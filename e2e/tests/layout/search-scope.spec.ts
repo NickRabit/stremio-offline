@@ -3,7 +3,7 @@ import { expect, test } from "@playwright/test";
 test("catalogue search controls fit every supported viewport", async ({ page }) => {
   await page.goto("/");
   const scope = page.getByRole("combobox", { name: "Kde hledat" });
-  await scope.selectOption({ label: "Seriály" });
+  await scope.selectOption((await scope.locator("option").filter({ hasText: "Seriály" }).first().getAttribute("value"))!);
   await page.getByPlaceholder("Hledat ve všech doplňcích naráz…").fill("Zkušební");
   await page.getByRole("button", { name: "Vyhledat" }).click();
 

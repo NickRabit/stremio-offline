@@ -41,7 +41,7 @@ test.describe("catalog", () => {
   test("searches inside one selected catalogue", async ({ page }) => {
     await page.goto("/");
     const scope = page.getByRole("combobox", { name: "Kde hledat" });
-    await scope.selectOption({ label: "Seriály" });
+    await scope.selectOption((await scope.locator("option").filter({ hasText: "Seriály" }).first().getAttribute("value"))!);
     await page.getByPlaceholder("Hledat ve všech doplňcích naráz…").fill("Zkušební");
     await page.getByRole("button", { name: "Vyhledat" }).click();
 
