@@ -769,6 +769,27 @@ const artStamp = async (file: string) => {
   const info = await stat(file).catch(() => undefined);
   return info ? Math.round(info.mtimeMs).toString(36) : "0";
 };
+/** The libraries as browse rows, for an empty path while more than one is configured.
+ *  Counts come from the walks the library listing already holds, so opening the root does
+ *  not walk the tree again. */
+const libraryRootBrowse = async () => {
+  await refreshLibraryHealth();
+  const stats = await libraryStats();
+  const items = await Promise.all([...store.libraries()].sort((a, b) => a.order - b.order).map(async (library) => {
+    const counts = stats.get(library.id) ?? { titles: 0, files: 0, bytes: 0 };
+    const key = libraryPath(library.id, "");
+    const path = wirePath(key);
+    return {
+      kind: "library" as const, libraryId: library.id, name: library.name, label: library.name,
+      type: library.type, enabled: library.enabled,
+      fileCount: counts.files, titles: counts.titles, size: counts.bytes,
+      unreachable: healthOf(library).unreachable, readOnly: healthOf(library).readOnly,
+      path, poster: await thumbUrl("dir", path, await locateFolderArtwork(key)),
+    };
+  }));
+  return { path: "", items, total: items.length };
+};
+
 const thumbUrl = async (param: "path" | "dir" | "key", value: string, art: string | undefined) =>
   (art ? `/api/library/thumb?${param}=${encodeURIComponent(value)}&v=${await artStamp(art)}` : undefined);
 
@@ -1504,14 +1525,18 @@ app.get("/api/library/browse", asyncRoute(async (req, res) => {
   const sort = sorts.has(String(req.query.sort)) ? String(req.query.sort) as "name" : "name";
   const onlyFavorites = req.query.favorites === "1";
   void sweepArtwork();
-  const resolved = requested ? await resolveLibraryPath(store.libraries(), requested) : undefined;
-  if (requested && !resolved) throw new AppError("Invalid path.", "err.invalidPath");
-  // An empty path is the single library's root while that is the whole setup. The root
-  // browse that lists several libraries is the library chrome's job, so until it lands a
-  // multi-library install is told which one to open rather than shown the first one.
-  if (!resolved && store.libraries().length !== 1) {
-    throw new AppError("Several libraries are configured. Open one of them.", "err.libraryRootAmbiguous");
+  const libraries = store.libraries();
+  // An empty path is the single library's root while that is the whole setup, and the list
+  // of libraries once there are more. Configured is what counts, not enabled and not
+  // reachable: a library switched off or on a disk that is away is still part of the setup,
+  // and a browse root that changed shape when a drive spun down would be worse than a row
+  // with a warning. The row says so instead of hiding it.
+  if (!requested && libraries.length !== 1) {
+    res.json(await libraryRootBrowse());
+    return;
   }
+  const resolved = requested ? await resolveLibraryPath(libraries, requested) : undefined;
+  if (requested && !resolved) throw new AppError("Invalid path.", "err.invalidPath");
   const library = resolved?.library ?? singleLibrary();
   markBrowsed(library);
   const inLibrary = (path: string) => libraryPath(library.id, path);

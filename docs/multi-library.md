@@ -177,9 +177,19 @@ again after every rebase onto `main`.
 
 ### PR 4 — Library manager, root browse, cross-library move
 
-- [ ] Not started.
-- [ ] `GET /api/library/browse` with an empty path lists the configured libraries as
-      `kind: "library"` rows and the interface renders them; replaces the PR 3 answer.
+- [x] `GET /api/library/browse` with an empty path lists the configured libraries as
+      `kind: "library"` rows while more than one is configured, and still passes through to
+      the single configured library, so a one-library install is untouched. The row carries
+      the id, name, type, enabled flag, counts, reachability and the root's poster. A
+      library that is switched off or away stays listed and says so: configured is what
+      counts, and a browse root that changed shape when a drive spun down would be worse
+      than a row with a warning. A disabled library's row shows zero counts because the
+      walk skips it; the media is still on disk. Counts come from the walks the library
+      listing already holds, so opening the root does not walk the tree again. The
+      `err.libraryRootAmbiguous` answer from PR 3 is gone, and so is the 500 an install
+      with no library left would have raised.
+- [ ] The interface renders those `kind: "library"` rows and resolves breadcrumb segment
+      zero through the library list, so it never shows `lib_ab12cd34`.
 - [ ] Follow-up from PR 1: `e2e/tests/layout/screenshots.spec.ts` drops the diagnostics
       report chip before the settings screenshot. The chip is per-run noise inside a masked
       section, but its width decided whether the header wrapped at the narrow viewports, so

@@ -60,9 +60,24 @@ test("a granted root is added, previewed and revoked without losing what it reme
   const remaining = await (await request.get("/api/libraries/browse")).json();
   expect(remaining.entries.map((entry: { path: string }) => entry.path)).not.toContain(grantedRoot);
 
+  // Two configured libraries means the browse root lists them; a disabled one is still part
+  // of the setup, so its row stays and says so instead of disappearing.
+  const root = await (await request.get("/api/library/browse")).json();
+  const rows = root.items.filter((item: { kind: string }) => item.kind === "library");
+  expect(rows.map((row: { libraryId: string }) => row.libraryId)).toEqual(expect.arrayContaining([library.id]));
+  expect(rows.find((row: { libraryId: string }) => row.libraryId === library.id)).toMatchObject({
+    // The walk skips a disabled library, so its counts are the empty default; the media is
+    // still there and comes back with the next grant.
+    name: "Granted", type: "movie", enabled: false, fileCount: 0, unreachable: false,
+  });
+
   // Cleanup through the API the test just used, so the run leaves one library behind.
   const removed = await request.delete(`/api/libraries/${library.id}?forget=1`);
   expect(removed.status()).toBe(204);
   const final = await (await request.get("/api/libraries")).json();
   expect(final).toHaveLength(1);
+
+  // Back to one library, the browse root passes through to it and the list is gone.
+  const passedThrough = await (await request.get("/api/library/browse")).json();
+  expect(passedThrough.items.some((item: { kind: string }) => item.kind === "library")).toBe(false);
 });
