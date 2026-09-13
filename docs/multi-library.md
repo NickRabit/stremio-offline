@@ -40,7 +40,18 @@ again after every rebase onto `main`.
 
 ### PR 2 — Metadata store split and cache policy
 
-- [ ] Not started.
+- [x] `LibraryMetaStore`: `data/library/<id>.json` with library-relative keys, the shared
+      `episodes.json`, debounced atomic per-library writes, `forget`, and the memoised
+      qualified view `index.ts` consumes.
+- [x] The migration hands the match history over and `state.json` keeps none of it: a v1
+      state after its key pass, and a state the libraries build already migrated, which
+      carried the rows inline. `index.ts` reads and writes through the store; the scan's
+      qualified mutator (`updateQualified`) lands in the file of the library it touched.
+- [ ] Artwork per library (`data/artwork/<id>/`), `data/artwork/index.json`,
+      `ARTWORK_CACHE_MB` eviction and the root-readable guard on the orphan sweep.
+- [ ] `IMAGE_CACHE_TTL_DAYS` pass in `ImageProxy.evict()`, `LIBRARY_META_TTL_DAYS` and
+      `LibraryMetaRecord.refreshedAt` in the scan.
+- [ ] `docs/configuration.md` for the three new variables.
 
 ### PR 3 — Library types, CRUD API, folder picker
 

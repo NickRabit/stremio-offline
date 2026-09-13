@@ -3,7 +3,10 @@ import { constants } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { buildLibrary, listVideos, type LibraryEntry } from "./library.js";
-import { libraryPath, newLibraryId, toPosix, type LibraryRecord } from "./libraries.js";
+import { libraryPath, newLibraryId, parseLibraryPath, relativeWithin, toPosix, type LibraryRecord } from "./libraries.js";
+import { writeEpisodesFile, writeLibraryFile } from "./library-meta-store.js";
+import type { LibraryEpisodeRecord, LibraryMetaRecord, LibrarySuggestion } from "./library-match.js";
+import { log } from "./logger.js";
 import { SCHEMA_VERSION, type State } from "./store.js";
 
 export interface MigrationSummary {
@@ -11,10 +14,19 @@ export interface MigrationSummary {
   libraryId?: string;
   /** Stored path keys rewritten with the library prefix. */
   paths: number;
+  /** Rows of match history moved out of `state.json` into `data/library/`. */
+  metadata: number;
   artwork: { mapped: number; removed: number };
 }
 
-const nothing = (): MigrationSummary => ({ migrated: false, paths: 0, artwork: { mapped: 0, removed: 0 } });
+/** The match history as every build before this one stored it: inline in `state.json`. */
+type InlineState = State & {
+  libraryMeta?: Record<string, LibraryMetaRecord>;
+  librarySuggestions?: Record<string, LibrarySuggestion>;
+  libraryEpisodes?: Record<string, LibraryEpisodeRecord>;
+};
+
+const nothing = (): MigrationSummary => ({ migrated: false, paths: 0, metadata: 0, artwork: { mapped: 0, removed: 0 } });
 const artworkName = (key: string) => `${createHash("sha1").update(key).digest("hex")}.jpg`;
 const ARTWORK_FRESH_MS = 60 * 60_000;
 
@@ -27,21 +39,65 @@ export async function migrateStateFile(dataDir: string, downloadDir: string): Pr
     throw error;
   });
   if (raw === undefined) return nothing();
-  const state = JSON.parse(raw) as State;
-  if ((state.schemaVersion ?? 1) >= SCHEMA_VERSION) return nothing();
+  const state = JSON.parse(raw) as InlineState;
+  const legacy = (state.schemaVersion ?? 1) < SCHEMA_VERSION;
+  const inline = Boolean(state.libraryMeta || state.librarySuggestions || state.libraryEpisodes);
+  if (!legacy && !inline) return nothing();
 
-  // A rollback to an older image is realistic, so the untouched v1 file is kept.
-  await copyFile(file, `${file}.v1.bak`);
-  const summary = await migrateLibraries(state, { dataDir, downloadDir });
+  if (legacy) {
+    // A rollback to an older image is realistic, so the untouched v1 file is kept.
+    await copyFile(file, `${file}.v1.bak`);
+  }
+  // The second branch is a state the libraries build already migrated: it kept the match
+  // history inline, and this build reads it from `data/library/` only.
+  const summary = legacy ? await migrateLibraries(state, { dataDir, downloadDir }) : nothing();
+  if (!legacy) summary.metadata = await splitInlineMetadata(state, dataDir);
   const temp = `${file}.tmp`;
   await writeFile(temp, JSON.stringify(state, null, 2), { mode: 0o600 });
   await rename(temp, file);
   return summary;
 }
 
+/** Moves the match history out of the state into `data/library/`, keyed the way those
+ *  files store it: library-relative for the matches, shared for the episode rows. */
+async function splitInlineMetadata(state: InlineState, dataDir: string): Promise<number> {
+  const meta = state.libraryMeta ?? {};
+  const suggestions = state.librarySuggestions ?? {};
+  const episodes = state.libraryEpisodes ?? {};
+  delete state.libraryMeta;
+  delete state.librarySuggestions;
+  delete state.libraryEpisodes;
+
+  const files = new Map<string, { meta: Record<string, LibraryMetaRecord>; suggestions: Record<string, LibrarySuggestion> }>();
+  const bucket = (libraryId: string) => {
+    let file = files.get(libraryId);
+    if (!file) { file = { meta: {}, suggestions: {} }; files.set(libraryId, file); }
+    return file;
+  };
+  // A key without a library prefix is qualified on the way in; one with no library at
+  // all has nowhere to go, and losing it silently is worse than saying so.
+  const fallback = state.libraries?.[0]?.id;
+  let rows = 0;
+  let dropped = 0;
+  const each = <T,>(records: Record<string, T>, into: (libraryId: string, relative: string, value: T) => void) => {
+    for (const [key, value] of Object.entries(records)) {
+      const libraryId = parseLibraryPath(key)?.libraryId ?? fallback;
+      if (!libraryId) { dropped += 1; continue; }
+      into(libraryId, relativeWithin(libraryId, toPosix(key)), value);
+      rows += 1;
+    }
+  };
+  each(meta, (libraryId, relative, value) => { bucket(libraryId).meta[relative] = value; });
+  each(suggestions, (libraryId, relative, value) => { bucket(libraryId).suggestions[relative] = value; });
+  for (const [libraryId, file] of files) await writeLibraryFile(dataDir, libraryId, file.meta, file.suggestions);
+  if (Object.keys(episodes).length) await writeEpisodesFile(dataDir, episodes);
+  if (dropped) log("WARN", "Library metadata rows outside any library were dropped", { rows: dropped });
+  return rows;
+}
+
 /** Rewrites a v1 state in place: one library for the download directory, every stored
  *  path key prefixed with its id. No file on disk is moved or renamed. */
-export async function migrateLibraries(state: State, opts: { dataDir: string; downloadDir: string }): Promise<MigrationSummary> {
+export async function migrateLibraries(state: InlineState, opts: { dataDir: string; downloadDir: string }): Promise<MigrationSummary> {
   const library = await legacyLibrary(opts.downloadDir);
   const id = library.id;
   let paths = 0;
@@ -67,7 +123,7 @@ export async function migrateLibraries(state: State, opts: { dataDir: string; do
   // Only an existing settings blob is rewritten: creating one would make `Store.load`
   // read it as a pre-English install and flip the whole interface to Czech.
   if (state.settings) state.settings = { ...state.settings, defaultMovieLibrary: id, defaultSeriesLibrary: id };
-  return { migrated: true, libraryId: id, paths, artwork: await rekeyArtwork(opts, id) };
+  return { migrated: true, libraryId: id, paths, metadata: await splitInlineMetadata(state, opts.dataDir), artwork: await rekeyArtwork(opts, id) };
 }
 
 async function legacyLibrary(root: string): Promise<LibraryRecord> {

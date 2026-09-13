@@ -88,6 +88,31 @@ test("a write driven by catalogue identity walks every library", async () => {
   });
 });
 
+test("a qualified write touches only the library that owns the key", async () => {
+  await withStore(async (store, dataDir) => {
+    await seed(dataDir, "lib_aaaaaaaa", { "One.mkv": record("tt1") });
+    await seed(dataDir, "lib_bbbbbbbb", { "Two.mkv": record("tt2") });
+    await store.load();
+    const untouched = await stat(libraryFile(dataDir, "lib_bbbbbbbb"));
+    await store.updateQualified((meta, suggestions, episodes) => {
+      meta["lib_aaaaaaaa/One.mkv"] = { ...meta["lib_aaaaaaaa/One.mkv"]!, name: "Renamed" };
+      delete suggestions["lib_aaaaaaaa/One.mkv"];
+      meta["lib_cccccccc/New.mkv"] = record("tt9");
+      meta["unqualified.mkv"] = record("tt0");
+      suggestions["lib_aaaaaaaa/Other show"] = { type: "series", id: "tt7", name: "Other show", score: 70 };
+      episodes["movie:tt1:0:0"] = { type: "movie", id: "tt1" } as never;
+    });
+    await store.flush();
+    assert.equal(store.qualifiedMeta()["lib_aaaaaaaa/One.mkv"]!.name, "Renamed");
+    assert.equal(store.qualifiedMeta()["lib_cccccccc/New.mkv"]!.id, "tt9", "a library with no file yet is created");
+    assert.equal(store.qualifiedMeta()["unqualified.mkv"], undefined, "an unqualified key is not ours");
+    assert.equal(store.qualifiedSuggestions()["lib_aaaaaaaa/Other show"]!.score, 70);
+    assert.deepEqual(Object.keys(JSON.parse(await readFile(path.join(dataDir, "library", "episodes.json"), "utf8"))), ["movie:tt1:0:0"]);
+    assert.equal((await stat(libraryFile(dataDir, "lib_bbbbbbbb"))).mtimeMs, untouched.mtimeMs, "the other library is not rewritten");
+    assert.deepEqual((await readdir(path.join(dataDir, "library"))).sort(), ["episodes.json", "lib_aaaaaaaa.json", "lib_bbbbbbbb.json", "lib_cccccccc.json"]);
+  });
+});
+
 test("forget drops the file and the keys that came from it", async () => {
   await withStore(async (store, dataDir) => {
     await seed(dataDir, "lib_a", { "One.mkv": record("tt1") });

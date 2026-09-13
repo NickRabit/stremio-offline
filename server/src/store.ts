@@ -4,10 +4,7 @@ import type { AddonRecord } from "./types.js";
 import type { AuthState } from "./auth.js";
 import { normalizeDownloadSettings } from "./naming.js";
 import type { UiLanguage } from "./language.js";
-import type { LibraryEpisodeRecord, LibraryMetaRecord, LibrarySuggestion } from "./library-match.js";
 import { newLibraryId, type LibraryRecord } from "./libraries.js";
-
-export type { LibraryEpisodeRecord, LibraryMetaRecord, LibrarySuggestion };
 
 /** `state.json` shape version. A state without it predates libraries and migrates once. */
 export const SCHEMA_VERSION = 2;
@@ -48,10 +45,6 @@ export interface State { schemaVersion?: number;
   addons: AddonRecord[]; settings: Settings; defaultsInstalled: boolean; auth?: AuthState;
   /** When the addon manifests were last refreshed in the background. */
   addonsRefreshedAt?: string;
-  libraryMeta?: Record<string, LibraryMetaRecord>;
-  librarySuggestions?: Record<string, LibrarySuggestion>;
-  /** Episode texts of bound series, keyed by title and numbering, not by path. */
-  libraryEpisodes?: Record<string, LibraryEpisodeRecord>;
   /** Paths marked as favourites. Nothing is moved; it is only a flag. */
   favorites?: string[];
   /** Starred catalogue titles. Kept apart from library paths, because a title need not have
@@ -109,9 +102,6 @@ export class Store {
   addonsRefreshedAt() { return this.state.addonsRefreshedAt; }
   auth() { return this.state.auth; }
   libraries() { return this.state.libraries ?? []; }
-  libraryMeta() { return this.state.libraryMeta ?? {}; }
-  librarySuggestions() { return this.state.librarySuggestions ?? {}; }
-  libraryEpisodes() { return this.state.libraryEpisodes ?? {}; }
   favorites() { return this.state.favorites ?? []; }
   progress() { return this.state.progress ?? {}; }
   watchlist() { return this.state.watchlist ?? {}; }

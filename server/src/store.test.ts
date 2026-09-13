@@ -70,24 +70,6 @@ test("an install from before the interface was translated keeps Czech", async ()
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
-test("legacy libraryMeta rows round-trip without a rewrite", async () => {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-store-"));
-  try {
-    await writeFile(path.join(directory, "state.json"), JSON.stringify({
-      addons: [], defaultsInstalled: true, settings: {},
-      libraryMeta: { "Practical Magic": { type: "movie", id: "tt0120794" } },
-    }));
-    const store = new Store(directory); await store.load();
-    assert.deepEqual(store.libraryMeta()["Practical Magic"], { type: "movie", id: "tt0120794" });
-    assert.deepEqual(store.librarySuggestions(), {});
-    await store.update((state) => {
-      state.librarySuggestions = { "Practical Magic": { type: "movie", id: "tt0120794", name: "Practical Magic", year: 1998, score: 100 } };
-    });
-    const second = new Store(directory); await second.load();
-    assert.equal(second.librarySuggestions()["Practical Magic"]?.id, "tt0120794");
-  } finally { await rm(directory, { recursive: true, force: true }); }
-});
-
 test("a fresh install starts in English", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-store-"));
   try {
