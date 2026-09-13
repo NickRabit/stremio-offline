@@ -2,10 +2,11 @@ import { FormEvent, UIEvent, useEffect, useMemo, useRef, useState } from "react"
 import { ArrowDown, BarChart3, ArrowUp, Check, Copy, FolderInput, FolderOpen, Images, KeyRound, Languages, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, ShieldCheck, Sparkles, Star, FileJson, Link2, LogOut, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, FileText, Film, FolderCog, HardDrive, Library, PackagePlus, Pause, Play, Plus, RefreshCw, Search, SearchX, Settings, Subtitles, Trash2, Upload, X } from "lucide-react";
 import { api, ApiError, describeError, logDownloadUrl, saveToDevice } from "./api";
 import { AccountSettings, LoginScreen } from "./Login";
-import { SettingControl, SettingsSectionHead } from "./settings-ui";
+import { bytes, SettingControl, SettingsSectionHead } from "./settings-ui";
 import { LOCALES, LOCALE_NAMES } from "./i18n";
 import { Player } from "./Player";
 import { IdentifyDialog } from "./IdentifyDialog";
+import { LibraryManager, LibraryManagerDialog, libraryTypeLabel } from "./LibraryManager";
 import { MoveDialog } from "./MoveDialog";
 import { SuggestionsDialog } from "./SuggestionsDialog";
 import { SeriesDownloadDialog } from "./SeriesDownloadDialog";
@@ -18,7 +19,7 @@ import { languageName, locale, localeTag, serverText, setLocale, t, useI18n, typ
 import { canQueue, pickDefaultStream, repickStream, streamBadge, streamLanguages, streamSize, visibleCatalogStreams, type StreamSort } from "./streams";
 import { parseSearchScope } from "./search-scope";
 import { localizedDownloadTitle, mergeMetaDetail } from "./meta";
-import type { Addon, BuildInfo, Diagnostics, BrowseItem, BrowseResult, LibrarySort, ProgressEntry, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, DownloadSelection, Inspection, Meta, QueueHalt, ScanState, SearchableCatalog, Session, Settings as AppSettings, SettingsPatch, Stream, Subtitle, Video } from "./types";
+import type { Addon, BuildInfo, Diagnostics, BrowseItem, BrowseLibrary, BrowseResult, LibrarySort, LibraryView, ProgressEntry, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, DownloadSelection, Inspection, Meta, QueueHalt, ScanState, SearchableCatalog, Session, Settings as AppSettings, SettingsPatch, Stream, Subtitle, Video } from "./types";
 
 /** Library browsing choices survive both a section switch and a browser restart.
  * Private mode may forbid storage, hence the try/catch around everything. */
@@ -29,7 +30,6 @@ const recall = <T extends string>(key: string, allowed: readonly T[], fallback: 
 };
 
 type View = "catalog" | "library" | "downloads" | "stats" | "addons" | "settings";
-const bytes = (value?: number) => !value ? "—" : value > 1e9 ? `${(value / 1e9).toFixed(1)} GB` : value > 1e6 ? `${(value / 1e6).toFixed(1)} MB` : `${Math.round(value / 1e3)} kB`;
 const speed = (value: number) => value ? `${bytes(value)}/s` : "—";
 const streamLabel = (item: Stream) => item.name || item.title?.split("\n")[0] || item.description?.split("\n")[0] || "Stream";
 type GalleryImage = { url: string; label: string; shape: "poster" | "wide" };
@@ -97,6 +97,7 @@ export function App() {
     scrollDirection.current.set(element, { top, travel: changed ? 0 : travel, until: changed ? now + 250 : previous.until });
     if (changed) update(next);
   }
+  type TreeItem = Extract<BrowseItem, { kind: "folder" | "file" }>;
   const [selectedCatalog, setSelectedCatalog] = useState(""); const [search, setSearch] = useState(""); const [items, setItems] = useState<Meta[]>([]); const [selected, setSelected] = useState<Meta | null>(null); const [selectedDownloadTitle, setSelectedDownloadTitle] = useState("");
   const [selectedVideo, setSelectedVideo] = useState<Video | null>(null); const [streams, setStreams] = useState<Stream[]>([]); const [selectedStream, setSelectedStream] = useState<Stream | null>(null); const [subtitles, setSubtitles] = useState<Subtitle[]>([]);
   const [sourcesLoaded, setSourcesLoaded] = useState(false);
@@ -111,14 +112,17 @@ export function App() {
   const [resumePreview, setResumePreview] = useState<BrowseResult | null>(null);
   const [favoritePreview, setFavoritePreview] = useState<BrowseResult | null>(null);
   const [browse, setBrowse] = useState<BrowseResult | null>(null);
+  const [libraries, setLibraries] = useState<LibraryView[]>([]);
+  const refreshLibraries = () => api.libraries().then(setLibraries).catch(() => undefined);
   const [browsePath, setBrowsePath] = useState(""); const [browseQuery, setBrowseQuery] = useState("");
   const [browseSort, setBrowseSort] = useState<LibrarySort>(() => recall("sort", ["name", "added", "size", "random"] as const, "name") as LibrarySort);
   const [browseDesc, setBrowseDesc] = useState(() => recall("order", ["asc", "desc"] as const, "asc") === "desc");
   const [browseView, setBrowseView] = useState<"grid" | "list">(() => recall("view", ["grid", "list"] as const, "grid"));
   const [browseBusy, setBrowseBusy] = useState(false);
   const [identifyPath, setIdentifyPath] = useState<string | null>(null);
-  const [movePath, setMovePath] = useState<{ path: string; label: string } | null>(null);
+  const [movePath, setMovePath] = useState<{ path: string; label: string; type?: "movie" | "series" } | null>(null);
   const [suggestionsOpen, setSuggestionsOpen] = useState(false);
+  const [libraryManagerOpen, setLibraryManagerOpen] = useState(false);
   const [suggestionCount, setSuggestionCount] = useState(0);
   const [libraryScan, setLibraryScan] = useState<ScanState | null>(null);
   const [scanHintDismissed, setScanHintDismissed] = useState(() => {
@@ -203,7 +207,7 @@ export function App() {
     if (!wanted || wanted === label) return;
     try { await api.renameLibraryItem(itemPath, wanted); notify(t("library.renamed")); await loadBrowse(browsePath); } catch (error) { fail(error); }
   };
-  const openMove = (itemPath: string, label: string) => { setMenuFor(null); setMovePath({ path: itemPath, label }); };
+  const openMove = (itemPath: string, label: string, type?: "movie" | "series") => { setMenuFor(null); setMovePath({ path: itemPath, label, type }); };
   /** Follows the item into its new folder: seeing where it landed beats staring at the
    *  gap it left behind. The resume row and the star carry the old path, so both reload. */
   const finishMove = async (target: string) => {
@@ -261,7 +265,7 @@ export function App() {
     setScanHintDismissed(true);
     try { localStorage.setItem("library-scan-hint-dismissed", "1"); } catch { /* storage may be unavailable */ }
   };
-  const confirmSuggestion = async (item: BrowseItem) => {
+  const confirmSuggestion = async (item: TreeItem) => {
     setMenuFor(null);
     if (!item.suggestion) return;
     try {
@@ -271,7 +275,7 @@ export function App() {
       await loadBrowse(browsePath);
     } catch (error) { fail(error); }
   };
-  const dismissSuggestion = async (item: BrowseItem) => {
+  const dismissSuggestion = async (item: TreeItem) => {
     setMenuFor(null);
     try {
       await api.dismissLibrarySuggestion(item.path);
@@ -286,7 +290,7 @@ export function App() {
       notify(t("library.scanItemStarted"));
     } catch (error) { fail(error); }
   };
-  const matchActions = (item: BrowseItem) => {
+  const matchActions = (item: TreeItem) => {
     const match = item.match ?? "unmatched";
     const skipped = Boolean(item.skipLookup);
     return <>
@@ -308,13 +312,19 @@ export function App() {
         : <button onClick={() => void setCatalogLookup(item.path, false)}><SearchX/> {t("library.skipLookup")}</button>}
     </>;
   };
+  const libraryMeta = (item: BrowseLibrary) => [
+    libraryTypeLabel(item.type),
+    t("library.fileCount", { count: item.fileCount }),
+    bytes(item.size),
+    !item.enabled ? t("library.disabled") : item.unreachable ? t("library.unreachable") : item.readOnly ? t("library.readOnly") : "",
+  ].filter(Boolean).join(" · ");
   const folderMeta = (item: Extract<BrowseItem, { kind: "folder" }>) =>
     [item.year, t("library.fileCount", { count: item.fileCount }), bytes(item.size)].filter(Boolean).join(" · ");
   const fileMeta = (item: Extract<BrowseItem, { kind: "file" }>) =>
     browsePath === ":resume" && item.progress
       ? t("library.remaining", { time: fmtEta(Math.max(0, item.progress.duration - item.progress.position)) })
       : [item.year, bytes(item.size)].filter(Boolean).join(" · ");
-  const descriptionLine = (item: BrowseItem) => item.description
+  const descriptionLine = (item: TreeItem) => item.description
     ? (item.catalogName ? `${item.catalogName} · ${item.description}` : item.description)
     : item.match === "suggested" && item.suggestion
       ? t("library.suggestionLine", { name: item.suggestion.name, score: item.suggestion.score })
@@ -484,7 +494,7 @@ export function App() {
   }, []);
   const ready = Boolean(session);
   // Loading data only makes sense after signing in; before that it would just throw 401s.
-  useEffect(() => { if (!ready) return; refresh().catch(fail); loadDownloads(); api.settings().then((next) => { setSettings(next); setLocale(next.uiLanguage); }).catch(fail); api.languages().then(setLanguages).catch(() => undefined); }, [ready]);
+  useEffect(() => { if (!ready) return; refresh().catch(fail); loadDownloads(); refreshLibraries(); api.settings().then((next) => { setSettings(next); setLocale(next.uiLanguage); }).catch(fail); api.languages().then(setLanguages).catch(() => undefined); }, [ready]);
   // Which addons are worth searching changes as they are switched on and off.
   useEffect(() => { api.searchable().then(setSearchable).catch(() => undefined); }, [addons]);
   // Only a file probe knows the exact languages, so we run one for the chosen stream.
@@ -500,6 +510,9 @@ export function App() {
     if (Object.keys(rest).length) setSettings((current: AppSettings) => ({ ...current, ...rest }));
     try { setSettings(await api.updateSettings(patch)); notify(t("settings.saved")); } catch (e) { fail(e); }
   };
+  // An empty path with more than one library configured is the library list; a
+  // single-library install still opens straight into the tree.
+  const libraryList = browsePath === "" && libraries.length > 1;
   const loadBrowse = async (target = browsePath, skip = 0) => {
     const request = ++browseRequest.current;
     const wanted = JSON.stringify([target, browseQuery, browseSort, browseDesc, onlyFavorites]);
@@ -537,7 +550,7 @@ export function App() {
     // Every listed entry carries its own favourite flag; collecting them is enough.
     setLibraryFavorites((current) => {
       const next = new Set(current);
-      for (const item of browse.items) { if (item.favorite) next.add(item.path); else next.delete(item.path); }
+      for (const item of browse.items) { if (item.kind !== "library" && item.favorite) next.add(item.path); else next.delete(item.path); }
       return [...next];
     });
   }, [browse]);
@@ -1109,12 +1122,13 @@ export function App() {
             {browsePath === ":resume" && <span><ChevronRight/><button disabled>{t("library.continueWatching")}</button></span>}
             {!browsePath.startsWith(":") && browsePath.split("/").filter(Boolean).map((part, index, all) => <span key={part + index}>
               <ChevronRight/>
-              <button disabled={index === all.length - 1} onClick={() => { setBrowseQuery(""); setBrowsePath(all.slice(0, index + 1).join("/")); }}>{part}</button>
+              {/* Segment zero is a library id; the id is never shown. */}
+              <button disabled={index === all.length - 1} onClick={() => { setBrowseQuery(""); setBrowsePath(all.slice(0, index + 1).join("/")); }}>{index === 0 ? libraries.find((library) => library.id === part)?.name ?? part : part}</button>
             </span>)}
           </nav>
           <div className="browse-tools">
-            <div className="search-input"><Search/><input value={browseQuery} aria-label={t("library.filter")} placeholder={t("library.filterPlaceholder")} onChange={(event) => setBrowseQuery(event.target.value)}/></div>
-            <select aria-label={t("common.sorting")} value={browseSort} onChange={(event) => {
+            {!libraryList && <div className="search-input"><Search/><input value={browseQuery} aria-label={t("library.filter")} placeholder={t("library.filterPlaceholder")} onChange={(event) => setBrowseQuery(event.target.value)}/></div>}
+            {!libraryList && <select aria-label={t("common.sorting")} value={browseSort} onChange={(event) => {
               const next = event.target.value as LibrarySort;
               setBrowseSort(next);
               // Dates and sizes start with the largest value; names start with A.
@@ -1122,15 +1136,15 @@ export function App() {
             }}>
               <option value="name">{t("library.sortName")}</option><option value="added">{t(browsePath === ":resume" ? "library.sortLastWatched" : "library.sortAdded")}</option>
               <option value="size">{t("library.sortSize")}</option><option value="random">{t("library.sortRandom")}</option>
-            </select>
-            <button title={t(browseDesc ? "common.descending" : "common.ascending")} onClick={() => setBrowseDesc((value) => !value)} disabled={browseSort === "random"}>
+            </select>}
+            {!libraryList && <button title={t(browseDesc ? "common.descending" : "common.ascending")} onClick={() => setBrowseDesc((value) => !value)} disabled={browseSort === "random"}>
               {browseDesc ? <ArrowDown/> : <ArrowUp/>}
-            </button>
-            <button className={onlyFavorites ? "active-filter" : ""} title={t("library.onlyFavorites")} disabled={browsePath === ":favorites"}
-              onClick={() => setOnlyFavorites((value) => !value)}><Star/></button>
-            <button title={t(browseView === "grid" ? "library.viewRows" : "library.viewTiles")} onClick={() => setBrowseView((value) => value === "grid" ? "list" : "grid")}>
+            </button>}
+            {!libraryList && <button className={onlyFavorites ? "active-filter" : ""} title={t("library.onlyFavorites")} disabled={browsePath === ":favorites"}
+              onClick={() => setOnlyFavorites((value) => !value)}><Star/></button>}
+            {!libraryList && <button title={t(browseView === "grid" ? "library.viewRows" : "library.viewTiles")} onClick={() => setBrowseView((value) => value === "grid" ? "list" : "grid")}>
               {browseView === "grid" ? <List/> : <LayoutGrid/>}
-            </button>
+            </button>}
             <div className="library-maintenance" onKeyDown={(event) => {
               if (event.key === "Escape" && menuFor === ":library-tools") event.currentTarget.querySelector<HTMLButtonElement>(".library-maintenance-toggle")?.focus();
             }}>
@@ -1145,6 +1159,12 @@ export function App() {
                 <button title={t("library.rescanHint")} onClick={() => void startScan({ force: true })} disabled={scanning}>
                   <RefreshCw/> {t("library.rescan")}
                 </button>
+                {/* One library is one thing to manage: the settings section holds it, and the
+                    toolbar stays the row it has always been. More than one and managing them
+                    is a browse-time job, so the shortcut appears. */}
+                {libraries.length > 1 && <button className="library-manager-shortcut" title={t("library.libraries")} onClick={() => { setMenuFor(null); setLibraryManagerOpen(true); }}>
+                  <Library/> {t("library.libraries")}
+                </button>}
               </div>
             </div>
           </div>
@@ -1174,7 +1194,15 @@ export function App() {
             : <Empty icon={<HardDrive/>} title={t(browseQuery ? "library.emptyFilterTitle" : browsePath === ":resume" ? "library.emptyResumeTitle" : browsePath === ":favorites" || onlyFavorites ? "library.emptyFavoritesTitle" : "library.emptyTitle")} text={t(browseQuery ? "library.emptyFilterText" : browsePath === ":resume" ? "library.emptyResumeText" : browsePath === ":favorites" || onlyFavorites ? "library.emptyFavoritesText" : "library.emptyText")}/>)
           : <>
             <div className={browseView === "grid" ? "browse-grid" : "browse-rows"}>
-              {browse.items.map((item) => item.kind === "folder"
+              {browse.items.map((item) => item.kind === "library"
+                ? <article className={`browse-item library${item.unreachable ? " unreachable" : ""}`} key={item.path} data-path={item.path}>
+                    <button className="library-open" disabled={!item.enabled} onClick={() => { setBrowseQuery(""); setFromFavorites(false); setMenuFor(null); setBrowsePath(item.path); }}>
+                      <span className="browse-art">{item.poster ? <img src={item.poster} alt="" loading="lazy"/> : <HardDrive/>}<i className="browse-badge">{item.fileCount}</i></span>
+                      <span className="library-copy"><strong>{item.name}</strong><small>{libraryMeta(item)}</small></span>
+                      <span className="library-action">{item.enabled ? <><FolderOpen/> {t("library.openFolder")} <ChevronRight/></> : t("library.disabled")}</span>
+                    </button>
+                  </article>
+                : item.kind === "folder"
                 ? <article className={`browse-item folder${browseFocus === item.path ? " focused" : ""}`} key={item.path} data-path={item.path} aria-current={browseFocus === item.path ? "true" : undefined}><button className="library-open" onClick={() => { setBrowseQuery(""); setFromFavorites(browsePath === ":favorites" || fromFavorites); setBrowsePath(item.path); }}>
                     <span className="browse-art">{item.poster ? <img src={item.poster} alt="" loading="lazy"/> : <FolderOpen/>}<i className="browse-badge">{item.fileCount}</i>{item.favorite && <i className="fav-mark"><Star/></i>}</span>
                     <span className="library-copy"><strong>{item.name}</strong><small>{folderMeta(item)}</small>{descriptionLine(item) && <small className="library-desc">{descriptionLine(item)}</small>}</span><span className="library-action"><FolderOpen/> {t("library.openFolder")} <ChevronRight/></span></button>
@@ -1183,7 +1211,7 @@ export function App() {
                       {matchActions(item)}
                       <button onClick={() => void toggleFavorite(item.path, !item.favorite)}><Star/> {t(item.favorite ? "favorite.remove" : "favorite.add")}</button>
                       <button onClick={() => void renameItem(item.path, item.name)}><Pencil/> {t("library.rename")}</button>
-                      <button onClick={() => openMove(item.path, item.name)}><FolderInput/> {t("library.move")}</button>
+                      <button onClick={() => openMove(item.path, item.name, item.titleType)}><FolderInput/> {t("library.move")}</button>
                       <button className="danger" onClick={() => void removeItem(item.path, item.name, true)}><Trash2/> {t("common.delete")}</button>
                     </span>}
                   </article>
@@ -1200,7 +1228,7 @@ export function App() {
                       {item.progress && <button onClick={() => void forgetWatched(item.path)}><RotateCcw/> {t("library.markUnwatched")}</button>}
                       <button onClick={() => { setMenuFor(null); void downloadLibraryFile(item.path); }}><Download/> {t("library.downloadToDevice")}</button>
                       <button onClick={() => void renameItem(item.path, item.label)}><Pencil/> {t("library.rename")}</button>
-                      <button onClick={() => openMove(item.path, item.label)}><FolderInput/> {t("library.move")}</button>
+                      <button onClick={() => openMove(item.path, item.label, item.titleType)}><FolderInput/> {t("library.move")}</button>
                       <button className="danger" onClick={() => void removeItem(item.path, item.label, false)}><Trash2/> {t("common.delete")}</button>
                     </span>}
                   </article>)}
@@ -1218,7 +1246,7 @@ export function App() {
       {view === "addons" && <Addons addons={addons} restricted={restricted} onChanged={refresh} onNotify={notify} onError={fail}/>} 
       {view === "downloads" && <Downloads jobs={downloads} halt={queueHalt} refresh={loadDownloads} onError={fail} onReveal={revealInLibrary}/>}
       {view === "stats" && <StatsPanel key={statsReset} onError={fail}/>}
-      {view === "settings" && <SettingsPage build={buildInfo} restricted={restricted} settings={settings} languages={languages} session={session!} onSession={setSession} onSave={saveSettings} onImported={async (backup) => {
+      {view === "settings" && <SettingsPage build={buildInfo} restricted={restricted} settings={settings} languages={languages} session={session!} onSession={setSession} onSave={saveSettings} onLibrariesChanged={refreshLibraries} onImported={async (backup) => {
         const restored = await api.importSettings(backup);
         setSettings(restored.settings);
         setSelectedCatalog("");
@@ -1233,7 +1261,8 @@ export function App() {
       onDownload={enqueue}
       onDeviceDownload={() => localStream?.localPath ? downloadLibraryFile(localStream.localPath) : downloadStreamToDevice()}
       onClose={() => { setPlayerOpen(false); setLocalStream(null); }}/>
-    {movePath && <MoveDialog path={movePath.path} label={movePath.label} onClose={() => setMovePath(null)} onMoved={(target) => void finishMove(target)}/>}
+    {libraryManagerOpen && <LibraryManagerDialog restricted={restricted} onClose={() => setLibraryManagerOpen(false)} onChanged={refreshLibraries} onError={fail} onNotify={notify}/>}
+    {movePath && <MoveDialog path={movePath.path} label={movePath.label} itemType={movePath.type} libraries={libraries} onClose={() => setMovePath(null)} onMoved={(target) => void finishMove(target)}/>}
     {identifyPath && <IdentifyDialog path={identifyPath} onClose={() => setIdentifyPath(null)} onApplied={() => { setIdentifyPath(null); void loadSuggestionCount(); void loadBrowse(browsePath); }}/>}
     {suggestionsOpen && <SuggestionsDialog
       onClose={() => setSuggestionsOpen(false)}
@@ -1311,7 +1340,7 @@ const refreshIntervalLabel = (hours: number) =>
   : hours === 168 ? t("settings.addonRefreshWeekly")
   : t("settings.addonRefreshHoursOption", { count: hours });
 
-function SettingsPage({ build, restricted = false, settings, languages, session, onSession, onSave, onImported, onNotify, onError }: { build: BuildInfo | null; restricted?: boolean; settings: AppSettings; languages: Array<{ code: string; name: string }>; session: Session; onSession: (session: Session) => void; onSave: (patch: SettingsPatch) => Promise<void>; onImported: (backup: unknown) => Promise<void>; onNotify: (message: string) => void; onError: (error: unknown) => void }) {
+function SettingsPage({ build, restricted = false, settings, languages, session, onSession, onSave, onImported, onLibrariesChanged, onNotify, onError }: { build: BuildInfo | null; restricted?: boolean; settings: AppSettings; languages: Array<{ code: string; name: string }>; session: Session; onSession: (session: Session) => void; onSave: (patch: SettingsPatch) => Promise<void>; onImported: (backup: unknown) => Promise<void>; onLibrariesChanged: () => void; onNotify: (message: string) => void; onError: (error: unknown) => void }) {
   const { t, locale, setLocale } = useI18n();
   // The names come from the browser in the active language, so they need sorting there too.
   const languageOptions = languages
@@ -1350,6 +1379,7 @@ function SettingsPage({ build, restricted = false, settings, languages, session,
   return <section className="settings-page"><div className="settings-title"><Heading eyebrow={t("settings.eyebrow")} title={t("settings.title")}/><span><Check/> {t("settings.autosave")}</span></div>
     {restricted && <p className="notice">{t("restricted.notice")}</p>}
     <div className="settings-grid">
+      <section className="panel settings-section library-manager-section"><SettingsSectionHead icon={<Library/>} title={t("library.libraries")} text={t("library.librariesHint")}/><LibraryManager restricted={restricted} onChanged={onLibrariesChanged} onError={onError} onNotify={onNotify}/></section>
       <section className="panel settings-section language-section"><SettingsSectionHead icon={<Languages/>} title={t("settings.appearanceTitle")}/>
         <SettingControl title={t("settings.uiLanguage")} text={t("settings.uiLanguageHint")}>
           <select aria-label={t("settings.uiLanguage")} disabled={restricted} value={locale} onChange={(event) => {

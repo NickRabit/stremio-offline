@@ -508,6 +508,9 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .identify-episode{display:grid;gap:8px;padding:10px;border:1px solid var(--line);border-radius:9px;background:#10151d}
 .identify-episode select{padding:8px 10px;font-size:12px}
 .move-card{width:min(480px,100%)}
+.move-libraries{display:flex;flex-wrap:wrap;gap:6px}
+.move-libraries button{padding:5px 10px;font-size:12px;border:1px solid var(--line);border-radius:999px;background:#10151d;color:var(--muted)}
+.move-libraries button[aria-pressed=true]{border-color:var(--accent2);color:var(--text)}
 .move-crumbs{display:flex;flex-wrap:wrap;align-items:center;gap:2px;font-size:12px;color:var(--muted)}
 .move-crumbs span{display:flex;align-items:center;gap:2px}
 .move-crumbs button{padding:5px 8px;font-size:12px;border:0;background:0;color:var(--muted)}
@@ -590,6 +593,12 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .library-page .browse-rows .library-desc{font-weight:400;max-width:80ch}
 .library-page .browse-rows .browse-art{width:72px;aspect-ratio:2/3}.library-page .browse-rows .library-copy strong{margin-top:0}.library-page .browse-rows .browse-menu{position:absolute;top:50%;transform:translateY(-50%)}.library-page .browse-rows .browse-actions{top:65%;z-index:5}
 @media(max-width:700px){.library-page .browse-grid{grid-template-columns:repeat(auto-fill,minmax(min(100%,var(--library-tile-min)),1fr));gap:16px 10px}.library-page{--library-tile-min:130px}.library-tiles-large .library-page{--library-tile-min:155px}.library-favorites{gap:12px;padding:12px}.favorites-collage{width:92px;height:78px}.favorites-collage img{width:44px;height:66px}.favorites-collage img:nth-child(2){left:23px}.favorites-collage img:nth-child(3){left:46px}.favorites-copy strong{font-size:17px}.library-page .browse-tools{width:100%}.library-page .browse-tools .search-input{flex-basis:100%}.library-page .browse-rows .library-open{grid-template-columns:48px minmax(0,1fr);gap:6px 12px}.library-page .browse-rows .browse-art{width:48px;grid-row:1/3}.library-page .browse-rows .library-action{grid-column:2;min-height:36px;padding:4px 2px;font-size:11px}.library-page .browse-menu{width:44px;height:44px;top:5px;right:5px}.library-page .browse-actions{top:52px}}
+
+/* The toolbar is one button wider once the manager shortcut joins it, and what gives way
+   is the crumb: at the narrow desktop widths "Knihovna" collapsed into a three-line sliver.
+   It keeps a floor instead, so the tools wrap to a second row -- the shape the bar already
+   takes on a phone. A single-library install never renders that button and is untouched. */
+.library-page .browse-bar:has(.browse-tools>.library-maintenance .library-manager-shortcut) .crumbs{min-width:min(220px,100%)}
 
 .library-page .browse-panel{overflow:visible}.library-page .browse-panel>.browse-bar{border-radius:14px 14px 0 0}.library-page .browse-grid .browse-actions{right:0;width:100%;min-width:0;max-width:100%}
 
@@ -842,3 +851,31 @@ img.broken{visibility:hidden}
 .player-settings .subtitle-delay output{min-width:64px;text-align:center;font-variant-numeric:tabular-nums;opacity:.85}
 .player-settings .subtitle-delay button{min-width:34px}
 .player-settings .subtitle-delay .subtitle-delay-reset svg{width:16px;height:16px}
+
+.library-manager{display:grid;gap:12px}
+.library-manager-section{grid-column:1/-1}
+.library-manager-section .library-manager{grid-template-columns:repeat(auto-fill,minmax(320px,1fr))}
+.library-manager-section .library-manager-actions,.library-manager-section .identify-hint{grid-column:1/-1}
+.library-manager-actions{display:flex;gap:8px;flex-wrap:wrap}
+.library-admin-row{display:grid;gap:7px;padding:12px;border:1px solid var(--line);border-radius:10px;background:#10151d}
+.library-admin-row.unreachable{border-color:#e7b86766}
+.library-admin-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:space-between}
+.library-admin-root{font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.library-admin-controls{display:flex;flex-wrap:wrap;gap:14px;align-items:end}
+.library-admin-controls>label{display:grid;gap:4px;font-size:10px;color:var(--muted)}
+.library-admin-controls label.library-check{display:flex;align-items:center;gap:7px;font-size:11px;color:var(--text)}
+.library-admin-controls label.library-check input,.library-scan-now input{width:auto}
+.library-admin-controls select{width:auto;min-width:120px;padding:7px 10px;font-size:11px}
+.library-admin-buttons{display:flex;flex-wrap:wrap;gap:8px}
+.library-admin-buttons button{padding:7px 11px;font-size:11px}
+.library-badge{font-style:normal;font-size:10px;font-weight:700;color:var(--muted);border:1px solid var(--line);border-radius:99px;padding:2px 8px;margin-left:6px}
+.library-badge.warn{color:#e7b867;border-color:#e7b86766;background:#2a2113}
+.library-manager-card{width:min(760px,100%)}
+.library-picker-card{width:min(520px,100%)}
+.library-picker-manual{display:flex;gap:8px}
+.library-picker-manual input{font-size:12px}
+.library-picker-use{justify-content:flex-start}
+.library-picker-fields{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.library-picker-fields label{display:grid;gap:5px;font-size:10px;color:var(--muted)}
+.library-scan-now{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text)}
+@media(max-width:700px){.library-picker-fields,.library-manager-section .library-manager{grid-template-columns:1fr}}

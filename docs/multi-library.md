@@ -177,13 +177,56 @@ again after every rebase onto `main`.
 
 ### PR 4 — Library manager, root browse, cross-library move
 
-- [ ] Not started.
-- [ ] `GET /api/library/browse` with an empty path lists the configured libraries as
-      `kind: "library"` rows and the interface renders them; replaces the PR 3 answer.
-- [ ] Follow-up from PR 1: `e2e/tests/layout/screenshots.spec.ts` drops the diagnostics
+- [x] `GET /api/library/browse` with an empty path lists the configured libraries as
+      `kind: "library"` rows while more than one is configured, and still passes through to
+      the single configured library, so a one-library install is untouched. The row carries
+      the id, name, type, enabled flag, counts, reachability and the root's poster. A
+      library that is switched off or away stays listed and says so: configured is what
+      counts, and a browse root that changed shape when a drive spun down would be worse
+      than a row with a warning. A disabled library's row shows zero counts because the
+      walk skips it; the media is still on disk. Counts come from the walks the library
+      listing already holds, so opening the root does not walk the tree again. The
+      `err.libraryRootAmbiguous` answer from PR 3 is gone, and so is the 500 an install
+      with no library left would have raised.
+- [x] The interface renders those `kind: "library"` rows: name, type, counts, a disabled
+      or unreachable warning, the root's poster, and the open action. Clicking one opens it
+      (a disabled row is not clickable). Breadcrumb segment zero is resolved through the
+      library list, so an id is never shown. The sort, direction, favourite, tile and filter
+      controls are hidden while the library list is on screen: none of them applies to a
+      handful of rows. The root list, the breadcrumbs and the pass-through are covered in
+      `e2e/tests/library-admin.spec.ts`; the layout baselines keep running against a
+      single-library install, so they are unchanged.
+- [x] The library manager: a settings section plus the same panel behind the library tools,
+      with add, rename, type, enable, the artwork-writing switch, re-root, remove,
+      remove-and-forget and scan this library. Add walks the granted roots, grants a folder
+      typed by hand when the deployment has no native dialog, shows the estimate before
+      anything is written and offers "scan metadata now". Re-root patches the root and lets
+      the probe decide `writeArtwork` again. A user grant can be revoked from the picker;
+      the libraries under it are disabled and nothing is deleted. An operator grant is not
+      revocable from the interface, and `GET /api/libraries/browse` now says where each grant
+      came from so a folder can be told apart from one an operator mounted. Restricted mode
+      renders the list without a single control -- the API would refuse every one of them.
+      Covered by `e2e/tests/library-admin.spec.ts` (manager dialog, picker, estimate, rename,
+      the disabled row) and the settings part of `e2e/tests/restricted.spec.ts`.
+- [x] The cross-library move (§10). `POST /api/library/move` takes a destination in another
+      library: the type gate refuses a film into a `series` library and the reverse with
+      `err.libraryTypeMismatch`, with the kind taken from the item's binding and otherwise from
+      the source library's units; a `mixed` destination takes anything, and so does a unit
+      nobody can type. `LibraryMetaStore.relocate` carries the bindings across, writing both
+      files in one call, with the destination's own path winning on a collision. The thumbnails
+      move between `data/artwork/<id>/` directories and the cache index follows them, so the
+      ceiling keeps counting real bytes. `pruneEmptiedFolders` runs on the source library only.
+      An existing name at the destination fails with `err.nameTaken` -- no `(2)` suffixing. The
+      move dialog offers the libraries that take this kind of title and walks the picked one's
+      own tree, and the browse rows now carry the bound kind so it can decide. Covered by the
+      store and artwork-cache unit tests and by `e2e/tests/library-move.spec.ts`, which also
+      checks the bytes on disk and that the emptied folder went with them.
+- [x] Follow-up from PR 1: `e2e/tests/layout/screenshots.spec.ts` drops the diagnostics
       report chip before the settings screenshot. The chip is per-run noise inside a masked
       section, but its width decided whether the header wrapped at the narrow viewports, so
       the baseline used to match only when the recorded run happened to report three digits.
+      The chip is removed from the DOM after the settings page settles and before the
+      screenshot is taken; the diagnostics section remains masked as before.
 
 ### PR 5 — Operations queue and bulk selection
 

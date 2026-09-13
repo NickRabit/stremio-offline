@@ -106,6 +106,15 @@ export class ArtworkCache {
     await this.evict();
   }
 
+  /** A thumbnail whose key changed is the same picture in a new place: the index entry has
+   *  to follow, or the ceiling counts bytes that are no longer there and the sweep deletes
+   *  the wrong file. */
+  async moved(from: string, to: string) {
+    const name = this.storedName(from);
+    if (name) { this.entries.delete(name); this.save(); }
+    await this.written(to);
+  }
+
   /** Serving refreshes an entry, so a picture somebody keeps looking at is not the first
    *  one dropped. The index write itself is debounced, like every other write here. */
   async served(file: string) {

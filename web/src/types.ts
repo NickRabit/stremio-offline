@@ -126,12 +126,38 @@ export interface LibrarySummary {
 export interface LibraryPage extends LibrarySummary { files: LibraryFile[]; total: number }
 export type LibraryMatch = "unmatched" | "matched" | "suggested" | "rejected";
 export interface MatchSuggestion { type: string; id: string; name: string; year?: number; score: number }
-export interface BrowseMeta { year?: string; description?: string; catalogName?: string; match?: LibraryMatch; skipLookup?: boolean; suggestion?: MatchSuggestion }
+export interface BrowseMeta {
+  year?: string; description?: string; catalogName?: string; match?: LibraryMatch; skipLookup?: boolean; suggestion?: MatchSuggestion;
+  /** The kind of the title this row is bound to. Absent when nothing is bound, and the
+   *  move dialog then offers every library rather than refusing on a guess. */
+  titleType?: "movie" | "series";
+}
 export interface BrowseFolder extends BrowseMeta { path: string; name: string; fileCount: number; size: number; poster?: string }
 export interface BrowseFile extends LibraryFile, BrowseMeta { poster?: string; progress?: { position: number; duration: number } }
+export type LibraryType = "movie" | "series" | "mixed";
+/** One configured library as a row of the browse root. Only shown while more than one is
+ *  configured; a single-library install still opens straight into the tree. */
+export interface BrowseLibrary {
+  kind: "library"; libraryId: string; name: string; label: string; type: LibraryType;
+  enabled: boolean; fileCount: number; titles: number; size: number;
+  unreachable: boolean; readOnly: boolean; path: string; poster?: string;
+}
+/** One library in `GET /api/libraries`. `root` is absent in restricted mode. */
+export interface LibraryView {
+  id: string; name: string; type: LibraryType; root?: string; enabled: boolean; order: number;
+  addedAt: string; writeArtwork: boolean; unreachable: boolean; readOnly: boolean;
+  defaultMovie: boolean; defaultSeries: boolean; titles: number; files: number; bytes: number;
+}
 export type BrowseItem =
   | ({ kind: "folder"; favorite?: boolean } & BrowseFolder)
-  | ({ kind: "file"; favorite?: boolean } & BrowseFile);
+  | ({ kind: "file"; favorite?: boolean } & BrowseFile)
+  | BrowseLibrary;
+/** One entry of the settings backup: ids do not travel, roots do. */
+export interface LibraryGrant { path: string; source: "env" | "user"; grantedAt: string; writable: boolean }
+/** One row of the root picker. `libraryRoot` marks the folder that is a library's root. */
+export interface GrantEntry { name: string; path: string; writable: boolean; source?: "env" | "user"; libraryId?: string; libraryRoot?: boolean }
+export interface GrantBrowse { path: string; parent: string | null; entries: GrantEntry[] }
+export interface LibraryEstimate { root: string; type: LibraryType; titles: number; identified: number; files: number; truncated: boolean }
 export interface IdentityPreview {
   path: string; key: string; kind: "movie" | "series"; file: boolean; label: string;
   parsed: { title: string; query: string; year?: number; season?: number; episode?: number };

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -59,6 +59,20 @@ test("serving a thumbnail keeps it out of the eviction order", async () => {
     await put(cache, "lib_aaaaaaaa/Three.mkv", 4096);
     await assert.rejects(stat(first), "the one nobody asked for is the one dropped");
     assert.equal((await stat(second)).size, 4096);
+  });
+});
+
+test("a moved thumbnail keeps its bytes counted under the new key", async () => {
+  await withCache(1024 * 1024, async (cache, dir) => {
+    const from = await put(cache, "lib_aaaaaaaa/Show/01.mkv", 2048);
+    const to = cache.file("lib_bbbbbbbb/Archive/01.mkv");
+    await mkdir(path.dirname(to), { recursive: true });
+    await rename(from, to);
+    await cache.moved(from, to);
+    await cache.flush();
+    const stored = await readFile(path.join(dir, "index.json"), "utf8");
+    assert.deepEqual(Object.keys(JSON.parse(stored)), [path.join("lib_bbbbbbbb", hash("Archive/01.mkv"))]);
+    assert.equal(cache.size, 1);
   });
 });
 

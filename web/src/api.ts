@@ -1,5 +1,5 @@
 import { serverText, t } from "./i18n";
-import type { ActiveStream, Diagnostics, BuildInfo, AuthStatus, StatsSummary, Addon, AddonDownloadSettings, Capabilities, Catalog, Download, DownloadSelection, DownloadSnapshot, Inspection, BrowseResult, IdentityPreview, LibraryFolder, LibraryPage, ProgressEntry, WatchlistEntry, LibrarySummary, Meta, PlaybackSession, ScanState, SearchResult, SearchableCatalog, SuggestionRow, Session, Settings, SettingsBackup, SettingsPatch, Stream, Subtitle } from "./types";
+import type { ActiveStream, Diagnostics, BuildInfo, AuthStatus, StatsSummary, Addon, AddonDownloadSettings, Capabilities, Catalog, Download, DownloadSelection, DownloadSnapshot, Inspection, BrowseResult, IdentityPreview, LibraryFolder, LibraryPage, ProgressEntry, WatchlistEntry, GrantBrowse, LibraryEstimate, LibraryGrant, LibrarySummary, LibraryType, LibraryView, Meta, PlaybackSession, ScanState, SearchResult, SearchableCatalog, SuggestionRow, Session, Settings, SettingsBackup, SettingsPatch, Stream, Subtitle } from "./types";
 
 /** The status code has to reach the top, or a sign-out is indistinguishable from an ordinary error. */
 export class ApiError extends Error {
@@ -106,7 +106,7 @@ export const api = {
   librarySuggestions: () => request<{ items: SuggestionRow[]; total: number }>("/api/library/suggestions"),
   dismissLibrarySuggestion: (key: string) => request<void>(`/api/library/suggestion?${q({ key })}`, { method: "DELETE" }),
   libraryScan: () => request<ScanState>("/api/library/scan"),
-  startLibraryScan: (body: { force?: boolean; path?: string } = {}) =>
+  startLibraryScan: (body: { force?: boolean; path?: string; libraryId?: string } = {}) =>
     request<ScanState>("/api/library/scan", { method: "POST", body: JSON.stringify(body) }),
   stopLibraryScan: () => request<void>("/api/library/scan/stop", { method: "POST" }),
   watchlist: () => request<WatchlistEntry[]>("/api/watchlist"),
@@ -127,6 +127,20 @@ export const api = {
     request<BrowseResult>(`/api/library/resume?${q({ ...options, favorites: options.favorites ? 1 : undefined })}`),
   favorites: (options: { skip?: number; limit?: number; sort?: string; order?: string; seed?: string }) =>
     request<BrowseResult>(`/api/library/favorites?${q({ skip: options.skip || undefined, limit: options.limit ?? 60, sort: options.sort || undefined, order: options.order || undefined, seed: options.seed || undefined })}`),
+  /** The configured libraries. `root` is withheld in restricted mode. */
+  libraries: () => request<LibraryView[]>("/api/libraries"),
+  createLibrary: (body: { name: string; type: LibraryType; root: string; create?: boolean; writeArtwork?: boolean }) =>
+    request<LibraryView>("/api/libraries", { method: "POST", body: JSON.stringify(body) }),
+  updateLibrary: (id: string, patch: { name?: string; type?: LibraryType; enabled?: boolean; order?: number; writeArtwork?: boolean; root?: string }) =>
+    request<LibraryView>(`/api/libraries/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  deleteLibrary: (id: string, forget = false) =>
+    request<void>(`/api/libraries/${encodeURIComponent(id)}${forget ? "?forget=1" : ""}`, { method: "DELETE" }),
+  libraryGrants: () => request<LibraryGrant[]>("/api/libraries/grants"),
+  grantLibraryRoot: (path: string) => request<LibraryGrant[]>("/api/libraries/grants", { method: "POST", body: JSON.stringify({ path }) }),
+  revokeLibraryGrant: (path: string) => request<LibraryGrant[]>(`/api/libraries/grants?${q({ path })}`, { method: "DELETE" }),
+  browseGrants: (path = "") => request<GrantBrowse>(`/api/libraries/browse?${q({ path: path || undefined })}`),
+  previewLibrary: (body: { root: string; type: LibraryType }) =>
+    request<LibraryEstimate>("/api/libraries/preview", { method: "POST", body: JSON.stringify(body) }),
   browse: (options: { path?: string; query?: string; skip?: number; limit?: number; sort?: string; order?: string; seed?: string; favorites?: boolean }) =>
     request<BrowseResult>(`/api/library/browse?${q({
       path: options.path || undefined, query: options.query || undefined,

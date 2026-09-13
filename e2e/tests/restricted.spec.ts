@@ -92,5 +92,10 @@ test.describe("restricted mode", () => {
     await expect(page.locator("button.diagnostics-toggle")).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Change credentials" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Sign out everywhere" })).toHaveCount(0);
+    // The library list is readable, without the controls the API would refuse.
+    const manager = page.locator(".library-manager");
+    await expect(manager.locator(".library-admin-row")).toHaveCount(1);
+    await expect(manager.getByRole("button", { name: "Add library", exact: true })).toHaveCount(0);
+    await expect(manager.getByRole("button", { name: "Remove", exact: true })).toHaveCount(0);
   });
 });
