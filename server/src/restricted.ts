@@ -28,6 +28,11 @@ export const DENIED_GETS: Rule[] = [
   { method: "GET", pattern: /^\/settings\/export$/ },
   { method: "GET", pattern: /^\/logs$/ },
   { method: "GET", pattern: /^\/diagnostics$/ },
+  // Both name directories on the host, which the picker exists to disclose on an install
+  // whose owner is at the keyboard. `GET /libraries` stays allowed: it carries names,
+  // types and counts, and the interface renders nothing else.
+  { method: "GET", pattern: /^\/libraries\/browse$/ },
+  { method: "GET", pattern: /^\/libraries\/grants$/ },
 ];
 
 /** Authenticated writes that remain legal in restricted mode. Open paths are skipped before this list. */
