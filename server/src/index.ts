@@ -1003,7 +1003,9 @@ function scheduleFolderArtwork(key: string) {
 /** Thumbnails in the data directory outlive the video. After a scan the ones whose source
  *  is gone are removed. Saving next to the video has no such problem: the picture goes with
  *  the folder. Each library is swept on its own, and only while its root can actually be
- *  read: a mount that is down must never cost the user the thumbnails stored on it. */
+ *  read: a mount that is down must never cost the user the thumbnails stored on it.
+ *  A read-only root is readable, so the valid set is computable and the sweep runs: the
+ *  thumbnails it deletes live in `data/artwork/<libraryId>/`, which is writable anyway. */
 let lastArtworkSweep = 0;
 async function sweepArtwork() {
   if (Date.now() - lastArtworkSweep < 10 * 60_000) return;
@@ -1016,7 +1018,7 @@ async function sweepArtwork() {
   const health = (library: LibraryRecord) => libraryHealth.get(library.id);
   let removed = 0;
   for (const library of store.libraries()) {
-    if (!library.enabled || library.readOnly || health(library)?.readOnly || health(library)?.unreachable) continue;
+    if (!library.enabled || health(library)?.unreachable) continue;
     if (!await rootReadable(library.root)) {
       log("WARN", "The library root could not be read, its thumbnails are left alone", { library: library.name, root: library.root });
       continue;
