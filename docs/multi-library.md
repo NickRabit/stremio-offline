@@ -18,10 +18,14 @@ branch and leaves the tree buildable and tested.
 - [x] `libraries.ts`: ids, POSIX helpers, path parsing, carve-outs, `resolveLibraryPath`.
 - [x] POSIX wire rule through `library.ts` and `library-match.ts`.
 - [x] `schemaVersion`, `libraries` in state, `library-migrate.ts` and its unit tests.
-- [ ] `resolveLibraryPath` at every `index.ts` call site and in the download queue.
+- [x] `resolveLibraryPath` at every `index.ts` call site and in the download queue. The
+      wire stays relative while one library is configured, so the interface is unchanged;
+      `wirePath`/`libraryKey` are the only translation points.
 - [x] Artwork re-keying in the same migration. Queue targets stay library-relative
       until per-library save rules land (PR 6); only keys in `state.json` are qualified.
-- [ ] Verification: build, unit suites, e2e upgrade spec.
+- [ ] Verification: build, unit suites, e2e upgrade spec. The Playwright fixture
+      seeds a v1 `state.json`, so every end-to-end run now boots through the migration;
+      a dedicated assertion on the migrated result belongs with the library chrome (PR 4).
 
 ### PR 2 — Metadata store split and cache policy
 

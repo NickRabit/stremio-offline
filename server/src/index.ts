@@ -27,7 +27,7 @@ import { configureSecureMode, secureMode, securityHeaders } from "./secure.js";
 import { publicSettings, Store } from "./store.js";
 import { advanceTorrent, normalizeToken, verifyRealDebridToken } from "./debrid.js";
 import { clearLog, currentLevel, flushLog, initLogger, log, parseLevel, readLog, startLogMaintenance, setLevel } from "./logger.js";
-import { browseDirectory, describePath, emptiedFolders, entryDirectory, isPathWithin, isVideo, listFolders, listVideos, moveDestination, orphanedCatalogKeys, pageFiles, remapPath, resolveInside, scanLibrary, sortFiles, summarize } from "./library.js";
+import { browseDirectory, describePath, emptiedFolders, entryDirectory, isPathWithin, isVideo, listFolders, listVideos, moveDestination, orphanedCatalogKeys, pageFiles, remapPath, scanLibrary, sortFiles, summarize } from "./library.js";
 import { browseMeta, cacheFieldsFromMeta, episodeKey, episodeNumberOf, episodesFromMeta, dropKeyed, knownTitleOf, lookupSkipped, matchKeyFor, matchStatus, needsBackfill, needsEpisodes, pinInherited, remapKeyed, scanMiss, suggestionFor, titleUnits, unmatchAt, type LibraryMetaRecord } from "./library-match.js";
 import { parseMediaPath } from "./library-parse.js";
 import { LibraryScan } from "./library-scan.js";
@@ -42,14 +42,21 @@ import type { MediaInfo } from "./naming.js";
 import { defaultDownloadSettings, deviceFilename, normalizeDownloadSettings, safeName } from "./naming.js";
 import { LANGUAGE_NAMES, isUiLanguage, normalizeLanguage } from "./language.js";
 import { AppError, messageKeyOf } from "./errors.js";
+import { libraryPath, posixBase, posixDir, posixJoin, relativeWithin, resolveLibraryPath, toFs } from "./libraries.js";
+import { migrateStateFile } from "./library-migrate.js";
 import type { AddonRecord, AddonRole, MetaItem, StreamItem } from "./types.js";
 import { createSettingsBackup, parseSettingsBackup } from "./backup.js";
 
 const STREAM_SORTS = new Set(["recommended", "size-desc", "size-asc", "addon"]);
-const app = express(); const store = new Store();
+const DATA_DIR = process.env.DATA_DIR ?? "/data";
+const DOWNLOAD_DIR = process.env.DOWNLOAD_DIR ?? "/downloads";
+// Before anything reads the state: a v1 file gains its library and qualified keys.
+const libraryMigration = await migrateStateFile(DATA_DIR, DOWNLOAD_DIR);
+const app = express(); const store = new Store(DATA_DIR, DOWNLOAD_DIR);
 let markServerReady!: () => void;
 const serverReady = new Promise<void>((resolve) => { markServerReady = resolve; });
 await store.load();
+if (libraryMigration.migrated) log("INFO", "State migrated to libraries", { libraryId: libraryMigration.libraryId, paths: libraryMigration.paths, artwork: libraryMigration.artwork });
 // A level chosen in the interface outlives the container it was chosen in.
 const savedLevel = parseLevel(store.settings().logLevel);
 if (savedLevel) setLevel(savedLevel);
@@ -180,12 +187,15 @@ const trackMedia = (owner: ResourceOwner, res: express.Response, resourceId?: st
   activeMedia.add(active);
   res.once("close", () => activeMedia.delete(active));
 };
-const libraryTarget = async (relative: string) => {
-  const target = resolveInside(DOWNLOAD_DIR, relative);
-  if (!target || relative.split(/[\\/]/).some((part) => part.startsWith("."))) throw new ResourceError(404, "RESOURCE_NOT_FOUND");
-  const [root, resolved] = await Promise.all([realpath(DOWNLOAD_DIR), realpath(target)]);
-  if (!isPathWithin(resolved, root)) throw new ResourceError(404, "RESOURCE_NOT_FOUND");
-  return resolved;
+/** The one guard every library file read goes through: it refuses a dot segment, a
+ *  traversal and a symlink that leaves the root, whether the client sent a relative
+ *  path or a qualified key. */
+const libraryTarget = async (value: string) => {
+  const resolved = await resolveLibraryPath(store.libraries(), value);
+  if (!resolved) throw new ResourceError(404, "RESOURCE_NOT_FOUND");
+  const real = await realpath(resolved.absolute).catch(() => undefined);
+  if (!real) throw new ResourceError(404, "RESOURCE_NOT_FOUND");
+  return real;
 };
 const safeInspection = (info: Awaited<ReturnType<PlaybackManager["inspect"]>>, stream: StreamItem) => ({
   duration: info?.duration,
@@ -604,7 +614,6 @@ const noteSourceQuiet = (key: string) => {
 };
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const DOWNLOAD_DIR = process.env.DOWNLOAD_DIR ?? "/downloads";
 const DEVICE_TICKET_TTL = 24 * 60 * 60_000;
 type DeviceDownloadTicket = {
   owner: ResourceOwner;
@@ -619,6 +628,14 @@ const pruneDeviceDownloadTickets = () => {
   // Bound memory use on long-running servers; expired links can be recreated with another click.
   while (deviceDownloadTickets.size > 500) deviceDownloadTickets.delete(deviceDownloadTickets.keys().next().value!);
 };
+/** PR 1 keeps one library: the legacy root, addressed through its id. Every path
+ *  inside the server is a qualified key; the client still speaks relative paths and
+ *  `wirePath` is the single place that turns one back into the other. */
+const primaryLibrary = () => store.libraries()[0]!;
+const libraryKey = (relative: string) => libraryPath(primaryLibrary().id, relative);
+const wirePath = (key: string) => relativeWithin(primaryLibrary().id, key);
+const mediaPath = (key: string, ...rest: string[]) => path.join(primaryLibrary().root, toFs(posixJoin(relativeWithin(primaryLibrary().id, key), ...rest)));
+
 const metaCache = new Map<string, { value: MetaItem | null; at: number }>();
 const cachedMeta = async (type: string, id: string) => {
   const key = `${type}:${id}`;
@@ -635,16 +652,16 @@ let videoCache: { at: number; files: Awaited<ReturnType<typeof listVideos>> } | 
 const invalidateLibrary = () => { libraryCache = undefined; videoCache = undefined; };
 const libraryFiles = async () => {
   if (videoCache && Date.now() - videoCache.at < 30_000) return videoCache.files;
-  const files = await listVideos(DOWNLOAD_DIR);
+  const files = (await listVideos(primaryLibrary().root)).map((file) => ({ ...file, relative: libraryKey(file.relative) }));
   videoCache = { at: Date.now(), files };
   return files;
 };
 const libraryEntries = async () => {
   if (libraryCache && Date.now() - libraryCache.at < 30_000) return libraryCache.entries;
-  const entries = await scanLibrary(DOWNLOAD_DIR);
+  const entries = await scanLibrary(primaryLibrary().root);
   const known = store.libraryMeta();
   for (const entry of entries) {
-    const record = knownTitleOf(entry.key, known);
+    const record = knownTitleOf(libraryKey(entry.key), known);
     if (!record) continue;
     entry.meta = {
       type: record.type, id: record.id, name: record.name,
@@ -672,12 +689,12 @@ const dataArtworkFile = (key: string) => path.join(ARTWORK_DIR, `${createHash("s
 /** Someone else's picture in the folder always wins: nothing is overwritten or regenerated. */
 async function locateArtwork(entry: Awaited<ReturnType<typeof scanLibrary>>[number]) {
   const directory = entryDirectory(entry);
-  const folder = path.join(DOWNLOAD_DIR, directory);
   if (directory) {
+    const folder = mediaPath(directory);
     const existing = await findArtwork(folder);
     if (existing) return path.join(folder, existing);
   }
-  const own = dataArtworkFile(entry.key);
+  const own = dataArtworkFile(libraryKey(entry.key));
   return await fileExists(own) ? own : undefined;
 }
 
@@ -690,15 +707,15 @@ function scheduleArtwork(entry: Awaited<ReturnType<typeof scanLibrary>>[number])
     if (await locateArtwork(entry)) return;
     const toMedia = store.settings().artworkLocation === "media";
     const directory = entryDirectory(entry);
-    const target = toMedia && directory ? path.join(DOWNLOAD_DIR, directory, POSTER_OUTPUT) : dataArtworkFile(entry.key);
+    const target = toMedia && directory ? path.join(mediaPath(directory), POSTER_OUTPUT) : dataArtworkFile(libraryKey(entry.key));
     await mkdir(path.dirname(target), { recursive: true });
-    if (await catalogPosterIfBound(entry.key, target)) return;
+    if (await catalogPosterIfBound(libraryKey(entry.key), target)) return;
     if (await locateArtwork(entry)) return;
-    if (await catalogPosterIfBound(entry.key, target)) return;
+    if (await catalogPosterIfBound(libraryKey(entry.key), target)) return;
     const source = entry.files[0];
     if (!source) return;
     const info = await playback.inspect({ url: `file://${source.path}` }).catch(() => undefined);
-    if (await saveFrame(path.join(DOWNLOAD_DIR, source.path), target, framePosition(info?.duration))) {
+    if (await saveFrame(mediaPath(source.path), target, framePosition(info?.duration))) {
       log("INFO", "Thumbnail generated from the video", { key: entry.key });
     }
   });
@@ -717,18 +734,15 @@ app.get("/api/library", asyncRoute(async (_req, res) => {
 }));
 
 /** The binding may sit on the file or on any parent folder. An id-less sentinel is ignored. */
-const knownTitle = (relative: string) => knownTitleOf(relative, store.libraryMeta());
+const knownTitle = (key: string) => knownTitleOf(key, store.libraryMeta());
 
 /** Thumbnail of one video. Next to the video it is looked up by Jellyfin's naming convention. */
-async function locateFileArtwork(relative: string) {
-  const media = path.join(DOWNLOAD_DIR, path.dirname(relative), episodeArtName(path.basename(relative)));
+async function locateFileArtwork(key: string) {
+  const media = path.join(posixDir(mediaPath(key)), episodeArtName(posixBase(key)));
   if (await fileExists(media)) return media;
-  const own = dataArtworkFile(relative);
+  const own = dataArtworkFile(key);
   if (await fileExists(own)) return own;
-  const parent = path.dirname(relative);
-  if (fileMayUseFolderArtwork(relative, knownTitle(relative)?.type)) {
-    return locateFolderArtwork(parent);
-  }
+  if (fileMayUseFolderArtwork(key, knownTitle(key)?.type)) return locateFolderArtwork(posixDir(key));
   return undefined;
 }
 
@@ -766,12 +780,12 @@ const scheduleMetaBackfill = (type: string, id: string) => {
   return true;
 };
 
-const isFileKey = (key: string) => isVideo(path.basename(key));
+const isFileKey = (key: string) => isVideo(posixBase(key));
 const hashedArt = (key: string) => isFileKey(key) ? dataArtworkFile(key) : dataArtworkFile(`dir:${key}`);
 const mediaPosterExists = async (key: string) => {
-  const folder = isFileKey(key) ? path.dirname(key) : key;
-  if (!folder || folder === ".") return false;
-  return Boolean(await findArtwork(path.join(DOWNLOAD_DIR, folder)));
+  const folder = isFileKey(key) ? posixDir(key) : key;
+  if (!folder) return false;
+  return Boolean(await findArtwork(mediaPath(folder)));
 };
 const writeCatalogPoster = async (key: string, url?: string) => {
   if (!url || !key || key === ".") return false;
@@ -782,8 +796,8 @@ const writeCatalogPoster = async (key: string, url?: string) => {
   const asFile = isFileKey(key);
   const target = toMedia
     ? (asFile
-      ? path.join(DOWNLOAD_DIR, path.dirname(key), episodeArtName(path.basename(key)))
-      : path.join(DOWNLOAD_DIR, key, POSTER_OUTPUT))
+      ? path.join(posixDir(mediaPath(key)), episodeArtName(posixBase(key)))
+      : path.join(mediaPath(key), POSTER_OUTPUT))
     : hashedArt(key);
   await mkdir(path.dirname(target), { recursive: true });
   return savePosterAs(target, url);
@@ -795,21 +809,22 @@ const ownRecord = (relative: string, records: Record<string, LibraryMetaRecord>)
 
 /** Generated thumbnails of a path and everything under it. A changed binding makes
  *  them stale: the poster of the old title, or a frame grabbed while unmatched. */
-const clearGeneratedArt = async (relative: string) => {
-  await rm(dataArtworkFile(relative), { force: true });
-  await rm(dataArtworkFile(`dir:${relative}`), { force: true });
+const clearGeneratedArt = async (key: string) => {
+  await rm(dataArtworkFile(key), { force: true });
+  await rm(dataArtworkFile(`dir:${key}`), { force: true });
   for (const file of await libraryFiles()) {
-    if (file.relative !== relative && isPathWithin(file.relative, relative)) await rm(dataArtworkFile(file.relative), { force: true });
+    if (file.relative !== key && isPathWithin(file.relative, key)) await rm(dataArtworkFile(file.relative), { force: true });
   }
 };
 
 const attachBrowseMeta = <T extends { path: string; kind: string; name?: string; label?: string }>(item: T) => {
   const records = store.libraryMeta();
   const episodes = store.libraryEpisodes();
+  const key = libraryKey(item.path);
   const label = item.kind === "folder" ? String(item.name ?? "") : String(item.label ?? "");
-  const extra = browseMeta(item.path, label, records, store.librarySuggestions(), episodes);
-  const known = knownTitleOf(item.path, records);
-  const numbers = item.kind === "file" ? episodeNumberOf(item.path, ownRecord(item.path, records)) : undefined;
+  const extra = browseMeta(key, label, records, store.librarySuggestions(), episodes);
+  const known = knownTitleOf(key, records);
+  const numbers = item.kind === "file" ? episodeNumberOf(key, ownRecord(key, records)) : undefined;
   const wanted = needsBackfill(known) || needsEpisodes(known, numbers, episodes);
   const backfill = wanted && scheduleMetaBackfill(known!.type, known!.id);
   return { item: { ...item, ...extra }, backfill };
@@ -817,16 +832,16 @@ const attachBrowseMeta = <T extends { path: string; kind: string; name?: string;
 
 /** An episode gets its own still. Falling back to the series poster would paint
  *  the same picture on every row, so it is left to the frame grabber instead. */
-async function catalogPosterIfBound(relative: string, target: string) {
+async function catalogPosterIfBound(key: string, target: string) {
   const records = store.libraryMeta();
-  const known = knownTitleOf(relative, records);
+  const known = knownTitleOf(key, records);
   if (!known) return false;
-  if (known.type === "series" && isVideo(path.basename(relative))) {
-    const numbers = episodeNumberOf(relative, ownRecord(relative, records));
+  if (known.type === "series" && isVideo(posixBase(key))) {
+    const numbers = episodeNumberOf(key, ownRecord(key, records));
     const row = numbers ? store.libraryEpisodes()[episodeKey(known.type, known.id, numbers.season, numbers.episode)] : undefined;
     if (!row?.thumbnail) return false;
     if (await savePosterAs(target, row.thumbnail)) {
-      log("INFO", "Episode still filled in from metadata", { path: relative });
+      log("INFO", "Episode still filled in from metadata", { path: key });
       return true;
     }
     return false;
@@ -834,60 +849,60 @@ async function catalogPosterIfBound(relative: string, target: string) {
   const meta = await cachedMeta(known.type, known.id);
   if (!meta?.poster) return false;
   if (await savePosterAs(target, meta.poster)) {
-    log("INFO", "Poster filled in from metadata", { path: relative });
+    log("INFO", "Poster filled in from metadata", { path: key });
     return true;
   }
   return false;
 }
 
-function scheduleFileArtwork(relative: string) {
+function scheduleFileArtwork(key: string) {
   // Same guard as scheduleArtwork: a page reload while the frame grab is still
   // running must not pile up another one behind it.
-  if (artworkQueue.has(`file:${relative}`)) return;
-  artworkQueue.run(`file:${relative}`, async () => {
-    if (await locateFileArtwork(relative)) return;
-    const source = resolveInside(DOWNLOAD_DIR, relative);
+  if (artworkQueue.has(`file:${key}`)) return;
+  artworkQueue.run(`file:${key}`, async () => {
+    if (await locateFileArtwork(key)) return;
+    const source = await realpath(mediaPath(key)).catch(() => undefined);
     if (!source) return;
     const target = store.settings().artworkLocation === "media"
-      ? path.join(DOWNLOAD_DIR, path.dirname(relative), episodeArtName(path.basename(relative)))
-      : dataArtworkFile(relative);
+      ? path.join(posixDir(mediaPath(key)), episodeArtName(posixBase(key)))
+      : dataArtworkFile(key);
     await mkdir(path.dirname(target), { recursive: true });
-    if (await catalogPosterIfBound(relative, target)) return;
-    if (await locateFileArtwork(relative)) return;
-    if (await catalogPosterIfBound(relative, target)) return;
-    const info = await playback.inspect({ url: `file://${relative}` }).catch(() => undefined);
+    if (await catalogPosterIfBound(key, target)) return;
+    if (await locateFileArtwork(key)) return;
+    if (await catalogPosterIfBound(key, target)) return;
+    const info = await playback.inspect({ url: `file://${wirePath(key)}` }).catch(() => undefined);
     await saveFrame(source, target, framePosition(info?.duration));
   });
 }
 
 /** Folder thumbnail: its own picture, then the poster from metadata, otherwise a frame from the first video inside. */
-async function locateFolderArtwork(relative: string) {
-  const folder = path.join(DOWNLOAD_DIR, relative);
+async function locateFolderArtwork(key: string) {
+  const folder = mediaPath(key);
   const existing = await findArtwork(folder);
   if (existing) return path.join(folder, existing);
-  const own = dataArtworkFile(`dir:${relative}`);
+  const own = dataArtworkFile(`dir:${key}`);
   return await fileExists(own) ? own : undefined;
 }
 
-function scheduleFolderArtwork(relative: string) {
-  if (artworkQueue.has(`dir:${relative}`)) return;
-  artworkQueue.run(`dir:${relative}`, async () => {
-    if (await locateFolderArtwork(relative)) return;
+function scheduleFolderArtwork(key: string) {
+  if (artworkQueue.has(`dir:${key}`)) return;
+  artworkQueue.run(`dir:${key}`, async () => {
+    if (await locateFolderArtwork(key)) return;
     const toMedia = store.settings().artworkLocation === "media";
-    const target = toMedia ? path.join(DOWNLOAD_DIR, relative, POSTER_OUTPUT) : dataArtworkFile(`dir:${relative}`);
+    const target = toMedia ? path.join(mediaPath(key), POSTER_OUTPUT) : dataArtworkFile(`dir:${key}`);
     await mkdir(path.dirname(target), { recursive: true });
-    if (await catalogPosterIfBound(relative, target)) return;
-    if (await locateFolderArtwork(relative)) return;
-    if (await catalogPosterIfBound(relative, target)) return;
-    const inside = await browseDirectory(DOWNLOAD_DIR, relative, "", 0, 20);
+    if (await catalogPosterIfBound(key, target)) return;
+    if (await locateFolderArtwork(key)) return;
+    if (await catalogPosterIfBound(key, target)) return;
+    const inside = await browseDirectory(primaryLibrary().root, relativeWithin(primaryLibrary().id, key), "", 0, 20);
     let first = inside.items.find((item) => item.kind === "file");
     if (!first) {
       const sub = inside.items.find((item) => item.kind === "folder");
-      if (sub) first = (await browseDirectory(DOWNLOAD_DIR, sub.path, "", 0, 20)).items.find((item) => item.kind === "file");
+      if (sub) first = (await browseDirectory(primaryLibrary().root, sub.path, "", 0, 20)).items.find((item) => item.kind === "file");
     }
     if (!first) return;
     const info = await playback.inspect({ url: `file://${first.path}` }).catch(() => undefined);
-    await saveFrame(path.join(DOWNLOAD_DIR, first.path), target, framePosition(info?.duration));
+    await saveFrame(mediaPath(first.path), target, framePosition(info?.duration));
   });
 }
 
@@ -906,12 +921,12 @@ async function sweepArtwork() {
     }
   };
   for (const entry of await libraryEntries()) {
-    valid.add(path.basename(dataArtworkFile(entry.key)));
-    for (const file of entry.files) remember(file.path);
+    valid.add(path.basename(dataArtworkFile(libraryKey(entry.key))));
+    for (const file of entry.files) remember(libraryKey(file.path));
   }
   // The poster is saved when the job is queued, while the source does not exist yet.
   // Without this the sweep would delete it before the download finishes.
-  for (const job of queue.list()) remember(job.target);
+  for (const job of queue.list()) remember(libraryKey(job.target));
 
   let removed = 0;
   for (const name of await readdir(ARTWORK_DIR).catch(() => [] as string[])) {
@@ -956,22 +971,26 @@ app.post("/api/watchlist", asyncRoute(async (req, res) => {
 
 // Resume list: the position is reported as it goes, and a finished title forgets itself.
 const PROGRESS_DONE = 0.94;
+/** The client speaks relative paths; a stored progress entry is keyed by the qualified
+ *  one. A catalogue title key is not a path and travels untouched. */
+const storedProgressKey = (key: string) => key.startsWith("file:") ? `file:${libraryKey(key.slice(5))}` : key;
+const wireProgressKey = (key: string) => key.startsWith("file:") ? `file:${wirePath(key.slice(5))}` : key;
 app.get("/api/progress", (_req, res) => {
   const all = store.progress();
   const items = Object.entries(all)
-    .map(([key, value]) => ({ key, ...value, poster: images.proxied(value.poster) }))
+    .map(([key, value]) => ({ ...value, key: wireProgressKey(key), path: value.path ? wirePath(value.path) : value.path, poster: images.proxied(value.poster) }))
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
     .slice(0, 40);
   res.json(items);
 });
 app.get("/api/progress/:key", (req, res) => {
-  const found = store.progress()[String(req.params.key)];
+  const found = store.progress()[storedProgressKey(String(req.params.key))];
   res.json(found ? { ...found, poster: images.proxied(found.poster) } : null);
 });
 app.post("/api/progress", asyncRoute(async (req, res) => {
   // With tracking switched off the position is written nowhere.
   if (!store.settings().trackProgress) return res.status(204).end();
-  const key = String(req.body.key ?? "").trim();
+  const key = storedProgressKey(String(req.body.key ?? "").trim());
   const position = Number(req.body.position) || 0;
   const duration = Number(req.body.duration) || 0;
   if (!key) throw new AppError("Missing title key.", "err.missingTitleKey");
@@ -982,7 +1001,7 @@ app.post("/api/progress", asyncRoute(async (req, res) => {
     else all[key] = {
       position, duration,
       title: String(req.body.title ?? all[key]?.title ?? "Video"),
-      path: req.body.path ? String(req.body.path) : all[key]?.path,
+      path: req.body.path ? libraryKey(String(req.body.path)) : all[key]?.path,
       poster: posterOf(req.body.poster) ?? all[key]?.poster,
       updatedAt: new Date().toISOString(),
     };
@@ -998,17 +1017,18 @@ app.delete("/api/progress", asyncRoute(async (_req, res) => {
   res.status(204).end();
 }));
 app.delete("/api/progress/:key", asyncRoute(async (req, res) => {
-  await store.update((state) => { const all = { ...state.progress }; delete all[String(req.params.key)]; state.progress = all; });
+  await store.update((state) => { const all = { ...state.progress }; delete all[storedProgressKey(String(req.params.key))]; state.progress = all; });
   res.status(204).end();
 }));
 
 app.post("/api/library/favorite", asyncRoute(async (req, res) => {
   const relative = String(req.body.path ?? "").trim();
-  if (!relative || !resolveInside(DOWNLOAD_DIR, relative)) throw new AppError("Invalid path.", "err.invalidPath");
+  const resolved = relative ? await resolveLibraryPath(store.libraries(), relative) : undefined;
+  if (!resolved) throw new AppError("Invalid path.", "err.invalidPath");
   const wanted = Boolean(req.body.favorite);
   await store.update((state) => {
     const current = new Set(state.favorites ?? []);
-    if (wanted) current.add(relative); else current.delete(relative);
+    if (wanted) current.add(resolved.key); else current.delete(resolved.key);
     state.favorites = [...current];
   });
   res.json({ path: relative, favorite: wanted });
@@ -1019,10 +1039,10 @@ app.get("/api/library/resume", asyncRoute(async (req, res) => {
   const query = String(req.query.query ?? "").trim().toLocaleLowerCase();
   const entries = Object.entries(store.progress()).filter(([key, entry]) => key.startsWith("file:") && entry.path);
   const described = await Promise.all(entries.map(async ([, entry]) => {
-    const item = await describePath(DOWNLOAD_DIR, entry.path!);
+    const item = await describePath(primaryLibrary().root, wirePath(entry.path!));
     if (!item || item.kind !== "file") return [];
     return [{ ...item, label: entry.title || item.label, modified: entry.updatedAt,
-      progress: { position: entry.position, duration: entry.duration }, favorite: favorites.has(item.path) }];
+      progress: { position: entry.position, duration: entry.duration }, favorite: favorites.has(libraryKey(item.path)) }];
   }));
   const items = described.flat().filter((item) => (!query || item.label.toLocaleLowerCase().includes(query)) && (req.query.favorites !== "1" || item.favorite));
   const sorts = new Set(["name", "added", "size", "random"]);
@@ -1031,8 +1051,8 @@ app.get("/api/library/resume", asyncRoute(async (req, res) => {
   const skip = Math.max(0, Number(req.query.skip) || 0);
   const limit = Math.max(1, Math.min(120, Number(req.query.limit) || 60));
   const page = await Promise.all(ordered.slice(skip, skip + limit).map(async (item) => {
-    const art = await locateFileArtwork(item.path);
-    if (!art) scheduleFileArtwork(item.path);
+    const art = await locateFileArtwork(libraryKey(item.path));
+    if (!art) scheduleFileArtwork(libraryKey(item.path));
     const { item: withMeta, backfill } = attachBrowseMeta(item);
     return { ...withMeta, poster: await thumbUrl("path", item.path, art), backfill };
   }));
@@ -1042,7 +1062,7 @@ app.get("/api/library/resume", asyncRoute(async (req, res) => {
 app.get("/api/library/favorites", asyncRoute(async (req, res) => {
   const sorts = new Set(["name", "added", "size", "random"]);
   const sort = sorts.has(String(req.query.sort)) ? String(req.query.sort) as "name" : "name";
-  const described = await Promise.all(store.favorites().map((relative) => describePath(DOWNLOAD_DIR, relative)));
+  const described = await Promise.all(store.favorites().map((key) => describePath(primaryLibrary().root, wirePath(key))));
   // Paths that disappeared meanwhile are skipped but not dropped from the list:
   // the disk may be temporarily unavailable, and losing favourites over that is worse.
   const present = described.filter(Boolean) as NonNullable<typeof described[number]>[];
@@ -1053,8 +1073,9 @@ app.get("/api/library/favorites", asyncRoute(async (req, res) => {
   const skip = Math.max(0, Number(req.query.skip) || 0);
   const limit = Math.max(1, Math.min(120, Number(req.query.limit) || 60));
   const page = await Promise.all(ordered.slice(skip, skip + limit).map(async (item) => {
-    const art = item.kind === "folder" ? await locateFolderArtwork(item.path) : await locateFileArtwork(item.path);
-    if (!art) (item.kind === "folder" ? scheduleFolderArtwork : scheduleFileArtwork)(item.path);
+    const key = libraryKey(item.path);
+    const art = item.kind === "folder" ? await locateFolderArtwork(key) : await locateFileArtwork(key);
+    if (!art) (item.kind === "folder" ? scheduleFolderArtwork : scheduleFileArtwork)(key);
     const poster = await thumbUrl(item.kind === "folder" ? "dir" : "path", item.path, art);
     const { item: withMeta, backfill } = attachBrowseMeta(item);
     return { ...withMeta, favorite: true, poster, backfill };
@@ -1068,21 +1089,21 @@ app.get("/api/library/browse", asyncRoute(async (req, res) => {
   const sorts = new Set(["name", "added", "size", "random"]);
   const sort = sorts.has(String(req.query.sort)) ? String(req.query.sort) as "name" : "name";
   const onlyFavorites = req.query.favorites === "1";
-  const favoritePaths = onlyFavorites ? new Set(store.favorites()) : undefined;
+  const favoritePaths = onlyFavorites ? new Set(store.favorites().map(wirePath)) : undefined;
   void sweepArtwork();
-  const result = await browseDirectory(DOWNLOAD_DIR, relative, String(req.query.query ?? ""),
+  const result = await browseDirectory(primaryLibrary().root, relative, String(req.query.query ?? ""),
     Math.max(0, Number(req.query.skip) || 0), limit, sort, req.query.order === "desc", String(req.query.seed ?? ""), favoritePaths);
   // Missing thumbnails are produced in the background; the client asks for the page again shortly.
   const items = await Promise.all(result.items.map(async (item) => {
     if (item.kind === "folder") {
-      const art = await locateFolderArtwork(item.path);
-      if (!art) scheduleFolderArtwork(item.path);
+      const art = await locateFolderArtwork(libraryKey(item.path));
+      if (!art) scheduleFolderArtwork(libraryKey(item.path));
       const { item: withMeta, backfill } = attachBrowseMeta(item);
       return { ...withMeta, poster: await thumbUrl("dir", item.path, art), backfill };
     }
-    const art = await locateFileArtwork(item.path);
-    if (!art) scheduleFileArtwork(item.path);
-    const watched = store.progress()[`file:${item.path}`];
+    const art = await locateFileArtwork(libraryKey(item.path));
+    if (!art) scheduleFileArtwork(libraryKey(item.path));
+    const watched = store.progress()[`file:${libraryKey(item.path)}`];
     const { item: withMeta, backfill } = attachBrowseMeta(item);
     return {
       ...withMeta,
@@ -1099,22 +1120,22 @@ app.get("/api/library/browse", asyncRoute(async (req, res) => {
 
 /** Everything the store remembers about a path, dropped in one go. Returns the catalogue
  *  titles that nothing points at any more, for the log. */
-const forgetLibraryPath = async (relative: string) => {
+const forgetLibraryPath = async (key: string) => {
   // The resume list and the watchlist are keyed by catalogue title, not by path, so a
   // deleted file would leave the title hanging in both, offering to continue something
   // that is no longer on disk. libraryMeta knows the catalogue binding -- it is read
   // before this cleanup deletes it.
-  const orphans = orphanedCatalogKeys(store.libraryMeta(), relative);
+  const orphans = orphanedCatalogKeys(store.libraryMeta(), key);
   await store.update((state) => {
-    state.favorites = (state.favorites ?? []).filter((item) => !isPathWithin(item, relative));
-    state.libraryMeta = dropKeyed(state.libraryMeta ?? {}, relative);
-    state.librarySuggestions = dropKeyed(state.librarySuggestions ?? {}, relative);
-    state.progress = Object.fromEntries(Object.entries(state.progress ?? {}).filter(([key, value]) => {
-      if (orphans.has(key)) return false;
-      const itemPath = key.startsWith("file:") ? key.slice(5) : value.path;
-      return !itemPath || !isPathWithin(itemPath, relative);
+    state.favorites = (state.favorites ?? []).filter((item) => !isPathWithin(item, key));
+    state.libraryMeta = dropKeyed(state.libraryMeta ?? {}, key);
+    state.librarySuggestions = dropKeyed(state.librarySuggestions ?? {}, key);
+    state.progress = Object.fromEntries(Object.entries(state.progress ?? {}).filter(([progressKey, value]) => {
+      if (orphans.has(progressKey)) return false;
+      const itemPath = progressKey.startsWith("file:") ? progressKey.slice(5) : value.path;
+      return !itemPath || !isPathWithin(itemPath, key);
     }));
-    state.watchlist = Object.fromEntries(Object.entries(state.watchlist ?? {}).filter(([key]) => !orphans.has(key)));
+    state.watchlist = Object.fromEntries(Object.entries(state.watchlist ?? {}).filter(([watchKey]) => !orphans.has(watchKey)));
   });
   return orphans;
 };
@@ -1122,18 +1143,18 @@ const forgetLibraryPath = async (relative: string) => {
 /** Every stored binding uses the relative path, so a move has to keep them all consistent.
  *  `pin` is for a move into another folder: the identity an item inherited from the folder
  *  it is leaving has to become its own, or the destination's title would take over. */
-const relocateLibraryPath = (relative: string, nextRelative: string, pin = false) => store.update((state) => {
+const relocateLibraryPath = (key: string, nextKey: string, pin = false) => store.update((state) => {
   const pinned = pin
-    ? pinInherited(state.libraryMeta ?? {}, state.librarySuggestions ?? {}, relative, nextRelative)
+    ? pinInherited(state.libraryMeta ?? {}, state.librarySuggestions ?? {}, key, nextKey)
     : { meta: state.libraryMeta ?? {}, suggestions: state.librarySuggestions ?? {} };
-  state.favorites = (state.favorites ?? []).map((item) => remapPath(item, relative, nextRelative));
-  state.libraryMeta = remapKeyed(pinned.meta, relative, nextRelative);
-  state.librarySuggestions = remapKeyed(pinned.suggestions, relative, nextRelative);
-  state.progress = Object.fromEntries(Object.entries(state.progress ?? {}).map(([key, value]) => {
-    const filePath = key.startsWith("file:") ? key.slice(5) : undefined;
-    const nextKey = filePath ? `file:${remapPath(filePath, relative, nextRelative)}` : key;
-    const nextPath = value.path ? remapPath(value.path, relative, nextRelative) : value.path;
-    return [nextKey, { ...value, path: nextPath }];
+  state.favorites = (state.favorites ?? []).map((item) => remapPath(item, key, nextKey));
+  state.libraryMeta = remapKeyed(pinned.meta, key, nextKey);
+  state.librarySuggestions = remapKeyed(pinned.suggestions, key, nextKey);
+  state.progress = Object.fromEntries(Object.entries(state.progress ?? {}).map(([progressKey, value]) => {
+    const filePath = progressKey.startsWith("file:") ? progressKey.slice(5) : undefined;
+    const nextProgressKey = filePath ? `file:${remapPath(filePath, key, nextKey)}` : progressKey;
+    const nextPath = value.path ? remapPath(value.path, key, nextKey) : value.path;
+    return [nextProgressKey, { ...value, path: nextPath }];
   }));
 });
 
@@ -1149,15 +1170,14 @@ const relocateArtwork = async (items: string[], relative: string, nextRelative: 
 
 /** The folder the last video just left is litter, so it goes too -- up the tree for as long
  *  as the parent holds nothing to watch either. */
-const pruneEmptiedFolders = async (relative: string) => {
-  const gone = await emptiedFolders(DOWNLOAD_DIR, relative);
+const pruneEmptiedFolders = async (key: string) => {
+  const gone = await emptiedFolders(primaryLibrary().root, wirePath(key));
   for (const folder of gone) {
-    const target = resolveInside(DOWNLOAD_DIR, folder);
-    if (!target || target === path.resolve(DOWNLOAD_DIR)) continue;
-    await rm(target, { recursive: true, force: true });
-    await rm(dataArtworkFile(folder), { force: true });
-    await rm(dataArtworkFile(`dir:${folder}`), { force: true });
-    await forgetLibraryPath(folder);
+    const folderKey = libraryKey(folder);
+    await rm(mediaPath(folderKey), { recursive: true, force: true });
+    await rm(dataArtworkFile(folderKey), { force: true });
+    await rm(dataArtworkFile(`dir:${folderKey}`), { force: true });
+    await forgetLibraryPath(folderKey);
   }
   if (gone.length) log("INFO", "Emptied folders removed", { folders: gone });
   return gone;
@@ -1165,15 +1185,15 @@ const pruneEmptiedFolders = async (relative: string) => {
 
 app.delete("/api/library/item", asyncRoute(async (req, res) => {
   const relative = String(req.query.path ?? "").trim();
-  const target = relative && resolveInside(DOWNLOAD_DIR, relative);
-  if (!target || target === path.resolve(DOWNLOAD_DIR)) throw new AppError("Invalid path.", "err.invalidPath");
-  const info = await stat(target).catch(() => undefined);
+  const resolved = relative ? await resolveLibraryPath(store.libraries(), relative) : undefined;
+  if (!resolved || !resolved.relative) throw new AppError("Invalid path.", "err.invalidPath");
+  const info = await stat(resolved.absolute).catch(() => undefined);
   if (!info) throw new AppError("The file or folder does not exist.", "err.pathMissing");
-  await rm(target, { recursive: true, force: true });
-  await rm(dataArtworkFile(relative), { force: true });
-  await rm(dataArtworkFile(`dir:${relative}`), { force: true });
-  const orphans = await forgetLibraryPath(relative);
-  const pruned = await pruneEmptiedFolders(relative);
+  await rm(resolved.absolute, { recursive: true, force: true });
+  await rm(dataArtworkFile(resolved.key), { force: true });
+  await rm(dataArtworkFile(`dir:${resolved.key}`), { force: true });
+  const orphans = await forgetLibraryPath(resolved.key);
+  const pruned = await pruneEmptiedFolders(resolved.key);
   invalidateLibrary();
   log("INFO", "Deleted from the library", { path: relative, directory: info.isDirectory(), forgottenTitles: [...orphans], pruned });
   res.status(204).end();
@@ -1181,20 +1201,20 @@ app.delete("/api/library/item", asyncRoute(async (req, res) => {
 
 app.post("/api/library/rename", asyncRoute(async (req, res) => {
   const relative = String(req.body.path ?? "").trim();
-  const source = relative && resolveInside(DOWNLOAD_DIR, relative);
-  if (!source || source === path.resolve(DOWNLOAD_DIR)) throw new AppError("Invalid path.", "err.invalidPath");
-  const info = await stat(source).catch(() => undefined);
+  const resolved = relative ? await resolveLibraryPath(store.libraries(), relative) : undefined;
+  if (!resolved || !resolved.relative) throw new AppError("Invalid path.", "err.invalidPath");
+  const info = await stat(resolved.absolute).catch(() => undefined);
   if (!info) throw new AppError("The file or folder does not exist.", "err.pathMissing");
 
   const extension = info.isDirectory() ? "" : path.extname(relative);
   const wanted = safeName(String(req.body.name ?? "").replace(/\.[^.]+$/, ""));
-  const nextRelative = path.join(path.dirname(relative), `${wanted}${extension}`);
-  const target = resolveInside(DOWNLOAD_DIR, nextRelative);
+  const nextRelative = posixJoin(posixDir(relative), `${wanted}${extension}`);
+  const target = await resolveLibraryPath(store.libraries(), nextRelative);
   if (!target) throw new AppError("Invalid name.", "err.invalidName");
-  if (target !== source && await fileExists(target)) throw new AppError("A file with that name already exists.", "err.nameTaken");
+  if (target.absolute !== resolved.absolute && await fileExists(target.absolute)) throw new AppError("A file with that name already exists.", "err.nameTaken");
 
-  await rename(source, target);
-  await relocateLibraryPath(relative, nextRelative);
+  await rename(resolved.absolute, target.absolute);
+  await relocateLibraryPath(resolved.key, target.key);
   invalidateLibrary();
   log("INFO", "Renamed in the library", { from: relative, to: nextRelative });
   res.json({ path: nextRelative });
@@ -1204,54 +1224,56 @@ app.post("/api/library/rename", asyncRoute(async (req, res) => {
  *  into one of them is perfectly reasonable, so this lists them all. */
 app.get("/api/library/folders", asyncRoute(async (req, res) => {
   const relative = String(req.query.path ?? "").trim();
-  if (relative && !resolveInside(DOWNLOAD_DIR, relative)) throw new AppError("Invalid path.", "err.invalidPath");
-  res.json({ path: relative, folders: await listFolders(DOWNLOAD_DIR, relative) });
+  const resolved = await resolveLibraryPath(store.libraries(), relative);
+  if (!resolved) throw new AppError("Invalid path.", "err.invalidPath");
+  res.json({ path: relative, folders: await listFolders(primaryLibrary().root, resolved.relative) });
 }));
 
 app.post("/api/library/move", asyncRoute(async (req, res) => {
   const relative = String(req.body.path ?? "").trim();
-  const source = relative && resolveInside(DOWNLOAD_DIR, relative);
-  if (!source || source === path.resolve(DOWNLOAD_DIR)) throw new AppError("Invalid path.", "err.invalidPath");
-  const info = await stat(source).catch(() => undefined);
+  const resolved = relative ? await resolveLibraryPath(store.libraries(), relative) : undefined;
+  if (!resolved || !resolved.relative) throw new AppError("Invalid path.", "err.invalidPath");
+  const info = await stat(resolved.absolute).catch(() => undefined);
   if (!info) throw new AppError("The file or folder does not exist.", "err.pathMissing");
 
   const folder = String(req.body.folder ?? "").trim();
-  const folderTarget = resolveInside(DOWNLOAD_DIR, folder);
-  if (!folderTarget) throw new AppError("Invalid path.", "err.invalidPath");
-  const folderInfo = await stat(folderTarget).catch(() => undefined);
+  const folderResolved = await resolveLibraryPath(store.libraries(), folder);
+  if (!folderResolved) throw new AppError("Invalid path.", "err.invalidPath");
+  const folderInfo = await stat(folderResolved.absolute).catch(() => undefined);
   if (!folderInfo?.isDirectory()) throw new AppError("The destination folder does not exist.", "err.targetMissing");
 
-  const destination = moveDestination(relative, folder);
+  const destination = moveDestination(resolved.relative, folderResolved.relative);
   if ("error" in destination) {
     throw destination.error === "sameFolder"
       ? new AppError("The item is already in that folder.", "err.sameFolder")
       : new AppError("A folder cannot be moved into itself.", "err.moveIntoItself");
   }
-  const target = resolveInside(DOWNLOAD_DIR, destination.path);
+  const target = await resolveLibraryPath(store.libraries(), destination.path);
   if (!target) throw new AppError("Invalid path.", "err.invalidPath");
-  if (await fileExists(target)) throw new AppError("A file with that name already exists.", "err.nameTaken");
+  if (await fileExists(target.absolute)) throw new AppError("A file with that name already exists.", "err.nameTaken");
 
   // The thumbnails are keyed by path, so they are carried over rather than dropped:
   // the item is the same item and would otherwise lose its poster until a rescan.
-  const carried = [relative, ...(await libraryFiles())
-    .map((file) => file.relative).filter((item) => item !== relative && isPathWithin(item, relative))];
-  await rename(source, target);
-  await relocateArtwork(carried, relative, destination.path);
-  await relocateLibraryPath(relative, destination.path, true);
-  const pruned = await pruneEmptiedFolders(relative);
+  const carried = [resolved.key, ...(await libraryFiles())
+    .map((file) => file.relative).filter((item) => item !== resolved.key && isPathWithin(item, resolved.key))];
+  await rename(resolved.absolute, target.absolute);
+  await relocateArtwork(carried, resolved.key, target.key);
+  await relocateLibraryPath(resolved.key, target.key, true);
+  const pruned = await pruneEmptiedFolders(resolved.key);
   invalidateLibrary();
   log("INFO", "Moved in the library", { from: relative, to: destination.path, pruned });
   res.json({ path: destination.path });
 }));
 
 app.get("/api/library/thumb", asyncRoute(async (req, res) => {
-  const filePath = req.query.path ? String(req.query.path) : undefined;
-  const dirPath = req.query.dir ? String(req.query.dir) : undefined;
+  const filePath = req.query.path ? libraryKey(String(req.query.path)) : undefined;
+  const dirPath = req.query.dir ? libraryKey(String(req.query.dir)) : undefined;
   let art: string | undefined;
   if (filePath) art = await locateFileArtwork(filePath);
   else if (dirPath) art = await locateFolderArtwork(dirPath);
   else {
-    const entry = (await libraryEntries()).find((item) => item.key === String(req.query.key ?? ""));
+    const selected = String(req.query.key ?? "");
+    const entry = (await libraryEntries()).find((item) => item.key === wirePath(selected));
     art = entry && await locateArtwork(entry);
   }
   if (!art) return res.status(404).end();
@@ -1281,9 +1303,12 @@ const saveCatalogPoster = (key: string, url?: string) => {
 const hostOf = (url: string) => { try { return new URL(url).host; } catch { return ""; } };
 const scanGapMs = Number(process.env.LIBRARY_SCAN_GAP_MS);
 const libraryScan = new LibraryScan({
-  dataDir: process.env.DATA_DIR ?? "/data",
-  downloadDir: DOWNLOAD_DIR,
-  listVideos, titleUnits, searchAll, metadata,
+  dataDir: DATA_DIR,
+  downloadDir: primaryLibrary().root,
+  // The scan works on keys, so the walk it injects is the qualified one.
+  listVideos: async () => (await listVideos(primaryLibrary().root)).map((file) => ({ ...file, relative: libraryKey(file.relative) })),
+  pathExists: async (key: string) => { try { await access(mediaPath(key)); return true; } catch { return false; } },
+  titleUnits, searchAll, metadata,
   addons: () => store.addons(),
   libraryMeta: () => store.libraryMeta(),
   librarySuggestions: () => store.librarySuggestions(),
@@ -1321,14 +1346,15 @@ const libraryAutoScan = new LibraryAutoScan({
   status: () => libraryScan.snapshot(),
   start: () => libraryScan.start(),
   busy: () => playbackBusy() || (store.settings().libraryScanPauseOnDownload && queue.list().some((job) => job.status === "checking" || job.status === "downloading")),
-  watch: (onChange) => watchLibrary(DOWNLOAD_DIR, () => { invalidateLibrary(); onChange(); }),
+  watch: (onChange) => watchLibrary(primaryLibrary().root, () => { invalidateLibrary(); onChange(); }),
   ...(Number.isFinite(autoScanIntervalMs) ? { intervalMs: autoScanIntervalMs } : {}),
 });
 
 const rememberTitle = async (target: string, media: MediaInfo | undefined, flat: boolean) => {
   if (!media?.id) return;
-  const key = titleKey(target, media, flat);
-  if (!key || key === ".") return;
+  const relative = titleKey(target, media, flat);
+  if (!relative || relative === ".") return;
+  const key = libraryKey(relative);
   const type = media.metaType ?? (media.kind === "episode" ? "series" : "movie");
   const meta = await cachedMeta(type, media.id);
   const fields = cacheFieldsFromMeta(meta);
@@ -1377,29 +1403,29 @@ await stats.seed(queue.history().map(statEvent));
 
 app.get("/api/library/identity", asyncRoute(async (req, res) => {
   const relative = String(req.query.path ?? "").trim();
-  const target = relative && resolveInside(DOWNLOAD_DIR, relative);
-  if (!target) throw new AppError("Invalid path.", "err.invalidPath");
+  const resolved = relative ? await resolveLibraryPath(store.libraries(), relative) : undefined;
+  if (!resolved) throw new AppError("Invalid path.", "err.invalidPath");
   const files = await libraryFiles();
-  const key = matchKeyFor(relative, files);
-  const unit = titleUnits(files).find((item) => item.key === key);
+  const unitKey = matchKeyFor(resolved.key, files);
+  const unit = titleUnits(files).find((item) => item.key === unitKey);
   const records = store.libraryMeta();
   const suggestions = store.librarySuggestions();
-  const known = knownTitleOf(relative, records);
+  const known = knownTitleOf(resolved.key, records);
   if (needsBackfill(known)) scheduleMetaBackfill(known!.type, known!.id);
-  const suggestion = suggestionFor(key, suggestions);
-  const isFile = isVideo(path.basename(relative));
-  const numbers = episodeNumberOf(relative, ownRecord(relative, records));
+  const suggestion = suggestionFor(unitKey, suggestions);
+  const isFile = isVideo(posixBase(resolved.key));
+  const numbers = episodeNumberOf(resolved.key, ownRecord(resolved.key, records));
   const bound = known ? { type: known.type, id: known.id, name: known.name, season: known.season, episode: known.episode } : undefined;
   res.json({
     path: relative,
-    key,
+    key: wirePath(unitKey),
     // What the user clicked can be one file of a whole bound title, so the dialog
     // has to be able to say which of the two it is about to rewrite.
     file: isFile,
-    label: path.basename(relative),
+    label: posixBase(relative),
     kind: unit?.kind ?? (isFile && numbers ? "series" : "movie"),
-    parsed: { ...parseMediaPath(key), ...(numbers ? { season: numbers.season, episode: numbers.episode } : {}) },
-    match: matchStatus(relative, records, suggestions),
+    parsed: { ...parseMediaPath(unitKey), ...(numbers ? { season: numbers.season, episode: numbers.episode } : {}) },
+    match: matchStatus(resolved.key, records, suggestions),
     ...(bound?.id ? { bound } : {}),
     ...(suggestion ? { suggestion } : {}),
   });
@@ -1407,16 +1433,17 @@ app.get("/api/library/identity", asyncRoute(async (req, res) => {
 
 app.post("/api/library/match", asyncRoute(async (req, res) => {
   const requested = String(req.body.path ?? req.body.key ?? "").trim();
-  const target = requested && resolveInside(DOWNLOAD_DIR, requested);
-  if (!target) throw new AppError("Invalid path.", "err.invalidPath");
+  const resolved = requested ? await resolveLibraryPath(store.libraries(), requested) : undefined;
+  if (!resolved) throw new AppError("Invalid path.", "err.invalidPath");
+  const requestKey = resolved.key;
   const files = await libraryFiles();
-  const key = matchKeyFor(requested, files);
+  const unitKey = matchKeyFor(requestKey, files);
   if (typeof req.body.skipLookup === "boolean" && req.body.id === undefined) {
     await store.update((state) => {
       const next = { ...state.libraryMeta };
-      const current = next[requested];
+      const current = next[requestKey];
       if (req.body.skipLookup) {
-        next[requested] = {
+        next[requestKey] = {
           type: current?.type ?? "movie",
           id: current?.id ?? "",
           source: current?.source ?? "user",
@@ -1429,13 +1456,13 @@ app.post("/api/library/match", asyncRoute(async (req, res) => {
         };
       } else if (current?.id) {
         const { skipLookup: _skip, ...kept } = current;
-        next[requested] = kept;
-      } else delete next[requested];
+        next[requestKey] = kept;
+      } else delete next[requestKey];
       state.libraryMeta = next;
     });
     invalidateLibrary();
     log("INFO", req.body.skipLookup ? "Library path excluded from matching" : "Library path included in matching", { path: requested });
-    return res.json({ key: requested, skipLookup: req.body.skipLookup === true });
+    return res.json({ key: wirePath(requestKey), skipLookup: req.body.skipLookup === true });
   }
   const id = String(req.body.id ?? "");
   const type = String(req.body.type ?? "movie");
@@ -1446,7 +1473,7 @@ app.post("/api/library/match", asyncRoute(async (req, res) => {
   const episode = number(req.body.episode);
   const season = number(req.body.season);
   // "file" binds the one video the user clicked, "unit" the whole title it belongs to.
-  const bindKey = req.body.scope === "file" ? requested : key;
+  const bindKey = req.body.scope === "file" ? requestKey : unitKey;
   const meta = id ? await cachedMeta(type, id) : null;
   const fields = cacheFieldsFromMeta(meta);
   const episodeRows = episodesFromMeta(meta);
@@ -1455,7 +1482,7 @@ app.post("/api/library/match", asyncRoute(async (req, res) => {
     ? episodeRows[episodeKey(type, id, season ?? 1, episode)] : undefined;
   await store.update((state) => {
     let next = { ...state.libraryMeta };
-    if (!id) next = unmatchAt(next, requested);
+    if (!id) next = unmatchAt(next, requestKey);
     else {
       next[bindKey] = {
         type, id, source: "user", locked: true, skipLookup: false,
@@ -1463,21 +1490,21 @@ app.post("/api/library/match", asyncRoute(async (req, res) => {
         ...fields,
         ...(type === "series" && episode != null ? { season: season ?? 1, episode } : {}),
       };
-      if (requested !== bindKey) delete next[requested];
+      if (requestKey !== bindKey) delete next[requestKey];
     }
     state.libraryMeta = next;
     const suggestions = { ...state.librarySuggestions };
-    delete suggestions[key];
-    delete suggestions[requested];
+    delete suggestions[unitKey];
+    delete suggestions[requestKey];
     state.librarySuggestions = suggestions;
     if (Object.keys(episodeRows).length) state.libraryEpisodes = { ...state.libraryEpisodes, ...episodeRows };
   });
   invalidateLibrary();
   await clearGeneratedArt(bindKey);
-  if (requested !== bindKey) await clearGeneratedArt(requested);
+  if (requestKey !== bindKey) await clearGeneratedArt(requestKey);
   if (id) saveCatalogPoster(bindKey, episodeRow?.thumbnail ?? meta?.poster);
   log("INFO", "Library title matched", { key: bindKey, type, id: id || null, source: "user", ...(episode != null ? { season: season ?? 1, episode } : {}) });
-  res.json({ key: bindKey, type, id: id || null });
+  res.json({ key: wirePath(bindKey), type, id: id || null });
 }));
 
 /** What the scan proposed and nobody has confirmed yet. */
@@ -1485,13 +1512,15 @@ app.get("/api/library/suggestions", asyncRoute(async (_req, res) => {
   const records = store.libraryMeta();
   const items = Object.entries(store.librarySuggestions())
     .filter(([key, suggestion]) => suggestion.id && !knownTitleOf(key, records)?.id && !lookupSkipped(key, records))
-    .map(([key, suggestion]) => ({ key, label: path.basename(key), suggestion }))
+    .map(([key, suggestion]) => ({ key: wirePath(key), label: posixBase(key), suggestion }))
     .sort((a, b) => b.suggestion.score - a.suggestion.score);
   res.json({ items, total: items.length });
 }));
 app.delete("/api/library/suggestion", asyncRoute(async (req, res) => {
-  const key = String(req.query.key ?? "").trim();
-  if (!key) throw new AppError("Invalid path.", "err.invalidPath");
+  const requested = String(req.query.key ?? "").trim();
+  const resolved = requested ? await resolveLibraryPath(store.libraries(), requested) : undefined;
+  if (!resolved) throw new AppError("Invalid path.", "err.invalidPath");
+  const key = resolved.key;
   await store.update((state) => {
     const suggestions = { ...state.librarySuggestions };
     const previous = suggestions[key];
@@ -1505,8 +1534,9 @@ app.delete("/api/library/suggestion", asyncRoute(async (req, res) => {
 app.get("/api/library/scan", (_req, res) => res.json(libraryScan.snapshot()));
 app.post("/api/library/scan", asyncRoute(async (req, res) => {
   const requested = String(req.body?.path ?? "").trim();
-  if (requested && !resolveInside(DOWNLOAD_DIR, requested)) throw new AppError("Invalid path.", "err.invalidPath");
-  const state = await libraryScan.start({ force: req.body?.force === true, path: requested });
+  const resolved = requested ? await resolveLibraryPath(store.libraries(), requested) : undefined;
+  if (requested && !resolved) throw new AppError("Invalid path.", "err.invalidPath");
+  const state = await libraryScan.start({ force: req.body?.force === true, path: resolved?.key ?? "" });
   // A manual run covers the same ground, so the automatic one starts from here too.
   void libraryAutoScan.remember();
   res.json(state);
@@ -1517,17 +1547,19 @@ app.get(["/api/library/next/:sourceId", "/api/library/previous/:sourceId"], asyn
   res.setHeader("cache-control", "private, no-store");
   if (!source.url?.startsWith("file://")) return void res.json(null);
   const relative = source.url.slice(7);
-  await libraryTarget(relative);
-  const next = await nextVideoFile(resolveInside(DOWNLOAD_DIR, relative)!, req.path.startsWith("/api/library/previous/") ? -1 : 1);
+  const target = await libraryTarget(relative);
+  const next = await nextVideoFile(target, req.path.startsWith("/api/library/previous/") ? -1 : 1);
   res.json(next ? { path: path.posix.join(path.posix.dirname(relative), next), title: next } : null);
 }));
 
 app.post("/api/library/source", asyncRoute(async (req, res) => {
-  const relative = String(req.body.path ?? "");
-  const target = relative && await libraryTarget(relative);
-  if (!target || !(await stat(target).catch(() => undefined))?.isFile()) throw new ResourceError(404, "RESOURCE_NOT_FOUND");
+  const requested = String(req.body.path ?? "").trim();
+  const resolved = requested ? await resolveLibraryPath(store.libraries(), requested) : undefined;
+  const target = resolved && await libraryTarget(requested).catch(() => undefined);
+  if (!resolved || !target || !(await stat(target).catch(() => undefined))?.isFile()) throw new ResourceError(404, "RESOURCE_NOT_FOUND");
+  const relative = resolved.relative;
   const directory = path.dirname(target);
-  const stem = path.basename(relative, path.extname(relative));
+  const stem = posixBase(relative).replace(/\.[^.]+$/, "");
   const escaped = stem.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const sidecars = (await readdir(directory, { withFileTypes: true })).flatMap((entry) => {
     if (!entry.isFile()) return [];
@@ -1546,12 +1578,12 @@ app.post("/api/device-download", asyncRoute(async (req, res) => {
   const stream = await httpSourceOf(req);
   if (stream.url?.startsWith("file://")) {
     const relative = stream.url.slice(7);
-    const target = relative && resolveInside(DOWNLOAD_DIR, relative);
+    const target = relative ? await libraryTarget(relative).catch(() => undefined) : undefined;
     const info = target ? await stat(target).catch(() => undefined) : undefined;
     if (!target || !info?.isFile()) throw new ResourceError(404, "RESOURCE_NOT_FOUND");
     ticket = {
       owner, expiresAt: Math.min(owner.expiresAt, Date.now() + DEVICE_TICKET_TTL),
-      filename: path.basename(relative),
+      filename: posixBase(relative),
       source: { kind: "local", path: relative },
     };
   } else {
@@ -1665,7 +1697,8 @@ app.post("/api/downloads", asyncRoute(async (req, res) => {
   const targetSettings = media?.kind === "episode" ? settings.series : settings.movie;
   const job = await queue.add(String(req.body.title ?? "video"), stream, media, targetSettings);
   await rememberTitle(job.target, media, targetSettings.layout === "flat");
-  saveCatalogPoster(titleKey(job.target, media, targetSettings.layout === "flat"), media?.poster);
+  const posterKey = titleKey(job.target, media, targetSettings.layout === "flat");
+  if (posterKey && posterKey !== ".") saveCatalogPoster(libraryKey(posterKey), media?.poster);
   res.status(201).json(jobView(job));
 }));
 // Adding episodes in bulk: the jobs are lazy, streams are asked for at download time.
@@ -1805,7 +1838,7 @@ app.get("/api/diagnostics", asyncRoute(async (_req, res) => {
     addons: store.addons().map((addon) => ({ name: addon.manifest.name, role: addon.role, enabled: addon.enabled })),
     outbound: outbound.diagnostics(),
     libraryScan: libraryScan.snapshot(),
-    storage: [await freeSpace(process.env.DATA_DIR ?? "/data"), await freeSpace(DOWNLOAD_DIR)],
+    storage: [await freeSpace(DATA_DIR), await freeSpace(primaryLibrary().root)],
   });
 }));
 
