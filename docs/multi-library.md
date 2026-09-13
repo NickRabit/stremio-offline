@@ -139,6 +139,12 @@ again after every rebase onto `main`.
 - [ ] Follow-up for PR 6: `AddonDownloadSettings` carries no `libraryId` yet, so the delete
       path has no stored rule to fall back, and the queue has no job to pause with
       `pauseReason: "library"`. Both land with the per-library save rules.
+- [x] No reachable path throws the single-library pass-through at a call site that cannot
+      answer: `LibraryScanOpts.pathExists` is required and qualified, so the scan no longer
+      builds one from `downloadDir` at module load, and a state holding two libraries boots
+      instead of failing before the server listens. `GET /api/library/browse` with no path
+      answers a translated "open one of them" while more than one library is configured.
+      The root browse that lists them is PR 4's; this only stops it from being a 500.
 - [x] `LIBRARY_ROOTS` and `LIBRARY_META_TTL_DAYS` in `.env.example`, both compose files and
       `docs/configuration.md`, next to a short section on what a granted root is and what
       removing a library does and does not do.
@@ -148,6 +154,8 @@ again after every rebase onto `main`.
 ### PR 4 — Library manager, root browse, cross-library move
 
 - [ ] Not started.
+- [ ] `GET /api/library/browse` with an empty path lists the configured libraries as
+      `kind: "library"` rows and the interface renders them; replaces the PR 3 answer.
 - [ ] Follow-up from PR 1: `e2e/tests/layout/screenshots.spec.ts` drops the diagnostics
       report chip before the settings screenshot. The chip is per-run noise inside a masked
       section, but its width decided whether the header wrapped at the narrow viewports, so

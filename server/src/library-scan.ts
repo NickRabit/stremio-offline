@@ -1,4 +1,4 @@
-import { access, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { SearchResult } from "./addons.js";
 import { log } from "./logger.js";
@@ -38,7 +38,6 @@ export interface ScanState {
 
 export interface LibraryScanOpts {
   dataDir: string;
-  downloadDir: string;
   /** The walk is the host's: it spans libraries and knows each one's type, so the
    *  scan asks for units instead of building them from a single root. */
   units: () => Promise<TitleUnit[]>;
@@ -55,7 +54,8 @@ export interface LibraryScanOpts {
   savePoster: (key: string, url: string | undefined) => void;
   deleteGeneratedArt: (key: string) => Promise<void>;
   busy: () => ScanPauseReason | undefined;
-  pathExists?: (relative: string) => Promise<boolean>;
+  /** A key is qualified, so the scan cannot build a path from one root: the host resolves it. */
+  pathExists: (key: string) => Promise<boolean>;
   /** Libraries the interface touched since the last run. Only those pay for the
    *  metadata refresh: a two-thousand-title archive nobody looks at does not. */
   browsed?: () => ReadonlySet<string>;
@@ -111,10 +111,7 @@ export class LibraryScan {
     this.gapMs = opts.gapMs ?? 3_000;
     this.wakeMs = opts.wakeMs ?? 15_000;
     this.metaTtlMs = opts.metaTtlMs ?? 14 * 24 * 60 * 60_000;
-    this.pathExists = opts.pathExists ?? (async (relative) => {
-      try { await access(path.join(opts.downloadDir, relative)); return true; }
-      catch { return false; }
-    });
+    this.pathExists = opts.pathExists;
   }
 
   snapshot(): ScanState { return { ...this.state, remaining: [...this.state.remaining] }; }

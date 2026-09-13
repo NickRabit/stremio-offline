@@ -36,7 +36,6 @@ const harness = async (overrides: Partial<LibraryScanOpts> = {}) => {
   let busy: ScanPauseReason | undefined;
   const opts: LibraryScanOpts = {
     dataDir,
-    downloadDir: "/downloads",
     units: async () => [movie("Foo")],
     searchAll: async (_addons, query) => {
       searches.push(query);

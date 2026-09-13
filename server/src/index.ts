@@ -1503,7 +1503,12 @@ app.get("/api/library/browse", asyncRoute(async (req, res) => {
   void sweepArtwork();
   const resolved = requested ? await resolveLibraryPath(store.libraries(), requested) : undefined;
   if (requested && !resolved) throw new AppError("Invalid path.", "err.invalidPath");
-  // An empty path is the first library's root for as long as one library is configured.
+  // An empty path is the single library's root while that is the whole setup. The root
+  // browse that lists several libraries is the library chrome's job, so until it lands a
+  // multi-library install is told which one to open rather than shown the first one.
+  if (!resolved && store.libraries().length !== 1) {
+    throw new AppError("Several libraries are configured. Open one of them.", "err.libraryRootAmbiguous");
+  }
   const library = resolved?.library ?? singleLibrary();
   markBrowsed(library);
   const inLibrary = (path: string) => libraryPath(library.id, path);
@@ -1754,7 +1759,6 @@ const browsedLibraries = new Set<string>();
 const markBrowsed = (library: LibraryRecord) => { browsedLibraries.add(library.id); };
 const libraryScan = new LibraryScan({
   dataDir: DATA_DIR,
-  downloadDir: singleLibrary().root,
   // The scan works on keys, so the walk it injects is the qualified one.
   pathExists: async (key: string) => { try { await access(mediaPath(key)); return true; } catch { return false; } },
   units: async () => { await refreshLibraryHealth(); return libraryUnits(); },
