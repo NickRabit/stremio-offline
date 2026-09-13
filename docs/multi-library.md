@@ -188,8 +188,14 @@ again after every rebase onto `main`.
       listing already holds, so opening the root does not walk the tree again. The
       `err.libraryRootAmbiguous` answer from PR 3 is gone, and so is the 500 an install
       with no library left would have raised.
-- [ ] The interface renders those `kind: "library"` rows and resolves breadcrumb segment
-      zero through the library list, so it never shows `lib_ab12cd34`.
+- [x] The interface renders those `kind: "library"` rows: name, type, counts, a disabled
+      or unreachable warning, the root's poster, and the open action. Clicking one opens it
+      (a disabled row is not clickable). Breadcrumb segment zero is resolved through the
+      library list, so an id is never shown. The sort, direction, favourite, tile and filter
+      controls are hidden while the library list is on screen: none of them applies to a
+      handful of rows. The root list, the breadcrumbs and the pass-through are covered in
+      `e2e/tests/library-admin.spec.ts`; the layout baselines keep running against a
+      single-library install, so they are unchanged.
 - [ ] Follow-up from PR 1: `e2e/tests/layout/screenshots.spec.ts` drops the diagnostics
       report chip before the settings screenshot. The chip is per-run noise inside a masked
       section, but its width decided whether the header wrapped at the narrow viewports, so

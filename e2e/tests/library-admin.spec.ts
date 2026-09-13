@@ -71,6 +71,18 @@ test("a granted root is added, previewed and revoked without losing what it reme
     name: "Granted", type: "movie", enabled: false, fileCount: 0, unreachable: false,
   });
 
+  // The interface shows the same list, and the breadcrumb names the library instead of
+  // its id once one is opened.
+  await page.goto("/");
+  await page.getByRole("button", { name: "Knihovna", exact: true }).click();
+  const libraryRows = page.locator(".browse-item.library");
+  await expect(libraryRows).toHaveCount(2);
+  const grantedRow = libraryRows.filter({ hasText: "Granted" });
+  await expect(grantedRow).toContainText("Vypnutá");
+  await expect(grantedRow.getByRole("button").first()).toBeDisabled();
+  await libraryRows.filter({ hasText: "downloads" }).getByRole("button").first().click();
+  await expect(page.locator(".crumbs button", { hasText: "downloads" })).toBeVisible();
+
   // Cleanup through the API the test just used, so the run leaves one library behind.
   const removed = await request.delete(`/api/libraries/${library.id}?forget=1`);
   expect(removed.status()).toBe(204);

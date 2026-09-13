@@ -129,9 +129,24 @@ export interface MatchSuggestion { type: string; id: string; name: string; year?
 export interface BrowseMeta { year?: string; description?: string; catalogName?: string; match?: LibraryMatch; skipLookup?: boolean; suggestion?: MatchSuggestion }
 export interface BrowseFolder extends BrowseMeta { path: string; name: string; fileCount: number; size: number; poster?: string }
 export interface BrowseFile extends LibraryFile, BrowseMeta { poster?: string; progress?: { position: number; duration: number } }
+export type LibraryType = "movie" | "series" | "mixed";
+/** One configured library as a row of the browse root. Only shown while more than one is
+ *  configured; a single-library install still opens straight into the tree. */
+export interface BrowseLibrary {
+  kind: "library"; libraryId: string; name: string; label: string; type: LibraryType;
+  enabled: boolean; fileCount: number; titles: number; size: number;
+  unreachable: boolean; readOnly: boolean; path: string; poster?: string;
+}
+/** One library in `GET /api/libraries`. `root` is absent in restricted mode. */
+export interface LibraryView {
+  id: string; name: string; type: LibraryType; root?: string; enabled: boolean; order: number;
+  addedAt: string; writeArtwork: boolean; unreachable: boolean; readOnly: boolean;
+  defaultMovie: boolean; defaultSeries: boolean; titles: number; files: number; bytes: number;
+  }
 export type BrowseItem =
   | ({ kind: "folder"; favorite?: boolean } & BrowseFolder)
-  | ({ kind: "file"; favorite?: boolean } & BrowseFile);
+  | ({ kind: "file"; favorite?: boolean } & BrowseFile)
+  | BrowseLibrary;
 export interface IdentityPreview {
   path: string; key: string; kind: "movie" | "series"; file: boolean; label: string;
   parsed: { title: string; query: string; year?: number; season?: number; episode?: number };

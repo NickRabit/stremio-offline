@@ -1,5 +1,5 @@
 import { serverText, t } from "./i18n";
-import type { ActiveStream, Diagnostics, BuildInfo, AuthStatus, StatsSummary, Addon, AddonDownloadSettings, Capabilities, Catalog, Download, DownloadSelection, DownloadSnapshot, Inspection, BrowseResult, IdentityPreview, LibraryFolder, LibraryPage, ProgressEntry, WatchlistEntry, LibrarySummary, Meta, PlaybackSession, ScanState, SearchResult, SearchableCatalog, SuggestionRow, Session, Settings, SettingsBackup, SettingsPatch, Stream, Subtitle } from "./types";
+import type { ActiveStream, Diagnostics, BuildInfo, AuthStatus, StatsSummary, Addon, AddonDownloadSettings, Capabilities, Catalog, Download, DownloadSelection, DownloadSnapshot, Inspection, BrowseResult, IdentityPreview, LibraryFolder, LibraryPage, ProgressEntry, WatchlistEntry, LibrarySummary, LibraryType, LibraryView, Meta, PlaybackSession, ScanState, SearchResult, SearchableCatalog, SuggestionRow, Session, Settings, SettingsBackup, SettingsPatch, Stream, Subtitle } from "./types";
 
 /** The status code has to reach the top, or a sign-out is indistinguishable from an ordinary error. */
 export class ApiError extends Error {
@@ -127,6 +127,8 @@ export const api = {
     request<BrowseResult>(`/api/library/resume?${q({ ...options, favorites: options.favorites ? 1 : undefined })}`),
   favorites: (options: { skip?: number; limit?: number; sort?: string; order?: string; seed?: string }) =>
     request<BrowseResult>(`/api/library/favorites?${q({ skip: options.skip || undefined, limit: options.limit ?? 60, sort: options.sort || undefined, order: options.order || undefined, seed: options.seed || undefined })}`),
+  /** The configured libraries. `root` is withheld in restricted mode. */
+  libraries: () => request<LibraryView[]>("/api/libraries"),
   browse: (options: { path?: string; query?: string; skip?: number; limit?: number; sort?: string; order?: string; seed?: string; favorites?: boolean }) =>
     request<BrowseResult>(`/api/library/browse?${q({
       path: options.path || undefined, query: options.query || undefined,

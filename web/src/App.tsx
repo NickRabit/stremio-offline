@@ -18,7 +18,7 @@ import { languageName, locale, localeTag, serverText, setLocale, t, useI18n, typ
 import { canQueue, pickDefaultStream, repickStream, streamBadge, streamLanguages, streamSize, visibleCatalogStreams, type StreamSort } from "./streams";
 import { parseSearchScope } from "./search-scope";
 import { localizedDownloadTitle, mergeMetaDetail } from "./meta";
-import type { Addon, BuildInfo, Diagnostics, BrowseItem, BrowseResult, LibrarySort, ProgressEntry, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, DownloadSelection, Inspection, Meta, QueueHalt, ScanState, SearchableCatalog, Session, Settings as AppSettings, SettingsPatch, Stream, Subtitle, Video } from "./types";
+import type { Addon, BuildInfo, Diagnostics, BrowseItem, BrowseLibrary, BrowseResult, LibrarySort, LibraryType, LibraryView, ProgressEntry, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, DownloadSelection, Inspection, Meta, QueueHalt, ScanState, SearchableCatalog, Session, Settings as AppSettings, SettingsPatch, Stream, Subtitle, Video } from "./types";
 
 /** Library browsing choices survive both a section switch and a browser restart.
  * Private mode may forbid storage, hence the try/catch around everything. */
@@ -97,6 +97,7 @@ export function App() {
     scrollDirection.current.set(element, { top, travel: changed ? 0 : travel, until: changed ? now + 250 : previous.until });
     if (changed) update(next);
   }
+  type TreeItem = Extract<BrowseItem, { kind: "folder" | "file" }>;
   const [selectedCatalog, setSelectedCatalog] = useState(""); const [search, setSearch] = useState(""); const [items, setItems] = useState<Meta[]>([]); const [selected, setSelected] = useState<Meta | null>(null); const [selectedDownloadTitle, setSelectedDownloadTitle] = useState("");
   const [selectedVideo, setSelectedVideo] = useState<Video | null>(null); const [streams, setStreams] = useState<Stream[]>([]); const [selectedStream, setSelectedStream] = useState<Stream | null>(null); const [subtitles, setSubtitles] = useState<Subtitle[]>([]);
   const [sourcesLoaded, setSourcesLoaded] = useState(false);
@@ -111,6 +112,7 @@ export function App() {
   const [resumePreview, setResumePreview] = useState<BrowseResult | null>(null);
   const [favoritePreview, setFavoritePreview] = useState<BrowseResult | null>(null);
   const [browse, setBrowse] = useState<BrowseResult | null>(null);
+  const [libraries, setLibraries] = useState<LibraryView[]>([]);
   const [browsePath, setBrowsePath] = useState(""); const [browseQuery, setBrowseQuery] = useState("");
   const [browseSort, setBrowseSort] = useState<LibrarySort>(() => recall("sort", ["name", "added", "size", "random"] as const, "name") as LibrarySort);
   const [browseDesc, setBrowseDesc] = useState(() => recall("order", ["asc", "desc"] as const, "asc") === "desc");
@@ -261,7 +263,7 @@ export function App() {
     setScanHintDismissed(true);
     try { localStorage.setItem("library-scan-hint-dismissed", "1"); } catch { /* storage may be unavailable */ }
   };
-  const confirmSuggestion = async (item: BrowseItem) => {
+  const confirmSuggestion = async (item: TreeItem) => {
     setMenuFor(null);
     if (!item.suggestion) return;
     try {
@@ -271,7 +273,7 @@ export function App() {
       await loadBrowse(browsePath);
     } catch (error) { fail(error); }
   };
-  const dismissSuggestion = async (item: BrowseItem) => {
+  const dismissSuggestion = async (item: TreeItem) => {
     setMenuFor(null);
     try {
       await api.dismissLibrarySuggestion(item.path);
@@ -286,7 +288,7 @@ export function App() {
       notify(t("library.scanItemStarted"));
     } catch (error) { fail(error); }
   };
-  const matchActions = (item: BrowseItem) => {
+  const matchActions = (item: TreeItem) => {
     const match = item.match ?? "unmatched";
     const skipped = Boolean(item.skipLookup);
     return <>
@@ -308,13 +310,21 @@ export function App() {
         : <button onClick={() => void setCatalogLookup(item.path, false)}><SearchX/> {t("library.skipLookup")}</button>}
     </>;
   };
+  const libraryTypeLabel = (type: LibraryType) =>
+    t(type === "movie" ? "library.libraryTypeMovie" : type === "series" ? "library.libraryTypeSeries" : "library.libraryTypeMixed");
+  const libraryMeta = (item: BrowseLibrary) => [
+    libraryTypeLabel(item.type),
+    t("library.fileCount", { count: item.fileCount }),
+    bytes(item.size),
+    !item.enabled ? t("library.disabled") : item.unreachable ? t("library.unreachable") : item.readOnly ? t("library.readOnly") : "",
+  ].filter(Boolean).join(" · ");
   const folderMeta = (item: Extract<BrowseItem, { kind: "folder" }>) =>
     [item.year, t("library.fileCount", { count: item.fileCount }), bytes(item.size)].filter(Boolean).join(" · ");
   const fileMeta = (item: Extract<BrowseItem, { kind: "file" }>) =>
     browsePath === ":resume" && item.progress
       ? t("library.remaining", { time: fmtEta(Math.max(0, item.progress.duration - item.progress.position)) })
       : [item.year, bytes(item.size)].filter(Boolean).join(" · ");
-  const descriptionLine = (item: BrowseItem) => item.description
+  const descriptionLine = (item: TreeItem) => item.description
     ? (item.catalogName ? `${item.catalogName} · ${item.description}` : item.description)
     : item.match === "suggested" && item.suggestion
       ? t("library.suggestionLine", { name: item.suggestion.name, score: item.suggestion.score })
@@ -484,7 +494,7 @@ export function App() {
   }, []);
   const ready = Boolean(session);
   // Loading data only makes sense after signing in; before that it would just throw 401s.
-  useEffect(() => { if (!ready) return; refresh().catch(fail); loadDownloads(); api.settings().then((next) => { setSettings(next); setLocale(next.uiLanguage); }).catch(fail); api.languages().then(setLanguages).catch(() => undefined); }, [ready]);
+  useEffect(() => { if (!ready) return; refresh().catch(fail); loadDownloads(); api.libraries().then(setLibraries).catch(() => undefined); api.settings().then((next) => { setSettings(next); setLocale(next.uiLanguage); }).catch(fail); api.languages().then(setLanguages).catch(() => undefined); }, [ready]);
   // Which addons are worth searching changes as they are switched on and off.
   useEffect(() => { api.searchable().then(setSearchable).catch(() => undefined); }, [addons]);
   // Only a file probe knows the exact languages, so we run one for the chosen stream.
@@ -500,6 +510,9 @@ export function App() {
     if (Object.keys(rest).length) setSettings((current: AppSettings) => ({ ...current, ...rest }));
     try { setSettings(await api.updateSettings(patch)); notify(t("settings.saved")); } catch (e) { fail(e); }
   };
+  // An empty path with more than one library configured is the library list; a
+  // single-library install still opens straight into the tree.
+  const libraryList = browsePath === "" && libraries.length > 1;
   const loadBrowse = async (target = browsePath, skip = 0) => {
     const request = ++browseRequest.current;
     const wanted = JSON.stringify([target, browseQuery, browseSort, browseDesc, onlyFavorites]);
@@ -537,7 +550,7 @@ export function App() {
     // Every listed entry carries its own favourite flag; collecting them is enough.
     setLibraryFavorites((current) => {
       const next = new Set(current);
-      for (const item of browse.items) { if (item.favorite) next.add(item.path); else next.delete(item.path); }
+      for (const item of browse.items) { if (item.kind !== "library" && item.favorite) next.add(item.path); else next.delete(item.path); }
       return [...next];
     });
   }, [browse]);
@@ -1109,12 +1122,13 @@ export function App() {
             {browsePath === ":resume" && <span><ChevronRight/><button disabled>{t("library.continueWatching")}</button></span>}
             {!browsePath.startsWith(":") && browsePath.split("/").filter(Boolean).map((part, index, all) => <span key={part + index}>
               <ChevronRight/>
-              <button disabled={index === all.length - 1} onClick={() => { setBrowseQuery(""); setBrowsePath(all.slice(0, index + 1).join("/")); }}>{part}</button>
+              {/* Segment zero is a library id; the id is never shown. */}
+              <button disabled={index === all.length - 1} onClick={() => { setBrowseQuery(""); setBrowsePath(all.slice(0, index + 1).join("/")); }}>{index === 0 ? libraries.find((library) => library.id === part)?.name ?? part : part}</button>
             </span>)}
           </nav>
           <div className="browse-tools">
-            <div className="search-input"><Search/><input value={browseQuery} aria-label={t("library.filter")} placeholder={t("library.filterPlaceholder")} onChange={(event) => setBrowseQuery(event.target.value)}/></div>
-            <select aria-label={t("common.sorting")} value={browseSort} onChange={(event) => {
+            {!libraryList && <div className="search-input"><Search/><input value={browseQuery} aria-label={t("library.filter")} placeholder={t("library.filterPlaceholder")} onChange={(event) => setBrowseQuery(event.target.value)}/></div>}
+            {!libraryList && <select aria-label={t("common.sorting")} value={browseSort} onChange={(event) => {
               const next = event.target.value as LibrarySort;
               setBrowseSort(next);
               // Dates and sizes start with the largest value; names start with A.
@@ -1122,15 +1136,15 @@ export function App() {
             }}>
               <option value="name">{t("library.sortName")}</option><option value="added">{t(browsePath === ":resume" ? "library.sortLastWatched" : "library.sortAdded")}</option>
               <option value="size">{t("library.sortSize")}</option><option value="random">{t("library.sortRandom")}</option>
-            </select>
-            <button title={t(browseDesc ? "common.descending" : "common.ascending")} onClick={() => setBrowseDesc((value) => !value)} disabled={browseSort === "random"}>
+            </select>}
+            {!libraryList && <button title={t(browseDesc ? "common.descending" : "common.ascending")} onClick={() => setBrowseDesc((value) => !value)} disabled={browseSort === "random"}>
               {browseDesc ? <ArrowDown/> : <ArrowUp/>}
-            </button>
-            <button className={onlyFavorites ? "active-filter" : ""} title={t("library.onlyFavorites")} disabled={browsePath === ":favorites"}
-              onClick={() => setOnlyFavorites((value) => !value)}><Star/></button>
-            <button title={t(browseView === "grid" ? "library.viewRows" : "library.viewTiles")} onClick={() => setBrowseView((value) => value === "grid" ? "list" : "grid")}>
+            </button>}
+            {!libraryList && <button className={onlyFavorites ? "active-filter" : ""} title={t("library.onlyFavorites")} disabled={browsePath === ":favorites"}
+              onClick={() => setOnlyFavorites((value) => !value)}><Star/></button>}
+            {!libraryList && <button title={t(browseView === "grid" ? "library.viewRows" : "library.viewTiles")} onClick={() => setBrowseView((value) => value === "grid" ? "list" : "grid")}>
               {browseView === "grid" ? <List/> : <LayoutGrid/>}
-            </button>
+            </button>}
             <div className="library-maintenance" onKeyDown={(event) => {
               if (event.key === "Escape" && menuFor === ":library-tools") event.currentTarget.querySelector<HTMLButtonElement>(".library-maintenance-toggle")?.focus();
             }}>
@@ -1174,7 +1188,15 @@ export function App() {
             : <Empty icon={<HardDrive/>} title={t(browseQuery ? "library.emptyFilterTitle" : browsePath === ":resume" ? "library.emptyResumeTitle" : browsePath === ":favorites" || onlyFavorites ? "library.emptyFavoritesTitle" : "library.emptyTitle")} text={t(browseQuery ? "library.emptyFilterText" : browsePath === ":resume" ? "library.emptyResumeText" : browsePath === ":favorites" || onlyFavorites ? "library.emptyFavoritesText" : "library.emptyText")}/>)
           : <>
             <div className={browseView === "grid" ? "browse-grid" : "browse-rows"}>
-              {browse.items.map((item) => item.kind === "folder"
+              {browse.items.map((item) => item.kind === "library"
+                ? <article className={`browse-item library${item.unreachable ? " unreachable" : ""}`} key={item.path} data-path={item.path}>
+                    <button className="library-open" disabled={!item.enabled} onClick={() => { setBrowseQuery(""); setFromFavorites(false); setMenuFor(null); setBrowsePath(item.path); }}>
+                      <span className="browse-art">{item.poster ? <img src={item.poster} alt="" loading="lazy"/> : <HardDrive/>}<i className="browse-badge">{item.fileCount}</i></span>
+                      <span className="library-copy"><strong>{item.name}</strong><small>{libraryMeta(item)}</small></span>
+                      <span className="library-action">{item.enabled ? <><FolderOpen/> {t("library.openFolder")} <ChevronRight/></> : t("library.disabled")}</span>
+                    </button>
+                  </article>
+                : item.kind === "folder"
                 ? <article className={`browse-item folder${browseFocus === item.path ? " focused" : ""}`} key={item.path} data-path={item.path} aria-current={browseFocus === item.path ? "true" : undefined}><button className="library-open" onClick={() => { setBrowseQuery(""); setFromFavorites(browsePath === ":favorites" || fromFavorites); setBrowsePath(item.path); }}>
                     <span className="browse-art">{item.poster ? <img src={item.poster} alt="" loading="lazy"/> : <FolderOpen/>}<i className="browse-badge">{item.fileCount}</i>{item.favorite && <i className="fav-mark"><Star/></i>}</span>
                     <span className="library-copy"><strong>{item.name}</strong><small>{folderMeta(item)}</small>{descriptionLine(item) && <small className="library-desc">{descriptionLine(item)}</small>}</span><span className="library-action"><FolderOpen/> {t("library.openFolder")} <ChevronRight/></span></button>
