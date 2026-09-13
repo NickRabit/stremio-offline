@@ -4,11 +4,17 @@ import type { ScanState } from "./library-scan.js";
 
 export type AutoScanReason = "startup" | "interval" | "watch";
 
+/** One library the check may walk. A root that is unreachable is left out of the
+ *  list entirely, so its absence never reads as a mass deletion. */
+export interface AutoScanLibrary { id: string; files: () => Promise<FoundFile[]> }
+
 export interface LibraryAutoScanOpts {
   enabled: () => boolean;
-  files: () => Promise<FoundFile[]>;
+  /** The libraries to check, one fingerprint each. */
+  libraries: () => Promise<AutoScanLibrary[]>;
   status: () => ScanState;
-  start: () => Promise<ScanState>;
+  /** No argument scans every library; an id narrows the run to the one that moved. */
+  start: (libraryId?: string) => Promise<ScanState>;
   /** Playback or a running download; the scan would only pause itself anyway. */
   busy: () => boolean;
   watch?: (onChange: () => void) => { active: boolean; close(): void };
@@ -20,7 +26,9 @@ export interface LibraryAutoScanOpts {
  *  the queue knowing about it. The periodic check is the reliable half, the watch
  *  only makes it prompt where the filesystem reports changes at all. */
 export class LibraryAutoScan {
-  private fingerprint: string | undefined;
+  /** Kept for a library that is not in the list right now: an unplugged disk must not
+   *  look like a tree that lost everything when it comes back. */
+  private readonly fingerprints = new Map<string, string>();
   private timer: ReturnType<typeof setInterval> | undefined;
   private startupTimer: ReturnType<typeof setTimeout> | undefined;
   private watching: { active: boolean; close(): void } | undefined;
@@ -54,7 +62,9 @@ export class LibraryAutoScan {
 
   /** A manual scan covers the same ground, so its result becomes our baseline too. */
   async remember() {
-    this.fingerprint = libraryFingerprint(await this.opts.files());
+    for (const library of await this.opts.libraries()) {
+      this.fingerprints.set(library.id, libraryFingerprint(await library.files()));
+    }
   }
 
   isWatching() { return Boolean(this.watching?.active); }
@@ -68,15 +78,23 @@ export class LibraryAutoScan {
     if (this.opts.busy()) return false;
     this.running = true;
     try {
-      const stamp = libraryFingerprint(await this.opts.files());
-      // The first check after a restart has no baseline: files may have been copied
-      // in while the server was down, and a scan with nothing new to do is free.
-      if (this.fingerprint === stamp) return false;
-      const state = await this.opts.start();
+      const libraries = await this.opts.libraries();
+      const stamps = new Map<string, string>();
+      const changed: string[] = [];
+      for (const library of libraries) {
+        const stamp = libraryFingerprint(await library.files());
+        stamps.set(library.id, stamp);
+        // The first check after a restart has no baseline: files may have been copied
+        // in while the server was down, and a scan with nothing new to do is free.
+        if (this.fingerprints.get(library.id) !== stamp) changed.push(library.id);
+      }
+      if (!changed.length) return false;
+      // One library moved, so only that one is scanned; two or more is a whole-library run.
+      const state = await this.opts.start(changed.length === 1 ? changed[0] : undefined);
       // Recorded only once the scan is under way, so a start that failed on a
       // sleeping addon is tried again at the next check.
-      this.fingerprint = stamp;
-      log("INFO", "Automatic library scan started", { reason, total: state.total });
+      for (const [id, stamp] of stamps) this.fingerprints.set(id, stamp);
+      log("INFO", "Automatic library scan started", { reason, total: state.total, libraries: changed });
       return true;
     } catch (error) {
       log("WARN", "The automatic library scan could not start", { reason: error instanceof Error ? error.message : String(error) });

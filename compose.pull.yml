@@ -33,6 +33,11 @@ services:
       IMAGE_CACHE_TTL_DAYS: "${IMAGE_CACHE_TTL_DAYS:-0}"
       # Disk the thumbnails generated for the library (data/artwork) may take.
       ARTWORK_CACHE_MB: "${ARTWORK_CACHE_MB:-256}"
+      # Days after which the scan re-reads a bound series; 0 switches the pass off.
+      LIBRARY_META_TTL_DAYS: "${LIBRARY_META_TTL_DAYS:-14}"
+      # Roots a library may be added from. Empty keeps the download directory as the
+      # only one; add the extra mounts here.
+      LIBRARY_ROOTS: "${LIBRARY_ROOTS:-}"
       ALLOW_PRIVATE_ADDONS: "${ALLOW_PRIVATE_ADDONS:-0}"
       ALLOW_ADDON_HOSTS: "${ALLOW_ADDON_HOSTS:-}"
       RESTRICTED_MODE: "${RESTRICTED_MODE:-0}"

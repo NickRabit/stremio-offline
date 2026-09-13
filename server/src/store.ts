@@ -4,7 +4,7 @@ import type { AddonRecord } from "./types.js";
 import type { AuthState } from "./auth.js";
 import { normalizeDownloadSettings } from "./naming.js";
 import type { UiLanguage } from "./language.js";
-import { newLibraryId, type LibraryRecord } from "./libraries.js";
+import { newLibraryId, type LibraryRecord, type RootGrant } from "./libraries.js";
 
 /** `state.json` shape version. A state without it predates libraries and migrates once. */
 export const SCHEMA_VERSION = 2;
@@ -42,6 +42,9 @@ export function publicSettings(settings: Settings): PublicSettings {
 export interface State { schemaVersion?: number;
   /** The configured libraries, in display order. A migrated install has exactly one. */
   libraries?: LibraryRecord[];
+  /** Roots the person at the keyboard granted. The operator's `LIBRARY_ROOTS` are rebuilt
+   *  from the environment on every boot and never stored. */
+  grants?: RootGrant[];
   addons: AddonRecord[]; settings: Settings; defaultsInstalled: boolean; auth?: AuthState;
   /** When the addon manifests were last refreshed in the background. */
   addonsRefreshedAt?: string;
@@ -102,6 +105,7 @@ export class Store {
   addonsRefreshedAt() { return this.state.addonsRefreshedAt; }
   auth() { return this.state.auth; }
   libraries() { return this.state.libraries ?? []; }
+  grants() { return this.state.grants ?? []; }
   favorites() { return this.state.favorites ?? []; }
   progress() { return this.state.progress ?? {}; }
   watchlist() { return this.state.watchlist ?? {}; }

@@ -8,6 +8,9 @@ import type { LibraryEpisodeRecord, LibraryMetaRecord, LibrarySuggestion, TitleU
 import type { MetaItem } from "./types.js";
 
 const movie = (key: string): TitleUnit => ({ key, kind: "movie", relative: key, sampleFiles: [`${key}/a.mkv`] });
+const series = (key: string): TitleUnit => ({ key, kind: "series", relative: key, sampleFiles: [`${key}/a.mkv`] });
+const TTL = 14 * 24 * 60 * 60_000;
+const stale = () => new Date(Date.now() - TTL - 60_000).toISOString();
 const hit = (name: string, id = "tt1"): MetaItem => ({ id, type: "movie", name, releaseInfo: "2020", poster: "http://x/p.jpg", description: "Plot" });
 
 const waitFor = async (pred: () => boolean, ms = 2_000) => {
@@ -28,13 +31,12 @@ const harness = async (overrides: Partial<LibraryScanOpts> = {}) => {
   const posters: string[] = [];
   const deleted: string[] = [];
   const searches: string[] = [];
+  const metas: string[] = [];
   const frames: string[] = [];
   let busy: ScanPauseReason | undefined;
-  const scan = new LibraryScan({
+  const opts: LibraryScanOpts = {
     dataDir,
-    downloadDir: "/downloads",
-    listVideos: async () => [{ relative: "Foo/a.mkv", size: 1, modified: "2026-01-01T00:00:00.000Z" }],
-    titleUnits: () => [movie("Foo")],
+    units: async () => [movie("Foo")],
     searchAll: async (_addons, query) => {
       searches.push(query);
       return { items: [hit(query)] };
@@ -51,9 +53,15 @@ const harness = async (overrides: Partial<LibraryScanOpts> = {}) => {
     gapMs: 0,
     wakeMs: 20,
     ...overrides,
+  };
+  // The wrapper sits outside the overrides so a test that brings its own metadata
+  // implementation still shows up in `metas`.
+  const scan = new LibraryScan({
+    ...opts,
+    metadata: async (addons, type, id) => { metas.push(id); return opts.metadata(addons, type, id); },
   });
   return {
-    dataDir, scan, store, posters, deleted, searches, frames,
+    dataDir, scan, store, posters, deleted, searches, metas, frames,
     setBusy: (value: ScanPauseReason | undefined) => { busy = value; },
     close: async () => { await scan.stop(); await rm(dataDir, { recursive: true, force: true }); },
   };
@@ -76,8 +84,7 @@ test("a unique title auto-accepts, deletes hashed art and saves the catalog post
 
 test("excluding a parent folder skips child title units", async () => {
   const h = await harness({
-    listVideos: async () => [{ relative: "Movies/Title/a.mkv", size: 1, modified: "2026-01-01T00:00:00.000Z" }],
-    titleUnits: () => [movie("Movies/Title")],
+    units: async () => [movie("Movies/Title")],
   });
   try {
     h.store.meta.Movies = { type: "movie", id: "", source: "user", skipLookup: true };
@@ -144,11 +151,7 @@ test("a user lock taken during search is not overwritten", async () => {
 
 test("load retries the in-flight key still listed in remaining", async () => {
   const h = await harness({
-    listVideos: async () => [
-      { relative: "Foo/a.mkv", size: 1, modified: "2026-01-01T00:00:00.000Z" },
-      { relative: "Bar/a.mkv", size: 1, modified: "2026-01-01T00:00:00.000Z" },
-    ],
-    titleUnits: () => [movie("Foo"), movie("Bar")],
+    units: async () => [movie("Foo"), movie("Bar")],
     searchAll: async (_addons, query) => ({ items: [hit(query, query === "Foo" ? "tt-foo" : "tt-bar")] }),
   });
   try {
@@ -161,6 +164,20 @@ test("load retries the in-flight key still listed in remaining", async () => {
     assert.equal(h.scan.snapshot().matched, 2);
     assert.equal(h.store.meta.Foo?.id, "tt-foo");
     assert.equal(h.store.meta.Bar?.id, "tt-bar");
+  } finally { await h.close(); }
+});
+
+test("a scan state the upgrade left behind starts idle instead of skipping everything", async () => {
+  const h = await harness({ units: async () => [movie("lib_aaaaaaaa/Foo"), movie("lib_aaaaaaaa/Bar")] });
+  try {
+    await writeFile(path.join(h.dataDir, "library-scan.json"), JSON.stringify({
+      status: "running", total: 2, done: 1, matched: 0, skipped: 1, failed: 0,
+      remaining: ["Foo"], current: "Foo",
+    }));
+    await h.scan.load();
+    assert.equal(h.scan.snapshot().status, "idle", "the run is dropped rather than resumed against keys nobody has");
+    assert.deepEqual(h.scan.snapshot().remaining, []);
+    assert.deepEqual(h.searches, [], "and it asks the catalogues nothing on its own");
   } finally { await h.close(); }
 });
 
@@ -227,10 +244,67 @@ test("a unit searched in vain is remembered and skipped, until a forced rescan",
   } finally { await h.close(); }
 });
 
+test("a browsed series past the TTL is re-read, and keeps the binding it had", async () => {
+  const h = await harness({
+    units: async () => [series("lib_aaaaaaaa/Show")],
+    browsed: () => new Set(["lib_aaaaaaaa"]),
+    metaTtlMs: TTL,
+    metadata: async (_addons, _type, id) => ({ id, type: "series", name: "Show, refreshed", releaseInfo: "1995" }),
+  });
+  const before = stale();
+  try {
+    h.store.meta["lib_aaaaaaaa/Show"] = { type: "series", id: "tt1", source: "user", locked: true, name: "Show", matchedAt: before, refreshedAt: before };
+    await h.scan.start();
+    await waitFor(() => h.scan.snapshot().status === "completed");
+    const record = h.store.meta["lib_aaaaaaaa/Show"]!;
+    assert.deepEqual(h.metas, ["tt1"], "one metadata call, no search");
+    assert.deepEqual(h.searches, []);
+    assert.equal(record.name, "Show, refreshed");
+    assert.equal(record.source, "user", "a refresh does not take the binding over");
+    assert.equal(record.locked, true);
+    assert.equal(record.matchedAt, before, "the match date stays the date it was matched");
+    assert.notEqual(record.refreshedAt, before);
+    assert.equal(h.scan.snapshot().matched, 0, "a refresh is not a new match");
+    assert.deepEqual(h.deleted, [], "the poster the binding already has is left alone");
+  } finally { await h.close(); }
+});
+
+test("a movie, a library nobody looked at and a switched-off TTL are left alone", async () => {
+  const setup = async (overrides: Partial<LibraryScanOpts>, type: "movie" | "series") => {
+    const h = await harness({ units: async () => [type === "movie" ? movie("lib_aaaaaaaa/Film") : series("lib_aaaaaaaa/Show")], ...overrides });
+    const key = h.store.meta[type === "movie" ? "lib_aaaaaaaa/Film" : "lib_aaaaaaaa/Show"] = {
+      type, id: "tt1", source: "scan", locked: false, name: "Title", year: "1995", description: "Plot", refreshedAt: stale(),
+    } as never;
+    return { h, key };
+  };
+  const browsed = () => new Set(["lib_aaaaaaaa"]);
+
+  const movieCase = await setup({ browsed, metaTtlMs: TTL }, "movie");
+  try {
+    await movieCase.h.scan.start();
+    await waitFor(() => movieCase.h.scan.snapshot().status === "completed");
+    assert.deepEqual(movieCase.h.metas, [], "a movie binding carries all it will ever carry");
+  } finally { await movieCase.h.close(); }
+
+  const unbrowsed = await setup({ metaTtlMs: TTL, browsed: () => new Set() }, "series");
+  try {
+    await unbrowsed.h.scan.start();
+    await waitFor(() => unbrowsed.h.scan.snapshot().status === "completed");
+    assert.deepEqual(unbrowsed.h.metas, [], "a library nobody opened does not pay for the pass");
+  } finally { await unbrowsed.h.close(); }
+
+  const off = await setup({ browsed, metaTtlMs: 0 }, "series");
+  try {
+    await off.h.scan.start();
+    await waitFor(() => off.h.scan.snapshot().status === "completed");
+    assert.deepEqual(off.h.metas, [], "a zero TTL switches the pass off");
+  } finally { await off.h.close(); }
+});
+
 test("IMDb in the path is an exact metadata lookup without search", async () => {
   const lookups: string[] = [];
   const h = await harness({
-    titleUnits: () => [movie("Show {imdb-tt123}")],
+    units: async () => [movie("Show {imdb-tt123}")],
     pathExists: async () => true,
     metadata: async (_addons, type, id) => {
       lookups.push(`${type}:${id}`);
@@ -261,11 +335,7 @@ test("missing paths skip and persist without an addon call", async () => {
 test("a scan for one item leaves the rest of the library alone", async () => {
   const searches: string[] = [];
   const h = await harness({
-    listVideos: async () => [
-      { relative: "Foo/a.mkv", size: 1, modified: "2026-01-01T00:00:00.000Z" },
-      { relative: "Bar/b.mkv", size: 1, modified: "2026-01-01T00:00:00.000Z" },
-    ],
-    titleUnits: () => [movie("Foo"), movie("Bar")],
+    units: async () => [movie("Foo"), movie("Bar")],
     searchAll: async (_addons, query) => { searches.push(query); return { items: [] }; },
   });
   try {

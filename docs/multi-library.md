@@ -67,14 +67,119 @@ again after every rebase onto `main`.
 
 ### PR 3 — Library types, CRUD API, folder picker
 
-- [ ] `LIBRARY_META_TTL_DAYS` (default `14`) and `LibraryMetaRecord.refreshedAt`: a bound
+- [x] `library-grants.ts`: `LIBRARY_ROOTS` with the download directory as its fallback, user
+      grants, deduplication with the operator's grant winning, and containment
+      (`grantingRoot`) that resolves symlinks on both sides and refuses a grant whose own
+      root does not exist -- resolving a missing mount to its nearest existing ancestor
+      would widen the grant to the directory above it.
+- [x] `library-probe.ts`: `unreachable`/`readOnly` decided by writing and removing a
+      dot-file, so a read-only mount, a wrong `PUID` and an ACL are told apart; every call
+      bounded by a 2 s deadline, cached for 30 s, coalesced per root, and invalidated when
+      an operation fails on I/O.
+- [x] `titleUnits(files, type)` forces the kind for a typed library and leaves the unit
+      boundaries alone. The scan hands the walk over to the host (`units()`), because the
+      units of a typed library come from that library's file list; every unit key stays
+      qualified, so they flow into `searchAll` and `scoreHit` as `expectedKind` unchanged.
+- [x] Carve-outs: `listVideos`, `browseDirectory`, `listFolders`, `emptiedFolders` and
+      `describePath` take an `exclude` set and every call site passes `carveOuts()`. The
+      prune stopped at a folder that is, or holds, a carve-out: the parent no longer counts
+      the child library's videos, so without the guard it would delete the folder the child
+      lives in.
+- [x] The walk (`libraryFiles`, `libraryEntries`, `libraryUnits`) covers every enabled and
+      reachable library, each with its own carve-outs and its own type; `mediaPath` resolves
+      through the library the key names and the wire keeps the unqualified form only for the
+      first one. The autoscan keeps a fingerprint per library and starts a run for the one
+      that moved (all of them when several did), a scan accepts `{ libraryId }`, and browse,
+      the destination picker, the prune and the artwork sweep all run against the library
+      the path names. The probe answers (`unreachable`, `readOnly`) gate the walk and the
+      sweep; a root that is out of reach is skipped, never removed.
+- [x] The single-library pass-through fails loudly instead of guessing: an unqualified path
+      needs exactly one configured library (`singleLibrary()`), `libraryKey`/`libraryOfKey` go
+      through it, and `wirePath` hands back the qualified key as soon as it cannot attribute a
+      prefix. A forgotten call site in PR 4 throws rather than writing into the first library.
+      `/api/status` reports free space for every library root, and folder artwork browses and
+      frames the library its key names.
+- [x] `writeArtwork`, `readOnly` and `unreachable` through the artwork sink and the walk.
+      One decision point (`artworkBesideMedia`) replaced four copies of the global setting:
+      a poster lands next to the media only when the user asked for it, the library allows
+      writing and the root is neither read-only nor away. A write that fails there forgets
+      the probe for that root, so the next `GET /api/libraries` asks the disk instead of
+      trusting a cached verdict. The walk already skips a library that is disabled or away.
+- [x] `data/library-scan.json`, spec step 5: `LibraryScan.load()` drops a run whose
+      `remaining[]` names no item of any current library instead of resuming it. An upgrade
+      qualifies the unit keys, and an interrupted run would otherwise skip the whole library
+      one entry at a time. The guard sits in `load()` rather than in the migration, so it
+      also covers an install whose state file was written by the libraries build.
+- [x] `LIBRARY_META_TTL_DAYS` (default `14`) and `LibraryMetaRecord.refreshedAt`: a bound
       series older than the TTL is re-fetched by the scan, one `metadata()` call at the
       same pacing, only for libraries browsed since the last run. Carried over from PR 2.
-- [ ] The rest: not started.
+      The pass goes through the id the binding already carries, so it never searches and
+      never scores; the refresh keeps `source`, `locked` and `matchedAt`, merges the fields
+      and the episode rows, counts as a skip rather than a match, and leaves the poster
+      alone. A lookup that comes back empty leaves the binding exactly as it was. Only a
+      binding on the item itself counts -- one inherited from the folder above is refreshed
+      on the folder's own turn. The interface marks a library browsed in `/api/library/browse`
+      and `/api/library/folders`; the merged listing deliberately does not, or every start
+      would count as a browse of the whole tree.
+- [x] `/api/libraries` (list, create, patch, delete), `/api/libraries/browse`, the grant
+      endpoints, `/api/libraries/preview`, and the restricted-mode denials (`GET` of the
+      picker and the grants, and every write, with `GET /api/libraries` kept readable but
+      without `root`). `checkLibraryRoot`
+      (`library-admin.ts`) is the one gate: absolute, inside a granted root, a folder, and not
+      another library's root compared through `realpath`; a root inside another library's root
+      stays legal. `create: true` creates only inside the grant, and the probe decides
+      `writeArtwork`. `GET /libraries` probes each root through the 30 s cache and counts
+      titles, files and bytes from the walks the listing already holds. `PATCH` clears a
+      default picker the new type no longer serves. `DELETE` never touches media: `?forget=1`
+      drops the match history, the artwork directory and the favourite and resume rows that
+      pointed into it. The picker lists the grants when `path` is empty and their children
+      otherwise, never lists a symlink out of a grant, and flags a row that is or sits inside
+      a library. Revoking a user grant disables the libraries under it and deletes nothing --
+      an operator grant is rebuilt from the environment, so it cannot be revoked. `preview`
+      walks with a 20 000-file ceiling and a 5 s deadline, asks no addon, and reports
+      `truncated`; it counts existing bindings only when the root already is a library.
+- [ ] Follow-up for PR 6: `AddonDownloadSettings` carries no `libraryId` yet, so the delete
+      path has no stored rule to fall back, and the queue has no job to pause with
+      `pauseReason: "library"`. Both land with the per-library save rules.
+- [x] No reachable path throws the single-library pass-through at a call site that cannot
+      answer: `LibraryScanOpts.pathExists` is required and qualified, so the scan no longer
+      builds one from `downloadDir` at module load, and a state holding two libraries boots
+      instead of failing before the server listens. `GET /api/library/browse` with no path
+      answers a translated "open one of them" while more than one library is configured.
+      The root browse that lists them is PR 4's; this only stops it from being a 500.
+- [x] Two defects the Docker pass and `e2e/tests/library-admin.spec.ts` found, not the unit
+      suites: Express matches in registration order, so the parameterised
+      `DELETE /api/libraries/:id` was swallowing `DELETE /api/libraries/grants` and a revoke
+      answered "library not found" instead of disabling anything -- the item routes now come
+      after every literal path. And Express 5 leaves `req.body` undefined when a request
+      carries no body, so the grants revoke (path in the query) and a bodiless `PATCH` threw;
+      every new handler reads `req.body?.`. The spec adds a grant, refuses a root nobody
+      granted, previews, creates a library under the grant, revokes it and checks the library
+      is disabled while its file stays put, then removes what it made.
+- [x] A scan somebody asked for drops the in-memory walk first. `libraryFiles()` and
+      `libraryUnits()` are held for half a minute, so a folder copied in and then rescanned
+      was invisible to the run meant to find it; the e2e suite caught it once a spec that
+      walks the library ran shortly before `library-identify.spec.ts` created its fixture
+      folders.
+- [x] `LIBRARY_ROOTS` and `LIBRARY_META_TTL_DAYS` in `.env.example`, both compose files and
+      `docs/configuration.md`, next to a short section on what a granted root is and what
+      removing a library does and does not do.
+- [x] Verification: `tsc`, 453 server tests, 176 web tests, and both Playwright suites in the
+      CI image on the rebased head (244 passed, 23 skipped; the fullscreen idle-hide case in
+      `layout/player.spec.ts` is flaky there, exactly as it is on `main`). The local Docker
+      stack was built and driven through the new endpoints: a library whose root is away comes
+      up `unreachable`, is skipped by the walk and the sweep, and keeps its metadata and
+      thumbnails -- the same backdated orphan, with the root back, is deleted by the very next
+      sweep. A read-only mount is probed `readOnly`, keeps `writeArtwork` off and lands its
+      thumbnail in `data/artwork/<id>/` even with the artwork setting on `media`, while a
+      writable library under that setting writes the poster beside the media. Revoking a grant
+      disables the library and leaves its metadata, artwork and media in place.
 
 ### PR 4 — Library manager, root browse, cross-library move
 
 - [ ] Not started.
+- [ ] `GET /api/library/browse` with an empty path lists the configured libraries as
+      `kind: "library"` rows and the interface renders them; replaces the PR 3 answer.
 - [ ] Follow-up from PR 1: `e2e/tests/layout/screenshots.spec.ts` drops the diagnostics
       report chip before the settings screenshot. The chip is per-run noise inside a masked
       section, but its width decided whether the header wrapped at the narrow viewports, so

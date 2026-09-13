@@ -1,13 +1,14 @@
-import { access, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { SearchResult } from "./addons.js";
 import { log } from "./logger.js";
 import {
-  autoAccept, cacheFieldsFromMeta, episodesFromMeta, knownTitleOf, lookupSkipped, pickSuggestion, scanMiss,
+  autoAccept, cacheFieldsFromMeta, episodesFromMeta, knownTitleOf, lookupSkipped, needsRefresh, pickSuggestion, scanMiss,
   scannedRecently, scanSkipReason, scoreHit,
   type LibraryEpisodeRecord, type LibraryMetaRecord, type LibrarySuggestion, type TitleUnit,
 } from "./library-match.js";
 import { parseMediaPath } from "./library-parse.js";
+import { parseLibraryPath } from "./libraries.js";
 import { isPathWithin, type FoundFile } from "./library.js";
 import type { AddonRecord, MetaItem } from "./types.js";
 
@@ -30,13 +31,16 @@ export interface ScanState {
   error?: string;
   /** Set when the run covers one item instead of the whole library. */
   scope?: string;
+  /** Set when the run covers one library. The id is segment zero of every key, so this
+   *  is the same prefix filter a single item uses, one level up. */
+  libraryId?: string;
 }
 
 export interface LibraryScanOpts {
   dataDir: string;
-  downloadDir: string;
-  listVideos: (root: string) => Promise<FoundFile[]>;
-  titleUnits: (files: FoundFile[]) => TitleUnit[];
+  /** The walk is the host's: it spans libraries and knows each one's type, so the
+   *  scan asks for units instead of building them from a single root. */
+  units: () => Promise<TitleUnit[]>;
   searchAll: (addons: AddonRecord[], query: string, type?: string) => Promise<Pick<SearchResult, "items">>;
   metadata: (addons: AddonRecord[], type: string, id: string) => Promise<MetaItem | null>;
   addons: () => AddonRecord[];
@@ -50,7 +54,13 @@ export interface LibraryScanOpts {
   savePoster: (key: string, url: string | undefined) => void;
   deleteGeneratedArt: (key: string) => Promise<void>;
   busy: () => ScanPauseReason | undefined;
-  pathExists?: (relative: string) => Promise<boolean>;
+  /** A key is qualified, so the scan cannot build a path from one root: the host resolves it. */
+  pathExists: (key: string) => Promise<boolean>;
+  /** Libraries the interface touched since the last run. Only those pay for the
+   *  metadata refresh: a two-thousand-title archive nobody looks at does not. */
+  browsed?: () => ReadonlySet<string>;
+  /** Age at which a bound series is re-fetched; `0` switches the pass off. */
+  metaTtlMs?: number;
   gapMs?: number;
   wakeMs?: number;
 }
@@ -85,9 +95,12 @@ function idForPrefix(raw: string, prefixes: string[], needle: string): string | 
 export class LibraryScan {
   private state: ScanState = idle();
   private units = new Map<string, TitleUnit>();
+  /** Keys whose turn re-reads an existing binding instead of looking for a match. */
+  private readonly refreshing = new Set<string>();
   private readonly stateFile: string;
   private readonly gapMs: number;
   private readonly wakeMs: number;
+  private readonly metaTtlMs: number;
   private saveChain: Promise<void> = Promise.resolve();
   private pumpScheduled = false;
   private cancelled = false;
@@ -97,10 +110,8 @@ export class LibraryScan {
     this.stateFile = path.join(opts.dataDir, "library-scan.json");
     this.gapMs = opts.gapMs ?? 3_000;
     this.wakeMs = opts.wakeMs ?? 15_000;
-    this.pathExists = opts.pathExists ?? (async (relative) => {
-      try { await access(path.join(opts.downloadDir, relative)); return true; }
-      catch { return false; }
-    });
+    this.metaTtlMs = opts.metaTtlMs ?? 14 * 24 * 60 * 60_000;
+    this.pathExists = opts.pathExists;
   }
 
   snapshot(): ScanState { return { ...this.state, remaining: [...this.state.remaining] }; }
@@ -118,6 +129,15 @@ export class LibraryScan {
     }
     if (this.state.status === "running" || this.state.status === "paused") {
       await this.refreshUnits();
+      // An upgrade qualifies the unit keys, and a run that was interrupted before it would
+      // resume against keys the walk no longer produces: every entry would miss and the
+      // interface would watch a whole library being skipped. Nothing to resume, start over.
+      if (this.state.remaining.length && !this.state.remaining.some((key) => this.units.has(key))) {
+        log("WARN", "The library scan state names no item of any library, starting idle");
+        this.state = idle();
+        await this.save();
+        return;
+      }
       this.schedulePump();
     }
   }
@@ -126,23 +146,43 @@ export class LibraryScan {
    *  catalogues about every unbound title again. */
   /** `force` throws away the memory of earlier fruitless searches; `path` narrows the
    *  run to one item, which the interface uses for "find metadata" on a single title. */
-  async start({ force = false, path: scope = "" }: { force?: boolean; path?: string } = {}): Promise<ScanState> {
+  async start({ force = false, path: scope = "", libraryId }: { force?: boolean; path?: string; libraryId?: string } = {}): Promise<ScanState> {
     if (this.state.status === "running" || this.state.status === "paused") return this.snapshot();
-    const files = await this.opts.listVideos(this.opts.downloadDir);
-    const units = this.opts.titleUnits(files);
+    const units = await this.opts.units();
     this.units = new Map(units.map((unit) => [unit.key, unit]));
+    this.refreshing.clear();
     this.cancelled = false;
+    const browsed = this.opts.browsed?.() ?? new Set<string>();
     const records = this.opts.libraryMeta();
     const suggestions = this.opts.librarySuggestions();
-    const wanted = scope
-      ? units.filter((unit) => isPathWithin(unit.key, scope) || isPathWithin(scope, unit.key))
-      : units;
+    const inRun = (unit: TitleUnit) => {
+      if (libraryId && !isPathWithin(unit.key, libraryId)) return false;
+      if (!scope) return true;
+      return isPathWithin(unit.key, scope) || isPathWithin(scope, unit.key);
+    };
+    const wanted = units.filter(inRun);
     // Asking for one item is a deliberate act, so it ignores the searched-in-vain memory.
     const again = force || Boolean(scope);
     const queued = wanted.filter((unit) => {
       if (lookupSkipped(unit.key, records) || scanSkipReason(records[unit.key]) || knownTitleOf(unit.key, records)?.id) return false;
       return again || !scannedRecently(suggestions[unit.key]);
     });
+    const refreshing = this.metaTtlMs > 0 && !scope
+      ? wanted.filter((unit) => {
+        // The binding has to sit on the item itself: an inherited one belongs to the
+        // folder above, which is refreshed on its own turn when it holds videos.
+        const record = records[unit.key];
+        const owner = parseLibraryPath(unit.key)?.libraryId;
+        return Boolean(record?.id && owner && browsed.has(owner) && needsRefresh(record, this.metaTtlMs));
+      })
+      : [];
+    const pending = queued.map((unit) => unit.key);
+    // A refresh for a title that is also queued for a first match would ask twice.
+    for (const unit of refreshing) {
+      if (pending.includes(unit.key)) continue;
+      this.refreshing.add(unit.key);
+      pending.push(unit.key);
+    }
     if (again) await this.opts.updateMeta((_meta, current) => { for (const unit of wanted) delete current[unit.key]; });
     this.state = {
       status: "running",
@@ -150,12 +190,13 @@ export class LibraryScan {
       updatedAt: nowIso(),
       total: queued.length,
       done: 0, matched: 0, skipped: 0, failed: 0,
-      remaining: queued.map((unit) => unit.key),
-      current: queued[0]?.key,
+      remaining: pending,
+      current: pending[0],
       ...(scope ? { scope } : {}),
+      ...(libraryId ? { libraryId } : {}),
     };
     await this.save();
-    log("INFO", "Library scan started", { total: queued.length, titles: units.length, force, ...(scope ? { path: scope } : {}) });
+    log("INFO", "Library scan started", { total: pending.length, titles: units.length, force, refresh: refreshing.length, ...(scope ? { path: scope } : {}), ...(libraryId ? { libraryId } : {}) });
     this.schedulePump();
     return this.snapshot();
   }
@@ -167,8 +208,7 @@ export class LibraryScan {
   }
 
   private async refreshUnits() {
-    const files = await this.opts.listVideos(this.opts.downloadDir);
-    this.units = new Map(this.opts.titleUnits(files).map((unit) => [unit.key, unit]));
+    this.units = new Map((await this.opts.units()).map((unit) => [unit.key, unit]));
   }
 
   private schedulePump() {
@@ -222,16 +262,20 @@ export class LibraryScan {
     try {
       const unit = this.units.get(key);
       if (!unit || !await this.pathExists(key)) { await this.finishUnit("skipped"); return; }
+      const refresh = this.refreshing.has(key);
       const records = this.opts.libraryMeta();
-      if (lookupSkipped(key, records) || scanSkipReason(records[key]) || knownTitleOf(key, records)?.id) { await this.finishUnit("skipped"); return; }
+      const bound = records[key];
+      // A refresh is the one turn allowed to ask about a binding that already exists.
+      if (!refresh && (lookupSkipped(key, records) || scanSkipReason(records[key]) || knownTitleOf(key, records)?.id)) { await this.finishUnit("skipped"); return; }
 
       const parsed = parseMediaPath(key);
       if (this.opts.busy()) { delete this.state.current; return; }
+      this.refreshing.delete(key);
+
+      if (refresh && bound?.id) { addonCall = true; await this.refreshBinding(key, bound); return; }
 
       const identified = await this.identify(unit, parsed);
       addonCall = identified.called;
-      const after = this.opts.libraryMeta();
-      if (lookupSkipped(key, after) || scanSkipReason(after[key]) || knownTitleOf(key, after)?.id) { await this.finishUnit("skipped"); return; }
 
       if (identified.accept) {
         const item = identified.accept.item;
@@ -241,8 +285,10 @@ export class LibraryScan {
         const episodeRows = episodesFromMeta(meta ?? item);
         let wrote = false;
         await this.opts.updateMeta((metaMap, suggestions, episodes) => {
+          const known = metaMap[key];
           if (lookupSkipped(key, metaMap) || scanSkipReason(metaMap[key]) || knownTitleOf(key, metaMap)?.id) return;
           metaMap[key] = {
+            ...known,
             type: item.type, id: item.id, source: "scan", locked: false,
             matchedAt: nowIso(), backfilledAt: nowIso(), ...fields,
           };
@@ -283,6 +329,32 @@ export class LibraryScan {
     this.state.remaining = this.state.remaining.filter((item) => item !== key);
     delete this.state.current;
     return this.save();
+  }
+
+  /** A refresh is one exact metadata call about the id the binding already has: no search
+   *  and no scoring. A lookup that comes back empty leaves the binding exactly as it was,
+   *  and the poster it already has is kept either way. */
+  private async refreshBinding(key: string, bound: LibraryMetaRecord) {
+    const meta = await this.opts.metadata(this.opts.addons(), bound.type, bound.id);
+    if (!meta) {
+      log("WARN", "Library binding refresh found nothing", { key, id: bound.id });
+      await this.finishUnit("skipped");
+      return;
+    }
+    const fields = cacheFieldsFromMeta(meta);
+    const episodeRows = episodesFromMeta(meta);
+    let wrote = false;
+    await this.opts.updateMeta((metaMap, suggestions, episodes) => {
+      // The binding may have been unmatchd or replaced while the call was in flight, and
+      // a refresh never creates one.
+      if (metaMap[key]?.id !== bound.id) return;
+      metaMap[key] = { ...metaMap[key], ...fields, backfilledAt: nowIso(), refreshedAt: nowIso() };
+      Object.assign(episodes, episodeRows);
+      delete suggestions[key];
+      wrote = true;
+    });
+    if (wrote) log("INFO", "Library binding refreshed", { key, type: bound.type, id: bound.id, source: "scan" });
+    await this.finishUnit("skipped");
   }
 
   private async identify(unit: TitleUnit, parsed: ReturnType<typeof parseMediaPath>) {

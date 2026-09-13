@@ -8,12 +8,19 @@ const idle = (): ScanState => ({ status: "idle", total: 0, done: 0, matched: 0, 
 const file = (relative: string, size = 1, modified = "2026-01-01T00:00:00.000Z"): FoundFile => ({ relative, size, modified });
 
 const harness = (overrides: Partial<LibraryAutoScanOpts> = {}) => {
-  const state = { files: [file("Foo/a.mkv")], status: idle(), enabled: true, busy: false, starts: 0 };
+  const state = {
+    libraries: [{ id: "lib_aaaaaaaa", files: [file("lib_aaaaaaaa/Foo/a.mkv")] }],
+    present: true,
+    status: idle(), enabled: true, busy: false,
+    starts: 0, scanned: [] as Array<string | undefined>,
+  };
   const auto = new LibraryAutoScan({
     enabled: () => state.enabled,
-    files: async () => state.files,
+    libraries: async () => (state.present
+      ? state.libraries.map((library) => ({ id: library.id, files: async () => library.files }))
+      : []),
     status: () => state.status,
-    start: async () => { state.starts += 1; return { ...idle(), status: "running" }; },
+    start: async (libraryId) => { state.starts += 1; state.scanned.push(libraryId); return { ...idle(), status: "running" }; },
     busy: () => state.busy,
     ...overrides,
   });
@@ -31,7 +38,7 @@ test("the first check after a restart scans, an unchanged tree then does not", a
 test("a copied file changes the fingerprint and starts a scan", async () => {
   const { auto, state } = harness();
   await auto.check("startup");
-  state.files = [...state.files, file("Bar/b.mkv")];
+  state.libraries[0]!.files = [...state.libraries[0]!.files, file("lib_aaaaaaaa/Bar/b.mkv")];
   assert.equal(await auto.check("watch"), true);
   assert.equal(state.starts, 2);
 });
@@ -39,7 +46,7 @@ test("a copied file changes the fingerprint and starts a scan", async () => {
 test("a replaced file of another size is a change too", async () => {
   const { auto, state } = harness();
   await auto.check("startup");
-  state.files = [file("Foo/a.mkv", 2)];
+  state.libraries[0]!.files = [file("lib_aaaaaaaa/Foo/a.mkv", 2)];
   assert.equal(await auto.check("interval"), true);
 });
 
@@ -54,6 +61,37 @@ test("switched off, busy, or already scanning means no automatic run", async () 
   state.status = { ...idle(), status: "running" };
   assert.equal(await auto.check("interval"), false);
   assert.equal(state.starts, 0);
+});
+
+test("only the library that moved is scanned", async () => {
+  const { auto, state } = harness();
+  state.libraries = [
+    { id: "lib_aaaaaaaa", files: [file("lib_aaaaaaaa/Foo/a.mkv")] },
+    { id: "lib_bbbbbbbb", files: [file("lib_bbbbbbbb/Show/01.mkv")] },
+  ];
+  await auto.check("startup");
+  assert.deepEqual(state.scanned, [undefined], "the first check has no baseline for either library");
+
+  state.libraries[1]!.files = [...state.libraries[1]!.files, file("lib_bbbbbbbb/Show/02.mkv")];
+  assert.equal(await auto.check("interval"), true);
+  assert.deepEqual(state.scanned, [undefined, "lib_bbbbbbbb"]);
+  assert.equal(await auto.check("interval"), false, "the other library did not move");
+});
+
+test("a library that is not in the list right now keeps its fingerprint", async () => {
+  const { auto, state } = harness();
+  await auto.check("startup");
+  assert.equal(state.starts, 1);
+
+  state.present = false;
+  assert.equal(await auto.check("interval"), false, "an unplugged disk is not a tree that lost everything");
+  state.present = true;
+  assert.equal(await auto.check("interval"), false, "it came back unchanged, so nothing is rescanned");
+  assert.equal(state.starts, 1);
+
+  state.libraries[0]!.files = [file("lib_aaaaaaaa/Foo/a.mkv", 5)];
+  assert.equal(await auto.check("interval"), true);
+  assert.equal(state.starts, 2);
 });
 
 test("a manual scan becomes the baseline, so no automatic run repeats it", async () => {

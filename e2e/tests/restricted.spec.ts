@@ -41,6 +41,18 @@ test.describe("restricted mode", () => {
     await denied("get", "/api/settings/export");
     await denied("patch", "/api/auth/password", { currentPassword: "restricted-password", newPassword: "other-password" });
     await denied("get", "/api/diagnostics");
+    // Both name directories on the host. The library list itself stays readable: a guest
+    // sees the names and the counts, never the roots.
+    await denied("get", "/api/libraries/browse");
+    await denied("get", "/api/libraries/grants");
+    await denied("post", "/api/libraries/preview", { root: "/downloads" });
+    await denied("post", "/api/libraries/grants", { path: "/downloads" });
+
+    const libraries = await request.get("/api/libraries");
+    expect(libraries.ok()).toBeTruthy();
+    const [library] = await libraries.json();
+    expect(library.name).toBeTruthy();
+    expect(library.root).toBeUndefined();
   });
 
   test("lets a guest browse, play and keeps the admin surface closed", async ({ page }) => {
