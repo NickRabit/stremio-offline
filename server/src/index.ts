@@ -35,7 +35,7 @@ import { LibraryScan } from "./library-scan.js";
 import { createLibraryProbe, type LibraryHealth } from "./library-probe.js";
 import { LibraryAutoScan } from "./library-autoscan.js";
 import { watchLibrary } from "./library-watch.js";
-import { ArtworkQueue, episodeArtName, fileMayUseFolderArtwork, findArtwork, framePosition, POSTER_OUTPUT, savePosterAs, saveFrame } from "./artwork.js";
+import { ArtworkQueue, artworkBesideMedia, episodeArtName, fileMayUseFolderArtwork, findArtwork, framePosition, POSTER_OUTPUT, savePosterAs, saveFrame } from "./artwork.js";
 import { clearedCookie, createSession, DECOY_HASH, LoginThrottle, pruneRevoked, envCredentials, hashPassword, INTERNAL_TOKEN, parseCookies, readSession, secretEquals, REMEMBER_DAYS, SESSION_COOKIE, sessionCookie, verifyPassword } from "./auth.js";
 import { randomBytes, randomUUID } from "node:crypto";
 import type { ClientCapabilities, PlaybackOptions } from "./playback.js";
@@ -784,6 +784,19 @@ const saveGenerated = async (target: string, write: () => Promise<boolean>) => {
   return saved;
 };
 
+/** A write next to the media that failed is a better signal than the next scheduled probe:
+ *  the mount may have turned read-only, filled up or gone. The probe is forgotten, so the
+ *  next `GET /api/libraries` asks the disk again, and the failure is said out loud once. */
+const saveArtwork = async (key: string, target: string, write: () => Promise<boolean>) => {
+  const saved = await saveGenerated(target, write);
+  if (!saved && artworkBesideMediaFor(key)) {
+    const { library } = libraryOfKey(key);
+    libraryProbe.invalidate(library.root);
+    log("WARN", "Artwork could not be written next to the media", { key, library: library.id, root: library.root });
+  }
+  return saved;
+};
+
 /** Someone else's picture in the folder always wins: nothing is overwritten or regenerated. */
 async function locateArtwork(entry: Awaited<ReturnType<typeof scanLibrary>>[number]) {
   const directory = entryDirectory(entry);
@@ -803,9 +816,8 @@ function scheduleArtwork(entry: Awaited<ReturnType<typeof scanLibrary>>[number])
   if (artworkQueue.has(entry.key)) return;
   artworkQueue.run(entry.key, async () => {
     if (await locateArtwork(entry)) return;
-    const toMedia = store.settings().artworkLocation === "media";
     const directory = entryDirectory(entry);
-    const target = toMedia && directory ? path.join(mediaPath(directory), POSTER_OUTPUT) : dataArtworkFile(libraryKey(entry.key));
+    const target = directory && artworkBesideMediaFor(entry.key) ? path.join(mediaPath(directory), POSTER_OUTPUT) : dataArtworkFile(libraryKey(entry.key));
     await mkdir(path.dirname(target), { recursive: true });
     if (await catalogPosterIfBound(libraryKey(entry.key), target)) return;
     if (await locateArtwork(entry)) return;
@@ -813,7 +825,7 @@ function scheduleArtwork(entry: Awaited<ReturnType<typeof scanLibrary>>[number])
     const source = entry.files[0];
     if (!source) return;
     const info = await playback.inspect({ url: `file://${source.path}` }).catch(() => undefined);
-    if (await saveGenerated(target, () => saveFrame(mediaPath(source.path), target, framePosition(info?.duration)))) {
+    if (await saveArtwork(entry.key, target, () => saveFrame(mediaPath(source.path), target, framePosition(info?.duration)))) {
       log("INFO", "Thumbnail generated from the video", { key: entry.key });
     }
   });
@@ -848,6 +860,13 @@ const libraryStats = async () => {
 
 const healthOf = (library: LibraryRecord): LibraryHealth =>
   libraryHealth.get(library.id) ?? { unreachable: false, readOnly: false };
+
+/** Whether a poster for this key may be written next to the media. The library of the key
+ *  decides: an added archive, a read-only mount and one that is away all keep their folder. */
+const artworkBesideMediaFor = (key: string) => {
+  const { library } = libraryOfKey(key);
+  return artworkBesideMedia(store.settings().artworkLocation, library, healthOf(library));
+};
 
 /** The wire view of a library. Restricted mode withholds `root`: the picker discloses host
  *  layout to somebody at the keyboard, and a shared instance renders names and counts only. */
@@ -1161,7 +1180,7 @@ const writeCatalogPoster = async (key: string, url?: string) => {
   if (await mediaPosterExists(key)) return false;
   await rm(dataArtworkFile(key), { force: true });
   await rm(dataArtworkFile(`dir:${key}`), { force: true });
-  const toMedia = store.settings().artworkLocation === "media";
+  const toMedia = artworkBesideMediaFor(key);
   const asFile = isFileKey(key);
   const target = toMedia
     ? (asFile
@@ -1169,7 +1188,7 @@ const writeCatalogPoster = async (key: string, url?: string) => {
       : path.join(mediaPath(key), POSTER_OUTPUT))
     : hashedArt(key);
   await mkdir(path.dirname(target), { recursive: true });
-  return saveGenerated(target, () => savePosterAs(target, url));
+  return saveArtwork(key, target, () => savePosterAs(target, url));
 };
 
 /** The binding on this exact path, ignoring one inherited from a parent folder. */
@@ -1209,7 +1228,7 @@ async function catalogPosterIfBound(key: string, target: string) {
     const numbers = episodeNumberOf(key, ownRecord(key, records));
     const row = numbers ? metaStore.episodes()[episodeKey(known.type, known.id, numbers.season, numbers.episode)] : undefined;
     if (!row?.thumbnail) return false;
-    if (await saveGenerated(target, () => savePosterAs(target, row.thumbnail!))) {
+    if (await saveArtwork(key, target, () => savePosterAs(target, row.thumbnail!))) {
       log("INFO", "Episode still filled in from metadata", { path: key });
       return true;
     }
@@ -1217,7 +1236,7 @@ async function catalogPosterIfBound(key: string, target: string) {
   }
   const meta = await cachedMeta(known.type, known.id);
   if (!meta?.poster) return false;
-  if (await saveGenerated(target, () => savePosterAs(target, meta.poster!))) {
+  if (await saveArtwork(key, target, () => savePosterAs(target, meta.poster!))) {
     log("INFO", "Poster filled in from metadata", { path: key });
     return true;
   }
@@ -1232,7 +1251,7 @@ function scheduleFileArtwork(key: string) {
     if (await locateFileArtwork(key)) return;
     const source = await realpath(mediaPath(key)).catch(() => undefined);
     if (!source) return;
-    const target = store.settings().artworkLocation === "media"
+    const target = artworkBesideMediaFor(key)
       ? path.join(posixDir(mediaPath(key)), episodeArtName(posixBase(key)))
       : dataArtworkFile(key);
     await mkdir(path.dirname(target), { recursive: true });
@@ -1240,7 +1259,7 @@ function scheduleFileArtwork(key: string) {
     if (await locateFileArtwork(key)) return;
     if (await catalogPosterIfBound(key, target)) return;
     const info = await playback.inspect({ url: `file://${wirePath(key)}` }).catch(() => undefined);
-    await saveGenerated(target, () => saveFrame(source, target, framePosition(info?.duration)));
+    await saveArtwork(key, target, () => saveFrame(source, target, framePosition(info?.duration)));
   });
 }
 
@@ -1257,8 +1276,7 @@ function scheduleFolderArtwork(key: string) {
   if (artworkQueue.has(`dir:${key}`)) return;
   artworkQueue.run(`dir:${key}`, async () => {
     if (await locateFolderArtwork(key)) return;
-    const toMedia = store.settings().artworkLocation === "media";
-    const target = toMedia ? path.join(mediaPath(key), POSTER_OUTPUT) : dataArtworkFile(`dir:${key}`);
+    const target = artworkBesideMediaFor(key) ? path.join(mediaPath(key), POSTER_OUTPUT) : dataArtworkFile(`dir:${key}`);
     await mkdir(path.dirname(target), { recursive: true });
     if (await catalogPosterIfBound(key, target)) return;
     if (await locateFolderArtwork(key)) return;
@@ -1274,7 +1292,7 @@ function scheduleFolderArtwork(key: string) {
     if (!first) return;
     const source = mediaPath(libraryPath(library.id, first.path));
     const info = await playback.inspect({ url: `file://${source}` }).catch(() => undefined);
-    await saveGenerated(target, () => saveFrame(source, target, framePosition(info?.duration)));
+    await saveArtwork(key, target, () => saveFrame(source, target, framePosition(info?.duration)));
   });
 }
 

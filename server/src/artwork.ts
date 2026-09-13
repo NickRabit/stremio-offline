@@ -4,6 +4,8 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { log } from "./logger.js";
 import { guardedFetch } from "./outbound.js";
+import type { LibraryHealth } from "./library-probe.js";
+import type { LibraryRecord } from "./libraries.js";
 
 const run = promisify(execFile);
 
@@ -12,6 +14,18 @@ export const POSTER_NAMES = ["poster.jpg", "poster.png", "folder.jpg", "folder.p
 export const BACKDROP_NAMES = ["backdrop.jpg", "fanart.jpg", "background.jpg"];
 /** Our own output. Jellyfin picks it up as the poster when it scans. */
 export const POSTER_OUTPUT = "poster.jpg";
+
+/** A generated poster lands next to the media only when the user asked for it *and* the
+ *  library allows it. A read-only root, a root that is away and a library the user keeps
+ *  curated all fall back to `data/artwork/<libraryId>/`, whatever the global setting says:
+ *  dropping a file into somebody's archive is the one thing the setting must not do. */
+export function artworkBesideMedia(
+  setting: "data" | "media",
+  library: Pick<LibraryRecord, "writeArtwork">,
+  health: LibraryHealth,
+): boolean {
+  return setting === "media" && library.writeArtwork && !health.readOnly && !health.unreachable;
+}
 
 /** Jellyfin looks for an episode thumbnail under the file name; we write the same. */
 export const episodeArtName = (videoFile: string) => `${videoFile.replace(/\.[^.]+$/, "")}.jpg`;

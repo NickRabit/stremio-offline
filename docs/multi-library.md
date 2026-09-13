@@ -99,7 +99,12 @@ again after every rebase onto `main`.
       prefix. A forgotten call site in PR 4 throws rather than writing into the first library.
       `/api/status` reports free space for every library root, and folder artwork browses and
       frames the library its key names.
-- [ ] `writeArtwork`, `readOnly` and `unreachable` through the artwork sink and the walk.
+- [x] `writeArtwork`, `readOnly` and `unreachable` through the artwork sink and the walk.
+      One decision point (`artworkBesideMedia`) replaced four copies of the global setting:
+      a poster lands next to the media only when the user asked for it, the library allows
+      writing and the root is neither read-only nor away. A write that fails there forgets
+      the probe for that root, so the next `GET /api/libraries` asks the disk instead of
+      trusting a cached verdict. The walk already skips a library that is disabled or away.
 - [x] `data/library-scan.json`, spec step 5: `LibraryScan.load()` drops a run whose
       `remaining[]` names no item of any current library instead of resuming it. An upgrade
       qualifies the unit keys, and an interrupted run would otherwise skip the whole library
@@ -116,10 +121,27 @@ again after every rebase onto `main`.
       on the folder's own turn. The interface marks a library browsed in `/api/library/browse`
       and `/api/library/folders`; the merged listing deliberately does not, or every start
       would count as a browse of the whole tree.
-- [ ] `/api/libraries` (list, create, patch, delete), `/api/libraries/browse`, the grant
-      endpoints, `/api/libraries/preview`, and the restricted-mode denials.
-- [ ] `LIBRARY_ROOTS` and `LIBRARY_META_TTL_DAYS` in `.env.example`, both compose files and
-      `docs/configuration.md`.
+- [x] `/api/libraries` (list, create, patch, delete), `/api/libraries/browse`, the grant
+      endpoints, `/api/libraries/preview`, and the restricted-mode denials. `checkLibraryRoot`
+      (`library-admin.ts`) is the one gate: absolute, inside a granted root, a folder, and not
+      another library's root compared through `realpath`; a root inside another library's root
+      stays legal. `create: true` creates only inside the grant, and the probe decides
+      `writeArtwork`. `GET /libraries` probes each root through the 30 s cache and counts
+      titles, files and bytes from the walks the listing already holds. `PATCH` clears a
+      default picker the new type no longer serves. `DELETE` never touches media: `?forget=1`
+      drops the match history, the artwork directory and the favourite and resume rows that
+      pointed into it. The picker lists the grants when `path` is empty and their children
+      otherwise, never lists a symlink out of a grant, and flags a row that is or sits inside
+      a library. Revoking a user grant disables the libraries under it and deletes nothing --
+      an operator grant is rebuilt from the environment, so it cannot be revoked. `preview`
+      walks with a 20 000-file ceiling and a 5 s deadline, asks no addon, and reports
+      `truncated`; it counts existing bindings only when the root already is a library.
+- [ ] Follow-up for PR 6: `AddonDownloadSettings` carries no `libraryId` yet, so the delete
+      path has no stored rule to fall back, and the queue has no job to pause with
+      `pauseReason: "library"`. Both land with the per-library save rules.
+- [x] `LIBRARY_ROOTS` and `LIBRARY_META_TTL_DAYS` in `.env.example`, both compose files and
+      `docs/configuration.md`, next to a short section on what a granted root is and what
+      removing a library does and does not do.
 - [ ] Verification: `tsc`, the server unit suites, and the Playwright suite before the
       branch is pushed.
 
