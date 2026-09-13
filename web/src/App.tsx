@@ -120,7 +120,7 @@ export function App() {
   const [browseView, setBrowseView] = useState<"grid" | "list">(() => recall("view", ["grid", "list"] as const, "grid"));
   const [browseBusy, setBrowseBusy] = useState(false);
   const [identifyPath, setIdentifyPath] = useState<string | null>(null);
-  const [movePath, setMovePath] = useState<{ path: string; label: string } | null>(null);
+  const [movePath, setMovePath] = useState<{ path: string; label: string; type?: "movie" | "series" } | null>(null);
   const [suggestionsOpen, setSuggestionsOpen] = useState(false);
   const [libraryManagerOpen, setLibraryManagerOpen] = useState(false);
   const [suggestionCount, setSuggestionCount] = useState(0);
@@ -207,7 +207,7 @@ export function App() {
     if (!wanted || wanted === label) return;
     try { await api.renameLibraryItem(itemPath, wanted); notify(t("library.renamed")); await loadBrowse(browsePath); } catch (error) { fail(error); }
   };
-  const openMove = (itemPath: string, label: string) => { setMenuFor(null); setMovePath({ path: itemPath, label }); };
+  const openMove = (itemPath: string, label: string, type?: "movie" | "series") => { setMenuFor(null); setMovePath({ path: itemPath, label, type }); };
   /** Follows the item into its new folder: seeing where it landed beats staring at the
    *  gap it left behind. The resume row and the star carry the old path, so both reload. */
   const finishMove = async (target: string) => {
@@ -1159,9 +1159,12 @@ export function App() {
                 <button title={t("library.rescanHint")} onClick={() => void startScan({ force: true })} disabled={scanning}>
                   <RefreshCw/> {t("library.rescan")}
                 </button>
-                <button title={t("library.libraries")} onClick={() => { setMenuFor(null); setLibraryManagerOpen(true); }}>
+                {/* One library is one thing to manage: the settings section holds it, and the
+                    toolbar stays the row it has always been. More than one and managing them
+                    is a browse-time job, so the shortcut appears. */}
+                {libraries.length > 1 && <button className="library-manager-shortcut" title={t("library.libraries")} onClick={() => { setMenuFor(null); setLibraryManagerOpen(true); }}>
                   <Library/> {t("library.libraries")}
-                </button>
+                </button>}
               </div>
             </div>
           </div>
@@ -1208,7 +1211,7 @@ export function App() {
                       {matchActions(item)}
                       <button onClick={() => void toggleFavorite(item.path, !item.favorite)}><Star/> {t(item.favorite ? "favorite.remove" : "favorite.add")}</button>
                       <button onClick={() => void renameItem(item.path, item.name)}><Pencil/> {t("library.rename")}</button>
-                      <button onClick={() => openMove(item.path, item.name)}><FolderInput/> {t("library.move")}</button>
+                      <button onClick={() => openMove(item.path, item.name, item.titleType)}><FolderInput/> {t("library.move")}</button>
                       <button className="danger" onClick={() => void removeItem(item.path, item.name, true)}><Trash2/> {t("common.delete")}</button>
                     </span>}
                   </article>
@@ -1225,7 +1228,7 @@ export function App() {
                       {item.progress && <button onClick={() => void forgetWatched(item.path)}><RotateCcw/> {t("library.markUnwatched")}</button>}
                       <button onClick={() => { setMenuFor(null); void downloadLibraryFile(item.path); }}><Download/> {t("library.downloadToDevice")}</button>
                       <button onClick={() => void renameItem(item.path, item.label)}><Pencil/> {t("library.rename")}</button>
-                      <button onClick={() => openMove(item.path, item.label)}><FolderInput/> {t("library.move")}</button>
+                      <button onClick={() => openMove(item.path, item.label, item.titleType)}><FolderInput/> {t("library.move")}</button>
                       <button className="danger" onClick={() => void removeItem(item.path, item.label, false)}><Trash2/> {t("common.delete")}</button>
                     </span>}
                   </article>)}
@@ -1259,7 +1262,7 @@ export function App() {
       onDeviceDownload={() => localStream?.localPath ? downloadLibraryFile(localStream.localPath) : downloadStreamToDevice()}
       onClose={() => { setPlayerOpen(false); setLocalStream(null); }}/>
     {libraryManagerOpen && <LibraryManagerDialog restricted={restricted} onClose={() => setLibraryManagerOpen(false)} onChanged={refreshLibraries} onError={fail} onNotify={notify}/>}
-    {movePath && <MoveDialog path={movePath.path} label={movePath.label} onClose={() => setMovePath(null)} onMoved={(target) => void finishMove(target)}/>}
+    {movePath && <MoveDialog path={movePath.path} label={movePath.label} itemType={movePath.type} libraries={libraries} onClose={() => setMovePath(null)} onMoved={(target) => void finishMove(target)}/>}
     {identifyPath && <IdentifyDialog path={identifyPath} onClose={() => setIdentifyPath(null)} onApplied={() => { setIdentifyPath(null); void loadSuggestionCount(); void loadBrowse(browsePath); }}/>}
     {suggestionsOpen && <SuggestionsDialog
       onClose={() => setSuggestionsOpen(false)}

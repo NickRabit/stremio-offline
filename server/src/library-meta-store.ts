@@ -1,6 +1,7 @@
 import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { LibraryEpisodeRecord, LibraryMetaRecord, LibrarySuggestion } from "./library-match.js";
+import { dropKeyed, pinInherited, remapKeyed, type LibraryEpisodeRecord, type LibraryMetaRecord, type LibrarySuggestion } from "./library-match.js";
+import { isPathWithin, remapPath } from "./library.js";
 import { libraryPath, parseLibraryPath } from "./libraries.js";
 import { log } from "./logger.js";
 
@@ -157,6 +158,43 @@ export class LibraryMetaStore {
     mutator(this.qualifiedView((file) => file.meta, touched), this.qualifiedView((file) => file.suggestions, touched), this.episodeMap);
     for (const libraryId of touched) { this.invalidate(libraryId); this.save(libraryId); }
     this.saveEpisodes();
+  }
+
+  /** Carries everything remembered about a path to another one. Inside a library that is a
+   *  rename in place; across libraries the rows leave one file and land in the other, which
+   *  is why the store owns it -- two files have to change together or the move is half done.
+   *  `pin` is for a move into another folder, see `pinInherited`. */
+  async relocate(from: string, to: string, pin = false) {
+    const source = parseLibraryPath(from);
+    const target = parseLibraryPath(to);
+    if (!source || !target || !source.relative || !target.relative) return;
+    const file = this.files.get(source.libraryId);
+    if (!file) return;
+    const pinned = pin
+      ? pinInherited(file.meta, file.suggestions, source.relative, target.relative)
+      : { meta: file.meta, suggestions: file.suggestions };
+    if (source.libraryId === target.libraryId) {
+      file.meta = remapKeyed(pinned.meta, source.relative, target.relative);
+      file.suggestions = remapKeyed(pinned.suggestions, source.relative, target.relative);
+    } else {
+      const carried = <T,>(records: Record<string, T>) => Object.fromEntries(Object.entries(records)
+        .filter(([key]) => isPathWithin(key, source.relative))
+        .map(([key, value]) => [remapPath(key, source.relative, target.relative), value]));
+      const meta = carried(pinned.meta);
+      const suggestions = carried(pinned.suggestions);
+      file.meta = dropKeyed(pinned.meta, source.relative);
+      file.suggestions = dropKeyed(pinned.suggestions, source.relative);
+      const destination = this.file(target.libraryId);
+      // A row already at the destination path described a file that is not there any more;
+      // the one arriving is the one that exists.
+      destination.meta = { ...destination.meta, ...meta };
+      destination.suggestions = { ...destination.suggestions, ...suggestions };
+    }
+    this.invalidate(source.libraryId);
+    this.save(source.libraryId);
+    if (source.libraryId === target.libraryId) return;
+    this.invalidate(target.libraryId);
+    this.save(target.libraryId);
   }
 
   /** Mutates one library's file. Keys inside the mutator are library-relative; merge any

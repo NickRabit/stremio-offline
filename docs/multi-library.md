@@ -208,10 +208,25 @@ again after every rebase onto `main`.
       renders the list without a single control -- the API would refuse every one of them.
       Covered by `e2e/tests/library-admin.spec.ts` (manager dialog, picker, estimate, rename,
       the disabled row) and the settings part of `e2e/tests/restricted.spec.ts`.
-- [ ] Follow-up from PR 1: `e2e/tests/layout/screenshots.spec.ts` drops the diagnostics
+- [x] The cross-library move (§10). `POST /api/library/move` takes a destination in another
+      library: the type gate refuses a film into a `series` library and the reverse with
+      `err.libraryTypeMismatch`, with the kind taken from the item's binding and otherwise from
+      the source library's units; a `mixed` destination takes anything, and so does a unit
+      nobody can type. `LibraryMetaStore.relocate` carries the bindings across, writing both
+      files in one call, with the destination's own path winning on a collision. The thumbnails
+      move between `data/artwork/<id>/` directories and the cache index follows them, so the
+      ceiling keeps counting real bytes. `pruneEmptiedFolders` runs on the source library only.
+      An existing name at the destination fails with `err.nameTaken` -- no `(2)` suffixing. The
+      move dialog offers the libraries that take this kind of title and walks the picked one's
+      own tree, and the browse rows now carry the bound kind so it can decide. Covered by the
+      store and artwork-cache unit tests and by `e2e/tests/library-move.spec.ts`, which also
+      checks the bytes on disk and that the emptied folder went with them.
+- [x] Follow-up from PR 1: `e2e/tests/layout/screenshots.spec.ts` drops the diagnostics
       report chip before the settings screenshot. The chip is per-run noise inside a masked
       section, but its width decided whether the header wrapped at the narrow viewports, so
       the baseline used to match only when the recorded run happened to report three digits.
+      The chip is removed from the DOM after the settings page settles and before the
+      screenshot is taken; the diagnostics section remains masked as before.
 
 ### PR 5 — Operations queue and bulk selection
 

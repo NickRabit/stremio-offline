@@ -29,7 +29,7 @@ import { publicSettings, Store } from "./store.js";
 import { advanceTorrent, normalizeToken, verifyRealDebridToken } from "./debrid.js";
 import { clearLog, currentLevel, flushLog, initLogger, log, parseLevel, readLog, startLogMaintenance, setLevel } from "./logger.js";
 import { browseDirectory, describePath, emptiedFolders, entryDirectory, isPathWithin, isVideo, listFolders, listVideos, moveDestination, orphanedCatalogKeys, pageFiles, remapPath, scanLibrary, sortFiles, summarize, type FoundFile, type LibraryEntry, type WalkBudget } from "./library.js";
-import { browseMeta, cacheFieldsFromMeta, episodeKey, episodeNumberOf, episodesFromMeta, dropKeyed, knownTitleOf, lookupSkipped, matchKeyFor, matchStatus, needsBackfill, needsEpisodes, pinInherited, remapKeyed, scanMiss, suggestionFor, titleUnits, unmatchAt, type LibraryMetaRecord, type TitleUnit } from "./library-match.js";
+import { browseMeta, cacheFieldsFromMeta, episodeKey, episodeNumberOf, episodesFromMeta, dropKeyed, knownTitleOf, lookupSkipped, matchKeyFor, matchStatus, needsBackfill, needsEpisodes, scanMiss, suggestionFor, titleUnits, unmatchAt, type LibraryMetaRecord, type TitleKind, type TitleUnit } from "./library-match.js";
 import { parseMediaPath } from "./library-parse.js";
 import { LibraryScan } from "./library-scan.js";
 import { createLibraryProbe, type LibraryHealth } from "./library-probe.js";
@@ -1240,7 +1240,10 @@ const attachBrowseMeta = <T extends { path: string; kind: string; name?: string;
   const numbers = item.kind === "file" ? episodeNumberOf(key, ownRecord(key, records)) : undefined;
   const wanted = needsBackfill(known) || needsEpisodes(known, numbers, episodes);
   const backfill = wanted && scheduleMetaBackfill(known!.type, known!.id);
-  return { item: { ...item, ...extra }, backfill };
+  // The move dialog offers only the libraries that take what it is about to hand them,
+  // and a row without a binding has no kind to compare -- the server stays the backstop.
+  const titled = known && (known.type === "movie" || known.type === "series") ? { titleType: known.type } : {};
+  return { item: { ...item, ...extra, ...titled }, backfill };
 };
 
 /** An episode gets its own still. Falling back to the series poster would paint
@@ -1604,19 +1607,9 @@ const forgetLibraryPath = async (key: string) => {
  *  `pin` is for a move into another folder: the identity an item inherited from the folder
  *  it is leaving has to become its own, or the destination's title would take over. */
 const relocateLibraryPath = async (key: string, nextKey: string, pin = false) => {
-  const from = parseLibraryPath(key);
-  const to = parseLibraryPath(nextKey);
-  // A rename or a move keeps the item inside its library; handing it to another one is
-  // the cross-library move, which lands with the library manager.
-  if (from && to && from.libraryId === to.libraryId) {
-    await metaStore.update(from.libraryId, (file) => {
-      const pinned = pin
-        ? pinInherited(file.meta, file.suggestions, from.relative, to.relative)
-        : { meta: file.meta, suggestions: file.suggestions };
-      file.meta = remapKeyed(pinned.meta, from.relative, to.relative);
-      file.suggestions = remapKeyed(pinned.suggestions, from.relative, to.relative);
-    });
-  }
+  // The bindings live in one file per library, so a move into another library rewrites two
+  // of them and the store is the only place that can do both.
+  await metaStore.relocate(key, nextKey, pin);
   await store.update((state) => {
     state.favorites = (state.favorites ?? []).map((item) => remapPath(item, key, nextKey));
     state.progress = Object.fromEntries(Object.entries(state.progress ?? {}).map(([progressKey, value]) => {
@@ -1633,7 +1626,9 @@ const relocateArtwork = async (items: string[], relative: string, nextRelative: 
   for (const item of items) {
     const next = remapPath(item, relative, nextRelative);
     for (const [from, to] of [[item, next], [`dir:${item}`, `dir:${next}`]]) {
-      await rename(dataArtworkFile(from!), dataArtworkFile(to!)).catch(() => undefined);
+      const source = dataArtworkFile(from!);
+      const target = dataArtworkFile(to!);
+      await rename(source, target).then(() => artworks.moved(source, target), () => undefined);
     }
   }
 };
@@ -1703,6 +1698,26 @@ app.get("/api/library/folders", asyncRoute(async (req, res) => {
   res.json({ path: relative, folders: folders.map((folder) => ({ ...folder, path: wirePath(libraryPath(resolved.library.id, folder.path)) })) });
 }));
 
+/** The kind of the unit an item belongs to: its own binding first, the structure the source
+ *  library gives it otherwise, because an unbound file carries no type of its own. */
+const unitKindOf = async (key: string): Promise<TitleKind | undefined> => {
+  const record = ownRecord(key, metaStore.qualifiedMeta());
+  if (record?.type === "movie" || record?.type === "series") return record.type;
+  const covering = (await libraryUnits()).filter((unit) => isPathWithin(key, unit.key));
+  return covering.sort((a, b) => b.key.length - a.key.length)[0]?.kind;
+};
+
+/** A typed library is a promise about what is inside it, and a move must not break it.
+ *  `mixed` takes anything, and so does a unit whose kind nobody can name -- refusing that
+ *  would block a move over a guess. */
+const assertMoveType = async (key: string, destination: LibraryRecord) => {
+  if (destination.type === "mixed") return;
+  const kind = await unitKindOf(key);
+  if (kind && kind !== destination.type) {
+    throw new AppError(`A ${destination.type} library does not take ${kind === "movie" ? "films" : "series"}.`, "err.libraryTypeMismatch");
+  }
+};
+
 app.post("/api/library/move", asyncRoute(async (req, res) => {
   const relative = String(req.body.path ?? "").trim();
   const resolved = relative ? await resolveLibraryPath(store.libraries(), relative) : undefined;
@@ -1716,13 +1731,20 @@ app.post("/api/library/move", asyncRoute(async (req, res) => {
   const folderInfo = await stat(folderResolved.absolute).catch(() => undefined);
   if (!folderInfo?.isDirectory()) throw new AppError("The destination folder does not exist.", "err.targetMissing");
 
-  const destination = moveDestination(resolved.relative, folderResolved.relative);
+  // Into another library the item simply keeps its name: the two folders have nothing to
+  // do with one another, so the checks that guard a move inside one do not apply.
+  const acrossLibraries = folderResolved.library.id !== resolved.library.id;
+  if (acrossLibraries) await assertMoveType(resolved.key, folderResolved.library);
+  const destination = acrossLibraries
+    ? { path: posixJoin(folderResolved.relative, posixBase(resolved.relative)) }
+    : moveDestination(resolved.relative, folderResolved.relative);
   if ("error" in destination) {
     throw destination.error === "sameFolder"
       ? new AppError("The item is already in that folder.", "err.sameFolder")
       : new AppError("A folder cannot be moved into itself.", "err.moveIntoItself");
   }
-  const target = await resolveLibraryPath(store.libraries(), destination.path);
+  // Qualified, so a destination in another library resolves under its own root.
+  const target = await resolveLibraryPath(store.libraries(), libraryPath(folderResolved.library.id, destination.path));
   if (!target) throw new AppError("Invalid path.", "err.invalidPath");
   if (await fileExists(target.absolute)) throw new AppError("A file with that name already exists.", "err.nameTaken");
 
@@ -1733,10 +1755,12 @@ app.post("/api/library/move", asyncRoute(async (req, res) => {
   await rename(resolved.absolute, target.absolute);
   await relocateArtwork(carried, resolved.key, target.key);
   await relocateLibraryPath(resolved.key, target.key, true);
+  // Only the library the item left: the destination gained a folder, it did not lose one.
   const pruned = await pruneEmptiedFolders(resolved.key);
   invalidateLibrary();
-  log("INFO", "Moved in the library", { from: relative, to: destination.path, pruned });
-  res.json({ path: destination.path });
+  const moved = wirePath(target.key);
+  log("INFO", "Moved in the library", { from: relative, to: moved, library: resolved.library.id, pruned });
+  res.json({ path: moved });
 }));
 
 app.get("/api/library/thumb", asyncRoute(async (req, res) => {

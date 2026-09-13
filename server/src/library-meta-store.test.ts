@@ -73,6 +73,38 @@ test("episode rows land in the shared file, not in a library", async () => {
   });
 });
 
+const libA = "lib_aaaaaaaa";
+const libB = "lib_bbbbbbbb";
+
+test("a move inside one library renames the rows in its own file", async () => {
+  await withStore(async (store, dataDir) => {
+    await seed(dataDir, libA, { Show: record("tt1"), "Show/01.mkv": record("tt2") });
+    await seed(dataDir, libB, { "Film.mkv": record("tt3") });
+    await store.load();
+    await store.relocate(`${libA}/Show`, `${libA}/Serial`);
+    await store.flush();
+    assert.deepEqual(Object.keys(store.meta(libA)).sort(), ["Serial", "Serial/01.mkv"]);
+    assert.deepEqual(Object.keys(store.meta(libB)), ["Film.mkv"], "the other library is not in this move");
+  });
+});
+
+test("a move into another library writes both files and pins the inherited title first", async () => {
+  await withStore(async (store, dataDir) => {
+    // The folder carries the title; the file inside inherits it. In the destination the file
+    // sits under another title's folder, so it has to own the binding before it leaves.
+    await seed(dataDir, libA, { Show: record("tt1") }, { Show: { type: "movie", id: "tt1", score: 90 } });
+    await seed(dataDir, libB, { Archive: record("tt9") });
+    await store.load();
+    await store.relocate(`${libA}/Show/01.mkv`, `${libB}/Archive/01.mkv`, true);
+    await store.flush();
+    assert.deepEqual(Object.keys(store.meta(libA)), ["Show"], "only the moved row leaves");
+    assert.deepEqual(Object.keys(store.meta(libB)).sort(), ["Archive", "Archive/01.mkv"]);
+    assert.equal(store.meta(libB)["Archive/01.mkv"]!.id, "tt1", "the item keeps the title it had");
+    assert.deepEqual(Object.keys(store.suggestions(libA)), ["Show"], "the folder keeps its own suggestion");
+    assert.deepEqual(Object.keys(store.suggestions(libB)), ["Archive/01.mkv"]);
+  });
+});
+
 test("a write driven by catalogue identity walks every library", async () => {
   await withStore(async (store, dataDir) => {
     await seed(dataDir, "lib_a", { "One.mkv": record("tt1") });

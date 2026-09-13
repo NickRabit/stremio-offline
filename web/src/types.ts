@@ -126,7 +126,12 @@ export interface LibrarySummary {
 export interface LibraryPage extends LibrarySummary { files: LibraryFile[]; total: number }
 export type LibraryMatch = "unmatched" | "matched" | "suggested" | "rejected";
 export interface MatchSuggestion { type: string; id: string; name: string; year?: number; score: number }
-export interface BrowseMeta { year?: string; description?: string; catalogName?: string; match?: LibraryMatch; skipLookup?: boolean; suggestion?: MatchSuggestion }
+export interface BrowseMeta {
+  year?: string; description?: string; catalogName?: string; match?: LibraryMatch; skipLookup?: boolean; suggestion?: MatchSuggestion;
+  /** The kind of the title this row is bound to. Absent when nothing is bound, and the
+   *  move dialog then offers every library rather than refusing on a guess. */
+  titleType?: "movie" | "series";
+}
 export interface BrowseFolder extends BrowseMeta { path: string; name: string; fileCount: number; size: number; poster?: string }
 export interface BrowseFile extends LibraryFile, BrowseMeta { poster?: string; progress?: { position: number; duration: number } }
 export type LibraryType = "movie" | "series" | "mixed";
