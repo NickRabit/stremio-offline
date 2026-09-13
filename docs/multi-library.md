@@ -15,7 +15,7 @@ branch and leaves the tree buildable and tested.
 
 ### PR 1 — Qualified paths, `libraries.ts`, migration
 
-- [ ] `libraries.ts`: ids, POSIX helpers, path parsing, carve-outs, `resolveLibraryPath`.
+- [x] `libraries.ts`: ids, POSIX helpers, path parsing, carve-outs, `resolveLibraryPath`.
 - [ ] POSIX wire rule through `library.ts` and `library-match.ts`.
 - [ ] `schemaVersion`, `libraries` in state, `library-migrate.ts` and its unit tests.
 - [ ] `resolveLibraryPath` at every `index.ts` call site and in the download queue.
