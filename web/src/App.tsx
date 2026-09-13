@@ -36,6 +36,9 @@ type GalleryImage = { url: string; label: string; shape: "poster" | "wide" };
 /** Artwork comes through the server; when a provider does not deliver, leave the
  *  placeholder underneath rather than a broken image icon. */
 const hideBroken = (event: React.SyntheticEvent<HTMLImageElement>) => event.currentTarget.classList.add("broken");
+/** Addons name types freely; only the two we filter by have a translation. */
+const typeLabel = (type: string) => type === "movie" ? t("catalog.movies") : type === "series" ? t("catalog.series") : type;
+
 
 const galleryFor = (item: Meta | null): GalleryImage[] => {
   if (!item) return [];
@@ -976,7 +979,11 @@ export function App() {
             {submittedQuery
               ? <>
                   <span className="scope-badge">{t("catalog.searchedCatalogs", { count: sourceCount })} {scopedCatalog ? t("catalog.inCatalog", { addon: scopedCatalog.addonName, catalog: scopedCatalog.name }) : searchScope.addonKey ? t("catalog.inAddon", { addon: searchable.find((item) => item.addonKey === searchScope.addonKey)?.addonName ?? "" }) : t("catalog.inAllAddons")}</span>
-                  <label><span>{t("catalog.type")}</span><select aria-label={t("catalog.type")} value={effectiveTypeFilter} disabled={Boolean(searchScope.catalogType)} onChange={(e) => setTypeFilter(e.target.value)}><option value="">{t("common.all")}</option><option value="movie">{t("catalog.movies")}</option><option value="series">{t("catalog.series")}</option></select></label>
+                  <label><span>{t("catalog.type")}</span><select aria-label={t("catalog.type")} value={effectiveTypeFilter} disabled={Boolean(searchScope.catalogType)} onChange={(e) => setTypeFilter(e.target.value)}>
+                    {searchScope.catalogType
+                      ? <option value={searchScope.catalogType}>{typeLabel(searchScope.catalogType)}</option>
+                      : <><option value="">{t("common.all")}</option><option value="movie">{t("catalog.movies")}</option><option value="series">{t("catalog.series")}</option></>}
+                  </select></label>
                 </>
               : <>
                   <label className="catalog-filter"><span>{t("catalog.browse")}</span><select className="catalog-select" aria-label={t("catalog.browse")} value={selectedCatalog} onChange={(e) => setSelectedCatalog(e.target.value)}>

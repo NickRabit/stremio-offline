@@ -47,7 +47,12 @@ test.describe("catalog", () => {
 
     await expect(page.getByRole("button", { name: /Zkušební seriál/ })).toBeVisible();
     await expect(page.getByRole("button", { name: /Zkušební film/ })).toHaveCount(0);
-    await expect(page.getByRole("combobox", { name: "Typ" })).toBeDisabled();
+    // The locked filter offers exactly the catalogue's own type, so it can never
+    // claim a type the search is not using.
+    const type = page.getByRole("combobox", { name: "Typ" });
+    await expect(type).toBeDisabled();
+    await expect(type.locator("option")).toHaveCount(1);
+    await expect(type).toHaveValue("series");
   });
 
   test("a search with no match says so instead of showing an empty grid", async ({ page }) => {
