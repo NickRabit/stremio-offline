@@ -1,5 +1,5 @@
-import path from "node:path";
 import { isPathWithin, isVideo, numberedEpisode, parseSeason, remapPath, type FoundFile } from "./library.js";
+import { posixBase } from "./libraries.js";
 import { parseMediaPath, type ParsedMedia } from "./library-parse.js";
 import type { MetaItem } from "./types.js";
 
@@ -206,9 +206,9 @@ export function scanSkipReason(raw?: LibraryMetaRecord): "bound" | "ignored" | u
 }
 
 export function lookupSkipped(relative: string, records: Record<string, LibraryMetaRecord>): boolean {
-  const parts = relative.split(path.sep);
+  const parts = relative.split("/");
   for (let depth = parts.length; depth >= 1; depth -= 1) {
-    const key = parts.slice(0, depth).join(path.sep);
+    const key = parts.slice(0, depth).join("/");
     if (records[key]?.skipLookup) return true;
   }
   return false;
@@ -226,9 +226,9 @@ export function knownTitleEntry(
   relative: string,
   records: Record<string, LibraryMetaRecord>,
 ): { key: string; record: LibraryMetaRecord } | undefined {
-  const parts = relative.split(path.sep);
+  const parts = relative.split("/");
   for (let depth = parts.length; depth >= 1; depth -= 1) {
-    const key = parts.slice(0, depth).join(path.sep);
+    const key = parts.slice(0, depth).join("/");
     const found = records[key];
     if (!found) continue;
     return viewMeta(found)?.id ? { key, record: found } : undefined;
@@ -257,9 +257,9 @@ export function unmatchAt(records: Record<string, LibraryMetaRecord>, relative: 
 
 /** The scan result covering this path, ignoring the memory of a fruitless search. */
 export function suggestionFor(relative: string, suggestions: Record<string, LibrarySuggestion>): LibrarySuggestion | undefined {
-  const parts = relative.split(path.sep);
+  const parts = relative.split("/");
   for (let depth = parts.length; depth >= 1; depth -= 1) {
-    const found = suggestions[parts.slice(0, depth).join(path.sep)];
+    const found = suggestions[parts.slice(0, depth).join("/")];
     if (found?.id) return found;
   }
   return undefined;
@@ -386,7 +386,7 @@ export function browseMeta(
   const known = entry.record;
   const named = (value?: string) => (value && normalizeTitle(value) !== normalizeTitle(label) ? value : undefined);
 
-  if (known.type === "series" && isVideo(path.basename(relative))) {
+  if (known.type === "series" && isVideo(posixBase(relative))) {
     const numbers = episodeNumberOf(relative, records[relative]?.id ? records[relative] : undefined);
     // Without the episode text the series plot would repeat on every row, which
     // says nothing about the file in front of the user.
@@ -414,9 +414,9 @@ export function browseMeta(
 
 /** The ancestor key whose row covers this path, `accept` deciding what counts as cover. */
 function coveringKey<T>(records: Record<string, T>, relative: string, accept: (value: T) => boolean): string | undefined {
-  const parts = relative.split(path.sep);
+  const parts = relative.split("/");
   for (let depth = parts.length; depth >= 1; depth -= 1) {
-    const key = parts.slice(0, depth).join(path.sep);
+    const key = parts.slice(0, depth).join("/");
     const found = records[key];
     if (found !== undefined && accept(found)) return key;
   }
@@ -461,7 +461,7 @@ export function dropKeyed<T>(records: Record<string, T>, relative: string): Reco
 }
 
 function parentOf(relative: string): string {
-  const index = relative.lastIndexOf(path.sep);
+  const index = relative.lastIndexOf("/");
   return index < 0 ? "" : relative.slice(0, index);
 }
 
@@ -493,10 +493,10 @@ function indexFiles(files: FoundFile[]): DirIndex {
     children.set(parent, set);
   };
   for (const file of files) {
-    const parts = file.relative.split(path.sep);
+    const parts = file.relative.split("/");
     let acc = "";
     for (let i = 0; i < parts.length - 1; i += 1) {
-      const dir = acc ? `${acc}${path.sep}${parts[i]}` : parts[i]!;
+      const dir = acc ? `${acc}/${parts[i]}` : parts[i]!;
       addChild(acc, dir);
       acc = dir;
     }
@@ -510,15 +510,15 @@ function indexFiles(files: FoundFile[]): DirIndex {
 
 function filesUnder(index: DirIndex, dir: string): string[] {
   if (!dir) return index.all.map((file) => file.relative);
-  const prefix = `${dir}${path.sep}`;
+  const prefix = `${dir}/`;
   return index.all.filter((file) => file.relative.startsWith(prefix)).map((file) => file.relative);
 }
 
 function uniqueNonExtraTitles(videos: FoundFile[]): Set<string> {
   const titles = new Set<string>();
   for (const file of videos) {
-    if (isExtraName(path.basename(file.relative))) continue;
-    const title = comparableTitle(path.basename(file.relative));
+    if (isExtraName(posixBase(file.relative))) continue;
+    const title = comparableTitle(posixBase(file.relative));
     if (title) titles.add(title);
   }
   return titles;
@@ -533,9 +533,9 @@ function emit(out: TitleUnit[], key: string, kind: TitleKind, samples: string[])
 }
 
 function classifyVideosOnly(index: DirIndex, dir: string, videos: FoundFile[], out: TitleUnit[]) {
-  const nonExtra = videos.filter((file) => !isExtraName(path.basename(file.relative)));
+  const nonExtra = videos.filter((file) => !isExtraName(posixBase(file.relative)));
   if (!nonExtra.length) return;
-  const tagged = videos.filter((file) => isTaggedEpisode(path.basename(file.relative)));
+  const tagged = videos.filter((file) => isTaggedEpisode(posixBase(file.relative)));
   if (tagged.length * 2 > videos.length) {
     emit(out, dir, "series", videos.map((file) => file.relative));
     return;
@@ -548,7 +548,7 @@ function classifyVideosOnly(index: DirIndex, dir: string, videos: FoundFile[], o
 function classifyFolder(index: DirIndex, dir: string, out: TitleUnit[]) {
   const videos = index.videos.get(dir) ?? [];
   const children = [...(index.children.get(dir) ?? [])];
-  if (children.some((child) => parseSeason(path.basename(child)) != null)) {
+  if (children.some((child) => parseSeason(posixBase(child)) != null)) {
     emit(out, dir, "series", filesUnder(index, dir));
     return;
   }
@@ -582,7 +582,7 @@ export function matchKeyFor(relative: string, files: FoundFile[]): string {
     const parent = parentOf(relative);
     if (!parent) return relative;
     const siblings = files.filter((file) => parentOf(file.relative) === parent);
-    const nested = files.filter((file) => file.relative.startsWith(`${parent}${path.sep}`) && parentOf(file.relative) !== parent);
+    const nested = files.filter((file) => file.relative.startsWith(`${parent}/`) && parentOf(file.relative) !== parent);
     if (nested.length) {
       const sameFolder = files.filter((file) => parentOf(file.relative) === parent);
       if (sameFolder.length === 1 || uniqueNonExtraTitles(sameFolder).size <= 1) return parent;
