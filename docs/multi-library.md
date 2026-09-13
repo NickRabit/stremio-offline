@@ -164,8 +164,16 @@ again after every rebase onto `main`.
 - [x] `LIBRARY_ROOTS` and `LIBRARY_META_TTL_DAYS` in `.env.example`, both compose files and
       `docs/configuration.md`, next to a short section on what a granted root is and what
       removing a library does and does not do.
-- [ ] Verification: `tsc`, the server unit suites, and the Playwright suite before the
-      branch is pushed.
+- [x] Verification: `tsc`, 453 server tests, 176 web tests, and both Playwright suites in the
+      CI image on the rebased head (244 passed, 23 skipped; the fullscreen idle-hide case in
+      `layout/player.spec.ts` is flaky there, exactly as it is on `main`). The local Docker
+      stack was built and driven through the new endpoints: a library whose root is away comes
+      up `unreachable`, is skipped by the walk and the sweep, and keeps its metadata and
+      thumbnails -- the same backdated orphan, with the root back, is deleted by the very next
+      sweep. A read-only mount is probed `readOnly`, keeps `writeArtwork` off and lands its
+      thumbnail in `data/artwork/<id>/` even with the artwork setting on `media`, while a
+      writable library under that setting writes the poster beside the media. Revoking a grant
+      disables the library and leaves its metadata, artwork and media in place.
 
 ### PR 4 — Library manager, root browse, cross-library move
 
