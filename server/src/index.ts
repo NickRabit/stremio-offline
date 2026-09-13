@@ -639,23 +639,36 @@ const pruneDeviceDownloadTickets = () => {
 /** Every path inside the server is a qualified key; the client speaks relative paths
  *  while one library is configured, and `wirePath` is the single place that turns one
  *  back into the other. */
-const primaryLibrary = () => store.libraries()[0]!;
+const singleLibrary = () => {
+  const libraries = store.libraries();
+  // An unqualified path cannot say which library it belongs to, so with more than one
+  // configured the pass-through has no answer. Throwing beats a call site that forgot to
+  // qualify a key and silently wrote into the first library instead.
+  if (libraries.length !== 1) throw new Error(`An unqualified path needs exactly one library, ${libraries.length} are configured`);
+  return libraries[0]!;
+};
 /** Folders inside this library that another library owns. The walk, the pickers and
  *  the prune all stop at them, or a delete would take the other library with it. */
 const carveOutsOf = (library: LibraryRecord) => new Set(carveOuts(store.libraries(), library));
 /** The library a key names, with the key's part below it. A key without a library id is
- *  the single-library pass-through and belongs to the first library. */
+ *  the single-library pass-through; `singleLibrary` throws if there is no such library. */
 const libraryOfKey = (key: string) => {
   const parsed = parseLibraryPath(key);
-  if (!parsed) return { library: primaryLibrary(), relative: key };
-  return { library: libraryFor(store.libraries(), parsed.libraryId) ?? primaryLibrary(), relative: parsed.relative };
+  if (!parsed) return { library: singleLibrary(), relative: key };
+  return { library: libraryFor(store.libraries(), parsed.libraryId) ?? singleLibrary(), relative: parsed.relative };
 };
 /** Qualifies a wire path; a path that already names a library is left alone. */
 const libraryKey = (value: string) => {
   const parsed = parseLibraryPath(value);
-  return parsed ? libraryPath(parsed.libraryId, parsed.relative) : libraryPath(primaryLibrary().id, value);
+  return parsed ? libraryPath(parsed.libraryId, parsed.relative) : libraryPath(singleLibrary().id, value);
 };
-const wirePath = (key: string) => relativeWithin(primaryLibrary().id, key);
+/** The wire form of a key: relative while one library is configured, qualified as soon as
+ *  the interface has to tell several apart. Dropping a prefix it cannot attribute would
+ *  hand the client a path that names the wrong library, so it never guesses. */
+const wirePath = (key: string) => {
+  const libraries = store.libraries();
+  return libraries.length === 1 ? relativeWithin(libraries[0]!.id, key) : key;
+};
 const mediaPath = (key: string, ...rest: string[]) => {
   const { library, relative } = libraryOfKey(key);
   return path.join(library.root, toFs(posixJoin(relative, ...rest)));
@@ -987,16 +1000,18 @@ function scheduleFolderArtwork(key: string) {
     if (await catalogPosterIfBound(key, target)) return;
     if (await locateFolderArtwork(key)) return;
     if (await catalogPosterIfBound(key, target)) return;
-    const inside = await browseDirectory(primaryLibrary().root, relativeWithin(primaryLibrary().id, key), "", 0, 20,
-      "name", false, "", undefined, carveOutsOf(primaryLibrary()));
+    const { library, relative } = libraryOfKey(key);
+    const inside = await browseDirectory(library.root, relative, "", 0, 20,
+      "name", false, "", undefined, carveOutsOf(library));
     let first = inside.items.find((item) => item.kind === "file");
     if (!first) {
       const sub = inside.items.find((item) => item.kind === "folder");
-      if (sub) first = (await browseDirectory(primaryLibrary().root, sub.path, "", 0, 20, "name", false, "", undefined, carveOutsOf(primaryLibrary()))).items.find((item) => item.kind === "file");
+      if (sub) first = (await browseDirectory(library.root, sub.path, "", 0, 20, "name", false, "", undefined, carveOutsOf(library))).items.find((item) => item.kind === "file");
     }
     if (!first) return;
-    const info = await playback.inspect({ url: `file://${first.path}` }).catch(() => undefined);
-    await saveGenerated(target, () => saveFrame(mediaPath(first.path), target, framePosition(info?.duration)));
+    const source = mediaPath(libraryPath(library.id, first.path));
+    const info = await playback.inspect({ url: `file://${source}` }).catch(() => undefined);
+    await saveGenerated(target, () => saveFrame(source, target, framePosition(info?.duration)));
   });
 }
 
@@ -1208,7 +1223,7 @@ app.get("/api/library/browse", asyncRoute(async (req, res) => {
   const resolved = requested ? await resolveLibraryPath(store.libraries(), requested) : undefined;
   if (requested && !resolved) throw new AppError("Invalid path.", "err.invalidPath");
   // An empty path is the first library's root for as long as one library is configured.
-  const library = resolved?.library ?? primaryLibrary();
+  const library = resolved?.library ?? singleLibrary();
   markBrowsed(library);
   const inLibrary = (path: string) => libraryPath(library.id, path);
   const favoritePaths = onlyFavorites
@@ -1458,7 +1473,7 @@ const browsedLibraries = new Set<string>();
 const markBrowsed = (library: LibraryRecord) => { browsedLibraries.add(library.id); };
 const libraryScan = new LibraryScan({
   dataDir: DATA_DIR,
-  downloadDir: primaryLibrary().root,
+  downloadDir: singleLibrary().root,
   // The scan works on keys, so the walk it injects is the qualified one.
   pathExists: async (key: string) => { try { await access(mediaPath(key)); return true; } catch { return false; } },
   units: async () => { await refreshLibraryHealth(); return libraryUnits(); },
@@ -1993,7 +2008,7 @@ app.get("/api/diagnostics", asyncRoute(async (_req, res) => {
     addons: store.addons().map((addon) => ({ name: addon.manifest.name, role: addon.role, enabled: addon.enabled })),
     outbound: outbound.diagnostics(),
     libraryScan: libraryScan.snapshot(),
-    storage: [await freeSpace(DATA_DIR), await freeSpace(primaryLibrary().root)],
+    storage: [await freeSpace(DATA_DIR), ...await Promise.all(store.libraries().map((library) => freeSpace(library.root)))],
   });
 }));
 

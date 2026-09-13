@@ -93,6 +93,12 @@ again after every rebase onto `main`.
       the destination picker, the prune and the artwork sweep all run against the library
       the path names. The probe answers (`unreachable`, `readOnly`) gate the walk and the
       sweep; a root that is out of reach is skipped, never removed.
+- [x] The single-library pass-through fails loudly instead of guessing: an unqualified path
+      needs exactly one configured library (`singleLibrary()`), `libraryKey`/`libraryOfKey` go
+      through it, and `wirePath` hands back the qualified key as soon as it cannot attribute a
+      prefix. A forgotten call site in PR 4 throws rather than writing into the first library.
+      `/api/status` reports free space for every library root, and folder artwork browses and
+      frames the library its key names.
 - [ ] `writeArtwork`, `readOnly` and `unreachable` through the artwork sink and the walk.
 - [x] `data/library-scan.json`, spec step 5: `LibraryScan.load()` drops a run whose
       `remaining[]` names no item of any current library instead of resuming it. An upgrade
