@@ -62,8 +62,8 @@ the image name, for example `:a1b2c3d`.
 
 ```bash
 cd /volume1/docker
-git clone https://github.com/NickRabit/streamio-offline.git
-cd streamio-offline
+git clone https://github.com/NickRabit/stremio-offline.git
+cd stremio-offline
 cp .env.example .env
 # set DOWNLOAD_PATH, ALLOW_ADDON_HOSTS, and PUID/PGID from:
 stat -c '%u %g' /volume1/video/downloads

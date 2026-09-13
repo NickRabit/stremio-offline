@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Check [the roadmap](https://github.com/NickRabit/streamio-offline/blob/main/docs/roadmap.md) first.
+        Check [the roadmap](https://github.com/NickRabit/stremio-offline/blob/main/docs/roadmap.md) first.
         If the idea is already there, comment on an existing issue instead of opening a new one.
   - type: textarea
     id: problem

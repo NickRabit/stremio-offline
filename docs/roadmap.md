@@ -26,7 +26,7 @@ These used to be open notes. They are in `main` now.
 - Diagnostics panel: levels, rotation, retention, redaction, client playback errors, grouped issues.
 - Per-host guard on outbound addon calls: concurrency cap, queue, and a circuit breaker.
 - English documentation, MIT license, and the GitHub community files (contributing, security, code of conduct, issue and pull request templates).
-- GHCR image plus manual and tag-driven build workflows (`ghcr.io/nickrabit/streamio-offline`).
+- GHCR image plus manual and tag-driven build workflows (`ghcr.io/nickrabit/stremio-offline`).
 - Download queue: classify failures (network vs source vs disk), Range resume after a clean drop, halt the queue on ENOSPC and resume when space returns.
 - Mobile player scrubber: press anywhere on the bar, including the unplayed part, and drag the current position forward or back without first jumping to the press point.
 - Download queue on a phone: stacked layout so the page is usable.

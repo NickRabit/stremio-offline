@@ -9,7 +9,7 @@
 # script, run as root, with the project directory below.
 set -eu
 
-PROJECT="${1:-/volume2/docker/streamio-offline}"
+PROJECT="${1:-/volume2/docker/stremio-offline}"
 
 cd "$PROJECT"
 

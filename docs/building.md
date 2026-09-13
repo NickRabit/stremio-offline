@@ -25,7 +25,7 @@ image → Run workflow**) or by publishing a version.
 It runs the tests, builds `linux/amd64` and `linux/arm64` separately — the
 repository is public, so both architectures get a free native runner and no
 emulation is needed — merges them into one manifest list, and pushes to GHCR as
-`ghcr.io/nickrabit/streamio-offline:latest` and under the commit SHA. It then
+`ghcr.io/nickrabit/stremio-offline:latest` and under the commit SHA. It then
 checks that the amd64 image actually contains VAAPI drivers, and fails the job
 otherwise. arm64 is not checked; QuickSync does not run there.
 
@@ -52,7 +52,7 @@ stop/start. Ask for a new image explicitly — delete the local one under
 restarts:
 
 ```bash
-./scripts/nas-update.sh /volume2/docker/streamio-offline
+./scripts/nas-update.sh /volume2/docker/stremio-offline
 ```
 
 Without SSH, hang that script on **Control Panel → Task Scheduler → Create →
@@ -81,7 +81,7 @@ appear, with notes generated from commit messages.
 Pin a version on the NAS or a Mac instead of `:latest`:
 
 ```yaml
-image: ghcr.io/nickrabit/streamio-offline:0.4.0
+image: ghcr.io/nickrabit/stremio-offline:0.4.0
 ```
 
 ## Other hosts

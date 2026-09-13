@@ -1,8 +1,8 @@
 # Stremio Offline
 
-[![CI](https://github.com/NickRabit/streamio-offline/actions/workflows/ci.yml/badge.svg)](https://github.com/NickRabit/streamio-offline/actions/workflows/ci.yml)
+[![CI](https://github.com/NickRabit/stremio-offline/actions/workflows/ci.yml/badge.svg)](https://github.com/NickRabit/stremio-offline/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Image](https://img.shields.io/badge/ghcr.io-streamio--offline-2496ed?logo=docker&logoColor=white)](https://github.com/NickRabit/streamio-offline/pkgs/container/streamio-offline)
+[![Image](https://img.shields.io/badge/ghcr.io-stremio--offline-2496ed?logo=docker&logoColor=white)](https://github.com/NickRabit/stremio-offline/pkgs/container/stremio-offline)
 
 Self-hosted web client for standard [Stremio](https://www.stremio.com/) addons.
 It reads catalog and stream manifests, aggregates streams and subtitles, plays
@@ -43,8 +43,8 @@ torrent engine. See [Addons and downloads](docs/downloads.md#real-debrid-and-oth
 Requires Docker. Everything else — FFmpeg included — is in the image.
 
 ```bash
-git clone https://github.com/NickRabit/streamio-offline.git
-cd streamio-offline
+git clone https://github.com/NickRabit/stremio-offline.git
+cd stremio-offline
 cp .env.example .env
 docker compose up -d --build
 ```
