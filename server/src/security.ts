@@ -107,6 +107,7 @@ export function publicAddon(addon: import("./types.js").AddonRecord) {
     key: addon.key,
     role: addon.role,
     enabled: addon.enabled,
+    globalSearch: addon.globalSearch,
     essential: essentialAddon(addon),
     addedAt: addon.addedAt,
     manifest: addon.manifest,
@@ -124,6 +125,7 @@ export function publicAddonRestricted(addon: import("./types.js").AddonRecord) {
     key: addon.key,
     role: addon.role,
     enabled: addon.enabled,
+    globalSearch: addon.globalSearch,
     essential: essentialAddon(addon),
     manifest: {
       id: addon.manifest.id,

@@ -413,7 +413,7 @@ app.delete("/api/addons/:key", asyncRoute(async (req, res) => {
 app.get("/api/addons/:key/export", asyncRoute(async (req, res) => {
   const addon = store.addons().find((a) => a.key === req.params.key);
   if (!addon) throw new AppError("The addon was not found.", "err.addonNotFound");
-  res.json({ manifestUrl: addon.manifestUrl, role: addon.role, enabled: addon.enabled, addedAt: addon.addedAt, downloadSettings: addon.downloadSettings, manifest: addon.manifest });
+  res.json({ manifestUrl: addon.manifestUrl, role: addon.role, enabled: addon.enabled, globalSearch: addon.globalSearch, addedAt: addon.addedAt, downloadSettings: addon.downloadSettings, manifest: addon.manifest });
 }));
 // A manifest is a snapshot from the moment the addon was added: its catalogues,
 // resources and id prefixes decide what the addon is asked for, so a stale copy
@@ -491,6 +491,7 @@ app.patch("/api/addons/:key", asyncRoute(async (req, res) => {
     const addon = state.addons.find((a) => a.key === req.params.key);
     if (!addon) throw new AppError("The addon was not found.", "err.addonNotFound");
     if (typeof req.body.enabled === "boolean") addon.enabled = req.body.enabled;
+    if (typeof req.body.globalSearch === "boolean") addon.globalSearch = req.body.globalSearch;
     if (downloadSettings) addon.downloadSettings = downloadSettings;
     addon.role = role;
     if (reloaded) { addon.manifestUrl = reloaded.manifestUrl; addon.manifest = reloaded.manifest; }
@@ -508,10 +509,16 @@ app.get("/api/search", asyncRoute(async (req, res) => {
   const query = String(req.query.query ?? "").trim();
   if (!query) throw new AppError("Enter a search term.", "err.emptyQuery");
   const type = req.query.type ? String(req.query.type) : undefined;
-  const found = await searchAll(store.addons(), query, type, req.query.cursor ? String(req.query.cursor) : undefined, req.query.addon ? String(req.query.addon) : undefined);
+  const addonKey = req.query.addon ? String(req.query.addon) : undefined;
+  const found = await searchAll(store.addons(), query, type, req.query.cursor ? String(req.query.cursor) : undefined, {
+    addonKey,
+    catalogType: addonKey && req.query.catalogType ? String(req.query.catalogType) : undefined,
+    catalogId: addonKey && req.query.catalogId ? String(req.query.catalogId) : undefined,
+    respectGlobalSearch: !addonKey,
+  });
   res.json({ ...found, items: found.items.map((item) => images.rewriteMeta(item)) });
 }));
-app.get("/api/searchable", (_req, res) => res.json(searchableCatalogs(store.addons()).map(({ addon, definition }) => ({ addonKey: addon.key, addonName: addon.manifest.name, type: definition.type, id: definition.id }))));
+app.get("/api/searchable", (_req, res) => res.json(searchableCatalogs(store.addons()).map(({ addon, definition }) => ({ addonKey: addon.key, addonName: addon.manifest.name, globalSearch: addon.globalSearch, type: definition.type, id: definition.id, name: definition.name ?? definition.id }))));
 app.get("/api/meta/:type/:id", asyncRoute(async (req, res) => { const meta = await metadata(store.addons(), String(req.params.type), String(req.params.id)); if (!meta) return res.status(404).json({ error: "Metadata nebyla nalezena." }); res.json(images.rewriteMeta(meta)); }));
 /** Opaque id in, cached bytes out. An id we never handed out means nothing here. */
 app.get("/api/image/:id", asyncRoute(async (req, res) => {
@@ -1813,6 +1820,7 @@ app.post("/api/settings/import", asyncRoute(async (req, res) => {
     try {
       const addon = await loadAddon(saved.manifestUrl, saved.role);
       addon.enabled = saved.enabled;
+      addon.globalSearch = saved.globalSearch;
       addon.addedAt = saved.addedAt;
       addon.downloadSettings = saved.downloadSettings;
       return addon;

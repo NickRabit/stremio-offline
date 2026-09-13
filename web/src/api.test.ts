@@ -103,6 +103,18 @@ describe("query building", () => {
     expect(url(0)).toBe("/api/streams/movie/tt1");
     expect(url(1)).toBe("/api/streams/movie/tt1?addon=alpha");
   });
+
+  it("builds a catalogue-scoped search query", async () => {
+    fetchMock.mockResolvedValue(json({ items: [], cursor: "", hasMore: false, sources: 0 }));
+    await api.search("dune", { type: "series", cursor: "next", addonKey: "alpha", catalogType: "series", catalogId: "popular:2026" });
+    expect(url()).toBe("/api/search?query=dune&type=series&cursor=next&addon=alpha&catalogType=series&catalogId=popular%3A2026");
+  });
+
+  it("omits unused search scope parameters", async () => {
+    fetchMock.mockResolvedValue(json({ items: [], cursor: "", hasMore: false, sources: 0 }));
+    await api.search("dune");
+    expect(url()).toBe("/api/search?query=dune");
+  });
 });
 
 describe("opaque media contracts", () => {

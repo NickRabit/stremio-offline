@@ -69,7 +69,7 @@ export class Store {
     try {
       const loaded = JSON.parse(await readFile(this.filename, "utf8")) as Partial<State>;
       this.state = { ...structuredClone(initialState), ...loaded, settings: { ...initialState.settings, ...migrate(loaded.settings) } };
-      this.state.addons = this.state.addons.map((addon) => ({ ...addon, downloadSettings: normalizeDownloadSettings(addon.downloadSettings) }));
+      this.state.addons = this.state.addons.map((addon) => ({ ...addon, globalSearch: addon.globalSearch !== false, downloadSettings: normalizeDownloadSettings(addon.downloadSettings) }));
     }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
   }
