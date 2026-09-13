@@ -5,8 +5,12 @@ import type { AuthState } from "./auth.js";
 import { normalizeDownloadSettings } from "./naming.js";
 import type { UiLanguage } from "./language.js";
 import type { LibraryEpisodeRecord, LibraryMetaRecord, LibrarySuggestion } from "./library-match.js";
+import { newLibraryId, type LibraryRecord } from "./libraries.js";
 
 export type { LibraryEpisodeRecord, LibraryMetaRecord, LibrarySuggestion };
+
+/** `state.json` shape version. A state without it predates libraries and migrates once. */
+export const SCHEMA_VERSION = 2;
 
 export type TileSize = "compact" | "small" | "medium" | "large";
 export interface Settings {
@@ -26,6 +30,9 @@ export interface Settings {
   /** Hours between automatic addon manifest refreshes; 0 leaves it to the buttons. */
   addonRefreshHours: number;
   catalogTileSize: TileSize; libraryTileSize: TileSize;
+  /** Where a download lands when the addon rule names no library. An empty id falls
+   *  back to the first enabled library of the kind, then to the first `mixed` one. */
+  defaultMovieLibrary: string; defaultSeriesLibrary: string;
   /** Stored locally; never returned by GET /api/settings. */
   realDebridToken: string;
 }
@@ -35,7 +42,10 @@ export function publicSettings(settings: Settings): PublicSettings {
   const { realDebridToken: token, ...rest } = settings;
   return { ...rest, realDebridConfigured: Boolean(token) };
 }
-interface State { addons: AddonRecord[]; settings: Settings; defaultsInstalled: boolean; auth?: AuthState;
+export interface State { schemaVersion?: number;
+  /** The configured libraries, in display order. A migrated install has exactly one. */
+  libraries?: LibraryRecord[];
+  addons: AddonRecord[]; settings: Settings; defaultsInstalled: boolean; auth?: AuthState;
   /** When the addon manifests were last refreshed in the background. */
   addonsRefreshedAt?: string;
   libraryMeta?: Record<string, LibraryMetaRecord>;
@@ -49,7 +59,20 @@ interface State { addons: AddonRecord[]; settings: Settings; defaultsInstalled: 
   watchlist?: Record<string, { type: string; id: string; name: string; poster?: string; addedAt: string }>;
   /** The resume list: a title key against a position in seconds. */
   progress?: Record<string, { position: number; duration: number; title: string; path?: string; poster?: string; updatedAt: string }> }
-const initialState: State = { addons: [], settings: { concurrentDownloads: 1, parallelPerProvider: 1, downloadSegments: 2, uiLanguage: "en", audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui", mergeByName: true, streamSort: "recommended", artworkLocation: "data", trackProgress: true, showResumeRow: true, libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, addonRefreshHours: 24, catalogTileSize: "medium", libraryTileSize: "medium", realDebridToken: "" }, defaultsInstalled: false };
+const baseSettings: Settings = { concurrentDownloads: 1, parallelPerProvider: 1, downloadSegments: 2, uiLanguage: "en", audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui", mergeByName: true, streamSort: "recommended", artworkLocation: "data", trackProgress: true, showResumeRow: true, libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, addonRefreshHours: 24, catalogTileSize: "medium", libraryTileSize: "medium", defaultMovieLibrary: "", defaultSeriesLibrary: "", realDebridToken: "" };
+
+/** A fresh install starts with the one library the download directory has always been,
+ *  so it never runs the migration an upgrade needs. */
+const initialState = (downloadDir: string): State => ({
+  schemaVersion: SCHEMA_VERSION,
+  libraries: [{
+    id: newLibraryId(), name: path.basename(downloadDir) || "Library", type: "mixed", root: downloadDir,
+    enabled: true, order: 0, addedAt: new Date().toISOString(), writeArtwork: true,
+  }],
+  addons: [],
+  settings: structuredClone(baseSettings),
+  defaultsInstalled: false,
+});
 
 /** Settings written before the interface spoke anything but Czech. Defaulting them
  *  to the new English default would flip a running install on upgrade. */
@@ -58,17 +81,24 @@ function migrate(loaded?: Partial<Settings>): Partial<Settings> | undefined {
   return { ...loaded, uiLanguage: "cs" };
 }
 
-export const defaultSettings = (): Settings => structuredClone(initialState.settings);
+export const defaultSettings = (): Settings => structuredClone(baseSettings);
 
 export class Store {
-  private state: State = structuredClone(initialState);
+  private state: State;
   private readonly filename: string;
-  constructor(dataDir = process.env.DATA_DIR ?? "/data") { this.filename = path.join(dataDir, "state.json"); }
+  private readonly downloadDir: string;
+  constructor(dataDir = process.env.DATA_DIR ?? "/data", downloadDir = process.env.DOWNLOAD_DIR ?? "/downloads") {
+    this.filename = path.join(dataDir, "state.json");
+    this.downloadDir = downloadDir;
+    this.state = initialState(downloadDir);
+  }
   async load() {
     await mkdir(path.dirname(this.filename), { recursive: true });
     try {
       const loaded = JSON.parse(await readFile(this.filename, "utf8")) as Partial<State>;
-      this.state = { ...structuredClone(initialState), ...loaded, settings: { ...initialState.settings, ...migrate(loaded.settings) } };
+      const fresh = initialState(this.downloadDir);
+      this.state = { ...fresh, ...loaded, settings: { ...fresh.settings, ...migrate(loaded.settings) } };
+      if (!this.state.libraries?.length) this.state.libraries = fresh.libraries;
       this.state.addons = this.state.addons.map((addon) => ({ ...addon, globalSearch: addon.globalSearch !== false, downloadSettings: normalizeDownloadSettings(addon.downloadSettings) }));
     }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
@@ -78,6 +108,7 @@ export class Store {
   defaultsInstalled() { return this.state.defaultsInstalled; }
   addonsRefreshedAt() { return this.state.addonsRefreshedAt; }
   auth() { return this.state.auth; }
+  libraries() { return this.state.libraries ?? []; }
   libraryMeta() { return this.state.libraryMeta ?? {}; }
   librarySuggestions() { return this.state.librarySuggestions ?? {}; }
   libraryEpisodes() { return this.state.libraryEpisodes ?? {}; }

@@ -16,10 +16,11 @@ branch and leaves the tree buildable and tested.
 ### PR 1 — Qualified paths, `libraries.ts`, migration
 
 - [x] `libraries.ts`: ids, POSIX helpers, path parsing, carve-outs, `resolveLibraryPath`.
-- [ ] POSIX wire rule through `library.ts` and `library-match.ts`.
-- [ ] `schemaVersion`, `libraries` in state, `library-migrate.ts` and its unit tests.
+- [x] POSIX wire rule through `library.ts` and `library-match.ts`.
+- [x] `schemaVersion`, `libraries` in state, `library-migrate.ts` and its unit tests.
 - [ ] `resolveLibraryPath` at every `index.ts` call site and in the download queue.
-- [ ] Artwork and queue re-keying in the same migration.
+- [x] Artwork re-keying in the same migration. Queue targets stay library-relative
+      until per-library save rules land (PR 6); only keys in `state.json` are qualified.
 - [ ] Verification: build, unit suites, e2e upgrade spec.
 
 ### PR 2 — Metadata store split and cache policy
