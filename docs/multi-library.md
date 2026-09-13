@@ -57,6 +57,9 @@ again after every rebase onto `main`.
       address stay.
 - [x] `docs/configuration.md`, `.env.example` and both compose files carry
       `ARTWORK_CACHE_MB` and `IMAGE_CACHE_TTL_DAYS`.
+- [x] Verification: `tsc`, the server and web unit suites, and both Playwright suites in
+      the CI image. The local Docker stack was rebuilt from the branch and boots against the
+      live data directory, `/api/status` healthy.
 - [ ] Moved to PR 3: `LIBRARY_META_TTL_DAYS` and `LibraryMetaRecord.refreshedAt`. §7 hangs
       the freshness pass on the scan job, "only for libraries browsed since the last run",
       and that is the library-scoped scan PR 3 builds -- the field and the pass it exists
