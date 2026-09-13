@@ -85,9 +85,14 @@ again after every rebase onto `main`.
       prune stopped at a folder that is, or holds, a carve-out: the parent no longer counts
       the child library's videos, so without the guard it would delete the folder the child
       lives in.
-- [ ] The walk covers every enabled and reachable library, `mediaPath` resolves through the
-      library the key names, the autoscan fingerprint is per library, and a scan accepts
-      `{ libraryId }`.
+- [x] The walk (`libraryFiles`, `libraryEntries`, `libraryUnits`) covers every enabled and
+      reachable library, each with its own carve-outs and its own type; `mediaPath` resolves
+      through the library the key names and the wire keeps the unqualified form only for the
+      first one. The autoscan keeps a fingerprint per library and starts a run for the one
+      that moved (all of them when several did), a scan accepts `{ libraryId }`, and browse,
+      the destination picker, the prune and the artwork sweep all run against the library
+      the path names. The probe answers (`unreachable`, `readOnly`) gate the walk and the
+      sweep; a root that is out of reach is skipped, never removed.
 - [ ] `writeArtwork`, `readOnly` and `unreachable` through the artwork sink and the walk.
 - [ ] `LIBRARY_META_TTL_DAYS` (default `14`) and `LibraryMetaRecord.refreshedAt`: a bound
       series older than the TTL is re-fetched by the scan, one `metadata()` call at the

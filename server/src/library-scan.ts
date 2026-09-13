@@ -30,6 +30,9 @@ export interface ScanState {
   error?: string;
   /** Set when the run covers one item instead of the whole library. */
   scope?: string;
+  /** Set when the run covers one library. The id is segment zero of every key, so this
+   *  is the same prefix filter a single item uses, one level up. */
+  libraryId?: string;
 }
 
 export interface LibraryScanOpts {
@@ -127,16 +130,18 @@ export class LibraryScan {
    *  catalogues about every unbound title again. */
   /** `force` throws away the memory of earlier fruitless searches; `path` narrows the
    *  run to one item, which the interface uses for "find metadata" on a single title. */
-  async start({ force = false, path: scope = "" }: { force?: boolean; path?: string } = {}): Promise<ScanState> {
+  async start({ force = false, path: scope = "", libraryId }: { force?: boolean; path?: string; libraryId?: string } = {}): Promise<ScanState> {
     if (this.state.status === "running" || this.state.status === "paused") return this.snapshot();
     const units = await this.opts.units();
     this.units = new Map(units.map((unit) => [unit.key, unit]));
     this.cancelled = false;
     const records = this.opts.libraryMeta();
     const suggestions = this.opts.librarySuggestions();
-    const wanted = scope
-      ? units.filter((unit) => isPathWithin(unit.key, scope) || isPathWithin(scope, unit.key))
-      : units;
+    const wanted = units.filter((unit) => {
+      if (libraryId && !isPathWithin(unit.key, libraryId)) return false;
+      if (!scope) return true;
+      return isPathWithin(unit.key, scope) || isPathWithin(scope, unit.key);
+    });
     // Asking for one item is a deliberate act, so it ignores the searched-in-vain memory.
     const again = force || Boolean(scope);
     const queued = wanted.filter((unit) => {
@@ -153,9 +158,10 @@ export class LibraryScan {
       remaining: queued.map((unit) => unit.key),
       current: queued[0]?.key,
       ...(scope ? { scope } : {}),
+      ...(libraryId ? { libraryId } : {}),
     };
     await this.save();
-    log("INFO", "Library scan started", { total: queued.length, titles: units.length, force, ...(scope ? { path: scope } : {}) });
+    log("INFO", "Library scan started", { total: queued.length, titles: units.length, force, ...(scope ? { path: scope } : {}), ...(libraryId ? { libraryId } : {}) });
     this.schedulePump();
     return this.snapshot();
   }
