@@ -58,7 +58,7 @@ export const api = {
   catalog: (catalog: Catalog, search = "", skip = 0, genre = "") => request<Meta[]>(`/api/catalog?${q({ addon: catalog.addonKey, type: catalog.type, id: catalog.id, search: search || undefined, skip: skip || undefined, genre: genre || undefined })}`),
   search: (query: string, options: { type?: string; cursor?: string; addonKey?: string; catalogType?: string; catalogId?: string } = {}) => request<SearchResult>(`/api/search?${q({ query, type: options.type || undefined, cursor: options.cursor || undefined, addon: options.addonKey || undefined, catalogType: options.catalogType || undefined, catalogId: options.catalogId || undefined })}`),
   searchable: () => request<SearchableCatalog[]>("/api/searchable"),
-  meta: (type: string, id: string) => request<Meta>(`/api/meta/${encodeURIComponent(type)}/${encodeURIComponent(id)}`),
+  meta: (type: string, id: string, language?: string) => request<Meta>(`/api/meta/${encodeURIComponent(type)}/${encodeURIComponent(id)}${language ? `?${q({ language })}` : ""}`),
   streamSources: (type: string, id: string) => request<Array<{ key: string; name: string }>>(`/api/stream-sources/${encodeURIComponent(type)}/${encodeURIComponent(id)}`),
   streams: (type: string, id: string, addon?: string) => request<Stream[]>(`/api/streams/${encodeURIComponent(type)}/${encodeURIComponent(id)}${addon ? `?addon=${encodeURIComponent(addon)}` : ""}`),
   subtitles: (type: string, id: string) => request<Subtitle[]>(`/api/subtitles/${encodeURIComponent(type)}/${encodeURIComponent(id)}`),

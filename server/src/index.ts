@@ -519,7 +519,7 @@ app.get("/api/search", asyncRoute(async (req, res) => {
   res.json({ ...found, items: found.items.map((item) => images.rewriteMeta(item)) });
 }));
 app.get("/api/searchable", (_req, res) => res.json(searchableCatalogs(store.addons()).map(({ addon, definition }) => ({ addonKey: addon.key, addonName: addon.manifest.name, globalSearch: addon.globalSearch, type: definition.type, id: definition.id, name: definition.name ?? definition.id }))));
-app.get("/api/meta/:type/:id", asyncRoute(async (req, res) => { const meta = await metadata(store.addons(), String(req.params.type), String(req.params.id)); if (!meta) return res.status(404).json({ error: "Metadata nebyla nalezena." }); res.json(images.rewriteMeta(meta)); }));
+app.get("/api/meta/:type/:id", asyncRoute(async (req, res) => { const meta = await metadata(store.addons(), String(req.params.type), String(req.params.id), normalizeLanguage(String(req.query.language ?? ""))); if (!meta) return res.status(404).json({ error: "Metadata nebyla nalezena." }); res.json(images.rewriteMeta(meta)); }));
 /** Opaque id in, cached bytes out. An id we never handed out means nothing here. */
 app.get("/api/image/:id", asyncRoute(async (req, res) => {
   const cached = await images.fetch(String(req.params.id));
@@ -1858,6 +1858,7 @@ app.patch("/api/settings", asyncRoute(async (req, res) => {
     if (req.body.uiLanguage !== undefined && isUiLanguage(req.body.uiLanguage)) state.settings.uiLanguage = req.body.uiLanguage;
     if (req.body.audioLanguage !== undefined) state.settings.audioLanguage = normalizeLanguage(String(req.body.audioLanguage)) ?? state.settings.audioLanguage;
     if (req.body.subtitleLanguage !== undefined) state.settings.subtitleLanguage = normalizeLanguage(String(req.body.subtitleLanguage)) ?? state.settings.subtitleLanguage;
+    if (req.body.downloadTitleLanguage !== undefined) state.settings.downloadTitleLanguage = req.body.downloadTitleLanguage === "ui" ? "ui" : normalizeLanguage(String(req.body.downloadTitleLanguage)) ?? state.settings.downloadTitleLanguage;
     if (req.body.mergeByName !== undefined) state.settings.mergeByName = Boolean(req.body.mergeByName);
     if (req.body.trackProgress !== undefined) state.settings.trackProgress = Boolean(req.body.trackProgress);
     if (req.body.showResumeRow !== undefined) state.settings.showResumeRow = Boolean(req.body.showResumeRow);

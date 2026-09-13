@@ -1,6 +1,11 @@
 import { expect, test } from "@playwright/test";
 
 test("queues a source and the job reaches the download list", async ({ page }) => {
+  await page.route("**/api/meta/movie/tt-e2e-movie?*", async (route) => {
+    const response = await route.fetch();
+    const meta = await response.json();
+    await route.fulfill({ response, json: { ...meta, name: "Test Movie", nameLanguage: "en" } });
+  });
   await page.goto("/");
   await page.getByRole("button", { name: "Katalog", exact: true }).click();
 

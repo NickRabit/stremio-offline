@@ -16,6 +16,19 @@ test.describe("settings", () => {
     await page.getByRole("combobox", { name: "Velikost položek katalogu" }).selectOption("medium");
   });
 
+  test("downloaded titles follow the interface language unless overridden", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Nastavení", exact: true }).click();
+
+    const titleLanguage = page.getByRole("combobox", { name: "Jazyk názvů ke stažení" });
+    await expect(titleLanguage).toHaveValue("ui");
+    await titleLanguage.selectOption("en");
+    await page.reload();
+    await page.getByRole("button", { name: "Nastavení", exact: true }).click();
+    await expect(page.getByRole("combobox", { name: "Jazyk názvů ke stažení" })).toHaveValue("en");
+    await page.getByRole("combobox", { name: "Jazyk názvů ke stažení" }).selectOption("ui");
+  });
+
   test("diagnostics reports the running server", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("button", { name: "Nastavení", exact: true }).click();

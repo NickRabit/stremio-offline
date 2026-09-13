@@ -17,6 +17,7 @@ import { label, titleLanguage } from "./languages";
 import { languageName, locale, localeTag, serverText, setLocale, t, useI18n, type Key, type Locale } from "./i18n";
 import { canQueue, pickDefaultStream, repickStream, streamBadge, streamLanguages, streamSize, visibleCatalogStreams, type StreamSort } from "./streams";
 import { parseSearchScope } from "./search-scope";
+import { localizedDownloadTitle, mergeMetaDetail } from "./meta";
 import type { Addon, BuildInfo, Diagnostics, BrowseItem, BrowseResult, LibrarySort, ProgressEntry, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, DownloadSelection, Inspection, Meta, QueueHalt, ScanState, SearchableCatalog, Session, Settings as AppSettings, SettingsPatch, Stream, Subtitle, Video } from "./types";
 
 /** Library browsing choices survive both a section switch and a browser restart.
@@ -96,14 +97,14 @@ export function App() {
     scrollDirection.current.set(element, { top, travel: changed ? 0 : travel, until: changed ? now + 250 : previous.until });
     if (changed) update(next);
   }
-  const [selectedCatalog, setSelectedCatalog] = useState(""); const [search, setSearch] = useState(""); const [items, setItems] = useState<Meta[]>([]); const [selected, setSelected] = useState<Meta | null>(null);
+  const [selectedCatalog, setSelectedCatalog] = useState(""); const [search, setSearch] = useState(""); const [items, setItems] = useState<Meta[]>([]); const [selected, setSelected] = useState<Meta | null>(null); const [selectedDownloadTitle, setSelectedDownloadTitle] = useState("");
   const [selectedVideo, setSelectedVideo] = useState<Video | null>(null); const [streams, setStreams] = useState<Stream[]>([]); const [selectedStream, setSelectedStream] = useState<Stream | null>(null); const [subtitles, setSubtitles] = useState<Subtitle[]>([]);
   const [sourcesLoaded, setSourcesLoaded] = useState(false);
   const [episodesOpen, setEpisodesOpen] = useState(true);
   const [season, setSeason] = useState<number | null>(null);
   const [bulkDownload, setBulkDownload] = useState<{ label: string; title: string; type: string; episodes: Array<{ id: string; season?: number; episode?: number; title?: string }>; media: { id?: string; metaType?: string; poster?: string } } | null>(null);
   const [downloads, setDownloads] = useState<DownloadJob[]>([]); const [queueHalt, setQueueHalt] = useState<QueueHalt | null>(null); const [busy, setBusy] = useState(false); const [message, setMessage] = useState(""); const [error, setError] = useState(""); const [playerOpen, setPlayerOpen] = useState(false);
-  const [settings, setSettings] = useState<AppSettings>({ concurrentDownloads: 1, parallelPerProvider: 1, downloadSegments: 2, uiLanguage: locale(), audioLanguage: "en", subtitleLanguage: "en", mergeByName: true, streamSort: "recommended", artworkLocation: "data", trackProgress: true, showResumeRow: true, libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, addonRefreshHours: 24, catalogTileSize: "medium", libraryTileSize: "medium", realDebridConfigured: false });
+  const [settings, setSettings] = useState<AppSettings>({ concurrentDownloads: 1, parallelPerProvider: 1, downloadSegments: 2, uiLanguage: locale(), audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui", mergeByName: true, streamSort: "recommended", artworkLocation: "data", trackProgress: true, showResumeRow: true, libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, addonRefreshHours: 24, catalogTileSize: "medium", libraryTileSize: "medium", realDebridConfigured: false });
   const [languages, setLanguages] = useState<Array<{ code: string; name: string }>>([]);
   const [inspection, setInspection] = useState<Inspection | null>(null);
   const [session, setSession] = useState<Session | null | undefined>(undefined);
@@ -343,7 +344,9 @@ export function App() {
   const currentCatalog = virtualCatalog ? undefined
     : catalogs.find((catalog) => `${catalog.addonKey}:${catalog.type}:${catalog.id}` === selectedCatalog) ?? catalogs[0];
   const searchRequired = Boolean(currentCatalog?.extra?.some((extra) => extra.name === "search" && extra.isRequired));
-  const videoId = selectedVideo?.id || selected?.id; const videoTitle = selectedVideo ? `${selected?.name} · ${selectedVideo.title || selectedVideo.name || `S${selectedVideo.season}E${selectedVideo.episode}`}` : selected?.name || "Video";
+  const downloadTitleLanguage = settings.downloadTitleLanguage === "ui" ? settings.uiLanguage : settings.downloadTitleLanguage;
+  const baseDownloadTitle = selectedDownloadTitle || selected?.name || "Video";
+  const videoId = selectedVideo?.id || selected?.id; const videoTitle = selectedVideo ? `${baseDownloadTitle} · ${selectedVideo.title || selectedVideo.name || `S${selectedVideo.season}E${selectedVideo.episode}`}` : baseDownloadTitle;
   // Long shows run to hundreds of episodes, so the list branches by season. Specials (season 0) belong at the end.
   const seasons = [...new Set((selected?.videos ?? []).map((video) => video.season).filter((value): value is number => typeof value === "number"))].sort((a, b) => (a === 0 ? 1 : b === 0 ? -1 : a - b));
   const activeSeason = season ?? selectedVideo?.season ?? seasons.find((value) => value > 0) ?? seasons[0] ?? null;
@@ -880,23 +883,26 @@ export function App() {
     finally { if (!stale()) setBusy(false); }
   };
   const openMeta = async (item: Meta) => {
-    setSelected(item); setSelectedVideo(null); setEpisodesOpen(true); setSeason(null); setStreams([]); setSelectedStream(null); setSubtitles([]); setSourcesLoaded(false); setGalleryIndex(null); setDetailCompact(false);
+    setSelected(item); setSelectedDownloadTitle(item.name); setSelectedVideo(null); setEpisodesOpen(true); setSeason(null); setStreams([]); setSelectedStream(null); setSubtitles([]); setSourcesLoaded(false); setGalleryIndex(null); setDetailCompact(false);
     requestAnimationFrame(() => detailRef.current?.scrollTo({ top: 0 }));
     const type = item.type || currentCatalog?.type || "movie";
     let detail = item;
-    try { detail = { ...item, ...await api.meta(type, item.id) }; setSelected(detail); } catch { /* catalog item is still useful */ }
+    try {
+      const metadata = await api.meta(type, item.id, downloadTitleLanguage);
+      detail = mergeMetaDetail(item, metadata); setSelected(detail); setSelectedDownloadTitle(localizedDownloadTitle(item, metadata, downloadTitleLanguage));
+    } catch { /* catalog item is still useful */ }
     if (type !== "series" && !detail.videos?.length) await fetchSources(type, item.id);
   };
   const closeMeta = () => {
     sourcesRequestRef.current += 1;
-    setSelected(null); setSelectedVideo(null); setStreams([]); setSelectedStream(null); setSubtitles([]); setSourcesLoaded(false); setGalleryIndex(null); setDetailCompact(false);
+    setSelected(null); setSelectedDownloadTitle(""); setSelectedVideo(null); setStreams([]); setSelectedStream(null); setSubtitles([]); setSourcesLoaded(false); setGalleryIndex(null); setDetailCompact(false);
   };
   const loadSources = async (video?: Video) => {
     if (!selected) return; await fetchSources(selected.type || currentCatalog?.type || "movie", video?.id || selected.id, video);
   };
   const selectedMedia = () => selectedVideo
-    ? { kind: "episode", title: selected?.name, season: selectedVideo.season, episode: selectedVideo.episode, episodeTitle: selectedVideo.title || selectedVideo.name, id: selected?.id, metaType: selected?.type, poster: selected?.poster }
-    : { kind: "movie", title: selected?.name, id: selected?.id, metaType: selected?.type, poster: selected?.poster };
+    ? { kind: "episode", title: baseDownloadTitle, season: selectedVideo.season, episode: selectedVideo.episode, episodeTitle: selectedVideo.title || selectedVideo.name, id: selected?.id, metaType: selected?.type, poster: selected?.poster }
+    : { kind: "movie", title: baseDownloadTitle, id: selected?.id, metaType: selected?.type, poster: selected?.poster };
   const canPlay = Boolean(selectedStream?.playable);
   const enqueue = async () => {
     if (!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)) return false;
@@ -944,7 +950,7 @@ export function App() {
       : t("episodes.wholeShowCount", { count: episodes.length });
     const metaType = selected.type || currentCatalog?.type || "series";
     setBulkDownload({
-      label, title: selected.name, type: metaType,
+      label, title: baseDownloadTitle, type: metaType,
       episodes: episodes.map((video) => ({ id: String(video.id), season: video.season, episode: video.episode, title: video.title || video.name })),
       media: { id: selected.id, metaType, poster: selected.poster },
     });
@@ -1386,7 +1392,7 @@ function SettingsPage({ build, restricted = false, settings, languages, session,
             if (!confirm(t("settings.historyConfirm"))) return;
             try { await api.clearProgress(); onNotify(t("settings.historyCleared")); } catch (error) { onError(error); }
           }}><Trash2/> {t("settings.clearHistory")}</button></SettingControl>}</section>
-      <section className="panel settings-section"><SettingsSectionHead icon={<Download/>} title={t("nav.downloads")} text={t("settings.downloadsText")}/><SettingControl title={t("settings.concurrent")} text={t("settings.concurrentHint")}><select aria-label={t("settings.concurrent")} disabled={restricted} value={settings.concurrentDownloads} onChange={(event) => void onSave({ concurrentDownloads: Number(event.target.value) })}>{[1,2,3,4,5,6,7,8].map((value) => <option key={value} value={value}>{value}</option>)}</select></SettingControl><SettingControl title={t("settings.perProvider")} text={t("settings.perProviderHint")}><select aria-label={t("settings.perProvider")} disabled={restricted} value={settings.parallelPerProvider ?? 1} onChange={(event) => void onSave({ parallelPerProvider: Number(event.target.value) })}>{[1,2,3,4].map((value) => <option key={value} value={value}>{value}</option>)}</select></SettingControl><SettingControl title={t("settings.segments")} text={t("settings.segmentsHint")}><select aria-label={t("settings.segments")} disabled={restricted} value={settings.downloadSegments ?? 1} onChange={(event) => void onSave({ downloadSegments: Number(event.target.value) })}>{[1,2,3,4,6,8].map((value) => <option key={value} value={value}>{value}</option>)}</select></SettingControl></section>
+      <section className="panel settings-section"><SettingsSectionHead icon={<Download/>} title={t("nav.downloads")} text={t("settings.downloadsText")}/><SettingControl title={t("settings.downloadTitleLanguage")} text={t("settings.downloadTitleLanguageHint")}><select aria-label={t("settings.downloadTitleLanguage")} disabled={restricted} value={settings.downloadTitleLanguage} onChange={(event) => void onSave({ downloadTitleLanguage: event.target.value })}><option value="ui">{t("settings.downloadTitleLanguageUi", { language: LOCALE_NAMES[locale] })}</option>{languageOptions}</select></SettingControl><SettingControl title={t("settings.concurrent")} text={t("settings.concurrentHint")}><select aria-label={t("settings.concurrent")} disabled={restricted} value={settings.concurrentDownloads} onChange={(event) => void onSave({ concurrentDownloads: Number(event.target.value) })}>{[1,2,3,4,5,6,7,8].map((value) => <option key={value} value={value}>{value}</option>)}</select></SettingControl><SettingControl title={t("settings.perProvider")} text={t("settings.perProviderHint")}><select aria-label={t("settings.perProvider")} disabled={restricted} value={settings.parallelPerProvider ?? 1} onChange={(event) => void onSave({ parallelPerProvider: Number(event.target.value) })}>{[1,2,3,4].map((value) => <option key={value} value={value}>{value}</option>)}</select></SettingControl><SettingControl title={t("settings.segments")} text={t("settings.segmentsHint")}><select aria-label={t("settings.segments")} disabled={restricted} value={settings.downloadSegments ?? 1} onChange={(event) => void onSave({ downloadSegments: Number(event.target.value) })}>{[1,2,3,4,6,8].map((value) => <option key={value} value={value}>{value}</option>)}</select></SettingControl></section>
       <RealDebridSettings configured={settings.realDebridConfigured} onSave={onSave} onError={onError} restricted={restricted}/>
       <section className="panel settings-section storage-section"><SettingsSectionHead icon={<HardDrive/>} title={t("settings.storageTitle")} text={t("settings.storageText")}/><SettingControl title={t("settings.artwork")} text={t("settings.artworkHint")}>
         <select aria-label={t("settings.artwork")} disabled={restricted} value={settings.artworkLocation} onChange={(event) => void onSave({ artworkLocation: event.target.value as "data" | "media" })}>

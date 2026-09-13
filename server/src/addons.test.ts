@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { searchableCatalogs } from "./addons.js";
+import { addonMetadataLanguage, searchableCatalogs } from "./addons.js";
 import { defaultDownloadSettings } from "./naming.js";
 import type { AddonRecord } from "./types.js";
 
@@ -40,4 +40,14 @@ test("global-search opt-out affects only an unscoped user search", () => {
   assert.deepEqual(keys(addons, { addonKey: "private", respectGlobalSearch: true }), ["private:movie:movies", "private:series:series"]);
   assert.deepEqual(keys(addons, { addonKey: "private", catalogType: "movie", catalogId: "movies", respectGlobalSearch: true }), ["private:movie:movies"]);
   assert.deepEqual(keys(addons), ["alpha:movie:movies", "alpha:series:series", "private:movie:movies", "private:series:series"]);
+});
+
+test("metadata language is read from configured addons and Cinemeta", () => {
+  const configured = addon("tmdb");
+  configured.manifestUrl = "https://metadata.example/%7B%22language%22%3A%22cs-CZ%22%7D/manifest.json";
+  const cinemeta = addon("cinemeta");
+  cinemeta.manifest.id = "com.linvo.cinemeta";
+  assert.equal(addonMetadataLanguage(configured), "cs");
+  assert.equal(addonMetadataLanguage(cinemeta), "en");
+  assert.equal(addonMetadataLanguage(addon("plain")), undefined);
 });

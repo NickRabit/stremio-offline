@@ -55,6 +55,7 @@ function parseSettings(value: unknown): Settings {
   const uiLanguage = isUiLanguage(source.uiLanguage) ? source.uiLanguage : "cs";
   const audioLanguage = normalizeLanguage(String(source.audioLanguage ?? "")) ?? fallback.audioLanguage;
   const subtitleLanguage = normalizeLanguage(String(source.subtitleLanguage ?? "")) ?? fallback.subtitleLanguage;
+  const downloadTitleLanguage = source.downloadTitleLanguage === "ui" ? "ui" : normalizeLanguage(String(source.downloadTitleLanguage ?? "")) ?? fallback.downloadTitleLanguage;
   const streamSort = String(source.streamSort ?? "");
   const catalogTileSize = String(source.catalogTileSize ?? "");
   const libraryTileSize = String(source.libraryTileSize ?? "");
@@ -62,7 +63,7 @@ function parseSettings(value: unknown): Settings {
     concurrentDownloads: number("concurrentDownloads", 8),
     parallelPerProvider: number("parallelPerProvider", 8),
     downloadSegments: number("downloadSegments", 8),
-    uiLanguage, audioLanguage, subtitleLanguage,
+    uiLanguage, audioLanguage, subtitleLanguage, downloadTitleLanguage,
     mergeByName: boolean("mergeByName"),
     streamSort: STREAM_SORTS.has(streamSort) ? streamSort : fallback.streamSort,
     artworkLocation: source.artworkLocation === "media" ? "media" : "data",
