@@ -43,6 +43,10 @@ export interface LibraryMetaRecord {
   matchedAt?: string;
   /** Last time the catalogue was asked to fill the fields above, successful or not. */
   backfilledAt?: string;
+  /** Last full refresh of the binding against the catalogue. Older than the library
+   *  metadata TTL, a bound series is asked about again so its episode titles stay
+   *  current; a movie is refreshed only while fields are missing. */
+  refreshedAt?: string;
   /** Set when the binding names one episode instead of a whole title. */
   season?: number;
   episode?: number;
@@ -335,6 +339,15 @@ export function episodesFromMeta(meta: MetaItem | null | undefined, limit = MAX_
 export function episodeNumberOf(relative: string, record?: LibraryMetaRecord): { season: number; episode: number } | undefined {
   if (record?.episode != null) return { season: record.season ?? 1, episode: record.episode };
   return numberedEpisode(relative);
+}
+
+/** A bound series nobody re-read for the TTL. Only series: their episode list is what
+ *  goes stale, while a movie binding carries everything it will ever carry. */
+export function needsRefresh(raw: LibraryMetaRecord | undefined, ttlMs: number, now = Date.now()): boolean {
+  const viewed = viewMeta(raw);
+  if (!viewed?.id || viewed.type !== "series") return false;
+  const at = raw?.refreshedAt ? Date.parse(raw.refreshedAt) : NaN;
+  return !Number.isFinite(at) || now - at >= ttlMs;
 }
 
 export function needsBackfill(raw?: LibraryMetaRecord, now = Date.now()): boolean {

@@ -1209,6 +1209,7 @@ app.get("/api/library/browse", asyncRoute(async (req, res) => {
   if (requested && !resolved) throw new AppError("Invalid path.", "err.invalidPath");
   // An empty path is the first library's root for as long as one library is configured.
   const library = resolved?.library ?? primaryLibrary();
+  markBrowsed(library);
   const inLibrary = (path: string) => libraryPath(library.id, path);
   const favoritePaths = onlyFavorites
     ? new Set(store.favorites().map((key) => relativeKeyIn(library.id, key)).filter((value): value is string => value !== undefined))
@@ -1366,6 +1367,7 @@ app.get("/api/library/folders", asyncRoute(async (req, res) => {
   const relative = String(req.query.path ?? "").trim();
   const resolved = await resolveLibraryPath(store.libraries(), relative);
   if (!resolved) throw new AppError("Invalid path.", "err.invalidPath");
+  markBrowsed(resolved.library);
   const folders = await listFolders(resolved.library.root, resolved.relative, carveOutsOf(resolved.library));
   // A move destination travels back through resolveLibraryPath, so it is qualified too.
   res.json({ path: relative, folders: folders.map((folder) => ({ ...folder, path: wirePath(libraryPath(resolved.library.id, folder.path)) })) });
@@ -1445,12 +1447,25 @@ const saveCatalogPoster = (key: string, url?: string) => {
 
 const hostOf = (url: string) => { try { return new URL(url).host; } catch { return ""; } };
 const scanGapMs = Number(process.env.LIBRARY_SCAN_GAP_MS);
+/** Age at which the scan re-reads a bound series. `0` switches the pass off. */
+const metaTtlMs = () => {
+  const days = Number(process.env.LIBRARY_META_TTL_DAYS);
+  return Number.isFinite(days) && days >= 0 ? days * 24 * 60 * 60_000 : 14 * 24 * 60 * 60_000;
+};
+const browsedLibraries = new Set<string>();
+/** A library the interface opened is worth keeping current: the walk of a library nobody
+ *  looked at is what the freshness pass is allowed to skip. */
+const markBrowsed = (library: LibraryRecord) => { browsedLibraries.add(library.id); };
 const libraryScan = new LibraryScan({
   dataDir: DATA_DIR,
   downloadDir: primaryLibrary().root,
   // The scan works on keys, so the walk it injects is the qualified one.
   pathExists: async (key: string) => { try { await access(mediaPath(key)); return true; } catch { return false; } },
   units: async () => { await refreshLibraryHealth(); return libraryUnits(); },
+  // The freshness pass is a courtesy to what the user actually looks at: only the
+  // libraries the interface touched since the last run pay for it.
+  browsed: () => new Set(browsedLibraries),
+  metaTtlMs: metaTtlMs(),
   searchAll, metadata,
   addons: () => store.addons(),
   libraryMeta: () => metaStore.qualifiedMeta(),

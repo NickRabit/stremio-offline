@@ -3,7 +3,7 @@ import path from "node:path";
 import { test } from "node:test";
 import {
   autoAccept, browseMeta, cacheFieldsFromMeta, clipText, dropKeyed, episodeKey, episodeNumberOf, episodesFromMeta, isExtraName,
-  knownTitleOf, lookupSkipped, matchKeyFor, pinInherited, matchStatus, needsBackfill, needsEpisodes, pickSuggestion, remapKeyed, scanMiss,
+  knownTitleOf, lookupSkipped, matchKeyFor, pinInherited, matchStatus, needsBackfill, needsEpisodes, needsRefresh, pickSuggestion, remapKeyed, scanMiss,
   scannedRecently, scanSkipReason, scoreHit, suggestionFor, titleUnits, unmatchAt, viewMeta,
 } from "./library-match.js";
 import { parseMediaPath } from "./library-parse.js";
@@ -221,6 +221,19 @@ test("browse copy uses cached fields and a normalised catalog name", () => {
   assert.deepEqual(cacheFieldsFromMeta({ id: "tt1", type: "movie", name: "Film", releaseInfo: "2024", description: "Hi" }), {
     name: "Film", year: "2024", description: "Hi",
   });
+});
+
+test("only a bound series older than the TTL needs a refresh", () => {
+  const ttl = 14 * 24 * 60 * 60_000;
+  const now = Date.parse("2026-06-01T00:00:00.000Z");
+  const old = new Date(now - ttl - 1).toISOString();
+  const fresh = new Date(now - ttl + 1).toISOString();
+  assert.equal(needsRefresh({ type: "series", id: "tt1" }, ttl, now), true, "a series without a refresh date is due");
+  assert.equal(needsRefresh({ type: "series", id: "tt1", refreshedAt: old }, ttl, now), true);
+  assert.equal(needsRefresh({ type: "series", id: "tt1", refreshedAt: fresh }, ttl, now), false);
+  assert.equal(needsRefresh({ type: "movie", id: "tt1" }, ttl, now), false, "a movie carries all it will ever carry");
+  assert.equal(needsRefresh({ type: "series", id: "" }, ttl, now), false, "an id-less sentinel is not a binding");
+  assert.equal(needsRefresh(undefined, ttl, now), false);
 });
 
 test("suggestions remap and drop like libraryMeta", () => {

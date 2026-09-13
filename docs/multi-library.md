@@ -94,9 +94,17 @@ again after every rebase onto `main`.
       the path names. The probe answers (`unreachable`, `readOnly`) gate the walk and the
       sweep; a root that is out of reach is skipped, never removed.
 - [ ] `writeArtwork`, `readOnly` and `unreachable` through the artwork sink and the walk.
-- [ ] `LIBRARY_META_TTL_DAYS` (default `14`) and `LibraryMetaRecord.refreshedAt`: a bound
+- [x] `LIBRARY_META_TTL_DAYS` (default `14`) and `LibraryMetaRecord.refreshedAt`: a bound
       series older than the TTL is re-fetched by the scan, one `metadata()` call at the
       same pacing, only for libraries browsed since the last run. Carried over from PR 2.
+      The pass goes through the id the binding already carries, so it never searches and
+      never scores; the refresh keeps `source`, `locked` and `matchedAt`, merges the fields
+      and the episode rows, counts as a skip rather than a match, and leaves the poster
+      alone. A lookup that comes back empty leaves the binding exactly as it was. Only a
+      binding on the item itself counts -- one inherited from the folder above is refreshed
+      on the folder's own turn. The interface marks a library browsed in `/api/library/browse`
+      and `/api/library/folders`; the merged listing deliberately does not, or every start
+      would count as a browse of the whole tree.
 - [ ] `/api/libraries` (list, create, patch, delete), `/api/libraries/browse`, the grant
       endpoints, `/api/libraries/preview`, and the restricted-mode denials.
 - [ ] `LIBRARY_ROOTS` and `LIBRARY_META_TTL_DAYS` in `.env.example`, both compose files and
