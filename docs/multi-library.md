@@ -47,8 +47,11 @@ again after every rebase onto `main`.
       state after its key pass, and a state the libraries build already migrated, which
       carried the rows inline. `index.ts` reads and writes through the store; the scan's
       qualified mutator (`updateQualified`) lands in the file of the library it touched.
-- [ ] Artwork per library (`data/artwork/<id>/`), `data/artwork/index.json`,
-      `ARTWORK_CACHE_MB` eviction and the root-readable guard on the orphan sweep.
+- [x] Artwork per library (`data/artwork/<id>/`), `data/artwork/index.json` written on
+      save and on serve, `ARTWORK_CACHE_MB` eviction. The orphan sweep runs per library and
+      skips one whose root cannot be read. The migration moves the files the earlier layouts
+      left flat -- it used to delete the thumbnails it had just moved, which the freshness
+      guard hid in the test and not on a real install.
 - [ ] `IMAGE_CACHE_TTL_DAYS` pass in `ImageProxy.evict()`, `LIBRARY_META_TTL_DAYS` and
       `LibraryMetaRecord.refreshedAt` in the scan.
 - [ ] `docs/configuration.md` for the three new variables.

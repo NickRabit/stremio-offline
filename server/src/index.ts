@@ -7,6 +7,7 @@ import { readMediaText, rewritePlaylist } from "./media-playlist.js";
 import { AirPlayAccess } from "./airplay-access.js";
 import { shiftVtt } from "./vtt.js";
 import path from "node:path";
+import { constants } from "node:fs";
 import { access, mkdir, readdir, readFile, realpath, rename, rm, stat, statfs } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
@@ -34,7 +35,6 @@ import { LibraryScan } from "./library-scan.js";
 import { LibraryAutoScan } from "./library-autoscan.js";
 import { watchLibrary } from "./library-watch.js";
 import { ArtworkQueue, episodeArtName, fileMayUseFolderArtwork, findArtwork, framePosition, POSTER_OUTPUT, savePosterAs, saveFrame } from "./artwork.js";
-import { createHash } from "node:crypto";
 import { clearedCookie, createSession, DECOY_HASH, LoginThrottle, pruneRevoked, envCredentials, hashPassword, INTERNAL_TOKEN, parseCookies, readSession, secretEquals, REMEMBER_DAYS, SESSION_COOKIE, sessionCookie, verifyPassword } from "./auth.js";
 import { randomBytes, randomUUID } from "node:crypto";
 import type { ClientCapabilities, PlaybackOptions } from "./playback.js";
@@ -45,6 +45,7 @@ import { AppError, messageKeyOf } from "./errors.js";
 import { libraryPath, parseLibraryPath, posixBase, posixDir, posixJoin, relativeWithin, resolveLibraryPath, toFs } from "./libraries.js";
 import { migrateStateFile } from "./library-migrate.js";
 import { LibraryMetaStore } from "./library-meta-store.js";
+import { artworks } from "./artwork-cache.js";
 import type { AddonRecord, AddonRole, MetaItem, StreamItem } from "./types.js";
 import { createSettingsBackup, parseSettingsBackup } from "./backup.js";
 
@@ -70,6 +71,7 @@ configureSecureMode(() => store.settings().secureMode !== false);
 await initLogger(); startLogMaintenance();
 if (restrictedMode()) log("INFO", "Restricted mode enabled");
 await images.load();
+await artworks.load();
 const playbackOwners = new Map<string, { owner: ResourceOwner; resourceId: string }>();
 const airplayAccess = new AirPlayAccess(mediaResources);
 const queue = new DownloadQueue(() => store.settings().concurrentDownloads, () => store.settings().parallelPerProvider ?? 1, undefined, undefined, { segments: () => store.settings().downloadSegments ?? 1 }); const playback = new PlaybackManager(undefined, (id) => {
@@ -691,10 +693,17 @@ const artStamp = async (file: string) => {
 const thumbUrl = async (param: "path" | "dir" | "key", value: string, art: string | undefined) =>
   (art ? `/api/library/thumb?${param}=${encodeURIComponent(value)}&v=${await artStamp(art)}` : undefined);
 
-const ARTWORK_DIR = path.join(process.env.DATA_DIR ?? "/data", "artwork");
 const artworkQueue = new ArtworkQueue();
 const fileExists = async (file: string) => { try { await access(file); return true; } catch { return false; } };
-const dataArtworkFile = (key: string) => path.join(ARTWORK_DIR, `${createHash("sha1").update(key).digest("hex")}.jpg`);
+const dataArtworkFile = (key: string) => artworks.file(key);
+
+/** A generated thumbnail is counted against the cache ceiling; the same picture written
+ *  next to the media is the folder's own and is neither counted nor evicted. */
+const saveGenerated = async (target: string, write: () => Promise<boolean>) => {
+  const saved = await write();
+  if (saved) await artworks.written(target);
+  return saved;
+};
 
 /** Someone else's picture in the folder always wins: nothing is overwritten or regenerated. */
 async function locateArtwork(entry: Awaited<ReturnType<typeof scanLibrary>>[number]) {
@@ -725,7 +734,7 @@ function scheduleArtwork(entry: Awaited<ReturnType<typeof scanLibrary>>[number])
     const source = entry.files[0];
     if (!source) return;
     const info = await playback.inspect({ url: `file://${source.path}` }).catch(() => undefined);
-    if (await saveFrame(mediaPath(source.path), target, framePosition(info?.duration))) {
+    if (await saveGenerated(target, () => saveFrame(mediaPath(source.path), target, framePosition(info?.duration)))) {
       log("INFO", "Thumbnail generated from the video", { key: entry.key });
     }
   });
@@ -813,7 +822,7 @@ const writeCatalogPoster = async (key: string, url?: string) => {
       : path.join(mediaPath(key), POSTER_OUTPUT))
     : hashedArt(key);
   await mkdir(path.dirname(target), { recursive: true });
-  return savePosterAs(target, url);
+  return saveGenerated(target, () => savePosterAs(target, url));
 };
 
 /** The binding on this exact path, ignoring one inherited from a parent folder. */
@@ -853,7 +862,7 @@ async function catalogPosterIfBound(key: string, target: string) {
     const numbers = episodeNumberOf(key, ownRecord(key, records));
     const row = numbers ? metaStore.episodes()[episodeKey(known.type, known.id, numbers.season, numbers.episode)] : undefined;
     if (!row?.thumbnail) return false;
-    if (await savePosterAs(target, row.thumbnail)) {
+    if (await saveGenerated(target, () => savePosterAs(target, row.thumbnail!))) {
       log("INFO", "Episode still filled in from metadata", { path: key });
       return true;
     }
@@ -861,7 +870,7 @@ async function catalogPosterIfBound(key: string, target: string) {
   }
   const meta = await cachedMeta(known.type, known.id);
   if (!meta?.poster) return false;
-  if (await savePosterAs(target, meta.poster)) {
+  if (await saveGenerated(target, () => savePosterAs(target, meta.poster!))) {
     log("INFO", "Poster filled in from metadata", { path: key });
     return true;
   }
@@ -884,7 +893,7 @@ function scheduleFileArtwork(key: string) {
     if (await locateFileArtwork(key)) return;
     if (await catalogPosterIfBound(key, target)) return;
     const info = await playback.inspect({ url: `file://${wirePath(key)}` }).catch(() => undefined);
-    await saveFrame(source, target, framePosition(info?.duration));
+    await saveGenerated(target, () => saveFrame(source, target, framePosition(info?.duration)));
   });
 }
 
@@ -915,41 +924,55 @@ function scheduleFolderArtwork(key: string) {
     }
     if (!first) return;
     const info = await playback.inspect({ url: `file://${first.path}` }).catch(() => undefined);
-    await saveFrame(mediaPath(first.path), target, framePosition(info?.duration));
+    await saveGenerated(target, () => saveFrame(mediaPath(first.path), target, framePosition(info?.duration)));
   });
 }
 
 /** Thumbnails in the data directory outlive the video. After a scan the ones whose source
- *  is gone are removed. Saving next to the video has no such problem: the picture goes with the folder. */
+ *  is gone are removed. Saving next to the video has no such problem: the picture goes with
+ *  the folder. Each library is swept on its own, and only while its root can actually be
+ *  read: a mount that is down must never cost the user the thumbnails stored on it. */
 let lastArtworkSweep = 0;
 async function sweepArtwork() {
   if (Date.now() - lastArtworkSweep < 10 * 60_000) return;
   lastArtworkSweep = Date.now();
-  const valid = new Set<string>();
-  const remember = (key: string) => {
-    valid.add(path.basename(dataArtworkFile(key)));
-    const parts = key.split(path.sep);
-    for (let depth = 1; depth < parts.length; depth += 1) {
-      valid.add(path.basename(dataArtworkFile(`dir:${parts.slice(0, depth).join(path.sep)}`)));
-    }
-  };
-  for (const entry of await libraryEntries()) {
-    valid.add(path.basename(dataArtworkFile(libraryKey(entry.key))));
-    for (const file of entry.files) remember(libraryKey(file.path));
-  }
   // The poster is saved when the job is queued, while the source does not exist yet.
   // Without this the sweep would delete it before the download finishes.
-  for (const job of queue.list()) remember(libraryKey(job.target));
-
+  const queued = queue.list().map((job) => libraryKey(job.target));
+  const rootReadable = async (root: string) => { try { await access(root, constants.R_OK); return true; } catch { return false; } };
   let removed = 0;
-  for (const name of await readdir(ARTWORK_DIR).catch(() => [] as string[])) {
-    if (valid.has(name)) continue;
-    const file = path.join(ARTWORK_DIR, name);
-    // Second safeguard: anything fresh is kept. Its source may still be on its way.
-    const info = await stat(file).catch(() => undefined);
-    if (info && Date.now() - info.mtimeMs < 60 * 60_000) continue;
-    await rm(file, { force: true });
-    removed += 1;
+  for (const library of store.libraries()) {
+    if (!library.enabled || library.readOnly || library.unreachable) continue;
+    if (!await rootReadable(library.root)) {
+      log("WARN", "The library root could not be read, its thumbnails are left alone", { library: library.name, root: library.root });
+      continue;
+    }
+    const valid = new Set<string>();
+    // The ancestor rows matter: a folder is keyed `dir:<path>` for paths that appear in
+    // no file and in no binding, because a folder is not a file.
+    const remember = (key: string) => {
+      valid.add(path.basename(dataArtworkFile(key)));
+      const parts = key.split("/");
+      for (let depth = 1; depth < parts.length; depth += 1) {
+        valid.add(path.basename(dataArtworkFile(`dir:${parts.slice(0, depth).join("/")}`)));
+      }
+    };
+    for (const entry of await scanLibrary(library.root)) {
+      valid.add(path.basename(dataArtworkFile(libraryPath(library.id, entry.key))));
+      for (const file of entry.files) remember(libraryPath(library.id, file.path));
+    }
+    for (const key of queued) if (parseLibraryPath(key)?.libraryId === library.id) remember(key);
+
+    const dir = artworks.dirOf(library.id);
+    for (const name of await readdir(dir).catch(() => [] as string[])) {
+      if (valid.has(name)) continue;
+      const file = path.join(dir, name);
+      // Second safeguard: anything fresh is kept. Its source may still be on its way.
+      const info = await stat(file).catch(() => undefined);
+      if (!info?.isFile() || Date.now() - info.mtimeMs < 60 * 60_000) continue;
+      await rm(file, { force: true });
+      removed += 1;
+    }
   }
   if (removed) log("INFO", "Orphaned thumbnails deleted", { removed });
 }
@@ -1303,6 +1326,7 @@ app.get("/api/library/thumb", asyncRoute(async (req, res) => {
     art = entry && await locateArtwork(entry);
   }
   if (!art) return res.status(404).end();
+  void artworks.served(art);
   res.setHeader("cache-control", "private, no-store");
   res.sendFile(art, { dotfiles: "allow" }, (error) => { if (error && !res.headersSent) res.status(404).end(); });
 }));
@@ -2307,6 +2331,6 @@ app.listen(port, "0.0.0.0", () => { markServerReady(); log("INFO", "Stremio Offl
 for (const signal of ["SIGTERM", "SIGINT"] as const) {
   process.once(signal, () => {
     log("INFO", "Shutting down", { signal });
-    void Promise.allSettled([images.flush(), metaStore.flush()]).then(flushLog).finally(() => process.exit(0));
+    void Promise.allSettled([images.flush(), artworks.flush(), metaStore.flush()]).then(flushLog).finally(() => process.exit(0));
   });
 }

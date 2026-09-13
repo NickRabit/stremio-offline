@@ -77,7 +77,7 @@ test("a state that never had settings does not gain any", async () => {
   } finally { await rm(dataDir, { recursive: true, force: true }); await rm(downloadDir, { recursive: true, force: true }); }
 });
 
-test("thumbnails follow their keys into the qualified namespace", async () => {
+test("thumbnails move into the directory of their library", async () => {
   const dataDir = await mkdtemp(path.join(tmpdir(), "migrate-"));
   const downloadDir = await mkdtemp(path.join(tmpdir(), "downloads-"));
   const artwork = path.join(dataDir, "artwork");
@@ -86,11 +86,17 @@ test("thumbnails follow their keys into the qualified namespace", async () => {
   await writeFile(path.join(downloadDir, "Show", "01 serie", "01.mkv"), "x");
   // Exactly the shapes the orphan sweep treats as valid: an entry key, a file, and
   // the directory prefixes above the file (folders are keyed `dir:`).
-  const old = ["Show", "Show/01 serie/01.mkv", "dir:Show", "dir:Show/01 serie"].map(artworkName);
-  for (const name of old) await writeFile(path.join(artwork, name), "jpeg");
+  const keys = ["Show", "Show/01 serie/01.mkv", "dir:Show", "dir:Show/01 serie"];
+  // Old, so only the mapping itself can save them: the leftover pass has a freshness
+  // guard, and a test that leaned on it would pass even while dropping live thumbnails.
+  const past = new Date(Date.now() - 2 * 60 * 60_000);
+  for (const key of keys) {
+    const file = path.join(artwork, artworkName(key));
+    await writeFile(file, "jpeg");
+    await utimes(file, past, past);
+  }
   const orphan = artworkName("Gone/old.mkv");
   await writeFile(path.join(artwork, orphan), "jpeg");
-  const past = new Date(Date.now() - 2 * 60 * 60_000);
   await utimes(path.join(artwork, orphan), past, past);
   const fresh = artworkName("Gone/fresh.mkv");
   await writeFile(path.join(artwork, fresh), "jpeg");
@@ -100,11 +106,43 @@ test("thumbnails follow their keys into the qualified namespace", async () => {
     const summary = await migrateLibraries(state, { dataDir, downloadDir });
     const id = summary.libraryId!;
     assert.equal(summary.artwork.mapped, 4);
-    for (const name of old) await assert.rejects(stat(path.join(artwork, name)), "the old name is gone");
-    const kept = [`${id}/Show`, `dir:${id}/Show`, `dir:${id}/Show/01 serie`, `${id}/Show/01 serie/01.mkv`].map(artworkName);
-    for (const name of kept) assert.equal((await stat(path.join(artwork, name))).size, 4);
+    for (const key of keys) {
+      assert.equal((await stat(path.join(artwork, id, artworkName(key)))).size, 4, `${key} moved with its library`);
+      await assert.rejects(stat(path.join(artwork, artworkName(key))), "the flat name is gone");
+    }
+    assert.equal(summary.artwork.removed, 1, "only a file the map never covered is dropped");
     await assert.rejects(stat(path.join(artwork, orphan)), "an orphan past the freshness guard is dropped");
     assert.equal((await stat(path.join(artwork, fresh))).size, 4, "a fresh thumbnail is kept for its arriving file");
+  } finally { await rm(dataDir, { recursive: true, force: true }); await rm(downloadDir, { recursive: true, force: true }); }
+});
+
+test("a flat thumbnail the libraries build wrote is moved as well", async () => {
+  const dataDir = await mkdtemp(path.join(tmpdir(), "migrate-"));
+  const downloadDir = await mkdtemp(path.join(tmpdir(), "downloads-"));
+  const artwork = path.join(dataDir, "artwork");
+  await mkdir(path.join(downloadDir, "Show"), { recursive: true });
+  await mkdir(artwork, { recursive: true });
+  await writeFile(path.join(downloadDir, "Show", "01.mkv"), "x");
+  const file = path.join(dataDir, "state.json");
+  const state = {
+    ...v1State(),
+    schemaVersion: SCHEMA_VERSION,
+    libraries: [{ id: "lib_ab12cd34", name: "downloads", type: "mixed", root: downloadDir, enabled: true, order: 0, addedAt: "2026-01-01T00:00:00.000Z", writeArtwork: true }],
+    libraryMeta: { "lib_ab12cd34/Show": { type: "series", id: "tt1" } },
+    librarySuggestions: {},
+    libraryEpisodes: {},
+  };
+  await writeFile(file, JSON.stringify(state));
+  // The name that build used: the qualified key, hashed flat.
+  const flat = path.join(artwork, artworkName("lib_ab12cd34/Show"));
+  await writeFile(flat, "jpeg");
+  const past = new Date(Date.now() - 2 * 60 * 60_000);
+  await utimes(flat, past, past);
+  try {
+    const summary = await migrateStateFile(dataDir, downloadDir);
+    assert.equal(summary.artwork.mapped, 1);
+    assert.equal((await stat(path.join(artwork, "lib_ab12cd34", artworkName("Show")))).size, 4);
+    await assert.rejects(stat(flat), "nothing is left behind for the sweep to miss");
   } finally { await rm(dataDir, { recursive: true, force: true }); await rm(downloadDir, { recursive: true, force: true }); }
 });
 
