@@ -156,6 +156,11 @@ again after every rebase onto `main`.
       every new handler reads `req.body?.`. The spec adds a grant, refuses a root nobody
       granted, previews, creates a library under the grant, revokes it and checks the library
       is disabled while its file stays put, then removes what it made.
+- [x] A scan somebody asked for drops the in-memory walk first. `libraryFiles()` and
+      `libraryUnits()` are held for half a minute, so a folder copied in and then rescanned
+      was invisible to the run meant to find it; the e2e suite caught it once a spec that
+      walks the library ran shortly before `library-identify.spec.ts` created its fixture
+      folders.
 - [x] `LIBRARY_ROOTS` and `LIBRARY_META_TTL_DAYS` in `.env.example`, both compose files and
       `docs/configuration.md`, next to a short section on what a granted root is and what
       removing a library does and does not do.

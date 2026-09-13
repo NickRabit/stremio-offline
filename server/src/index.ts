@@ -1994,6 +1994,10 @@ app.post("/api/library/scan", asyncRoute(async (req, res) => {
   const library = wanted ? libraryFor(store.libraries(), wanted) : undefined;
   if (wanted && !library) throw new AppError("Unknown library.", "err.unknownLibrary");
   await refreshLibraryHealth();
+  // A run somebody asked for reads the tree as it is now: the walk behind it is held in
+  // memory for half a minute, and "scan again" must not answer from a listing taken before
+  // the file it is meant to find was copied in.
+  invalidateLibrary();
   const state = await libraryScan.start({ force: req.body?.force === true, path: resolved?.key ?? "", libraryId: library?.id });
   // A manual run covers the same ground, so the automatic one starts from here too.
   void libraryAutoScan.remember();
