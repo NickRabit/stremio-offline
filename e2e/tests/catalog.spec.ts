@@ -55,6 +55,31 @@ test.describe("catalog", () => {
     await expect(type).toHaveValue("series");
   });
 
+  test("a catalogue picked for searching is the one left on screen", async ({ page }) => {
+    await page.goto("/");
+    const requests: string[] = [];
+    page.on("request", (request) => { if (request.url().includes("/api/catalog?")) requests.push(request.url()); });
+
+    const scope = page.getByRole("combobox", { name: "Kde hledat" });
+    await scope.selectOption((await scope.locator("option").filter({ hasText: "Seriály" }).first().getAttribute("value"))!);
+
+    const browse = page.getByRole("combobox", { name: "Procházet katalog" });
+    await expect(browse).toHaveValue(/:series:e2e-series$/);
+    await expect(page.getByRole("button", { name: /Zkušební seriál/ })).toBeVisible();
+    // The catalogue behind the scope is fetched once, not once for the scope and
+    // again for the picker that followed it.
+    expect(requests.filter((url) => url.includes("e2e-series"))).toHaveLength(1);
+
+    await page.getByPlaceholder("Hledat ve všech doplňcích naráz…").fill("Zkušební");
+    await page.getByRole("button", { name: "Vyhledat" }).click();
+    await expect(page.getByRole("button", { name: /Zkušební seriál/ })).toBeVisible();
+
+    await page.getByRole("button", { name: "Zrušit" }).click();
+    await expect(browse).toHaveValue(/:series:e2e-series$/);
+    await expect(page.getByRole("button", { name: /Zkušební seriál/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Zkušební film/ })).toHaveCount(0);
+  });
+
   test("a search with no match says so instead of showing an empty grid", async ({ page }) => {
     await page.goto("/");
     await page.getByPlaceholder("Hledat ve všech doplňcích naráz…").fill("nic-takoveho-neexistuje");
