@@ -1,9 +1,12 @@
-import { access, copyFile, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { buildLibrary, listVideos, type LibraryEntry } from "./library.js";
-import { libraryPath, newLibraryId, toPosix, type LibraryRecord } from "./libraries.js";
+import { libraryPath, newLibraryId, parseLibraryPath, relativeWithin, toPosix, type LibraryRecord } from "./libraries.js";
+import { writeEpisodesFile, writeLibraryFile } from "./library-meta-store.js";
+import type { LibraryEpisodeRecord, LibraryMetaRecord, LibrarySuggestion } from "./library-match.js";
+import { log } from "./logger.js";
 import { SCHEMA_VERSION, type State } from "./store.js";
 
 export interface MigrationSummary {
@@ -11,10 +14,19 @@ export interface MigrationSummary {
   libraryId?: string;
   /** Stored path keys rewritten with the library prefix. */
   paths: number;
+  /** Rows of match history moved out of `state.json` into `data/library/`. */
+  metadata: number;
   artwork: { mapped: number; removed: number };
 }
 
-const nothing = (): MigrationSummary => ({ migrated: false, paths: 0, artwork: { mapped: 0, removed: 0 } });
+/** The match history as every build before this one stored it: inline in `state.json`. */
+type InlineState = State & {
+  libraryMeta?: Record<string, LibraryMetaRecord>;
+  librarySuggestions?: Record<string, LibrarySuggestion>;
+  libraryEpisodes?: Record<string, LibraryEpisodeRecord>;
+};
+
+const nothing = (): MigrationSummary => ({ migrated: false, paths: 0, metadata: 0, artwork: { mapped: 0, removed: 0 } });
 const artworkName = (key: string) => `${createHash("sha1").update(key).digest("hex")}.jpg`;
 const ARTWORK_FRESH_MS = 60 * 60_000;
 
@@ -27,21 +39,80 @@ export async function migrateStateFile(dataDir: string, downloadDir: string): Pr
     throw error;
   });
   if (raw === undefined) return nothing();
-  const state = JSON.parse(raw) as State;
-  if ((state.schemaVersion ?? 1) >= SCHEMA_VERSION) return nothing();
+  const state = JSON.parse(raw) as InlineState;
+  const legacy = (state.schemaVersion ?? 1) < SCHEMA_VERSION;
+  const inline = Boolean(state.libraryMeta || state.librarySuggestions || state.libraryEpisodes);
+  if (!legacy && !inline) return nothing();
 
-  // A rollback to an older image is realistic, so the untouched v1 file is kept.
-  await copyFile(file, `${file}.v1.bak`);
-  const summary = await migrateLibraries(state, { dataDir, downloadDir });
+  if (legacy) {
+    // A rollback to an older image is realistic, so the untouched v1 file is kept.
+    await copyFile(file, `${file}.v1.bak`);
+  }
+  // The second branch is a state the libraries build already migrated: it kept the match
+  // history inline and its thumbnails flat, and this build reads neither.
+  const summary = legacy ? await migrateLibraries(state, { dataDir, downloadDir }) : nothing();
+  if (!legacy) {
+    summary.metadata = await splitInlineMetadata(state, dataDir);
+    summary.artwork = await relayoutArtwork(state, dataDir);
+  }
   const temp = `${file}.tmp`;
   await writeFile(temp, JSON.stringify(state, null, 2), { mode: 0o600 });
   await rename(temp, file);
   return summary;
 }
 
+/** The libraries build named its thumbnails after the qualified key, flat in `data/artwork/`.
+ *  Everything this build reads lives in the directory of its library. */
+async function relayoutArtwork(state: InlineState, dataDir: string): Promise<{ mapped: number; removed: number }> {
+  const totals = { mapped: 0, removed: 0 };
+  for (const library of state.libraries ?? []) {
+    const moved = await rekeyArtwork({ dataDir, downloadDir: library.root }, library.id);
+    totals.mapped += moved.mapped;
+    totals.removed += moved.removed;
+  }
+  return totals;
+}
+
+/** Moves the match history out of the state into `data/library/`, keyed the way those
+ *  files store it: library-relative for the matches, shared for the episode rows. */
+async function splitInlineMetadata(state: InlineState, dataDir: string): Promise<number> {
+  const meta = state.libraryMeta ?? {};
+  const suggestions = state.librarySuggestions ?? {};
+  const episodes = state.libraryEpisodes ?? {};
+  delete state.libraryMeta;
+  delete state.librarySuggestions;
+  delete state.libraryEpisodes;
+
+  const files = new Map<string, { meta: Record<string, LibraryMetaRecord>; suggestions: Record<string, LibrarySuggestion> }>();
+  const bucket = (libraryId: string) => {
+    let file = files.get(libraryId);
+    if (!file) { file = { meta: {}, suggestions: {} }; files.set(libraryId, file); }
+    return file;
+  };
+  // A key without a library prefix is qualified on the way in; one with no library at
+  // all has nowhere to go, and losing it silently is worse than saying so.
+  const fallback = state.libraries?.[0]?.id;
+  let rows = 0;
+  let dropped = 0;
+  const each = <T,>(records: Record<string, T>, into: (libraryId: string, relative: string, value: T) => void) => {
+    for (const [key, value] of Object.entries(records)) {
+      const libraryId = parseLibraryPath(key)?.libraryId ?? fallback;
+      if (!libraryId) { dropped += 1; continue; }
+      into(libraryId, relativeWithin(libraryId, toPosix(key)), value);
+      rows += 1;
+    }
+  };
+  each(meta, (libraryId, relative, value) => { bucket(libraryId).meta[relative] = value; });
+  each(suggestions, (libraryId, relative, value) => { bucket(libraryId).suggestions[relative] = value; });
+  for (const [libraryId, file] of files) await writeLibraryFile(dataDir, libraryId, file.meta, file.suggestions);
+  if (Object.keys(episodes).length) await writeEpisodesFile(dataDir, episodes);
+  if (dropped) log("WARN", "Library metadata rows outside any library were dropped", { rows: dropped });
+  return rows;
+}
+
 /** Rewrites a v1 state in place: one library for the download directory, every stored
  *  path key prefixed with its id. No file on disk is moved or renamed. */
-export async function migrateLibraries(state: State, opts: { dataDir: string; downloadDir: string }): Promise<MigrationSummary> {
+export async function migrateLibraries(state: InlineState, opts: { dataDir: string; downloadDir: string }): Promise<MigrationSummary> {
   const library = await legacyLibrary(opts.downloadDir);
   const id = library.id;
   let paths = 0;
@@ -67,7 +138,7 @@ export async function migrateLibraries(state: State, opts: { dataDir: string; do
   // Only an existing settings blob is rewritten: creating one would make `Store.load`
   // read it as a pre-English install and flip the whole interface to Czech.
   if (state.settings) state.settings = { ...state.settings, defaultMovieLibrary: id, defaultSeriesLibrary: id };
-  return { migrated: true, libraryId: id, paths, artwork: await rekeyArtwork(opts, id) };
+  return { migrated: true, libraryId: id, paths, metadata: await splitInlineMetadata(state, opts.dataDir), artwork: await rekeyArtwork(opts, id) };
 }
 
 async function legacyLibrary(root: string): Promise<LibraryRecord> {
@@ -87,17 +158,20 @@ async function legacyLibrary(root: string): Promise<LibraryRecord> {
   };
 }
 
-/** Thumbnails are named after the key they belong to, and the old name cannot be
- *  inverted, so the mapping is built forward from the same shapes the orphan sweep
- *  accepts. Anything left over was referenced by nothing. */
+/** Thumbnails are named after the key they belong to and the old name cannot be inverted,
+ *  so the mapping is built forward from the same shapes the orphan sweep accepts. They move
+ *  into the directory of their library; what is still flat afterwards is referenced by
+ *  nothing. A file may sit there under either flat name: the one this build never used,
+ *  and the one the libraries build wrote before it learned the layout. */
 async function rekeyArtwork(opts: { dataDir: string; downloadDir: string }, libraryId: string): Promise<{ mapped: number; removed: number }> {
   const dir = path.join(opts.dataDir, "artwork");
   // `listVideos` answers an unreadable root with an empty tree, so a mount that is down
   // would make every stored thumbnail look like an orphan. Nothing is mapped and nothing
   // is removed while the root is away; the next start does the work.
   if (!await access(opts.downloadDir, constants.R_OK).then(() => true, () => false)) return { mapped: 0, removed: 0 };
-  const names = new Set(await readdir(dir).catch(() => [] as string[]));
-  if (!names.size) return { mapped: 0, removed: 0 };
+  // Only the flat files are candidates; the library directories are already in place.
+  const leftovers = new Set((await readdir(dir, { withFileTypes: true }).catch(() => []))
+    .filter((item) => item.isFile()).map((item) => item.name));
 
   const files = await listVideos(opts.downloadDir);
   const entries: LibraryEntry[] = buildLibrary(files);
@@ -114,23 +188,27 @@ async function rekeyArtwork(opts: { dataDir: string; downloadDir: string }, libr
 
   let mapped = 0;
   for (const key of keys) {
-    const from = artworkName(key);
-    if (!names.has(from)) continue;
-    const to = artworkName(key.startsWith("dir:") ? `dir:${libraryPath(libraryId, key.slice(4))}` : libraryPath(libraryId, key));
-    if (from === to) continue;
-    names.delete(from);
-    if (names.has(to)) { await rm(path.join(dir, from), { force: true }); continue; }
-    await rename(path.join(dir, from), path.join(dir, to));
-    names.add(to);
+    const folder = key.startsWith("dir:");
+    const relative = folder ? key.slice(4) : key;
+    const name = folder ? `dir:${relative}` : relative;
+    const qualified = folder ? `dir:${libraryPath(libraryId, relative)}` : libraryPath(libraryId, relative);
+    const from = [artworkName(qualified), artworkName(key)].find((candidate) => leftovers.has(candidate));
+    if (!from) continue;
+    leftovers.delete(from);
+    const target = path.join(libraryId, artworkName(name));
+    const file = path.join(dir, target);
+    if (await stat(file).then(() => true, () => false)) { await rm(path.join(dir, from), { force: true }); continue; }
+    await mkdir(path.join(dir, libraryId), { recursive: true });
+    await rename(path.join(dir, from), file);
     mapped += 1;
   }
 
   let removed = 0;
-  for (const name of names) {
+  for (const name of leftovers) {
     const file = path.join(dir, name);
     const info = await stat(file).catch(() => undefined);
     // The same freshness guard the sweep uses: a poster may be waiting for its file.
-    if (info && Date.now() - info.mtimeMs < ARTWORK_FRESH_MS) continue;
+    if (!info?.isFile() || Date.now() - info.mtimeMs < ARTWORK_FRESH_MS) continue;
     await rm(file, { force: true });
     removed += 1;
   }

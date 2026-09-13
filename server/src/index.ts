@@ -7,6 +7,7 @@ import { readMediaText, rewritePlaylist } from "./media-playlist.js";
 import { AirPlayAccess } from "./airplay-access.js";
 import { shiftVtt } from "./vtt.js";
 import path from "node:path";
+import { constants } from "node:fs";
 import { access, mkdir, readdir, readFile, realpath, rename, rm, stat, statfs } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
@@ -34,7 +35,6 @@ import { LibraryScan } from "./library-scan.js";
 import { LibraryAutoScan } from "./library-autoscan.js";
 import { watchLibrary } from "./library-watch.js";
 import { ArtworkQueue, episodeArtName, fileMayUseFolderArtwork, findArtwork, framePosition, POSTER_OUTPUT, savePosterAs, saveFrame } from "./artwork.js";
-import { createHash } from "node:crypto";
 import { clearedCookie, createSession, DECOY_HASH, LoginThrottle, pruneRevoked, envCredentials, hashPassword, INTERNAL_TOKEN, parseCookies, readSession, secretEquals, REMEMBER_DAYS, SESSION_COOKIE, sessionCookie, verifyPassword } from "./auth.js";
 import { randomBytes, randomUUID } from "node:crypto";
 import type { ClientCapabilities, PlaybackOptions } from "./playback.js";
@@ -42,8 +42,10 @@ import type { MediaInfo } from "./naming.js";
 import { defaultDownloadSettings, deviceFilename, normalizeDownloadSettings, safeName } from "./naming.js";
 import { LANGUAGE_NAMES, isUiLanguage, normalizeLanguage } from "./language.js";
 import { AppError, messageKeyOf } from "./errors.js";
-import { libraryPath, posixBase, posixDir, posixJoin, relativeWithin, resolveLibraryPath, toFs } from "./libraries.js";
+import { libraryPath, parseLibraryPath, posixBase, posixDir, posixJoin, relativeWithin, resolveLibraryPath, toFs } from "./libraries.js";
 import { migrateStateFile } from "./library-migrate.js";
+import { LibraryMetaStore } from "./library-meta-store.js";
+import { artworks } from "./artwork-cache.js";
 import type { AddonRecord, AddonRole, MetaItem, StreamItem } from "./types.js";
 import { createSettingsBackup, parseSettingsBackup } from "./backup.js";
 
@@ -53,10 +55,14 @@ const DOWNLOAD_DIR = process.env.DOWNLOAD_DIR ?? "/downloads";
 // Before anything reads the state: a v1 file gains its library and qualified keys.
 const libraryMigration = await migrateStateFile(DATA_DIR, DOWNLOAD_DIR);
 const app = express(); const store = new Store(DATA_DIR, DOWNLOAD_DIR);
+/** The match history, kept per library instead of inside `state.json`. */
+const metaStore = new LibraryMetaStore(DATA_DIR);
 let markServerReady!: () => void;
 const serverReady = new Promise<void>((resolve) => { markServerReady = resolve; });
 await store.load();
+await metaStore.load();
 if (libraryMigration.migrated) log("INFO", "State migrated to libraries", { libraryId: libraryMigration.libraryId, paths: libraryMigration.paths, artwork: libraryMigration.artwork });
+if (libraryMigration.metadata) log("INFO", "Library metadata moved out of the state", { rows: libraryMigration.metadata });
 // A level chosen in the interface outlives the container it was chosen in.
 const savedLevel = parseLevel(store.settings().logLevel);
 if (savedLevel) setLevel(savedLevel);
@@ -65,6 +71,7 @@ configureSecureMode(() => store.settings().secureMode !== false);
 await initLogger(); startLogMaintenance();
 if (restrictedMode()) log("INFO", "Restricted mode enabled");
 await images.load();
+await artworks.load();
 const playbackOwners = new Map<string, { owner: ResourceOwner; resourceId: string }>();
 const airplayAccess = new AirPlayAccess(mediaResources);
 const queue = new DownloadQueue(() => store.settings().concurrentDownloads, () => store.settings().parallelPerProvider ?? 1, undefined, undefined, { segments: () => store.settings().downloadSegments ?? 1 }); const playback = new PlaybackManager(undefined, (id) => {
@@ -635,6 +642,11 @@ const primaryLibrary = () => store.libraries()[0]!;
 const libraryKey = (relative: string) => libraryPath(primaryLibrary().id, relative);
 const wirePath = (key: string) => relativeWithin(primaryLibrary().id, key);
 const mediaPath = (key: string, ...rest: string[]) => path.join(primaryLibrary().root, toFs(posixJoin(relativeWithin(primaryLibrary().id, key), ...rest)));
+/** The key as a library file stores it. Keys of another library are not ours to write. */
+const relativeKeyIn = (libraryId: string, key: string) => {
+  const parsed = parseLibraryPath(key);
+  return parsed?.libraryId === libraryId ? parsed.relative : undefined;
+};
 
 const metaCache = new Map<string, { value: MetaItem | null; at: number }>();
 const cachedMeta = async (type: string, id: string) => {
@@ -659,7 +671,7 @@ const libraryFiles = async () => {
 const libraryEntries = async () => {
   if (libraryCache && Date.now() - libraryCache.at < 30_000) return libraryCache.entries;
   const entries = await scanLibrary(primaryLibrary().root);
-  const known = store.libraryMeta();
+  const known = metaStore.qualifiedMeta();
   for (const entry of entries) {
     const record = knownTitleOf(libraryKey(entry.key), known);
     if (!record) continue;
@@ -681,10 +693,17 @@ const artStamp = async (file: string) => {
 const thumbUrl = async (param: "path" | "dir" | "key", value: string, art: string | undefined) =>
   (art ? `/api/library/thumb?${param}=${encodeURIComponent(value)}&v=${await artStamp(art)}` : undefined);
 
-const ARTWORK_DIR = path.join(process.env.DATA_DIR ?? "/data", "artwork");
 const artworkQueue = new ArtworkQueue();
 const fileExists = async (file: string) => { try { await access(file); return true; } catch { return false; } };
-const dataArtworkFile = (key: string) => path.join(ARTWORK_DIR, `${createHash("sha1").update(key).digest("hex")}.jpg`);
+const dataArtworkFile = (key: string) => artworks.file(key);
+
+/** A generated thumbnail is counted against the cache ceiling; the same picture written
+ *  next to the media is the folder's own and is neither counted nor evicted. */
+const saveGenerated = async (target: string, write: () => Promise<boolean>) => {
+  const saved = await write();
+  if (saved) await artworks.written(target);
+  return saved;
+};
 
 /** Someone else's picture in the folder always wins: nothing is overwritten or regenerated. */
 async function locateArtwork(entry: Awaited<ReturnType<typeof scanLibrary>>[number]) {
@@ -715,7 +734,7 @@ function scheduleArtwork(entry: Awaited<ReturnType<typeof scanLibrary>>[number])
     const source = entry.files[0];
     if (!source) return;
     const info = await playback.inspect({ url: `file://${source.path}` }).catch(() => undefined);
-    if (await saveFrame(mediaPath(source.path), target, framePosition(info?.duration))) {
+    if (await saveGenerated(target, () => saveFrame(mediaPath(source.path), target, framePosition(info?.duration)))) {
       log("INFO", "Thumbnail generated from the video", { key: entry.key });
     }
   });
@@ -734,7 +753,7 @@ app.get("/api/library", asyncRoute(async (_req, res) => {
 }));
 
 /** The binding may sit on the file or on any parent folder. An id-less sentinel is ignored. */
-const knownTitle = (key: string) => knownTitleOf(key, store.libraryMeta());
+const knownTitle = (key: string) => knownTitleOf(key, metaStore.qualifiedMeta());
 
 /** Thumbnail of one video. Next to the video it is looked up by Jellyfin's naming convention. */
 async function locateFileArtwork(key: string) {
@@ -767,13 +786,16 @@ const scheduleMetaBackfill = (type: string, id: string) => {
     const fields = cacheFieldsFromMeta(meta);
     const episodeRows = episodesFromMeta(meta);
     const at = new Date().toISOString();
-    await store.update((state) => {
-      const next = { ...state.libraryMeta };
-      for (const [pathKey, record] of Object.entries(next)) {
-        if (record.type === type && record.id === id) next[pathKey] = { ...record, ...fields, backfilledAt: at };
+    // The binding is found by catalogue identity, so every library is walked; only the
+    // ones holding a row for this title are written.
+    await metaStore.updateAll((file, _libraryId, episodes) => {
+      let bound = false;
+      for (const [key, record] of Object.entries(file.meta)) {
+        if (record.type !== type || record.id !== id) continue;
+        file.meta[key] = { ...record, ...fields, backfilledAt: at };
+        bound = true;
       }
-      state.libraryMeta = next;
-      if (Object.keys(episodeRows).length) state.libraryEpisodes = { ...state.libraryEpisodes, ...episodeRows };
+      if (bound) Object.assign(episodes, episodeRows);
     });
     invalidateLibrary();
   });
@@ -800,7 +822,7 @@ const writeCatalogPoster = async (key: string, url?: string) => {
       : path.join(mediaPath(key), POSTER_OUTPUT))
     : hashedArt(key);
   await mkdir(path.dirname(target), { recursive: true });
-  return savePosterAs(target, url);
+  return saveGenerated(target, () => savePosterAs(target, url));
 };
 
 /** The binding on this exact path, ignoring one inherited from a parent folder. */
@@ -818,11 +840,11 @@ const clearGeneratedArt = async (key: string) => {
 };
 
 const attachBrowseMeta = <T extends { path: string; kind: string; name?: string; label?: string }>(item: T) => {
-  const records = store.libraryMeta();
-  const episodes = store.libraryEpisodes();
+  const records = metaStore.qualifiedMeta();
+  const episodes = metaStore.episodes();
   const key = libraryKey(item.path);
   const label = item.kind === "folder" ? String(item.name ?? "") : String(item.label ?? "");
-  const extra = browseMeta(key, label, records, store.librarySuggestions(), episodes);
+  const extra = browseMeta(key, label, records, metaStore.qualifiedSuggestions(), episodes);
   const known = knownTitleOf(key, records);
   const numbers = item.kind === "file" ? episodeNumberOf(key, ownRecord(key, records)) : undefined;
   const wanted = needsBackfill(known) || needsEpisodes(known, numbers, episodes);
@@ -833,14 +855,14 @@ const attachBrowseMeta = <T extends { path: string; kind: string; name?: string;
 /** An episode gets its own still. Falling back to the series poster would paint
  *  the same picture on every row, so it is left to the frame grabber instead. */
 async function catalogPosterIfBound(key: string, target: string) {
-  const records = store.libraryMeta();
+  const records = metaStore.qualifiedMeta();
   const known = knownTitleOf(key, records);
   if (!known) return false;
   if (known.type === "series" && isVideo(posixBase(key))) {
     const numbers = episodeNumberOf(key, ownRecord(key, records));
-    const row = numbers ? store.libraryEpisodes()[episodeKey(known.type, known.id, numbers.season, numbers.episode)] : undefined;
+    const row = numbers ? metaStore.episodes()[episodeKey(known.type, known.id, numbers.season, numbers.episode)] : undefined;
     if (!row?.thumbnail) return false;
-    if (await savePosterAs(target, row.thumbnail)) {
+    if (await saveGenerated(target, () => savePosterAs(target, row.thumbnail!))) {
       log("INFO", "Episode still filled in from metadata", { path: key });
       return true;
     }
@@ -848,7 +870,7 @@ async function catalogPosterIfBound(key: string, target: string) {
   }
   const meta = await cachedMeta(known.type, known.id);
   if (!meta?.poster) return false;
-  if (await savePosterAs(target, meta.poster)) {
+  if (await saveGenerated(target, () => savePosterAs(target, meta.poster!))) {
     log("INFO", "Poster filled in from metadata", { path: key });
     return true;
   }
@@ -871,7 +893,7 @@ function scheduleFileArtwork(key: string) {
     if (await locateFileArtwork(key)) return;
     if (await catalogPosterIfBound(key, target)) return;
     const info = await playback.inspect({ url: `file://${wirePath(key)}` }).catch(() => undefined);
-    await saveFrame(source, target, framePosition(info?.duration));
+    await saveGenerated(target, () => saveFrame(source, target, framePosition(info?.duration)));
   });
 }
 
@@ -902,41 +924,55 @@ function scheduleFolderArtwork(key: string) {
     }
     if (!first) return;
     const info = await playback.inspect({ url: `file://${first.path}` }).catch(() => undefined);
-    await saveFrame(mediaPath(first.path), target, framePosition(info?.duration));
+    await saveGenerated(target, () => saveFrame(mediaPath(first.path), target, framePosition(info?.duration)));
   });
 }
 
 /** Thumbnails in the data directory outlive the video. After a scan the ones whose source
- *  is gone are removed. Saving next to the video has no such problem: the picture goes with the folder. */
+ *  is gone are removed. Saving next to the video has no such problem: the picture goes with
+ *  the folder. Each library is swept on its own, and only while its root can actually be
+ *  read: a mount that is down must never cost the user the thumbnails stored on it. */
 let lastArtworkSweep = 0;
 async function sweepArtwork() {
   if (Date.now() - lastArtworkSweep < 10 * 60_000) return;
   lastArtworkSweep = Date.now();
-  const valid = new Set<string>();
-  const remember = (key: string) => {
-    valid.add(path.basename(dataArtworkFile(key)));
-    const parts = key.split(path.sep);
-    for (let depth = 1; depth < parts.length; depth += 1) {
-      valid.add(path.basename(dataArtworkFile(`dir:${parts.slice(0, depth).join(path.sep)}`)));
-    }
-  };
-  for (const entry of await libraryEntries()) {
-    valid.add(path.basename(dataArtworkFile(libraryKey(entry.key))));
-    for (const file of entry.files) remember(libraryKey(file.path));
-  }
   // The poster is saved when the job is queued, while the source does not exist yet.
   // Without this the sweep would delete it before the download finishes.
-  for (const job of queue.list()) remember(libraryKey(job.target));
-
+  const queued = queue.list().map((job) => libraryKey(job.target));
+  const rootReadable = async (root: string) => { try { await access(root, constants.R_OK); return true; } catch { return false; } };
   let removed = 0;
-  for (const name of await readdir(ARTWORK_DIR).catch(() => [] as string[])) {
-    if (valid.has(name)) continue;
-    const file = path.join(ARTWORK_DIR, name);
-    // Second safeguard: anything fresh is kept. Its source may still be on its way.
-    const info = await stat(file).catch(() => undefined);
-    if (info && Date.now() - info.mtimeMs < 60 * 60_000) continue;
-    await rm(file, { force: true });
-    removed += 1;
+  for (const library of store.libraries()) {
+    if (!library.enabled || library.readOnly || library.unreachable) continue;
+    if (!await rootReadable(library.root)) {
+      log("WARN", "The library root could not be read, its thumbnails are left alone", { library: library.name, root: library.root });
+      continue;
+    }
+    const valid = new Set<string>();
+    // The ancestor rows matter: a folder is keyed `dir:<path>` for paths that appear in
+    // no file and in no binding, because a folder is not a file.
+    const remember = (key: string) => {
+      valid.add(path.basename(dataArtworkFile(key)));
+      const parts = key.split("/");
+      for (let depth = 1; depth < parts.length; depth += 1) {
+        valid.add(path.basename(dataArtworkFile(`dir:${parts.slice(0, depth).join("/")}`)));
+      }
+    };
+    for (const entry of await scanLibrary(library.root)) {
+      valid.add(path.basename(dataArtworkFile(libraryPath(library.id, entry.key))));
+      for (const file of entry.files) remember(libraryPath(library.id, file.path));
+    }
+    for (const key of queued) if (parseLibraryPath(key)?.libraryId === library.id) remember(key);
+
+    const dir = artworks.dirOf(library.id);
+    for (const name of await readdir(dir).catch(() => [] as string[])) {
+      if (valid.has(name)) continue;
+      const file = path.join(dir, name);
+      // Second safeguard: anything fresh is kept. Its source may still be on its way.
+      const info = await stat(file).catch(() => undefined);
+      if (!info?.isFile() || Date.now() - info.mtimeMs < 60 * 60_000) continue;
+      await rm(file, { force: true });
+      removed += 1;
+    }
   }
   if (removed) log("INFO", "Orphaned thumbnails deleted", { removed });
 }
@@ -1123,13 +1159,16 @@ app.get("/api/library/browse", asyncRoute(async (req, res) => {
 const forgetLibraryPath = async (key: string) => {
   // The resume list and the watchlist are keyed by catalogue title, not by path, so a
   // deleted file would leave the title hanging in both, offering to continue something
-  // that is no longer on disk. libraryMeta knows the catalogue binding -- it is read
-  // before this cleanup deletes it.
-  const orphans = orphanedCatalogKeys(store.libraryMeta(), key);
+  // that is no longer on disk. The match history knows the catalogue binding -- it is
+  // read before this cleanup deletes it.
+  const orphans = orphanedCatalogKeys(metaStore.qualifiedMeta(), key);
+  const target = parseLibraryPath(key);
+  if (target) await metaStore.update(target.libraryId, (file) => {
+    file.meta = dropKeyed(file.meta, target.relative);
+    file.suggestions = dropKeyed(file.suggestions, target.relative);
+  });
   await store.update((state) => {
     state.favorites = (state.favorites ?? []).filter((item) => !isPathWithin(item, key));
-    state.libraryMeta = dropKeyed(state.libraryMeta ?? {}, key);
-    state.librarySuggestions = dropKeyed(state.librarySuggestions ?? {}, key);
     state.progress = Object.fromEntries(Object.entries(state.progress ?? {}).filter(([progressKey, value]) => {
       if (orphans.has(progressKey)) return false;
       const itemPath = progressKey.startsWith("file:") ? progressKey.slice(5) : value.path;
@@ -1143,20 +1182,30 @@ const forgetLibraryPath = async (key: string) => {
 /** Every stored binding uses the relative path, so a move has to keep them all consistent.
  *  `pin` is for a move into another folder: the identity an item inherited from the folder
  *  it is leaving has to become its own, or the destination's title would take over. */
-const relocateLibraryPath = (key: string, nextKey: string, pin = false) => store.update((state) => {
-  const pinned = pin
-    ? pinInherited(state.libraryMeta ?? {}, state.librarySuggestions ?? {}, key, nextKey)
-    : { meta: state.libraryMeta ?? {}, suggestions: state.librarySuggestions ?? {} };
-  state.favorites = (state.favorites ?? []).map((item) => remapPath(item, key, nextKey));
-  state.libraryMeta = remapKeyed(pinned.meta, key, nextKey);
-  state.librarySuggestions = remapKeyed(pinned.suggestions, key, nextKey);
-  state.progress = Object.fromEntries(Object.entries(state.progress ?? {}).map(([progressKey, value]) => {
-    const filePath = progressKey.startsWith("file:") ? progressKey.slice(5) : undefined;
-    const nextProgressKey = filePath ? `file:${remapPath(filePath, key, nextKey)}` : progressKey;
-    const nextPath = value.path ? remapPath(value.path, key, nextKey) : value.path;
-    return [nextProgressKey, { ...value, path: nextPath }];
-  }));
-});
+const relocateLibraryPath = async (key: string, nextKey: string, pin = false) => {
+  const from = parseLibraryPath(key);
+  const to = parseLibraryPath(nextKey);
+  // A rename or a move keeps the item inside its library; handing it to another one is
+  // the cross-library move, which lands with the library manager.
+  if (from && to && from.libraryId === to.libraryId) {
+    await metaStore.update(from.libraryId, (file) => {
+      const pinned = pin
+        ? pinInherited(file.meta, file.suggestions, from.relative, to.relative)
+        : { meta: file.meta, suggestions: file.suggestions };
+      file.meta = remapKeyed(pinned.meta, from.relative, to.relative);
+      file.suggestions = remapKeyed(pinned.suggestions, from.relative, to.relative);
+    });
+  }
+  await store.update((state) => {
+    state.favorites = (state.favorites ?? []).map((item) => remapPath(item, key, nextKey));
+    state.progress = Object.fromEntries(Object.entries(state.progress ?? {}).map(([progressKey, value]) => {
+      const filePath = progressKey.startsWith("file:") ? progressKey.slice(5) : undefined;
+      const nextProgressKey = filePath ? `file:${remapPath(filePath, key, nextKey)}` : progressKey;
+      const nextPath = value.path ? remapPath(value.path, key, nextKey) : value.path;
+      return [nextProgressKey, { ...value, path: nextPath }];
+    }));
+  });
+};
 
 /** Moves the hashed thumbnails of an item and of everything under it to their new keys. */
 const relocateArtwork = async (items: string[], relative: string, nextRelative: string) => {
@@ -1277,6 +1326,7 @@ app.get("/api/library/thumb", asyncRoute(async (req, res) => {
     art = entry && await locateArtwork(entry);
   }
   if (!art) return res.status(404).end();
+  void artworks.served(art);
   res.setHeader("cache-control", "private, no-store");
   res.sendFile(art, { dotfiles: "allow" }, (error) => { if (error && !res.headersSent) res.status(404).end(); });
 }));
@@ -1310,18 +1360,11 @@ const libraryScan = new LibraryScan({
   pathExists: async (key: string) => { try { await access(mediaPath(key)); return true; } catch { return false; } },
   titleUnits, searchAll, metadata,
   addons: () => store.addons(),
-  libraryMeta: () => store.libraryMeta(),
-  librarySuggestions: () => store.librarySuggestions(),
+  libraryMeta: () => metaStore.qualifiedMeta(),
+  librarySuggestions: () => metaStore.qualifiedSuggestions(),
+  // The scan thinks in qualified keys; the store turns them into per-library writes.
   updateMeta: async (mutator) => {
-    await store.update((state) => {
-      const meta = { ...state.libraryMeta };
-      const suggestions = { ...state.librarySuggestions };
-      const episodes = { ...state.libraryEpisodes };
-      mutator(meta, suggestions, episodes);
-      state.libraryMeta = meta;
-      state.librarySuggestions = suggestions;
-      state.libraryEpisodes = episodes;
-    });
+    await metaStore.updateQualified(mutator);
     invalidateLibrary();
   },
   savePoster: (key, url) => saveCatalogPoster(key, url),
@@ -1360,15 +1403,11 @@ const rememberTitle = async (target: string, media: MediaInfo | undefined, flat:
   const fields = cacheFieldsFromMeta(meta);
   const episodeRows = episodesFromMeta(meta);
   const at = new Date().toISOString();
-  await store.update((state) => {
-    state.libraryMeta = {
-      ...state.libraryMeta,
-      [key]: { type, id: media.id!, source: "download", locked: true, matchedAt: at, backfilledAt: at, ...fields },
-    };
-    const suggestions = { ...state.librarySuggestions };
-    delete suggestions[key];
-    state.librarySuggestions = suggestions;
-    if (Object.keys(episodeRows).length) state.libraryEpisodes = { ...state.libraryEpisodes, ...episodeRows };
+  const destination = parseLibraryPath(key);
+  if (destination) await metaStore.update(destination.libraryId, (file, episodes) => {
+    file.meta[destination.relative] = { type, id: media.id!, source: "download", locked: true, matchedAt: at, backfilledAt: at, ...fields };
+    delete file.suggestions[destination.relative];
+    Object.assign(episodes, episodeRows);
   });
   saveCatalogPoster(key, meta?.poster ?? media.poster);
 };
@@ -1408,8 +1447,8 @@ app.get("/api/library/identity", asyncRoute(async (req, res) => {
   const files = await libraryFiles();
   const unitKey = matchKeyFor(resolved.key, files);
   const unit = titleUnits(files).find((item) => item.key === unitKey);
-  const records = store.libraryMeta();
-  const suggestions = store.librarySuggestions();
+  const records = metaStore.qualifiedMeta();
+  const suggestions = metaStore.qualifiedSuggestions();
   const known = knownTitleOf(resolved.key, records);
   if (needsBackfill(known)) scheduleMetaBackfill(known!.type, known!.id);
   const suggestion = suggestionFor(unitKey, suggestions);
@@ -1439,11 +1478,11 @@ app.post("/api/library/match", asyncRoute(async (req, res) => {
   const files = await libraryFiles();
   const unitKey = matchKeyFor(requestKey, files);
   if (typeof req.body.skipLookup === "boolean" && req.body.id === undefined) {
-    await store.update((state) => {
-      const next = { ...state.libraryMeta };
-      const current = next[requestKey];
+    const target = parseLibraryPath(requestKey);
+    if (target) await metaStore.update(target.libraryId, (file) => {
+      const current = file.meta[target.relative];
       if (req.body.skipLookup) {
-        next[requestKey] = {
+        file.meta[target.relative] = {
           type: current?.type ?? "movie",
           id: current?.id ?? "",
           source: current?.source ?? "user",
@@ -1456,9 +1495,8 @@ app.post("/api/library/match", asyncRoute(async (req, res) => {
         };
       } else if (current?.id) {
         const { skipLookup: _skip, ...kept } = current;
-        next[requestKey] = kept;
-      } else delete next[requestKey];
-      state.libraryMeta = next;
+        file.meta[target.relative] = kept;
+      } else delete file.meta[target.relative];
     });
     invalidateLibrary();
     log("INFO", req.body.skipLookup ? "Library path excluded from matching" : "Library path included in matching", { path: requested });
@@ -1480,24 +1518,22 @@ app.post("/api/library/match", asyncRoute(async (req, res) => {
   const at = new Date().toISOString();
   const episodeRow = type === "series" && episode != null
     ? episodeRows[episodeKey(type, id, season ?? 1, episode)] : undefined;
-  await store.update((state) => {
-    let next = { ...state.libraryMeta };
-    if (!id) next = unmatchAt(next, requestKey);
+  const target = parseLibraryPath(bindKey);
+  if (target) await metaStore.update(target.libraryId, (file, episodes) => {
+    const request = relativeKeyIn(target.libraryId, requestKey);
+    const unit = relativeKeyIn(target.libraryId, unitKey);
+    if (!id) file.meta = unmatchAt(file.meta, request ?? target.relative);
     else {
-      next[bindKey] = {
+      file.meta[target.relative] = {
         type, id, source: "user", locked: true, skipLookup: false,
         matchedAt: at, backfilledAt: at,
         ...fields,
         ...(type === "series" && episode != null ? { season: season ?? 1, episode } : {}),
       };
-      if (requestKey !== bindKey) delete next[requestKey];
+      if (request && request !== target.relative) delete file.meta[request];
     }
-    state.libraryMeta = next;
-    const suggestions = { ...state.librarySuggestions };
-    delete suggestions[unitKey];
-    delete suggestions[requestKey];
-    state.librarySuggestions = suggestions;
-    if (Object.keys(episodeRows).length) state.libraryEpisodes = { ...state.libraryEpisodes, ...episodeRows };
+    for (const key of [target.relative, request, unit]) if (key) delete file.suggestions[key];
+    Object.assign(episodes, episodeRows);
   });
   invalidateLibrary();
   await clearGeneratedArt(bindKey);
@@ -1509,8 +1545,8 @@ app.post("/api/library/match", asyncRoute(async (req, res) => {
 
 /** What the scan proposed and nobody has confirmed yet. */
 app.get("/api/library/suggestions", asyncRoute(async (_req, res) => {
-  const records = store.libraryMeta();
-  const items = Object.entries(store.librarySuggestions())
+  const records = metaStore.qualifiedMeta();
+  const items = Object.entries(metaStore.qualifiedSuggestions())
     .filter(([key, suggestion]) => suggestion.id && !knownTitleOf(key, records)?.id && !lookupSkipped(key, records))
     .map(([key, suggestion]) => ({ key: wirePath(key), label: posixBase(key), suggestion }))
     .sort((a, b) => b.suggestion.score - a.suggestion.score);
@@ -1521,12 +1557,11 @@ app.delete("/api/library/suggestion", asyncRoute(async (req, res) => {
   const resolved = requested ? await resolveLibraryPath(store.libraries(), requested) : undefined;
   if (!resolved) throw new AppError("Invalid path.", "err.invalidPath");
   const key = resolved.key;
-  await store.update((state) => {
-    const suggestions = { ...state.librarySuggestions };
-    const previous = suggestions[key];
+  const target = parseLibraryPath(key);
+  if (target) await metaStore.update(target.libraryId, (file) => {
+    const previous = file.suggestions[target.relative];
     // Kept as the memory of a searched unit, so the next scan walks past it.
-    suggestions[key] = scanMiss(previous?.type === "series" ? "series" : "movie");
-    state.librarySuggestions = suggestions;
+    file.suggestions[target.relative] = scanMiss(previous?.type === "series" ? "series" : "movie");
   });
   invalidateLibrary();
   res.status(204).end();
@@ -1842,10 +1877,11 @@ app.get("/api/diagnostics", asyncRoute(async (_req, res) => {
   });
 }));
 
-app.get("/api/settings/export", (_req, res) => {
+app.get("/api/settings/export", asyncRoute(async (_req, res) => {
+  await metaStore.flush();
   res.setHeader("content-disposition", `attachment; filename=stremio-offline-settings-${new Date().toISOString().slice(0, 10)}.json`);
   res.json(createSettingsBackup(store.settings(), store.addons()));
-});
+}));
 app.post("/api/settings/import", asyncRoute(async (req, res) => {
   const backup = parseSettingsBackup(req.body);
   // Manifests are loaded before a single write, so a broken backup changes no part of the configuration.
@@ -2295,6 +2331,6 @@ app.listen(port, "0.0.0.0", () => { markServerReady(); log("INFO", "Stremio Offl
 for (const signal of ["SIGTERM", "SIGINT"] as const) {
   process.once(signal, () => {
     log("INFO", "Shutting down", { signal });
-    void images.flush().catch(() => undefined).then(flushLog).finally(() => process.exit(0));
+    void Promise.allSettled([images.flush(), artworks.flush(), metaStore.flush()]).then(flushLog).finally(() => process.exit(0));
   });
 }

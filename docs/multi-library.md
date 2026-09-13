@@ -40,11 +40,37 @@ again after every rebase onto `main`.
 
 ### PR 2 — Metadata store split and cache policy
 
-- [ ] Not started.
+- [x] `LibraryMetaStore`: `data/library/<id>.json` with library-relative keys, the shared
+      `episodes.json`, debounced atomic per-library writes, `forget`, and the memoised
+      qualified view `index.ts` consumes.
+- [x] The migration hands the match history over and `state.json` keeps none of it: a v1
+      state after its key pass, and a state the libraries build already migrated, which
+      carried the rows inline. `index.ts` reads and writes through the store; the scan's
+      qualified mutator (`updateQualified`) lands in the file of the library it touched.
+- [x] Artwork per library (`data/artwork/<id>/`), `data/artwork/index.json` written on
+      save and on serve, `ARTWORK_CACHE_MB` eviction. The orphan sweep runs per library and
+      skips one whose root cannot be read. The migration moves the files the earlier layouts
+      left flat -- it used to delete the thumbnails it had just moved, which the freshness
+      guard hid in the test and not on a real install.
+- [x] `IMAGE_CACHE_TTL_DAYS` pass in `ImageProxy.evict()`: bytes of an image nobody
+      looked at for that long go while the cache is still under its cap, the id and the
+      address stay.
+- [x] `docs/configuration.md`, `.env.example` and both compose files carry
+      `ARTWORK_CACHE_MB` and `IMAGE_CACHE_TTL_DAYS`.
+- [x] Verification: `tsc`, the server and web unit suites, and both Playwright suites in
+      the CI image. The local Docker stack was rebuilt from the branch and boots against the
+      live data directory, `/api/status` healthy.
+- [ ] Moved to PR 3: `LIBRARY_META_TTL_DAYS` and `LibraryMetaRecord.refreshedAt`. §7 hangs
+      the freshness pass on the scan job, "only for libraries browsed since the last run",
+      and that is the library-scoped scan PR 3 builds -- the field and the pass it exists
+      for belong in one commit.
 
 ### PR 3 — Library types, CRUD API, folder picker
 
-- [ ] Not started.
+- [ ] `LIBRARY_META_TTL_DAYS` (default `14`) and `LibraryMetaRecord.refreshedAt`: a bound
+      series older than the TTL is re-fetched by the scan, one `metadata()` call at the
+      same pacing, only for libraries browsed since the last run. Carried over from PR 2.
+- [ ] The rest: not started.
 
 ### PR 4 — Library manager, root browse, cross-library move
 

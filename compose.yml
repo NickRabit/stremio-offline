@@ -21,6 +21,11 @@ services:
       LOG_RETENTION_DAYS: "${LOG_RETENTION_DAYS:-7}"
       # Disk the server-side artwork cache may take (Settings -> Privacy).
       IMAGE_CACHE_MB: "${IMAGE_CACHE_MB:-512}"
+      # Age at which a cached addon image is dropped even under that limit. 0 keeps the
+      # cap-only behaviour.
+      IMAGE_CACHE_TTL_DAYS: "${IMAGE_CACHE_TTL_DAYS:-0}"
+      # Disk the thumbnails generated for the library (data/artwork) may take.
+      ARTWORK_CACHE_MB: "${ARTWORK_CACHE_MB:-256}"
       ALLOW_PRIVATE_ADDONS: "${ALLOW_PRIVATE_ADDONS:-0}"
       ALLOW_ADDON_HOSTS: "${ALLOW_ADDON_HOSTS:-}"
       RESTRICTED_MODE: "${RESTRICTED_MODE:-0}"
