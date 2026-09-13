@@ -38,6 +38,8 @@ type GalleryImage = { url: string; label: string; shape: "poster" | "wide" };
 const hideBroken = (event: React.SyntheticEvent<HTMLImageElement>) => event.currentTarget.classList.add("broken");
 /** Addons name types freely; only the two we filter by have a translation. */
 const typeLabel = (type: string) => type === "movie" ? t("catalog.movies") : type === "series" ? t("catalog.series") : type;
+/** The same type as a parenthesised hint next to a catalogue's own name. */
+const typeTag = (type: string) => type === "movie" ? t("catalog.typeMovie") : type === "series" ? t("catalog.typeSeries") : type;
 
 
 const galleryFor = (item: Meta | null): GalleryImage[] => {
@@ -969,7 +971,7 @@ export function App() {
               <option value="">{t("catalog.allAddons")}</option>
               {[...new Map(searchable.map((item) => [item.addonKey, { name: item.addonName, globalSearch: item.globalSearch }])).entries()].map(([key, group]) => <optgroup key={key} label={`${group.name}${group.globalSearch ? "" : " ·"}`} title={group.globalSearch ? undefined : t("catalog.onlyWhenPicked")}>
                 <option value={`addon:${key}`} title={group.globalSearch ? undefined : t("catalog.onlyWhenPicked")}>{t("catalog.allCatalogs")}{group.globalSearch ? "" : " ·"}</option>
-                {searchable.filter((item) => item.addonKey === key).map((item) => <option key={`${item.type}:${item.id}`} value={`catalog:${key}:${item.type}:${item.id}`} title={item.globalSearch ? undefined : t("catalog.onlyWhenPicked")}>{item.name}{item.globalSearch ? "" : " ·"}</option>)}
+                {searchable.filter((item) => item.addonKey === key).map((item) => <option key={`${item.type}:${item.id}`} value={`catalog:${key}:${item.type}:${item.id}`} title={item.globalSearch ? undefined : t("catalog.onlyWhenPicked")}>{item.name} ({typeTag(item.type)}){item.globalSearch ? "" : " ·"}</option>)}
               </optgroup>)}
             </select></label>
             <button className="primary" disabled={busy}><Search/> {t("catalog.search")}</button>
@@ -989,7 +991,7 @@ export function App() {
                   <label className="catalog-filter"><span>{t("catalog.browse")}</span><select className="catalog-select" aria-label={t("catalog.browse")} value={selectedCatalog} onChange={(e) => setSelectedCatalog(e.target.value)}>
                     <option value={VIRTUAL.watchlist}>★ {t("catalog.myList")} ({watchlist.length})</option>
                     <option value={VIRTUAL.resume}>▸ {t("library.continueWatching")} ({resume.filter((item) => !item.key.startsWith("file:")).length})</option>
-                    {catalogs.map((catalog) => <option key={`${catalog.addonKey}:${catalog.type}:${catalog.id}`} value={`${catalog.addonKey}:${catalog.type}:${catalog.id}`}>{catalog.addonName} · {catalog.name || catalog.id} ({catalog.type === "series" ? t("catalog.seriesLower") : catalog.type})</option>)}
+                    {catalogs.map((catalog) => <option key={`${catalog.addonKey}:${catalog.type}:${catalog.id}`} value={`${catalog.addonKey}:${catalog.type}:${catalog.id}`}>{catalog.addonName} · {catalog.name || catalog.id} ({typeTag(catalog.type)})</option>)}
                   </select></label>
                   {genreOptions.length > 0 && <label><span>{t("catalog.genre")}</span><select aria-label={t("catalog.genre")} value={activeGenre} onChange={(e) => setGenre(e.target.value)}><option value="">{t("catalog.allGenres")}</option>{genreOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select></label>}
                 </>}
