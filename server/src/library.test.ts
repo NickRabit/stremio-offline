@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { browseDirectory, buildLibrary, emptiedFolders, listFolders, moveDestination, libraryFingerprint, numberedEpisode, isPathWithin, isVideo, listVideos, orphanedCatalogKeys, pageFiles, parseEpisode, parseSeason, remapPath, resolveInside, sortFiles, summarize } from "./library.js";
+import { browseDirectory, buildLibrary, describePath, emptiedFolders, listFolders, moveDestination, libraryFingerprint, numberedEpisode, isPathWithin, isVideo, listVideos, orphanedCatalogKeys, pageFiles, parseEpisode, parseSeason, remapPath, resolveInside, sortFiles, summarize } from "./library.js";
 
 const file = (relative: string, size = 100, modified = "2026-01-01T00:00:00.000Z") => ({ relative, size, modified });
 
@@ -288,6 +288,35 @@ test("the folder of the last deleted video is emptied up the tree", async () => 
 
     await writeFile(path.join(root, "Přátelé", "special.mkv"), "x");
     assert.deepEqual(await emptiedFolders(root, episode), [season], "the show folder still holds a video");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("a folder another library owns is carved out of every walk", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "stremio-carve-"));
+  try {
+    await mkdir(path.join(root, "Inbox", "Seriály", "Show"), { recursive: true });
+    await mkdir(path.join(root, "Filmy"), { recursive: true });
+    await writeFile(path.join(root, "Filmy", "Duna.mkv"), "x");
+    await writeFile(path.join(root, "Inbox", "volný.mkv"), "x");
+    await writeFile(path.join(root, "Inbox", "Seriály", "Show", "01.mkv"), "x");
+    const exclude = new Set(["Inbox/Seriály"]);
+
+    assert.deepEqual(
+      (await listVideos(root, "", 0, exclude)).map((entry) => entry.relative).sort(),
+      ["Filmy/Duna.mkv", "Inbox/volný.mkv"],
+    );
+
+    const browsed = await browseDirectory(root, "Inbox", "", 0, 20, "name", false, "", undefined, exclude);
+    assert.deepEqual(browsed.items.map((item) => item.path), ["Inbox/volný.mkv"]);
+    assert.deepEqual(await listFolders(root, "Inbox", exclude), [], "the destination picker does not offer it either");
+    assert.equal(await describePath(root, "Inbox/Seriály", exclude), undefined);
+
+    await rm(path.join(root, "Inbox", "volný.mkv"));
+    assert.deepEqual(await listVideos(root, "Inbox", 0, exclude), [], "the parent's own content is gone");
+    assert.deepEqual((await listVideos(root, "Inbox")).map((entry) => entry.relative), ["Inbox/Seriály/Show/01.mkv"],
+      "and the child library's file is the only thing left in it");
+    assert.deepEqual(await emptiedFolders(root, "Inbox/volný.mkv", exclude), [],
+      "so a folder holding another library is never emptied, or the delete would take that library with it");
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

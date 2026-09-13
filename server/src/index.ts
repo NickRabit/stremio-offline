@@ -42,7 +42,7 @@ import type { MediaInfo } from "./naming.js";
 import { defaultDownloadSettings, deviceFilename, normalizeDownloadSettings, safeName } from "./naming.js";
 import { LANGUAGE_NAMES, isUiLanguage, normalizeLanguage } from "./language.js";
 import { AppError, messageKeyOf } from "./errors.js";
-import { libraryPath, parseLibraryPath, posixBase, posixDir, posixJoin, relativeWithin, resolveLibraryPath, toFs } from "./libraries.js";
+import { carveOuts, libraryPath, parseLibraryPath, posixBase, posixDir, posixJoin, relativeWithin, resolveLibraryPath, toFs, type LibraryRecord } from "./libraries.js";
 import { migrateStateFile } from "./library-migrate.js";
 import { LibraryMetaStore } from "./library-meta-store.js";
 import { artworks } from "./artwork-cache.js";
@@ -639,6 +639,9 @@ const pruneDeviceDownloadTickets = () => {
  *  inside the server is a qualified key; the client still speaks relative paths and
  *  `wirePath` is the single place that turns one back into the other. */
 const primaryLibrary = () => store.libraries()[0]!;
+/** Folders inside this library that another library owns. The walk, the pickers and
+ *  the prune all stop at them, or a delete would take the other library with it. */
+const carveOutsOf = (library: LibraryRecord) => new Set(carveOuts(store.libraries(), library));
 const libraryKey = (relative: string) => libraryPath(primaryLibrary().id, relative);
 const wirePath = (key: string) => relativeWithin(primaryLibrary().id, key);
 const mediaPath = (key: string, ...rest: string[]) => path.join(primaryLibrary().root, toFs(posixJoin(relativeWithin(primaryLibrary().id, key), ...rest)));
@@ -664,7 +667,8 @@ let videoCache: { at: number; files: Awaited<ReturnType<typeof listVideos>> } | 
 const invalidateLibrary = () => { libraryCache = undefined; videoCache = undefined; unitCache = undefined; };
 const libraryFiles = async () => {
   if (videoCache && Date.now() - videoCache.at < 30_000) return videoCache.files;
-  const files = (await listVideos(primaryLibrary().root)).map((file) => ({ ...file, relative: libraryKey(file.relative) }));
+  const files = (await listVideos(primaryLibrary().root, "", 0, carveOutsOf(primaryLibrary())))
+    .map((file) => ({ ...file, relative: libraryKey(file.relative) }));
   videoCache = { at: Date.now(), files };
   return files;
 };
@@ -681,7 +685,7 @@ const libraryUnits = async (): Promise<TitleUnit[]> => {
 };
 const libraryEntries = async () => {
   if (libraryCache && Date.now() - libraryCache.at < 30_000) return libraryCache.entries;
-  const entries = await scanLibrary(primaryLibrary().root);
+  const entries = await scanLibrary(primaryLibrary().root, carveOutsOf(primaryLibrary()));
   const known = metaStore.qualifiedMeta();
   for (const entry of entries) {
     const record = knownTitleOf(libraryKey(entry.key), known);
@@ -927,11 +931,12 @@ function scheduleFolderArtwork(key: string) {
     if (await catalogPosterIfBound(key, target)) return;
     if (await locateFolderArtwork(key)) return;
     if (await catalogPosterIfBound(key, target)) return;
-    const inside = await browseDirectory(primaryLibrary().root, relativeWithin(primaryLibrary().id, key), "", 0, 20);
+    const inside = await browseDirectory(primaryLibrary().root, relativeWithin(primaryLibrary().id, key), "", 0, 20,
+      "name", false, "", undefined, carveOutsOf(primaryLibrary()));
     let first = inside.items.find((item) => item.kind === "file");
     if (!first) {
       const sub = inside.items.find((item) => item.kind === "folder");
-      if (sub) first = (await browseDirectory(primaryLibrary().root, sub.path, "", 0, 20)).items.find((item) => item.kind === "file");
+      if (sub) first = (await browseDirectory(primaryLibrary().root, sub.path, "", 0, 20, "name", false, "", undefined, carveOutsOf(primaryLibrary()))).items.find((item) => item.kind === "file");
     }
     if (!first) return;
     const info = await playback.inspect({ url: `file://${first.path}` }).catch(() => undefined);
@@ -968,7 +973,7 @@ async function sweepArtwork() {
         valid.add(path.basename(dataArtworkFile(`dir:${parts.slice(0, depth).join("/")}`)));
       }
     };
-    for (const entry of await scanLibrary(library.root)) {
+    for (const entry of await scanLibrary(library.root, carveOutsOf(library))) {
       valid.add(path.basename(dataArtworkFile(libraryPath(library.id, entry.key))));
       for (const file of entry.files) remember(libraryPath(library.id, file.path));
     }
@@ -1086,7 +1091,7 @@ app.get("/api/library/resume", asyncRoute(async (req, res) => {
   const query = String(req.query.query ?? "").trim().toLocaleLowerCase();
   const entries = Object.entries(store.progress()).filter(([key, entry]) => key.startsWith("file:") && entry.path);
   const described = await Promise.all(entries.map(async ([, entry]) => {
-    const item = await describePath(primaryLibrary().root, wirePath(entry.path!));
+    const item = await describePath(primaryLibrary().root, wirePath(entry.path!), carveOutsOf(primaryLibrary()));
     if (!item || item.kind !== "file") return [];
     return [{ ...item, label: entry.title || item.label, modified: entry.updatedAt,
       progress: { position: entry.position, duration: entry.duration }, favorite: favorites.has(libraryKey(item.path)) }];
@@ -1109,7 +1114,7 @@ app.get("/api/library/resume", asyncRoute(async (req, res) => {
 app.get("/api/library/favorites", asyncRoute(async (req, res) => {
   const sorts = new Set(["name", "added", "size", "random"]);
   const sort = sorts.has(String(req.query.sort)) ? String(req.query.sort) as "name" : "name";
-  const described = await Promise.all(store.favorites().map((key) => describePath(primaryLibrary().root, wirePath(key))));
+  const described = await Promise.all(store.favorites().map((key) => describePath(primaryLibrary().root, wirePath(key), carveOutsOf(primaryLibrary()))));
   // Paths that disappeared meanwhile are skipped but not dropped from the list:
   // the disk may be temporarily unavailable, and losing favourites over that is worse.
   const present = described.filter(Boolean) as NonNullable<typeof described[number]>[];
@@ -1139,7 +1144,7 @@ app.get("/api/library/browse", asyncRoute(async (req, res) => {
   const favoritePaths = onlyFavorites ? new Set(store.favorites().map(wirePath)) : undefined;
   void sweepArtwork();
   const result = await browseDirectory(primaryLibrary().root, relative, String(req.query.query ?? ""),
-    Math.max(0, Number(req.query.skip) || 0), limit, sort, req.query.order === "desc", String(req.query.seed ?? ""), favoritePaths);
+    Math.max(0, Number(req.query.skip) || 0), limit, sort, req.query.order === "desc", String(req.query.seed ?? ""), favoritePaths, carveOutsOf(primaryLibrary()));
   // Missing thumbnails are produced in the background; the client asks for the page again shortly.
   const items = await Promise.all(result.items.map(async (item) => {
     if (item.kind === "folder") {
@@ -1231,7 +1236,7 @@ const relocateArtwork = async (items: string[], relative: string, nextRelative: 
 /** The folder the last video just left is litter, so it goes too -- up the tree for as long
  *  as the parent holds nothing to watch either. */
 const pruneEmptiedFolders = async (key: string) => {
-  const gone = await emptiedFolders(primaryLibrary().root, wirePath(key));
+  const gone = await emptiedFolders(primaryLibrary().root, wirePath(key), carveOutsOf(primaryLibrary()));
   for (const folder of gone) {
     const folderKey = libraryKey(folder);
     await rm(mediaPath(folderKey), { recursive: true, force: true });
@@ -1286,7 +1291,7 @@ app.get("/api/library/folders", asyncRoute(async (req, res) => {
   const relative = String(req.query.path ?? "").trim();
   const resolved = await resolveLibraryPath(store.libraries(), relative);
   if (!resolved) throw new AppError("Invalid path.", "err.invalidPath");
-  res.json({ path: relative, folders: await listFolders(primaryLibrary().root, resolved.relative) });
+  res.json({ path: relative, folders: await listFolders(primaryLibrary().root, resolved.relative, carveOutsOf(primaryLibrary())) });
 }));
 
 app.post("/api/library/move", asyncRoute(async (req, res) => {

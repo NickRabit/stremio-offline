@@ -80,8 +80,11 @@ again after every rebase onto `main`.
       boundaries alone. The scan hands the walk over to the host (`units()`), because the
       units of a typed library come from that library's file list; every unit key stays
       qualified, so they flow into `searchAll` and `scoreHit` as `expectedKind` unchanged.
-- [ ] Carve-outs: `listVideos`, `browseDirectory`, `listFolders`, `emptiedFolders` and
-      `describePath` take an `exclude` set, and every call site passes `carveOuts()`.
+- [x] Carve-outs: `listVideos`, `browseDirectory`, `listFolders`, `emptiedFolders` and
+      `describePath` take an `exclude` set and every call site passes `carveOuts()`. The
+      prune stopped at a folder that is, or holds, a carve-out: the parent no longer counts
+      the child library's videos, so without the guard it would delete the folder the child
+      lives in.
 - [ ] The walk covers every enabled and reachable library, `mediaPath` resolves through the
       library the key names, the autoscan fingerprint is per library, and a scan accepts
       `{ libraryId }`.

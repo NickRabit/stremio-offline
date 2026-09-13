@@ -98,6 +98,14 @@ export function isPathWithin(value: string, parent: string): boolean {
   return Boolean(parent) && SEPARATORS.some((separator) => value.startsWith(`${parent}${separator}`));
 }
 
+/** True when `folder` is a carve-out itself or holds one: deleting it would delete
+ *  another library. */
+function excludedUnder(exclude: ReadonlySet<string> | undefined, folder: string): boolean {
+  if (!exclude?.size) return false;
+  for (const path of exclude) if (isPathWithin(path, folder)) return true;
+  return false;
+}
+
 /** Catalogue titles nothing in the library points at once the path is deleted.
  * What another path still holds -- a series split across two folders, say -- stays:
  * deleting one of them does not mean the title left the library. */
@@ -113,13 +121,16 @@ export function orphanedCatalogKeys(meta: Record<string, { type: string; id: str
 
 /** Folders on the way up from a removed item that hold no video any more.
  * A folder whose last film is gone is litter, even when a subtitle or a poster stayed behind,
- * so the whole folder goes rather than an empty shell of it. Ordered deepest first. */
-export async function emptiedFolders(root: string, relative: string): Promise<string[]> {
+ * so the whole folder goes rather than an empty shell of it. Ordered deepest first.
+ * A folder that holds another library is never emptied: deleting it would delete that
+ * library, so the walk stops there whether or not it holds videos of its own. */
+export async function emptiedFolders(root: string, relative: string, exclude?: ReadonlySet<string>): Promise<string[]> {
   const gone: string[] = [];
   let folder = posixDir(relative);
   while (folder) {
     if (!resolveInside(root, folder)) break;
-    if ((await listVideos(root, folder)).length) break;
+    if (excludedUnder(exclude, folder)) break;
+    if ((await listVideos(root, folder, 0, exclude)).length) break;
     gone.push(folder);
     folder = posixDir(folder);
   }
@@ -128,7 +139,7 @@ export async function emptiedFolders(root: string, relative: string): Promise<st
 
 /** Subfolders of one folder. The destination picker lists these: unlike browsing, a folder
  *  holding no video is still somewhere an item can be moved to, so nothing is filtered out. */
-export async function listFolders(root: string, relative: string): Promise<{ path: string; name: string }[]> {
+export async function listFolders(root: string, relative: string, exclude?: ReadonlySet<string>): Promise<{ path: string; name: string }[]> {
   const target = resolveInside(root, relative);
   if (!target) return [];
   let entries;
@@ -136,6 +147,7 @@ export async function listFolders(root: string, relative: string): Promise<{ pat
   return entries
     .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
     .map((entry) => ({ path: posixJoin(relative, entry.name), name: entry.name }))
+    .filter((entry) => !exclude?.has(entry.path))
     .sort((a, b) => a.name.localeCompare(b.name, "cs"));
 }
 
@@ -154,8 +166,9 @@ export function moveDestination(relative: string, folder: string): { path: strin
 
 export interface FoundFile { relative: string; size: number; modified: string }
 
-/** Every video under root, same walk `scanLibrary` uses. Depth cap 8, skip dotfiles. */
-export async function listVideos(root: string, relative = "", depth = 0): Promise<FoundFile[]> {
+/** Every video under root, same walk `scanLibrary` uses. Depth cap 8, skip dotfiles.
+ *  `exclude` holds library-relative folders another library owns: they are never entered. */
+export async function listVideos(root: string, relative = "", depth = 0, exclude?: ReadonlySet<string>): Promise<FoundFile[]> {
   // The structure is the user's own: downloads/series/Show/01 serie/episode.mkv and deeper.
   if (depth > 8) return [];
   let entries;
@@ -165,7 +178,11 @@ export async function listVideos(root: string, relative = "", depth = 0): Promis
   for (const entry of entries) {
     if (entry.name.startsWith(".")) continue;
     const next = posixJoin(relative, entry.name);
-    if (entry.isDirectory()) { found.push(...await listVideos(root, next, depth + 1)); continue; }
+    if (entry.isDirectory()) {
+      if (exclude?.has(next)) continue;
+      found.push(...await listVideos(root, next, depth + 1, exclude));
+      continue;
+    }
     if (!entry.isFile() || !isVideo(entry.name)) continue;
     try {
       const info = await stat(path.join(root, toFs(next)));
@@ -225,8 +242,8 @@ export function buildLibrary(files: FoundFile[]): LibraryEntry[] {
   return entries.sort((a, b) => b.modified.localeCompare(a.modified));
 }
 
-export async function scanLibrary(root: string): Promise<LibraryEntry[]> {
-  return buildLibrary(await listVideos(root));
+export async function scanLibrary(root: string, exclude?: ReadonlySet<string>): Promise<LibraryEntry[]> {
+  return buildLibrary(await listVideos(root, "", 0, exclude));
 }
 
 export const summarize = ({ files, ...entry }: LibraryEntry): LibrarySummary => ({ ...entry, fileCount: files.length });
@@ -269,14 +286,15 @@ export function sortFiles<T extends { label: string; size: number; modified: str
 
 /** Describes one path as a list item. Used for the virtual favourites folder, whose items
  *  come from all over the tree. */
-export async function describePath(root: string, relative: string): Promise<BrowseItem | undefined> {
+export async function describePath(root: string, relative: string, exclude?: ReadonlySet<string>): Promise<BrowseItem | undefined> {
+  if (exclude?.has(relative)) return undefined;
   const target = resolveInside(root, relative);
   if (!target) return undefined;
   const info = await stat(target).catch(() => undefined);
   if (!info) return undefined;
   const name = posixBase(relative);
   if (info.isDirectory()) {
-    const inside = await listVideos(root, relative);
+    const inside = await listVideos(root, relative, 0, exclude);
     if (!inside.length) return undefined;
     return {
       kind: "folder", path: relative, name, fileCount: inside.length,
@@ -304,7 +322,8 @@ export interface BrowseResult { path: string; items: BrowseItem[]; total: number
 
 /** The contents of one folder: its subfolders and videos. It does not descend; that is what opening a folder is for. */
 export async function browseDirectory(root: string, relative: string, query = "", skip = 0, limit = 60,
-  sort: LibrarySort = "name", descending = false, seed = "", onlyPaths?: ReadonlySet<string>): Promise<BrowseResult> {
+  sort: LibrarySort = "name", descending = false, seed = "", onlyPaths?: ReadonlySet<string>,
+  exclude?: ReadonlySet<string>): Promise<BrowseResult> {
   const target = resolveInside(root, relative);
   if (!target) return { path: relative, items: [], total: 0 };
   let entries;
@@ -317,8 +336,9 @@ export async function browseDirectory(root: string, relative: string, query = ""
   for (const entry of entries) {
     if (entry.name.startsWith(".")) continue;
     const childRelative = posixJoin(relative, entry.name);
+    if (exclude?.has(childRelative)) continue;
     if (entry.isDirectory()) {
-      const inside = await listVideos(root, childRelative);
+      const inside = await listVideos(root, childRelative, 0, exclude);
       if (!inside.length) continue;
       if (needle && !entry.name.toLowerCase().includes(needle)) continue;
       folders.push({
