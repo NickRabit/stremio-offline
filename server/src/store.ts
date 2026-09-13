@@ -12,7 +12,7 @@ export type TileSize = "compact" | "small" | "medium" | "large";
 export interface Settings {
   concurrentDownloads: number; parallelPerProvider: number;
   /** Connections one file is split across. Above one, each part is fetched over its own range request. */
-  downloadSegments: number; uiLanguage: UiLanguage; audioLanguage: string; subtitleLanguage: string;
+  downloadSegments: number; uiLanguage: UiLanguage; audioLanguage: string; subtitleLanguage: string; downloadTitleLanguage: "ui" | string;
   mergeByName: boolean; streamSort: string; artworkLocation: "data" | "media"; trackProgress: boolean; showResumeRow: boolean;
   /** Look up metadata for titles copied into the download folder without asking. */
   libraryAutoScan: boolean;
@@ -49,7 +49,7 @@ interface State { addons: AddonRecord[]; settings: Settings; defaultsInstalled: 
   watchlist?: Record<string, { type: string; id: string; name: string; poster?: string; addedAt: string }>;
   /** The resume list: a title key against a position in seconds. */
   progress?: Record<string, { position: number; duration: number; title: string; path?: string; poster?: string; updatedAt: string }> }
-const initialState: State = { addons: [], settings: { concurrentDownloads: 1, parallelPerProvider: 1, downloadSegments: 2, uiLanguage: "en", audioLanguage: "en", subtitleLanguage: "en", mergeByName: true, streamSort: "recommended", artworkLocation: "data", trackProgress: true, showResumeRow: true, libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, addonRefreshHours: 24, catalogTileSize: "medium", libraryTileSize: "medium", realDebridToken: "" }, defaultsInstalled: false };
+const initialState: State = { addons: [], settings: { concurrentDownloads: 1, parallelPerProvider: 1, downloadSegments: 2, uiLanguage: "en", audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui", mergeByName: true, streamSort: "recommended", artworkLocation: "data", trackProgress: true, showResumeRow: true, libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, addonRefreshHours: 24, catalogTileSize: "medium", libraryTileSize: "medium", realDebridToken: "" }, defaultsInstalled: false };
 
 /** Settings written before the interface spoke anything but Czech. Defaulting them
  *  to the new English default would flip a running install on upgrade. */

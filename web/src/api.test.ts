@@ -92,8 +92,8 @@ describe("query building", () => {
 
   it("escapes identifiers that would otherwise break the path", async () => {
     fetchMock.mockResolvedValue(json({}));
-    await api.meta("series", "tt123:1:2");
-    expect(url()).toBe("/api/meta/series/tt123%3A1%3A2");
+    await api.meta("series", "tt123:1:2", "cs");
+    expect(url()).toBe("/api/meta/series/tt123%3A1%3A2?language=cs");
   });
 
   it("adds the addon filter to streams only when one is picked", async () => {

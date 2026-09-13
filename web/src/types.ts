@@ -12,6 +12,7 @@ export interface Catalog { addonKey: string; addonName: string; type: string; id
 export interface SearchableCatalog { addonKey: string; addonName: string; globalSearch: boolean; type: string; id: string; name: string }
 export interface Meta {
   id: string; type: string; name: string; poster?: string; background?: string; description?: string; releaseInfo?: string;
+  nameLanguage?: string;
   year?: string | number; genres?: string[]; videos?: Video[];
   addonName?: string; sources?: string[]; [key: string]: unknown;
 }
@@ -89,7 +90,7 @@ export interface ActiveStream {
   duration?: number; startedAt: string; idleSeconds: number; bytes: number; rate: number;
 }
 export interface Settings {
-  concurrentDownloads: number; parallelPerProvider: number; downloadSegments: number; uiLanguage: Locale; audioLanguage: string; subtitleLanguage: string;
+  concurrentDownloads: number; parallelPerProvider: number; downloadSegments: number; uiLanguage: Locale; audioLanguage: string; subtitleLanguage: string; downloadTitleLanguage: "ui" | string;
   mergeByName: boolean; streamSort: string; artworkLocation: "data" | "media"; trackProgress: boolean; showResumeRow: boolean; libraryAutoScan: boolean; libraryScanPauseOnDownload: boolean;
   secureMode: boolean;
   /** What the server writes down, as opposed to what the log view filters back out. */

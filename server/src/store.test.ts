@@ -26,6 +26,7 @@ test("an old addon state migrates to the default save rules", async () => {
     assert.equal(store.settings().catalogTileSize, "medium");
     assert.equal(store.settings().libraryTileSize, "medium");
     assert.equal(store.settings().realDebridToken, "");
+    assert.equal(store.settings().downloadTitleLanguage, "ui");
     assert.equal(store.addons()[0].globalSearch, true);
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
@@ -94,6 +95,7 @@ test("a fresh install starts in English", async () => {
     assert.equal(store.settings().uiLanguage, "en");
     assert.equal(store.settings().audioLanguage, "en");
     assert.equal(store.settings().subtitleLanguage, "en");
+    assert.equal(store.settings().downloadTitleLanguage, "ui");
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 

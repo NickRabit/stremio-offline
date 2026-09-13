@@ -5,6 +5,7 @@ import { validateRemoteUrl } from "./security.js";
 import { guardedFetch } from "./outbound.js";
 import { defaultDownloadSettings } from "./naming.js";
 import { log } from "./logger.js";
+import { normalizeLanguage } from "./language.js";
 
 const reasonOf = (error: unknown) => error instanceof Error ? error.message : String(error);
 
@@ -37,6 +38,23 @@ export async function loadAddon(rawUrl: string, role: AddonRole): Promise<AddonR
 }
 
 function baseUrl(addon: AddonRecord): URL { return new URL("./", addon.manifestUrl); }
+
+export function addonMetadataLanguage(addon: AddonRecord): string | undefined {
+  if (addon.manifest.id === "com.linvo.cinemeta") return "en";
+  const url = new URL(addon.manifestUrl);
+  for (const value of [url.searchParams.get("language"), url.searchParams.get("lang")]) {
+    const language = normalizeLanguage(value ?? undefined);
+    if (language) return language;
+  }
+  for (const segment of url.pathname.split("/")) {
+    try {
+      const config = JSON.parse(decodeURIComponent(segment)) as Record<string, unknown>;
+      const language = normalizeLanguage(typeof config.language === "string" ? config.language : undefined);
+      if (language) return language;
+    } catch { /* not a JSON configuration segment */ }
+  }
+  return undefined;
+}
 function resourceUrl(addon: AddonRecord, resource: string, type: string, id: string, extras?: Record<string, string | number>) {
   const base = baseUrl(addon);
   const parts = [resource, encodeURIComponent(type), encodeURIComponent(id)];
@@ -160,13 +178,19 @@ function fillMissingMeta(base: MetaItem, extra: MetaItem): MetaItem {
   };
 }
 
-export async function metadata(addons: AddonRecord[], type: string, id: string) {
+export async function metadata(addons: AddonRecord[], type: string, id: string, preferredLanguage?: string) {
   let best: MetaItem | null = null;
-  for (const addon of addons.filter((a) => a.enabled && a.role !== "source" && supports(a, "meta", type, id))) {
+  const candidates = addons.filter((a) => a.enabled && a.role !== "source" && supports(a, "meta", type, id));
+  const ordered = preferredLanguage
+    ? [...candidates.filter((addon) => addonMetadataLanguage(addon) === preferredLanguage), ...candidates.filter((addon) => addonMetadataLanguage(addon) !== preferredLanguage)]
+    : candidates;
+  for (const addon of ordered) {
     try {
       const response = await jsonFetch<{ meta?: MetaItem }>(resourceUrl(addon, "meta", type, id));
       if (!response.meta) continue;
-      best = best ? fillMissingMeta(best, response.meta) : response.meta;
+      const language = addonMetadataLanguage(addon);
+      const meta = { ...response.meta, ...(language ? { nameLanguage: language } : {}) };
+      best = best ? fillMissingMeta(best, meta) : meta;
       if (best.description) return best;
     } catch { /* try next metadata provider */ }
   }

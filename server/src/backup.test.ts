@@ -24,13 +24,14 @@ test("a backup keeps the settings, the order and the addon's sensitive URL", () 
 test("an import refuses a foreign format and normalises the values", () => {
   assert.throws(() => parseSettingsBackup({ format: "other", version: 1, settings: {}, addons: [] }), /not a Stremio Offline settings backup/);
   const parsed = parseSettingsBackup({
-    format: "stremio-offline-settings", version: 1, settings: { concurrentDownloads: 99, artworkLocation: "elsewhere" },
+    format: "stremio-offline-settings", version: 1, settings: { concurrentDownloads: 99, artworkLocation: "elsewhere", downloadTitleLanguage: "sk-SK" },
     addons: [{ manifestUrl: "https://example.com/manifest.json", role: "both", enabled: true, downloadSettings: {} }],
   });
   assert.equal(parsed.settings.concurrentDownloads, 8);
   assert.equal(parsed.settings.artworkLocation, "data");
   assert.equal(parsed.settings.realDebridToken, "");
   assert.equal(parsed.settings.libraryScanPauseOnDownload, false);
+  assert.equal(parsed.settings.downloadTitleLanguage, "sk");
   assert.deepEqual(parsed.addons[0].downloadSettings, defaultDownloadSettings());
   assert.equal(parsed.addons[0].globalSearch, true);
 });
