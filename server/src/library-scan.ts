@@ -301,6 +301,7 @@ export class LibraryScan {
       const meta = await this.opts.metadata(addons, unit.kind, prefixed);
       if (meta) return { called: true, accept: { item: { ...meta, type: meta.type || unit.kind }, score: 100, titleSimilarity: 1, autoEligible: true } };
     }
+    // Global-search opt-outs do not affect library matching.
     const found = await this.opts.searchAll(addons, parsed.query, unit.kind);
     const hits = found.items.filter((item) => item.name).map((item) => scoreHit(parsed, item, unit.kind));
     return { called: true, accept: autoAccept(hits), suggestion: pickSuggestion(hits) };

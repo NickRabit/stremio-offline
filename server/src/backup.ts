@@ -15,6 +15,7 @@ export interface BackupAddon {
   manifestUrl: string;
   role: AddonRole;
   enabled: boolean;
+  globalSearch: boolean;
   addedAt: string;
   downloadSettings: AddonDownloadSettings;
 }
@@ -38,8 +39,8 @@ export function createSettingsBackup(settings: Settings, addons: AddonRecord[]):
     version: BACKUP_VERSION,
     exportedAt: new Date().toISOString(),
     settings: structuredClone(settings),
-    addons: addons.map(({ manifestUrl, role, enabled, addedAt, downloadSettings }) => ({
-      manifestUrl, role, enabled, addedAt, downloadSettings: structuredClone(downloadSettings),
+    addons: addons.map(({ manifestUrl, role, enabled, globalSearch, addedAt, downloadSettings }) => ({
+      manifestUrl, role, enabled, globalSearch, addedAt, downloadSettings: structuredClone(downloadSettings),
     })),
   };
 }
@@ -91,6 +92,7 @@ export function parseSettingsBackup(value: unknown): Omit<SettingsBackup, "expor
       manifestUrl,
       role,
       enabled: typeof item.enabled === "boolean" ? item.enabled : true,
+      globalSearch: item.globalSearch !== false,
       addedAt: typeof item.addedAt === "string" && !Number.isNaN(Date.parse(item.addedAt)) ? item.addedAt : new Date().toISOString(),
       downloadSettings: normalizeDownloadSettings(item.downloadSettings),
     };

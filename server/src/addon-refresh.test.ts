@@ -8,7 +8,7 @@ const manifest = (over: Partial<StremioManifest> = {}): StremioManifest =>
   ({ id: "org.example", name: "Example", version: "1.0.0", resources: ["stream"], types: ["movie"], ...over }) as StremioManifest;
 
 const record = (over: Partial<AddonRecord> = {}): AddonRecord => ({
-  key: "a", manifestUrl: "https://example.test/manifest.json", role: "both", enabled: true,
+  key: "a", manifestUrl: "https://example.test/manifest.json", role: "both", enabled: true, globalSearch: true,
   addedAt: "2024-01-01T00:00:00.000Z", manifest: manifest(), downloadSettings: defaultDownloadSettings(), ...over,
 });
 

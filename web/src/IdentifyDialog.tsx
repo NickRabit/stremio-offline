@@ -46,7 +46,7 @@ export function IdentifyDialog({ path, onClose, onApplied }: { path: string; onC
       setScope(loaded.bound?.episode != null ? "file" : "unit");
       setSeason(loaded.parsed.season != null ? String(loaded.parsed.season) : "");
       setEpisode(loaded.parsed.episode != null ? String(loaded.parsed.episode) : "");
-      const result = await api.search(loaded.parsed.query || loaded.parsed.title, nextKind);
+      const result = await api.search(loaded.parsed.query || loaded.parsed.title, { type: nextKind });
       if (cancelled) return;
       setItems(result.items);
       setPicked(preselect(result.items, loaded.suggestion?.id ?? loaded.bound?.id));
@@ -82,7 +82,7 @@ export function IdentifyDialog({ path, onClose, onApplied }: { path: string; onC
     setBusy(true); setError("");
     try {
       const query = year.trim() ? `${title.trim()} ${year.trim()}` : title.trim();
-      const result = await api.search(query, kind);
+      const result = await api.search(query, { type: kind });
       setItems(result.items);
       setPicked(preselect(result.items, identity?.suggestion?.id ?? identity?.bound?.id));
     } catch (value) { setError(describeError(value)); }

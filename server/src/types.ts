@@ -8,6 +8,7 @@ export interface AddonRecord {
   manifestUrl: string;
   role: AddonRole;
   enabled: boolean;
+  globalSearch: boolean;
   addedAt: string;
   manifest: StremioManifest;
   downloadSettings: AddonDownloadSettings;

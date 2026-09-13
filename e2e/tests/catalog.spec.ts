@@ -38,6 +38,23 @@ test.describe("catalog", () => {
     await expect(page.getByRole("button", { name: /Zkušební film/ })).toHaveCount(0);
   });
 
+  test("searches inside one selected catalogue", async ({ page }) => {
+    await page.goto("/");
+    const scope = page.getByRole("combobox", { name: "Kde hledat" });
+    await scope.selectOption({ label: "Seriály" });
+    await page.getByPlaceholder("Hledat ve všech doplňcích naráz…").fill("Zkušební");
+    await page.getByRole("button", { name: "Vyhledat" }).click();
+
+    await expect(page.getByRole("button", { name: /Zkušební seriál/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Zkušební film/ })).toHaveCount(0);
+    // The locked filter offers exactly the catalogue's own type, so it can never
+    // claim a type the search is not using.
+    const type = page.getByRole("combobox", { name: "Typ" });
+    await expect(type).toBeDisabled();
+    await expect(type.locator("option")).toHaveCount(1);
+    await expect(type).toHaveValue("series");
+  });
+
   test("a search with no match says so instead of showing an empty grid", async ({ page }) => {
     await page.goto("/");
     await page.getByPlaceholder("Hledat ve všech doplňcích naráz…").fill("nic-takoveho-neexistuje");

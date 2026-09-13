@@ -31,7 +31,7 @@ export async function loadAddon(rawUrl: string, role: AddonRole): Promise<AddonR
   const manifest = await jsonFetch<StremioManifest>(url.toString());
   if (!manifest.id || !manifest.name || !manifest.version) throw new AppError("The manifest is missing id, name or version.", "err.manifestIncomplete");
   return {
-    key: randomUUID(), manifestUrl: url.toString(), role, enabled: true,
+    key: randomUUID(), manifestUrl: url.toString(), role, enabled: true, globalSearch: true,
     addedAt: new Date().toISOString(), manifest, downloadSettings: defaultDownloadSettings(),
   };
 }
@@ -76,10 +76,23 @@ function requiredExtras(definition: CatalogDefinition): string[] {
 }
 
 /** Catalogues worth querying: they support search and demand nothing we cannot supply. */
-export function searchableCatalogs(addons: AddonRecord[], type?: string, addonKey?: string) {
-  return addons.filter((addon) => addon.enabled && addon.role !== "source" && (!addonKey || addon.key === addonKey)).flatMap((addon) =>
+export interface SearchScope {
+  addonKey?: string;
+  catalogType?: string;
+  catalogId?: string;
+  respectGlobalSearch?: boolean;
+}
+
+export function searchableCatalogs(addons: AddonRecord[], type?: string, scope?: SearchScope) {
+  return addons.filter((addon) =>
+    addon.enabled
+    && addon.role !== "source"
+    && (!scope?.addonKey || addon.key === scope.addonKey)
+    && (!scope?.respectGlobalSearch || scope.addonKey || addon.globalSearch !== false))
+    .flatMap((addon) =>
     (addon.manifest.catalogs ?? [])
       .filter((definition) => (!type || definition.type === type) && declaresExtra(definition, "search"))
+      .filter((definition) => !scope?.catalogId || (definition.id === scope.catalogId && (!scope.catalogType || definition.type === scope.catalogType)))
       .filter((definition) => requiredExtras(definition).every((name) => name === "search"))
       .map((definition) => ({ addon, definition })));
 }
@@ -96,8 +109,8 @@ const decodeCursor = (cursor?: string): Record<string, number> => {
 const encodeCursor = (offsets: Record<string, number>) => Buffer.from(JSON.stringify(offsets)).toString("base64url");
 
 /** Stremio asks every addon at once; one slow or broken addon must not bring the rest down. */
-export async function searchAll(addons: AddonRecord[], query: string, type: string | undefined, cursor?: string, addonKey?: string): Promise<SearchResult> {
-  const targets = searchableCatalogs(addons, type, addonKey);
+export async function searchAll(addons: AddonRecord[], query: string, type: string | undefined, cursor?: string, scope?: SearchScope): Promise<SearchResult> {
+  const targets = searchableCatalogs(addons, type, scope);
   const offsets = decodeCursor(cursor);
   const nextOffsets: Record<string, number> = {};
 
