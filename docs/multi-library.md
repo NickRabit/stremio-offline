@@ -11,7 +11,10 @@
 ## Progress
 
 Implementation status. One line per slice; a slice is a commit on the task
-branch and leaves the tree buildable and tested.
+branch and leaves the tree buildable and tested. A slice is verified with the
+narrowest suites that cover it -- server unit tests, `tsc`, a single Playwright
+spec. The full build, unit and e2e suites run before the branch is pushed and
+again after every rebase onto `main`.
 
 ### PR 1 — Qualified paths, `libraries.ts`, migration
 
@@ -23,9 +26,12 @@ branch and leaves the tree buildable and tested.
       `wirePath`/`libraryKey` are the only translation points.
 - [x] Artwork re-keying in the same migration. Queue targets stay library-relative
       until per-library save rules land (PR 6); only keys in `state.json` are qualified.
-- [ ] Verification: build, unit suites, e2e upgrade spec. The Playwright fixture
-      seeds a v1 `state.json`, so every end-to-end run now boots through the migration;
-      a dedicated assertion on the migrated result belongs with the library chrome (PR 4).
+- [x] Verification: `tsc`, 412 server tests, the Playwright suite, and the built image
+      booted against a v1 `state.json` (migrated in place, backup kept, keys qualified,
+      `/api/status` healthy). The fixture seeds a v1 `state.json`, so every end-to-end run
+      boots through the migration; the dedicated assertion on the migrated result belongs
+      with the library chrome (PR 4). The settings baseline no longer reads the run's own
+      report count -- see the note under PR 4.
 
 ### PR 2 — Metadata store split and cache policy
 
@@ -38,6 +44,10 @@ branch and leaves the tree buildable and tested.
 ### PR 4 — Library manager, root browse, cross-library move
 
 - [ ] Not started.
+- [ ] Follow-up from PR 1: `e2e/tests/layout/screenshots.spec.ts` drops the diagnostics
+      report chip before the settings screenshot. The chip is per-run noise inside a masked
+      section, but its width decided whether the header wrapped at the narrow viewports, so
+      the baseline used to match only when the recorded run happened to report three digits.
 
 ### PR 5 — Operations queue and bulk selection
 
