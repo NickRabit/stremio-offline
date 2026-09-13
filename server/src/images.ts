@@ -46,6 +46,12 @@ const megabytes = (value: string | undefined, fallback: number) => {
   return (Number.isFinite(parsed) && parsed > 0 ? parsed : fallback) * 1024 * 1024;
 };
 
+/** `0`, the default, keeps the cache on its cap alone. */
+const days = (value: string | undefined) => {
+  const parsed = Number(value);
+  return (Number.isFinite(parsed) && parsed > 0 ? parsed : 0) * 24 * 60 * 60 * 1000;
+};
+
 export class ImageProxy {
   private index = new Map<string, Entry>();
   private inflight = new Map<string, Promise<Entry | undefined>>();
@@ -55,6 +61,7 @@ export class ImageProxy {
   constructor(
     private dir = path.join(process.env.DATA_DIR ?? "/data", "images"),
     private cap = megabytes(process.env.IMAGE_CACHE_MB, 512),
+    private ttlMs = days(process.env.IMAGE_CACHE_TTL_DAYS),
     private fetcher: (url: string, init: RequestInit) => Promise<Response> = guardedFetch,
   ) {}
 
@@ -211,25 +218,35 @@ export class ImageProxy {
     }
   }
 
-  /** Oldest first, down to four fifths of the cap so this does not run on every write. */
+  /** Oldest first, down to four fifths of the cap so this does not run on every write.
+   *  `IMAGE_CACHE_TTL_DAYS` also drops the bytes of anything not served for that long,
+   *  while the cache still sits under its cap. */
   private async evict() {
     let total = 0;
     for (const entry of this.index.values()) total += entry.bytes ?? 0;
-    if (total <= this.cap) return;
+    // The address stays, only the bytes go: the id the client holds keeps working.
+    const drop = async ([id, entry]: [string, Entry]) => {
+      await rm(this.path(id, entry.ext!), { force: true });
+      total -= entry.bytes ?? 0;
+      entry.ext = undefined;
+      entry.bytes = undefined;
+    };
+    const aged = this.ttlMs
+      ? [...this.index.entries()].filter(([, entry]) => entry.ext && Date.now() - entry.at > this.ttlMs)
+      : [];
+    for (const entry of aged) await drop(entry);
+    if (aged.length) log("INFO", "Cached images dropped past their age", { removed: aged.length });
+
     const stored = [...this.index.entries()].filter(([, entry]) => entry.ext).sort((a, b) => a[1].at - b[1].at);
     const target = this.cap * 0.8;
     let removed = 0;
-    for (const [id, entry] of stored) {
+    for (const entry of total > this.cap ? stored : []) {
       if (total <= target) break;
-      await rm(this.path(id, entry.ext!), { force: true });
-      total -= entry.bytes ?? 0;
+      await drop(entry);
       removed += 1;
-      // The address stays, only the bytes go: the id the client holds keeps working.
-      entry.ext = undefined;
-      entry.bytes = undefined;
     }
     if (removed) log("INFO", "Cached images dropped to stay under the limit", { removed });
-    this.save();
+    if (removed || aged.length) this.save();
   }
 
   get size() { return this.index.size; }

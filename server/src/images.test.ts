@@ -16,10 +16,10 @@ const REMOTE = "https://images.example/poster/tt1234.jpg?token=secret";
 const imageResponse = (body: Buffer = PNG, type = "image/png", status = 200) =>
   new Response(status === 200 ? body : null, { status, headers: { "content-type": type } });
 
-async function harness(responder: (url: string) => Promise<Response> = async () => imageResponse(), cap = 1024 * 1024) {
+async function harness(responder: (url: string) => Promise<Response> = async () => imageResponse(), cap = 1024 * 1024, ttlMs = 0) {
   const dir = await mkdtemp(path.join(os.tmpdir(), "stremio-images-"));
   const calls: string[] = [];
-  const proxy = new ImageProxy(dir, cap, async (url) => { calls.push(url); return responder(url); });
+  const proxy = new ImageProxy(dir, cap, ttlMs, async (url) => { calls.push(url); return responder(url); });
   await proxy.load();
   return { dir, proxy, calls };
 }
@@ -111,7 +111,7 @@ test("a restart keeps the link the page already holds working", async () => {
   await proxy.fetch(id);
   await proxy.flush();
 
-  const restarted = new ImageProxy(dir, 1024 * 1024, async () => { throw new Error("must not fetch again"); });
+  const restarted = new ImageProxy(dir, 1024 * 1024, 0, async () => { throw new Error("must not fetch again"); });
   await restarted.load();
   assert.equal(restarted.original(`/api/image/${id}`), REMOTE);
   assert.equal((await restarted.fetch(id))?.type, "image/png");
@@ -124,4 +124,28 @@ test("the cache stays under its limit and the addresses survive it", async () =>
   const files = (await readdir(dir)).filter((name) => name.endsWith(".jpg"));
   assert.ok(files.length < 4, `expected an eviction, found ${files.length} files`);
   assert.equal(proxy.original(links[0]!), "https://cdn.example/a.jpg");
+});
+
+test("an image nobody looks at any more goes on its own, whatever the limit", async () => {
+  const { proxy } = await harness(async () => imageResponse(Buffer.alloc(64, 7), "image/jpeg"), 1024 * 1024, 40);
+  const stale = proxy.proxied("https://cdn.example/stale.jpg")!.split("/").pop()!;
+  await proxy.fetch(stale);
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  const fresh = proxy.proxied("https://cdn.example/fresh.jpg")!.split("/").pop()!;
+  await proxy.fetch(fresh);
+  assert.equal(proxy.source(stale), "https://cdn.example/stale.jpg", "the link the page already holds keeps working");
+  assert.equal(await proxy.fetch(stale).then((image) => image?.type), "image/jpeg", "and the bytes come back on the next ask");
+  assert.deepEqual(proxy.proxied("https://cdn.example/stale.jpg"), `/api/image/${stale}`, "the id never changes");
+});
+
+test("an image served again survives its own age", async () => {
+  const { proxy } = await harness(async () => imageResponse(Buffer.alloc(64, 7), "image/jpeg"), 1024 * 1024, 40);
+  const id = proxy.proxied("https://cdn.example/kept.jpg")!.split("/").pop()!;
+  await proxy.fetch(id);
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  await proxy.fetch(id);
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  const other = proxy.proxied("https://cdn.example/other.jpg")!.split("/").pop()!;
+  await proxy.fetch(other);
+  assert.ok((await proxy.fetch(id))?.file, "a picture somebody keeps looking at is not the one dropped");
 });

@@ -41,10 +41,25 @@ load artwork straight from the provider again.
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `IMAGE_CACHE_MB` | `512` | Disk the cached artwork may take before the oldest images are dropped. |
+| `IMAGE_CACHE_TTL_DAYS` | `0` | Age at which a cached image is dropped even while the cache is under its limit. `0` keeps the limit as the only rule. |
 
 The first visit to a catalogue is slower, because the server is fetching those
 posters; after that they are served from the cache. Dropping an image only frees
 the bytes, never the link the page already holds.
+
+## Library artwork
+
+A picture that sits next to the media (`poster.jpg`, `folder.jpg`) is never
+touched: it belongs to the folder. What is capped here are the thumbnails the
+server generates itself — a frame out of the video, or the poster of the title a
+path is matched to. They live under `DATA_PATH/artwork/<library id>/`, so deleting
+a library deletes its thumbnails and nothing else.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `ARTWORK_CACHE_MB` | `256` | Disk those thumbnails may take before the least recently used are dropped. |
+
+A dropped thumbnail is generated again on the next visit; nothing else is lost.
 
 ## Addon access
 
