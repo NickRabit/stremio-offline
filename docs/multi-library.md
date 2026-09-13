@@ -67,10 +67,32 @@ again after every rebase onto `main`.
 
 ### PR 3 — Library types, CRUD API, folder picker
 
+- [x] `library-grants.ts`: `LIBRARY_ROOTS` with the download directory as its fallback, user
+      grants, deduplication with the operator's grant winning, and containment
+      (`grantingRoot`) that resolves symlinks on both sides and refuses a grant whose own
+      root does not exist -- resolving a missing mount to its nearest existing ancestor
+      would widen the grant to the directory above it.
+- [x] `library-probe.ts`: `unreachable`/`readOnly` decided by writing and removing a
+      dot-file, so a read-only mount, a wrong `PUID` and an ACL are told apart; every call
+      bounded by a 2 s deadline, cached for 30 s, coalesced per root, and invalidated when
+      an operation fails on I/O.
+- [ ] `titleUnits(files, type)` forces the kind for a typed library, and the scan passes
+      the library type to `searchAll` and `scoreHit` as `expectedKind`.
+- [ ] Carve-outs: `listVideos`, `browseDirectory`, `listFolders`, `emptiedFolders` and
+      `describePath` take an `exclude` set, and every call site passes `carveOuts()`.
+- [ ] The walk covers every enabled and reachable library, `mediaPath` resolves through the
+      library the key names, the autoscan fingerprint is per library, and a scan accepts
+      `{ libraryId }`.
+- [ ] `writeArtwork`, `readOnly` and `unreachable` through the artwork sink and the walk.
 - [ ] `LIBRARY_META_TTL_DAYS` (default `14`) and `LibraryMetaRecord.refreshedAt`: a bound
       series older than the TTL is re-fetched by the scan, one `metadata()` call at the
       same pacing, only for libraries browsed since the last run. Carried over from PR 2.
-- [ ] The rest: not started.
+- [ ] `/api/libraries` (list, create, patch, delete), `/api/libraries/browse`, the grant
+      endpoints, `/api/libraries/preview`, and the restricted-mode denials.
+- [ ] `LIBRARY_ROOTS` and `LIBRARY_META_TTL_DAYS` in `.env.example`, both compose files and
+      `docs/configuration.md`.
+- [ ] Verification: `tsc`, the server unit suites, and the Playwright suite before the
+      branch is pushed.
 
 ### PR 4 — Library manager, root browse, cross-library move
 

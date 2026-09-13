@@ -128,10 +128,10 @@ export async function resolveLibraryPath(libraries: LibraryRecord[], value: stri
 
   const root = path.resolve(library.root);
   const absolute = path.resolve(root, toFs(relative));
-  if (!inside(absolute, root)) return undefined;
+  if (!isInside(absolute, root)) return undefined;
   const [real, realRoot] = await Promise.all([realAncestor(absolute), realAncestor(root)]);
   if (!real || !realRoot) return undefined;
-  if (!inside(real, realRoot)) return undefined;
+  if (!isInside(real, realRoot)) return undefined;
   return { library, relative, key: libraryPath(library.id, relative), absolute };
 }
 
@@ -146,7 +146,7 @@ function normalize(value: string): string {
 
 /** The deepest existing ancestor of `target`, resolved. A path that does not exist yet
  *  is still guarded, through the directory it would be created in. */
-async function realAncestor(target: string): Promise<string | undefined> {
+export async function realAncestor(target: string): Promise<string | undefined> {
   let current = target;
   for (;;) {
     try { return await realpath(current); }
@@ -160,7 +160,7 @@ async function realAncestor(target: string): Promise<string | undefined> {
 
 /** Containment on absolute native paths. `path.relative` handles a drive letter and a
  *  UNC root without a colon split. */
-function inside(value: string, parent: string): boolean {
+export function isInside(value: string, parent: string): boolean {
   const relative = path.relative(parent, value);
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
