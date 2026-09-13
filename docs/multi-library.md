@@ -726,7 +726,7 @@ this work, not a nice-to-have:
 | `POST` | `/api/libraries/grants` | **New.** Record a user grant (desktop; the path comes from the native picker). Denied in restricted mode. |
 | `DELETE` | `/api/libraries/grants` | **New.** Revoke a user grant; libraries under it are disabled, never deleted. Denied in restricted mode. |
 | `POST` | `/api/libraries/preview` | **New.** `titleUnits` over a candidate root: title count and how many are already identified, with no addon call (§6). |
-| `GET` | `/api/library/browse` | Empty `path` lists libraries (or passes through with exactly one). Items may be `kind: "library"`. |
+| `GET` | `/api/library/browse` | Empty `path` lists libraries, or passes through when exactly one library is **configured** (§12 — not one enabled, not one reachable). Items may be `kind: "library"`. |
 | `GET` | `/api/library` | Summaries gain `libraryId`; keys are qualified. |
 | `POST` | `/api/library/move` | `folder` becomes a qualified target; cross-library moves allowed subject to §10. |
 | `POST` | `/api/library/folder` | **New.** Create a folder at a qualified path. |
@@ -794,14 +794,32 @@ migration that runs second is a migration that runs against half-loaded state.
    `data/library/episodes.json`.
 4. Re-key `data/artwork/*.jpg` into `data/artwork/<id>/`. The file name is
    `sha1(key).jpg` with no index (`dataArtworkFile` in `server/src/index.ts`), so
-   the old name cannot be inverted: build the mapping forward instead, from the
-   keys the migration already holds — every `libraryMeta` / `librarySuggestions`
-   key plus every path from one `listVideos(DOWNLOAD_DIR)` walk, each hashed both
-   bare and as `dir:<key>` — and rename only what that map covers.
-   **Unmapped files are left alone**, not deleted: they are the same orphans
-   `sweepArtwork` already collects, under its existing one-hour freshness guard.
-   A failure here is not fatal either; a missing thumbnail regenerates. Log how
-   many were mapped and how many were left.
+   the old name cannot be inverted — build the mapping forward instead, and build
+   it from **exactly the key shapes `sweepArtwork` considers valid**, or live
+   thumbnails will be dropped on the floor:
+
+   | Source | Key shape |
+   | --- | --- |
+   | each library entry (`libraryEntries()`, i.e. a top-level folder or a root-level file) | `entry.key`, hashed bare |
+   | each video from one `listVideos(DOWNLOAD_DIR)` walk | the file path, hashed bare |
+   | every **ancestor prefix** of each of those file paths | `dir:<prefix>`, hashed |
+   | each queued download job target, read from `data/downloads.json` | the same two shapes as a file path |
+
+   The ancestor row is the one that is easy to miss and expensive to get wrong:
+   folder thumbnails are keyed `dir:<path>` for paths that appear in no
+   `libraryMeta` key and in no `listVideos` result, because a folder is not a
+   file and need not be bound to anything. `sweepArtwork`'s `remember()` walks
+   those prefixes for precisely this reason; mirror it rather than reimplementing
+   it. Queued jobs matter for the same reason they do in the sweep: a poster is
+   saved when the job is queued, before the file exists.
+
+   Anything still sitting directly in `data/artwork/` once the map is applied is
+   by construction referenced by nothing — the map covers every key the sweep
+   would have called valid — so **delete it, under the sweep's own one-hour
+   freshness guard**. The migration has to finish this: after it, the sweep only
+   looks inside `data/artwork/<libraryId>/` (§8), so a file left at the old root
+   would never be collected by anything again. A failure here is not fatal; a
+   missing thumbnail regenerates. Log how many were mapped, how many removed.
 5. Rewrite `data/library-scan.json` paths, or reset it to idle when it is not
    running — a mid-scan migration may simply start over.
 6. `AddonDownloadSettings[kind].libraryId = ""` (the default), and
@@ -836,7 +854,7 @@ rewriting stored rows, so a library that comes back needs no repair:
 | --- | --- | --- | --- |
 | `defaultMovieLibrary` / `defaultSeriesLibrary` | cleared to `""`; `defaultLibrary()` then falls back to the first enabled library of the kind, then the first `mixed` | left pointing at it; the same fallback applies while it is away | cleared if the new type no longer matches the kind |
 | `AddonDownloadSettings[kind].libraryId` | rewritten to `""` (= default) and logged, one line per addon | left as it is; the download resolves through the fallback for now | left as it is if still eligible (`mixed` always is), else rewritten to `""` and logged |
-| Queued download jobs | jobs whose target resolves into it are **paused** with a `pauseReason` of `"library"`, never failed and never silently redirected | same | unaffected; the type gate applies to placement, not to a job already placed |
+| Queued download jobs | jobs whose target resolves into it are **paused** with `pauseReason: "library"`, never failed and never silently redirected | same | unaffected; the type gate applies to placement, not to a job already placed |
 | Running ops job | cancelled at the current item; completed items keep their results | paused, resumed when the library returns | unaffected |
 | `favorites`, `progress`, `libraryMeta` | kept unless `?forget=1`; the metadata file and artwork directory go only on an explicit forget | kept, hidden from listings (§12) | kept |
 
@@ -848,6 +866,14 @@ Two rules behind that table:
 - **A paused download is honest; a redirected one is not.** Sending a job to the
   fallback library because its real target vanished would scatter a season across
   two roots. Pause, say why, and let the user decide.
+
+`"library"` is a **new** `PauseReason`. Today the union is `"user" | "storage"`
+in `server/src/downloads.ts` and is mirrored by hand in `web/src/types.ts`;
+widen both, or the value is an illegal literal the compiler rejects. It also
+needs a row in the queue UI and a key in `en.ts` / `cs.ts`
+(`downloads.pausedLibrary`), and — unlike `"storage"` — it must **not** halt the
+whole queue: only the jobs bound to that library stop, and they resume on their
+own when it comes back, the way a `"storage"` pause resumes when space returns.
 
 `defaultLibrary()` must therefore never assume its stored id resolves, and the
 download path must handle "the rule names a library that is not available right
@@ -1141,6 +1167,8 @@ available* is the spec:
 - Deleting rewrites addon rules that named it to `""`; disabling does not.
 - A queued job whose target resolves into a vanishing library is paused with
   `pauseReason: "library"` — never failed, never redirected to the fallback.
+- That pause is per job, not a queue halt: jobs targeting other libraries keep
+  running, and the paused ones resume by themselves when the library returns.
 - Changing a `mixed` library to `movie` clears a `series` rule that named it and
   leaves a `movie` one alone.
 - `?forget=1` removes the metadata file and artwork directory; without it both
@@ -1176,6 +1204,13 @@ available* is the spec:
 - A state that already carries `schemaVersion: 2` is left byte-identical.
 - A fresh install (no `state.json`) produces one library without running the
   migration path at all.
+- Artwork mapping covers all four key shapes: a bound title's thumbnail, a loose
+  file's thumbnail, a **folder** thumbnail whose path appears in no `libraryMeta`
+  key (the ancestor case), and a poster saved for a job still in
+  `data/downloads.json`. Each lands at its new hash under
+  `data/artwork/<id>/`.
+- After the run, `data/artwork/` holds no loose `*.jpg` — anything unmapped and
+  older than the freshness guard is gone, anything newer is kept.
 
 `library-autoscan.test.ts` (extend)
 
