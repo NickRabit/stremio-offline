@@ -31,9 +31,7 @@ export async function migrateStateFile(dataDir: string, downloadDir: string): Pr
   if ((state.schemaVersion ?? 1) >= SCHEMA_VERSION) return nothing();
 
   // A rollback to an older image is realistic, so the untouched v1 file is kept.
-  await copyFile(file, `${file}.v1.bak`).catch((error: NodeJS.ErrnoException) => {
-    if (error.code !== "EEXIST") throw error;
-  });
+  await copyFile(file, `${file}.v1.bak`);
   const summary = await migrateLibraries(state, { dataDir, downloadDir });
   const temp = `${file}.tmp`;
   await writeFile(temp, JSON.stringify(state, null, 2), { mode: 0o600 });
