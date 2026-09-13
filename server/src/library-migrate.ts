@@ -94,6 +94,10 @@ async function legacyLibrary(root: string): Promise<LibraryRecord> {
  *  accepts. Anything left over was referenced by nothing. */
 async function rekeyArtwork(opts: { dataDir: string; downloadDir: string }, libraryId: string): Promise<{ mapped: number; removed: number }> {
   const dir = path.join(opts.dataDir, "artwork");
+  // `listVideos` answers an unreadable root with an empty tree, so a mount that is down
+  // would make every stored thumbnail look like an orphan. Nothing is mapped and nothing
+  // is removed while the root is away; the next start does the work.
+  if (!await access(opts.downloadDir, constants.R_OK).then(() => true, () => false)) return { mapped: 0, removed: 0 };
   const names = new Set(await readdir(dir).catch(() => [] as string[]));
   if (!names.size) return { mapped: 0, removed: 0 };
 

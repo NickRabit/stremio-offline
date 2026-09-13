@@ -129,3 +129,21 @@ test("an unreachable or read-only root comes up flagged rather than failing", as
   assert.equal(summary.migrated, true);
   await rm(dataDir, { recursive: true, force: true });
 });
+
+test("a root that is away keeps the thumbnails it had", async () => {
+  const dataDir = await mkdtemp(path.join(tmpdir(), "migrate-"));
+  const missing = path.join(dataDir, "gone");
+  const artworkDir = path.join(dataDir, "artwork");
+  await mkdir(artworkDir, { recursive: true });
+  const poster = path.join(artworkDir, artworkName("Film.mkv"));
+  await writeFile(poster, "poster");
+  const old = new Date(Date.now() - 2 * 60 * 60_000);
+  await utimes(poster, old, old);
+  await writeFile(path.join(dataDir, "state.json"), JSON.stringify(v1State()));
+  try {
+    const summary = await migrateStateFile(dataDir, missing);
+    assert.equal(summary.migrated, true);
+    assert.deepEqual(summary.artwork, { mapped: 0, removed: 0 }, "an unreachable root maps and removes nothing");
+    assert.equal((await stat(poster)).size, 6, "the thumbnail is still there");
+  } finally { await rm(dataDir, { recursive: true, force: true }); }
+});
