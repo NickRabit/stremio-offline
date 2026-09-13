@@ -166,24 +166,32 @@ export function moveDestination(relative: string, folder: string): { path: strin
 
 export interface FoundFile { relative: string; size: number; modified: string }
 
+/** A ceiling for a caller that only needs an estimate. `files` counts down and `until` is a
+ *  `Date.now()` deadline; either reaching zero ends the walk where it stands. */
+export interface WalkBudget { files: number; until: number }
+
 /** Every video under root, same walk `scanLibrary` uses. Depth cap 8, skip dotfiles.
- *  `exclude` holds library-relative folders another library owns: they are never entered. */
-export async function listVideos(root: string, relative = "", depth = 0, exclude?: ReadonlySet<string>): Promise<FoundFile[]> {
+ *  `exclude` holds library-relative folders another library owns: they are never entered.
+ *  `budget` bounds a walk over a tree nobody has vouched for yet (§6's add preview). */
+export async function listVideos(root: string, relative = "", depth = 0, exclude?: ReadonlySet<string>, budget?: WalkBudget): Promise<FoundFile[]> {
   // The structure is the user's own: downloads/series/Show/01 serie/episode.mkv and deeper.
   if (depth > 8) return [];
+  if (budget && (budget.files <= 0 || Date.now() > budget.until)) return [];
   let entries;
   try { entries = await readdir(path.join(root, toFs(relative)), { withFileTypes: true }); }
   catch { return []; }
   const found: FoundFile[] = [];
   for (const entry of entries) {
+    if (budget && (budget.files <= 0 || Date.now() > budget.until)) break;
     if (entry.name.startsWith(".")) continue;
     const next = posixJoin(relative, entry.name);
     if (entry.isDirectory()) {
       if (exclude?.has(next)) continue;
-      found.push(...await listVideos(root, next, depth + 1, exclude));
+      found.push(...await listVideos(root, next, depth + 1, exclude, budget));
       continue;
     }
     if (!entry.isFile() || !isVideo(entry.name)) continue;
+    if (budget) budget.files -= 1;
     try {
       const info = await stat(path.join(root, toFs(next)));
       found.push({ relative: next, size: info.size, modified: info.mtime.toISOString() });

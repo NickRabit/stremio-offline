@@ -211,6 +211,22 @@ test("listVideos walks the same tree scanLibrary uses", async () => {
   }
 });
 
+test("a walk with a budget stops where the budget ends", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "stremio-videos-"));
+  try {
+    await mkdir(path.join(root, "Show"), { recursive: true });
+    for (let index = 0; index < 5; index += 1) await writeFile(path.join(root, "Show", `${index}.mkv`), "");
+    const capped = await listVideos(root, "", 0, undefined, { files: 2, until: Date.now() + 60_000 });
+    assert.equal(capped.length, 2, "the file ceiling ends the walk");
+    const expired = await listVideos(root, "", 0, undefined, { files: 100, until: Date.now() - 1 });
+    assert.deepEqual(expired, [], "a deadline already past walks nothing");
+    const full = await listVideos(root);
+    assert.equal(full.length, 5, "without a budget the walk is unchanged");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("a deleted title loses its catalogue binding", () => {
   const meta = {
     "filmy/Duna": { type: "movie", id: "tt1160419" },
