@@ -33,8 +33,7 @@ const harness = async (overrides: Partial<LibraryScanOpts> = {}) => {
   const scan = new LibraryScan({
     dataDir,
     downloadDir: "/downloads",
-    listVideos: async () => [{ relative: "Foo/a.mkv", size: 1, modified: "2026-01-01T00:00:00.000Z" }],
-    titleUnits: () => [movie("Foo")],
+    units: async () => [movie("Foo")],
     searchAll: async (_addons, query) => {
       searches.push(query);
       return { items: [hit(query)] };
@@ -76,8 +75,7 @@ test("a unique title auto-accepts, deletes hashed art and saves the catalog post
 
 test("excluding a parent folder skips child title units", async () => {
   const h = await harness({
-    listVideos: async () => [{ relative: "Movies/Title/a.mkv", size: 1, modified: "2026-01-01T00:00:00.000Z" }],
-    titleUnits: () => [movie("Movies/Title")],
+    units: async () => [movie("Movies/Title")],
   });
   try {
     h.store.meta.Movies = { type: "movie", id: "", source: "user", skipLookup: true };
@@ -144,11 +142,7 @@ test("a user lock taken during search is not overwritten", async () => {
 
 test("load retries the in-flight key still listed in remaining", async () => {
   const h = await harness({
-    listVideos: async () => [
-      { relative: "Foo/a.mkv", size: 1, modified: "2026-01-01T00:00:00.000Z" },
-      { relative: "Bar/a.mkv", size: 1, modified: "2026-01-01T00:00:00.000Z" },
-    ],
-    titleUnits: () => [movie("Foo"), movie("Bar")],
+    units: async () => [movie("Foo"), movie("Bar")],
     searchAll: async (_addons, query) => ({ items: [hit(query, query === "Foo" ? "tt-foo" : "tt-bar")] }),
   });
   try {
@@ -230,7 +224,7 @@ test("a unit searched in vain is remembered and skipped, until a forced rescan",
 test("IMDb in the path is an exact metadata lookup without search", async () => {
   const lookups: string[] = [];
   const h = await harness({
-    titleUnits: () => [movie("Show {imdb-tt123}")],
+    units: async () => [movie("Show {imdb-tt123}")],
     pathExists: async () => true,
     metadata: async (_addons, type, id) => {
       lookups.push(`${type}:${id}`);
@@ -261,11 +255,7 @@ test("missing paths skip and persist without an addon call", async () => {
 test("a scan for one item leaves the rest of the library alone", async () => {
   const searches: string[] = [];
   const h = await harness({
-    listVideos: async () => [
-      { relative: "Foo/a.mkv", size: 1, modified: "2026-01-01T00:00:00.000Z" },
-      { relative: "Bar/b.mkv", size: 1, modified: "2026-01-01T00:00:00.000Z" },
-    ],
-    titleUnits: () => [movie("Foo"), movie("Bar")],
+    units: async () => [movie("Foo"), movie("Bar")],
     searchAll: async (_addons, query) => { searches.push(query); return { items: [] }; },
   });
   try {

@@ -76,8 +76,10 @@ again after every rebase onto `main`.
       dot-file, so a read-only mount, a wrong `PUID` and an ACL are told apart; every call
       bounded by a 2 s deadline, cached for 30 s, coalesced per root, and invalidated when
       an operation fails on I/O.
-- [ ] `titleUnits(files, type)` forces the kind for a typed library, and the scan passes
-      the library type to `searchAll` and `scoreHit` as `expectedKind`.
+- [x] `titleUnits(files, type)` forces the kind for a typed library and leaves the unit
+      boundaries alone. The scan hands the walk over to the host (`units()`), because the
+      units of a typed library come from that library's file list; every unit key stays
+      qualified, so they flow into `searchAll` and `scoreHit` as `expectedKind` unchanged.
 - [ ] Carve-outs: `listVideos`, `browseDirectory`, `listFolders`, `emptiedFolders` and
       `describePath` take an `exclude` set, and every call site passes `carveOuts()`.
 - [ ] The walk covers every enabled and reachable library, `mediaPath` resolves through the

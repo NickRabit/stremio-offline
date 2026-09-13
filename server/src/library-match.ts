@@ -1,5 +1,5 @@
 import { isPathWithin, isVideo, numberedEpisode, parseSeason, remapPath, type FoundFile } from "./library.js";
-import { posixBase } from "./libraries.js";
+import { posixBase, type LibraryType } from "./libraries.js";
 import { parseMediaPath, type ParsedMedia } from "./library-parse.js";
 import type { MetaItem } from "./types.js";
 
@@ -567,10 +567,14 @@ function walkContainer(index: DirIndex, dir: string, out: TitleUnit[]) {
   for (const child of index.children.get(dir) ?? []) classifyFolder(index, child, out);
 }
 
-export function titleUnits(files: FoundFile[]): TitleUnit[] {
+/** Unit boundaries never depend on the library type -- only the kind does. A tree
+ *  typed `movie` keeps every unit, including one holding a season folder, and a tree
+ *  typed `series` emits no movie at all; `mixed` is the structure-driven default. */
+export function titleUnits(files: FoundFile[], type: LibraryType = "mixed"): TitleUnit[] {
   const out: TitleUnit[] = [];
   walkContainer(indexFiles(files), "", out);
-  return out;
+  if (type === "mixed") return out;
+  return out.map((unit) => ({ ...unit, kind: type }));
 }
 
 export function matchKeyFor(relative: string, files: FoundFile[]): string {

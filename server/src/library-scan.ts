@@ -35,8 +35,9 @@ export interface ScanState {
 export interface LibraryScanOpts {
   dataDir: string;
   downloadDir: string;
-  listVideos: (root: string) => Promise<FoundFile[]>;
-  titleUnits: (files: FoundFile[]) => TitleUnit[];
+  /** The walk is the host's: it spans libraries and knows each one's type, so the
+   *  scan asks for units instead of building them from a single root. */
+  units: () => Promise<TitleUnit[]>;
   searchAll: (addons: AddonRecord[], query: string, type?: string) => Promise<Pick<SearchResult, "items">>;
   metadata: (addons: AddonRecord[], type: string, id: string) => Promise<MetaItem | null>;
   addons: () => AddonRecord[];
@@ -128,8 +129,7 @@ export class LibraryScan {
    *  run to one item, which the interface uses for "find metadata" on a single title. */
   async start({ force = false, path: scope = "" }: { force?: boolean; path?: string } = {}): Promise<ScanState> {
     if (this.state.status === "running" || this.state.status === "paused") return this.snapshot();
-    const files = await this.opts.listVideos(this.opts.downloadDir);
-    const units = this.opts.titleUnits(files);
+    const units = await this.opts.units();
     this.units = new Map(units.map((unit) => [unit.key, unit]));
     this.cancelled = false;
     const records = this.opts.libraryMeta();
@@ -167,8 +167,7 @@ export class LibraryScan {
   }
 
   private async refreshUnits() {
-    const files = await this.opts.listVideos(this.opts.downloadDir);
-    this.units = new Map(this.opts.titleUnits(files).map((unit) => [unit.key, unit]));
+    this.units = new Map((await this.opts.units()).map((unit) => [unit.key, unit]));
   }
 
   private schedulePump() {

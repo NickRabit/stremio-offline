@@ -31,6 +31,29 @@ test("movie folder, season series, and an unrelated collection", () => {
   );
 });
 
+test("a typed library keeps the boundaries and changes only the kind", () => {
+  const files = ["Father Ted/01 serie/01 - Good Luck, Father Ted.mkv", "Interstellar.avi"].map(file);
+  assert.deepEqual(
+    titleUnits(files, "mixed").map((unit) => `${unit.kind}:${unit.key}`).sort(),
+    ["movie:Interstellar.avi", "series:Father Ted"],
+  );
+  assert.deepEqual(
+    titleUnits(files, "movie").map((unit) => `${unit.kind}:${unit.key}`).sort(),
+    ["movie:Father Ted", "movie:Interstellar.avi"],
+    "a season folder no longer turns the folder into a series",
+  );
+  assert.deepEqual(
+    titleUnits(files, "series").map((unit) => `${unit.kind}:${unit.key}`).sort(),
+    ["series:Father Ted", "series:Interstellar.avi"],
+    "a loose file at the root is a series of one file",
+  );
+  assert.deepEqual(
+    titleUnits(files, "series").map((unit) => unit.key),
+    titleUnits(files).map((unit) => unit.key),
+    "only the kind is forced, never the unit set",
+  );
+});
+
 test("same-title copies and a trailer next to one movie are one movie unit", () => {
   assert.deepEqual(
     keys(["Obsession/Obsession.mkv", "Obsession/Obsession (2).mkv"]),

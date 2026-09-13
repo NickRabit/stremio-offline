@@ -29,7 +29,7 @@ import { publicSettings, Store } from "./store.js";
 import { advanceTorrent, normalizeToken, verifyRealDebridToken } from "./debrid.js";
 import { clearLog, currentLevel, flushLog, initLogger, log, parseLevel, readLog, startLogMaintenance, setLevel } from "./logger.js";
 import { browseDirectory, describePath, emptiedFolders, entryDirectory, isPathWithin, isVideo, listFolders, listVideos, moveDestination, orphanedCatalogKeys, pageFiles, remapPath, scanLibrary, sortFiles, summarize } from "./library.js";
-import { browseMeta, cacheFieldsFromMeta, episodeKey, episodeNumberOf, episodesFromMeta, dropKeyed, knownTitleOf, lookupSkipped, matchKeyFor, matchStatus, needsBackfill, needsEpisodes, pinInherited, remapKeyed, scanMiss, suggestionFor, titleUnits, unmatchAt, type LibraryMetaRecord } from "./library-match.js";
+import { browseMeta, cacheFieldsFromMeta, episodeKey, episodeNumberOf, episodesFromMeta, dropKeyed, knownTitleOf, lookupSkipped, matchKeyFor, matchStatus, needsBackfill, needsEpisodes, pinInherited, remapKeyed, scanMiss, suggestionFor, titleUnits, unmatchAt, type LibraryMetaRecord, type TitleUnit } from "./library-match.js";
 import { parseMediaPath } from "./library-parse.js";
 import { LibraryScan } from "./library-scan.js";
 import { LibraryAutoScan } from "./library-autoscan.js";
@@ -661,12 +661,23 @@ const cachedMeta = async (type: string, id: string) => {
 // Walking the tree is expensive, so it is held in memory for a while. The queue invalidates it once a download finishes.
 let libraryCache: { at: number; entries: Awaited<ReturnType<typeof scanLibrary>> } | undefined;
 let videoCache: { at: number; files: Awaited<ReturnType<typeof listVideos>> } | undefined;
-const invalidateLibrary = () => { libraryCache = undefined; videoCache = undefined; };
+const invalidateLibrary = () => { libraryCache = undefined; videoCache = undefined; unitCache = undefined; };
 const libraryFiles = async () => {
   if (videoCache && Date.now() - videoCache.at < 30_000) return videoCache.files;
   const files = (await listVideos(primaryLibrary().root)).map((file) => ({ ...file, relative: libraryKey(file.relative) }));
   videoCache = { at: Date.now(), files };
   return files;
+};
+/** Title units of every library, the type of each one applied. Cached with the walk
+ *  it derives from, because a catalogue-sized tree is expensive to index. */
+let unitCache: { at: number; units: TitleUnit[] } | undefined;
+const libraryUnits = async (): Promise<TitleUnit[]> => {
+  if (unitCache && Date.now() - unitCache.at < 30_000) return unitCache.units;
+  const library = primaryLibrary();
+  const files = (await libraryFiles()).filter((file) => parseLibraryPath(file.relative)?.libraryId === library.id);
+  const units = titleUnits(files, library.type);
+  unitCache = { at: Date.now(), units };
+  return units;
 };
 const libraryEntries = async () => {
   if (libraryCache && Date.now() - libraryCache.at < 30_000) return libraryCache.entries;
@@ -1356,9 +1367,9 @@ const libraryScan = new LibraryScan({
   dataDir: DATA_DIR,
   downloadDir: primaryLibrary().root,
   // The scan works on keys, so the walk it injects is the qualified one.
-  listVideos: async () => (await listVideos(primaryLibrary().root)).map((file) => ({ ...file, relative: libraryKey(file.relative) })),
   pathExists: async (key: string) => { try { await access(mediaPath(key)); return true; } catch { return false; } },
-  titleUnits, searchAll, metadata,
+  units: () => libraryUnits(),
+  searchAll, metadata,
   addons: () => store.addons(),
   libraryMeta: () => metaStore.qualifiedMeta(),
   librarySuggestions: () => metaStore.qualifiedSuggestions(),
@@ -1446,7 +1457,7 @@ app.get("/api/library/identity", asyncRoute(async (req, res) => {
   if (!resolved) throw new AppError("Invalid path.", "err.invalidPath");
   const files = await libraryFiles();
   const unitKey = matchKeyFor(resolved.key, files);
-  const unit = titleUnits(files).find((item) => item.key === unitKey);
+  const unit = (await libraryUnits()).find((item) => item.key === unitKey);
   const records = metaStore.qualifiedMeta();
   const suggestions = metaStore.qualifiedSuggestions();
   const known = knownTitleOf(resolved.key, records);
