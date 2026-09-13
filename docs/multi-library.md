@@ -122,7 +122,9 @@ again after every rebase onto `main`.
       and `/api/library/folders`; the merged listing deliberately does not, or every start
       would count as a browse of the whole tree.
 - [x] `/api/libraries` (list, create, patch, delete), `/api/libraries/browse`, the grant
-      endpoints, `/api/libraries/preview`, and the restricted-mode denials. `checkLibraryRoot`
+      endpoints, `/api/libraries/preview`, and the restricted-mode denials (`GET` of the
+      picker and the grants, and every write, with `GET /api/libraries` kept readable but
+      without `root`). `checkLibraryRoot`
       (`library-admin.ts`) is the one gate: absolute, inside a granted root, a folder, and not
       another library's root compared through `realpath`; a root inside another library's root
       stays legal. `create: true` creates only inside the grant, and the probe decides
@@ -145,6 +147,15 @@ again after every rebase onto `main`.
       instead of failing before the server listens. `GET /api/library/browse` with no path
       answers a translated "open one of them" while more than one library is configured.
       The root browse that lists them is PR 4's; this only stops it from being a 500.
+- [x] Two defects the Docker pass and `e2e/tests/library-admin.spec.ts` found, not the unit
+      suites: Express matches in registration order, so the parameterised
+      `DELETE /api/libraries/:id` was swallowing `DELETE /api/libraries/grants` and a revoke
+      answered "library not found" instead of disabling anything -- the item routes now come
+      after every literal path. And Express 5 leaves `req.body` undefined when a request
+      carries no body, so the grants revoke (path in the query) and a bodiless `PATCH` threw;
+      every new handler reads `req.body?.`. The spec adds a grant, refuses a root nobody
+      granted, previews, creates a library under the grant, revokes it and checks the library
+      is disabled while its file stays put, then removes what it made.
 - [x] `LIBRARY_ROOTS` and `LIBRARY_META_TTL_DAYS` in `.env.example`, both compose files and
       `docs/configuration.md`, next to a short section on what a granted root is and what
       removing a library does and does not do.

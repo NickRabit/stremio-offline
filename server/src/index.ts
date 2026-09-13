@@ -896,11 +896,11 @@ app.get("/api/libraries", asyncRoute(async (_req, res) => {
 }));
 
 app.post("/api/libraries", asyncRoute(async (req, res) => {
-  const name = String(req.body.name ?? "").trim();
+  const name = String(req.body?.name ?? "").trim();
   if (!name) throw new AppError("Give the library a name.", "err.libraryNameRequired");
-  const type = asLibraryType(req.body.type);
+  const type = asLibraryType(req.body?.type);
   if (!type) throw new AppError("Unknown library type.", "err.libraryTypeUnknown");
-  const root = await requireLibraryRoot(req.body.root, { create: req.body.create === true });
+  const root = await requireLibraryRoot(req.body?.root, { create: req.body?.create === true });
   // A fresh answer for the root as it is now: a deleted library's cached verdict must not
   // decide whether the new one is writable.
   libraryProbe.invalidate(root);
@@ -911,7 +911,7 @@ app.post("/api/libraries", asyncRoute(async (req, res) => {
     addedAt: new Date().toISOString(),
     ...(health.unreachable ? { unreachable: true } : {}),
     ...(health.readOnly ? { readOnly: true } : {}),
-    writeArtwork: req.body.writeArtwork !== false && !health.readOnly,
+    writeArtwork: req.body?.writeArtwork !== false && !health.readOnly,
   };
   await store.update((state) => { state.libraries = [...(state.libraries ?? []), library]; });
   invalidateLibrary();
@@ -920,24 +920,129 @@ app.post("/api/libraries", asyncRoute(async (req, res) => {
   res.status(201).json(libraryView(library, health, { titles: 0, files: 0, bytes: 0 }));
 }));
 
+app.get("/api/libraries/browse", asyncRoute(async (req, res) => {
+  const requested = String(req.query.path ?? "").trim();
+  const grants = libraryGrants();
+  if (!requested) {
+    const rows = (await grantRows()).map((grant) => ({
+      name: posixBase(grant.path) || grant.path, path: grant.path, writable: grant.writable, ...libraryFlag(store.libraries(), grant.path),
+    }));
+    res.json({ path: "", parent: null, entries: rows });
+    return;
+  }
+  const inside = await grantingRoot(grants, requested);
+  if (!inside) throw new AppError("That folder is outside every granted root.", "err.libraryRootNotGranted", 403);
+  const dir = path.resolve(requested);
+  if (!(await stat(dir).catch(() => undefined))?.isDirectory()) throw new AppError("The folder does not exist.", "err.pathMissing");
+  const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
+  const rows = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
+    const full = path.join(dir, entry.name);
+    // A symlink out of the grant is not listed at all, rather than listed and then refused.
+    if (!await insideGrant(grants, full)) continue;
+    rows.push({
+      name: entry.name, path: toPosix(full),
+      writable: await access(full, constants.W_OK).then(() => true, () => false),
+      ...libraryFlag(store.libraries(), full),
+    });
+  }
+  rows.sort((a, b) => a.name.localeCompare(b.name, "cs"));
+  const up = path.dirname(dir);
+  res.json({ path: toPosix(dir), parent: up !== dir && await insideGrant(grants, up) ? toPosix(up) : null, entries: rows });
+}));
+
+app.get("/api/libraries/grants", asyncRoute(async (_req, res) => { res.json(await grantRows()); }));
+
+app.post("/api/libraries/grants", asyncRoute(async (req, res) => {
+  const raw = String(req.body?.path ?? "").trim();
+  if (!raw) throw new AppError("Missing folder.", "err.missingFolder");
+  if (!path.isAbsolute(raw)) throw new AppError("The path has to be absolute.", "err.libraryRootAbsolute");
+  const root = path.resolve(raw);
+  if (!(await stat(root).catch(() => undefined))?.isDirectory()) throw new AppError("The folder does not exist.", "err.pathMissing");
+  // A grant is recorded, never inferred: the request names a folder that is already there.
+  if (!store.grants().some((grant) => path.resolve(grant.path) === root)) {
+    await store.update((state) => {
+      state.grants = [...(state.grants ?? []), { path: root, source: "user", grantedAt: new Date().toISOString() }];
+    });
+    log("INFO", "Library root granted", { root });
+  }
+  res.status(201).json(await grantRows());
+}));
+
+app.delete("/api/libraries/grants", asyncRoute(async (req, res) => {
+  const raw = String(req.body?.path ?? req.query.path ?? "").trim();
+  if (!raw) throw new AppError("Missing folder.", "err.missingFolder");
+  const root = path.resolve(raw);
+  // An operator grant is rebuilt from the environment on the next boot, so only a grant
+  // somebody made at the keyboard can be revoked.
+  if (!store.grants().some((grant) => path.resolve(grant.path) === root)) {
+    throw new AppError("That root was not granted here.", "err.grantNotFound", 404);
+  }
+  // Revoking disables the libraries under it. Nothing is deleted -- the media, the metadata
+  // file and the artwork directory all stay, so granting the root again brings them back.
+  const affected = store.libraries().filter((library) => isInside(path.resolve(library.root), root));
+  await store.update((state) => {
+    state.grants = (state.grants ?? []).filter((grant) => path.resolve(grant.path) !== root);
+    state.libraries = (state.libraries ?? []).map((library) =>
+      affected.some((item) => item.id === library.id) ? { ...library, enabled: false } : library);
+  });
+  invalidateLibrary();
+  await refreshLibraryHealth();
+  for (const library of affected) log("INFO", "Library disabled with its revoked grant", { library: library.id, root: library.root });
+  res.json(await grantRows());
+}));
+
+/** How much of a candidate tree the estimate may touch. The walk is capped at depth 8
+ *  already, but a folder with a hundred thousand files must not become a way to tie the
+ *  server up with one request. */
+const PREVIEW_MAX_FILES = 20_000;
+const PREVIEW_DEADLINE_MS = 5_000;
+
+app.post("/api/libraries/preview", asyncRoute(async (req, res) => {
+  const raw = String(req.body?.root ?? "").trim();
+  if (!path.isAbsolute(raw)) throw new AppError("The root has to be an absolute path.", "err.libraryRootAbsolute");
+  const root = path.resolve(raw);
+  if (!await insideGrant(libraryGrants(), root)) {
+    throw new AppError("That folder is outside every granted root.", "err.libraryRootNotGranted", 403);
+  }
+  if (!(await stat(root).catch(() => undefined))?.isDirectory()) throw new AppError("The folder does not exist.", "err.pathMissing");
+  const budget: WalkBudget = { files: PREVIEW_MAX_FILES, until: Date.now() + PREVIEW_DEADLINE_MS };
+  const files = await listVideos(root, "", 0, undefined, budget);
+  const type = asLibraryType(req.body?.type) ?? "mixed";
+  const units = titleUnits(files, type);
+  // No addon is asked anything: the estimate is the walk plus what the state already knows.
+  const library = store.libraries().find((item) => path.resolve(item.root) === root);
+  const records = metaStore.qualifiedMeta();
+  const identified = library
+    ? units.filter((unit) => Boolean(knownTitleOf(libraryPath(library.id, unit.relative), records)?.id)).length
+    : 0;
+  res.json({
+    root: toPosix(root), type, titles: units.length, identified, files: files.length,
+    truncated: budget.files <= 0 || Date.now() > budget.until,
+  });
+}));
+
+// The item routes come after every literal `/api/libraries/...` route: Express matches in
+// registration order, so a `:id` route above them would swallow `/libraries/grants`.
 app.patch("/api/libraries/:id", asyncRoute(async (req, res) => {
   const target = store.libraries().find((library) => library.id === req.params.id);
   if (!target) throw new AppError("The library was not found.", "err.libraryNotFound", 404);
   const patch: Partial<LibraryRecord> = {};
-  if (req.body.name !== undefined) {
-    const name = String(req.body.name).trim();
+  if (req.body?.name !== undefined) {
+    const name = String(req.body?.name).trim();
     if (!name) throw new AppError("Give the library a name.", "err.libraryNameRequired");
     patch.name = name;
   }
-  if (req.body.type !== undefined) {
-    const type = asLibraryType(req.body.type);
+  if (req.body?.type !== undefined) {
+    const type = asLibraryType(req.body?.type);
     if (!type) throw new AppError("Unknown library type.", "err.libraryTypeUnknown");
     patch.type = type;
   }
-  if (req.body.enabled !== undefined) patch.enabled = req.body.enabled === true;
-  if (req.body.order !== undefined && Number.isFinite(Number(req.body.order))) patch.order = Number(req.body.order);
-  if (req.body.writeArtwork !== undefined) patch.writeArtwork = req.body.writeArtwork === true;
-  if (req.body.root !== undefined) patch.root = await requireLibraryRoot(req.body.root, { exceptId: target.id });
+  if (req.body?.enabled !== undefined) patch.enabled = req.body.enabled === true;
+  if (req.body?.order !== undefined && Number.isFinite(Number(req.body.order))) patch.order = Number(req.body.order);
+  if (req.body?.writeArtwork !== undefined) patch.writeArtwork = req.body.writeArtwork === true;
+  if (req.body?.root !== undefined) patch.root = await requireLibraryRoot(req.body.root, { exceptId: target.id });
 
   const next = { ...target, ...patch };
   if (patch.root !== undefined) libraryProbe.invalidate(next.root);
@@ -996,108 +1101,6 @@ app.delete("/api/libraries/:id", asyncRoute(async (req, res) => {
 /** The folder picker. It exists for deployments without a native dialog -- a desktop build
  *  uses the OS dialog instead and never calls it. Which is also why both of its reads are
  *  denied in restricted mode: they are the one place that names directories on the host. */
-app.get("/api/libraries/browse", asyncRoute(async (req, res) => {
-  const requested = String(req.query.path ?? "").trim();
-  const grants = libraryGrants();
-  if (!requested) {
-    const rows = (await grantRows()).map((grant) => ({
-      name: posixBase(grant.path) || grant.path, path: grant.path, writable: grant.writable, ...libraryFlag(store.libraries(), grant.path),
-    }));
-    res.json({ path: "", parent: null, entries: rows });
-    return;
-  }
-  const inside = await grantingRoot(grants, requested);
-  if (!inside) throw new AppError("That folder is outside every granted root.", "err.libraryRootNotGranted", 403);
-  const dir = path.resolve(requested);
-  if (!(await stat(dir).catch(() => undefined))?.isDirectory()) throw new AppError("The folder does not exist.", "err.pathMissing");
-  const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
-  const rows = [];
-  for (const entry of entries) {
-    if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
-    const full = path.join(dir, entry.name);
-    // A symlink out of the grant is not listed at all, rather than listed and then refused.
-    if (!await insideGrant(grants, full)) continue;
-    rows.push({
-      name: entry.name, path: toPosix(full),
-      writable: await access(full, constants.W_OK).then(() => true, () => false),
-      ...libraryFlag(store.libraries(), full),
-    });
-  }
-  rows.sort((a, b) => a.name.localeCompare(b.name, "cs"));
-  const up = path.dirname(dir);
-  res.json({ path: toPosix(dir), parent: up !== dir && await insideGrant(grants, up) ? toPosix(up) : null, entries: rows });
-}));
-
-app.get("/api/libraries/grants", asyncRoute(async (_req, res) => { res.json(await grantRows()); }));
-
-app.post("/api/libraries/grants", asyncRoute(async (req, res) => {
-  const raw = String(req.body.path ?? "").trim();
-  if (!raw) throw new AppError("Missing folder.", "err.missingFolder");
-  if (!path.isAbsolute(raw)) throw new AppError("The path has to be absolute.", "err.libraryRootAbsolute");
-  const root = path.resolve(raw);
-  if (!(await stat(root).catch(() => undefined))?.isDirectory()) throw new AppError("The folder does not exist.", "err.pathMissing");
-  // A grant is recorded, never inferred: the request names a folder that is already there.
-  if (!store.grants().some((grant) => path.resolve(grant.path) === root)) {
-    await store.update((state) => {
-      state.grants = [...(state.grants ?? []), { path: root, source: "user", grantedAt: new Date().toISOString() }];
-    });
-    log("INFO", "Library root granted", { root });
-  }
-  res.status(201).json(await grantRows());
-}));
-
-app.delete("/api/libraries/grants", asyncRoute(async (req, res) => {
-  const raw = String(req.body.path ?? req.query.path ?? "").trim();
-  if (!raw) throw new AppError("Missing folder.", "err.missingFolder");
-  const root = path.resolve(raw);
-  // An operator grant is rebuilt from the environment on the next boot, so only a grant
-  // somebody made at the keyboard can be revoked.
-  if (!store.grants().some((grant) => path.resolve(grant.path) === root)) {
-    throw new AppError("That root was not granted here.", "err.grantNotFound", 404);
-  }
-  // Revoking disables the libraries under it. Nothing is deleted -- the media, the metadata
-  // file and the artwork directory all stay, so granting the root again brings them back.
-  const affected = store.libraries().filter((library) => isInside(path.resolve(library.root), root));
-  await store.update((state) => {
-    state.grants = (state.grants ?? []).filter((grant) => path.resolve(grant.path) !== root);
-    state.libraries = (state.libraries ?? []).map((library) =>
-      affected.some((item) => item.id === library.id) ? { ...library, enabled: false } : library);
-  });
-  invalidateLibrary();
-  await refreshLibraryHealth();
-  for (const library of affected) log("INFO", "Library disabled with its revoked grant", { library: library.id, root: library.root });
-  res.json(await grantRows());
-}));
-
-/** How much of a candidate tree the estimate may touch. The walk is capped at depth 8
- *  already, but a folder with a hundred thousand files must not become a way to tie the
- *  server up with one request. */
-const PREVIEW_MAX_FILES = 20_000;
-const PREVIEW_DEADLINE_MS = 5_000;
-
-app.post("/api/libraries/preview", asyncRoute(async (req, res) => {
-  const raw = String(req.body.root ?? "").trim();
-  if (!path.isAbsolute(raw)) throw new AppError("The root has to be an absolute path.", "err.libraryRootAbsolute");
-  const root = path.resolve(raw);
-  if (!await insideGrant(libraryGrants(), root)) {
-    throw new AppError("That folder is outside every granted root.", "err.libraryRootNotGranted", 403);
-  }
-  if (!(await stat(root).catch(() => undefined))?.isDirectory()) throw new AppError("The folder does not exist.", "err.pathMissing");
-  const budget: WalkBudget = { files: PREVIEW_MAX_FILES, until: Date.now() + PREVIEW_DEADLINE_MS };
-  const files = await listVideos(root, "", 0, undefined, budget);
-  const type = asLibraryType(req.body.type) ?? "mixed";
-  const units = titleUnits(files, type);
-  // No addon is asked anything: the estimate is the walk plus what the state already knows.
-  const library = store.libraries().find((item) => path.resolve(item.root) === root);
-  const records = metaStore.qualifiedMeta();
-  const identified = library
-    ? units.filter((unit) => Boolean(knownTitleOf(libraryPath(library.id, unit.relative), records)?.id)).length
-    : 0;
-  res.json({
-    root: toPosix(root), type, titles: units.length, identified, files: files.length,
-    truncated: budget.files <= 0 || Date.now() > budget.until,
-  });
-}));
 
 app.get("/api/library", asyncRoute(async (_req, res) => {
   const entries = await libraryEntries();
