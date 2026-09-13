@@ -47,6 +47,49 @@ test("a granted root is added, previewed and revoked without losing what it reme
   const listed = await (await request.get("/api/libraries")).json();
   expect(listed.map((entry: { id: string }) => entry.id)).toContain(library.id);
 
+  // The browse root lists the libraries while more than one is configured, and the
+  // breadcrumb names the library instead of its id once one is opened.
+  const root = await (await request.get("/api/library/browse")).json();
+  const rows = root.items.filter((item: { kind: string }) => item.kind === "library");
+  expect(rows.map((row: { libraryId: string }) => row.libraryId)).toEqual(expect.arrayContaining([library.id]));
+  expect(rows.find((row: { libraryId: string }) => row.libraryId === library.id)).toMatchObject({
+    name: "Granted", type: "movie", enabled: true, fileCount: 1, unreachable: false,
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Knihovna", exact: true }).click();
+  const libraryRows = page.locator(".browse-item.library");
+  await expect(libraryRows).toHaveCount(2);
+  await libraryRows.filter({ hasText: "downloads" }).getByRole("button").first().click();
+  await expect(page.locator(".crumbs button", { hasText: "downloads" })).toBeVisible();
+
+  // The library tools open the same manager the settings section renders. On a wide
+  // viewport these actions are inline; the toggle that hides them is the mobile layout.
+  await page.getByRole("button", { name: "Knihovny", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Knihovny" });
+  await expect(dialog.locator(".library-admin-row")).toHaveCount(2);
+
+  // The picker walks the granted roots and reports what the scan would cost before
+  // anything is created.
+  await dialog.getByRole("button", { name: "Přidat knihovnu" }).click();
+  const picker = page.getByRole("dialog", { name: "Vyberte složku" });
+  await picker.locator(".move-list button", { hasText: "granted-root" }).click();
+  await picker.getByRole("button", { name: "Použít tuto složku" }).click();
+  await expect(picker).toContainText("Nalezeno 1 titulů, 1 souborů.");
+  await picker.getByRole("button", { name: "Zrušit" }).click();
+  await expect(picker).toHaveCount(0);
+  await dialog.getByRole("button", { name: "Zrušit" }).click();
+  await expect(dialog).toHaveCount(0);
+
+  // A rename goes through the prompt and the row follows.
+  await page.getByRole("button", { name: "Nastavení", exact: true }).click();
+  const manager = page.locator(".library-manager");
+  await expect(manager.locator(".library-admin-row")).toHaveCount(2);
+  page.once("dialog", (prompt) => void prompt.accept("Přejmenovaná"));
+  await manager.locator(".library-admin-row", { hasText: "Granted" }).getByRole("button", { name: "Přejmenovat" }).click();
+  await expect(manager.locator(".library-admin-row", { hasText: "Přejmenovaná" })).toBeVisible();
+  await expect(manager.locator(".library-admin-row", { hasText: "Přejmenovaná" })).toContainText("Filmy");
+
   // Revoking disables the library under it; the media, the metadata file and the artwork
   // directory stay, so granting the root again brings it back.
   const revoked = await request.delete(`/api/libraries/grants?path=${encodeURIComponent(grantedRoot)}`);
@@ -60,28 +103,13 @@ test("a granted root is added, previewed and revoked without losing what it reme
   const remaining = await (await request.get("/api/libraries/browse")).json();
   expect(remaining.entries.map((entry: { path: string }) => entry.path)).not.toContain(grantedRoot);
 
-  // Two configured libraries means the browse root lists them; a disabled one is still part
-  // of the setup, so its row stays and says so instead of disappearing.
-  const root = await (await request.get("/api/library/browse")).json();
-  const rows = root.items.filter((item: { kind: string }) => item.kind === "library");
-  expect(rows.map((row: { libraryId: string }) => row.libraryId)).toEqual(expect.arrayContaining([library.id]));
-  expect(rows.find((row: { libraryId: string }) => row.libraryId === library.id)).toMatchObject({
-    // The walk skips a disabled library, so its counts are the empty default; the media is
-    // still there and comes back with the next grant.
-    name: "Granted", type: "movie", enabled: false, fileCount: 0, unreachable: false,
-  });
-
-  // The interface shows the same list, and the breadcrumb names the library instead of
-  // its id once one is opened.
+  // A disabled library is still part of the setup: its row stays and says so instead of
+  // disappearing, and it cannot be opened.
   await page.goto("/");
   await page.getByRole("button", { name: "Knihovna", exact: true }).click();
-  const libraryRows = page.locator(".browse-item.library");
-  await expect(libraryRows).toHaveCount(2);
-  const grantedRow = libraryRows.filter({ hasText: "Granted" });
-  await expect(grantedRow).toContainText("Vypnutá");
-  await expect(grantedRow.getByRole("button").first()).toBeDisabled();
-  await libraryRows.filter({ hasText: "downloads" }).getByRole("button").first().click();
-  await expect(page.locator(".crumbs button", { hasText: "downloads" })).toBeVisible();
+  const disabledRow = page.locator(".browse-item.library").filter({ hasText: "Přejmenovaná" });
+  await expect(disabledRow).toContainText("Vypnutá");
+  await expect(disabledRow.getByRole("button").first()).toBeDisabled();
 
   // Cleanup through the API the test just used, so the run leaves one library behind.
   const removed = await request.delete(`/api/libraries/${library.id}?forget=1`);

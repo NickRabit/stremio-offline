@@ -142,11 +142,17 @@ export interface LibraryView {
   id: string; name: string; type: LibraryType; root?: string; enabled: boolean; order: number;
   addedAt: string; writeArtwork: boolean; unreachable: boolean; readOnly: boolean;
   defaultMovie: boolean; defaultSeries: boolean; titles: number; files: number; bytes: number;
-  }
+}
 export type BrowseItem =
   | ({ kind: "folder"; favorite?: boolean } & BrowseFolder)
   | ({ kind: "file"; favorite?: boolean } & BrowseFile)
   | BrowseLibrary;
+/** One entry of the settings backup: ids do not travel, roots do. */
+export interface LibraryGrant { path: string; source: "env" | "user"; grantedAt: string; writable: boolean }
+/** One row of the root picker. `libraryRoot` marks the folder that is a library's root. */
+export interface GrantEntry { name: string; path: string; writable: boolean; source?: "env" | "user"; libraryId?: string; libraryRoot?: boolean }
+export interface GrantBrowse { path: string; parent: string | null; entries: GrantEntry[] }
+export interface LibraryEstimate { root: string; type: LibraryType; titles: number; identified: number; files: number; truncated: boolean }
 export interface IdentityPreview {
   path: string; key: string; kind: "movie" | "series"; file: boolean; label: string;
   parsed: { title: string; query: string; year?: number; season?: number; episode?: number };

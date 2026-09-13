@@ -946,7 +946,8 @@ app.get("/api/libraries/browse", asyncRoute(async (req, res) => {
   const grants = libraryGrants();
   if (!requested) {
     const rows = (await grantRows()).map((grant) => ({
-      name: posixBase(grant.path) || grant.path, path: grant.path, writable: grant.writable, ...libraryFlag(store.libraries(), grant.path),
+      name: posixBase(grant.path) || grant.path, path: grant.path, source: grant.source,
+      writable: grant.writable, ...libraryFlag(store.libraries(), grant.path),
     }));
     res.json({ path: "", parent: null, entries: rows });
     return;

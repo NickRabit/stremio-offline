@@ -842,3 +842,31 @@ img.broken{visibility:hidden}
 .player-settings .subtitle-delay output{min-width:64px;text-align:center;font-variant-numeric:tabular-nums;opacity:.85}
 .player-settings .subtitle-delay button{min-width:34px}
 .player-settings .subtitle-delay .subtitle-delay-reset svg{width:16px;height:16px}
+
+.library-manager{display:grid;gap:12px}
+.library-manager-section{grid-column:1/-1}
+.library-manager-section .library-manager{grid-template-columns:repeat(auto-fill,minmax(320px,1fr))}
+.library-manager-section .library-manager-actions,.library-manager-section .identify-hint{grid-column:1/-1}
+.library-manager-actions{display:flex;gap:8px;flex-wrap:wrap}
+.library-admin-row{display:grid;gap:7px;padding:12px;border:1px solid var(--line);border-radius:10px;background:#10151d}
+.library-admin-row.unreachable{border-color:#e7b86766}
+.library-admin-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:space-between}
+.library-admin-root{font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.library-admin-controls{display:flex;flex-wrap:wrap;gap:14px;align-items:end}
+.library-admin-controls>label{display:grid;gap:4px;font-size:10px;color:var(--muted)}
+.library-admin-controls label.library-check{display:flex;align-items:center;gap:7px;font-size:11px;color:var(--text)}
+.library-admin-controls label.library-check input,.library-scan-now input{width:auto}
+.library-admin-controls select{width:auto;min-width:120px;padding:7px 10px;font-size:11px}
+.library-admin-buttons{display:flex;flex-wrap:wrap;gap:8px}
+.library-admin-buttons button{padding:7px 11px;font-size:11px}
+.library-badge{font-style:normal;font-size:10px;font-weight:700;color:var(--muted);border:1px solid var(--line);border-radius:99px;padding:2px 8px;margin-left:6px}
+.library-badge.warn{color:#e7b867;border-color:#e7b86766;background:#2a2113}
+.library-manager-card{width:min(760px,100%)}
+.library-picker-card{width:min(520px,100%)}
+.library-picker-manual{display:flex;gap:8px}
+.library-picker-manual input{font-size:12px}
+.library-picker-use{justify-content:flex-start}
+.library-picker-fields{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.library-picker-fields label{display:grid;gap:5px;font-size:10px;color:var(--muted)}
+.library-scan-now{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text)}
+@media(max-width:700px){.library-picker-fields,.library-manager-section .library-manager{grid-template-columns:1fr}}

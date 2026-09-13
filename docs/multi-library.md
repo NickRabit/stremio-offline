@@ -196,6 +196,18 @@ again after every rebase onto `main`.
       handful of rows. The root list, the breadcrumbs and the pass-through are covered in
       `e2e/tests/library-admin.spec.ts`; the layout baselines keep running against a
       single-library install, so they are unchanged.
+- [x] The library manager: a settings section plus the same panel behind the library tools,
+      with add, rename, type, enable, the artwork-writing switch, re-root, remove,
+      remove-and-forget and scan this library. Add walks the granted roots, grants a folder
+      typed by hand when the deployment has no native dialog, shows the estimate before
+      anything is written and offers "scan metadata now". Re-root patches the root and lets
+      the probe decide `writeArtwork` again. A user grant can be revoked from the picker;
+      the libraries under it are disabled and nothing is deleted. An operator grant is not
+      revocable from the interface, and `GET /api/libraries/browse` now says where each grant
+      came from so a folder can be told apart from one an operator mounted. Restricted mode
+      renders the list without a single control -- the API would refuse every one of them.
+      Covered by `e2e/tests/library-admin.spec.ts` (manager dialog, picker, estimate, rename,
+      the disabled row) and the settings part of `e2e/tests/restricted.spec.ts`.
 - [ ] Follow-up from PR 1: `e2e/tests/layout/screenshots.spec.ts` drops the diagnostics
       report chip before the settings screenshot. The chip is per-run noise inside a masked
       section, but its width decided whether the header wrapped at the narrow viewports, so
