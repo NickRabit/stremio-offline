@@ -325,6 +325,14 @@ export function App() {
   const searchScope = parseSearchScope(searchScopeValue);
   const scopedCatalog = searchScope.catalogId ? searchable.find((item) => item.addonKey === searchScope.addonKey && item.type === searchScope.catalogType && item.id === searchScope.catalogId) : undefined;
   const effectiveTypeFilter = searchScope.catalogType ?? typeFilter;
+  /** Picking one catalogue to search in also points the browse picker at it, so the
+   *  catalogue stays on screen once the search is cleared. The wider scopes -- one
+   *  addon, or all of them -- have nothing to point at and leave it alone. */
+  const pickSearchScope = (value: string) => {
+    setSearchScopeValue(value);
+    const picked = parseSearchScope(value);
+    if (picked.catalogId) setSelectedCatalog(`${picked.addonKey}:${picked.catalogType}:${picked.catalogId}`);
+  };
   const [skip, setSkip] = useState(0); const [cursor, setCursor] = useState(""); const [hasMore, setHasMore] = useState(false); const [loadingMore, setLoadingMore] = useState(false); const [sourceCount, setSourceCount] = useState(0);
   const [pendingSources, setPendingSources] = useState(0);
   const pickedRef = useRef(false); const sourcesRequestRef = useRef(0);
@@ -732,9 +740,10 @@ export function App() {
   };
 
   const submitSearch = (event?: FormEvent) => { event?.preventDefault(); setSubmittedQuery(search.trim()); };
-  // A changed catalogue, query or filter starts from the first page.
+  // A changed catalogue, query or filter starts from the first page. The scope only
+  // decides what a search asks for, so on its own it reloads nothing.
   useEffect(() => { itemsRef.current = []; setItems([]); setSkip(0); setCursor(""); setHasMore(false); setSourceCount(0); void loadPage(true); },
-    [submittedQuery, searchScopeValue, typeFilter, activeGenre, virtualCatalog, currentCatalog?.addonKey, currentCatalog?.type, currentCatalog?.id, catalogReset]);
+    [submittedQuery, submittedQuery && searchScopeValue, typeFilter, activeGenre, virtualCatalog, currentCatalog?.addonKey, currentCatalog?.type, currentCatalog?.id, catalogReset]);
 
   // The grid scrolls on its own. A plain scroll listener works even where
   // IntersectionObserver stays quiet (a hidden document, power-saving modes).
@@ -744,7 +753,7 @@ export function App() {
     const onScroll = () => { if (grid.scrollTop + grid.clientHeight >= grid.scrollHeight - 400) void loadPage(false); };
     grid.addEventListener("scroll", onScroll, { passive: true });
     return () => grid.removeEventListener("scroll", onScroll);
-  }, [hasMore, skip, cursor, submittedQuery, searchScopeValue, typeFilter, activeGenre, currentCatalog?.addonKey, currentCatalog?.type, currentCatalog?.id]);
+  }, [hasMore, skip, cursor, submittedQuery, submittedQuery && searchScopeValue, typeFilter, activeGenre, currentCatalog?.addonKey, currentCatalog?.type, currentCatalog?.id]);
 
   /** Every addon files the same film under its own id. We merge by name and year and keep
    *  the entry with an IMDb id, because that is what source addons look streams up by. */
@@ -967,7 +976,7 @@ export function App() {
         {!catalogs.length ? (restricted ? <Empty icon={<PackagePlus/>} title={t("onboarding.title")} text={t("restricted.notice")}/> : <Onboarding onOpen={() => setView("addons")}/>) : <>
           <form className="searchbar" onSubmit={submitSearch}>
             <div className="search-input"><Search/><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={t("catalog.searchPlaceholder")}/></div>
-            <label className="scope-select"><span>{t("catalog.searchScopeIn")}</span><select aria-label={t("catalog.searchScope")} value={searchScopeValue} onChange={(e) => setSearchScopeValue(e.target.value)}>
+            <label className="scope-select"><span>{t("catalog.searchScopeIn")}</span><select aria-label={t("catalog.searchScope")} value={searchScopeValue} onChange={(e) => pickSearchScope(e.target.value)}>
               <option value="">{t("catalog.allAddons")}</option>
               {[...new Map(searchable.map((item) => [item.addonKey, { name: item.addonName, globalSearch: item.globalSearch }])).entries()].map(([key, group]) => <optgroup key={key} label={`${group.name}${group.globalSearch ? "" : " ·"}`} title={group.globalSearch ? undefined : t("catalog.onlyWhenPicked")}>
                 <option value={`addon:${key}`} title={group.globalSearch ? undefined : t("catalog.onlyWhenPicked")}>{t("catalog.allCatalogs")}{group.globalSearch ? "" : " ·"}</option>
