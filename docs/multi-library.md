@@ -32,6 +32,11 @@ again after every rebase onto `main`.
       boots through the migration; the dedicated assertion on the migrated result belongs
       with the library chrome (PR 4). The settings baseline no longer reads the run's own
       report count -- see the note under PR 4.
+- [x] Review follow-up: `rekeyArtwork` maps and removes nothing while the library root
+      is unreadable, because `listVideos` answers a missing mount with an empty tree and
+      that would make every stored thumbnail look like an orphan. A test seeds an old
+      thumbnail under an unreachable root. The redundant `EEXIST` guard around the
+      `state.json` backup is gone; `copyFile` overwrites and never throws it.
 
 ### PR 2 — Metadata store split and cache policy
 
@@ -552,9 +557,14 @@ already has:
 - Eviction: oldest `at` first, down to 80 % of the cap — mirror
   `ImageProxy.evict()` rather than inventing a second policy.
 - The orphan sweep stays as it is (it is correctness, not pressure), now scoped
-  per library and skipping libraries that are disabled, `readOnly`, or whose
-  root is currently unreachable — **never delete thumbnails because a mount is
-  down**. Guard with an explicit "root readable" check before sweeping a library.
+  per library and skipping libraries that are disabled or whose root cannot be
+  **read** — **never delete thumbnails because a mount is down**. Guard with an
+  explicit root-readable check before sweeping a library.
+  `readOnly` must **not** skip the sweep: it describes the media root, while the
+  thumbnails being swept live in `data/artwork/<libraryId>/`, which is writable
+  either way. A read-only root can still be enumerated, so `valid` is computable
+  and the sweep is safe — and skipping it would let orphans grow without bound in
+  exactly the common case, an added read-only archive.
 - `writeArtwork: false` (§6) redirects everything that would land next to the
   media into `data/artwork/<libraryId>/`, whatever the global `artworkLocation`
   says. That covers a read-only mount and a tree the user curates elsewhere.
