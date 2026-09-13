@@ -58,8 +58,39 @@ a library deletes its thumbnails and nothing else.
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `ARTWORK_CACHE_MB` | `256` | Disk those thumbnails may take before the least recently used are dropped. |
+| `LIBRARY_META_TTL_DAYS` | `14` | Age at which the scan re-reads a bound series, so its episode titles stay current. `0` switches the pass off. Only libraries the interface opened are refreshed. |
 
 A dropped thumbnail is generated again on the next visit; nothing else is lost.
+
+## Libraries
+
+The download directory is a library like any other. Extra ones are added from the
+interface, and a library can only be created inside a **granted root**: a folder
+the deployment allows the process to read. Under Docker the grants come from the
+environment, on a desktop build from the native folder picker.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `LIBRARY_ROOTS` | `DOWNLOAD_PATH` | Comma-separated roots a library may be added from. A relative entry is ignored and logged. |
+
+An extra disk is one more mount plus one more entry:
+
+```yaml
+volumes:
+  - "${DOWNLOAD_PATH:-./downloads}:/downloads"
+  - "${ARCHIVE_PATH:-./archive}:/libraries/archive"
+environment:
+  LIBRARY_ROOTS: "/downloads,/libraries/archive"
+```
+
+A root outside every grant is refused, and so is a folder that is already another
+library's root. A root *inside* another library is legal: the parent then stops
+walking, matching and sweeping that folder, which is what makes it possible to
+split the download directory into a films and a series library without moving a
+single file.
+
+Removing a library never touches the media. `?forget=1` drops what the server
+remembers about it — the match history and its thumbnails — and nothing else.
 
 ## Addon access
 
