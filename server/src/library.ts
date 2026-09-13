@@ -1,5 +1,6 @@
 import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
+import { posixBase, posixDir, posixJoin, toFs } from "./libraries.js";
 
 const VIDEO = new Set([".mkv", ".mp4", ".avi", ".m4v", ".mov", ".webm", ".ts", ".m2ts", ".wmv", ".flv", ".mpg", ".mpeg"]);
 
@@ -57,13 +58,13 @@ const CROSS_EPISODE = /\b(\d{1,2})x(\d{1,3})\b/i;
 /** Season and episode of a video file: "S01E02" or "1x02" in its own name first,
  *  then a plain leading number inside a season folder. */
 export function numberedEpisode(relative: string): { season: number; episode: number } | undefined {
-  const base = path.basename(relative);
+  const base = posixBase(relative);
   if (!isVideo(base)) return undefined;
   const name = base.replace(/\.[^.]+$/, "");
   const tagged = TAGGED_EPISODE.exec(name) ?? CROSS_EPISODE.exec(name);
   if (tagged) return { season: Number(tagged[1]), episode: Number(tagged[2]) };
-  const folder = path.dirname(relative);
-  const season = folder && folder !== "." ? parseSeason(path.basename(folder)) : null;
+  const folder = posixDir(relative);
+  const season = folder ? parseSeason(posixBase(folder)) : null;
   const { episode } = parseEpisode(base);
   if (season != null && episode != null) return { season, episode };
   return undefined;
@@ -71,21 +72,30 @@ export function numberedEpisode(relative: string): { season: number; episode: nu
 
 export const isVideo = (filename: string) => VIDEO.has(path.extname(filename).toLowerCase());
 
-/** The path must not lead outside the download directory, not even through a symlink. */
+/** The path must not lead outside the download directory, not even through a symlink.
+ *  `relative` is a POSIX key; the separator is converted only here, at the syscall. */
 export function resolveInside(root: string, relative: string): string | undefined {
   const base = path.resolve(root);
-  const target = path.resolve(base, relative);
+  const target = path.resolve(base, toFs(relative));
   const prefix = base.endsWith(path.sep) ? base : `${base}${path.sep}`;
   return target === base || target.startsWith(prefix) ? target : undefined;
 }
 
+/** The separator between key segments. Keys are POSIX on the wire; a native absolute
+ *  path (the media guard) is compared through the same helper. */
+const SEPARATORS = path.sep === "/" ? ["/"] : ["/", path.sep];
+
 /** Rewrites the path of the item itself and of everything under it. */
 export function remapPath(value: string, from: string, to: string): string {
-  return value === from || value.startsWith(`${from}${path.sep}`) ? to + value.slice(from.length) : value;
+  if (value === from) return to;
+  return from && SEPARATORS.some((separator) => value.startsWith(`${from}${separator}`))
+    ? to + value.slice(from.length)
+    : value;
 }
 
 export function isPathWithin(value: string, parent: string): boolean {
-  return value === parent || value.startsWith(`${parent}${path.sep}`);
+  if (value === parent) return true;
+  return Boolean(parent) && SEPARATORS.some((separator) => value.startsWith(`${parent}${separator}`));
 }
 
 /** Catalogue titles nothing in the library points at once the path is deleted.
@@ -106,12 +116,12 @@ export function orphanedCatalogKeys(meta: Record<string, { type: string; id: str
  * so the whole folder goes rather than an empty shell of it. Ordered deepest first. */
 export async function emptiedFolders(root: string, relative: string): Promise<string[]> {
   const gone: string[] = [];
-  let folder = path.dirname(relative);
-  while (folder && folder !== "." && folder !== path.sep) {
+  let folder = posixDir(relative);
+  while (folder) {
     if (!resolveInside(root, folder)) break;
     if ((await listVideos(root, folder)).length) break;
     gone.push(folder);
-    folder = path.dirname(folder);
+    folder = posixDir(folder);
   }
   return gone;
 }
@@ -125,7 +135,7 @@ export async function listFolders(root: string, relative: string): Promise<{ pat
   try { entries = await readdir(target, { withFileTypes: true }); } catch { return []; }
   return entries
     .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
-    .map((entry) => ({ path: relative ? path.join(relative, entry.name) : entry.name, name: entry.name }))
+    .map((entry) => ({ path: posixJoin(relative, entry.name), name: entry.name }))
     .sort((a, b) => a.name.localeCompare(b.name, "cs"));
 }
 
@@ -135,11 +145,11 @@ export type MoveProblem = "sameFolder" | "intoItself";
  *  A folder cannot swallow itself, and a move that changes nothing is refused rather than
  *  silently renaming the item onto its own path. */
 export function moveDestination(relative: string, folder: string): { path: string } | { error: MoveProblem } {
-  const from = path.dirname(relative);
+  const from = posixDir(relative);
   const target = folder === "." ? "" : folder;
-  if ((from === "." ? "" : from) === target) return { error: "sameFolder" };
+  if (from === target) return { error: "sameFolder" };
   if (isPathWithin(target, relative)) return { error: "intoItself" };
-  return { path: target ? path.join(target, path.basename(relative)) : path.basename(relative) };
+  return { path: posixJoin(target, posixBase(relative)) };
 }
 
 export interface FoundFile { relative: string; size: number; modified: string }
@@ -149,16 +159,16 @@ export async function listVideos(root: string, relative = "", depth = 0): Promis
   // The structure is the user's own: downloads/series/Show/01 serie/episode.mkv and deeper.
   if (depth > 8) return [];
   let entries;
-  try { entries = await readdir(path.join(root, relative), { withFileTypes: true }); }
+  try { entries = await readdir(path.join(root, toFs(relative)), { withFileTypes: true }); }
   catch { return []; }
   const found: FoundFile[] = [];
   for (const entry of entries) {
     if (entry.name.startsWith(".")) continue;
-    const next = relative ? path.join(relative, entry.name) : entry.name;
+    const next = posixJoin(relative, entry.name);
     if (entry.isDirectory()) { found.push(...await listVideos(root, next, depth + 1)); continue; }
     if (!entry.isFile() || !isVideo(entry.name)) continue;
     try {
-      const info = await stat(path.join(root, next));
+      const info = await stat(path.join(root, toFs(next)));
       found.push({ relative: next, size: info.size, modified: info.mtime.toISOString() });
     } catch { /* the file disappeared meanwhile */ }
   }
@@ -181,16 +191,16 @@ export function libraryFingerprint(files: FoundFile[]): string {
 export function buildLibrary(files: FoundFile[]): LibraryEntry[] {
   const groups = new Map<string, FoundFile[]>();
   for (const file of files) {
-    const parts = file.relative.split(path.sep);
+    const parts = file.relative.split("/");
     // A file sitting in the root has no folder and stands for itself.
     const key = parts.length === 1 ? file.relative : parts[0];
     (groups.get(key) ?? groups.set(key, []).get(key)!).push(file);
   }
 
   const entries: LibraryEntry[] = [...groups.entries()].map(([key, group]) => {
-    const inSeason = group.some((file) => file.relative.split(path.sep).length >= 3);
+    const inSeason = group.some((file) => file.relative.split("/").length >= 3);
     const items: LibraryFile[] = group.map((file) => {
-      const parts = file.relative.split(path.sep);
+      const parts = file.relative.split("/");
       const filename = parts[parts.length - 1];
       const season = parts.length >= 3 ? parseSeason(parts[parts.length - 2]) : null;
       const { episode, title } = parseEpisode(filename);
@@ -223,7 +233,7 @@ export const summarize = ({ files, ...entry }: LibraryEntry): LibrarySummary => 
 
 /** The item's folder relative to the download root. A file in the root has no folder of its own. */
 export const entryDirectory = (entry: { key: string; files: { path: string }[] }) =>
-  entry.files[0]?.path.includes(path.sep) ? entry.key : "";
+  entry.files[0]?.path.includes("/") ? entry.key : "";
 
 /** A slice of one item's files, optionally filtered by name. */
 export function pageFiles(entry: LibraryEntry, query: string, skip: number, limit: number) {
@@ -264,7 +274,7 @@ export async function describePath(root: string, relative: string): Promise<Brow
   if (!target) return undefined;
   const info = await stat(target).catch(() => undefined);
   if (!info) return undefined;
-  const name = path.basename(relative);
+  const name = posixBase(relative);
   if (info.isDirectory()) {
     const inside = await listVideos(root, relative);
     if (!inside.length) return undefined;
@@ -278,7 +288,7 @@ export async function describePath(root: string, relative: string): Promise<Brow
   const { episode, title } = parseEpisode(name);
   return {
     kind: "file", path: relative, label: title || name.replace(/\.[^.]+$/, ""),
-    season: parseSeason(path.basename(path.dirname(relative))), episode,
+    season: parseSeason(posixBase(posixDir(relative))), episode,
     size: info.size, modified: info.mtime.toISOString(),
   };
 }
@@ -306,7 +316,7 @@ export async function browseDirectory(root: string, relative: string, query = ""
 
   for (const entry of entries) {
     if (entry.name.startsWith(".")) continue;
-    const childRelative = relative ? path.join(relative, entry.name) : entry.name;
+    const childRelative = posixJoin(relative, entry.name);
     if (entry.isDirectory()) {
       const inside = await listVideos(root, childRelative);
       if (!inside.length) continue;
@@ -322,7 +332,7 @@ export async function browseDirectory(root: string, relative: string, query = ""
     const label = entry.name.replace(/\.[^.]+$/, "");
     if (needle && !label.toLowerCase().includes(needle)) continue;
     try {
-      const info = await stat(path.join(root, childRelative));
+      const info = await stat(path.join(root, toFs(childRelative)));
       const numbers = numberedEpisode(childRelative);
       files.push({
         path: childRelative, label,

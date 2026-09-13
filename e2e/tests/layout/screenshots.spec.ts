@@ -71,6 +71,10 @@ test.describe("screenshots", () => {
   test("settings", async ({ page }) => {
     await openView(page, "Nastavení");
     await expect(page.getByRole("combobox", { name: "Velikost položek katalogu" })).toBeVisible();
+    // The report count is different on every run, and at the narrow viewports its width
+    // decides whether the header wraps. The section is masked anyway, so drop the chip and
+    // let the baseline measure the header, not the noise.
+    await page.locator(".diagnostics-toggle .state-chip").evaluateAll((chips) => chips.forEach((chip) => chip.remove()));
     await expect(page).toHaveScreenshot("settings.png", {
       fullPage: true,
       // Version, uptime and free disk space are different on every run.

@@ -75,6 +75,9 @@ function parseSettings(value: unknown): Settings {
     addonRefreshHours: normalizeRefreshHours(source.addonRefreshHours ?? fallback.addonRefreshHours),
     catalogTileSize: TILE_SIZES.has(catalogTileSize) ? catalogTileSize as Settings["catalogTileSize"] : fallback.catalogTileSize,
     libraryTileSize: TILE_SIZES.has(libraryTileSize) ? libraryTileSize as Settings["libraryTileSize"] : fallback.libraryTileSize,
+    // A backup does not carry library ids yet; the import falls back to the default.
+    defaultMovieLibrary: typeof source.defaultMovieLibrary === "string" ? source.defaultMovieLibrary : "",
+    defaultSeriesLibrary: typeof source.defaultSeriesLibrary === "string" ? source.defaultSeriesLibrary : "",
     realDebridToken: typeof source.realDebridToken === "string" ? source.realDebridToken.trim() : fallback.realDebridToken,
   };
 }

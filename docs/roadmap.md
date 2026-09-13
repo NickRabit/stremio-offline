@@ -78,6 +78,11 @@ push / ntfy out of the browser.
 ### Library and discovery
 
 - **Library metadata**: posters and descriptions for folders that did not arrive through the download queue. Spec in [library-metadata.md](library-metadata.md). Path parser, title units and scoring ship first; Identify, the scan job and library chrome follow.
+- **Multiple libraries**: several named roots with a type (movie / series / mixed),
+  managed from the interface, items moved between them, per-addon save targets,
+  bulk file operations, and the metadata/cache groundwork that goes with it.
+  Spec in [multi-library.md](multi-library.md). It supersedes the "Plex-like
+  separate libraries" rejection in [library-metadata.md](library-metadata.md).
 - **Follow show**: daily check for new episodes, enqueue as lazy jobs. The lazy-job plumbing exists; the watch list and scheduler do not.
 - Search: live input (~400 ms debounce), recent queries, suggestions from already loaded catalogs, optional rank-by-title-match.
 

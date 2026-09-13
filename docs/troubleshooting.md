@@ -64,6 +64,24 @@ off.
 Downloads and video playback do **not** go through the guard — a long transfer
 would hold a slot, and stopping playback would look like an outage.
 
+## Rolling the image back
+
+An upgrade to a build with libraries rewrites `state.json`: stored paths gain a
+library id in front of them (`lib_ab12cd34/Show/01 serie/01.mkv`) and
+`schemaVersion` becomes `2`. An older image reading that file cannot resolve the
+paths, so the library would come up with no match history and no thumbnails.
+
+The migration copies the file it found to `state.json.v1.bak` in `DATA_DIR`
+before touching anything. To roll back, stop the container, copy that file over
+`state.json` and start the old image:
+
+```sh
+cp data/state.json.v1.bak data/state.json
+```
+
+Nothing in the library itself is renamed or moved by the migration, so a
+rollback loses nothing but the time spent on the newer build.
+
 ## Common situations
 
 | Symptom | Where to look |
