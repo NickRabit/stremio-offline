@@ -60,7 +60,7 @@ representative at an online or offline event.
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
 reported to the community leaders responsible for enforcement by opening a
-private [GitHub security advisory](https://github.com/NickRabit/streamio-offline/security/advisories/new)
+private [GitHub security advisory](https://github.com/NickRabit/stremio-offline/security/advisories/new)
 or by contacting the maintainer through GitHub.
 
 All complaints will be reviewed and investigated promptly and fairly.

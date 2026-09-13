@@ -10,7 +10,7 @@ Older tags and ad-hoc images are not.
 Do not open a public issue for a problem that could expose a NAS, session
 cookies, or tokens stored in addon URLs.
 
-Use [GitHub private vulnerability reporting](https://github.com/NickRabit/streamio-offline/security/advisories/new)
+Use [GitHub private vulnerability reporting](https://github.com/NickRabit/stremio-offline/security/advisories/new)
 instead. If that form is unavailable, contact the maintainer through GitHub.
 
 Please include:

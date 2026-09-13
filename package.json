@@ -6,12 +6,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/NickRabit/streamio-offline.git"
+    "url": "https://github.com/NickRabit/stremio-offline.git"
   },
   "bugs": {
-    "url": "https://github.com/NickRabit/streamio-offline/issues"
+    "url": "https://github.com/NickRabit/stremio-offline/issues"
   },
-  "homepage": "https://github.com/NickRabit/streamio-offline#readme",
+  "homepage": "https://github.com/NickRabit/stremio-offline#readme",
   "workspaces": [
     "server",
     "web"

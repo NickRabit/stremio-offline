@@ -9,7 +9,7 @@ services:
   stremio-offline:
     # GitHub Actions builds the image; the NAS only pulls it. Pin a version
     # instead of :latest by appending a commit SHA, for example :a1b2c3d.
-    image: ghcr.io/nickrabit/streamio-offline:latest
+    image: ghcr.io/nickrabit/stremio-offline:latest
     container_name: stremio-offline
     restart: unless-stopped
     init: true
