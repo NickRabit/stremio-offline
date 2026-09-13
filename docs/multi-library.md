@@ -401,6 +401,22 @@ Three consequences that only surface once a tree can be added:
    auto-removed; its metadata file and its artwork directory stay untouched
    until the user removes the library explicitly.
 
+`readOnly` and `unreachable` are probed, not declared: on create, on re-root, at
+the start of a scan, sweep or ops job, and on `GET /api/libraries`. Two
+constraints make the probe its own small problem rather than a `stat` call:
+
+- **It must not block.** `stat` on a dead NFS or SMB mount can hang for the mount
+  timeout, and `GET /api/libraries` is on the browse path. Probe with an explicit
+  timeout (2 s) and treat the timeout itself as `unreachable`.
+- **It must be cached.** The library view polls; probing per request would stat a
+  sick mount every couple of seconds. Cache the result for 30 s, and invalidate
+  it when an operation against that library fails on I/O — a failing write is a
+  better signal than the next scheduled probe.
+
+Writability is checked the same way and with the same cache, by creating and
+removing a dot-file rather than reading the mode bits, because a read-only mount,
+a wrong `PUID`, and an ACL all fail differently.
+
 ### 7. Metadata storage
 
 Move library-keyed maps out of `state.json` into `data/library/<libraryId>.json`:
@@ -418,7 +434,15 @@ stays valid if a library is ever re-identified, and the file is readable on its
 own. `LibraryMetaStore` re-qualifies on read.
 
 `libraryEpisodes` is keyed by `type:id:season:episode`, not by path, so it is
-shared: move it to `data/library/episodes.json`.
+shared across libraries: move it to `data/library/episodes.json`.
+
+Rows orphaned by a deleted library are **kept**, deliberately. Nothing prunes
+`libraryEpisodes` today either, the rows are small and capped per title
+(`MAX_EPISODES`), and they are keyed by catalogue identity — so a library that is
+removed and re-added, or a second library holding the same show, reuses them
+instead of asking the addon again. Deleting a library therefore removes its
+`data/library/<id>.json` and its artwork directory, and touches this file not at
+all.
 
 ```ts
 export class LibraryMetaStore {
@@ -599,11 +623,20 @@ libraries as rows of `kind: "library"` carrying `{ libraryId, name, type,
 fileCount, size, poster, unreachable? }`. Two exceptions that keep the common
 case unchanged:
 
-- With exactly one library, the root browse transparently returns that
-  library's contents, and the breadcrumb shows the library name instead of
+- With exactly one **configured** library the root browse transparently returns
+  that library's contents, and the breadcrumb shows the library name instead of
   "Library". A single-library install must look and behave exactly as today —
   this is also what keeps the layout screenshots in
   `e2e/tests/layout/__screenshots__` meaningful.
+  Configured, not enabled and not reachable: a second library that is switched
+  off or whose disk is unplugged is still a deliberate part of the setup, and a
+  browse root that silently changed shape when a drive spun down would be worse
+  than one extra click. Two libraries means the list, always.
+- `:favorites` and `:resume` span libraries and stay unqualified. Entries whose
+  library is disabled or unreachable are **omitted** from those listings rather
+  than rendered as dead rows — `describePath` cannot stat them anyway — and they
+  come back when the library does. Nothing is removed from `favorites` or
+  `progress`.
 - A library whose root is unreachable (unplugged disk, dead mount) renders as a
   row with a warning and is skipped by scan, sweep and ops. It is never
   auto-removed and its metadata is never dropped.
@@ -715,6 +748,13 @@ ids — a backup restored elsewhere must not claim another instance's ids) and
 import maps them by root, then by name, and falls back to the default for
 anything unmatched. Bump `BACKUP_VERSION` to `2` and keep reading `1`.
 
+Import must remap **every** id it restores, not just the addon rules:
+`Settings.defaultMovieLibrary` and `defaultSeriesLibrary` travel inside the
+`settings` blob and would otherwise arrive pointing at another instance's
+libraries. Run them through the same resolution, and clear to `""` when
+unmatched. `parseSettings` in `server/src/backup.ts` is where that belongs, so a
+v1 backup (which has neither field) also lands on valid values.
+
 ## Data Model Changes & Migration
 
 An existing install must come up on the new build with its match history,
@@ -752,8 +792,16 @@ migration that runs second is a migration that runs against half-loaded state.
 3. Move `libraryMeta` / `librarySuggestions` into `data/library/<id>.json`
    (library-relative keys) and `libraryEpisodes` into
    `data/library/episodes.json`.
-4. Re-key `data/artwork/*.jpg` into `data/artwork/<id>/` under the new hashes.
-   A failure here is not fatal: a missing thumbnail regenerates. Log the count.
+4. Re-key `data/artwork/*.jpg` into `data/artwork/<id>/`. The file name is
+   `sha1(key).jpg` with no index (`dataArtworkFile` in `server/src/index.ts`), so
+   the old name cannot be inverted: build the mapping forward instead, from the
+   keys the migration already holds — every `libraryMeta` / `librarySuggestions`
+   key plus every path from one `listVideos(DOWNLOAD_DIR)` walk, each hashed both
+   bare and as `dir:<key>` — and rename only what that map covers.
+   **Unmapped files are left alone**, not deleted: they are the same orphans
+   `sweepArtwork` already collects, under its existing one-hour freshness guard.
+   A failure here is not fatal either; a missing thumbnail regenerates. Log how
+   many were mapped and how many were left.
 5. Rewrite `data/library-scan.json` paths, or reset it to idle when it is not
    running — a mid-scan migration may simply start over.
 6. `AddonDownloadSettings[kind].libraryId = ""` (the default), and
@@ -761,13 +809,49 @@ migration that runs second is a migration that runs against half-loaded state.
 7. Rewrite the download queue's stored job targets to qualified paths. A job
    interrupted mid-transfer resumes by Range against the same absolute file, so
    rewriting the stored target is enough — but the queue must load *after* this.
-8. Seed the per-library autoscan fingerprint from the existing global one, so
-   the first boot after an upgrade does not read as a whole-tree change and
-   start a scan nobody asked for.
-9. Write `state.json` once, atomically, then continue.
+8. Write `state.json` once, atomically, then continue.
+
+Nothing needs to be done about the autoscan baseline. `LibraryAutoScan` keeps its
+fingerprint in memory only (`server/src/library-autoscan.ts`) — `remember()` is
+called after a manual scan and nothing persists it — so **every** restart already
+starts without a baseline and runs one check, as the comment in `check()` says
+outright. An upgrade is just another restart. The check is cheap on a migrated
+install because bound units are skips and skips do not sleep; on an unmatched one
+it does what the user would have asked for anyway. Per-library fingerprints (§6)
+are in-memory in exactly the same way.
 
 The migrated root needs no grant of its own: `LIBRARY_ROOTS` defaults to
 `DOWNLOAD_DIR`, so the legacy library is inside a granted root by construction.
+
+### When a library stops being available
+
+Four events point references at a library that is gone or no longer eligible:
+**delete**, **disable**, **change type**, and **revoking the grant** its root sits
+under (which disables, never deletes). Validation on `PATCH /api/addons/:key`
+only covers the moment a rule is written; every one of these events happens
+afterwards. Resolve them the same way each time, at **use** rather than by
+rewriting stored rows, so a library that comes back needs no repair:
+
+| Reference | On delete | On disable / unreachable | On type change |
+| --- | --- | --- | --- |
+| `defaultMovieLibrary` / `defaultSeriesLibrary` | cleared to `""`; `defaultLibrary()` then falls back to the first enabled library of the kind, then the first `mixed` | left pointing at it; the same fallback applies while it is away | cleared if the new type no longer matches the kind |
+| `AddonDownloadSettings[kind].libraryId` | rewritten to `""` (= default) and logged, one line per addon | left as it is; the download resolves through the fallback for now | left as it is if still eligible (`mixed` always is), else rewritten to `""` and logged |
+| Queued download jobs | jobs whose target resolves into it are **paused** with a `pauseReason` of `"library"`, never failed and never silently redirected | same | unaffected; the type gate applies to placement, not to a job already placed |
+| Running ops job | cancelled at the current item; completed items keep their results | paused, resumed when the library returns | unaffected |
+| `favorites`, `progress`, `libraryMeta` | kept unless `?forget=1`; the metadata file and artwork directory go only on an explicit forget | kept, hidden from listings (§12) | kept |
+
+Two rules behind that table:
+
+- **Nothing is destroyed by absence.** A pulled disk, a revoked grant and a
+  switched-off library are all recoverable states. Only an explicit
+  `DELETE /api/libraries/:id?forget=1` removes remembered data.
+- **A paused download is honest; a redirected one is not.** Sending a job to the
+  fallback library because its real target vanished would scatter a season across
+  two roots. Pause, say why, and let the user decide.
+
+`defaultLibrary()` must therefore never assume its stored id resolves, and the
+download path must handle "the rule names a library that is not available right
+now" as a first-class outcome rather than an invariant violation.
 
 ### Rollback
 
@@ -816,10 +900,26 @@ upgrade path is covered by something that actually boots the server.
   path at `INFO` with the job id.
 
 **Restricted mode.** Keep today's parity (item rename/move/delete and match are
-already allowed) and add to `ALLOWED_MUTATIONS`: `POST /library/folder`,
-`POST /library/ops`, `POST /library/ops/:id/cancel`. Deny: everything under
-`/libraries` (CRUD and the picker) — a shared demo must not learn the host's
-directory layout or repoint a library.
+already allowed) and add to `ALLOWED_MUTATIONS` in `server/src/restricted.ts`:
+`POST /library/folder`, `POST /library/ops`, `POST /library/ops/:id/cancel`.
+
+Denying the reads takes an explicit list, not prose: `restrictedMiddleware` lets
+every GET through unless it matches `DENIED_GETS`, so add there (paths are
+Express-stripped of the `/api` mount):
+
+```ts
+{ method: "GET", pattern: /^\/libraries\/browse$/ },
+{ method: "GET", pattern: /^\/libraries\/grants$/ },
+```
+
+and add the writes — `POST`/`PATCH`/`DELETE` on `/libraries`, `/libraries/:id`,
+`/libraries/grants` and `/libraries/preview` — nowhere, since anything not in
+`ALLOWED_MUTATIONS` is already refused.
+
+`GET /api/libraries` itself stays **allowed**: the browse breadcrumbs and the
+move dialog need the names. It must omit `root` from its payload in restricted
+mode, though — a shared demo has no business learning the host's directory
+layout, and the name and type are all the interface actually renders.
 
 ## Observability
 
@@ -1027,6 +1127,24 @@ Per [testing.md](testing.md).
   grant is refused; revoking a grant disables rather than deletes its libraries.
 - Nesting validation: identical root refused; child accepted and carved; a root
   that is a file refused; a root outside every base refused.
+- The reachability probe: a root whose `stat` never settles is reported
+  `unreachable` after the timeout rather than hanging the call; a second probe
+  inside the cache window does not touch the filesystem; an I/O failure against
+  the library invalidates the cache early.
+
+`library-references.test.ts` (new) — the table in *When a library stops being
+available* is the spec:
+
+- Deleting a library clears a default that named it and `defaultLibrary()` then
+  returns the first enabled library of the kind, then the first `mixed`, then
+  `undefined`.
+- Deleting rewrites addon rules that named it to `""`; disabling does not.
+- A queued job whose target resolves into a vanishing library is paused with
+  `pauseReason: "library"` — never failed, never redirected to the fallback.
+- Changing a `mixed` library to `movie` clears a `series` rule that named it and
+  leaves a `movie` one alone.
+- `?forget=1` removes the metadata file and artwork directory; without it both
+  survive and a re-added library at the same root picks them up.
 
 `library.test.ts` (extend)
 
@@ -1084,10 +1202,21 @@ Per [testing.md](testing.md).
   mismatch → throws with the catalogue key, `mixed` accepted for both kinds.
 - `safeName` rejects Windows reserved device names and trailing dots/spaces.
 
+`restricted.test.ts` (extend)
+
+- `GET /libraries/browse` and `GET /libraries/grants` are refused via
+  `DENIED_GETS`; `GET /libraries` is allowed and its payload carries no `root`.
+- Library and grant writes are refused by the default-deny on mutations, while
+  `POST /library/folder` and `POST /library/ops` are allowed.
+
 `backup.test.ts` (extend)
 
 - v1 backup still imports; v2 round-trips libraries; an unmatched library falls
   back to the default and is reported.
+- `defaultMovieLibrary` / `defaultSeriesLibrary` inside the `settings` blob are
+  remapped by root then name, and cleared to `""` when unmatched — a foreign id
+  must never survive an import. A v1 backup, which carries neither field, lands
+  on valid values.
 
 ### L1 — Vitest (`web/src`)
 
@@ -1107,6 +1236,9 @@ Per [testing.md](testing.md).
 - `library-bulk.spec.ts`: enter selection mode, select three items, move them,
   watch the job progress, confirm the result and that a failed item did not stop
   the rest.
+- `libraries.spec.ts` also covers the pass-through boundary: one configured
+  library browses straight into its contents, and adding a second — even left
+  disabled — switches the root to the list and keeps it there.
 - `library-types.spec.ts`: a `series` library classifies a folder of loose
   numbered files as a show; a `movie` library does not turn a folder with
   `01 serie` into one.
@@ -1117,9 +1249,11 @@ Per [testing.md](testing.md).
 
 - New shots: library manager, root browse with two libraries, selection action
   bar (desktop, tablet-landscape, mobile).
-- Existing shots must not change: assert the single-library pass-through by
-  keeping `catalog.png`, `title-detail.png` and the library shots byte-identical
-  in the single-library fixture.
+- Existing shots must keep passing **without their baselines being regenerated**
+  in the single-library fixture — that is the assertion that the pass-through
+  really is invisible. Not byte-identity: Playwright compares with a threshold,
+  and demanding identical bytes would turn any unrelated antialiasing difference
+  into a failure that says nothing about this feature.
 
 ## Rollout Plan / PR Plan
 
