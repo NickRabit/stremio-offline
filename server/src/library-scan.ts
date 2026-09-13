@@ -132,6 +132,15 @@ export class LibraryScan {
     }
     if (this.state.status === "running" || this.state.status === "paused") {
       await this.refreshUnits();
+      // An upgrade qualifies the unit keys, and a run that was interrupted before it would
+      // resume against keys the walk no longer produces: every entry would miss and the
+      // interface would watch a whole library being skipped. Nothing to resume, start over.
+      if (this.state.remaining.length && !this.state.remaining.some((key) => this.units.has(key))) {
+        log("WARN", "The library scan state names no item of any library, starting idle");
+        this.state = idle();
+        await this.save();
+        return;
+      }
       this.schedulePump();
     }
   }

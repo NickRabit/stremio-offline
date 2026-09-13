@@ -94,6 +94,11 @@ again after every rebase onto `main`.
       the path names. The probe answers (`unreachable`, `readOnly`) gate the walk and the
       sweep; a root that is out of reach is skipped, never removed.
 - [ ] `writeArtwork`, `readOnly` and `unreachable` through the artwork sink and the walk.
+- [x] `data/library-scan.json`, spec step 5: `LibraryScan.load()` drops a run whose
+      `remaining[]` names no item of any current library instead of resuming it. An upgrade
+      qualifies the unit keys, and an interrupted run would otherwise skip the whole library
+      one entry at a time. The guard sits in `load()` rather than in the migration, so it
+      also covers an install whose state file was written by the libraries build.
 - [x] `LIBRARY_META_TTL_DAYS` (default `14`) and `LibraryMetaRecord.refreshedAt`: a bound
       series older than the TTL is re-fetched by the scan, one `metadata()` call at the
       same pacing, only for libraries browsed since the last run. Carried over from PR 2.

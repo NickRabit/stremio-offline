@@ -168,6 +168,20 @@ test("load retries the in-flight key still listed in remaining", async () => {
   } finally { await h.close(); }
 });
 
+test("a scan state the upgrade left behind starts idle instead of skipping everything", async () => {
+  const h = await harness({ units: async () => [movie("lib_aaaaaaaa/Foo"), movie("lib_aaaaaaaa/Bar")] });
+  try {
+    await writeFile(path.join(h.dataDir, "library-scan.json"), JSON.stringify({
+      status: "running", total: 2, done: 1, matched: 0, skipped: 1, failed: 0,
+      remaining: ["Foo"], current: "Foo",
+    }));
+    await h.scan.load();
+    assert.equal(h.scan.snapshot().status, "idle", "the run is dropped rather than resumed against keys nobody has");
+    assert.deepEqual(h.scan.snapshot().remaining, []);
+    assert.deepEqual(h.searches, [], "and it asks the catalogues nothing on its own");
+  } finally { await h.close(); }
+});
+
 test("start while running or paused returns the current snapshot", async () => {
   let release!: () => void;
   const gate = new Promise<void>((resolve) => { release = resolve; });
