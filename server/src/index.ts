@@ -1779,7 +1779,7 @@ const transferLibraryItem = async (relative: string, folder: string, copy = fals
   // the item is the same item and would otherwise lose its poster until a rescan.
   const carried = [resolved.key, ...(await libraryFiles())
     .map((file) => file.relative).filter((item) => item !== resolved.key && isPathWithin(item, resolved.key))];
-  await transferLibraryPath(resolved.absolute, target.absolute, !copy, progress);
+  const transferred = await transferLibraryPath(resolved.absolute, target.absolute, !copy, progress);
   if (copy) await metaStore.copy(resolved.key, target.key);
   else {
     await relocateArtwork(carried, resolved.key, target.key);
@@ -1789,7 +1789,8 @@ const transferLibraryItem = async (relative: string, folder: string, copy = fals
   const pruned = copy ? [] : await pruneEmptiedFolders(resolved.key);
   invalidateLibrary();
   const moved = wirePath(target.key);
-  log("INFO", copy ? "Copied in the library" : "Moved in the library", { from: relative, to: moved, library: resolved.library.id, pruned });
+  log("INFO", copy ? "Copied in the library" : "Moved in the library",
+    { from: relative, to: moved, library: resolved.library.id, pruned, ...(transferred.sourceLeft ? { sourceLeft: transferred.sourceLeft } : {}) });
   return moved;
 };
 

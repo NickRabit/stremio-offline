@@ -2,6 +2,7 @@ import { createReadStream, createWriteStream } from "node:fs";
 import { lstat, mkdir, open, readdir, rename, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
+import { log } from "./logger.js";
 
 export type TransferProgress = (bytes: number, total: number) => void;
 
@@ -37,11 +38,36 @@ const copyTree = async (source: string, target: string, progress: { bytes: numbe
   await syncFile(target);
 };
 
-export async function transferLibraryPath(source: string, target: string, move: boolean, report: TransferProgress = () => undefined) {
+/** Drops the source of a finished move. The copy is already at the destination, so a
+ *  refusal here leaves a duplicate, not a lost item: it is reported, never thrown. The
+ *  message comes back for the caller to log and show; `undefined` means the source is gone. */
+export async function removeMovedSource(source: string): Promise<string | undefined> {
+  try {
+    await rm(source, { recursive: true, force: false });
+    return undefined;
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    log("WARN", "The copy landed but the source could not be removed", { source, reason: reason.slice(0, 120) });
+    return reason;
+  }
+}
+
+export interface TransferResult {
+  bytes: number;
+  total: number;
+  /** A move whose copy landed but whose source could not be removed. The item is at the
+   *  destination and also still where it was; the caller reports the leftover instead of
+   *  calling the whole transfer a failure. */
+  sourceLeft?: string;
+}
+
+export async function transferLibraryPath(source: string, target: string, move: boolean, report: TransferProgress = () => undefined): Promise<TransferResult> {
   const [sourceInfo, parentInfo] = await Promise.all([stat(source), stat(path.dirname(target))]);
   if (move && sourceInfo.dev === parentInfo.dev) {
     await rename(source, target);
-    const bytes = sourceInfo.isFile() ? sourceInfo.size : 0;
+    // A folder is renamed whole, so nothing was copied -- but the size is what the item
+    // takes, and a progress bar that reads zero for a moved season is a lie about the item.
+    const bytes = sourceInfo.isDirectory() ? await byteSize(target) : sourceInfo.size;
     report(bytes, bytes);
     return { bytes, total: bytes };
   }
@@ -51,12 +77,15 @@ export async function transferLibraryPath(source: string, target: string, move: 
   const progress = { bytes: 0, total, report };
   try {
     await copyTree(source, temporary, progress);
-    await rename(temporary, target);
-    if (move) await rm(source, { recursive: true, force: false });
   } catch (error) {
     await rm(temporary, { recursive: true, force: true });
     throw error;
   }
+  // Past this point the copy is durable and in place. A failure now is about the source
+  // that is left behind, not about the transfer: throwing would report a move that did
+  // not happen, and the retry would only meet its own result as `err.nameTaken`.
+  await rename(temporary, target);
+  const sourceLeft = move ? await removeMovedSource(source) : undefined;
   report(total, total);
-  return { bytes: total, total };
+  return { bytes: total, total, ...(sourceLeft ? { sourceLeft } : {}) };
 }
