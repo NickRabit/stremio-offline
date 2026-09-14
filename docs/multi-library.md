@@ -174,6 +174,26 @@ again after every rebase onto `main`.
       thumbnail in `data/artwork/<id>/` even with the artwork setting on `media`, while a
       writable library under that setting writes the poster beside the media. Revoking a grant
       disables the library and leaves its metadata, artwork and media in place.
+- [x] Follow-up found by using the feature: the picker can name a folder that does not exist
+      yet. The name is taken inside the browsed folder, the selection becomes that path and the
+      create request carries `create: true`, so `checkLibraryRoot` makes the folder inside the
+      grant -- the option PR 3 already had and nothing sent. A cancelled flow leaves nothing on
+      disk, and nothing is pre-created: the directory appears with the library. The estimate is
+      skipped while the folder is pending, the library name defaults to it, a name with a slash
+      is refused in the picker, and re-root keeps offering only folders that exist. The write
+      goes through `POST /api/libraries`, so it is denied in restricted mode with the rest of
+      the admin routes. Covered by `web/src/LibraryManager.test.tsx` (the request body, and the
+      ordinary pick still sending no `create`) and by `e2e/tests/library-admin.spec.ts`, which
+      asserts the folder is absent before the library is added and present after.
+- [x] Follow-up found in use: the global `Settings.artworkLocation` is retired and
+      `writeArtwork` is the one control for where a poster goes. `artworkBesideMedia` takes no
+      setting, `PATCH /api/settings` ignores the old key, the backup no longer carries it, and
+      the Storage section says where the switch moved instead of offering a second answer to
+      the same question. `retireArtworkLocation` in `library-migrate.ts` reads the old value
+      once, keyed on the key still being in the file, and turns a library's `writeArtwork` off
+      unless the install had asked for `"media"`; the value then leaves the state, so the pass
+      runs once. Covered by `library-migrate.test.ts` (both directions, and a second start
+      doing nothing) plus the updated `artwork.test.ts` and `backup.test.ts`.
 
 ### PR 4 — Library manager, root browse, cross-library move
 
@@ -255,7 +275,13 @@ again after every rebase onto `main`.
 
 ### PR 6 — Per-library addon save rules, backup, documentation
 
-- [ ] Not started.
+- [x] The user documentation: [libraries.md](libraries.md) covers what a library is, the
+      types, the per-library switches, what an unreachable or read-only root does, removing
+      against disabling, where the state lives, and the split of the download directory --
+      *split from inside* as the supported route and *re-root* with the warning that it moves
+      no files. Linked from the README and from the configuration reference, which is where
+      an operator looks for `LIBRARY_ROOTS`.
+- [ ] The rest: per-library addon save rules, backup v2.
 
 ## Overview
 
@@ -405,8 +431,8 @@ export interface LibraryRecord {
    *  copy destinations, and every ops job that writes. Never auto-removed. */
   readOnly?: boolean;
   /** May we drop poster.jpg next to the media here? Default true; forced false and
-   *  locked in the UI when readOnly. Overrides the global `artworkLocation` for
-   *  this library (§6). */
+   *  locked in the UI when readOnly. The one control for this question (§6); the
+   *  global `artworkLocation` it used to answer to is retired. */
   writeArtwork: boolean;
   /** Root could not be reached at the last check. Skipped by scan, sweep, autoscan
    *  and ops; metadata and artwork are kept untouched. */
@@ -639,10 +665,11 @@ Three consequences that only surface once a tree can be added:
 2. **A library may be one we must not write into.** An added tree can be a
    read-only mount, or simply one the user does not want us dropping
    `poster.jpg` into. `LibraryRecord` gains `writeArtwork: boolean` (default
-   `true`, forced `false` and locked in the UI when the root is not writable),
-   which overrides the global `artworkLocation` for that library: generated and
-   catalogue artwork go to `data/artwork/<libraryId>/` instead of next to the
-   media. A `readOnly` library is also excluded from the addon save-rule picker,
+   `true`, forced `false` and locked in the UI when the root is not writable):
+   generated and catalogue artwork go to `data/artwork/<libraryId>/` instead of
+   next to the media. It is the one control for that question — the global
+   `artworkLocation` this slice still carried is retired under *Known gaps*. A
+   `readOnly` library is also excluded from the addon save-rule picker,
    from the move/copy destination list, and from every ops job that writes.
 3. **An unreachable root is normal operation, not an error.** With external
    disks in play this stops being an edge case. Such a library renders with a
@@ -761,12 +788,13 @@ already has:
   and the sweep is safe — and skipping it would let orphans grow without bound in
   exactly the common case, an added read-only archive.
 - `writeArtwork: false` (§6) redirects everything that would land next to the
-  media into `data/artwork/<libraryId>/`, whatever the global `artworkLocation`
-  says. That covers a read-only mount and a tree the user curates elsewhere.
-  `savePosterFromUrl`, `saveFrame` and `writeCatalogPoster` all consult it.
-- A poster that lives next to the media (`POSTER_NAMES`, `artworkLocation:
-  "media"`) is never evicted and never counted. Key Decision 7 of
-  [library-metadata.md](library-metadata.md) stands.
+  media into `data/artwork/<libraryId>/`. That covers a read-only mount and a
+  tree the user curates elsewhere. `savePosterFromUrl`, `saveFrame` and
+  `writeCatalogPoster` all consult it, and it is the only control: the global
+  `artworkLocation` is retired, its value read once by the migration.
+- A poster that lives next to the media (`POSTER_NAMES`, and everything we
+  generate where `writeArtwork` allows it) is never evicted and never counted.
+  Key Decision 7 of [library-metadata.md](library-metadata.md) stands.
 - `ImageProxy`: add the TTL pass to `evict()`; drop bytes only, keep the id → URL
   row, exactly as the current eviction does.
 
@@ -1600,31 +1628,28 @@ decision attached, and none of them needs the design revisited.
 
 ### The folder picker cannot create a folder
 
-`POST /api/libraries` already takes `create?: boolean` and
-`requireLibraryRoot(value, { create })` carries it, but nothing sends it: the
-manager calls `api.createLibrary({ name, type, root })` and the picker lists only
-directories that already exist. So a library can only be added over a folder that
-is already on disk — and under Docker the app is the only interface the owner
-has, which makes "that folder does not exist" a dead end rather than a hint.
-
-Wire the existing option: a **New folder** action in the picker, creating inside
-the browsed grant, and `create: true` on the request that follows. `mkdir` stays
-refused outside every grant, and refused in restricted mode with the rest of
-`/libraries`.
+**Closed.** The picker offers **New folder**: the name is taken inside the browsed
+folder, that path becomes the selection, and the create request carries
+`create: true`, the option `POST /api/libraries` and
+`requireLibraryRoot(value, { create })` had from the start. Nothing is created
+before the library is, so a cancelled flow leaves no empty folder; the `mkdir`
+still happens inside `checkLibraryRoot`, which refuses anything outside every
+grant, and the route stays denied in restricted mode with the rest of
+`/libraries`. Re-root is unchanged: it takes a folder that already exists.
 
 ### Retire `artworkLocation`
 
-`Settings.artworkLocation` is global and defaults to `"data"`; `writeArtwork` is
-per library and defaults to `true`. A poster lands beside the media only when
-both agree, which is two controls for one decision and explains why an install
-that wanted posters beside the media kept writing them into `DATA_PATH`.
+**Closed.** `Settings.artworkLocation` is gone and `writeArtwork` is the single
+control, on by default, forced off and locked where the root is read-only — the
+case the flag exists for. It also sits at the right level: whether to write into
+a tree is a property of that tree, not of the installation.
 
-Drop the global one. `writeArtwork` is the single control, on by default, forced
-off and locked where the root is read-only — the case the flag exists for. It
-also sits at the right level: whether to write into a tree is a property of that
-tree, not of the installation. Migration reads the old global once: an install
-that had `artworkLocation: "data"` gets `writeArtwork: false` on its libraries,
-so nobody's layout changes under them, and the Storage section loses the select.
+The migration reads the old global once, when the key is still in `state.json`,
+and takes it away with it: a library keeps its own answer only where the old
+setting said `"media"`, so an install that wrote its posters into `DATA_PATH`
+keeps them there and nobody's layout changes under them. A state that points
+next to the media gets the flags it already had. The Storage section loses the
+select and says where the switch went.
 
 ### No guided split of the download directory
 
@@ -1646,6 +1671,28 @@ Write (1) up in the user documentation as the supported route. A wizard that
 offers it from the library manager is worth having; note that re-root moves no
 files, since the name suggests otherwise.
 
+**Written up** in [libraries.md](libraries.md), both routes, with the warning
+that re-root moves no files. The wizard from the library manager is still open.
+
+### Remembered metadata a re-add cannot find
+
+Found while writing that guide. `DELETE /api/libraries/:id` without `forget=1`
+keeps `data/library/<id>.json` and `data/artwork/<id>/`, and the interface reads
+as if the plain *Remove* were the recoverable choice ("Remove and forget … the
+match history and the thumbnails will not come back"). It is not recoverable:
+`POST /api/libraries` always mints a new id and nothing maps a root back to a
+retired one, so a library added again at the same folder starts with an empty
+match history. The kept files are then reachable by nothing.
+
+Two ways out, and it is a decision rather than a fix:
+
+1. Say what happens. The row says the metadata is left on disk but is not picked
+   up again — what [libraries.md](libraries.md) now does.
+2. Keep a retired-root index and let a re-add at the same root take the old id
+   back, which restores the match history. That is the behaviour the row's
+   wording and §12 both imply, and per-library save rules will want the same
+   root-to-library mapping anyway.
+
 ## Open Questions
 
 1. **Default-library storage.** `Settings.defaultMovieLibrary` /
@@ -1656,8 +1703,9 @@ files, since the name suggests otherwise.
    Running the feature showed the opposite problem to the one this question
    anticipated: there are now *two* controls for where a poster goes, the global
    `Settings.artworkLocation` (`data` | `media`) and the per-library
-   `writeArtwork`, and they say overlapping things. See *Retire
-   `artworkLocation`* under Known gaps.
+   `writeArtwork`, and they said overlapping things. Global one retired; see
+   *Retire `artworkLocation`* under Known gaps. The next per-library setting
+   should be weighed the same way: does it describe the tree or the install?
 3. **Bulk rename by pattern.** Deliberately out of v1. The `LibraryOp` union is
    shaped to take it without a migration.
 4. **Follow show** ([roadmap.md](roadmap.md)) will want a per-library watch list

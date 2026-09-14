@@ -20,10 +20,11 @@ specification disagree, the specification wins and this file is wrong.
 | #118 | Library manager, root browse, cross-library moves | merged |
 | #120 | Library size in Settings read the file count | merged |
 | #121 | Transfer reported a landed copy as a failed move | merged into #119 |
-| #119 | Bulk operations queue and selection UI | open, rebased onto `main`, at `0.4.4`, baselines regenerating |
+| #119 | Bulk operations queue and selection UI | merged |
 | PR 6 | Per-library addon save rules, backup v2, documentation | not started |
 
-`main` is at `0.4.3`. #119 carries `0.4.4`.
+`main` is at `0.4.4`, which includes #119. #123 (`0.4.5`) carries the folder
+picker; the artwork retirement is the branch right after it.
 
 ## Defects to fix
 
@@ -39,6 +40,10 @@ Wire what is already there: a **New folder** action in the picker, creating
 inside the browsed grant, and `create: true` on the request that follows. Keep
 `mkdir` refused outside every grant and refused in restricted mode.
 
+**Fixed** in #123: the picker names the folder, the create request makes it, and
+a cancelled flow leaves nothing on disk. Re-root still takes only folders that
+exist, because it moves no files.
+
 ### Two controls decide where a poster goes
 
 `Settings.artworkLocation` is global and defaults to `"data"`; `writeArtwork` is
@@ -52,6 +57,11 @@ also sits at the right level: whether to write into a tree is a property of that
 tree, not of the installation. Migration reads the old global once, so an install
 that had `"data"` gets `writeArtwork: false` and nobody's layout changes under
 them.
+
+**Fixed**: the global is gone from the settings, the backup and the Storage
+section, and the migration reads the old value while the key is still in
+`state.json` — a library keeps its own answer only where the install had asked
+for `"media"`.
 
 ### Nothing explains how to split the download directory
 
@@ -70,6 +80,21 @@ Carve-outs make splitting `/downloads` into `/downloads/Films` and
    tree and read it as new unmatched titles.
 
 Say explicitly that re-root moves no files. The name suggests otherwise.
+
+**Written up** in `docs/libraries.md`, both routes. The library-manager wizard
+is still open.
+
+### Remembered metadata a re-add cannot find
+
+Found while writing that guide. `DELETE /api/libraries/:id` without `forget=1`
+keeps `data/library/<id>.json` and `data/artwork/<id>/`, and the row reads as if
+the plain *Remove* were the recoverable choice. It is not: `POST /api/libraries`
+always mints a new id and nothing maps a root back to a retired one, so a
+library added again at the same folder starts with an empty match history and
+the kept files are reachable by nothing. Recorded under *Known gaps* in
+[multi-library.md](multi-library.md), with the two ways out: say so, or keep a
+retired-root index and let the re-add take the old id back. The second is the
+behaviour §12 implies, and per-library save rules will want the same mapping.
 
 ## Fixed, recorded so they are not re-litigated
 
@@ -124,6 +149,14 @@ commit to your branch — and because that push comes from `github-actions[bot]`
 **it does not trigger CI**. Push something of your own afterwards (a squash of
 the baseline commit is tidiest) or the run sits at `action_required`.
 
+**The settings screenshot covers the Storage section.** Anything that changes
+that panel needs the workflow, even when the change reads like a one-line
+removal on a screen nobody thinks of as layout.
+
+**A local container fails all five settings comparisons on untouched `main`
+too**, two pixels of height apart. Run that one spec on `main` before blaming
+the branch.
+
 ## Verifying in Docker
 
 `AGENTS.md` asks for a local deploy after implementing. Two additions for this
@@ -161,9 +194,13 @@ curl -s localhost:${STREMIO_OFFLINE_PORT:-8090}/api/status
 In order. Each is a branch off `main` and its own pull request.
 
 1. **Finish #119.** Baselines are regenerating; merge once green.
-2. **Loose ends of PR 3**: New folder in the picker with `create: true`.
+   Done: merged into `main` as `0.4.4`.
+2. **Loose ends of PR 3**: New folder in the picker with `create: true`. Done in
+   #123, open when this was written.
 3. **Retire `artworkLocation`** in favour of per-library `writeArtwork`, with the
-   one-time migration.
+   one-time migration. Done: the migration reads the old global once, keyed on
+   the key still being in the state file, and the Storage section lost the
+   select.
 4. **PR 6 — per-library addon save rules.** `DownloadTargetSettings.libraryId`
    end to end: the select offering only libraries of the matching type or
    `mixed`, never a `readOnly`, disabled or unreachable one; validation on
@@ -171,6 +208,9 @@ In order. Each is a branch off `main` and its own pull request.
    **and** remapping `defaultMovieLibrary` / `defaultSeriesLibrary` inside the
    settings blob; `/downloads` gone from `web/src`. §11 of the specification.
 5. **User documentation**: `docs/libraries.md`, including the split guide above.
+   Done: the guide covers the split, the types, the switches, unreachable and
+   read-only roots, removing against disabling, and where the state lives.
+   Writing it turned up a third defect, recorded below.
 
 ## Two things worth not getting wrong
 
