@@ -63,7 +63,10 @@ export async function migrateStateFile(dataDir: string, downloadDir: string): Pr
     summary.metadata = await splitInlineMetadata(state, dataDir);
     summary.artwork = await relayoutArtwork(state, dataDir);
   }
-  if (globalArtwork) summary.artworkSetting = retireArtworkLocation(state);
+  // On the legacy path the library was minted a moment ago and holds no opinion of its
+  // own, so the retired global is the only authority. On a libraries-build state the user
+  // may already have turned the switch off, and that survives.
+  if (globalArtwork) summary.artworkSetting = retireArtworkLocation(state, legacy);
   const temp = `${file}.tmp`;
   await writeFile(temp, JSON.stringify(state, null, 2), { mode: 0o600 });
   await rename(temp, file);
@@ -74,13 +77,13 @@ export async function migrateStateFile(dataDir: string, downloadDir: string): Pr
  *  decision, one level up, and the two had to agree before a poster moved. Read the old
  *  value once and let it decide each library's switch, so an install that kept its posters
  *  in `DATA_PATH` keeps them there and no layout changes under anybody. */
-function retireArtworkLocation(state: GlobalArtworkState): number {
+function retireArtworkLocation(state: GlobalArtworkState, freshlyCreated = false): number {
   if (!state.settings) return 0;
   const besideMedia = state.settings.artworkLocation === "media";
   delete state.settings.artworkLocation;
   let changed = 0;
   state.libraries = (state.libraries ?? []).map((library) => {
-    const writeArtwork = besideMedia && library.writeArtwork !== false;
+    const writeArtwork = besideMedia && (freshlyCreated || library.writeArtwork !== false);
     if (writeArtwork === library.writeArtwork) return library;
     changed += 1;
     return { ...library, writeArtwork };
@@ -181,7 +184,9 @@ async function legacyLibrary(root: string): Promise<LibraryRecord> {
     addedAt: new Date().toISOString(),
     ...(reachable ? {} : { unreachable: true }),
     ...(reachable && !writable ? { readOnly: true } : {}),
-    writeArtwork: !(reachable && !writable),
+    // `retireArtworkLocation` sets this from the global that used to decide it. Without
+    // that global -- a state with no settings at all -- off is the safe answer.
+    writeArtwork: false,
   };
 }
 

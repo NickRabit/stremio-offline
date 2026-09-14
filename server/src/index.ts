@@ -972,7 +972,9 @@ app.post("/api/libraries", asyncRoute(async (req, res) => {
     addedAt: new Date().toISOString(),
     ...(health.unreachable ? { unreachable: true } : {}),
     ...(health.readOnly ? { readOnly: true } : {}),
-    writeArtwork: req.body?.writeArtwork !== false && !health.readOnly,
+    // Off unless asked for: a new library points at somebody's existing tree as often as
+    // not, and writing poster.jpg into it is the one thing that cannot be taken back.
+    writeArtwork: req.body?.writeArtwork === true && !health.readOnly,
   };
   await store.update((state) => {
     state.libraries = [...(state.libraries ?? []), library];
