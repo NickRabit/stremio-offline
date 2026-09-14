@@ -1,6 +1,11 @@
 export type AddonRole = "catalog" | "source" | "both";
 export type DownloadLayout = "flat" | "structured";
-export interface DownloadTargetSettings { subfolder: string; layout: DownloadLayout }
+export interface DownloadTargetSettings {
+  subfolder: string;
+  layout: DownloadLayout;
+  /** Library the finished file goes to. Absent or empty means the default for the kind. */
+  libraryId?: string;
+}
 export interface AddonDownloadSettings { movie: DownloadTargetSettings; series: DownloadTargetSettings }
 
 export interface AddonRecord {

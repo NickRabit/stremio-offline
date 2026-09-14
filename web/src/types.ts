@@ -1,6 +1,11 @@
 import type { Locale } from "./i18n";
 export type DownloadLayout = "flat" | "structured";
-export interface DownloadTargetSettings { subfolder: string; layout: DownloadLayout }
+export interface DownloadTargetSettings {
+  subfolder: string;
+  layout: DownloadLayout;
+  /** Library the finished file goes to; absent means the default for the kind. */
+  libraryId?: string;
+}
 export interface AddonDownloadSettings { movie: DownloadTargetSettings; series: DownloadTargetSettings }
 export interface Addon {
   key: string; role: "catalog" | "source" | "both"; enabled: boolean; globalSearch: boolean; displayUrl?: string;

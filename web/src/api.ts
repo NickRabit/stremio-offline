@@ -74,7 +74,7 @@ export const api = {
   settings: () => request<Settings>("/api/settings"),
   updateSettings: (patch: SettingsPatch) => request<Settings>("/api/settings", { method: "PATCH", body: JSON.stringify(patch) }),
   exportSettings: () => request<SettingsBackup>("/api/settings/export"),
-  importSettings: (backup: unknown) => request<{ settings: Settings; addons: Addon[] }>("/api/settings/import", { method: "POST", body: JSON.stringify(backup), timeoutMs: 120_000 }),
+  importSettings: (backup: unknown) => request<{ settings: Settings; addons: Addon[]; remapped: number }>("/api/settings/import", { method: "POST", body: JSON.stringify(backup), timeoutMs: 120_000 }),
   languages: () => request<Array<{ code: string; name: string }>>("/api/languages"),
   inspect: (stream: Stream) => request<Inspection>("/api/inspect", { method: "POST", body: JSON.stringify({ sourceId: stream.sourceId }) }),
   logs: (options: { tail?: number; level?: string; hours?: number; search?: string; inline?: boolean } = {}) =>

@@ -152,6 +152,42 @@ test("the same source cannot be queued twice", async () => {
   }
 });
 
+test("a save rule sends the file into the library it names", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-dl-"));
+  const downloadDir = path.join(directory, "downloads");
+  const archiveRoot = path.join(directory, "archive");
+  const archive = { id: "lib_12345678", name: "Archive", type: "movie" as const, root: archiveRoot, enabled: true, order: 0, addedAt: "2026-01-01T00:00:00.000Z", writeArtwork: true };
+  const size = 4096;
+  const { server, port } = await listen((_req, res) => {
+    res.writeHead(200, { "content-length": String(size), "content-type": "video/mp4" });
+    void send(res, size).then(() => res.end());
+  });
+  const queue = new DownloadQueue(() => 1, () => 1, path.join(directory, "data"), downloadDir, {
+    stallInitialMs: 5_000, stallTransferMs: 5_000,
+    libraries: () => [archive],
+    targetLibrary: (_kind, libraryId) => libraryId === archive.id ? archive : undefined,
+  });
+  await queue.load();
+  try {
+    const job = await queue.add("Film", { url: `http://127.0.0.1:${port}/film.mp4` }, undefined, { subfolder: "", layout: "structured", libraryId: archive.id });
+    assert.equal(job.target, "lib_12345678/Film/Film.mp4", "the job stores the qualified target");
+    await waitFor(queue, () => queue.list()[0]?.status === "completed");
+    assert.equal((await stat(path.join(archiveRoot, "Film", "Film.mp4"))).size, size, "it landed in the library the rule named");
+    await assert.rejects(stat(path.join(downloadDir, "Film", "Film.mp4")), "and not in the download directory");
+
+    // A rule that names a library this instance does not have is the default again, so an
+    // imported backup or a removed library cannot strand a download.
+    const fallback = await queue.add("Other", { url: `http://127.0.0.1:${port}/other.mp4` }, undefined, { subfolder: "", layout: "structured", libraryId: "lib_99999999" });
+    assert.equal(fallback.target, "Other/Other.mp4");
+    await waitFor(queue, () => queue.list().find((item) => item.id === fallback.id)?.status === "completed");
+    assert.equal((await stat(path.join(downloadDir, "Other", "Other.mp4"))).size, size);
+  } finally {
+    queue.stop();
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("a clean close short of Content-Length is retried from the .part file", async () => {
   const size = 32 * 1024;
   const drop = 8 * 1024;

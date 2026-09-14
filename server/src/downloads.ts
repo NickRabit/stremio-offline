@@ -18,6 +18,7 @@ import {
 } from "./download-policy.js";
 import { isRetryableDebridFailure, type DebridAdvance } from "./debrid.js";
 import { playlistArgs } from "./probe.js";
+import { libraryPath, parseLibraryPath, relativeWithin, type LibraryRecord } from "./libraries.js";
 import {
   planSegments, segmentCount, segmentedBytes, segmentSize, usableSegments, type Segment,
 } from "./download-segments.js";
@@ -58,6 +59,9 @@ export interface DownloadJob {
   subtitle?: SubtitleItem;
   resolution?: DownloadResolution;
   status: DownloadStatus; target: string; received: number; total?: number; speed: number;
+  /** The library `target` lives in. Absent on a job queued before libraries existed, which
+   *  belongs to the download directory. */
+  libraryId?: string;
   error?: string;
   /** Catalogue key for `error`, so the interface can show it in the reader's language.
    *  A failure whose text is built from a source's own words carries none. */
@@ -82,6 +86,11 @@ export interface DebridEngine {
 }
 export interface QueueHooks {
   now?: () => number;
+  /** Every configured library, so a qualified target can be turned back into a root. */
+  libraries?: () => LibraryRecord[];
+  /** Where a finished file goes: the rule's library when it can be written to, otherwise
+   *  the default for the kind. */
+  targetLibrary?: (kind: "movie" | "series", libraryId?: string) => LibraryRecord | undefined;
   freeSpace?: (dir: string) => Promise<{ freeBytes?: number; totalBytes?: number }>;
   createWriteStream?: (file: string, options: { flags: string }) => NodeJS.WritableStream;
   stallInitialMs?: number;
@@ -121,6 +130,8 @@ export class DownloadQueue {
   private halt?: QueueHalt;
   private readonly stateFile: string;
   private readonly downloadDir: string;
+  private readonly libraries: () => LibraryRecord[];
+  private readonly targetLibrary: (kind: "movie" | "series", libraryId?: string) => LibraryRecord | undefined;
   private readonly now: () => number;
   private readonly freeSpace: (dir: string) => Promise<{ freeBytes?: number; totalBytes?: number }>;
   private readonly createWriteStream: (file: string, options: { flags: string }) => NodeJS.WritableStream;
@@ -150,6 +161,8 @@ export class DownloadQueue {
   ) {
     this.stateFile = path.join(dataDir, "downloads.json");
     this.downloadDir = downloadDir;
+    this.libraries = hooks.libraries ?? (() => []);
+    this.targetLibrary = hooks.targetLibrary ?? (() => undefined);
     this.now = hooks.now ?? Date.now;
     this.freeSpace = hooks.freeSpace ?? volumeSpace;
     this.createWriteStream = hooks.createWriteStream ?? fsCreateWriteStream;
@@ -210,6 +223,29 @@ export class DownloadQueue {
   list() { return this.jobs.map((job, index) => ({ ...this.publicJob(job), order: index })); }
   snapshot() { return { jobs: this.list(), halt: this.haltInfo() }; }
 
+  /** The library a new job writes into. A rule that names a library nobody can write to right
+   *  now -- removed, switched off, read-only or on a disk that is away -- falls back to the
+   *  default for the kind: a download that can land somewhere sensible must not fail, and
+   *  nothing on disk is ever the price of a mount that is not there. */
+  private destination(kind: "movie" | "series", settings: DownloadTargetSettings) {
+    return this.targetLibrary(kind, settings.libraryId);
+  }
+
+  /** Where a job's file lives: the root of the library its target names, and the path below
+   *  it. A job queued before libraries existed carries a bare relative target and belongs to
+   *  the download directory; a library since removed falls back to it too. */
+  private locate(job: Pick<DownloadJob, "target" | "libraryId">) {
+    const named = job.libraryId ?? parseLibraryPath(job.target)?.libraryId;
+    const library = named ? this.libraries().find((item) => item.id === named) : undefined;
+    if (!library) return { root: this.downloadDir, relative: parseLibraryPath(job.target)?.relative ?? job.target };
+    return { root: library.root, relative: relativeWithin(library.id, job.target) };
+  }
+
+  private jobPath(job: Pick<DownloadJob, "target" | "libraryId">) {
+    const { root, relative } = this.locate(job);
+    return path.join(root, relative);
+  }
+
   async add(title: string, stream: StreamItem, media?: MediaInfo, targetSettings: DownloadTargetSettings = defaultDownloadSettings().movie) {
     if (!stream.url && stream.infoHash) return this.addDebrid(title, stream, media, targetSettings);
     if (!stream.url) throw new AppError("Only a direct HTTP stream can be downloaded.", "err.downloadNeedsHttp");
@@ -217,12 +253,14 @@ export class DownloadQueue {
     // uniqueTarget happily hands the second job a name with "(2)".
     const duplicate = this.jobs.find((job) => job.stream?.url === stream.url && job.status !== "failed");
     if (duplicate && duplicate.status !== "completed") throw new AppError("This source is already in the queue.", "err.sourceQueued");
-    if (duplicate && await exists(path.join(this.downloadDir, duplicate.target))) throw new AppError("This source is already in the library.", "err.sourceDownloaded");
+    if (duplicate && await exists(this.jobPath(duplicate))) throw new AppError("This source is already in the library.", "err.sourceDownloaded");
     const extension = streamExtension(stream);
     const { directory, base } = targetPath(media, title, extension, targetSettings);
-    const target = await this.uniqueTarget(directory, base, extension);
+    const kind = media?.kind === "episode" ? "series" : "movie";
+    const library = this.destination(kind, targetSettings);
+    const target = await this.uniqueTarget(library, directory, base, extension);
     const now = new Date().toISOString();
-    const job: DownloadJob = { id: crypto.randomUUID(), title, stream, media, status: "queued", target, received: 0, speed: 0, createdAt: now, updatedAt: now };
+    const job: DownloadJob = { id: crypto.randomUUID(), title, stream, media, status: "queued", target, received: 0, speed: 0, createdAt: now, updatedAt: now, ...(library ? { libraryId: library.id } : {}) };
     this.jobs.push(job); await this.save(); this.pump(); return this.publicJob(job);
   }
 
@@ -236,11 +274,13 @@ export class DownloadQueue {
     if (duplicate && duplicate.status !== "completed") throw new AppError("This torrent is already in the queue.", "err.torrentQueued");
     const extension = streamExtension(stream);
     const { directory, base } = targetPath(media, title, extension, targetSettings);
-    const target = await this.uniqueTarget(directory, base, extension);
+    const kind = media?.kind === "episode" ? "series" : "movie";
+    const library = this.destination(kind, targetSettings);
+    const target = await this.uniqueTarget(library, directory, base, extension);
     const now = new Date().toISOString();
     const job: DownloadJob = {
       id: crypto.randomUUID(), title, stream, media, status: "waiting", target, received: 0, speed: 0,
-      debrid: {}, createdAt: now, updatedAt: now,
+      debrid: {}, createdAt: now, updatedAt: now, ...(library ? { libraryId: library.id } : {}),
     };
     this.jobs.push(job); await this.save();
     log("INFO", "Waiting for Real-Debrid", { id: job.id, title: job.title, infoHash: stream.infoHash });
@@ -258,13 +298,14 @@ export class DownloadQueue {
 
   /** History can be cleared, but the files stay. A free name therefore has to be looked for on
    *  disk as well, or a finished film would be quietly overwritten by downloading the same title. */
-  private async uniqueTarget(directory: string, base: string, extension: string) {
+  private async uniqueTarget(library: LibraryRecord | undefined, directory: string, base: string, extension: string) {
     for (let copy = 1; copy <= 999; copy += 1) {
       const relative = joinTarget(directory, base, extension, copy);
-      if (this.jobs.some((job) => job.target === relative)) continue;
-      const full = path.join(this.downloadDir, relative);
+      const target = library ? libraryPath(library.id, relative) : relative;
+      if (this.jobs.some((job) => job.target === target)) continue;
+      const full = path.join(library?.root ?? this.downloadDir, relative);
       if (await exists(full) || await exists(`${full}.part`)) continue;
-      return relative;
+      return target;
     }
     throw new AppError("Could not find a free file name.", "err.noFreeName");
   }
@@ -288,7 +329,7 @@ export class DownloadQueue {
     const job = this.require(id);
     if (!(["paused", "failed"] as DownloadStatus[]).includes(job.status)) throw new AppError("This item cannot be resumed.", "err.cannotResume");
     if (this.halt || job.pauseReason === "storage") {
-      const space = await this.freeSpace(this.downloadDir);
+      const space = await this.freeSpace(this.locate(job).root);
       if (!this.hasRoom(space)) throw new AppError(this.halt?.message ?? "No space left on the disk.", this.halt?.messageKey ?? "err.noSpace");
       this.releaseStorageHalt();
     }
@@ -393,7 +434,7 @@ export class DownloadQueue {
     const [job] = this.jobs.splice(index, 1);
     this.active.get(id)?.abort();
     if (job.status !== "completed" && job.target) {
-      await unlink(path.join(this.downloadDir, `${job.target}.part`)).catch(() => undefined);
+      await unlink(`${this.jobPath(job)}.part`).catch(() => undefined);
       const subtitleFiles = this.subtitleFiles(job);
       if (subtitleFiles) await unlink(subtitleFiles.partial).catch(() => undefined);
     }
@@ -461,8 +502,10 @@ export class DownloadQueue {
     return space.freeBytes >= storageResumeNeed(space.totalBytes, remaining);
   }
 
-  private async admitStorage(needed: number) {
-    const space = await this.freeSpace(this.downloadDir);
+  /** The disk that matters is the one the job writes to, which is not always the download
+   *  directory once a save rule names another library. */
+  private async admitStorage(needed: number, root = this.downloadDir) {
+    const space = await this.freeSpace(root);
     if (space.freeBytes == null) return;
     if (space.freeBytes < needed + storageHeadroom(space.totalBytes)) {
       throw new StorageError("No space left on the disk.", "ENOSPC");
@@ -506,9 +549,18 @@ export class DownloadQueue {
   private async checkSpace() {
     if (!this.halt) { if (this.spaceWatch) { clearInterval(this.spaceWatch); this.spaceWatch = undefined; } return; }
     try {
-      const space = await this.freeSpace(this.downloadDir);
-      if (!this.hasRoom(space)) return;
-      log("INFO", "Storage has space again, the queue will continue", { freeBytes: space.freeBytes });
+      // Every disk a halted job writes to has to have room again, not just the download
+      // directory: a save rule may have sent one of them to another mount.
+      const roots = new Set(this.jobs.filter((job) => job.pauseReason === "storage").map((job) => this.locate(job).root));
+      if (!roots.size) roots.add(this.downloadDir);
+      let freeBytes: number | undefined;
+      for (const root of roots) {
+        const space = await this.freeSpace(root);
+        if (space.freeBytes == null) return;
+        if (!this.hasRoom(space, 0)) return;
+        freeBytes = space.freeBytes;
+      }
+      log("INFO", "Storage has space again, the queue will continue", { freeBytes });
       this.releaseStorageHalt();
       await this.save();
       this.pump();
@@ -571,10 +623,12 @@ export class DownloadQueue {
     const settings = job.source.selection?.targetSettings ?? (job.media?.kind === "episode" ? resolved.settings.series : resolved.settings.movie);
     const extension = streamExtension(resolved.stream);
     const { directory, base } = targetPath(job.media, job.title, extension, settings);
-    job.target = await this.uniqueTarget(directory, base, extension);
+    const library = this.destination(job.media?.kind === "episode" ? "series" : "movie", settings);
+    job.target = await this.uniqueTarget(library, directory, base, extension);
+    job.libraryId = library?.id;
     await this.save();
     log("INFO", "Download source selected", {
-      id: job.id, title: job.title, addon: resolved.stream.addonName, target: job.target, attempt: job.source.tried.length + 1,
+      id: job.id, title: job.title, addon: resolved.stream.addonName, target: job.target, library: library?.id, attempt: job.source.tried.length + 1,
       selectionMs, checkedCandidates: resolved.resolution?.checkedCandidates,
       audioLanguage: resolved.resolution?.audioLanguage, fallbackAudio: resolved.resolution?.fallbackUsed,
       subtitleStatus: resolved.resolution?.subtitleStatus,
@@ -583,9 +637,9 @@ export class DownloadQueue {
 
   private subtitleFiles(job: DownloadJob) {
     if (!job.target || !job.resolution?.subtitleLanguage || job.resolution.subtitleSource !== "addon") return undefined;
-    const extension = path.extname(job.target);
-    const base = job.target.slice(0, -extension.length);
-    const target = path.join(this.downloadDir, `${base}.${job.resolution.subtitleLanguage}.vtt`);
+    const { root, relative } = this.locate(job);
+    const base = relative.slice(0, -path.extname(relative).length);
+    const target = path.join(root, `${base}.${job.resolution.subtitleLanguage}.vtt`);
     return { target, partial: `${target}.part` };
   }
 
@@ -792,7 +846,7 @@ export class DownloadQueue {
       }
       const stream = job.stream!;
       if (!stream.url) throw new SourceError("Only a direct HTTP stream can be downloaded.");
-      const partial = path.join(this.downloadDir, `${job.target}.part`); const target = path.join(this.downloadDir, job.target);
+      const partial = `${this.jobPath(job)}.part`; const target = this.jobPath(job);
       await mkdir(path.dirname(target), { recursive: true });
       await this.prepareSubtitle(job, controller);
 
@@ -844,7 +898,7 @@ export class DownloadQueue {
       if (plan) {
         job.segments = plan;
         start(segmentedBytes(plan));
-        if (job.total) await this.admitStorage(job.total - base);
+        if (job.total) await this.admitStorage(job.total - base, this.locate(job).root);
         const resumed = offset === job.total;
         const handle = await open(partial, resumed ? "r+" : "w+");
         try {
@@ -883,7 +937,7 @@ export class DownloadQueue {
         }
         job.total = expectedSize(range?.total, (Number(response.headers.get("content-length")) || 0) + offset || undefined, hinted);
         start(offset);
-        if (job.total) await this.admitStorage(job.total - offset);
+        if (job.total) await this.admitStorage(job.total - offset, this.locate(job).root);
         lastProgressAt = this.now();
         watchStall(() => lastProgressAt);
         const monitor = new TransformStream<Uint8Array, Uint8Array>({ transform: (chunk, output) => {
@@ -909,7 +963,7 @@ export class DownloadQueue {
         await this.haltForStorage(storageMessage(error));
       } else if (kind === "transient" && (job.retryCount ?? 0) < 3) {
         if (error instanceof HttpSourceError && error.httpStatus === 416 && job.target) {
-          await unlink(path.join(this.downloadDir, `${job.target}.part`)).catch(() => undefined);
+          await unlink(`${this.jobPath(job)}.part`).catch(() => undefined);
           job.received = 0; job.total = undefined; job.segments = undefined;
         }
         job.retryCount = (job.retryCount ?? 0) + 1;
@@ -924,7 +978,7 @@ export class DownloadQueue {
       } else if (job.source && job.stream?.url) {
         // A lazy job tries the next source in order; the address of the failed one is never used again.
         job.source.tried.push(job.stream.url);
-        if (job.target) await unlink(path.join(this.downloadDir, `${job.target}.part`)).catch(() => undefined);
+        if (job.target) await unlink(`${this.jobPath(job)}.part`).catch(() => undefined);
         const subtitleFiles = this.subtitleFiles(job);
         if (subtitleFiles) await unlink(subtitleFiles.partial).catch(() => undefined);
         job.stream = undefined; job.subtitle = undefined; job.resolution = undefined; job.target = ""; job.received = 0; job.total = undefined; job.segments = undefined; job.retryCount = 0; job.notBefore = undefined;

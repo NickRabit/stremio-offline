@@ -43,14 +43,14 @@ import type { MediaInfo } from "./naming.js";
 import { defaultDownloadSettings, deviceFilename, normalizeDownloadSettings, safeName } from "./naming.js";
 import { LANGUAGE_NAMES, isUiLanguage, normalizeLanguage } from "./language.js";
 import { AppError, messageKeyOf } from "./errors.js";
-import { carveOuts, isInside, libraryFor, libraryPath, newLibraryId, parseLibraryPath, posixBase, posixDir, posixJoin, realAncestor, relativeWithin, resolveLibraryPath, toFs, toPosix, type LibraryRecord, type LibraryType, type RootGrant } from "./libraries.js";
+import { carveOuts, defaultLibrary, isInside, libraryFor, libraryPath, newLibraryId, parseLibraryPath, posixBase, posixDir, posixJoin, realAncestor, relativeWithin, resolveLibraryPath, toFs, toPosix, type LibraryRecord, type LibraryType, type RootGrant } from "./libraries.js";
 import { envGrants, grantView, grantingRoot, insideGrant, mergeGrants } from "./library-grants.js";
 import { asLibraryType, checkLibraryRoot, libraryFlag } from "./library-admin.js";
 import { migrateStateFile } from "./library-migrate.js";
 import { LibraryMetaStore } from "./library-meta-store.js";
 import { artworks } from "./artwork-cache.js";
 import type { AddonRecord, AddonRole, MetaItem, StreamItem } from "./types.js";
-import { createSettingsBackup, parseSettingsBackup } from "./backup.js";
+import { createSettingsBackup, parseSettingsBackup, remapBackupLibraries } from "./backup.js";
 import { LibraryOps, type LibraryOp } from "./library-ops.js";
 import { transferLibraryPath, type TransferProgress } from "./library-transfer.js";
 
@@ -79,7 +79,21 @@ await images.load();
 await artworks.load();
 const playbackOwners = new Map<string, { owner: ResourceOwner; resourceId: string }>();
 const airplayAccess = new AirPlayAccess(mediaResources);
-const queue = new DownloadQueue(() => store.settings().concurrentDownloads, () => store.settings().parallelPerProvider ?? 1, undefined, undefined, { segments: () => store.settings().downloadSegments ?? 1 }); const playback = new PlaybackManager(undefined, (id) => {
+/** Where a finished file goes: the library its save rule names, or the default for the kind.
+ *  A rule that names a library nobody can write to right now falls back, so an unplugged disk
+ *  delays nothing and loses nothing. */
+const downloadLibrary = (kind: "movie" | "series", libraryId?: string) => {
+  const libraries = store.libraries();
+  const named = libraryId ? libraryFor(libraries, libraryId) : undefined;
+  if (named && named.enabled && !named.readOnly && !named.unreachable) return named;
+  if (named) log("WARN", "A save rule names a library that cannot be written to, using the default", { library: named.id, root: named.root, enabled: named.enabled, readOnly: Boolean(named.readOnly), unreachable: Boolean(named.unreachable) });
+  return defaultLibrary(libraries, store.settings(), kind === "series" ? "episode" : "movie");
+};
+const queue = new DownloadQueue(() => store.settings().concurrentDownloads, () => store.settings().parallelPerProvider ?? 1, undefined, undefined, {
+  segments: () => store.settings().downloadSegments ?? 1,
+  libraries: () => store.libraries(),
+  targetLibrary: downloadLibrary,
+}); const playback = new PlaybackManager(undefined, (id) => {
   const owned = playbackOwners.get(id);
   if (owned) {
     mediaResources.remove(owned.resourceId);
@@ -395,7 +409,13 @@ const mediaSource = (value: unknown): MediaInfo | undefined => {
 
 /** The catalogue poster travels with the queued job and with library metadata as well. */
 const mediaView = (media: MediaInfo) => ({ ...media, poster: images.proxied(media.poster) });
-const jobView = <T extends { media?: MediaInfo }>(job: T): T => (job.media ? { ...job, media: mediaView(job.media) } : job);
+/** A job's target is stored qualified, like every other key; the client gets the wire form,
+ *  which stays relative while one library is configured. */
+const jobView = <T extends { media?: MediaInfo; target?: string }>(job: T): T => ({
+  ...job,
+  ...(job.target ? { target: wirePath(job.target) } : {}),
+  ...(job.media ? { media: mediaView(job.media) } : {}),
+});
 
 /** An addon logo sits on the provider's server as well, so it takes the same detour. */
 const withProxiedLogo = <T extends { manifest: { logo?: string } }>(view: T): T =>
@@ -508,7 +528,7 @@ app.patch("/api/addons/:key", asyncRoute(async (req, res) => {
   // The settings are validated before the write: the mutator changes state in place, so
   // an exception halfway through would leave changes in memory that are never persisted.
   // It also rejects a nonsensical request before fetching a manifest for it.
-  const downloadSettings = req.body.downloadSettings === undefined ? undefined : normalizeDownloadSettings(req.body.downloadSettings);
+  const downloadSettings = req.body.downloadSettings === undefined ? undefined : normalizeDownloadSettings(req.body.downloadSettings, store.libraries());
   const reloaded = url && url !== existing.manifestUrl ? await loadAddon(url, role) : undefined;
   await store.update((state) => {
     const addon = state.addons.find((a) => a.key === req.params.key);
@@ -2488,10 +2508,16 @@ app.get("/api/diagnostics", asyncRoute(async (_req, res) => {
 app.get("/api/settings/export", asyncRoute(async (_req, res) => {
   await metaStore.flush();
   res.setHeader("content-disposition", `attachment; filename=stremio-offline-settings-${new Date().toISOString().slice(0, 10)}.json`);
-  res.json(createSettingsBackup(store.settings(), store.addons()));
+  res.json(createSettingsBackup(store.settings(), store.addons(), store.libraries()));
 }));
 app.post("/api/settings/import", asyncRoute(async (req, res) => {
-  const backup = parseSettingsBackup(req.body);
+  // The libraries are this instance's, so a rule that names one from somewhere else is
+  // remapped before anything is written: by root first, then by name.
+  const parsed = remapBackupLibraries(parseSettingsBackup(req.body), store.libraries());
+  for (const remap of parsed.remaps) {
+    log("INFO", "A save rule named a library this instance does not have", { what: remap.what, addon: remap.addon, from: remap.from, to: remap.to ?? "default" });
+  }
+  const backup = { ...parsed, libraries: [] };
   // Manifests are loaded before a single write, so a broken backup changes no part of the configuration.
   const loaded = await Promise.all(backup.addons.map(async (saved, index) => {
     try {
@@ -2519,8 +2545,8 @@ app.post("/api/settings/import", asyncRoute(async (req, res) => {
   });
   streamCache.clear();
   queue.changed();
-  log("INFO", "Settings backup imported", { addons: loaded.length, version: backup.version });
-  res.json({ settings: publicSettings(store.settings()), addons: store.addons().map(publicAddon) });
+  log("INFO", "Settings backup imported", { addons: loaded.length, version: backup.version, remapped: parsed.remaps.length });
+  res.json({ settings: publicSettings(store.settings()), addons: store.addons().map(publicAddon), remapped: parsed.remaps.length });
 }));
 app.patch("/api/settings", asyncRoute(async (req, res) => {
   let realDebridToken: string | undefined;

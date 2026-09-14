@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { deviceFilename, joinTarget, normalizeDownloadSettings, safeName, safeSubfolder, streamExtension, targetPath } from "./naming.js";
+import type { LibraryRecord } from "./libraries.js";
 
 test("a film goes into a folder of its own with the same name", () => {
   const { directory, base } = targetPath({ kind: "movie", title: "The Matrix" }, "cokoli", ".mkv");
@@ -92,6 +93,31 @@ test("the default settings migrate to the base folder and structure", () => {
   assert.deepEqual(normalizeDownloadSettings(undefined), {
     movie: { subfolder: "", layout: "structured" }, series: { subfolder: "", layout: "structured" },
   });
+});
+
+test("a save rule may name a library, and only one that takes the kind", () => {
+  const library = (over: Partial<LibraryRecord>): LibraryRecord => ({
+    id: "lib_11111111", name: "Films", type: "movie", root: "/mnt/films", enabled: true, order: 0,
+    addedAt: "2026-01-01T00:00:00.000Z", writeArtwork: true, ...over,
+  });
+  const films = library({});
+  const series = library({ id: "lib_22222222", name: "Series", type: "series" });
+  const mixed = library({ id: "lib_33333333", name: "Mixed", type: "mixed" });
+  const rule = (libraryId: string) => ({ movie: { subfolder: "", layout: "structured", libraryId }, series: {} });
+
+  // Without the library list the id is kept: the queue resolves it when the job starts.
+  assert.equal(normalizeDownloadSettings(rule(films.id)).movie.libraryId, films.id);
+  assert.equal(normalizeDownloadSettings(rule(mixed.id), [films, mixed]).movie.libraryId, mixed.id, "mixed takes anything");
+  assert.equal(normalizeDownloadSettings(rule(films.id), [films, series]).movie.libraryId, films.id, "the id survives the trip out and back");
+  assert.equal("libraryId" in normalizeDownloadSettings({ movie: {}, series: {} }, [films]).movie, false, "no rule is the default");
+
+  const refused = (value: unknown, libraries: LibraryRecord[], why: string) =>
+    assert.throws(() => normalizeDownloadSettings(value, libraries), `refused: ${why}`);
+  refused(rule("lib_99999999"), [films], "a library this instance does not have");
+  refused(rule(series.id), [films, series], "a series library does not take films");
+  refused(rule(films.id), [library({ enabled: false }), series], "a library that is switched off");
+  refused(rule(films.id), [library({ readOnly: true }), series], "a library that cannot be written to");
+  refused(rule(films.id), [library({ unreachable: true }), series], "a library whose disk is away");
 });
 
 test("a subfolder must not escape downloads", () => {

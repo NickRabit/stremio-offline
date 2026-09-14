@@ -1364,13 +1364,16 @@ export function App() {
           </>}
         </div>
       </section>}
-      {view === "addons" && <Addons addons={addons} restricted={restricted} onChanged={refresh} onNotify={notify} onError={fail}/>} 
+      {view === "addons" && <Addons addons={addons} libraries={libraries} restricted={restricted} onChanged={refresh} onNotify={notify} onError={fail}/>} 
       {view === "downloads" && <Downloads jobs={downloads} halt={queueHalt} refresh={loadDownloads} onError={fail} onReveal={revealInLibrary}/>}
       {view === "stats" && <StatsPanel key={statsReset} onError={fail}/>}
       {view === "settings" && <SettingsPage build={buildInfo} restricted={restricted} settings={settings} languages={languages} session={session!} onSession={setSession} onSave={saveSettings} onLibrariesChanged={refreshLibraries} onImported={async (backup) => {
         const restored = await api.importSettings(backup);
         setSettings(restored.settings);
         setSelectedCatalog("");
+        // Rules that named a library of the machine the backup came from are pointed at this
+        // instance's own, or at the default; say how many had to move.
+        if (restored.remapped) notify(t("settings.importRemapped", { count: restored.remapped }));
         await refresh(true);
       }} onNotify={notify} onError={fail}/>}
     </main>
@@ -1743,7 +1746,7 @@ function DiagnosticsSection({ build, onNotify, onError }: { build: BuildInfo | n
   </section>;
 }
 
-function Addons({ addons, restricted = false, onChanged, onNotify, onError }: { addons: Addon[]; restricted?: boolean; onChanged: () => Promise<void>; onNotify: (s:string)=>void; onError:(e:unknown)=>void }) {
+function Addons({ addons, libraries = [], restricted = false, onChanged, onNotify, onError }: { addons: Addon[]; libraries?: LibraryView[]; restricted?: boolean; onChanged: () => Promise<void>; onNotify: (s:string)=>void; onError:(e:unknown)=>void }) {
   const [url, setUrl] = useState(""); const [role, setRole] = useState("both"); const [busy, setBusy] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   // A manifest is only read when the addon is added, so nothing here notices when the
@@ -1770,7 +1773,7 @@ function Addons({ addons, restricted = false, onChanged, onNotify, onError }: { 
       <div className="subhead"><h3>{group.title}</h3><span>{group.text}</span></div>
       <div className="addon-grid">{group.list.map((addon, index) => restricted
         ? <AddonCardReadOnly key={addon.key} addon={addon}/>
-        : <AddonCard key={addon.key} addon={addon}
+        : <AddonCard key={addon.key} addon={addon} libraries={libraries}
             index={group.ordered ? index : -1} total={group.list.length}
             onChanged={onChanged} onNotify={onNotify} onError={onError}/>)}</div>
     </div>)}
@@ -1785,7 +1788,7 @@ function AddonCardReadOnly({ addon }: { addon: Addon }) {
   </article>;
 }
 
-function AddonCard({ addon, index, total, onChanged, onNotify, onError }: { addon: Addon; index: number; total: number; onChanged: () => Promise<void>; onNotify: (s:string)=>void; onError:(e:unknown)=>void }) {
+function AddonCard({ addon, libraries, index, total, onChanged, onNotify, onError }: { addon: Addon; libraries: LibraryView[]; index: number; total: number; onChanged: () => Promise<void>; onNotify: (s:string)=>void; onError:(e:unknown)=>void }) {
   const clone = (value: AddonDownloadSettings): AddonDownloadSettings => ({ movie: { ...value.movie }, series: { ...value.series } });
   const storedSettings = addon.downloadSettings ?? { movie: { subfolder: "", layout: "structured" }, series: { subfolder: "", layout: "structured" } };
   const [draft, setDraft] = useState<AddonDownloadSettings>(() => clone(storedSettings));
@@ -1836,7 +1839,28 @@ function AddonCard({ addon, index, total, onChanged, onNotify, onError }: { addo
   const providesStreams = (addon.manifest.resources ?? []).some((resource) => typeof resource === "string" ? resource === "stream" : resource.name === "stream");
   useEffect(() => { if (addon.downloadSettings) setDraft(clone(addon.downloadSettings)); }, [addon.downloadSettings]);
   const change = (kind: "movie" | "series", patch: Partial<AddonDownloadSettings["movie"]>) => setDraft((current) => ({ ...current, [kind]: { ...current[kind], ...patch } }));
-  const preview = (kind: "movie" | "series") => { const rule = draft[kind]; const folder = rule.subfolder.trim().replaceAll("\\", "/").replace(/^\/+|\/+$/g, ""); const root = `/downloads${folder ? `/${folder}` : ""}`; if (kind === "movie") return rule.layout === "flat" ? `${root}/${t("addons.sampleMovie")}.mkv` : `${root}/${t("addons.sampleMovie")}/${t("addons.sampleMovie")}.mkv`; return rule.layout === "flat" ? `${root}/${t("addons.sampleShow")} - S01E01 - ${t("addons.sampleEpisode")}.mkv` : `${root}/${t("addons.sampleShow")}/01 ${t("addons.sampleSeasonFolder")}/01 - ${t("addons.sampleEpisode")}.mkv`; };
+  /** Where a rule may point: the same set the server accepts, in the same order, so the
+   *  "Default" entry names the library the queue would fall back to. */
+  const offered = (kind: "movie" | "series") => libraries
+    .filter((library) => library.enabled && !library.unreachable && !library.readOnly && (library.type === kind || library.type === "mixed"))
+    .sort((a, b) => a.order - b.order);
+  const defaultLibrary = (kind: "movie" | "series") => {
+    const available = offered(kind);
+    return available.find((library) => (kind === "movie" ? library.defaultMovie : library.defaultSeries)) ?? available[0];
+  };
+  // A rule may name a library that is no longer offered (switched off, unplugged, removed).
+  // It stays visible and stays selected: silently rewriting somebody's rule would be worse.
+  const strayLibrary = (kind: "movie" | "series") => {
+    const wanted = draft[kind].libraryId;
+    return wanted && !offered(kind).some((library) => library.id === wanted) ? libraries.find((library) => library.id === wanted) : undefined;
+  };
+  const preview = (kind: "movie" | "series") => {
+    const rule = draft[kind];
+    const folder = rule.subfolder.trim().replaceAll("\\", "/").replace(/^\/+|\/+$/g, "");
+    const root = `${(libraries.find((library) => library.id === rule.libraryId) ?? defaultLibrary(kind))?.root ?? "/downloads"}${folder ? `/${folder}` : ""}`;
+    if (kind === "movie") return rule.layout === "flat" ? `${root}/${t("addons.sampleMovie")}.mkv` : `${root}/${t("addons.sampleMovie")}/${t("addons.sampleMovie")}.mkv`;
+    return rule.layout === "flat" ? `${root}/${t("addons.sampleShow")} - S01E01 - ${t("addons.sampleEpisode")}.mkv` : `${root}/${t("addons.sampleShow")}/01 ${t("addons.sampleSeasonFolder")}/01 - ${t("addons.sampleEpisode")}.mkv`;
+  };
   const save = async () => { setSaving(true); try { const saved = await api.updateAddon(addon.key, { downloadSettings: draft }); if (saved.downloadSettings) setDraft(clone(saved.downloadSettings)); await onChanged(); onNotify(t("addons.storageSaved", { addon: addon.manifest.name })); } catch (error) { onError(error); } finally { setSaving(false); } };
   return <article className={`panel addon-card ${storageOpen ? "storage-expanded" : ""}`}>
     {addon.manifest.logo ? <img src={addon.manifest.logo} alt="" onError={hideBroken}/> : <div className="addon-logo"><PackagePlus/></div>}
@@ -1864,8 +1888,24 @@ function AddonCard({ addon, index, total, onChanged, onNotify, onError }: { addo
       </div>
     </div>}
     {providesStreams && <button className={`storage-toggle ${storageOpen ? "open" : ""}`} onClick={() => setStorageOpen((value) => !value)} aria-expanded={storageOpen}><FolderCog/> <span>{t("addons.storageSettings")}</span><ChevronDown/></button>}
-    {providesStreams && storageOpen && <div className="addon-download-settings"><div className="addon-download-head"><strong>{t("addons.whereToStore")}</strong><small>{t("addons.whereToStoreBefore")} <code>DOWNLOAD_PATH</code>. {t("addons.whereToStoreAfter")} <code>/downloads</code>.</small></div>
-      <div className="download-rule-grid">{(["movie", "series"] as const).map((kind) => <div className="download-rule" key={kind}><b>{t(kind === "movie" ? "catalog.movies" : "catalog.series")}</b><label className="folder-label"><span>{t("addons.subfolder")}</span><div className="folder-field"><code>/downloads/</code><input aria-label={t("addons.subfolderLabel", { kind: t(kind === "movie" ? "catalog.movies" : "catalog.series") })} value={draft[kind].subfolder} onChange={(event) => change(kind, { subfolder: event.target.value })} placeholder={t("addons.subfolderPlaceholder")}/></div></label><label><span>{t("addons.layout")}</span><select aria-label={t("addons.layoutLabel", { kind: t(kind === "movie" ? "catalog.movies" : "catalog.series") })} value={draft[kind].layout} onChange={(event) => change(kind, { layout: event.target.value as "flat" | "structured" })}><option value="structured">{t("addons.layoutStructured")}</option><option value="flat">{t("addons.layoutFlat")}</option></select></label><small className="path-preview">{t("addons.example")} <code>{preview(kind)}</code></small></div>)}</div>
+    {providesStreams && storageOpen && <div className="addon-download-settings"><div className="addon-download-head"><strong>{t("addons.whereToStore")}</strong><small>{t("addons.whereToStoreHint")}</small></div>
+      <div className="download-rule-grid">{(["movie", "series"] as const).map((kind) => {
+        const kindLabel = t(kind === "movie" ? "catalog.movies" : "catalog.series");
+        const chosen = libraries.find((library) => library.id === draft[kind].libraryId);
+        const stray = strayLibrary(kind);
+        const fallback = defaultLibrary(kind);
+        return <div className="download-rule" key={kind}><b>{kindLabel}</b>
+          <label><span>{t("addons.saveTo")}</span>
+            <select aria-label={t("addons.saveToLabel", { kind: kindLabel })} value={draft[kind].libraryId ?? ""}
+              onChange={(event) => change(kind, { libraryId: event.target.value || undefined })}>
+              <option value="">{fallback ? t("addons.saveToDefaultNamed", { name: fallback.name }) : t("addons.saveToDefault")}</option>
+              {offered(kind).map((library) => <option key={library.id} value={library.id}>{library.name}</option>)}
+              {stray && <option value={stray.id}>{t("addons.saveToUnavailable", { name: stray.name })}</option>}
+            </select></label>
+          <label className="folder-label"><span>{t("addons.subfolder")}</span><div className="folder-field"><code>{chosen?.root ?? fallback?.root ?? ""}/</code><input aria-label={t("addons.subfolderLabel", { kind: kindLabel })} value={draft[kind].subfolder} onChange={(event) => change(kind, { subfolder: event.target.value })} placeholder={t("addons.subfolderPlaceholder")}/></div></label>
+          <label><span>{t("addons.layout")}</span><select aria-label={t("addons.layoutLabel", { kind: kindLabel })} value={draft[kind].layout} onChange={(event) => change(kind, { layout: event.target.value as "flat" | "structured" })}><option value="structured">{t("addons.layoutStructured")}</option><option value="flat">{t("addons.layoutFlat")}</option></select></label>
+          <small className="path-preview">{t("addons.example")} <code>{preview(kind)}</code></small></div>;
+      })}</div>
       <div className="download-settings-actions"><button onClick={() => { setDraft(clone(storedSettings)); setStorageOpen(false); }}>{t("common.cancel")}</button><button className="primary save-download-settings" disabled={saving} onClick={() => void save()}>{t(saving ? "common.saving" : "settings.saveSettings")}</button></div>
     </div>}
   </article>;
