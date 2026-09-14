@@ -43,7 +43,7 @@ import type { MediaInfo } from "./naming.js";
 import { defaultDownloadSettings, deviceFilename, normalizeDownloadSettings, safeName } from "./naming.js";
 import { LANGUAGE_NAMES, isUiLanguage, normalizeLanguage } from "./language.js";
 import { AppError, messageKeyOf } from "./errors.js";
-import { activeDeparted, carveOuts, defaultLibrary, DEPARTED_MAX, departedIdFor, isInside, libraryFor, libraryPath, newLibraryId, parseLibraryPath, posixBase, posixDir, posixJoin, realAncestor, relativeWithin, resolveLibraryPath, toFs, toPosix, type LibraryRecord, type LibraryType, type RootGrant } from "./libraries.js";
+import { activeDeparted, carveOuts, defaultLibrary, DEPARTED_MAX, departedIdFor, isInside, libraryFor, libraryPath, newLibraryId, parseLibraryPath, posixBase, posixDir, posixJoin, realAncestor, relativeWithin, resolveLibraryPath, sameFile, toFs, toPosix, type LibraryRecord, type LibraryType, type RootGrant } from "./libraries.js";
 import { envGrants, grantView, grantingRoot, insideGrant, mergeGrants } from "./library-grants.js";
 import { asLibraryType, checkLibraryRoot, libraryFlag } from "./library-admin.js";
 import { migrateStateFile } from "./library-migrate.js";
@@ -1778,7 +1778,9 @@ app.post("/api/library/rename", asyncRoute(async (req, res) => {
   const nextRelative = posixJoin(posixDir(relative), `${wanted}${extension}`);
   const target = await resolveLibraryPath(store.libraries(), nextRelative);
   if (!target) throw new AppError("Invalid name.", "err.invalidName");
-  if (target.absolute !== resolved.absolute && await fileExists(target.absolute)) throw new AppError("A file with that name already exists.", "err.nameTaken");
+  // A rename that only changes the case of a name is a real rename where the filesystem folds
+  // case; there the target is the same file, and `fileExists` must not be read as a clash.
+  if (!sameFile(target.absolute, resolved.absolute) && await fileExists(target.absolute)) throw new AppError("A file with that name already exists.", "err.nameTaken");
 
   await rename(resolved.absolute, target.absolute);
   await relocateLibraryPath(resolved.key, target.key);

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import path from "node:path";
 import { test } from "node:test";
 import { deviceFilename, joinTarget, normalizeDownloadSettings, safeName, safeSubfolder, streamExtension, targetPath } from "./naming.js";
 import type { LibraryRecord } from "./libraries.js";
@@ -72,6 +73,25 @@ test("an empty or dots-only name does not throw", () => {
 
 test("an over-long name is trimmed", () => {
   assert.ok(safeName("a".repeat(400)).length <= 150);
+});
+
+test("a name Windows refuses becomes one it accepts", () => {
+  // Whatever follows it: `CON`, `CON.mkv` and `CON.txt` are all device names there.
+  for (const reserved of ["CON", "con.mkv", "PRN", "AUX", "NUL", "COM1", "LPT9.txt"]) {
+    assert.equal(safeName(reserved), `_${reserved}`, `${reserved} is a device name`);
+  }
+  // Only the whole stem counts, so an ordinary name that starts with one is left alone.
+  assert.equal(safeName("CONcert.mkv"), "CONcert.mkv");
+  assert.equal(safeName("Console"), "Console");
+  // A trailing dot or space is refused there too, and already goes.
+  assert.equal(safeName("Film. "), "Film");
+});
+
+test("a subfolder Windows could not use is refused", () => {
+  for (const value of ["C:\\Windows", "\\\\server\\share\\Films", "\\Films", "Films\\..\\..\\etc"]) {
+    assert.throws(() => safeSubfolder(value), `${value} must not become a subfolder`);
+  }
+  assert.equal(safeSubfolder("Films\\2024"), path.join("Films", "2024"), "a backslash inside is still a separator");
 });
 
 test("a film can be saved flat into the addon's subfolder", () => {

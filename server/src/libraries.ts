@@ -59,6 +59,15 @@ export interface RootGrant { path: string; source: "env" | "user"; grantedAt: st
 
 export const newLibraryId = () => `lib_${randomBytes(4).toString("hex")}`;
 
+const CASE_INSENSITIVE_FS = process.platform === "win32" || process.platform === "darwin";
+
+/** What the filesystem under this build treats as one file. macOS and Windows fold case and
+ *  Linux does not, which is the difference the rename guard has to respect: changing only the
+ *  case of a name is a real rename there and must not be refused as "the name is taken".
+ *  `caseInsensitive` is a parameter so the rule can be tested on any runner. */
+export const sameFile = (left: string, right: string, caseInsensitive = CASE_INSENSITIVE_FS) =>
+  left === right || (caseInsensitive && left.toLowerCase() === right.toLowerCase());
+
 /** Paths crossing a module boundary use `/`; `path.sep` appears only at a syscall. */
 export const toPosix = (value: string) => value.split(path.sep).join("/");
 export const toFs = (value: string) => value.split("/").join(path.sep);
