@@ -140,9 +140,9 @@ again after every rebase onto `main`.
       `truncated`; it counts existing bindings only when the root already is a library.
 - [x] Follow-up for PR 6, closed with the per-library save rules:
       `AddonDownloadSettings` carries `libraryId`, and a job whose library is away waits for
-      it with `pauseReason: "library"` instead of being failed or redirected. The one
-      exception, a library whose record is gone, is recorded under *When a library stops
-      being available*.
+      it with `pauseReason: "library"` instead of being failed or redirected. A library whose
+      record is gone waits too, with the half-hour deadline recorded under *When a library
+      stops being available*.
 - [x] No reachable path throws the single-library pass-through at a call site that cannot
       answer: `LibraryScanOpts.pathExists` is required and qualified, so the scan no longer
       builds one from `downloadDir` at module load, and a state holding two libraries boots
@@ -1109,7 +1109,7 @@ rewriting stored rows, so a library that comes back needs no repair:
 | Reference | On delete | On disable / unreachable | On type change |
 | --- | --- | --- | --- |
 | `defaultMovieLibrary` / `defaultSeriesLibrary` | cleared to `""`; `defaultLibrary()` then falls back to the first enabled library of the kind, then the first `mixed` | left pointing at it; the same fallback applies while it is away | cleared if the new type no longer matches the kind |
-| `AddonDownloadSettings[kind].libraryId` | kept as it stands and marked in the editor as not available; the queue falls back to the default and logs one line per job | left as it is; the download resolves through the fallback for now | left as it is if still eligible (`mixed` always is), and the queue falls back while it is not |
+| `AddonDownloadSettings[kind].libraryId` | kept as it stands and marked in the editor as not available; a job bound for it waits for the re-add (the folder keeps its identity) and takes the default after `LIBRARY_WAIT_MS` | left as it is; a job bound for it waits (see the row below) rather than going somewhere else | left as it is if still eligible (`mixed` always is); a job already placed is unaffected |
 | Queued download jobs | jobs whose target resolves into it are **paused** with `pauseReason: "library"`, never failed and never silently redirected | same | unaffected; the type gate applies to placement, not to a job already placed |
 | Running ops job | cancelled at the current item; completed items keep their results | paused, resumed when the library returns | unaffected |
 | `favorites`, `progress`, `libraryMeta` | kept unless `?forget=1`; the metadata file and artwork directory go only on an explicit forget | kept, hidden from listings (§12) | kept |
@@ -1135,13 +1135,15 @@ own when it comes back, the way a `"storage"` pause resumes when space returns.
 download path must handle "the rule names a library that is not available right
 now" as a first-class outcome rather than an invariant violation.
 
-One exception, added when the save rules landed: a rule that names a library
-whose **record is gone** -- deleted, not disabled -- falls back to the default
-instead of pausing. A paused job waits for something that will come back; a
-deleted library will not, and a queue that never moves again is not an honest
-state either. The reference stays in the rule so the interface can show it as
-not available, and a library added again at the same root picks the same id back
-up (*Known gaps*), which makes the rule live again.
+**Removed is not disabled**, and the difference is a deadline rather than a
+fallback. A rule naming a library whose **record is gone** pauses like any
+other: the folder removed without forgetting keeps its identity, so adding it
+again brings the same library back and the job continues there (*Known gaps*).
+What it does not do is wait for ever -- after `LIBRARY_WAIT_MS` (half an hour)
+the job takes the default for the kind and logs one line saying so, because a
+library that is never coming back must not strand a queue. A library that is
+merely switched off, read-only or away has no deadline at all: a pulled disk
+comes back, and the row already says what the job is waiting for.
 
 ### Rollback
 

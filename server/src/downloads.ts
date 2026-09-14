@@ -64,6 +64,10 @@ export interface DownloadJob {
   /** The library `target` lives in. Absent on a job queued before libraries existed, which
    *  belongs to the download directory. */
   libraryId?: string;
+  /** When the job last started waiting for a library, and whether that library is one whose
+   *  record is gone rather than one that is merely unreachable. */
+  pausedAt?: string;
+  libraryGone?: boolean;
   /** The rule that placed it, so the target can be chosen again when a library comes back. */
   targetSettings?: DownloadTargetSettings;
   error?: string;
@@ -96,6 +100,10 @@ export interface QueueHooks {
   defaultLibrary?: (kind: "movie" | "series") => LibraryRecord | undefined;
   /** One library by id with its reachability refreshed -- what a paused job waits for. */
   libraryState?: (libraryId: string) => Promise<LibraryRecord | undefined>;
+  /** How long a job waits for a library whose record is gone -- a folder removed without
+   *  forgetting comes back with the same id when it is added again -- before it takes the
+   *  default instead. A library that is merely away is waited for without a deadline. */
+  libraryWaitMs?: number;
   /** How often a job paused for a library asks whether it is back. */
   libraryRetryMs?: number;
   freeSpace?: (dir: string) => Promise<{ freeBytes?: number; totalBytes?: number }>;
@@ -116,15 +124,22 @@ const exists = async (file: string) => { try { await stat(file); return true; } 
 const MiB = 1024 ** 2;
 
 /** The rule's library is not there to be written to right now. Not a failure: the job waits,
- *  because sending one title to a fallback root would scatter a season across two libraries. */
+ *  because sending one title to a fallback root would scatter a season across two libraries.
+ *  `gone` marks the stricter case, a library whose record is not there at all. */
 export class LibraryUnavailableError extends Error {
-  constructor(readonly libraryId: string) {
+  constructor(readonly libraryId: string, readonly gone = false) {
     super(`The library ${libraryId} is not available.`);
     this.name = "LibraryUnavailableError";
   }
 }
 
 const libraryUsable = (library: LibraryRecord) => library.enabled && !library.readOnly && !library.unreachable;
+
+/** How long a job waits for a library whose record has gone before taking the default. A folder
+ *  removed without forgetting comes back with the same id when it is added again, which is
+ *  usually a matter of a minute; half an hour of patience covers a mistake, and after that a
+ *  queue that never moves is worse than a file in the default library. */
+export const LIBRARY_WAIT_MS = 30 * 60_000;
 
 export async function volumeSpace(target: string) {
   try {
@@ -151,6 +166,7 @@ export class DownloadQueue {
   private readonly libraries: () => LibraryRecord[];
   private readonly defaultLibrary: (kind: "movie" | "series") => LibraryRecord | undefined;
   private readonly libraryState?: (libraryId: string) => Promise<LibraryRecord | undefined>;
+  private readonly libraryWaitMs: number;
   private readonly libraryRetryMs: number;
   private libraryWatch?: NodeJS.Timeout;
   private readonly now: () => number;
@@ -185,6 +201,7 @@ export class DownloadQueue {
     this.libraries = hooks.libraries ?? (() => []);
     this.defaultLibrary = hooks.defaultLibrary ?? (() => undefined);
     this.libraryState = hooks.libraryState;
+    this.libraryWaitMs = hooks.libraryWaitMs ?? LIBRARY_WAIT_MS;
     this.libraryRetryMs = hooks.libraryRetryMs ?? 15_000;
     this.now = hooks.now ?? Date.now;
     this.freeSpace = hooks.freeSpace ?? volumeSpace;
@@ -254,19 +271,23 @@ export class DownloadQueue {
    *  nothing on disk is ever the price of a mount that is not there. */
   /** The library a new job writes into. A rule that names one which is switched off,
    *  read-only or away is not redirected: the caller pauses the job, because scattering one
-   *  title across two roots is worse than waiting. A rule naming a library this instance no
-   *  longer has falls back to the default -- the record is gone, so waiting would be forever,
-   *  and the interface marks the rule as unavailable. */
+   *  title across two roots is worse than waiting.
+   *
+   *  A library that has been *removed* pauses too, with a deadline: the folder keeps its
+   *  identity, so re-adding it brings the same library back and the job continues there. The
+   *  deadline is the `libraryWaitMs` in `wakeLibraries`; past it the job takes the default,
+   *  because a library that never comes back must not strand a queue for ever. */
   private async resolveLibrary(kind: "movie" | "series", settings: DownloadTargetSettings) {
     const wanted = settings.libraryId;
     if (!wanted) return this.defaultLibrary(kind);
     const named = (await this.libraryState?.(wanted)) ?? this.libraries().find((library) => library.id === wanted);
-    if (!named) {
-      log("WARN", "A save rule names a library this instance no longer has, using the default", { library: wanted });
-      return this.defaultLibrary(kind);
-    }
+    if (!named) throw new LibraryUnavailableError(wanted, true);
     if (!libraryUsable(named)) throw new LibraryUnavailableError(named.id);
     return named;
+  }
+
+  private kindOf(job: DownloadJob): "movie" | "series" {
+    return job.media?.kind === "episode" ? "series" : "movie";
   }
 
   /** The file name is chosen when the download can actually start, so a name picked while a
@@ -278,13 +299,15 @@ export class DownloadQueue {
     job.target = await this.uniqueTarget(library, directory, base, extension);
   }
 
-  private pauseForLibrary(job: DownloadJob, libraryId: string) {
+  private pauseForLibrary(job: DownloadJob, error: LibraryUnavailableError) {
     job.status = "paused";
     job.pauseReason = "library";
-    job.libraryId = libraryId;
+    job.libraryId = error.libraryId;
+    job.libraryGone = error.gone || undefined;
+    job.pausedAt = new Date().toISOString();
     job.speed = 0;
-    job.updatedAt = new Date().toISOString();
-    log("INFO", "Download paused, the library it goes to is not available", { id: job.id, title: job.title, library: libraryId });
+    job.updatedAt = job.pausedAt;
+    log("INFO", "Download paused, the library it goes to is not available", { id: job.id, title: job.title, library: error.libraryId, removed: error.gone || undefined });
     this.watchLibraries();
   }
 
@@ -304,15 +327,25 @@ export class DownloadQueue {
     }
     let woke = false;
     for (const job of waiting) {
-      const library = (await this.libraryState?.(job.libraryId!)) ?? this.libraries().find((item) => item.id === job.libraryId);
-      if (!library || !libraryUsable(library)) continue;
+      const waited = job.libraryId!;
+      const named = (await this.libraryState?.(waited)) ?? this.libraries().find((item) => item.id === waited);
+      if (named && !libraryUsable(named)) continue;
+      // A library whose record is gone gets a deadline: the folder keeps its identity, so a
+      // re-add brings this same library back and the job continues there. Past the deadline
+      // nothing is coming, and a queue that waits for ever is not honest either.
+      const expired = !named && job.libraryGone && this.now() - Date.parse(job.pausedAt ?? "") >= this.libraryWaitMs;
+      if (!named && !expired) continue;
+      if (!named) log("WARN", "The library a download waited for did not come back, using the default", { id: job.id, title: job.title, library: waited });
+      const library = named ?? this.defaultLibrary(this.kindOf(job));
       await this.ensureTarget(job, library);
-      job.libraryId = library.id;
+      job.libraryId = library?.id;
+      job.libraryGone = undefined;
       job.pauseReason = undefined;
+      job.pausedAt = undefined;
       job.status = job.debrid && !job.stream?.url ? "waiting" : "queued";
       job.updatedAt = new Date().toISOString();
-      log("INFO", "The library is back, the download continues", { id: job.id, title: job.title, library: library.id });
       if (job.status === "waiting") this.scheduleDebrid(job.id);
+      if (named) log("INFO", "The library is back, the download continues", { id: job.id, title: job.title, library: named.id });
       woke = true;
     }
     if (!woke) return;
@@ -353,7 +386,7 @@ export class DownloadQueue {
       if (library) job.libraryId = library.id;
     } catch (error) {
       if (!(error instanceof LibraryUnavailableError)) throw error;
-      this.pauseForLibrary(job, error.libraryId);
+      this.pauseForLibrary(job, error);
     }
     this.jobs.push(job); await this.save();
     if (job.status === "paused") return this.publicJob(job);
@@ -380,7 +413,7 @@ export class DownloadQueue {
       if (library) job.libraryId = library.id;
     } catch (error) {
       if (!(error instanceof LibraryUnavailableError)) throw error;
-      this.pauseForLibrary(job, error.libraryId);
+      this.pauseForLibrary(job, error);
     }
     this.jobs.push(job); await this.save();
     if (job.status === "paused") return this.publicJob(job);
@@ -1062,7 +1095,7 @@ export class DownloadQueue {
       // The rule's library went away while the job waited for its source, or is gone now.
       // Nothing is redirected and nothing fails: the job waits for the library to come back.
       if (error instanceof LibraryUnavailableError) {
-        this.pauseForLibrary(job, error.libraryId);
+        this.pauseForLibrary(job, error);
         await this.save();
         return;
       }
