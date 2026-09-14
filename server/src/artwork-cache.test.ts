@@ -134,3 +134,35 @@ test("removing a library's directory takes its entries with it and nobody else's
       [path.join("lib_bbbbbbbb", hash("One.mkv"))]);
   });
 });
+
+test("a picture follows its key into a library that has no directory yet", async () => {
+  await withCache(1024 * 1024, async (cache) => {
+    const from = await put(cache, "lib_aaaaaaaa/Show/01.mkv", 2048);
+    const to = cache.file("lib_bbbbbbbb/Archive/01.mkv");
+    // The destination library has never had a thumbnail, so its directory does not exist.
+    await assert.rejects(stat(path.dirname(to)));
+    assert.deepEqual(await cache.moveKey("lib_aaaaaaaa/Show/01.mkv", "lib_bbbbbbbb/Archive/01.mkv"), { carried: true });
+    assert.equal((await stat(to)).size, 2048, "the picture arrived");
+    await assert.rejects(stat(from), "and did not stay behind");
+    assert.equal(cache.size, 1, "the index followed it");
+  });
+});
+
+test("a copy leaves the source picture where it is", async () => {
+  await withCache(1024 * 1024, async (cache) => {
+    const from = await put(cache, "lib_aaaaaaaa/Show/01.mkv", 2048);
+    const to = cache.file("lib_bbbbbbbb/Archive/01.mkv");
+    assert.deepEqual(await cache.copyKey("lib_aaaaaaaa/Show/01.mkv", "lib_bbbbbbbb/Archive/01.mkv"), { carried: true });
+    assert.equal((await stat(from)).size, 2048);
+    assert.equal((await stat(to)).size, 2048);
+    assert.equal(cache.size, 2, "both are counted");
+  });
+});
+
+test("an item with no picture of its own says so rather than failing", async () => {
+  await withCache(1024 * 1024, async (cache) => {
+    assert.deepEqual(await cache.moveKey("lib_aaaaaaaa/Show/01.mkv", "lib_bbbbbbbb/Archive/01.mkv"), { carried: false, reason: "absent" });
+    assert.deepEqual(await cache.copyKey("lib_aaaaaaaa/Show/01.mkv", "lib_bbbbbbbb/Archive/01.mkv"), { carried: false, reason: "absent" });
+    assert.equal(cache.size, 0);
+  });
+});

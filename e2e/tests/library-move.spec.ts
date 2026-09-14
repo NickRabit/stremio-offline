@@ -233,3 +233,75 @@ test("a file crosses into another library, and a typed library refuses the wrong
   const final = await (await request.get("/api/libraries")).json();
   expect(final).toHaveLength(1);
 });
+
+// The data-loss shape: a library's artwork directory is made on its first thumbnail, so moving a
+// title into a library that never had one used to fail with ENOENT, leave the picture in the
+// source under a stale key and let the orphan sweep take it an hour later.
+test("a picture crosses into another library with its title, and comes back", async ({ request }) => {
+  const clipName = "Obrázek mezi knihovnami.mkv";
+  const root = path.resolve("e2e/.tmp/picture-library");
+  await rm(path.join(downloads, clipName), { force: true });
+  await rm(root, { recursive: true, force: true });
+  await copyFile(sample, path.join(downloads, clipName));
+  await mkdir(root, { recursive: true });
+
+  const [source] = await (await request.get("/api/libraries")).json();
+  expect((await request.post("/api/libraries/grants", { data: { path: root } })).status()).toBe(201);
+  const destination = await (await request.post("/api/libraries", { data: { name: "Obrázky", type: "movie", root } })).json();
+  const artwork = (libraryId: string, key: string) =>
+    path.join(path.resolve("e2e/.tmp/data/artwork"), libraryId, `${createHash("sha1").update(key).digest("hex")}.jpg`);
+
+  try {
+    // Bind the file itself to the fixture title, so it has a picture of its own under its key.
+    // Qualified, because a second library is configured by now and an unqualified path names none.
+    expect((await request.post("/api/library/match", { data: { path: `${source.id}/${clipName}`, type: "movie", id: "tt-e2e-movie" } })).status()).toBe(200);
+    await waitForFile([artwork(source.id, clipName)]);
+    // Its directory for generated thumbnails exists from the moment the library does, which is
+    // what used to be missing when a picture had to cross into it.
+    await expect.poll(() => stat(path.join(path.resolve("e2e/.tmp/data/artwork"), destination.id)).then(() => true, () => false)).toBe(true);
+
+    const there = await request.post("/api/library/move", { data: { path: `${source.id}/${clipName}`, folder: destination.id } });
+    expect(there.status(), await there.text()).toBe(200);
+    await waitForFile([artwork(destination.id, clipName)]);
+    expect(await stat(artwork(source.id, clipName)).catch(() => undefined), "the picture did not stay behind").toBeUndefined();
+
+    const back = await request.post("/api/library/move", { data: { path: `${destination.id}/${clipName}`, folder: source.id } });
+    expect(back.status(), await back.text()).toBe(200);
+    await waitForFile([artwork(source.id, clipName)]);
+    expect(await stat(artwork(destination.id, clipName)).catch(() => undefined), "and came back with it").toBeUndefined();
+  } finally {
+    await request.delete(`/api/libraries/${destination.id}?forget=1`);
+    await request.delete(`/api/libraries/grants?path=${encodeURIComponent(root)}`);
+    await rm(root, { recursive: true, force: true });
+    await rm(path.join(downloads, clipName), { force: true });
+  }
+});
+
+// The endpoint used to accept `copy: true` and move anyway -- the original deleted, a success in
+// the response. It honours the field now, and a copy carries the picture to both halves.
+test("the move route copies when it is asked to", async ({ request }) => {
+  const clipName = "Kopírovaný klip.mkv";
+  const folder = "Kopírování cíl";
+  await rm(path.join(downloads, folder), { recursive: true, force: true });
+  await rm(path.join(downloads, clipName), { force: true });
+  await mkdir(path.join(downloads, folder), { recursive: true });
+  await copyFile(sample, path.join(downloads, clipName));
+
+  const [library] = await (await request.get("/api/libraries")).json();
+  try {
+    expect((await request.post("/api/library/match", { data: { path: `${library.id}/${clipName}`, type: "movie", id: "tt-e2e-movie" } })).status()).toBe(200);
+    const artwork = path.join(path.resolve("e2e/.tmp/data/artwork"), library.id, `${createHash("sha1").update(clipName).digest("hex")}.jpg`);
+    await waitForFile([artwork]);
+
+    const copied = await request.post("/api/library/move", { data: { path: `${library.id}/${clipName}`, folder: `${library.id}/${folder}`, copy: true } });
+    expect(copied.status(), await copied.text()).toBe(200);
+    // Both files are there: the one that was copied and the one it was copied from.
+    await assertFileExists(path.join(downloads, clipName));
+    await assertFileExists(path.join(downloads, folder, clipName));
+    await waitForFile([path.join(path.resolve("e2e/.tmp/data/artwork"), library.id, `${createHash("sha1").update(`${folder}/${clipName}`).digest("hex")}.jpg`)]);
+    expect((await stat(artwork)).size, "the original keeps its picture too").toBeGreaterThan(0);
+  } finally {
+    await rm(path.join(downloads, folder), { recursive: true, force: true });
+    await rm(path.join(downloads, clipName), { force: true });
+  }
+});
