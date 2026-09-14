@@ -111,6 +111,11 @@ side effect of a library edit.
 To take a disk out of service without losing anything, *disable* the library
 instead: the row stays, the counts stay, and re-enabling it restores it exactly.
 
+A download that was already queued for a library you remove waits for it rather
+than landing somewhere else — the same rule as a disk that is unplugged. Add the
+folder back and the job continues into it. If the library never comes back, the
+job takes the default for its kind after half an hour and the log says so.
+
 ## Splitting the download directory
 
 The common case: `/downloads` has grown into a mixture of films and series, and

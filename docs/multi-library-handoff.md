@@ -230,6 +230,16 @@ that resolves into a type error rather than a merge conflict:
 After #125 lands the line has to go rather than be merged, and the rebased branch
 needs `npm run build` before the tests, not only the tests.
 
+**A second review (`LIBRARY_REVIEW.md` again) followed the fixes.** Three points,
+all settled: the reference table in *When a library stops being available* still
+described the old fallback in two of its three cells, the delete-versus-pause
+pair was inconsistent (#126 fell back at once, #127 made removed libraries come
+back), and the ffmpeg sidecar test guessed how long a reader takes to start.
+That last one is #128; the other two are in #126, where the behaviour lives. The
+answer to the delete question: a removed library pauses a job like an
+unavailable one, and the job takes the default after `LIBRARY_WAIT_MS` (half an
+hour) if the folder is never added back.
+
 The review also confirmed, so nobody spends a day on them again: the create path
 cannot escape a grant through a symlink (`grantingRoot` resolves both sides), the
 artwork migration preserves the old layout, and backup v2 remaps every id it
