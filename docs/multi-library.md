@@ -230,7 +230,28 @@ again after every rebase onto `main`.
 
 ### PR 5 — Operations queue and bulk selection
 
-- [ ] Not started.
+- [x] `LibraryOps`: durable serial jobs in `data/library-ops.json`, restart recovery,
+      queued requests, per-item results, continue-on-error, cancellation after the current
+      item, a 500-item cap and byte progress. Waiting is represented as `paused/queue`
+      because the published state union has no separate queued status.
+- [x] Safe transfer path: same-device moves use `rename`; copy and cross-device move write
+      a sibling `.part` tree, fsync every file, rename it into place, and only then remove a
+      move source. A failed attempt removes its staging tree and nested symbolic links are
+      refused rather than followed outside the guarded library path.
+- [x] `/api/library/ops` snapshot/start/cancel, `/api/library/folder`, copy, and shared
+      implementations behind the existing single favorite, delete, match and move routes.
+      Copy duplicates path metadata; move carries metadata and artwork as before. Jobs pause
+      for affected playback, an active download writing under the destination, and an
+      unavailable library. A running metadata scan pauses while an operation writes.
+- [x] Browse selection mode with per-row controls and a sticky action bar for move, copy,
+      delete, favorite, bind/unbind, lookup exclusion, artwork regeneration and clearing
+      watched progress. The destination and identify dialogs accept a selection as one job.
+      The library polls active work, shows item/byte progress, pause reason and cancel, and
+      refreshes browse and progress state on completion. Folder creation is in library tools.
+- [x] Unit coverage for durability, serial execution, failure continuation, unfinished-job
+      retention, staged copies, same-device moves, metadata copies, bulk destination picking
+      and bulk matching. `library-bulk.spec.ts` selects three files, removes one before submit,
+      and proves the other two finish while the failed row is recorded.
 
 ### PR 6 — Per-library addon save rules, backup, documentation
 

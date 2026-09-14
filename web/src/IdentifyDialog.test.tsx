@@ -143,4 +143,25 @@ describe("IdentifyDialog", () => {
     await act(async () => { await Promise.resolve(); });
     expect(host.textContent).toContain("excluded from matching");
   });
+
+  it("queues one catalogue match for several selected items", async () => {
+    const onApplied = vi.fn();
+    fetchMock.mockImplementation((url: string) => {
+      if (String(url).includes("/api/library/identity")) return Promise.resolve(json(identity));
+      if (String(url).includes("/api/search")) return Promise.resolve(json({
+        items: [{ id: "tt0111958", type: "series", name: "Father Ted", releaseInfo: "1995" }],
+        hasMore: false, cursor: "", sources: 1,
+      }));
+      if (String(url).includes("/api/library/ops")) return Promise.resolve(json({ id: "job-1" }, 202));
+      return Promise.resolve(json({}));
+    });
+    await act(async () => { root.render(<IdentifyDialog path="Father Ted" paths={["Father Ted", "Other"]} onClose={() => undefined} onApplied={onApplied}/>); });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    await act(async () => { [...host.querySelectorAll(".identify-results button")][0]!.dispatchEvent(new MouseEvent("click", { bubbles: true })); });
+    await act(async () => { [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("Use this title"))!.click(); });
+    await act(async () => { await Promise.resolve(); });
+    const post = fetchMock.mock.calls.find((call) => String(call[0]).includes("/api/library/ops"));
+    expect(JSON.parse(String((post?.[1] as RequestInit).body))).toEqual({ op: "match", items: ["Father Ted", "Other"], id: "tt0111958", type: "series" });
+    expect(onApplied).toHaveBeenCalled();
+  });
 });

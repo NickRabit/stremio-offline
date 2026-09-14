@@ -1682,8 +1682,9 @@ app.post("/api/library/folder", asyncRoute(async (req, res) => {
   if (!resolved) throw new AppError("Invalid path.", "err.invalidPath");
   const info = await stat(resolved.absolute).catch(() => undefined);
   if (!info?.isDirectory()) throw new AppError("The destination folder does not exist.", "err.targetMissing");
-  const name = safeName(String(req.body?.name ?? ""));
-  if (!name) throw new AppError("Invalid name.", "err.invalidName");
+  const rawName = String(req.body?.name ?? "").trim();
+  if (!rawName || /^\.+$/.test(rawName)) throw new AppError("Invalid name.", "err.invalidName");
+  const name = safeName(rawName);
   const relative = posixJoin(resolved.relative, name);
   const target = await resolveLibraryPath(store.libraries(), libraryPath(resolved.library.id, relative));
   if (!target) throw new AppError("Invalid path.", "err.invalidPath");
@@ -1865,6 +1866,7 @@ const libraryScan = new LibraryScan({
   savePoster: (key, url) => saveCatalogPoster(key, url),
   deleteGeneratedArt: (key) => clearGeneratedArt(key),
   busy: () => {
+    if (libraryOpsWriting) return "operation";
     if (playback.diagnostics().sessions.some((session) => session.idleSeconds < PLAYBACK_IDLE_SECONDS)) return "playback";
     if (store.settings().libraryScanPauseOnDownload && queue.list().some((job) => job.status === "downloading")) return "download";
     const searchHosts = new Set(searchableCatalogs(store.addons()).map(({ addon }) => hostOf(addon.manifestUrl)));
@@ -2081,19 +2083,19 @@ const libraryOps = new LibraryOps({
   file: path.join(DATA_DIR, "library-ops.json"),
   pause: async (operation, item) => {
     const parsed = parseLibraryPath(item);
-    const library = parsed ? libraryFor(store.libraries(), parsed.libraryId) : undefined;
+    const resolved = await resolveLibraryPath(store.libraries(), item);
+    const library = parsed ? libraryFor(store.libraries(), parsed.libraryId) : resolved?.library;
     if (library) {
       await refreshLibraryHealth();
       if (libraryHealth.get(library.id)?.unreachable) return "library";
     }
-    const resolved = await resolveLibraryPath(store.libraries(), item);
     if (resolved && playback.active().some((session) => {
       if (!session.stream.url?.startsWith("file:")) return false;
       try { return isInside(fileURLToPath(session.stream.url), resolved.absolute); } catch { return false; }
     })) return "playback";
     if ((operation.op === "move" || operation.op === "copy") && queue.list().some((job) => job.status === "checking" || job.status === "downloading")) {
       const target = await resolveLibraryPath(store.libraries(), operation.target);
-      const writing = await Promise.all(queue.list().filter((job) => job.target).map((job) => resolveLibraryPath(store.libraries(), job.target)));
+      const writing = await Promise.all(queue.list().filter((job) => job.target && (job.status === "checking" || job.status === "downloading")).map((job) => resolveLibraryPath(store.libraries(), job.target)));
       if (target && writing.some((job) => job && isInside(job.absolute, target.absolute))) return "download";
     }
     return undefined;
@@ -2936,6 +2938,6 @@ app.listen(port, "0.0.0.0", () => { markServerReady(); log("INFO", "Stremio Offl
 for (const signal of ["SIGTERM", "SIGINT"] as const) {
   process.once(signal, () => {
     log("INFO", "Shutting down", { signal });
-    void Promise.allSettled([images.flush(), artworks.flush(), metaStore.flush()]).then(flushLog).finally(() => process.exit(0));
+    void Promise.allSettled([images.flush(), artworks.flush(), metaStore.flush(), libraryOps.flush()]).then(flushLog).finally(() => process.exit(0));
   });
 }

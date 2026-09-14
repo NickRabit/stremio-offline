@@ -88,3 +88,33 @@ test("a paused job resumes when its blocker clears", async () => {
     assert.deepEqual(h.seen, ["one"]);
   } finally { await h.close(); }
 });
+
+test("persistence never trims unfinished jobs", async () => {
+  const h = await harness();
+  try {
+    const queue = new LibraryOps({
+      file: path.join(h.dataDir, "many.json"), retryMs: 1_000,
+      pause: () => "library",
+      execute: async () => ({}),
+    });
+    await queue.load();
+    for (let index = 0; index < 25; index += 1) await queue.enqueue({ op: "delete", items: [`item-${index}`] });
+    await waitFor(() => queue.snapshot().jobs[0]?.pauseReason === "library");
+    await queue.flush();
+    const saved = JSON.parse(await readFile(path.join(h.dataDir, "many.json"), "utf8"));
+    assert.equal(saved.jobs.length, 25);
+  } finally { await h.close(); }
+});
+
+test("a corrupt state file does not block startup or new work", async () => {
+  const h = await harness();
+  try {
+    const file = path.join(h.dataDir, "corrupt.json");
+    await writeFile(file, "{broken");
+    const queue = new LibraryOps({ file, execute: async (_operation, item) => { h.seen.push(item); return {}; } });
+    await queue.load();
+    await queue.enqueue({ op: "delete", items: ["one"] });
+    await waitFor(() => queue.snapshot().jobs[0]?.status === "completed");
+    assert.deepEqual(h.seen, ["one"]);
+  } finally { await h.close(); }
+});

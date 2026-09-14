@@ -10,9 +10,9 @@ const parentOf = (folder: string) => folder.includes("/") ? folder.slice(0, fold
  *  one level up or into the folder next door -- is a couple of clicks away. With more than one
  *  library the same dialog crosses between them: the picked library's own tree is then walked,
  *  and only the libraries that take this kind of title are offered. */
-export function MoveDialog({ path, label, itemType, libraries = [], onClose, onMoved }:
+export function MoveDialog({ path, paths, copy = false, label, itemType, libraries = [], onClose, onMoved, onQueued }:
   { path: string; label: string; itemType?: "movie" | "series"; libraries?: LibraryView[];
-    onClose: () => void; onMoved: (target: string) => void }) {
+    paths?: string[]; copy?: boolean; onClose: () => void; onMoved: (target: string) => void; onQueued?: (id: string) => void }) {
   useI18n();
   const [folder, setFolder] = useState(parentOf(path));
   const [folders, setFolders] = useState<LibraryFolder[]>([]);
@@ -49,13 +49,20 @@ export function MoveDialog({ path, label, itemType, libraries = [], onClose, onM
   const open = (value: string) => setFolder(root ? (value ? `${root}/${value}` : root) : value);
 
   // The item cannot land where it already is, and a folder cannot be moved inside itself.
-  const inItself = folder === path || folder.startsWith(`${path}/`);
-  const unchanged = folder === parentOf(path);
+  const moving = paths?.length ? paths : [path];
+  const inItself = moving.some((item) => folder === item || folder.startsWith(`${item}/`));
+  const unchanged = moving.every((item) => folder === parentOf(item));
   const crumbs = relative ? relative.split("/") : [];
 
   const move = async () => {
     setBusy(true);
     try {
+      if (paths?.length) {
+        const queued = await api.startLibraryOp({ op: copy ? "copy" : "move", items: paths, target: folder });
+        onQueued?.(queued.id);
+        onClose();
+        return;
+      }
       const result = await api.moveLibraryItem(path, folder);
       onMoved(result.path);
     } catch (value) { setError(describeError(value)); setBusy(false); }
@@ -65,7 +72,7 @@ export function MoveDialog({ path, label, itemType, libraries = [], onClose, onM
     onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <div className="panel identify-card move-card">
       <div className="identify-head">
-        <h2>{t("library.moveTitle", { name: label })}</h2>
+        <h2>{t(copy ? "library.copyTitle" : "library.moveTitle", { name: label })}</h2>
         <button type="button" className="icon-button" aria-label={t("common.cancel")} onClick={onClose}><X/></button>
       </div>
       {offered.length > 1 && <div className="move-libraries" role="group" aria-label={t("library.moveToLibrary")}>
@@ -83,7 +90,7 @@ export function MoveDialog({ path, label, itemType, libraries = [], onClose, onM
         {relative && <button type="button" className="move-up" onClick={() => open(parentOf(relative))}>
           <CornerLeftUp/> {t("library.moveUp")}
         </button>}
-        {folders.map((item) => <button type="button" key={item.path} disabled={item.path === path} onClick={() => setFolder(item.path)}>
+        {folders.map((item) => <button type="button" key={item.path} disabled={moving.includes(item.path)} onClick={() => setFolder(item.path)}>
           <FolderOpen/> <span>{item.name}</span> <ChevronRight/>
         </button>)}
         {!busy && !folders.length && <p className="identify-hint">{t("library.moveNoSubfolders")}</p>}
@@ -94,7 +101,7 @@ export function MoveDialog({ path, label, itemType, libraries = [], onClose, onM
         : unchanged ? t("library.moveSameFolder")
           : t("library.moveTargetHint", { folder: relative || (qualified && current ? current.name : t("library.rootFolder")) })}</p>
       <button type="button" className="primary" disabled={busy || inItself || unchanged} onClick={() => void move()}>
-        {t("library.moveConfirm")}
+        {t(copy ? "library.copyConfirm" : "library.moveConfirm")}
       </button>
     </div>
   </div>;

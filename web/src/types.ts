@@ -168,7 +168,7 @@ export interface IdentityPreview {
 export interface SuggestionRow { key: string; label: string; suggestion: MatchSuggestion }
 export interface ScanState {
   status: "idle" | "running" | "paused" | "completed" | "failed";
-  pauseReason?: "playback" | "download" | "breaker";
+  pauseReason?: "playback" | "download" | "breaker" | "operation";
   startedAt?: string; finishedAt?: string; updatedAt?: string;
   total: number; done: number; matched: number; skipped: number; failed: number;
   current?: string; remaining: string[]; error?: string;
