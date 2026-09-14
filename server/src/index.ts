@@ -79,20 +79,17 @@ await images.load();
 await artworks.load();
 const playbackOwners = new Map<string, { owner: ResourceOwner; resourceId: string }>();
 const airplayAccess = new AirPlayAccess(mediaResources);
-/** Where a finished file goes: the library its save rule names, or the default for the kind.
- *  A rule that names a library nobody can write to right now falls back, so an unplugged disk
- *  delays nothing and loses nothing. */
-const downloadLibrary = (kind: "movie" | "series", libraryId?: string) => {
-  const libraries = store.libraries();
-  const named = libraryId ? libraryFor(libraries, libraryId) : undefined;
-  if (named && named.enabled && !named.readOnly && !named.unreachable) return named;
-  if (named) log("WARN", "A save rule names a library that cannot be written to, using the default", { library: named.id, root: named.root, enabled: named.enabled, readOnly: Boolean(named.readOnly), unreachable: Boolean(named.unreachable) });
-  return defaultLibrary(libraries, store.settings(), kind === "series" ? "episode" : "movie");
-};
+/** Where a download with no library of its own goes: the default for the kind. A read-only
+ *  library is never a destination, so it is left out of the choice. */
+const downloadDefaultLibrary = (kind: "movie" | "series") =>
+  defaultLibrary(store.libraries().filter((library) => !library.readOnly), store.settings(), kind === "series" ? "episode" : "movie");
 const queue = new DownloadQueue(() => store.settings().concurrentDownloads, () => store.settings().parallelPerProvider ?? 1, undefined, undefined, {
   segments: () => store.settings().downloadSegments ?? 1,
   libraries: () => store.libraries(),
-  targetLibrary: downloadLibrary,
+  defaultLibrary: downloadDefaultLibrary,
+  // A job paused for a library asks whether it is back; the probe is refreshed first so a
+  // disk that was plugged in is seen within the queue's own retry, not the cache's.
+  libraryState: async (libraryId) => { await refreshLibraryHealth(); return libraryFor(store.libraries(), libraryId); },
 }); const playback = new PlaybackManager(undefined, (id) => {
   const owned = playbackOwners.get(id);
   if (owned) {

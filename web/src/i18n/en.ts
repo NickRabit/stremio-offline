@@ -577,6 +577,7 @@ export const en = {
   "downloads.status.paused": "Paused",
   "downloads.status.completed": "Done",
   "downloads.status.failed": "Error",
+  "downloads.pausedLibrary": "Waiting for the library this download goes to. It continues on its own when the library is back.",
   "downloads.queued": "Added to the queue.",
   "downloads.waitingDebrid": "Waiting for Real-Debrid.",
   "downloads.debridReady": "{title} is ready on Real-Debrid, downloading now.",

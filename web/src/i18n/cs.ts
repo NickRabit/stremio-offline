@@ -573,6 +573,7 @@ export const cs: Catalog = {
   "downloads.status.paused": "Pozastaveno",
   "downloads.status.completed": "Dokončeno",
   "downloads.status.failed": "Chyba",
+  "downloads.pausedLibrary": "Čeká se na knihovnu, do které se stahuje. Jakmile bude dostupná, stahování pokračuje samo.",
   "downloads.queued": "Přidáno do fronty.",
   "downloads.waitingDebrid": "Čeká na Real-Debrid.",
   "downloads.debridReady": "{title} je připravený na Real-Debrid, stahuji.",

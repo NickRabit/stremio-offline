@@ -165,7 +165,7 @@ test("a save rule sends the file into the library it names", async () => {
   const queue = new DownloadQueue(() => 1, () => 1, path.join(directory, "data"), downloadDir, {
     stallInitialMs: 5_000, stallTransferMs: 5_000,
     libraries: () => [archive],
-    targetLibrary: (_kind, libraryId) => libraryId === archive.id ? archive : undefined,
+    libraryState: async (libraryId) => libraryId === archive.id ? archive : undefined,
   });
   await queue.load();
   try {
@@ -181,6 +181,46 @@ test("a save rule sends the file into the library it names", async () => {
     assert.equal(fallback.target, "Other/Other.mp4");
     await waitFor(queue, () => queue.list().find((item) => item.id === fallback.id)?.status === "completed");
     assert.equal((await stat(path.join(downloadDir, "Other", "Other.mp4"))).size, size);
+  } finally {
+    queue.stop();
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a rule whose library is away waits for it instead of landing somewhere else", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-dl-"));
+  const downloadDir = path.join(directory, "downloads");
+  const archiveRoot = path.join(directory, "archive");
+  const archive = { id: "lib_12345678", name: "Archive", type: "movie" as const, root: archiveRoot, enabled: true, order: 0, addedAt: "2026-01-01T00:00:00.000Z", writeArtwork: true };
+  const fallbackLibrary = { ...archive, id: "lib_aaaaaaaa", name: "Downloads", root: downloadDir };
+  let away = true;
+  const size = 4096;
+  const { server, port } = await listen((_req, res) => {
+    res.writeHead(200, { "content-length": String(size), "content-type": "video/mp4" });
+    void send(res, size).then(() => res.end());
+  });
+  const queue = new DownloadQueue(() => 1, () => 1, path.join(directory, "data"), downloadDir, {
+    stallInitialMs: 5_000, stallTransferMs: 5_000, libraryRetryMs: 30,
+    libraries: () => [away ? { ...archive, unreachable: true } : archive, fallbackLibrary],
+    defaultLibrary: () => fallbackLibrary,
+    libraryState: async (libraryId) => libraryId === archive.id ? (away ? { ...archive, unreachable: true } : archive) : undefined,
+  });
+  await queue.load();
+  try {
+    const job = await queue.add("Film", { url: `http://127.0.0.1:${port}/film.mp4` }, undefined, { subfolder: "", layout: "structured", libraryId: archive.id });
+    assert.equal(job.status, "paused", "the job waits for its library");
+    assert.equal((queue.list()[0] as { pauseReason?: string }).pauseReason, "library");
+    assert.equal(queue.list()[0]!.target, "", "no name is chosen while the disk is away");
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    await assert.rejects(stat(path.join(downloadDir, "Film", "Film.mp4")), "and nothing lands in the fallback library");
+
+    // Plugging the disk back in resumes the job by itself, into the library the rule names.
+    away = false;
+    await waitFor(queue, () => queue.list()[0]?.status === "completed");
+    assert.equal(queue.list()[0]!.target, "lib_12345678/Film/Film.mp4");
+    assert.equal((await stat(path.join(archiveRoot, "Film", "Film.mp4"))).size, size);
+    await assert.rejects(stat(path.join(downloadDir, "Film", "Film.mp4")), "the fallback stays empty");
   } finally {
     queue.stop();
     server.close();

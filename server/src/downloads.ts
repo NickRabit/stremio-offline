@@ -26,7 +26,9 @@ import { readMediaText } from "./media-playlist.js";
 
 export type { QueueHalt };
 export type DownloadStatus = "queued" | "waiting" | "checking" | "downloading" | "paused" | "completed" | "failed";
-export type PauseReason = "user" | "storage";
+/** `library` is not a fault: the rule's library is switched off, read-only or away, and the job
+ *  waits for it rather than landing somewhere the user did not ask for. */
+export type PauseReason = "user" | "storage" | "library";
 export type SubtitleMode = "off" | "optional" | "required";
 export type DownloadSourceStrategy = "priority" | "largest";
 export interface DownloadSelection {
@@ -62,6 +64,8 @@ export interface DownloadJob {
   /** The library `target` lives in. Absent on a job queued before libraries existed, which
    *  belongs to the download directory. */
   libraryId?: string;
+  /** The rule that placed it, so the target can be chosen again when a library comes back. */
+  targetSettings?: DownloadTargetSettings;
   error?: string;
   /** Catalogue key for `error`, so the interface can show it in the reader's language.
    *  A failure whose text is built from a source's own words carries none. */
@@ -88,9 +92,12 @@ export interface QueueHooks {
   now?: () => number;
   /** Every configured library, so a qualified target can be turned back into a root. */
   libraries?: () => LibraryRecord[];
-  /** Where a finished file goes: the rule's library when it can be written to, otherwise
-   *  the default for the kind. */
-  targetLibrary?: (kind: "movie" | "series", libraryId?: string) => LibraryRecord | undefined;
+  /** Where a rule that names no library goes: the default for the kind. */
+  defaultLibrary?: (kind: "movie" | "series") => LibraryRecord | undefined;
+  /** One library by id with its reachability refreshed -- what a paused job waits for. */
+  libraryState?: (libraryId: string) => Promise<LibraryRecord | undefined>;
+  /** How often a job paused for a library asks whether it is back. */
+  libraryRetryMs?: number;
   freeSpace?: (dir: string) => Promise<{ freeBytes?: number; totalBytes?: number }>;
   createWriteStream?: (file: string, options: { flags: string }) => NodeJS.WritableStream;
   stallInitialMs?: number;
@@ -107,6 +114,17 @@ export interface QueueHooks {
 
 const exists = async (file: string) => { try { await stat(file); return true; } catch { return false; } };
 const MiB = 1024 ** 2;
+
+/** The rule's library is not there to be written to right now. Not a failure: the job waits,
+ *  because sending one title to a fallback root would scatter a season across two libraries. */
+export class LibraryUnavailableError extends Error {
+  constructor(readonly libraryId: string) {
+    super(`The library ${libraryId} is not available.`);
+    this.name = "LibraryUnavailableError";
+  }
+}
+
+const libraryUsable = (library: LibraryRecord) => library.enabled && !library.readOnly && !library.unreachable;
 
 export async function volumeSpace(target: string) {
   try {
@@ -131,7 +149,10 @@ export class DownloadQueue {
   private readonly stateFile: string;
   private readonly downloadDir: string;
   private readonly libraries: () => LibraryRecord[];
-  private readonly targetLibrary: (kind: "movie" | "series", libraryId?: string) => LibraryRecord | undefined;
+  private readonly defaultLibrary: (kind: "movie" | "series") => LibraryRecord | undefined;
+  private readonly libraryState?: (libraryId: string) => Promise<LibraryRecord | undefined>;
+  private readonly libraryRetryMs: number;
+  private libraryWatch?: NodeJS.Timeout;
   private readonly now: () => number;
   private readonly freeSpace: (dir: string) => Promise<{ freeBytes?: number; totalBytes?: number }>;
   private readonly createWriteStream: (file: string, options: { flags: string }) => NodeJS.WritableStream;
@@ -162,7 +183,9 @@ export class DownloadQueue {
     this.stateFile = path.join(dataDir, "downloads.json");
     this.downloadDir = downloadDir;
     this.libraries = hooks.libraries ?? (() => []);
-    this.targetLibrary = hooks.targetLibrary ?? (() => undefined);
+    this.defaultLibrary = hooks.defaultLibrary ?? (() => undefined);
+    this.libraryState = hooks.libraryState;
+    this.libraryRetryMs = hooks.libraryRetryMs ?? 15_000;
     this.now = hooks.now ?? Date.now;
     this.freeSpace = hooks.freeSpace ?? volumeSpace;
     this.createWriteStream = hooks.createWriteStream ?? fsCreateWriteStream;
@@ -185,7 +208,8 @@ export class DownloadQueue {
     if (this.saveTimer) clearTimeout(this.saveTimer);
     if (this.retryTimer) clearTimeout(this.retryTimer);
     if (this.spaceWatch) clearInterval(this.spaceWatch);
-    this.saveTimer = undefined; this.retryTimer = undefined; this.spaceWatch = undefined;
+    if (this.libraryWatch) clearInterval(this.libraryWatch);
+    this.saveTimer = undefined; this.retryTimer = undefined; this.spaceWatch = undefined; this.libraryWatch = undefined;
     for (const timer of this.debridTimers.values()) clearTimeout(timer);
     this.debridTimers.clear();
     for (const controller of this.active.values()) controller.abort();
@@ -218,6 +242,7 @@ export class DownloadQueue {
     await this.save();
     this.pump();
     for (const job of this.jobs) if (job.status === "waiting") this.scheduleDebrid(job.id);
+    if (this.jobs.some((job) => job.status === "paused" && job.pauseReason === "library")) this.watchLibraries();
   }
 
   list() { return this.jobs.map((job, index) => ({ ...this.publicJob(job), order: index })); }
@@ -227,8 +252,72 @@ export class DownloadQueue {
    *  now -- removed, switched off, read-only or on a disk that is away -- falls back to the
    *  default for the kind: a download that can land somewhere sensible must not fail, and
    *  nothing on disk is ever the price of a mount that is not there. */
-  private destination(kind: "movie" | "series", settings: DownloadTargetSettings) {
-    return this.targetLibrary(kind, settings.libraryId);
+  /** The library a new job writes into. A rule that names one which is switched off,
+   *  read-only or away is not redirected: the caller pauses the job, because scattering one
+   *  title across two roots is worse than waiting. A rule naming a library this instance no
+   *  longer has falls back to the default -- the record is gone, so waiting would be forever,
+   *  and the interface marks the rule as unavailable. */
+  private async resolveLibrary(kind: "movie" | "series", settings: DownloadTargetSettings) {
+    const wanted = settings.libraryId;
+    if (!wanted) return this.defaultLibrary(kind);
+    const named = (await this.libraryState?.(wanted)) ?? this.libraries().find((library) => library.id === wanted);
+    if (!named) {
+      log("WARN", "A save rule names a library this instance no longer has, using the default", { library: wanted });
+      return this.defaultLibrary(kind);
+    }
+    if (!libraryUsable(named)) throw new LibraryUnavailableError(named.id);
+    return named;
+  }
+
+  /** The file name is chosen when the download can actually start, so a name picked while a
+   *  disk was away cannot collide with what came back. */
+  private async ensureTarget(job: DownloadJob, library: LibraryRecord | undefined) {
+    if (job.target || !job.stream) return;
+    const extension = streamExtension(job.stream);
+    const { directory, base } = targetPath(job.media, job.title, extension, job.targetSettings ?? defaultDownloadSettings().movie);
+    job.target = await this.uniqueTarget(library, directory, base, extension);
+  }
+
+  private pauseForLibrary(job: DownloadJob, libraryId: string) {
+    job.status = "paused";
+    job.pauseReason = "library";
+    job.libraryId = libraryId;
+    job.speed = 0;
+    job.updatedAt = new Date().toISOString();
+    log("INFO", "Download paused, the library it goes to is not available", { id: job.id, title: job.title, library: libraryId });
+    this.watchLibraries();
+  }
+
+  /** Jobs waiting for a library ask again on a timer, and go back to the queue by themselves
+   *  when it returns. Nothing else in the queue is held up by them. */
+  private watchLibraries() {
+    if (this.libraryWatch) return;
+    this.libraryWatch = setInterval(() => { void this.wakeLibraries(); }, this.libraryRetryMs);
+    this.libraryWatch.unref();
+  }
+
+  private async wakeLibraries() {
+    const waiting = this.jobs.filter((job) => job.status === "paused" && job.pauseReason === "library" && job.libraryId);
+    if (!waiting.length) {
+      if (this.libraryWatch) { clearInterval(this.libraryWatch); this.libraryWatch = undefined; }
+      return;
+    }
+    let woke = false;
+    for (const job of waiting) {
+      const library = (await this.libraryState?.(job.libraryId!)) ?? this.libraries().find((item) => item.id === job.libraryId);
+      if (!library || !libraryUsable(library)) continue;
+      await this.ensureTarget(job, library);
+      job.libraryId = library.id;
+      job.pauseReason = undefined;
+      job.status = job.debrid && !job.stream?.url ? "waiting" : "queued";
+      job.updatedAt = new Date().toISOString();
+      log("INFO", "The library is back, the download continues", { id: job.id, title: job.title, library: library.id });
+      if (job.status === "waiting") this.scheduleDebrid(job.id);
+      woke = true;
+    }
+    if (!woke) return;
+    await this.save();
+    this.pump();
   }
 
   /** Where a job's file lives: the root of the library its target names, and the path below
@@ -255,13 +344,21 @@ export class DownloadQueue {
     if (duplicate && duplicate.status !== "completed") throw new AppError("This source is already in the queue.", "err.sourceQueued");
     if (duplicate && await exists(this.jobPath(duplicate))) throw new AppError("This source is already in the library.", "err.sourceDownloaded");
     const extension = streamExtension(stream);
-    const { directory, base } = targetPath(media, title, extension, targetSettings);
     const kind = media?.kind === "episode" ? "series" : "movie";
-    const library = this.destination(kind, targetSettings);
-    const target = await this.uniqueTarget(library, directory, base, extension);
     const now = new Date().toISOString();
-    const job: DownloadJob = { id: crypto.randomUUID(), title, stream, media, status: "queued", target, received: 0, speed: 0, createdAt: now, updatedAt: now, ...(library ? { libraryId: library.id } : {}) };
-    this.jobs.push(job); await this.save(); this.pump(); return this.publicJob(job);
+    const job: DownloadJob = { id: crypto.randomUUID(), title, stream, media, status: "queued", target: "", received: 0, speed: 0, targetSettings, createdAt: now, updatedAt: now };
+    try {
+      const library = await this.resolveLibrary(kind, targetSettings);
+      await this.ensureTarget(job, library);
+      if (library) job.libraryId = library.id;
+    } catch (error) {
+      if (!(error instanceof LibraryUnavailableError)) throw error;
+      this.pauseForLibrary(job, error.libraryId);
+    }
+    this.jobs.push(job); await this.save();
+    if (job.status === "paused") return this.publicJob(job);
+    this.pump();
+    return this.publicJob(job);
   }
 
   private sameTorrent(left: StreamItem | undefined, right: StreamItem) {
@@ -272,17 +369,21 @@ export class DownloadQueue {
     if (!this.debrid?.configured()) throw new AppError("Set up Real-Debrid in Settings first.", "err.debridNotConfigured");
     const duplicate = this.jobs.find((job) => this.sameTorrent(job.stream, stream) && job.status !== "failed");
     if (duplicate && duplicate.status !== "completed") throw new AppError("This torrent is already in the queue.", "err.torrentQueued");
-    const extension = streamExtension(stream);
-    const { directory, base } = targetPath(media, title, extension, targetSettings);
-    const kind = media?.kind === "episode" ? "series" : "movie";
-    const library = this.destination(kind, targetSettings);
-    const target = await this.uniqueTarget(library, directory, base, extension);
     const now = new Date().toISOString();
     const job: DownloadJob = {
-      id: crypto.randomUUID(), title, stream, media, status: "waiting", target, received: 0, speed: 0,
-      debrid: {}, createdAt: now, updatedAt: now, ...(library ? { libraryId: library.id } : {}),
+      id: crypto.randomUUID(), title, stream, media, status: "waiting", target: "", received: 0, speed: 0,
+      debrid: {}, targetSettings, createdAt: now, updatedAt: now,
     };
+    try {
+      const library = await this.resolveLibrary(media?.kind === "episode" ? "series" : "movie", targetSettings);
+      await this.ensureTarget(job, library);
+      if (library) job.libraryId = library.id;
+    } catch (error) {
+      if (!(error instanceof LibraryUnavailableError)) throw error;
+      this.pauseForLibrary(job, error.libraryId);
+    }
     this.jobs.push(job); await this.save();
+    if (job.status === "paused") return this.publicJob(job);
     log("INFO", "Waiting for Real-Debrid", { id: job.id, title: job.title, infoHash: stream.infoHash });
     this.scheduleDebrid(job.id);
     return this.publicJob(job);
@@ -328,6 +429,11 @@ export class DownloadQueue {
   async resume(id: string) {
     const job = this.require(id);
     if (!(["paused", "failed"] as DownloadStatus[]).includes(job.status)) throw new AppError("This item cannot be resumed.", "err.cannotResume");
+    if (job.pauseReason === "library" && job.libraryId) {
+      const library = (await this.libraryState?.(job.libraryId)) ?? this.libraries().find((item) => item.id === job.libraryId);
+      if (!library || !libraryUsable(library)) throw new AppError("The library this download goes to is not available right now.", "err.libraryNotWritable");
+      await this.ensureTarget(job, library);
+    }
     if (this.halt || job.pauseReason === "storage") {
       const space = await this.freeSpace(this.locate(job).root);
       if (!this.hasRoom(space)) throw new AppError(this.halt?.message ?? "No space left on the disk.", this.halt?.messageKey ?? "err.noSpace");
@@ -621,10 +727,9 @@ export class DownloadQueue {
     job.subtitle = resolved.subtitle;
     job.resolution = resolved.resolution;
     const settings = job.source.selection?.targetSettings ?? (job.media?.kind === "episode" ? resolved.settings.series : resolved.settings.movie);
-    const extension = streamExtension(resolved.stream);
-    const { directory, base } = targetPath(job.media, job.title, extension, settings);
-    const library = this.destination(job.media?.kind === "episode" ? "series" : "movie", settings);
-    job.target = await this.uniqueTarget(library, directory, base, extension);
+    job.targetSettings = settings;
+    const library = await this.resolveLibrary(job.media?.kind === "episode" ? "series" : "movie", settings);
+    await this.ensureTarget(job, library);
     job.libraryId = library?.id;
     await this.save();
     log("INFO", "Download source selected", {
@@ -954,6 +1059,13 @@ export class DownloadQueue {
       await this.commit(job, partial, target);
     } catch (error) {
       job.speed = 0;
+      // The rule's library went away while the job waited for its source, or is gone now.
+      // Nothing is redirected and nothing fails: the job waits for the library to come back.
+      if (error instanceof LibraryUnavailableError) {
+        this.pauseForLibrary(job, error.libraryId);
+        await this.save();
+        return;
+      }
       const message = stalled ? "The transfer carried no data." : (error instanceof Error ? error.message : String(error));
       const kind = this.pauseRequested.has(job.id) ? "pause" as const : classifyFailure(error, { stalled });
       if (kind === "pause") {

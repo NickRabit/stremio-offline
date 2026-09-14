@@ -34,7 +34,7 @@ export interface Download {
   id: string; title: string; status: "queued" | "waiting" | "checking" | "downloading" | "paused" | "completed" | "failed";
   target: string; received: number; total?: number; speed: number; order: number;
   error?: string; errorKey?: string; errorVars?: Record<string, string | number>;
-  pauseReason?: "user" | "storage"; pending?: boolean; debridProgress?: number;
+  pauseReason?: "user" | "storage" | "library"; pending?: boolean; debridProgress?: number;
   /** How many connections the file is being split across; missing while it runs over one. */
   segments?: number;
   resolution?: { checkedCandidates: number; audioLanguage?: string; fallbackUsed?: boolean; subtitleLanguage?: string; subtitleSource?: "embedded" | "addon"; subtitleStatus?: "ready" | "missing" };
