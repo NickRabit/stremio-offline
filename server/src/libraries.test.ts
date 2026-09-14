@@ -187,3 +187,16 @@ test("a queued download's artwork key is only guessed when the job knows its lib
     "a legacy bare target belongs to nobody, and the sweep must not ask which library it is");
   assert.equal(queuedArtworkKey({ target: "" }), undefined);
 });
+
+// A bare path is the single-library wire format. Once a second library exists the client
+// sends qualified paths, so a bare one now means something stale -- a bookmark, a remembered
+// browse path -- and it has to read as an invalid path rather than as a sentence about the
+// server's internals.
+test("an unqualified path is refused, not resolved, once a second library exists", async () => {
+  const two: LibraryRecord[] = [
+    { id: "lib_ab12cd34", name: "One", type: "mixed", root: "/one", enabled: true, order: 0, addedAt: "", writeArtwork: false },
+    { id: "lib_ef56ab78", name: "Two", type: "mixed", root: "/two", enabled: true, order: 1, addedAt: "", writeArtwork: false },
+  ];
+  assert.equal(await resolveLibraryPath(two, "Film/Film.mkv"), undefined, "nothing can say which library it meant");
+  assert.equal(await resolveLibraryPath([two[0]!], "Film/Film.mkv") === undefined, false, "one library is still the pass-through");
+});
