@@ -35,7 +35,7 @@ import { LibraryScan } from "./library-scan.js";
 import { createLibraryProbe, type LibraryHealth } from "./library-probe.js";
 import { LibraryAutoScan } from "./library-autoscan.js";
 import { watchLibrary } from "./library-watch.js";
-import { ArtworkQueue, artworkBesideMedia, episodeArtName, fileMayUseFolderArtwork, findArtwork, framePosition, POSTER_OUTPUT, savePosterAs, saveFrame } from "./artwork.js";
+import { ArtworkQueue, artworkBesideMedia, episodeArtName, fileMayUseFolderArtwork, findArtwork, framePosition, POSTER_OUTPUT, savePosterAs, saveFrame, type PosterOutcome } from "./artwork.js";
 import { clearedCookie, createSession, DECOY_HASH, LoginThrottle, pruneRevoked, envCredentials, hashPassword, INTERNAL_TOKEN, parseCookies, readSession, secretEquals, REMEMBER_DAYS, SESSION_COOKIE, sessionCookie, verifyPassword } from "./auth.js";
 import { randomBytes, randomUUID } from "node:crypto";
 import type { ClientCapabilities, PlaybackOptions } from "./playback.js";
@@ -839,6 +839,20 @@ const saveArtwork = async (key: string, target: string, write: () => Promise<boo
   return saved;
 };
 
+/** `saveArtwork` with the reason kept, for the posters the catalogue hands us: one of them not
+ *  arriving used to be silent end to end, and a blank title nobody can explain is worse than a
+ *  warning in the log. */
+const savePosterReport = async (key: string, target: string, url: string, what: string) => {
+  let refusal: Extract<PosterOutcome, { ok: false }> | undefined;
+  const saved = await saveArtwork(key, target, async () => {
+    const outcome = await savePosterAs(target, url);
+    if (!outcome.ok) refusal = outcome;
+    return outcome.ok;
+  });
+  if (!saved) log("WARN", `${what} could not be saved`, { key, host: hostOf(url), target, reason: refusal?.reason ?? "no-file", detail: refusal?.detail });
+  return saved;
+};
+
 /** Someone else's picture in the folder always wins: nothing is overwritten or regenerated. */
 async function locateArtwork(entry: Awaited<ReturnType<typeof scanLibrary>>[number]) {
   const directory = entryDirectory(entry);
@@ -1228,7 +1242,12 @@ const mediaPosterExists = async (key: string) => {
 };
 const writeCatalogPoster = async (key: string, url?: string) => {
   if (!url || !key || key === ".") return false;
-  if (await mediaPosterExists(key)) return false;
+  if (await mediaPosterExists(key)) {
+    // Not a failure: a picture of the folder's own always wins, and it is worth being able to
+    // see that this is why nothing was written.
+    log("DEBUG", "The folder has its own picture, the catalogue poster was not written", { key });
+    return false;
+  }
   await rm(dataArtworkFile(key), { force: true });
   await rm(dataArtworkFile(`dir:${key}`), { force: true });
   const toMedia = artworkBesideMediaFor(key);
@@ -1239,7 +1258,7 @@ const writeCatalogPoster = async (key: string, url?: string) => {
       : path.join(mediaPath(key), POSTER_OUTPUT))
     : hashedArt(key);
   await mkdir(path.dirname(target), { recursive: true });
-  return saveArtwork(key, target, () => savePosterAs(target, url));
+  return savePosterReport(key, target, url, "The catalogue poster");
 };
 
 /** The binding on this exact path, ignoring one inherited from a parent folder. */
@@ -1282,7 +1301,7 @@ async function catalogPosterIfBound(key: string, target: string) {
     const numbers = episodeNumberOf(key, ownRecord(key, records));
     const row = numbers ? metaStore.episodes()[episodeKey(known.type, known.id, numbers.season, numbers.episode)] : undefined;
     if (!row?.thumbnail) return false;
-    if (await saveArtwork(key, target, () => savePosterAs(target, row.thumbnail!))) {
+    if (await savePosterReport(key, target, row.thumbnail, "The episode still")) {
       log("INFO", "Episode still filled in from metadata", { path: key });
       return true;
     }
@@ -1290,7 +1309,7 @@ async function catalogPosterIfBound(key: string, target: string) {
   }
   const meta = await cachedMeta(known.type, known.id);
   if (!meta?.poster) return false;
-  if (await saveArtwork(key, target, () => savePosterAs(target, meta.poster!))) {
+  if (await savePosterReport(key, target, meta.poster, "The metadata poster")) {
     log("INFO", "Poster filled in from metadata", { path: key });
     return true;
   }
@@ -1867,12 +1886,20 @@ const titleKey = (target: string, media: MediaInfo | undefined, flat: boolean) =
   return media?.kind === "episode" && media.season != null ? path.dirname(directory) : directory;
 };
 
-/** The catalogue poster is saved as the job is queued, so it is in the library before the file is. */
-const saveCatalogPoster = (key: string, url?: string) => {
-  if (!url || !key || key === ".") return;
+/** The catalogue poster is saved as the job is queued, so it is in the library before the file
+ *  is. `fallback` is the catalogue's own answer, tried only when the first address fails: the
+ *  poster the client handed over is the one the viewer expects, but it may be a dead link. */
+const saveCatalogPoster = (key: string, url?: string, fallback?: string) => {
+  if (!key || key === "." || (!url && !fallback)) return;
   const queueKey = isFileKey(key) ? `file:${key}` : `dir:${key}`;
   artworkQueue.run(queueKey, async () => {
-    if (await writeCatalogPoster(key, url)) log("INFO", "Poster from the catalog saved", { key });
+    if (url && await writeCatalogPoster(key, url)) {
+      log("INFO", "Poster from the catalog saved", { key });
+      return;
+    }
+    if (fallback && fallback !== url && await writeCatalogPoster(key, fallback)) {
+      log("INFO", "Poster from the catalog saved", { key, source: "metadata" });
+    }
   });
 };
 
@@ -1956,7 +1983,10 @@ const rememberTitle = async (target: string, media: MediaInfo | undefined, flat:
     delete file.suggestions[destination.relative];
     Object.assign(episodes, episodeRows);
   });
-  saveCatalogPoster(key, meta?.poster ?? media.poster);
+  // The poster the client was looking at when it pressed download is the one to save: it needs
+  // no round trip, and for an addon that answers `metadata()` with nothing it is the only one
+  // there will ever be. The catalogue's own poster is the second chance, not the first.
+  saveCatalogPoster(key, media.poster, meta?.poster);
 };
 
 // Completion invalidates the scan at once. For a lazy job the target path is known

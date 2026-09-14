@@ -74,17 +74,26 @@ async function writeAtomic(target: string, data: Buffer) {
   await rename(temp, target);
 }
 
+/** Why a picture did not arrive. Named rather than collapsed into `false`: a poster that never
+ *  lands has to be distinguishable from one nobody asked for, or a blank title has no story. */
+export type PosterOutcome =
+  | { ok: true }
+  | { ok: false; reason: "status" | "content-type" | "size" | "failed"; detail?: string };
+
 /** Downloads a picture to an exact place. Used for the poster the client sent from the catalogue. */
-export async function savePosterAs(target: string, url: string): Promise<boolean> {
+export async function savePosterAs(target: string, url: string): Promise<PosterOutcome> {
   try {
     const response = await guardedFetch(url, { signal: AbortSignal.timeout(20_000) });
-    if (!response.ok) return false;
-    if (!(response.headers.get("content-type") ?? "").startsWith("image/")) return false;
+    if (!response.ok) return { ok: false, reason: "status", detail: `${response.status}` };
+    const type = response.headers.get("content-type") ?? "";
+    if (!type.startsWith("image/")) return { ok: false, reason: "content-type", detail: type || "(none)" };
     const data = Buffer.from(await response.arrayBuffer());
-    if (!data.length || data.length > 8 * 1024 * 1024) return false;
+    if (!data.length || data.length > 8 * 1024 * 1024) return { ok: false, reason: "size", detail: `${data.length}` };
     await writeAtomic(target, data);
-    return true;
-  } catch { return false; }
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, reason: "failed", detail: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 export async function savePosterFromUrl(directory: string, url: string): Promise<boolean> {
