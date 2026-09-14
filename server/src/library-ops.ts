@@ -65,9 +65,12 @@ export class LibraryOps {
   constructor(private readonly options: LibraryOpsOptions) {}
 
   async load() {
-    const saved = await readFile(this.options.file, "utf8").then((value) => JSON.parse(value) as StoredState, () => undefined);
+    const saved = await readFile(this.options.file, "utf8").then((value) => {
+      try { return JSON.parse(value) as StoredState; } catch { return undefined; }
+    }, () => undefined);
     if (saved?.version === 1 && Array.isArray(saved.jobs)) {
-      this.jobs = saved.jobs.map((job) => job.status === "running" || (job.status === "paused" && job.pauseReason !== "queue")
+      this.jobs = saved.jobs.filter((job) => Array.isArray(job.operation?.items) && typeof job.id === "string")
+        .map((job) => job.status === "running" || (job.status === "paused" && job.pauseReason !== "queue")
         ? { ...job, status: "paused", pauseReason: "queue", current: undefined }
         : job);
     }
@@ -78,6 +81,8 @@ export class LibraryOps {
   snapshot() {
     return { jobs: this.jobs.map(publicJob) };
   }
+
+  async flush() { await this.saveTail; }
 
   async enqueue(operation: LibraryOp) {
     const now = new Date().toISOString();
@@ -131,6 +136,7 @@ export class LibraryOps {
           if (job.status === "paused") job.pauseReason = "queue";
           this.pump();
         }, this.options.retryMs ?? 1_000);
+        this.wakeTimer.unref();
         return;
       }
       job.status = "running";
@@ -166,9 +172,11 @@ export class LibraryOps {
   }
 
   private save() {
-    const state: StoredState = { version: 1, jobs: this.jobs.slice(-20) };
+    const active = this.jobs.filter((job) => job.status === "running" || job.status === "paused");
+    const finished = this.jobs.filter((job) => job.status !== "running" && job.status !== "paused").slice(-20);
+    const state: StoredState = { version: 1, jobs: [...active, ...finished].sort((a, b) => a.startedAt.localeCompare(b.startedAt)) };
     const serialized = JSON.stringify(state, null, 2);
-    this.saveTail = this.saveTail.then(async () => {
+    this.saveTail = this.saveTail.catch(() => undefined).then(async () => {
       await mkdir(path.dirname(this.options.file), { recursive: true });
       const temporary = `${this.options.file}.tmp`;
       await writeFile(temporary, serialized, { mode: 0o600 });

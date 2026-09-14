@@ -486,6 +486,14 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 
 .library-scan-status,.library-scan-hint{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin:0 16px 12px;padding:10px 14px;border:1px solid var(--line);border-radius:10px;background:#10151d;font-size:12px;color:var(--muted)}
 .library-scan-status button,.library-scan-hint button{margin-left:auto;padding:6px 10px;font-size:11px}
+.library-op-status{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px 14px;align-items:center;margin:0 16px 12px;padding:11px 14px;border:1px solid #ff795c55;border-radius:10px;background:#201713;font-size:11px}
+.library-op-status>div{display:flex;gap:10px;align-items:center;min-width:0}.library-op-status>div span,.library-op-status small{color:var(--muted)}
+.library-op-status>button{grid-column:2;grid-row:1/4;padding:6px 10px;font-size:11px}.library-op-progress{grid-column:1;display:block;height:5px;overflow:hidden;border-radius:99px;background:#342a27}.library-op-progress i{display:block;height:100%;background:var(--accent)}
+.library-bulk-bar{position:sticky;z-index:7;top:94px;display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin:0 16px 12px;padding:10px;border:1px solid #ff795c55;border-radius:10px;background:#161b24f5;box-shadow:0 10px 30px #0007;backdrop-filter:blur(12px)}
+.library-bulk-bar strong{margin-right:auto;padding:0 6px;font-size:12px}.library-bulk-bar button{padding:7px 9px;font-size:10px}.library-bulk-bar button svg{width:14px;height:14px}
+.library-page .browse-item.selected .library-open{box-shadow:0 0 0 2px var(--accent)}
+.library-page .browse-select{position:absolute;z-index:3;right:8px;top:8px;width:36px;height:36px;padding:0;border:2px solid var(--accent2);border-radius:9px;background:#10151eeb}.library-page .browse-select[aria-pressed=true]{background:var(--accent)}
+@media(max-width:700px){.library-bulk-bar{top:70px}.library-bulk-bar strong{flex-basis:100%}.library-op-status{grid-template-columns:1fr}.library-op-status>button{grid-column:1;grid-row:auto}.library-op-status>div{align-items:flex-start;flex-direction:column;gap:3px}}
 .identify-overlay{position:fixed;z-index:250;inset:0;display:grid;place-items:center;padding:24px;background:#030507f2}
 .identify-card{width:min(520px,100%);max-height:min(90dvh,720px);overflow:auto;padding:22px;display:grid;gap:12px}
 .identify-head{display:flex;align-items:center;justify-content:space-between;gap:12px}

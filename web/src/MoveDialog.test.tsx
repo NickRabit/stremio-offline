@@ -119,3 +119,23 @@ it("the library root is a destination of its own", async () => {
   expect(confirmButton().disabled).toBe(false);
   expect(host.textContent).toContain("Moves into Library.");
 });
+
+it("queues several selected items as one copy operation", async () => {
+  fetchMock.mockImplementation((url: string, options?: RequestInit) => Promise.resolve(
+    options?.method === "POST" ? json({ id: "job-1" }, 202) : folders("Archive"),
+  ));
+  const onQueued = vi.fn();
+  await act(async () => {
+    root.render(<MoveDialog path="Films/one.mkv" paths={["Films/one.mkv", "Films/two.mkv"]} copy label="2 items"
+      onClose={vi.fn()} onMoved={vi.fn()} onQueued={onQueued}/>);
+  });
+  await settle();
+  await click([...host.querySelectorAll(".move-list button")].find((button) => button.textContent?.includes("Archive"))!);
+  await settle();
+  await click([...host.querySelectorAll("button")].find((button) => button.textContent?.includes("Copy here"))!);
+  await settle();
+  const post = fetchMock.mock.calls.find(([, options]) => (options as RequestInit | undefined)?.method === "POST")!;
+  expect(post[0]).toBe("/api/library/ops");
+  expect(JSON.parse(String((post[1] as RequestInit).body))).toEqual({ op: "copy", items: ["Films/one.mkv", "Films/two.mkv"], target: "Archive" });
+  expect(onQueued).toHaveBeenCalled();
+});

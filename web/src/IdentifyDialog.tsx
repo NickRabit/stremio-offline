@@ -8,7 +8,7 @@ const hideBroken = (event: React.SyntheticEvent<HTMLImageElement>) => event.curr
 
 const numbered = (videos: Video[]) => videos.filter((video) => typeof video.season === "number" && typeof video.episode === "number");
 
-export function IdentifyDialog({ path, onClose, onApplied }: { path: string; onClose: () => void; onApplied: () => void }) {
+export function IdentifyDialog({ path, paths, onClose, onApplied }: { path: string; paths?: string[]; onClose: () => void; onApplied: (id?: string) => void }) {
   useI18n();
   const [identity, setIdentity] = useState<IdentityPreview | null>(null);
   const [title, setTitle] = useState("");
@@ -57,7 +57,7 @@ export function IdentifyDialog({ path, onClose, onApplied }: { path: string; onC
 
   // Episode rows come from the picked series, so the numbering the user confirms
   // is the catalogue's own rather than whatever the file name happens to say.
-  const wantsEpisode = kind === "series" && scope === "file";
+  const wantsEpisode = !paths?.length && kind === "series" && scope === "file";
   useEffect(() => {
     if (!wantsEpisode || !picked?.id) { setVideos([]); return; }
     let cancelled = false;
@@ -93,18 +93,17 @@ export function IdentifyDialog({ path, onClose, onApplied }: { path: string; onC
     if (!picked) return;
     setBusy(true); setError("");
     try {
-      await api.matchLibraryItem({
-        path,
-        id: picked.id,
-        type: picked.type || kind,
-        scope,
-        ...(wantsEpisode && episode.trim() ? { season: Number(season || 1), episode: Number(episode) } : {}),
-      });
-      onApplied();
+      let operationId: string | undefined;
+      if (paths?.length) operationId = (await api.startLibraryOp({ op: "match", items: paths, id: picked.id, type: picked.type || kind })).id;
+      else await api.matchLibraryItem({
+          path, id: picked.id, type: picked.type || kind, scope,
+          ...(wantsEpisode && episode.trim() ? { season: Number(season || 1), episode: Number(episode) } : {}),
+        });
+      onApplied(operationId);
     } catch (value) { setError(describeError(value)); setBusy(false); }
   };
 
-  const canScope = Boolean(identity?.file);
+  const canScope = Boolean(identity?.file) && !paths?.length;
   const unitName = identity && identity.key !== identity.path ? identity.key : (identity?.label ?? path);
 
   return <div className="identify-overlay" role="dialog" aria-modal="true" aria-label={t("library.identify")} onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
