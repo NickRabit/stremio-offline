@@ -43,7 +43,7 @@ import type { MediaInfo } from "./naming.js";
 import { defaultDownloadSettings, deviceFilename, normalizeDownloadSettings, safeName } from "./naming.js";
 import { LANGUAGE_NAMES, isUiLanguage, normalizeLanguage } from "./language.js";
 import { AppError, messageKeyOf } from "./errors.js";
-import { activeDeparted, carveOuts, defaultLibrary, DEPARTED_MAX, departedIdFor, isInside, libraryFor, libraryPath, newLibraryId, parseLibraryPath, posixBase, posixDir, posixJoin, realAncestor, relativeWithin, resolveLibraryPath, sameFile, toFs, toPosix, type LibraryRecord, type LibraryType, type RootGrant } from "./libraries.js";
+import { activeDeparted, carveOuts, queuedArtworkKey, defaultLibrary, DEPARTED_MAX, departedIdFor, isInside, libraryFor, libraryPath, newLibraryId, parseLibraryPath, posixBase, posixDir, posixJoin, realAncestor, relativeWithin, resolveLibraryPath, sameFile, toFs, toPosix, type LibraryRecord, type LibraryType, type RootGrant } from "./libraries.js";
 import { envGrants, grantView, grantingRoot, insideGrant, mergeGrants } from "./library-grants.js";
 import { asLibraryType, checkLibraryRoot, libraryFlag } from "./library-admin.js";
 import { migrateStateFile } from "./library-migrate.js";
@@ -801,20 +801,21 @@ const libraryRootBrowse = async () => {
     const counts = stats.get(library.id) ?? { titles: 0, files: 0, bytes: 0 };
     const key = libraryPath(library.id, "");
     const path = wirePath(key);
-    const posters: string[] = [];
-    const previewEntries = entries.filter((entry) => parseLibraryPath(entry.key)?.libraryId === library.id).slice(0, 5);
+    const posters = new Set<string>();
+    const previewEntries = entries.filter((entry) => parseLibraryPath(entry.key)?.libraryId === library.id);
     for (const entry of previewEntries) {
       const art = await locateArtwork(entry);
       if (!art) { scheduleArtwork(entry); pending = true; }
       const poster = await thumbUrl("key", wirePath(entry.key), art);
-      if (poster) posters.push(poster);
+      if (poster) posters.add(poster);
+      if (posters.size === 5) break;
     }
     return {
       kind: "library" as const, libraryId: library.id, name: library.name, label: library.name,
       type: library.type, enabled: library.enabled,
       fileCount: counts.files, titles: counts.titles, size: counts.bytes,
       unreachable: healthOf(library).unreachable, readOnly: healthOf(library).readOnly,
-      path, posters, poster: await thumbUrl("dir", path, await locateFolderArtwork(key)),
+      path, posters: [...posters], poster: await thumbUrl("dir", path, await locateFolderArtwork(key)),
     };
   }));
   return { path: "", items, total: items.length, pending };
@@ -1417,7 +1418,10 @@ async function sweepArtwork() {
   lastArtworkSweep = Date.now();
   // The poster is saved when the job is queued, while the source does not exist yet.
   // Without this the sweep would delete it before the download finishes.
-  const queued = queue.list().map((job) => libraryKey(job.target));
+  const queued = queue.list().flatMap((job) => {
+    const key = queuedArtworkKey(job);
+    return key ? [key] : [];
+  });
   const rootReadable = async (root: string) => { try { await access(root, constants.R_OK); return true; } catch { return false; } };
   await refreshLibraryHealth();
   const health = (library: LibraryRecord) => libraryHealth.get(library.id);
@@ -1562,8 +1566,12 @@ app.get("/api/library/resume", asyncRoute(async (req, res) => {
   const described = await Promise.all(entries.map(async ([, entry]) => {
     const item = await describeLibraryPath(entry.path!);
     if (!item || item.kind !== "file") return [];
-    return [{ ...item, path: wirePath(libraryKey(item.path)), label: entry.title || item.label, modified: entry.updatedAt,
-      progress: { position: entry.position, duration: entry.duration }, favorite: favorites.has(libraryKey(item.path)) }];
+    // `describePath` answers library-relative, and the row already knows which library it
+    // came from. Qualifying it through the single-library shim instead asks an install with
+    // two of them a question it cannot answer, and the whole resume row returns 400.
+    const key = libraryPath(libraryOfKey(entry.path!).library.id, item.path);
+    return [{ ...item, path: wirePath(key), label: entry.title || item.label, modified: entry.updatedAt,
+      progress: { position: entry.position, duration: entry.duration }, favorite: favorites.has(key) }];
   }));
   const items = described.flat().filter((item) => (!query || item.label.toLocaleLowerCase().includes(query)) && (req.query.favorites !== "1" || item.favorite));
   const sorts = new Set(["name", "added", "size", "random"]);
@@ -2330,6 +2338,7 @@ app.post("/api/library/source", asyncRoute(async (req, res) => {
   const target = resolved && await libraryTarget(requested).catch(() => undefined);
   if (!resolved || !target || !(await stat(target).catch(() => undefined))?.isFile()) throw new ResourceError(404, "RESOURCE_NOT_FOUND");
   const relative = resolved.relative;
+  const key = resolved.key;
   const directory = path.dirname(target);
   const stem = posixBase(relative).replace(/\.[^.]+$/, "");
   const escaped = stem.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -2337,9 +2346,9 @@ app.post("/api/library/source", asyncRoute(async (req, res) => {
     if (!entry.isFile()) return [];
     const match = new RegExp(`^${escaped}(?:\\.([a-zA-Z]{2,3}))?\\.(?:srt|vtt)$`, "i").exec(entry.name);
     if (!match) return [];
-    return [{ url: `file://${path.posix.join(path.posix.dirname(relative), entry.name)}`, lang: normalizeLanguage(match[1]) }];
+    return [{ url: `file://${path.posix.join(path.posix.dirname(key), entry.name)}`, lang: normalizeLanguage(match[1]) }];
   });
-  res.setHeader("cache-control", "private, no-store").json(mediaResources.publicStream({ url: `file://${relative}`, subtitles: sidecars, behaviorHints: { filename: path.basename(relative) } }, ownerOf(req)));
+  res.setHeader("cache-control", "private, no-store").json(mediaResources.publicStream({ url: `file://${key}`, subtitles: sidecars, behaviorHints: { filename: path.basename(relative) } }, ownerOf(req)));
 }));
 
 /** Keep the external address out of the download link by exchanging it for a short-lived ticket. */

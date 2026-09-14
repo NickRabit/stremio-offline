@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { activeDeparted, carveOuts, defaultLibrary, DEPARTED_MAX, departedIdFor, libraryFor, libraryPath, parseLibraryPath, relativeWithin, resolveLibraryPath, sameFile, toFs, toPosix, type DepartedLibrary, type LibraryRecord } from "./libraries.js";
+import { activeDeparted, carveOuts, defaultLibrary, DEPARTED_MAX, departedIdFor, libraryFor, libraryPath, parseLibraryPath, relativeWithin, resolveLibraryPath, sameFile, toFs, toPosix, type DepartedLibrary, type LibraryRecord, queuedArtworkKey } from "./libraries.js";
 
 const library = (over: Partial<LibraryRecord> = {}): LibraryRecord => ({
   id: "lib_ab12cd34", name: "Filmy", type: "movie", root: "/media/filmy", enabled: true,
@@ -173,4 +173,17 @@ test("the wire is POSIX and the syscall is not", () => {
   // sends that, and reading it as one would name a library that does not exist.
   assert.deepEqual(parseLibraryPath("lib_ab12cd34/Show/01.mkv"), { libraryId: "lib_ab12cd34", relative: "Show/01.mkv" });
   assert.equal(parseLibraryPath("lib_ab12cd34\\Show\\01.mkv"), undefined);
+});
+
+// The sweep crashed a two-library install with "An unqualified path needs exactly one
+// library, 2 are configured": it qualified every queued target blindly, and a job left over
+// from before libraries carries a bare path that nothing can attribute.
+test("a queued download's artwork key is only guessed when the job knows its library", () => {
+  assert.equal(queuedArtworkKey({ target: "lib_ab12cd34/Film/Film.mkv" }), "lib_ab12cd34/Film/Film.mkv",
+    "a qualified target is already an answer");
+  assert.equal(queuedArtworkKey({ target: "Film/Film.mkv", libraryId: "lib_ab12cd34" }), "lib_ab12cd34/Film/Film.mkv",
+    "a bare target is qualified from the job's own library");
+  assert.equal(queuedArtworkKey({ target: "Film/Film.mkv" }), undefined,
+    "a legacy bare target belongs to nobody, and the sweep must not ask which library it is");
+  assert.equal(queuedArtworkKey({ target: "" }), undefined);
 });

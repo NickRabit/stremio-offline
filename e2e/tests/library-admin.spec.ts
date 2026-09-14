@@ -56,6 +56,13 @@ test("a granted root is added, previewed and revoked without losing what it reme
     name: "Granted", type: "movie", enabled: true, fileCount: 1, unreachable: false,
   });
 
+  const sourceResponse = await request.post("/api/library/source", {
+    data: { path: `${library.id}/Zkušební film/Zkušební film.mkv` },
+  });
+  expect(sourceResponse.status()).toBe(200);
+  const source = await sourceResponse.json();
+  expect((await request.get(`/api/library/next/${source.sourceId}`)).status(), "a source keeps its library identity").toBe(200);
+
   await page.goto("/");
   await page.getByRole("button", { name: "Knihovna", exact: true }).click();
   const libraryRows = page.locator(".browse-item.library");
