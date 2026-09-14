@@ -703,7 +703,7 @@ img.broken{visibility:hidden}
 .library-maintenance-actions{display:flex;flex-wrap:wrap;gap:8px}
 .library-page .library-maintenance-toggle{display:none}
 @media(max-width:700px){
-  .library-page .browse-tools{display:grid;grid-template-columns:minmax(0,1fr) repeat(4,44px);gap:6px}
+  .library-page .browse-tools{display:grid;grid-template-columns:minmax(0,1fr) repeat(5,44px);gap:6px}
   .library-page .browse-tools .search-input{grid-column:1/-1;min-width:0}
   .library-page .browse-tools>button,.library-page .browse-tools select{width:100%;padding:8px;min-width:0}
   .library-page .library-maintenance-toggle{display:flex;width:44px;height:44px;padding:8px}
