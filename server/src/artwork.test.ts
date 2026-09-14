@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
+import { createServer, type Server } from "node:http";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { ArtworkQueue, artworkBesideMedia, fileMayUseFolderArtwork } from "./artwork.js";
+import { ArtworkQueue, artworkBesideMedia, fileMayUseFolderArtwork, savePosterAs } from "./artwork.js";
+
+process.env.ALLOW_PRIVATE_ADDONS = "1";
 
 test("a poster lands next to the media only where the library allows writing", () => {
   const healthy = { unreachable: false, readOnly: false };
@@ -43,4 +48,31 @@ test("ArtworkQueue.has reports a key only while its job is queued or running", a
   release();
   await job;
   assert.equal(queue.has("dir:Foo"), false);
+});
+
+test("a poster that does not arrive says why", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "poster-"));
+  const target = path.join(directory, "poster.jpg");
+  const server = createServer((req, res) => {
+    if (req.url === "/missing") { res.writeHead(404).end(); return; }
+    if (req.url === "/text") { res.writeHead(200, { "content-type": "text/plain" }).end("not a picture"); return; }
+    if (req.url === "/big") { res.writeHead(200, { "content-type": "image/jpeg" }).end(Buffer.alloc(9 * 1024 * 1024)); return; }
+    res.writeHead(200, { "content-type": "image/jpeg" }).end(Buffer.from([0xff, 0xd8, 0xff]));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  try {
+    // Every refusal is named, because a title that stays blank has to be explainable.
+    assert.deepEqual(await savePosterAs(target, `${base}/missing`), { ok: false, reason: "status", detail: "404" });
+    assert.deepEqual(await savePosterAs(target, `${base}/text`), { ok: false, reason: "content-type", detail: "text/plain" });
+    assert.deepEqual(await savePosterAs(target, `${base}/big`), { ok: false, reason: "size", detail: `${9 * 1024 * 1024}` });
+    const refused = await savePosterAs(target, "http://127.0.0.1:1/poster.jpg");
+    assert.equal(refused.ok, false);
+    assert.equal(refused.ok === false && refused.reason, "failed");
+    // And the one that works still works.
+    assert.deepEqual(await savePosterAs(target, `${base}/ok`), { ok: true });
+  } finally {
+    await new Promise<void>((resolve) => (server as Server).close(() => resolve()));
+    await rm(directory, { recursive: true, force: true });
+  }
 });
