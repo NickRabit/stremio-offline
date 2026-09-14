@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ChevronRight, CornerLeftUp, FolderOpen, HardDrive, Pencil, Plus, RefreshCw, Sparkles, Trash2, X } from "lucide-react";
+import { ChevronRight, CornerLeftUp, FolderOpen, FolderPlus, HardDrive, Pencil, Plus, RefreshCw, Sparkles, Trash2, X } from "lucide-react";
 import { api, describeError } from "./api";
 import { t, useI18n } from "./i18n";
 import { bytes, SettingControl, SettingsSectionHead } from "./settings-ui";
@@ -123,6 +123,10 @@ function RootPicker({ reroot, onClose, onDone, onError, onLibrariesChanged }:
   const [name, setName] = useState(reroot?.name ?? "");
   const [type, setType] = useState<LibraryType>(reroot?.type ?? "mixed");
   const [manual, setManual] = useState("");
+  const [newFolder, setNewFolder] = useState("");
+  // The selection can name a folder that is not on disk yet: the create request makes it,
+  // inside the grant the browsed folder sits in. Re-rooting never creates anything.
+  const [pendingCreate, setPendingCreate] = useState(false);
   const [estimate, setEstimate] = useState<LibraryEstimate | null>(null);
   const [scanNow, setScanNow] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -137,13 +141,29 @@ function RootPicker({ reroot, onClose, onDone, onError, onLibrariesChanged }:
   useEffect(() => { void load(); }, []);
   useEffect(() => {
     setEstimate(null);
-    if (!selected) return;
+    if (!selected || pendingCreate) return;
     let stale = false;
     void api.previewLibrary({ root: selected, type })
       .then((value) => { if (!stale) setEstimate(value); })
       .catch(() => undefined);
     return () => { stale = true; };
-  }, [selected, type]);
+  }, [selected, type, pendingCreate]);
+
+  const select = (target: string) => { setPendingCreate(false); setSelected(target); };
+  /** The folder is named here and created by the request that adds the library, so a
+   *  cancelled flow leaves nothing behind on disk. */
+  const createFolder = () => {
+    const name = newFolder.trim();
+    if (!name || !browse?.path) return;
+    // Both separators, the characters a name may not carry anywhere, and the two dot names:
+    // the server would turn them into something else rather than refuse them.
+    if (name === "." || name === ".." || /[/\\:*?"<>|]/.test(name)) { setError(t("library.newFolderInvalid")); return; }
+    setError("");
+    setNewFolder("");
+    setName((current) => current || name);
+    setPendingCreate(true);
+    setSelected(`${browse.path.replace(/\/+$/, "")}/${name}`);
+  };
 
   const grant = async () => {
     const wanted = manual.trim();
@@ -152,7 +172,7 @@ function RootPicker({ reroot, onClose, onDone, onError, onLibrariesChanged }:
     try {
       await api.grantLibraryRoot(wanted);
       setManual("");
-      setSelected(wanted);
+      select(wanted);
       await load(wanted);
     } catch (value) { setError(describeError(value)); }
     finally { setBusy(false); }
@@ -165,7 +185,7 @@ function RootPicker({ reroot, onClose, onDone, onError, onLibrariesChanged }:
     try {
       const library = reroot
         ? await api.updateLibrary(reroot.id, { root: selected })
-        : await api.createLibrary({ name: name.trim(), type, root: selected });
+        : await api.createLibrary({ name: name.trim(), type, root: selected, ...(pendingCreate ? { create: true } : {}) });
       if (scanNow) await api.startLibraryScan({ libraryId: library.id });
       onDone(t(reroot ? "library.rerooted" : "library.created"));
     } catch (value) { setError(describeError(value)); setBusy(false); }
@@ -180,7 +200,7 @@ function RootPicker({ reroot, onClose, onDone, onError, onLibrariesChanged }:
   const revoke = async (grant: LibraryGrant) => {
     if (!confirm(t("library.revokeGrantConfirm", { path: grant.path }))) return;
     setBusy(true);
-    try { await api.revokeLibraryGrant(grant.path); setSelected(""); await load(""); onLibrariesChanged?.(); }
+    try { await api.revokeLibraryGrant(grant.path); select(""); await load(""); onLibrariesChanged?.(); }
     catch (value) { setError(describeError(value)); }
     finally { setBusy(false); }
   };
@@ -207,6 +227,11 @@ function RootPicker({ reroot, onClose, onDone, onError, onLibrariesChanged }:
         </button>)}
         {!busy && browse && !browse.entries.length && <p className="identify-hint">{t("library.pickerEmpty")}</p>}
       </div>
+      {!reroot && browse?.path && <div className="library-picker-manual">
+        <input value={newFolder} aria-label={t("library.newFolder")} placeholder={t("library.newFolderHint")}
+          onChange={(event) => setNewFolder(event.target.value)}/>
+        <button type="button" onClick={createFolder} disabled={busy || !newFolder.trim()}><FolderPlus/> {t("library.newFolder")}</button>
+      </div>}
       <div className="library-picker-manual">
         <input value={manual} aria-label={t("library.grantFolder")} placeholder={t("library.grantHint")}
           onChange={(event) => setManual(event.target.value)}/>
@@ -215,10 +240,11 @@ function RootPicker({ reroot, onClose, onDone, onError, onLibrariesChanged }:
       {currentGrant?.source === "user" && <button type="button" className="danger" onClick={() => void revoke(currentGrant)} disabled={busy}>
         <Trash2/> {t("library.revokeGrant")}
       </button>}
-      <button type="button" className="library-picker-use" disabled={!browse?.path} onClick={() => setSelected(browse!.path)}>
+      <button type="button" className="library-picker-use" disabled={!browse?.path} onClick={() => select(browse!.path)}>
         <FolderOpen/> {t("library.useThisFolder")}
       </button>
       <p className="identify-hint">{selected || t("library.pickerNothingSelected")}</p>
+      {pendingCreate && <p className="identify-hint">{t("library.newFolderPending")}</p>}
       {estimate && <p className="identify-hint">
         {t("library.estimate", { titles: estimate.titles, files: estimate.files })}
         {estimate.identified ? ` · ${t("library.estimateIdentified", { count: estimate.identified })}` : ""}

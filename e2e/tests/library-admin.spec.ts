@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 // Its own root, outside the download directory: the walk of the download library must not
@@ -80,6 +80,31 @@ test("a granted root is added, previewed and revoked without losing what it reme
   await expect(picker).toHaveCount(0);
   await dialog.getByRole("button", { name: "Zrušit" }).click();
   await expect(dialog).toHaveCount(0);
+
+  // A folder that is not on disk yet is named in the picker and created by the request that
+  // adds the library -- the only way in for an owner whose app runs in a container.
+  const added = path.join(grantedRoot, "Nové filmy");
+  expect(await stat(added).catch(() => undefined), "nothing is created before the library is").toBeUndefined();
+  await page.getByRole("button", { name: "Knihovny", exact: true }).click();
+  const tools = page.getByRole("dialog", { name: "Knihovny" });
+  await tools.getByRole("button", { name: "Přidat knihovnu" }).click();
+  const creator = page.getByRole("dialog", { name: "Vyberte složku" });
+  await creator.locator(".move-list button", { hasText: "granted-root" }).click();
+  await creator.locator('input[aria-label="Nová složka"]').fill("Nové filmy");
+  await creator.getByRole("button", { name: "Nová složka" }).click();
+  await expect(creator).toContainText("Složka ještě neexistuje.");
+  await expect(creator.locator('input[aria-label="Název"]')).toHaveValue("Nové filmy");
+  await creator.getByRole("button", { name: "Přidat knihovnu" }).click();
+  await expect(creator).toHaveCount(0);
+  expect((await stat(added)).isDirectory(), "the grant makes the folder creatable").toBe(true);
+
+  const withFolder = await (await request.get("/api/libraries")).json();
+  const made = withFolder.find((entry: { root: string }) => entry.root === added);
+  expect(made).toMatchObject({ name: "Nové filmy", type: "mixed" });
+  await request.delete(`/api/libraries/${made.id}?forget=1`);
+  await rm(added, { recursive: true, force: true });
+  await tools.getByRole("button", { name: "Zrušit" }).click();
+  await expect(tools).toHaveCount(0);
 
   // A rename goes through the prompt and the row follows.
   await page.getByRole("button", { name: "Nastavení", exact: true }).click();
