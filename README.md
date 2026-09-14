@@ -94,6 +94,7 @@ on demand, so a catalogue the provider adds later still shows up. See
 | [Configuration reference](docs/configuration.md) | Every environment variable, with defaults |
 | [Playback](docs/playback.md) | Direct play vs. remux vs. transcode, seeking, tracks, subtitles |
 | [Addons and downloads](docs/downloads.md) | Debrid addons, the queue, save rules, config backup |
+| [Libraries](docs/libraries.md) | Several roots, types, artwork per library, splitting the download folder |
 | [Hardware acceleration](docs/hardware-acceleration.md) | QuickSync and VAAPI, and how to tell it is really running |
 | [Diagnostics and troubleshooting](docs/troubleshooting.md) | The log, the addon guard, symptom-to-page index |
 | [Building and releasing](docs/building.md) | Local builds, GHCR, version tags, Windows and macOS hosts |

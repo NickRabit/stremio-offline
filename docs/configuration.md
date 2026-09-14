@@ -87,7 +87,8 @@ A root outside every grant is refused, and so is a folder that is already anothe
 library's root. A root *inside* another library is legal: the parent then stops
 walking, matching and sweeping that folder, which is what makes it possible to
 split the download directory into a films and a series library without moving a
-single file.
+single file. [Libraries](libraries.md) walks through that, the types, the
+per-library switches and what happens when a disk is unplugged.
 
 Removing a library never touches the media. `?forget=1` drops what the server
 remembers about it — the match history and its thumbnails — and nothing else.
