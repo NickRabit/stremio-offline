@@ -1,5 +1,5 @@
 import { serverText, t } from "./i18n";
-import type { ActiveStream, Diagnostics, BuildInfo, AuthStatus, StatsSummary, Addon, AddonDownloadSettings, Capabilities, Catalog, Download, DownloadSelection, DownloadSnapshot, Inspection, BrowseResult, IdentityPreview, LibraryFolder, LibraryOp, LibraryOpsState, LibraryPage, ProgressEntry, WatchlistEntry, GrantBrowse, LibraryEstimate, LibraryGrant, LibrarySummary, LibraryType, LibraryView, Meta, PlaybackSession, ScanState, SearchResult, SearchableCatalog, SuggestionRow, Session, Settings, SettingsBackup, SettingsPatch, Stream, Subtitle } from "./types";
+import type { ActiveStream, Diagnostics, BuildInfo, AuthStatus, StatsSummary, Addon, AddonDownloadSettings, Capabilities, Catalog, Download, DownloadSelection, DownloadSnapshot, Inspection, BrowseResult, IdentityPreview, LibraryFolder, LibraryOp, LibraryOpsState, ProgressEntry, WatchlistEntry, GrantBrowse, LibraryEstimate, LibraryGrant, LibrarySummary, LibraryType, LibraryView, Meta, PlaybackSession, ScanState, SearchResult, SearchableCatalog, SuggestionRow, Session, Settings, SettingsBackup, SettingsPatch, Stream, Subtitle } from "./types";
 
 /** The status code has to reach the top, or a sign-out is indistinguishable from an ordinary error. */
 export class ApiError extends Error {
@@ -152,8 +152,6 @@ export const api = {
       sort: options.sort || undefined, order: options.order || undefined, seed: options.seed || undefined,
       favorites: options.favorites ? 1 : undefined,
     })}`),
-  libraryEntry: (key: string, query = "", skip = 0, limit = 100) =>
-    request<LibraryPage>(`/api/library/entry?${q({ key, query: query || undefined, skip: skip || undefined, limit })}`),
   status: () => request<BuildInfo>("/api/status"),
   me: () => request<AuthStatus>("/api/auth/me"),
   setup: (username: string, password: string, language: string) => request<Session>("/api/auth/setup", { method: "POST", body: JSON.stringify({ username, password, language }) }),

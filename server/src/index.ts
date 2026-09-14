@@ -667,7 +667,12 @@ const singleLibrary = () => {
   // An unqualified path cannot say which library it belongs to, so with more than one
   // configured the pass-through has no answer. Throwing beats a call site that forgot to
   // qualify a key and silently wrote into the first library instead.
-  if (libraries.length !== 1) throw new Error(`An unqualified path needs exactly one library, ${libraries.length} are configured`);
+  // A client that still holds a bare path from a single-library install -- a bookmark, a
+  // remembered browse path -- must get the same refusal as any other invalid path, not a
+  // developer's sentence. The message still names the count, for the log.
+  if (libraries.length !== 1) {
+    throw new AppError(`Invalid path: it names no library, and ${libraries.length} are configured.`, "err.invalidPath");
+  }
   return libraries[0]!;
 };
 /** Folders inside this library that another library owns. The walk, the pickers and
