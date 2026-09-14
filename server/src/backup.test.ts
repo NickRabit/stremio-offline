@@ -28,7 +28,7 @@ test("an import refuses a foreign format and normalises the values", () => {
     addons: [{ manifestUrl: "https://example.com/manifest.json", role: "both", enabled: true, downloadSettings: {} }],
   });
   assert.equal(parsed.settings.concurrentDownloads, 8);
-  assert.equal(parsed.settings.artworkLocation, "data");
+  assert.equal("artworkLocation" in parsed.settings, false, "the retired global is not restored");
   assert.equal(parsed.settings.realDebridToken, "");
   assert.equal(parsed.settings.libraryScanPauseOnDownload, false);
   assert.equal(parsed.settings.downloadTitleLanguage, "sk");

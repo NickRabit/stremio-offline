@@ -91,7 +91,7 @@ export interface ActiveStream {
 }
 export interface Settings {
   concurrentDownloads: number; parallelPerProvider: number; downloadSegments: number; uiLanguage: Locale; audioLanguage: string; subtitleLanguage: string; downloadTitleLanguage: "ui" | string;
-  mergeByName: boolean; streamSort: string; artworkLocation: "data" | "media"; trackProgress: boolean; showResumeRow: boolean; libraryAutoScan: boolean; libraryScanPauseOnDownload: boolean;
+  mergeByName: boolean; streamSort: string; trackProgress: boolean; showResumeRow: boolean; libraryAutoScan: boolean; libraryScanPauseOnDownload: boolean;
   secureMode: boolean;
   /** What the server writes down, as opposed to what the log view filters back out. */
   logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR";
