@@ -197,6 +197,22 @@ export class LibraryMetaStore {
     this.save(target.libraryId);
   }
 
+  async copy(from: string, to: string) {
+    const source = parseLibraryPath(from);
+    const target = parseLibraryPath(to);
+    if (!source || !target || !source.relative || !target.relative) return;
+    const file = this.files.get(source.libraryId);
+    if (!file) return;
+    const carried = <T,>(records: Record<string, T>) => Object.fromEntries(Object.entries(records)
+      .filter(([key]) => isPathWithin(key, source.relative))
+      .map(([key, value]) => [remapPath(key, source.relative, target.relative), structuredClone(value)]));
+    const destination = this.file(target.libraryId);
+    destination.meta = { ...destination.meta, ...carried(file.meta) };
+    destination.suggestions = { ...destination.suggestions, ...carried(file.suggestions) };
+    this.invalidate(target.libraryId);
+    this.save(target.libraryId);
+  }
+
   /** Mutates one library's file. Keys inside the mutator are library-relative; merge any
    *  episode rows in the same call, through the map it is handed. */
   async update(libraryId: string, mutator: MetaMutator) {
