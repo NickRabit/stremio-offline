@@ -30,12 +30,29 @@ export function artworkBesideMedia(
 /** Jellyfin looks for an episode thumbnail under the file name; we write the same. */
 export const episodeArtName = (videoFile: string) => `${videoFile.replace(/\.[^.]+$/, "")}.jpg`;
 
-/** A bound movie already has a folder poster. A series episode must not inherit it. */
-export function fileMayUseFolderArtwork(relative: string, titleType?: string): boolean {
+/** A bound movie may reuse the folder poster when the folder **is** its folder. A series
+ *  episode never inherits one, and a film sitting in a folder of unrelated videos must not
+ *  wear that folder's picture either -- which is what a move into such a folder used to make
+ *  it do.
+ *
+ *  Two ways to know the folder is the film's own, and the caller passes what it has:
+ *  - `anchoredOn` is the key the binding that covers the file sits at, when the caller has the
+ *    records (`knownTitleEntry`). The folder is the title's folder only when the binding is
+ *    anchored on that very folder, not on the file itself.
+ *  - without records, a film whose name is the folder's name is in a folder of its own: the
+ *    `Practical Magic/Practical Magic.mkv` shape. This is a narrower test than the anchor, and
+ *    it only ever adds the folder to a file that already carries its name. */
+export function fileMayUseFolderArtwork(relative: string, titleType?: string, anchoredOn?: string): boolean {
   if (titleType !== "movie") return false;
   const parent = path.dirname(relative);
-  return parent !== "." && parent !== "";
+  if (parent === "." || parent === "") return false;
+  if (anchoredOn !== undefined) return anchoredOn === parent || sharesFolderName(relative, parent);
+  return sharesFolderName(relative, parent);
 }
+
+const sharesFolderName = (relative: string, parent: string) =>
+  path.basename(relative, path.extname(relative)).normalize("NFC").toLowerCase()
+  === path.basename(parent).normalize("NFC").toLowerCase();
 
 const exists = async (file: string) => { try { await access(file); return true; } catch { return false; } };
 

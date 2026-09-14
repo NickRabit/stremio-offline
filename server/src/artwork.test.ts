@@ -16,9 +16,22 @@ test("a movie file may reuse the folder poster, a series episode may not", () =>
   assert.equal(fileMayUseFolderArtwork(path.join("Practical Magic", "Practical Magic.mkv"), "movie"), true);
   assert.equal(fileMayUseFolderArtwork("Practical Magic.mkv", "movie"), false);
   assert.equal(fileMayUseFolderArtwork(path.join("Father Ted", "01 serie", "01.mkv"), "series"), false);
-  assert.equal(fileMayUseFolderArtwork(path.join("xxx", "one.mp4"), "movie"), true);
+  assert.equal(fileMayUseFolderArtwork(path.join("xxx", "one.mp4"), "movie"), false, "a folder of unrelated videos is not this film's folder");
   assert.equal(fileMayUseFolderArtwork(path.join("xxx", "one.mp4")), false);
   assert.equal(fileMayUseFolderArtwork(path.join("xxx", "one.mp4"), "series"), false);
+});
+
+test("the binding decides whose folder it is, not the shape of the path", () => {
+  const file = path.join("xxx", "Playing something.mp4");
+  const film = path.join("Practical Magic", "Practical Magic (CZ).mkv");
+  // The binding that covers the file sits on the folder: the folder is the title's folder,
+  // whatever the file is called.
+  assert.equal(fileMayUseFolderArtwork(film, "movie", "Practical Magic"), true);
+  // It sits on the file: the folder is a container, and its picture belongs to none of the
+  // films inside it.
+  assert.equal(fileMayUseFolderArtwork(file, "movie", file), false);
+  assert.equal(fileMayUseFolderArtwork(path.join("Practical Magic", "Practical Magic.mkv"), "movie", path.join("Practical Magic", "Practical Magic.mkv")), true, "a film named after its own folder keeps it");
+  assert.equal(fileMayUseFolderArtwork(film, "series", "Practical Magic"), false);
 });
 
 test("ArtworkQueue.run with the same key twice chains the second task", async () => {
