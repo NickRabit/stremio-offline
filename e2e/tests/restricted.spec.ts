@@ -47,6 +47,8 @@ test.describe("restricted mode", () => {
     await denied("get", "/api/libraries/grants");
     await denied("post", "/api/libraries/preview", { root: "/downloads" });
     await denied("post", "/api/libraries/grants", { path: "/downloads" });
+    // `create` only ever rides on this route, so the folder-writing path is denied with it.
+    await denied("post", "/api/libraries", { name: "New", type: "mixed", root: "/downloads/New", create: true });
 
     const libraries = await request.get("/api/libraries");
     expect(libraries.ok()).toBeTruthy();
