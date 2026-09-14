@@ -17,6 +17,10 @@ interface Entry {
   at: number;
 }
 
+/** What happened to a picture asked to follow its key. `absent` is the ordinary case -- most
+ *  items have no picture of their own -- and `failed` is the one worth saying out loud. */
+export type ArtworkCarry = { carried: true } | { carried: false; reason: "absent" | "failed"; detail?: string };
+
 const hash = (key: string) => createHash("sha1").update(key).digest("hex");
 
 const megabytes = (value: string | undefined, fallback: number) => {
@@ -113,6 +117,43 @@ export class ArtworkCache {
     const name = this.storedName(from);
     if (name) { this.entries.delete(name); this.save(); }
     await this.written(to);
+  }
+
+  /** Moves a picture from one key to another, both inside this cache. A library's directory is
+   *  created lazily on its first thumbnail, so a move *between* libraries lands in a directory
+   *  that may not exist yet -- creating it here is what makes the picture follow its item
+   *  instead of failing with `ENOENT` and being swept as an orphan an hour later. */
+  async moveKey(from: string, to: string): Promise<ArtworkCarry> {
+    const source = this.file(from);
+    const target = this.file(to);
+    if (source === target) return { carried: true };
+    await mkdir(path.dirname(target), { recursive: true });
+    try { await rename(source, target); }
+    catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      // Nothing to carry is the ordinary case: most items have no picture of their own.
+      if (code === "ENOENT") return { carried: false, reason: "absent" };
+      return { carried: false, reason: "failed", detail: error instanceof Error ? error.message : String(error) };
+    }
+    await this.moved(source, target);
+    return { carried: true };
+  }
+
+  /** The same, for a copy: the source keeps its picture and the destination gains one. */
+  async copyKey(from: string, to: string): Promise<ArtworkCarry> {
+    const source = this.file(from);
+    const target = this.file(to);
+    if (source === target) return { carried: true };
+    const data = await readFile(source).catch(() => undefined);
+    if (!data) return { carried: false, reason: "absent" };
+    try {
+      await mkdir(path.dirname(target), { recursive: true });
+      await writeFile(target, data, { mode: 0o644 });
+    } catch (error) {
+      return { carried: false, reason: "failed", detail: error instanceof Error ? error.message : String(error) };
+    }
+    await this.written(target);
+    return { carried: true };
   }
 
   /** A thumbnail the server deleted. Without this the entry's bytes keep counting against the

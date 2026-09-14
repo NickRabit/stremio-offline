@@ -987,6 +987,9 @@ app.post("/api/libraries", asyncRoute(async (req, res) => {
     state.libraries = [...(state.libraries ?? []), library];
     if (resumedId) state.departed = (state.departed ?? []).filter((entry) => entry.id !== resumedId);
   });
+  // The library's directory for generated thumbnails is created with the library, not left to
+  // whichever writer happens to come first.
+  await mkdir(artworks.dirOf(library.id), { recursive: true }).catch(() => undefined);
   invalidateLibrary();
   await refreshLibraryHealth();
   if (resumedId) log("INFO", "Library added again, it keeps what it remembered", { library: library.id, root: library.root, type });
@@ -1694,14 +1697,31 @@ const relocateLibraryPath = async (key: string, nextKey: string, pin = false) =>
   });
 };
 
-/** Moves the hashed thumbnails of an item and of everything under it to their new keys. */
+/** Moves the hashed thumbnails of an item and of everything under it to their new keys. The
+ *  cache creates the destination library's directory: `data/artwork/<libraryId>/` is made on a
+ *  library's first thumbnail, so a move *between* libraries used to fail with `ENOENT` and lose
+ *  the picture to the orphan sweep an hour later. */
 const relocateArtwork = async (items: string[], relative: string, nextRelative: string) => {
   for (const item of items) {
     const next = remapPath(item, relative, nextRelative);
     for (const [from, to] of [[item, next], [`dir:${item}`, `dir:${next}`]]) {
-      const source = dataArtworkFile(from!);
-      const target = dataArtworkFile(to!);
-      await rename(source, target).then(() => artworks.moved(source, target), () => undefined);
+      const result = await artworks.moveKey(from!, to!);
+      if (!result.carried && result.reason === "failed") {
+        log("WARN", "A thumbnail could not follow its item", { from, to, detail: result.detail });
+      }
+    }
+  }
+};
+
+/** The same for a copy: the item exists twice now and both halves deserve the picture. */
+const duplicateArtwork = async (items: string[], relative: string, nextRelative: string) => {
+  for (const item of items) {
+    const next = remapPath(item, relative, nextRelative);
+    for (const [from, to] of [[item, next], [`dir:${item}`, `dir:${next}`]]) {
+      const result = await artworks.copyKey(from!, to!);
+      if (!result.carried && result.reason === "failed") {
+        log("WARN", "A thumbnail could not be copied to the item's new key", { from, to, detail: result.detail });
+      }
     }
   }
 };
@@ -1711,13 +1731,10 @@ const relocateArtwork = async (items: string[], relative: string, nextRelative: 
  *  shows up blank and the folder's copy is swept as an orphan an hour later. Copied rather than
  *  moved, because whatever stays in the folder is still that title's. */
 const carryCoveringArtwork = async (cover: string, nextKey: string) => {
-  const source = dataArtworkFile(`dir:${cover}`);
-  const destination = dataArtworkFile(isFileKey(nextKey) ? nextKey : `dir:${nextKey}`);
-  const data = await readFile(source).catch(() => undefined);
-  if (!data) return;
-  await mkdir(path.dirname(destination), { recursive: true });
-  await writeFile(destination, data).catch(() => undefined);
-  await artworks.written(destination);
+  const result = await artworks.copyKey(`dir:${cover}`, isFileKey(nextKey) ? nextKey : `dir:${nextKey}`);
+  if (!result.carried && result.reason === "failed") {
+    log("WARN", "The picture of the folder a title is bound through could not travel with it", { cover, next: nextKey, detail: result.detail });
+  }
 };
 
 /** The folder the last video just left is litter, so it goes too -- up the tree for as long
@@ -1865,7 +1882,11 @@ const transferLibraryItem = async (relative: string, folder: string, copy = fals
   // picture is the title's and has to travel with it.
   const cover = knownTitleEntry(resolved.key, metaStore.qualifiedMeta());
   const transferred = await transferLibraryPath(resolved.absolute, target.absolute, !copy, progress);
-  if (copy) await metaStore.copy(resolved.key, target.key);
+  if (copy) {
+    await metaStore.copy(resolved.key, target.key);
+    // Both halves of a copy keep the picture: the item exists twice now.
+    await duplicateArtwork(carried, resolved.key, target.key);
+  }
   else {
     await relocateArtwork(carried, resolved.key, target.key);
     if (cover && cover.key !== resolved.key && isPathWithin(resolved.key, cover.key)) await carryCoveringArtwork(cover.key, target.key);
@@ -1881,7 +1902,9 @@ const transferLibraryItem = async (relative: string, folder: string, copy = fals
 };
 
 app.post("/api/library/move", asyncRoute(async (req, res) => {
-  const moved = await transferLibraryItem(String(req.body.path ?? "").trim(), String(req.body.folder ?? "").trim());
+  // `copy` is honoured rather than ignored: the field was silently dropped before, so a client
+  // that asked for a copy got a move -- the original deleted -- with a success in the response.
+  const moved = await transferLibraryItem(String(req.body.path ?? "").trim(), String(req.body.folder ?? "").trim(), req.body.copy === true);
   res.json({ path: moved });
 }));
 
