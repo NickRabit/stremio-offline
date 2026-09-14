@@ -3,14 +3,12 @@
 | Field | Value |
 | --- | --- |
 | Date | 2026-09-14 |
-| State of the work | PR 1–4 on `main` (#114, #115, #117, #118). PR 5 open as #119. |
-| Specification | [multi-library.md](multi-library.md) — the design; read *Known gaps* and *Open Questions* first |
+| Design | [multi-library.md](multi-library.md). Read **Known gaps** and **Open Questions** before starting. |
 | Audience | The agent picking the work up next |
 
-Everything below is either a finding from reviewing the merged work, a defect
-found by using it, or the next thing to build. Nothing here changes the design;
-if something reads as though it does, the specification wins and this file is
-wrong.
+Findings from reviewing the merged work, defects found by using it, and what to
+build next. Nothing here changes the design; where this file and the
+specification disagree, the specification wins and this file is wrong.
 
 ## Where the work stands
 
@@ -20,36 +18,26 @@ wrong.
 | #115 | Metadata store split, artwork and image cache policy | merged |
 | #117 | Library types, CRUD API, folder picker | merged |
 | #118 | Library manager, root browse, cross-library moves | merged |
-| #119 | Bulk operations queue and selection UI | open, **e2e red** |
-| #120 | Library size in Settings read the file count | open, fix + test |
-| #121 | Transfer: a landed copy reported as a failed move | open, stacked on #119 |
+| #120 | Library size in Settings read the file count | merged |
+| #121 | Transfer reported a landed copy as a failed move | merged into #119 |
+| #119 | Bulk operations queue and selection UI | open, rebased onto `main`, at `0.4.4`, baselines regenerating |
 | PR 6 | Per-library addon save rules, backup v2, documentation | not started |
 
-Two open PRs both bump `0.4.2 → 0.4.3`. Whichever merges second takes `0.4.4`;
-`AGENTS.md` treats that conflict as routine.
+`main` is at `0.4.3`. #119 carries `0.4.4`.
 
 ## Defects to fix
-
-### #119 is failing e2e on `settings.png`
-
-Five viewports, both attempts, so it is not a flake. The PR regenerated its
-`library*.png` baselines and not `settings.png`, and the library manager lives on
-the settings screen. Regenerate it — but read *Generating baselines* below first,
-and do it **after** #120 lands, because #120 changes the text in that same
-screenshot and would otherwise invalidate the new baseline immediately.
 
 ### The folder picker cannot create a folder
 
 Adding a library over a folder that does not exist yet answers *"The folder does
-not exist."* and stops there. `POST /api/libraries` already accepts
-`create?: boolean` and `requireLibraryRoot` carries it; the client never sends it
-and the picker offers no way to make one. Under Docker the app is the only
-interface its owner has, so this is a dead end rather than a hint.
+not exist."* and stops. `POST /api/libraries` already accepts `create?: boolean`
+and `requireLibraryRoot` carries it — the client never sends it, and the picker
+offers no way to make one. Under Docker the app is the only interface its owner
+has, so this is a dead end rather than a hint.
 
 Wire what is already there: a **New folder** action in the picker, creating
 inside the browsed grant, and `create: true` on the request that follows. Keep
-`mkdir` refused outside every grant and refused in restricted mode. Specified
-under *Known gaps* in [multi-library.md](multi-library.md).
+`mkdir` refused outside every grant and refused in restricted mode.
 
 ### Two controls decide where a poster goes
 
@@ -59,22 +47,40 @@ both agree, which is why an install that asked for posters beside the media kept
 writing them into `DATA_PATH`.
 
 Retire the global one. `writeArtwork` becomes the single control, on by default,
-forced off and locked where the root is read-only — the case it exists for.
-Migration reads the old global once so nobody's layout changes under them.
-Specified under *Known gaps*.
+forced off and locked where the root is read-only — the case it exists for. It
+also sits at the right level: whether to write into a tree is a property of that
+tree, not of the installation. Migration reads the old global once, so an install
+that had `"data"` gets `writeArtwork: false` and nobody's layout changes under
+them.
 
-## Findings from the review that are already fixed
+### Nothing explains how to split the download directory
 
-Recorded so they are not re-litigated, and because two of them are worth
-remembering as classes of bug rather than incidents.
+Carve-outs make splitting `/downloads` into `/downloads/Films` and
+`/downloads/Series` free, and cross-library moves carry metadata with each title
+— and nothing says so. Two routes, both worth writing up:
+
+1. **Split from inside.** Add the new libraries as folders under the existing
+   root; the parent carves them out. Move titles across in the interface. No
+   downtime, metadata travels, and on one volume each move is a `rename`.
+2. **Re-root.** `PATCH /api/libraries/:id { root }` rewrites the record and
+   **moves nothing**. To push a library one level down: stop the server, move the
+   tree on disk, start, re-root onto the new folder. Keys are
+   `<libraryId>/<relative>` and the relatives do not change, so the match history
+   survives whole. With the server running, a scan could observe the half-moved
+   tree and read it as new unmatched titles.
+
+Say explicitly that re-root moves no files. The name suggests otherwise.
+
+## Fixed, recorded so they are not re-litigated
+
+Two of these are worth remembering as classes rather than incidents.
 
 - **The migration deleted every generated thumbnail when the media root was
   unreachable.** `listVideos` answers an unreadable root with an empty tree, so
   the valid-key set came out empty and the removal pass took everything older
-  than an hour. Fixed in #114 with an `R_OK` probe. The class: *an empty walk and
-  an empty library are indistinguishable at the call site, and one of them must
-  never drive a delete.* The same shape is why the orphan sweep checks the root
-  is readable.
+  than an hour. The class: *an empty walk and an empty library are
+  indistinguishable at the call site, and one of them must never drive a delete.*
+  The same shape is why the orphan sweep checks the root is readable first.
 - **Artwork re-keying missed the ancestor rows.** Folder thumbnails are keyed
   `dir:<path>` for paths that appear in no `libraryMeta` key and in no
   `listVideos` result, because a folder is not a file and need not be bound to
@@ -82,41 +88,53 @@ remembering as classes of bug rather than incidents.
 - **`primaryLibrary()` was a single-library shim across ~35 call sites.** Now
   `singleLibrary()` throws when the count is not one, so a call site that forgot
   to qualify a key fails loudly instead of writing into the first library.
-- **A resumed scan from before the migration** held unqualified `remaining[]`
+- **A scan resumed from before the migration** held unqualified `remaining[]`
   while the units had become qualified. `LibraryScan.load()` now discards a run
   whose remaining set matches nothing.
+- **The sweep skipped `readOnly` libraries**, letting their orphans grow without
+  bound — the common case for an added archive. `readOnly` describes the media
+  root; the thumbnails being swept live in `data/artwork/<libraryId>/`. Only an
+  unreadable root skips now. This one was the specification's error, not the
+  implementation's.
 
-## Generating baselines
+## Screenshot baselines — read before regenerating
 
-`docs/testing.md` used to say that the container was enough and that generating
-on an Apple Silicon Mac matched CI. **It does not.** The image pins the browser
-and the fonts, but glyph rasterisation differs between arm64 and amd64: one
-settings baseline regenerated on arm64 failed all five viewports on CI,
-including the two whose text had not changed. The fixed 120-pixel tolerance does
-not come close.
+This cost a day of red CI. Three separate things are true:
 
-Either use the **Update screenshot baselines** workflow, which runs on the same
-amd64 runner that checks them, or force the platform locally:
+**Local generation does not work on an Apple Silicon Mac.** `docs/testing.md`
+used to say the container was enough. It is not: the image pins the browser and
+the fonts but not the rasteriser. One settings baseline regenerated on arm64 was
+rejected on all five viewports, including the two whose text had not changed.
+
+**Forcing `--platform linux/amd64` is not enough either.** The emulated run still
+produced a page **two pixels taller** than the runner does, and a height mismatch
+fails the comparison outright — tolerance does not enter into it.
+
+**Use the workflow.** `Update screenshot baselines` runs on the same runner that
+checks the result, and it now works:
 
 ```
-docker build --platform linux/amd64 -t stremio-offline-e2e -f e2e/Dockerfile .
-docker run --rm --platform linux/amd64 -v "$PWD":/work -w /work -e CI=1 \
-  stremio-offline-e2e npx playwright test layout/screenshots.spec.ts -g "settings" --update-snapshots
+gh workflow run "Update screenshot baselines" -f branch=<your-branch>
 ```
 
-Narrow with `-g`. Regenerating everything commits a megabyte of churn nobody can
-review.
+It was broken until #122: it ran in the bare Playwright image, which carries no
+ffmpeg, so the fixture could not build its test media and the web server never
+started. That is why nobody used it and everyone generated locally. It pushes a
+commit to your branch — and because that push comes from `github-actions[bot]`,
+**it does not trigger CI**. Push something of your own afterwards (a squash of
+the baseline commit is tidiest) or the run sits at `action_required`.
 
 ## Verifying in Docker
 
 `AGENTS.md` asks for a local deploy after implementing. Two additions for this
-feature specifically:
+feature:
 
-- **Verify with a library whose root is away**, not only with a healthy one. Stop
-  a mount, or point a second library at a folder you then rename, and confirm the
-  row is flagged, the scan and sweep skip it, and nothing is deleted. That branch
-  has already cost one data-loss bug.
-- **Leave the container up** when you are done, so the owner can try the change.
+- **Verify with a library whose root is away**, not only a healthy one. Stop a
+  mount, or point a library at a folder you then rename, and confirm the row is
+  flagged, that scan and sweep skip it, and that nothing is deleted. That branch
+  has already cost one data-loss bug, and the test that was supposed to cover it
+  passed because the temporary directory held no artwork.
+- **Leave the container up** when you are done, so the owner can try it.
 
 ```
 docker compose up -d --build
@@ -124,32 +142,42 @@ docker compose ps
 curl -s localhost:${STREMIO_OFFLINE_PORT:-8090}/api/status
 ```
 
+## Working alongside other branches
+
+- **Version bumps collide.** Two open PRs both bumping the same patch is routine;
+  `AGENTS.md` says the branch takes the next patch after whatever is on `main` at
+  rebase time. Check `main` before bumping, not when you opened the branch.
+- **`player-sidecars.test.ts` is flaky on CI.** "cues are held back until they
+  reach past the playhead" reads subtitles through ffmpeg and is timing
+  sensitive; it fails under runner load and passes on a re-run. Confirm locally
+  before treating it as a regression.
+- **A rebase strands other worktrees.** Several `/private/tmp/stremio-*`
+  checkouts track these branches. After a force-push, `git -C <worktree> reset
+  --hard origin/<branch>` — but look at `git status` there first; one of them had
+  uncommitted work.
+
 ## What to build next
 
-In order. Each is a branch off `main` and its own pull request, per `AGENTS.md`.
+In order. Each is a branch off `main` and its own pull request.
 
-1. **Land #120, then fix #119's baseline.** In that order, for the reason above.
-2. **#121** — review and merge with #119; it is stacked on that branch.
-3. **Finish PR 3's loose ends**: New folder in the picker with `create: true`.
-4. **Retire `artworkLocation`** in favour of per-library `writeArtwork`, with the
+1. **Finish #119.** Baselines are regenerating; merge once green.
+2. **Loose ends of PR 3**: New folder in the picker with `create: true`.
+3. **Retire `artworkLocation`** in favour of per-library `writeArtwork`, with the
    one-time migration.
-5. **PR 6 — per-library addon save rules.** `DownloadTargetSettings.libraryId`
+4. **PR 6 — per-library addon save rules.** `DownloadTargetSettings.libraryId`
    end to end: the select offering only libraries of the matching type or
-   `mixed` and never a `readOnly`, disabled or unreachable one; validation on
-   `PATCH /api/addons/:key`; backup v2 that remaps libraries by root then name
-   **and** remaps `defaultMovieLibrary` / `defaultSeriesLibrary` inside the
+   `mixed`, never a `readOnly`, disabled or unreachable one; validation on
+   `PATCH /api/addons/:key`; backup v2 remapping libraries by root then name
+   **and** remapping `defaultMovieLibrary` / `defaultSeriesLibrary` inside the
    settings blob; `/downloads` gone from `web/src`. §11 of the specification.
-6. **User documentation**: `docs/libraries.md`, and the split guide — carve-outs
-   make splitting `/downloads` free, and nothing currently tells anyone that.
-   Note explicitly that re-root moves no files, because the name suggests it
-   does.
+5. **User documentation**: `docs/libraries.md`, including the split guide above.
 
 ## Two things worth not getting wrong
 
 **Pass-through is on exactly one *configured* library** — not one enabled, not
-one reachable. A second library that is switched off or whose disk is unplugged
-is still a deliberate part of the setup, and a browse root that changed shape
-when a drive spun down would be worse than one extra click.
+one reachable. A library that is switched off or whose disk is unplugged is still
+a deliberate part of the setup, and a browse root that changed shape when a drive
+spun down would be worse than one extra click.
 
 **Nothing is destroyed by absence.** A pulled disk, a revoked grant and a
 disabled library are recoverable states. Only an explicit
