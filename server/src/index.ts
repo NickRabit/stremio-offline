@@ -795,20 +795,29 @@ const artStamp = async (file: string) => {
  *  not walk the tree again. */
 const libraryRootBrowse = async () => {
   await refreshLibraryHealth();
-  const stats = await libraryStats();
+  const [stats, entries] = await Promise.all([libraryStats(), libraryEntries()]);
+  let pending = false;
   const items = await Promise.all([...store.libraries()].sort((a, b) => a.order - b.order).map(async (library) => {
     const counts = stats.get(library.id) ?? { titles: 0, files: 0, bytes: 0 };
     const key = libraryPath(library.id, "");
     const path = wirePath(key);
+    const posters: string[] = [];
+    const previewEntries = entries.filter((entry) => parseLibraryPath(entry.key)?.libraryId === library.id).slice(0, 5);
+    for (const entry of previewEntries) {
+      const art = await locateArtwork(entry);
+      if (!art) { scheduleArtwork(entry); pending = true; }
+      const poster = await thumbUrl("key", wirePath(entry.key), art);
+      if (poster) posters.push(poster);
+    }
     return {
       kind: "library" as const, libraryId: library.id, name: library.name, label: library.name,
       type: library.type, enabled: library.enabled,
       fileCount: counts.files, titles: counts.titles, size: counts.bytes,
       unreachable: healthOf(library).unreachable, readOnly: healthOf(library).readOnly,
-      path, poster: await thumbUrl("dir", path, await locateFolderArtwork(key)),
+      path, posters, poster: await thumbUrl("dir", path, await locateFolderArtwork(key)),
     };
   }));
-  return { path: "", items, total: items.length };
+  return { path: "", items, total: items.length, pending };
 };
 
 const thumbUrl = async (param: "path" | "dir" | "key", value: string, art: string | undefined) =>
