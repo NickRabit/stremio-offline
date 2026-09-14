@@ -818,6 +818,13 @@ const artworkQueue = new ArtworkQueue();
 const fileExists = async (file: string) => { try { await access(file); return true; } catch { return false; } };
 const dataArtworkFile = (key: string) => artworks.file(key);
 
+/** Every removal of a generated thumbnail goes through here: the cache counts bytes it wrote,
+ *  and an entry left behind after its file is gone makes the next eviction drop a live picture. */
+const removeArtwork = async (file: string) => {
+  await rm(file, { force: true });
+  await artworks.removed(file);
+};
+
 /** A generated thumbnail is counted against the cache ceiling; the same picture written
  *  next to the media is the folder's own and is neither counted nor evicted. */
 const saveGenerated = async (target: string, write: () => Promise<boolean>) => {
@@ -1165,6 +1172,7 @@ app.delete("/api/libraries/:id", asyncRoute(async (req, res) => {
   if (forget) {
     await metaStore.forget(target.id);
     await rm(artworks.dirOf(target.id), { recursive: true, force: true });
+    await artworks.removedTree(artworks.dirOf(target.id));
   }
   invalidateLibrary();
   await refreshLibraryHealth();
@@ -1264,8 +1272,8 @@ const writeCatalogPoster = async (key: string, url?: string) => {
     log("DEBUG", "The folder has its own picture, the catalogue poster was not written", { key });
     return false;
   }
-  await rm(dataArtworkFile(key), { force: true });
-  await rm(dataArtworkFile(`dir:${key}`), { force: true });
+  await removeArtwork(dataArtworkFile(key));
+  await removeArtwork(dataArtworkFile(`dir:${key}`));
   const toMedia = artworkBesideMediaFor(key);
   const asFile = isFileKey(key);
   const target = toMedia
@@ -1284,10 +1292,10 @@ const ownRecord = (relative: string, records: Record<string, LibraryMetaRecord>)
 /** Generated thumbnails of a path and everything under it. A changed binding makes
  *  them stale: the poster of the old title, or a frame grabbed while unmatched. */
 const clearGeneratedArt = async (key: string) => {
-  await rm(dataArtworkFile(key), { force: true });
-  await rm(dataArtworkFile(`dir:${key}`), { force: true });
+  await removeArtwork(dataArtworkFile(key));
+  await removeArtwork(dataArtworkFile(`dir:${key}`));
   for (const file of await libraryFiles()) {
-    if (file.relative !== key && isPathWithin(file.relative, key)) await rm(dataArtworkFile(file.relative), { force: true });
+    if (file.relative !== key && isPathWithin(file.relative, key)) await removeArtwork(dataArtworkFile(file.relative));
   }
 };
 
@@ -1431,7 +1439,7 @@ async function sweepArtwork() {
       // Second safeguard: anything fresh is kept. Its source may still be on its way.
       const info = await stat(file).catch(() => undefined);
       if (!info?.isFile() || Date.now() - info.mtimeMs < 60 * 60_000) continue;
-      await rm(file, { force: true });
+      await removeArtwork(file);
       removed += 1;
     }
   }
@@ -1720,8 +1728,8 @@ const pruneEmptiedFolders = async (key: string) => {
   for (const folder of gone) {
     const folderKey = libraryPath(library.id, folder);
     await rm(mediaPath(folderKey), { recursive: true, force: true });
-    await rm(dataArtworkFile(folderKey), { force: true });
-    await rm(dataArtworkFile(`dir:${folderKey}`), { force: true });
+    await removeArtwork(dataArtworkFile(folderKey));
+    await removeArtwork(dataArtworkFile(`dir:${folderKey}`));
     await forgetLibraryPath(folderKey);
   }
   if (gone.length) log("INFO", "Emptied folders removed", { folders: gone });
@@ -1734,8 +1742,8 @@ const deleteLibraryItem = async (relative: string) => {
   const info = await stat(resolved.absolute).catch(() => undefined);
   if (!info) throw new AppError("The file or folder does not exist.", "err.pathMissing");
   await rm(resolved.absolute, { recursive: true, force: true });
-  await rm(dataArtworkFile(resolved.key), { force: true });
-  await rm(dataArtworkFile(`dir:${resolved.key}`), { force: true });
+  await removeArtwork(dataArtworkFile(resolved.key));
+  await removeArtwork(dataArtworkFile(`dir:${resolved.key}`));
   const orphans = await forgetLibraryPath(resolved.key);
   const pruned = await pruneEmptiedFolders(resolved.key);
   invalidateLibrary();
