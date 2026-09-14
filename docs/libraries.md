@@ -54,7 +54,7 @@ the counts, plus:
 | --- | --- |
 | Type | Change it at any time. A `mixed` library that becomes typed is re-read at the next scan, and titles that no longer fit keep their match but are flagged. |
 | Enabled | A switched-off library keeps its place, its metadata and its row. It is skipped by the scan, and it does not open. |
-| Write artwork next to the media | Where a poster or thumbnail we generate goes: beside the video, or under `DATA_PATH/artwork/<library id>/`. On by default; forced off and locked where the root cannot be written. A `poster.jpg` that is already in the folder is never touched or overwritten. |
+| Write artwork next to the media | Where a poster or thumbnail we generate goes: beside the video, or under `DATA_PATH/artwork/<library id>/`. Off by default — a new library often points at a tree somebody else keeps, and a `poster.jpg` written into it cannot be taken back. Turn it on per library, for instance so a media server scanning the same folder finds the posters. Forced off and locked where the root cannot be written. A `poster.jpg` that is already in the folder is never touched or overwritten. |
 | Rename | The name in the app. Nothing on disk moves. |
 | Scan this library | Matches this one library now instead of waiting for the automatic scan. |
 | Change folder | Points the library at another folder. **It moves no files** — see below. |

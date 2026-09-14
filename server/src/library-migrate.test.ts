@@ -45,7 +45,8 @@ test("a v1 state gains one library and qualified keys", async () => {
     assert.equal(state.libraries?.length, 1);
     assert.equal(state.libraries?.[0]?.root, downloadDir);
     assert.equal(state.libraries?.[0]?.type, "mixed", "the legacy tree keeps inferring");
-    assert.equal(state.libraries?.[0]?.writeArtwork, true);
+    // Minted with no opinion; `migrateStateFile` lets the retired global have the say.
+    assert.equal(state.libraries?.[0]?.writeArtwork, false);
     assert.deepEqual(state.settings.defaultMovieLibrary, id);
     assert.deepEqual(state.settings.defaultSeriesLibrary, id);
 
@@ -265,4 +266,33 @@ test("a root that is away keeps the thumbnails it had", async () => {
     assert.deepEqual(summary.artwork, { mapped: 0, removed: 0 }, "an unreachable root maps and removes nothing");
     assert.equal((await stat(poster)).size, 6, "the thumbnail is still there");
   } finally { await rm(dataDir, { recursive: true, force: true }); }
+});
+
+// The switch is off for a library nobody has had a chance to configure, so a migration that
+// read the library's current value would see its own default as "the user turned this off"
+// and drop the very setting it exists to carry over. A v1 install has exactly that shape.
+test("a v1 install that kept its posters beside the media keeps them there", async () => {
+  const dataDir = await mkdtemp(path.join(tmpdir(), "migrate-"));
+  const downloadDir = await mkdtemp(path.join(tmpdir(), "downloads-"));
+  const file = path.join(dataDir, "state.json");
+  await writeFile(file, JSON.stringify({ ...v1State(), settings: { ...defaultSettings(), artworkLocation: "media" } }));
+  try {
+    await migrateStateFile(dataDir, downloadDir);
+    const rewritten = JSON.parse(await readFile(file, "utf8"));
+    assert.deepEqual(rewritten.libraries.map((item: { writeArtwork: boolean }) => item.writeArtwork), [true]);
+    assert.equal("artworkLocation" in rewritten.settings, false);
+  } finally { await rm(dataDir, { recursive: true, force: true }); await rm(downloadDir, { recursive: true, force: true }); }
+});
+
+// And the other way: the default the global did not ask for stays off.
+test("a v1 install that kept its posters in the data folder is left alone", async () => {
+  const dataDir = await mkdtemp(path.join(tmpdir(), "migrate-"));
+  const downloadDir = await mkdtemp(path.join(tmpdir(), "downloads-"));
+  const file = path.join(dataDir, "state.json");
+  await writeFile(file, JSON.stringify({ ...v1State(), settings: { ...defaultSettings(), artworkLocation: "data" } }));
+  try {
+    await migrateStateFile(dataDir, downloadDir);
+    const rewritten = JSON.parse(await readFile(file, "utf8"));
+    assert.deepEqual(rewritten.libraries.map((item: { writeArtwork: boolean }) => item.writeArtwork), [false]);
+  } finally { await rm(dataDir, { recursive: true, force: true }); await rm(downloadDir, { recursive: true, force: true }); }
 });

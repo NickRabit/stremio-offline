@@ -65,7 +65,7 @@ const initialState = (downloadDir: string): State => ({
   schemaVersion: SCHEMA_VERSION,
   libraries: [{
     id: newLibraryId(), name: path.basename(downloadDir) || "Library", type: "mixed", root: downloadDir,
-    enabled: true, order: 0, addedAt: new Date().toISOString(), writeArtwork: true,
+    enabled: true, order: 0, addedAt: new Date().toISOString(), writeArtwork: false,
   }],
   addons: [],
   settings: structuredClone(baseSettings),
