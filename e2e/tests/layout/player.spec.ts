@@ -112,7 +112,12 @@ test("video clicks dismiss controls and settings; double-click toggles fullscree
   await overlay.locator(".fullscreen-action").click();
   await expect.poll(() => page.evaluate(() => document.fullscreenElement?.classList.contains("player-overlay"))).toBe(true);
   await page.clock.install();
-  await page.clock.pauseAt(new Date());
+  // Pause a second *ahead* of the browser's clock rather than "now": the timestamp is read in
+  // Node and reaches the browser after a round trip, and on a busy runner that instant is
+  // already in the past -- which the clock refuses ("Cannot fast-forward to the past"). The
+  // jump lands before the pointermove below starts the countdown, so the 9999/1 pair still
+  // measures exactly the idle timeout.
+  await page.clock.pauseAt(new Date(Date.now() + 1_000));
   await overlay.dispatchEvent("pointermove", { pointerType: "mouse" });
   await page.clock.fastForward(9999);
   await expect(overlay).not.toHaveClass(/cursor-hidden/);

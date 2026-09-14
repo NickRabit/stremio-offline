@@ -77,19 +77,29 @@ test("a jump back before the reader's start, or another track, begins a new one"
   } finally { await sidecars.stop("session"); await rm(directory, { recursive: true, force: true }); }
 });
 
-test("cues are held back until they reach past the playhead, then shifted to it", { timeout: 5000 }, async () => {
+// The reader is held open on purpose, twice: once with a cue the picture has already passed and
+// once with the cue that is ahead. The test waits for the first burst to reach its gate rather
+// than guessing how many ticks that takes -- under load a tick was not enough, `finish` was a
+// no-op when it was called, and the reader waited on a promise nobody would ever resolve.
+test("cues are held back until they reach past the playhead, then shifted to it", { timeout: 15_000 }, async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "sidecar-lead-"));
   let finish = () => {};
+  let burstWritten = () => {};
+  const atRest = new Promise<void>((resolve) => { burstWritten = resolve; });
   const sidecars = new PlayerSidecars(async (_args, file, _append, signal) => {
     // Only a cue that is already over: nothing the picture has not passed.
     await writeFile(file, `WEBVTT\n\n${cue(2990, 2996, "just said")}\n\n`);
-    await new Promise<void>((resolve) => { finish = resolve; signal.addEventListener("abort", () => resolve(), { once: true }); });
+    await new Promise<void>((resolve) => {
+      finish = resolve;
+      signal.addEventListener("abort", () => resolve(), { once: true });
+      burstWritten();
+    });
     await writeFile(file, `WEBVTT\n\n${cue(2990, 2996, "just said")}\n\n${cue(3000 + SIDECAR_LEAD_S + 5, 3000 + SIDECAR_LEAD_S + 9, "ahead")}\n\n`);
   });
   try {
     sidecars.ensure("session", directory, 0, 3000, async () => []);
     const revision = sidecars.revision("session");
-    await tick();
+    await atRest;
     assert.equal(await sidecars.read("session", revision, 3000), undefined, "a cue the picture has already passed is nothing to attach");
     finish();
     // The cues can be readable a moment before the reader has finished with the film.
