@@ -115,6 +115,29 @@ export class ArtworkCache {
     await this.written(to);
   }
 
+  /** A thumbnail the server deleted. Without this the entry's bytes keep counting against the
+   *  ceiling, and the next eviction drops a live picture to make room for nothing. */
+  async removed(file: string) {
+    const name = this.storedName(file);
+    if (!name || !this.entries.delete(name)) return;
+    this.save();
+  }
+
+  /** Every entry under a directory the server removed with its library. */
+  async removedTree(directory: string) {
+    const prefix = this.storedName(directory);
+    if (prefix === undefined) return;
+    let dropped = 0;
+    for (const name of [...this.entries.keys()]) {
+      if (name !== prefix && !name.startsWith(`${prefix}${path.sep}`)) continue;
+      this.entries.delete(name);
+      dropped += 1;
+    }
+    if (!dropped) return;
+    log("DEBUG", "Artwork cache entries dropped with their directory", { directory, dropped });
+    this.save();
+  }
+
   /** Serving refreshes an entry, so a picture somebody keeps looking at is not the first
    *  one dropped. The index write itself is debounced, like every other write here. */
   async served(file: string) {

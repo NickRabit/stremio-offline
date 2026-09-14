@@ -103,3 +103,34 @@ test("the index survives a restart and forgets files the sweep took", async () =
     assert.equal((await stat(kept)).size, 2048);
   });
 });
+
+test("a thumbnail the server deletes stops counting before the next eviction", async () => {
+  await withCache(10 * 1024, async (cache, dir) => {
+    const gone = await put(cache, "lib_aaaaaaaa/One.mkv", 4096);
+    await sleep(3);
+    const kept = await put(cache, "lib_aaaaaaaa/Two.mkv", 4096);
+    await rm(gone, { force: true });
+    await cache.removed(gone);
+    await cache.flush();
+    assert.equal(cache.size, 1);
+    assert.deepEqual(Object.keys(JSON.parse(await readFile(path.join(dir, "index.json"), "utf8"))),
+      [path.join("lib_aaaaaaaa", hash("Two.mkv"))]);
+    // The bytes are out of the sum, so the picture that is still there is not evicted by them.
+    await put(cache, "lib_aaaaaaaa/Three.mkv", 4096);
+    assert.equal((await stat(kept)).size, 4096);
+  });
+});
+
+test("removing a library's directory takes its entries with it and nobody else's", async () => {
+  await withCache(1024 * 1024, async (cache, dir) => {
+    await put(cache, "lib_aaaaaaaa/One.mkv", 1024);
+    await put(cache, "dir:lib_aaaaaaaa/Show", 1024);
+    await put(cache, "lib_bbbbbbbb/One.mkv", 1024);
+    await rm(path.join(dir, "lib_aaaaaaaa"), { recursive: true, force: true });
+    await cache.removedTree(path.join(dir, "lib_aaaaaaaa"));
+    await cache.flush();
+    assert.equal(cache.size, 1);
+    assert.deepEqual(Object.keys(JSON.parse(await readFile(path.join(dir, "index.json"), "utf8"))),
+      [path.join("lib_bbbbbbbb", hash("One.mkv"))]);
+  });
+});
