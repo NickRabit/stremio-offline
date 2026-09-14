@@ -65,7 +65,7 @@ export function LibraryManager({ restricted = false, onChanged, onError, onNotif
         </span>
       </div>
       <small className="library-admin-root" title={library.root}>{library.root}</small>
-      <small>{t("library.libraryCounts", { titles: library.titles, files: library.files, size: bytes(library.files) })}</small>
+      <small>{t("library.libraryCounts", { titles: library.titles, files: library.files, size: bytes(library.bytes) })}</small>
       {!restricted && <div className="library-admin-controls">
         <label><span>{t("library.libraryType")}</span>
           <select aria-label={t("library.libraryType")} value={library.type} disabled={busy}
