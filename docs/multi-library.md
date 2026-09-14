@@ -1569,15 +1569,74 @@ import, the client's `/downloads` hardcodes removed, `docs/libraries.md` (user
 documentation), `docs/downloads.md`, `docs/library-metadata.md` (supersede the
 separate-libraries rejection), `docs/roadmap.md`. **Version bump.**
 
+## Known gaps
+
+Where the work stands, and what is left to do, is in
+[multi-library-handoff.md](multi-library-handoff.md).
+
+Found by using the feature once PR 1–4 were on `main`. Each is small, each has a
+decision attached, and none of them needs the design revisited.
+
+### The folder picker cannot create a folder
+
+`POST /api/libraries` already takes `create?: boolean` and
+`requireLibraryRoot(value, { create })` carries it, but nothing sends it: the
+manager calls `api.createLibrary({ name, type, root })` and the picker lists only
+directories that already exist. So a library can only be added over a folder that
+is already on disk — and under Docker the app is the only interface the owner
+has, which makes "that folder does not exist" a dead end rather than a hint.
+
+Wire the existing option: a **New folder** action in the picker, creating inside
+the browsed grant, and `create: true` on the request that follows. `mkdir` stays
+refused outside every grant, and refused in restricted mode with the rest of
+`/libraries`.
+
+### Retire `artworkLocation`
+
+`Settings.artworkLocation` is global and defaults to `"data"`; `writeArtwork` is
+per library and defaults to `true`. A poster lands beside the media only when
+both agree, which is two controls for one decision and explains why an install
+that wanted posters beside the media kept writing them into `DATA_PATH`.
+
+Drop the global one. `writeArtwork` is the single control, on by default, forced
+off and locked where the root is read-only — the case the flag exists for. It
+also sits at the right level: whether to write into a tree is a property of that
+tree, not of the installation. Migration reads the old global once: an install
+that had `artworkLocation: "data"` gets `writeArtwork: false` on its libraries,
+so nobody's layout changes under them, and the Storage section loses the select.
+
+### No guided split of the download directory
+
+Carve-outs make splitting `/downloads` into `/downloads/Films` and
+`/downloads/Series` free, and §10 moves titles between them with their metadata —
+but nothing tells the owner that. Today the two ways are:
+
+1. **Split from inside.** Add the new libraries as folders under the existing
+   root; the parent carves them out. Move titles across in the interface. No
+   downtime, metadata travels, and on one volume each move is a `rename`.
+2. **Re-root.** `PATCH /api/libraries/:id { root }` rewrites the record and
+   **does not move anything**. To push a library one level down: stop the server,
+   move the tree into the new folder on disk, start, then re-root onto it. Keys
+   are `<libraryId>/<relative>` and the relatives do not change, so the whole
+   match history survives. With the server running, a scan could observe the
+   half-moved tree and read it as new unmatched titles.
+
+Write (1) up in the user documentation as the supported route. A wizard that
+offers it from the library manager is worth having; note that re-root moves no
+files, since the name suggests otherwise.
+
 ## Open Questions
 
 1. **Default-library storage.** `Settings.defaultMovieLibrary` /
    `defaultSeriesLibrary` (chosen here) versus a flag on `LibraryRecord`. The
    settings field is simpler to validate on delete; revisit if a third kind ever
    appears.
-2. **Per-library settings beyond `writeArtwork`.** `writeArtwork` (§6) is in
-   because an added tree may be read-only or curated. The rest of `Settings`
-   stays global; revisit only if a concrete case appears.
+2. ~~**Per-library settings beyond `writeArtwork`.**~~ **Answered in use.**
+   Running the feature showed the opposite problem to the one this question
+   anticipated: there are now *two* controls for where a poster goes, the global
+   `Settings.artworkLocation` (`data` | `media`) and the per-library
+   `writeArtwork`, and they say overlapping things. See *Retire
+   `artworkLocation`* under Known gaps.
 3. **Bulk rename by pattern.** Deliberately out of v1. The `LibraryOp` union is
    shaped to take it without a migration.
 4. **Follow show** ([roadmap.md](roadmap.md)) will want a per-library watch list
