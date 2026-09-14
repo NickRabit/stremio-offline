@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { activeDeparted, carveOuts, defaultLibrary, DEPARTED_MAX, departedIdFor, libraryFor, libraryPath, parseLibraryPath, relativeWithin, resolveLibraryPath, toFs, toPosix, type DepartedLibrary, type LibraryRecord } from "./libraries.js";
+import { activeDeparted, carveOuts, defaultLibrary, DEPARTED_MAX, departedIdFor, libraryFor, libraryPath, parseLibraryPath, relativeWithin, resolveLibraryPath, sameFile, toFs, toPosix, type DepartedLibrary, type LibraryRecord } from "./libraries.js";
 
 const library = (over: Partial<LibraryRecord> = {}): LibraryRecord => ({
   id: "lib_ab12cd34", name: "Filmy", type: "movie", root: "/media/filmy", enabled: true,
@@ -149,4 +149,28 @@ test("a folder added again takes back the id it had before", async () => {
   } finally {
     await rm(base, { recursive: true, force: true });
   }
+});
+
+test("two paths as the filesystem under this build sees them", () => {
+  // The rename guard's rule, in one place: changing only the case of a name is a rename where
+  // case is folded, and a clash where it is not. Linux CI runs the second half of each pair.
+  assert.equal(sameFile("/mnt/Films", "/mnt/Films", true), true);
+  assert.equal(sameFile("/mnt/Films", "/mnt/films", false), false, "Linux keeps them apart");
+  assert.equal(sameFile("/mnt/Films", "/mnt/films", true), true, "macOS and Windows do not");
+  assert.equal(sameFile("/mnt/Films", "/mnt/Series", true), false);
+  // On this runner the default follows the platform, whichever it is.
+  const folded = process.platform === "win32" || process.platform === "darwin";
+  assert.equal(sameFile("/mnt/Films", "/mnt/films"), folded);
+});
+
+test("the wire is POSIX and the syscall is not", () => {
+  // The interface sends "/" whatever the host uses, and `toFs` is the one place that turns it
+  // back into the separator this build's filesystem expects.
+  assert.equal(toPosix("Show/01 serie/01.mkv"), "Show/01 serie/01.mkv");
+  assert.equal(toFs("Show/01 serie/01.mkv"), path.join("Show", "01 serie", "01.mkv"));
+  assert.equal(toPosix(toFs("Show/01 serie/01.mkv")), "Show/01 serie/01.mkv");
+  // A qualified key parses on the wire, and a Windows-shaped one is not a key: the client never
+  // sends that, and reading it as one would name a library that does not exist.
+  assert.deepEqual(parseLibraryPath("lib_ab12cd34/Show/01.mkv"), { libraryId: "lib_ab12cd34", relative: "Show/01.mkv" });
+  assert.equal(parseLibraryPath("lib_ab12cd34\\Show\\01.mkv"), undefined);
 });

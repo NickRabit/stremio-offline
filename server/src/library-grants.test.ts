@@ -17,6 +17,10 @@ test("the root list is comma separated, deduplicated and keeps only absolute pat
   assert.deepEqual(parseRootList("/media, /archive/", "/downloads"), ["/media", "/archive"]);
   assert.deepEqual(parseRootList("/media,/media", "/downloads"), ["/media"]);
   assert.deepEqual(parseRootList("media,/archive", "/downloads"), ["/archive"], "a relative entry would depend on the working directory");
+  // Windows shapes arrive whole: the list is split on the comma only, never on a colon.
+  assert.deepEqual(parseRootList("C:\\Media,/archive", "/downloads"), ["/archive"], "a drive letter is not a POSIX root");
+  assert.deepEqual(parseRootList("/archive,D:\\Films", "/downloads"), ["/archive"]);
+  assert.deepEqual(parseRootList("C:\\Media", "/downloads"), [], "a Windows-only list has nothing this build can use");
 });
 
 test("env grants carry their source and the boot time", () => {

@@ -20,6 +20,9 @@ export interface MediaInfo {
 // The backslash is here for Windows shares, and also so a name cannot be used to
 // escape the target directory.
 const FORBIDDEN = /[\u0000-\u001f/:*?"<>|\\]/g;
+/** Windows refuses these stems whatever follows them, so `CON.mkv` is a file nobody there can
+ *  create. An underscore in front keeps the name recognisable and makes it legal again. */
+const RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
 
 export function safeName(value: string): string {
   const cleaned = value.normalize("NFC")
@@ -27,7 +30,9 @@ export function safeName(value: string): string {
     // Stripping the slashes from "../.." leaves lone dots, which make no sense as part of a name.
     .split(/\s+/).filter((part) => part && !/^\.+$/.test(part)).join(" ")
     .replace(/^\.+/, "").replace(/\.+$/, "").trim();
-  return cleaned.slice(0, 150).trim() || "video";
+  const stem = cleaned.split(".")[0] ?? "";
+  const named = RESERVED.test(stem) ? `_${cleaned}` : cleaned;
+  return named.slice(0, 150).trim() || "video";
 }
 
 const pad = (value: number) => String(Math.max(0, Math.trunc(value))).padStart(2, "0");
