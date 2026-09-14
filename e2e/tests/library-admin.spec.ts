@@ -90,7 +90,9 @@ test("a granted root is added, previewed and revoked without losing what it reme
   await tools.getByRole("button", { name: "Přidat knihovnu" }).click();
   const creator = page.getByRole("dialog", { name: "Vyberte složku" });
   await creator.locator(".move-list button", { hasText: "granted-root" }).click();
-  await creator.locator('input[aria-label="Nová složka"]').fill("Nové filmy");
+  const newFolder = creator.locator('input[aria-label="Nová složka"]');
+  await newFolder.click();
+  await newFolder.fill("Nové filmy");
   await creator.getByRole("button", { name: "Nová složka" }).click();
   await expect(creator).toContainText("Složka ještě neexistuje.");
   await expect(creator.locator('input[aria-label="Název"]')).toHaveValue("Nové filmy");

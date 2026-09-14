@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ChevronRight, CornerLeftUp, FolderOpen, FolderPlus, HardDrive, Pencil, Plus, RefreshCw, Sparkles, Trash2, X } from "lucide-react";
+import { ChevronRight, CornerLeftUp, FolderOpen, FolderPlus, HardDrive, Pencil, Plus, RefreshCw, Search, Sparkles, Trash2, X } from "lucide-react";
 import { api, describeError } from "./api";
 import { t, useI18n } from "./i18n";
 import { bytes, SettingControl, SettingsSectionHead } from "./settings-ui";
@@ -123,7 +123,11 @@ function RootPicker({ reroot, onClose, onDone, onError, onLibrariesChanged }:
   const [name, setName] = useState(reroot?.name ?? "");
   const [type, setType] = useState<LibraryType>(reroot?.type ?? "mixed");
   const [manual, setManual] = useState("");
+  const [manualActive, setManualActive] = useState(false);
   const [newFolder, setNewFolder] = useState("");
+  const [newFolderActive, setNewFolderActive] = useState(false);
+  const [folderFilter, setFolderFilter] = useState("");
+  const [folderFilterActive, setFolderFilterActive] = useState(false);
   // The selection can name a folder that is not on disk yet: the create request makes it,
   // inside the grant the browsed folder sits in. Re-rooting never creates anything.
   const [pendingCreate, setPendingCreate] = useState(false);
@@ -134,7 +138,7 @@ function RootPicker({ reroot, onClose, onDone, onError, onLibrariesChanged }:
 
   const load = async (target = "") => {
     setBusy(true);
-    try { setBrowse(await api.browseGrants(target)); setGrants(await api.libraryGrants()); setError(""); }
+    try { setBrowse(await api.browseGrants(target)); setGrants(await api.libraryGrants()); setFolderFilter(""); setError(""); }
     catch (value) { setError(describeError(value)); }
     finally { setBusy(false); }
   };
@@ -205,6 +209,7 @@ function RootPicker({ reroot, onClose, onDone, onError, onLibrariesChanged }:
     finally { setBusy(false); }
   };
   const crumbs = browse && browse.path ? browse.path.split("/") : [];
+  const visibleEntries = browse?.entries.filter((entry) => entry.name.toLocaleLowerCase().includes(folderFilter.trim().toLocaleLowerCase())) ?? [];
   return <div className="identify-overlay" role="dialog" aria-modal="true" aria-label={t("library.chooseFolder")}
     onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <div className="panel identify-card library-picker-card">
@@ -212,57 +217,88 @@ function RootPicker({ reroot, onClose, onDone, onError, onLibrariesChanged }:
         <h2>{reroot ? t("library.reroot") : t("library.addLibrary")}</h2>
         <button type="button" className="icon-button" aria-label={t("common.cancel")} onClick={onClose}><X/></button>
       </div>
-      <nav className="move-crumbs" aria-label={t("library.chooseFolder")}>
-        <button type="button" onClick={() => void load("")}><HardDrive/> {t("library.rootFolder")}</button>
-        {crumbs.map((part, index) => <span key={part + index}>
-          <ChevronRight aria-hidden="true"/>
-          <button type="button" onClick={() => void load(crumbs.slice(0, index + 1).join("/"))}>{part}</button>
-        </span>)}
-      </nav>
-      <div className="move-list">
-        {browse?.path && <button type="button" className="move-up" onClick={() => void load(browse.parent ?? "")}><CornerLeftUp/> {t("library.moveUp")}</button>}
-        {browse?.entries.map((entry) => <button type="button" key={entry.path} onClick={() => void load(entry.path)}>
-          <FolderOpen/> <span>{entry.name}{entry.libraryRoot && <i className="library-badge">{t("library.rootFolder")}</i>}</span>
-          <ChevronRight/>
-        </button>)}
-        {!busy && browse && !browse.entries.length && <p className="identify-hint">{t("library.pickerEmpty")}</p>}
-      </div>
-      {!reroot && browse?.path && <div className="library-picker-manual">
-        <input value={newFolder} aria-label={t("library.newFolder")} placeholder={t("library.newFolderHint")}
-          onChange={(event) => setNewFolder(event.target.value)}/>
-        <button type="button" onClick={createFolder} disabled={busy || !newFolder.trim()}><FolderPlus/> {t("library.newFolder")}</button>
-      </div>}
-      <div className="library-picker-manual">
-        <input value={manual} aria-label={t("library.grantFolder")} placeholder={t("library.grantHint")}
-          onChange={(event) => setManual(event.target.value)}/>
-        <button type="button" onClick={() => void grant()} disabled={busy || !manual.trim()}>{t("library.grantFolder")}</button>
-      </div>
-      {currentGrant?.source === "user" && <button type="button" className="danger" onClick={() => void revoke(currentGrant)} disabled={busy}>
-        <Trash2/> {t("library.revokeGrant")}
-      </button>}
-      <button type="button" className="library-picker-use" disabled={!browse?.path} onClick={() => select(browse!.path)}>
-        <FolderOpen/> {t("library.useThisFolder")}
-      </button>
-      <p className="identify-hint">{selected || t("library.pickerNothingSelected")}</p>
-      {pendingCreate && <p className="identify-hint">{t("library.newFolderPending")}</p>}
-      {estimate && <p className="identify-hint">
-        {t("library.estimate", { titles: estimate.titles, files: estimate.files })}
-        {estimate.identified ? ` · ${t("library.estimateIdentified", { count: estimate.identified })}` : ""}
-        {estimate.truncated ? ` · ${t("library.estimateTruncated")}` : ""}
-      </p>}
-      {selected && <label className="library-scan-now"><input type="checkbox" checked={scanNow} onChange={(event) => setScanNow(event.target.checked)}/> <span>{t("library.scanNow")}</span></label>}
-      {!reroot && selected && <div className="library-picker-fields">
+      {!reroot && <section className="library-picker-section library-picker-details">
+        <div className="library-picker-section-head">
+          <h3>{t("library.detailsHeading")}</h3>
+          <p>{t("library.detailsHint")}</p>
+        </div>
+        <div className="library-picker-fields">
         <label><span>{t("library.libraryName")}</span>
-          <input value={name} aria-label={t("library.libraryName")} placeholder={t("library.libraryNameHint")} onChange={(event) => setName(event.target.value)}/></label>
+          <input value={name} autoComplete="off" aria-label={t("library.libraryName")} placeholder={t("library.libraryNameHint")} onChange={(event) => setName(event.target.value)}/></label>
         <label><span>{t("library.libraryType")}</span>
           <select aria-label={t("library.libraryType")} value={type} onChange={(event) => setType(event.target.value as LibraryType)}>
             {TYPES.map((value) => <option key={value} value={value}>{libraryTypeLabel(value)}</option>)}
           </select></label>
-      </div>}
-      {error && <p className="login-error">{error}</p>}
-      <button type="button" className="primary" disabled={busy || !selected} onClick={() => void apply()}>
-        {reroot ? t("library.rerootConfirm") : t("library.addConfirm")}
-      </button>
+        </div>
+      </section>}
+      <section className="library-picker-section">
+        <div className="library-picker-section-head">
+          <h3>{t("library.folderHeading")}</h3>
+          <p>{t("library.folderHint")}</p>
+        </div>
+        <nav className="move-crumbs" aria-label={t("library.chooseFolder")}>
+          <button type="button" onClick={() => void load("")}><HardDrive/> {t("library.rootFolder")}</button>
+          {crumbs.map((part, index) => <span key={part + index}>
+            <ChevronRight aria-hidden="true"/>
+            <button type="button" onClick={() => void load(crumbs.slice(0, index + 1).join("/"))}>{part}</button>
+          </span>)}
+        </nav>
+        <label className="library-folder-filter">
+          <Search aria-hidden="true"/>
+          <input type="search" name="library-folder-filter" value={folderFilter} readOnly={!folderFilterActive} autoComplete="off"
+            data-1p-ignore="true" data-lpignore="true" spellCheck={false} onFocus={() => { setFolderFilterActive(true); setFolderFilter(""); }}
+            aria-label={t("library.filterFolders")} placeholder={t("library.filterFoldersHint")}
+            onChange={(event) => setFolderFilter(event.target.value)}/>
+        </label>
+        <div className="move-list">
+          {browse?.path && <button type="button" className="move-up" onClick={() => void load(browse.parent ?? "")}><CornerLeftUp/> {t("library.moveUp")}</button>}
+          {visibleEntries.map((entry) => <button type="button" key={entry.path} onClick={() => void load(entry.path)}>
+            <FolderOpen/> <span>{entry.name}{entry.libraryRoot && <i className="library-badge">{t("library.rootFolder")}</i>}</span>
+            <ChevronRight/>
+          </button>)}
+          {!busy && browse && !browse.entries.length && <p className="identify-hint">{t("library.pickerEmpty")}</p>}
+          {!busy && browse && !!browse.entries.length && !visibleEntries.length && <p className="identify-hint">{t("library.noFilteredFolders")}</p>}
+        </div>
+        <button type="button" className="library-picker-use" disabled={!browse?.path} onClick={() => select(browse!.path)}>
+          <FolderOpen/> {t("library.useThisFolder")}
+        </button>
+        <div className={`library-picker-selection${selected ? " selected" : ""}`} aria-live="polite">
+          <span>{t("library.selectedFolder")}</span>
+          <strong title={selected}>{selected || t("library.pickerNothingSelected")}</strong>
+          {pendingCreate && <p>{t("library.newFolderPending")}</p>}
+          {estimate && <p className="library-picker-estimate">
+            {t("library.estimate", { titles: estimate.titles, files: estimate.files })}
+            {estimate.identified ? ` · ${t("library.estimateIdentified", { count: estimate.identified })}` : ""}
+            {estimate.truncated ? ` · ${t("library.estimateTruncated")}` : ""}
+          </p>}
+          {selected && <label className="library-scan-now"><input type="checkbox" checked={scanNow} onChange={(event) => setScanNow(event.target.checked)}/> <span>{t("library.scanNow")}</span></label>}
+        </div>
+        {!reroot && browse?.path && <div className="library-picker-manual library-picker-create">
+          <input value={newFolder} readOnly={!newFolderActive} autoComplete="off" data-1p-ignore="true" data-lpignore="true"
+            onFocus={() => { setNewFolderActive(true); setNewFolder(""); }} aria-label={t("library.newFolder")} placeholder={t("library.newFolderHint")}
+            onChange={(event) => setNewFolder(event.target.value)}/>
+          <button type="button" onClick={createFolder} disabled={busy || !newFolder.trim()}><FolderPlus/> {t("library.newFolder")}</button>
+        </div>}
+        <details className="library-picker-advanced">
+          <summary>{t("library.folderNotListed")}</summary>
+          <p>{t("library.grantExplanation")}</p>
+          <div className="library-picker-manual">
+            <input value={manual} readOnly={!manualActive} autoComplete="off" data-1p-ignore="true" data-lpignore="true"
+              onFocus={() => { setManualActive(true); setManual(""); }} aria-label={t("library.grantFolder")} placeholder={t("library.grantHint")}
+              onChange={(event) => setManual(event.target.value)}/>
+            <button type="button" onClick={() => void grant()} disabled={busy || !manual.trim()}>{t("library.grantFolder")}</button>
+          </div>
+          {currentGrant?.source === "user" && <button type="button" className="danger" onClick={() => void revoke(currentGrant)} disabled={busy}>
+            <Trash2/> {t("library.revokeGrant")}
+          </button>}
+        </details>
+      </section>
+      <footer className="library-picker-footer">
+        {error && <p className="login-error">{error}</p>}
+        <button type="button" className="primary" disabled={busy || !selected || (!reroot && !name.trim())} onClick={() => void apply()}>
+          {reroot ? t("library.rerootConfirm") : t("library.addConfirm")}
+        </button>
+      </footer>
     </div>
   </div>;
 }
