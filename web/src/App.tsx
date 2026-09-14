@@ -1367,7 +1367,7 @@ export function App() {
       {view === "addons" && <Addons addons={addons} libraries={libraries} restricted={restricted} onChanged={refresh} onNotify={notify} onError={fail}/>} 
       {view === "downloads" && <Downloads jobs={downloads} halt={queueHalt} refresh={loadDownloads} onError={fail} onReveal={revealInLibrary}/>}
       {view === "stats" && <StatsPanel key={statsReset} onError={fail}/>}
-      {view === "settings" && <SettingsPage build={buildInfo} restricted={restricted} settings={settings} languages={languages} session={session!} onSession={setSession} onSave={saveSettings} onLibrariesChanged={refreshLibraries} onImported={async (backup) => {
+      {view === "settings" && <SettingsPage build={buildInfo} restricted={restricted} settings={settings} languages={languages} libraries={libraries} session={session!} onSession={setSession} onSave={saveSettings} onLibrariesChanged={refreshLibraries} onImported={async (backup) => {
         const restored = await api.importSettings(backup);
         setSettings(restored.settings);
         setSelectedCatalog("");
@@ -1469,7 +1469,7 @@ const refreshIntervalLabel = (hours: number) =>
   : hours === 168 ? t("settings.addonRefreshWeekly")
   : t("settings.addonRefreshHoursOption", { count: hours });
 
-function SettingsPage({ build, restricted = false, settings, languages, session, onSession, onSave, onImported, onLibrariesChanged, onNotify, onError }: { build: BuildInfo | null; restricted?: boolean; settings: AppSettings; languages: Array<{ code: string; name: string }>; session: Session; onSession: (session: Session) => void; onSave: (patch: SettingsPatch) => Promise<void>; onImported: (backup: unknown) => Promise<void>; onLibrariesChanged: () => void; onNotify: (message: string) => void; onError: (error: unknown) => void }) {
+function SettingsPage({ build, restricted = false, settings, languages, libraries = [], session, onSession, onSave, onImported, onLibrariesChanged, onNotify, onError }: { build: BuildInfo | null; restricted?: boolean; settings: AppSettings; languages: Array<{ code: string; name: string }>; libraries?: LibraryView[]; session: Session; onSession: (session: Session) => void; onSave: (patch: SettingsPatch) => Promise<void>; onImported: (backup: unknown) => Promise<void>; onLibrariesChanged: () => void; onNotify: (message: string) => void; onError: (error: unknown) => void }) {
   const { t, locale, setLocale } = useI18n();
   // The names come from the browser in the active language, so they need sorting there too.
   const languageOptions = languages
@@ -1479,6 +1479,9 @@ function SettingsPage({ build, restricted = false, settings, languages, session,
   const tileSizes = [{ value: "compact", key: "settings.tile.compact" }, { value: "small", key: "settings.tile.small" }, { value: "medium", key: "settings.tile.medium" }, { value: "large", key: "settings.tile.large" }] as const;
   const importInput = useRef<HTMLInputElement>(null);
   const [backupBusy, setBackupBusy] = useState(false);
+  // Which root a download lands under is a property of the library, and a mount differs per
+  // install; showing a fixed path was the last thing here that assumed one.
+  const libraryRoot = (libraries.find((library) => library.defaultMovie) ?? libraries[0])?.root ?? t("settings.noLibraryRoot");
   const exportSettings = async () => {
     setBackupBusy(true);
     try {
@@ -1553,7 +1556,7 @@ function SettingsPage({ build, restricted = false, settings, languages, session,
           }}><Trash2/> {t("settings.clearHistory")}</button></SettingControl>}</section>
       <section className="panel settings-section"><SettingsSectionHead icon={<Download/>} title={t("nav.downloads")} text={t("settings.downloadsText")}/><SettingControl title={t("settings.downloadTitleLanguage")} text={t("settings.downloadTitleLanguageHint")}><select aria-label={t("settings.downloadTitleLanguage")} disabled={restricted} value={settings.downloadTitleLanguage} onChange={(event) => void onSave({ downloadTitleLanguage: event.target.value })}><option value="ui">{t("settings.downloadTitleLanguageUi", { language: LOCALE_NAMES[locale] })}</option>{languageOptions}</select></SettingControl><SettingControl title={t("settings.concurrent")} text={t("settings.concurrentHint")}><select aria-label={t("settings.concurrent")} disabled={restricted} value={settings.concurrentDownloads} onChange={(event) => void onSave({ concurrentDownloads: Number(event.target.value) })}>{[1,2,3,4,5,6,7,8].map((value) => <option key={value} value={value}>{value}</option>)}</select></SettingControl><SettingControl title={t("settings.perProvider")} text={t("settings.perProviderHint")}><select aria-label={t("settings.perProvider")} disabled={restricted} value={settings.parallelPerProvider ?? 1} onChange={(event) => void onSave({ parallelPerProvider: Number(event.target.value) })}>{[1,2,3,4].map((value) => <option key={value} value={value}>{value}</option>)}</select></SettingControl><SettingControl title={t("settings.segments")} text={t("settings.segmentsHint")}><select aria-label={t("settings.segments")} disabled={restricted} value={settings.downloadSegments ?? 1} onChange={(event) => void onSave({ downloadSegments: Number(event.target.value) })}>{[1,2,3,4,6,8].map((value) => <option key={value} value={value}>{value}</option>)}</select></SettingControl></section>
       <RealDebridSettings configured={settings.realDebridConfigured} onSave={onSave} onError={onError} restricted={restricted}/>
-      <section className="panel settings-section storage-section"><SettingsSectionHead icon={<HardDrive/>} title={t("settings.storageTitle")} text={t("settings.storageText")}/><p>{t("settings.artworkMoved")}</p><div className="storage-path"><span>{t("settings.dockerPath")}</span><code>/downloads</code></div><p>{t("settings.storageNoteBefore")} <code>DOWNLOAD_PATH</code> {t("settings.storageNoteAfter")}</p></section>
+      <section className="panel settings-section storage-section"><SettingsSectionHead icon={<HardDrive/>} title={t("settings.storageTitle")} text={t("settings.storageText")}/><p>{t("settings.artworkMoved")}</p><div className="storage-path"><span>{t("settings.dockerPath")}</span><code>{libraryRoot}</code></div><p>{t("settings.storageNoteBefore")} <code>DOWNLOAD_PATH</code> {t("settings.storageNoteAfter")}</p></section>
       <AccountSettings session={session} onSession={onSession} onNotify={onNotify} onError={onError} restricted={restricted}/>
       {!restricted && <section className="panel settings-section backup-section"><SettingsSectionHead icon={<FileJson/>} title={t("settings.backupTitle")} text={t("settings.backupText")}/><p>{t("settings.backupBody")}</p><p className="notice">{t("settings.backupWarning")}</p><div className="setting-actions"><button disabled={backupBusy} onClick={() => void exportSettings()}><Download/> {t("settings.export")}</button><button disabled={backupBusy} onClick={() => importInput.current?.click()}><Upload/> {t("settings.import")}</button><input ref={importInput} className="file-input" type="file" accept="application/json,.json" aria-label={t("settings.pickBackup")} onChange={(event) => void importSettings(event.target.files?.[0])}/></div></section>}
       {!restricted && <DiagnosticsSection build={build} onNotify={onNotify} onError={onError}/>}
@@ -1854,7 +1857,7 @@ function AddonCard({ addon, libraries, index, total, onChanged, onNotify, onErro
   const preview = (kind: "movie" | "series") => {
     const rule = draft[kind];
     const folder = rule.subfolder.trim().replaceAll("\\", "/").replace(/^\/+|\/+$/g, "");
-    const root = `${(libraries.find((library) => library.id === rule.libraryId) ?? defaultLibrary(kind))?.root ?? "/downloads"}${folder ? `/${folder}` : ""}`;
+    const root = `${(libraries.find((library) => library.id === rule.libraryId) ?? defaultLibrary(kind))?.root ?? t("addons.noLibraryRoot")}${folder ? `/${folder}` : ""}`;
     if (kind === "movie") return rule.layout === "flat" ? `${root}/${t("addons.sampleMovie")}.mkv` : `${root}/${t("addons.sampleMovie")}/${t("addons.sampleMovie")}.mkv`;
     return rule.layout === "flat" ? `${root}/${t("addons.sampleShow")} - S01E01 - ${t("addons.sampleEpisode")}.mkv` : `${root}/${t("addons.sampleShow")}/01 ${t("addons.sampleSeasonFolder")}/01 - ${t("addons.sampleEpisode")}.mkv`;
   };

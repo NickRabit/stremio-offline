@@ -42,12 +42,12 @@ export const defaultDownloadSettings = (): AddonDownloadSettings => ({
   series: { subfolder: "", layout: "structured" },
 });
 
-/** The subfolder is relative to /downloads. Several levels are allowed, but never an
- * absolute path, a drive letter, or . and .. segments. */
+/** The subfolder is relative to the root of the library the rule names. Several levels are
+ *  allowed, but never an absolute path, a drive letter, or . and .. segments. */
 export function safeSubfolder(value: unknown): string {
   const raw = String(value ?? "").trim();
   if (!raw) return "";
-  if (/^[\\/]/.test(raw) || /^[a-z]:/i.test(raw)) throw new AppError("The subfolder has to be relative to /downloads.", "err.subfolderRelative");
+  if (/^[\\/]/.test(raw) || /^[a-z]:/i.test(raw)) throw new AppError("The subfolder has to be relative to the library's root.", "err.subfolderRelative");
   const segments = raw.split(/[\\/]+/).filter(Boolean);
   if (segments.length > 8) throw new AppError("The subfolder can be at most 8 levels deep.", "err.subfolderDepth");
   if (segments.some((segment) => segment === "." || segment === "..")) throw new AppError("The subfolder cannot contain . or .. segments.", "err.subfolderDots");
