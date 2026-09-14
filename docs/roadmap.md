@@ -73,6 +73,96 @@ Do not keep a single number that pretends to be watch time.
 Shipped. Remaining: follow-show can later enqueue torrent sources the same way;
 push / ntfy out of the browser.
 
+## Engineering health (before the next feature)
+
+Feature work is cheap now; long-lived complexity is not. These items are about
+keeping the code changeable and the data safe, and they are worth taking in this
+order. Each one is independently mergeable — do not fold two of them into one
+refactor, and do not carry a feature along with one.
+
+### Split the HTTP layer out of `index.ts`
+
+`server/src/index.ts` is 3085 lines and registers 97 routes. The domain modules
+next to it are fine; `index.ts` is the problem, because it is bootstrap, wiring,
+router, auth boundary and orchestration for libraries, playback, downloads,
+settings and diagnostics all at once. Every change reads it, so every change is
+expensive, and two agents working in parallel collide in it.
+
+Move the handlers into `server/src/routes/` by area (auth, addons, playback,
+downloads, libraries, settings, diagnostics) and leave composition behind. This
+is a move, not a rewrite: no behaviour change, no API change, no state format
+change, no DI framework and no new dependency. Done when changing one endpoint
+means opening one small file and the existing suites stay green.
+
+### Version the persisted state and test the migrations
+
+Only libraries have an explicit migration today (`library-migrate.ts`). The main
+state, settings, addons, the download queue, the artwork index, history, favourites
+and resume positions have no version and no test that an old file still loads.
+
+Give a version to the structures that actually change shape — not to everything —
+and keep real state directories from released versions as fixtures
+(`server/test-fixtures/state/<version>/`), with a test that loading one produces
+the expected current state. Migration must be deterministic, idempotent where it
+can be, and safe when the process dies halfway. An upgrade must never require
+hand-editing a JSON file, no valid user data may be dropped in silence, and a
+failed migration must name the file and the reason.
+
+### Make destructive filesystem paths fail safe
+
+The rule: when the app cannot tell **"the library is empty"** from **"the library
+could not be read"**, it must not clean anything up. Uncertainty stops.
+
+The cross-library artwork loss in `LIBRARY_BUGS.md` is exactly this shape — a
+swallowed `ENOENT`, a file orphaned under the old key, and an hour later the sweep
+took it for good. Walk the rest of the same surface: library add / remove / forget /
+disable / re-enable / re-root / reconnect / type change; file rename, move, copy,
+delete, bulk and cross-library operations, including across filesystems; artwork
+generation, replacement, cleanup and orphan detection; metadata binding after an
+external rename or a vanished file. A destructive path gets explicit preconditions
+and never swallows an error, a failure never leaves a success showing in the
+interface, and each case found gets a regression test at the domain layer.
+
+### Give interrupted operations a defined restart
+
+Downloads have `.part` files and a resume. Nothing else does: a library move or
+copy, a bulk operation, artwork generation, a scan, a metadata update or a
+transcode killed mid-flight has no stated behaviour on the next start.
+
+After a restart every interrupted operation should end up resumed, retried, marked
+failed, cleaned up, or shown to the user — never displayed as finished while the
+disk holds half a file. Temporary and staging files need deterministic names,
+a rule for collisions and an owner that clears them, and a partial destination must
+never be scannable as complete media.
+
+### Playback hardening
+
+Direct play → remux → transcode stays the order, and it should be deterministic
+and testable rather than discovered per stream. What needs checking: byte ranges
+and seeking on direct play; the fragmented MP4 lifecycle and audio-only conversion
+on remux; cancellation, client disconnect and concurrent sessions on transcode —
+no FFmpeg process may outlive its request; and VAAPI/QuickSync falling back to
+software instead of failing. A failed playback should tell us the source, the mode
+chosen, hardware or software, and the stage that failed, without a token or a full
+private stream URL reaching the log.
+
+### Backup scope, written down
+
+`backup.ts` exports and imports settings. What a backup means is not written down:
+which data must be preserved (addons, preferences, library definitions, favourites,
+resume state, metadata bindings, download settings), which is genuinely rebuildable
+cache — verified, not assumed — and how secrets in addon URLs are handled. Restore
+validates the file before applying any of it, fails loudly on an incompatible or
+partial backup, and stays explicit about remapping when the filesystem roots moved.
+
+### A classification behind the errors
+
+`AppError` already carries English text plus a catalogue key. What is missing is a
+stable code and a class — source, network, storage, library, playback, transcode,
+addon, authentication, configuration, internal — so the diagnostics panel can group
+failures, say whether the thing is still going, and say whether a retry helps,
+instead of showing a raw exception string. Redaction stays covered by tests.
+
 ## Later
 
 ### Library and discovery
@@ -103,6 +193,12 @@ Do not expose the app directly to the internet. HTTPS reverse proxy or a VPN rem
 
 Stream sorting and filtering is still checked by hand against real addon
 payloads. See [testing.md](testing.md) for the layers that do exist.
+
+The suite is strong and should stay cheap to keep. When it starts costing more
+than it catches, the things to look for are an end-to-end test proving something
+a domain test already proves, a screenshot baseline that breaks on unrelated
+changes, and a wait on a sleep where an observable condition exists. A flaky test
+is a defect, not weather.
 
 ## Out of scope unless revisited
 
