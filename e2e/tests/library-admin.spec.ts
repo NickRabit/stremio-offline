@@ -146,3 +146,36 @@ test("a granted root is added, previewed and revoked without losing what it reme
   const passedThrough = await (await request.get("/api/library/browse")).json();
   expect(passedThrough.items.some((item: { kind: string }) => item.kind === "library")).toBe(false);
 });
+
+// The dialog says a plain Remove keeps the metadata "for a later re-add". This is what makes
+// that true: the folder takes its identity back, so everything keyed to it is live again.
+test("a folder added again is the same library, not a new one", async ({ request }) => {
+  const root = path.join(grantedRoot, "Remembered");
+  const remembered = "Zapamatovaný film";
+  await mkdir(path.join(root, remembered), { recursive: true });
+  await writeFile(path.join(root, remembered, `${remembered}.mkv`), "not a real video");
+  // Its own grant: the first journey revokes the one it made, and a library may only be
+  // added inside a granted root.
+  expect((await request.post("/api/libraries/grants", { data: { path: grantedRoot } })).status()).toBe(201);
+
+  const first = await (await request.post("/api/libraries", { data: { name: "Remembers", type: "mixed", root } })).json();
+  const favorite = await request.post("/api/library/favorite", { data: { path: `${first.id}/${remembered}`, favorite: true } });
+  expect(favorite.status()).toBe(200);
+
+  const removed = await request.delete(`/api/libraries/${first.id}`);
+  expect(removed.status()).toBe(204);
+  expect((await request.delete(`/api/libraries/${first.id}?forget=1`)).status(), "removing it again changes nothing").toBe(404);
+
+  const again = await (await request.post("/api/libraries", { data: { name: "Remembers again", type: "mixed", root } })).json();
+  expect(again.id, "the folder keeps the identity it had").toBe(first.id);
+  const favorites = await (await request.get("/api/library/favorites")).json();
+  expect(favorites.items.map((item: { path: string }) => item.path), "so what was starred is still starred").toContain(`${first.id}/${remembered}`);
+
+  // Forget drops the note as well: a third add is a new library with a new id.
+  await request.delete(`/api/libraries/${first.id}?forget=1`);
+  const third = await (await request.post("/api/libraries", { data: { name: "Remembers once more", type: "mixed", root } })).json();
+  expect(third.id).not.toBe(first.id);
+  await request.delete(`/api/libraries/${third.id}?forget=1`);
+  await request.delete(`/api/libraries/grants?path=${encodeURIComponent(grantedRoot)}`);
+  await rm(root, { recursive: true, force: true });
+});

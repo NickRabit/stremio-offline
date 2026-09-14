@@ -25,6 +25,31 @@ export interface LibraryRecord {
   unreachable?: boolean;
 }
 
+/** A library that was removed without forgetting. Its id is kept so that adding the same
+ *  folder again picks up its match history, its artwork and its favourite and resume rows
+ *  instead of starting from nothing. */
+export interface DepartedLibrary { id: string; root: string; removedAt: string }
+
+export const DEPARTED_MAX = 20;
+export const DEPARTED_DAYS = 30;
+
+/** What is still worth keeping: expired entries and everything past the cap are dropped, the
+ *  oldest first, so the list cannot grow with every add-and-remove. */
+export function activeDeparted(departed: DepartedLibrary[], now = Date.now()): DepartedLibrary[] {
+  const cutoff = now - DEPARTED_DAYS * 24 * 60 * 60_000;
+  return departed.filter((entry) => Date.parse(entry.removedAt) >= cutoff).slice(-DEPARTED_MAX);
+}
+
+/** The id a re-added folder takes back: the newest departed entry for the same folder, both
+ *  sides through `realpath`, so two mounts of one disk are the same library. */
+export async function departedIdFor(departed: DepartedLibrary[], root: string, now = Date.now()): Promise<string | undefined> {
+  const absolute = path.resolve(root);
+  const real = await realpath(absolute).catch(() => absolute);
+  // A root that is away when it is removed can only be recorded as it was spelled, so both
+  // forms count: the resolved one and the lexical one.
+  return [...activeDeparted(departed, now)].reverse().find((entry) => entry.root === real || entry.root === absolute)?.id;
+}
+
 /** The part of `Settings` a default lookup needs. Kept structural so this module
  *  stays free of a store import. */
 export interface DefaultLibrarySettings { defaultMovieLibrary?: string; defaultSeriesLibrary?: string }

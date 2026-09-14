@@ -418,7 +418,7 @@ export const en = {
   "library.addConfirm": "Add library",
   "library.removeLibrary": "Remove",
   "library.removeForget": "Remove and forget",
-  "library.removeConfirm": "Remove “{name}”? Nothing on disk is deleted.",
+  "library.removeConfirm": "Remove “{name}”? Nothing on disk is deleted, and adding the same folder again keeps what it remembers.",
   "library.removeForgetConfirm": "Remove “{name}” and forget its metadata? Nothing on disk is deleted, but the match history and the thumbnails will not come back.",
   "library.removed": "Library removed.",
   "library.created": "Library added.",
