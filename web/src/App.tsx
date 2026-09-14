@@ -1364,13 +1364,16 @@ export function App() {
           </>}
         </div>
       </section>}
-      {view === "addons" && <Addons addons={addons} restricted={restricted} onChanged={refresh} onNotify={notify} onError={fail}/>} 
+      {view === "addons" && <Addons addons={addons} libraries={libraries} restricted={restricted} onChanged={refresh} onNotify={notify} onError={fail}/>} 
       {view === "downloads" && <Downloads jobs={downloads} halt={queueHalt} refresh={loadDownloads} onError={fail} onReveal={revealInLibrary}/>}
       {view === "stats" && <StatsPanel key={statsReset} onError={fail}/>}
       {view === "settings" && <SettingsPage build={buildInfo} restricted={restricted} settings={settings} languages={languages} session={session!} onSession={setSession} onSave={saveSettings} onLibrariesChanged={refreshLibraries} onImported={async (backup) => {
         const restored = await api.importSettings(backup);
         setSettings(restored.settings);
         setSelectedCatalog("");
+        // Rules that named a library of the machine the backup came from are pointed at this
+        // instance's own, or at the default; say how many had to move.
+        if (restored.remapped) notify(t("settings.importRemapped", { count: restored.remapped }));
         await refresh(true);
       }} onNotify={notify} onError={fail}/>}
     </main>
@@ -1740,7 +1743,7 @@ function DiagnosticsSection({ build, onNotify, onError }: { build: BuildInfo | n
   </section>;
 }
 
-function Addons({ addons, restricted = false, onChanged, onNotify, onError }: { addons: Addon[]; restricted?: boolean; onChanged: () => Promise<void>; onNotify: (s:string)=>void; onError:(e:unknown)=>void }) {
+function Addons({ addons, libraries = [], restricted = false, onChanged, onNotify, onError }: { addons: Addon[]; libraries?: LibraryView[]; restricted?: boolean; onChanged: () => Promise<void>; onNotify: (s:string)=>void; onError:(e:unknown)=>void }) {
   const [url, setUrl] = useState(""); const [role, setRole] = useState("both"); const [busy, setBusy] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   // A manifest is only read when the addon is added, so nothing here notices when the
@@ -1767,7 +1770,7 @@ function Addons({ addons, restricted = false, onChanged, onNotify, onError }: { 
       <div className="subhead"><h3>{group.title}</h3><span>{group.text}</span></div>
       <div className="addon-grid">{group.list.map((addon, index) => restricted
         ? <AddonCardReadOnly key={addon.key} addon={addon}/>
-        : <AddonCard key={addon.key} addon={addon}
+        : <AddonCard key={addon.key} addon={addon} libraries={libraries}
             index={group.ordered ? index : -1} total={group.list.length}
             onChanged={onChanged} onNotify={onNotify} onError={onError}/>)}</div>
     </div>)}
@@ -1782,7 +1785,7 @@ function AddonCardReadOnly({ addon }: { addon: Addon }) {
   </article>;
 }
 
-function AddonCard({ addon, index, total, onChanged, onNotify, onError }: { addon: Addon; index: number; total: number; onChanged: () => Promise<void>; onNotify: (s:string)=>void; onError:(e:unknown)=>void }) {
+function AddonCard({ addon, libraries, index, total, onChanged, onNotify, onError }: { addon: Addon; libraries: LibraryView[]; index: number; total: number; onChanged: () => Promise<void>; onNotify: (s:string)=>void; onError:(e:unknown)=>void }) {
   const clone = (value: AddonDownloadSettings): AddonDownloadSettings => ({ movie: { ...value.movie }, series: { ...value.series } });
   const storedSettings = addon.downloadSettings ?? { movie: { subfolder: "", layout: "structured" }, series: { subfolder: "", layout: "structured" } };
   const [draft, setDraft] = useState<AddonDownloadSettings>(() => clone(storedSettings));
@@ -1833,7 +1836,28 @@ function AddonCard({ addon, index, total, onChanged, onNotify, onError }: { addo
   const providesStreams = (addon.manifest.resources ?? []).some((resource) => typeof resource === "string" ? resource === "stream" : resource.name === "stream");
   useEffect(() => { if (addon.downloadSettings) setDraft(clone(addon.downloadSettings)); }, [addon.downloadSettings]);
   const change = (kind: "movie" | "series", patch: Partial<AddonDownloadSettings["movie"]>) => setDraft((current) => ({ ...current, [kind]: { ...current[kind], ...patch } }));
-  const preview = (kind: "movie" | "series") => { const rule = draft[kind]; const folder = rule.subfolder.trim().replaceAll("\\", "/").replace(/^\/+|\/+$/g, ""); const root = `/downloads${folder ? `/${folder}` : ""}`; if (kind === "movie") return rule.layout === "flat" ? `${root}/${t("addons.sampleMovie")}.mkv` : `${root}/${t("addons.sampleMovie")}/${t("addons.sampleMovie")}.mkv`; return rule.layout === "flat" ? `${root}/${t("addons.sampleShow")} - S01E01 - ${t("addons.sampleEpisode")}.mkv` : `${root}/${t("addons.sampleShow")}/01 ${t("addons.sampleSeasonFolder")}/01 - ${t("addons.sampleEpisode")}.mkv`; };
+  /** Where a rule may point: the same set the server accepts, in the same order, so the
+   *  "Default" entry names the library the queue would fall back to. */
+  const offered = (kind: "movie" | "series") => libraries
+    .filter((library) => library.enabled && !library.unreachable && !library.readOnly && (library.type === kind || library.type === "mixed"))
+    .sort((a, b) => a.order - b.order);
+  const defaultLibrary = (kind: "movie" | "series") => {
+    const available = offered(kind);
+    return available.find((library) => (kind === "movie" ? library.defaultMovie : library.defaultSeries)) ?? available[0];
+  };
+  // A rule may name a library that is no longer offered (switched off, unplugged, removed).
+  // It stays visible and stays selected: silently rewriting somebody's rule would be worse.
+  const strayLibrary = (kind: "movie" | "series") => {
+    const wanted = draft[kind].libraryId;
+    return wanted && !offered(kind).some((library) => library.id === wanted) ? libraries.find((library) => library.id === wanted) : undefined;
+  };
+  const preview = (kind: "movie" | "series") => {
+    const rule = draft[kind];
+    const folder = rule.subfolder.trim().replaceAll("\\", "/").replace(/^\/+|\/+$/g, "");
+    const root = `${(libraries.find((library) => library.id === rule.libraryId) ?? defaultLibrary(kind))?.root ?? "/downloads"}${folder ? `/${folder}` : ""}`;
+    if (kind === "movie") return rule.layout === "flat" ? `${root}/${t("addons.sampleMovie")}.mkv` : `${root}/${t("addons.sampleMovie")}/${t("addons.sampleMovie")}.mkv`;
+    return rule.layout === "flat" ? `${root}/${t("addons.sampleShow")} - S01E01 - ${t("addons.sampleEpisode")}.mkv` : `${root}/${t("addons.sampleShow")}/01 ${t("addons.sampleSeasonFolder")}/01 - ${t("addons.sampleEpisode")}.mkv`;
+  };
   const save = async () => { setSaving(true); try { const saved = await api.updateAddon(addon.key, { downloadSettings: draft }); if (saved.downloadSettings) setDraft(clone(saved.downloadSettings)); await onChanged(); onNotify(t("addons.storageSaved", { addon: addon.manifest.name })); } catch (error) { onError(error); } finally { setSaving(false); } };
   return <article className={`panel addon-card ${storageOpen ? "storage-expanded" : ""}`}>
     {addon.manifest.logo ? <img src={addon.manifest.logo} alt="" onError={hideBroken}/> : <div className="addon-logo"><PackagePlus/></div>}
@@ -1861,8 +1885,24 @@ function AddonCard({ addon, index, total, onChanged, onNotify, onError }: { addo
       </div>
     </div>}
     {providesStreams && <button className={`storage-toggle ${storageOpen ? "open" : ""}`} onClick={() => setStorageOpen((value) => !value)} aria-expanded={storageOpen}><FolderCog/> <span>{t("addons.storageSettings")}</span><ChevronDown/></button>}
-    {providesStreams && storageOpen && <div className="addon-download-settings"><div className="addon-download-head"><strong>{t("addons.whereToStore")}</strong><small>{t("addons.whereToStoreBefore")} <code>DOWNLOAD_PATH</code>. {t("addons.whereToStoreAfter")} <code>/downloads</code>.</small></div>
-      <div className="download-rule-grid">{(["movie", "series"] as const).map((kind) => <div className="download-rule" key={kind}><b>{t(kind === "movie" ? "catalog.movies" : "catalog.series")}</b><label className="folder-label"><span>{t("addons.subfolder")}</span><div className="folder-field"><code>/downloads/</code><input aria-label={t("addons.subfolderLabel", { kind: t(kind === "movie" ? "catalog.movies" : "catalog.series") })} value={draft[kind].subfolder} onChange={(event) => change(kind, { subfolder: event.target.value })} placeholder={t("addons.subfolderPlaceholder")}/></div></label><label><span>{t("addons.layout")}</span><select aria-label={t("addons.layoutLabel", { kind: t(kind === "movie" ? "catalog.movies" : "catalog.series") })} value={draft[kind].layout} onChange={(event) => change(kind, { layout: event.target.value as "flat" | "structured" })}><option value="structured">{t("addons.layoutStructured")}</option><option value="flat">{t("addons.layoutFlat")}</option></select></label><small className="path-preview">{t("addons.example")} <code>{preview(kind)}</code></small></div>)}</div>
+    {providesStreams && storageOpen && <div className="addon-download-settings"><div className="addon-download-head"><strong>{t("addons.whereToStore")}</strong><small>{t("addons.whereToStoreHint")}</small></div>
+      <div className="download-rule-grid">{(["movie", "series"] as const).map((kind) => {
+        const kindLabel = t(kind === "movie" ? "catalog.movies" : "catalog.series");
+        const chosen = libraries.find((library) => library.id === draft[kind].libraryId);
+        const stray = strayLibrary(kind);
+        const fallback = defaultLibrary(kind);
+        return <div className="download-rule" key={kind}><b>{kindLabel}</b>
+          <label><span>{t("addons.saveTo")}</span>
+            <select aria-label={t("addons.saveToLabel", { kind: kindLabel })} value={draft[kind].libraryId ?? ""}
+              onChange={(event) => change(kind, { libraryId: event.target.value || undefined })}>
+              <option value="">{fallback ? t("addons.saveToDefaultNamed", { name: fallback.name }) : t("addons.saveToDefault")}</option>
+              {offered(kind).map((library) => <option key={library.id} value={library.id}>{library.name}</option>)}
+              {stray && <option value={stray.id}>{t("addons.saveToUnavailable", { name: stray.name })}</option>}
+            </select></label>
+          <label className="folder-label"><span>{t("addons.subfolder")}</span><div className="folder-field"><code>{chosen?.root ?? fallback?.root ?? ""}/</code><input aria-label={t("addons.subfolderLabel", { kind: kindLabel })} value={draft[kind].subfolder} onChange={(event) => change(kind, { subfolder: event.target.value })} placeholder={t("addons.subfolderPlaceholder")}/></div></label>
+          <label><span>{t("addons.layout")}</span><select aria-label={t("addons.layoutLabel", { kind: kindLabel })} value={draft[kind].layout} onChange={(event) => change(kind, { layout: event.target.value as "flat" | "structured" })}><option value="structured">{t("addons.layoutStructured")}</option><option value="flat">{t("addons.layoutFlat")}</option></select></label>
+          <small className="path-preview">{t("addons.example")} <code>{preview(kind)}</code></small></div>;
+      })}</div>
       <div className="download-settings-actions"><button onClick={() => { setDraft(clone(storedSettings)); setStorageOpen(false); }}>{t("common.cancel")}</button><button className="primary save-download-settings" disabled={saving} onClick={() => void save()}>{t(saving ? "common.saving" : "settings.saveSettings")}</button></div>
     </div>}
   </article>;
@@ -1907,7 +1947,7 @@ function Downloads({ jobs, halt, refresh, onError, onReveal }: { jobs: DownloadJ
   };
   useEffect(() => setPendingPage((page) => Math.min(page, Math.max(1, Math.ceil(groups.pending.length / pageSize)))), [groups.pending.length, pageSize]);
   useEffect(() => setCompletedPage((page) => Math.min(page, Math.max(1, Math.ceil(groups.completed.length / pageSize)))), [groups.completed.length, pageSize]);
-  const renderJob = (job: DownloadJob) => <div className={`download-row ${expandedJobs[job.id] ? "details-expanded" : ""}`} data-status={job.status} key={job.id}><div className="download-job">{job.status === "completed" && job.target ? <button className="link-button job-link" title={t("downloads.showInLibrary")} onClick={() => onReveal(job.target)}><span>{job.title}</span></button> : <strong>{job.title}</strong>}<div id={`queue-details-${job.id}`} className="queue-job-details"><small>{job.target || (job.pending ? t("downloads.sourcePickedLater") : "")}</small>{job.resolution?.audioLanguage && <small>{t(job.resolution.fallbackUsed ? "downloads.checkedFallbackSource" : "downloads.checkedSource", { audio: label(job.resolution.audioLanguage), count: job.resolution.checkedCandidates })}{job.resolution.subtitleLanguage ? ` · ${t("downloads.subtitleReady", { language: label(job.resolution.subtitleLanguage) })}` : job.resolution.subtitleStatus === "missing" ? ` · ${t("downloads.subtitleMissing")}` : ""}</small>}<dl className="queue-times">{(["createdAt", "startedAt", "completedAt"] as const).map((field) => <div key={field}><dt>{t(`downloads.${field}`)}</dt><dd>{formatDate(job[field])}</dd></div>)}<div><dt>{t("downloads.duration")}</dt><dd>{duration(job) == null ? "—" : t("downloads.durationValue", { hours: Math.floor(duration(job)! / 3600000), minutes: Math.floor(duration(job)! / 60000) % 60, seconds: Math.floor(duration(job)! / 1000) % 60 })}</dd></div></dl></div>{job.error && <small className="queue-job-error">{serverText(job.errorKey, job.error, job.errorVars)}</small>}</div><span className={`job-status ${job.status}`}>{statusLabel(job.status)}</span><div className="download-progress"><span>{job.status === "waiting" ? `${job.debridProgress ?? 0} %` : `${bytes(job.received)} / ${bytes(job.total)}`}</span><div className="progress"><i style={{width:`${job.status === "waiting" ? Math.min(100, job.debridProgress ?? 0) : job.total ? Math.min(100, job.received/job.total*100):0}%`}}/></div></div><span className="download-speed">{speed(job.speed)}{job.segments && job.segments > 1 ? <i className="segment-tag" title={t("downloads.segments", { count: job.segments })}>{`\u00d7${job.segments}`}</i> : null}<small>{eta(job)}</small></span><div className="queue-actions"><button className="queue-details-toggle" aria-expanded={!!expandedJobs[job.id]} aria-controls={`queue-details-${job.id}`} onClick={() => setExpandedJobs((current) => ({ ...current, [job.id]: !current[job.id] }))}>{t("downloads.details")}<ChevronDown aria-hidden="true"/></button>{job.status === "completed" && job.target && <button title={t("downloads.showInLibrary")} onClick={() => onReveal(job.target)}><HardDrive/></button>}{job.status !== "completed" && job.status !== "downloading" && job.status !== "checking" && <><button className="queue-priority" title={t("downloads.moveUp")} disabled={sort !== "order" || direction !== "asc" || job.order === 0} onClick={() => action(() => api.moveDownload(job.id, -1))}><ArrowUp/></button><button className="queue-priority" title={t("downloads.moveDown")} disabled={sort !== "order" || direction !== "asc" || job.order === jobs.length - 1} onClick={() => action(() => api.moveDownload(job.id, 1))}><ArrowDown/></button></>}{job.status === "checking" || job.status === "downloading" || job.status === "queued" || job.status === "waiting" ? <button title={t("player.pause")} onClick={() => action(() => api.downloadAction(job.id,"pause"))}><Pause/></button> : job.status === "paused" ? <button title={t("library.continue")} onClick={() => action(() => api.downloadAction(job.id,"resume"))}><Play/></button> : job.status === "failed" ? <button title={t("downloads.retry")} onClick={() => action(() => api.downloadAction(job.id,"retry"))}><RefreshCw/></button> : null}<button className="danger" title={t("downloads.removeFromQueue")} onClick={() => action(() => api.removeDownload(job.id))}><Trash2/></button></div></div>;
+  const renderJob = (job: DownloadJob) => <div className={`download-row ${expandedJobs[job.id] ? "details-expanded" : ""}`} data-status={job.status} key={job.id}><div className="download-job">{job.status === "completed" && job.target ? <button className="link-button job-link" title={t("downloads.showInLibrary")} onClick={() => onReveal(job.target)}><span>{job.title}</span></button> : <strong>{job.title}</strong>}<div id={`queue-details-${job.id}`} className="queue-job-details"><small>{job.target || (job.pending ? t("downloads.sourcePickedLater") : "")}</small>{job.resolution?.audioLanguage && <small>{t(job.resolution.fallbackUsed ? "downloads.checkedFallbackSource" : "downloads.checkedSource", { audio: label(job.resolution.audioLanguage), count: job.resolution.checkedCandidates })}{job.resolution.subtitleLanguage ? ` · ${t("downloads.subtitleReady", { language: label(job.resolution.subtitleLanguage) })}` : job.resolution.subtitleStatus === "missing" ? ` · ${t("downloads.subtitleMissing")}` : ""}</small>}<dl className="queue-times">{(["createdAt", "startedAt", "completedAt"] as const).map((field) => <div key={field}><dt>{t(`downloads.${field}`)}</dt><dd>{formatDate(job[field])}</dd></div>)}<div><dt>{t("downloads.duration")}</dt><dd>{duration(job) == null ? "—" : t("downloads.durationValue", { hours: Math.floor(duration(job)! / 3600000), minutes: Math.floor(duration(job)! / 60000) % 60, seconds: Math.floor(duration(job)! / 1000) % 60 })}</dd></div></dl></div>{job.pauseReason === "library" && <small className="queue-job-paused">{t("downloads.pausedLibrary")}</small>}{job.error && <small className="queue-job-error">{serverText(job.errorKey, job.error, job.errorVars)}</small>}</div><span className={`job-status ${job.status}`}>{statusLabel(job.status)}</span><div className="download-progress"><span>{job.status === "waiting" ? `${job.debridProgress ?? 0} %` : `${bytes(job.received)} / ${bytes(job.total)}`}</span><div className="progress"><i style={{width:`${job.status === "waiting" ? Math.min(100, job.debridProgress ?? 0) : job.total ? Math.min(100, job.received/job.total*100):0}%`}}/></div></div><span className="download-speed">{speed(job.speed)}{job.segments && job.segments > 1 ? <i className="segment-tag" title={t("downloads.segments", { count: job.segments })}>{`\u00d7${job.segments}`}</i> : null}<small>{eta(job)}</small></span><div className="queue-actions"><button className="queue-details-toggle" aria-expanded={!!expandedJobs[job.id]} aria-controls={`queue-details-${job.id}`} onClick={() => setExpandedJobs((current) => ({ ...current, [job.id]: !current[job.id] }))}>{t("downloads.details")}<ChevronDown aria-hidden="true"/></button>{job.status === "completed" && job.target && <button title={t("downloads.showInLibrary")} onClick={() => onReveal(job.target)}><HardDrive/></button>}{job.status !== "completed" && job.status !== "downloading" && job.status !== "checking" && <><button className="queue-priority" title={t("downloads.moveUp")} disabled={sort !== "order" || direction !== "asc" || job.order === 0} onClick={() => action(() => api.moveDownload(job.id, -1))}><ArrowUp/></button><button className="queue-priority" title={t("downloads.moveDown")} disabled={sort !== "order" || direction !== "asc" || job.order === jobs.length - 1} onClick={() => action(() => api.moveDownload(job.id, 1))}><ArrowDown/></button></>}{job.status === "checking" || job.status === "downloading" || job.status === "queued" || job.status === "waiting" ? <button title={t("player.pause")} onClick={() => action(() => api.downloadAction(job.id,"pause"))}><Pause/></button> : job.status === "paused" ? <button title={t("library.continue")} onClick={() => action(() => api.downloadAction(job.id,"resume"))}><Play/></button> : job.status === "failed" ? <button title={t("downloads.retry")} onClick={() => action(() => api.downloadAction(job.id,"retry"))}><RefreshCw/></button> : null}<button className="danger" title={t("downloads.removeFromQueue")} onClick={() => action(() => api.removeDownload(job.id))}><Trash2/></button></div></div>;
   return <section className="downloads-page"><div className="download-title"><Heading eyebrow={t("downloads.eyebrow")} title={t("downloads.title")}/><button disabled={!jobs.some((job) => job.status === "completed")} onClick={() => action(api.clearCompleted)}><Trash2/> {t("downloads.clearCompleted")}</button></div>{halt && <div className="queue-halt" role="status">{serverText(halt.messageKey, halt.message)} {t("downloads.haltResumes")}</div>}<details className="queue-filters"><summary>{t("downloads.filters")}<span>{activeFilters > 0 && t("downloads.activeFilters", { count: activeFilters })}{sort !== "order" || direction !== "asc" ? ` · ${t(`downloads.${sort}` as Key)} (${t(direction === "asc" ? "downloads.asc" : "downloads.desc")})` : ""}</span><ChevronDown aria-hidden="true"/></summary><div className="queue-tools">
     <label>{t("downloads.search")}<input value={query} onChange={(e) => setQuery(e.target.value)}/></label>
     <label>{t("downloads.filterStatus")}<select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">{t("downloads.all")}</option>{(["queued", "waiting", "checking", "downloading", "paused", "completed", "failed"] as const).map((value) => <option key={value} value={value}>{statusLabel(value)}</option>)}</select></label>

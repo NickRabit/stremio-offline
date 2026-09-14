@@ -1,6 +1,7 @@
 import { AppError } from "./errors.js";
 import path from "node:path";
 import type { AddonDownloadSettings, DownloadLayout, DownloadTargetSettings, StreamItem } from "./types.js";
+import type { LibraryRecord } from "./libraries.js";
 
 export interface MediaInfo {
   /** The IMDb id from the catalogue, so metadata need not be guessed from the folder name. */
@@ -48,15 +49,31 @@ export function safeSubfolder(value: unknown): string {
   return segments.map(safeName).join(path.sep);
 }
 
-const targetSettings = (value: unknown): DownloadTargetSettings => {
-  const item = typeof value === "object" && value ? value as Record<string, unknown> : {};
-  const layout: DownloadLayout = item.layout === "flat" ? "flat" : "structured";
-  return { subfolder: safeSubfolder(item.subfolder), layout };
+/** The library a rule names, or the reason it cannot be used. Called with the libraries a
+ *  request is up against (`store.libraries()`), so the editor and the route agree on what a
+ *  writable destination is. Without them the id is kept as it stands: the queue resolves it
+ *  when the job starts, where a library that went away must not fail the download. */
+const targetLibrary = (id: string, kind: "movie" | "series", libraries?: LibraryRecord[]): string | undefined => {
+  if (!id || !libraries) return id || undefined;
+  const library = libraries.find((item) => item.id === id);
+  if (!library) throw new AppError("That library does not exist.", "err.libraryNotFound");
+  if (library.type !== kind && library.type !== "mixed") throw new AppError("That library does not take this kind of title.", "err.libraryTypeMismatch");
+  if (!library.enabled || library.readOnly || library.unreachable) {
+    throw new AppError("That library is switched off, read-only or not reachable right now.", "err.libraryNotWritable");
+  }
+  return id;
 };
 
-export function normalizeDownloadSettings(value: unknown): AddonDownloadSettings {
+const targetSettings = (value: unknown, kind: "movie" | "series", libraries?: LibraryRecord[]): DownloadTargetSettings => {
   const item = typeof value === "object" && value ? value as Record<string, unknown> : {};
-  return { movie: targetSettings(item.movie), series: targetSettings(item.series) };
+  const layout: DownloadLayout = item.layout === "flat" ? "flat" : "structured";
+  const libraryId = targetLibrary(String(item.libraryId ?? "").trim(), kind, libraries);
+  return { subfolder: safeSubfolder(item.subfolder), layout, ...(libraryId ? { libraryId } : {}) };
+};
+
+export function normalizeDownloadSettings(value: unknown, libraries?: LibraryRecord[]): AddonDownloadSettings {
+  const item = typeof value === "object" && value ? value as Record<string, unknown> : {};
+  return { movie: targetSettings(item.movie, "movie", libraries), series: targetSettings(item.series, "series", libraries) };
 }
 
 /** A film goes into a folder of its own, an episode into the series and season folders. Media libraries expect that. */

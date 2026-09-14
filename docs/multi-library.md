@@ -138,9 +138,11 @@ again after every rebase onto `main`.
       an operator grant is rebuilt from the environment, so it cannot be revoked. `preview`
       walks with a 20 000-file ceiling and a 5 s deadline, asks no addon, and reports
       `truncated`; it counts existing bindings only when the root already is a library.
-- [ ] Follow-up for PR 6: `AddonDownloadSettings` carries no `libraryId` yet, so the delete
-      path has no stored rule to fall back, and the queue has no job to pause with
-      `pauseReason: "library"`. Both land with the per-library save rules.
+- [x] Follow-up for PR 6, closed with the per-library save rules:
+      `AddonDownloadSettings` carries `libraryId`, and a job whose library is away waits for
+      it with `pauseReason: "library"` instead of being failed or redirected. A library whose
+      record is gone waits too, with the half-hour deadline recorded under *When a library
+      stops being available*.
 - [x] No reachable path throws the single-library pass-through at a call site that cannot
       answer: `LibraryScanOpts.pathExists` is required and qualified, so the scan no longer
       builds one from `downloadDir` at module load, and a state holding two libraries boots
@@ -1107,7 +1109,7 @@ rewriting stored rows, so a library that comes back needs no repair:
 | Reference | On delete | On disable / unreachable | On type change |
 | --- | --- | --- | --- |
 | `defaultMovieLibrary` / `defaultSeriesLibrary` | cleared to `""`; `defaultLibrary()` then falls back to the first enabled library of the kind, then the first `mixed` | left pointing at it; the same fallback applies while it is away | cleared if the new type no longer matches the kind |
-| `AddonDownloadSettings[kind].libraryId` | rewritten to `""` (= default) and logged, one line per addon | left as it is; the download resolves through the fallback for now | left as it is if still eligible (`mixed` always is), else rewritten to `""` and logged |
+| `AddonDownloadSettings[kind].libraryId` | kept as it stands and marked in the editor as not available; a job bound for it waits for the re-add (the folder keeps its identity) and takes the default after `LIBRARY_WAIT_MS` | left as it is; a job bound for it waits (see the row below) rather than going somewhere else | left as it is if still eligible (`mixed` always is); a job already placed is unaffected |
 | Queued download jobs | jobs whose target resolves into it are **paused** with `pauseReason: "library"`, never failed and never silently redirected | same | unaffected; the type gate applies to placement, not to a job already placed |
 | Running ops job | cancelled at the current item; completed items keep their results | paused, resumed when the library returns | unaffected |
 | `favorites`, `progress`, `libraryMeta` | kept unless `?forget=1`; the metadata file and artwork directory go only on an explicit forget | kept, hidden from listings (§12) | kept |
@@ -1132,6 +1134,16 @@ own when it comes back, the way a `"storage"` pause resumes when space returns.
 `defaultLibrary()` must therefore never assume its stored id resolves, and the
 download path must handle "the rule names a library that is not available right
 now" as a first-class outcome rather than an invariant violation.
+
+**Removed is not disabled**, and the difference is a deadline rather than a
+fallback. A rule naming a library whose **record is gone** pauses like any
+other: the folder removed without forgetting keeps its identity, so adding it
+again brings the same library back and the job continues there (*Known gaps*).
+What it does not do is wait for ever -- after `LIBRARY_WAIT_MS` (half an hour)
+the job takes the default for the kind and logs one line saying so, because a
+library that is never coming back must not strand a queue. A library that is
+merely switched off, read-only or away has no deadline at all: a pulled disk
+comes back, and the row already says what the job is waiting for.
 
 ### Rollback
 
@@ -1418,7 +1430,10 @@ available* is the spec:
 - Deleting a library clears a default that named it and `defaultLibrary()` then
   returns the first enabled library of the kind, then the first `mixed`, then
   `undefined`.
-- Deleting rewrites addon rules that named it to `""`; disabling does not.
+- Deleting leaves addon rules that named it as they stand and marks them as not
+  available; the queue falls back to the default until the id comes back, and it
+  does come back when the library is added again at the same root (*Known gaps*).
+  Disabling does not touch a rule either.
 - A queued job whose target resolves into a vanishing library is paused with
   `pauseReason: "library"` — never failed, never redirected to the fallback.
 - That pause is per job, not a queue halt: jobs targeting other libraries keep

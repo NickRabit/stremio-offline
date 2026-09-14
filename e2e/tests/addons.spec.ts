@@ -37,4 +37,17 @@ test.describe("addons", () => {
 
     await page.getByRole("combobox", { name: "Jak často se obnovují manifesty" }).selectOption("24");
   });
+
+  test("a save rule names the library it goes to", async ({ page }) => {
+    await openAddons(page);
+    await page.getByRole("button", { name: "Pravidla ukládání", exact: true }).click();
+    const card = page.locator(".addon-card", { has: page.getByRole("heading", { name: "E2E doplněk" }) });
+
+    // One library is configured, so its name is the default and the preview spells out the
+    // real root instead of the /downloads the form used to hardcode for every install.
+    const movies = card.getByRole("combobox", { name: "Filmy – knihovna" });
+    await expect(movies.locator("option").first()).toHaveText("Výchozí · downloads");
+    const [library] = await (await page.request.get("/api/libraries")).json();
+    await expect(card.locator(".download-rule").first()).toContainText(library.root);
+  });
 });

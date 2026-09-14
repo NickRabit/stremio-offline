@@ -775,6 +775,7 @@ img.broken{visibility:hidden}
 .queue-job-details{min-width:0;max-width:100%}
 .queue-details-toggle{display:none}
 .download-job .queue-job-error{white-space:normal;overflow-wrap:anywhere;color:var(--red)}
+.download-job .queue-job-paused{white-space:normal;overflow-wrap:anywhere;color:var(--muted)}
 @media(max-width:700px){
   .downloads-page .download-row{grid-template-columns:minmax(0,1fr);grid-template-areas:"title" "status" "progress" "meta" "actions";gap:8px;padding:14px 4px}
   .downloads-page .download-row>.job-status{justify-self:start;align-self:start}

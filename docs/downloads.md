@@ -120,10 +120,22 @@ Filenames follow the same rules as library downloads.
 
 ## Where files are saved
 
-In **Addons**, each stream addon can set where movies and series are saved. The
-host directory is `DOWNLOAD_PATH`; the addon card takes only a relative
-subdirectory inside it. An empty subdirectory means `DOWNLOAD_PATH` itself;
-nested paths such as `Webshare/Movies` work.
+In **Addons → Storage rules**, each stream addon sets where its movies and its
+series are saved. Each kind picks a **library** and a subfolder inside it:
+
+- **Default** is the library marked as the default for that kind, and behind it
+  the first library that takes the kind — a movie rule never lands in a series
+  library unless that library is `mixed` ([libraries.md](libraries.md)).
+- A named library is used for that kind of file and nothing else. The preview
+  under the form shows the real root, not a fixed `/downloads`.
+- The subfolder is relative to the library's root: empty means the root itself,
+  and nested paths such as `Webshare/Movies` work.
+
+A rule that names a library which is switched off, read-only, unplugged or
+removed is not offered again in the form, and a download that such a rule would
+send there falls back to the default instead of failing — nothing is lost, it
+lands where the default points. Files already in the library are never moved by
+a change of rule; it applies to newly queued items.
 
 | Mode | Result |
 | --- | --- |
@@ -137,6 +149,12 @@ The change applies to newly queued items.
 **Settings** can export the configuration to JSON and import it later. The backup
 holds app settings, installed addon order and state, and their save rules. It
 does **not** hold the account, the library, or watch history.
+
+It does carry the *names and roots* of the libraries, so a save rule that names
+one survives the trip: an import points it at a library with the same root, then
+at one with the same name and type, and falls back to the default for anything
+it cannot place. The count it reports afterwards is how many references had to
+move.
 
 Personalized addon URLs and the Real-Debrid API token are stored in the file in
 the clear — treat it as a password. Import replaces the current configuration
