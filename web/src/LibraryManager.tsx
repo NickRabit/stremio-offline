@@ -54,9 +54,12 @@ export function LibraryManager({ restricted = false, onChanged, onError, onNotif
       </div>}
     {libraries.map((library) => <article className={`library-admin-row${library.unreachable ? " unreachable" : ""}`} key={library.id}>
       <div className="library-admin-head">
-        <strong>{library.name}</strong>
+        <div className="library-admin-title">
+          <strong>{library.name}</strong>
+          <small className="library-admin-root" title={library.root}>{library.root}</small>
+        </div>
         <span className="library-admin-flags">
-          <i className="library-badge">{libraryTypeLabel(library.type)}</i>
+          {restricted && <i className="library-badge">{libraryTypeLabel(library.type)}</i>}
           {library.defaultMovie && <i className="library-badge">{t("library.defaultMovie")}</i>}
           {library.defaultSeries && <i className="library-badge">{t("library.defaultSeries")}</i>}
           {!library.enabled && <i className="library-badge off">{t("library.disabled")}</i>}
@@ -64,8 +67,7 @@ export function LibraryManager({ restricted = false, onChanged, onError, onNotif
           {library.readOnly && <i className="library-badge warn">{t("library.readOnly")}</i>}
         </span>
       </div>
-      <small className="library-admin-root" title={library.root}>{library.root}</small>
-      <small>{t("library.libraryCounts", { titles: library.titles, files: library.files, size: bytes(library.bytes) })}</small>
+      <small className="library-admin-counts">{t("library.libraryCounts", { titles: library.titles, files: library.files, size: bytes(library.bytes) })}</small>
       {!restricted && <div className="library-admin-controls">
         <label><span>{t("library.libraryType")}</span>
           <select aria-label={t("library.libraryType")} value={library.type} disabled={busy}
@@ -77,13 +79,20 @@ export function LibraryManager({ restricted = false, onChanged, onError, onNotif
         <label className="library-check"><input type="checkbox" checked={library.writeArtwork} disabled={busy || library.readOnly}
           onChange={(event) => void patch(library, { writeArtwork: event.target.checked }, t("library.updated"))}/> <span>{t("library.writeArtwork")}</span></label>
       </div>}
-      {!restricted && <div className="library-admin-buttons">
-        <button onClick={() => void rename(library)}><Pencil/> {t("library.rename")}</button>
-        <button onClick={() => void scan(library)}><Sparkles/> {t("library.scanThis")}</button>
-        <button onClick={() => setPicker({ reroot: library })}><FolderOpen/> {t("library.reroot")}</button>
-        <button className="danger" onClick={() => void remove(library, false)}><Trash2/> {t("library.removeLibrary")}</button>
-        <button className="danger" onClick={() => void remove(library, true)}><Trash2/> {t("library.removeForget")}</button>
-      </div>}
+      {!restricted && <footer className="library-admin-footer">
+        <div className="library-admin-buttons">
+          <button className="library-admin-scan" onClick={() => void scan(library)}><Sparkles/> {t("library.scanThis")}</button>
+          <button onClick={() => setPicker({ reroot: library })}><FolderOpen/> {t("library.reroot")}</button>
+          <button onClick={() => void rename(library)}><Pencil/> {t("library.rename")}</button>
+        </div>
+        <details className="library-admin-danger">
+          <summary><Trash2/> {t("library.removeOptions")}</summary>
+          <div>
+            <button className="danger" onClick={() => void remove(library, false)}><Trash2/> {t("library.removeLibrary")}</button>
+            <button className="danger" onClick={() => void remove(library, true)}><Trash2/> {t("library.removeForget")}</button>
+          </div>
+        </details>
+      </footer>}
     </article>)}
     {!libraries.length && <p className="identify-hint">{t("library.emptyText")}</p>}
     {picker && <RootPicker reroot={picker.reroot} onClose={() => setPicker(null)} onError={onError} onLibrariesChanged={onChanged}

@@ -416,6 +416,7 @@ export const cs: Catalog = {
   "library.addConfirm": "Přidat knihovnu",
   "library.removeLibrary": "Odebrat",
   "library.removeForget": "Odebrat a zapomenout",
+  "library.removeOptions": "Možnosti odebrání",
   "library.removeConfirm": "Odebrat „{name}“? Na disku se nic nemaže a když stejnou složku přidáte znovu, zůstane jí, co si pamatuje.",
   "library.removeForgetConfirm": "Odebrat „{name}“ a zapomenout metadata? Na disku se nic nemaže, ale historie párování ani náhledy se nevrátí.",
   "library.removed": "Knihovna odebrána.",
