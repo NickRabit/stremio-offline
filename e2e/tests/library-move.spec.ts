@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
-import { copyFile, mkdir, rm, stat } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { copyFile, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 const sample = path.resolve("e2e/fixtures/media/sample.mp4");
@@ -39,6 +40,69 @@ const assertFileExists = async (file: string) => {
   const info = await stat(file).catch(() => undefined);
   expect(info?.isFile(), `${file} should be on disk`).toBe(true);
 };
+
+/** Waits for whichever of these paths appears first, and hands it back. */
+const waitForFile = async (candidates: string[], timeout = 20_000) => {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    for (const file of candidates) if (await stat(file).then(() => true, () => false)) return file;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(`None of ${candidates.join(", ")} appeared.`);
+};
+
+// A film in a folder of its own, bound through that folder, whose picture therefore lives with
+// the folder. Move the file into a folder of unrelated videos that has a picture of its own:
+// the film must not come back wearing it, and the picture it had must travel with it.
+const ownFolder = "Vlastní obrázek zdroj";
+const ownClip = "Vlastní obrázek klip.mkv";
+const sharedFolder = "Sdílená složka cíl";
+const sharedPicture = Buffer.from("this is the shared folder's picture, not the film's");
+
+test("a film moved into a shared folder keeps its own picture", async ({ request }) => {
+  // The download directory outlives a run, so a fixture left behind by an earlier failure (or by
+  // this test's own second attempt) has to go first: the move refuses a name that is taken.
+  await rm(path.join(downloads, ownFolder), { recursive: true, force: true });
+  await rm(path.join(downloads, sharedFolder), { recursive: true, force: true });
+  await mkdir(path.join(downloads, ownFolder), { recursive: true });
+  await copyFile(sample, path.join(downloads, ownFolder, ownClip));
+  await mkdir(path.join(downloads, sharedFolder), { recursive: true });
+  await copyFile(sample, path.join(downloads, sharedFolder, "Jiný klip.mkv"));
+  await writeFile(path.join(downloads, sharedFolder, "poster.jpg"), sharedPicture);
+
+  // Bind the folder, the way the scan or Identify does: the film is the title of that folder.
+  const bound = await request.post("/api/library/match", { data: { path: ownFolder, type: "movie", id: "tt-e2e-movie" } });
+  expect(bound.status()).toBe(200);
+  // The catalogue poster of a folder-bound title lands in the data directory, under the
+  // folder's key (this install writes nothing into the media tree; that is the global default).
+  const [library] = await (await request.get("/api/libraries")).json();
+  const artworkDir = path.join(path.resolve("e2e/.tmp/data/artwork"), library.id);
+  // Whichever layout this install chose: beside the folder, or hashed in the data directory.
+  const ownPicture = await waitForFile([
+    path.join(downloads, ownFolder, "poster.jpg"),
+    path.join(artworkDir, `${createHash("sha1").update(`dir:${ownFolder}`).digest("hex")}.jpg`),
+  ]);
+  // Read before the move: the folder it belonged to is emptied and its copy of the picture is
+  // cleaned up with it, which is what makes carrying the picture the only way it survives.
+  const pictureBeforeTheMove = await readFile(ownPicture);
+
+  const moved = await request.post("/api/library/move", { data: { path: `${ownFolder}/${ownClip}`, folder: sharedFolder } });
+  expect(moved.status(), await moved.text()).toBe(200);
+
+  // The picture the film had came with it, into the data directory under its new key.
+  const key = `${sharedFolder}/${ownClip}`;
+  const carried = path.join(artworkDir, `${createHash("sha1").update(key).digest("hex")}.jpg`);
+  await waitForFile([carried]);
+  expect(await readFile(carried)).toEqual(pictureBeforeTheMove);
+  expect(await readFile(carried)).not.toEqual(sharedPicture);
+
+  // And the browse view agrees that the film has a picture of its own.
+  const listing = await (await request.get(`/api/library/browse?path=${encodeURIComponent(sharedFolder)}`)).json();
+  const film = listing.items.find((item: { label?: string; name?: string }) => (item.label ?? item.name)?.startsWith("Vlastní obrázek klip"));
+  expect(film.poster, "the film is not left blank").toBeTruthy();
+
+  await rm(path.join(downloads, sharedFolder), { recursive: true, force: true });
+});
 
 const moveInto = async (page: import("@playwright/test").Page, label: RegExp, destination: string) => {
   await page.getByRole("button", { name: label }).click();

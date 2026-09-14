@@ -8,7 +8,7 @@ import { AirPlayAccess } from "./airplay-access.js";
 import { shiftVtt } from "./vtt.js";
 import path from "node:path";
 import { constants } from "node:fs";
-import { access, mkdir, readdir, readFile, realpath, rename, rm, stat, statfs } from "node:fs/promises";
+import { access, mkdir, readdir, readFile, realpath, rename, rm, stat, statfs, writeFile } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { loadAddon, catalog, metadata, searchAll, searchableCatalogs, streamCandidates, streams, subtitles } from "./addons.js";
@@ -29,7 +29,7 @@ import { publicSettings, Store } from "./store.js";
 import { advanceTorrent, normalizeToken, verifyRealDebridToken } from "./debrid.js";
 import { clearLog, currentLevel, flushLog, initLogger, log, parseLevel, readLog, startLogMaintenance, setLevel } from "./logger.js";
 import { browseDirectory, describePath, emptiedFolders, entryDirectory, isPathWithin, isVideo, listFolders, listVideos, moveDestination, orphanedCatalogKeys, pageFiles, remapPath, scanLibrary, sortFiles, summarize, type FoundFile, type LibraryEntry, type WalkBudget } from "./library.js";
-import { browseMeta, cacheFieldsFromMeta, episodeKey, episodeNumberOf, episodesFromMeta, dropKeyed, knownTitleOf, lookupSkipped, matchKeyFor, matchStatus, needsBackfill, needsEpisodes, scanMiss, suggestionFor, titleUnits, unmatchAt, type LibraryMetaRecord, type TitleKind, type TitleUnit } from "./library-match.js";
+import { browseMeta, cacheFieldsFromMeta, episodeKey, episodeNumberOf, episodesFromMeta, dropKeyed, knownTitleEntry, knownTitleOf, lookupSkipped, matchKeyFor, matchStatus, needsBackfill, needsEpisodes, scanMiss, suggestionFor, titleUnits, unmatchAt, type LibraryMetaRecord, type TitleKind, type TitleUnit } from "./library-match.js";
 import { parseMediaPath } from "./library-parse.js";
 import { LibraryScan } from "./library-scan.js";
 import { createLibraryProbe, type LibraryHealth } from "./library-probe.js";
@@ -1174,7 +1174,11 @@ async function locateFileArtwork(key: string) {
   if (await fileExists(media)) return media;
   const own = dataArtworkFile(key);
   if (await fileExists(own)) return own;
-  if (fileMayUseFolderArtwork(key, knownTitle(key)?.type)) return locateFolderArtwork(posixDir(key));
+  // The folder's picture belongs to a film only when the folder is the film's folder: a title
+  // bound through that folder, not one bound on the file itself, which is what a film moved
+  // into a shared folder becomes.
+  const cover = knownTitleEntry(key, metaStore.qualifiedMeta());
+  if (fileMayUseFolderArtwork(key, cover?.record.type, cover?.key)) return locateFolderArtwork(posixDir(key));
   return undefined;
 }
 
@@ -1659,6 +1663,20 @@ const relocateArtwork = async (items: string[], relative: string, nextRelative: 
   }
 };
 
+/** A title bound through its folder keeps its picture under that folder's key. Moving the item
+ *  out pins the binding on the item, so the picture has to follow it: without this the item
+ *  shows up blank and the folder's copy is swept as an orphan an hour later. Copied rather than
+ *  moved, because whatever stays in the folder is still that title's. */
+const carryCoveringArtwork = async (cover: string, nextKey: string) => {
+  const source = dataArtworkFile(`dir:${cover}`);
+  const destination = dataArtworkFile(isFileKey(nextKey) ? nextKey : `dir:${nextKey}`);
+  const data = await readFile(source).catch(() => undefined);
+  if (!data) return;
+  await mkdir(path.dirname(destination), { recursive: true });
+  await writeFile(destination, data).catch(() => undefined);
+  await artworks.written(destination);
+};
+
 /** The folder the last video just left is litter, so it goes too -- up the tree for as long
  *  as the parent holds nothing to watch either. */
 const pruneEmptiedFolders = async (key: string) => {
@@ -1798,10 +1816,14 @@ const transferLibraryItem = async (relative: string, folder: string, copy = fals
   // the item is the same item and would otherwise lose its poster until a rescan.
   const carried = [resolved.key, ...(await libraryFiles())
     .map((file) => file.relative).filter((item) => item !== resolved.key && isPathWithin(item, resolved.key))];
+  // The folder a title is bound through, when the item does not carry the binding itself: its
+  // picture is the title's and has to travel with it.
+  const cover = knownTitleEntry(resolved.key, metaStore.qualifiedMeta());
   const transferred = await transferLibraryPath(resolved.absolute, target.absolute, !copy, progress);
   if (copy) await metaStore.copy(resolved.key, target.key);
   else {
     await relocateArtwork(carried, resolved.key, target.key);
+    if (cover && cover.key !== resolved.key && isPathWithin(resolved.key, cover.key)) await carryCoveringArtwork(cover.key, target.key);
     await relocateLibraryPath(resolved.key, target.key, true);
   }
   // Only the library the item left: the destination gained a folder, it did not lose one.
