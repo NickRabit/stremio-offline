@@ -19,7 +19,7 @@ import { languageName, locale, localeTag, serverText, setLocale, t, useI18n, typ
 import { canQueue, pickDefaultStream, repickStream, streamBadge, streamLanguages, streamSize, visibleCatalogStreams, type StreamSort } from "./streams";
 import { parseSearchScope } from "./search-scope";
 import { localizedDownloadTitle, mergeMetaDetail } from "./meta";
-import type { Addon, BuildInfo, Diagnostics, BrowseItem, BrowseLibrary, BrowseResult, LibrarySort, LibraryView, ProgressEntry, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, DownloadSelection, Inspection, Meta, QueueHalt, ScanState, SearchableCatalog, Session, Settings as AppSettings, SettingsPatch, Stream, Subtitle, Video } from "./types";
+import type { Addon, BuildInfo, Diagnostics, BrowseItem, BrowseLibrary, BrowseResult, LibraryOp, LibraryOpsState, LibrarySort, LibraryView, ProgressEntry, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, DownloadSelection, Inspection, Meta, QueueHalt, ScanState, SearchableCatalog, Session, Settings as AppSettings, SettingsPatch, Stream, Subtitle, Video } from "./types";
 
 /** Library browsing choices survive both a section switch and a browser restart.
  * Private mode may forbid storage, hence the try/catch around everything. */
@@ -120,7 +120,11 @@ export function App() {
   const [browseView, setBrowseView] = useState<"grid" | "list">(() => recall("view", ["grid", "list"] as const, "grid"));
   const [browseBusy, setBrowseBusy] = useState(false);
   const [identifyPath, setIdentifyPath] = useState<string | null>(null);
-  const [movePath, setMovePath] = useState<{ path: string; label: string; type?: "movie" | "series" } | null>(null);
+  const [movePath, setMovePath] = useState<{ path: string; label: string; type?: "movie" | "series"; paths?: string[]; copy?: boolean } | null>(null);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedPaths, setSelectedPaths] = useState<Set<string>>(() => new Set());
+  const [libraryOps, setLibraryOps] = useState<LibraryOpsState[]>([]);
+  const [bulkIdentifyPaths, setBulkIdentifyPaths] = useState<string[] | null>(null);
   const [suggestionsOpen, setSuggestionsOpen] = useState(false);
   const [libraryManagerOpen, setLibraryManagerOpen] = useState(false);
   const [suggestionCount, setSuggestionCount] = useState(0);
@@ -130,6 +134,8 @@ export function App() {
     catch { return false; }
   });
   const scanStatus = useRef<ScanState["status"] | undefined>(undefined);
+  const opsStatus = useRef(new Map<string, LibraryOpsState["status"]>());
+  const finishingOps = useRef(new Set<string>());
   const scanWanted = useRef(false);
   const [scanEpoch, setScanEpoch] = useState(0);
   const browseRequest = useRef(0);
@@ -148,6 +154,61 @@ export function App() {
   const [browseFocus, setBrowseFocus] = useState<string | null>(null);
   const focusScrolled = useRef<string | null>(null);
   const focusTimer = useRef(0);
+
+  const toggleSelection = (itemPath: string) => setSelectedPaths((current) => {
+    const next = new Set(current);
+    if (next.has(itemPath)) next.delete(itemPath); else if (next.size < 500) next.add(itemPath);
+    return next;
+  });
+  const leaveSelection = () => { setSelectionMode(false); setSelectedPaths(new Set()); };
+  const refreshLibraryOps = async () => {
+    const snapshot = await api.libraryOps();
+    setLibraryOps(snapshot.jobs);
+    return snapshot.jobs;
+  };
+  const finishLibraryOp = async (job: LibraryOpsState) => {
+    if (finishingOps.current.has(job.id)) return;
+    finishingOps.current.add(job.id);
+    opsStatus.current.set(job.id, job.status);
+    try {
+      await Promise.all([loadBrowse(browsePath), api.progressList().then(setResume), api.watchlist().then(setWatchlist)]);
+      notify(job.failed
+        ? t("library.bulkFinishedFailed", { failed: job.failed, total: job.total })
+        : t("library.bulkFinished"));
+    } finally { finishingOps.current.delete(job.id); }
+  };
+  const trackQueuedOp = async (id: string) => {
+    opsStatus.current.set(id, "paused");
+    const jobs = await refreshLibraryOps();
+    const job = jobs.find((candidate) => candidate.id === id);
+    if (job && job.status !== "running" && job.status !== "paused") await finishLibraryOp(job);
+  };
+  const startBulk = async (operation: LibraryOp) => {
+    try {
+      const queued = await api.startLibraryOp(operation);
+      leaveSelection();
+      await trackQueuedOp(queued.id);
+    } catch (error) { fail(error); }
+  };
+  const openBulkDestination = (copy: boolean) => {
+    const paths = [...selectedPaths];
+    const selectedItems = browse?.items.filter((item): item is TreeItem => item.kind !== "library" && selectedPaths.has(item.path)) ?? [];
+    const kinds = new Set(selectedItems.map((item) => item.titleType).filter(Boolean));
+    setMovePath({ path: paths[0]!, paths, copy, label: t("library.bulkItems", { count: paths.length }), type: kinds.size === 1 ? [...kinds][0] : undefined });
+  };
+  const deleteBulk = () => {
+    const items = [...selectedPaths];
+    if (items.length && confirm(t("library.bulkDeleteConfirm", { count: items.length }))) void startBulk({ op: "delete", items });
+  };
+  const createFolder = async () => {
+    const name = prompt(t("library.createFolderPrompt"));
+    if (!name) return;
+    try {
+      await api.createLibraryFolder(browsePath, name);
+      notify(t("library.folderCreated"));
+      await loadBrowse(browsePath);
+    } catch (error) { fail(error); }
+  };
 
   const removeItem = async (itemPath: string, label: string, folder: boolean) => {
     setMenuFor(null);
@@ -574,6 +635,7 @@ export function App() {
 
   useEffect(() => { if (!ready || view !== "library") return; void loadBrowse(browsePath); },
     [ready, view, browsePath, browseQuery, browseSort, browseDesc, onlyFavorites, scanEpoch]);
+  useEffect(() => { setSelectionMode(false); setSelectedPaths(new Set()); }, [browsePath]);
   // Polling only means something while a scan is on; otherwise one look on entry is enough.
   const scanning = libraryScan?.status === "running" || libraryScan?.status === "paused";
   useEffect(() => {
@@ -594,6 +656,30 @@ export function App() {
     const timer = window.setInterval(() => void tick(), 2000);
     return () => { cancelled = true; window.clearInterval(timer); };
   }, [ready, view, scanning]);
+  const operationsActive = libraryOps.some((job) => job.status === "running" || job.status === "paused");
+  useEffect(() => {
+    if (!ready || view !== "library") return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const jobs = await api.libraryOps();
+        if (cancelled) return;
+        let completed: LibraryOpsState | undefined;
+        for (const job of jobs.jobs) {
+          const previous = opsStatus.current.get(job.id);
+          const terminal = job.status === "completed" || job.status === "failed" || job.status === "cancelled";
+          if (previous && (previous === "running" || previous === "paused") && terminal) completed = job;
+          opsStatus.current.set(job.id, job.status);
+        }
+        setLibraryOps(jobs.jobs);
+        if (completed) await finishLibraryOp(completed);
+      } catch { /* operation status is optional chrome */ }
+    };
+    void tick();
+    if (!operationsActive) return () => { cancelled = true; };
+    const timer = window.setInterval(() => void tick(), 1000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [ready, view, operationsActive, browsePath]);
   useEffect(() => { if (ready && view === "library") void loadSuggestionCount(); }, [ready, view, scanEpoch]);
   // Page-scroll paging, the same as in the catalogue. The button stays as a fallback.
   useEffect(() => {
@@ -976,6 +1062,11 @@ export function App() {
     await loadDownloads();
   };
 
+  const activeLibraryOp = libraryOps.find((job) => job.status === "running" || job.status === "paused");
+  const operationProgress = activeLibraryOp
+    ? activeLibraryOp.bytesTotal > 0 ? activeLibraryOp.bytes / activeLibraryOp.bytesTotal : (activeLibraryOp.done + activeLibraryOp.failed) / Math.max(1, activeLibraryOp.total)
+    : 0;
+
   if (session === undefined) return <div className="login-screen"><div className="loading">{t("common.loading")}</div></div>;
   if (!ready) return <LoginScreen setup={setupNeeded} onSession={(next) => { setSetupNeeded(false); setSession(next); }}/>;
 
@@ -1145,6 +1236,8 @@ export function App() {
             {!libraryList && <button title={t(browseView === "grid" ? "library.viewRows" : "library.viewTiles")} onClick={() => setBrowseView((value) => value === "grid" ? "list" : "grid")}>
               {browseView === "grid" ? <List/> : <LayoutGrid/>}
             </button>}
+            {!libraryList && <button className={selectionMode ? "active-filter" : ""} title={t("library.selectMode")} aria-pressed={selectionMode}
+              onClick={() => { setMenuFor(null); if (selectionMode) leaveSelection(); else setSelectionMode(true); }}><Check/></button>}
             <div className="library-maintenance" onKeyDown={(event) => {
               if (event.key === "Escape" && menuFor === ":library-tools") event.currentTarget.querySelector<HTMLButtonElement>(".library-maintenance-toggle")?.focus();
             }}>
@@ -1159,6 +1252,9 @@ export function App() {
                 <button title={t("library.rescanHint")} onClick={() => void startScan({ force: true })} disabled={scanning}>
                   <RefreshCw/> {t("library.rescan")}
                 </button>
+                {!libraryList && !browsePath.startsWith(":") && <button title={t("library.createFolder")} onClick={() => { setMenuFor(null); void createFolder(); }}>
+                  <Plus/> {t("library.createFolder")}
+                </button>}
                 {/* One library is one thing to manage: the settings section holds it, and the
                     toolbar stays the row it has always been. More than one and managing them
                     is a browse-time job, so the shortcut appears. */}
@@ -1174,6 +1270,7 @@ export function App() {
           {libraryScan.pauseReason === "playback" && <span>{t("library.scanPausedPlayback")}</span>}
           {libraryScan.pauseReason === "download" && <span>{t("library.scanPausedDownload")}</span>}
           {libraryScan.pauseReason === "breaker" && <span>{t("library.scanPausedAddon")}</span>}
+          {libraryScan.pauseReason === "operation" && <span>{t("library.scanPausedOperation")}</span>}
           <button type="button" onClick={() => void stopScan()}>{t("library.scanStop")}</button>
         </div>}
         {!browsePath && !scanHintDismissed && !libraryScan?.finishedAt && (browse?.total ?? 0) >= 10 && <div className="library-scan-hint" role="status">
@@ -1183,6 +1280,28 @@ export function App() {
         {suggestionCount > 0 && !scanning && <div className="library-scan-hint" role="status">
           <span>{t("library.suggestionsWaiting", { count: suggestionCount })}</span>
           <button type="button" onClick={() => setSuggestionsOpen(true)}>{t("library.suggestionsReview")}</button>
+        </div>}
+        {activeLibraryOp && <div className="library-op-status" role="status">
+          <div><strong>{t(`library.bulkOp.${activeLibraryOp.op}` as Key)}</strong>
+            <span>{t("library.bulkProgress", { done: activeLibraryOp.done + activeLibraryOp.failed, total: activeLibraryOp.total, failed: activeLibraryOp.failed })}</span></div>
+          <span className="library-op-progress"><i style={{ width: `${Math.min(100, Math.round(operationProgress * 100))}%` }}/></span>
+          {activeLibraryOp.pauseReason && activeLibraryOp.pauseReason !== "queue" && <small>{t(`library.bulkPaused.${activeLibraryOp.pauseReason}` as Key)}</small>}
+          <button type="button" onClick={() => void api.cancelLibraryOp(activeLibraryOp.id).then(refreshLibraryOps).catch(fail)}>{t("common.cancel")}</button>
+        </div>}
+        {selectionMode && <div className="library-bulk-bar" role="toolbar" aria-label={t("library.bulkActions")}>
+          <strong>{t("library.selectedCount", { count: selectedPaths.size })}</strong>
+          <button disabled={!selectedPaths.size} onClick={() => openBulkDestination(false)}><FolderInput/> {t("library.move")}</button>
+          <button disabled={!selectedPaths.size} onClick={() => openBulkDestination(true)}><Copy/> {t("library.copy")}</button>
+          <button disabled={!selectedPaths.size} onClick={() => void startBulk({ op: "favorite", items: [...selectedPaths], favorite: true })}><Star/> {t("favorite.add")}</button>
+          <button disabled={!selectedPaths.size} onClick={() => void startBulk({ op: "favorite", items: [...selectedPaths], favorite: false })}><Star/> {t("favorite.remove")}</button>
+          <button disabled={!selectedPaths.size} onClick={() => setBulkIdentifyPaths([...selectedPaths])}><Sparkles/> {t("library.identify")}</button>
+          <button disabled={!selectedPaths.size} onClick={() => void startBulk({ op: "unmatch", items: [...selectedPaths] })}><X/> {t("library.unmatch")}</button>
+          <button disabled={!selectedPaths.size} onClick={() => void startBulk({ op: "skipLookup", items: [...selectedPaths], skipLookup: true })}><SearchX/> {t("library.skipLookup")}</button>
+          <button disabled={!selectedPaths.size} onClick={() => void startBulk({ op: "skipLookup", items: [...selectedPaths], skipLookup: false })}><Search/> {t("library.allowLookup")}</button>
+          <button disabled={!selectedPaths.size} onClick={() => void startBulk({ op: "artwork", items: [...selectedPaths] })}><Images/> {t("library.regenerateArtwork")}</button>
+          <button disabled={!selectedPaths.size} onClick={() => void startBulk({ op: "forget", items: [...selectedPaths] })}><RotateCcw/> {t("library.markUnwatched")}</button>
+          <button className="danger" disabled={!selectedPaths.size} onClick={deleteBulk}><Trash2/> {t("common.delete")}</button>
+          <button onClick={leaveSelection}><X/> {t("common.cancel")}</button>
         </div>}
 
         {!browsePath && !onlyFavorites && !browseQuery && <button className="library-favorites" onClick={() => { setBrowseQuery(""); setFromFavorites(false); setBrowsePath(":favorites"); }}>
@@ -1203,11 +1322,12 @@ export function App() {
                     </button>
                   </article>
                 : item.kind === "folder"
-                ? <article className={`browse-item folder${browseFocus === item.path ? " focused" : ""}`} key={item.path} data-path={item.path} aria-current={browseFocus === item.path ? "true" : undefined}><button className="library-open" onClick={() => { setBrowseQuery(""); setFromFavorites(browsePath === ":favorites" || fromFavorites); setBrowsePath(item.path); }}>
+                ? <article className={`browse-item folder${browseFocus === item.path ? " focused" : ""}${selectedPaths.has(item.path) ? " selected" : ""}`} key={item.path} data-path={item.path} aria-current={browseFocus === item.path ? "true" : undefined}><button className="library-open" onClick={() => { if (selectionMode) { toggleSelection(item.path); return; } setBrowseQuery(""); setFromFavorites(browsePath === ":favorites" || fromFavorites); setBrowsePath(item.path); }}>
                     <span className="browse-art">{item.poster ? <img src={item.poster} alt="" loading="lazy"/> : <FolderOpen/>}<i className="browse-badge">{item.fileCount}</i>{item.favorite && <i className="fav-mark"><Star/></i>}</span>
                     <span className="library-copy"><strong>{item.name}</strong><small>{folderMeta(item)}</small>{descriptionLine(item) && <small className="library-desc">{descriptionLine(item)}</small>}</span><span className="library-action"><FolderOpen/> {t("library.openFolder")} <ChevronRight/></span></button>
-                    <button className="browse-menu" aria-label={t("library.options", { name: item.name })} aria-expanded={menuFor === item.path} onClick={(event) => { event.stopPropagation(); setMenuFor(menuFor === item.path ? null : item.path); }}><MoreVertical/></button>
-                    {menuFor === item.path && <span className="browse-actions" onClick={(event) => event.stopPropagation()}>
+                    {selectionMode && <button className="browse-select" aria-label={t("library.selectItem", { name: item.name })} aria-pressed={selectedPaths.has(item.path)} onClick={(event) => { event.stopPropagation(); toggleSelection(item.path); }}>{selectedPaths.has(item.path) && <Check/>}</button>}
+                    {!selectionMode && <button className="browse-menu" aria-label={t("library.options", { name: item.name })} aria-expanded={menuFor === item.path} onClick={(event) => { event.stopPropagation(); setMenuFor(menuFor === item.path ? null : item.path); }}><MoreVertical/></button>}
+                    {!selectionMode && menuFor === item.path && <span className="browse-actions" onClick={(event) => event.stopPropagation()}>
                       {matchActions(item)}
                       <button onClick={() => void toggleFavorite(item.path, !item.favorite)}><Star/> {t(item.favorite ? "favorite.remove" : "favorite.add")}</button>
                       <button onClick={() => void renameItem(item.path, item.name)}><Pencil/> {t("library.rename")}</button>
@@ -1215,14 +1335,15 @@ export function App() {
                       <button className="danger" onClick={() => void removeItem(item.path, item.name, true)}><Trash2/> {t("common.delete")}</button>
                     </span>}
                   </article>
-                : <article className={`browse-item${browseFocus === item.path ? " focused" : ""}`} key={item.path} data-path={item.path} aria-current={browseFocus === item.path ? "true" : undefined}><button className="library-open" onClick={() => playLocal(item.label, item.path, item.poster)}>
+                : <article className={`browse-item${browseFocus === item.path ? " focused" : ""}${selectedPaths.has(item.path) ? " selected" : ""}`} key={item.path} data-path={item.path} aria-current={browseFocus === item.path ? "true" : undefined}><button className="library-open" onClick={() => selectionMode ? toggleSelection(item.path) : playLocal(item.label, item.path, item.poster)}>
                     <span className="browse-art">{item.poster ? <img src={item.poster} alt="" loading="lazy"/> : <Film/>}{item.favorite && <i className="fav-mark"><Star/></i>}
                     {browseFocus === item.path && <i className="browse-focus-mark">{t("library.thisFile")}</i>}
                     {item.progress && <i className="resume-bar"><i style={{ width: `${Math.min(100, Math.round(item.progress.position / (item.progress.duration || 1) * 100))}%` }}/></i>}</span>
                     <span className="library-copy"><strong>{item.season != null ? `${item.season}×${String(item.episode ?? 0).padStart(2, "0")} ${item.label}` : item.label}</strong>
                     <small>{fileMeta(item)}</small>{descriptionLine(item) && <small className="library-desc">{descriptionLine(item)}</small>}</span><span className="library-action"><Play/> {t(item.progress ? "library.continue" : "player.play")}</span></button>
-                    <button className="browse-menu" aria-label={t("library.options", { name: item.label })} aria-expanded={menuFor === item.path} onClick={(event) => { event.stopPropagation(); setMenuFor(menuFor === item.path ? null : item.path); }}><MoreVertical/></button>
-                    {menuFor === item.path && <span className="browse-actions" onClick={(event) => event.stopPropagation()}>
+                    {selectionMode && <button className="browse-select" aria-label={t("library.selectItem", { name: item.label })} aria-pressed={selectedPaths.has(item.path)} onClick={(event) => { event.stopPropagation(); toggleSelection(item.path); }}>{selectedPaths.has(item.path) && <Check/>}</button>}
+                    {!selectionMode && <button className="browse-menu" aria-label={t("library.options", { name: item.label })} aria-expanded={menuFor === item.path} onClick={(event) => { event.stopPropagation(); setMenuFor(menuFor === item.path ? null : item.path); }}><MoreVertical/></button>}
+                    {!selectionMode && menuFor === item.path && <span className="browse-actions" onClick={(event) => event.stopPropagation()}>
                       {matchActions(item)}
                       <button onClick={() => void toggleFavorite(item.path, !item.favorite)}><Star/> {t(item.favorite ? "favorite.remove" : "favorite.add")}</button>
                       {item.progress && <button onClick={() => void forgetWatched(item.path)}><RotateCcw/> {t("library.markUnwatched")}</button>}
@@ -1262,8 +1383,13 @@ export function App() {
       onDeviceDownload={() => localStream?.localPath ? downloadLibraryFile(localStream.localPath) : downloadStreamToDevice()}
       onClose={() => { setPlayerOpen(false); setLocalStream(null); }}/>
     {libraryManagerOpen && <LibraryManagerDialog restricted={restricted} onClose={() => setLibraryManagerOpen(false)} onChanged={refreshLibraries} onError={fail} onNotify={notify}/>}
-    {movePath && <MoveDialog path={movePath.path} label={movePath.label} itemType={movePath.type} libraries={libraries} onClose={() => setMovePath(null)} onMoved={(target) => void finishMove(target)}/>}
-    {identifyPath && <IdentifyDialog path={identifyPath} onClose={() => setIdentifyPath(null)} onApplied={() => { setIdentifyPath(null); void loadSuggestionCount(); void loadBrowse(browsePath); }}/>}
+    {movePath && <MoveDialog path={movePath.path} paths={movePath.paths} copy={movePath.copy} label={movePath.label}
+      itemType={movePath.type} libraries={libraries} onClose={() => setMovePath(null)} onMoved={(target) => void finishMove(target)}
+      onQueued={(id) => { leaveSelection(); void trackQueuedOp(id); }}/>}
+    {identifyPath && <IdentifyDialog path={identifyPath} onClose={() => setIdentifyPath(null)}
+      onApplied={() => { setIdentifyPath(null); void loadSuggestionCount(); void loadBrowse(browsePath); }}/>}
+    {bulkIdentifyPaths?.length && <IdentifyDialog path={bulkIdentifyPaths[0]!} paths={bulkIdentifyPaths}
+      onClose={() => setBulkIdentifyPaths(null)} onApplied={(id) => { setBulkIdentifyPaths(null); leaveSelection(); if (id) void trackQueuedOp(id); }}/>}
     {suggestionsOpen && <SuggestionsDialog
       onClose={() => setSuggestionsOpen(false)}
       onChanged={() => { void loadSuggestionCount(); void loadBrowse(browsePath); }}

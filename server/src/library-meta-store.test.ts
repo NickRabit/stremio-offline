@@ -105,6 +105,18 @@ test("a move into another library writes both files and pins the inherited title
   });
 });
 
+test("copy duplicates metadata without changing the source", async () => {
+  const dataDir = await mkdtemp(path.join(tmpdir(), "stremio-meta-"));
+  try {
+    const store = new LibraryMetaStore(dataDir);
+    await store.load();
+    await store.update("lib_11111111", (file) => { file.meta.Title = record("tt1"); });
+    await store.copy("lib_11111111/Title", "lib_22222222/Title copy");
+    assert.equal(store.meta("lib_11111111").Title?.id, "tt1");
+    assert.equal(store.meta("lib_22222222")["Title copy"]?.id, "tt1");
+  } finally { await rm(dataDir, { recursive: true, force: true }); }
+});
+
 test("a write driven by catalogue identity walks every library", async () => {
   await withStore(async (store, dataDir) => {
     await seed(dataDir, "lib_a", { "One.mkv": record("tt1") });

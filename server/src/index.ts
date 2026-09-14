@@ -51,6 +51,8 @@ import { LibraryMetaStore } from "./library-meta-store.js";
 import { artworks } from "./artwork-cache.js";
 import type { AddonRecord, AddonRole, MetaItem, StreamItem } from "./types.js";
 import { createSettingsBackup, parseSettingsBackup } from "./backup.js";
+import { LibraryOps, type LibraryOp } from "./library-ops.js";
+import { transferLibraryPath, type TransferProgress } from "./library-transfer.js";
 
 const STREAM_SORTS = new Set(["recommended", "size-desc", "size-asc", "addon"]);
 const DATA_DIR = process.env.DATA_DIR ?? "/data";
@@ -89,6 +91,7 @@ const queue = new DownloadQueue(() => store.settings().concurrentDownloads, () =
   throughput.forget(id);
 });
 const stats = new StatsLog();
+let libraryOpsWriting = false;
 /** How fast each running playback is transferring right now. */
 const throughput = new Throughput();
 
@@ -1457,16 +1460,20 @@ app.delete("/api/progress/:key", asyncRoute(async (req, res) => {
   res.status(204).end();
 }));
 
-app.post("/api/library/favorite", asyncRoute(async (req, res) => {
-  const relative = String(req.body.path ?? "").trim();
+const setLibraryFavorite = async (relative: string, wanted: boolean) => {
   const resolved = relative ? await resolveLibraryPath(store.libraries(), relative) : undefined;
   if (!resolved) throw new AppError("Invalid path.", "err.invalidPath");
-  const wanted = Boolean(req.body.favorite);
   await store.update((state) => {
     const current = new Set(state.favorites ?? []);
     if (wanted) current.add(resolved.key); else current.delete(resolved.key);
     state.favorites = [...current];
   });
+};
+
+app.post("/api/library/favorite", asyncRoute(async (req, res) => {
+  const relative = String(req.body.path ?? "").trim();
+  const wanted = Boolean(req.body.favorite);
+  await setLibraryFavorite(relative, wanted);
   res.json({ path: relative, favorite: wanted });
 }));
 
@@ -1649,8 +1656,7 @@ const pruneEmptiedFolders = async (key: string) => {
   return gone;
 };
 
-app.delete("/api/library/item", asyncRoute(async (req, res) => {
-  const relative = String(req.query.path ?? "").trim();
+const deleteLibraryItem = async (relative: string) => {
   const resolved = relative ? await resolveLibraryPath(store.libraries(), relative) : undefined;
   if (!resolved || !resolved.relative) throw new AppError("Invalid path.", "err.invalidPath");
   const info = await stat(resolved.absolute).catch(() => undefined);
@@ -1662,7 +1668,30 @@ app.delete("/api/library/item", asyncRoute(async (req, res) => {
   const pruned = await pruneEmptiedFolders(resolved.key);
   invalidateLibrary();
   log("INFO", "Deleted from the library", { path: relative, directory: info.isDirectory(), forgottenTitles: [...orphans], pruned });
+};
+
+app.delete("/api/library/item", asyncRoute(async (req, res) => {
+  const relative = String(req.query.path ?? "").trim();
+  await deleteLibraryItem(relative);
   res.status(204).end();
+}));
+
+app.post("/api/library/folder", asyncRoute(async (req, res) => {
+  const parent = String(req.body?.path ?? "").trim();
+  const resolved = await resolveLibraryPath(store.libraries(), parent);
+  if (!resolved) throw new AppError("Invalid path.", "err.invalidPath");
+  const info = await stat(resolved.absolute).catch(() => undefined);
+  if (!info?.isDirectory()) throw new AppError("The destination folder does not exist.", "err.targetMissing");
+  const rawName = String(req.body?.name ?? "").trim();
+  if (!rawName || /^\.+$/.test(rawName)) throw new AppError("Invalid name.", "err.invalidName");
+  const name = safeName(rawName);
+  const relative = posixJoin(resolved.relative, name);
+  const target = await resolveLibraryPath(store.libraries(), libraryPath(resolved.library.id, relative));
+  if (!target) throw new AppError("Invalid path.", "err.invalidPath");
+  if (await fileExists(target.absolute)) throw new AppError("A file with that name already exists.", "err.nameTaken");
+  await mkdir(target.absolute);
+  invalidateLibrary();
+  res.status(201).json({ path: wirePath(target.key) });
 }));
 
 app.post("/api/library/rename", asyncRoute(async (req, res) => {
@@ -1718,14 +1747,12 @@ const assertMoveType = async (key: string, destination: LibraryRecord) => {
   }
 };
 
-app.post("/api/library/move", asyncRoute(async (req, res) => {
-  const relative = String(req.body.path ?? "").trim();
+const transferLibraryItem = async (relative: string, folder: string, copy = false, progress?: TransferProgress) => {
   const resolved = relative ? await resolveLibraryPath(store.libraries(), relative) : undefined;
   if (!resolved || !resolved.relative) throw new AppError("Invalid path.", "err.invalidPath");
   const info = await stat(resolved.absolute).catch(() => undefined);
   if (!info) throw new AppError("The file or folder does not exist.", "err.pathMissing");
 
-  const folder = String(req.body.folder ?? "").trim();
   const folderResolved = await resolveLibraryPath(store.libraries(), folder);
   if (!folderResolved) throw new AppError("Invalid path.", "err.invalidPath");
   const folderInfo = await stat(folderResolved.absolute).catch(() => undefined);
@@ -1752,14 +1779,23 @@ app.post("/api/library/move", asyncRoute(async (req, res) => {
   // the item is the same item and would otherwise lose its poster until a rescan.
   const carried = [resolved.key, ...(await libraryFiles())
     .map((file) => file.relative).filter((item) => item !== resolved.key && isPathWithin(item, resolved.key))];
-  await rename(resolved.absolute, target.absolute);
-  await relocateArtwork(carried, resolved.key, target.key);
-  await relocateLibraryPath(resolved.key, target.key, true);
+  const transferred = await transferLibraryPath(resolved.absolute, target.absolute, !copy, progress);
+  if (copy) await metaStore.copy(resolved.key, target.key);
+  else {
+    await relocateArtwork(carried, resolved.key, target.key);
+    await relocateLibraryPath(resolved.key, target.key, true);
+  }
   // Only the library the item left: the destination gained a folder, it did not lose one.
-  const pruned = await pruneEmptiedFolders(resolved.key);
+  const pruned = copy ? [] : await pruneEmptiedFolders(resolved.key);
   invalidateLibrary();
   const moved = wirePath(target.key);
-  log("INFO", "Moved in the library", { from: relative, to: moved, library: resolved.library.id, pruned });
+  log("INFO", copy ? "Copied in the library" : "Moved in the library",
+    { from: relative, to: moved, library: resolved.library.id, pruned, ...(transferred.sourceLeft ? { sourceLeft: transferred.sourceLeft } : {}) });
+  return moved;
+};
+
+app.post("/api/library/move", asyncRoute(async (req, res) => {
+  const moved = await transferLibraryItem(String(req.body.path ?? "").trim(), String(req.body.folder ?? "").trim());
   res.json({ path: moved });
 }));
 
@@ -1831,6 +1867,7 @@ const libraryScan = new LibraryScan({
   savePoster: (key, url) => saveCatalogPoster(key, url),
   deleteGeneratedArt: (key) => clearGeneratedArt(key),
   busy: () => {
+    if (libraryOpsWriting) return "operation";
     if (playback.diagnostics().sessions.some((session) => session.idleSeconds < PLAYBACK_IDLE_SECONDS)) return "playback";
     if (store.settings().libraryScanPauseOnDownload && queue.list().some((job) => job.status === "downloading")) return "download";
     const searchHosts = new Set(searchableCatalogs(store.addons()).map(({ addon }) => hostOf(addon.manifestUrl)));
@@ -1854,7 +1891,7 @@ const libraryAutoScan = new LibraryAutoScan({
   },
   status: () => libraryScan.snapshot(),
   start: (libraryId?: string) => libraryScan.start(libraryId ? { libraryId } : {}),
-  busy: () => playbackBusy() || (store.settings().libraryScanPauseOnDownload && queue.list().some((job) => job.status === "checking" || job.status === "downloading")),
+  busy: () => playbackBusy() || libraryOpsWriting || (store.settings().libraryScanPauseOnDownload && queue.list().some((job) => job.status === "checking" || job.status === "downloading")),
   watch: (onChange) => {
     const watches = walkableLibraries().map((library) => watchLibrary(library.root, () => { invalidateLibrary(); onChange(); }));
     return { active: watches.some((watch) => watch.active), close: () => { for (const watch of watches) watch.close(); } };
@@ -1939,18 +1976,20 @@ app.get("/api/library/identity", asyncRoute(async (req, res) => {
   });
 }));
 
-app.post("/api/library/match", asyncRoute(async (req, res) => {
-  const requested = String(req.body.path ?? req.body.key ?? "").trim();
+type LibraryMatchRequest = { path?: unknown; key?: unknown; id?: unknown; type?: unknown; scope?: unknown; season?: unknown; episode?: unknown; skipLookup?: unknown };
+
+const matchLibraryItem = async (body: LibraryMatchRequest) => {
+  const requested = String(body.path ?? body.key ?? "").trim();
   const resolved = requested ? await resolveLibraryPath(store.libraries(), requested) : undefined;
   if (!resolved) throw new AppError("Invalid path.", "err.invalidPath");
   const requestKey = resolved.key;
   const files = await libraryFiles();
   const unitKey = matchKeyFor(requestKey, files);
-  if (typeof req.body.skipLookup === "boolean" && req.body.id === undefined) {
+  if (typeof body.skipLookup === "boolean" && body.id === undefined) {
     const target = parseLibraryPath(requestKey);
     if (target) await metaStore.update(target.libraryId, (file) => {
       const current = file.meta[target.relative];
-      if (req.body.skipLookup) {
+      if (body.skipLookup) {
         file.meta[target.relative] = {
           type: current?.type ?? "movie",
           id: current?.id ?? "",
@@ -1968,19 +2007,19 @@ app.post("/api/library/match", asyncRoute(async (req, res) => {
       } else delete file.meta[target.relative];
     });
     invalidateLibrary();
-    log("INFO", req.body.skipLookup ? "Library path excluded from matching" : "Library path included in matching", { path: requested });
-    return res.json({ key: wirePath(requestKey), skipLookup: req.body.skipLookup === true });
+    log("INFO", body.skipLookup ? "Library path excluded from matching" : "Library path included in matching", { path: requested });
+    return { key: wirePath(requestKey), skipLookup: body.skipLookup === true };
   }
-  const id = String(req.body.id ?? "");
-  const type = String(req.body.type ?? "movie");
+  const id = String(body.id ?? "");
+  const type = String(body.type ?? "movie");
   const number = (value: unknown) => {
     const parsed = Number(value);
     return value === undefined || value === null || value === "" || !Number.isFinite(parsed) ? undefined : parsed;
   };
-  const episode = number(req.body.episode);
-  const season = number(req.body.season);
+  const episode = number(body.episode);
+  const season = number(body.season);
   // "file" binds the one video the user clicked, "unit" the whole title it belongs to.
-  const bindKey = req.body.scope === "file" ? requestKey : unitKey;
+  const bindKey = body.scope === "file" ? requestKey : unitKey;
   const meta = id ? await cachedMeta(type, id) : null;
   const fields = cacheFieldsFromMeta(meta);
   const episodeRows = episodesFromMeta(meta);
@@ -2009,7 +2048,99 @@ app.post("/api/library/match", asyncRoute(async (req, res) => {
   if (requestKey !== bindKey) await clearGeneratedArt(requestKey);
   if (id) saveCatalogPoster(bindKey, episodeRow?.thumbnail ?? meta?.poster);
   log("INFO", "Library title matched", { key: bindKey, type, id: id || null, source: "user", ...(episode != null ? { season: season ?? 1, episode } : {}) });
-  res.json({ key: wirePath(bindKey), type, id: id || null });
+  return { key: wirePath(bindKey), type, id: id || null };
+};
+
+app.post("/api/library/match", asyncRoute(async (req, res) => {
+  res.json(await matchLibraryItem(req.body ?? {}));
+}));
+
+const parseLibraryOp = (value: unknown): LibraryOp => {
+  const body = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  const op = String(body.op ?? "");
+  const items = Array.isArray(body.items)
+    ? [...new Set(body.items.map((item) => String(item).trim()).filter(Boolean))]
+    : [];
+  if (!items.length) throw new AppError("At least one library item is required.", "err.missingLibraryItems");
+  if (items.length > 500) throw new AppError("A library operation may contain at most 500 items.", "err.tooManyItems");
+  if (op === "move" || op === "copy") {
+    const target = String(body.target ?? "").trim();
+    if (!target) throw new AppError("A destination folder is required.", "err.targetMissing");
+    return { op, items, target };
+  }
+  if (op === "delete" || op === "unmatch" || op === "artwork" || op === "forget") return { op, items };
+  if (op === "favorite") return { op, items, favorite: Boolean(body.favorite) };
+  if (op === "skipLookup") return { op, items, skipLookup: Boolean(body.skipLookup) };
+  if (op === "match") {
+    const id = String(body.id ?? "").trim();
+    const type = String(body.type ?? "").trim();
+    if (!id || !type) throw new AppError("A catalogue title is required.", "err.missingTitleKey");
+    return { op, items, type, id };
+  }
+  throw new AppError("Unknown library operation.", "err.invalidLibraryOperation");
+};
+
+const libraryOps = new LibraryOps({
+  file: path.join(DATA_DIR, "library-ops.json"),
+  pause: async (operation, item) => {
+    const parsed = parseLibraryPath(item);
+    const resolved = await resolveLibraryPath(store.libraries(), item);
+    const library = parsed ? libraryFor(store.libraries(), parsed.libraryId) : resolved?.library;
+    if (library) {
+      await refreshLibraryHealth();
+      if (libraryHealth.get(library.id)?.unreachable) return "library";
+    }
+    if (resolved && playback.active().some((session) => {
+      if (!session.stream.url?.startsWith("file:")) return false;
+      try { return isInside(fileURLToPath(session.stream.url), resolved.absolute); } catch { return false; }
+    })) return "playback";
+    if ((operation.op === "move" || operation.op === "copy") && queue.list().some((job) => job.status === "checking" || job.status === "downloading")) {
+      const target = await resolveLibraryPath(store.libraries(), operation.target);
+      const writing = await Promise.all(queue.list().filter((job) => job.target && (job.status === "checking" || job.status === "downloading")).map((job) => resolveLibraryPath(store.libraries(), job.target)));
+      if (target && writing.some((job) => job && isInside(job.absolute, target.absolute))) return "download";
+    }
+    return undefined;
+  },
+  execute: async (operation, item, progress) => {
+    const resolved = await resolveLibraryPath(store.libraries(), item);
+    if (!resolved || !resolved.relative) throw new AppError("Invalid path.", "err.invalidPath");
+    libraryOpsWriting = operation.op === "move" || operation.op === "copy" || operation.op === "delete";
+    try {
+      if (operation.op === "move" || operation.op === "copy") {
+        return { to: await transferLibraryItem(item, operation.target, operation.op === "copy", progress) };
+      }
+      if (operation.op === "delete") await deleteLibraryItem(item);
+      else if (operation.op === "favorite") await setLibraryFavorite(item, operation.favorite);
+      else if (operation.op === "match") await matchLibraryItem({ path: item, type: operation.type, id: operation.id });
+      else if (operation.op === "unmatch") await matchLibraryItem({ path: item, type: "movie", id: "" });
+      else if (operation.op === "skipLookup") await matchLibraryItem({ path: item, skipLookup: operation.skipLookup });
+      else if (operation.op === "forget") {
+        await store.update((state) => {
+          state.progress = Object.fromEntries(Object.entries(state.progress ?? {}).filter(([key, record]) => {
+            const stored = key.startsWith("file:") ? key.slice(5) : record.path;
+            return !stored || !isPathWithin(stored, resolved.key);
+          }));
+        });
+      } else {
+        await clearGeneratedArt(resolved.key);
+        const info = await stat(resolved.absolute);
+        (info.isDirectory() ? scheduleFolderArtwork : scheduleFileArtwork)(resolved.key);
+      }
+      invalidateLibrary();
+      return {};
+    } finally { libraryOpsWriting = false; }
+  },
+});
+await libraryOps.load();
+
+app.get("/api/library/ops", (_req, res) => res.json(libraryOps.snapshot()));
+app.post("/api/library/ops", asyncRoute(async (req, res) => {
+  const job = await libraryOps.enqueue(parseLibraryOp(req.body));
+  res.status(202).json({ id: job.id });
+}));
+app.delete("/api/library/ops/:id", asyncRoute(async (req, res) => {
+  if (!await libraryOps.cancel(String(req.params.id))) throw new AppError("Library operation not found.", "err.libraryOperationMissing", 404);
+  res.status(204).end();
 }));
 
 /** What the scan proposed and nobody has confirmed yet. */
@@ -2808,6 +2939,6 @@ app.listen(port, "0.0.0.0", () => { markServerReady(); log("INFO", "Stremio Offl
 for (const signal of ["SIGTERM", "SIGINT"] as const) {
   process.once(signal, () => {
     log("INFO", "Shutting down", { signal });
-    void Promise.allSettled([images.flush(), artworks.flush(), metaStore.flush()]).then(flushLog).finally(() => process.exit(0));
+    void Promise.allSettled([images.flush(), artworks.flush(), metaStore.flush(), libraryOps.flush()]).then(flushLog).finally(() => process.exit(0));
   });
 }

@@ -1,5 +1,5 @@
 import { serverText, t } from "./i18n";
-import type { ActiveStream, Diagnostics, BuildInfo, AuthStatus, StatsSummary, Addon, AddonDownloadSettings, Capabilities, Catalog, Download, DownloadSelection, DownloadSnapshot, Inspection, BrowseResult, IdentityPreview, LibraryFolder, LibraryPage, ProgressEntry, WatchlistEntry, GrantBrowse, LibraryEstimate, LibraryGrant, LibrarySummary, LibraryType, LibraryView, Meta, PlaybackSession, ScanState, SearchResult, SearchableCatalog, SuggestionRow, Session, Settings, SettingsBackup, SettingsPatch, Stream, Subtitle } from "./types";
+import type { ActiveStream, Diagnostics, BuildInfo, AuthStatus, StatsSummary, Addon, AddonDownloadSettings, Capabilities, Catalog, Download, DownloadSelection, DownloadSnapshot, Inspection, BrowseResult, IdentityPreview, LibraryFolder, LibraryOp, LibraryOpsState, LibraryPage, ProgressEntry, WatchlistEntry, GrantBrowse, LibraryEstimate, LibraryGrant, LibrarySummary, LibraryType, LibraryView, Meta, PlaybackSession, ScanState, SearchResult, SearchableCatalog, SuggestionRow, Session, Settings, SettingsBackup, SettingsPatch, Stream, Subtitle } from "./types";
 
 /** The status code has to reach the top, or a sign-out is indistinguishable from an ordinary error. */
 export class ApiError extends Error {
@@ -100,6 +100,10 @@ export const api = {
   renameLibraryItem: (path: string, name: string) => request<{ path: string }>("/api/library/rename", { method: "POST", body: JSON.stringify({ path, name }) }),
   libraryFolders: (path = "") => request<{ path: string; folders: LibraryFolder[] }>(`/api/library/folders?${q({ path: path || undefined })}`),
   moveLibraryItem: (path: string, folder: string) => request<{ path: string }>("/api/library/move", { method: "POST", body: JSON.stringify({ path, folder }) }),
+  createLibraryFolder: (path: string, name: string) => request<{ path: string }>("/api/library/folder", { method: "POST", body: JSON.stringify({ path, name }) }),
+  libraryOps: () => request<{ jobs: LibraryOpsState[] }>("/api/library/ops"),
+  startLibraryOp: (operation: LibraryOp) => request<{ id: string }>("/api/library/ops", { method: "POST", body: JSON.stringify(operation) }),
+  cancelLibraryOp: (id: string) => request<void>(`/api/library/ops/${encodeURIComponent(id)}`, { method: "DELETE" }),
   libraryIdentity: (path: string) => request<IdentityPreview>(`/api/library/identity?${q({ path })}`),
   matchLibraryItem: (body: { path?: string; key?: string; id?: string; type?: string; scope?: "unit" | "file"; season?: number; episode?: number; skipLookup?: boolean }) =>
     request<{ key: string; type: string; id: string | null }>("/api/library/match", { method: "POST", body: JSON.stringify(body) }),

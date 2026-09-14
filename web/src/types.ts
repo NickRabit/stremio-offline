@@ -168,10 +168,24 @@ export interface IdentityPreview {
 export interface SuggestionRow { key: string; label: string; suggestion: MatchSuggestion }
 export interface ScanState {
   status: "idle" | "running" | "paused" | "completed" | "failed";
-  pauseReason?: "playback" | "download" | "breaker";
+  pauseReason?: "playback" | "download" | "breaker" | "operation";
   startedAt?: string; finishedAt?: string; updatedAt?: string;
   total: number; done: number; matched: number; skipped: number; failed: number;
   current?: string; remaining: string[]; error?: string;
+}
+export type LibraryOp =
+  | { op: "move" | "copy"; items: string[]; target: string }
+  | { op: "delete" | "unmatch" | "artwork" | "forget"; items: string[] }
+  | { op: "favorite"; items: string[]; favorite: boolean }
+  | { op: "match"; items: string[]; type: string; id: string }
+  | { op: "skipLookup"; items: string[]; skipLookup: boolean };
+export interface LibraryOpsState {
+  id: string; op: LibraryOp["op"];
+  status: "running" | "paused" | "completed" | "failed" | "cancelled";
+  pauseReason?: "queue" | "playback" | "download" | "library";
+  total: number; done: number; failed: number; bytes: number; bytesTotal: number;
+  current?: string; startedAt: string; finishedAt?: string;
+  results: Array<{ path: string; ok: boolean; to?: string; error?: string; errorKey?: string }>;
 }
 /** One destination in the move dialog. Unlike a browsed folder it may hold no video at all. */
 export interface LibraryFolder { path: string; name: string }

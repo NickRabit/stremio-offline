@@ -13,7 +13,7 @@ import { isPathWithin, type FoundFile } from "./library.js";
 import type { AddonRecord, MetaItem } from "./types.js";
 
 export type ScanStatus = "idle" | "running" | "paused" | "completed" | "failed";
-export type ScanPauseReason = "playback" | "download" | "breaker";
+export type ScanPauseReason = "playback" | "download" | "breaker" | "operation";
 
 export interface ScanState {
   status: ScanStatus;
