@@ -207,10 +207,33 @@ In order. Each is a branch off `main` and its own pull request.
    `PATCH /api/addons/:key`; backup v2 remapping libraries by root then name
    **and** remapping `defaultMovieLibrary` / `defaultSeriesLibrary` inside the
    settings blob; `/downloads` gone from `web/src`. §11 of the specification.
+   Done in #126, with the review's first point folded in: a job whose library is
+   switched off, read-only or away **pauses** with `pauseReason: "library"` and
+   resumes by itself, instead of being redirected to the default.
 5. **User documentation**: `docs/libraries.md`, including the split guide above.
    Done: the guide covers the split, the types, the switches, unreachable and
    read-only roots, removing against disabling, and where the state lives.
-   Writing it turned up a third defect, recorded below.
+6. **A removed library keeps its identity** for a month, so a folder added again
+   takes its id back and everything remembered under it is live again. Done in
+   #127 — the review's second point, and what makes the dialog's promise true.
+
+## The review of these four branches
+
+An independent review (`LIBRARY_REVIEW.md`, answered in `LIBRARY_REVIEW.md` next
+to it) settled two blocking points and left one merge-order warning. All three
+are reflected above; the warning is worth repeating here because it is the kind
+that resolves into a type error rather than a merge conflict:
+
+**Rebasing #126 over #125 is semantic.** #125 removes `artworkLocation` from
+`Settings`; #126 was written against the version that still has it, so
+`server/src/backup.ts` and `server/src/store.ts` carry the field in two places.
+After #125 lands the line has to go rather than be merged, and the rebased branch
+needs `npm run build` before the tests, not only the tests.
+
+The review also confirmed, so nobody spends a day on them again: the create path
+cannot escape a grant through a symlink (`grantingRoot` resolves both sides), the
+artwork migration preserves the old layout, and backup v2 remaps every id it
+restores.
 
 ## Two things worth not getting wrong
 

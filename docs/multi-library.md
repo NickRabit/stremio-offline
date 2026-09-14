@@ -275,13 +275,36 @@ again after every rebase onto `main`.
 
 ### PR 6 — Per-library addon save rules, backup, documentation
 
+- [x] `DownloadTargetSettings.libraryId` end to end: the editor offers the libraries that take
+      the kind, with **Default** naming the library marked as that kind's default and the path
+      preview showing the chosen library's own root instead of a hardcoded `/downloads`
+      (desktop readiness). Validation is one place, `normalizeDownloadSettings(value,
+      libraries)`: unknown id, a library that does not take the kind, or one that is switched
+      off, read-only or away is an `AppError` with a catalogue key, thrown before anything is
+      written.
+- [x] The queue resolves the rule's library when a job starts and stores the **qualified**
+      target, so the finished file, its metadata, its artwork and the interface's "show in
+      library" all work off one kind of path. A library that cannot be written to right now
+      **pauses** the job (`pauseReason: "library"`) instead of redirecting it, the queue keeps
+      running the other jobs, and the paused ones resume by themselves when the library is
+      back. A rule naming a library whose record is gone falls back to the default and logs
+      one line -- see *When a library stops being available*.
+- [x] Backup version 2 carries the libraries' names and roots and the import maps every
+      reference -- the two defaults in the settings blob and each addon's rules -- by root
+      first, then by name and type, clearing what it cannot match and reporting the count.
+      Version 1 still imports.
 - [x] The user documentation: [libraries.md](libraries.md) covers what a library is, the
       types, the per-library switches, what an unreachable or read-only root does, removing
       against disabling, where the state lives, and the split of the download directory --
       *split from inside* as the supported route and *re-root* with the warning that it moves
       no files. Linked from the README and from the configuration reference, which is where
       an operator looks for `LIBRARY_ROOTS`.
-- [ ] The rest: per-library addon save rules, backup v2.
+- [x] Review follow-up (LIBRARY_REVIEW.md point 2): a library removed without `forget` leaves
+      `{ id, root, removedAt }` in `state.departed`, and a folder added again at the same root
+      takes that id back, so the match history, the artwork and the favorite and resume rows
+      are live again instead of stranded. Matching is `realpath` on both sides with the
+      literal path as a fallback, the list keeps the newest 20 entries and drops anything
+      older than 30 days, and `?forget=1` drops the note with the rest.
 
 ## Overview
 
@@ -1676,22 +1699,21 @@ that re-root moves no files. The wizard from the library manager is still open.
 
 ### Remembered metadata a re-add cannot find
 
-Found while writing that guide. `DELETE /api/libraries/:id` without `forget=1`
-keeps `data/library/<id>.json` and `data/artwork/<id>/`, and the interface reads
-as if the plain *Remove* were the recoverable choice ("Remove and forget … the
-match history and the thumbnails will not come back"). It is not recoverable:
-`POST /api/libraries` always mints a new id and nothing maps a root back to a
-retired one, so a library added again at the same folder starts with an empty
-match history. The kept files are then reachable by nothing.
+**Closed.** `DELETE /api/libraries/:id` without `forget=1` keeps
+`data/library/<id>.json` and `data/artwork/<id>/`, and the dialog promises that a
+folder added again picks that up. It did not: `POST /api/libraries` minted a new
+id, so the kept files and the favorite and resume rows keyed to the old one were
+reachable by nothing.
 
-Two ways out, and it is a decision rather than a fix:
-
-1. Say what happens. The row says the metadata is left on disk but is not picked
-   up again — what [libraries.md](libraries.md) now does.
-2. Keep a retired-root index and let a re-add at the same root take the old id
-   back, which restores the match history. That is the behaviour the row's
-   wording and §12 both imply, and per-library save rules will want the same
-   root-to-library mapping anyway.
+The second of the two ways out was taken, the one that makes the promise true
+rather than rewriting it: a removal without `forget` leaves `{ id, root,
+removedAt }` in `state.departed`, and a library added again at the same root
+takes the id back. Matching goes through `realpath` on both sides, the way the
+root guard does, with the literal path as a fallback for a folder removed while
+its disk was away. `activeDeparted` keeps the newest 20 entries and drops
+anything older than 30 days, so add-and-remove cannot grow the state file, and
+`?forget=1` drops the note together with everything else. The guide says this
+plainly now instead of warning about it.
 
 ## Open Questions
 

@@ -37,9 +37,13 @@ Library view. The picker walks the folders this install is allowed to read.
   your catalogues straight away. Untick it and the scan waits until the next
   automatic run, or until you press **Scan this library** in its row.
 
-New downloads from the queue still land under `DOWNLOAD_PATH`, which is the
-install's first library. An added library is for media that is already on disk;
-letting an addon's save rule name a library is not in this build yet.
+Where a download lands is a property of the addon that offered the stream: each
+stream addon sets a library and a subfolder for films and for series, and the
+library marked **Default for movies** or **Default for series** is what a rule
+that says *Default* means (see
+[downloads.md](downloads.md#where-files-are-saved)). The queue resolves that
+choice when a job starts, so a library that is switched off, read-only or on a
+disk that has gone pauses the job rather than sending the file somewhere else.
 
 ## The library row
 
@@ -77,8 +81,10 @@ errors:
 
 - The row says **not reachable** and stays where it is. The library is skipped
   by the scan, by the thumbnail sweep and by bulk operations. Its metadata file
-  and thumbnails stay in `DATA_PATH`, and the media is untouched. Plug the disk
-  back in and everything is there again.
+  and thumbnails stay in `DATA_PATH`, and the media is untouched. A download
+  bound for it — an addon's save rule names it — waits in the queue and says so,
+  rather than landing in another library where nobody expects it. Plug the disk
+  back in and everything is there again, the download included.
 - A root that cannot be written (a read-only mount, a wrong `PUID`) is flagged
   **read-only**. Nothing is written into it: posters and thumbnails go to
   `DATA_PATH/artwork/<library id>/` instead, and the artwork switch is locked
@@ -93,8 +99,11 @@ Both actions leave every file on disk alone; the app never deletes media as a
 side effect of a library edit.
 
 - **Remove** takes the library out of the app and leaves its stored metadata and
-  thumbnails in `DATA_PATH`. They are not picked up again by a later *Add*: a
-  new library gets its own identity, so it starts with a fresh match history.
+  thumbnails in `DATA_PATH`. The folder keeps its identity for a month: add the
+  same folder again — the same path, however it is mounted — and it is the same
+  library, with its match history, its thumbnails, its favorites and its resume
+  positions exactly where they were. Twenty removed folders are remembered at
+  once; add *and* remove more than that and the oldest note is forgotten.
 - **Remove and forget** also drops that stored metadata, the thumbnails under
   `DATA_PATH/artwork/<library id>/`, and the favorites and resume rows that
   pointed into it. The media itself still stays.
