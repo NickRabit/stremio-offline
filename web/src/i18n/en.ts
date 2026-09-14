@@ -480,7 +480,7 @@ export const en = {
   "library.newFolder": "New folder",
   "library.newFolderHint": "Name of the new folder",
   "library.newFolderPending": "This folder does not exist yet. It is created together with the library.",
-  "library.newFolderInvalid": "A folder name cannot contain a slash.",
+  "library.newFolderInvalid": "A folder name cannot contain / \\ : * ? \" < > |.",
   "library.regenerateArtwork": "Regenerate artwork",
   "library.rename": "Rename",
   "library.renamePrompt": "New name:",

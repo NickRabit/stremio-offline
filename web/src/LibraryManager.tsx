@@ -155,7 +155,9 @@ function RootPicker({ reroot, onClose, onDone, onError, onLibrariesChanged }:
   const createFolder = () => {
     const name = newFolder.trim();
     if (!name || !browse?.path) return;
-    if (name === "." || name === ".." || name.includes("/")) { setError(t("library.newFolderInvalid")); return; }
+    // Both separators, the characters a name may not carry anywhere, and the two dot names:
+    // the server would turn them into something else rather than refuse them.
+    if (name === "." || name === ".." || /[/\\:*?"<>|]/.test(name)) { setError(t("library.newFolderInvalid")); return; }
     setError("");
     setNewFolder("");
     setName((current) => current || name);

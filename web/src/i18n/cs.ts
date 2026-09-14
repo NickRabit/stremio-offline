@@ -476,7 +476,7 @@ export const cs: Catalog = {
   "library.newFolder": "Nová složka",
   "library.newFolderHint": "Název nové složky",
   "library.newFolderPending": "Složka ještě neexistuje. Vytvoří se spolu s knihovnou.",
-  "library.newFolderInvalid": "Název složky nesmí obsahovat lomítko.",
+  "library.newFolderInvalid": "Název složky nesmí obsahovat / \\ : * ? \" < > |.",
   "library.regenerateArtwork": "Obnovit obrázky",
   "library.rename": "Přejmenovat",
   "library.renamePrompt": "Nové jméno:",
