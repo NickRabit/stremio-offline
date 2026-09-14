@@ -58,7 +58,10 @@ it("a library that holds nothing yet shows no size rather than a zero", async ()
 
 const granted: LibraryGrant = { path: "/downloads", source: "env", grantedAt: "2026-09-01T00:00:00.000Z", writable: true };
 const browseAt = (path: string): GrantBrowse => path
-  ? { path, parent: null, entries: [] }
+  ? { path, parent: null, entries: [
+      { name: "Films", path: `${path}/Films`, writable: true, source: "env" },
+      { name: "Series", path: `${path}/Series`, writable: true, source: "env" },
+    ] }
   : { path: "", parent: null, entries: [{ name: "downloads", path: "/downloads", writable: true, source: "env" }] };
 
 /** The picker adds a library over a folder that is not on disk yet by naming it here and
@@ -123,4 +126,24 @@ it("a folder that is already there is used as it is", async () => {
   await clickIn(picker(), "Add library");
 
   expect(posted, "nothing is created when the folder exists").toEqual([{ name: "Downloads", type: "mixed", root: "/downloads" }]);
+});
+
+it("shows library details before the folder browser and keeps manual grants secondary", async () => {
+  await openPicker([]);
+
+  const sections = picker().querySelectorAll(".library-picker-section");
+  expect(sections[0].textContent).toContain("Library details");
+  expect(sections[1].textContent).toContain("Folder");
+  expect(picker().querySelector<HTMLInputElement>('input[aria-label="Filter folders"]')?.readOnly).toBe(true);
+  expect(picker().querySelector<HTMLDetailsElement>(".library-picker-advanced")?.open).toBe(false);
+});
+
+it("filters the folders in the current location", async () => {
+  await openPicker([]);
+
+  await act(async () => { picker().querySelector<HTMLInputElement>('input[aria-label="Filter folders"]')?.focus(); });
+  await fillIn(picker(), "Filter folders", "seri");
+
+  expect([...picker().querySelectorAll(".move-list button")].some((button) => button.textContent?.includes("Series"))).toBe(true);
+  expect([...picker().querySelectorAll(".move-list button")].some((button) => button.textContent?.includes("Films"))).toBe(false);
 });

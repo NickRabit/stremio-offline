@@ -99,6 +99,16 @@ export function relativeWithin(libraryId: string, key: string): string {
   return value.startsWith(`${libraryId}/`) ? value.slice(libraryId.length + 1) : value;
 }
 
+/** The qualified key a queued download's target belongs to. A job from before libraries
+ *  carries a bare path and knows no library: the sweep has no way to say whose picture it
+ *  is, so it leaves it alone rather than guessing — and never asks for a library that a
+ *  multi-library install cannot single out. */
+export function queuedArtworkKey(job: { target: string; libraryId?: string }): string | undefined {
+  if (!job.target) return undefined;
+  if (parseLibraryPath(job.target)) return job.target;
+  return job.libraryId ? libraryPath(job.libraryId, job.target) : undefined;
+}
+
 export function libraryFor(libraries: LibraryRecord[], id: string): LibraryRecord | undefined {
   return libraries.find((library) => library.id === id);
 }

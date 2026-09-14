@@ -145,7 +145,7 @@ export type LibraryType = "movie" | "series" | "mixed";
 export interface BrowseLibrary {
   kind: "library"; libraryId: string; name: string; label: string; type: LibraryType;
   enabled: boolean; fileCount: number; titles: number; size: number;
-  unreachable: boolean; readOnly: boolean; path: string; poster?: string;
+  unreachable: boolean; readOnly: boolean; path: string; poster?: string; posters?: string[];
 }
 /** One library in `GET /api/libraries`. `root` is absent in restricted mode. */
 export interface LibraryView {
