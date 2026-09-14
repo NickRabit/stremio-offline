@@ -159,12 +159,28 @@ npm run test:e2e:snapshots
 ```
 
 The **Update screenshot baselines** workflow does the same thing on a branch and
-pushes the result, which is the easier path when a design change touches several
-screens.
+pushes the result. It runs on the same amd64 runner that checks them, so it is
+the path that cannot get the architecture wrong -- prefer it whenever a change
+touches a baseline at all.
 
-The image is what matters, not the machine: baselines generated in the container
-on an Apple Silicon Mac match what the amd64 CI runner produces. Generating them
-locally is fine.
+**The container is not enough; the architecture has to match too.** The image
+pins the browser and the fonts, but glyph rasterisation still differs between
+arm64 and amd64, so baselines generated in the container on an Apple Silicon Mac
+are rejected by the amd64 CI runner. It is not subtle and it is not limited to
+the screens that changed: regenerating one settings baseline on arm64 failed all
+five viewports, including the two whose text was identical, and the fixed
+120-pixel tolerance does not come close to absorbing it. To generate locally on
+an Apple Silicon Mac, force the platform on both the build and the run:
+
+```
+docker build --platform linux/amd64 -t stremio-offline-e2e -f e2e/Dockerfile .
+docker run --rm --platform linux/amd64 -v "$PWD":/work -w /work -e CI=1 \
+  stremio-offline-e2e npx playwright test layout/screenshots.spec.ts --update-snapshots
+```
+
+Emulation makes a run roughly three times slower, which is still quicker than a
+round trip through CI. Narrow it with `-g` when one screen changed: regenerating
+everything commits a megabyte of churn that no reviewer can read.
 
 Two decisions worth knowing about:
 
