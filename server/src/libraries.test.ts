@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { carveOuts, defaultLibrary, libraryFor, libraryPath, parseLibraryPath, relativeWithin, resolveLibraryPath, toFs, toPosix, type LibraryRecord } from "./libraries.js";
+import { activeDeparted, carveOuts, defaultLibrary, DEPARTED_MAX, departedIdFor, libraryFor, libraryPath, parseLibraryPath, relativeWithin, resolveLibraryPath, toFs, toPosix, type DepartedLibrary, type LibraryRecord } from "./libraries.js";
 
 const library = (over: Partial<LibraryRecord> = {}): LibraryRecord => ({
   id: "lib_ab12cd34", name: "Filmy", type: "movie", root: "/media/filmy", enabled: true,
@@ -110,4 +110,43 @@ test("resolution refuses what the guard exists for", async () => {
   assert.equal(await resolveLibraryPath([only, second], "Show"), undefined, "an unqualified path needs exactly one configured library");
 
   try { await rm(root, { recursive: true, force: true }); await rm(outside, { recursive: true, force: true }); } catch { /* best effort */ }
+});
+
+test("a folder added again takes back the id it had before", async () => {
+  const base = await mkdtemp(path.join(tmpdir(), "departed-"));
+  const root = path.join(base, "Films");
+  const elsewhere = path.join(base, "Elsewhere");
+  await mkdir(root, { recursive: true });
+  await mkdir(elsewhere, { recursive: true });
+  const link = path.join(base, "link");
+  await symlink(root, link);
+  const now = Date.parse("2026-09-14T12:00:00.000Z");
+  // A departed entry holds the realpath, the way the route records it: on macOS the temporary
+  // directory is reached through a symlink, and two names for one folder must still match.
+  const [realRoot, realElsewhere] = await Promise.all([realpath(root), realpath(elsewhere)]);
+  const departed: DepartedLibrary[] = [
+    { id: "lib_11111111", root: realElsewhere, removedAt: "2026-09-14T11:00:00.000Z" },
+    { id: "lib_22222222", root: realRoot, removedAt: "2026-09-14T11:30:00.000Z" },
+  ];
+
+  try {
+    assert.equal(await departedIdFor(departed, root, now), "lib_22222222", "the same folder takes its id back");
+    assert.equal(await departedIdFor(departed, link, now), "lib_22222222", "and so does the same folder under another name");
+    assert.equal(await departedIdFor(departed, path.join(base, "Other"), now), undefined);
+    assert.equal(await departedIdFor(departed, elsewhere, now), "lib_11111111");
+
+    // Nothing is kept for ever: an old entry stops matching, and the list has a ceiling.
+    const stale = [{ id: "lib_33333333", root: realRoot, removedAt: "2026-07-01T00:00:00.000Z" }];
+    assert.equal(await departedIdFor(stale, root, now), undefined, "an expired entry is gone");
+    // The list is kept oldest first, the way the route appends to it.
+    const total = DEPARTED_MAX + 5;
+    const many = Array.from({ length: total }, (_, index) => ({
+      id: `lib_${String(index).padStart(8, "0")}`, root: path.resolve(base, `root-${index}`), removedAt: new Date(now - (total - index) * 1000).toISOString(),
+    }));
+    assert.equal(activeDeparted(many, now).length, DEPARTED_MAX, "the newest are kept");
+    assert.equal(await departedIdFor(many, path.resolve(base, "root-0"), now), undefined, "the oldest fell off the end");
+    assert.equal(await departedIdFor(many, path.resolve(base, `root-${total - 1}`), now), `lib_${String(total - 1).padStart(8, "0")}`, "the newest is still there");
+  } finally {
+    await rm(base, { recursive: true, force: true });
+  }
 });

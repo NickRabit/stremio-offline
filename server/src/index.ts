@@ -43,7 +43,7 @@ import type { MediaInfo } from "./naming.js";
 import { defaultDownloadSettings, deviceFilename, normalizeDownloadSettings, safeName } from "./naming.js";
 import { LANGUAGE_NAMES, isUiLanguage, normalizeLanguage } from "./language.js";
 import { AppError, messageKeyOf } from "./errors.js";
-import { carveOuts, defaultLibrary, isInside, libraryFor, libraryPath, newLibraryId, parseLibraryPath, posixBase, posixDir, posixJoin, realAncestor, relativeWithin, resolveLibraryPath, toFs, toPosix, type LibraryRecord, type LibraryType, type RootGrant } from "./libraries.js";
+import { activeDeparted, carveOuts, defaultLibrary, DEPARTED_MAX, departedIdFor, isInside, libraryFor, libraryPath, newLibraryId, parseLibraryPath, posixBase, posixDir, posixJoin, realAncestor, relativeWithin, resolveLibraryPath, toFs, toPosix, type LibraryRecord, type LibraryType, type RootGrant } from "./libraries.js";
 import { envGrants, grantView, grantingRoot, insideGrant, mergeGrants } from "./library-grants.js";
 import { asLibraryType, checkLibraryRoot, libraryFlag } from "./library-admin.js";
 import { migrateStateFile } from "./library-migrate.js";
@@ -962,18 +962,26 @@ app.post("/api/libraries", asyncRoute(async (req, res) => {
   // decide whether the new one is writable.
   libraryProbe.invalidate(root);
   const health = await libraryProbe.cached(root);
+  // A folder that was a library before and was removed without forgetting takes its identity
+  // back, so its match history, artwork and favourite rows are its own again.
+  const departed = store.departed();
+  const resumedId = await departedIdFor(departed, root);
   const library: LibraryRecord = {
-    id: newLibraryId(), name, type, root, enabled: true,
+    id: resumedId ?? newLibraryId(), name, type, root, enabled: true,
     order: store.libraries().reduce((next, item) => Math.max(next, item.order + 1), 0),
     addedAt: new Date().toISOString(),
     ...(health.unreachable ? { unreachable: true } : {}),
     ...(health.readOnly ? { readOnly: true } : {}),
     writeArtwork: req.body?.writeArtwork !== false && !health.readOnly,
   };
-  await store.update((state) => { state.libraries = [...(state.libraries ?? []), library]; });
+  await store.update((state) => {
+    state.libraries = [...(state.libraries ?? []), library];
+    if (resumedId) state.departed = (state.departed ?? []).filter((entry) => entry.id !== resumedId);
+  });
   invalidateLibrary();
   await refreshLibraryHealth();
-  log("INFO", "Library created", { library: library.id, root: library.root, type });
+  if (resumedId) log("INFO", "Library added again, it keeps what it remembered", { library: library.id, root: library.root, type });
+  else log("INFO", "Library created", { library: library.id, root: library.root, type });
   res.status(201).json(libraryView(library, health, { titles: 0, files: 0, bytes: 0 }));
 }));
 
@@ -1133,8 +1141,14 @@ app.delete("/api/libraries/:id", asyncRoute(async (req, res) => {
   if (!target) throw new AppError("The library was not found.", "err.libraryNotFound", 404);
   // Only an explicit forget drops remembered data. The media is never touched either way.
   const forget = req.query.forget === "1";
+  // Removing without forgetting leaves a note behind: the folder's identity, so that adding it
+  // again is not a new library that has to be matched all over. The note is what makes the
+  // dialog's promise true, and it is dropped with the rest when the user asks to forget.
+  const realRoot = await realpath(path.resolve(target.root)).catch(() => path.resolve(target.root));
   await store.update((state) => {
     state.libraries = (state.libraries ?? []).filter((library) => library.id !== target.id);
+    const kept = activeDeparted(state.departed ?? []).filter((entry) => entry.id !== target.id);
+    state.departed = forget ? kept : [...kept, { id: target.id, root: realRoot, removedAt: new Date().toISOString() }].slice(-DEPARTED_MAX);
     if (state.settings) {
       if (state.settings.defaultMovieLibrary === target.id) state.settings.defaultMovieLibrary = "";
       if (state.settings.defaultSeriesLibrary === target.id) state.settings.defaultSeriesLibrary = "";
