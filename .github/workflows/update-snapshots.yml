@@ -29,6 +29,10 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
+      # The fixture builds its test media with ffmpeg, which the Playwright image
+      # does not carry. Without this the web server never starts and the run dies
+      # before it renders anything. The e2e job in ci.yml installs it the same way.
+      - run: apt-get update && apt-get install -y --no-install-recommends ffmpeg
       - run: npx playwright test --update-snapshots
         env:
           HOME: /root
