@@ -5,11 +5,10 @@ import { ArtworkQueue, artworkBesideMedia, fileMayUseFolderArtwork } from "./art
 
 test("a poster lands next to the media only where the library allows writing", () => {
   const healthy = { unreachable: false, readOnly: false };
-  assert.equal(artworkBesideMedia("media", { writeArtwork: true }, healthy), true);
-  assert.equal(artworkBesideMedia("data", { writeArtwork: true }, healthy), false, "the setting alone decides in the ordinary case");
-  assert.equal(artworkBesideMedia("media", { writeArtwork: false }, healthy), false, "a curated library keeps its folder to itself");
-  assert.equal(artworkBesideMedia("media", { writeArtwork: true }, { unreachable: false, readOnly: true }), false);
-  assert.equal(artworkBesideMedia("media", { writeArtwork: true }, { unreachable: true, readOnly: false }), false, "a mount that is down is not written to");
+  assert.equal(artworkBesideMedia({ writeArtwork: true }, healthy), true, "the library's own switch is the one control");
+  assert.equal(artworkBesideMedia({ writeArtwork: false }, healthy), false, "a curated library keeps its folder to itself");
+  assert.equal(artworkBesideMedia({ writeArtwork: true }, { unreachable: false, readOnly: true }), false);
+  assert.equal(artworkBesideMedia({ writeArtwork: true }, { unreachable: true, readOnly: false }), false, "a mount that is down is not written to");
 });
 
 test("a movie file may reuse the folder poster, a series episode may not", () => {

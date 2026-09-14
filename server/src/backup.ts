@@ -66,7 +66,6 @@ function parseSettings(value: unknown): Settings {
     uiLanguage, audioLanguage, subtitleLanguage, downloadTitleLanguage,
     mergeByName: boolean("mergeByName"),
     streamSort: STREAM_SORTS.has(streamSort) ? streamSort : fallback.streamSort,
-    artworkLocation: source.artworkLocation === "media" ? "media" : "data",
     trackProgress: boolean("trackProgress"),
     showResumeRow: boolean("showResumeRow"),
     libraryAutoScan: boolean("libraryAutoScan"),

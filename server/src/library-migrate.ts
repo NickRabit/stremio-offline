@@ -17,6 +17,8 @@ export interface MigrationSummary {
   /** Rows of match history moved out of `state.json` into `data/library/`. */
   metadata: number;
   artwork: { mapped: number; removed: number };
+  /** Libraries whose `writeArtwork` the retired global setting decided. */
+  artworkSetting: number;
 }
 
 /** The match history as every build before this one stored it: inline in `state.json`. */
@@ -26,7 +28,12 @@ type InlineState = State & {
   libraryEpisodes?: Record<string, LibraryEpisodeRecord>;
 };
 
-const nothing = (): MigrationSummary => ({ migrated: false, paths: 0, metadata: 0, artwork: { mapped: 0, removed: 0 } });
+/** `Settings.artworkLocation` before it was retired in favour of the per-library switch. */
+type GlobalArtworkState = InlineState & { settings?: State["settings"] & { artworkLocation?: "data" | "media" } };
+
+const nothing = (): MigrationSummary => ({ migrated: false, paths: 0, metadata: 0, artwork: { mapped: 0, removed: 0 }, artworkSetting: 0 });
+/** The old global is the marker: it is read once and removed, so this runs once per install. */
+const hasArtworkLocation = (state: GlobalArtworkState) => Boolean(state.settings && "artworkLocation" in state.settings);
 const artworkName = (key: string) => `${createHash("sha1").update(key).digest("hex")}.jpg`;
 const ARTWORK_FRESH_MS = 60 * 60_000;
 
@@ -39,10 +46,11 @@ export async function migrateStateFile(dataDir: string, downloadDir: string): Pr
     throw error;
   });
   if (raw === undefined) return nothing();
-  const state = JSON.parse(raw) as InlineState;
+  const state = JSON.parse(raw) as GlobalArtworkState;
   const legacy = (state.schemaVersion ?? 1) < SCHEMA_VERSION;
   const inline = Boolean(state.libraryMeta || state.librarySuggestions || state.libraryEpisodes);
-  if (!legacy && !inline) return nothing();
+  const globalArtwork = hasArtworkLocation(state);
+  if (!legacy && !inline && !globalArtwork) return nothing();
 
   if (legacy) {
     // A rollback to an older image is realistic, so the untouched v1 file is kept.
@@ -51,14 +59,33 @@ export async function migrateStateFile(dataDir: string, downloadDir: string): Pr
   // The second branch is a state the libraries build already migrated: it kept the match
   // history inline and its thumbnails flat, and this build reads neither.
   const summary = legacy ? await migrateLibraries(state, { dataDir, downloadDir }) : nothing();
-  if (!legacy) {
+  if (!legacy && inline) {
     summary.metadata = await splitInlineMetadata(state, dataDir);
     summary.artwork = await relayoutArtwork(state, dataDir);
   }
+  if (globalArtwork) summary.artworkSetting = retireArtworkLocation(state);
   const temp = `${file}.tmp`;
   await writeFile(temp, JSON.stringify(state, null, 2), { mode: 0o600 });
   await rename(temp, file);
   return summary;
+}
+
+/** `writeArtwork` on the library is the one control now; the global setting was the same
+ *  decision, one level up, and the two had to agree before a poster moved. Read the old
+ *  value once and let it decide each library's switch, so an install that kept its posters
+ *  in `DATA_PATH` keeps them there and no layout changes under anybody. */
+function retireArtworkLocation(state: GlobalArtworkState): number {
+  if (!state.settings) return 0;
+  const besideMedia = state.settings.artworkLocation === "media";
+  delete state.settings.artworkLocation;
+  let changed = 0;
+  state.libraries = (state.libraries ?? []).map((library) => {
+    const writeArtwork = besideMedia && library.writeArtwork !== false;
+    if (writeArtwork === library.writeArtwork) return library;
+    changed += 1;
+    return { ...library, writeArtwork };
+  });
+  return changed;
 }
 
 /** The libraries build named its thumbnails after the qualified key, flat in `data/artwork/`.
@@ -138,7 +165,7 @@ export async function migrateLibraries(state: InlineState, opts: { dataDir: stri
   // Only an existing settings blob is rewritten: creating one would make `Store.load`
   // read it as a pre-English install and flip the whole interface to Czech.
   if (state.settings) state.settings = { ...state.settings, defaultMovieLibrary: id, defaultSeriesLibrary: id };
-  return { migrated: true, libraryId: id, paths, metadata: await splitInlineMetadata(state, opts.dataDir), artwork: await rekeyArtwork(opts, id) };
+  return { migrated: true, libraryId: id, paths, metadata: await splitInlineMetadata(state, opts.dataDir), artwork: await rekeyArtwork(opts, id), artworkSetting: 0 };
 }
 
 async function legacyLibrary(root: string): Promise<LibraryRecord> {

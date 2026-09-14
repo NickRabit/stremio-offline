@@ -14,7 +14,7 @@ export interface Settings {
   concurrentDownloads: number; parallelPerProvider: number;
   /** Connections one file is split across. Above one, each part is fetched over its own range request. */
   downloadSegments: number; uiLanguage: UiLanguage; audioLanguage: string; subtitleLanguage: string; downloadTitleLanguage: "ui" | string;
-  mergeByName: boolean; streamSort: string; artworkLocation: "data" | "media"; trackProgress: boolean; showResumeRow: boolean;
+  mergeByName: boolean; streamSort: string; trackProgress: boolean; showResumeRow: boolean;
   /** Look up metadata for titles copied into the download folder without asking. */
   libraryAutoScan: boolean;
   /** Hold the library scan back while a file is downloading. Off by default: the scan
@@ -55,7 +55,7 @@ export interface State { schemaVersion?: number;
   watchlist?: Record<string, { type: string; id: string; name: string; poster?: string; addedAt: string }>;
   /** The resume list: a title key against a position in seconds. */
   progress?: Record<string, { position: number; duration: number; title: string; path?: string; poster?: string; updatedAt: string }> }
-const baseSettings: Settings = { concurrentDownloads: 1, parallelPerProvider: 1, downloadSegments: 2, uiLanguage: "en", audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui", mergeByName: true, streamSort: "recommended", artworkLocation: "data", trackProgress: true, showResumeRow: true, libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, addonRefreshHours: 24, catalogTileSize: "medium", libraryTileSize: "medium", defaultMovieLibrary: "", defaultSeriesLibrary: "", realDebridToken: "" };
+const baseSettings: Settings = { concurrentDownloads: 1, parallelPerProvider: 1, downloadSegments: 2, uiLanguage: "en", audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui", mergeByName: true, streamSort: "recommended", trackProgress: true, showResumeRow: true, libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, addonRefreshHours: 24, catalogTileSize: "medium", libraryTileSize: "medium", defaultMovieLibrary: "", defaultSeriesLibrary: "", realDebridToken: "" };
 
 /** A fresh install starts with the one library the download directory has always been,
  *  so it never runs the migration an upgrade needs. */

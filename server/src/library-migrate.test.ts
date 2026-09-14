@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { migrateLibraries, migrateStateFile } from "./library-migrate.js";
-import { SCHEMA_VERSION, type State } from "./store.js";
+import { defaultSettings, SCHEMA_VERSION, type State } from "./store.js";
 
 const artworkName = (key: string) => `${createHash("sha1").update(key).digest("hex")}.jpg`;
 
@@ -199,6 +199,54 @@ test("an unreachable or read-only root comes up flagged rather than failing", as
   assert.equal(state.libraries?.[0]?.unreachable, true);
   assert.equal(summary.migrated, true);
   await rm(dataDir, { recursive: true, force: true });
+});
+
+/** A state the libraries build wrote: two libraries, no inline match history, and the global
+ *  artwork location the next build retired. */
+const libraryState = (downloadDir: string, artworkLocation: string, flags: boolean[]) => {
+  const state = {
+    ...v1State(),
+    schemaVersion: SCHEMA_VERSION,
+    settings: { ...defaultSettings(), artworkLocation },
+    libraries: flags.map((writeArtwork, index) => ({
+      id: `lib_${index}`, name: `Library ${index}`, type: "mixed", root: path.join(downloadDir, `lib_${index}`),
+      enabled: true, order: index, addedAt: "2026-01-01T00:00:00.000Z", writeArtwork,
+    })),
+  } as Record<string, unknown>;
+  delete state.libraryMeta;
+  delete state.librarySuggestions;
+  delete state.libraryEpisodes;
+  return state;
+};
+
+test("the retired global artwork setting turns the per-library switches off once", async () => {
+  const dataDir = await mkdtemp(path.join(tmpdir(), "migrate-"));
+  const downloadDir = await mkdtemp(path.join(tmpdir(), "downloads-"));
+  const file = path.join(dataDir, "state.json");
+  await writeFile(file, JSON.stringify(libraryState(downloadDir, "data", [true, true])));
+  try {
+    const summary = await migrateStateFile(dataDir, downloadDir);
+    assert.equal(summary.artworkSetting, 2, "the old global had the last word on both");
+    const rewritten = JSON.parse(await readFile(file, "utf8"));
+    assert.equal("artworkLocation" in rewritten.settings, false, "the global is not carried forward");
+    assert.deepEqual(rewritten.libraries.map((item: { writeArtwork: boolean }) => item.writeArtwork), [false, false]);
+    const again = await migrateStateFile(dataDir, downloadDir);
+    assert.equal(again.artworkSetting, 0, "the second start has nothing left to read");
+  } finally { await rm(dataDir, { recursive: true, force: true }); await rm(downloadDir, { recursive: true, force: true }); }
+});
+
+test("a global that pointed next to the media leaves each library as it was", async () => {
+  const dataDir = await mkdtemp(path.join(tmpdir(), "migrate-"));
+  const downloadDir = await mkdtemp(path.join(tmpdir(), "downloads-"));
+  const file = path.join(dataDir, "state.json");
+  await writeFile(file, JSON.stringify(libraryState(downloadDir, "media", [true, false])));
+  try {
+    const summary = await migrateStateFile(dataDir, downloadDir);
+    assert.equal(summary.artworkSetting, 0, "a library that already wrote beside the media says the same thing");
+    const rewritten = JSON.parse(await readFile(file, "utf8"));
+    assert.equal("artworkLocation" in rewritten.settings, false);
+    assert.deepEqual(rewritten.libraries.map((item: { writeArtwork: boolean }) => item.writeArtwork), [true, false]);
+  } finally { await rm(dataDir, { recursive: true, force: true }); await rm(downloadDir, { recursive: true, force: true }); }
 });
 
 test("a root that is away keeps the thumbnails it had", async () => {

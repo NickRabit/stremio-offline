@@ -68,6 +68,7 @@ await store.load();
 await metaStore.load();
 if (libraryMigration.migrated) log("INFO", "State migrated to libraries", { libraryId: libraryMigration.libraryId, paths: libraryMigration.paths, artwork: libraryMigration.artwork });
 if (libraryMigration.metadata) log("INFO", "Library metadata moved out of the state", { rows: libraryMigration.metadata });
+if (libraryMigration.artworkSetting) log("INFO", "The global artwork location was retired", { libraries: libraryMigration.artworkSetting });
 // A level chosen in the interface outlives the container it was chosen in.
 const savedLevel = parseLevel(store.settings().logLevel);
 if (savedLevel) setLevel(savedLevel);
@@ -886,10 +887,11 @@ const healthOf = (library: LibraryRecord): LibraryHealth =>
   libraryHealth.get(library.id) ?? { unreachable: false, readOnly: false };
 
 /** Whether a poster for this key may be written next to the media. The library of the key
- *  decides: an added archive, a read-only mount and one that is away all keep their folder. */
+ *  decides, alone: an added archive, a read-only mount and one that is away all keep their
+ *  folder, and a curated library says no for its own tree. */
 const artworkBesideMediaFor = (key: string) => {
   const { library } = libraryOfKey(key);
-  return artworkBesideMedia(store.settings().artworkLocation, library, healthOf(library));
+  return artworkBesideMedia(library, healthOf(library));
 };
 
 /** The wire view of a library. Restricted mode withholds `root`: the picker discloses host
@@ -2551,9 +2553,6 @@ app.patch("/api/settings", asyncRoute(async (req, res) => {
     }
     if (req.body.secureMode !== undefined) state.settings.secureMode = Boolean(req.body.secureMode);
     if (req.body.addonRefreshHours !== undefined) state.settings.addonRefreshHours = normalizeRefreshHours(req.body.addonRefreshHours);
-    if (req.body.artworkLocation !== undefined) {
-      state.settings.artworkLocation = req.body.artworkLocation === "media" ? "media" : "data";
-    }
     if (req.body.streamSort !== undefined) {
       const value = String(req.body.streamSort);
       state.settings.streamSort = STREAM_SORTS.has(value) ? value : "recommended";
