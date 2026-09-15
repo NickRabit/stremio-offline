@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { asLibraryType, checkLibraryRemoval, checkLibraryRoot, libraryFlag } from "./library-admin.js";
+import { asLibraryType, checkLibraryRemoval, checkLibraryRoot, checkRerootItems, checkRerootPaths, libraryFlag } from "./library-admin.js";
 import type { LibraryRecord, RootGrant } from "./libraries.js";
 
 const grant = (p: string): RootGrant => ({ path: p, source: "env", grantedAt: "2026-01-01T00:00:00.000Z" });
@@ -120,4 +120,104 @@ test("a removable library is answered with the record that matched, not another 
   assert.equal(result.ok, true);
   assert.equal(result.ok === true && result.library.name, "Series");
   assert.equal(result.ok === true && result.library.root, "/media/Series");
+});
+
+test("a carve-out refuses the move before the destination is even looked at", async () => {
+  const dataDir = await mkdtemp(path.join(tmpdir(), "admin-"));
+  const from = path.join(dataDir, "from");
+  const to = path.join(dataDir, "to");
+  await mkdir(from, { recursive: true });
+  await mkdir(to, { recursive: true });
+  await writeFile(path.join(from, "Movies"), "x");
+  // The destination would collide as well; the carve-out is what the person has to fix.
+  await writeFile(path.join(to, "Movies"), "x");
+  try {
+    const result = await checkRerootPaths({ from, to, carveOuts: ["Archive"] });
+    assert.equal(result.ok, false);
+    assert.equal(result.ok === false && result.messageKey, "err.libraryRerootCarveOut");
+    assert.equal(result.ok === false && result.status, 409);
+  } finally { await rm(dataDir, { recursive: true, force: true }); }
+});
+
+test("a root inside the other one is refused in both directions", async () => {
+  const dataDir = await mkdtemp(path.join(tmpdir(), "admin-"));
+  const from = path.join(dataDir, "from");
+  const nested = path.join(from, "Nested");
+  await mkdir(nested, { recursive: true });
+  await writeFile(path.join(from, "Movies"), "x");
+  try {
+    const within = await checkRerootPaths({ from, to: nested, carveOuts: [] });
+    assert.equal(within.ok === false && within.messageKey, "err.libraryRerootNested");
+    assert.equal(within.ok === false && within.status, 409);
+    const around = await checkRerootPaths({ from: nested, to: from, carveOuts: [] });
+    assert.equal(around.ok === false && around.messageKey, "err.libraryRerootNested");
+    const same = await checkRerootPaths({ from, to: from, carveOuts: [] });
+    assert.equal(same.ok === false && same.messageKey, "err.libraryRerootNested");
+    // A destination that does not exist yet is still read as the folder it would become.
+    const missing = await checkRerootPaths({ from, to: path.join(from, "Unmade"), carveOuts: [] });
+    assert.equal(missing.ok === false && missing.messageKey, "err.libraryRerootNested");
+  } finally { await rm(dataDir, { recursive: true, force: true }); }
+});
+
+test("a nested destination is refused before create can make the folder", async () => {
+  const dataDir = await mkdtemp(path.join(tmpdir(), "admin-"));
+  const from = path.join(dataDir, "from");
+  const to = path.join(from, "Sub");
+  await mkdir(path.join(from, "Show"), { recursive: true });
+  try {
+    // The route's order: the path-only refusals run against the input as given, and `create`
+    // never runs once one of them fires, so a refused request writes nothing.
+    const paths = await checkRerootPaths({ from, to, carveOuts: [] });
+    if (paths.ok) await checkLibraryRoot({ grants: [grant(dataDir)], libraries: [], root: to, create: true });
+    assert.equal(paths.ok === false && paths.messageKey, "err.libraryRerootNested");
+    assert.equal(await stat(to).then(() => true, () => false), false);
+  } finally { await rm(dataDir, { recursive: true, force: true }); }
+});
+
+test("an empty source is refused, because there is nothing to carry over", async () => {
+  const dataDir = await mkdtemp(path.join(tmpdir(), "admin-"));
+  const from = path.join(dataDir, "from");
+  const to = path.join(dataDir, "to");
+  await mkdir(from, { recursive: true });
+  await mkdir(to, { recursive: true });
+  try {
+    const result = await checkRerootItems({ from, to });
+    assert.equal(result.ok === false && result.messageKey, "err.libraryRerootEmpty");
+    assert.equal(result.ok === false && result.status, 409);
+  } finally { await rm(dataDir, { recursive: true, force: true }); }
+});
+
+test("a name the destination already holds is refused by name", async () => {
+  const dataDir = await mkdtemp(path.join(tmpdir(), "admin-"));
+  const from = path.join(dataDir, "from");
+  const to = path.join(dataDir, "to");
+  await mkdir(from, { recursive: true });
+  await mkdir(to, { recursive: true });
+  await writeFile(path.join(from, "Movies"), "x");
+  await writeFile(path.join(from, "Show"), "x");
+  await writeFile(path.join(to, "Show"), "x");
+  try {
+    const result = await checkRerootItems({ from, to });
+    assert.equal(result.ok === false && result.messageKey, "err.libraryRerootCollision");
+    assert.equal(result.ok === false && result.status, 409);
+  } finally { await rm(dataDir, { recursive: true, force: true }); }
+});
+
+test("a clear move hands back every top-level entry and touches nothing", async () => {
+  const dataDir = await mkdtemp(path.join(tmpdir(), "admin-"));
+  const from = path.join(dataDir, "from");
+  const to = path.join(dataDir, "to");
+  await mkdir(from, { recursive: true });
+  await mkdir(path.join(from, "Show"), { recursive: true });
+  await mkdir(to, { recursive: true });
+  await writeFile(path.join(from, "Movies"), "x");
+  await writeFile(path.join(from, ".hidden"), "x");
+  try {
+    const result = await checkRerootItems({ from, to });
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.ok === true && [...result.items].sort(), [".hidden", "Movies", "Show"]);
+    // The check reads both folders and writes neither: the move is the queue's job.
+    assert.deepEqual((await readdir(from)).sort(), [".hidden", "Movies", "Show"]);
+    assert.deepEqual(await readdir(to), []);
+  } finally { await rm(dataDir, { recursive: true, force: true }); }
 });

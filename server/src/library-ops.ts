@@ -2,10 +2,12 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { messageKeyOf } from "./errors.js";
+import { log } from "./logger.js";
 
 export type LibraryOp =
   | { op: "move"; items: string[]; target: string }
   | { op: "copy"; items: string[]; target: string }
+  | { op: "reroot"; items: string[]; libraryId: string; from: string; to: string }
   | { op: "delete"; items: string[] }
   | { op: "favorite"; items: string[]; favorite: boolean }
   | { op: "match"; items: string[]; type: string; id: string }
@@ -43,6 +45,9 @@ export interface OpsState {
 interface StoredJob extends OpsState {
   operation: LibraryOp;
   cancelRequested?: boolean;
+  /** Set at enqueue and cleared once `finished` has run, so a job that went terminal
+   *  without its hook (a crash in between) is picked up again by the next `load()`. */
+  notifyPending?: boolean;
 }
 
 interface StoredState { version: 1; jobs: StoredJob[] }
@@ -51,16 +56,22 @@ export interface LibraryOpsOptions {
   file: string;
   execute: (operation: LibraryOp, item: string, progress: (bytes: number, total?: number) => void) => Promise<{ to?: string }>;
   pause?: (operation: LibraryOp, item: string) => Promise<OpsState["pauseReason"] | undefined> | OpsState["pauseReason"] | undefined;
+  /** Called once when a job reaches a terminal state, after the state is saved.
+   *  A throw is logged by the caller and never fails the job. */
+  finished?: (job: OpsState, operation: LibraryOp) => Promise<void> | void;
   retryMs?: number;
 }
 
-const publicJob = ({ operation: _operation, cancelRequested: _cancelRequested, ...job }: StoredJob): OpsState => structuredClone(job);
+const publicJob = ({ operation: _operation, cancelRequested: _cancelRequested, notifyPending: _notifyPending, ...job }: StoredJob): OpsState => structuredClone(job);
+
+const isTerminal = (status: OpsStatus) => status === "completed" || status === "failed" || status === "cancelled";
 
 export class LibraryOps {
   private jobs: StoredJob[] = [];
   private pumping = false;
   private saveTail = Promise.resolve();
   private wakeTimer?: ReturnType<typeof setTimeout>;
+  private notified = new Set<string>();
 
   constructor(private readonly options: LibraryOpsOptions) {}
 
@@ -75,6 +86,11 @@ export class LibraryOps {
         : job);
     }
     await this.save();
+    // A job that ended while the process was going down still carries the flag: its hook
+    // never ran, and a terminal job never reaches the pump again. Run it before the pump.
+    for (const job of this.jobs) {
+      if (job.notifyPending && isTerminal(job.status)) await this.finish(job);
+    }
     this.pump();
   }
 
@@ -89,7 +105,7 @@ export class LibraryOps {
     const job: StoredJob = {
       id: randomUUID(), operation, op: operation.op, status: "paused", pauseReason: "queue",
       total: operation.items.length, done: 0, failed: 0, bytes: 0, bytesTotal: 0,
-      startedAt: now, results: [],
+      startedAt: now, results: [], notifyPending: true,
     };
     this.jobs.push(job);
     await this.save();
@@ -100,13 +116,15 @@ export class LibraryOps {
   async cancel(id: string) {
     const job = this.jobs.find((candidate) => candidate.id === id);
     if (!job || job.status === "completed" || job.status === "failed" || job.status === "cancelled") return false;
-    if (job.status === "running") job.cancelRequested = true;
-    else {
+    if (job.status === "running") {
+      job.cancelRequested = true;
+      await this.save();
+    } else {
       job.status = "cancelled";
       job.pauseReason = undefined;
       job.finishedAt = new Date().toISOString();
+      await this.finish(job);
     }
-    await this.save();
     return true;
   }
 
@@ -125,7 +143,7 @@ export class LibraryOps {
         job.status = job.failed === job.total ? "failed" : "completed";
         job.pauseReason = undefined;
         job.finishedAt = new Date().toISOString();
-        await this.save();
+        await this.finish(job);
         continue;
       }
       const reason = await this.options.pause?.(job.operation, item);
@@ -160,15 +178,37 @@ export class LibraryOps {
       if (job.cancelRequested) {
         job.status = "cancelled";
         job.finishedAt = new Date().toISOString();
+        await this.finish(job);
       } else if (job.done + job.failed >= job.total) {
         job.status = job.failed === job.total ? "failed" : "completed";
         job.finishedAt = new Date().toISOString();
+        await this.finish(job);
       } else {
         job.status = "paused";
         job.pauseReason = "queue";
+        await this.save();
       }
-      await this.save();
     }
+  }
+
+  /** A job that will never run another item: the state is saved first, then whoever asked
+   *  hears about it -- once per job, and a hook that throws is reported instead of being
+   *  allowed to stop the pump. The flag only comes off once the hook is through, so a
+   *  crash between the two saves is repaired by `load()`. */
+  private async finish(job: StoredJob) {
+    await this.save();
+    if (this.notified.has(job.id)) return;
+    this.notified.add(job.id);
+    try {
+      await this.options.finished?.(publicJob(job), job.operation);
+    } catch (error) {
+      log("WARN", "A finished library operation hook threw", {
+        job: job.id, op: job.operation.op, reason: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+    job.notifyPending = false;
+    await this.save();
   }
 
   private save() {

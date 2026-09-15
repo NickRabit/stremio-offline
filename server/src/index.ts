@@ -45,7 +45,7 @@ import { LANGUAGE_NAMES, isUiLanguage, normalizeLanguage } from "./language.js";
 import { AppError, messageKeyOf } from "./errors.js";
 import { activeDeparted, carveOuts, queuedArtworkKey, defaultLibrary, DEPARTED_MAX, departedIdFor, isInside, libraryFor, libraryPath, newLibraryId, parseLibraryPath, posixBase, posixDir, posixJoin, realAncestor, relativeWithin, resolveLibraryPath, sameFile, toFs, toPosix, type LibraryRecord, type LibraryType, type RootGrant } from "./libraries.js";
 import { envGrants, grantView, grantingRoot, insideGrant, mergeGrants } from "./library-grants.js";
-import { asLibraryType, checkLibraryRemoval, checkLibraryRoot, libraryFlag } from "./library-admin.js";
+import { asLibraryType, checkLibraryRemoval, checkLibraryRoot, checkRerootItems, checkRerootPaths, libraryFlag } from "./library-admin.js";
 import { migrateStateFile } from "./library-migrate.js";
 import { LibraryMetaStore } from "./library-meta-store.js";
 import { artworks } from "./artwork-cache.js";
@@ -1199,6 +1199,25 @@ app.delete("/api/libraries/:id", asyncRoute(async (req, res) => {
   res.status(204).end();
 }));
 
+/** Re-rooting that carries the content over: the tree moves into the new folder first and the
+ *  library only points at it once every item is across. Pointing without moving stays on
+ *  `PATCH`, which is what `moveContent` keeps apart. */
+app.post("/api/libraries/:id/reroot", asyncRoute(async (req, res) => {
+  const target = store.libraries().find((library) => library.id === req.params.id);
+  if (!target) throw new AppError("The library was not found.", "err.libraryNotFound", 404);
+  if (req.body?.moveContent !== true) throw new AppError("This route moves the content; set moveContent to true.", "err.invalidRequest", 400);
+  const from = path.resolve(target.root);
+  // The path-only refusals come first, over the input as it was given: `create` below can
+  // make a folder, and a refused request must leave nothing behind.
+  const paths = await checkRerootPaths({ from, to: path.resolve(String(req.body?.root ?? "").trim()), carveOuts: carveOuts(store.libraries(), target) });
+  if (!paths.ok) throw new AppError(paths.message, paths.messageKey, paths.status);
+  const root = await requireLibraryRoot(req.body?.root, { exceptId: target.id, create: req.body?.create === true });
+  const items = await checkRerootItems({ from, to: root });
+  if (!items.ok) throw new AppError(items.message, items.messageKey, items.status);
+  const job = await libraryOps.enqueue({ op: "reroot", items: items.items, libraryId: target.id, from, to: root });
+  res.status(202).json({ id: job.id });
+}));
+
 /** The folder picker. It exists for deployments without a native dialog -- a desktop build
  *  uses the OS dialog instead and never calls it. Which is also why both of its reads are
  *  denied in restricted mode: they are the one place that names directories on the host. */
@@ -2226,6 +2245,24 @@ const parseLibraryOp = (value: unknown): LibraryOp => {
 const libraryOps = new LibraryOps({
   file: path.join(DATA_DIR, "library-ops.json"),
   pause: async (operation, item) => {
+    // A `reroot` item is a bare name, so it resolves to no library path at all and every
+    // guard below would be skipped. The two blockers that still apply are the same ones:
+    // a disk that is away, and a file a session or a download is using right now.
+    if (operation.op === "reroot") {
+      await refreshLibraryHealth();
+      if (libraryHealth.get(operation.libraryId)?.unreachable) return "library";
+      const source = path.join(operation.from, item);
+      if (playback.active().some((session) => {
+        if (!session.stream.url?.startsWith("file:")) return false;
+        try { return isInside(fileURLToPath(session.stream.url), source); } catch { return false; }
+      })) return "playback";
+      const writing = queue.list().filter((job) => job.target && (job.status === "checking" || job.status === "downloading"));
+      if (writing.length) {
+        const targets = await Promise.all(writing.map((job) => resolveLibraryPath(store.libraries(), job.target)));
+        if (targets.some((target) => target && (isInside(target.absolute, operation.to) || isInside(target.absolute, operation.from)))) return "download";
+      }
+      return undefined;
+    }
     const parsed = parseLibraryPath(item);
     const resolved = await resolveLibraryPath(store.libraries(), item);
     const library = parsed ? libraryFor(store.libraries(), parsed.libraryId) : resolved?.library;
@@ -2245,6 +2282,17 @@ const libraryOps = new LibraryOps({
     return undefined;
   },
   execute: async (operation, item, progress) => {
+    // A `reroot` item is a bare name of the old root, not a library path: it is joined onto
+    // both roots here, and resolving it as a key would throw before it ever moved.
+    if (operation.op === "reroot") {
+      libraryOpsWriting = true;
+      try {
+        const source = path.join(operation.from, item);
+        const target = path.join(operation.to, item);
+        await transferLibraryPath(source, target, true, progress);
+        return { to: toPosix(target) };
+      } finally { libraryOpsWriting = false; }
+    }
     const resolved = await resolveLibraryPath(store.libraries(), item);
     if (!resolved || !resolved.relative) throw new AppError("Invalid path.", "err.invalidPath");
     libraryOpsWriting = operation.op === "move" || operation.op === "copy" || operation.op === "delete";
@@ -2272,6 +2320,22 @@ const libraryOps = new LibraryOps({
       invalidateLibrary();
       return {};
     } finally { libraryOpsWriting = false; }
+  },
+  // The root follows the content, and only once all of it is across: a run that failed or
+  // was cancelled left items behind, and those items are still under the old root. This
+  // hangs off the job reaching its terminal state, so a job restored from disk after a
+  // restart switches the root the same way.
+  finished: async (job, operation) => {
+    if (operation.op !== "reroot") return;
+    if (job.status !== "completed" || job.failed > 0) return;
+    await store.update((state) => {
+      state.libraries = (state.libraries ?? []).map((library) => library.id === operation.libraryId ? { ...library, root: operation.to } : library);
+    });
+    invalidateLibrary();
+    await refreshLibraryHealth();
+    log("INFO", "Library re-rooted, the content came along", {
+      library: operation.libraryId, from: operation.from, root: operation.to, items: operation.items.length,
+    });
   },
 });
 await libraryOps.load();
