@@ -1884,18 +1884,24 @@ const unitKindOf = async (key: string): Promise<TitleKind | undefined> => {
   return covering.sort((a, b) => b.key.length - a.key.length)[0]?.kind;
 };
 
-/** A typed library is a promise about what is inside it, and a move must not break it.
- *  `mixed` takes anything, and so does a unit whose kind nobody can name -- refusing that
- *  would block a move over a guess. */
-const assertMoveType = async (key: string, destination: LibraryRecord) => {
+/** A typed library is a promise about what is inside it, and a move must not break it
+ *  without being asked. `mixed` takes anything, and so does a unit whose kind nobody can
+ *  name -- refusing that would block a move over a guess. Confirming is the owner's to
+ *  do: nothing renders differently afterwards, only a later scan reads the item as the
+ *  library's kind. */
+const assertMoveType = async (key: string, destination: LibraryRecord, confirmed = false) => {
   if (destination.type === "mixed") return;
   const kind = await unitKindOf(key);
   if (kind && kind !== destination.type) {
-    throw new AppError(`A ${destination.type} library does not take ${kind === "movie" ? "films" : "series"}.`, "err.libraryTypeMismatch");
+    if (!confirmed) {
+      throw new AppError(`A ${destination.type} library does not take ${kind === "movie" ? "films" : "series"}.`,
+        "err.libraryTypeMismatch", undefined, { type: destination.type, kind });
+    }
+    log("INFO", "A move into a library of another type was confirmed", { key, library: destination.id, type: destination.type, kind });
   }
 };
 
-const transferLibraryItem = async (relative: string, folder: string, copy = false, progress?: TransferProgress) => {
+const transferLibraryItem = async (relative: string, folder: string, copy = false, progress?: TransferProgress, confirmTypeMismatch = false) => {
   const resolved = relative ? await resolveLibraryPath(store.libraries(), relative) : undefined;
   if (!resolved || !resolved.relative) throw new AppError("Invalid path.", "err.invalidPath");
   const info = await stat(resolved.absolute).catch(() => undefined);
@@ -1909,7 +1915,7 @@ const transferLibraryItem = async (relative: string, folder: string, copy = fals
   // Into another library the item simply keeps its name: the two folders have nothing to
   // do with one another, so the checks that guard a move inside one do not apply.
   const acrossLibraries = folderResolved.library.id !== resolved.library.id;
-  if (acrossLibraries) await assertMoveType(resolved.key, folderResolved.library);
+  if (acrossLibraries) await assertMoveType(resolved.key, folderResolved.library, confirmTypeMismatch);
   const destination = acrossLibraries
     ? { path: posixJoin(folderResolved.relative, posixBase(resolved.relative)) }
     : moveDestination(resolved.relative, folderResolved.relative);
@@ -1953,7 +1959,8 @@ const transferLibraryItem = async (relative: string, folder: string, copy = fals
 app.post("/api/library/move", asyncRoute(async (req, res) => {
   // `copy` is honoured rather than ignored: the field was silently dropped before, so a client
   // that asked for a copy got a move -- the original deleted -- with a success in the response.
-  const moved = await transferLibraryItem(String(req.body.path ?? "").trim(), String(req.body.folder ?? "").trim(), req.body.copy === true);
+  const moved = await transferLibraryItem(String(req.body.path ?? "").trim(), String(req.body.folder ?? "").trim(),
+    req.body.copy === true, undefined, req.body.confirmTypeMismatch === true);
   res.json({ path: moved });
 }));
 
@@ -2246,7 +2253,7 @@ const parseLibraryOp = (value: unknown): LibraryOp => {
   if (op === "move" || op === "copy") {
     const target = String(body.target ?? "").trim();
     if (!target) throw new AppError("A destination folder is required.", "err.targetMissing");
-    return { op, items, target };
+    return { op, items, target, ...(body.confirmTypeMismatch === true ? { confirmTypeMismatch: true } : {}) };
   }
   if (op === "delete" || op === "unmatch" || op === "artwork" || op === "forget") return { op, items };
   if (op === "favorite") return { op, items, favorite: Boolean(body.favorite) };
@@ -2317,7 +2324,9 @@ const libraryOps = new LibraryOps({
     libraryOpsWriting = operation.op === "move" || operation.op === "copy" || operation.op === "delete";
     try {
       if (operation.op === "move" || operation.op === "copy") {
-        return { to: await transferLibraryItem(item, operation.target, operation.op === "copy", progress) };
+        return {
+          to: await transferLibraryItem(item, operation.target, operation.op === "copy", progress, operation.confirmTypeMismatch === true),
+        };
       }
       if (operation.op === "delete") await deleteLibraryItem(item);
       else if (operation.op === "favorite") await setLibraryFavorite(item, operation.favorite);
@@ -3147,10 +3156,12 @@ app.use((error: unknown, req: express.Request, res: express.Response, _next: exp
   }
   const mediaRoute = /^(?:\/api)?\/(?:media|playback|inspect|streams|subtitle|subtitles|device-download|library\/source)(?:\/|$)/.test(req.path);
   const hideDetails = mediaRoute && !(error instanceof ResourceError) && status >= 500;
+  const vars = error instanceof AppError ? error.vars : undefined;
   res.status(hideDetails ? 502 : status).json({
     error: hideDetails ? "Media source request failed." : message,
     code: error instanceof ResourceError ? error.code : undefined,
     messageKey: hideDetails ? undefined : messageKeyOf(error),
+    ...(vars ? { vars } : {}),
   });
 });
 process.on("unhandledRejection", (reason) => {

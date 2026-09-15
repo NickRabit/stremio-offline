@@ -179,7 +179,7 @@ export interface ScanState {
   current?: string; remaining: string[]; error?: string;
 }
 export type LibraryOp =
-  | { op: "move" | "copy"; items: string[]; target: string }
+  | { op: "move" | "copy"; items: string[]; target: string; confirmTypeMismatch?: boolean }
   | { op: "delete" | "unmatch" | "artwork" | "forget"; items: string[] }
   | { op: "favorite"; items: string[]; favorite: boolean }
   | { op: "match"; items: string[]; type: string; id: string }
