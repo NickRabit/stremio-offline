@@ -814,32 +814,40 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     }
   };
 
-  // Rotation may enter fullscreen only for our complete player overlay.
+  // A rotation carries no user activation, so a fullscreen request made straight from the
+  // orientation handler is rejected. The first touch after the rotation does carry one, and that
+  // is when the overlay claims the screen. iPhone Safari exposes no Fullscreen API for elements
+  // at all; there the manifest's standalone display is what gives the player the whole screen.
   useEffect(() => {
     if (!open) { setMobileLandscape(false); automaticFullscreenRef.current = false; return; }
     const orientation = window.matchMedia("(orientation: landscape)");
+    const gestures = ["pointerup", "touchend", "click"] as const;
     let previous = false;
-    let entering = false;
-    let retry: number | undefined;
-    const enterAutomatically = () => {
-      if (entering || automaticFullscreenRef.current || playerIsFullscreen(overlayRef.current)) return;
-      entering = true;
+    let armed = false;
+    function disarm() {
+      armed = false;
+      for (const event of gestures) overlayRef.current?.removeEventListener(event, enterOnGesture);
+    }
+    function enterOnGesture() {
+      disarm();
       void enterPlayerFullscreen(overlayRef.current).then((entered) => {
         automaticFullscreenRef.current = entered;
-      }).finally(() => { entering = false; });
-    };
+      });
+    }
     const update = () => {
       const touchDevice = navigator.maxTouchPoints > 0 || window.matchMedia("(pointer: coarse)").matches;
       const landscape = orientation.matches && Math.min(window.innerWidth, window.innerHeight) <= 700 && Math.max(window.innerWidth, window.innerHeight) <= 1200;
       setMobileLandscape(landscape);
-      if (landscape && touchDevice && (!previous || !automaticFullscreenRef.current)) {
-        enterAutomatically();
-        window.clearTimeout(retry);
-        retry = window.setTimeout(enterAutomatically, 80);
+      if (landscape && touchDevice) {
+        const overlay = overlayRef.current;
+        if (!armed && overlay && supportsPlayerFullscreen(overlay) && !playerIsFullscreen(overlay)) {
+          armed = true;
+          for (const event of gestures) overlay.addEventListener(event, enterOnGesture);
+        }
       } else if (!landscape && previous) {
+        disarm();
         if (automaticFullscreenRef.current) void exitPlayerFullscreen();
         automaticFullscreenRef.current = false;
-
       }
       previous = landscape;
     };
@@ -848,7 +856,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     window.addEventListener("orientationchange", update);
     window.addEventListener("resize", update);
     return () => {
-      window.clearTimeout(retry);
+      disarm();
       orientation.removeEventListener?.("change", update);
       window.removeEventListener("orientationchange", update);
       window.removeEventListener("resize", update);
