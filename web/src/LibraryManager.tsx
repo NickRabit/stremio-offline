@@ -176,6 +176,9 @@ function RootPicker({ reroot, onClose, onDone, onError, onLibrariesChanged }:
   const [pendingCreate, setPendingCreate] = useState(false);
   const [estimate, setEstimate] = useState<LibraryEstimate | null>(null);
   const [scanNow, setScanNow] = useState(true);
+  // Pointing at a folder and moving the tree into it are two different intentions with the
+  // same destination, so they are one choice rather than two buttons that look alike.
+  const [carryContent, setCarryContent] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -230,6 +233,13 @@ function RootPicker({ reroot, onClose, onDone, onError, onLibrariesChanged }:
     setBusy(true);
     setError("");
     try {
+      if (reroot && carryContent) {
+        // The library follows its content, so there is nothing to scan yet and nothing to
+        // report beyond the job having started.
+        await api.rerootLibrary(reroot.id, { root: selected, ...(pendingCreate ? { create: true } : {}) });
+        onDone(t("library.rerootMoveStarted"));
+        return;
+      }
       const library = reroot
         ? await api.updateLibrary(reroot.id, { root: selected, ...(pendingCreate ? { create: true } : {}) })
         : await api.createLibrary({ name: name.trim(), type, root: selected, ...(pendingCreate ? { create: true } : {}) });
@@ -343,11 +353,18 @@ function RootPicker({ reroot, onClose, onDone, onError, onLibrariesChanged }:
             {estimate.identified ? ` · ${t("library.estimateIdentified", { count: estimate.identified })}` : ""}
             {estimate.truncated ? ` · ${t("library.estimateTruncated")}` : ""}
           </p>}
-          {selected && <label className="library-scan-now"><input type="checkbox" checked={scanNow} onChange={(event) => setScanNow(event.target.checked)}/> <span>{t("library.scanNow")}</span></label>}
+          {selected && !(reroot && carryContent) && <label className="library-scan-now"><input type="checkbox" checked={scanNow} onChange={(event) => setScanNow(event.target.checked)}/> <span>{t("library.scanNow")}</span></label>}
         </div>
+        {reroot && <fieldset className="library-reroot-choice">
+          <legend>{t("library.rerootWhat")}</legend>
+          <label><input type="radio" name="reroot-mode" checked={!carryContent} onChange={() => setCarryContent(false)}/>
+            <span><strong>{t("library.rerootPointOnly")}</strong>{t("library.rerootPointOnlyHint")}</span></label>
+          <label><input type="radio" name="reroot-mode" checked={carryContent} onChange={() => setCarryContent(true)}/>
+            <span><strong>{t("library.rerootMove")}</strong>{t("library.rerootMoveHint")}</span></label>
+        </fieldset>}
         {error && <p className="login-error">{error}</p>}
         <button type="button" className="primary" disabled={busy || !selected || (!reroot && !name.trim())} onClick={() => void apply()}>
-          {reroot ? t("library.rerootConfirm") : t("library.addConfirm")}
+          {reroot ? (carryContent ? t("library.rerootMoveConfirm") : t("library.rerootConfirm")) : t("library.addConfirm")}
         </button>
       </footer>
     </div>

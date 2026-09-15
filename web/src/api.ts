@@ -137,6 +137,10 @@ export const api = {
     request<LibraryView>("/api/libraries", { method: "POST", body: JSON.stringify(body) }),
   updateLibrary: (id: string, patch: { name?: string; type?: LibraryType; enabled?: boolean; order?: number; writeArtwork?: boolean; mosaic?: boolean; root?: string; create?: boolean }) =>
     request<LibraryView>(`/api/libraries/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  /** Re-rooting that carries the content over. Queued, so it answers with the job id and
+   *  the library only follows once every item is across. */
+  rerootLibrary: (id: string, body: { root: string; create?: boolean }) =>
+    request<{ id: string }>(`/api/libraries/${encodeURIComponent(id)}/reroot`, { method: "POST", body: JSON.stringify({ ...body, moveContent: true }) }),
   deleteLibrary: (id: string, forget = false) =>
     request<void>(`/api/libraries/${encodeURIComponent(id)}${forget ? "?forget=1" : ""}`, { method: "DELETE" }),
   libraryGrants: () => request<LibraryGrant[]>("/api/libraries/grants"),

@@ -184,7 +184,8 @@ export type LibraryOp =
   | { op: "favorite"; items: string[]; favorite: boolean }
   | { op: "match"; items: string[]; type: string; id: string }
   | { op: "skipLookup"; items: string[]; skipLookup: boolean }
-  | { op: "mosaic"; items: string[]; mosaic: boolean };
+  | { op: "mosaic"; items: string[]; mosaic: boolean }
+  | { op: "reroot"; items: string[]; libraryId: string; from: string; to: string };
 export interface LibraryOpsState {
   id: string; op: LibraryOp["op"];
   status: "running" | "paused" | "completed" | "failed" | "cancelled";
