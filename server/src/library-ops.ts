@@ -5,8 +5,8 @@ import { messageKeyOf } from "./errors.js";
 import { log } from "./logger.js";
 
 export type LibraryOp =
-  | { op: "move"; items: string[]; target: string }
-  | { op: "copy"; items: string[]; target: string }
+  | { op: "move"; items: string[]; target: string; confirmTypeMismatch?: boolean }
+  | { op: "copy"; items: string[]; target: string; confirmTypeMismatch?: boolean }
   | { op: "reroot"; items: string[]; libraryId: string; from: string; to: string }
   | { op: "delete"; items: string[] }
   | { op: "favorite"; items: string[]; favorite: boolean }
