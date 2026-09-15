@@ -190,7 +190,7 @@ it("re-rooting can name a folder that does not exist yet", async () => {
   await clickIn(picker(), "downloads");
   await fillIn(picker(), "New folder", "Archive");
   await clickIn(picker(), "New folder");
-  await clickIn(picker(), "Move to this folder");
+  await clickIn(picker(), "Point at this folder");
 
   expect(patched).toEqual([{ root: "/downloads/Archive", create: true }]);
 });
@@ -245,4 +245,38 @@ it("the mosaic of covers can be turned off for one library", async () => {
   await act(async () => { box.click(); await Promise.resolve(); });
 
   expect(patched).toEqual([{ mosaic: false }]);
+});
+
+/** Re-rooting used to rewrite the record and move nothing, with nothing on screen saying so.
+ *  The two intentions are now one choice, and the moving one is a queued job. */
+it("re-rooting can take the content along, and says which it is doing", async () => {
+  const calls: Array<{ url: string; body: unknown }> = [];
+  fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+    if (init?.method === "POST" && String(url).endsWith("/reroot")) {
+      calls.push({ url: String(url), body: JSON.parse(String(init.body)) });
+      return json({ id: "job-1" }, 202);
+    }
+    if (init?.method === "PATCH") { calls.push({ url: String(url), body: JSON.parse(String(init.body)) }); return json(library()); }
+    if (url === "/api/libraries") return json([library()]);
+    if (url === "/api/libraries/grants") return json([granted]);
+    if (String(url).startsWith("/api/libraries/browse")) {
+      return json(browseAt(new URLSearchParams(String(url).split("?")[1]).get("path") ?? ""));
+    }
+    if (url === "/api/libraries/preview") return json({ root: "/downloads", type: "movie", titles: 2, identified: 0, files: 3, truncated: false });
+    return json({});
+  });
+  await act(async () => { root.render(<LibraryManager onError={vi.fn()} onNotify={vi.fn()}/>); });
+  await act(async () => { await Promise.resolve(); });
+
+  await clickIn(host, "Change folder");
+  await clickIn(picker(), "downloads");
+  await clickIn(picker(), "Use this folder");
+  expect(picker().textContent, "pointing is what it does unless asked otherwise").toContain("Point at this folder");
+
+  const move = [...picker().querySelectorAll<HTMLInputElement>("input[type=radio]")][1];
+  await act(async () => { move.click(); await Promise.resolve(); });
+  expect(picker().textContent, "the button says which of the two it will do").toContain("Move the content here");
+
+  await clickIn(picker(), "Move the content here");
+  expect(calls).toEqual([{ url: "/api/libraries/lib_ab12cd34/reroot", body: { root: "/downloads", moveContent: true } }]);
 });
