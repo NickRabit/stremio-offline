@@ -37,6 +37,7 @@ export interface LibraryMetaRecord {
   source?: "download" | "user" | "scan";
   locked?: boolean;
   skipLookup?: boolean;
+  skipMosaic?: boolean;
   name?: string;
   year?: string;
   description?: string;
@@ -218,6 +219,15 @@ export function lookupSkipped(relative: string, records: Record<string, LibraryM
   return false;
 }
 
+export function mosaicSkipped(relative: string, records: Record<string, LibraryMetaRecord>): boolean {
+  const parts = relative.split("/");
+  for (let depth = parts.length; depth >= 1; depth -= 1) {
+    const key = parts.slice(0, depth).join("/");
+    if (records[key]?.skipMosaic) return true;
+  }
+  return false;
+}
+
 export type MatchStatus = "unmatched" | "matched" | "suggested" | "rejected";
 
 const DESCRIPTION_MAX = 1200;
@@ -374,6 +384,7 @@ export interface BrowseMetaView {
   description?: string;
   catalogName?: string;
   skipLookup?: boolean;
+  skipMosaic?: boolean;
   season?: number;
   episode?: number;
   suggestion?: LibrarySuggestion;
@@ -388,7 +399,8 @@ export function browseMeta(
 ): BrowseMetaView {
   const match = matchStatus(relative, records, suggestions);
   const skipLookup = Boolean(records[relative]?.skipLookup);
-  const base: BrowseMetaView = { match, ...(skipLookup ? { skipLookup } : {}) };
+  const skipMosaic = Boolean(records[relative]?.skipMosaic);
+  const base: BrowseMetaView = { match, ...(skipLookup ? { skipLookup } : {}), ...(skipMosaic ? { skipMosaic } : {}) };
   if (match === "suggested") {
     const suggestion = suggestionFor(relative, suggestions);
     return suggestion ? { ...base, suggestion } : base;
@@ -456,6 +468,12 @@ export function pinInherited(
   if (ignored && !stillCovers(ignored)) {
     const own = nextMeta[relative] ?? meta[relative] ?? { type: meta[ignored]!.type, id: "", source: "user" as const };
     nextMeta[relative] = { ...own, skipLookup: true };
+  }
+  // So is being kept out of the mosaic.
+  const hidden = coveringKey(meta, relative, (record) => Boolean(record.skipMosaic));
+  if (hidden && !stillCovers(hidden)) {
+    const own = nextMeta[relative] ?? meta[relative] ?? { type: meta[hidden]!.type, id: "", source: "user" as const };
+    nextMeta[relative] = { ...own, skipMosaic: true };
   }
 
   const nextSuggestions = { ...suggestions };

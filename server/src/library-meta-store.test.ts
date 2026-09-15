@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { LibraryMetaStore } from "./library-meta-store.js";
-import type { LibraryMetaRecord } from "./library-match.js";
+import { knownTitleOf, type LibraryMetaRecord } from "./library-match.js";
 
 const record = (id: string): LibraryMetaRecord => ({ type: "movie", id, source: "scan", locked: false, matchedAt: "2026-01-01T00:00:00.000Z" });
 const libraryFile = (dataDir: string, id: string) => path.join(dataDir, "library", `${id}.json`);
@@ -28,6 +28,19 @@ test("a library file is read into the qualified view and back", async () => {
     assert.deepEqual(Object.keys(store.qualifiedMeta()).sort(), ["lib_a/Show/01.mkv", "lib_b/Film.mkv"]);
     assert.deepEqual(Object.keys(store.qualifiedSuggestions()), ["lib_a/Other show"]);
     assert.deepEqual(Object.keys(store.meta("lib_a")), ["Show/01.mkv"], "the file keeps library-relative keys");
+  });
+});
+
+test("a mosaic-only record round-trips without becoming a binding", async () => {
+  await withStore(async (store, dataDir) => {
+    await seed(dataDir, "lib_a", { Movies: { type: "movie", id: "", source: "user", skipMosaic: true } });
+    await store.load();
+    await store.flush();
+    const row = store.qualifiedMeta()["lib_a/Movies"]!;
+    assert.equal(row.skipMosaic, true, "the flag comes back");
+    assert.equal(row.id, "", "a decision, not a title");
+    assert.equal(knownTitleOf("lib_a/Movies/Title.mkv", store.qualifiedMeta()), undefined, "it is not read as a binding");
+    assert.equal(JSON.parse(await readFile(libraryFile(dataDir, "lib_a"), "utf8")).meta.Movies.skipMosaic, true, "the flag is written back");
   });
 });
 

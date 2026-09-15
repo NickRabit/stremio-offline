@@ -3,7 +3,7 @@ import path from "node:path";
 import { test } from "node:test";
 import {
   autoAccept, browseMeta, cacheFieldsFromMeta, clipText, dropKeyed, episodeKey, episodeNumberOf, episodesFromMeta, isExtraName,
-  knownTitleOf, lookupSkipped, matchKeyFor, pinInherited, matchStatus, needsBackfill, needsEpisodes, needsRefresh, pickSuggestion, remapKeyed, scanMiss,
+  knownTitleOf, lookupSkipped, mosaicSkipped, matchKeyFor, pinInherited, matchStatus, needsBackfill, needsEpisodes, needsRefresh, pickSuggestion, remapKeyed, scanMiss,
   scannedRecently, scanSkipReason, scoreHit, suggestionFor, titleUnits, unmatchAt, viewMeta,
 } from "./library-match.js";
 import { parseMediaPath } from "./library-parse.js";
@@ -206,6 +206,48 @@ test("excluding a folder skips matching of its children", () => {
   assert.equal(lookupSkipped("Other", records), false);
 });
 
+test("keeping a folder out of the mosaic covers everything below it", () => {
+  const records = {
+    Movies: { type: "movie", id: "", source: "user" as const, skipMosaic: true },
+    "Movies/Extra": { type: "movie", id: "tt1", source: "user" as const },
+  };
+  assert.equal(mosaicSkipped("Movies/Extra/deep/one.mkv", records), true);
+  assert.equal(mosaicSkipped("Movies", records), true);
+  assert.equal(mosaicSkipped("Other", records), false);
+});
+
+test("keeping one file out of the mosaic leaves its neighbours alone", () => {
+  const records = {
+    Movies: { type: "movie", id: "", source: "user" as const },
+    "Movies/one.mkv": { type: "movie", id: "tt1", source: "user" as const, skipMosaic: true },
+  };
+  assert.equal(mosaicSkipped("Movies/one.mkv", records), true);
+  assert.equal(mosaicSkipped("Movies/two.mkv", records), false);
+  assert.equal(mosaicSkipped("Movies", records), false);
+});
+
+test("clearing the folder flag stops covering its children and keeps their own", () => {
+  const records = {
+    Movies: { type: "movie", id: "", source: "user" as const, skipMosaic: true },
+    "Movies/one.mkv": { type: "movie", id: "tt1", source: "user" as const, skipMosaic: true },
+  };
+  assert.equal(mosaicSkipped("Movies/two.mkv", records), true);
+  const cleared = { ...records, Movies: { type: "movie", id: "", source: "user" as const } };
+  assert.equal(mosaicSkipped("Movies/two.mkv", cleared), false);
+  assert.equal(mosaicSkipped("Movies/one.mkv", cleared), true, "the child keeps its own flag");
+});
+
+test("browse meta reports the mosaic flag a key owns, not one it inherits", () => {
+  const records = {
+    Movies: { type: "movie", id: "", source: "user" as const, skipMosaic: true },
+    "Movies/one.mkv": { type: "movie", id: "tt1", source: "user" as const, skipMosaic: true },
+  };
+  assert.equal(browseMeta("Movies", "Movies", records).skipMosaic, true);
+  assert.equal(browseMeta("Movies/one.mkv", "one", records).skipMosaic, true);
+  const inherited = { Movies: { type: "movie", id: "", source: "user" as const, skipMosaic: true } };
+  assert.equal(browseMeta("Movies/one.mkv", "one", inherited).skipMosaic, undefined);
+});
+
 test("browse copy uses cached fields and a normalised catalog name", () => {
   const records = {
     "Practical Magic": { type: "movie", id: "tt1", name: "Practical Magic", year: "1998", description: "A witch." },
@@ -384,6 +426,15 @@ test("a suggestion and a switched-off lookup travel with the item too", () => {
   assert.equal(pinned.meta[from]?.skipLookup, true);
   assert.equal(lookupSkipped(to, remapKeyed(pinned.meta, from, to)), true);
   assert.equal(suggestionFor(to, remapKeyed(pinned.suggestions, from, to))?.id, "tt1");
+});
+
+test("an item kept out of the mosaic takes the flag from the folder it leaves", () => {
+  const meta = { "Skryté": { type: "movie", id: "", source: "user" as const, skipMosaic: true } };
+  const from = join("Skryté", "klip.mkv");
+  const to = join("xxx", "klip.mkv");
+  const pinned = pinInherited(meta, {}, from, to);
+  assert.equal(pinned.meta[from]?.skipMosaic, true);
+  assert.equal(mosaicSkipped(to, remapKeyed(pinned.meta, from, to)), true);
 });
 
 test("an unmatched item inherits nothing and stays unmatched where it lands", () => {

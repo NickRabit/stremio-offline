@@ -132,7 +132,7 @@ export interface LibraryPage extends LibrarySummary { files: LibraryFile[]; tota
 export type LibraryMatch = "unmatched" | "matched" | "suggested" | "rejected";
 export interface MatchSuggestion { type: string; id: string; name: string; year?: number; score: number }
 export interface BrowseMeta {
-  year?: string; description?: string; catalogName?: string; match?: LibraryMatch; skipLookup?: boolean; suggestion?: MatchSuggestion;
+  year?: string; description?: string; catalogName?: string; match?: LibraryMatch; skipLookup?: boolean; skipMosaic?: boolean; suggestion?: MatchSuggestion;
   /** The kind of the title this row is bound to. Absent when nothing is bound, and the
    *  move dialog then offers every library rather than refusing on a guess. */
   titleType?: "movie" | "series";
@@ -150,7 +150,7 @@ export interface BrowseLibrary {
 /** One library in `GET /api/libraries`. `root` is absent in restricted mode. */
 export interface LibraryView {
   id: string; name: string; type: LibraryType; root?: string; enabled: boolean; order: number;
-  addedAt: string; writeArtwork: boolean; unreachable: boolean; readOnly: boolean;
+  addedAt: string; writeArtwork: boolean; mosaic?: boolean; unreachable: boolean; readOnly: boolean;
   defaultMovie: boolean; defaultSeries: boolean; titles: number; files: number; bytes: number;
 }
 export type BrowseItem =
@@ -183,7 +183,8 @@ export type LibraryOp =
   | { op: "delete" | "unmatch" | "artwork" | "forget"; items: string[] }
   | { op: "favorite"; items: string[]; favorite: boolean }
   | { op: "match"; items: string[]; type: string; id: string }
-  | { op: "skipLookup"; items: string[]; skipLookup: boolean };
+  | { op: "skipLookup"; items: string[]; skipLookup: boolean }
+  | { op: "mosaic"; items: string[]; mosaic: boolean };
 export interface LibraryOpsState {
   id: string; op: LibraryOp["op"];
   status: "running" | "paused" | "completed" | "failed" | "cancelled";

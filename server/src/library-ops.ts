@@ -13,6 +13,7 @@ export type LibraryOp =
   | { op: "match"; items: string[]; type: string; id: string }
   | { op: "unmatch"; items: string[] }
   | { op: "skipLookup"; items: string[]; skipLookup: boolean }
+  | { op: "mosaic"; items: string[]; mosaic: boolean }
   | { op: "artwork"; items: string[] }
   | { op: "forget"; items: string[] };
 
