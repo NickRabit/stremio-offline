@@ -657,7 +657,15 @@ const rangeServer = (options: { total?: number; ranges?: boolean; cutAt?: number
     const probe = Boolean(match && match[1] === "0" && match[2] === "0");
     if (!match || options.ranges === false || (options.probeOnly && !probe)) {
       res.writeHead(200, { "content-length": String(total), "content-type": "video/mp4" });
-      for (let sent = 0; sent < total; sent += MB) res.write(filled(sent, Math.min(MB, total - sent)));
+      // Paced the way the range branch is, and stopping the moment the client gives up. A
+      // segment request answered with the whole file is a body nobody wants: written in one
+      // synchronous burst, four of those queue the file four times over and hold the loop
+      // long enough for the stall detector to fire before the fallback is even reached.
+      for (let sent = 0; sent < total; sent += MB) {
+        if (res.destroyed) return;
+        res.write(filled(sent, Math.min(MB, total - sent)));
+        await new Promise((done) => setTimeout(done, 1));
+      }
       res.end();
       return;
     }
