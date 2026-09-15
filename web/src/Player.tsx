@@ -814,23 +814,40 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     }
   };
 
-  // Rotation may enter fullscreen only for our complete player overlay.
+  // A rotation carries no user activation, so a fullscreen request made straight from the
+  // orientation handler is rejected. The first touch after the rotation does carry one, and that
+  // is when the overlay claims the screen. iPhone Safari exposes no Fullscreen API for elements
+  // at all; there the manifest's standalone display is what gives the player the whole screen.
   useEffect(() => {
     if (!open) { setMobileLandscape(false); automaticFullscreenRef.current = false; return; }
     const orientation = window.matchMedia("(orientation: landscape)");
+    const gestures = ["pointerup", "touchend", "click"] as const;
     let previous = false;
+    let armed = false;
+    function disarm() {
+      armed = false;
+      for (const event of gestures) overlayRef.current?.removeEventListener(event, enterOnGesture);
+    }
+    function enterOnGesture() {
+      disarm();
+      void enterPlayerFullscreen(overlayRef.current).then((entered) => {
+        automaticFullscreenRef.current = entered;
+      });
+    }
     const update = () => {
       const touchDevice = navigator.maxTouchPoints > 0 || window.matchMedia("(pointer: coarse)").matches;
       const landscape = orientation.matches && Math.min(window.innerWidth, window.innerHeight) <= 700 && Math.max(window.innerWidth, window.innerHeight) <= 1200;
       setMobileLandscape(landscape);
-      if (landscape && touchDevice && !previous) {
-        window.setTimeout(() => void enterPlayerFullscreen(overlayRef.current).then((entered) => {
-          automaticFullscreenRef.current = entered;
-        }), 80);
+      if (landscape && touchDevice) {
+        const overlay = overlayRef.current;
+        if (!armed && overlay && supportsPlayerFullscreen(overlay) && !playerIsFullscreen(overlay)) {
+          armed = true;
+          for (const event of gestures) overlay.addEventListener(event, enterOnGesture);
+        }
       } else if (!landscape && previous) {
+        disarm();
         if (automaticFullscreenRef.current) void exitPlayerFullscreen();
         automaticFullscreenRef.current = false;
-
       }
       previous = landscape;
     };
@@ -839,11 +856,34 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     window.addEventListener("orientationchange", update);
     window.addEventListener("resize", update);
     return () => {
+      disarm();
       orientation.removeEventListener?.("change", update);
       window.removeEventListener("orientationchange", update);
       window.removeEventListener("resize", update);
     };
   }, [open]);
+
+  // In a tab Safari keeps its chrome, and it lays a fixed overlay out against the large
+  // viewport, so the video ran on past the bottom edge of the screen. The visual viewport is
+  // the part actually on screen, and in landscape the player is sized to that instead.
+  useEffect(() => {
+    const viewport = window.visualViewport;
+    const overlay = overlayRef.current;
+    if (!open || !mobileLandscape || !viewport || !overlay) return;
+    const fit = () => {
+      overlay.style.setProperty("--player-viewport-height", `${viewport.height}px`);
+      overlay.style.setProperty("--player-viewport-top", `${viewport.offsetTop}px`);
+    };
+    fit();
+    viewport.addEventListener("resize", fit);
+    viewport.addEventListener("scroll", fit);
+    return () => {
+      viewport.removeEventListener("resize", fit);
+      viewport.removeEventListener("scroll", fit);
+      overlay.style.removeProperty("--player-viewport-height");
+      overlay.style.removeProperty("--player-viewport-top");
+    };
+  }, [open, mobileLandscape]);
 
   /** Playback keeps running; the queue gets the very stream that is playing. */
   const download = async () => {

@@ -158,3 +158,51 @@ test("phone catalog search returns when scrolling upwards", async ({ page }, tes
   await expect(page.locator(".searchbar")).toBeVisible();
   expect(await list.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
 });
+
+test("phone catalog keeps the selected title in place after rotating during playback", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile", "starts in phone portrait");
+  await page.route("**/api/catalog?**", async (route) => {
+    const response = await route.fetch();
+    const items = await response.json();
+    await route.fulfill({ json: Array.from({ length: 60 }, (_, index) => ({ ...items[0], id: `tt-e2e-${index}`, name: `Title ${index}` })) });
+  });
+  await page.route("**/api/meta/movie/tt-e2e-*", async (route) => {
+    const id = decodeURIComponent(new URL(route.request().url()).pathname.split("/").pop()!);
+    const index = id.split("-").pop();
+    await route.fulfill({ json: { id, type: "movie", name: `Title ${index}`, description: "Rotation test title" } });
+  });
+  await page.goto("/");
+  const catalog = page.getByRole("combobox", { name: "Procházet katalog" });
+  await expect(catalog).toBeVisible();
+  const options = await catalog.locator("option").allTextContents();
+  await catalog.selectOption({ label: options.find((text) => /Filmy/.test(text))! });
+
+  const list = page.locator(".poster-grid");
+  const title = list.getByRole("button", { name: /Title 35/ });
+  await expect(list.locator(".poster-card")).toHaveCount(60);
+  await list.evaluate((element) => { element.scrollTop = 500; });
+  await expect(page.locator(".searchbar")).toBeHidden();
+  await title.evaluate((element) => element.scrollIntoView({ block: "center" }));
+  const before = await title.evaluate((element) => {
+    const list = element.parentElement!;
+    return (element.getBoundingClientRect().top - list.getBoundingClientRect().top) / list.clientHeight;
+  });
+  await title.evaluate((element: HTMLButtonElement) => element.click());
+  const detail = page.locator(".detail-panel");
+  await expect(detail).toBeVisible();
+  await detail.getByRole("button", { name: "Přehrát", exact: true }).click();
+  const player = page.locator(".player-overlay");
+  await expect(player).toBeVisible();
+
+  await page.setViewportSize({ width: 844, height: 390 });
+  await player.getByRole("button", { name: "Zavřít přehrávač", exact: true }).click({ force: true });
+  await expect(player).toHaveCount(0);
+  await page.locator(".mobile-detail-head").getByRole("button", { name: "Výsledky" }).click();
+
+  await expect(page.locator(".searchbar")).toBeHidden();
+  await expect(title).toBeInViewport();
+  await expect.poll(() => title.evaluate((element) => {
+    const list = element.parentElement!;
+    return (element.getBoundingClientRect().top - list.getBoundingClientRect().top) / list.clientHeight;
+  }).then((after) => Math.abs(after - before))).toBeLessThan(0.15);
+});

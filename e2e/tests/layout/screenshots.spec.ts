@@ -75,6 +75,11 @@ test.describe("screenshots", () => {
     // decides whether the header wraps. The section is masked anyway, so drop the chip and
     // let the baseline measure the header, not the noise.
     await page.locator(".diagnostics-toggle .state-chip").evaluateAll((chips) => chips.forEach((chip) => chip.remove()));
+    // Every path on this page is the checkout directory -- /work from the local mount,
+    // /__w/<repo>/<repo> on a runner -- and the longer one wraps to a second line, which makes
+    // the whole page two pixels taller. A mask does not help: it is drawn over the element's
+    // own box, so it changes size along with the text. The baseline gets a fixed path instead.
+    await page.locator(".library-admin-root, .storage-path code").evaluateAll((paths) => paths.forEach((path) => { path.textContent = "/library"; }));
     await expect(page).toHaveScreenshot("settings.png", {
       fullPage: true,
       // Version, uptime and free disk space are different on every run.

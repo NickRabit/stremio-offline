@@ -31,6 +31,14 @@ const recall = <T extends string>(key: string, allowed: readonly T[], fallback: 
 };
 
 type View = "catalog" | "library" | "downloads" | "stats" | "addons" | "settings";
+type PlaybackAnchor = { kind: "catalog" | "library"; key: string };
+type PlaybackReturn = {
+  view: View;
+  windowY: number;
+  gridY?: number;
+  catalogCompact: boolean;
+  anchor?: PlaybackAnchor & { element: HTMLElement; ratio: number };
+};
 const speed = (value: number) => value ? `${bytes(value)}/s` : "—";
 const streamLabel = (item: Stream) => item.name || item.title?.split("\n")[0] || item.description?.split("\n")[0] || "Stream";
 type GalleryImage = { url: string; label: string; shape: "poster" | "wide" };
@@ -83,6 +91,7 @@ export function App() {
   const [catalogCompact, setCatalogCompact] = useState(false);
   const scrollDirection = useRef(new WeakMap<HTMLElement, { top: number; travel: number; until: number }>());
   function compactOnScroll(event: UIEvent<HTMLDivElement>, compact: boolean, update: (value: boolean) => void) {
+    if (playerOpenRef.current || restoringScroll.current) return;
     const element = event.currentTarget;
     const top = Math.max(0, element.scrollTop);
     const previous = scrollDirection.current.get(element) ?? { top: 0, travel: 0, until: 0 };
@@ -423,6 +432,7 @@ export function App() {
   const [pendingSources, setPendingSources] = useState(0);
   const pickedRef = useRef(false); const sourcesRequestRef = useRef(0);
   const loadingRef = useRef(false); const requestRef = useRef(0); const itemsRef = useRef<Meta[]>([]); const gridRef = useRef<HTMLDivElement>(null); const detailRef = useRef<HTMLElement>(null);
+  const playerOpenRef = useRef(false); const playbackReturn = useRef<PlaybackReturn | null>(null);
   // The built-in lists look like a catalogue, they just do not come from an addon.
   const VIRTUAL = { resume: ":resume", watchlist: ":watchlist" } as const;
   const virtualCatalog = selectedCatalog === VIRTUAL.resume || selectedCatalog === VIRTUAL.watchlist ? selectedCatalog : "";
@@ -446,8 +456,37 @@ export function App() {
     setError(describeError(value)); setTimeout(() => setError(""), 6000);
   };
 
+  const findPlaybackAnchor = ({ kind, key }: PlaybackAnchor) => {
+    const attribute = kind === "catalog" ? "catalogKey" : "path";
+    const candidates = Array.from(document.querySelectorAll<HTMLElement>(kind === "catalog" ? "[data-catalog-key]" : "[data-path]"));
+    const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    return candidates.find((element) => element === active && element.dataset[attribute] === key)
+      ?? candidates.find((element) => element.dataset[attribute] === key && element.getClientRects().length > 0)
+      ?? candidates.find((element) => element.dataset[attribute] === key);
+  };
+  const capturePlaybackReturn = (anchor?: PlaybackAnchor): PlaybackReturn => {
+    const element = anchor && findPlaybackAnchor(anchor);
+    const grid = anchor?.kind === "catalog" ? gridRef.current : null;
+    const viewportTop = grid?.getBoundingClientRect().top ?? 0;
+    const viewportHeight = grid?.clientHeight || window.innerHeight;
+    return {
+      view,
+      windowY: window.scrollY,
+      gridY: grid?.scrollTop,
+      catalogCompact,
+      anchor: element && anchor ? { ...anchor, element, ratio: (element.getBoundingClientRect().top - viewportTop) / viewportHeight } : undefined,
+    };
+  };
+  const openPlayer = (anchor?: PlaybackAnchor) => {
+    playbackReturn.current = capturePlaybackReturn(anchor);
+    scrollByView.current[view] = window.scrollY;
+    playerOpenRef.current = true;
+    pickedRef.current = true;
+    setPlayerOpen(true);
+  };
+
   useEffect(() => {
-    const onScroll = () => { if (!restoringScroll.current) scrollByView.current[viewRef.current] = window.scrollY; };
+    const onScroll = () => { if (!restoringScroll.current && !playerOpenRef.current) scrollByView.current[viewRef.current] = window.scrollY; };
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
@@ -472,6 +511,42 @@ export function App() {
       for (const event of ["wheel", "touchstart", "keydown"]) window.removeEventListener(event, stop);
     };
   }, [view]);
+  useEffect(() => {
+    playerOpenRef.current = playerOpen;
+    if (playerOpen) return;
+    const saved = playbackReturn.current;
+    if (!saved || saved.view !== view) return;
+    restoringScroll.current = true;
+    setCatalogCompact(saved.catalogCompact);
+    const deadline = performance.now() + 1000;
+    let handle = 0;
+    const apply = () => {
+      const anchor = saved.anchor;
+      const element = anchor && (anchor.element.isConnected ? anchor.element : findPlaybackAnchor(anchor));
+      if (anchor?.kind === "catalog") {
+        const grid = gridRef.current;
+        if (grid && element) {
+          const current = element.getBoundingClientRect().top - grid.getBoundingClientRect().top;
+          grid.scrollTop += current - anchor.ratio * grid.clientHeight;
+        } else if (grid && saved.gridY != null) grid.scrollTop = saved.gridY;
+      } else if (element && anchor) {
+        window.scrollBy(0, element.getBoundingClientRect().top - anchor.ratio * window.innerHeight);
+      } else window.scrollTo(0, saved.windowY);
+      if (performance.now() < deadline) handle = requestAnimationFrame(apply);
+      else { restoringScroll.current = false; playbackReturn.current = null; }
+    };
+    handle = requestAnimationFrame(apply);
+    const stop = () => {
+      cancelAnimationFrame(handle);
+      restoringScroll.current = false;
+      playbackReturn.current = null;
+    };
+    for (const event of ["wheel", "touchmove", "keydown"]) window.addEventListener(event, stop, { passive: true, once: true });
+    return () => {
+      stop();
+      for (const event of ["wheel", "touchmove", "keydown"]) window.removeEventListener(event, stop);
+    };
+  }, [playerOpen, view]);
   useEffect(() => {
     const panel = detailRef.current;
     if (!panel || !selected) return;
@@ -779,11 +854,15 @@ export function App() {
     finally { nextBusyRef.current = false; setNextBusy(false); }
   };
   const playLocal = async (title: string, path: string, poster?: string) => {
+    const returning = capturePlaybackReturn({ kind: "library", key: path });
     try {
       const source = await api.librarySource(path);
       setLocalPoster(poster);
       setLocalTitle(title);
       setLocalStream({ ...source, localPath: path });
+      playbackReturn.current = returning;
+      scrollByView.current[view] = returning.windowY;
+      playerOpenRef.current = true;
       pickedRef.current = true;
       setPlayerOpen(true);
     } catch (error) { fail(error); }
@@ -1096,7 +1175,9 @@ export function App() {
       <Nav icon={<BarChart3/>} label={t("nav.stats")} active={view === "stats"} onClick={() => openView("stats")}/>
     </nav><div className="sidebar-bottom"><button className="sidebar-toggle" onClick={toggleSidebar} title={t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")} aria-label={t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")}>{sidebarCollapsed ? <PanelLeftOpen/> : <PanelLeftClose/>}<span>{t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")}</span></button><div className="addon-status"><small>{t("app.activeAddons")}</small><strong>{addons.filter((a) => a.enabled).length}</strong><span>{t("app.catalogsAndSources")}</span></div></div></aside>
     <main className={view === "catalog" ? "view-catalog" : ""}>
-      {view === "catalog" && <section className={`catalog-view ${catalogCompact ? "catalog-compact" : ""}`} onFocusCapture={() => setCatalogCompact(false)}><Heading eyebrow={t("catalog.eyebrow")} title={t("catalog.title")}/>
+      {view === "catalog" && <section className={`catalog-view ${catalogCompact ? "catalog-compact" : ""}`} onFocusCapture={(event) => {
+        if ((event.target as HTMLElement).closest(".searchbar,.filterbar")) setCatalogCompact(false);
+      }}><Heading eyebrow={t("catalog.eyebrow")} title={t("catalog.title")}/>
         {!catalogs.length ? (restricted ? <Empty icon={<PackagePlus/>} title={t("onboarding.title")} text={t("restricted.notice")}/> : <Onboarding onOpen={() => setView("addons")}/>) : <>
           <form className="searchbar" onSubmit={submitSearch}>
             <div className="search-input"><Search/><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={t("catalog.searchPlaceholder")}/></div>
@@ -1138,7 +1219,7 @@ export function App() {
                 const postup = catalogProgress(item);
                 const vSeznamu = inWatchlist(item.type, item.id);
                 const metadata = [item.releaseInfo || item.year, submittedQuery ? (item.sources ?? [item.addonName]).filter(Boolean).join(", ") : null].filter(Boolean).join(" · ") || item.type;
-                return <button key={klic} className={`poster-card ${selected?.id === item.id ? "selected" : ""}`} onClick={() => openMeta(item)}>
+                return <button key={klic} data-catalog-key={klic} className={`poster-card ${selected?.id === item.id ? "selected" : ""}`} onClick={() => openMeta(item)}>
                   <span className="poster-wrap">
                     {item.poster ? <img src={item.poster} alt="" loading="lazy" onError={hideBroken}/> : <div className="poster-fallback"><Film/></div>}
                     {vSeznamu && <i className="fav-mark"><Star/></i>}
@@ -1192,7 +1273,7 @@ export function App() {
               <div className="source-footer"><div className="source-info"><Subtitles/> {t("sources.subtitleCount", { count: subtitles.length + (selectedStream?.subtitles?.length || 0) })}
                 {inspection && <> · <b>{t("sources.audioInFile")}</b> {inspection.audioTracks.length ? inspection.audioTracks.map((track, index) => <em className="lang-badge" key={index}>{label(track.language)}</em>) : "—"}
                 · <b>{t("sources.subtitlesInFile")}</b> {inspection.subtitleTracks.length ? inspection.subtitleTracks.map((track, index) => <em className="lang-badge" key={index}>{label(track.language)}</em>) : "—"}</>}
-                {selectedStream?.playable && !inspection && <> · {t("sources.probing")}</>}</div><div className="actions"><button className="primary" disabled={!canPlay} onClick={() => { pickedRef.current = true; setPlayerOpen(true); }}><CirclePlay/> {t("player.play")}</button><button disabled={!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)} onClick={() => void enqueue()}><HardDrive/> {t("save.toLibrary")}</button><button disabled={!canPlay} onClick={() => void downloadStreamToDevice()}><Download/> {t("save.toDevice")}</button></div></div>
+              {selectedStream?.playable && !inspection && <> · {t("sources.probing")}</>}</div><div className="actions"><button className="primary" disabled={!canPlay} onClick={() => openPlayer({ kind: "catalog", key: `${selected.type || "movie"}:${selected.id}` })}><CirclePlay/> {t("player.play")}</button><button disabled={!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)} onClick={() => void enqueue()}><HardDrive/> {t("save.toLibrary")}</button><button disabled={!canPlay} onClick={() => void downloadStreamToDevice()}><Download/> {t("save.toDevice")}</button></div></div>
             </div>}
             </div>
           </> : <Empty icon={<Film/>} title={t("catalog.pickTitle")} text={t("catalog.pickText")}/>}</section></div>
@@ -1202,7 +1283,7 @@ export function App() {
         {settings.showResumeRow && !browsePath && !onlyFavorites && localResume.length > 0 && <div className="resume-row">
           <div className="subhead"><h3>{t("library.continueWatching")}</h3><button className="resume-show-all" onClick={() => { setBrowseQuery(""); setOnlyFavorites(false); setFromFavorites(false); setMenuFor(null); setBrowseSort("added"); setBrowseDesc(true); setBrowsePath(":resume"); }}>{t("library.showAll")} ({resumePreview?.total ?? localResume.length}) <ChevronRight/></button></div>
           <div className="resume-strip">
-            {localResume.slice(0, 8).map((item) => <button className="browse-item" key={item.key} onClick={() => {
+            {localResume.slice(0, 8).map((item) => <button className="browse-item" key={item.key} data-path={item.path} onClick={() => {
               if (item.path) playLocal(item.title, item.path, item.poster);
             }}>
               <span className="browse-art">
