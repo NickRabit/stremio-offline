@@ -1,5 +1,5 @@
 import { FormEvent, UIEvent, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, BarChart3, ArrowUp, Check, Copy, FolderInput, FolderOpen, Images, KeyRound, Languages, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, ShieldCheck, Sparkles, Star, FileJson, Link2, LogOut, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, FileText, Film, FolderCog, HardDrive, Library, PackagePlus, Pause, Play, Plus, RefreshCw, Search, SearchX, Settings, Subtitles, Trash2, Upload, X } from "lucide-react";
+import { ArrowDown, BarChart3, ArrowUp, Check, Copy, FolderInput, FolderOpen, ImageOff, Images, KeyRound, Languages, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, ShieldCheck, Sparkles, Star, FileJson, Link2, LogOut, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, FileText, Film, FolderCog, HardDrive, Library, PackagePlus, Pause, Play, Plus, RefreshCw, Search, SearchX, Settings, Subtitles, Trash2, Upload, X } from "lucide-react";
 import { api, ApiError, describeError, logDownloadUrl, saveToDevice } from "./api";
 import { AccountSettings, LoginScreen } from "./Login";
 import { bytes, SettingControl, SettingsSectionHead } from "./settings-ui";
@@ -351,6 +351,16 @@ export function App() {
       notify(t("library.scanItemStarted"));
     } catch (error) { fail(error); }
   };
+  /** The mosaic on the home screen is scanned over prepared artwork, so a cover that is not
+   *  for the living-room screen is kept out here, and everything below a folder with it. */
+  const setMosaic = async (itemPath: string, shown: boolean) => {
+    setMenuFor(null);
+    try {
+      await api.matchLibraryItem({ path: itemPath, skipMosaic: !shown });
+      notify(t(shown ? "library.mosaicShown" : "library.mosaicHidden"));
+      await loadBrowse(browsePath);
+    } catch (error) { fail(error); }
+  };
   const matchActions = (item: TreeItem) => {
     const match = item.match ?? "unmatched";
     const skipped = Boolean(item.skipLookup);
@@ -371,6 +381,9 @@ export function App() {
       {skipped
         ? <button onClick={() => void setCatalogLookup(item.path, true)}><Search/> {t("library.allowLookup")}</button>
         : <button onClick={() => void setCatalogLookup(item.path, false)}><SearchX/> {t("library.skipLookup")}</button>}
+      {item.skipMosaic
+        ? <button onClick={() => void setMosaic(item.path, true)}><Images/> {t("library.mosaicShow")}</button>
+        : <button onClick={() => void setMosaic(item.path, false)}><ImageOff/> {t("library.mosaicHide")}</button>}
     </>;
   };
   const libraryMeta = (item: BrowseLibrary) => [
@@ -1298,6 +1311,8 @@ export function App() {
           <button disabled={!selectedPaths.size} onClick={() => void startBulk({ op: "unmatch", items: [...selectedPaths] })}><X/> {t("library.unmatch")}</button>
           <button disabled={!selectedPaths.size} onClick={() => void startBulk({ op: "skipLookup", items: [...selectedPaths], skipLookup: true })}><SearchX/> {t("library.skipLookup")}</button>
           <button disabled={!selectedPaths.size} onClick={() => void startBulk({ op: "skipLookup", items: [...selectedPaths], skipLookup: false })}><Search/> {t("library.allowLookup")}</button>
+          <button disabled={!selectedPaths.size} onClick={() => void startBulk({ op: "mosaic", items: [...selectedPaths], mosaic: false })}><ImageOff/> {t("library.mosaicHide")}</button>
+          <button disabled={!selectedPaths.size} onClick={() => void startBulk({ op: "mosaic", items: [...selectedPaths], mosaic: true })}><Images/> {t("library.mosaicShow")}</button>
           <button disabled={!selectedPaths.size} onClick={() => void startBulk({ op: "artwork", items: [...selectedPaths] })}><Images/> {t("library.regenerateArtwork")}</button>
           <button disabled={!selectedPaths.size} onClick={() => void startBulk({ op: "forget", items: [...selectedPaths] })}><RotateCcw/> {t("library.markUnwatched")}</button>
           <button className="danger" disabled={!selectedPaths.size} onClick={deleteBulk}><Trash2/> {t("common.delete")}</button>

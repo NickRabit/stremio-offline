@@ -228,3 +228,21 @@ it("the picker scrolls in one place, with the selection next to the button that 
   expect(footer.querySelector(".library-picker-selection")).toBeTruthy();
   expect(footer.querySelector("button.primary")).toBeTruthy();
 });
+
+it("the mosaic of covers can be turned off for one library", async () => {
+  const patched: Record<string, unknown>[] = [];
+  fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+    if (init?.method === "PATCH") { patched.push(JSON.parse(String(init.body))); return json(library({ mosaic: false })); }
+    return json([library()]);
+  });
+  await act(async () => { root.render(<LibraryManager onError={vi.fn()} onNotify={vi.fn()}/>); });
+  await act(async () => { await Promise.resolve(); });
+
+  const box = [...host.querySelectorAll<HTMLInputElement>("input[type=checkbox]")]
+    .find((input) => input.closest("label")?.textContent?.includes("Show a mosaic of covers"))!;
+  expect(box, "the switch is on the library card").toBeTruthy();
+  expect(box.checked, "a library that never said otherwise keeps its mosaic").toBe(true);
+  await act(async () => { box.click(); await Promise.resolve(); });
+
+  expect(patched).toEqual([{ mosaic: false }]);
+});

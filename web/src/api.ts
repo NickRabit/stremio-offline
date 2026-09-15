@@ -105,7 +105,7 @@ export const api = {
   startLibraryOp: (operation: LibraryOp) => request<{ id: string }>("/api/library/ops", { method: "POST", body: JSON.stringify(operation) }),
   cancelLibraryOp: (id: string) => request<void>(`/api/library/ops/${encodeURIComponent(id)}`, { method: "DELETE" }),
   libraryIdentity: (path: string) => request<IdentityPreview>(`/api/library/identity?${q({ path })}`),
-  matchLibraryItem: (body: { path?: string; key?: string; id?: string; type?: string; scope?: "unit" | "file"; season?: number; episode?: number; skipLookup?: boolean }) =>
+  matchLibraryItem: (body: { path?: string; key?: string; id?: string; type?: string; scope?: "unit" | "file"; season?: number; episode?: number; skipLookup?: boolean; skipMosaic?: boolean }) =>
     request<{ key: string; type: string; id: string | null }>("/api/library/match", { method: "POST", body: JSON.stringify(body) }),
   librarySuggestions: () => request<{ items: SuggestionRow[]; total: number }>("/api/library/suggestions"),
   dismissLibrarySuggestion: (key: string) => request<void>(`/api/library/suggestion?${q({ key })}`, { method: "DELETE" }),
@@ -135,7 +135,7 @@ export const api = {
   libraries: () => request<LibraryView[]>("/api/libraries"),
   createLibrary: (body: { name: string; type: LibraryType; root: string; create?: boolean; writeArtwork?: boolean }) =>
     request<LibraryView>("/api/libraries", { method: "POST", body: JSON.stringify(body) }),
-  updateLibrary: (id: string, patch: { name?: string; type?: LibraryType; enabled?: boolean; order?: number; writeArtwork?: boolean; root?: string; create?: boolean }) =>
+  updateLibrary: (id: string, patch: { name?: string; type?: LibraryType; enabled?: boolean; order?: number; writeArtwork?: boolean; mosaic?: boolean; root?: string; create?: boolean }) =>
     request<LibraryView>(`/api/libraries/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(patch) }),
   deleteLibrary: (id: string, forget = false) =>
     request<void>(`/api/libraries/${encodeURIComponent(id)}${forget ? "?forget=1" : ""}`, { method: "DELETE" }),

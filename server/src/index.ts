@@ -29,7 +29,7 @@ import { publicSettings, Store } from "./store.js";
 import { advanceTorrent, normalizeToken, verifyRealDebridToken } from "./debrid.js";
 import { clearLog, currentLevel, flushLog, initLogger, log, parseLevel, readLog, startLogMaintenance, setLevel } from "./logger.js";
 import { browseDirectory, describePath, emptiedFolders, entryDirectory, isPathWithin, isVideo, listFolders, listVideos, moveDestination, orphanedCatalogKeys, pageFiles, remapPath, scanLibrary, sortFiles, summarize, type FoundFile, type LibraryEntry, type WalkBudget } from "./library.js";
-import { browseMeta, cacheFieldsFromMeta, episodeKey, episodeNumberOf, episodesFromMeta, dropKeyed, knownTitleEntry, knownTitleOf, lookupSkipped, matchKeyFor, matchStatus, needsBackfill, needsEpisodes, scanMiss, suggestionFor, titleUnits, unmatchAt, type LibraryMetaRecord, type TitleKind, type TitleUnit } from "./library-match.js";
+import { browseMeta, cacheFieldsFromMeta, episodeKey, episodeNumberOf, episodesFromMeta, dropKeyed, knownTitleEntry, knownTitleOf, lookupSkipped, matchKeyFor, matchStatus, mosaicSkipped, needsBackfill, needsEpisodes, scanMiss, suggestionFor, titleUnits, unmatchAt, type LibraryMetaRecord, type TitleKind, type TitleUnit } from "./library-match.js";
 import { parseMediaPath } from "./library-parse.js";
 import { LibraryScan } from "./library-scan.js";
 import { createLibraryProbe, type LibraryHealth } from "./library-probe.js";
@@ -808,12 +808,17 @@ const libraryRootBrowse = async () => {
     const path = wirePath(key);
     const posters = new Set<string>();
     const previewEntries = entries.filter((entry) => parseLibraryPath(entry.key)?.libraryId === library.id);
-    for (const entry of previewEntries) {
-      const art = await locateArtwork(entry);
-      if (!art) { scheduleArtwork(entry); pending = true; }
-      const poster = await thumbUrl("key", wirePath(entry.key), art);
-      if (poster) posters.add(poster);
-      if (posters.size === 5) break;
+    if (library.mosaic !== false) {
+      const records = metaStore.meta(library.id);
+      for (const entry of previewEntries) {
+        const relative = relativeKeyIn(library.id, entry.key);
+        if (relative === undefined || mosaicSkipped(relative, records)) continue;
+        const art = await locateArtwork(entry);
+        if (!art) { scheduleArtwork(entry); pending = true; }
+        const poster = await thumbUrl("key", wirePath(entry.key), art);
+        if (poster) posters.add(poster);
+        if (posters.size === 5) break;
+      }
     }
     return {
       kind: "library" as const, libraryId: library.id, name: library.name, label: library.name,
@@ -954,6 +959,7 @@ const libraryView = (library: LibraryRecord, health: LibraryHealth, stats: { tit
   ...(restrictedMode() ? {} : { root: toPosix(library.root) }),
   enabled: library.enabled, order: library.order, addedAt: library.addedAt,
   writeArtwork: library.writeArtwork,
+  mosaic: library.mosaic !== false,
   unreachable: health.unreachable, readOnly: health.readOnly,
   defaultMovie: store.settings().defaultMovieLibrary === library.id,
   defaultSeries: store.settings().defaultSeriesLibrary === library.id,
@@ -1133,6 +1139,7 @@ app.patch("/api/libraries/:id", asyncRoute(async (req, res) => {
     patch.type = type;
   }
   if (req.body?.enabled !== undefined) patch.enabled = req.body.enabled === true;
+  if (req.body?.mosaic !== undefined) patch.mosaic = req.body.mosaic !== false;
   if (req.body?.order !== undefined && Number.isFinite(Number(req.body.order))) patch.order = Number(req.body.order);
   if (req.body?.writeArtwork !== undefined) patch.writeArtwork = req.body.writeArtwork === true;
   if (req.body?.root !== undefined) patch.root = await requireLibraryRoot(req.body.root, { exceptId: target.id, create: req.body?.create === true });
@@ -2138,7 +2145,7 @@ app.get("/api/library/identity", asyncRoute(async (req, res) => {
   });
 }));
 
-type LibraryMatchRequest = { path?: unknown; key?: unknown; id?: unknown; type?: unknown; scope?: unknown; season?: unknown; episode?: unknown; skipLookup?: unknown };
+type LibraryMatchRequest = { path?: unknown; key?: unknown; id?: unknown; type?: unknown; scope?: unknown; season?: unknown; episode?: unknown; skipLookup?: unknown; skipMosaic?: unknown };
 
 const matchLibraryItem = async (body: LibraryMatchRequest) => {
   const requested = String(body.path ?? body.key ?? "").trim();
@@ -2147,30 +2154,41 @@ const matchLibraryItem = async (body: LibraryMatchRequest) => {
   const requestKey = resolved.key;
   const files = await libraryFiles();
   const unitKey = matchKeyFor(requestKey, files);
-  if (typeof body.skipLookup === "boolean" && body.id === undefined) {
+  const flag = typeof body.skipLookup === "boolean" ? { name: "skipLookup" as const, value: body.skipLookup }
+    : typeof body.skipMosaic === "boolean" ? { name: "skipMosaic" as const, value: body.skipMosaic }
+    : undefined;
+  if (flag && body.id === undefined) {
     const target = parseLibraryPath(requestKey);
     if (target) await metaStore.update(target.libraryId, (file) => {
       const current = file.meta[target.relative];
-      if (body.skipLookup) {
-        file.meta[target.relative] = {
+      if (flag.value) {
+        const record: LibraryMetaRecord = {
           type: current?.type ?? "movie",
           id: current?.id ?? "",
           source: current?.source ?? "user",
-          skipLookup: true,
           ...(current?.locked != null ? { locked: current.locked } : {}),
           ...(current?.name ? { name: current.name } : {}),
           ...(current?.year ? { year: current.year } : {}),
           ...(current?.description ? { description: current.description } : {}),
           ...(current?.matchedAt ? { matchedAt: current.matchedAt } : {}),
+          ...(current?.skipLookup ? { skipLookup: true } : {}),
+          ...(current?.skipMosaic ? { skipMosaic: true } : {}),
         };
-      } else if (current?.id) {
-        const { skipLookup: _skip, ...kept } = current;
-        file.meta[target.relative] = kept;
-      } else delete file.meta[target.relative];
+        if (flag.name === "skipLookup") record.skipLookup = true; else record.skipMosaic = true;
+        file.meta[target.relative] = record;
+      } else if (current) {
+        const kept: LibraryMetaRecord = { ...current };
+        if (flag.name === "skipLookup") delete kept.skipLookup; else delete kept.skipMosaic;
+        if (kept.id || kept.skipLookup || kept.skipMosaic) file.meta[target.relative] = kept;
+        else delete file.meta[target.relative];
+      }
     });
     invalidateLibrary();
-    log("INFO", body.skipLookup ? "Library path excluded from matching" : "Library path included in matching", { path: requested });
-    return { key: wirePath(requestKey), skipLookup: body.skipLookup === true };
+    const what = flag.name === "skipLookup" ? "matching" : "the mosaic";
+    log("INFO", flag.value ? `Library path excluded from ${what}` : `Library path included in ${what}`, { path: requested });
+    return flag.name === "skipLookup"
+      ? { key: wirePath(requestKey), skipLookup: flag.value }
+      : { key: wirePath(requestKey), skipMosaic: flag.value };
   }
   const id = String(body.id ?? "");
   const type = String(body.type ?? "movie");
@@ -2233,6 +2251,7 @@ const parseLibraryOp = (value: unknown): LibraryOp => {
   if (op === "delete" || op === "unmatch" || op === "artwork" || op === "forget") return { op, items };
   if (op === "favorite") return { op, items, favorite: Boolean(body.favorite) };
   if (op === "skipLookup") return { op, items, skipLookup: Boolean(body.skipLookup) };
+  if (op === "mosaic") return { op, items, mosaic: Boolean(body.mosaic) };
   if (op === "match") {
     const id = String(body.id ?? "").trim();
     const type = String(body.type ?? "").trim();
@@ -2305,6 +2324,7 @@ const libraryOps = new LibraryOps({
       else if (operation.op === "match") await matchLibraryItem({ path: item, type: operation.type, id: operation.id });
       else if (operation.op === "unmatch") await matchLibraryItem({ path: item, type: "movie", id: "" });
       else if (operation.op === "skipLookup") await matchLibraryItem({ path: item, skipLookup: operation.skipLookup });
+      else if (operation.op === "mosaic") await matchLibraryItem({ path: item, skipMosaic: !operation.mosaic });
       else if (operation.op === "forget") {
         await store.update((state) => {
           state.progress = Object.fromEntries(Object.entries(state.progress ?? {}).filter(([key, record]) => {

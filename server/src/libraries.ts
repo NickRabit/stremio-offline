@@ -21,6 +21,8 @@ export interface LibraryRecord {
   readOnly?: boolean;
   /** May we drop poster.jpg next to the media here? Forced false when readOnly. */
   writeArtwork: boolean;
+  /** Off hides the prepared artwork row and falls back to the folder picture. Absent means on. */
+  mosaic?: boolean;
   /** The root could not be reached at the last check. Metadata and artwork stay. */
   unreachable?: boolean;
 }
