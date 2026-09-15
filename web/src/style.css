@@ -544,6 +544,10 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .move-list button svg{width:16px;height:16px}
 .move-list button:disabled{opacity:.4}
 .move-list .move-up{grid-template-columns:16px minmax(0,1fr);color:var(--muted)}
+.move-list .move-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px;align-items:center}
+.move-list .move-row.picked>button:first-child{border-color:var(--accent);color:var(--text)}
+.move-row-pick{padding:9px;color:var(--muted)}
+.move-row-pick:hover:not(:disabled),.move-row.picked .move-row-pick{color:var(--accent)}
 .suggestion-list{display:grid;gap:8px;max-height:min(50dvh,420px);overflow:auto}
 .suggestion-row{display:grid;gap:8px;padding:10px;border:1px solid var(--line);border-radius:9px;background:#10151d}
 .suggestion-copy strong{display:block;font-size:12px;overflow-wrap:anywhere}
@@ -922,6 +926,8 @@ img.broken{visibility:hidden}
 .library-picker-manual input{font-size:12px}
 .library-picker-manual button{white-space:nowrap}
 .library-picker-use{justify-content:flex-start;width:100%}
+.library-admin-order{display:flex;gap:4px;align-self:flex-start}
+.library-admin-order .icon-button{width:28px;height:28px}
 .library-picker-create{padding-top:10px;border-top:1px solid var(--line)}
 .library-picker-advanced{color:var(--muted);font-size:11px}
 .library-picker-advanced summary{width:max-content;max-width:100%;cursor:pointer;color:var(--muted);font-weight:700}

@@ -135,7 +135,7 @@ export const api = {
   libraries: () => request<LibraryView[]>("/api/libraries"),
   createLibrary: (body: { name: string; type: LibraryType; root: string; create?: boolean; writeArtwork?: boolean }) =>
     request<LibraryView>("/api/libraries", { method: "POST", body: JSON.stringify(body) }),
-  updateLibrary: (id: string, patch: { name?: string; type?: LibraryType; enabled?: boolean; order?: number; writeArtwork?: boolean; root?: string }) =>
+  updateLibrary: (id: string, patch: { name?: string; type?: LibraryType; enabled?: boolean; order?: number; writeArtwork?: boolean; root?: string; create?: boolean }) =>
     request<LibraryView>(`/api/libraries/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(patch) }),
   deleteLibrary: (id: string, forget = false) =>
     request<void>(`/api/libraries/${encodeURIComponent(id)}${forget ? "?forget=1" : ""}`, { method: "DELETE" }),

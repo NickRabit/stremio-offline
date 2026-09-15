@@ -80,7 +80,7 @@ const fillIn = async (scope: ParentNode, label: string, value: string) => {
 };
 
 /** Opens the picker and walks into the granted folder, which is where a library is added. */
-const openPicker = async (posted: Record<string, unknown>[]) => {
+const openPicker = async (posted: Record<string, unknown>[], enter = true) => {
   fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
     if (url === "/api/libraries" && init?.method === "POST") {
       posted.push(JSON.parse(String(init.body)));
@@ -97,7 +97,13 @@ const openPicker = async (posted: Record<string, unknown>[]) => {
   await act(async () => { root.render(<LibraryManager onError={vi.fn()} onNotify={vi.fn()}/>); });
   await act(async () => { await Promise.resolve(); });
   await clickIn(host, "Add library");
-  await clickIn(picker(), "downloads");
+  if (enter) await clickIn(picker(), "downloads");
+};
+
+const clickLabelled = async (scope: ParentNode, label: string) => {
+  const button = scope.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
+  expect(button, `"${label}" is on screen`).toBeTruthy();
+  await act(async () => { button!.click(); await Promise.resolve(); });
 };
 
 const picker = () => host.querySelector(".library-picker-card") as HTMLElement;
@@ -146,4 +152,66 @@ it("filters the folders in the current location", async () => {
 
   expect([...picker().querySelectorAll(".move-list button")].some((button) => button.textContent?.includes("Series"))).toBe(true);
   expect([...picker().querySelectorAll(".move-list button")].some((button) => button.textContent?.includes("Films"))).toBe(false);
+});
+
+it("a granted root is selectable from the list, without opening it first", async () => {
+  const posted: Record<string, unknown>[] = [];
+  await openPicker(posted, false);
+
+  expect(picker().textContent, "nothing is preselected at the top level").toContain("Nothing selected yet.");
+  await clickLabelled(picker(), "Select downloads");
+  await fillIn(picker(), "Name", "Downloads");
+  await clickIn(picker(), "Add library");
+
+  expect(posted).toEqual([{ name: "Downloads", type: "mixed", root: "/downloads" }]);
+});
+
+/** Re-rooting used to hide the create control, so a library could only be moved into a
+ *  folder somebody had made outside the app. */
+it("re-rooting can name a folder that does not exist yet", async () => {
+  const patched: Record<string, unknown>[] = [];
+  fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+    if (String(url).startsWith("/api/libraries/lib_ab12cd34") && init?.method === "PATCH") {
+      patched.push(JSON.parse(String(init.body)));
+      return json(library({ root: "/downloads/Archive" }));
+    }
+    if (url === "/api/libraries") return json([library()]);
+    if (url === "/api/libraries/grants") return json([granted]);
+    if (String(url).startsWith("/api/libraries/browse")) {
+      return json(browseAt(new URLSearchParams(String(url).split("?")[1]).get("path") ?? ""));
+    }
+    if (url === "/api/libraries/preview") return json({ root: "/downloads", type: "movie", titles: 2, identified: 0, files: 3, truncated: false });
+    return json({});
+  });
+  await act(async () => { root.render(<LibraryManager onError={vi.fn()} onNotify={vi.fn()}/>); });
+  await act(async () => { await Promise.resolve(); });
+
+  await clickIn(host, "Change folder");
+  await clickIn(picker(), "downloads");
+  await fillIn(picker(), "New folder", "Archive");
+  await clickIn(picker(), "New folder");
+  await clickIn(picker(), "Move to this folder");
+
+  expect(patched).toEqual([{ root: "/downloads/Archive", create: true }]);
+});
+
+it("the libraries can be reordered, and the order is written as a sequence", async () => {
+  const patched: { id: string; body: Record<string, unknown> }[] = [];
+  const rows = [library({ id: "lib_11111111", name: "Films", order: 3 }), library({ id: "lib_22222222", name: "Series", order: 7 })];
+  fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+    if (init?.method === "PATCH") {
+      patched.push({ id: String(url).split("/").pop()!, body: JSON.parse(String(init.body)) });
+      return json(rows[0]);
+    }
+    return json(rows);
+  });
+  await act(async () => { root.render(<LibraryManager onError={vi.fn()} onNotify={vi.fn()}/>); });
+  await act(async () => { await Promise.resolve(); });
+
+  await clickLabelled(host, "Move Series up");
+
+  expect(patched).toEqual([
+    { id: "lib_22222222", body: { order: 0 } },
+    { id: "lib_11111111", body: { order: 1 } },
+  ]);
 });

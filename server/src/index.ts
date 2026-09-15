@@ -1135,7 +1135,7 @@ app.patch("/api/libraries/:id", asyncRoute(async (req, res) => {
   if (req.body?.enabled !== undefined) patch.enabled = req.body.enabled === true;
   if (req.body?.order !== undefined && Number.isFinite(Number(req.body.order))) patch.order = Number(req.body.order);
   if (req.body?.writeArtwork !== undefined) patch.writeArtwork = req.body.writeArtwork === true;
-  if (req.body?.root !== undefined) patch.root = await requireLibraryRoot(req.body.root, { exceptId: target.id });
+  if (req.body?.root !== undefined) patch.root = await requireLibraryRoot(req.body.root, { exceptId: target.id, create: req.body?.create === true });
 
   const next = { ...target, ...patch };
   if (patch.root !== undefined) libraryProbe.invalidate(next.root);
