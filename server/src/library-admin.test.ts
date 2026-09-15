@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { asLibraryType, checkLibraryRoot, libraryFlag } from "./library-admin.js";
+import { asLibraryType, checkLibraryRemoval, checkLibraryRoot, libraryFlag } from "./library-admin.js";
 import type { LibraryRecord, RootGrant } from "./libraries.js";
 
 const grant = (p: string): RootGrant => ({ path: p, source: "env", grantedAt: "2026-01-01T00:00:00.000Z" });
@@ -83,4 +83,41 @@ test("only the three library types are accepted", () => {
   assert.equal(asLibraryType("mixed"), "mixed");
   assert.equal(asLibraryType("Movie"), undefined);
   assert.equal(asLibraryType(undefined), undefined);
+});
+
+test("the only library is refused, because an empty set breaks every unqualified path", () => {
+  const only = library({ root: "/media/Films" });
+  const result = checkLibraryRemoval([only], only.id);
+  assert.equal(result.ok, false);
+  assert.equal(result.ok === false && result.messageKey, "err.libraryLast");
+  assert.equal(result.ok === false && result.status, 409);
+  assert.equal(result.ok === false && result.message, "This is the only library. Point it at another folder instead of removing it.");
+});
+
+test("an unknown id is refused as not found, even when it is the only library configured", () => {
+  const only = library({ root: "/media/Films" });
+  const result = checkLibraryRemoval([only], "lib_00000000");
+  assert.equal(result.ok, false);
+  assert.equal(result.ok === false && result.messageKey, "err.libraryNotFound");
+  assert.equal(result.ok === false && result.status, 404);
+});
+
+test("any of several libraries is removable, and a disabled or unreachable one still counts", () => {
+  const first = library({ root: "/media/Films", order: 0 });
+  const second = library({ id: "lib_ef56ab78", root: "/media/Series", order: 1, enabled: false, unreachable: true });
+  const removedFirst = checkLibraryRemoval([first, second], first.id);
+  assert.equal(removedFirst.ok, true);
+  assert.equal(removedFirst.ok === true && removedFirst.library, first);
+  const removedSecond = checkLibraryRemoval([first, second], second.id);
+  assert.equal(removedSecond.ok, true);
+  assert.equal(removedSecond.ok === true && removedSecond.library, second);
+});
+
+test("a removable library is answered with the record that matched, not another of the same", () => {
+  const first = library({ root: "/media/Films", name: "Films", order: 0 });
+  const second = library({ id: "lib_ef56ab78", root: "/media/Series", name: "Series", order: 1 });
+  const result = checkLibraryRemoval([first, second], second.id);
+  assert.equal(result.ok, true);
+  assert.equal(result.ok === true && result.library.name, "Series");
+  assert.equal(result.ok === true && result.library.root, "/media/Series");
 });

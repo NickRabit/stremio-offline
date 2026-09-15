@@ -54,3 +54,22 @@ export function libraryFlag(libraries: LibraryRecord[], target: string) {
   const owner = libraries.find((library) => isInside(absolute, path.resolve(library.root)));
   return owner ? { libraryId: owner.id, libraryRoot: path.resolve(owner.root) === absolute } : {};
 }
+
+/** Whether a library may be removed. The last one may not: an empty set breaks every
+ *  unqualified path until a restart, and the restart seeds a new id that matches nothing
+ *  the old library remembered. */
+export type RemovalCheck = { ok: true; library: LibraryRecord } | { ok: false; message: string; messageKey: string; status: number };
+
+export function checkLibraryRemoval(libraries: LibraryRecord[], id: string): RemovalCheck {
+  const library = libraries.find((record) => record.id === id);
+  if (!library) return { ok: false, message: "The library was not found.", messageKey: "err.libraryNotFound", status: 404 };
+  if (libraries.length === 1) {
+    return {
+      ok: false,
+      message: "This is the only library. Point it at another folder instead of removing it.",
+      messageKey: "err.libraryLast",
+      status: 409,
+    };
+  }
+  return { ok: true, library };
+}

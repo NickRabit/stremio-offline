@@ -884,6 +884,7 @@ export const en = {
   "err.libraryRootCreate": "The folder could not be created.",
   "err.libraryRootTaken": "Another library already uses that folder.",
   "err.libraryRootAmbiguous": "Several libraries are configured. Open one of them.",
+  "err.libraryLast": "This is the only library. Point it at another folder instead of removing it.",
   "err.grantNotFound": "That root was not granted here.",
   "err.invalidName": "Invalid name.",
   "err.nameTaken": "A file with that name already exists.",
