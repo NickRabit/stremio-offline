@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createWriteStream } from "node:fs";
+import { createWriteStream, existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import os from "node:os";
@@ -643,7 +643,7 @@ const filled = (from: number, length: number) => Buffer.from(Array.from({ length
 
 /** Serves byte ranges, and every byte says where in the file it belongs, so a segment written
  *  to the wrong offset cannot pass unnoticed. */
-const rangeServer = (options: { total?: number; ranges?: boolean; cutAt?: number } = {}) => new Promise<{
+const rangeServer = (options: { total?: number; ranges?: boolean; cutAt?: number; probeOnly?: boolean } = {}) => new Promise<{
   server: Server; port: number; peak: () => number; requests: () => string[];
 }>((resolve) => {
   const total = options.total ?? SEGMENTED_TOTAL;
@@ -652,7 +652,10 @@ const rangeServer = (options: { total?: number; ranges?: boolean; cutAt?: number
   const server = createServer(async (req, res) => {
     requests.push(req.headers.range ?? "");
     const match = /bytes=(\d+)-(\d*)/.exec(req.headers.range ?? "");
-    if (!match || options.ranges === false) {
+    // `probeOnly` is the source that answers the one-byte probe honestly and every real range
+    // with the whole file -- the lie that makes the probe promise a plan the transfer cannot keep.
+    const probe = Boolean(match && match[1] === "0" && match[2] === "0");
+    if (!match || options.ranges === false || (options.probeOnly && !probe)) {
       res.writeHead(200, { "content-length": String(total), "content-type": "video/mp4" });
       for (let sent = 0; sent < total; sent += MB) res.write(filled(sent, Math.min(MB, total - sent)));
       res.end();
@@ -710,6 +713,142 @@ test("a source that ignores ranges is downloaded over one stream", async () => {
     await assertContent(path.join(downloads, job.target), SEGMENTED_TOTAL);
   } finally {
     queue.stop(); server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a source that lies to the probe and then ignores ranges finishes as one stream", async () => {
+  const { directory, queue, downloads } = await tempQueue({ segments: () => 4 });
+  const { server, port, requests } = await rangeServer({ probeOnly: true });
+  const plans: Array<number | undefined> = [];
+  queue.onProgress = (job) => plans.push(job.segments?.length);
+  try {
+    const job = await queue.add("Mendacious", { url: `http://127.0.0.1:${port}/film.mkv` });
+    await waitFor(queue, () => queue.list()[0].status === "completed" || queue.list()[0].status === "failed", 60_000);
+    const done = queue.list()[0];
+    assert.equal(done.status, "completed", done.error ?? "");
+    assert.equal(done.rangesIgnored, true, "the job has to remember that the source ignores ranges");
+    assert.equal(requests().filter((range) => range === "bytes=0-0").length, 1, "the doomed plan must be built exactly once");
+    assert.ok(plans.length > 0, "the transfer that succeeds should have reported progress");
+    assert.deepEqual([...new Set(plans)], [undefined], "the attempt that succeeds must carry no plan");
+    await assertContent(path.join(downloads, job.target), SEGMENTED_TOTAL);
+  } finally {
+    queue.stop(); server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("the part file of an abandoned plan is gone before the single stream writes", async () => {
+  const partAtWrite: boolean[] = [];
+  const { directory, queue, downloads } = await tempQueue({
+    segments: () => 4,
+    createWriteStream: (file, options) => { partAtWrite.push(existsSync(file)); return createWriteStream(file, options); },
+  });
+  const { server, port } = await rangeServer({ probeOnly: true });
+  try {
+    const job = await queue.add("Mendacious", { url: `http://127.0.0.1:${port}/film.mkv` });
+    await waitFor(queue, () => queue.list()[0].status === "completed" || queue.list()[0].status === "failed", 60_000);
+    assert.equal(queue.list()[0].status, "completed", queue.list()[0].error ?? "");
+    assert.equal(queue.list()[0].rangesIgnored, true, "the plan has to have been abandoned for this to prove anything");
+    assert.deepEqual(partAtWrite, [false], "a part file written at segment offsets must not survive into the single stream");
+    await assertContent(path.join(downloads, job.target), SEGMENTED_TOTAL);
+  } finally {
+    queue.stop(); server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("falling back to one stream does not spend a retry", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-dl-"));
+  const data = path.join(directory, "data");
+  const downloads = path.join(directory, "downloads");
+  await mkdir(data, { recursive: true });
+  await mkdir(downloads, { recursive: true });
+  const { server, port } = await rangeServer({ probeOnly: true });
+  await writeFile(path.join(data, "downloads.json"), JSON.stringify([{
+    id: "job-1", title: "Mendacious", status: "queued", target: "Mendacious.mkv", received: 0, retryCount: 1,
+    speed: 0, createdAt: "2020-01-01T00:00:00.000Z", updatedAt: "2020-01-01T00:00:00.000Z",
+    stream: { url: `http://127.0.0.1:${port}/film.mkv` },
+  }]));
+  const queue = new DownloadQueue(() => 1, () => 1, data, downloads, { retryDelay: () => 30, segments: () => 4 });
+  const seen: number[] = [];
+  queue.onProgress = (job) => seen.push(job.retryCount ?? 0);
+  try {
+    await queue.load();
+    await waitFor(queue, () => queue.list()[0].status === "completed" || queue.list()[0].status === "failed", 60_000);
+    assert.equal(queue.list()[0].status, "completed", queue.list()[0].error ?? "");
+    assert.ok(seen.length > 0, "the transfer that succeeds should have reported progress");
+    assert.deepEqual([...new Set(seen)], [1], "the fallback must leave the retry budget where the connection drops left it");
+  } finally {
+    queue.stop();
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a 200 on an unsegmented attempt still fails after three retries", async () => {
+  const { directory, queue } = await tempQueue({ segments: () => 4 });
+  const ranges: string[] = [];
+  let probes = 0;
+  const { server, port } = await listen((req, res) => {
+    const range = req.headers.range ?? "";
+    ranges.push(range);
+    if (range === "bytes=0-0") {
+      probes += 1;
+      res.writeHead(206, { "content-length": "1", "content-range": `bytes 0-0/${SEGMENTED_TOTAL}` });
+      res.end(filled(0, 1));
+      return;
+    }
+    // A 200 without a size whose body stops early: the source answers, but never the file.
+    res.writeHead(200, { "content-type": "video/mp4" });
+    res.write(Buffer.alloc(4096));
+    res.end();
+  });
+  try {
+    await queue.add("Mendacious", { url: `http://127.0.0.1:${port}/film.mkv` });
+    await waitFor(queue, () => queue.list()[0].status === "failed", 30_000);
+    const job = queue.list()[0];
+    assert.equal(job.retryCount, 3, "an unsegmented 200 has to spend the retry budget like any other failure");
+    assert.equal(job.rangesIgnored, true, "the doomed plan has to be abandoned first");
+    assert.equal(probes, 1, "the abandoned plan must not be built again");
+    assert.ok(ranges.includes(""), "the attempt that failed has to have been the unsegmented one");
+  } finally {
+    queue.stop(); server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a source that lies does not deny ranges to the source that follows it", async () => {
+  const { directory, queue, downloads } = await tempQueue({ segments: () => 3 });
+  const liar = await listen((req, res) => {
+    const range = req.headers.range ?? "";
+    if (range === "bytes=0-0") {
+      res.writeHead(206, { "content-length": "1", "content-range": `bytes 0-0/${SEGMENTED_TOTAL}` });
+      res.end(filled(0, 1));
+      return;
+    }
+    // A 200 whose body stops early: this source answers ranges and the single stream alike without
+    // ever sending the file, so the job gives up on it and moves to the next source.
+    res.writeHead(200, { "content-type": "video/mp4" });
+    res.write(Buffer.alloc(4096));
+    res.end();
+  });
+  const honest = await rangeServer();
+  const liarUrl = `http://127.0.0.1:${liar.port}/lie.mkv`;
+  queue.setResolver(async ({ tried }) => ({
+    stream: { url: tried.includes(liarUrl) ? `http://127.0.0.1:${honest.port}/honest.mkv` : liarUrl },
+    settings: defaultDownloadSettings(),
+  }));
+  try {
+    await queue.addPending("Liar", { type: "movie", videoId: "tt2" }, { kind: "movie", title: "Liar" });
+    await waitFor(queue, () => queue.list()[0].status === "completed" || queue.list()[0].status === "failed", 60_000);
+    const job = queue.list()[0];
+    assert.equal(job.status, "completed", job.error ?? "");
+    assert.ok(!job.rangesIgnored, "a flag describing the first source must not reach the second");
+    assert.equal(honest.peak(), 3, "the honest source has to be segmented on its own merits");
+    await assertContent(path.join(downloads, job.target), SEGMENTED_TOTAL);
+  } finally {
+    queue.stop(); liar.server.close(); honest.server.close();
     await rm(directory, { recursive: true, force: true });
   }
 });
