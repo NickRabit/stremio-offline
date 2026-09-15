@@ -1,17 +1,61 @@
-import { mkdir, realpath, stat } from "node:fs/promises";
+import { mkdir, readdir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { grantingRoot } from "./library-grants.js";
-import { isInside, type LibraryRecord, type LibraryType, type RootGrant } from "./libraries.js";
+import { isInside, realAncestor, type LibraryRecord, type LibraryType, type RootGrant } from "./libraries.js";
 
 /** A root the deployment will accept, or why it will not. The message carries the catalogue
  *  key the interface renders it with; the English text is the fallback. */
 export type RootCheck = { ok: true; root: string } | { ok: false; message: string; messageKey: string; status?: number };
+
+/** Whether a library's whole tree may be moved into another folder, and what has to move. */
+export type RerootCheck = { ok: true; items: string[] } | { ok: false; message: string; messageKey: string; status: number };
 
 export const asLibraryType = (value: unknown): LibraryType | undefined =>
   value === "movie" || value === "series" || value === "mixed" ? value : undefined;
 
 const refuse = (message: string, messageKey: string, status?: number): RootCheck =>
   ({ ok: false, message, messageKey, ...(status === undefined ? {} : { status }) });
+
+const refuseReroot = (message: string, messageKey: string, status: number): RerootCheck =>
+  ({ ok: false, message, messageKey, status });
+
+const namesIn = (folder: string) => readdir(folder).catch(() => [] as string[]);
+
+/** The refusals that are about paths alone, so they can run before anything is created.
+ *  A carve-out is refused whatever else is wrong with the destination, because moving
+ *  another library along is a thing this deployment never does. */
+export async function checkRerootPaths(opts: {
+  from: string;
+  to: string;
+  /** Roots of other libraries that sit inside `from`, as `carveOuts` reports them. */
+  carveOuts: string[];
+}): Promise<RerootCheck> {
+  if (opts.carveOuts.length) {
+    return refuseReroot("Another library sits inside this one. Move it out first, or point at the new folder without moving.", "err.libraryRerootCarveOut", 409);
+  }
+  // Compared through realpath: the same folder under two names is one folder, and a nested
+  // one would be dragged along or would swallow the tree that is being moved. A destination
+  // that does not exist yet resolves through its nearest real ancestor, so `create` cannot
+  // sneak one root inside the other.
+  const real = async (value: string) => await realAncestor(value) ?? path.resolve(value);
+  const [from, to] = await Promise.all([real(opts.from), real(opts.to)]);
+  if (from === to || isInside(to, from) || isInside(from, to)) {
+    return refuseReroot("The new folder is inside the old one.", "err.libraryRerootNested", 409);
+  }
+  return { ok: true, items: [] };
+}
+
+/** What has to move, once the destination is known to exist. It only reads: the names are
+ *  read once, here, and the enqueue decides what moves -- the pump only walks that list. */
+export async function checkRerootItems(opts: { from: string; to: string }): Promise<RerootCheck> {
+  const items = await namesIn(opts.from);
+  if (!items.length) return refuseReroot("There is nothing in this folder to move.", "err.libraryRerootEmpty", 409);
+  const taken = new Set(await namesIn(opts.to));
+  if (items.some((name) => taken.has(name))) {
+    return refuseReroot("The new folder already holds something with the same name.", "err.libraryRerootCollision", 409);
+  }
+  return { ok: true, items };
+}
 
 /** A root has to be absolute, inside a granted root, a folder, and not another library's
  *  root. A root inside another library's root is legal: that is the carve-out, and it is
