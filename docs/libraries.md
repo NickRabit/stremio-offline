@@ -155,7 +155,9 @@ To push a library one level down:
 
 Paths are remembered relative to the library root, so the titles keep their
 matches as long as the contents of the folder move together. The media is
-exactly where you put it — re-root never copies, moves or deletes a file.
+exactly where you put it — re-root never copies, moves or deletes a file. The
+picker can create the destination folder if it does not exist yet; that is the
+only thing re-rooting writes.
 
 ## Where the state lives
 

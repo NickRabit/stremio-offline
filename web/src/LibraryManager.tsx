@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ChevronRight, CornerLeftUp, FolderOpen, FolderPlus, HardDrive, Pencil, Plus, RefreshCw, Search, Sparkles, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, ChevronRight, CornerLeftUp, FolderOpen, FolderPlus, HardDrive, Pencil, Plus, RefreshCw, Search, Sparkles, Trash2, X } from "lucide-react";
 import { api, describeError } from "./api";
 import { t, useI18n } from "./i18n";
 import { bytes, SettingControl, SettingsSectionHead } from "./settings-ui";
@@ -37,6 +37,26 @@ export function LibraryManager({ restricted = false, onChanged, onError, onNotif
     try { await api.startLibraryScan({ libraryId: library.id }); onNotify(t("library.scanStarted")); }
     catch (error) { onError(error); }
   };
+  /** The list is shown in `order`, which nothing set until now. Moving a row rewrites the
+   *  whole sequence: existing records can share an order or leave gaps, and swapping two
+   *  numbers in that state does not always move anything. */
+  const reorder = async (index: number, delta: number) => {
+    const next = [...libraries];
+    const other = next[index + delta];
+    const moved = next[index];
+    if (!other || !moved) return;
+    next[index + delta] = moved;
+    next[index] = other;
+    setBusy(true);
+    try {
+      for (const [position, library] of next.entries()) {
+        if (library.order !== position) await api.updateLibrary(library.id, { order: position });
+      }
+      await load();
+      onChanged?.();
+    } catch (error) { onError(error); }
+    finally { setBusy(false); }
+  };
   const remove = async (library: LibraryView, forget: boolean) => {
     if (!confirm(t(forget ? "library.removeForgetConfirm" : "library.removeConfirm", { name: library.name }))) return;
     setBusy(true);
@@ -52,7 +72,7 @@ export function LibraryManager({ restricted = false, onChanged, onError, onNotif
         <button className="primary" onClick={() => setPicker({})}><Plus/> {t("library.addLibrary")}</button>
         <button onClick={() => void load().catch(onError)} disabled={busy}><RefreshCw/> {t("common.refresh")}</button>
       </div>}
-    {libraries.map((library) => <article className={`library-admin-row${library.unreachable ? " unreachable" : ""}`} key={library.id}>
+    {libraries.map((library, index) => <article className={`library-admin-row${library.unreachable ? " unreachable" : ""}`} key={library.id}>
       <div className="library-admin-head">
         <div className="library-admin-title">
           <strong>{library.name}</strong>
@@ -66,6 +86,14 @@ export function LibraryManager({ restricted = false, onChanged, onError, onNotif
           {library.unreachable && <i className="library-badge warn">{t("library.unreachable")}</i>}
           {library.readOnly && <i className="library-badge warn">{t("library.readOnly")}</i>}
         </span>
+        {!restricted && libraries.length > 1 && <span className="library-admin-order">
+          <button type="button" className="icon-button" disabled={busy || index === 0}
+            aria-label={t("library.orderUp", { name: library.name })} title={t("library.orderUp", { name: library.name })}
+            onClick={() => void reorder(index, -1)}><ArrowUp/></button>
+          <button type="button" className="icon-button" disabled={busy || index === libraries.length - 1}
+            aria-label={t("library.orderDown", { name: library.name })} title={t("library.orderDown", { name: library.name })}
+            onClick={() => void reorder(index, 1)}><ArrowDown/></button>
+        </span>}
       </div>
       <small className="library-admin-counts">{t("library.libraryCounts", { titles: library.titles, files: library.files, size: bytes(library.bytes) })}</small>
       {!restricted && <div className="library-admin-controls">
@@ -88,8 +116,12 @@ export function LibraryManager({ restricted = false, onChanged, onError, onNotif
         <details className="library-admin-danger">
           <summary><Trash2/> {t("library.removeOptions")}</summary>
           <div>
-            <button className="danger" onClick={() => void remove(library, false)}><Trash2/> {t("library.removeLibrary")}</button>
-            <button className="danger" onClick={() => void remove(library, true)}><Trash2/> {t("library.removeForget")}</button>
+            {libraries.length > 1
+              ? <>
+                <button className="danger" onClick={() => void remove(library, false)}><Trash2/> {t("library.removeLibrary")}</button>
+                <button className="danger" onClick={() => void remove(library, true)}><Trash2/> {t("library.removeForget")}</button>
+              </>
+              : <p className="identify-hint">{t("library.removeLastHint")}</p>}
           </div>
         </details>
       </footer>}
@@ -137,8 +169,8 @@ function RootPicker({ reroot, onClose, onDone, onError, onLibrariesChanged }:
   const [newFolderActive, setNewFolderActive] = useState(false);
   const [folderFilter, setFolderFilter] = useState("");
   const [folderFilterActive, setFolderFilterActive] = useState(false);
-  // The selection can name a folder that is not on disk yet: the create request makes it,
-  // inside the grant the browsed folder sits in. Re-rooting never creates anything.
+  // The selection can name a folder that is not on disk yet: the request that applies it
+  // makes it, inside the grant the browsed folder sits in.
   const [pendingCreate, setPendingCreate] = useState(false);
   const [estimate, setEstimate] = useState<LibraryEstimate | null>(null);
   const [scanNow, setScanNow] = useState(true);
@@ -197,7 +229,7 @@ function RootPicker({ reroot, onClose, onDone, onError, onLibrariesChanged }:
     setError("");
     try {
       const library = reroot
-        ? await api.updateLibrary(reroot.id, { root: selected })
+        ? await api.updateLibrary(reroot.id, { root: selected, ...(pendingCreate ? { create: true } : {}) })
         : await api.createLibrary({ name: name.trim(), type, root: selected, ...(pendingCreate ? { create: true } : {}) });
       if (scanNow) await api.startLibraryScan({ libraryId: library.id });
       onDone(t(reroot ? "library.rerooted" : "library.created"));
@@ -221,11 +253,12 @@ function RootPicker({ reroot, onClose, onDone, onError, onLibrariesChanged }:
   const visibleEntries = browse?.entries.filter((entry) => entry.name.toLocaleLowerCase().includes(folderFilter.trim().toLocaleLowerCase())) ?? [];
   return <div className="identify-overlay" role="dialog" aria-modal="true" aria-label={t("library.chooseFolder")}
     onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-    <div className="panel identify-card library-picker-card">
+    <div className="panel identify-card dialog-split library-picker-card">
       <div className="identify-head">
         <h2>{reroot ? t("library.reroot") : t("library.addLibrary")}</h2>
         <button type="button" className="icon-button" aria-label={t("common.cancel")} onClick={onClose}><X/></button>
       </div>
+      <div className="dialog-body">
       {!reroot && <section className="library-picker-section library-picker-details">
         <div className="library-picker-section-head">
           <h3>{t("library.detailsHeading")}</h3>
@@ -261,28 +294,23 @@ function RootPicker({ reroot, onClose, onDone, onError, onLibrariesChanged }:
         </label>
         <div className="move-list">
           {browse?.path && <button type="button" className="move-up" onClick={() => void load(browse.parent ?? "")}><CornerLeftUp/> {t("library.moveUp")}</button>}
-          {visibleEntries.map((entry) => <button type="button" key={entry.path} onClick={() => void load(entry.path)}>
-            <FolderOpen/> <span>{entry.name}{entry.libraryRoot && <i className="library-badge">{t("library.rootFolder")}</i>}</span>
-            <ChevronRight/>
-          </button>)}
+          {visibleEntries.map((entry) => <div className={`move-row${selected === entry.path ? " picked" : ""}`} key={entry.path}>
+            <button type="button" onClick={() => void load(entry.path)}>
+              <FolderOpen/> <span>{entry.name}{entry.libraryRoot && <i className="library-badge">{t("library.rootFolder")}</i>}</span>
+              <ChevronRight/>
+            </button>
+            <button type="button" className="move-row-pick" aria-label={t("library.selectFolder", { name: entry.name })}
+              title={t("library.selectFolder", { name: entry.name })} onClick={() => select(entry.path)}><Check/></button>
+          </div>)}
           {!busy && browse && !browse.entries.length && <p className="identify-hint">{t("library.pickerEmpty")}</p>}
           {!busy && browse && !!browse.entries.length && !visibleEntries.length && <p className="identify-hint">{t("library.noFilteredFolders")}</p>}
         </div>
-        <button type="button" className="library-picker-use" disabled={!browse?.path} onClick={() => select(browse!.path)}>
-          <FolderOpen/> {t("library.useThisFolder")}
-        </button>
-        <div className={`library-picker-selection${selected ? " selected" : ""}`} aria-live="polite">
-          <span>{t("library.selectedFolder")}</span>
-          <strong title={selected}>{selected || t("library.pickerNothingSelected")}</strong>
-          {pendingCreate && <p>{t("library.newFolderPending")}</p>}
-          {estimate && <p className="library-picker-estimate">
-            {t("library.estimate", { titles: estimate.titles, files: estimate.files })}
-            {estimate.identified ? ` · ${t("library.estimateIdentified", { count: estimate.identified })}` : ""}
-            {estimate.truncated ? ` · ${t("library.estimateTruncated")}` : ""}
-          </p>}
-          {selected && <label className="library-scan-now"><input type="checkbox" checked={scanNow} onChange={(event) => setScanNow(event.target.checked)}/> <span>{t("library.scanNow")}</span></label>}
-        </div>
-        {!reroot && browse?.path && <div className="library-picker-manual library-picker-create">
+        {browse?.path
+          ? <button type="button" className="library-picker-use" onClick={() => select(browse.path)}>
+            <FolderOpen/> {t("library.useThisFolder")}
+          </button>
+          : <p className="identify-hint">{t("library.pickerGrantHint")}</p>}
+        {browse?.path && <div className="library-picker-manual library-picker-create">
           <input value={newFolder} readOnly={!newFolderActive} autoComplete="off" data-1p-ignore="true" data-lpignore="true"
             onFocus={() => { setNewFolderActive(true); setNewFolder(""); }} aria-label={t("library.newFolder")} placeholder={t("library.newFolderHint")}
             onChange={(event) => setNewFolder(event.target.value)}/>
@@ -302,7 +330,19 @@ function RootPicker({ reroot, onClose, onDone, onError, onLibrariesChanged }:
           </button>}
         </details>
       </section>
-      <footer className="library-picker-footer">
+      </div>
+      <footer className="library-picker-footer dialog-foot">
+        <div className={`library-picker-selection${selected ? " selected" : ""}`} aria-live="polite">
+          <span>{t("library.selectedFolder")}</span>
+          <strong title={selected}>{selected || t("library.pickerNothingSelected")}</strong>
+          {pendingCreate && <p>{t("library.newFolderPending")}</p>}
+          {estimate && <p className="library-picker-estimate">
+            {t("library.estimate", { titles: estimate.titles, files: estimate.files })}
+            {estimate.identified ? ` · ${t("library.estimateIdentified", { count: estimate.identified })}` : ""}
+            {estimate.truncated ? ` · ${t("library.estimateTruncated")}` : ""}
+          </p>}
+          {selected && <label className="library-scan-now"><input type="checkbox" checked={scanNow} onChange={(event) => setScanNow(event.target.checked)}/> <span>{t("library.scanNow")}</span></label>}
+        </div>
         {error && <p className="login-error">{error}</p>}
         <button type="button" className="primary" disabled={busy || !selected || (!reroot && !name.trim())} onClick={() => void apply()}>
           {reroot ? t("library.rerootConfirm") : t("library.addConfirm")}
