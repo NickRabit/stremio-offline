@@ -102,12 +102,18 @@ export function LibraryManager({ restricted = false, onChanged, onError, onNotif
             onChange={(event) => void patch(library, { type: event.target.value as LibraryType }, t("library.updated"))}>
             {TYPES.map((type) => <option key={type} value={type}>{libraryTypeLabel(type)}</option>)}
           </select></label>
-        <label className="library-check"><input type="checkbox" checked={library.enabled} disabled={busy}
-          onChange={(event) => void patch(library, { enabled: event.target.checked }, t("library.updated"))}/> <span>{t("library.enabled")}</span></label>
-        <label className="library-check"><input type="checkbox" checked={library.writeArtwork} disabled={busy || library.readOnly}
-          onChange={(event) => void patch(library, { writeArtwork: event.target.checked }, t("library.updated"))}/> <span>{t("library.writeArtwork")}</span></label>
-        <label className="library-check"><input type="checkbox" checked={library.mosaic !== false} disabled={busy}
-          onChange={(event) => void patch(library, { mosaic: event.target.checked }, t("library.updated"))}/> <span>{t("library.mosaic")}</span></label>
+        <label className="library-check">
+          <span className="switch"><input type="checkbox" checked={library.enabled} disabled={busy}
+            onChange={(event) => void patch(library, { enabled: event.target.checked }, t("library.updated"))}/><span/></span>
+          <span>{t("library.enabled")}</span></label>
+        <label className="library-check">
+          <span className="switch"><input type="checkbox" checked={library.writeArtwork} disabled={busy || library.readOnly}
+            onChange={(event) => void patch(library, { writeArtwork: event.target.checked }, t("library.updated"))}/><span/></span>
+          <span>{t("library.writeArtwork")}</span></label>
+        <label className="library-check">
+          <span className="switch"><input type="checkbox" checked={library.mosaic !== false} disabled={busy}
+            onChange={(event) => void patch(library, { mosaic: event.target.checked }, t("library.updated"))}/><span/></span>
+          <span>{t("library.mosaic")}</span></label>
       </div>}
       {!restricted && <footer className="library-admin-footer">
         <div className="library-admin-buttons">
@@ -353,7 +359,9 @@ function RootPicker({ reroot, onClose, onDone, onError, onLibrariesChanged }:
             {estimate.identified ? ` · ${t("library.estimateIdentified", { count: estimate.identified })}` : ""}
             {estimate.truncated ? ` · ${t("library.estimateTruncated")}` : ""}
           </p>}
-          {selected && !(reroot && carryContent) && <label className="library-scan-now"><input type="checkbox" checked={scanNow} onChange={(event) => setScanNow(event.target.checked)}/> <span>{t("library.scanNow")}</span></label>}
+          {selected && !(reroot && carryContent) && <label className="library-scan-now">
+            <span className="switch"><input type="checkbox" checked={scanNow} onChange={(event) => setScanNow(event.target.checked)}/><span/></span>
+            <span>{t("library.scanNow")}</span></label>}
         </div>
         {reroot && <fieldset className="library-reroot-choice">
           <legend>{t("library.rerootWhat")}</legend>
