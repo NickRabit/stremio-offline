@@ -78,14 +78,6 @@ export function LibraryManager({ restricted = false, onChanged, onError, onNotif
           <strong>{library.name}</strong>
           <small className="library-admin-root" title={library.root}>{library.root}</small>
         </div>
-        {!restricted && libraries.length > 1 && <span className="library-admin-order">
-          <button type="button" className="icon-button" disabled={busy || index === 0}
-            aria-label={t("library.orderUp", { name: library.name })} title={t("library.orderUp", { name: library.name })}
-            onClick={() => void reorder(index, -1)}><ArrowUp/></button>
-          <button type="button" className="icon-button" disabled={busy || index === libraries.length - 1}
-            aria-label={t("library.orderDown", { name: library.name })} title={t("library.orderDown", { name: library.name })}
-            onClick={() => void reorder(index, 1)}><ArrowDown/></button>
-        </span>}
         <span className="library-admin-flags">
           {restricted && <i className="library-badge">{libraryTypeLabel(library.type)}</i>}
           {library.defaultMovie && <i className="library-badge">{t("library.defaultMovie")}</i>}
@@ -94,6 +86,14 @@ export function LibraryManager({ restricted = false, onChanged, onError, onNotif
           {library.unreachable && <i className="library-badge warn">{t("library.unreachable")}</i>}
           {library.readOnly && <i className="library-badge warn">{t("library.readOnly")}</i>}
         </span>
+        {!restricted && libraries.length > 1 && <span className="library-admin-order">
+          <button type="button" className="icon-button" disabled={busy || index === 0}
+            aria-label={t("library.orderUp", { name: library.name })} title={t("library.orderUp", { name: library.name })}
+            onClick={() => void reorder(index, -1)}><ArrowUp/></button>
+          <button type="button" className="icon-button" disabled={busy || index === libraries.length - 1}
+            aria-label={t("library.orderDown", { name: library.name })} title={t("library.orderDown", { name: library.name })}
+            onClick={() => void reorder(index, 1)}><ArrowDown/></button>
+        </span>}
       </div>
       <small className="library-admin-counts">{t("library.libraryCounts", { titles: library.titles, files: library.files, size: bytes(library.bytes) })}</small>
       {!restricted && <div className="library-admin-controls">
