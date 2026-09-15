@@ -45,7 +45,7 @@ import { LANGUAGE_NAMES, isUiLanguage, normalizeLanguage } from "./language.js";
 import { AppError, messageKeyOf } from "./errors.js";
 import { activeDeparted, carveOuts, queuedArtworkKey, defaultLibrary, DEPARTED_MAX, departedIdFor, isInside, libraryFor, libraryPath, newLibraryId, parseLibraryPath, posixBase, posixDir, posixJoin, realAncestor, relativeWithin, resolveLibraryPath, sameFile, toFs, toPosix, type LibraryRecord, type LibraryType, type RootGrant } from "./libraries.js";
 import { envGrants, grantView, grantingRoot, insideGrant, mergeGrants } from "./library-grants.js";
-import { asLibraryType, checkLibraryRoot, libraryFlag } from "./library-admin.js";
+import { asLibraryType, checkLibraryRemoval, checkLibraryRoot, libraryFlag } from "./library-admin.js";
 import { migrateStateFile } from "./library-migrate.js";
 import { LibraryMetaStore } from "./library-meta-store.js";
 import { artworks } from "./artwork-cache.js";
@@ -1164,8 +1164,9 @@ app.patch("/api/libraries/:id", asyncRoute(async (req, res) => {
 }));
 
 app.delete("/api/libraries/:id", asyncRoute(async (req, res) => {
-  const target = store.libraries().find((library) => library.id === req.params.id);
-  if (!target) throw new AppError("The library was not found.", "err.libraryNotFound", 404);
+  const check = checkLibraryRemoval(store.libraries(), String(req.params.id));
+  if (!check.ok) throw new AppError(check.message, check.messageKey, check.status);
+  const target = check.library;
   // Only an explicit forget drops remembered data. The media is never touched either way.
   const forget = req.query.forget === "1";
   // Removing without forgetting leaves a note behind: the folder's identity, so that adding it

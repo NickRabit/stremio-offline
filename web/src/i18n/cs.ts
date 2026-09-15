@@ -879,6 +879,7 @@ export const cs: Catalog = {
   "err.libraryRootCreate": "Složku se nepodařilo vytvořit.",
   "err.libraryRootTaken": "Tuhle složku už používá jiná knihovna.",
   "err.libraryRootAmbiguous": "Je nakonfigurováno více knihoven. Otevřete jednu z nich.",
+  "err.libraryLast": "Tohle je jediná knihovna. Místo odebrání ji nasměrujte na jinou složku.",
   "err.grantNotFound": "Tohle umístění tady nebylo povoleno.",
   "err.invalidName": "Neplatné jméno.",
   "err.nameTaken": "Soubor s tímhle jménem už existuje.",
