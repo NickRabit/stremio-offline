@@ -32,3 +32,28 @@ test("Safari landscape sidebar accepts touch navigation from every page", async 
     await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
   }
 });
+
+test("Safari retries overlay fullscreen when the first rotation request is rejected", async ({ page }) => {
+  await page.addInitScript(() => {
+    const state = window as typeof window & { fullscreenAttempts?: number };
+    state.fullscreenAttempts = 0;
+    const request = () => {
+      state.fullscreenAttempts = (state.fullscreenAttempts ?? 0) + 1;
+      return state.fullscreenAttempts === 1 ? Promise.reject(new Error("not ready")) : Promise.resolve();
+    };
+    Object.defineProperty(Document.prototype, "fullscreenEnabled", { configurable: true, get: () => true });
+    Object.defineProperty(HTMLElement.prototype, "requestFullscreen", { configurable: true, value: request });
+    Object.defineProperty(HTMLElement.prototype, "webkitRequestFullscreen", { configurable: true, value: request });
+  });
+  await page.setViewportSize({ width: 390, height: 664 });
+  await page.goto("/");
+  const catalog = page.getByRole("combobox", { name: "Procházet katalog" });
+  const movieCatalog = await catalog.locator("option").filter({ hasText: "Filmy" }).first().getAttribute("value");
+  await catalog.selectOption(movieCatalog!);
+  await page.getByRole("button", { name: /Zkušební film/ }).click();
+  await page.getByRole("button", { name: "Přehrát", exact: true }).click();
+  await expect(page.locator(".player-overlay")).toBeVisible();
+
+  await page.setViewportSize({ width: 844, height: 390 });
+  await expect.poll(() => page.evaluate(() => (window as typeof window & { fullscreenAttempts?: number }).fullscreenAttempts ?? 0)).toBeGreaterThanOrEqual(2);
+});

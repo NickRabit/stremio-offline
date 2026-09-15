@@ -819,14 +819,23 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     if (!open) { setMobileLandscape(false); automaticFullscreenRef.current = false; return; }
     const orientation = window.matchMedia("(orientation: landscape)");
     let previous = false;
+    let entering = false;
+    let retry: number | undefined;
+    const enterAutomatically = () => {
+      if (entering || automaticFullscreenRef.current || playerIsFullscreen(overlayRef.current)) return;
+      entering = true;
+      void enterPlayerFullscreen(overlayRef.current).then((entered) => {
+        automaticFullscreenRef.current = entered;
+      }).finally(() => { entering = false; });
+    };
     const update = () => {
       const touchDevice = navigator.maxTouchPoints > 0 || window.matchMedia("(pointer: coarse)").matches;
       const landscape = orientation.matches && Math.min(window.innerWidth, window.innerHeight) <= 700 && Math.max(window.innerWidth, window.innerHeight) <= 1200;
       setMobileLandscape(landscape);
-      if (landscape && touchDevice && !previous) {
-        window.setTimeout(() => void enterPlayerFullscreen(overlayRef.current).then((entered) => {
-          automaticFullscreenRef.current = entered;
-        }), 80);
+      if (landscape && touchDevice && (!previous || !automaticFullscreenRef.current)) {
+        enterAutomatically();
+        window.clearTimeout(retry);
+        retry = window.setTimeout(enterAutomatically, 80);
       } else if (!landscape && previous) {
         if (automaticFullscreenRef.current) void exitPlayerFullscreen();
         automaticFullscreenRef.current = false;
@@ -839,6 +848,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     window.addEventListener("orientationchange", update);
     window.addEventListener("resize", update);
     return () => {
+      window.clearTimeout(retry);
       orientation.removeEventListener?.("change", update);
       window.removeEventListener("orientationchange", update);
       window.removeEventListener("resize", update);
