@@ -72,6 +72,7 @@ export class LibraryOps {
   private pumping = false;
   private saveTail = Promise.resolve();
   private wakeTimer?: ReturnType<typeof setTimeout>;
+  private pumped: Promise<void> = Promise.resolve();
   private notified = new Set<string>();
 
   constructor(private readonly options: LibraryOpsOptions) {}
@@ -132,7 +133,17 @@ export class LibraryOps {
   private pump() {
     if (this.pumping) return;
     this.pumping = true;
-    void this.run().finally(() => { this.pumping = false; });
+    this.pumped = this.run().finally(() => { this.pumping = false; });
+    void this.pumped.catch(() => undefined);
+  }
+
+  /** Resolves once nothing is in flight: the pump has stopped walking items and every write
+   *  it asked for is on disk. `flush()` only waits for the writes, which is what shutdown
+   *  wants; this waits for the work, which is what a caller taking the directory away
+   *  afterwards needs. */
+  async settled() {
+    await this.pumped.catch(() => undefined);
+    await this.saveTail.catch(() => undefined);
   }
 
   private async run() {
