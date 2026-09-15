@@ -77,8 +77,9 @@ test.describe("screenshots", () => {
     await page.locator(".diagnostics-toggle .state-chip").evaluateAll((chips) => chips.forEach((chip) => chip.remove()));
     await expect(page).toHaveScreenshot("settings.png", {
       fullPage: true,
-      // Version, uptime and free disk space are different on every run.
-      mask: [page.locator(".diagnostics-section"), page.locator(".storage-path")],
+      // Version, uptime and free disk space are different on every run, and a library's root
+      // is the checkout path -- /work from the local mount, /__w/... on a runner.
+      mask: [page.locator(".diagnostics-section"), page.locator(".storage-path"), page.locator(".library-admin-root")],
     });
   });
 });
