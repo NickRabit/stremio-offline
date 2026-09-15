@@ -26,7 +26,10 @@ const harness = async (execute?: LibraryOpsOptions["execute"]) => {
   // The queue saves once more after a job reaches its terminal state, to record that the
   // finished hook has run. Removing the directory without waiting for that write races it,
   // and the write lands as an unhandled rejection after the test is over.
-  return { dataDir, queue, seen, close: async () => { await queue.flush(); await rm(dataDir, { recursive: true, force: true }); } };
+  // The queue writes once more after a job reaches its terminal state, to record that the
+  // finished hook has run -- and that write is asked for after the pump has moved on, so
+  // waiting only for the writes in flight is not enough. `settled` waits for both.
+  return { dataDir, queue, seen, close: async () => { await queue.settled(); await rm(dataDir, { recursive: true, force: true }); } };
 };
 
 test("jobs run serially and continue after an item fails", async () => {
