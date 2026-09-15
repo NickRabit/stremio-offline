@@ -932,6 +932,8 @@ img.broken{visibility:hidden}
 .library-picker-use{justify-content:flex-start;width:100%}
 .library-admin-order{display:flex;gap:4px;align-self:flex-start}
 .library-admin-order .icon-button{width:28px;height:28px}
+.queue-job-library{display:flex;align-items:center;gap:5px;color:var(--text)}
+.queue-job-library svg{width:13px;height:13px;color:var(--muted)}
 .library-picker-create{padding-top:10px;border-top:1px solid var(--line)}
 .library-picker-advanced{color:var(--muted);font-size:11px}
 .library-picker-advanced summary{width:max-content;max-width:100%;cursor:pointer;color:var(--muted);font-weight:700}
