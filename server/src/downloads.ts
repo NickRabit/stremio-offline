@@ -80,6 +80,9 @@ export interface DownloadJob {
   /** Present only while a segmented transfer is unfinished; it is what lets each connection
    *  pick up at its own offset after a restart. */
   segments?: Segment[];
+  /** The source advertised byte ranges and then ignored them. Segmenting it again would
+   *  fail the same way, so every further attempt runs over one stream. */
+  rangesIgnored?: boolean;
   createdAt: string; updatedAt: string; startedAt?: string; completedAt?: string;
 }
 export type StreamResolver = (source: NonNullable<DownloadJob["source"]>) => Promise<{
@@ -822,6 +825,9 @@ export class DownloadQueue {
   /** A file is split only when the source serves byte ranges and the whole size is known.
    *  Anything less and the transfer runs over one stream, exactly as it always did. */
   private async segmentPlan(job: DownloadJob, stream: StreamItem, partSize: number, controller: AbortController) {
+    // A source caught ignoring its ranges is not asked about them again: the probe would say
+    // 206 and the very plan that cannot work would come back.
+    if (job.rangesIgnored) return undefined;
     // A plan already on disk is finished as a plan: its parts sit at their own offsets, so a
     // linear resume would append the rest over the top of them.
     const restored = usableSegments(job.segments, job.total);
@@ -1106,6 +1112,21 @@ export class DownloadQueue {
         job.pauseReason ??= "user";
       } else if (kind === "storage") {
         await this.haltForStorage(storageMessage(error));
+      } else if (kind === "transient" && error instanceof HttpSourceError && error.httpStatus === 200 && job.segments) {
+        // The source promised ranges and then answered one with the whole file. The plan cannot
+        // work, so it is dropped rather than retried; what is left is a single stream, which this
+        // source has just shown it can serve. That is a different plan, not a lost connection, so
+        // it does not spend the retry budget and it happens even when that budget is used up.
+        job.rangesIgnored = true;
+        // The segments wrote at offsets a single stream will not reproduce; resuming onto that
+        // file would append over them and leave it silently corrupt.
+        await unlink(`${this.jobPath(job)}.part`).catch(() => undefined);
+        job.received = 0; job.total = undefined; job.segments = undefined;
+        job.status = "queued"; job.notBefore = undefined;
+        retryScheduled = true;
+        log("INFO", "The source ignored byte ranges, the segment plan was abandoned", { id: job.id });
+        if (this.retryTimer) clearTimeout(this.retryTimer);
+        this.retryTimer = setTimeout(() => { this.retryTimer = undefined; this.pump(); }, 2000);
       } else if (kind === "transient" && (job.retryCount ?? 0) < 3) {
         if (error instanceof HttpSourceError && error.httpStatus === 416 && job.target) {
           await unlink(`${this.jobPath(job)}.part`).catch(() => undefined);
@@ -1126,7 +1147,7 @@ export class DownloadQueue {
         if (job.target) await unlink(`${this.jobPath(job)}.part`).catch(() => undefined);
         const subtitleFiles = this.subtitleFiles(job);
         if (subtitleFiles) await unlink(subtitleFiles.partial).catch(() => undefined);
-        job.stream = undefined; job.subtitle = undefined; job.resolution = undefined; job.target = ""; job.received = 0; job.total = undefined; job.segments = undefined; job.retryCount = 0; job.notBefore = undefined;
+        job.stream = undefined; job.subtitle = undefined; job.resolution = undefined; job.target = ""; job.received = 0; job.total = undefined; job.segments = undefined; job.rangesIgnored = undefined; job.retryCount = 0; job.notBefore = undefined;
         job.status = "queued"; this.setError(job, `Source failed (${message}), trying the next one\u2026`, "err.sourceFailedTryingNext", { reason: message });
         retryScheduled = true; log("WARN", "The source failed, trying the next one", { id: job.id, title: job.title, reason: message, tried: job.source.tried.length });
         if (this.retryTimer) clearTimeout(this.retryTimer);
