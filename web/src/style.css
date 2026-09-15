@@ -963,3 +963,7 @@ img.broken{visibility:hidden}
 .library-picker-footer .primary{justify-self:end;min-width:180px}
 .library-picker-footer .primary:disabled{border-color:var(--line);background:#252c37;color:var(--muted);box-shadow:none}
 @media(max-width:700px){.library-picker-fields,.library-manager-section .library-manager{grid-template-columns:1fr}.library-admin-row{padding:14px}.library-admin-head{display:grid}.library-admin-flags{justify-content:flex-start;max-width:none}.library-admin-controls{grid-template-columns:1fr}.library-admin-controls label.library-check:last-child{grid-column:auto}.library-admin-buttons button{width:100%}.library-admin-danger{justify-self:start}.library-admin-danger>div{left:0;right:auto}.library-picker-card{width:100%;max-height:96dvh;border-radius:16px 16px 0 0}.library-picker-manual{grid-template-columns:1fr}.library-picker-manual button{width:100%}.library-picker-footer .primary{justify-self:stretch;width:100%}}
+
+/* Safari in a tab lays this fixed overlay out against the large viewport, so its own chrome
+   pushed the video past the bottom edge. --player-viewport-* track the visual viewport. */
+.player-overlay.mobile-landscape{top:var(--player-viewport-top,0px);bottom:auto;height:var(--player-viewport-height,100dvh)}

@@ -863,6 +863,28 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     };
   }, [open]);
 
+  // In a tab Safari keeps its chrome, and it lays a fixed overlay out against the large
+  // viewport, so the video ran on past the bottom edge of the screen. The visual viewport is
+  // the part actually on screen, and in landscape the player is sized to that instead.
+  useEffect(() => {
+    const viewport = window.visualViewport;
+    const overlay = overlayRef.current;
+    if (!open || !mobileLandscape || !viewport || !overlay) return;
+    const fit = () => {
+      overlay.style.setProperty("--player-viewport-height", `${viewport.height}px`);
+      overlay.style.setProperty("--player-viewport-top", `${viewport.offsetTop}px`);
+    };
+    fit();
+    viewport.addEventListener("resize", fit);
+    viewport.addEventListener("scroll", fit);
+    return () => {
+      viewport.removeEventListener("resize", fit);
+      viewport.removeEventListener("scroll", fit);
+      overlay.style.removeProperty("--player-viewport-height");
+      overlay.style.removeProperty("--player-viewport-top");
+    };
+  }, [open, mobileLandscape]);
+
   /** Playback keeps running; the queue gets the very stream that is playing. */
   const download = async () => {
     if (downloadState !== "idle") return;
