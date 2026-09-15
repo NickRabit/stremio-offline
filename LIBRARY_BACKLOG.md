@@ -215,6 +215,37 @@ Reproduce it first, on a fixture, and find out which of these it is:
 The answer decides whether this is a bug or a tuning decision. It is the one item
 here that is not yet understood, so it goes last.
 
+### Answered: it is (1), and it is a tuning decision
+
+Found in `index.ts`. Artwork is not scheduled by the scan at all — it is
+scheduled by **browsing**:
+
+```ts
+const art = await locateFileArtwork(key);
+if (!art) scheduleFileArtwork(key);
+```
+
+That runs on every library listing, on the favourites route and on the resume
+route. So the moment the owner opens the folder they copied the film into, a
+file with no artwork gets a frame generated, immediately, with no catalogue
+lookup anywhere in the path. The match comes later, from the scan, on its own
+schedule and over its own conservative bar.
+
+So the replacement path is not broken: `clearGeneratedArt` does run on a match,
+and a later match does replace the frame. What happened is that nothing ever
+matched it — and the frame was already there, because looking at the folder is
+what makes one.
+
+The decision worth making: **do not spend ffmpeg on a file that has never had a
+lookup.** A record with no `backfilledAt`, not `skipLookup`, in a library with a
+scan queued or running, is a file whose poster may be one request away. The
+browse response already carries `pending`, and the client already asks again, so
+a short blank tile costs nothing that is not already paid for. Generating first
+and matching later costs a wrong-looking tile that only ever corrects itself if
+the scan clears a bar it was built to clear rarely.
+
+That is one condition at the two call sites above, not a new mechanism.
+
 ---
 
 # Found while reviewing, not from the twelve
