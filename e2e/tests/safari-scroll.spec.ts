@@ -67,8 +67,9 @@ test("Safari leaves the player alone where no element fullscreen exists", async 
   await page.addInitScript(() => {
     // What an iPhone actually offers: no element fullscreen, only the native video one.
     Object.defineProperty(Document.prototype, "fullscreenEnabled", { configurable: true, get: () => false });
-    delete (HTMLElement.prototype as Partial<HTMLElement>).requestFullscreen;
-    delete (HTMLElement.prototype as Record<string, unknown>).webkitRequestFullscreen;
+    const prototype = HTMLElement.prototype as unknown as Record<string, unknown>;
+    delete prototype.requestFullscreen;
+    delete prototype.webkitRequestFullscreen;
   });
   await page.setViewportSize({ width: 390, height: 664 });
   await page.goto("/");
