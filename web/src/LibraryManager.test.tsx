@@ -215,3 +215,16 @@ it("the libraries can be reordered, and the order is written as a sequence", asy
     { id: "lib_11111111", body: { order: 1 } },
   ]);
 });
+
+it("the picker scrolls in one place, with the selection next to the button that acts on it", async () => {
+  await openPicker([], false);
+
+  const card = picker();
+  const body = card.querySelector(".dialog-body")!;
+  expect(card.classList.contains("dialog-split")).toBe(true);
+  expect(body.querySelector(".move-list"), "the folder list scrolls with the rest of the body").toBeTruthy();
+  expect(body.querySelector(".library-picker-selection"), "the selection is not in the scroller").toBeNull();
+  const footer = card.querySelector(".library-picker-footer")!;
+  expect(footer.querySelector(".library-picker-selection")).toBeTruthy();
+  expect(footer.querySelector("button.primary")).toBeTruthy();
+});

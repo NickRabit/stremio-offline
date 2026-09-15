@@ -107,11 +107,12 @@ export function IdentifyDialog({ path, paths, onClose, onApplied }: { path: stri
   const unitName = identity && identity.key !== identity.path ? identity.key : (identity?.label ?? path);
 
   return <div className="identify-overlay" role="dialog" aria-modal="true" aria-label={t("library.identify")} onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-    <form className="panel identify-card" onSubmit={search}>
+    <form className="panel identify-card dialog-split" onSubmit={search}>
       <div className="identify-head">
         <h2>{t(identity?.match === "matched" ? "library.fixMatch" : "library.identify")}</h2>
         <button type="button" className="icon-button" aria-label={t("common.cancel")} onClick={onClose}><X/></button>
       </div>
+      <div className="dialog-body">
       {identity?.bound?.id && <p className="identify-hint">{t("library.identifyBound", { name: identity.bound.name || identity.bound.id })}</p>}
       {identity?.match === "rejected" && <p className="identify-hint">{t("library.unmatchedLocked")}</p>}
       {canScope && <fieldset className="identify-scope">
@@ -160,7 +161,10 @@ export function IdentifyDialog({ path, paths, onClose, onApplied }: { path: stri
           </label>
         </div>
       </div>}
-      <button type="button" className="primary" disabled={!picked || busy || (wantsEpisode && !episode.trim())} onClick={() => void apply()}>{t("library.identifyApply")}</button>
+      </div>
+      <footer className="dialog-foot">
+        <button type="button" className="primary" disabled={!picked || busy || (wantsEpisode && !episode.trim())} onClick={() => void apply()}>{t("library.identifyApply")}</button>
+      </footer>
     </form>
   </div>;
 }

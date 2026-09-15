@@ -253,11 +253,12 @@ function RootPicker({ reroot, onClose, onDone, onError, onLibrariesChanged }:
   const visibleEntries = browse?.entries.filter((entry) => entry.name.toLocaleLowerCase().includes(folderFilter.trim().toLocaleLowerCase())) ?? [];
   return <div className="identify-overlay" role="dialog" aria-modal="true" aria-label={t("library.chooseFolder")}
     onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-    <div className="panel identify-card library-picker-card">
+    <div className="panel identify-card dialog-split library-picker-card">
       <div className="identify-head">
         <h2>{reroot ? t("library.reroot") : t("library.addLibrary")}</h2>
         <button type="button" className="icon-button" aria-label={t("common.cancel")} onClick={onClose}><X/></button>
       </div>
+      <div className="dialog-body">
       {!reroot && <section className="library-picker-section library-picker-details">
         <div className="library-picker-section-head">
           <h3>{t("library.detailsHeading")}</h3>
@@ -309,17 +310,6 @@ function RootPicker({ reroot, onClose, onDone, onError, onLibrariesChanged }:
             <FolderOpen/> {t("library.useThisFolder")}
           </button>
           : <p className="identify-hint">{t("library.pickerGrantHint")}</p>}
-        <div className={`library-picker-selection${selected ? " selected" : ""}`} aria-live="polite">
-          <span>{t("library.selectedFolder")}</span>
-          <strong title={selected}>{selected || t("library.pickerNothingSelected")}</strong>
-          {pendingCreate && <p>{t("library.newFolderPending")}</p>}
-          {estimate && <p className="library-picker-estimate">
-            {t("library.estimate", { titles: estimate.titles, files: estimate.files })}
-            {estimate.identified ? ` · ${t("library.estimateIdentified", { count: estimate.identified })}` : ""}
-            {estimate.truncated ? ` · ${t("library.estimateTruncated")}` : ""}
-          </p>}
-          {selected && <label className="library-scan-now"><input type="checkbox" checked={scanNow} onChange={(event) => setScanNow(event.target.checked)}/> <span>{t("library.scanNow")}</span></label>}
-        </div>
         {browse?.path && <div className="library-picker-manual library-picker-create">
           <input value={newFolder} readOnly={!newFolderActive} autoComplete="off" data-1p-ignore="true" data-lpignore="true"
             onFocus={() => { setNewFolderActive(true); setNewFolder(""); }} aria-label={t("library.newFolder")} placeholder={t("library.newFolderHint")}
@@ -340,7 +330,19 @@ function RootPicker({ reroot, onClose, onDone, onError, onLibrariesChanged }:
           </button>}
         </details>
       </section>
-      <footer className="library-picker-footer">
+      </div>
+      <footer className="library-picker-footer dialog-foot">
+        <div className={`library-picker-selection${selected ? " selected" : ""}`} aria-live="polite">
+          <span>{t("library.selectedFolder")}</span>
+          <strong title={selected}>{selected || t("library.pickerNothingSelected")}</strong>
+          {pendingCreate && <p>{t("library.newFolderPending")}</p>}
+          {estimate && <p className="library-picker-estimate">
+            {t("library.estimate", { titles: estimate.titles, files: estimate.files })}
+            {estimate.identified ? ` · ${t("library.estimateIdentified", { count: estimate.identified })}` : ""}
+            {estimate.truncated ? ` · ${t("library.estimateTruncated")}` : ""}
+          </p>}
+          {selected && <label className="library-scan-now"><input type="checkbox" checked={scanNow} onChange={(event) => setScanNow(event.target.checked)}/> <span>{t("library.scanNow")}</span></label>}
+        </div>
         {error && <p className="login-error">{error}</p>}
         <button type="button" className="primary" disabled={busy || !selected || (!reroot && !name.trim())} onClick={() => void apply()}>
           {reroot ? t("library.rerootConfirm") : t("library.addConfirm")}

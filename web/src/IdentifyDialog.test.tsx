@@ -165,3 +165,28 @@ describe("IdentifyDialog", () => {
     expect(onApplied).toHaveBeenCalled();
   });
 });
+
+/** The card used to scroll while the result list inside it scrolled too, so the wheel moved
+ *  the list and then jolted the card. One scroll region, with the head and the action outside
+ *  it. */
+it("keeps the head and the action outside the one scrolling region", async () => {
+  fetchMock.mockImplementation((url: string) => {
+    if (String(url).includes("/api/library/identity")) return Promise.resolve(json(identity));
+    if (String(url).includes("/api/search")) return Promise.resolve(json({
+      items: [{ id: "tt0111958", type: "series", name: "Father Ted", releaseInfo: "1995" }],
+      hasMore: false, cursor: "", sources: 1,
+    }));
+    return Promise.resolve(json({}));
+  });
+  await act(async () => { root.render(<IdentifyDialog path="Father Ted" onClose={() => undefined} onApplied={() => undefined}/>); });
+  await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+  const card = host.querySelector(".identify-card")!;
+  const body = host.querySelector(".dialog-body")!;
+  expect(card.classList.contains("dialog-split")).toBe(true);
+  expect(body.querySelector(".identify-results"), "the results scroll with the rest, not on their own").toBeTruthy();
+  expect(body.querySelector(".identify-head"), "the head is pinned outside the scroller").toBeNull();
+  const apply = [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("Use this title"))!;
+  expect(apply.closest(".dialog-foot"), "the action is pinned outside the scroller").toBeTruthy();
+  expect(apply.closest(".dialog-body")).toBeNull();
+});
