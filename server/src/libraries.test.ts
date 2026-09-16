@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { activeDeparted, carveOuts, defaultLibrary, DEPARTED_MAX, departedIdFor, libraryFor, libraryPath, parseLibraryPath, relativeWithin, resolveLibraryPath, sameFile, toFs, toPosix, type DepartedLibrary, type LibraryRecord, queuedArtworkKey } from "./libraries.js";
+import { activeDeparted, carveOuts, defaultLibrary, DEPARTED_MAX, departedIdFor, libraryFor, libraryPath, parseLibraryPath, relativeWithin, resolveLibraryPath, sameFile, showsInContinueWatching, toFs, toPosix, type DepartedLibrary, type LibraryRecord, queuedArtworkKey } from "./libraries.js";
 
 const library = (over: Partial<LibraryRecord> = {}): LibraryRecord => ({
   id: "lib_ab12cd34", name: "Filmy", type: "movie", root: "/media/filmy", enabled: true,
@@ -31,6 +31,15 @@ test("a qualified path is built back from its parts", () => {
   assert.equal(relativeWithin("lib_ab12cd34", "lib_ab12cd34/Show/01.mkv"), "Show/01.mkv");
   assert.equal(relativeWithin("lib_ab12cd34", "lib_ab12cd34"), "");
   assert.equal(relativeWithin("lib_ab12cd34", ":favorites"), ":favorites", "a virtual path is untouched");
+});
+
+test("a library is in Continue watching unless it was turned off", () => {
+  const off = library({ showInContinueWatching: false });
+  assert.equal(showsInContinueWatching("lib_ab12cd34/Show/01.mkv", [library()]), true, "a record without the field predates the switch and stays on");
+  assert.equal(showsInContinueWatching("lib_ab12cd34/Show/01.mkv", [off]), false);
+  assert.equal(showsInContinueWatching("lib_ab12cd34/Show/01.mkv", [library({ showInContinueWatching: true })]), true, "turning it back on brings the stored rows with it");
+  assert.equal(showsInContinueWatching("Show/01.mkv", [off]), true, "a path no library claims belongs to no switch");
+  assert.equal(showsInContinueWatching("lib_11111111/Show/01.mkv", [off]), true, "a library that is gone hides nothing");
 });
 
 test("the wire separator is POSIX and the filesystem one is native", () => {
