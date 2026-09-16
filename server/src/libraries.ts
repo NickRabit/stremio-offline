@@ -23,6 +23,8 @@ export interface LibraryRecord {
   writeArtwork: boolean;
   /** Off hides the prepared artwork row and falls back to the folder picture. Absent means on. */
   mosaic?: boolean;
+  /** Off keeps playback position but leaves this library out of Continue watching. Absent means on. */
+  showInContinueWatching?: boolean;
   /** The root could not be reached at the last check. Metadata and artwork stay. */
   unreachable?: boolean;
 }
@@ -99,6 +101,14 @@ export function relativeWithin(libraryId: string, key: string): string {
   const value = normalize(key);
   if (value === libraryId) return "";
   return value.startsWith(`${libraryId}/`) ? value.slice(libraryId.length + 1) : value;
+}
+
+/** Whether progress kept for a path belongs in Continue watching. A path no library claims
+ *  -- an unqualified one, or one whose library is gone -- stays; a library that turned the
+ *  row off keeps its positions and drops out of the list. */
+export function showsInContinueWatching(value: string, libraries: readonly Pick<LibraryRecord, "id" | "showInContinueWatching">[]): boolean {
+  const owner = parseLibraryPath(value)?.libraryId;
+  return !owner || libraries.find((library) => library.id === owner)?.showInContinueWatching !== false;
 }
 
 /** The qualified key a queued download's target belongs to. A job from before libraries

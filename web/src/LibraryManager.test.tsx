@@ -247,6 +247,23 @@ it("the mosaic of covers can be turned off for one library", async () => {
   expect(patched).toEqual([{ mosaic: false }]);
 });
 
+it("can keep a library out of Continue watching", async () => {
+  const patched: Record<string, unknown>[] = [];
+  fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+    if (init?.method === "PATCH") { patched.push(JSON.parse(String(init.body))); return json(library({ showInContinueWatching: false })); }
+    return json([library()]);
+  });
+  await act(async () => { root.render(<LibraryManager onError={vi.fn()} onNotify={vi.fn()}/>); });
+  await act(async () => { await Promise.resolve(); });
+
+  const box = [...host.querySelectorAll<HTMLInputElement>("input[type=checkbox]")]
+    .find((input) => input.closest("label")?.textContent?.includes("Show in Continue watching"))!;
+  expect(box.checked, "libraries remain visible unless explicitly excluded").toBe(true);
+  await act(async () => { box.click(); await Promise.resolve(); });
+
+  expect(patched).toEqual([{ showInContinueWatching: false }]);
+});
+
 /** Re-rooting used to rewrite the record and move nothing, with nothing on screen saying so.
  *  The two intentions are now one choice, and the moving one is a queued job. */
 it("re-rooting can take the content along, and says which it is doing", async () => {

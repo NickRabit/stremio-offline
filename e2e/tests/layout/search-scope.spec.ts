@@ -26,7 +26,7 @@ test("global search setting remains readable and touchable", async ({ page }, te
   const card = page.locator(".addon-card").filter({ hasText: "E2E doplněk" });
   await card.getByRole("button", { name: "Manifest a export" }).click();
 
-  const setting = card.locator(".global-search-setting");
+  const setting = card.locator(".addon-setting", { hasText: "Zahrnout do hledání ve všech doplňcích" });
   const toggle = setting.getByRole("checkbox", { name: "Zahrnout do hledání ve všech doplňcích" });
   await expect(setting).toBeVisible();
   await expect(toggle).toBeChecked();

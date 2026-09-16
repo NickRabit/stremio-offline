@@ -52,7 +52,7 @@ export const api = {
   refreshAddons: () => request<{ changed: number; failed: number; addons: Addon[] }>("/api/addons/refresh", { method: "POST", timeoutMs: 120_000 }),
   stats: (hours: number) => request<StatsSummary>(`/api/stats?hours=${hours}`),
   activeStreams: () => request<ActiveStream[]>("/api/stats/streams"),
-  updateAddon: (key: string, patch: { enabled?: boolean; globalSearch?: boolean; url?: string; role?: string; downloadSettings?: AddonDownloadSettings }) => request<Addon>(`/api/addons/${key}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  updateAddon: (key: string, patch: { enabled?: boolean; globalSearch?: boolean; showInContinueWatching?: boolean; url?: string; role?: string; downloadSettings?: AddonDownloadSettings }) => request<Addon>(`/api/addons/${key}`, { method: "PATCH", body: JSON.stringify(patch) }),
   toggleAddon: (key: string, enabled: boolean) => request<Addon>(`/api/addons/${key}`, { method: "PATCH", body: JSON.stringify({ enabled }) }),
   catalogs: () => request<Catalog[]>("/api/catalogs"),
   catalog: (catalog: Catalog, search = "", skip = 0, genre = "") => request<Meta[]>(`/api/catalog?${q({ addon: catalog.addonKey, type: catalog.type, id: catalog.id, search: search || undefined, skip: skip || undefined, genre: genre || undefined })}`),
@@ -124,7 +124,7 @@ export const api = {
    *  over instead of converting and reading the source until it works out nobody is there. */
   stopPlaybackOnUnload: (id: string) => void fetch(`/api/playback/${id}`, { method: "DELETE", keepalive: true }).catch(() => undefined),
   progressOf: (key: string) => request<ProgressEntry | null>(`/api/progress/${encodeURIComponent(key)}`),
-  saveProgress: (payload: { key: string; position: number; duration: number; title?: string; path?: string; poster?: string }) =>
+  saveProgress: (payload: { key: string; position: number; duration: number; title?: string; path?: string; poster?: string; addonKey?: string }) =>
     request<void>("/api/progress", { method: "POST", body: JSON.stringify(payload) }),
   clearProgress: () => request<void>("/api/progress", { method: "DELETE" }),
   forgetProgress: (key: string) => request<void>(`/api/progress/${encodeURIComponent(key)}`, { method: "DELETE" }),
@@ -137,7 +137,7 @@ export const api = {
   libraries: () => request<LibraryView[]>("/api/libraries"),
   createLibrary: (body: { name: string; type: LibraryType; root: string; create?: boolean; writeArtwork?: boolean }) =>
     request<LibraryView>("/api/libraries", { method: "POST", body: JSON.stringify(body) }),
-  updateLibrary: (id: string, patch: { name?: string; type?: LibraryType; enabled?: boolean; order?: number; writeArtwork?: boolean; mosaic?: boolean; root?: string; create?: boolean }) =>
+  updateLibrary: (id: string, patch: { name?: string; type?: LibraryType; enabled?: boolean; order?: number; writeArtwork?: boolean; mosaic?: boolean; showInContinueWatching?: boolean; root?: string; create?: boolean }) =>
     request<LibraryView>(`/api/libraries/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(patch) }),
   /** Re-rooting that carries the content over. Queued, so it answers with the job id and
    *  the library only follows once every item is across. */

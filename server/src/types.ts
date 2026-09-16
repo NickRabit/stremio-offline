@@ -14,6 +14,8 @@ export interface AddonRecord {
   role: AddonRole;
   enabled: boolean;
   globalSearch: boolean;
+  /** Off keeps playback position but leaves catalogue titles from this addon out of Continue watching. */
+  showInContinueWatching?: boolean;
   addedAt: string;
   manifest: StremioManifest;
   downloadSettings: AddonDownloadSettings;

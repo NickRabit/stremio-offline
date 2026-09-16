@@ -32,7 +32,7 @@ export async function loadAddon(rawUrl: string, role: AddonRole): Promise<AddonR
   const manifest = await jsonFetch<StremioManifest>(url.toString());
   if (!manifest.id || !manifest.name || !manifest.version) throw new AppError("The manifest is missing id, name or version.", "err.manifestIncomplete");
   return {
-    key: randomUUID(), manifestUrl: url.toString(), role, enabled: true, globalSearch: true,
+    key: randomUUID(), manifestUrl: url.toString(), role, enabled: true, globalSearch: true, showInContinueWatching: true,
     addedAt: new Date().toISOString(), manifest, downloadSettings: defaultDownloadSettings(),
   };
 }

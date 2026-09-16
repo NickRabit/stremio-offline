@@ -76,7 +76,7 @@ test("publicAddonRestricted is an allowlist and drops token-adjacent fields", ()
   const addon = sampleAddon();
   (addon.manifest as { extra?: string }).extra = "should-not-leak";
   const published = publicAddonRestricted(addon);
-  assert.deepEqual(Object.keys(published).sort(), ["enabled", "essential", "globalSearch", "key", "manifest", "role"]);
+  assert.deepEqual(Object.keys(published).sort(), ["enabled", "essential", "globalSearch", "key", "manifest", "role", "showInContinueWatching"]);
   assert.deepEqual(Object.keys(published.manifest).sort(), ["behaviorHints", "description", "id", "logo", "name", "resources", "version"]);
   assert.equal("displayUrl" in published, false);
   assert.equal("downloadSettings" in published, false);
@@ -88,6 +88,7 @@ test("publicAddonRestricted is an allowlist and drops token-adjacent fields", ()
   assert.deepEqual(published.manifest.behaviorHints, { p2p: true });
   assert.equal(published.manifest.logo, "https://torrentio.strem.fun/logo.png");
   assert.equal(published.globalSearch, false);
+  assert.equal(published.showInContinueWatching, true);
 });
 
 test("publicAddon still redacts the path but keeps downloadSettings", () => {
@@ -95,4 +96,5 @@ test("publicAddon still redacts the path but keeps downloadSettings", () => {
   assert.equal(published.displayUrl, "https://torrentio.strem.fun/…/manifest.json");
   assert.ok(published.downloadSettings);
   assert.equal(published.globalSearch, false);
+  assert.equal(published.showInContinueWatching, true);
 });

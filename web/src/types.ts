@@ -9,6 +9,7 @@ export interface DownloadTargetSettings {
 export interface AddonDownloadSettings { movie: DownloadTargetSettings; series: DownloadTargetSettings }
 export interface Addon {
   key: string; role: "catalog" | "source" | "both"; enabled: boolean; globalSearch: boolean; displayUrl?: string;
+  showInContinueWatching?: boolean;
   /** Cinemeta: the interface hides its remove and off switches. */
   essential?: boolean;
   configurable?: boolean; downloadSettings?: AddonDownloadSettings; manifest: { id: string; name: string; version: string; description?: string; logo?: string; resources?: Array<string | { name: string }>; behaviorHints?: { p2p?: boolean } };
@@ -152,7 +153,7 @@ export interface BrowseLibrary {
 /** One library in `GET /api/libraries`. `root` is absent in restricted mode. */
 export interface LibraryView {
   id: string; name: string; type: LibraryType; root?: string; enabled: boolean; order: number;
-  addedAt: string; writeArtwork: boolean; mosaic?: boolean; unreachable: boolean; readOnly: boolean;
+  addedAt: string; writeArtwork: boolean; mosaic?: boolean; showInContinueWatching?: boolean; unreachable: boolean; readOnly: boolean;
   defaultMovie: boolean; defaultSeries: boolean; titles: number; files: number; bytes: number;
 }
 export type BrowseItem =
@@ -201,5 +202,5 @@ export interface LibraryFolder { path: string; name: string }
 
 export interface BrowseResult { path: string; items: BrowseItem[]; total: number; pending: boolean }
 export type LibrarySort = "name" | "added" | "size" | "random";
-export interface ProgressEntry { key: string; position: number; duration: number; title: string; path?: string; poster?: string; updatedAt: string }
+export interface ProgressEntry { key: string; position: number; duration: number; title: string; path?: string; poster?: string; addonKey?: string; updatedAt: string }
 export interface WatchlistEntry { key: string; type: string; id: string; name: string; poster?: string; addedAt: string }

@@ -114,6 +114,10 @@ export function LibraryManager({ restricted = false, onChanged, onError, onNotif
           <span className="switch"><input type="checkbox" checked={library.mosaic !== false} disabled={busy}
             onChange={(event) => void patch(library, { mosaic: event.target.checked }, t("library.updated"))}/><span/></span>
           <span>{t("library.mosaic")}</span></label>
+        <label className="library-check">
+          <span className="switch"><input type="checkbox" checked={library.showInContinueWatching !== false} disabled={busy}
+            onChange={(event) => void patch(library, { showInContinueWatching: event.target.checked }, t("library.showInContinueWatching"))}/><span/></span>
+          <span>{t("library.showInContinueWatching")}</span></label>
       </div>}
       {!restricted && <footer className="library-admin-footer">
         <div className="library-admin-buttons">

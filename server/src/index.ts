@@ -45,7 +45,7 @@ import type { MediaInfo } from "./naming.js";
 import { defaultDownloadSettings, deviceFilename, normalizeDownloadSettings, safeName } from "./naming.js";
 import { LANGUAGE_NAMES, isUiLanguage, normalizeLanguage } from "./language.js";
 import { AppError, messageKeyOf } from "./errors.js";
-import { activeDeparted, carveOuts, queuedArtworkKey, defaultLibrary, DEPARTED_MAX, departedIdFor, isInside, libraryFor, libraryPath, newLibraryId, parseLibraryPath, posixBase, posixDir, posixJoin, realAncestor, relativeWithin, resolveLibraryPath, sameFile, toFs, toPosix, type LibraryRecord, type LibraryType, type RootGrant } from "./libraries.js";
+import { activeDeparted, carveOuts, queuedArtworkKey, defaultLibrary, DEPARTED_MAX, departedIdFor, isInside, libraryFor, libraryPath, newLibraryId, parseLibraryPath, posixBase, posixDir, posixJoin, realAncestor, relativeWithin, resolveLibraryPath, sameFile, showsInContinueWatching, toFs, toPosix, type LibraryRecord, type LibraryType, type RootGrant } from "./libraries.js";
 import { envGrants, grantView, grantingRoot, insideGrant, mergeGrants } from "./library-grants.js";
 import { asLibraryType, checkLibraryRemoval, checkLibraryRoot, checkRerootItems, checkRerootPaths, libraryFlag } from "./library-admin.js";
 import { migrateStateFile } from "./library-migrate.js";
@@ -538,6 +538,7 @@ app.patch("/api/addons/:key", asyncRoute(async (req, res) => {
     if (!addon) throw new AppError("The addon was not found.", "err.addonNotFound");
     if (typeof req.body.enabled === "boolean") addon.enabled = req.body.enabled;
     if (typeof req.body.globalSearch === "boolean") addon.globalSearch = req.body.globalSearch;
+    if (typeof req.body.showInContinueWatching === "boolean") addon.showInContinueWatching = req.body.showInContinueWatching;
     if (downloadSettings) addon.downloadSettings = downloadSettings;
     addon.role = role;
     if (reloaded) { addon.manifestUrl = reloaded.manifestUrl; addon.manifest = reloaded.manifest; }
@@ -993,6 +994,7 @@ const libraryView = (library: LibraryRecord, health: LibraryHealth, stats: { tit
   enabled: library.enabled, order: library.order, addedAt: library.addedAt,
   writeArtwork: library.writeArtwork,
   mosaic: library.mosaic !== false,
+  showInContinueWatching: library.showInContinueWatching !== false,
   unreachable: health.unreachable, readOnly: health.readOnly,
   defaultMovie: store.settings().defaultMovieLibrary === library.id,
   defaultSeries: store.settings().defaultSeriesLibrary === library.id,
@@ -1173,6 +1175,7 @@ app.patch("/api/libraries/:id", asyncRoute(async (req, res) => {
   }
   if (req.body?.enabled !== undefined) patch.enabled = req.body.enabled === true;
   if (req.body?.mosaic !== undefined) patch.mosaic = req.body.mosaic !== false;
+  if (req.body?.showInContinueWatching !== undefined) patch.showInContinueWatching = req.body.showInContinueWatching !== false;
   if (req.body?.order !== undefined && Number.isFinite(Number(req.body.order))) patch.order = Number(req.body.order);
   if (req.body?.writeArtwork !== undefined) patch.writeArtwork = req.body.writeArtwork === true;
   if (req.body?.root !== undefined) patch.root = await requireLibraryRoot(req.body.root, { exceptId: target.id, create: req.body?.create === true });
@@ -1591,6 +1594,7 @@ app.post("/api/progress", asyncRoute(async (req, res) => {
       title: String(req.body.title ?? all[key]?.title ?? "Video"),
       path: req.body.path ? libraryKey(String(req.body.path)) : all[key]?.path,
       poster: posterOf(req.body.poster) ?? all[key]?.poster,
+      addonKey: typeof req.body.addonKey === "string" ? req.body.addonKey : all[key]?.addonKey,
       updatedAt: new Date().toISOString(),
     };
     // The list must not grow without bound.
@@ -1629,7 +1633,9 @@ app.post("/api/library/favorite", asyncRoute(async (req, res) => {
 app.get("/api/library/resume", asyncRoute(async (req, res) => {
   const favorites = new Set(store.favorites());
   const query = String(req.query.query ?? "").trim().toLocaleLowerCase();
-  const entries = Object.entries(store.progress()).filter(([key, entry]) => key.startsWith("file:") && entry.path);
+  const libraries = store.libraries();
+  const entries = Object.entries(store.progress()).filter(([key, entry]) =>
+    key.startsWith("file:") && Boolean(entry.path) && showsInContinueWatching(entry.path!, libraries));
   const described = await Promise.all(entries.map(async ([, entry]) => {
     const item = await describeLibraryPath(entry.path!);
     if (!item || item.kind !== "file") return [];
