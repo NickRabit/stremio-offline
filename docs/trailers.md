@@ -42,13 +42,20 @@ or persistent storage of trailers in this change.
 
 Secure Mode promises that the browser contacts only this instance. A YouTube
 iframe necessarily breaks that promise, even on the nocookie host. Therefore,
-do not weaken Secure Mode to make trailers work.
+do not weaken Secure Mode to make in-app iframe playback work.
 
-Trailer discovery and the Watch trailer action are available only when
-`settings.secureMode === false`. When Secure Mode is enabled, do not request a
-trailer, do not render an unavailable button, and do not show an error. This
-matches the existing behaviour in which remote browser-loaded content is absent
-in Secure Mode.
+Trailer discovery stays available in both modes: it is a server-to-server lookup
+like the existing metadata and title-link lookups. The action changes by mode:
+
+- when `settings.secureMode === false`, **Watch trailer** opens the in-app
+  `TrailerPlayer` overlay;
+- when `settings.secureMode === true`, **Open trailer on YouTube** is a normal
+  external link to `https://www.youtube.com/watch?v=<video-id>`, with
+  `target="_blank"` and `rel="noopener noreferrer"`.
+
+The external action follows the existing ČSFD, TMDB, and IMDb link pattern. It
+does not load a third-party frame into the Stremio Offline document; opening the
+separate browser tab is an explicit user navigation.
 
 When Secure Mode is off, update `server/src/secure.ts` so the CSP includes:
 
@@ -210,7 +217,6 @@ Follow the existing links pattern in `web/src/App.tsx`:
 
 - When opening catalog metadata, request title links and trailer independently;
   neither may delay metadata or stream loading.
-- Do not make either trailer request while `settings.secureMode` is true.
 - Guard the catalog trailer response with the same request-token lifecycle as
   `titleLinks`, so a late response never attaches a trailer to a newly selected
   title.
@@ -230,9 +236,10 @@ description header. In library menus, render it above the existing title-link
 row, so the primary action is visible before external links and management
 actions.
 
-The button appears only after a usable trailer has been resolved. It must not
+The action appears only after a usable trailer has been resolved. It must not
 look enabled while the request is pending and must not leave an empty placeholder
-when no trailer exists.
+when no trailer exists. When Secure Mode is on, render it as the external YouTube
+anchor described above; otherwise render the in-app trailer button.
 
 Clicking it opens a new `TrailerPlayer` component. The overlay must:
 
@@ -259,6 +266,7 @@ trailers.watch
 trailers.playerTitle
 trailers.close
 trailers.openHint
+trailers.openOnYouTube
 ```
 
 Use product terminology consistently: English uses “Watch trailer”; Czech uses
@@ -299,8 +307,8 @@ Add focused unit tests before UI integration.
 - clicking builds a nocookie embed URL from the ID and opens the overlay;
 - closing unmounts the iframe;
 - a stale catalog response cannot display a trailer for another title.
-- Secure Mode makes no trailer request or trailer button; insecure mode permits
-  the nocookie iframe through CSP.
+- Secure Mode renders a safe external YouTube anchor rather than an iframe;
+  insecure mode permits the nocookie iframe through CSP.
 
 Run `npm test` and `npm run build`. Then follow the repository's required Docker
 verification (`docker compose up -d --build`, `docker compose ps`, container
@@ -315,8 +323,8 @@ logs, and `GET /api/status`) before opening the implementation PR.
 3. Cinemeta always wins when both providers have one.
 4. No trailer source, provider error, missing key, or unmatched library item
    produces a visible error or blocks ordinary title metadata.
-5. The action plays inside the app in an iframe overlay; it never enters the
-   direct-stream FFmpeg player pipeline.
+5. With Secure Mode off, the action plays inside the app in an iframe overlay;
+   it never enters the direct-stream FFmpeg player pipeline.
 6. All new visible copy is translated in English and Czech.
-7. Secure Mode never causes a browser request to YouTube; disabling it permits
-   the explicitly scoped nocookie iframe.
+7. With Secure Mode on, the action opens a separate YouTube tab and never adds a
+   third-party iframe to the Stremio Offline document.
