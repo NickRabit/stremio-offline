@@ -611,7 +611,7 @@ app.get("/api/streams/:type/:id", asyncRoute(async (req, res) => {
   const owner = ownerOf(req);
   const items = await streams(store.addons(), String(req.params.type), String(req.params.id), req.query.addon ? String(req.query.addon) : undefined);
   if (ownerOf(req).sid !== owner.sid) throw new ResourceError(401, "AUTH_REQUIRED");
-  res.setHeader("cache-control", "private, no-store").json(items.map((item) => mediaResources.publicStream(item, owner)));
+  res.setHeader("cache-control", "private, no-store").json(mediaResources.listing(items, owner));
 }));
 app.get("/api/subtitles/:type/:id", asyncRoute(async (req, res) => {
   const owner = ownerOf(req);

@@ -146,9 +146,9 @@ export class MediaResources {
   }
 
   /**
-   * One listing hands out a resource per stream plus one per subtitle track, and the
-   * subtitle count is the provider's choice rather than the user's. Only the streams
-   * are charged, so a well-stocked catalogue cannot spend the window on its own.
+   * The window bounds how often a session asks for sources, not how many a title happens
+   * to carry: a stocked provider answers one episode with hundreds of streams, and billing
+   * each of them spends the session's minute on a single click.
    */
   private charge(sid: string) {
     for (const [key, window] of this.creationWindows) if (window.at + 60_000 <= this.now()) this.creationWindows.delete(key);
@@ -161,7 +161,7 @@ export class MediaResources {
     this.creationWindows.set(sid, window);
   }
 
-  add(stream: StreamItem, owner: ResourceOwner, scope: ResourceScope, parent?: string, unique = false): string {
+  add(stream: StreamItem, owner: ResourceOwner, scope: ResourceScope, parent?: string, unique = false, bill = true): string {
     this.prune();
     if (owner.expiresAt <= this.now()) throw new ResourceError(410, "RESOURCE_EXPIRED");
     if (parent) this.get(parent, owner.sid, "media");
@@ -170,7 +170,7 @@ export class MediaResources {
     const key = createHash("sha256").update(JSON.stringify([owner.sid, scope, parent, serialized, unique ? randomBytes(16).toString("hex") : ""])).digest("hex");
     const existing = this.dedup.get(key);
     if (existing) return existing;
-    if (scope === "source") this.charge(owner.sid);
+    if (scope === "source" && bill) this.charge(owner.sid);
     const bytes = Buffer.byteLength(serialized) + 512;
     this.reserve(bytes);
     const id = randomBytes(32).toString("base64url");
@@ -229,8 +229,21 @@ export class MediaResources {
   }
 
   publicStream(stream: StreamItem, owner: ResourceOwner): PublicStream {
+    return this.materialize(stream, owner, true);
+  }
+
+  /** A listing hands out one resource per stream, and a stocked provider answers a single
+   *  episode with hundreds of them. The session's minute is spent by the listing, so a click
+   *  cannot exhaust it -- a refused addon used to drop out of the next-episode pick and the
+   *  viewer landed on another provider, in another language. */
+  listing(streams: StreamItem[], owner: ResourceOwner): PublicStream[] {
+    if (streams.length) this.charge(owner.sid);
+    return streams.map((stream) => this.materialize(stream, owner, false));
+  }
+
+  private materialize(stream: StreamItem, owner: ResourceOwner, bill: boolean): PublicStream {
     const kind = streamKind(stream);
-    const sourceId = this.add(stream, owner, "source");
+    const sourceId = this.add(stream, owner, "source", undefined, false, bill);
     const record = this.get(sourceId, owner.sid, "source").stream;
     return {
       sourceId, kind, playable: kind === "remote" || kind === "library",

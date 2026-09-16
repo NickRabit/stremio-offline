@@ -1262,13 +1262,28 @@ export function App() {
       const type = selected.type || currentCatalog?.type || "series";
       const id = nextCatalogEpisode.id || selected.id;
       const prefetched = nextEpisodePrefetchRef.current;
-      const { streams: nextStreams, subtitles: nextSubtitles } = prefetched?.id === id
+      let { streams: nextStreams, subtitles: nextSubtitles } = prefetched?.id === id
         ? await prefetched.promise.catch(() => fetchEpisodeSources(type, id))
         : await fetchEpisodeSources(type, id);
       if (stale()) return false;
-      setSubtitles(nextSubtitles);
       const currentLanguage = playbackPreferences.audioLanguage ?? (currentStream ? streamLanguages(currentStream, metaLanguage)[0] : undefined);
-      const nextStream = pickNextEpisodeStream(nextStreams, currentStream, currentLanguage ?? settings.audioLanguage, addonPriority, metaLanguage) ?? null;
+      const preferredLanguage = currentLanguage ?? settings.audioLanguage;
+      let nextStream = pickNextEpisodeStream(nextStreams, currentStream, preferredLanguage, addonPriority, metaLanguage) ?? null;
+      // A listing comes back without the addon that is playing when its request failed or the
+      // provider was busy. Asking that one on its own keeps the viewer with the provider they
+      // chose instead of moving a binge to another one, in another language.
+      if (currentStream?.addonKey && !nextStreams.some((stream) => stream.addonKey === currentStream.addonKey)) {
+        const again = await loadStreamPart(type, id, { key: currentStream.addonKey, name: currentStream.addonName ?? "" });
+        if (stale()) return false;
+        if (again.length) {
+          nextStreams = [...nextStreams, ...again];
+          nextStream = pickNextEpisodeStream(nextStreams, currentStream, preferredLanguage, addonPriority, metaLanguage) ?? nextStream;
+        }
+      }
+      if (currentStream && nextStream && nextStream.addonKey !== currentStream.addonKey) {
+        report("INFO", "The addon that was playing has no source for the next episode", { addon: currentStream.addonName, using: nextStream.addonName });
+      }
+      setSubtitles(nextSubtitles);
       setStreams(nextStreams); setSelectedStream(nextStream); setPendingSources(0); setSourcesLoaded(true);
       return Boolean(nextStream?.playable);
     } catch (error) {
