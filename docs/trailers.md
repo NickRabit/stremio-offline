@@ -47,7 +47,7 @@ do not weaken Secure Mode to make in-app iframe playback work.
 Trailer discovery stays available in both modes: it is a server-to-server lookup
 like the existing metadata and title-link lookups. The action changes by mode:
 
-- when `settings.secureMode === false`, **Watch trailer** opens the in-app
+- when `settings.secureMode === false`, **TRAILER** opens the in-app
   `TrailerPlayer` overlay;
 - when `settings.secureMode === true`, **Open trailer on YouTube** is a normal
   external link to `https://www.youtube.com/watch?v=<video-id>`, with
@@ -230,11 +230,11 @@ Do not fetch trailers for every catalog tile or every library entry.
 
 ### Placement and interaction
 
-Use a `CirclePlay` icon and a translated label. In the catalog, render the
-trailer button beside the existing `titleLinksRow(titleLinks)` beneath the
-description header. In library menus, render it above the existing title-link
-row, so the primary action is visible before external links and management
-actions.
+Render a `TRAILER` pill beside the existing `titleLinksRow(titleLinks)` beneath
+the description header. It uses the same compact shape as the IMDb, TMDB, and
+ČSFD pills, with a distinct gold accent and no icon. In library menus, render it
+above the existing title-link row, so the primary action is visible before
+external links and management actions.
 
 The action appears only after a usable trailer has been resolved. It must not
 look enabled while the request is pending and must not leave an empty placeholder
@@ -269,8 +269,8 @@ trailers.openHint
 trailers.openOnYouTube
 ```
 
-Use product terminology consistently: English uses “Watch trailer”; Czech uses
-“Přehrát trailer”. Do not hard-code strings in React components.
+Use the same compact `TRAILER` label in English and Czech. Do not hard-code
+strings in React components.
 
 ## Tests
 

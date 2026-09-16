@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { AppError } from "./errors.js";
-import { clearTmdbCache, tmdbImage, tmdbMeta, verifyTmdbKey, type TmdbConfig } from "./tmdb.js";
+import { clearTmdbCache, tmdbImage, tmdbMeta, tmdbTrailer, verifyTmdbKey, type TmdbConfig } from "./tmdb.js";
 import type { FetchLike } from "./debrid.js";
 
 const json = (body: unknown, status = 200) =>
@@ -88,6 +88,34 @@ test("a tmdb id skips the imdb lookup", async () => {
   assert.match(calls[0], /\/movie\/31410\?/);
   if (!result) throw new Error("expected metadata");
   assert.equal(result.id, "tmdb:31410");
+});
+
+test("TMDB trailers prefer official entries and ignore other video kinds", async () => {
+  clearTmdbCache();
+  const calls: string[] = [];
+  const result = await tmdbTrailer("movie", "tmdb:31410", config, async (url) => {
+    calls.push(url);
+    return json({ results: [
+      { key: "aaaaaaaaaaa", site: "YouTube", type: "Teaser", official: true },
+      { key: "bbbbbbbbbbb", site: "Vimeo", type: "Trailer", official: true },
+      { key: "ccccccccccc", site: "YouTube", type: "Trailer", iso_639_1: "cs" },
+      { key: "ddddddddddd", site: "YouTube", type: "Trailer", official: true, iso_639_1: "en", name: "Official" },
+    ] });
+  });
+  assert.match(calls[0]!, /\/movie\/31410\/videos\?/);
+  assert.deepEqual(result, { youtubeId: "ddddddddddd", title: "Official" });
+});
+
+test("TMDB trailers resolve an IMDb series through the tv endpoint", async () => {
+  clearTmdbCache();
+  const calls: string[] = [];
+  const result = await tmdbTrailer("series", "tt0903747", config, async (url) => {
+    calls.push(url);
+    return url.includes("/find/") ? json({ movie_results: [], tv_results: [{ id: 1396 }] })
+      : json({ results: [{ key: "eeeeeeeeeee", site: "YouTube", type: "Trailer", iso_639_1: "en" }] });
+  });
+  assert.match(calls[1]!, /\/tv\/1396\/videos\?/);
+  assert.deepEqual(result, { youtubeId: "eeeeeeeeeee" });
 });
 
 test("a series is read from the tv endpoint", async () => {

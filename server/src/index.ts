@@ -28,6 +28,7 @@ import { configureSecureMode, secureMode, securityHeaders } from "./secure.js";
 import { publicSettings, Store } from "./store.js";
 import { advanceTorrent, normalizeToken, verifyRealDebridToken } from "./debrid.js";
 import { tmdbMeta, verifyTmdbKey } from "./tmdb.js";
+import { clearTrailerCache, trailerFor } from "./trailers.js";
 import { ExternalIdStore, siteLinks } from "./external-ids.js";
 import { clearLog, currentLevel, flushLog, initLogger, log, parseLevel, readLog, startLogMaintenance, setLevel } from "./logger.js";
 import { browseDirectory, describePath, emptiedFolders, entryDirectory, isPathWithin, isVideo, listFolders, listVideos, moveDestination, orphanedCatalogKeys, pageFiles, remapPath, scanLibrary, sortFiles, summarize, type FoundFile, type LibraryEntry, type WalkBudget } from "./library.js";
@@ -570,11 +571,25 @@ const tmdbProvider = (language: string): MetaProvider | undefined => {
   const apiKey = store.settings().tmdbApiKey;
   return apiKey ? (type, id) => tmdbMeta(type, id, { apiKey, language }) : undefined;
 };
+const titleTrailer = (type: string, id: string, language: string) => {
+  const apiKey = store.settings().tmdbApiKey;
+  return trailerFor(store.addons(), type, id, language, apiKey ? { apiKey, language } : undefined);
+};
 app.get("/api/meta/:type/:id", asyncRoute(async (req, res) => {
   const language = normalizeLanguage(String(req.query.language ?? "")) ?? store.settings().uiLanguage;
   const meta = await cachedMeta(String(req.params.type), String(req.params.id), language);
   if (!meta) return res.status(404).json({ error: "Metadata nebyla nalezena." });
   res.json(images.rewriteMeta(meta));
+}));
+app.get("/api/library/trailer", asyncRoute(async (req, res) => {
+  const language = normalizeLanguage(String(req.query.language ?? "")) ?? store.settings().uiLanguage;
+  const raw = String(req.query.path ?? "").trim();
+  const entry = raw ? knownTitleEntry(libraryKey(raw), metaStore.qualifiedMeta()) : undefined;
+  res.json({ trailer: entry ? await titleTrailer(entry.record.type, entry.record.id, language) : null });
+}));
+app.get("/api/trailer/:type/:id", asyncRoute(async (req, res) => {
+  const language = normalizeLanguage(String(req.query.language ?? "")) ?? store.settings().uiLanguage;
+  res.json({ trailer: await titleTrailer(String(req.params.type), String(req.params.id), language) });
 }));
 /** The same row for a folder that is bound to a title. A path with no binding asks
  *  Wikidata nothing and answers no links. */
@@ -2861,6 +2876,7 @@ app.patch("/api/settings", asyncRoute(async (req, res) => {
   if (tmdbApiKey !== undefined || languageChanged) {
     // The metadata cache key cannot see a TMDB key change on its own.
     metaCache.clear();
+    clearTrailerCache();
     // The seven-day backfill floor is measured from the last lookup, and neither a new key
     // nor a new language is visible to it. Clearing the stamps is what lets the next browse
     // ask again; needsBackfill then decides on the language, as it already does.

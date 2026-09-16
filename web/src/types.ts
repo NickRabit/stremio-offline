@@ -27,6 +27,7 @@ export interface Video { id?: string; title?: string; name?: string; season?: nu
 export interface Subtitle { subtitleId: string; lang?: string; addonName?: string }
 /** One site worth checking before watching, in the order the server sent it. */
 export interface SiteLink { site: "csfd" | "tmdb" | "imdb"; url: string }
+export interface Trailer { youtubeId: string; title?: string; provider: "cinemeta" | "tmdb" }
 export interface Stream {
   sourceId: string; kind: "remote" | "library" | "torrent" | "unsupported"; playable: boolean; localPath?: string; name?: string; title?: string; description?: string;
   subtitles?: Subtitle[]; addonKey?: string; addonName?: string;
