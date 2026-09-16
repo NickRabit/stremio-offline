@@ -22,4 +22,24 @@ describe("mergeMetaDetail", () => {
     expect(localizedDownloadTitle(summary, { ...summary, name: "Yes, Prime Minister", nameLanguage: "en" }, "en")).toBe("Yes, Prime Minister");
     expect(localizedDownloadTitle(summary, { ...summary, name: "Yes, Prime Minister", nameLanguage: "en" }, "cs")).toBe("Jistě, pane premiére");
   });
+
+  it("keeps the catalog id when the metadata addon answers with its own id scheme", () => {
+    const merged = mergeMetaDetail(
+      { id: "tt0090257", type: "movie", name: "Vesničko má středisková" },
+      { id: "tmdb:31410", type: "movie", name: "My Sweet Little Village", description: "…" },
+    );
+
+    expect(merged.id).toBe("tt0090257");
+    expect(merged.name).toBe("Vesničko má středisková");
+    expect(merged.description).toBe("…");
+  });
+
+  it("falls back to the detailed type when the catalog item has none", () => {
+    const merged = mergeMetaDetail(
+      { id: "tt0090257", type: "", name: "Vesničko má středisková" },
+      { id: "tmdb:31410", type: "series", name: "My Sweet Little Village" },
+    );
+
+    expect(merged.type).toBe("series");
+  });
 });
