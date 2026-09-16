@@ -7,6 +7,7 @@ import { watchSidecar } from "./player-sidecar";
 import { label, pickAddonSubtitle } from "./languages";
 import { hostOf, report } from "./diagnostics";
 import { releaseMediaElement, AHEAD_CATCHUP_MS, HLS_PLAYER_CONFIG, ignoreHlsErrorDuringRestart, planDecodeRecovery, planSeek, recordDecodeRecover, waitForSeekable } from "./player-hls";
+import { clampVolume, readVolume, writeVolume } from "./player-volume";
 import { detectCapabilities } from "./capabilities";
 import { t, useI18n, type Key } from "./i18n";
 import type { Capabilities, PlaybackMode, PlaybackSession, Stream, Subtitle, Track } from "./types";
@@ -200,7 +201,29 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   const bottomRef = useRef<HTMLDivElement>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [browserFullscreen, setBrowserFullscreen] = useState(false);
+  const [volume, setVolume] = useState(readVolume);
   const videoRef = useRef<HTMLVideoElement>(null);
+
+  // The overlay is unmounted whenever the player closes, so the element's own volume is back to
+  // the browser's default on every open: the remembered one is applied here instead. Listening
+  // for `volumechange` is what keeps the slider and the memory in step with keys and the system
+  // mixer, which change the element without going through the range input.
+  useEffect(() => {
+    if (!open) return;
+    const video = videoRef.current;
+    if (!video) return;
+    video.volume = volume;
+    const remember = () => {
+      setVolume((current) => {
+        const next = clampVolume(video.volume);
+        if (Math.abs(next - current) < 0.001) return current;
+        writeVolume(next);
+        return next;
+      });
+    };
+    video.addEventListener("volumechange", remember);
+    return () => video.removeEventListener("volumechange", remember);
+  }, [open, volume]);
   const hlsRef = useRef<Hls | null>(null);
   const sessionRef = useRef<string | null>(null);
   const modeRef = useRef<PlaybackMode>("transcode");
@@ -1026,7 +1049,8 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
           {onNext && <button className="next-episode" disabled={nextBusy} aria-label={t("player.nextEpisode")} title={t("player.nextEpisodeTitle", { title: nextTitle ?? "" })} onClick={() => void onNext()}><SkipForward /></button>}
         </div>
         <Volume2 />
-        <input aria-label={t("player.volume")} className="volume" type="range" min="0" max="100" defaultValue="100" onChange={(event) => { const video = videoRef.current; if (video) video.volume = Number(event.target.value) / 100; }} />
+        <input aria-label={t("player.volume")} className="volume" type="range" min="0" max="100" value={Math.round(volume * 100)}
+          onChange={(event) => { const next = clampVolume(Number(event.target.value) / 100); setVolume(next); writeVolume(next); }} />
 
         {((session?.subtitleTracks.length ?? 0) > 0 || addonSubtitles.length > 0 || session?.sidecarUrl) && <button disabled={subtitleValue === "off" && !session?.sidecarUrl} aria-label={subtitlesHidden ? t("player.showSubtitles") : t("player.hideSubtitles")} title={subtitlesHidden ? t("player.showSubtitlesKey") : t("player.hideSubtitlesKey")} aria-pressed={!subtitlesHidden} onClick={() => setSubtitlesHidden(!subtitlesHidden)}>{subtitlesHidden ? <CaptionsOff /> : <Captions />}</button>}
         <button className="player-settings-toggle" aria-label={t("player.settings")} title={t("player.settings")} aria-expanded={settingsOpen} aria-controls="player-settings" onClick={() => setSettingsOpen(!settingsOpen)}><Settings /></button>
