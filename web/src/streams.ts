@@ -81,7 +81,25 @@ export function pickDefaultStream(streams: Stream[]): Stream | undefined {
  * choosing that provider's best language and size variant. */
 export function pickNextEpisodeStream(streams: Stream[], current: Stream | null, preferredLanguage: string, priority: Map<string, number>, titleLanguage?: string): Stream | undefined {
   const ranked = arrangeStreams(streams.filter((stream) => stream.playable), { addon: "", language: "", sort: "recommended" }, preferredLanguage, priority, titleLanguage);
-  return ranked.find((stream) => current?.addonKey && stream.addonKey === current.addonKey) ?? ranked[0];
+  const sameAddon = ranked.filter((stream) => Boolean(current) && (
+    (current?.addonKey && stream.addonKey === current.addonKey)
+    || (current?.addonName && stream.addonName === current.addonName)
+  ));
+  if (!sameAddon.length) return ranked[0];
+  const currentSize = current ? streamSize(current) : undefined;
+  return [...sameAddon].sort((left, right) => {
+    const language = Number(!streamLanguages(left, titleLanguage).includes(preferredLanguage)) - Number(!streamLanguages(right, titleLanguage).includes(preferredLanguage));
+    if (language) return language;
+    if (currentSize !== undefined) {
+      const distance = (stream: Stream) => {
+        const size = streamSize(stream);
+        return size === undefined ? Number.POSITIVE_INFINITY : Math.abs(Math.log(size / currentSize));
+      };
+      const byDistance = distance(left) - distance(right);
+      if (byDistance) return byDistance;
+    }
+    return ranked.indexOf(left) - ranked.indexOf(right);
+  })[0];
 }
 
 export function streamBadge(stream: Stream): string {

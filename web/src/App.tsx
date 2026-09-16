@@ -119,6 +119,7 @@ export function App() {
   type TreeItem = Extract<BrowseItem, { kind: "folder" | "file" }>;
   const [selectedCatalog, setSelectedCatalog] = useState(""); const [search, setSearch] = useState(""); const [items, setItems] = useState<Meta[]>([]); const [selected, setSelected] = useState<Meta | null>(null); const [selectedDownloadTitle, setSelectedDownloadTitle] = useState("");
   const [selectedVideo, setSelectedVideo] = useState<Video | null>(null); const [streams, setStreams] = useState<Stream[]>([]); const [selectedStream, setSelectedStream] = useState<Stream | null>(null); const [subtitles, setSubtitles] = useState<Subtitle[]>([]); const [localEpisode, setLocalEpisode] = useState(false); const [playbackPreferences, setPlaybackPreferences] = useState<{ audioLanguage?: string; subtitleLanguage?: string | null }>({});
+  const nextEpisodePrefetchRef = useRef<{ id: string; promise: Promise<{ streams: Stream[]; subtitles: Subtitle[] }> } | null>(null);
   const [sourcesLoaded, setSourcesLoaded] = useState(false); const [metaLoading, setMetaLoading] = useState(false);
   const [titleLinks, setTitleLinks] = useState<SiteLink[]>([]);
   const [libraryLinks, setLibraryLinks] = useState<Record<string, SiteLink[]>>({});
@@ -1216,6 +1217,17 @@ export function App() {
   const loadSources = async (video?: Video) => {
     if (!selected) return; await fetchSources(selected.type || currentCatalog?.type || "movie", video?.id || selected.id, video);
   };
+  const fetchEpisodeSources = async (type: string, id: string) => {
+    const [sources, nextSubtitles] = await Promise.all([api.streamSources(type, id), api.subtitles(type, id).catch(() => [] as Subtitle[])]);
+    const parts = await Promise.all(sources.map(async (source) => {
+      try { return await api.streams(type, id, source.key); }
+      catch (error) {
+        report("WARN", `Sources from the addon could not be loaded: ${source.name}`, { addon: source.name, reason: error instanceof Error ? error.message : String(error) });
+        return [] as Stream[];
+      }
+    }));
+    return { streams: parts.flat(), subtitles: nextSubtitles };
+  };
   const orderedEpisodes = useMemo(() => (selected?.videos ?? []).map((video, index) => ({ video, index })).sort((a, b) => {
     const season = (value: Video) => value.season === 0 ? Number.MAX_SAFE_INTEGER : value.season ?? Number.MAX_SAFE_INTEGER - 1;
     return season(a.video) - season(b.video) || (a.video.episode ?? a.index) - (b.video.episode ?? b.index) || a.index - b.index;
@@ -1225,6 +1237,13 @@ export function App() {
     const index = orderedEpisodes.findIndex((video) => video === selectedVideo || (video.id && video.id === selectedVideo.id));
     return index >= 0 ? orderedEpisodes[index + 1] ?? null : null;
   }, [orderedEpisodes, selectedVideo]);
+  useEffect(() => {
+    if (!playerOpen || localStream || !selected || !nextCatalogEpisode?.id) return;
+    const id = nextCatalogEpisode.id;
+    const type = selected.type || currentCatalog?.type || "series";
+    const promise = fetchEpisodeSources(type, id);
+    nextEpisodePrefetchRef.current = { id, promise };
+  }, [playerOpen, localStream, selected?.id, selected?.type, nextCatalogEpisode?.id, currentCatalog?.type]);
   const playNextCatalogEpisode = async () => {
     if (!selected || !nextCatalogEpisode || nextBusyRef.current) return false;
     nextBusyRef.current = true; setNextBusy(true);
@@ -1236,18 +1255,12 @@ export function App() {
     try {
       const type = selected.type || currentCatalog?.type || "series";
       const id = nextCatalogEpisode.id || selected.id;
-      const [sources, nextSubtitles] = await Promise.all([api.streamSources(type, id), api.subtitles(type, id)]);
+      const prefetched = nextEpisodePrefetchRef.current;
+      const { streams: nextStreams, subtitles: nextSubtitles } = prefetched?.id === id
+        ? await prefetched.promise
+        : await fetchEpisodeSources(type, id);
       if (stale()) return false;
-      setSubtitles(nextSubtitles); setPendingSources(sources.length);
-      const parts = await Promise.all(sources.map(async (source) => {
-        try { return await api.streams(type, id, source.key); }
-        catch (error) {
-          if (!stale()) report("WARN", `Sources from the addon could not be loaded: ${source.name}`, { addon: source.name, reason: error instanceof Error ? error.message : String(error) });
-          return [] as Stream[];
-        }
-      }));
-      if (stale()) return false;
-      const nextStreams = parts.flat();
+      setSubtitles(nextSubtitles);
       const currentLanguage = playbackPreferences.audioLanguage ?? (currentStream ? streamLanguages(currentStream, metaLanguage)[0] : undefined);
       const nextStream = pickNextEpisodeStream(nextStreams, currentStream, currentLanguage ?? settings.audioLanguage, addonPriority, metaLanguage) ?? null;
       setStreams(nextStreams); setSelectedStream(nextStream); setPendingSources(0); setSourcesLoaded(true);

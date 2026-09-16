@@ -197,6 +197,13 @@ describe("pickNextEpisodeStream", () => {
     const czech = stream({ name: "czech", addonKey: "two", addonName: "Two", title: "Czech 1 GB" });
     expect(pickNextEpisodeStream([english, czech], current, "cs", new Map())?.name).toBe("czech");
   });
+
+  it("keeps a similarly sized variant once the addon and language match", () => {
+    const current = stream({ addonKey: "same", addonName: "Same", title: "Czech 3 GB" });
+    const close = stream({ name: "close", addonKey: "same", addonName: "Same", title: "Czech 3.2 GB" });
+    const huge = stream({ name: "huge", addonKey: "same", addonName: "Same", title: "Czech 20 GB" });
+    expect(pickNextEpisodeStream([huge, close], current, "cs", new Map())?.name).toBe("close");
+  });
 });
 
 describe("repickStream", () => {
