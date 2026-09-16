@@ -12,7 +12,7 @@ import { detectCapabilities } from "./capabilities";
 import { t, useI18n, type Key } from "./i18n";
 import type { Capabilities, PlaybackMode, PlaybackSession, Stream, Subtitle, Track } from "./types";
 
-interface Props { previousTitle?: string; onPrevious?: () => Promise<void>; nextTitle?: string; nextBusy?: boolean; onNext?: () => Promise<void>; open: boolean; title: string; stream: Stream | null; subtitles: Subtitle[]; subtitleLanguage: string; audioLanguage: string; progressKey?: string; progressPoster?: string; favorite?: boolean; onToggleFavorite?: () => void; onDownload: () => Promise<boolean>; onDeviceDownload: () => Promise<boolean>; onClose: () => void }
+interface Props { previousTitle?: string; onPrevious?: () => Promise<boolean>; nextTitle?: string; nextBusy?: boolean; onNext?: () => Promise<boolean>; open: boolean; title: string; stream: Stream | null; subtitles: Subtitle[]; subtitleLanguage: string; audioLanguage: string; progressKey?: string; progressPoster?: string; favorite?: boolean; onToggleFavorite?: () => void; onDownload: () => Promise<boolean>; onDeviceDownload: () => Promise<boolean>; onClose: () => void }
 
 const fmt = (seconds: number) => !Number.isFinite(seconds) ? "0:00" : `${Math.floor(seconds / 3600) ? `${Math.floor(seconds / 3600)}:` : ""}${String(Math.floor((seconds % 3600) / 60)).padStart(2, "0")}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
 
@@ -203,6 +203,40 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   const [browserFullscreen, setBrowserFullscreen] = useState(false);
   const [volume, setVolume] = useState(readVolume);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const [upNext, setUpNext] = useState(false);
+  const [upNextSeconds, setUpNextSeconds] = useState(5);
+  const advancingRef = useRef(false);
+  const onNextRef = useRef(onNext);
+  onNextRef.current = onNext;
+
+  const startNext = async () => {
+    if (advancingRef.current) return;
+    const advance = onNextRef.current;
+    if (!advance) return closePlayer();
+    advancingRef.current = true;
+    setUpNext(false);
+    try {
+      if (!await advance()) closePlayer();
+    } finally { advancingRef.current = false; }
+  };
+
+  useEffect(() => {
+    if (!upNext) return;
+    const deadline = Date.now() + 5000;
+    const tick = () => {
+      const remaining = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+      setUpNextSeconds(remaining);
+      if (remaining === 0) void startNext();
+    };
+    tick();
+    const timer = window.setInterval(tick, 200);
+    return () => clearInterval(timer);
+  }, [upNext]);
+
+  useEffect(() => {
+    setUpNext(false);
+    setUpNextSeconds(5);
+  }, [stream]);
 
   // The overlay is unmounted whenever the player closes, so the element's own volume is back to
   // the browser's default on every open: the remembered one is applied here instead. Listening
@@ -991,6 +1025,10 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     }}>
       <video ref={videoRef} playsInline disableRemotePlayback x-webkit-airplay="deny"
         onPlay={() => setPaused(false)} onPause={() => setPaused(true)}
+        onEnded={() => {
+          if (!onNext) return closePlayer();
+          setSettingsOpen(false); setUpNextSeconds(5); setUpNext(true); revealControls();
+        }}
         onTimeUpdate={(event) => {
           const absolute = offsetRef.current + event.currentTarget.currentTime;
           reportRef.current = { position: absolute, duration: duration || probeDurationRef.current };
@@ -1029,6 +1067,12 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
         <span>{t("player.stalling")}</span>
         <button onClick={() => changeQuality(qualityHint)}>{t("player.lowerQualityTo", { height: qualityHint })}</button>
         <button className="icon-button" aria-label={t("player.hideHint")} onClick={() => { stallsRef.current = []; setQualityHint(null); }}><X /></button>
+      </div>}
+      {upNext && <div className="player-up-next" role="status">
+        <small>{t("player.upNext")}</small>
+        <strong>{nextTitle}</strong>
+        <span>{t("player.upNextCountdown", { seconds: upNextSeconds })}</span>
+        <div><button className="primary" disabled={nextBusy} onClick={() => void startNext()}>{t("player.playNow")}</button><button disabled={nextBusy} onClick={() => setUpNext(false)}>{t("common.cancel")}</button></div>
       </div>}
     </div>
     <div ref={bottomRef} className="player-bottom">

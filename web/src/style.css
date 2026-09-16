@@ -661,6 +661,7 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .player-settings .player-action{justify-content:flex-start;gap:10px}
 .player-overlay .player-resumed{top:85px}
 .player-overlay .player-hint{bottom:calc(var(--player-bottom-height,120px) + 12px)}
+.player-up-next{position:absolute;z-index:14;left:50%;top:50%;width:min(360px,calc(100% - 32px));transform:translate(-50%,-50%);display:flex;flex-direction:column;gap:8px;padding:20px;border:1px solid var(--line);border-radius:14px;background:#141922f5;box-shadow:0 12px 42px #000b;text-align:center}.player-up-next small{color:var(--accent);font-size:10px;font-weight:800;letter-spacing:1.2px}.player-up-next strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.player-up-next span{color:var(--muted);font-size:12px}.player-up-next>div{display:flex;justify-content:center;gap:8px;margin-top:4px}.player-up-next button{min-height:40px}
 @media(max-width:700px), (max-height:500px){
   .player-overlay .player-controls{gap:4px}
   .player-overlay .player-controls>.volume,.player-overlay .player-controls>svg{display:none}
