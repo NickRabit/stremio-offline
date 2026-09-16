@@ -92,6 +92,7 @@ function parseSettings(value: unknown): Settings {
     defaultMovieLibrary: typeof source.defaultMovieLibrary === "string" ? source.defaultMovieLibrary : "",
     defaultSeriesLibrary: typeof source.defaultSeriesLibrary === "string" ? source.defaultSeriesLibrary : "",
     realDebridToken: typeof source.realDebridToken === "string" ? source.realDebridToken.trim() : fallback.realDebridToken,
+    tmdbApiKey: typeof source.tmdbApiKey === "string" ? source.tmdbApiKey.trim() : fallback.tmdbApiKey,
   };
 }
 

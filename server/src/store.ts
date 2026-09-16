@@ -32,12 +32,14 @@ export interface Settings {
   defaultMovieLibrary: string; defaultSeriesLibrary: string;
   /** Stored locally; never returned by GET /api/settings. */
   realDebridToken: string;
+  /** Stored locally; never returned by GET /api/settings. */
+  tmdbApiKey: string;
 }
-export type PublicSettings = Omit<Settings, "realDebridToken"> & { realDebridConfigured: boolean };
+export type PublicSettings = Omit<Settings, "realDebridToken" | "tmdbApiKey"> & { realDebridConfigured: boolean; tmdbConfigured: boolean };
 
 export function publicSettings(settings: Settings): PublicSettings {
-  const { realDebridToken: token, ...rest } = settings;
-  return { ...rest, realDebridConfigured: Boolean(token) };
+  const { realDebridToken: token, tmdbApiKey: apiKey, ...rest } = settings;
+  return { ...rest, realDebridConfigured: Boolean(token), tmdbConfigured: Boolean(apiKey) };
 }
 export interface State { schemaVersion?: number;
   /** The configured libraries, in display order. A migrated install has exactly one. */
@@ -57,7 +59,7 @@ export interface State { schemaVersion?: number;
   watchlist?: Record<string, { type: string; id: string; name: string; poster?: string; addedAt: string }>;
   /** The resume list: a title key against a position in seconds. */
   progress?: Record<string, { position: number; duration: number; title: string; path?: string; poster?: string; updatedAt: string }> }
-const baseSettings: Settings = { concurrentDownloads: 1, parallelPerProvider: 1, downloadSegments: 2, uiLanguage: "en", audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui", mergeByName: true, streamSort: "recommended", trackProgress: true, showResumeRow: true, libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, addonRefreshHours: 24, catalogTileSize: "medium", libraryTileSize: "medium", defaultMovieLibrary: "", defaultSeriesLibrary: "", realDebridToken: "" };
+const baseSettings: Settings = { concurrentDownloads: 1, parallelPerProvider: 1, downloadSegments: 2, uiLanguage: "en", audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui", mergeByName: true, streamSort: "recommended", trackProgress: true, showResumeRow: true, libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, addonRefreshHours: 24, catalogTileSize: "medium", libraryTileSize: "medium", defaultMovieLibrary: "", defaultSeriesLibrary: "", realDebridToken: "", tmdbApiKey: "" };
 
 /** A fresh install starts with the one library the download directory has always been,
  *  so it never runs the migration an upgrade needs. */

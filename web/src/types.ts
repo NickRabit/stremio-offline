@@ -101,9 +101,9 @@ export interface Settings {
   /** What the server writes down, as opposed to what the log view filters back out. */
   logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR";
   addonRefreshHours: number;
-  catalogTileSize: TileSize; libraryTileSize: TileSize; realDebridConfigured: boolean;
+  catalogTileSize: TileSize; libraryTileSize: TileSize; realDebridConfigured: boolean; tmdbConfigured: boolean;
 }
-export type SettingsPatch = Partial<Omit<Settings, "realDebridConfigured">> & { realDebridToken?: string };
+export type SettingsPatch = Partial<Omit<Settings, "realDebridConfigured" | "tmdbConfigured">> & { realDebridToken?: string; tmdbApiKey?: string };
 export interface SettingsBackup {
   format: "stremio-offline-settings"; version: 1; exportedAt: string; settings: Settings;
   addons: Array<{ manifestUrl: string; role: Addon["role"]; enabled: boolean; globalSearch: boolean; addedAt: string; downloadSettings: AddonDownloadSettings }>;

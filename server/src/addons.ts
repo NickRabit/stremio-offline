@@ -175,11 +175,20 @@ function fillMissingMeta(base: MetaItem, extra: MetaItem): MetaItem {
     ...(!base.background && extra.background ? { background: extra.background } : {}),
     ...(base.year == null && extra.year != null ? { year: extra.year } : {}),
     ...(!base.releaseInfo && extra.releaseInfo ? { releaseInfo: extra.releaseInfo } : {}),
+    ...(!base.genres?.length && extra.genres?.length ? { genres: extra.genres } : {}),
+    ...(!base.videos?.length && extra.videos?.length ? { videos: extra.videos } : {}),
+    ...(base.runtime == null && extra.runtime != null ? { runtime: extra.runtime } : {}),
   };
 }
 
-export async function metadata(addons: AddonRecord[], type: string, id: string, preferredLanguage?: string) {
+export type MetaProvider = (type: string, id: string) => Promise<MetaItem | null>;
+
+export async function metadata(addons: AddonRecord[], type: string, id: string, preferredLanguage?: string, provider?: MetaProvider) {
   let best: MetaItem | null = null;
+  if (provider) {
+    try { best = await provider(type, id); }
+    catch { best = null; }
+  }
   const candidates = addons.filter((a) => a.enabled && a.role !== "source" && supports(a, "meta", type, id));
   const ordered = preferredLanguage
     ? [...candidates.filter((addon) => addonMetadataLanguage(addon) === preferredLanguage), ...candidates.filter((addon) => addonMetadataLanguage(addon) !== preferredLanguage)]
@@ -191,7 +200,7 @@ export async function metadata(addons: AddonRecord[], type: string, id: string, 
       const language = addonMetadataLanguage(addon);
       const meta = { ...response.meta, ...(language ? { nameLanguage: language } : {}) };
       best = best ? fillMissingMeta(best, meta) : meta;
-      if (best.description) return best;
+      if (best.description && (type !== "series" || (best.videos?.length ?? 0) > 0)) return best;
     } catch { /* try next metadata provider */ }
   }
   return best;
