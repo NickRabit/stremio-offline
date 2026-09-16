@@ -532,6 +532,7 @@ export const cs: Catalog = {
   "library.unmatch": "Zrušit přiřazení",
   "library.skipLookup": "Vyloučit z přiřazování",
   "library.mosaic": "Zobrazovat mozaiku obalů",
+  "library.showInContinueWatching": "Zobrazovat v Pokračovat ve sledování",
   "library.mosaicHide": "Nezobrazovat v mozaice",
   "library.mosaicShow": "Zobrazovat v mozaice",
   "library.mosaicHidden": "V mozaice se už neobjeví.",

@@ -23,6 +23,8 @@ export interface LibraryRecord {
   writeArtwork: boolean;
   /** Off hides the prepared artwork row and falls back to the folder picture. Absent means on. */
   mosaic?: boolean;
+  /** Off keeps playback position but leaves this library out of Continue watching. Absent means on. */
+  showInContinueWatching?: boolean;
   /** The root could not be reached at the last check. Metadata and artwork stay. */
   unreachable?: boolean;
 }

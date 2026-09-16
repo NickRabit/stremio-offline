@@ -152,7 +152,7 @@ export interface BrowseLibrary {
 /** One library in `GET /api/libraries`. `root` is absent in restricted mode. */
 export interface LibraryView {
   id: string; name: string; type: LibraryType; root?: string; enabled: boolean; order: number;
-  addedAt: string; writeArtwork: boolean; mosaic?: boolean; unreachable: boolean; readOnly: boolean;
+  addedAt: string; writeArtwork: boolean; mosaic?: boolean; showInContinueWatching?: boolean; unreachable: boolean; readOnly: boolean;
   defaultMovie: boolean; defaultSeries: boolean; titles: number; files: number; bytes: number;
 }
 export type BrowseItem =

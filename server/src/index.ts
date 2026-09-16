@@ -993,6 +993,7 @@ const libraryView = (library: LibraryRecord, health: LibraryHealth, stats: { tit
   enabled: library.enabled, order: library.order, addedAt: library.addedAt,
   writeArtwork: library.writeArtwork,
   mosaic: library.mosaic !== false,
+  showInContinueWatching: library.showInContinueWatching !== false,
   unreachable: health.unreachable, readOnly: health.readOnly,
   defaultMovie: store.settings().defaultMovieLibrary === library.id,
   defaultSeries: store.settings().defaultSeriesLibrary === library.id,
@@ -1173,6 +1174,7 @@ app.patch("/api/libraries/:id", asyncRoute(async (req, res) => {
   }
   if (req.body?.enabled !== undefined) patch.enabled = req.body.enabled === true;
   if (req.body?.mosaic !== undefined) patch.mosaic = req.body.mosaic !== false;
+  if (req.body?.showInContinueWatching !== undefined) patch.showInContinueWatching = req.body.showInContinueWatching !== false;
   if (req.body?.order !== undefined && Number.isFinite(Number(req.body.order))) patch.order = Number(req.body.order);
   if (req.body?.writeArtwork !== undefined) patch.writeArtwork = req.body.writeArtwork === true;
   if (req.body?.root !== undefined) patch.root = await requireLibraryRoot(req.body.root, { exceptId: target.id, create: req.body?.create === true });
@@ -1629,7 +1631,11 @@ app.post("/api/library/favorite", asyncRoute(async (req, res) => {
 app.get("/api/library/resume", asyncRoute(async (req, res) => {
   const favorites = new Set(store.favorites());
   const query = String(req.query.query ?? "").trim().toLocaleLowerCase();
-  const entries = Object.entries(store.progress()).filter(([key, entry]) => key.startsWith("file:") && entry.path);
+  const entries = Object.entries(store.progress()).filter(([key, entry]) => {
+    if (!key.startsWith("file:") || !entry.path) return false;
+    const owner = parseLibraryPath(entry.path)?.libraryId;
+    return !owner || store.libraries().find((library) => library.id === owner)?.showInContinueWatching !== false;
+  });
   const described = await Promise.all(entries.map(async ([, entry]) => {
     const item = await describeLibraryPath(entry.path!);
     if (!item || item.kind !== "file") return [];

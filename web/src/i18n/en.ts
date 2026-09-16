@@ -536,6 +536,7 @@ export const en = {
   "library.unmatch": "Unmatch",
   "library.skipLookup": "Exclude from matching",
   "library.mosaic": "Show a mosaic of covers",
+  "library.showInContinueWatching": "Show in Continue watching",
   "library.mosaicHide": "Keep out of the mosaic",
   "library.mosaicShow": "Show in the mosaic",
   "library.mosaicHidden": "It is kept out of the mosaic.",

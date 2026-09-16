@@ -1153,7 +1153,11 @@ export function App() {
   // The library preview includes existing local files; catalog progress stays separate.
   const localResume = useMemo(() => resumePreview
     ? resumePreview.items.flatMap((item) => item.kind === "file" && item.progress ? [{ key: `file:${item.path}`, path: item.path, title: item.label, poster: item.poster, season: item.season, updatedAt: item.modified, ...item.progress }] : [])
-    : resume.filter((item) => item.key.startsWith("file:") && item.path).map((item) => ({ ...item, season: undefined })), [resumePreview, resume]);
+    : resume.filter((item) => {
+      if (!item.key.startsWith("file:") || !item.path) return false;
+      const libraryId = item.path.split("/", 1)[0];
+      return !libraryId?.startsWith("lib_") || libraries.find((library) => library.id === libraryId)?.showInContinueWatching !== false;
+    }).map((item) => ({ ...item, season: undefined })), [resumePreview, resume, libraries]);
   const catalogProgress = (item: Meta) => resume.find((entry) => entry.key === `${item.type || "movie"}:${item.id}`);
   const forgetCatalogWatched = async (item: Meta) => {
     setMenuFor(null);
