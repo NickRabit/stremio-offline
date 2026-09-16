@@ -1046,7 +1046,10 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       <video ref={videoRef} playsInline disableRemotePlayback x-webkit-airplay="deny"
         onPlay={() => { setPaused(false); cancelNext(); }} onPause={() => setPaused(true)} onSeeking={cancelNext}
         onEnded={() => {
-          if (!autoNext || !onNext) return;
+          // Nothing follows, so the film is over: the player steps aside and leaves the
+          // detail view on screen instead of sitting on the last frame.
+          if (!onNext) return closePlayer();
+          if (!autoNext) return;
           setSettingsOpen(false); setUpNextSeconds(5); setUpNext(true); revealControls();
         }}
         onTimeUpdate={(event) => {

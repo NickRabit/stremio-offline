@@ -22,6 +22,9 @@ test("embedded subtitle URLs load directly and a subtitle error never stops the 
   await page.getByRole("button", { name: /Zkušební film/ }).click();
   await page.getByRole("button", { name: "Přehrát", exact: true }).click();
   const video = page.locator("video");
+  // The fixture clip is seconds long and the player steps aside when a film ends; keeping it
+  // running leaves the overlay in place for the whole check.
+  await video.evaluate((element: HTMLVideoElement) => { element.loop = true; });
   await expect(video).toHaveAttribute("disableRemotePlayback", "");
   await expect(video).toHaveAttribute("x-webkit-airplay", "deny");
   await expect(page.locator(".airplay-toggle")).toHaveCount(0);
