@@ -41,6 +41,9 @@ export interface LibraryMetaRecord {
   name?: string;
   year?: string;
   description?: string;
+  /** The language the three cached fields above are in, from the meta that filled them.
+   *  A record from before this existed has none, which reads as "unknown". */
+  metaLanguage?: string;
   matchedAt?: string;
   /** Last time the catalogue was asked to fill the fields above, successful or not. */
   backfilledAt?: string;
@@ -299,15 +302,18 @@ export function clipText(value: string, max: number): string {
   return `${(space > max * 0.6 ? cut.slice(0, space) : cut).trimEnd()}…`;
 }
 
-export function cacheFieldsFromMeta(meta: MetaItem | null | undefined): { name?: string; year?: string; description?: string } {
+export function cacheFieldsFromMeta(meta: MetaItem | null | undefined):
+  { name?: string; year?: string; description?: string; metaLanguage?: string } {
   if (!meta) return {};
   const year = yearFromMeta(meta);
   const description = typeof meta.description === "string" && meta.description.trim()
     ? clipText(meta.description, DESCRIPTION_MAX) : undefined;
+  const metaLanguage = typeof meta.nameLanguage === "string" && meta.nameLanguage ? meta.nameLanguage : undefined;
   return {
     ...(meta.name ? { name: meta.name } : {}),
     ...(year != null ? { year: String(year) } : {}),
     ...(description ? { description } : {}),
+    ...(metaLanguage ? { metaLanguage } : {}),
   };
 }
 
@@ -360,11 +366,12 @@ export function needsRefresh(raw: LibraryMetaRecord | undefined, ttlMs: number, 
   return !Number.isFinite(at) || now - at >= ttlMs;
 }
 
-export function needsBackfill(raw?: LibraryMetaRecord, now = Date.now()): boolean {
+export function needsBackfill(raw?: LibraryMetaRecord, now = Date.now(), wantedLanguage?: string): boolean {
   const viewed = viewMeta(raw);
   if (!viewed?.id) return false;
   const tried = raw?.backfilledAt ? Date.parse(raw.backfilledAt) : NaN;
   if (Number.isFinite(tried) && now - tried < BACKFILL_TTL_MS) return false;
+  if (wantedLanguage && raw?.metaLanguage !== wantedLanguage) return true;
   return !raw?.name || !raw.year || !raw.description;
 }
 

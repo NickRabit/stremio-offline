@@ -567,7 +567,7 @@ const tmdbProvider = (language: string): MetaProvider | undefined => {
 };
 app.get("/api/meta/:type/:id", asyncRoute(async (req, res) => {
   const language = normalizeLanguage(String(req.query.language ?? "")) ?? store.settings().uiLanguage;
-  const meta = await metadata(store.addons(), String(req.params.type), String(req.params.id), language, tmdbProvider(language));
+  const meta = await cachedMeta(String(req.params.type), String(req.params.id), language);
   if (!meta) return res.status(404).json({ error: "Metadata nebyla nalezena." });
   res.json(images.rewriteMeta(meta));
 }));
@@ -736,14 +736,14 @@ const relativeKeyIn = (libraryId: string, key: string) => {
 };
 
 const metaCache = new Map<string, { value: MetaItem | null; at: number }>();
-const cachedMeta = async (type: string, id: string) => {
-  const language = store.settings().uiLanguage;
+const cachedMeta = async (type: string, id: string, language: string = store.settings().uiLanguage) => {
   const key = `${type}:${id}:${language}`;
   const hit = metaCache.get(key);
   if (hit && Date.now() - hit.at < 6 * 60 * 60_000) return hit.value;
   const value = await metadata(store.addons(), type, id, language, tmdbProvider(language)).catch(() => null);
   if (metaCache.size > 300) metaCache.clear();
-  metaCache.set(key, { value, at: Date.now() });
+  // A failed lookup is not an answer: caching it would hold a title empty for six hours.
+  if (value) metaCache.set(key, { value, at: Date.now() });
   return value;
 };
 // Walking the tree is expensive, so it is held in memory for a while. The queue invalidates it once a download finishes.
@@ -1363,7 +1363,9 @@ const attachBrowseMeta = <T extends { path: string; kind: string; name?: string;
   const extra = browseMeta(key, label, records, metaStore.qualifiedSuggestions(), episodes);
   const known = knownTitleOf(key, records);
   const numbers = item.kind === "file" ? episodeNumberOf(key, ownRecord(key, records)) : undefined;
-  const wanted = needsBackfill(known) || needsEpisodes(known, numbers, episodes);
+  // Only a key can answer with a better language; without one every record stays wanted as it is.
+  const wantedLanguage = store.settings().tmdbApiKey ? store.settings().uiLanguage : undefined;
+  const wanted = needsBackfill(known, undefined, wantedLanguage) || needsEpisodes(known, numbers, episodes);
   const backfill = wanted && scheduleMetaBackfill(known!.type, known!.id);
   // The move dialog offers only the libraries that take what it is about to hand them,
   // and a row without a binding has no kind to compare -- the server stays the backstop.
@@ -2143,7 +2145,8 @@ app.get("/api/library/identity", asyncRoute(async (req, res) => {
   const records = metaStore.qualifiedMeta();
   const suggestions = metaStore.qualifiedSuggestions();
   const known = knownTitleOf(resolved.key, records);
-  if (needsBackfill(known)) scheduleMetaBackfill(known!.type, known!.id);
+  const wantedLanguage = store.settings().tmdbApiKey ? store.settings().uiLanguage : undefined;
+  if (needsBackfill(known, undefined, wantedLanguage)) scheduleMetaBackfill(known!.type, known!.id);
   const suggestion = suggestionFor(unitKey, suggestions);
   const isFile = isVideo(posixBase(resolved.key));
   const numbers = episodeNumberOf(resolved.key, ownRecord(resolved.key, records));

@@ -265,6 +265,21 @@ test("browse copy uses cached fields and a normalised catalog name", () => {
   });
 });
 
+test("a record in another language than the wanted one is stale again", () => {
+  const full = { type: "movie", id: "tt1", name: "X", year: "1998", description: "Hi" };
+  assert.equal(needsBackfill({ ...full, metaLanguage: "en" }, undefined, "cs"), true);
+  assert.equal(needsBackfill({ ...full, metaLanguage: "en" }, undefined, "en"), false);
+  assert.equal(needsBackfill(full, undefined, "cs"), true);
+  assert.equal(needsBackfill(full, undefined, undefined), false);
+  const hourAgo = new Date(Date.now() - 60 * 60_000).toISOString();
+  assert.equal(needsBackfill({ ...full, metaLanguage: "en", backfilledAt: hourAgo }, undefined, "cs"), false);
+});
+
+test("the language of the meta is cached with the fields it filled", () => {
+  assert.deepEqual(cacheFieldsFromMeta({ id: "tt1", type: "movie", name: "Film", nameLanguage: "cs" }), { name: "Film", metaLanguage: "cs" });
+  assert.deepEqual(cacheFieldsFromMeta({ id: "tt1", type: "movie", name: "Film" }), { name: "Film" });
+});
+
 test("only a bound series older than the TTL needs a refresh", () => {
   const ttl = 14 * 24 * 60 * 60_000;
   const now = Date.parse("2026-06-01T00:00:00.000Z");
