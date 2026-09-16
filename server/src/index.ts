@@ -2878,6 +2878,11 @@ app.post("/api/inspect", asyncRoute(async (req, res) => {
 app.post("/api/playback", asyncRoute(async (req, res) => {
   const settings = store.settings();
   const options: PlaybackOptions = { audioLanguage: settings.audioLanguage, subtitleLanguage: settings.subtitleLanguage };
+  if (req.body.audioLanguage !== undefined) options.audioLanguage = normalizeLanguage(String(req.body.audioLanguage)) ?? settings.audioLanguage;
+  if (req.body.subtitleLanguage !== undefined) {
+    if (req.body.subtitleLanguage === null) options.subtitleTrack = null;
+    else options.subtitleLanguage = normalizeLanguage(String(req.body.subtitleLanguage)) ?? settings.subtitleLanguage;
+  }
   if (req.body.audioTrack !== undefined) options.audioTrack = Number(req.body.audioTrack);
   if (req.body.subtitleTrack !== undefined) options.subtitleTrack = req.body.subtitleTrack === null ? null : Number(req.body.subtitleTrack);
   if (req.body.time !== undefined) options.startTime = Math.max(0, Number(req.body.time) || 0);

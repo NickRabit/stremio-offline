@@ -87,7 +87,7 @@ export const api = {
   // Start waits for the source probe (up to 20 s quick, 45 s deep) and then for FFmpeg's
   // first segments (up to 40 s). A shorter deadline does not cancel the session, it only
   // leaves it running with nobody watching.
-  startPlayback: (stream: Stream, capabilities: Capabilities, time = 0, subtitleIds: string[] = []) => request<PlaybackSession>("/api/playback", { method: "POST", body: JSON.stringify({ sourceId: stream.sourceId, capabilities, time, subtitleIds }), timeoutMs: PLAYBACK_START_MS }),
+  startPlayback: (stream: Stream, capabilities: Capabilities, time = 0, subtitleIds: string[] = [], preferences?: { audioLanguage?: string; subtitleLanguage?: string | null }) => request<PlaybackSession>("/api/playback", { method: "POST", body: JSON.stringify({ sourceId: stream.sourceId, capabilities, time, subtitleIds, ...preferences }), timeoutMs: PLAYBACK_START_MS }),
   setTrack: (id: string, changes: { audio?: number; subtitle?: number | null; quality?: number | null; time: number }) => request<PlaybackSession>(`/api/playback/${id}/track`, { method: "POST", body: JSON.stringify(changes), timeoutMs: PLAYBACK_RESTART_MS }),
   seekPlayback: (id: string, time: number) => request<PlaybackSession>(`/api/playback/${id}/seek`, { method: "POST", body: JSON.stringify({ time }), timeoutMs: PLAYBACK_RESTART_MS }),
   /** The browser refused the stream: the server stops copying and really transcodes. */

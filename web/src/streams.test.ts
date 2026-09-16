@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { arrangeStreams, canQueue, pickDefaultStream, streamBadge, streamLanguages, streamSize, streamText, visibleCatalogStreams, repickStream, type StreamFilters } from "./streams";
+import { arrangeStreams, canQueue, pickDefaultStream, pickNextEpisodeStream, streamBadge, streamLanguages, streamSize, streamText, visibleCatalogStreams, repickStream, type StreamFilters } from "./streams";
 import type { Stream } from "./types";
 
 const stream = (parts: Partial<Stream>): Stream => ({ sourceId: "source", kind: "remote", playable: true, ...parts });
@@ -179,6 +179,23 @@ describe("torrent listing", () => {
   it("does not treat a torrent as playable", () => {
     expect(http.playable).toBe(true);
     expect(torrent.playable).toBe(false);
+  });
+});
+
+describe("pickNextEpisodeStream", () => {
+  it("keeps the current addon and ranks its variants by the spoken language", () => {
+    const current = stream({ addonKey: "same", addonName: "Same" });
+    const english = stream({ name: "english", addonKey: "same", addonName: "Same", title: "English 10 GB" });
+    const czech = stream({ name: "czech", addonKey: "same", addonName: "Same", title: "Czech 1 GB" });
+    const other = stream({ name: "other", addonKey: "other", addonName: "Other", title: "Czech 20 GB" });
+    expect(pickNextEpisodeStream([english, other, czech], current, "cs", new Map())?.name).toBe("czech");
+  });
+
+  it("falls back to the normal recommended ranking when the addon has no next episode", () => {
+    const current = stream({ addonKey: "gone", addonName: "Gone" });
+    const english = stream({ name: "english", addonKey: "one", addonName: "One", title: "English 20 GB" });
+    const czech = stream({ name: "czech", addonKey: "two", addonName: "Two", title: "Czech 1 GB" });
+    expect(pickNextEpisodeStream([english, czech], current, "cs", new Map())?.name).toBe("czech");
   });
 });
 

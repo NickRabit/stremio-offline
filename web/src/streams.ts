@@ -77,6 +77,13 @@ export function pickDefaultStream(streams: Stream[]): Stream | undefined {
   return streams.find((stream) => stream.playable) ?? streams[0];
 }
 
+/** A new episode should stay with the provider the viewer chose when it can, while still
+ * choosing that provider's best language and size variant. */
+export function pickNextEpisodeStream(streams: Stream[], current: Stream | null, preferredLanguage: string, priority: Map<string, number>, titleLanguage?: string): Stream | undefined {
+  const ranked = arrangeStreams(streams.filter((stream) => stream.playable), { addon: "", language: "", sort: "recommended" }, preferredLanguage, priority, titleLanguage);
+  return ranked.find((stream) => current?.addonKey && stream.addonKey === current.addonKey) ?? ranked[0];
+}
+
 export function streamBadge(stream: Stream): string {
   if (stream.playable) return "HTTP";
   if (stream.kind === "torrent") return "RD";
