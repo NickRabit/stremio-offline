@@ -971,3 +971,12 @@ img.broken{visibility:hidden}
 /* Safari in a tab lays this fixed overlay out against the large viewport, so its own chrome
    pushed the video past the bottom edge. --player-viewport-* track the visual viewport. */
 .player-overlay.mobile-landscape{top:var(--player-viewport-top,0px);bottom:auto;height:var(--player-viewport-height,100dvh)}
+
+/* The ČSFD, TMDB and IMDb row: under the description of a title, and in a matched
+   library folder's menu, where it has to read as the buttons below it. */
+.title-links{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.title-links a{display:inline-flex;align-items:center;padding:5px 9px;border:1px solid var(--line);border-radius:7px;background:var(--panel2);font-size:11px;font-weight:700;color:var(--accent2);text-decoration:none}
+.title-links a:hover,.title-links a:focus-visible{border-color:var(--accent);color:var(--text)}
+.browse-actions .title-links{display:grid;gap:2px;margin:0}
+.browse-actions .title-links a{padding:7px 9px;border:0;border-radius:0;background:transparent;color:var(--text)}
+.browse-actions .title-links a:hover{background:#ffffff10}

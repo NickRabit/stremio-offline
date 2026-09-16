@@ -1,5 +1,5 @@
 import { serverText, t } from "./i18n";
-import type { ActiveStream, Diagnostics, BuildInfo, AuthStatus, StatsSummary, Addon, AddonDownloadSettings, Capabilities, Catalog, Download, DownloadSelection, DownloadSnapshot, Inspection, BrowseResult, IdentityPreview, LibraryFolder, LibraryOp, LibraryOpsState, ProgressEntry, WatchlistEntry, GrantBrowse, LibraryEstimate, LibraryGrant, LibrarySummary, LibraryType, LibraryView, Meta, PlaybackSession, ScanState, SearchResult, SearchableCatalog, SuggestionRow, Session, Settings, SettingsBackup, SettingsPatch, Stream, Subtitle } from "./types";
+import type { ActiveStream, Diagnostics, BuildInfo, AuthStatus, StatsSummary, Addon, AddonDownloadSettings, Capabilities, Catalog, Download, DownloadSelection, DownloadSnapshot, Inspection, BrowseResult, IdentityPreview, LibraryFolder, LibraryOp, LibraryOpsState, ProgressEntry, WatchlistEntry, GrantBrowse, LibraryEstimate, LibraryGrant, LibrarySummary, LibraryType, LibraryView, Meta, PlaybackSession, ScanState, SearchResult, SearchableCatalog, SiteLink, SuggestionRow, Session, Settings, SettingsBackup, SettingsPatch, Stream, Subtitle } from "./types";
 
 /** The status code has to reach the top, or a sign-out is indistinguishable from an ordinary error. */
 export class ApiError extends Error {
@@ -59,6 +59,8 @@ export const api = {
   search: (query: string, options: { type?: string; cursor?: string; addonKey?: string; catalogType?: string; catalogId?: string } = {}) => request<SearchResult>(`/api/search?${q({ query, type: options.type || undefined, cursor: options.cursor || undefined, addon: options.addonKey || undefined, catalogType: options.catalogType || undefined, catalogId: options.catalogId || undefined })}`),
   searchable: () => request<SearchableCatalog[]>("/api/searchable"),
   meta: (type: string, id: string, language?: string) => request<Meta>(`/api/meta/${encodeURIComponent(type)}/${encodeURIComponent(id)}${language ? `?${q({ language })}` : ""}`),
+  links: (type: string, id: string, language: string) => request<{ links: SiteLink[] }>(`/api/links/${encodeURIComponent(type)}/${encodeURIComponent(id)}?${q({ language })}`),
+  libraryLinks: (path: string, language: string) => request<{ links: SiteLink[] }>(`/api/library/links?${q({ path, language })}`),
   streamSources: (type: string, id: string) => request<Array<{ key: string; name: string }>>(`/api/stream-sources/${encodeURIComponent(type)}/${encodeURIComponent(id)}`),
   streams: (type: string, id: string, addon?: string) => request<Stream[]>(`/api/streams/${encodeURIComponent(type)}/${encodeURIComponent(id)}${addon ? `?addon=${encodeURIComponent(addon)}` : ""}`),
   subtitles: (type: string, id: string) => request<Subtitle[]>(`/api/subtitles/${encodeURIComponent(type)}/${encodeURIComponent(id)}`),

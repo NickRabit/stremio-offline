@@ -255,6 +255,7 @@ export const cs: Catalog = {
   "catalog.noDescription": "Bez popisu.",
   "catalog.pickTitle": "Vyberte titul",
   "catalog.pickText": "Objeví se tu podrobnosti, epizody a zdroje ze všech aktivních doplňků.",
+  "links.openOn": "Otevřít na {site}",
 
   // Galerie obrázků.
   "gallery.title": "Galerie obrázků",

@@ -259,6 +259,7 @@ export const en = {
   "catalog.noDescription": "No description.",
   "catalog.pickTitle": "Pick a title",
   "catalog.pickText": "Details, episodes and sources from every active addon appear here.",
+  "links.openOn": "Open on {site}",
 
   // Image gallery.
   "gallery.title": "Image gallery",
