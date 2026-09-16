@@ -29,7 +29,15 @@ const harness = async (execute?: LibraryOpsOptions["execute"]) => {
   // The queue writes once more after a job reaches its terminal state, to record that the
   // finished hook has run -- and that write is asked for after the pump has moved on, so
   // waiting only for the writes in flight is not enough. `settled` waits for both.
-  return { dataDir, queue, seen, close: async () => { await queue.settled(); await rm(dataDir, { recursive: true, force: true }); } };
+  return { dataDir, queue, seen, close: () => cleanup(dataDir, [queue]) };
+};
+
+/** Every queue has to stop before the directory goes away. The save that records a
+ *  terminal job is asked for after the pump has moved on, so `settled` is the only
+ *  thing that covers it -- see its comment in library-ops.ts. */
+const cleanup = async (dataDir: string, queues: LibraryOps[] = []) => {
+  for (const queue of queues) await queue.settled();
+  await rm(dataDir, { recursive: true, force: true });
 };
 
 test("jobs run serially and continue after an item fails", async () => {
@@ -60,6 +68,7 @@ test("jobs run serially and continue after an item fails", async () => {
 
 test("load resumes a persisted in-flight job at its current item", async () => {
   const h = await harness();
+  const queues: LibraryOps[] = [h.queue];
   try {
     const operation: LibraryOp = { op: "copy", items: ["one", "two"], target: "target" };
     await writeFile(path.join(h.dataDir, "library-ops.json"), JSON.stringify({ version: 1, jobs: [{
@@ -70,16 +79,18 @@ test("load resumes a persisted in-flight job at its current item", async () => {
       file: path.join(h.dataDir, "library-ops.json"), retryMs: 10,
       execute: async (_operation, item) => { h.seen.push(item); return {}; },
     });
+    queues.push(resumed);
     await resumed.load();
     await waitFor(() => resumed.snapshot().jobs[0]?.status === "completed");
     assert.deepEqual(h.seen, ["one", "two"]);
     assert.equal(resumed.snapshot().jobs[0]?.done, 2);
     assert.equal(JSON.parse(await readFile(path.join(h.dataDir, "library-ops.json"), "utf8")).jobs[0].status, "completed");
-  } finally { await h.close(); }
+  } finally { await cleanup(h.dataDir, queues); }
 });
 
 test("a paused job resumes when its blocker clears", async () => {
   const h = await harness();
+  const queues: LibraryOps[] = [h.queue];
   let blocked = true;
   try {
     const queue = new LibraryOps({
@@ -87,47 +98,53 @@ test("a paused job resumes when its blocker clears", async () => {
       pause: () => blocked ? "playback" : undefined,
       execute: async (_operation, item) => { h.seen.push(item); return {}; },
     });
+    queues.push(queue);
     await queue.load();
     await queue.enqueue({ op: "delete", items: ["one"] });
     await waitFor(() => queue.snapshot().jobs[0]?.pauseReason === "playback");
     blocked = false;
     await waitFor(() => queue.snapshot().jobs[0]?.status === "completed");
     assert.deepEqual(h.seen, ["one"]);
-  } finally { await h.close(); }
+  } finally { await cleanup(h.dataDir, queues); }
 });
 
 test("persistence never trims unfinished jobs", async () => {
   const h = await harness();
+  const queues: LibraryOps[] = [h.queue];
   try {
     const queue = new LibraryOps({
       file: path.join(h.dataDir, "many.json"), retryMs: 1_000,
       pause: () => "library",
       execute: async () => ({}),
     });
+    queues.push(queue);
     await queue.load();
     for (let index = 0; index < 25; index += 1) await queue.enqueue({ op: "delete", items: [`item-${index}`] });
     await waitFor(() => queue.snapshot().jobs[0]?.pauseReason === "library");
     await queue.flush();
     const saved = JSON.parse(await readFile(path.join(h.dataDir, "many.json"), "utf8"));
     assert.equal(saved.jobs.length, 25);
-  } finally { await h.close(); }
+  } finally { await cleanup(h.dataDir, queues); }
 });
 
 test("a corrupt state file does not block startup or new work", async () => {
   const h = await harness();
+  const queues: LibraryOps[] = [h.queue];
   try {
     const file = path.join(h.dataDir, "corrupt.json");
     await writeFile(file, "{broken");
     const queue = new LibraryOps({ file, execute: async (_operation, item) => { h.seen.push(item); return {}; } });
+    queues.push(queue);
     await queue.load();
     await queue.enqueue({ op: "delete", items: ["one"] });
     await waitFor(() => queue.snapshot().jobs[0]?.status === "completed");
     assert.deepEqual(h.seen, ["one"]);
-  } finally { await h.close(); }
+  } finally { await cleanup(h.dataDir, queues); }
 });
 
 test("finished fires once, with the state the job ended in", async () => {
   const dataDir = await mkdtemp(path.join(tmpdir(), "stremio-ops-"));
+  const queues: LibraryOps[] = [];
   const seen: OpsState[] = [];
   try {
     const queue = new LibraryOps({
@@ -135,6 +152,7 @@ test("finished fires once, with the state the job ended in", async () => {
       execute: async () => ({}),
       finished: (job) => { seen.push(job); },
     });
+    queues.push(queue);
     await queue.load();
     await queue.enqueue({ op: "delete", items: ["one", "two"] });
     await waitFor(() => seen.length === 1);
@@ -145,11 +163,12 @@ test("finished fires once, with the state the job ended in", async () => {
     assert.equal(seen[0]?.status, "completed");
     assert.equal(seen[0]?.op, "delete");
     assert.equal(seen[0]?.done, 2);
-  } finally { await rm(dataDir, { recursive: true, force: true }); }
+  } finally { await cleanup(dataDir, queues); }
 });
 
 test("finished reports a failure and a cancellation, and the caller is what decides", async () => {
   const dataDir = await mkdtemp(path.join(tmpdir(), "stremio-ops-"));
+  const queues: LibraryOps[] = [];
   const seen: string[] = [];
   const finished = (job: OpsState) => { seen.push(job.status); };
   try {
@@ -158,6 +177,7 @@ test("finished reports a failure and a cancellation, and the caller is what deci
       execute: async () => { throw new AppError("Missing", "err.pathMissing"); },
       finished,
     });
+    queues.push(failing);
     await failing.load();
     await failing.enqueue({ op: "delete", items: ["one"] });
     await waitFor(() => seen.length === 1);
@@ -168,6 +188,7 @@ test("finished reports a failure and a cancellation, and the caller is what deci
       execute: async () => { await new Promise((resolve) => setTimeout(resolve, 30)); return {}; },
       finished,
     });
+    queues.push(cancelling);
     await cancelling.load();
     const job = await cancelling.enqueue({ op: "delete", items: ["one"] });
     await waitFor(() => cancelling.snapshot().jobs[0]?.status === "running");
@@ -175,11 +196,12 @@ test("finished reports a failure and a cancellation, and the caller is what deci
     await waitFor(() => seen.length === 2);
     assert.deepEqual(seen, ["failed", "cancelled"]);
     assert.equal(cancelling.snapshot().jobs[0]?.status, "cancelled");
-  } finally { await rm(dataDir, { recursive: true, force: true }); }
+  } finally { await cleanup(dataDir, queues); }
 });
 
 test("cancelling a job that never started reports the state exactly once", async () => {
   const dataDir = await mkdtemp(path.join(tmpdir(), "stremio-ops-"));
+  const queues: LibraryOps[] = [];
   const seen: string[] = [];
   try {
     const queue = new LibraryOps({
@@ -188,17 +210,19 @@ test("cancelling a job that never started reports the state exactly once", async
       execute: async () => ({}),
       finished: (job) => { seen.push(job.status); },
     });
+    queues.push(queue);
     await queue.load();
     const job = await queue.enqueue({ op: "delete", items: ["one"] });
     await waitFor(() => queue.snapshot().jobs[0]?.pauseReason === "playback");
     await queue.cancel(job.id);
     await new Promise((resolve) => setTimeout(resolve, 50));
     assert.deepEqual(seen, ["cancelled"]);
-  } finally { await rm(dataDir, { recursive: true, force: true }); }
+  } finally { await cleanup(dataDir, queues); }
 });
 
 test("a finished hook that throws does not stop the next job", async () => {
   const dataDir = await mkdtemp(path.join(tmpdir(), "stremio-ops-"));
+  const queues: LibraryOps[] = [];
   const seen: string[] = [];
   try {
     const queue = new LibraryOps({
@@ -206,16 +230,18 @@ test("a finished hook that throws does not stop the next job", async () => {
       execute: async (_operation, item) => { seen.push(item); return {}; },
       finished: () => { throw new Error("hook down"); },
     });
+    queues.push(queue);
     await queue.load();
     await queue.enqueue({ op: "delete", items: ["one"] });
     const second = await queue.enqueue({ op: "delete", items: ["two"] });
     await waitFor(() => queue.snapshot().jobs.find((job) => job.id === second.id)?.status === "completed");
     assert.deepEqual(seen, ["one", "two"]);
-  } finally { await rm(dataDir, { recursive: true, force: true }); }
+  } finally { await cleanup(dataDir, queues); }
 });
 
 test("a terminal job whose hook never ran fires once on the next load", async () => {
   const dataDir = await mkdtemp(path.join(tmpdir(), "stremio-ops-"));
+  const queues: LibraryOps[] = [];
   const file = path.join(dataDir, "pending.json");
   const seen: string[] = [];
   // What a crash between the terminal save and the hook leaves behind: the content is
@@ -231,20 +257,23 @@ test("a terminal job whose hook never ran fires once on the next load", async ()
   try {
     await writeFile(file, JSON.stringify(stored));
     const queue = new LibraryOps({ file, retryMs: 10, execute: async () => ({}), finished });
+    queues.push(queue);
     await queue.load();
     await queue.flush();
     assert.deepEqual(seen, ["completed"]);
     assert.equal(JSON.parse(await readFile(file, "utf8")).jobs[0].notifyPending, false);
     // The flag, not the in-memory set, is what keeps a later start quiet.
     const again = new LibraryOps({ file, retryMs: 10, execute: async () => ({}), finished });
+    queues.push(again);
     await again.load();
     await again.flush();
     assert.deepEqual(seen, ["completed"]);
-  } finally { await rm(dataDir, { recursive: true, force: true }); }
+  } finally { await cleanup(dataDir, queues); }
 });
 
 test("a terminal job stored without the flag does not fire on load", async () => {
   const dataDir = await mkdtemp(path.join(tmpdir(), "stremio-ops-"));
+  const queues: LibraryOps[] = [];
   const file = path.join(dataDir, "legacy.json");
   const seen: string[] = [];
   try {
@@ -254,14 +283,16 @@ test("a terminal job stored without the flag does not fire on load", async () =>
       startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(), results: [],
     }] }));
     const queue = new LibraryOps({ file, retryMs: 10, execute: async () => ({}), finished: (job) => { seen.push(job.status); } });
+    queues.push(queue);
     await queue.load();
     await queue.flush();
     assert.deepEqual(seen, []);
-  } finally { await rm(dataDir, { recursive: true, force: true }); }
+  } finally { await cleanup(dataDir, queues); }
 });
 
 test("a reroot item pauses for playback although it is only a bare name", async () => {
   const dataDir = await mkdtemp(path.join(tmpdir(), "stremio-ops-"));
+  const queues: LibraryOps[] = [];
   const from = path.join(dataDir, "from");
   const playing = path.join(from, "Show", "01.mkv");
   const seen: string[] = [];
@@ -276,6 +307,7 @@ test("a reroot item pauses for playback although it is only a bare name", async 
       pause: (operation, item) => blocked && operation.op === "reroot" && isInside(playing, path.join(operation.from, item)) ? "playback" : undefined,
       execute: async (_operation, item) => { seen.push(item); return {}; },
     });
+    queues.push(queue);
     await queue.load();
     await queue.enqueue({ op: "reroot", items: ["Show"], libraryId: "lib_a", from, to: path.join(dataDir, "to") });
     await waitFor(() => queue.snapshot().jobs[0]?.pauseReason === "playback");
@@ -283,5 +315,5 @@ test("a reroot item pauses for playback although it is only a bare name", async 
     blocked = false;
     await waitFor(() => queue.snapshot().jobs[0]?.status === "completed");
     assert.deepEqual(seen, ["Show"]);
-  } finally { await rm(dataDir, { recursive: true, force: true }); }
+  } finally { await cleanup(dataDir, queues); }
 });
