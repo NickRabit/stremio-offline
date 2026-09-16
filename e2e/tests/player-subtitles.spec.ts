@@ -37,6 +37,9 @@ test("embedded subtitle URLs load directly and a subtitle error never stops the 
   await video.locator("track").dispatchEvent("error", { bubbles: false });
   await expect(page.locator(".player-error")).toHaveCount(0);
   // The viewer's own correction rides in the address, so the element reloads the cues with it.
+  // The film runs on, so the controls have hidden themselves and a click would land on the
+  // video underneath them.
+  await page.locator(".player-overlay").dispatchEvent("pointermove");
   await page.locator("button.player-settings-toggle").click({ force: true });
   await page.getByRole("button", { name: "Titulky později" }).click();
   await page.getByRole("button", { name: "Titulky později" }).click();
