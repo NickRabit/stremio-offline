@@ -642,6 +642,8 @@ export const en = {
   "addons.roleSource": "Sources only",
   "addons.enabled": "Addon enabled",
   "addons.globalSearch": "Include in search across all addons",
+  "addons.showInContinueWatching": "Show in Continue watching",
+  "addons.showInContinueWatchingHint": "Keeps this addon's titles out of the catalogue Continue watching list when turned off.",
   "addons.globalSearchHint": "When off, this addon is searched only if you pick it in the search scope.",
   "addons.added": "The manifest was added.",
   "addons.updated": "Addon updated.",

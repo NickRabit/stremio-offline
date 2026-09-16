@@ -638,6 +638,8 @@ export const cs: Catalog = {
   "addons.roleSource": "Pouze zdroje",
   "addons.enabled": "Doplněk zapnutý",
   "addons.globalSearch": "Zahrnout do hledání ve všech doplňcích",
+  "addons.showInContinueWatching": "Zobrazovat v Pokračovat ve sledování",
+  "addons.showInContinueWatchingHint": "Po vypnutí se tituly z tohoto doplňku nezobrazí v katalogovém seznamu Pokračovat ve sledování.",
   "addons.globalSearchHint": "Po vypnutí se v tomto doplňku hledá jen tehdy, když jej vyberete v rozsahu hledání.",
   "addons.added": "Manifest byl přidán.",
   "addons.updated": "Doplněk aktualizován.",

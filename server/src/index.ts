@@ -538,6 +538,7 @@ app.patch("/api/addons/:key", asyncRoute(async (req, res) => {
     if (!addon) throw new AppError("The addon was not found.", "err.addonNotFound");
     if (typeof req.body.enabled === "boolean") addon.enabled = req.body.enabled;
     if (typeof req.body.globalSearch === "boolean") addon.globalSearch = req.body.globalSearch;
+    if (typeof req.body.showInContinueWatching === "boolean") addon.showInContinueWatching = req.body.showInContinueWatching;
     if (downloadSettings) addon.downloadSettings = downloadSettings;
     addon.role = role;
     if (reloaded) { addon.manifestUrl = reloaded.manifestUrl; addon.manifest = reloaded.manifest; }
@@ -1593,6 +1594,7 @@ app.post("/api/progress", asyncRoute(async (req, res) => {
       title: String(req.body.title ?? all[key]?.title ?? "Video"),
       path: req.body.path ? libraryKey(String(req.body.path)) : all[key]?.path,
       poster: posterOf(req.body.poster) ?? all[key]?.poster,
+      addonKey: typeof req.body.addonKey === "string" ? req.body.addonKey : all[key]?.addonKey,
       updatedAt: new Date().toISOString(),
     };
     // The list must not grow without bound.

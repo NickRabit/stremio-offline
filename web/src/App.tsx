@@ -1135,16 +1135,17 @@ export function App() {
     if (next.move) setSelectedStream(next.to);
   }, [visibleStreams, pendingSources, playerOpen]);
 
+  const catalogResume = useMemo(() => resume.filter((item) => !item.key.startsWith("file:") && addons.find((addon) => addon.key === item.addonKey)?.showInContinueWatching !== false), [resume, addons]);
   /** The built-in lists are computed from memory; they must not go through a full load,
    *  which would drop the selected title. */
   const virtualItems = useMemo<Meta[]>(() => {
     if (virtualCatalog === VIRTUAL.watchlist) return watchlist.map((item) => ({ id: item.id, type: item.type, name: item.name, poster: item.poster }));
-    if (virtualCatalog === VIRTUAL.resume) return resume.filter((item) => !item.key.startsWith("file:")).map((item) => {
+    if (virtualCatalog === VIRTUAL.resume) return catalogResume.map((item) => {
       const [type, ...rest] = item.key.split(":");
       return { id: rest.join(":"), type, name: item.title, poster: item.poster };
     });
     return [];
-  }, [virtualCatalog, watchlist, resume]);
+  }, [virtualCatalog, watchlist, catalogResume]);
   useEffect(() => {
     if (!virtualCatalog) return;
     itemsRef.current = virtualItems; setItems(virtualItems); setHasMore(false);
@@ -1410,7 +1411,7 @@ export function App() {
               : <>
                   <label className="catalog-filter"><span>{t("catalog.browse")}</span><select className="catalog-select" aria-label={t("catalog.browse")} value={selectedCatalog} onChange={(e) => setSelectedCatalog(e.target.value)}>
                     <option value={VIRTUAL.watchlist}>★ {t("catalog.myList")} ({watchlist.length})</option>
-                    <option value={VIRTUAL.resume}>▸ {t("library.continueWatching")} ({resume.filter((item) => !item.key.startsWith("file:")).length})</option>
+                    <option value={VIRTUAL.resume}>▸ {t("library.continueWatching")} ({catalogResume.length})</option>
                     {catalogs.map((catalog) => <option key={`${catalog.addonKey}:${catalog.type}:${catalog.id}`} value={`${catalog.addonKey}:${catalog.type}:${catalog.id}`}>{catalog.addonName} · {catalog.name || catalog.id} ({typeTag(catalog.type)})</option>)}
                   </select></label>
                   {genreOptions.length > 0 && <label><span>{t("catalog.genre")}</span><select aria-label={t("catalog.genre")} value={activeGenre} onChange={(e) => setGenre(e.target.value)}><option value="">{t("catalog.allGenres")}</option>{genreOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select></label>}
@@ -1687,6 +1688,7 @@ export function App() {
     <Player nextTitle={localStream ? nextFile?.title : nextCatalogEpisode ? episodeLabel(nextCatalogEpisode) : undefined} nextBusy={nextBusy} onNext={localStream ? nextFile ? () => playAdjacent(nextFile) : undefined : nextCatalogEpisode ? playNextCatalogEpisode : undefined} autoNext={localStream ? localEpisode : Boolean(nextCatalogEpisode)} previousTitle={previousFile?.title} onPrevious={previousFile ? () => playAdjacent(previousFile) : undefined} open={playerOpen} title={localStream ? localTitle : videoTitle} stream={localStream ?? selectedStream} subtitles={localStream ? [] : subtitles} subtitleLanguage={settings.subtitleLanguage} audioLanguage={settings.audioLanguage} onPreferences={setPlaybackPreferences}
       progressKey={localStream?.localPath ? `file:${localStream.localPath}` : (videoId ? `${selected?.type ?? "movie"}:${videoId}` : undefined)}
       progressPoster={localStream ? localPoster : selected?.poster}
+      progressAddonKey={localStream ? undefined : currentCatalog?.addonKey}
       favorite={localStream?.localPath ? libraryFavorites.includes(localStream.localPath) : inWatchlist(selected?.type, selected?.id)}
       onToggleFavorite={localStream?.localPath || selected ? () => void togglePlayerFavorite() : undefined}
       onDownload={enqueue}
@@ -2224,6 +2226,7 @@ function AddonCard({ addon, libraries, index, total, onChanged, onNotify, onErro
           <option value="both">{t("addons.roleBoth")}</option><option value="catalog">{t("addons.roleCatalog")}</option><option value="source">{t("addons.roleSource")}</option>
         </select></label>
       {addon.role !== "source" && <div className="global-search-setting"><div><strong>{t("addons.globalSearch")}</strong><small>{t("addons.globalSearchHint")}</small></div><label className="switch"><input aria-label={t("addons.globalSearch")} type="checkbox" checked={addon.globalSearch} onChange={async (event) => { try { await api.updateAddon(addon.key, { globalSearch: event.target.checked }); await onChanged(); } catch (error) { onError(error); } }}/><span/></label></div>}
+      {addon.role !== "source" && <div className="global-search-setting"><div><strong>{t("addons.showInContinueWatching")}</strong><small>{t("addons.showInContinueWatchingHint")}</small></div><label className="switch"><input aria-label={t("addons.showInContinueWatching")} type="checkbox" checked={addon.showInContinueWatching !== false} onChange={async (event) => { try { await api.updateAddon(addon.key, { showInContinueWatching: event.target.checked }); await onChanged(); } catch (error) { onError(error); } }}/><span/></label></div>}
       <div className="manifest-actions">
         <button className="primary" disabled={manifestBusy || !manifestUrl.trim()} onClick={() => void saveManifest()}><Check/> {t("common.save")}</button>
         <button onClick={async () => { try { await copyText(manifestUrl); onNotify(t("addons.urlCopied")); } catch (error) { onError(error); } }}><Copy/> {t("addons.copyUrl")}</button>
