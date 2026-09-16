@@ -17,7 +17,7 @@ import { report } from "./diagnostics";
 import { groupLog, parseLog, type LogGroup, type LogLine } from "./log-groups";
 import { label, titleLanguage } from "./languages";
 import { languageName, locale, localeTag, serverText, setLocale, t, useI18n, type Key, type Locale } from "./i18n";
-import { canQueue, pickDefaultStream, repickStream, streamBadge, streamLanguages, streamSize, visibleCatalogStreams, type StreamSort } from "./streams";
+import { canQueue, pickDefaultStream, pickNextEpisodeStream, repickStream, streamBadge, streamLanguages, streamSize, visibleCatalogStreams, type StreamSort } from "./streams";
 import { parseSearchScope } from "./search-scope";
 import { localizedDownloadTitle, mergeMetaDetail } from "./meta";
 import type { Addon, BuildInfo, Diagnostics, BrowseItem, BrowseLibrary, BrowseResult, LibraryOp, LibraryOpsState, LibrarySort, LibraryView, ProgressEntry, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, DownloadSelection, Inspection, Meta, QueueHalt, ScanState, SearchableCatalog, Session, Settings as AppSettings, SettingsPatch, SiteLink, Stream, Subtitle, Video } from "./types";
@@ -57,6 +57,11 @@ const hideBroken = (event: React.SyntheticEvent<HTMLImageElement>) => event.curr
 const typeLabel = (type: string) => type === "movie" ? t("catalog.movies") : type === "series" ? t("catalog.series") : type;
 /** The same type as a parenthesised hint next to a catalogue's own name. */
 const typeTag = (type: string) => type === "movie" ? t("catalog.typeMovie") : type === "series" ? t("catalog.typeSeries") : type;
+/** A video entry may carry nothing but its place in the show; the episode list names it by that. */
+const episodeLabel = (video: Video) => video.title || video.name
+  || (video.season != null || video.episode != null
+    ? `${String(video.season ?? 0).padStart(2, "0")}×${String(video.episode ?? 0).padStart(2, "0")}`
+    : t("episodes.one"));
 
 
 /** Two bars, because the preview reserves a two-line box. */
@@ -118,7 +123,8 @@ export function App() {
   }
   type TreeItem = Extract<BrowseItem, { kind: "folder" | "file" }>;
   const [selectedCatalog, setSelectedCatalog] = useState(""); const [search, setSearch] = useState(""); const [items, setItems] = useState<Meta[]>([]); const [selected, setSelected] = useState<Meta | null>(null); const [selectedDownloadTitle, setSelectedDownloadTitle] = useState("");
-  const [selectedVideo, setSelectedVideo] = useState<Video | null>(null); const [streams, setStreams] = useState<Stream[]>([]); const [selectedStream, setSelectedStream] = useState<Stream | null>(null); const [subtitles, setSubtitles] = useState<Subtitle[]>([]);
+  const [selectedVideo, setSelectedVideo] = useState<Video | null>(null); const [streams, setStreams] = useState<Stream[]>([]); const [selectedStream, setSelectedStream] = useState<Stream | null>(null); const [subtitles, setSubtitles] = useState<Subtitle[]>([]); const [localEpisode, setLocalEpisode] = useState(false); const [playbackPreferences, setPlaybackPreferences] = useState<{ audioLanguage?: string; subtitleLanguage?: string | null }>({});
+  const nextEpisodePrefetchRef = useRef<{ id: string; promise: Promise<{ streams: Stream[]; subtitles: Subtitle[] }> } | null>(null);
   const [sourcesLoaded, setSourcesLoaded] = useState(false); const [metaLoading, setMetaLoading] = useState(false);
   const [titleLinks, setTitleLinks] = useState<SiteLink[]>([]);
   const [libraryLinks, setLibraryLinks] = useState<Record<string, SiteLink[]>>({});
@@ -472,7 +478,7 @@ export function App() {
   const searchRequired = Boolean(currentCatalog?.extra?.some((extra) => extra.name === "search" && extra.isRequired));
   const downloadTitleLanguage = settings.downloadTitleLanguage === "ui" ? settings.uiLanguage : settings.downloadTitleLanguage;
   const baseDownloadTitle = selectedDownloadTitle || selected?.name || "Video";
-  const videoId = selectedVideo?.id || selected?.id; const videoTitle = selectedVideo ? `${baseDownloadTitle} · ${selectedVideo.title || selectedVideo.name || `S${selectedVideo.season}E${selectedVideo.episode}`}` : baseDownloadTitle;
+  const videoId = selectedVideo?.id || selected?.id; const videoTitle = selectedVideo ? `${baseDownloadTitle} · ${episodeLabel(selectedVideo)}` : baseDownloadTitle;
   // Long shows run to hundreds of episodes, so the list branches by season. Specials (season 0) belong at the end.
   const seasons = [...new Set((selected?.videos ?? []).map((video) => video.season).filter((value): value is number => typeof value === "number"))].sort((a, b) => (a === 0 ? 1 : b === 0 ? -1 : a - b));
   const activeSeason = season ?? selectedVideo?.season ?? seasons.find((value) => value > 0) ?? seasons[0] ?? null;
@@ -960,24 +966,26 @@ export function App() {
     return () => { stale = true; };
   }, [playerOpen, localStream]);
   const playAdjacent = async (file: { path: string; title: string }) => {
-    if (!file || nextBusyRef.current) return;
+    if (!file || nextBusyRef.current) return false;
     nextBusyRef.current = true; setNextBusy(true);
-    try { await playLocal(file.title, file.path, localPoster); }
+    try { return await playLocal(file.title, file.path, localPoster, localEpisode); }
     finally { nextBusyRef.current = false; setNextBusy(false); }
   };
-  const playLocal = async (title: string, path: string, poster?: string) => {
+  const playLocal = async (title: string, path: string, poster?: string, episode = false) => {
     const returning = capturePlaybackReturn({ kind: "library", key: path });
     try {
       const source = await api.librarySource(path);
       setLocalPoster(poster);
       setLocalTitle(title);
+      setLocalEpisode(episode);
       setLocalStream({ ...source, localPath: path });
       playbackReturn.current = returning;
       scrollByView.current[view] = returning.windowY;
       playerOpenRef.current = true;
       pickedRef.current = true;
       setPlayerOpen(true);
-    } catch (error) { fail(error); }
+      return true;
+    } catch (error) { fail(error); return false; }
   };
   // Polling reschedules itself instead of running on a fixed interval: a hidden tab
   // does nothing, and a failing server is asked ever less often. A toast on every tick
@@ -1144,8 +1152,8 @@ export function App() {
 
   // The library preview includes existing local files; catalog progress stays separate.
   const localResume = useMemo(() => resumePreview
-    ? resumePreview.items.flatMap((item) => item.kind === "file" && item.progress ? [{ key: `file:${item.path}`, path: item.path, title: item.label, poster: item.poster, updatedAt: item.modified, ...item.progress }] : [])
-    : resume.filter((item) => item.key.startsWith("file:") && item.path), [resumePreview, resume]);
+    ? resumePreview.items.flatMap((item) => item.kind === "file" && item.progress ? [{ key: `file:${item.path}`, path: item.path, title: item.label, poster: item.poster, season: item.season, updatedAt: item.modified, ...item.progress }] : [])
+    : resume.filter((item) => item.key.startsWith("file:") && item.path).map((item) => ({ ...item, season: undefined })), [resumePreview, resume]);
   const catalogProgress = (item: Meta) => resume.find((entry) => entry.key === `${item.type || "movie"}:${item.id}`);
   const forgetCatalogWatched = async (item: Meta) => {
     setMenuFor(null);
@@ -1163,6 +1171,15 @@ export function App() {
     else if (sort === "year") list.sort((a, b) => year(b) - year(a));
     return list;
   }, [items, sort, settings.mergeByName, virtualCatalog]);
+  /** One addon's answer, with a failure turned into nothing. */
+  const loadStreamPart = async (type: string, id: string, source: { key: string; name: string }) => {
+    try { return await api.streams(type, id, source.key); }
+    catch (error) {
+      // One unreachable addon must neither bring the rest down nor flood the screen with errors.
+      report("WARN", `Sources from the addon could not be loaded: ${source.name}`, { addon: source.name, reason: error instanceof Error ? error.message : String(error) });
+      return [] as Stream[];
+    }
+  };
   /** Each addon is asked separately, so results show up as they arrive instead of waiting for the slowest. */
   const fetchSources = async (type: string, id: string, video?: Video) => {
     const request = ++sourcesRequestRef.current;
@@ -1175,13 +1192,9 @@ export function App() {
       if (stale()) return;
       setSubtitles(nextSubtitles); setSourcesLoaded(true); setBusy(false); setPendingSources(sources.length);
       await Promise.all(sources.map(async (source) => {
-        try {
-          const part = await api.streams(type, id, source.key);
-          if (!stale() && part.length) setStreams((previous) => [...previous, ...part]);
-        } catch (error) {
-          // One unreachable addon must neither bring the rest down nor flood the screen with errors.
-          if (!stale()) report("WARN", `Sources from the addon could not be loaded: ${source.name}`, { addon: source.name, reason: error instanceof Error ? error.message : String(error) });
-        } finally { if (!stale()) setPendingSources((count) => count - 1); }
+        const part = await loadStreamPart(type, id, source);
+        if (!stale() && part.length) setStreams((previous) => [...previous, ...part]);
+        if (!stale()) setPendingSources((count) => count - 1);
       }));
     } catch (e) { if (!stale()) { fail(e); setSourcesLoaded(true); } }
     finally { if (!stale()) setBusy(false); }
@@ -1213,6 +1226,73 @@ export function App() {
   };
   const loadSources = async (video?: Video) => {
     if (!selected) return; await fetchSources(selected.type || currentCatalog?.type || "movie", video?.id || selected.id, video);
+  };
+  const fetchEpisodeSources = async (type: string, id: string) => {
+    const [sources, nextSubtitles] = await Promise.all([api.streamSources(type, id), api.subtitles(type, id).catch(() => [] as Subtitle[])]);
+    const parts = await Promise.all(sources.map((source) => loadStreamPart(type, id, source)));
+    return { streams: parts.flat(), subtitles: nextSubtitles };
+  };
+  const orderedEpisodes = useMemo(() => (selected?.videos ?? []).map((video, index) => ({ video, index })).sort((a, b) => {
+    const season = (value: Video) => value.season === 0 ? Number.MAX_SAFE_INTEGER : value.season ?? Number.MAX_SAFE_INTEGER - 1;
+    return season(a.video) - season(b.video) || (a.video.episode ?? a.index) - (b.video.episode ?? b.index) || a.index - b.index;
+  }).map(({ video }) => video), [selected?.videos]);
+  const nextCatalogEpisode = useMemo(() => {
+    if (!selectedVideo) return null;
+    const index = orderedEpisodes.findIndex((video) => video === selectedVideo || (video.id && video.id === selectedVideo.id));
+    return index >= 0 ? orderedEpisodes[index + 1] ?? null : null;
+  }, [orderedEpisodes, selectedVideo]);
+  useEffect(() => {
+    if (!playerOpen || localStream || !selected || !nextCatalogEpisode?.id) return;
+    const id = nextCatalogEpisode.id;
+    const type = selected.type || currentCatalog?.type || "series";
+    const promise = fetchEpisodeSources(type, id);
+    // The viewer may never ask for this one, and nobody would be waiting to hear it failed.
+    void promise.catch(() => undefined);
+    nextEpisodePrefetchRef.current = { id, promise };
+  }, [playerOpen, localStream, selected?.id, selected?.type, nextCatalogEpisode?.id, currentCatalog?.type]);
+  const playNextCatalogEpisode = async () => {
+    if (!selected || !nextCatalogEpisode || nextBusyRef.current) return false;
+    nextBusyRef.current = true; setNextBusy(true);
+    const currentStream = selectedStream;
+    const request = ++sourcesRequestRef.current;
+    const stale = () => request !== sourcesRequestRef.current;
+    setSelectedVideo(nextCatalogEpisode); setEpisodesOpen(false); setSourcesLoaded(false); setBusy(true);
+    setStreams([]); setSelectedStream(null); setSubtitles([]); setPendingSources(0); pickedRef.current = false;
+    try {
+      const type = selected.type || currentCatalog?.type || "series";
+      const id = nextCatalogEpisode.id || selected.id;
+      const prefetched = nextEpisodePrefetchRef.current;
+      let { streams: nextStreams, subtitles: nextSubtitles } = prefetched?.id === id
+        ? await prefetched.promise.catch(() => fetchEpisodeSources(type, id))
+        : await fetchEpisodeSources(type, id);
+      if (stale()) return false;
+      const currentLanguage = playbackPreferences.audioLanguage ?? (currentStream ? streamLanguages(currentStream, metaLanguage)[0] : undefined);
+      const preferredLanguage = currentLanguage ?? settings.audioLanguage;
+      let nextStream = pickNextEpisodeStream(nextStreams, currentStream, preferredLanguage, addonPriority, metaLanguage) ?? null;
+      // A listing comes back without the addon that is playing when its request failed or the
+      // provider was busy. Asking that one on its own keeps the viewer with the provider they
+      // chose instead of moving a binge to another one, in another language.
+      if (currentStream?.addonKey && !nextStreams.some((stream) => stream.addonKey === currentStream.addonKey)) {
+        const again = await loadStreamPart(type, id, { key: currentStream.addonKey, name: currentStream.addonName ?? "" });
+        if (stale()) return false;
+        if (again.length) {
+          nextStreams = [...nextStreams, ...again];
+          nextStream = pickNextEpisodeStream(nextStreams, currentStream, preferredLanguage, addonPriority, metaLanguage) ?? nextStream;
+        }
+      }
+      if (currentStream && nextStream && nextStream.addonKey !== currentStream.addonKey) {
+        report("INFO", "The addon that was playing has no source for the next episode", { addon: currentStream.addonName, using: nextStream.addonName });
+      }
+      setSubtitles(nextSubtitles);
+      setStreams(nextStreams); setSelectedStream(nextStream); setPendingSources(0); setSourcesLoaded(true);
+      return Boolean(nextStream?.playable);
+    } catch (error) {
+      if (!stale()) { fail(error); setSourcesLoaded(true); }
+      return false;
+    } finally {
+      if (!stale()) setBusy(false);
+      nextBusyRef.current = false; setNextBusy(false);
+    }
   };
   const selectedMedia = () => selectedVideo
     ? { kind: "episode", title: baseDownloadTitle, season: selectedVideo.season, episode: selectedVideo.episode, episodeTitle: selectedVideo.title || selectedVideo.name, id: selected?.id, metaType: selected?.type, poster: selected?.poster }
@@ -1406,7 +1486,7 @@ export function App() {
           <div className="subhead"><h3>{t("library.continueWatching")}</h3><button className="resume-show-all" onClick={() => { setBrowseQuery(""); setOnlyFavorites(false); setFromFavorites(false); setMenuFor(null); setBrowseSort("added"); setBrowseDesc(true); setBrowsePath(":resume"); }}>{t("library.showAll")} ({resumePreview?.total ?? localResume.length}) <ChevronRight/></button></div>
           <div className="resume-strip">
             {localResume.slice(0, 8).map((item) => <button className="browse-item" key={item.key} data-path={item.path} onClick={() => {
-              if (item.path) playLocal(item.title, item.path, item.poster);
+              if (item.path) void playLocal(item.title, item.path, item.poster, item.season != null);
             }}>
               <span className="browse-art">
                 {item.poster ? <img src={item.poster} alt="" loading="lazy"/> : <Film/>}
@@ -1557,7 +1637,7 @@ export function App() {
                       <button className="danger" onClick={() => void removeItem(item.path, item.name, true)}><Trash2/> {t("common.delete")}</button>
                     </span>}
                   </article>
-                : <article className={`browse-item${browseFocus === item.path ? " focused" : ""}${selectedPaths.has(item.path) ? " selected" : ""}`} key={item.path} data-path={item.path} aria-current={browseFocus === item.path ? "true" : undefined}><button className="library-open" onClick={() => selectionMode ? toggleSelection(item.path) : playLocal(item.label, item.path, item.poster)}>
+                : <article className={`browse-item${browseFocus === item.path ? " focused" : ""}${selectedPaths.has(item.path) ? " selected" : ""}`} key={item.path} data-path={item.path} aria-current={browseFocus === item.path ? "true" : undefined}><button className="library-open" onClick={() => selectionMode ? toggleSelection(item.path) : void playLocal(item.label, item.path, item.poster, item.season != null)}>
                     <span className="browse-art">{item.poster ? <img src={item.poster} alt="" loading="lazy"/> : <Film/>}{item.favorite && <i className="fav-mark"><Star/></i>}
                     {browseFocus === item.path && <i className="browse-focus-mark">{t("library.thisFile")}</i>}
                     {item.progress && <i className="resume-bar"><i style={{ width: `${Math.min(100, Math.round(item.progress.position / (item.progress.duration || 1) * 100))}%` }}/></i>}</span>
@@ -1600,14 +1680,14 @@ export function App() {
         await refresh(true);
       }} onNotify={notify} onError={fail}/>}
     </main>
-    <Player nextTitle={nextFile?.title} nextBusy={nextBusy} onNext={nextFile ? () => playAdjacent(nextFile) : undefined} previousTitle={previousFile?.title} onPrevious={previousFile ? () => playAdjacent(previousFile) : undefined} open={playerOpen} title={localStream ? localTitle : videoTitle} stream={localStream ?? selectedStream} subtitles={localStream ? [] : subtitles} subtitleLanguage={settings.subtitleLanguage} audioLanguage={settings.audioLanguage}
+    <Player nextTitle={localStream ? nextFile?.title : nextCatalogEpisode ? episodeLabel(nextCatalogEpisode) : undefined} nextBusy={nextBusy} onNext={localStream ? nextFile ? () => playAdjacent(nextFile) : undefined : nextCatalogEpisode ? playNextCatalogEpisode : undefined} autoNext={localStream ? localEpisode : Boolean(nextCatalogEpisode)} previousTitle={previousFile?.title} onPrevious={previousFile ? () => playAdjacent(previousFile) : undefined} open={playerOpen} title={localStream ? localTitle : videoTitle} stream={localStream ?? selectedStream} subtitles={localStream ? [] : subtitles} subtitleLanguage={settings.subtitleLanguage} audioLanguage={settings.audioLanguage} onPreferences={setPlaybackPreferences}
       progressKey={localStream?.localPath ? `file:${localStream.localPath}` : (videoId ? `${selected?.type ?? "movie"}:${videoId}` : undefined)}
       progressPoster={localStream ? localPoster : selected?.poster}
       favorite={localStream?.localPath ? libraryFavorites.includes(localStream.localPath) : inWatchlist(selected?.type, selected?.id)}
       onToggleFavorite={localStream?.localPath || selected ? () => void togglePlayerFavorite() : undefined}
       onDownload={enqueue}
       onDeviceDownload={() => localStream?.localPath ? downloadLibraryFile(localStream.localPath) : downloadStreamToDevice()}
-      onClose={() => { setPlayerOpen(false); setLocalStream(null); }}/>
+      onClose={() => { setPlayerOpen(false); setLocalStream(null); setLocalEpisode(false); setPlaybackPreferences({}); }}/>
     {libraryManagerOpen && <LibraryManagerDialog restricted={restricted} onClose={() => setLibraryManagerOpen(false)} onChanged={refreshLibraries} onError={fail} onNotify={notify}/>}
     {movePath && <MoveDialog path={movePath.path} paths={movePath.paths} copy={movePath.copy} label={movePath.label}
       itemType={movePath.type} libraries={libraries} onClose={() => setMovePath(null)} onMoved={(target) => void finishMove(target)}

@@ -12,7 +12,7 @@ import { detectCapabilities } from "./capabilities";
 import { t, useI18n, type Key } from "./i18n";
 import type { Capabilities, PlaybackMode, PlaybackSession, Stream, Subtitle, Track } from "./types";
 
-interface Props { previousTitle?: string; onPrevious?: () => Promise<void>; nextTitle?: string; nextBusy?: boolean; onNext?: () => Promise<void>; open: boolean; title: string; stream: Stream | null; subtitles: Subtitle[]; subtitleLanguage: string; audioLanguage: string; progressKey?: string; progressPoster?: string; favorite?: boolean; onToggleFavorite?: () => void; onDownload: () => Promise<boolean>; onDeviceDownload: () => Promise<boolean>; onClose: () => void }
+interface Props { previousTitle?: string; onPrevious?: () => Promise<boolean>; nextTitle?: string; nextBusy?: boolean; onNext?: () => Promise<boolean>; autoNext?: boolean; open: boolean; title: string; stream: Stream | null; subtitles: Subtitle[]; subtitleLanguage: string; audioLanguage: string; onPreferences?: (preferences: { audioLanguage?: string; subtitleLanguage?: string | null }) => void; progressKey?: string; progressPoster?: string; favorite?: boolean; onToggleFavorite?: () => void; onDownload: () => Promise<boolean>; onDeviceDownload: () => Promise<boolean>; onClose: () => void }
 
 const fmt = (seconds: number) => !Number.isFinite(seconds) ? "0:00" : `${Math.floor(seconds / 3600) ? `${Math.floor(seconds / 3600)}:` : ""}${String(Math.floor((seconds % 3600) / 60)).padStart(2, "0")}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
 
@@ -193,7 +193,7 @@ const trackLabel = (track: Track) => {
 const SUBTITLE_DELAY_STEP_S = 0.25;
 const SUBTITLE_DELAY_LIMIT_S = 30;
 
-export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext, open, title, stream, subtitles, subtitleLanguage, audioLanguage, progressKey, progressPoster, favorite, onToggleFavorite, onDownload, onDeviceDownload, onClose }: Props) {
+export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext, autoNext, open, title, stream, subtitles, subtitleLanguage, audioLanguage, onPreferences, progressKey, progressPoster, favorite, onToggleFavorite, onDownload, onDeviceDownload, onClose }: Props) {
   // Subscribes the whole overlay to the language, so a switch behind it redraws every label.
   useI18n();
   const [subtitleIds, setSubtitleIds] = useState<Record<string, string>>({});
@@ -203,6 +203,52 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   const [browserFullscreen, setBrowserFullscreen] = useState(false);
   const [volume, setVolume] = useState(readVolume);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const audioPreferenceRef = useRef(audioLanguage);
+  const subtitlePreferenceRef = useRef<string | null>(subtitleLanguage);
+  const [upNext, setUpNext] = useState(false);
+  const [upNextSeconds, setUpNextSeconds] = useState(5);
+  const advancingRef = useRef(false);
+  const onNextRef = useRef(onNext);
+  onNextRef.current = onNext;
+  // Read when the player closes, where a stale prop would leak the last film's language.
+  const preferenceDefaultsRef = useRef({ audioLanguage, subtitleLanguage });
+  preferenceDefaultsRef.current = { audioLanguage, subtitleLanguage };
+
+  const cancelNext = () => { setUpNext(false); setUpNextSeconds(5); };
+  const startNext = async () => {
+    const advance = onNextRef.current;
+    if (advancingRef.current || !advance) return;
+    advancingRef.current = true;
+    setUpNext(false);
+    // A hand-off that fails leaves the viewer where they are: closing the player behind their
+    // back would take the error message with it, and the transport still has the button.
+    try { await advance(); } finally { advancingRef.current = false; }
+  };
+
+  useEffect(() => {
+    if (!upNext) return;
+    const deadline = Date.now() + 5000;
+    const tick = () => {
+      const remaining = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+      setUpNextSeconds(remaining);
+      if (remaining === 0) void startNext();
+    };
+    tick();
+    const timer = window.setInterval(tick, 200);
+    return () => clearInterval(timer);
+  }, [upNext]);
+
+  useEffect(() => { cancelNext(); }, [stream]);
+
+  // Track choices and a running countdown belong to the film on screen. The player outlives
+  // its overlay, so both are dropped when it closes instead of following the viewer to the
+  // next title.
+  useEffect(() => {
+    if (open) return;
+    cancelNext();
+    audioPreferenceRef.current = preferenceDefaultsRef.current.audioLanguage;
+    subtitlePreferenceRef.current = preferenceDefaultsRef.current.subtitleLanguage;
+  }, [open]);
 
   // The overlay is unmounted whenever the player closes, so the element's own volume is back to
   // the browser's default on every open: the remembered one is applied here instead. Listening
@@ -487,6 +533,9 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     abandonedRef.current = false;
     if (next.sidecarUrl !== session?.sidecarUrl) { setSidecarReady(false); setSidecarPass(0); }
     sessionRef.current = next.id; modeRef.current = next.mode; offsetRef.current = next.offset;
+    audioPreferenceRef.current = next.audioTracks[next.audioTrack]?.language ?? audioPreferenceRef.current;
+    if (next.subtitleTrack !== null) subtitlePreferenceRef.current = next.subtitleTracks[next.subtitleTrack]?.language ?? subtitlePreferenceRef.current;
+    onPreferences?.({ audioLanguage: audioPreferenceRef.current, subtitleLanguage: subtitlePreferenceRef.current });
     setSession(next); setOffset(next.offset); showTime(next.offset);
     if (next.duration) { probeDurationRef.current = next.duration; setDuration(next.duration); }
     if (next.subtitleIds) setSubtitleIds(next.subtitleIds);
@@ -507,7 +556,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       const saved = progressKey ? await api.progressOf(progressKey).catch(() => null) : null;
       const from = saved && saved.position > 30 ? saved.position : 0;
       if (from) setResumedFrom(from);
-      return { created: await api.startPlayback(stream, capabilities(), from, addonSubtitles.map((item) => item.subtitleId)), from };
+      return { created: await api.startPlayback(stream, capabilities(), from, addonSubtitles.map((item) => item.subtitleId), { audioLanguage: audioPreferenceRef.current, subtitleLanguage: subtitlePreferenceRef.current }), from };
     })().then(({ created, from }) => {
       if (disposed) { void api.stopPlayback(created.id).catch(() => undefined); return; }
       applySession(created);
@@ -524,7 +573,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       // The server has chosen among the tracks the film carries; an addon fills the gap only
       // where the film left one, and by the same rule -- silence over understood dialogue.
       if (created.subtitleTrack === null && !created.sidecarUrl) {
-        setAddonSubtitle(pickAddonSubtitle(addonSubtitles, subtitleLanguage, created.audioTracks[created.audioTrack]?.language, audioLanguage));
+        if (subtitlePreferenceRef.current !== null) setAddonSubtitle(pickAddonSubtitle(addonSubtitles, subtitlePreferenceRef.current ?? subtitleLanguage, created.audioTracks[created.audioTrack]?.language, audioPreferenceRef.current));
       }
     }).catch((value) => {
       const message = value instanceof Error ? value.message : String(value);
@@ -608,7 +657,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
           if (!(value instanceof ApiError) || !(value.code === "RESOURCE_NOT_FOUND" || value.messageKey === "err.playbackSessionGone")) throw value;
           // The server may have restarted in the meantime, or cleaned up an idle session.
           // A new HLS session starts at the target; a direct stream is moved by the browser.
-          next = await api.startPlayback(stream!, capabilities(), requested, addonSubtitles.map((item) => item.subtitleId));
+          next = await api.startPlayback(stream!, capabilities(), requested, addonSubtitles.map((item) => item.subtitleId), { audioLanguage: audioPreferenceRef.current, subtitleLanguage: subtitlePreferenceRef.current });
           id = next.id; started = next.id;
           if (next.mode === "direct") recoveredDirectAt = requested;
         }
@@ -657,6 +706,8 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       const next = await api.setTrack(id, { subtitle, time: timeRef.current });
       if (sessionRef.current !== next.id) return;
       if (next.sidecarUrl !== session?.sidecarUrl) { setSidecarReady(false); setSidecarPass(0); }
+      if (next.subtitleTrack !== null) subtitlePreferenceRef.current = next.subtitleTracks[next.subtitleTrack]?.language ?? subtitlePreferenceRef.current;
+      onPreferences?.({ audioLanguage: audioPreferenceRef.current, subtitleLanguage: subtitlePreferenceRef.current });
       setSession(next);
     } catch (value) {
       const message = value instanceof Error ? value.message : String(value);
@@ -744,7 +795,10 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     setSubtitlesHidden(false);
     if (value.startsWith("embedded:")) { setAddonSubtitle(null); await changeSubtitle(Number(value.slice(9))); return; }
     if (session?.subtitleTrack !== null && session !== null) await changeSubtitle(null);
-    setAddonSubtitle(value.startsWith("addon:") ? addonSubtitles[Number(value.slice(6))] ?? null : null);
+    const next = value.startsWith("addon:") ? addonSubtitles[Number(value.slice(6))] ?? null : null;
+    subtitlePreferenceRef.current = next?.lang ?? null;
+    onPreferences?.({ audioLanguage: audioPreferenceRef.current, subtitleLanguage: subtitlePreferenceRef.current });
+    setAddonSubtitle(next);
   };
 
   // The position is reported every ten seconds and once more on close, so nothing is lost.
@@ -990,7 +1044,14 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       else revealControls();
     }}>
       <video ref={videoRef} playsInline disableRemotePlayback x-webkit-airplay="deny"
-        onPlay={() => setPaused(false)} onPause={() => setPaused(true)}
+        onPlay={() => { setPaused(false); cancelNext(); }} onPause={() => setPaused(true)} onSeeking={cancelNext}
+        onEnded={() => {
+          // Nothing follows, so the film is over: the player steps aside and leaves the
+          // detail view on screen instead of sitting on the last frame.
+          if (!onNext) return closePlayer();
+          if (!autoNext) return;
+          setSettingsOpen(false); setUpNextSeconds(5); setUpNext(true); revealControls();
+        }}
         onTimeUpdate={(event) => {
           const absolute = offsetRef.current + event.currentTarget.currentTime;
           reportRef.current = { position: absolute, duration: duration || probeDurationRef.current };
@@ -1029,6 +1090,12 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
         <span>{t("player.stalling")}</span>
         <button onClick={() => changeQuality(qualityHint)}>{t("player.lowerQualityTo", { height: qualityHint })}</button>
         <button className="icon-button" aria-label={t("player.hideHint")} onClick={() => { stallsRef.current = []; setQualityHint(null); }}><X /></button>
+      </div>}
+      {upNext && <div className="player-up-next" role="status">
+        <small>{t("player.upNext")}</small>
+        <strong>{nextTitle}</strong>
+        <span>{t("player.upNextCountdown", { seconds: upNextSeconds })}</span>
+        <div><button className="primary" disabled={nextBusy} onClick={() => void startNext()}>{t("player.playNow")}</button><button disabled={nextBusy} onClick={cancelNext}>{t("common.cancel")}</button></div>
       </div>}
     </div>
     <div ref={bottomRef} className="player-bottom">

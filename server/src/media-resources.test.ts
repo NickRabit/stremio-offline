@@ -133,9 +133,20 @@ test("selection creation is rate limited but duplicate lookups do not consume ca
 
 test("subtitle tracks ride along with their listing instead of spending the window", () => {
   const registry = new MediaResources(() => 0, 100, 100_000, 1);
-  const listing = registry.publicStream({ ...source, subtitles: [{ url: "https://a.test/1" }, { url: "https://a.test/2" }] }, owner);
-  assert.equal(listing.subtitles.length, 2);
-  assert.throws(() => registry.add({ url: "https://other.test" }, owner, "source"), { status: 429 });
+  const [listed] = registry.listing([{ ...source, subtitles: [{ url: "https://a.test/1" }, { url: "https://a.test/2" }] }], owner);
+  assert.equal(listed.subtitles.length, 2);
+  assert.throws(() => registry.listing([{ url: "https://other.test" }], owner), { status: 429 });
+});
+
+test("a listing spends one charge however many streams the provider answers with", () => {
+  let now = 0;
+  const registry = new MediaResources(() => now, 500, 10_000_000, 1);
+  const listed = registry.listing(Array.from({ length: 200 }, (_, index) => ({ url: `https://provider.test/${index}` })), owner);
+  assert.equal(listed.length, 200);
+  // The one click that asked for them is what the window counts, not the provider's catalogue size.
+  assert.throws(() => registry.listing([{ url: "https://other.test" }], owner), { status: 429 });
+  now = 60_000;
+  assert.equal(registry.listing([{ url: "https://other.test" }], owner).length, 1);
 });
 
 test("a full registry drops the oldest selections instead of refusing new ones", () => {
