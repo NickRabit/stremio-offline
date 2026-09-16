@@ -145,6 +145,24 @@ test("a write driven by catalogue identity walks every library", async () => {
   });
 });
 
+test("dropping the backfill stamp leaves the rest of the row alone", async () => {
+  await withStore(async (store, dataDir) => {
+    const filled = (id: string, name: string): LibraryMetaRecord => ({ ...record(id), name, year: "2001", description: `${name} described` });
+    const fresh = filled("tt2", "Fresh");
+    await seed(dataDir, "lib_a", { "Stamped.mkv": { ...filled("tt1", "Stamped"), backfilledAt: "2026-09-14T15:51:00.000Z" }, "Fresh.mkv": fresh });
+    await store.load();
+    await store.updateAll((file) => {
+      for (const [key, row] of Object.entries(file.meta)) {
+        if (!row.backfilledAt) continue;
+        const { backfilledAt: _dropped, ...rest } = row;
+        file.meta[key] = rest;
+      }
+    });
+    assert.deepEqual(store.meta("lib_a")["Stamped.mkv"], filled("tt1", "Stamped"), "the stamp goes, the answer stays");
+    assert.deepEqual(store.meta("lib_a")["Fresh.mkv"], fresh, "a row without a stamp is not rewritten");
+  });
+});
+
 test("a qualified write touches only the library that owns the key", async () => {
   await withStore(async (store, dataDir) => {
     await seed(dataDir, "lib_aaaaaaaa", { "One.mkv": record("tt1") });

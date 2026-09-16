@@ -2790,6 +2790,7 @@ app.patch("/api/settings", asyncRoute(async (req, res) => {
     tmdbApiKey = String(req.body.tmdbApiKey).trim();
     if (tmdbApiKey) await verifyTmdbKey(tmdbApiKey);
   }
+  const languageBefore = store.settings().uiLanguage;
   await store.update((state) => {
     if (req.body.concurrentDownloads !== undefined) state.settings.concurrentDownloads = Math.max(1, Math.min(8, Number(req.body.concurrentDownloads) || 1));
     if (req.body.parallelPerProvider !== undefined) state.settings.parallelPerProvider = Math.max(1, Math.min(8, Number(req.body.parallelPerProvider) || 1));
@@ -2828,8 +2829,22 @@ app.patch("/api/settings", asyncRoute(async (req, res) => {
     if (realDebridToken !== undefined) state.settings.realDebridToken = realDebridToken;
     if (tmdbApiKey !== undefined) state.settings.tmdbApiKey = tmdbApiKey;
   });
-  // The metadata cache key cannot see a TMDB key change on its own.
-  if (tmdbApiKey !== undefined) metaCache.clear();
+  const languageChanged = store.settings().uiLanguage !== languageBefore;
+  if (tmdbApiKey !== undefined || languageChanged) {
+    // The metadata cache key cannot see a TMDB key change on its own.
+    metaCache.clear();
+    // The seven-day backfill floor is measured from the last lookup, and neither a new key
+    // nor a new language is visible to it. Clearing the stamps is what lets the next browse
+    // ask again; needsBackfill then decides on the language, as it already does.
+    await metaStore.updateAll((file) => {
+      for (const [key, record] of Object.entries(file.meta)) {
+        if (!record.backfilledAt) continue;
+        const { backfilledAt: _dropped, ...rest } = record;
+        file.meta[key] = rest;
+      }
+    });
+    invalidateLibrary();
+  }
   queue.changed(); res.json(publicSettings(store.settings()));
 }));
 app.get("/api/languages", (_req, res) => res.json(Object.entries(LANGUAGE_NAMES).map(([code, name]) => ({ code, name }))));
