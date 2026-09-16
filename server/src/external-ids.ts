@@ -120,13 +120,24 @@ export class ExternalIdStore {
   }
 }
 
+const tmdbTarget = (type: string, id: string, ids: ExternalIds): { path: "movie" | "tv"; id: string } | undefined => {
+  // Which kind the catalogue thinks it is only decides which id to prefer. The path has to
+  // follow the property that actually supplied the id, or the link points at another title.
+  const ordered = type === "series"
+    ? [["tv", ids.tmdbTv], ["movie", ids.tmdbMovie]] as const
+    : [["movie", ids.tmdbMovie], ["tv", ids.tmdbTv]] as const;
+  for (const [path, value] of ordered) if (value) return { path, id: value };
+  const fromId = TMDB_ID.exec(id)?.[1];
+  return fromId ? { path: type === "series" ? "tv" : "movie", id: fromId } : undefined;
+};
+
 /** Pure. The order and the set depend on the language: ČSFD only has Czech and Slovak
  *  pages, so it is behind the language and never built for anyone else. */
 export function siteLinks(type: string, id: string, ids: ExternalIds, language: string): SiteLink[] {
   const czech = language === "cs";
-  const tmdbId = (type === "series" ? ids.tmdbTv : ids.tmdbMovie) ?? TMDB_ID.exec(id)?.[1];
-  const tmdb: SiteLink | undefined = tmdbId
-    ? { site: "tmdb", url: `https://www.themoviedb.org/${type === "series" ? "tv" : "movie"}/${tmdbId}${czech ? "?language=cs-CZ" : ""}` }
+  const target = tmdbTarget(type, id, ids);
+  const tmdb: SiteLink | undefined = target
+    ? { site: "tmdb", url: `https://www.themoviedb.org/${target.path}/${target.id}${czech ? "?language=cs-CZ" : ""}` }
     : undefined;
   const imdb: SiteLink | undefined = id.startsWith("tt") ? { site: "imdb", url: `https://www.imdb.com/title/${id}/` } : undefined;
   const csfd: SiteLink | undefined = czech && ids.csfd ? { site: "csfd", url: `https://www.csfd.cz/film/${ids.csfd}/` } : undefined;

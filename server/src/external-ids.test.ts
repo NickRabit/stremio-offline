@@ -164,4 +164,10 @@ test("siteLinks builds the row the language and the kind call for", () => {
   assert.deepEqual(siteLinks("movie", "tmdb:157336", {}, "en"), [
     { site: "tmdb", url: "https://www.themoviedb.org/movie/157336" },
   ]);
+  // The path follows the property that supplied the id, not the kind the catalogue believes.
+  assert.deepEqual(siteLinks("series", "tt0108906", { csfd: "71924", tmdbMovie: "22137" }, "cs"), [
+    { site: "csfd", url: "https://www.csfd.cz/film/71924/" },
+    { site: "tmdb", url: "https://www.themoviedb.org/movie/22137?language=cs-CZ" },
+    { site: "imdb", url: "https://www.imdb.com/title/tt0108906/" },
+  ]);
 });
