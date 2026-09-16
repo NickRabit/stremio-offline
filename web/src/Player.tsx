@@ -12,7 +12,7 @@ import { detectCapabilities } from "./capabilities";
 import { t, useI18n, type Key } from "./i18n";
 import type { Capabilities, PlaybackMode, PlaybackSession, Stream, Subtitle, Track } from "./types";
 
-interface Props { previousTitle?: string; onPrevious?: () => Promise<boolean>; nextTitle?: string; nextBusy?: boolean; onNext?: () => Promise<boolean>; open: boolean; title: string; stream: Stream | null; subtitles: Subtitle[]; subtitleLanguage: string; audioLanguage: string; onPreferences?: (preferences: { audioLanguage?: string; subtitleLanguage?: string | null }) => void; progressKey?: string; progressPoster?: string; favorite?: boolean; onToggleFavorite?: () => void; onDownload: () => Promise<boolean>; onDeviceDownload: () => Promise<boolean>; onClose: () => void }
+interface Props { previousTitle?: string; onPrevious?: () => Promise<boolean>; nextTitle?: string; nextBusy?: boolean; onNext?: () => Promise<boolean>; autoNext?: boolean; open: boolean; title: string; stream: Stream | null; subtitles: Subtitle[]; subtitleLanguage: string; audioLanguage: string; onPreferences?: (preferences: { audioLanguage?: string; subtitleLanguage?: string | null }) => void; progressKey?: string; progressPoster?: string; favorite?: boolean; onToggleFavorite?: () => void; onDownload: () => Promise<boolean>; onDeviceDownload: () => Promise<boolean>; onClose: () => void }
 
 const fmt = (seconds: number) => !Number.isFinite(seconds) ? "0:00" : `${Math.floor(seconds / 3600) ? `${Math.floor(seconds / 3600)}:` : ""}${String(Math.floor((seconds % 3600) / 60)).padStart(2, "0")}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
 
@@ -193,7 +193,7 @@ const trackLabel = (track: Track) => {
 const SUBTITLE_DELAY_STEP_S = 0.25;
 const SUBTITLE_DELAY_LIMIT_S = 30;
 
-export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext, open, title, stream, subtitles, subtitleLanguage, audioLanguage, onPreferences, progressKey, progressPoster, favorite, onToggleFavorite, onDownload, onDeviceDownload, onClose }: Props) {
+export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext, autoNext, open, title, stream, subtitles, subtitleLanguage, audioLanguage, onPreferences, progressKey, progressPoster, favorite, onToggleFavorite, onDownload, onDeviceDownload, onClose }: Props) {
   // Subscribes the whole overlay to the language, so a switch behind it redraws every label.
   useI18n();
   const [subtitleIds, setSubtitleIds] = useState<Record<string, string>>({});
@@ -210,16 +210,19 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   const advancingRef = useRef(false);
   const onNextRef = useRef(onNext);
   onNextRef.current = onNext;
+  // Read when the player closes, where a stale prop would leak the last film's language.
+  const preferenceDefaultsRef = useRef({ audioLanguage, subtitleLanguage });
+  preferenceDefaultsRef.current = { audioLanguage, subtitleLanguage };
 
+  const cancelNext = () => { setUpNext(false); setUpNextSeconds(5); };
   const startNext = async () => {
-    if (advancingRef.current) return;
     const advance = onNextRef.current;
-    if (!advance) return closePlayer();
+    if (advancingRef.current || !advance) return;
     advancingRef.current = true;
     setUpNext(false);
-    try {
-      if (!await advance()) closePlayer();
-    } finally { advancingRef.current = false; }
+    // A hand-off that fails leaves the viewer where they are: closing the player behind their
+    // back would take the error message with it, and the transport still has the button.
+    try { await advance(); } finally { advancingRef.current = false; }
   };
 
   useEffect(() => {
@@ -235,10 +238,17 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     return () => clearInterval(timer);
   }, [upNext]);
 
+  useEffect(() => { cancelNext(); }, [stream]);
+
+  // Track choices and a running countdown belong to the film on screen. The player outlives
+  // its overlay, so both are dropped when it closes instead of following the viewer to the
+  // next title.
   useEffect(() => {
-    setUpNext(false);
-    setUpNextSeconds(5);
-  }, [stream]);
+    if (open) return;
+    cancelNext();
+    audioPreferenceRef.current = preferenceDefaultsRef.current.audioLanguage;
+    subtitlePreferenceRef.current = preferenceDefaultsRef.current.subtitleLanguage;
+  }, [open]);
 
   // The overlay is unmounted whenever the player closes, so the element's own volume is back to
   // the browser's default on every open: the remembered one is applied here instead. Listening
@@ -1034,9 +1044,9 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       else revealControls();
     }}>
       <video ref={videoRef} playsInline disableRemotePlayback x-webkit-airplay="deny"
-        onPlay={() => setPaused(false)} onPause={() => setPaused(true)}
+        onPlay={() => { setPaused(false); cancelNext(); }} onPause={() => setPaused(true)} onSeeking={cancelNext}
         onEnded={() => {
-          if (!onNext) return closePlayer();
+          if (!autoNext || !onNext) return;
           setSettingsOpen(false); setUpNextSeconds(5); setUpNext(true); revealControls();
         }}
         onTimeUpdate={(event) => {
@@ -1082,7 +1092,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
         <small>{t("player.upNext")}</small>
         <strong>{nextTitle}</strong>
         <span>{t("player.upNextCountdown", { seconds: upNextSeconds })}</span>
-        <div><button className="primary" disabled={nextBusy} onClick={() => void startNext()}>{t("player.playNow")}</button><button disabled={nextBusy} onClick={() => setUpNext(false)}>{t("common.cancel")}</button></div>
+        <div><button className="primary" disabled={nextBusy} onClick={() => void startNext()}>{t("player.playNow")}</button><button disabled={nextBusy} onClick={cancelNext}>{t("common.cancel")}</button></div>
       </div>}
     </div>
     <div ref={bottomRef} className="player-bottom">
