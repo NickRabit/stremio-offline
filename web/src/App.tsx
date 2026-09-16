@@ -118,7 +118,7 @@ export function App() {
   const [season, setSeason] = useState<number | null>(null);
   const [bulkDownload, setBulkDownload] = useState<{ label: string; title: string; type: string; episodes: Array<{ id: string; season?: number; episode?: number; title?: string }>; media: { id?: string; metaType?: string; poster?: string } } | null>(null);
   const [downloads, setDownloads] = useState<DownloadJob[]>([]); const [queueHalt, setQueueHalt] = useState<QueueHalt | null>(null); const [busy, setBusy] = useState(false); const [message, setMessage] = useState(""); const [error, setError] = useState(""); const [playerOpen, setPlayerOpen] = useState(false);
-  const [settings, setSettings] = useState<AppSettings>({ concurrentDownloads: 1, parallelPerProvider: 1, downloadSegments: 2, uiLanguage: locale(), audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui", mergeByName: true, streamSort: "recommended", trackProgress: true, showResumeRow: true, libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, addonRefreshHours: 24, catalogTileSize: "medium", libraryTileSize: "medium", realDebridConfigured: false });
+  const [settings, setSettings] = useState<AppSettings>({ concurrentDownloads: 1, parallelPerProvider: 1, downloadSegments: 2, uiLanguage: locale(), audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui", mergeByName: true, streamSort: "recommended", trackProgress: true, showResumeRow: true, libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, addonRefreshHours: 24, catalogTileSize: "medium", libraryTileSize: "medium", realDebridConfigured: false, tmdbConfigured: false });
   const [languages, setLanguages] = useState<Array<{ code: string; name: string }>>([]);
   const [inspection, setInspection] = useState<Inspection | null>(null);
   const [session, setSession] = useState<Session | null | undefined>(undefined);
@@ -741,7 +741,7 @@ export function App() {
     return () => { stale = true; };
   }, [selectedStream]);
   const saveSettings = async (patch: SettingsPatch) => {
-    const { realDebridToken: _token, ...rest } = patch;
+    const { realDebridToken: _token, tmdbApiKey: _apiKey, ...rest } = patch;
     if (Object.keys(rest).length) setSettings((current: AppSettings) => ({ ...current, ...rest }));
     try { setSettings(await api.updateSettings(patch)); notify(t("settings.saved")); } catch (e) { fail(e); }
   };
@@ -1165,7 +1165,7 @@ export function App() {
     const type = item.type || currentCatalog?.type || "movie";
     let detail = item;
     try {
-      const metadata = await api.meta(type, item.id, downloadTitleLanguage);
+      const metadata = await api.meta(type, item.id, settings.uiLanguage);
       detail = mergeMetaDetail(item, metadata); setSelected(detail); setSelectedDownloadTitle(localizedDownloadTitle(item, metadata, downloadTitleLanguage));
     } catch { /* catalog item is still useful */ }
     if (type !== "series" && !detail.videos?.length) await fetchSources(type, item.id);
@@ -1612,6 +1612,41 @@ function Heading({ eyebrow, title }: { eyebrow: string; title: string }) { retur
 function Empty({ icon, title, text }: { icon: React.ReactNode; title: string; text: string }) { return <div className="empty"><i>{icon}</i><h3>{title}</h3><p>{text}</p></div>; }
 function Onboarding({ onOpen }: { onOpen: () => void }) { return <div className="panel onboarding"><i><PackagePlus/></i><h2>{t("onboarding.title")}</h2><p>{t("onboarding.text")}</p><button className="primary" onClick={onOpen}><Plus/> {t("onboarding.action")}</button></div>; }
 
+function TmdbSettings({ configured, onSave, onError, restricted = false }: { configured: boolean; onSave: (patch: SettingsPatch) => Promise<void>; onError: (error: unknown) => void; restricted?: boolean }) {
+  const [apiKey, setApiKey] = useState("");
+  const [busy, setBusy] = useState(false);
+  const submit = async () => {
+    const value = apiKey.trim();
+    if (!value) return;
+    setBusy(true);
+    try { await onSave({ tmdbApiKey: value }); setApiKey(""); }
+    catch (error) { onError(error); }
+    finally { setBusy(false); }
+  };
+  const clear = async () => {
+    if (!confirm(t("tmdb.removeConfirm"))) return;
+    setBusy(true);
+    try { await onSave({ tmdbApiKey: "" }); setApiKey(""); }
+    catch (error) { onError(error); }
+    finally { setBusy(false); }
+  };
+  return <section className="panel settings-section credentials-section">
+    <SettingsSectionHead icon={<KeyRound/>} title={t("tmdb.title")} text={t("tmdb.sectionText")}/>
+    {configured
+      ? <p className="credentials-status" role="status">{t("tmdb.stored")}</p>
+      : <p className="credentials-status muted">{t("tmdb.missing")}</p>}
+    {!restricted && <div className="credentials-row"><label className="credentials-field">
+      <span>{t(configured ? "tmdb.replaceKey" : "tmdb.apiKey")}</span>
+      <input type="password" autoComplete="off" spellCheck={false} value={apiKey} onChange={(event) => setApiKey(event.target.value)}
+        aria-label={t("tmdb.keyLabel")} placeholder={configured ? "••••••••" : t("tmdb.keyPlaceholder")}/>
+    </label>
+    <div className="setting-actions">
+      <button className="primary" disabled={busy || !apiKey.trim()} onClick={() => void submit()}>{t(configured ? "tmdb.replaceKey" : "tmdb.saveKey")}</button>
+      {configured && <button className="danger" disabled={busy} onClick={() => void clear()}>{t("common.remove")}</button>}
+    </div></div>}
+  </section>;
+}
+
 function RealDebridSettings({ configured, onSave, onError, restricted = false }: { configured: boolean; onSave: (patch: SettingsPatch) => Promise<void>; onError: (error: unknown) => void; restricted?: boolean }) {
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
@@ -1630,12 +1665,12 @@ function RealDebridSettings({ configured, onSave, onError, restricted = false }:
     catch (error) { onError(error); }
     finally { setBusy(false); }
   };
-  return <section className="panel settings-section debrid-section">
+  return <section className="panel settings-section credentials-section">
     <SettingsSectionHead icon={<KeyRound/>} title={t("debrid.title")} text={t("debrid.sectionText")}/>
     {configured
-      ? <p className="debrid-status" role="status">{t("debrid.stored")}</p>
-      : <p className="debrid-status muted">{t("debrid.missing")}</p>}
-    {!restricted && <div className="debrid-credentials"><label className="debrid-field">
+      ? <p className="credentials-status" role="status">{t("debrid.stored")}</p>
+      : <p className="credentials-status muted">{t("debrid.missing")}</p>}
+    {!restricted && <div className="credentials-row"><label className="credentials-field">
       <span>{t(configured ? "debrid.replaceToken" : "debrid.apiToken")}</span>
       <input type="password" autoComplete="off" spellCheck={false} value={token} onChange={(event) => setToken(event.target.value)}
         aria-label={t("debrid.tokenLabel")} placeholder={configured ? "••••••••" : t("debrid.tokenPlaceholder")}/>
@@ -1718,6 +1753,7 @@ function SettingsPage({ build, restricted = false, settings, languages, librarie
           </select></SettingControl>
       </section>
       <section className="panel settings-section"><SettingsSectionHead icon={<Download/>} title={t("nav.downloads")} text={t("settings.downloadsText")}/><SettingControl title={t("settings.downloadTitleLanguage")} text={t("settings.downloadTitleLanguageHint")}><select aria-label={t("settings.downloadTitleLanguage")} disabled={restricted} value={settings.downloadTitleLanguage} onChange={(event) => void onSave({ downloadTitleLanguage: event.target.value })}><option value="ui">{t("settings.downloadTitleLanguageUi", { language: LOCALE_NAMES[locale] })}</option>{languageOptions}</select></SettingControl><SettingControl title={t("settings.concurrent")} text={t("settings.concurrentHint")}><select aria-label={t("settings.concurrent")} disabled={restricted} value={settings.concurrentDownloads} onChange={(event) => void onSave({ concurrentDownloads: Number(event.target.value) })}>{[1,2,3,4,5,6,7,8].map((value) => <option key={value} value={value}>{value}</option>)}</select></SettingControl><SettingControl title={t("settings.perProvider")} text={t("settings.perProviderHint")}><select aria-label={t("settings.perProvider")} disabled={restricted} value={settings.parallelPerProvider ?? 1} onChange={(event) => void onSave({ parallelPerProvider: Number(event.target.value) })}>{[1,2,3,4].map((value) => <option key={value} value={value}>{value}</option>)}</select></SettingControl><SettingControl title={t("settings.segments")} text={t("settings.segmentsHint")}><select aria-label={t("settings.segments")} disabled={restricted} value={settings.downloadSegments ?? 1} onChange={(event) => void onSave({ downloadSegments: Number(event.target.value) })}>{[1,2,3,4,6,8].map((value) => <option key={value} value={value}>{value}</option>)}</select></SettingControl></section>
+      <TmdbSettings configured={settings.tmdbConfigured} onSave={onSave} onError={onError} restricted={restricted}/>
       <RealDebridSettings configured={settings.realDebridConfigured} onSave={onSave} onError={onError} restricted={restricted}/>
       <section className="panel settings-section playback-section"><SettingsSectionHead icon={<CirclePlay/>} title={t("settings.playbackTitle")} text={t("settings.playbackText")}/><div className="playback-settings"><SettingControl title={t("settings.audioLanguage")} text={t("settings.audioLanguageHint")}><select aria-label={t("settings.audioLanguageLabel")} disabled={restricted} value={settings.audioLanguage} onChange={(event) => void onSave({ audioLanguage: event.target.value })}>{languageOptions}</select></SettingControl><SettingControl title={t("settings.subtitleLanguage")} text={t("settings.subtitleLanguageHint")}><select aria-label={t("settings.subtitleLanguageLabel")} disabled={restricted} value={settings.subtitleLanguage} onChange={(event) => void onSave({ subtitleLanguage: event.target.value })}>{languageOptions}</select></SettingControl></div><SettingControl title={t("settings.streamSort")} text={t("settings.streamSortHint")}><select aria-label={t("settings.streamSort")} disabled={restricted} value={settings.streamSort} onChange={(event) => void onSave({ streamSort: event.target.value })}><option value="recommended">{t("sources.sortRecommended")}</option><option value="size-desc">{t("sources.sortLargest")}</option><option value="size-asc">{t("sources.sortSmallest")}</option><option value="addon">{t("sources.sortAddon")}</option></select></SettingControl><SettingControl title={t("settings.trackProgress")} text={t("settings.trackProgressHint")}>
           <select aria-label={t("settings.trackProgressLabel")} disabled={restricted} value={settings.trackProgress ? "1" : "0"} onChange={(event) => void onSave({ trackProgress: event.target.value === "1" })}>

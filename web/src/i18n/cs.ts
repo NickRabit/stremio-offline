@@ -800,6 +800,18 @@ export const cs: Catalog = {
   "debrid.tokenPlaceholder": "vložte token z real-debrid.com",
   "debrid.removeConfirm": "Odebrat uložený token Real-Debrid?",
 
+  // TMDB.
+  "tmdb.title": "Metadata z TMDB",
+  "tmdb.sectionText": "Názvy, popisy a plakáty v jazyce rozhraní. Bez klíče odpovídají jen katalogové doplňky.",
+  "tmdb.stored": "Klíč uložen. Nový klíč se před uložením ověří.",
+  "tmdb.missing": "Bez klíče. Metadata pocházejí jen z katalogových doplňků.",
+  "tmdb.apiKey": "API klíč",
+  "tmdb.replaceKey": "Nahradit klíč",
+  "tmdb.saveKey": "Uložit klíč",
+  "tmdb.keyLabel": "API klíč TMDB",
+  "tmdb.keyPlaceholder": "vložte klíč z themoviedb.org",
+  "tmdb.removeConfirm": "Odebrat uložený klíč TMDB?",
+
   // Diagnostika.
   "diag.title": "Diagnostika",
   "diag.subtitle": "Stav serveru a poslední problémy",
@@ -873,6 +885,7 @@ export const cs: Catalog = {
   "err.essentialAddon": "Cinemeta dodává metadata knihovny, nejde odebrat ani vypnout.",
   "err.manifestExists": "Tenhle manifest už je přidaný.",
   "err.addonNotJson": "Doplněk nevrátil JSON.",
+  "err.tmdbKeyRejected": "TMDB odmítlo API klíč.",
   "err.manifestIncomplete": "Manifestu chybí id, name nebo version.",
   "err.emptyQuery": "Zadejte hledaný výraz.",
   "err.missingTitleId": "Chybí id titulu.",

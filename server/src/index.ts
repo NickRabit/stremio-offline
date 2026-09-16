@@ -11,7 +11,7 @@ import { constants } from "node:fs";
 import { access, mkdir, readdir, readFile, realpath, rename, rm, stat, statfs, writeFile } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
-import { loadAddon, catalog, metadata, searchAll, searchableCatalogs, streamCandidates, streams, subtitles } from "./addons.js";
+import { loadAddon, catalog, metadata, searchAll, searchableCatalogs, streamCandidates, streams, subtitles, type MetaProvider } from "./addons.js";
 import { autoRefreshEnabled, manifestChanged, normalizeRefreshHours, refreshDue, refreshManifests, type RefreshOutcome } from "./addon-refresh.js";
 import { rankStreams, titleLanguage } from "./ranking.js";
 import { DownloadQueue, isPlaylist, type DownloadSelection, type SubtitleMode } from "./downloads.js";
@@ -27,6 +27,7 @@ import { images } from "./images.js";
 import { configureSecureMode, secureMode, securityHeaders } from "./secure.js";
 import { publicSettings, Store } from "./store.js";
 import { advanceTorrent, normalizeToken, verifyRealDebridToken } from "./debrid.js";
+import { tmdbMeta, verifyTmdbKey } from "./tmdb.js";
 import { clearLog, currentLevel, flushLog, initLogger, log, parseLevel, readLog, startLogMaintenance, setLevel } from "./logger.js";
 import { browseDirectory, describePath, emptiedFolders, entryDirectory, isPathWithin, isVideo, listFolders, listVideos, moveDestination, orphanedCatalogKeys, pageFiles, remapPath, scanLibrary, sortFiles, summarize, type FoundFile, type LibraryEntry, type WalkBudget } from "./library.js";
 import { browseMeta, cacheFieldsFromMeta, episodeKey, episodeNumberOf, episodesFromMeta, dropKeyed, knownTitleEntry, knownTitleOf, lookupSkipped, matchKeyFor, matchStatus, mosaicSkipped, needsBackfill, needsEpisodes, scanMiss, suggestionFor, titleUnits, unmatchAt, type LibraryMetaRecord, type TitleKind, type TitleUnit } from "./library-match.js";
@@ -560,7 +561,16 @@ app.get("/api/search", asyncRoute(async (req, res) => {
   res.json({ ...found, items: found.items.map((item) => images.rewriteMeta(item)) });
 }));
 app.get("/api/searchable", (_req, res) => res.json(searchableCatalogs(store.addons()).map(({ addon, definition }) => ({ addonKey: addon.key, addonName: addon.manifest.name, globalSearch: addon.globalSearch, type: definition.type, id: definition.id, name: definition.name ?? definition.id }))));
-app.get("/api/meta/:type/:id", asyncRoute(async (req, res) => { const meta = await metadata(store.addons(), String(req.params.type), String(req.params.id), normalizeLanguage(String(req.query.language ?? ""))); if (!meta) return res.status(404).json({ error: "Metadata nebyla nalezena." }); res.json(images.rewriteMeta(meta)); }));
+const tmdbProvider = (language: string): MetaProvider | undefined => {
+  const apiKey = store.settings().tmdbApiKey;
+  return apiKey ? (type, id) => tmdbMeta(type, id, { apiKey, language }) : undefined;
+};
+app.get("/api/meta/:type/:id", asyncRoute(async (req, res) => {
+  const language = normalizeLanguage(String(req.query.language ?? "")) ?? store.settings().uiLanguage;
+  const meta = await metadata(store.addons(), String(req.params.type), String(req.params.id), language, tmdbProvider(language));
+  if (!meta) return res.status(404).json({ error: "Metadata nebyla nalezena." });
+  res.json(images.rewriteMeta(meta));
+}));
 /** Opaque id in, cached bytes out. An id we never handed out means nothing here. */
 app.get("/api/image/:id", asyncRoute(async (req, res) => {
   const cached = await images.fetch(String(req.params.id));
@@ -727,10 +737,11 @@ const relativeKeyIn = (libraryId: string, key: string) => {
 
 const metaCache = new Map<string, { value: MetaItem | null; at: number }>();
 const cachedMeta = async (type: string, id: string) => {
-  const key = `${type}:${id}`;
+  const language = store.settings().uiLanguage;
+  const key = `${type}:${id}:${language}`;
   const hit = metaCache.get(key);
   if (hit && Date.now() - hit.at < 6 * 60 * 60_000) return hit.value;
-  const value = await metadata(store.addons(), type, id).catch(() => null);
+  const value = await metadata(store.addons(), type, id, language, tmdbProvider(language)).catch(() => null);
   if (metaCache.size > 300) metaCache.clear();
   metaCache.set(key, { value, at: Date.now() });
   return value;
@@ -2771,6 +2782,11 @@ app.patch("/api/settings", asyncRoute(async (req, res) => {
     realDebridToken = normalizeToken(req.body.realDebridToken);
     if (realDebridToken) await verifyRealDebridToken(realDebridToken);
   }
+  let tmdbApiKey: string | undefined;
+  if (req.body.tmdbApiKey !== undefined) {
+    tmdbApiKey = String(req.body.tmdbApiKey).trim();
+    if (tmdbApiKey) await verifyTmdbKey(tmdbApiKey);
+  }
   await store.update((state) => {
     if (req.body.concurrentDownloads !== undefined) state.settings.concurrentDownloads = Math.max(1, Math.min(8, Number(req.body.concurrentDownloads) || 1));
     if (req.body.parallelPerProvider !== undefined) state.settings.parallelPerProvider = Math.max(1, Math.min(8, Number(req.body.parallelPerProvider) || 1));
@@ -2807,7 +2823,10 @@ app.patch("/api/settings", asyncRoute(async (req, res) => {
       state.settings.libraryTileSize = value === "compact" || value === "small" || value === "large" ? value : "medium";
     }
     if (realDebridToken !== undefined) state.settings.realDebridToken = realDebridToken;
+    if (tmdbApiKey !== undefined) state.settings.tmdbApiKey = tmdbApiKey;
   });
+  // The metadata cache key cannot see a TMDB key change on its own.
+  if (tmdbApiKey !== undefined) metaCache.clear();
   queue.changed(); res.json(publicSettings(store.settings()));
 }));
 app.get("/api/languages", (_req, res) => res.json(Object.entries(LANGUAGE_NAMES).map(([code, name]) => ({ code, name }))));

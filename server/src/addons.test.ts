@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { addonMetadataLanguage, searchableCatalogs } from "./addons.js";
+import { addonMetadataLanguage, metadata, searchableCatalogs } from "./addons.js";
 import { defaultDownloadSettings } from "./naming.js";
 import type { AddonRecord } from "./types.js";
 
@@ -50,4 +50,75 @@ test("metadata language is read from configured addons and Cinemeta", () => {
   assert.equal(addonMetadataLanguage(configured), "cs");
   assert.equal(addonMetadataLanguage(cinemeta), "en");
   assert.equal(addonMetadataLanguage(addon("plain")), undefined);
+});
+
+const json = (body: unknown) => new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
+
+const metaAddon = (key: string): AddonRecord => ({
+  key,
+  manifestUrl: `https://${key}.example/manifest.json`,
+  role: "both",
+  enabled: true,
+  globalSearch: true,
+  addedAt: "2026-01-01T00:00:00.000Z",
+  downloadSettings: defaultDownloadSettings(),
+  manifest: { id: key, name: key.toUpperCase(), version: "1", resources: ["catalog", "meta"] },
+});
+
+/** Serves the addon requests from a stub instead of the network. */
+async function withStubbedAddons(handler: (url: string) => Response, run: () => Promise<void>) {
+  const originalFetch = globalThis.fetch;
+  const originalFlag = process.env.ALLOW_PRIVATE_ADDONS;
+  process.env.ALLOW_PRIVATE_ADDONS = "1";
+  globalThis.fetch = (async (url: string | URL | Request) => handler(String(url))) as typeof fetch;
+  try { await run(); }
+  finally {
+    globalThis.fetch = originalFetch;
+    if (originalFlag === undefined) delete process.env.ALLOW_PRIVATE_ADDONS;
+    else process.env.ALLOW_PRIVATE_ADDONS = originalFlag;
+  }
+}
+
+test("a provider answer wins and an addon fills the missing poster", async () => {
+  const calls: string[] = [];
+  await withStubbedAddons((url) => {
+    calls.push(url);
+    return json({ meta: { id: "tt1", type: "movie", name: "Cinemeta name", description: "Cinemeta description", poster: "https://img.example/poster.jpg" } });
+  }, async () => {
+    const provider = async (type: string, id: string) => ({ id, type, name: "TMDB name", description: "TMDB description" });
+    const result = await metadata([metaAddon("cinemeta")], "movie", "tt1", "cs", provider);
+    if (!result) throw new Error("expected metadata");
+    assert.equal(result.name, "TMDB name");
+    assert.equal(result.description, "TMDB description");
+    assert.equal(result.poster, "https://img.example/poster.jpg");
+  });
+  assert.equal(calls.length, 1);
+});
+
+test("a series with a full provider description still waits for the episode list", async () => {
+  const videos = [{ id: "tt1:1:1", season: 1, episode: 1, title: "Pilot" }];
+  const calls: string[] = [];
+  await withStubbedAddons((url) => {
+    calls.push(url);
+    return json({ meta: { id: "tt1", type: "series", name: "Series name", videos } });
+  }, async () => {
+    const provider = async (type: string, id: string) => ({ id, type, name: "TMDB series", description: "TMDB description", videos: [] });
+    const result = await metadata([metaAddon("cinemeta")], "series", "tt1", "cs", provider);
+    if (!result) throw new Error("expected metadata");
+    assert.equal(result.name, "TMDB series");
+    assert.deepEqual(result.videos, videos);
+  });
+  assert.equal(calls.length, 1);
+});
+
+test("without a provider the first addon with a description ends the loop", async () => {
+  const calls: string[] = [];
+  await withStubbedAddons((url) => {
+    calls.push(url);
+    return json({ meta: { id: "tt2", type: "movie", name: "Name", description: "Description" } });
+  }, async () => {
+    const result = await metadata([metaAddon("cinemeta"), metaAddon("other")], "movie", "tt2", "cs");
+    assert.deepEqual(result, { id: "tt2", type: "movie", name: "Name", description: "Description" });
+  });
+  assert.equal(calls.length, 1);
 });

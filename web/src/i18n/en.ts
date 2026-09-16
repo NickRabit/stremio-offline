@@ -804,6 +804,18 @@ export const en = {
   "debrid.tokenPlaceholder": "paste the token from real-debrid.com",
   "debrid.removeConfirm": "Remove the saved Real-Debrid token?",
 
+  // TMDB.
+  "tmdb.title": "TMDB metadata",
+  "tmdb.sectionText": "Titles, descriptions and posters in the language of the interface. Without a key the catalogue addons answer alone.",
+  "tmdb.stored": "Key saved. A replacement is verified before it is stored.",
+  "tmdb.missing": "No key. Metadata comes from the catalogue addons only.",
+  "tmdb.apiKey": "API key",
+  "tmdb.replaceKey": "Replace key",
+  "tmdb.saveKey": "Save key",
+  "tmdb.keyLabel": "TMDB API key",
+  "tmdb.keyPlaceholder": "paste the key from themoviedb.org",
+  "tmdb.removeConfirm": "Remove the saved TMDB key?",
+
   // Diagnostics.
   "diag.title": "Diagnostics",
   "diag.subtitle": "Server state and recent trouble",
@@ -878,6 +890,7 @@ export const en = {
   "err.essentialAddon": "Cinemeta provides the library metadata and cannot be removed or switched off.",
   "err.manifestExists": "This manifest is already added.",
   "err.addonNotJson": "The addon did not return JSON.",
+  "err.tmdbKeyRejected": "TMDB refused the API key.",
   "err.manifestIncomplete": "The manifest is missing id, name or version.",
   "err.emptyQuery": "Enter a search term.",
   "err.missingTitleId": "Missing title id.",
