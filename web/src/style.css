@@ -971,3 +971,17 @@ img.broken{visibility:hidden}
 /* Safari in a tab lays this fixed overlay out against the large viewport, so its own chrome
    pushed the video past the bottom edge. --player-viewport-* track the visual viewport. */
 .player-overlay.mobile-landscape{top:var(--player-viewport-top,0px);bottom:auto;height:var(--player-viewport-height,100dvh)}
+
+/* The ČSFD, TMDB and IMDb row: under the description of a title, and in a matched
+   library folder's menu, where it has to read as the buttons below it. */
+/* The chip: the shape of .pill, quieter -- the pill says what the title is, these only say
+   where else to read about it. */
+.title-links a{display:inline-flex;align-items:center;padding:3px 7px;border:1px solid var(--line);border-radius:99px;background:#0b0e13cc;font-size:9px;font-weight:800;letter-spacing:.02em;color:var(--muted);text-decoration:none}
+.title-links a:hover,.title-links a:focus-visible{border-color:#ff5b3848;color:var(--accent2)}
+/* Catalogue: on the line the type pill and the star already hold. nowrap is deliberate --
+   the links arrive after the metadata, and a wrap would add a line to the hero and send the
+   background image jumping. */
+.detail-copy>.title-links{display:inline-flex;flex-wrap:nowrap;gap:5px;margin:0 0 0 9px;vertical-align:middle}
+/* In the menu they are one strip above the actions, not three more rows of it: these open
+   another site, everything below them acts on the file. */
+.browse-actions .title-links{display:flex;flex-wrap:wrap;gap:5px;margin:0 0 4px;padding:3px 4px 7px;border-bottom:1px solid var(--line)}

@@ -28,6 +28,7 @@ import { configureSecureMode, secureMode, securityHeaders } from "./secure.js";
 import { publicSettings, Store } from "./store.js";
 import { advanceTorrent, normalizeToken, verifyRealDebridToken } from "./debrid.js";
 import { tmdbMeta, verifyTmdbKey } from "./tmdb.js";
+import { ExternalIdStore, siteLinks } from "./external-ids.js";
 import { clearLog, currentLevel, flushLog, initLogger, log, parseLevel, readLog, startLogMaintenance, setLevel } from "./logger.js";
 import { browseDirectory, describePath, emptiedFolders, entryDirectory, isPathWithin, isVideo, listFolders, listVideos, moveDestination, orphanedCatalogKeys, pageFiles, remapPath, scanLibrary, sortFiles, summarize, type FoundFile, type LibraryEntry, type WalkBudget } from "./library.js";
 import { browseMeta, cacheFieldsFromMeta, episodeKey, episodeNumberOf, episodesFromMeta, dropKeyed, knownTitleEntry, knownTitleOf, lookupSkipped, matchKeyFor, matchStatus, mosaicSkipped, needsBackfill, needsEpisodes, scanMiss, suggestionFor, titleUnits, unmatchAt, type LibraryMetaRecord, type TitleKind, type TitleUnit } from "./library-match.js";
@@ -63,10 +64,13 @@ const libraryMigration = await migrateStateFile(DATA_DIR, DOWNLOAD_DIR);
 const app = express(); const store = new Store(DATA_DIR, DOWNLOAD_DIR);
 /** The match history, kept per library instead of inside `state.json`. */
 const metaStore = new LibraryMetaStore(DATA_DIR);
+/** The Wikidata ids behind the site links, one answer per title and kept on disk. */
+const externalIds = new ExternalIdStore(DATA_DIR);
 let markServerReady!: () => void;
 const serverReady = new Promise<void>((resolve) => { markServerReady = resolve; });
 await store.load();
 await metaStore.load();
+await externalIds.load();
 if (libraryMigration.migrated) log("INFO", "State migrated to libraries", { libraryId: libraryMigration.libraryId, paths: libraryMigration.paths, artwork: libraryMigration.artwork });
 if (libraryMigration.metadata) log("INFO", "Library metadata moved out of the state", { rows: libraryMigration.metadata });
 if (libraryMigration.artworkSetting) log("INFO", "The global artwork location was retired", { libraries: libraryMigration.artworkSetting });
@@ -570,6 +574,24 @@ app.get("/api/meta/:type/:id", asyncRoute(async (req, res) => {
   const meta = await cachedMeta(String(req.params.type), String(req.params.id), language);
   if (!meta) return res.status(404).json({ error: "Metadata nebyla nalezena." });
   res.json(images.rewriteMeta(meta));
+}));
+/** The same row for a folder that is bound to a title. A path with no binding asks
+ *  Wikidata nothing and answers no links. */
+app.get("/api/library/links", asyncRoute(async (req, res) => {
+  const language = normalizeLanguage(String(req.query.language ?? "")) ?? store.settings().uiLanguage;
+  const raw = String(req.query.path ?? "").trim();
+  const entry = raw ? knownTitleEntry(libraryKey(raw), metaStore.qualifiedMeta()) : undefined;
+  if (!entry) return res.json({ links: [] });
+  const ids = (await externalIds.ids(entry.record.id)) ?? {};
+  res.json({ links: siteLinks(entry.record.type, entry.record.id, ids, language) });
+}));
+/** The sites worth checking before watching. Wikidata supplies two ids, the catalogue id
+ *  the rest; when it cannot be reached the links it would have added are simply missing. */
+app.get("/api/links/:type/:id", asyncRoute(async (req, res) => {
+  const id = String(req.params.id);
+  const language = normalizeLanguage(String(req.query.language ?? "")) ?? store.settings().uiLanguage;
+  const ids = /^tt\d+$/.test(id) ? await externalIds.ids(id) : {};
+  res.json({ links: siteLinks(String(req.params.type), id, ids ?? {}, language) });
 }));
 /** Opaque id in, cached bytes out. An id we never handed out means nothing here. */
 app.get("/api/image/:id", asyncRoute(async (req, res) => {
