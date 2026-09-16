@@ -45,7 +45,7 @@ import type { MediaInfo } from "./naming.js";
 import { defaultDownloadSettings, deviceFilename, normalizeDownloadSettings, safeName } from "./naming.js";
 import { LANGUAGE_NAMES, isUiLanguage, normalizeLanguage } from "./language.js";
 import { AppError, messageKeyOf } from "./errors.js";
-import { activeDeparted, carveOuts, queuedArtworkKey, defaultLibrary, DEPARTED_MAX, departedIdFor, isInside, libraryFor, libraryPath, newLibraryId, parseLibraryPath, posixBase, posixDir, posixJoin, realAncestor, relativeWithin, resolveLibraryPath, sameFile, toFs, toPosix, type LibraryRecord, type LibraryType, type RootGrant } from "./libraries.js";
+import { activeDeparted, carveOuts, queuedArtworkKey, defaultLibrary, DEPARTED_MAX, departedIdFor, isInside, libraryFor, libraryPath, newLibraryId, parseLibraryPath, posixBase, posixDir, posixJoin, realAncestor, relativeWithin, resolveLibraryPath, sameFile, showsInContinueWatching, toFs, toPosix, type LibraryRecord, type LibraryType, type RootGrant } from "./libraries.js";
 import { envGrants, grantView, grantingRoot, insideGrant, mergeGrants } from "./library-grants.js";
 import { asLibraryType, checkLibraryRemoval, checkLibraryRoot, checkRerootItems, checkRerootPaths, libraryFlag } from "./library-admin.js";
 import { migrateStateFile } from "./library-migrate.js";
@@ -1633,11 +1633,9 @@ app.post("/api/library/favorite", asyncRoute(async (req, res) => {
 app.get("/api/library/resume", asyncRoute(async (req, res) => {
   const favorites = new Set(store.favorites());
   const query = String(req.query.query ?? "").trim().toLocaleLowerCase();
-  const entries = Object.entries(store.progress()).filter(([key, entry]) => {
-    if (!key.startsWith("file:") || !entry.path) return false;
-    const owner = parseLibraryPath(entry.path)?.libraryId;
-    return !owner || store.libraries().find((library) => library.id === owner)?.showInContinueWatching !== false;
-  });
+  const libraries = store.libraries();
+  const entries = Object.entries(store.progress()).filter(([key, entry]) =>
+    key.startsWith("file:") && Boolean(entry.path) && showsInContinueWatching(entry.path!, libraries));
   const described = await Promise.all(entries.map(async ([, entry]) => {
     const item = await describeLibraryPath(entry.path!);
     if (!item || item.kind !== "file") return [];

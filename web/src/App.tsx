@@ -20,6 +20,7 @@ import { languageName, locale, localeTag, serverText, setLocale, t, useI18n, typ
 import { canQueue, pickDefaultStream, pickNextEpisodeStream, repickStream, streamBadge, streamLanguages, streamSize, visibleCatalogStreams, type StreamSort } from "./streams";
 import { parseSearchScope } from "./search-scope";
 import { localizedDownloadTitle, mergeMetaDetail } from "./meta";
+import { catalogResumeEntries, localResumeEntries } from "./resume-visibility";
 import type { Addon, BuildInfo, Diagnostics, BrowseItem, BrowseLibrary, BrowseResult, LibraryOp, LibraryOpsState, LibrarySort, LibraryView, ProgressEntry, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, DownloadSelection, Inspection, Meta, QueueHalt, ScanState, SearchableCatalog, Session, Settings as AppSettings, SettingsPatch, SiteLink, Stream, Subtitle, Video } from "./types";
 
 /** The names of the linked sites. They are trademarks, not interface text, so they are
@@ -1135,7 +1136,7 @@ export function App() {
     if (next.move) setSelectedStream(next.to);
   }, [visibleStreams, pendingSources, playerOpen]);
 
-  const catalogResume = useMemo(() => resume.filter((item) => !item.key.startsWith("file:") && addons.find((addon) => addon.key === item.addonKey)?.showInContinueWatching !== false), [resume, addons]);
+  const catalogResume = useMemo(() => catalogResumeEntries(resume, addons), [resume, addons]);
   /** The built-in lists are computed from memory; they must not go through a full load,
    *  which would drop the selected title. */
   const virtualItems = useMemo<Meta[]>(() => {
@@ -1154,11 +1155,7 @@ export function App() {
   // The library preview includes existing local files; catalog progress stays separate.
   const localResume = useMemo(() => resumePreview
     ? resumePreview.items.flatMap((item) => item.kind === "file" && item.progress ? [{ key: `file:${item.path}`, path: item.path, title: item.label, poster: item.poster, season: item.season, updatedAt: item.modified, ...item.progress }] : [])
-    : resume.filter((item) => {
-      if (!item.key.startsWith("file:") || !item.path) return false;
-      const libraryId = item.path.split("/", 1)[0];
-      return !libraryId?.startsWith("lib_") || libraries.find((library) => library.id === libraryId)?.showInContinueWatching !== false;
-    }).map((item) => ({ ...item, season: undefined })), [resumePreview, resume, libraries]);
+    : localResumeEntries(resume, libraries).map((item) => ({ ...item, season: undefined })), [resumePreview, resume, libraries]);
   const catalogProgress = (item: Meta) => resume.find((entry) => entry.key === `${item.type || "movie"}:${item.id}`);
   const forgetCatalogWatched = async (item: Meta) => {
     setMenuFor(null);
@@ -2225,8 +2222,8 @@ function AddonCard({ addon, libraries, index, total, onChanged, onNotify, onErro
         <select value={manifestRole} onChange={(event) => setManifestRole(event.target.value as Addon["role"])}>
           <option value="both">{t("addons.roleBoth")}</option><option value="catalog">{t("addons.roleCatalog")}</option><option value="source">{t("addons.roleSource")}</option>
         </select></label>
-      {addon.role !== "source" && <div className="global-search-setting"><div><strong>{t("addons.globalSearch")}</strong><small>{t("addons.globalSearchHint")}</small></div><label className="switch"><input aria-label={t("addons.globalSearch")} type="checkbox" checked={addon.globalSearch} onChange={async (event) => { try { await api.updateAddon(addon.key, { globalSearch: event.target.checked }); await onChanged(); } catch (error) { onError(error); } }}/><span/></label></div>}
-      {addon.role !== "source" && <div className="global-search-setting"><div><strong>{t("addons.showInContinueWatching")}</strong><small>{t("addons.showInContinueWatchingHint")}</small></div><label className="switch"><input aria-label={t("addons.showInContinueWatching")} type="checkbox" checked={addon.showInContinueWatching !== false} onChange={async (event) => { try { await api.updateAddon(addon.key, { showInContinueWatching: event.target.checked }); await onChanged(); } catch (error) { onError(error); } }}/><span/></label></div>}
+      {addon.role !== "source" && <div className="addon-setting"><div><strong>{t("addons.globalSearch")}</strong><small>{t("addons.globalSearchHint")}</small></div><label className="switch"><input aria-label={t("addons.globalSearch")} type="checkbox" checked={addon.globalSearch} onChange={async (event) => { try { await api.updateAddon(addon.key, { globalSearch: event.target.checked }); await onChanged(); } catch (error) { onError(error); } }}/><span/></label></div>}
+      {addon.role !== "source" && <div className="addon-setting"><div><strong>{t("addons.showInContinueWatching")}</strong><small>{t("addons.showInContinueWatchingHint")}</small></div><label className="switch"><input aria-label={t("addons.showInContinueWatching")} type="checkbox" checked={addon.showInContinueWatching !== false} onChange={async (event) => { try { await api.updateAddon(addon.key, { showInContinueWatching: event.target.checked }); await onChanged(); } catch (error) { onError(error); } }}/><span/></label></div>}
       <div className="manifest-actions">
         <button className="primary" disabled={manifestBusy || !manifestUrl.trim()} onClick={() => void saveManifest()}><Check/> {t("common.save")}</button>
         <button onClick={async () => { try { await copyText(manifestUrl); onNotify(t("addons.urlCopied")); } catch (error) { onError(error); } }}><Copy/> {t("addons.copyUrl")}</button>

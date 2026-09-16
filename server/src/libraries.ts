@@ -103,6 +103,14 @@ export function relativeWithin(libraryId: string, key: string): string {
   return value.startsWith(`${libraryId}/`) ? value.slice(libraryId.length + 1) : value;
 }
 
+/** Whether progress kept for a path belongs in Continue watching. A path no library claims
+ *  -- an unqualified one, or one whose library is gone -- stays; a library that turned the
+ *  row off keeps its positions and drops out of the list. */
+export function showsInContinueWatching(value: string, libraries: readonly Pick<LibraryRecord, "id" | "showInContinueWatching">[]): boolean {
+  const owner = parseLibraryPath(value)?.libraryId;
+  return !owner || libraries.find((library) => library.id === owner)?.showInContinueWatching !== false;
+}
+
 /** The qualified key a queued download's target belongs to. A job from before libraries
  *  carries a bare path and knows no library: the sweep has no way to say whose picture it
  *  is, so it leaves it alone rather than guessing — and never asks for a library that a
