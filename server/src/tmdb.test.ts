@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { AppError } from "./errors.js";
-import { clearTmdbCache, tmdbMeta, verifyTmdbKey, type TmdbConfig } from "./tmdb.js";
+import { clearTmdbCache, tmdbImage, tmdbMeta, verifyTmdbKey, type TmdbConfig } from "./tmdb.js";
 import type { FetchLike } from "./debrid.js";
 
 const json = (body: unknown, status = 200) =>
@@ -44,12 +44,26 @@ test("a movie by IMDb id is resolved and mapped to Czech", async () => {
   assert.equal(result.type, "movie");
   assert.equal(result.name, "Návrat do budoucnosti");
   assert.equal(result.description, "Marty se vydává do minulosti.");
-  assert.equal(result.poster, "https://image.tmdb.org/t/p/w500/back.jpg");
-  assert.equal(result.background, "https://image.tmdb.org/t/p/original/backdrop.jpg");
-  assert.equal(result.year, "1985");
-  assert.equal(result.releaseInfo, "1985");
-  assert.deepEqual(result.genres, ["Dobrodružný", "Komedie"]);
   assert.equal(result.nameLanguage, "cs");
+  assert.equal("poster" in result, false);
+  assert.equal("background" in result, false);
+  assert.equal("year" in result, false);
+  assert.equal("releaseInfo" in result, false);
+  assert.equal("genres" in result, false);
+});
+
+test("artwork on maps the poster and backdrop and nothing else", async () => {
+  clearTmdbCache();
+  const fetchImpl: FetchLike = async (url) =>
+    url.includes("/find/") ? json(findMovie) : json(movieDetail);
+
+  const result = await tmdbMeta("movie", "tt0090257", { ...config, artwork: true }, fetchImpl);
+
+  if (!result) throw new Error("expected metadata");
+  assert.equal(result.poster, "https://image.tmdb.org/t/p/w500/back.jpg");
+  assert.equal(result.background, "https://image.tmdb.org/t/p/w1280/backdrop.jpg");
+  assert.equal("genres" in result, false);
+  assert.equal("year" in result, false);
 });
 
 test("an empty overview leaves the description off", async () => {
@@ -91,9 +105,16 @@ test("a series is read from the tv endpoint", async () => {
   assert.match(calls[0], /\/tv\/1396\?/);
   if (!result) throw new Error("expected metadata");
   assert.equal(result.name, "Perníkový táta");
-  assert.equal(result.year, "2008");
-  assert.equal(result.releaseInfo, "2008");
+  assert.equal("year" in result, false);
+  assert.equal("releaseInfo" in result, false);
   assert.equal("poster" in result, false);
+});
+
+test("tmdbImage composes a URL and answers undefined without a path", () => {
+  assert.equal(tmdbImage("/back.jpg", "w500"), "https://image.tmdb.org/t/p/w500/back.jpg");
+  assert.equal(tmdbImage(undefined, "w1280"), undefined);
+  assert.equal(tmdbImage(null, "w1280"), undefined);
+  assert.equal(tmdbImage("", "w1280"), undefined);
 });
 
 test("an imdb id TMDB does not know answers null", async () => {

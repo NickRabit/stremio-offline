@@ -5,11 +5,27 @@ import { normalizeLanguage } from "./language.js";
 import type { FetchLike } from "./debrid.js";
 import type { MetaItem } from "./types.js";
 
-export interface TmdbConfig { apiKey: string; language: string }
+export interface TmdbConfig {
+  apiKey: string;
+  language: string;
+  /** Off by default: the catalogue owns the artwork, and swapping it for a second set of
+   *  pictures of the same title is churn the reader sees. The landscape artwork work turns
+   *  this on; nothing else should. */
+  artwork?: boolean;
+}
 
 const TMDB_API = "https://api.themoviedb.org/3";
 const TIMEOUT_MS = 12_000;
 const ID_CACHE_LIMIT = 500;
+
+/** The sizes TMDB serves. `original` is the full file -- for a hero it is three to eight
+ *  times the bytes of w1280 and buys nothing at the widths this interface renders. */
+export type TmdbImageSize = "w300" | "w500" | "w780" | "w1280" | "original";
+
+/** An absolute image URL, or undefined when TMDB has no file for that slot. */
+export function tmdbImage(path: string | null | undefined, size: TmdbImageSize): string | undefined {
+  return path ? `https://image.tmdb.org/t/p/${size}${path}` : undefined;
+}
 
 /** IMDb id against the TMDB id it resolves to, so a title is looked up through /find once. */
 const idCache = new Map<string, number | null>();
@@ -33,8 +49,6 @@ interface TmdbDetail {
   name?: string; original_name?: string;
   overview?: string;
   poster_path?: string | null; backdrop_path?: string | null;
-  release_date?: string; first_air_date?: string;
-  genres?: Array<{ name?: string }>;
 }
 
 interface TmdbFind {
@@ -83,22 +97,27 @@ async function resolveId(type: string, id: string, config: TmdbConfig, fetchImpl
   return resolved;
 }
 
-const toMetaItem = (type: string, id: string, detail: TmdbDetail, language: string): MetaItem => {
+const artworkOf = (detail: TmdbDetail): Pick<MetaItem, "poster" | "background"> => {
+  const poster = tmdbImage(detail.poster_path, "w500");
+  const background = tmdbImage(detail.backdrop_path, "w1280");
+  return {
+    ...(poster ? { poster } : {}),
+    ...(background ? { background } : {}),
+  };
+};
+
+const toMetaItem = (type: string, id: string, detail: TmdbDetail, config: TmdbConfig): MetaItem => {
   const name = (type === "movie" ? detail.title || detail.original_title : detail.name || detail.original_name) ?? "";
-  const date = (type === "movie" ? detail.release_date : detail.first_air_date) ?? "";
-  const year = date.slice(0, 4);
-  const genres = (detail.genres ?? []).map((genre) => genre.name).filter((value): value is string => Boolean(value));
-  const poster = detail.poster_path ? `https://image.tmdb.org/t/p/w500${detail.poster_path}` : undefined;
-  const background = detail.backdrop_path ? `https://image.tmdb.org/t/p/original${detail.backdrop_path}` : undefined;
-  const nameLanguage = normalizeLanguage(language);
+  const nameLanguage = normalizeLanguage(config.language);
+  // The description is the only field the addon cannot give in the interface language: a
+  // year reads the same everywhere, genres are three words nobody opened the panel for, and
+  // the artwork is already painted. Replacing any of them late is movement without value.
+  // fillMissingMeta takes all of it from the addon.
   return {
     id, type, name,
     ...(detail.overview ? { description: detail.overview } : {}),
-    ...(poster ? { poster } : {}),
-    ...(background ? { background } : {}),
-    ...(year ? { year, releaseInfo: year } : {}),
-    ...(genres.length ? { genres } : {}),
     ...(nameLanguage ? { nameLanguage } : {}),
+    ...(config.artwork ? artworkOf(detail) : {}),
   };
 };
 
@@ -125,7 +144,7 @@ export async function tmdbMeta(type: string, id: string, config: TmdbConfig, fet
     return null;
   }
 
-  try { return toMetaItem(type, id, await response.json() as TmdbDetail, config.language); }
+  try { return toMetaItem(type, id, await response.json() as TmdbDetail, config); }
   catch (error) {
     log("WARN", "TMDB answered with malformed JSON", { operation: "meta", type, id, reason: reasonOf(error) });
     return null;
