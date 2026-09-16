@@ -183,6 +183,16 @@ function fillMissingMeta(base: MetaItem, extra: MetaItem): MetaItem {
 
 export type MetaProvider = (type: string, id: string) => Promise<MetaItem | null>;
 
+/** One metadata answer, kept public for focused consumers such as trailers that must not
+ * use the aggregate's provider order. */
+export async function addonMetadata(addon: AddonRecord, type: string, id: string): Promise<MetaItem | null> {
+  if (!addon.enabled || addon.role === "source" || !supports(addon, "meta", type, id)) return null;
+  const response = await jsonFetch<{ meta?: MetaItem }>(resourceUrl(addon, "meta", type, id));
+  if (!response.meta) return null;
+  const language = addonMetadataLanguage(addon);
+  return { ...response.meta, ...(language ? { nameLanguage: language } : {}) };
+}
+
 export async function metadata(addons: AddonRecord[], type: string, id: string, preferredLanguage?: string, provider?: MetaProvider) {
   let best: MetaItem | null = null;
   if (provider) {
@@ -195,10 +205,8 @@ export async function metadata(addons: AddonRecord[], type: string, id: string, 
     : candidates;
   for (const addon of ordered) {
     try {
-      const response = await jsonFetch<{ meta?: MetaItem }>(resourceUrl(addon, "meta", type, id));
-      if (!response.meta) continue;
-      const language = addonMetadataLanguage(addon);
-      const meta = { ...response.meta, ...(language ? { nameLanguage: language } : {}) };
+      const meta = await addonMetadata(addon, type, id);
+      if (!meta) continue;
       best = best ? fillMissingMeta(best, meta) : meta;
       if (best.description && (type !== "series" || (best.videos?.length ?? 0) > 0)) return best;
     } catch { /* try next metadata provider */ }

@@ -56,6 +56,10 @@ interface TmdbFind {
   tv_results?: Array<{ id?: number }>;
 }
 
+interface TmdbVideos {
+  results?: Array<{ key?: string; name?: string; site?: string; type?: string; official?: boolean; iso_639_1?: string | null }>;
+}
+
 /** Verifies the key. Throws AppError("…", "err.tmdbKeyRejected") when TMDB refuses it. */
 export async function verifyTmdbKey(apiKey: string, fetchImpl: FetchLike = guardedFetch): Promise<void> {
   const response = await request("/configuration", { api_key: apiKey }, fetchImpl);
@@ -95,6 +99,37 @@ async function resolveId(type: string, id: string, config: TmdbConfig, fetchImpl
   if (idCache.size > ID_CACHE_LIMIT) idCache.clear();
   idCache.set(key, resolved);
   return resolved;
+}
+
+const YOUTUBE_ID = /^[A-Za-z0-9_-]{11}$/;
+
+export async function tmdbTrailer(type: "movie" | "series", id: string, config: TmdbConfig, fetchImpl: FetchLike = guardedFetch): Promise<{ youtubeId: string; title?: string } | null> {
+  const tmdbId = await resolveId(type, id, config, fetchImpl);
+  if (tmdbId == null) return null;
+  let response: Response;
+  try {
+    response = await request(`/${type === "movie" ? "movie" : "tv"}/${tmdbId}/videos`, { api_key: config.apiKey, language: config.language }, fetchImpl);
+  } catch (error) {
+    log("WARN", "TMDB trailer lookup failed", { operation: "videos", type, id, reason: reasonOf(error) });
+    return null;
+  }
+  if (!response.ok) {
+    log("WARN", "TMDB trailer lookup failed", { operation: "videos", type, id, status: response.status });
+    return null;
+  }
+  let body: TmdbVideos;
+  try { body = await response.json() as TmdbVideos; }
+  catch (error) {
+    log("WARN", "TMDB answered with malformed JSON", { operation: "videos", type, id, reason: reasonOf(error) });
+    return null;
+  }
+  const language = normalizeLanguage(config.language);
+  const candidates = (body.results ?? []).filter((video) => video.site === "YouTube" && video.type === "Trailer" && YOUTUBE_ID.test(video.key ?? ""));
+  if (!candidates.length) return null;
+  const score = (video: typeof candidates[number]) =>
+    (video.official ? 4 : 0) + (normalizeLanguage(video.iso_639_1 ?? undefined) === language ? 2 : 0) + (normalizeLanguage(video.iso_639_1 ?? undefined) === "en" ? 1 : 0);
+  const selected = candidates.reduce((best, video) => score(video) > score(best) ? video : best);
+  return { youtubeId: selected.key!, ...(selected.name ? { title: selected.name } : {}) };
 }
 
 const artworkOf = (detail: TmdbDetail): Pick<MetaItem, "poster" | "background"> => {

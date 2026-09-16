@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { AppError } from "./errors.js";
-import { clearTmdbCache, tmdbImage, tmdbMeta, verifyTmdbKey, type TmdbConfig } from "./tmdb.js";
+import { clearTmdbCache, tmdbImage, tmdbMeta, tmdbTrailer, verifyTmdbKey, type TmdbConfig } from "./tmdb.js";
 import type { FetchLike } from "./debrid.js";
 
 const json = (body: unknown, status = 200) =>
@@ -88,6 +88,58 @@ test("a tmdb id skips the imdb lookup", async () => {
   assert.match(calls[0], /\/movie\/31410\?/);
   if (!result) throw new Error("expected metadata");
   assert.equal(result.id, "tmdb:31410");
+});
+
+test("TMDB trailers prefer official entries and ignore other video kinds", async () => {
+  clearTmdbCache();
+  const calls: string[] = [];
+  const result = await tmdbTrailer("movie", "tmdb:31410", config, async (url) => {
+    calls.push(url);
+    return json({ results: [
+      { key: "aaaaaaaaaaa", site: "YouTube", type: "Teaser", official: true },
+      { key: "bbbbbbbbbbb", site: "Vimeo", type: "Trailer", official: true },
+      { key: "ccccccccccc", site: "YouTube", type: "Trailer", iso_639_1: "cs" },
+      { key: "ddddddddddd", site: "YouTube", type: "Trailer", official: true, iso_639_1: "en", name: "Official" },
+    ] });
+  });
+  assert.match(calls[0]!, /\/movie\/31410\/videos\?/);
+  assert.deepEqual(result, { youtubeId: "ddddddddddd", title: "Official" });
+});
+
+test("TMDB trailers resolve an IMDb series through the tv endpoint", async () => {
+  clearTmdbCache();
+  const calls: string[] = [];
+  const result = await tmdbTrailer("series", "tt0903747", config, async (url) => {
+    calls.push(url);
+    return url.includes("/find/") ? json({ movie_results: [], tv_results: [{ id: 1396 }] })
+      : json({ results: [{ key: "eeeeeeeeeee", site: "YouTube", type: "Trailer", iso_639_1: "en" }] });
+  });
+  assert.match(calls[1]!, /\/tv\/1396\/videos\?/);
+  assert.deepEqual(result, { youtubeId: "eeeeeeeeeee" });
+});
+
+test("TMDB trailer selection falls back to the UI language, then English, then the first", async () => {
+  clearTmdbCache();
+  const byLanguage = async (language: string) => tmdbTrailer("movie", "tmdb:31410", { ...config, language }, async () => json({ results: [
+    { key: "aaaaaaaaaaa", site: "YouTube", type: "Trailer", iso_639_1: "de" },
+    { key: "bbbbbbbbbbb", site: "YouTube", type: "Trailer", iso_639_1: "en" },
+    { key: "ccccccccccc", site: "YouTube", type: "Trailer", iso_639_1: "cs" },
+  ] }));
+  assert.deepEqual(await byLanguage("cs"), { youtubeId: "ccccccccccc" }, "the interface language wins");
+  assert.deepEqual(await byLanguage("fr"), { youtubeId: "bbbbbbbbbbb" }, "English is the next best thing");
+  clearTmdbCache();
+  assert.deepEqual(await tmdbTrailer("movie", "tmdb:31410", config, async () => json({ results: [
+    { key: "aaaaaaaaaaa", site: "YouTube", type: "Trailer" },
+    { key: "bbbbbbbbbbb", site: "YouTube", type: "Trailer" },
+  ] })), { youtubeId: "aaaaaaaaaaa" }, "with nothing to choose by, TMDB's order decides");
+});
+
+test("TMDB answers nothing for a video list it cannot use, a refusal, or malformed JSON", async () => {
+  clearTmdbCache();
+  const unusable = { results: [{ key: "aaaaaaaaaaa", site: "YouTube", type: "Clip" }, { key: "short", site: "YouTube", type: "Trailer" }] };
+  assert.equal(await tmdbTrailer("movie", "tmdb:31410", config, async () => json(unusable)), null);
+  assert.equal(await tmdbTrailer("movie", "tmdb:31411", config, async () => json({ error: "refused" }, 500)), null);
+  assert.equal(await tmdbTrailer("movie", "tmdb:31412", config, async () => new Response("<html>", { headers: { "content-type": "application/json" } })), null);
 });
 
 test("a series is read from the tv endpoint", async () => {

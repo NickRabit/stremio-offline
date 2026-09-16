@@ -263,6 +263,11 @@ export const en = {
   "catalog.pickTitle": "Pick a title",
   "catalog.pickText": "Details, episodes and sources from every active addon appear here.",
   "links.openOn": "Open on {site}",
+  "trailers.watch": "TRAILER",
+  "trailers.playerTitle": "Trailer",
+  "trailers.close": "Close trailer",
+  "trailers.openHint": "Watch the trailer",
+  "trailers.openOnYouTube": "TRAILER",
 
   // Image gallery.
   "gallery.title": "Image gallery",

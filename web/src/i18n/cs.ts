@@ -259,6 +259,11 @@ export const cs: Catalog = {
   "catalog.pickTitle": "Vyberte titul",
   "catalog.pickText": "Objeví se tu podrobnosti, epizody a zdroje ze všech aktivních doplňků.",
   "links.openOn": "Otevřít na {site}",
+  "trailers.watch": "TRAILER",
+  "trailers.playerTitle": "Trailer",
+  "trailers.close": "Zavřít trailer",
+  "trailers.openHint": "Přehrát trailer",
+  "trailers.openOnYouTube": "TRAILER",
 
   // Galerie obrázků.
   "gallery.title": "Galerie obrázků",

@@ -28,8 +28,9 @@ const POLICY = [
 
 /** Off, the page keeps loading remote artwork the way it always did. */
 const imgSrc = () => (secureMode() ? "img-src 'self' data: blob:" : "img-src 'self' data: blob: https: http:");
+const frameSrc = () => secureMode() ? undefined : "frame-src 'self' https://www.youtube-nocookie.com";
 
-export const contentSecurityPolicy = (): string => [...POLICY, imgSrc()].join("; ");
+export const contentSecurityPolicy = (): string => [...POLICY, imgSrc(), frameSrc()].filter((value): value is string => Boolean(value)).join("; ");
 
 /**
  * The policy is the enforcement half of secure mode: rewriting addresses stops the

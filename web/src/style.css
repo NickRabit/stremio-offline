@@ -979,6 +979,13 @@ img.broken{visibility:hidden}
    where else to read about it. */
 .title-links a{display:inline-flex;align-items:center;padding:3px 7px;border:1px solid var(--line);border-radius:99px;background:#0b0e13cc;font-size:9px;font-weight:800;letter-spacing:.02em;color:var(--muted);text-decoration:none}
 .title-links a:hover,.title-links a:focus-visible{border-color:#ff5b3848;color:var(--accent2)}
+.trailer-action{display:inline-flex;align-items:center;margin:0 0 0 9px;padding:3px 7px;border:1px solid #e9b56066;border-radius:99px;background:#e9b56015;color:#e9b560;font-size:9px;font-weight:800;letter-spacing:.02em;vertical-align:middle;text-decoration:none}
+.trailer-action:hover,.trailer-action:focus-visible{border-color:#e9b560;color:#ffd78a}
+.browse-actions .trailer-action{margin:0 0 4px;justify-content:center}
+.trailer-overlay{position:fixed;z-index:110;inset:0;background:#05070a;display:grid;grid-template-rows:auto minmax(0,1fr);padding:16px}
+.trailer-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:0 0 12px}
+.trailer-head button{padding:8px 11px}
+.trailer-overlay iframe{width:100%;height:100%;border:0;border-radius:10px;background:#000}
 /* Catalogue: on the line the type pill and the star already hold. nowrap is deliberate --
    the links arrive after the metadata, and a wrap would add a line to the hero and send the
    background image jumping. */
