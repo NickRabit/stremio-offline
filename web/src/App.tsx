@@ -32,6 +32,9 @@ const recall = <T extends string>(key: string, allowed: readonly T[], fallback: 
 
 type View = "catalog" | "library" | "downloads" | "stats" | "addons" | "settings";
 type PlaybackAnchor = { kind: "catalog" | "library"; key: string };
+/** What a list is looking at, in terms the layout cannot invalidate: the item on top and
+ *  how far it sits into the view. A rotation rewrites every pixel offset; this survives. */
+type ViewAnchor = PlaybackAnchor & { offset: number };
 type PlaybackReturn = {
   view: View;
   windowY: number;
@@ -433,6 +436,7 @@ export function App() {
   const pickedRef = useRef(false); const sourcesRequestRef = useRef(0);
   const loadingRef = useRef(false); const requestRef = useRef(0); const itemsRef = useRef<Meta[]>([]); const gridRef = useRef<HTMLDivElement>(null); const detailRef = useRef<HTMLElement>(null);
   const playerOpenRef = useRef(false); const playbackReturn = useRef<PlaybackReturn | null>(null);
+  const viewAnchor = useRef<ViewAnchor | null>(null); const anchorFrozen = useRef(false); const anchorFrame = useRef(0);
   // The built-in lists look like a catalogue, they just do not come from an addon.
   const VIRTUAL = { resume: ":resume", watchlist: ":watchlist" } as const;
   const virtualCatalog = selectedCatalog === VIRTUAL.resume || selectedCatalog === VIRTUAL.watchlist ? selectedCatalog : "";
@@ -485,10 +489,91 @@ export function App() {
     setPlayerOpen(true);
   };
 
+  // Where the two lists that survive a rotation keep their position: the catalogue scrolls
+  // inside its own grid, the library scrolls with the document.
+  const anchorScroller = () => viewRef.current === "catalog" ? gridRef.current : null;
+  const anchorKind = () => viewRef.current === "catalog" ? "catalog" as const : viewRef.current === "library" ? "library" as const : null;
+  const trackViewAnchor = () => {
+    if (anchorFrozen.current || restoringScroll.current || playerOpenRef.current) return;
+    const kind = anchorKind();
+    if (!kind) return;
+    const scroller = anchorScroller();
+    const top = scroller?.getBoundingClientRect().top ?? 0;
+    const first = Array.from(document.querySelectorAll<HTMLElement>(kind === "catalog" ? "[data-catalog-key]" : "[data-path]"))
+      .find((element) => element.getClientRects().length > 0 && element.getBoundingClientRect().bottom > top + 1);
+    const key = kind === "catalog" ? first?.dataset.catalogKey : first?.dataset.path;
+    viewAnchor.current = first && key ? { kind, key, offset: first.getBoundingClientRect().top - top } : null;
+  };
+  const scheduleViewAnchor = () => {
+    if (anchorFrame.current) return;
+    anchorFrame.current = requestAnimationFrame(() => { anchorFrame.current = 0; trackViewAnchor(); });
+  };
+  const applyViewAnchor = () => {
+    const saved = viewAnchor.current;
+    if (!saved) return;
+    const element = findPlaybackAnchor(saved);
+    if (!element) return;
+    const scroller = anchorScroller();
+    const delta = element.getBoundingClientRect().top - (scroller?.getBoundingClientRect().top ?? 0) - saved.offset;
+    if (Math.abs(delta) < 1) return;
+    if (scroller) scroller.scrollTop += delta;
+    else window.scrollBy(0, delta);
+  };
+
   useEffect(() => {
-    const onScroll = () => { if (!restoringScroll.current && !playerOpenRef.current) scrollByView.current[viewRef.current] = window.scrollY; };
+    const onScroll = () => {
+      if (!restoringScroll.current && !playerOpenRef.current) scrollByView.current[viewRef.current] = window.scrollY;
+      scheduleViewAnchor();
+    };
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+  // A rotation collapses the scrollable range -- the catalogue grid trades three columns for
+  // eight -- and the browser clamps the offset to the new maximum, which throws the position
+  // away for good. No pixel offset survives that, so the position is held as the item on top
+  // and how far it sits into the view, then re-applied once the new layout settles. The resize
+  // steps run before the scroll steps, so freezing the anchor here beats the clamp's own event.
+  useEffect(() => {
+    let size = `${window.innerWidth}x${window.innerHeight}`;
+    let handle = 0;
+    let listening = false;
+    const release = () => {
+      cancelAnimationFrame(handle);
+      anchorFrozen.current = false;
+      restoringScroll.current = false;
+      if (listening) {
+        listening = false;
+        for (const event of ["wheel", "touchmove", "keydown"]) window.removeEventListener(event, release);
+      }
+      scrollByView.current[viewRef.current] = window.scrollY;
+    };
+    const onResize = () => {
+      const next = `${window.innerWidth}x${window.innerHeight}`;
+      if (next === size) return;
+      size = next;
+      if (!viewAnchor.current || playerOpenRef.current) return;
+      anchorFrozen.current = true;
+      restoringScroll.current = true;
+      cancelAnimationFrame(handle);
+      if (!listening) {
+        listening = true;
+        for (const event of ["wheel", "touchmove", "keydown"]) window.addEventListener(event, release, { passive: true });
+      }
+      const deadline = performance.now() + 700;
+      const chase = () => {
+        applyViewAnchor();
+        if (performance.now() < deadline) handle = requestAnimationFrame(chase);
+        else release();
+      };
+      handle = requestAnimationFrame(chase);
+    };
+    window.addEventListener("resize", onResize);
+    window.addEventListener("orientationchange", onResize);
+    return () => {
+      release();
+      window.removeEventListener("resize", onResize);
+      window.removeEventListener("orientationchange", onResize);
+    };
   }, []);
   // A section's content arrives asynchronously, so the saved position is chased for a moment.
   useEffect(() => {
@@ -1213,7 +1298,7 @@ export function App() {
             {sort !== "default" && <small className="filter-note">{t("catalog.sortNote")}</small>}
           </div>
           <div className="catalog-layout"><section className="panel result-panel"><div className="panel-head"><h3>{submittedQuery ? t("catalog.searchHeading", { query: submittedQuery }) : t("catalog.results")}</h3><span>{t("catalog.itemCount", { count: visibleItems.length })}{hasMore ? "+" : ""}</span></div>
-            <div className="poster-grid" ref={gridRef} onScroll={(event) => compactOnScroll(event, catalogCompact, setCatalogCompact)}>
+            <div className="poster-grid" ref={gridRef} onScroll={(event) => { compactOnScroll(event, catalogCompact, setCatalogCompact); scheduleViewAnchor(); }}>
               {visibleItems.map((item) => {
                 const klic = `${item.type || "movie"}:${item.id}`;
                 const postup = catalogProgress(item);
