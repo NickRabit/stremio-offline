@@ -64,7 +64,7 @@ export async function selectDownloadSource(input: {
     })
     : selection.addonKeys.flatMap((addonKey) => rankStreams(
       selected.filter((stream) => stream.addonKey === addonKey), selection.audioLanguage, priority, selection.titleLanguage));
-  const tiers: Array<RankedChoice | undefined> = Array.from({ length: 5 });
+  const tiers: Array<RankedChoice | undefined> = Array.from({ length: 3 });
   let checkedCandidates = 0;
 
   for (const stream of candidates) {
@@ -87,8 +87,11 @@ export async function selectDownloadSource(input: {
       : undefined;
     const listedPrimary = mode !== "strict" && listed.includes(selection.audioLanguage);
     const listedFallback = mode !== "strict" && !!selection.fallbackAudioLanguage && listed.includes(selection.fallbackAudioLanguage);
-    // Five tiers, best first: a probed track naming the language, the listing naming it, the same
-    // two for the fallback, then -- in `preferred` only -- the best track whatever it holds.
+    // Three tiers, and only the language that came out decides them: the requested one, the
+    // fallback, then -- in `preferred` only -- whatever the file holds. How it was proven is
+    // recorded but never ranked. Within one tier the candidate order already carries the
+    // strategy the viewer picked, and a probe that happens to name a track must not hand the
+    // download to a smaller file than the one they asked for.
     let tier: number;
     let audioTrack: number;
     let audioLanguage: string | undefined = selection.audioLanguage;
@@ -97,14 +100,14 @@ export async function selectDownloadSource(input: {
     if (primary) {
       tier = 0; audioTrack = primary.index; audioEvidence = "probe";
     } else if (listedPrimary) {
-      tier = 1; audioTrack = pickByLanguage(info.audioTracks, selection.audioLanguage); audioEvidence = "listing";
+      tier = 0; audioTrack = pickByLanguage(info.audioTracks, selection.audioLanguage); audioEvidence = "listing";
     } else if (secondary) {
-      tier = 2; audioTrack = secondary.index; audioLanguage = selection.fallbackAudioLanguage; fallbackUsed = true; audioEvidence = "probe";
+      tier = 1; audioTrack = secondary.index; audioLanguage = selection.fallbackAudioLanguage; fallbackUsed = true; audioEvidence = "probe";
     } else if (listedFallback) {
-      tier = 3; audioTrack = pickByLanguage(info.audioTracks, selection.fallbackAudioLanguage); audioLanguage = selection.fallbackAudioLanguage; fallbackUsed = true; audioEvidence = "listing";
+      tier = 1; audioTrack = pickByLanguage(info.audioTracks, selection.fallbackAudioLanguage); audioLanguage = selection.fallbackAudioLanguage; fallbackUsed = true; audioEvidence = "listing";
     } else if (mode === "preferred") {
       const track = info.audioTracks[pickByLanguage(info.audioTracks, selection.audioLanguage)];
-      tier = 4; audioTrack = track.index; audioLanguage = track.language; fallbackUsed = true; audioEvidence = "none";
+      tier = 2; audioTrack = track.index; audioLanguage = track.language; fallbackUsed = true; audioEvidence = "none";
     } else continue;
 
     const subtitle = subtitlesFor(info, stream, input.subtitles, selection);
@@ -124,7 +127,7 @@ export async function selectDownloadSource(input: {
         subtitleStatus: subtitle.language ? "ready" : selection.subtitleMode === "optional" ? "missing" : undefined,
       },
     };
-    const primaryMatch = tier <= 1;
+    const primaryMatch = tier === 0;
     const choiceRank = selection.subtitleMode === "required"
       ? subtitle.rank
       : primaryMatch || selection.subtitleMode === "off"

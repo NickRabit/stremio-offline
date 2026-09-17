@@ -181,17 +181,37 @@ test("strict rejects a source whose only evidence is the listing", async () => {
   assert.equal(chosen, undefined);
 });
 
-test("a probed match beats a listing-only source that comes first", async () => {
-  const listed = { ...stream("https://listed.test/episode.mkv", "first"), title: "Film CZ dabing" };
-  const probed = stream("https://probed.test/episode.mkv", "second");
+test("how the language was proven never outranks the order the strategy put the candidates in", async () => {
+  const listed = { ...stream("https://listed.test/episode.mkv", "first", 2e9), title: "Film CZ dabing" };
+  const probed = stream("https://probed.test/episode.mkv", "second", 300e6);
+  const inspect = async (item: StreamItem) => item.addonKey === "first" ? info([undefined]) : info(["cs"]);
   for (const audioMode of ["listed", "preferred"] as const) {
-    const chosen = await selectDownloadSource({
-      candidates: [listed, probed], subtitles: [], selection: selection({ audioMode }), tried: [],
-      inspect: async (item) => item.addonKey === "first" ? info([undefined]) : info(["cs"]),
+    const largest = await selectDownloadSource({
+      candidates: [listed, probed], subtitles: [], selection: selection({ audioMode, sourceStrategy: "largest" }), tried: [], inspect,
     });
-    assert.equal(chosen?.stream.url, "https://probed.test/episode.mkv");
-    assert.equal(chosen?.resolution.audioEvidence, "probe");
+    assert.equal(largest?.stream.url, "https://listed.test/episode.mkv");
+    assert.equal(largest?.resolution.audioEvidence, "listing");
+    const byPriority = await selectDownloadSource({
+      candidates: [probed, listed], subtitles: [], selection: selection({ audioMode, addonKeys: ["second", "first"] }), tried: [], inspect,
+    });
+    assert.equal(byPriority?.stream.url, "https://probed.test/episode.mkv");
   }
+});
+
+/** The reported defect: two English sources, Czech asked for, `largest` picked. The probe named
+ *  the small one's track and left the large one's untagged, and the evidence tier handed the
+ *  season to the 62 MB file. */
+test("the largest fallback source wins even when only a smaller one has a tagged track", async () => {
+  const large = { ...stream("https://large.test/episode.mkv", "first", 286e6), title: "Episode (en 1080p)" };
+  const small = { ...stream("https://small.test/episode.mkv", "first", 62e6), title: "Episode 1080p EN" };
+  const inspect = async (item: StreamItem) => item.url!.includes("large") ? info([undefined]) : info(["en"]);
+  const chosen = await selectDownloadSource({
+    candidates: [large, small], subtitles: [],
+    selection: selection({ audioMode: "preferred", sourceStrategy: "largest" }), tried: [], inspect,
+  });
+  assert.equal(chosen?.stream.url, "https://large.test/episode.mkv");
+  assert.equal(chosen?.resolution.audioLanguage, "en");
+  assert.equal(chosen?.resolution.fallbackUsed, true);
 });
 
 test("preferred downloads a source that matches nothing when no better one is offered", async () => {
