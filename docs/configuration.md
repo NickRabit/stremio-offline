@@ -72,16 +72,23 @@ environment, on a desktop build from the native folder picker.
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `LIBRARY_ROOTS` | `DOWNLOAD_PATH` | Comma-separated roots a library may be added from. A relative entry is ignored and logged. |
+| `EXTRA_LIBRARY_PATH` | `./datacenter` | Host folder behind the second mount compose ships, `/libraries/datacenter` in the container. |
 
-An extra disk is one more mount plus one more entry:
+Both compose files already carry that second mount, so an extra disk is one
+variable and one entry:
 
-```yaml
-volumes:
-  - "${DOWNLOAD_PATH:-./downloads}:/downloads"
-  - "${ARCHIVE_PATH:-./archive}:/libraries/archive"
-environment:
-  LIBRARY_ROOTS: "/downloads,/libraries/archive"
+```dotenv
+EXTRA_LIBRARY_PATH=/volume2/datacenter
+LIBRARY_ROOTS=/downloads,/libraries/datacenter
 ```
+
+The mount only makes the disk reachable; `LIBRARY_ROOTS` is what grants it. Once
+the variable is set it replaces the default, so the download directory has to be
+listed too or the library you have today falls outside every grant. A third disk
+is one more mount next to those in `volumes:` plus one more entry in the list.
+
+The picker shows every granted root as a top-level row of its own, so a library
+outside the download directory never appears inside it.
 
 A root outside every grant is refused, and so is a folder that is already another
 library's root. A root *inside* another library is legal: the parent then stops

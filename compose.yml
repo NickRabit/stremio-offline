@@ -29,7 +29,8 @@ services:
       # Days after which the scan re-reads a bound series; 0 switches the pass off.
       LIBRARY_META_TTL_DAYS: "${LIBRARY_META_TTL_DAYS:-14}"
       # Roots a library may be added from. Empty keeps the download directory as the
-      # only one; add the extra mounts here.
+      # only one; add the extra mounts here, the download directory included, for
+      # example "/downloads,/libraries/datacenter".
       LIBRARY_ROOTS: "${LIBRARY_ROOTS:-}"
       ALLOW_PRIVATE_ADDONS: "${ALLOW_PRIVATE_ADDONS:-0}"
       ALLOW_ADDON_HOSTS: "${ALLOW_ADDON_HOSTS:-}"
@@ -85,3 +86,8 @@ services:
       # anything else.
       - "${DATA_PATH:-./data}:/data"
       - "${DOWNLOAD_PATH:-./downloads}:/downloads"
+      # A second library on another disk. Point EXTRA_LIBRARY_PATH at it (a NAS
+      # share, an external drive) and list the container path in LIBRARY_ROOTS --
+      # a mount alone grants nothing. The default keeps an empty folder next to
+      # the download directory, so the mount is always valid.
+      - "${EXTRA_LIBRARY_PATH:-./datacenter}:/libraries/datacenter"

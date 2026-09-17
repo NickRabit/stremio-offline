@@ -2,6 +2,7 @@ node_modules/
 dist/
 data/
 downloads/
+datacenter/
 .env
 *.log
 .DS_Store
