@@ -57,6 +57,7 @@ import type { AddonRecord, AddonRole, MetaItem, StreamItem } from "./types.js";
 import { createSettingsBackup, parseSettingsBackup, remapBackupLibraries } from "./backup.js";
 import { LibraryOps, type LibraryOp } from "./library-ops.js";
 import { transferLibraryPath, type TransferProgress } from "./library-transfer.js";
+import { groupResumeRows } from "./resume-group.js";
 
 const STREAM_SORTS = new Set(["recommended", "size-desc", "size-asc", "addon"]);
 const DATA_DIR = process.env.DATA_DIR ?? "/data";
@@ -1669,6 +1670,7 @@ app.get("/api/library/resume", asyncRoute(async (req, res) => {
   const favorites = new Set(store.favorites());
   const query = String(req.query.query ?? "").trim().toLocaleLowerCase();
   const libraries = store.libraries();
+  const records = metaStore.qualifiedMeta();
   const entries = Object.entries(store.progress()).filter(([key, entry]) =>
     key.startsWith("file:") && Boolean(entry.path) && showsInContinueWatching(entry.path!, libraries));
   const described = await Promise.all(entries.map(async ([, entry]) => {
@@ -1677,11 +1679,21 @@ app.get("/api/library/resume", asyncRoute(async (req, res) => {
     // `describePath` answers library-relative, and the row already knows which library it
     // came from. Qualifying it through the single-library shim instead asks an install with
     // two of them a question it cannot answer, and the whole resume row returns 400.
-    const key = libraryPath(libraryOfKey(entry.path!).library.id, item.path);
+    const libraryId = libraryOfKey(entry.path!).library.id;
+    const key = libraryPath(libraryId, item.path);
+    // The binding sits on the show's folder, so two season folders of one show answer with the
+    // same key and the grouping below turns them into a single tile.
+    const bound = knownTitleEntry(libraryKey(key), records);
+    const series = bound?.record.type === "series" ? { key: bound.key, name: bound.record.name } : undefined;
     return [{ ...item, path: wirePath(key), label: entry.title || item.label, modified: entry.updatedAt,
-      progress: { position: entry.position, duration: entry.duration }, favorite: favorites.has(key) }];
+      progress: { position: entry.position, duration: entry.duration }, favorite: favorites.has(key),
+      seriesKey: series?.key,
+      ...(series?.name ? { series: { name: series.name } } : {}) }];
   }));
-  const items = described.flat().filter((item) => (!query || item.label.toLocaleLowerCase().includes(query)) && (req.query.favorites !== "1" || item.favorite));
+  // One tile per show before the filters, the sort and the slice, so `total` and the paging
+  // both count what the interface can open.
+  const items = groupResumeRows(described.flat())
+    .filter((item) => (!query || item.label.toLocaleLowerCase().includes(query)) && (req.query.favorites !== "1" || item.favorite));
   const sorts = new Set(["name", "added", "size", "random"]);
   const sort = sorts.has(String(req.query.sort)) ? String(req.query.sort) as "name" : "added";
   const ordered = sortFiles(items, sort, req.query.order !== "asc", String(req.query.seed ?? ""));
@@ -1693,7 +1705,7 @@ app.get("/api/library/resume", asyncRoute(async (req, res) => {
     const { item: withMeta, backfill } = attachBrowseMeta(item);
     return { ...withMeta, poster: await thumbUrl("path", item.path, art), backfill };
   }));
-  res.json({ path: ":resume", items: page.map(({ backfill: _backfill, ...item }) => item), total: ordered.length, pending: page.some((item) => !item.poster || item.backfill) });
+  res.json({ path: ":resume", items: page.map(({ backfill: _backfill, seriesKey: _seriesKey, ...item }) => item), total: ordered.length, pending: page.some((item) => !item.poster || item.backfill) });
 }));
 
 app.get("/api/library/favorites", asyncRoute(async (req, res) => {

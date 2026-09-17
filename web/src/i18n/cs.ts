@@ -381,6 +381,7 @@ export const cs: Catalog = {
   "library.title": "Stažené soubory",
   "library.continueWatching": "Pokračovat ve sledování",
   "library.showAll": "Zobrazit vše",
+  "library.showInLibrary": "Zobrazit v knihovně",
   "library.remaining": "zbývá {time}",
   "library.breadcrumbs": "Cesta v knihovně",
   "library.folderUp": "O složku zpět",
