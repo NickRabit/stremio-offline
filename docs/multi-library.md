@@ -1026,7 +1026,7 @@ this work, not a nice-to-have:
 | --- | --- | --- |
 | `GET` | `/api/libraries` | **New.** The library list with counts, sizes, type, default flags, reachability. |
 | `POST` | `/api/libraries` | **New.** Create `{ name, type, root, create?, writeArtwork? }`. Validates the grant, nesting and writability. |
-| `PATCH` | `/api/libraries/:id` | **New.** `{ name?, type?, enabled?, root?, order? }`. |
+| `PATCH` | `/api/libraries/:id` | **New.** `{ name?, type?, enabled?, root?, order?, writeArtwork?, mosaic?, showInContinueWatching?, defaultMovie?, defaultSeries? }`. The last two write `Settings.defaultMovieLibrary` / `defaultSeriesLibrary`: `true` claims the kind from whoever held it, `false` releases it, and a kind the library's type does not take is refused with `err.libraryDefaultType`. |
 | `DELETE` | `/api/libraries/:id` | **New.** `?forget=1` also drops remembered metadata and artwork. Never touches media. |
 | `GET` | `/api/libraries/browse` | **New.** Folder picker over the granted roots. Server deployments only; a desktop build uses the OS dialog. Denied in restricted mode. |
 | `GET` | `/api/libraries/grants` | **New.** The granted roots, each with its source (`env` / `user`) and writability. |
@@ -1732,10 +1732,14 @@ plainly now instead of warning about it.
 
 ## Open Questions
 
-1. **Default-library storage.** `Settings.defaultMovieLibrary` /
-   `defaultSeriesLibrary` (chosen here) versus a flag on `LibraryRecord`. The
-   settings field is simpler to validate on delete; revisit if a third kind ever
-   appears.
+1. ~~**Default-library storage.**~~ **Answered in use.**
+   `Settings.defaultMovieLibrary` / `defaultSeriesLibrary` stayed, because
+   clearing one id on delete is simpler than sweeping a flag off every record.
+   What the spec missed is that nothing ever wrote them: the settings route
+   never accepted the two fields, so the choice the row displayed could not be
+   made. `PATCH /api/libraries/:id` now takes `defaultMovie` / `defaultSeries`
+   instead — the storage is a setting, the control is the library. Revisit the
+   storage only if a third kind ever appears.
 2. ~~**Per-library settings beyond `writeArtwork`.**~~ **Answered in use.**
    Running the feature showed the opposite problem to the one this question
    anticipated: there are now *two* controls for where a poster goes, the global

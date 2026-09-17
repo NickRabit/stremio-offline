@@ -123,9 +123,10 @@ Filenames follow the same rules as library downloads.
 In **Addons → Storage rules**, each stream addon sets where its movies and its
 series are saved. Each kind picks a **library** and a subfolder inside it:
 
-- **Default** is the library marked as the default for that kind, and behind it
-  the first library that takes the kind — a movie rule never lands in a series
-  library unless that library is `mixed` ([libraries.md](libraries.md)).
+- **Default** is the library whose row in **Settings → Libraries** is switched to
+  *Default for movies* or *Default for series*, and behind it the first library
+  that takes the kind — a movie rule never lands in a series library unless that
+  library is `mixed` ([libraries.md](libraries.md)).
 - A named library is used for that kind of file and nothing else. The preview
   under the form shows the real root, not a fixed `/downloads`.
 - The subfolder is relative to the library's root: empty means the root itself,
