@@ -188,3 +188,50 @@ test("a folder added again is the same library, not a new one", async ({ request
   await request.delete(`/api/libraries/grants?path=${encodeURIComponent(grantedRoot)}`);
   await rm(root, { recursive: true, force: true });
 });
+
+// Where a download lands when no save rule names a library. The choice is stored in the
+// settings, one id per kind, but it is made on the library row and must read back from it.
+test("each kind's default library is claimed and released from the library row", async ({ page }) => {
+  const request = page.request;
+  const root = path.join(grantedRoot, "Defaults");
+  await mkdir(root, { recursive: true });
+  expect((await request.post("/api/libraries/grants", { data: { path: grantedRoot } })).status()).toBe(201);
+
+  const download = (await (await request.get("/api/libraries")).json())[0];
+  const extra = await (await request.post("/api/libraries", { data: { name: "Sklad", type: "mixed", root } })).json();
+  expect(extra).toMatchObject({ defaultMovie: false, defaultSeries: false });
+
+  const claimed = await request.patch(`/api/libraries/${extra.id}`, { data: { defaultMovie: true, defaultSeries: true } });
+  expect(await claimed.json()).toMatchObject({ defaultMovie: true, defaultSeries: true });
+  const moved = await (await request.get("/api/libraries")).json();
+  expect(moved.find((entry: { id: string }) => entry.id === download.id), "one library holds a kind at a time")
+    .toMatchObject({ defaultMovie: false, defaultSeries: false });
+
+  // A library the kind cannot land in cannot hold its default, and narrowing the type gives
+  // up the default the new type no longer serves.
+  const refused = await request.patch(`/api/libraries/${extra.id}`, { data: { type: "series", defaultMovie: true } });
+  expect(refused.status()).toBe(400);
+  expect(await refused.json()).toMatchObject({ messageKey: "err.libraryDefaultType" });
+  const narrowed = await request.patch(`/api/libraries/${extra.id}`, { data: { type: "series" } });
+  expect(await narrowed.json(), "the series default survives, the movie one does not")
+    .toMatchObject({ type: "series", defaultMovie: false, defaultSeries: true });
+
+  // The row carries both switches, and the one the type rules out is off and disabled.
+  await page.goto("/");
+  await page.getByRole("button", { name: "Nastavení", exact: true }).click();
+  const row = page.locator(".library-manager .library-admin-row", { hasText: "Sklad" });
+  const movies = row.getByRole("checkbox", { name: "Výchozí pro filmy" });
+  const series = row.getByRole("checkbox", { name: "Výchozí pro seriály" });
+  await expect(movies).toBeDisabled();
+  await expect(series).toBeChecked();
+  // The switch paints a span over its input, so the click goes to the label around both.
+  await row.locator("label.library-check", { hasText: "Výchozí pro seriály" }).click();
+  await expect(series).not.toBeChecked();
+  await expect(row.locator(".library-admin-flags")).not.toContainText("Výchozí pro seriály");
+  expect((await (await request.get("/api/libraries")).json())
+    .every((entry: { defaultSeries: boolean }) => !entry.defaultSeries), "released, and nobody else took it").toBe(true);
+
+  await request.delete(`/api/libraries/${extra.id}?forget=1`);
+  await request.delete(`/api/libraries/grants?path=${encodeURIComponent(grantedRoot)}`);
+  await rm(root, { recursive: true, force: true });
+});

@@ -1197,6 +1197,13 @@ app.patch("/api/libraries/:id", asyncRoute(async (req, res) => {
   if (req.body?.order !== undefined && Number.isFinite(Number(req.body.order))) patch.order = Number(req.body.order);
   if (req.body?.writeArtwork !== undefined) patch.writeArtwork = req.body.writeArtwork === true;
   if (req.body?.root !== undefined) patch.root = await requireLibraryRoot(req.body.root, { exceptId: target.id, create: req.body?.create === true });
+  // The default lives in the settings -- one id per kind, so claiming it takes it from
+  // whoever held it -- but it reads as a property of the library, and that is where the
+  // form sets it. `undefined` leaves the current choice alone.
+  const claimsDefault = (kind: "movie" | "series") => {
+    const value = req.body?.[kind === "movie" ? "defaultMovie" : "defaultSeries"];
+    return value === undefined ? undefined : value === true;
+  };
 
   const next = { ...target, ...patch };
   if (patch.root !== undefined) libraryProbe.invalidate(next.root);
@@ -1207,6 +1214,14 @@ app.patch("/api/libraries/:id", asyncRoute(async (req, res) => {
   // back would keep the library out of every walk.
   if (health.unreachable) record.unreachable = true; else delete record.unreachable;
   if (health.readOnly) record.readOnly = true; else delete record.readOnly;
+  for (const kind of ["movie", "series"] as const) {
+    if (claimsDefault(kind) !== true) continue;
+    // Judged on the type the library ends the request with, so widening it and claiming the
+    // default in one call is allowed, and narrowing it out of the kind is not.
+    if (record.type !== kind && record.type !== "mixed") {
+      throw new AppError(`A ${record.type} library cannot be the default for ${kind === "movie" ? "movies" : "series"}.`, "err.libraryDefaultType");
+    }
+  }
   await store.update((state) => {
     state.libraries = (state.libraries ?? []).map((library) => library.id === record.id ? record : library);
     // The default pickers resolve at use, so a type change only strands the kinds the new
@@ -1215,6 +1230,12 @@ app.patch("/api/libraries/:id", asyncRoute(async (req, res) => {
       const serves = (kind: "movie" | "series") => record.type === kind || record.type === "mixed";
       if (!serves("movie") && state.settings.defaultMovieLibrary === record.id) state.settings.defaultMovieLibrary = "";
       if (!serves("series") && state.settings.defaultSeriesLibrary === record.id) state.settings.defaultSeriesLibrary = "";
+      for (const kind of ["movie", "series"] as const) {
+        const field = kind === "movie" ? "defaultMovieLibrary" : "defaultSeriesLibrary";
+        const wanted = claimsDefault(kind);
+        if (wanted === true) state.settings[field] = record.id;
+        else if (wanted === false && state.settings[field] === record.id) state.settings[field] = "";
+      }
     }
   });
   invalidateLibrary();

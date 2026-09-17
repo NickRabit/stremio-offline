@@ -106,6 +106,14 @@ export function LibraryManager({ restricted = false, onChanged, onError, onNotif
           <span className="switch"><input type="checkbox" checked={library.enabled} disabled={busy}
             onChange={(event) => void patch(library, { enabled: event.target.checked }, t("library.updated"))}/><span/></span>
           <span>{t("library.enabled")}</span></label>
+        {(["movie", "series"] as const).map((kind) => {
+          const serves = library.type === kind || library.type === "mixed";
+          const key = kind === "movie" ? "defaultMovie" : "defaultSeries";
+          return <label className="library-check" key={key} title={serves ? undefined : t("library.defaultTypeHint")}>
+            <span className="switch"><input type="checkbox" checked={library[key]} disabled={busy || !serves}
+              onChange={(event) => void patch(library, { [key]: event.target.checked }, t("library.updated"))}/><span/></span>
+            <span>{t(`library.${key}`)}</span></label>;
+        })}
         <label className="library-check">
           <span className="switch"><input type="checkbox" checked={library.writeArtwork} disabled={busy || library.readOnly}
             onChange={(event) => void patch(library, { writeArtwork: event.target.checked }, t("library.updated"))}/><span/></span>
