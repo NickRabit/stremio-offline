@@ -259,6 +259,7 @@ export const en = {
   "catalog.emptyTitle": "The catalog is empty",
   "catalog.emptyText": "Try a search, or another catalog.",
   "catalog.description": "Description",
+  "catalog.imdbRating": "IMDb rating {rating} out of 10",
   "catalog.noDescription": "No description.",
   "catalog.pickTitle": "Pick a title",
   "catalog.pickText": "Details, episodes and sources from every active addon appear here.",
