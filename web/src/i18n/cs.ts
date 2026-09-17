@@ -325,6 +325,13 @@ export const cs: Catalog = {
   "bulk.audioSettings": "Zvuk",
   "bulk.audioSettingsHint": "Nastavte preferovanou stopu a případný záložní jazyk.",
   "bulk.audioFallback": "Záložní zvuk",
+  "bulk.audioMode": "Shoda zvuku",
+  "bulk.audioModeListed": "Podle nabídky",
+  "bulk.audioModePreferred": "Jen preferovaný",
+  "bulk.audioModeStrict": "Ověřeno v souboru",
+  "bulk.audioModeHintListed": "Jako důkaz jazyka stačí popis od doplňku. Hodí se, když je zdroj správný, ale soubor nemá označený jazyk.",
+  "bulk.audioModeHintPreferred": "Jazyk jen určuje pořadí. Když nic neodpovídá, stáhne se přesto nejlepší zbývající zdroj.",
+  "bulk.audioModeHintStrict": "Počítá se jen stopa, kterou soubor sám označí daným jazykem. Díly bez odpovídající stopy se nestáhnou.",
   "bulk.noFallback": "Bez záložního jazyka",
   "bulk.subtitles": "Titulky",
   "bulk.subtitlesOff": "Nestahovat",
@@ -335,7 +342,7 @@ export const cs: Catalog = {
   "bulk.subtitleSettings": "Titulky",
   "bulk.subtitleSettingsHint": "Určete, zda mají titulky ovlivnit výběr zdroje.",
   "bulk.subtitlePriorityHint": "Preferovaný zvuk vždy vyhraje i bez titulků. Pokud je nutný záložní zvuk, dostane odpovídající vestavěná titulková stopa přednost před verzí bez titulků.",
-  "bulk.queueHint": "Každá epizoda se kontroluje až ve chvíli, kdy přijde na řadu. Jazyky se čtou ze stop uvnitř zdroje.",
+  "bulk.queueHint": "Každá epizoda se kontroluje až ve chvíli, kdy přijde na řadu.",
   "bulk.add": "Přidat do fronty",
 
   // Sources for a title.
@@ -624,6 +631,8 @@ export const cs: Catalog = {
   "downloads.inLibrary": "{title} je v knihovně.",
   "downloads.checkedSource": "Zvuk {audio} · ověřeno zdrojů: {count}",
   "downloads.checkedFallbackSource": "Záložní zvuk {audio} · ověřeno zdrojů: {count}",
+  "downloads.audioFromListing": "jazyk podle nabídky",
+  "downloads.audioUnverified": "Zvuk neověřen · ověřeno zdrojů: {count}",
   "downloads.subtitleReady": "Titulky {language}",
   "downloads.subtitleMissing": "Volitelné titulky nejsou dostupné",
 

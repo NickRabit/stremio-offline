@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { ArrowDown, ArrowUp, Download, Languages, ListFilter, Subtitles, X } from "lucide-react";
 import { api, describeError } from "./api";
 import { languageName, t, useI18n } from "./i18n";
-import type { DownloadSelection, DownloadSourceStrategy, SubtitleMode } from "./types";
+import type { AudioMode, DownloadSelection, DownloadSourceStrategy, SubtitleMode } from "./types";
 
 interface Episode { id: string; season?: number; episode?: number; title?: string }
 
@@ -22,6 +22,7 @@ export function SeriesDownloadDialog({ type, label, episodes, audioLanguage, sub
   const [sourceStrategy, setSourceStrategy] = useState<DownloadSourceStrategy>("largest");
   const [audio, setAudio] = useState(audioLanguage);
   const [audioFallback, setAudioFallback] = useState(audioLanguage === "en" ? "" : "en");
+  const [audioMode, setAudioMode] = useState<AudioMode>("listed");
   const [subtitleMode, setSubtitleMode] = useState<SubtitleMode>("optional");
   const [subtitle, setSubtitle] = useState(subtitleLanguage);
   const [subtitleFallback, setSubtitleFallback] = useState(subtitleLanguage === "en" ? "" : "en");
@@ -65,6 +66,7 @@ export function SeriesDownloadDialog({ type, label, episodes, audioLanguage, sub
       await onSubmit({
         addonKeys: chosen, sourceStrategy, audioLanguage: audio,
         fallbackAudioLanguage: audioFallback && audioFallback !== audio ? audioFallback : undefined,
+        audioMode,
         subtitleMode,
         subtitleLanguage: subtitleMode === "off" ? undefined : subtitle,
         fallbackSubtitleLanguage: subtitleMode !== "off" && subtitleFallback !== subtitle ? subtitleFallback || undefined : undefined,
@@ -96,10 +98,16 @@ export function SeriesDownloadDialog({ type, label, episodes, audioLanguage, sub
         </section>
         <section className="bulk-section">
           <div className="bulk-section-head"><Languages/><div><h3>{t("bulk.audioSettings")}</h3><p>{t("bulk.audioSettingsHint")}</p></div></div>
-          <div className="bulk-language-grid">
+          <div className="bulk-language-grid bulk-audio-grid">
+            <label><span>{t("bulk.audioMode")}</span><select value={audioMode} onChange={(event) => setAudioMode(event.target.value as AudioMode)}>
+              <option value="listed">{t("bulk.audioModeListed")}</option>
+              <option value="preferred">{t("bulk.audioModePreferred")}</option>
+              <option value="strict">{t("bulk.audioModeStrict")}</option>
+            </select></label>
             <label><span>{t("bulk.audio")}</span><select value={audio} onChange={(event) => setAudio(event.target.value)}>{languageOptions()}</select></label>
             <label><span>{t("bulk.audioFallback")}</span><select value={audioFallback} onChange={(event) => setAudioFallback(event.target.value)}><option value="">{t("bulk.noFallback")}</option>{languageOptions()}</select></label>
           </div>
+          <p className="identify-hint bulk-mode-hint">{t(audioMode === "listed" ? "bulk.audioModeHintListed" : audioMode === "preferred" ? "bulk.audioModeHintPreferred" : "bulk.audioModeHintStrict")}</p>
         </section>
         <section className="bulk-section">
           <div className="bulk-section-head"><Subtitles/><div><h3>{t("bulk.subtitleSettings")}</h3><p>{t("bulk.subtitleSettingsHint")}</p></div></div>

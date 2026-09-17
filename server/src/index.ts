@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 import { loadAddon, catalog, metadata, searchAll, searchableCatalogs, streamCandidates, streams, subtitles, type MetaProvider } from "./addons.js";
 import { autoRefreshEnabled, manifestChanged, normalizeRefreshHours, refreshDue, refreshManifests, type RefreshOutcome } from "./addon-refresh.js";
 import { rankStreams, titleLanguage } from "./ranking.js";
-import { DownloadQueue, isPlaylist, type DownloadSelection, type SubtitleMode } from "./downloads.js";
+import { DownloadQueue, isPlaylist, type AudioMode, type DownloadSelection, type SubtitleMode } from "./downloads.js";
 import { selectDownloadSource } from "./download-selection.js";
 import { StatsLog, type TrafficEvent, type TrafficMeta } from "./stats.js";
 import { Throughput } from "./throughput.js";
@@ -2658,6 +2658,7 @@ app.post("/api/downloads/bulk", asyncRoute(async (req, res) => {
   const audioLanguage = normalizeLanguage(String(rawSelection.audioLanguage ?? ""));
   if (!audioLanguage) throw new AppError("Pick an audio language.", "err.missingAudioLanguage");
   const fallbackAudioLanguage = normalizeLanguage(String(rawSelection.fallbackAudioLanguage ?? ""));
+  const audioMode: AudioMode = ["strict", "preferred"].includes(String(rawSelection.audioMode)) ? String(rawSelection.audioMode) as AudioMode : "listed";
   const subtitleMode: SubtitleMode = ["optional", "required"].includes(String(rawSelection.subtitleMode)) ? String(rawSelection.subtitleMode) as SubtitleMode : "off";
   const subtitleLanguage = subtitleMode === "off" ? undefined : normalizeLanguage(String(rawSelection.subtitleLanguage ?? ""));
   if (subtitleMode !== "off" && !subtitleLanguage) throw new AppError("Pick a subtitle language.", "err.missingSubtitleLanguage");
@@ -2668,6 +2669,7 @@ app.post("/api/downloads/bulk", asyncRoute(async (req, res) => {
   const selection: DownloadSelection = {
     addonKeys, sourceStrategy, audioLanguage,
     fallbackAudioLanguage: fallbackAudioLanguage === audioLanguage ? undefined : fallbackAudioLanguage,
+    audioMode,
     titleLanguage: metaLanguage,
     subtitleMode, subtitleLanguage,
     fallbackSubtitleLanguage: fallbackSubtitleLanguage === subtitleLanguage ? undefined : fallbackSubtitleLanguage,

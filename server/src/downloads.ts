@@ -30,12 +30,18 @@ export type DownloadStatus = "queued" | "waiting" | "checking" | "downloading" |
  *  waits for it rather than landing somewhere the user did not ask for. */
 export type PauseReason = "user" | "storage" | "library";
 export type SubtitleMode = "off" | "optional" | "required";
+/** How hard the requested audio language is. `strict` trusts only what ffprobe reads out of the
+ *  file; `listed` lets the addon's own listing say so, for files that carry no language tag at
+ *  all; `preferred` never rules a source out over the language, only ranks by it. */
+export type AudioMode = "strict" | "listed" | "preferred";
 export type DownloadSourceStrategy = "priority" | "largest";
 export interface DownloadSelection {
   addonKeys: string[];
   sourceStrategy: DownloadSourceStrategy;
   audioLanguage: string;
   fallbackAudioLanguage?: string;
+  /** Absent on a job queued before this existed, which was promised `strict`. */
+  audioMode?: AudioMode;
   /** The language of the title itself, where its metadata names one. */
   titleLanguage?: string;
   subtitleMode: SubtitleMode;
@@ -48,6 +54,8 @@ export interface DownloadResolution {
   audioLanguage?: string;
   audioTrack?: number;
   fallbackUsed?: boolean;
+  /** What established `audioLanguage`: the file's own tags, the addon listing, or nothing. */
+  audioEvidence?: "probe" | "listing" | "none";
   subtitleLanguage?: string;
   subtitleTrack?: number;
   subtitleSource?: "embedded" | "addon";
@@ -752,7 +760,9 @@ export class DownloadQueue {
     if (!resolved?.stream.url) {
       const selection = job.source.selection;
       const requested = selection
-        ? `No source contains ${selection.audioLanguage}${selection.fallbackAudioLanguage ? ` or ${selection.fallbackAudioLanguage}` : ""} audio${selection.subtitleMode === "required" ? " and the required subtitles" : ""}.`
+        ? selection.audioMode === "preferred"
+          ? `No usable source was found${selection.subtitleMode === "required" ? " with the required subtitles" : ""}.`
+          : `No source contains ${selection.audioLanguage}${selection.fallbackAudioLanguage ? ` or ${selection.fallbackAudioLanguage}` : ""} audio${selection.subtitleMode === "required" ? " and the required subtitles" : ""}.`
         : "No directly downloadable source was found.";
       log("WARN", "No download source could be resolved", { id: job.id, title: job.title, selectionMs, previouslyTried: job.source.tried.length });
       throw new SourceError(job.source.tried.length

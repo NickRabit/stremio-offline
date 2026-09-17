@@ -594,15 +594,15 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .bulk-sources .icon-button{padding:5px}
 .bulk-sources .icon-button svg{width:14px;height:14px}
 .bulk-language-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
-.bulk-subtitle-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
+.bulk-subtitle-grid,.bulk-audio-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
 .bulk-language-grid label{display:grid;gap:5px}
 .bulk-language-grid label span{font-size:10px;color:var(--muted)}
 .bulk-language-grid select{padding:9px 10px;font-size:12px}
-.bulk-subtitle-hint{margin:0;padding:9px 10px;border-radius:8px;background:#1a202a}
+.bulk-subtitle-hint,.bulk-mode-hint{margin:0;padding:9px 10px;border-radius:8px;background:#1a202a}
 .bulk-footer{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:14px 22px;border-top:1px solid var(--line);background:#141a23}
 .bulk-footer>p{max-width:390px}
 .bulk-footer>div{display:flex;gap:8px;flex:0 0 auto}
-@media(max-width:700px){.identify-overlay{padding:0;align-items:end}.bulk-card{width:100%;max-height:96dvh;border-radius:16px 16px 0 0}.bulk-head{padding:17px 16px 14px}.bulk-body{padding:12px 14px}.bulk-strategy,.bulk-language-grid,.bulk-subtitle-grid{grid-template-columns:1fr}.bulk-footer{align-items:stretch;padding:12px 14px}.bulk-footer>p{display:none}.bulk-footer>div{width:100%}.bulk-footer button{flex:1}}
+@media(max-width:700px){.identify-overlay{padding:0;align-items:end}.bulk-card{width:100%;max-height:96dvh;border-radius:16px 16px 0 0}.bulk-head{padding:17px 16px 14px}.bulk-body{padding:12px 14px}.bulk-strategy,.bulk-language-grid,.bulk-subtitle-grid,.bulk-audio-grid{grid-template-columns:1fr}.bulk-footer{align-items:stretch;padding:12px 14px}.bulk-footer>p{display:none}.bulk-footer>div{width:100%}.bulk-footer button{flex:1}}
 .library-action{display:flex;align-items:center;gap:7px;min-height:44px;font-size:12px;color:var(--accent2);padding:8px 2px}
 .library-action svg{width:18px;height:18px;flex-shrink:0}.library-action svg:last-child:not(:first-child){margin-left:auto}
 .library-page .browse-menu{opacity:1;width:36px;height:36px;top:8px;right:8px;padding:8px;border:1px solid #ffffff24;background:#10151eeb;z-index:2}
