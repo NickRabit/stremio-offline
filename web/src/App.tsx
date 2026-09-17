@@ -23,7 +23,7 @@ import { parseSearchScope } from "./search-scope";
 import { localizedDownloadTitle, mergeMetaDetail } from "./meta";
 import { catalogResumeEntries, localResumeEntries } from "./resume-visibility";
 import { trailerAction } from "./trailers";
-import type { Addon, BuildInfo, Diagnostics, BrowseItem, BrowseLibrary, BrowseResult, LibraryOp, LibraryOpsState, LibrarySort, LibraryView, ProgressEntry, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, DownloadSelection, Inspection, Meta, QueueHalt, ScanState, SearchableCatalog, Session, Settings as AppSettings, SettingsPatch, SiteLink, Stream, Subtitle, Trailer, Video } from "./types";
+import type { Addon, BuildInfo, Diagnostics, BrowseFile, BrowseItem, BrowseLibrary, BrowseResult, LibraryOp, LibraryOpsState, LibrarySort, LibraryView, ProgressEntry, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, DownloadSelection, Inspection, Meta, QueueHalt, ScanState, SearchableCatalog, Session, Settings as AppSettings, SettingsPatch, SiteLink, Stream, Subtitle, Trailer, Video } from "./types";
 
 /** The names of the linked sites. They are trademarks, not interface text, so they are
  *  spelled the same in every language and live here rather than in the catalogues. */
@@ -52,6 +52,11 @@ type PlaybackReturn = {
 const speed = (value: number) => value ? `${bytes(value)}/s` : "—";
 const streamLabel = (item: Stream) => item.name || item.title?.split("\n")[0] || item.description?.split("\n")[0] || "Stream";
 type GalleryImage = { url: string; label: string; shape: "poster" | "wide" };
+/** A Continue watching tile: the stored position plus the season, the episode number and the
+ *  show, which only the preview answers. A tile without them offers no next episode.
+ *  `series` comes from the library row, which knows the show by name; the catalogue's own
+ *  `series` on a progress entry describes an episode key and never reaches this strip. */
+type ResumeTile = Omit<ProgressEntry, "series"> & Partial<Pick<BrowseFile, "season" | "episode" | "series">>;
 
 /** Artwork comes through the server; when a provider does not deliver, leave the
  *  placeholder underneath rather than a broken image icon. */
@@ -1172,9 +1177,9 @@ export function App() {
   }, [virtualCatalog, virtualItems]);
 
   // The library preview includes existing local files; catalog progress stays separate.
-  const localResume = useMemo(() => resumePreview
-    ? resumePreview.items.flatMap((item) => item.kind === "file" && item.progress ? [{ key: `file:${item.path}`, path: item.path, title: item.label, poster: item.poster, season: item.season, updatedAt: item.modified, ...item.progress }] : [])
-    : localResumeEntries(resume, libraries).map((item) => ({ ...item, season: undefined })), [resumePreview, resume, libraries]);
+  const localResume = useMemo<ResumeTile[]>(() => resumePreview
+    ? resumePreview.items.flatMap((item) => item.kind === "file" && item.progress ? [{ key: `file:${item.path}`, path: item.path, title: item.label, poster: item.poster, season: item.season, series: item.series, updatedAt: item.modified, ...item.progress }] : [])
+    : localResumeEntries(resume, libraries), [resumePreview, resume, libraries]);
   const catalogProgress = (item: Meta) => resume.find((entry) => entry.key === `${item.type || "movie"}:${item.id}`);
   const forgetCatalogWatched = async (item: Meta) => {
     setMenuFor(null);
@@ -1519,8 +1524,12 @@ export function App() {
                 <i className="browse-play"><CirclePlay/></i>
                 <i className="resume-bar"><i style={{ width: `${Math.min(100, Math.round(item.position / (item.duration || 1) * 100))}%` }}/></i>
               </span>
-              <strong>{item.title}</strong>
-              <small>{t("library.remaining", { time: fmtEta(Math.max(0, item.duration - item.position)) })}</small>
+              <span className="browse-menu" onClick={(event) => { event.stopPropagation(); setMenuFor(menuFor === item.key ? null : item.key); }}><MoreVertical/></span>
+              <strong>{item.series?.name ?? item.title}</strong>
+              <small>{item.season != null ? `${item.season}×${String(item.episode ?? 0).padStart(2, "0")} ` : ""}{t("library.remaining", { time: fmtEta(Math.max(0, item.duration - item.position)) })}</small>
+              {menuFor === item.key && <span className="browse-actions" onClick={(event) => event.stopPropagation()}>
+                <button onClick={() => { if (item.path) revealInLibrary(item.path); }}><HardDrive/> {t("library.showInLibrary")}</button>
+              </span>}
             </button>)}
           </div>
         </div>}
@@ -1675,6 +1684,7 @@ export function App() {
                       {item.match === "matched" && <>{trailerPill(libraryTrailers[item.path] ?? null)}{titleLinksRow(libraryLinks[item.path] ?? [])}</>}
                       {matchActions(item)}
                       <button onClick={() => void toggleFavorite(item.path, !item.favorite)}><Star/> {t(item.favorite ? "favorite.remove" : "favorite.add")}</button>
+                      {item.progress && <button onClick={() => revealInLibrary(item.path)}><HardDrive/> {t("library.showInLibrary")}</button>}
                       {item.progress && <button onClick={() => void forgetWatched(item.path)}><RotateCcw/> {t("library.markUnwatched")}</button>}
                       <button onClick={() => { setMenuFor(null); void downloadLibraryFile(item.path); }}><Download/> {t("library.downloadToDevice")}</button>
                       <button onClick={() => void renameItem(item.path, item.label)}><Pencil/> {t("library.rename")}</button>

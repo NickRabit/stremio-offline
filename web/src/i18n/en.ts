@@ -385,6 +385,7 @@ export const en = {
   "library.title": "Downloaded files",
   "library.continueWatching": "Continue watching",
   "library.showAll": "Show all",
+  "library.showInLibrary": "Show in library",
   "library.remaining": "{time} left",
   "library.breadcrumbs": "Path in the library",
   "library.folderUp": "One folder up",

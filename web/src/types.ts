@@ -144,7 +144,11 @@ export interface BrowseMeta {
   titleType?: "movie" | "series";
 }
 export interface BrowseFolder extends BrowseMeta { path: string; name: string; fileCount: number; size: number; poster?: string }
-export interface BrowseFile extends LibraryFile, BrowseMeta { poster?: string; progress?: { position: number; duration: number } }
+export interface BrowseFile extends LibraryFile, BrowseMeta {
+  poster?: string; progress?: { position: number; duration: number };
+  /** The show this episode belongs to, on a Continue watching row only. */
+  series?: { name: string };
+}
 export type LibraryType = "movie" | "series" | "mixed";
 /** One configured library as a row of the browse root. Only shown while more than one is
  *  configured; a single-library install still opens straight into the tree. */
