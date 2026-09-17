@@ -41,16 +41,18 @@ export interface Download {
   pauseReason?: "user" | "storage" | "library"; pending?: boolean; debridProgress?: number;
   /** How many connections the file is being split across; missing while it runs over one. */
   segments?: number;
-  resolution?: { checkedCandidates: number; audioLanguage?: string; fallbackUsed?: boolean; subtitleLanguage?: string; subtitleSource?: "embedded" | "addon"; subtitleStatus?: "ready" | "missing" };
+  resolution?: { checkedCandidates: number; audioLanguage?: string; fallbackUsed?: boolean; audioEvidence?: "probe" | "listing" | "none"; subtitleLanguage?: string; subtitleSource?: "embedded" | "addon"; subtitleStatus?: "ready" | "missing" };
   createdAt: string; updatedAt: string; startedAt?: string; completedAt?: string;
 }
 export type SubtitleMode = "off" | "optional" | "required";
+export type AudioMode = "strict" | "listed" | "preferred";
 export type DownloadSourceStrategy = "priority" | "largest";
 export interface DownloadSelection {
   addonKeys: string[];
   sourceStrategy: DownloadSourceStrategy;
   audioLanguage: string;
   fallbackAudioLanguage?: string;
+  audioMode?: AudioMode;
   subtitleMode: SubtitleMode;
   subtitleLanguage?: string;
   fallbackSubtitleLanguage?: string;

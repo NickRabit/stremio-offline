@@ -10,7 +10,7 @@ const selection = (overrides: Partial<DownloadSelection> = {}): DownloadSelectio
   subtitleMode: "off", targetSettings: { subfolder: "", layout: "structured" }, ...overrides,
 });
 const stream = (url: string, addonKey: string, size?: number): StreamItem => ({ url, addonKey, behaviorHints: { filename: "episode.mkv", videoSize: size } });
-const info = (languages: string[], subtitleLanguages: string[] = []): MediaInfo => ({
+const info = (languages: Array<string | undefined>, subtitleLanguages: Array<string | undefined> = []): MediaInfo => ({
   container: "matroska", video: { codec: "h264" },
   audioTracks: languages.map((language, index) => ({ index, codec: "aac", language })),
   subtitleTracks: subtitleLanguages.map((language, index) => ({ index, codec: "subrip", language })),
@@ -158,4 +158,87 @@ test("primary subtitles win over an earlier subtitle fallback", async () => {
   });
   assert.equal(chosen?.stream.addonKey, "second");
   assert.equal(chosen?.resolution.subtitleLanguage, "cs");
+});
+
+test("listed takes a source the listing names even though the probe finds no language", async () => {
+  const candidates = [{ ...stream("https://one.test/episode.mkv", "first"), title: "Film CZ dabing" }];
+  const chosen = await selectDownloadSource({
+    candidates, subtitles: [], selection: selection({ audioMode: "listed" }), tried: [],
+    inspect: async () => info([undefined]),
+  });
+  assert.equal(chosen?.stream.url, "https://one.test/episode.mkv");
+  assert.equal(chosen?.resolution.audioLanguage, "cs");
+  assert.equal(chosen?.resolution.audioEvidence, "listing");
+  assert.equal(chosen?.resolution.fallbackUsed, false);
+});
+
+test("strict rejects a source whose only evidence is the listing", async () => {
+  const candidates = [{ ...stream("https://one.test/episode.mkv", "first"), title: "Film CZ dabing" }];
+  const chosen = await selectDownloadSource({
+    candidates, subtitles: [], selection: selection({ audioMode: "strict" }), tried: [],
+    inspect: async () => info([undefined]),
+  });
+  assert.equal(chosen, undefined);
+});
+
+test("a probed match beats a listing-only source that comes first", async () => {
+  const listed = { ...stream("https://listed.test/episode.mkv", "first"), title: "Film CZ dabing" };
+  const probed = stream("https://probed.test/episode.mkv", "second");
+  for (const audioMode of ["listed", "preferred"] as const) {
+    const chosen = await selectDownloadSource({
+      candidates: [listed, probed], subtitles: [], selection: selection({ audioMode }), tried: [],
+      inspect: async (item) => item.addonKey === "first" ? info([undefined]) : info(["cs"]),
+    });
+    assert.equal(chosen?.stream.url, "https://probed.test/episode.mkv");
+    assert.equal(chosen?.resolution.audioEvidence, "probe");
+  }
+});
+
+test("preferred downloads a source that matches nothing when no better one is offered", async () => {
+  const candidates = [stream("https://one.test/episode.mkv", "first")];
+  const inspect = async () => info(["de"]);
+  const preferred = await selectDownloadSource({ candidates, subtitles: [], selection: selection({ audioMode: "preferred" }), tried: [], inspect });
+  assert.equal(preferred?.stream.url, "https://one.test/episode.mkv");
+  assert.equal(preferred?.resolution.audioLanguage, "de");
+  assert.equal(preferred?.resolution.audioTrack, 0);
+  assert.equal(preferred?.resolution.audioEvidence, "none");
+  assert.equal(preferred?.resolution.fallbackUsed, true);
+  assert.equal(await selectDownloadSource({ candidates, subtitles: [], selection: selection({ audioMode: "strict" }), tried: [], inspect }), undefined);
+  assert.equal(await selectDownloadSource({ candidates, subtitles: [], selection: selection({ audioMode: "listed" }), tried: [], inspect }), undefined);
+});
+
+test("preferred still prefers the fallback language over no match in either order", async () => {
+  const fallback = stream("https://fallback.test/episode.mkv", "first");
+  const other = stream("https://other.test/episode.mkv", "first");
+  const inspect = async (item: StreamItem) => item.url!.includes("fallback") ? info(["en"]) : info(["de"]);
+  for (const candidates of [[other, fallback], [fallback, other]]) {
+    const chosen = await selectDownloadSource({ candidates, subtitles: [], selection: selection({ audioMode: "preferred" }), tried: [], inspect });
+    assert.equal(chosen?.stream.url, "https://fallback.test/episode.mkv");
+    assert.equal(chosen?.resolution.audioLanguage, "en");
+    assert.equal(chosen?.resolution.audioEvidence, "probe");
+    assert.equal(chosen?.resolution.fallbackUsed, true);
+  }
+});
+
+test("listed honours the title language when the addon admitted it found none", async () => {
+  const candidate = { ...stream("https://one.test/episode.mkv", "first"), behaviorHints: { filename: "episode.mkv", bingeGroup: "Webshare||1080p|" } };
+  const chosen = await selectDownloadSource({
+    candidates: [candidate], subtitles: [], selection: selection({ audioMode: "listed", titleLanguage: "cs" }), tried: [],
+    inspect: async () => info([undefined]),
+  });
+  assert.equal(chosen?.resolution.audioLanguage, "cs");
+  assert.equal(chosen?.resolution.audioEvidence, "listing");
+});
+
+test("the listing cannot speak for a file that names its own audio languages", async () => {
+  const candidates = [{ ...stream("https://one.test/episode.mkv", "first"), title: "Film CZ dabing" }];
+  const inspect = async () => info(["de", "en"]);
+  const listed = await selectDownloadSource({ candidates, subtitles: [], selection: selection({ audioMode: "listed" }), tried: [], inspect });
+  assert.equal(listed?.resolution.audioLanguage, "en");
+  assert.equal(listed?.resolution.audioEvidence, "probe");
+  assert.equal(listed?.resolution.fallbackUsed, true);
+  const noFallback = await selectDownloadSource({
+    candidates, subtitles: [], selection: selection({ audioMode: "listed", fallbackAudioLanguage: undefined }), tried: [], inspect,
+  });
+  assert.equal(noFallback, undefined);
 });

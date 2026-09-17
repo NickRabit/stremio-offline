@@ -1,6 +1,7 @@
 import { log } from "./logger.js";
 import type { DownloadResolution, DownloadSelection } from "./downloads.js";
 import { rankStreams, streamLanguages, streamSize } from "./ranking.js";
+import { pickByLanguage } from "./language.js";
 import type { MediaInfo } from "./probe.js";
 import type { StreamItem, SubtitleItem } from "./types.js";
 
@@ -63,8 +64,7 @@ export async function selectDownloadSource(input: {
     })
     : selection.addonKeys.flatMap((addonKey) => rankStreams(
       selected.filter((stream) => stream.addonKey === addonKey), selection.audioLanguage, priority, selection.titleLanguage));
-  let primaryChoice: RankedChoice | undefined;
-  let fallbackChoice: RankedChoice | undefined;
+  const tiers: Array<RankedChoice | undefined> = Array.from({ length: 5 });
   let checkedCandidates = 0;
 
   for (const stream of candidates) {
@@ -76,12 +76,36 @@ export async function selectDownloadSource(input: {
     checkedCandidates += 1;
     if (!info?.video || !info.audioTracks.length) continue;
     if (info.duration !== undefined && info.duration < MIN_STREAM_DURATION_SECONDS) continue;
+    const mode = selection.audioMode ?? "strict";
+    // The listing may only speak for a file that names no audio language of its own. One that
+    // does has already contradicted it, and picking a track out of it would put a language on
+    // the job that nothing inside the file supports.
+    const listed = info.audioTracks.some((track) => track.language) ? [] : streamLanguages(stream, selection.titleLanguage);
     const primary = info.audioTracks.find((track) => track.language === selection.audioLanguage);
     const secondary = selection.fallbackAudioLanguage
       ? info.audioTracks.find((track) => track.language === selection.fallbackAudioLanguage)
       : undefined;
-    const audio = primary ?? secondary;
-    if (!audio) continue;
+    const listedPrimary = mode !== "strict" && listed.includes(selection.audioLanguage);
+    const listedFallback = mode !== "strict" && !!selection.fallbackAudioLanguage && listed.includes(selection.fallbackAudioLanguage);
+    // Five tiers, best first: a probed track naming the language, the listing naming it, the same
+    // two for the fallback, then -- in `preferred` only -- the best track whatever it holds.
+    let tier: number;
+    let audioTrack: number;
+    let audioLanguage: string | undefined = selection.audioLanguage;
+    let fallbackUsed = false;
+    let audioEvidence: "probe" | "listing" | "none";
+    if (primary) {
+      tier = 0; audioTrack = primary.index; audioEvidence = "probe";
+    } else if (listedPrimary) {
+      tier = 1; audioTrack = pickByLanguage(info.audioTracks, selection.audioLanguage); audioEvidence = "listing";
+    } else if (secondary) {
+      tier = 2; audioTrack = secondary.index; audioLanguage = selection.fallbackAudioLanguage; fallbackUsed = true; audioEvidence = "probe";
+    } else if (listedFallback) {
+      tier = 3; audioTrack = pickByLanguage(info.audioTracks, selection.fallbackAudioLanguage); audioLanguage = selection.fallbackAudioLanguage; fallbackUsed = true; audioEvidence = "listing";
+    } else if (mode === "preferred") {
+      const track = info.audioTracks[pickByLanguage(info.audioTracks, selection.audioLanguage)];
+      tier = 4; audioTrack = track.index; audioLanguage = track.language; fallbackUsed = true; audioEvidence = "none";
+    } else continue;
 
     const subtitle = subtitlesFor(info, stream, input.subtitles, selection);
     if (selection.subtitleMode === "required" && !subtitle.language) continue;
@@ -90,32 +114,33 @@ export async function selectDownloadSource(input: {
       subtitle: subtitle.subtitle,
       resolution: {
         checkedCandidates,
-        audioLanguage: audio.language,
-        audioTrack: audio.index,
-        fallbackUsed: !primary,
+        audioLanguage,
+        audioTrack,
+        fallbackUsed,
+        audioEvidence,
         subtitleLanguage: subtitle.language,
         subtitleTrack: subtitle.track,
         subtitleSource: subtitle.source,
         subtitleStatus: subtitle.language ? "ready" : selection.subtitleMode === "optional" ? "missing" : undefined,
       },
     };
+    const primaryMatch = tier <= 1;
     const choiceRank = selection.subtitleMode === "required"
       ? subtitle.rank
-      : primary || selection.subtitleMode === "off"
+      : primaryMatch || selection.subtitleMode === "off"
         ? 0
         : subtitle.source === "embedded"
           ? subtitle.rank
           : subtitle.language
             ? 2 + subtitle.rank
             : 4;
-    if (primary && choiceRank === 0) return choice;
-    const previous = primary ? primaryChoice : fallbackChoice;
+    if (tier === 0 && choiceRank === 0) return choice;
+    const previous = tiers[tier];
     if (!previous || choiceRank < previous.subtitleRank) {
-      if (primary) primaryChoice = { choice, subtitleRank: choiceRank };
-      else fallbackChoice = { choice, subtitleRank: choiceRank };
+      tiers[tier] = { choice, subtitleRank: choiceRank };
     }
   }
-  const chosen = primaryChoice ?? fallbackChoice;
+  const chosen = tiers.find((slot) => slot);
   if (chosen) chosen.choice.resolution.checkedCandidates = checkedCandidates;
   return chosen?.choice;
 }

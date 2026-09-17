@@ -329,6 +329,13 @@ export const en = {
   "bulk.audioSettings": "Audio",
   "bulk.audioSettingsHint": "Set the preferred track and an optional fallback.",
   "bulk.audioFallback": "Fallback audio",
+  "bulk.audioMode": "Audio matching",
+  "bulk.audioModeListed": "From the listing",
+  "bulk.audioModePreferred": "Preferred only",
+  "bulk.audioModeStrict": "Verified in the file",
+  "bulk.audioModeHintListed": "The addon's own description counts as proof of the language. Use this when a source is right but its file carries no language tag.",
+  "bulk.audioModeHintPreferred": "The language only decides the order. If nothing matches, the best remaining source is downloaded anyway.",
+  "bulk.audioModeHintStrict": "Only a track the file itself names in the language counts. Episodes with no matching track are not downloaded.",
   "bulk.noFallback": "No fallback",
   "bulk.subtitles": "Subtitles",
   "bulk.subtitlesOff": "Do not download",
@@ -339,7 +346,7 @@ export const en = {
   "bulk.subtitleSettings": "Subtitles",
   "bulk.subtitleSettingsHint": "Choose whether subtitles should affect source selection.",
   "bulk.subtitlePriorityHint": "Preferred audio always wins, even without subtitles. If fallback audio is needed, a matching embedded subtitle track is preferred over no subtitles.",
-  "bulk.queueHint": "Each episode is checked only when it reaches the front of the queue. Languages are read from the tracks inside the source.",
+  "bulk.queueHint": "Each episode is checked only when it reaches the front of the queue.",
   "bulk.add": "Add to queue",
 
   // Sources for a title.
@@ -628,6 +635,8 @@ export const en = {
   "downloads.inLibrary": "{title} is in the library.",
   "downloads.checkedSource": "Audio {audio} · checked {count} sources",
   "downloads.checkedFallbackSource": "Fallback audio {audio} · checked {count} sources",
+  "downloads.audioFromListing": "language from the listing",
+  "downloads.audioUnverified": "Audio not confirmed · checked {count} sources",
   "downloads.subtitleReady": "Subtitles {language}",
   "downloads.subtitleMissing": "Optional subtitles unavailable",
 

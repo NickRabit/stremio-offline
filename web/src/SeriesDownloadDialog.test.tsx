@@ -34,6 +34,17 @@ describe("SeriesDownloadDialog", () => {
     await act(async () => { subtitleMode.value = "required"; subtitleMode.dispatchEvent(new Event("change", { bubbles: true })); });
     const add = [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("Add to queue"))!;
     await act(async () => { add.click(); await Promise.resolve(); });
-    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ addonKeys: ["second", "first"], sourceStrategy: "priority", audioLanguage: "cs", fallbackAudioLanguage: "en", subtitleMode: "required", subtitleLanguage: "cs" }));
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ addonKeys: ["second", "first"], sourceStrategy: "priority", audioLanguage: "cs", fallbackAudioLanguage: "en", audioMode: "listed", subtitleMode: "required", subtitleLanguage: "cs" }));
+  });
+
+  it("submits the chosen audio matching mode", async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    await act(async () => { root.render(<SeriesDownloadDialog type="series" label="Season 1" episodes={[{ id: "tt1:1:1" }]} audioLanguage="cs" subtitleLanguage="cs" languages={[{ code: "cs", name: "Čeština" }, { code: "en", name: "English" }]} onClose={() => undefined} onSubmit={onSubmit}/>); });
+    await act(async () => { await Promise.resolve(); });
+    const audioMode = [...host.querySelectorAll("select")].find((select) => [...select.options].some((option) => option.value === "preferred"))!;
+    await act(async () => { audioMode.value = "preferred"; audioMode.dispatchEvent(new Event("change", { bubbles: true })); });
+    const add = [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("Add to queue"))!;
+    await act(async () => { add.click(); await Promise.resolve(); });
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ audioMode: "preferred" }));
   });
 });
