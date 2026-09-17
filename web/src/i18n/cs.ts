@@ -255,6 +255,7 @@ export const cs: Catalog = {
   "catalog.emptyTitle": "Katalog je prázdný",
   "catalog.emptyText": "Zkuste vyhledávání nebo jiný katalog.",
   "catalog.description": "Popis",
+  "catalog.imdbRating": "Hodnocení IMDb {rating} z 10",
   "catalog.noDescription": "Bez popisu.",
   "catalog.pickTitle": "Vyberte titul",
   "catalog.pickText": "Objeví se tu podrobnosti, epizody a zdroje ze všech aktivních doplňků.",

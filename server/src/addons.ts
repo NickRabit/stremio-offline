@@ -167,18 +167,17 @@ export async function searchAll(addons: AddonRecord[], query: string, type: stri
   };
 }
 
+/** An empty string, an empty array and null all mean "this answer did not carry it". */
+const carries = (value: unknown) =>
+  value != null && value !== "" && !(Array.isArray(value) && value.length === 0);
+
+/** Everything `base` does not carry, taken from `extra`. Naming the fields instead would
+ *  quietly drop every other one an addon answers with -- the IMDb rating, the cast, the
+ *  logo -- which is what happened while this listed eight of them by hand. */
 function fillMissingMeta(base: MetaItem, extra: MetaItem): MetaItem {
-  return {
-    ...base,
-    ...(!base.description && extra.description ? { description: extra.description } : {}),
-    ...(!base.poster && extra.poster ? { poster: extra.poster } : {}),
-    ...(!base.background && extra.background ? { background: extra.background } : {}),
-    ...(base.year == null && extra.year != null ? { year: extra.year } : {}),
-    ...(!base.releaseInfo && extra.releaseInfo ? { releaseInfo: extra.releaseInfo } : {}),
-    ...(!base.genres?.length && extra.genres?.length ? { genres: extra.genres } : {}),
-    ...(!base.videos?.length && extra.videos?.length ? { videos: extra.videos } : {}),
-    ...(base.runtime == null && extra.runtime != null ? { runtime: extra.runtime } : {}),
-  };
+  const filled: MetaItem = { ...base };
+  for (const [key, value] of Object.entries(extra)) if (!carries(filled[key]) && carries(value)) filled[key] = value;
+  return filled;
 }
 
 export type MetaProvider = (type: string, id: string) => Promise<MetaItem | null>;
