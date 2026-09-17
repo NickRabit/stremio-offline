@@ -599,8 +599,12 @@ export function App() {
   // away for good. No pixel offset survives that, so the position is held as the item on top
   // and how far it sits into the view, then re-applied once the new layout settles. The resize
   // steps run before the scroll steps, so freezing the anchor here beats the clamp's own event.
+  // Only a rotation is worth answering. Safari slides its toolbars away as the page scrolls,
+  // which changes innerHeight and fires resize just the same -- and answering that dragged the
+  // list somewhere else mid-scroll. The width and the orientation tell the two apart.
+  const viewportShape = () => `${window.innerWidth}:${window.matchMedia("(orientation: landscape)").matches}`;
   useEffect(() => {
-    let size = `${window.innerWidth}x${window.innerHeight}`;
+    let size = viewportShape();
     let handle = 0;
     let listening = false;
     const release = () => {
@@ -614,7 +618,7 @@ export function App() {
       scrollByView.current[viewRef.current] = window.scrollY;
     };
     const onResize = () => {
-      const next = `${window.innerWidth}x${window.innerHeight}`;
+      const next = viewportShape();
       if (next === size) return;
       size = next;
       if (!viewAnchor.current || playerOpenRef.current) return;
@@ -1098,7 +1102,15 @@ export function App() {
   useEffect(() => {
     const grid = gridRef.current;
     if (!grid || !hasMore) return;
-    const onScroll = () => { if (grid.scrollTop + grid.clientHeight >= grid.scrollHeight - 400) void loadPage(false); };
+    // A rotation shortens the grid enough to land inside the margin on its own, and the clamp
+    // that follows arrives as a scroll event -- which fetched a page nobody had scrolled for.
+    // The margin follows the viewport so a short one cannot sit permanently at the end, and a
+    // scroll the restore itself caused is not the viewer reaching the bottom.
+    const onScroll = () => {
+      if (restoringScroll.current) return;
+      const margin = Math.min(400, grid.clientHeight);
+      if (grid.scrollTop + grid.clientHeight >= grid.scrollHeight - margin) void loadPage(false);
+    };
     grid.addEventListener("scroll", onScroll, { passive: true });
     return () => grid.removeEventListener("scroll", onScroll);
   }, [hasMore, skip, cursor, submittedQuery, submittedQuery && searchScopeValue, typeFilter, activeGenre, currentCatalog?.addonKey, currentCatalog?.type, currentCatalog?.id]);

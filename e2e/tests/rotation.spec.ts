@@ -84,3 +84,64 @@ test("a rotation keeps the library looking at the same item", async ({ page }) =
   });
   expect(visible).toBe(true);
 });
+
+// Safari slides its toolbars away as the page scrolls, which changes innerHeight and fires
+// resize exactly as a rotation does. Answering it starts a chase that re-applies the anchor
+// every frame, and iOS momentum keeps scrolling after the finger is gone -- so the list was
+// hauled back while it was still gliding. A scroll no gesture drives stands in for momentum,
+// because the chase gives way to wheel and touch but never to a scroll on its own.
+const TOOLBAR_COLLAPSED = { width: 390, height: 940 };
+
+test("a toolbar sliding away does not haul a gliding list back", async ({ page }) => {
+  await page.route("**/api/catalog?**", async (route) => {
+    await route.fulfill({ json: manyMovies(60) });
+  });
+  await page.setViewportSize(PORTRAIT);
+  await page.goto("/");
+  const catalog = page.getByRole("combobox", { name: "Procházet katalog" });
+  await expect(catalog).toBeVisible();
+  const options = await catalog.locator("option").allTextContents();
+  await catalog.selectOption({ label: options.find((text) => /Filmy/.test(text))! });
+  const grid = page.locator(".poster-grid");
+  await expect(grid.locator(".poster-card").first()).toBeVisible();
+
+  await grid.evaluate((element) => { element.scrollTop = element.scrollHeight * 0.4; });
+  await expect.poll(() => grid.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+
+  // Only the height changes, the way it does when the toolbars go.
+  await page.setViewportSize(TOOLBAR_COLLAPSED);
+  // Still gliding: the position moves on with no gesture behind it.
+  const glided = await grid.evaluate((element) => {
+    element.scrollTop += 900;
+    return element.scrollTop;
+  });
+  await page.waitForTimeout(900);
+
+  expect(await grid.evaluate((element) => element.scrollTop)).toBe(glided);
+});
+
+test("a rotation does not fetch a page nobody scrolled for", async ({ page }) => {
+  let fetches = 0;
+  await page.route("**/api/catalog?**", async (route) => {
+    fetches += 1;
+    await route.fulfill({ json: manyMovies(60) });
+  });
+  await page.setViewportSize(PORTRAIT);
+  await page.goto("/");
+  const catalog = page.getByRole("combobox", { name: "Procházet katalog" });
+  await expect(catalog).toBeVisible();
+  const options = await catalog.locator("option").allTextContents();
+  await catalog.selectOption({ label: options.find((text) => /Filmy/.test(text))! });
+  const grid = page.locator(".poster-grid");
+  await expect(grid.locator(".poster-card").first()).toBeVisible();
+  await grid.evaluate((element) => { element.scrollTop = element.scrollHeight * 0.4; });
+  await page.waitForTimeout(600);
+  const before = fetches;
+
+  // Landscape leaves the grid so short that it sits inside the paging margin by itself, and
+  // the clamp that follows arrives as a scroll event. Neither is the viewer asking for more.
+  await page.setViewportSize(LANDSCAPE);
+  await page.waitForTimeout(1500);
+
+  expect(fetches).toBe(before);
+});
