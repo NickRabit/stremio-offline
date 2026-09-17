@@ -1463,14 +1463,17 @@ export function App() {
                 const postup = catalogProgress(item);
                 const resumeRow = virtualCatalog === VIRTUAL.resume ? catalogResumeTargetByKey.get(klic) : undefined;
                 const vSeznamu = inWatchlist(item.type, item.id);
-                const metadata = resumeRow?.episode
-                  ? episodeLabel({ season: resumeRow.episode.season, episode: resumeRow.episode.number })
+                const episodeRow = resumeRow?.episode ? episodeLabel({ season: resumeRow.episode.season, episode: resumeRow.episode.number }) : undefined;
+                // A row left behind by a finished episode is not being watched yet: it says so
+                // instead of pretending to hold a position.
+                const metadata = episodeRow
+                  ? [postup?.pending ? t("library.nextEpisode") : null, episodeRow].filter(Boolean).join(" · ")
                   : [item.releaseInfo || item.year, submittedQuery ? (item.sources ?? [item.addonName]).filter(Boolean).join(", ") : null].filter(Boolean).join(" · ") || item.type;
                 return <button key={klic} data-catalog-key={klic} className={`poster-card ${selected?.id === item.id ? "selected" : ""}`} onClick={() => openMeta(item, resumeRow?.episode)}>
                   <span className="poster-wrap">
                     {item.poster ? <img src={item.poster} alt="" loading="lazy" onError={hideBroken}/> : <div className="poster-fallback"><Film/></div>}
                     {vSeznamu && <i className="fav-mark"><Star/></i>}
-                    {postup && <i className="resume-bar"><i style={{ width: `${Math.min(100, Math.round(postup.position / (postup.duration || 1) * 100))}%` }}/></i>}
+                    {postup && !postup.pending && <i className="resume-bar"><i style={{ width: `${Math.min(100, Math.round(postup.position / (postup.duration || 1) * 100))}%` }}/></i>}
                     <span className="browse-menu" onClick={(event) => { event.stopPropagation(); setMenuFor(menuFor === klic ? null : klic); }}><MoreVertical/></span>
                   </span>
                   <strong>{item.name}</strong>

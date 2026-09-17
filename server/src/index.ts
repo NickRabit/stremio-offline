@@ -27,6 +27,7 @@ import { images } from "./images.js";
 import { configureSecureMode, secureMode, securityHeaders } from "./secure.js";
 import { publicSettings, Store } from "./store.js";
 import { groupSeriesProgress, seriesOf, type ProgressSeries } from "./progress-series.js";
+import { markersOwingRow, nextEpisodeOf } from "./next-episode.js";
 import { advanceTorrent, normalizeToken, verifyRealDebridToken } from "./debrid.js";
 import { tmdbMeta, verifyTmdbKey } from "./tmdb.js";
 import { clearTrailerCache, trailerFor } from "./trailers.js";
@@ -1599,15 +1600,45 @@ const reportedSeries = (key: string, title: string, body: unknown): ProgressSeri
     episode: Number.isFinite(episode) ? episode : derived?.episode ?? 0,
   };
 };
-app.get("/api/progress", (_req, res) => {
+/** One row of Continue watching, either a stored position or the next episode a finished
+ *  one left behind. */
+type ProgressRow = { key: string; position: number; duration: number; title: string; path?: string; poster?: string; addonKey?: string; series?: ProgressSeries; pending?: true; updatedAt: string };
+app.get("/api/progress", asyncRoute(async (_req, res) => {
   const all = store.progress();
   // One row per series, whichever episode was watched last. The cut to 40 titles happens
-  // after that, so a show does not spend the row on every episode of it.
-  const items = groupSeriesProgress(Object.entries(all).map(([key, value]) => ({ ...value, key })))
+  // after the markers have had their say, so a show does not spend the row on every episode.
+  const rows = groupSeriesProgress(Object.entries(all).map(([key, value]) => ({ ...value, key })));
+  const shown = rows.flatMap((row) => (row.series ? [row.series.id] : []));
+  const over: string[] = [];
+  const pending = await Promise.all(markersOwingRow(store.watchedSeries(), shown).map(async ([id, marker]): Promise<ProgressRow | undefined> => {
+    // The six-hour cache answers most of these. An addon that stays quiet answers null,
+    // which leaves the marker alone: one unreachable show must fail by itself.
+    const meta = await cachedMeta("series", id);
+    if (!meta) return undefined;
+    const next = nextEpisodeOf(meta.videos, marker);
+    if (!next) { over.push(id); return undefined; }
+    return {
+      key: `series:${id}:${next.season}:${next.episode}`,
+      position: 0, duration: 0,
+      title: next.name ? `${marker.name} · ${next.name}` : marker.name,
+      poster: marker.poster, addonKey: marker.addonKey,
+      series: { id, name: marker.name, season: next.season, episode: next.episode },
+      pending: true,
+      updatedAt: marker.updatedAt,
+    };
+  }));
+  // A show that ran out of episodes leaves Continue watching for good.
+  if (over.length) await store.update((state) => {
+    const markers = { ...state.watchedSeries };
+    for (const id of over) delete markers[id];
+    state.watchedSeries = markers;
+  });
+  const items = [...rows, ...pending.filter((row) => row !== undefined)]
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
     .slice(0, 40)
     .map((value) => ({ ...value, key: wireProgressKey(value.key), path: value.path ? wirePath(value.path) : value.path, poster: images.proxied(value.poster) }));
   res.json(items);
-});
+}));
 app.get("/api/progress/:key", (req, res) => {
   const found = store.progress()[storedProgressKey(String(req.params.key))];
   res.json(found ? { ...found, poster: images.proxied(found.poster) } : null);
@@ -1621,31 +1652,61 @@ app.post("/api/progress", asyncRoute(async (req, res) => {
   if (!key) throw new AppError("Missing title key.", "err.missingTitleKey");
   await store.update((state) => {
     const all = { ...state.progress };
-    const title = String(req.body.title ?? all[key]?.title ?? "Video");
-    // Neither an almost-finished title nor the very beginning is worth keeping.
-    if (duration > 0 && (position / duration > PROGRESS_DONE || position < 30)) delete all[key];
-    else all[key] = {
+    const previous = all[key];
+    const title = String(req.body.title ?? previous?.title ?? "Video");
+    const record = {
       position, duration,
       title,
-      path: req.body.path ? libraryKey(String(req.body.path)) : all[key]?.path,
-      poster: posterOf(req.body.poster) ?? all[key]?.poster,
-      addonKey: typeof req.body.addonKey === "string" ? req.body.addonKey : all[key]?.addonKey,
-      series: reportedSeries(key, title, req.body.series) ?? all[key]?.series,
+      path: req.body.path ? libraryKey(String(req.body.path)) : previous?.path,
+      poster: posterOf(req.body.poster) ?? previous?.poster,
+      addonKey: typeof req.body.addonKey === "string" ? req.body.addonKey : previous?.addonKey,
+      series: reportedSeries(key, title, req.body.series) ?? previous?.series,
       updatedAt: new Date().toISOString(),
     };
+    const series = seriesOf(key, record);
+    const markers = { ...state.watchedSeries };
+    // Any report beats the marker of the show it belongs to, so the next episode of a
+    // finished one never stands beside the episode being watched now.
+    if (series) delete markers[series.id];
+    // Neither an almost-finished title nor the very beginning is worth keeping. A finished
+    // episode leaves the show's next one behind instead of nothing at all.
+    const finished = duration > 0 && position / duration > PROGRESS_DONE;
+    if (finished || (duration > 0 && position < 30)) {
+      delete all[key];
+      if (finished && series) markers[series.id] = {
+        name: series.name, poster: record.poster, addonKey: record.addonKey,
+        season: series.season, episode: series.episode, updatedAt: record.updatedAt,
+      };
+    } else all[key] = record;
     // The list must not grow without bound.
     const keys = Object.keys(all).sort((a, b) => all[b]!.updatedAt.localeCompare(all[a]!.updatedAt));
     state.progress = Object.fromEntries(keys.slice(0, 60).map((item) => [item, all[item]!]));
+    const markerIds = Object.keys(markers).sort((a, b) => markers[b]!.updatedAt.localeCompare(markers[a]!.updatedAt));
+    state.watchedSeries = Object.fromEntries(markerIds.slice(0, 60).map((id) => [id, markers[id]!]));
   });
   res.status(204).end();
 }));
 app.delete("/api/progress", asyncRoute(async (_req, res) => {
-  await store.update((state) => { state.progress = {}; });
+  await store.update((state) => { state.progress = {}; state.watchedSeries = {}; });
   log("INFO", "Watch history cleared");
   res.status(204).end();
 }));
 app.delete("/api/progress/:key", asyncRoute(async (req, res) => {
-  await store.update((state) => { const all = { ...state.progress }; delete all[storedProgressKey(String(req.params.key))]; state.progress = all; });
+  await store.update((state) => {
+    const key = storedProgressKey(String(req.params.key));
+    const all = { ...state.progress };
+    const removed = all[key];
+    delete all[key];
+    state.progress = all;
+    // The row a finished episode leaves behind is not stored, so forgetting that row has
+    // to forget the marker that draws it.
+    const series = seriesOf(key, { title: removed?.title ?? "", series: removed?.series });
+    if (series) {
+      const markers = { ...state.watchedSeries };
+      delete markers[series.id];
+      state.watchedSeries = markers;
+    }
+  });
   res.status(204).end();
 }));
 

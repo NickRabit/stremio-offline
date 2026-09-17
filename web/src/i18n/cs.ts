@@ -380,6 +380,7 @@ export const cs: Catalog = {
   "library.eyebrow": "KNIHOVNA",
   "library.title": "Stažené soubory",
   "library.continueWatching": "Pokračovat ve sledování",
+  "library.nextEpisode": "Další díl",
   "library.showAll": "Zobrazit vše",
   "library.showInLibrary": "Zobrazit v knihovně",
   "library.remaining": "zbývá {time}",

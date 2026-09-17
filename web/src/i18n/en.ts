@@ -384,6 +384,7 @@ export const en = {
   "library.eyebrow": "LIBRARY",
   "library.title": "Downloaded files",
   "library.continueWatching": "Continue watching",
+  "library.nextEpisode": "Next episode",
   "library.showAll": "Show all",
   "library.showInLibrary": "Show in library",
   "library.remaining": "{time} left",
