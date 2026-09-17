@@ -3,7 +3,7 @@ import { chmod, mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/pr
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { removeMovedSource, transferLibraryPath } from "./library-transfer.js";
+import { removeMovedSource, renameAcross, transferLibraryPath } from "./library-transfer.js";
 
 test("copy stages a tree and reports byte progress", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "stremio-transfer-"));
@@ -20,6 +20,19 @@ test("copy stages a tree and reports byte progress", async () => {
     assert.deepEqual(result, { bytes: 10, total: 10 });
     assert.deepEqual(progress.at(-1), [10, 10]);
     await assert.rejects(stat(`${target}.part`));
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("a rename that the filesystem refuses hands the move over to the copy", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "stremio-transfer-"));
+  try {
+    const source = path.join(root, "source.mkv");
+    const target = path.join(root, "target.mkv");
+    await writeFile(source, "video");
+    assert.equal(await renameAcross(source, target), true);
+    // Only EXDEV means "copy instead". Anything else is a real failure and has to be seen:
+    // swallowing it would report a move that never happened.
+    await assert.rejects(renameAcross(path.join(root, "gone.mkv"), target), { code: "ENOENT" });
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

@@ -61,10 +61,27 @@ export interface TransferResult {
   sourceLeft?: string;
 }
 
-export async function transferLibraryPath(source: string, target: string, move: boolean, report: TransferProgress = () => undefined): Promise<TransferResult> {
-  const [sourceInfo, parentInfo] = await Promise.all([stat(source), stat(path.dirname(target))]);
-  if (move && sourceInfo.dev === parentInfo.dev) {
+/** Moves the item in one step when the filesystem allows it. `false` means it does not:
+ *  the caller copies instead. Asking `stat` first would only be a guess -- two bind mounts
+ *  of one host directory share a device number under Docker Desktop and still refuse the
+ *  rename, while two btrfs subvolumes of one NAS volume carry different ones. The kernel
+ *  knows, and a refused rename costs a syscall, so the move is simply tried. */
+export async function renameAcross(source: string, target: string): Promise<boolean> {
+  try {
     await rename(source, target);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EXDEV") throw error;
+    log("INFO", "The move crosses a filesystem, copying instead", { source, target });
+    return false;
+  }
+}
+
+export async function transferLibraryPath(source: string, target: string, move: boolean, report: TransferProgress = () => undefined): Promise<TransferResult> {
+  // The destination's parent is stat'd, not for its device -- that is the kernel's to know --
+  // but because a transfer into a folder that is not there is a mistake, not a folder to create.
+  const [sourceInfo] = await Promise.all([stat(source), stat(path.dirname(target))]);
+  if (move && await renameAcross(source, target)) {
     // A folder is renamed whole, so nothing was copied -- but the size is what the item
     // takes, and a progress bar that reads zero for a moved season is a lie about the item.
     const bytes = sourceInfo.isDirectory() ? await byteSize(target) : sourceInfo.size;
