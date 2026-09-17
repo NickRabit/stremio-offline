@@ -205,5 +205,5 @@ export interface LibraryFolder { path: string; name: string }
 
 export interface BrowseResult { path: string; items: BrowseItem[]; total: number; pending: boolean }
 export type LibrarySort = "name" | "added" | "size" | "random";
-export interface ProgressEntry { key: string; position: number; duration: number; title: string; path?: string; poster?: string; addonKey?: string; updatedAt: string }
+export interface ProgressEntry { key: string; position: number; duration: number; title: string; path?: string; poster?: string; addonKey?: string; series?: { id: string; name: string; season: number; episode: number }; updatedAt: string }
 export interface WatchlistEntry { key: string; type: string; id: string; name: string; poster?: string; addedAt: string }

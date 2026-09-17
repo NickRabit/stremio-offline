@@ -26,6 +26,7 @@ import { guardedFetch, outbound } from "./outbound.js";
 import { images } from "./images.js";
 import { configureSecureMode, secureMode, securityHeaders } from "./secure.js";
 import { publicSettings, Store } from "./store.js";
+import { groupSeriesProgress, seriesOf, type ProgressSeries } from "./progress-series.js";
 import { advanceTorrent, normalizeToken, verifyRealDebridToken } from "./debrid.js";
 import { tmdbMeta, verifyTmdbKey } from "./tmdb.js";
 import { clearTrailerCache, trailerFor } from "./trailers.js";
@@ -1581,12 +1582,29 @@ const PROGRESS_DONE = 0.94;
  *  one. A catalogue title key is not a path and travels untouched. */
 const storedProgressKey = (key: string) => key.startsWith("file:") ? `file:${libraryKey(key.slice(5))}` : key;
 const wireProgressKey = (key: string) => key.startsWith("file:") ? `file:${wirePath(key.slice(5))}` : key;
+/** The `series` field of a report: the body names the series, and whatever it leaves
+ *  out the episode key fills in. An id that is not a non-empty string means no series. */
+const reportedSeries = (key: string, title: string, body: unknown): ProgressSeries | undefined => {
+  const field = body && typeof body === "object" ? body as { id?: unknown; name?: unknown; season?: unknown; episode?: unknown } : {};
+  const id = typeof field.id === "string" ? field.id.trim() : "";
+  if (!id) return undefined;
+  const derived = seriesOf(key, { title });
+  const name = typeof field.name === "string" ? field.name.trim() : "";
+  const season = Number(field.season), episode = Number(field.episode);
+  return {
+    id,
+    name: name || derived?.name || title,
+    season: Number.isFinite(season) ? season : derived?.season ?? 0,
+    episode: Number.isFinite(episode) ? episode : derived?.episode ?? 0,
+  };
+};
 app.get("/api/progress", (_req, res) => {
   const all = store.progress();
-  const items = Object.entries(all)
-    .map(([key, value]) => ({ ...value, key: wireProgressKey(key), path: value.path ? wirePath(value.path) : value.path, poster: images.proxied(value.poster) }))
-    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-    .slice(0, 40);
+  // One row per series, whichever episode was watched last. The cut to 40 titles happens
+  // after that, so a show does not spend the row on every episode of it.
+  const items = groupSeriesProgress(Object.entries(all).map(([key, value]) => ({ ...value, key })))
+    .slice(0, 40)
+    .map((value) => ({ ...value, key: wireProgressKey(value.key), path: value.path ? wirePath(value.path) : value.path, poster: images.proxied(value.poster) }));
   res.json(items);
 });
 app.get("/api/progress/:key", (req, res) => {
@@ -1602,14 +1620,16 @@ app.post("/api/progress", asyncRoute(async (req, res) => {
   if (!key) throw new AppError("Missing title key.", "err.missingTitleKey");
   await store.update((state) => {
     const all = { ...state.progress };
+    const title = String(req.body.title ?? all[key]?.title ?? "Video");
     // Neither an almost-finished title nor the very beginning is worth keeping.
     if (duration > 0 && (position / duration > PROGRESS_DONE || position < 30)) delete all[key];
     else all[key] = {
       position, duration,
-      title: String(req.body.title ?? all[key]?.title ?? "Video"),
+      title,
       path: req.body.path ? libraryKey(String(req.body.path)) : all[key]?.path,
       poster: posterOf(req.body.poster) ?? all[key]?.poster,
       addonKey: typeof req.body.addonKey === "string" ? req.body.addonKey : all[key]?.addonKey,
+      series: reportedSeries(key, title, req.body.series) ?? all[key]?.series,
       updatedAt: new Date().toISOString(),
     };
     // The list must not grow without bound.

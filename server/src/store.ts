@@ -5,6 +5,7 @@ import type { AuthState } from "./auth.js";
 import { normalizeDownloadSettings } from "./naming.js";
 import type { UiLanguage } from "./language.js";
 import { newLibraryId, type DepartedLibrary, type LibraryRecord, type RootGrant } from "./libraries.js";
+import type { ProgressSeries } from "./progress-series.js";
 
 /** `state.json` shape version. A state without it predates libraries and migrates once. */
 export const SCHEMA_VERSION = 2;
@@ -58,7 +59,7 @@ export interface State { schemaVersion?: number;
    *  a file at all. */
   watchlist?: Record<string, { type: string; id: string; name: string; poster?: string; addedAt: string }>;
   /** The resume list: a title key against a position in seconds. */
-  progress?: Record<string, { position: number; duration: number; title: string; path?: string; poster?: string; addonKey?: string; updatedAt: string }> }
+  progress?: Record<string, { position: number; duration: number; title: string; path?: string; poster?: string; addonKey?: string; series?: ProgressSeries; updatedAt: string }> }
 const baseSettings: Settings = { concurrentDownloads: 1, parallelPerProvider: 1, downloadSegments: 2, uiLanguage: "en", audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui", mergeByName: true, streamSort: "recommended", trackProgress: true, showResumeRow: true, libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, addonRefreshHours: 24, catalogTileSize: "medium", libraryTileSize: "medium", defaultMovieLibrary: "", defaultSeriesLibrary: "", realDebridToken: "", tmdbApiKey: "" };
 
 /** A fresh install starts with the one library the download directory has always been,
