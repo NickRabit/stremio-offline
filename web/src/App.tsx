@@ -22,6 +22,7 @@ import { canQueue, pickDefaultStream, pickNextEpisodeStream, repickStream, strea
 import { parseSearchScope } from "./search-scope";
 import { localizedDownloadTitle, mergeMetaDetail } from "./meta";
 import { catalogResumeEntries, localResumeEntries } from "./resume-visibility";
+import { resumeTarget, resumeVideo, type ResumeTarget } from "./resume-target";
 import { trailerAction } from "./trailers";
 import type { Addon, BuildInfo, Diagnostics, BrowseFile, BrowseItem, BrowseLibrary, BrowseResult, LibraryOp, LibraryOpsState, LibrarySort, LibraryView, ProgressEntry, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, DownloadSelection, Inspection, Meta, QueueHalt, ScanState, SearchableCatalog, Session, Settings as AppSettings, SettingsPatch, SiteLink, Stream, Subtitle, Trailer, Video } from "./types";
 
@@ -1161,16 +1162,19 @@ export function App() {
   }, [visibleStreams, pendingSources, playerOpen]);
 
   const catalogResume = useMemo(() => catalogResumeEntries(resume, addons), [resume, addons]);
+  /** Each Continue watching row with the episode it remembers, in the server's order. */
+  const catalogResumeTargets = useMemo(() => catalogResume.map((entry) => resumeTarget(entry)), [catalogResume]);
+  /** The same rows by the key the grid gives its tiles. */
+  const catalogResumeTargetByKey = useMemo(() => new Map<string, ResumeTarget>(catalogResumeTargets.map((target) => [
+    `${target.meta.type || "movie"}:${target.meta.id}`, target,
+  ] as const)), [catalogResumeTargets]);
   /** The built-in lists are computed from memory; they must not go through a full load,
    *  which would drop the selected title. */
   const virtualItems = useMemo<Meta[]>(() => {
     if (virtualCatalog === VIRTUAL.watchlist) return watchlist.map((item) => ({ id: item.id, type: item.type, name: item.name, poster: item.poster }));
-    if (virtualCatalog === VIRTUAL.resume) return catalogResume.map((item) => {
-      const [type, ...rest] = item.key.split(":");
-      return { id: rest.join(":"), type, name: item.title, poster: item.poster };
-    });
+    if (virtualCatalog === VIRTUAL.resume) return catalogResumeTargets.map((target) => target.meta);
     return [];
-  }, [virtualCatalog, watchlist, catalogResume]);
+  }, [virtualCatalog, watchlist, catalogResumeTargets]);
   useEffect(() => {
     if (!virtualCatalog) return;
     itemsRef.current = virtualItems; setItems(virtualItems); setHasMore(false);
@@ -1180,10 +1184,12 @@ export function App() {
   const localResume = useMemo<ResumeTile[]>(() => resumePreview
     ? resumePreview.items.flatMap((item) => item.kind === "file" && item.progress ? [{ key: `file:${item.path}`, path: item.path, title: item.label, poster: item.poster, season: item.season, series: item.series, updatedAt: item.modified, ...item.progress }] : [])
     : localResumeEntries(resume, libraries), [resumePreview, resume, libraries]);
-  const catalogProgress = (item: Meta) => resume.find((entry) => entry.key === `${item.type || "movie"}:${item.id}`);
-  const forgetCatalogWatched = async (item: Meta) => {
+  const catalogProgress = (item: Meta) => resume.find((entry) => item.type === "series"
+    ? entry.series?.id === item.id
+    : entry.key === `${item.type || "movie"}:${item.id}`);
+  const forgetCatalogWatched = async (entry: ProgressEntry) => {
     setMenuFor(null);
-    try { await api.forgetProgress(`${item.type || "movie"}:${item.id}`); setResume(await api.progressList()); }
+    try { await api.forgetProgress(entry.key); setResume(await api.progressList()); }
     catch (error) { fail(error); }
   };
 
@@ -1225,7 +1231,7 @@ export function App() {
     } catch (e) { if (!stale()) { fail(e); setSourcesLoaded(true); } }
     finally { if (!stale()) setBusy(false); }
   };
-  const openMeta = async (item: Meta) => {
+  const openMeta = async (item: Meta, resume?: ResumeTarget["episode"]) => {
     const request = ++sourcesRequestRef.current;
     const linksRequest = ++linksRequestRef.current;
     const trailerRequest = ++trailerRequestRef.current;
@@ -1247,7 +1253,12 @@ export function App() {
       .then((answer) => { if (trailerRequest === trailerRequestRef.current) setTitleTrailer(answer.trailer); })
       .catch(() => { if (trailerRequest === trailerRequestRef.current) setTitleTrailer(null); });
     // The sources fetch moves the same token, so an abandoned open must not start one.
-    if (request === sourcesRequestRef.current && type !== "series" && !detail.videos?.length) await fetchSources(type, item.id);
+    if (request !== sourcesRequestRef.current) return;
+    const remembered = resumeVideo(detail.videos, resume);
+    if (remembered) {
+      setSeason(remembered.season ?? null); setEpisodesOpen(false);
+      await fetchSources(type, remembered.id!, remembered);
+    } else if (type !== "series" && !detail.videos?.length) await fetchSources(type, item.id);
   };
   const closeMeta = () => {
     sourcesRequestRef.current += 1;
@@ -1450,9 +1461,12 @@ export function App() {
               {visibleItems.map((item) => {
                 const klic = `${item.type || "movie"}:${item.id}`;
                 const postup = catalogProgress(item);
+                const resumeRow = virtualCatalog === VIRTUAL.resume ? catalogResumeTargetByKey.get(klic) : undefined;
                 const vSeznamu = inWatchlist(item.type, item.id);
-                const metadata = [item.releaseInfo || item.year, submittedQuery ? (item.sources ?? [item.addonName]).filter(Boolean).join(", ") : null].filter(Boolean).join(" · ") || item.type;
-                return <button key={klic} data-catalog-key={klic} className={`poster-card ${selected?.id === item.id ? "selected" : ""}`} onClick={() => openMeta(item)}>
+                const metadata = resumeRow?.episode
+                  ? episodeLabel({ season: resumeRow.episode.season, episode: resumeRow.episode.number })
+                  : [item.releaseInfo || item.year, submittedQuery ? (item.sources ?? [item.addonName]).filter(Boolean).join(", ") : null].filter(Boolean).join(" · ") || item.type;
+                return <button key={klic} data-catalog-key={klic} className={`poster-card ${selected?.id === item.id ? "selected" : ""}`} onClick={() => openMeta(item, resumeRow?.episode)}>
                   <span className="poster-wrap">
                     {item.poster ? <img src={item.poster} alt="" loading="lazy" onError={hideBroken}/> : <div className="poster-fallback"><Film/></div>}
                     {vSeznamu && <i className="fav-mark"><Star/></i>}
@@ -1463,7 +1477,7 @@ export function App() {
                   <small title={metadata}>{metadata}</small>
                   {menuFor === klic && <span className="browse-actions" onClick={(event) => event.stopPropagation()}>
                     <button onClick={() => { setMenuFor(null); void toggleWatchlist(item); }}><Star/> {t(vSeznamu ? "watchlist.remove" : "watchlist.add")}</button>
-                    {postup && <button onClick={() => void forgetCatalogWatched(item)}><RotateCcw/> {t("library.markUnwatched")}</button>}
+                    {postup && <button onClick={() => void forgetCatalogWatched(postup)}><RotateCcw/> {t("library.markUnwatched")}</button>}
                   </span>}
                 </button>;
               })}
