@@ -59,7 +59,10 @@ export interface State { schemaVersion?: number;
    *  a file at all. */
   watchlist?: Record<string, { type: string; id: string; name: string; poster?: string; addedAt: string }>;
   /** The resume list: a title key against a position in seconds. */
-  progress?: Record<string, { position: number; duration: number; title: string; path?: string; poster?: string; addonKey?: string; series?: ProgressSeries; updatedAt: string }> }
+  progress?: Record<string, { position: number; duration: number; title: string; path?: string; poster?: string; addonKey?: string; series?: ProgressSeries; updatedAt: string }>;
+  /** The last episode of a show that ran to the end, per series id. What turns a
+   *  finished episode into the next one in Continue watching. */
+  watchedSeries?: Record<string, { name: string; poster?: string; addonKey?: string; season: number; episode: number; updatedAt: string }> }
 const baseSettings: Settings = { concurrentDownloads: 1, parallelPerProvider: 1, downloadSegments: 2, uiLanguage: "en", audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui", mergeByName: true, streamSort: "recommended", trackProgress: true, showResumeRow: true, libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, addonRefreshHours: 24, catalogTileSize: "medium", libraryTileSize: "medium", defaultMovieLibrary: "", defaultSeriesLibrary: "", realDebridToken: "", tmdbApiKey: "" };
 
 /** A fresh install starts with the one library the download directory has always been,
@@ -114,6 +117,7 @@ export class Store {
   departed() { return this.state.departed ?? []; }
   favorites() { return this.state.favorites ?? []; }
   progress() { return this.state.progress ?? {}; }
+  watchedSeries() { return this.state.watchedSeries ?? {}; }
   watchlist() { return this.state.watchlist ?? {}; }
   private chain: Promise<void> = Promise.resolve();
   /** Writes run one after another, or two concurrent saves would fight over the same .tmp file. */
