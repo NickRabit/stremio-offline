@@ -1,5 +1,5 @@
 import { FormEvent, UIEvent, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, BarChart3, ArrowUp, Check, Copy, FolderInput, FolderOpen, ImageOff, Images, KeyRound, Languages, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, ShieldCheck, Sparkles, Star, FileJson, Link2, LogOut, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, FileText, Film, FolderCog, HardDrive, Library, PackagePlus, Pause, Play, Plus, RefreshCw, Search, SearchX, Settings, Subtitles, Trash2, Upload, X } from "lucide-react";
+import { ArrowDown, BarChart3, ArrowUp, Check, RectangleHorizontal, RectangleVertical, Copy, FolderInput, FolderOpen, ImageOff, Images, KeyRound, Languages, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, ShieldCheck, Sparkles, Star, FileJson, Link2, LogOut, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, FileText, Film, FolderCog, HardDrive, Library, PackagePlus, Pause, Play, Plus, RefreshCw, Search, SearchX, Settings, Subtitles, Trash2, Upload, X } from "lucide-react";
 import { queueDestination } from "./queue-target";
 import { api, ApiError, describeError, logDownloadUrl, saveToDevice } from "./api";
 import { AccountSettings, LoginScreen } from "./Login";
@@ -9,6 +9,7 @@ import { Player } from "./Player";
 import { TrailerPlayer } from "./TrailerPlayer";
 import { IdentifyDialog } from "./IdentifyDialog";
 import { LibraryManager, LibraryManagerDialog, libraryTypeLabel } from "./LibraryManager";
+import { TileArt } from "./TileArt";
 import { MoveDialog } from "./MoveDialog";
 import { SuggestionsDialog } from "./SuggestionsDialog";
 import { SeriesDownloadDialog } from "./SeriesDownloadDialog";
@@ -810,6 +811,16 @@ export function App() {
     api.inspect(selectedStream).then((value) => { if (!stale) setInspection(value); }).catch(() => undefined);
     return () => { stale = true; };
   }, [selectedStream]);
+  /** The shape buttons save like any other setting, but without the toast: one per click
+   *  while somebody flips back and forth is noise. A refused save puts the grid back. */
+  const toggleShape = async (key: "catalogTileShape" | "libraryTileShape") => {
+    const before = settings[key];
+    const next = before === "wide" ? "poster" : "wide";
+    setSettings((current: AppSettings) => ({ ...current, [key]: next }));
+    try { setSettings(await api.updateSettings({ [key]: next })); }
+    catch (e) { setSettings((current: AppSettings) => ({ ...current, [key]: before })); fail(e); }
+  };
+
   const saveSettings = async (patch: SettingsPatch) => {
     const { realDebridToken: _token, tmdbApiKey: _apiKey, ...rest } = patch;
     if (Object.keys(rest).length) setSettings((current: AppSettings) => ({ ...current, ...rest }));
@@ -1426,7 +1437,7 @@ export function App() {
   if (session === undefined) return <div className="login-screen"><div className="loading">{t("common.loading")}</div></div>;
   if (!ready) return <LoginScreen setup={setupNeeded} onSession={(next) => { setSetupNeeded(false); setSession(next); }}/>;
 
-  return <div className={`app-shell catalog-tiles-${settings.catalogTileSize} library-tiles-${settings.libraryTileSize}${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
+  return <div className={`app-shell catalog-tiles-${settings.catalogTileSize} library-tiles-${settings.libraryTileSize} catalog-shape-${settings.catalogTileShape} library-shape-${settings.libraryTileShape}${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
     <header className="topbar"><button className="brand brand-home" title={t("app.goToCleanCatalog")} aria-label={t("app.goToCleanCatalog")} onClick={resetCatalog}><div className="brand-mark"><CirclePlay/></div><div><small>{t("auth.brandEyebrow")}</small><h1>Stremio <span>Offline</span></h1></div></button><div className="topbar-right">{restricted && <div className="restricted-chip">{t("restricted.chip")}</div>}<div className="online"><i/> {t("app.serverOnline")}</div>
       <button className="signout" title={t("auth.signedInAs", { username: session?.username ?? "" })} onClick={async () => { try { await api.logout(); } finally { location.reload(); } }}><LogOut/> {t("app.signOut")}</button></div></header>
     <aside className="sidebar"><nav>
@@ -1474,6 +1485,7 @@ export function App() {
                 </>}
             <label><span>{t("common.sorting")}</span><select aria-label={t("catalog.sorting")} value={sort} onChange={(e) => setSort(e.target.value)}><option value="default">{t("catalog.sortAddon")}</option><option value="name">{t("catalog.sortName")}</option><option value="year">{t("catalog.sortYear")}</option></select></label>
             {sort !== "default" && <small className="filter-note">{t("catalog.sortNote")}</small>}
+            <button title={t(settings.catalogTileShape === "wide" ? "catalog.shapePoster" : "catalog.shapeWide")} aria-pressed={settings.catalogTileShape === "wide"} onClick={() => void toggleShape("catalogTileShape")}>{settings.catalogTileShape === "wide" ? <RectangleVertical/> : <RectangleHorizontal/>}</button>
           </div>
           <div className="catalog-layout"><section className="panel result-panel"><div className="panel-head"><h3>{submittedQuery ? t("catalog.searchHeading", { query: submittedQuery }) : t("catalog.results")}</h3><span>{t("catalog.itemCount", { count: visibleItems.length })}{hasMore ? "+" : ""}</span></div>
             <div className="poster-grid" ref={gridRef} onScroll={(event) => { compactOnScroll(event, catalogCompact, setCatalogCompact); scheduleViewAnchor(); }}>
@@ -1490,7 +1502,7 @@ export function App() {
                   : [item.releaseInfo || item.year, submittedQuery ? (item.sources ?? [item.addonName]).filter(Boolean).join(", ") : null].filter(Boolean).join(" · ") || item.type;
                 return <button key={klic} data-catalog-key={klic} className={`poster-card ${selected?.id === item.id ? "selected" : ""}`} onClick={() => openMeta(item, resumeRow?.episode)}>
                   <span className="poster-wrap">
-                    {item.poster ? <img src={item.poster} alt="" loading="lazy" onError={hideBroken}/> : <div className="poster-fallback"><Film/></div>}
+                    <TileArt shape={settings.catalogTileShape} poster={item.poster} wide={item.background} fallback={<div className="poster-fallback"><Film/></div>}/>
                     {vSeznamu && <i className="fav-mark"><Star/></i>}
                     {postup && !postup.pending && <i className="resume-bar"><i style={{ width: `${Math.min(100, Math.round(postup.position / (postup.duration || 1) * 100))}%` }}/></i>}
                     <span className="browse-menu" onClick={(event) => { event.stopPropagation(); setMenuFor(menuFor === klic ? null : klic); }}><MoreVertical/></span>
@@ -1603,6 +1615,7 @@ export function App() {
             {!libraryList && <button title={t(browseView === "grid" ? "library.viewRows" : "library.viewTiles")} onClick={() => setBrowseView((value) => value === "grid" ? "list" : "grid")}>
               {browseView === "grid" ? <List/> : <LayoutGrid/>}
             </button>}
+            {!libraryList && browseView === "grid" && <button title={t(settings.libraryTileShape === "wide" ? "library.shapePoster" : "library.shapeWide")} aria-pressed={settings.libraryTileShape === "wide"} onClick={() => void toggleShape("libraryTileShape")}>{settings.libraryTileShape === "wide" ? <RectangleVertical/> : <RectangleHorizontal/>}</button>}
             {!libraryList && <button className={selectionMode ? "active-filter" : ""} title={t("library.selectMode")} aria-pressed={selectionMode}
               onClick={() => { setMenuFor(null); if (selectionMode) leaveSelection(); else setSelectionMode(true); }}><Check/></button>}
             <div className="library-maintenance" onKeyDown={(event) => {
@@ -1694,7 +1707,7 @@ export function App() {
                   </article>
                 : item.kind === "folder"
                 ? <article className={`browse-item folder${browseFocus === item.path ? " focused" : ""}${selectedPaths.has(item.path) ? " selected" : ""}`} key={item.path} data-path={item.path} aria-current={browseFocus === item.path ? "true" : undefined}><button className="library-open" onClick={() => { if (selectionMode) { toggleSelection(item.path); return; } setBrowseQuery(""); setFromFavorites(browsePath === ":favorites" || fromFavorites); setBrowsePath(item.path); }}>
-                    <span className="browse-art">{item.poster ? <img src={item.poster} alt="" loading="lazy"/> : <FolderOpen/>}<i className="browse-badge">{item.fileCount}</i>{item.favorite && <i className="fav-mark"><Star/></i>}</span>
+                    <span className="browse-art"><TileArt shape={settings.libraryTileShape} poster={item.poster} wide={item.wide} fallback={<FolderOpen/>}/><i className="browse-badge">{item.fileCount}</i>{item.favorite && <i className="fav-mark"><Star/></i>}</span>
                     <span className="library-copy"><strong>{item.name}</strong><small>{folderMeta(item)}</small>{descriptionLine(item) && <small className="library-desc" title={descriptionLine(item)}>{descriptionLine(item)}</small>}</span><span className="library-action"><FolderOpen/> {t("library.openFolder")} <ChevronRight/></span></button>
                     {selectionMode && <button className="browse-select" aria-label={t("library.selectItem", { name: item.name })} aria-pressed={selectedPaths.has(item.path)} onClick={(event) => { event.stopPropagation(); toggleSelection(item.path); }}>{selectedPaths.has(item.path) && <Check/>}</button>}
                     {!selectionMode && <button className="browse-menu" aria-label={t("library.options", { name: item.name })} aria-expanded={menuFor === item.path} onClick={(event) => { event.stopPropagation(); openMenu(item); }}><MoreVertical/></button>}
@@ -1708,7 +1721,7 @@ export function App() {
                     </span>}
                   </article>
                 : <article className={`browse-item${browseFocus === item.path ? " focused" : ""}${selectedPaths.has(item.path) ? " selected" : ""}`} key={item.path} data-path={item.path} aria-current={browseFocus === item.path ? "true" : undefined}><button className="library-open" onClick={() => selectionMode ? toggleSelection(item.path) : void playLocal(item.label, item.path, item.poster, item.season != null)}>
-                    <span className="browse-art">{item.poster ? <img src={item.poster} alt="" loading="lazy"/> : <Film/>}{item.favorite && <i className="fav-mark"><Star/></i>}
+                    <span className="browse-art"><TileArt shape={settings.libraryTileShape} poster={item.poster} wide={item.wide} fallback={<Film/>}/>{item.favorite && <i className="fav-mark"><Star/></i>}
                     {browseFocus === item.path && <i className="browse-focus-mark">{t("library.thisFile")}</i>}
                     {item.progress && <i className="resume-bar"><i style={{ width: `${Math.min(100, Math.round(item.progress.position / (item.progress.duration || 1) * 100))}%` }}/></i>}</span>
                     <span className="library-copy"><strong>{item.season != null ? `${item.season}×${String(item.episode ?? 0).padStart(2, "0")} ${item.label}` : item.label}</strong>
@@ -1887,6 +1900,7 @@ function SettingsPage({ build, restricted = false, settings, languages, librarie
     .map((item) => ({ code: item.code, name: languageName(item.code) }))
     .sort((a, b) => a.name.localeCompare(b.name, localeTag()))
     .map((item) => <option key={item.code} value={item.code}>{item.name}</option>);
+  const tileShapes = [{ value: "poster", key: "settings.shape.poster" }, { value: "wide", key: "settings.shape.wide" }] as const;
   const tileSizes = [{ value: "compact", key: "settings.tile.compact" }, { value: "small", key: "settings.tile.small" }, { value: "medium", key: "settings.tile.medium" }, { value: "large", key: "settings.tile.large" }] as const;
   const importInput = useRef<HTMLInputElement>(null);
   const [backupBusy, setBackupBusy] = useState(false);
@@ -1962,7 +1976,7 @@ function SettingsPage({ build, restricted = false, settings, languages, librarie
             setLocale(next);
             void onSave({ uiLanguage: next });
           }}>{LOCALES.map((code) => <option key={code} value={code}>{LOCALE_NAMES[code]}</option>)}</select>
-        </SettingControl><SettingControl title={t("settings.catalogTiles")} text={t("settings.catalogTilesHint")}><select aria-label={t("settings.catalogTiles")} disabled={restricted} value={settings.catalogTileSize} onChange={(event) => void onSave({ catalogTileSize: event.target.value as AppSettings["catalogTileSize"] })}>{tileSizes.map((size) => <option key={size.value} value={size.value}>{t(size.key)}</option>)}</select></SettingControl><SettingControl title={t("settings.libraryTiles")} text={t("settings.libraryTilesHint")}><select aria-label={t("settings.libraryTiles")} disabled={restricted} value={settings.libraryTileSize} onChange={(event) => void onSave({ libraryTileSize: event.target.value as AppSettings["libraryTileSize"] })}>{tileSizes.map((size) => <option key={size.value} value={size.value}>{t(size.key)}</option>)}</select></SettingControl></section>
+        </SettingControl><SettingControl title={t("settings.catalogTiles")} text={t("settings.catalogTilesHint")}><select aria-label={t("settings.catalogTiles")} disabled={restricted} value={settings.catalogTileSize} onChange={(event) => void onSave({ catalogTileSize: event.target.value as AppSettings["catalogTileSize"] })}>{tileSizes.map((size) => <option key={size.value} value={size.value}>{t(size.key)}</option>)}</select></SettingControl><SettingControl title={t("settings.libraryTiles")} text={t("settings.libraryTilesHint")}><select aria-label={t("settings.libraryTiles")} disabled={restricted} value={settings.libraryTileSize} onChange={(event) => void onSave({ libraryTileSize: event.target.value as AppSettings["libraryTileSize"] })}>{tileSizes.map((size) => <option key={size.value} value={size.value}>{t(size.key)}</option>)}</select></SettingControl><SettingControl title={t("settings.catalogShape")} text={t("settings.catalogShapeHint")}><select aria-label={t("settings.catalogShape")} disabled={restricted} value={settings.catalogTileShape} onChange={(event) => void onSave({ catalogTileShape: event.target.value as AppSettings["catalogTileShape"] })}>{tileShapes.map((shape) => <option key={shape.value} value={shape.value}>{t(shape.key)}</option>)}</select></SettingControl><SettingControl title={t("settings.libraryShape")} text={t("settings.libraryShapeHint")}><select aria-label={t("settings.libraryShape")} disabled={restricted} value={settings.libraryTileShape} onChange={(event) => void onSave({ libraryTileShape: event.target.value as AppSettings["libraryTileShape"] })}>{tileShapes.map((shape) => <option key={shape.value} value={shape.value}>{t(shape.key)}</option>)}</select></SettingControl></section>
       <section className="panel settings-section"><SettingsSectionHead icon={<ShieldCheck/>} title={t("settings.privacyTitle")} text={t("settings.privacyText")}/>
         <SettingControl title={t("settings.secureMode")} text={t("settings.secureModeHint")}>
           <select aria-label={t("settings.secureModeLabel")} disabled={restricted} value={settings.secureMode ? "1" : "0"} onChange={(event) => void onSave({ secureMode: event.target.value === "1" })}>
