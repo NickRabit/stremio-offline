@@ -11,7 +11,7 @@ same list with short comments.
 | `STREMIO_OFFLINE_PORT` | `8090` | Host port the UI is published on. |
 | `DOWNLOAD_PATH` | `./downloads` | Host directory for downloaded media. |
 | `DATA_PATH` | `./data` | Server data: account, addons, artwork, stats, queue. An ordinary folder — copy it to back it up. |
-| `TZ` | `Europe/Prague` | Container timezone; affects log timestamps. |
+| `TZ` | `Europe/Prague` | Container timezone. Log timestamps stay in UTC whatever it is set to. |
 | `PUID` / `PGID` | `1000` / `1000` | User the process runs as. Match the owner of `DOWNLOAD_PATH`. |
 | `FIX_PERMISSIONS` | `0` | `1` chowns the whole download folder once at start. Slow on a large library. |
 

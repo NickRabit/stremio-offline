@@ -5,6 +5,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { asLibraryType, checkLibraryRemoval, checkLibraryRoot, checkRerootItems, checkRerootPaths, libraryFlag } from "./library-admin.js";
 import type { LibraryRecord, RootGrant } from "./libraries.js";
+import { flushLog } from "./logger.js";
 
 const grant = (p: string): RootGrant => ({ path: p, source: "env", grantedAt: "2026-01-01T00:00:00.000Z" });
 const library = (over: Partial<LibraryRecord> & { root: string }): LibraryRecord => ({
@@ -220,4 +221,28 @@ test("a clear move hands back every top-level entry and touches nothing", async 
     assert.deepEqual((await readdir(from)).sort(), [".hidden", "Movies", "Show"]);
     assert.deepEqual(await readdir(to), []);
   } finally { await rm(dataDir, { recursive: true, force: true }); }
+});
+
+test("a root that cannot be created records the errno the interface hides", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "stremio-admin-"));
+  const written: string[] = [];
+  const original = process.stdout.write.bind(process.stdout);
+  try {
+    // A file where the new folder would go: mkdir refuses with EEXIST/ENOTDIR.
+    await writeFile(path.join(directory, "blocked"), "");
+    const target = path.join(directory, "blocked", "library");
+    process.stdout.write = ((chunk: unknown) => { written.push(String(chunk)); return true; }) as typeof process.stdout.write;
+    const result = await checkLibraryRoot({ root: target, grants: [grant(directory)], libraries: [], create: true });
+    process.stdout.write = original;
+    assert.equal(result.ok, false);
+    assert.equal(result.ok === false && result.messageKey, "err.libraryRootCreate");
+
+    const line = written.find((entry) => entry.includes("A library root could not be created"));
+    assert.ok(line, "the refusal is logged");
+    assert.match(line!, /"code":"(ENOTDIR|EEXIST|EACCES)"/);
+  } finally {
+    process.stdout.write = original;
+    await flushLog();
+    await rm(directory, { recursive: true, force: true });
+  }
 });

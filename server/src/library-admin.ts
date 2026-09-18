@@ -2,6 +2,7 @@ import { mkdir, readdir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { grantingRoot } from "./library-grants.js";
 import { isInside, realAncestor, type LibraryRecord, type LibraryType, type RootGrant } from "./libraries.js";
+import { log } from "./logger.js";
 
 /** A root the deployment will accept, or why it will not. The message carries the catalogue
  *  key the interface renders it with; the English text is the fallback. */
@@ -80,7 +81,16 @@ export async function checkLibraryRoot(opts: {
     if (!opts.create) return refuse("The folder does not exist.", "err.pathMissing");
     // Inside the grant, checked above; a race with something else creating it is fine.
     try { await mkdir(root, { recursive: true }); }
-    catch { return refuse("The folder could not be created.", "err.libraryRootCreate"); }
+    catch (error) {
+      // The interface says only that it failed. EACCES on a NAS share, EROFS on a read-only
+      // mount and ENOSPC are three different evenings for whoever has to fix it, and the
+      // errno is the one thing that tells them apart.
+      log("WARN", "A library root could not be created", {
+        root, code: (error as NodeJS.ErrnoException)?.code,
+        reason: error instanceof Error ? error.message : String(error),
+      });
+      return refuse("The folder could not be created.", "err.libraryRootCreate");
+    }
   }
   // Compared through realpath: two mounts of the same disk are one root, not two.
   const real = await realpath(root).catch(() => root);

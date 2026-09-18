@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { AirPlayAccess } from "./airplay-access.js";
+import { flushLog } from "./logger.js";
 import { mediaChildPath, MediaResources } from "./media-resources.js";
 
 function fixture() {
@@ -52,4 +53,38 @@ test("AirPlay grants never extend the login lifetime", () => {
   const token = new URL(f.access.url("short", `/api/media/${root}`), "http://test").searchParams.get("airplay");
   f.advance(1000);
   assert.equal(f.access.authorize("GET", `/api/media/${root}`, token), undefined);
+});
+
+test("a refusal is written down, the token is not", async () => {
+  const { root, access, token, advance } = fixture();
+  const written: string[] = [];
+  const original = process.stdout.write.bind(process.stdout);
+  process.stdout.write = ((chunk: unknown) => { written.push(String(chunk)); return true; }) as typeof process.stdout.write;
+  try {
+    assert.equal(access.authorize("GET", "/api/settings", token), undefined);
+    advance(13 * 60 * 60_000);
+    assert.equal(access.authorize("GET", `/api/media/${root}`, token), undefined);
+  } finally {
+    process.stdout.write = original;
+    await flushLog();
+  }
+  const lines = written.filter((line) => line.includes("AirPlay request refused"));
+  assert.equal(lines.length, 2, "both refusals reported, and for different reasons");
+  assert.ok(lines.some((line) => line.includes("the grant does not cover this file")));
+  assert.ok(lines.some((line) => line.includes("the grant expired")));
+  for (const line of written) assert.ok(!line.includes(token!), "the AirPlay token never reaches the log");
+});
+
+test("an ordinary request carrying no AirPlay token stays out of the log", async () => {
+  const { root, access } = fixture();
+  const written: string[] = [];
+  const original = process.stdout.write.bind(process.stdout);
+  process.stdout.write = ((chunk: unknown) => { written.push(String(chunk)); return true; }) as typeof process.stdout.write;
+  try {
+    for (const method of ["GET", "POST", "DELETE"]) assert.equal(access.authorize(method, `/api/media/${root}`, undefined), undefined);
+  } finally {
+    process.stdout.write = original;
+    await flushLog();
+  }
+  assert.equal(written.filter((line) => line.includes("AirPlay")).length, 0);
 });

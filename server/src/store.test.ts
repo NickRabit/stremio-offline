@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -88,5 +88,22 @@ test("a stored language survives a reload", async () => {
     await first.update((state) => { state.settings.uiLanguage = "cs"; });
     const second = new Store(directory); await second.load();
     assert.equal(second.settings().uiLanguage, "cs");
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("a failed write does not stop the next one from reaching the disk", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-store-"));
+  try {
+    const store = new Store(directory); await store.load();
+    // A directory where state.json.tmp belongs: the rename cannot happen, the write fails.
+    await mkdir(path.join(directory, "state.json.tmp"));
+    await assert.rejects(store.update((state) => { state.settings.uiLanguage = "cs"; }));
+
+    await rm(path.join(directory, "state.json.tmp"), { recursive: true });
+    await store.update((state) => { state.settings.audioLanguage = "de"; });
+
+    const reloaded = new Store(directory); await reloaded.load();
+    assert.equal(reloaded.settings().uiLanguage, "cs", "the earlier change is in the state that was saved");
+    assert.equal(reloaded.settings().audioLanguage, "de");
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
