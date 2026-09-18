@@ -35,6 +35,9 @@ These used to be open notes. They are in `main` now.
 - Real-Debrid client: API token in Settings, torrent rows no longer look like HTTP, waiting queue jobs that do not take an HTTP slot, play only when an HTTPS URL exists now, in-app toasts for the two hand-offs.
 - Restricted / demo mode (`RESTRICTED_MODE=1`): process-wide lock so a shared instance cannot change addons, settings or the password, and cannot export tokens. Off by default.
 - Smart season and whole-show downloads: ordered addons or largest-file selection across sources, verified audio language with fallback, and optional or required embedded/addon subtitles resolved per episode at the front of the queue.
+- Tile size that follows the panel rather than a fixed pixel count: each of the four settings is a floor, a ceiling and a share of the panel the grid sits in, read through a container query so the catalogue's split with the detail panel stays untouched. A narrowing window drops a column instead of shrinking every tile.
+- Portrait or landscape tiles, per page, from a button on the catalogue and one in the library. A library title keeps both pictures: the poster it always had and a backdrop taken from the bound catalogue title, a `backdrop.jpg` beside the media, or the frame grabbed from the video, which was landscape all along and had been drawn cropped into a portrait box. Titles already on disk fill in as they are browsed and on a rescan, with no migration. Where only one picture exists the tile letterboxes it rather than cropping.
+- Cached artwork sized for a tile: a metahub background is narrowed to its small variant before the proxy ever sees the address, and anything else is re-encoded once to 640px as it is cached, through the ffmpeg already in the image.
 
 ## Next (daily friction)
 

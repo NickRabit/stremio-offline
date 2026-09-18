@@ -9,7 +9,7 @@ import { test } from "node:test";
 import { promisify } from "node:util";
 import {
   artNames, artOutput, artVariantKey, ArtworkQueue, artworkBesideMedia, BACKDROP_NAMES, fileMayUseFolderArtwork,
-  findArtwork, POSTER_NAMES, saveBackdropAs, savePosterAs,
+  findArtwork, pickArtwork, POSTER_NAMES, readFolderListing, saveBackdropAs, savePosterAs,
 } from "./artwork.js";
 import { ArtworkCache } from "./artwork-cache.js";
 
@@ -153,4 +153,19 @@ test("a catalogue backdrop is narrowed before it is stored", { skip: !hasFfmpeg 
     await new Promise<void>((resolve) => (server as Server).close(() => resolve()));
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test("one listing answers both shapes, and an unreadable folder answers neither", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-listing-"));
+  await writeFile(path.join(directory, "Poster.JPG"), "x");
+  await writeFile(path.join(directory, "backdrop.jpg"), "x");
+
+  const listing = await readFolderListing(directory);
+  // The name on disk comes back, not the lowercased one it was found by.
+  assert.equal(pickArtwork(listing, POSTER_NAMES), "Poster.JPG");
+  assert.equal(pickArtwork(listing, BACKDROP_NAMES), "backdrop.jpg");
+
+  assert.equal(await readFolderListing(path.join(directory, "gone")), undefined);
+  assert.equal(pickArtwork(undefined, POSTER_NAMES), undefined);
+  await rm(directory, { recursive: true, force: true });
 });

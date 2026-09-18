@@ -40,7 +40,7 @@ import { LibraryScan } from "./library-scan.js";
 import { createLibraryProbe, type LibraryHealth } from "./library-probe.js";
 import { LibraryAutoScan } from "./library-autoscan.js";
 import { watchLibrary } from "./library-watch.js";
-import { ArtworkQueue, artNames, artOutput, artVariantKey, artworkBesideMedia, BACKDROP_OUTPUT, episodeArtName, fileMayUseFolderArtwork, findArtwork, framePosition, POSTER_OUTPUT, saveBackdropAs, saveFrame, savePosterAs, type ArtShape, type PosterOutcome } from "./artwork.js";
+import { ArtworkQueue, artNames, artOutput, artVariantKey, artworkBesideMedia, BACKDROP_OUTPUT, episodeArtName, fileMayUseFolderArtwork, findArtwork, type FolderListing, framePosition, pickArtwork, readFolderListing, POSTER_OUTPUT, saveBackdropAs, saveFrame, savePosterAs, type ArtShape, type PosterOutcome } from "./artwork.js";
 import { clearedCookie, createSession, DECOY_HASH, LoginThrottle, pruneRevoked, envCredentials, hashPassword, INTERNAL_TOKEN, parseCookies, readSession, secretEquals, REMEMBER_DAYS, SESSION_COOKIE, sessionCookie, verifyPassword } from "./auth.js";
 import { RepeatFilter } from "./access-log.js";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -1611,13 +1611,22 @@ function scheduleFileArtwork(key: string, shape: ArtShape = "poster") {
   });
 }
 
-/** Folder thumbnail: its own picture, then the one from metadata, otherwise a frame from the first video inside. */
-async function locateFolderArtwork(key: string, shape: ArtShape = "poster") {
-  const folder = mediaPath(key);
-  const existing = await findArtwork(folder, artNames(shape));
-  if (existing) return path.join(folder, existing);
+const folderArtworkIn = (key: string, listing: FolderListing | undefined) => async (shape: ArtShape) => {
+  const existing = pickArtwork(listing, artNames(shape));
+  if (existing) return path.join(mediaPath(key), existing);
   const own = storeArt(`dir:${key}`, shape);
   return own && await fileExists(own) ? own : undefined;
+};
+
+/** Folder thumbnail: its own picture, then the one from metadata, otherwise a frame from the first video inside. */
+async function locateFolderArtwork(key: string, shape: ArtShape = "poster") {
+  return folderArtworkIn(key, await readFolderListing(mediaPath(key)))(shape);
+}
+
+/** Both shapes out of one listing, for the rows that draw a poster and a backdrop side by side. */
+async function locateFolderArtworkPair(key: string) {
+  const shaped = folderArtworkIn(key, await readFolderListing(mediaPath(key)));
+  return { poster: await shaped("poster"), wide: await shaped("wide") };
 }
 
 function scheduleFolderArtwork(key: string, shape: ArtShape = "poster") {
@@ -1958,9 +1967,10 @@ app.get("/api/library/favorites", asyncRoute(async (req, res) => {
   const limit = Math.max(1, Math.min(120, Number(req.query.limit) || 60));
   const page = await Promise.all(ordered.slice(skip, skip + limit).map(async (item) => {
     const key = libraryKey(item.path);
-    const art = item.kind === "folder" ? await locateFolderArtwork(key) : await locateFileArtwork(key);
+    const { poster: art, wide } = item.kind === "folder"
+      ? await locateFolderArtworkPair(key)
+      : { poster: await locateFileArtwork(key), wide: await locateFileArtwork(key, "wide") };
     if (!art) (item.kind === "folder" ? scheduleFolderArtwork : scheduleFileArtwork)(key);
-    const wide = item.kind === "folder" ? await locateFolderArtwork(key, "wide") : await locateFileArtwork(key, "wide");
     if (!wide) (item.kind === "folder" ? scheduleFolderArtwork : scheduleFileArtwork)(key, "wide");
     const poster = await thumbUrl(item.kind === "folder" ? "dir" : "path", item.path, art);
     const wideUrl = await thumbUrl(item.kind === "folder" ? "dir" : "path", item.path, wide, "wide");
@@ -2003,9 +2013,8 @@ app.get("/api/library/browse", asyncRoute(async (req, res) => {
     const key = inLibrary(item.path);
     const path = wirePath(key);
     if (item.kind === "folder") {
-      const art = await locateFolderArtwork(key);
+      const { poster: art, wide } = await locateFolderArtworkPair(key);
       if (!art) scheduleFolderArtwork(key);
-      const wide = await locateFolderArtwork(key, "wide");
       if (!wide) scheduleFolderArtwork(key, "wide");
       const { item: withMeta, backfill } = attachBrowseMeta({ ...item, path });
       return {
