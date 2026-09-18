@@ -1043,3 +1043,10 @@ img.broken{visibility:hidden}
 .library-check .switch span:after{width:18px;height:18px}
 .library-check .switch input:checked+span:after{left:21px}
 .addon-edit-section .download-rule-grid{grid-template-columns:1fr}
+/* The detail column grows with the window, and past about 1920px it grows into space
+   the poster grid could have spent on another column: its own content stops well
+   before that -- the description, the three filters and a source row all fit inside
+   720px. Capping it there is continuous (the column is already 725px at 1920px) and
+   hands the rest to the grid, which answers extra width with another column rather
+   than a bigger poster. Tiles keep growing with the panel below this, as intended. */
+@media(min-width:1920px){.catalog-layout{grid-template-columns:minmax(460px,1fr) minmax(360px,720px)}}
