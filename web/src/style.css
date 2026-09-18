@@ -332,6 +332,8 @@ main.view-catalog{padding-top:98px}main.view-catalog .heading{margin-bottom:8px}
   main.view-catalog .filterbar .scope-badge,main.view-catalog .filterbar .filter-note{display:none}
   main.view-catalog .catalog-layout{display:block;min-height:0;height:0;flex:1 1 auto}
   main.view-catalog .result-panel{height:100%;margin:0;padding:10px}
+  /* The one grid that stays absolute. There is room for about one row here, so a tile
+     sized by the setting would show a third of it and nothing else. */
   main.view-catalog .poster-grid{grid-template-columns:repeat(auto-fill,minmax(82px,1fr));gap:9px}
   main.view-catalog .detail-panel{display:none}
   main.view-catalog .detail-panel.mobile-open{position:fixed;z-index:45;inset:54px 0 0 calc(56px + env(safe-area-inset-left, 0px));display:grid;grid-template-columns:minmax(210px,.72fr) minmax(0,1.5fr);grid-template-rows:36px minmax(0,1fr);gap:6px 8px;min-height:0;margin:0;padding:0 max(10px, env(safe-area-inset-right, 0px)) max(8px, env(safe-area-inset-bottom, 0px)) 8px;overflow:hidden;overflow-x:clip;overscroll-behavior:none;overscroll-behavior-x:none;touch-action:pan-y;border:0;border-radius:0;background:var(--bg);box-shadow:none}
