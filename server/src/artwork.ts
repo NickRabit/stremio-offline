@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { access, readdir, rename, writeFile } from "node:fs/promises";
+import { access, readdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { log } from "./logger.js";
@@ -14,6 +14,20 @@ export const POSTER_NAMES = ["poster.jpg", "poster.png", "folder.jpg", "folder.p
 export const BACKDROP_NAMES = ["backdrop.jpg", "fanart.jpg", "background.jpg"];
 /** Our own output. Jellyfin picks it up as the poster when it scans. */
 export const POSTER_OUTPUT = "poster.jpg";
+/** The same for the wide variant: the first name Emby and Jellyfin read for a backdrop. */
+export const BACKDROP_OUTPUT = "backdrop.jpg";
+
+/** The two pictures a title keeps: the portrait poster and the landscape backdrop. The
+ *  spelling matches the interface's tile shape. */
+export type ArtShape = "poster" | "wide";
+
+export const artNames = (shape: ArtShape) => shape === "wide" ? BACKDROP_NAMES : POSTER_NAMES;
+export const artOutput = (shape: ArtShape) => shape === "wide" ? BACKDROP_OUTPUT : POSTER_OUTPUT;
+
+/** The key a shape's variant holds in the generated-artwork store: a second sha1 in the same
+ *  directory, so it inherits the byte accounting and the eviction of `artwork-cache.ts`. The
+ *  poster keeps the key it has always had, so no file on disk is renamed by the second one. */
+export const artVariantKey = (key: string, shape: ArtShape) => shape === "wide" ? `${key}#wide` : key;
 
 /** A generated poster lands next to the media only where the library allows writing. A
  *  read-only root, a root that is away and a library the user keeps curated all fall back
@@ -80,8 +94,9 @@ export type PosterOutcome =
   | { ok: true }
   | { ok: false; reason: "status" | "content-type" | "size" | "failed"; detail?: string };
 
-/** Downloads a picture to an exact place. Used for the poster the client sent from the catalogue. */
-export async function savePosterAs(target: string, url: string): Promise<PosterOutcome> {
+type FetchOutcome = { ok: true; data: Buffer } | Extract<PosterOutcome, { ok: false }>;
+
+const fetchPicture = async (url: string): Promise<FetchOutcome> => {
   try {
     const response = await guardedFetch(url, { signal: AbortSignal.timeout(20_000) });
     if (!response.ok) return { ok: false, reason: "status", detail: `${response.status}` };
@@ -89,10 +104,61 @@ export async function savePosterAs(target: string, url: string): Promise<PosterO
     if (!type.startsWith("image/")) return { ok: false, reason: "content-type", detail: type || "(none)" };
     const data = Buffer.from(await response.arrayBuffer());
     if (!data.length || data.length > 8 * 1024 * 1024) return { ok: false, reason: "size", detail: `${data.length}` };
-    await writeAtomic(target, data);
+    return { ok: true, data };
+  } catch (error) {
+    return { ok: false, reason: "failed", detail: error instanceof Error ? error.message : String(error) };
+  }
+};
+
+/** Downloads a picture to an exact place. Used for the poster the client sent from the catalogue. */
+export async function savePosterAs(target: string, url: string): Promise<PosterOutcome> {
+  const fetched = await fetchPicture(url);
+  if (!fetched.ok) return fetched;
+  try {
+    await writeAtomic(target, fetched.data);
     return { ok: true };
   } catch (error) {
     return { ok: false, reason: "failed", detail: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/** The widest a stored backdrop may be. The catalogue hands out 200 kB - 1 MB backgrounds, and
+ *  a second variant of every title at that weight would start evicting posters that are in use. */
+const BACKDROP_WIDTH = 640;
+
+/** Narrows a picture to a width cap. The filter is the one the image proxy uses for its tiles. */
+async function shrinkToWidth(source: string, target: string, width: number): Promise<boolean> {
+  const temp = `${target}.tmp.jpg`;
+  try {
+    await run("ffmpeg", [
+      "-hide_banner", "-loglevel", "error", "-nostdin", "-threads", "1",
+      "-i", source, "-vf", `scale='min(${width},iw)':-2`, "-frames:v", "1", "-q:v", "5", "-y", temp,
+    ], { timeout: 15_000, killSignal: "SIGKILL" });
+    await rename(temp, target);
+    return true;
+  } catch (error) {
+    await rm(temp, { force: true });
+    log("WARN", "The backdrop could not be narrowed", { reason: error instanceof Error ? error.message.slice(0, 120) : String(error) });
+    return false;
+  }
+}
+
+/** Downloads the wide variant of a catalogue picture and narrows it before it is stored. A
+ *  picture ffmpeg could not read back is kept as it arrived: a large backdrop is worth more
+ *  than a tile with no landscape picture at all. */
+export async function saveBackdropAs(target: string, url: string): Promise<PosterOutcome> {
+  const fetched = await fetchPicture(url);
+  if (!fetched.ok) return fetched;
+  const source = `${target}.src.jpg`;
+  try {
+    // The same mode a poster is written with, because the fallback below renames this very file.
+    await writeFile(source, fetched.data, { mode: 0o644 });
+    if (!await shrinkToWidth(source, target, BACKDROP_WIDTH)) await rename(source, target);
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, reason: "failed", detail: error instanceof Error ? error.message : String(error) };
+  } finally {
+    await rm(source, { force: true });
   }
 }
 
