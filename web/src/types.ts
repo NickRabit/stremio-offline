@@ -61,6 +61,7 @@ export interface DownloadSnapshot { jobs: Download[]; halt: QueueHalt | null }
 
 export type PlaybackMode = "direct" | "remux" | "transcode";
 export type TileSize = "compact" | "small" | "medium" | "large";
+export type TileShape = "poster" | "wide";
 export interface Track { index: number; codec: string; language?: string; title?: string; channels?: number; default?: boolean; forced?: boolean }
 export interface Inspection { duration?: number; video?: { codec: string; width?: number; height?: number }; audioTracks: Track[]; subtitleTracks: Track[] }
 export interface BuildInfo { status: string; version: string; builtAt?: string; commit?: string; restricted?: boolean }
@@ -107,7 +108,9 @@ export interface Settings {
   /** What the server writes down, as opposed to what the log view filters back out. */
   logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR";
   addonRefreshHours: number;
-  catalogTileSize: TileSize; libraryTileSize: TileSize; realDebridConfigured: boolean; tmdbConfigured: boolean;
+  catalogTileSize: TileSize; libraryTileSize: TileSize;
+  catalogTileShape: TileShape; libraryTileShape: TileShape;
+  realDebridConfigured: boolean; tmdbConfigured: boolean;
 }
 export type SettingsPatch = Partial<Omit<Settings, "realDebridConfigured" | "tmdbConfigured">> & { realDebridToken?: string; tmdbApiKey?: string };
 export interface SettingsBackup {

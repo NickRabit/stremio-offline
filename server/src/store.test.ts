@@ -25,6 +25,8 @@ test("an old addon state migrates to the default save rules", async () => {
     });
     assert.equal(store.settings().catalogTileSize, "medium");
     assert.equal(store.settings().libraryTileSize, "medium");
+    assert.equal(store.settings().catalogTileShape, "poster");
+    assert.equal(store.settings().libraryTileShape, "poster");
     assert.equal(store.settings().realDebridToken, "");
     assert.equal(store.settings().downloadTitleLanguage, "ui");
     assert.equal(store.addons()[0].globalSearch, true);
