@@ -123,7 +123,7 @@ main.view-catalog{padding-top:98px}main.view-catalog .heading{margin-bottom:8px}
 /* Tile widths follow the panel the grid sits in, not the window: the catalogue grid
    shares its row with the detail panel, whose width must not move. The floor is what
    makes a narrowing panel drop a column instead of shrinking every tile. */
-.catalog-tiles-compact{--catalog-tile-poster:clamp(78px,9cqw,130px);--catalog-tile-wide:clamp(132px,15cqw,220px)}.catalog-tiles-small{--catalog-tile-poster:clamp(96px,11cqw,160px);--catalog-tile-wide:clamp(160px,18cqw,270px)}.catalog-tiles-medium{--catalog-tile-poster:clamp(112px,13cqw,195px);--catalog-tile-wide:clamp(170px,22cqw,330px)}.catalog-tiles-large{--catalog-tile-poster:clamp(150px,20cqw,300px);--catalog-tile-wide:clamp(250px,33cqw,500px)}.library-tiles-compact{--browse-tile-min:clamp(130px,15cqw,210px)}.library-tiles-small{--browse-tile-min:clamp(160px,18cqw,250px)}.library-tiles-medium{--browse-tile-min:clamp(190px,21cqw,300px)}.library-tiles-large{--browse-tile-min:clamp(250px,28cqw,400px)}.catalog-shape-poster{--catalog-tile-aspect:2/3}.catalog-shape-wide{--catalog-tile-aspect:16/9;--catalog-tile-min:var(--catalog-tile-wide)}.library-shape-poster{--library-tile-aspect:2/3}.library-shape-wide{--library-tile-aspect:16/9;--library-tile-min:var(--library-tile-wide)}.app-shell .poster-grid{grid-template-columns:repeat(auto-fill,minmax(var(--catalog-tile-min,var(--catalog-tile-poster,115px)),1fr))}.app-shell .browse-grid{grid-template-columns:repeat(auto-fill,minmax(var(--browse-tile-min,190px),1fr))}
+.catalog-tiles-compact{--catalog-tile-poster:clamp(78px,9cqw,130px);--catalog-tile-wide:clamp(150px,17.5cqw,260px)}.catalog-tiles-small{--catalog-tile-poster:clamp(96px,11cqw,160px);--catalog-tile-wide:clamp(170px,22cqw,320px)}.catalog-tiles-medium{--catalog-tile-poster:clamp(112px,13cqw,195px);--catalog-tile-wide:clamp(200px,28cqw,420px)}.catalog-tiles-large{--catalog-tile-poster:clamp(150px,20cqw,300px);--catalog-tile-wide:clamp(280px,41cqw,700px)}.library-tiles-compact{--browse-tile-min:clamp(130px,15cqw,210px)}.library-tiles-small{--browse-tile-min:clamp(160px,18cqw,250px)}.library-tiles-medium{--browse-tile-min:clamp(190px,21cqw,300px)}.library-tiles-large{--browse-tile-min:clamp(250px,28cqw,400px)}.catalog-shape-poster{--catalog-tile-aspect:2/3}.catalog-shape-wide{--catalog-tile-aspect:16/9;--catalog-tile-min:var(--catalog-tile-wide)}.library-shape-poster{--library-tile-aspect:2/3}.library-shape-wide{--library-tile-aspect:16/9;--library-tile-min:var(--library-tile-wide)}.app-shell .poster-grid{grid-template-columns:repeat(auto-fill,minmax(var(--catalog-tile-min,var(--catalog-tile-poster,115px)),1fr))}.app-shell .browse-grid{grid-template-columns:repeat(auto-fill,minmax(var(--browse-tile-min,190px),1fr))}
 
 /* Download statistics. The .panel class gives no inner padding in this application -- other
    panels carry it in their own content -- so it is added here, or the text and bars would
@@ -219,7 +219,7 @@ main.view-catalog{padding-top:98px}main.view-catalog .heading{margin-bottom:8px}
   .searchbar input,.searchbar select,.searchbar button{min-height:44px}
   .scope-select{display:grid;grid-template-columns:auto minmax(0,1fr)}
   .scope-select select{width:100%;max-width:none}
-  .filterbar{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px 10px;margin:0 0 12px}
+  .filterbar{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto;gap:9px 10px;margin:0 0 12px}.filterbar>button{align-self:end;min-height:42px;padding:9px 12px}
   .filterbar label{display:grid;align-items:end;gap:5px;min-width:0}
   .filterbar label.catalog-filter,.filterbar .scope-badge,.filterbar .filter-note{grid-column:1/-1}
   .filterbar select{width:100%;min-height:42px;padding:8px 10px}
@@ -325,7 +325,7 @@ main.view-catalog{padding-top:98px}main.view-catalog .heading{margin-bottom:8px}
   main.view-catalog .searchbar input,main.view-catalog .searchbar select,main.view-catalog .searchbar button{min-height:36px;padding-top:6px;padding-bottom:6px}
   main.view-catalog .scope-select>span{display:none}
   main.view-catalog .scope-select select{width:100%;max-width:none}
-  main.view-catalog .filterbar{display:grid;grid-template-columns:minmax(210px,1fr) minmax(110px,.45fr) minmax(130px,.5fr);gap:7px;margin:0 0 7px}
+  main.view-catalog .filterbar{display:grid;grid-template-columns:minmax(190px,1fr) minmax(105px,.45fr) minmax(120px,.5fr) auto;gap:7px;margin:0 0 7px}.filterbar>button{align-self:stretch;min-height:34px;padding:5px 9px}
   main.view-catalog .filterbar label{display:block;min-width:0}
   main.view-catalog .filterbar label>span{display:none}
   main.view-catalog .filterbar select{width:100%;max-width:none;min-height:34px;padding:5px 8px}
@@ -730,8 +730,10 @@ img.broken{visibility:hidden}
 .library-maintenance-actions{display:flex;flex-wrap:wrap;gap:8px}
 .library-page .library-maintenance-toggle{display:none}
 @media(max-width:700px){
-  .library-page .browse-tools{display:grid;grid-template-columns:minmax(0,1fr) repeat(5,44px);gap:6px}
-  .library-page .browse-tools .search-input{grid-column:1/-1;min-width:0}
+  .library-page .browse-tools{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:6px}
+  .library-page .browse-tools .search-input{grid-column:1/4;min-width:0}
+  .library-page .browse-tools>select{grid-column:4/-1}
+  .library-page .library-maintenance{grid-column:auto}
   .library-page .browse-tools>button,.library-page .browse-tools select{width:100%;padding:8px;min-width:0}
   .library-page .library-maintenance-toggle{display:flex;width:44px;height:44px;padding:8px}
   .library-maintenance-actions{display:none;position:absolute;right:0;top:calc(100% + 8px);z-index:10;width:max-content;max-width:calc(100vw - 64px);padding:6px;border:1px solid var(--line);border-radius:10px;background:var(--panel2);box-shadow:0 12px 30px #0009}
