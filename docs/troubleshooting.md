@@ -33,9 +33,10 @@ token was presented and why it was not accepted, never the credential itself.
 
 A request that arrives without a valid session, and an AirPlay request that is
 turned away, are recorded at `WARN`. Both repeat -- a player whose session
-expired retries several times a second -- so each is reported once a minute per
-address and path, and the next line carries an `alsoRefused` count of the ones
-held back in between.
+expired retries several times a second -- so each is reported once a minute: a
+session refusal per address, path and cookie state, an AirPlay one per reason and
+path. The next line carries an `alsoRefused` count of the ones held back in
+between.
 
 `LOG_LEVEL=DEBUG` adds request and conversion detail, and the scores that
 decided a library title was left unmatched.

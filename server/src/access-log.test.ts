@@ -34,3 +34,13 @@ test("the map does not grow without bound", () => {
   for (let i = 0; i < 100; i += 1) filter.record(`key-${i}`);
   assert.ok(filter.record("key-99") === undefined, "the newest key is still remembered");
 });
+
+test("an overflow drops an idle key, not the busiest one", () => {
+  let now = 0;
+  const filter = new RepeatFilter(() => now, 60_000, 10);
+  assert.deepEqual(filter.record("busy"), { suppressed: 0 });
+  // The loud key keeps knocking while twenty quiet ones arrive behind it.
+  for (let i = 0; i < 20; i += 1) { assert.equal(filter.record("busy"), undefined); filter.record(`key-${i}`); }
+  now += 60_000;
+  assert.deepEqual(filter.record("busy"), { suppressed: 20 }, "the count it stood for has to survive the overflow");
+});

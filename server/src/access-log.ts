@@ -14,11 +14,16 @@ export class RepeatFilter {
     while (this.seen.size > this.maxKeys) this.seen.delete(this.seen.keys().next().value!);
   }
 
-  /** How many were held back since the last reported one, or undefined when this one stays quiet. */
+  /** How many were held back since the last reported one, or undefined when this one stays quiet.
+   *  Both branches reinsert the key: a Map keeps a key where it was first put even when the value
+   *  is replaced, so without this the busiest key is the oldest one and an overflow throws it out
+   *  first -- costing exactly the count it was keeping. Reinserting orders the map by last use,
+   *  and the key that falls out is one nobody has asked about in a while. */
   record(key: string): { suppressed: number } | undefined {
     this.prune();
     const entry = this.seen.get(key);
-    if (entry && entry.until > this.now()) { entry.suppressed += 1; return undefined; }
+    this.seen.delete(key);
+    if (entry && entry.until > this.now()) { entry.suppressed += 1; this.seen.set(key, entry); return undefined; }
     this.seen.set(key, { until: this.now() + this.windowMs, suppressed: 0 });
     return { suppressed: entry?.suppressed ?? 0 };
   }

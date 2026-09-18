@@ -91,7 +91,7 @@ test("after an outage and a resumed transfer the retry budget comes back", async
     assert.equal(job.retryCount, 0, "after a resumed transfer the retry budget should be full again");
     assert.equal((await stat(path.join(directory, "downloads", job.target))).size, TOTAL);
   } finally {
-    manager.stop();
+    await manager.stop();
     server.close();
     await rm(directory, { recursive: true, force: true });
   }
@@ -121,7 +121,7 @@ const runThree = async (perProvider: number) => {
     assert.deepEqual(queue.list().map((job) => job.status), ["completed", "completed", "completed"]);
     return peak();
   } finally {
-    queue.stop();
+    await queue.stop();
     server.close();
     await rm(directory, { recursive: true, force: true });
   }
@@ -147,7 +147,7 @@ test("the same source cannot be queued twice", async () => {
     await queue.pause(other.id);
     assert.equal(queue.list().length, 2);
   } finally {
-    queue.stop();
+    await queue.stop();
     await rm(directory, { recursive: true, force: true });
   }
 });
@@ -185,7 +185,7 @@ test("a save rule sends the file into the library it names", async () => {
     await waitFor(queue, () => queue.list().find((item) => item.id === fallback.id)?.status === "completed");
     assert.equal((await stat(path.join(downloadDir, "Other", "Other.mp4"))).size, size);
   } finally {
-    queue.stop();
+    await queue.stop();
     server.close();
     await rm(directory, { recursive: true, force: true });
   }
@@ -225,7 +225,7 @@ test("a rule whose library is away waits for it instead of landing somewhere els
     assert.equal((await stat(path.join(archiveRoot, "Film", "Film.mp4"))).size, size);
     await assert.rejects(stat(path.join(downloadDir, "Film", "Film.mp4")), "the fallback stays empty");
   } finally {
-    queue.stop();
+    await queue.stop();
     server.close();
     await rm(directory, { recursive: true, force: true });
   }
@@ -264,7 +264,7 @@ test("a job waits for a removed library and finishes there once it is added agai
     assert.equal((await stat(path.join(archiveRoot, "Film", "Film.mp4"))).size, size);
     await assert.rejects(stat(path.join(downloadDir, "Film", "Film.mp4")), "nothing landed in the download directory");
   } finally {
-    queue.stop();
+    await queue.stop();
     server.close();
     await rm(directory, { recursive: true, force: true });
   }
@@ -297,7 +297,7 @@ test("a clean close short of Content-Length is retried from the .part file", asy
     assert.ok(requests >= 2, "the short first response must be followed by a Range resume");
     assert.equal((await stat(path.join(downloads, job.target))).size, size);
   } finally {
-    queue.stop();
+    await queue.stop();
     server.close();
     await rm(directory, { recursive: true, force: true });
   }
@@ -317,7 +317,7 @@ test("a clean close without a known size is not treated as finished", async () =
     assert.notEqual(job.status, "completed");
     assert.match(job.error ?? "", /ended early|does not match|retry/);
   } finally {
-    queue.stop();
+    await queue.stop();
     server.close();
     await rm(directory, { recursive: true, force: true });
   }
@@ -349,7 +349,7 @@ test("ENOSPC pauses the queue and leaves later jobs untouched", async () => {
     await new Promise((resolve) => setTimeout(resolve, 80));
     assert.equal(hits, 1, "the second job must not start while storage is halted");
   } finally {
-    queue.stop();
+    await queue.stop();
     server.close();
     await rm(directory, { recursive: true, force: true });
   }
@@ -380,7 +380,7 @@ test("the queue resumes by itself once free space returns", async () => {
     assert.equal(queue.haltInfo(), null);
     assert.equal((await stat(path.join(downloads, queue.list()[0].target))).size, size);
   } finally {
-    queue.stop();
+    await queue.stop();
     server.close();
     await rm(directory, { recursive: true, force: true });
   }
@@ -409,7 +409,7 @@ test("a 206 that restarts at byte 0 does not append onto the .part file", async 
     assert.equal(body.length, size);
     assert.ok(body.every((byte) => byte === 2), "the restarted payload must replace the partial, not follow it");
   } finally {
-    queue.stop();
+    await queue.stop();
     server.close();
     await rm(directory, { recursive: true, force: true });
   }
@@ -431,7 +431,7 @@ test("notBefore stops pump from retrying immediately", async () => {
     assert.equal(hits, hitsAfterFirst, "Retry-After must be honoured");
     assert.equal(queue.list()[0].status, "queued");
   } finally {
-    queue.stop();
+    await queue.stop();
     server.close();
     await rm(directory, { recursive: true, force: true });
   }
@@ -464,7 +464,7 @@ test("a downloading job is requeued from the .part file after load", async () =>
     assert.equal(restored.list()[0].status, "completed", restored.list()[0].error);
     assert.equal((await stat(path.join(downloads, "Film.mp4"))).size, size);
   } finally {
-    restored.stop();
+    await restored.stop();
     server.close();
     await rm(directory, { recursive: true, force: true });
   }
@@ -496,7 +496,7 @@ test("HTTP 404 fails a direct job and moves a lazy job to the next source", asyn
     assert.equal(lazy.status, "completed", lazy.error);
     assert.ok(goodHits >= 1);
   } finally {
-    queue.stop();
+    await queue.stop();
     server.close();
     await rm(directory, { recursive: true, force: true });
   }
@@ -528,7 +528,7 @@ test("a smart job stores selected addon subtitles beside the completed episode",
     assert.equal(queue.list()[0].status, "completed", queue.list()[0].error);
     assert.match(await readFile(path.join(downloads, "Show", "01 serie", "01.cs.vtt"), "utf8"), /WEBVTT[\s\S]*00:00:01\.000[\s\S]*Ahoj/);
   } finally {
-    queue.stop(); server.close(); await rm(directory, { recursive: true, force: true });
+    await queue.stop(); server.close(); await rm(directory, { recursive: true, force: true });
   }
 });
 
@@ -567,7 +567,7 @@ test("a torrent waits on Real-Debrid then downloads over HTTP without taking a s
     assert.equal((await stat(path.join(downloads, torrent.target))).size, payload.length);
     assert.ok(calls >= 2);
   } finally {
-    queue.stop();
+    await queue.stop();
     server.close();
     await rm(directory, { recursive: true, force: true }).catch(() => undefined);
   }
@@ -581,7 +581,7 @@ test("the same infoHash is not queued twice", async () => {
     await queue.add("Film", { infoHash: HASH, fileIdx: 0 });
     await assert.rejects(queue.add("Film", { infoHash: HASH, fileIdx: 0 }), /already in the queue/);
   } finally {
-    queue.stop();
+    await queue.stop();
     await rm(directory, { recursive: true, force: true });
   }
 });
@@ -605,7 +605,7 @@ test("a dropped Real-Debrid call is retried instead of failing the job", async (
     await waitFor(queue, () => calls >= 2 && queue.list()[0].status === "waiting");
     assert.equal(queue.list()[0].status, "waiting");
   } finally {
-    queue.stop();
+    await queue.stop();
     await rm(directory, { recursive: true, force: true });
   }
 });
@@ -615,7 +615,7 @@ test("a torrent without a token is refused", async () => {
   try {
     await assert.rejects(queue.add("Film", { infoHash: HASH }), /Real-Debrid/);
   } finally {
-    queue.stop();
+    await queue.stop();
     await rm(directory, { recursive: true, force: true });
   }
 });
@@ -632,7 +632,7 @@ test("a damaged queue file is quarantined and the server still starts", async ()
     assert.equal(queue.list().length, 0);
     assert.equal(await readFile(`${state}.bak`, "utf8"), "{not-json");
   } finally {
-    queue.stop();
+    await queue.stop();
     await rm(directory, { recursive: true, force: true });
   }
 });
@@ -705,7 +705,7 @@ test("a file is fetched over several connections and lands byte for byte", async
     assert.equal(peak(), 3, "all three segments should have run at once");
     await assertContent(path.join(downloads, job.target), SEGMENTED_TOTAL);
   } finally {
-    queue.stop(); server.close();
+    await queue.stop(); server.close();
     await rm(directory, { recursive: true, force: true });
   }
 });
@@ -720,7 +720,7 @@ test("a source that ignores ranges is downloaded over one stream", async () => {
     assert.equal(peak(), 0, "no ranged transfer should have started");
     await assertContent(path.join(downloads, job.target), SEGMENTED_TOTAL);
   } finally {
-    queue.stop(); server.close();
+    await queue.stop(); server.close();
     await rm(directory, { recursive: true, force: true });
   }
 });
@@ -741,7 +741,7 @@ test("a source that lies to the probe and then ignores ranges finishes as one st
     assert.deepEqual([...new Set(plans)], [undefined], "the attempt that succeeds must carry no plan");
     await assertContent(path.join(downloads, job.target), SEGMENTED_TOTAL);
   } finally {
-    queue.stop(); server.close();
+    await queue.stop(); server.close();
     await rm(directory, { recursive: true, force: true });
   }
 });
@@ -761,7 +761,7 @@ test("the part file of an abandoned plan is gone before the single stream writes
     assert.deepEqual(partAtWrite, [false], "a part file written at segment offsets must not survive into the single stream");
     await assertContent(path.join(downloads, job.target), SEGMENTED_TOTAL);
   } finally {
-    queue.stop(); server.close();
+    await queue.stop(); server.close();
     await rm(directory, { recursive: true, force: true });
   }
 });
@@ -788,7 +788,7 @@ test("falling back to one stream does not spend a retry", async () => {
     assert.ok(seen.length > 0, "the transfer that succeeds should have reported progress");
     assert.deepEqual([...new Set(seen)], [1], "the fallback must leave the retry budget where the connection drops left it");
   } finally {
-    queue.stop();
+    await queue.stop();
     server.close();
     await rm(directory, { recursive: true, force: true });
   }
@@ -821,7 +821,7 @@ test("a 200 on an unsegmented attempt still fails after three retries", async ()
     assert.equal(probes, 1, "the abandoned plan must not be built again");
     assert.ok(ranges.includes(""), "the attempt that failed has to have been the unsegmented one");
   } finally {
-    queue.stop(); server.close();
+    await queue.stop(); server.close();
     await rm(directory, { recursive: true, force: true });
   }
 });
@@ -856,7 +856,7 @@ test("a source that lies does not deny ranges to the source that follows it", as
     assert.equal(honest.peak(), 3, "the honest source has to be segmented on its own merits");
     await assertContent(path.join(downloads, job.target), SEGMENTED_TOTAL);
   } finally {
-    queue.stop(); liar.server.close(); honest.server.close();
+    await queue.stop(); liar.server.close(); honest.server.close();
     await rm(directory, { recursive: true, force: true });
   }
 });
@@ -871,7 +871,7 @@ test("a segment cut mid-transfer resumes at its own offset", async () => {
     assert.ok(requests().some((range) => /^bytes=[1-9]\d+-\d+$/.test(range)), `a retry should have asked for a later offset: ${requests().join(", ")}`);
     await assertContent(path.join(downloads, job.target), SEGMENTED_TOTAL);
   } finally {
-    queue.stop(); server.close();
+    await queue.stop(); server.close();
     await rm(directory, { recursive: true, force: true });
   }
 });
@@ -892,7 +892,7 @@ test("a paused segmented download keeps its plan and finishes after a resume", a
     assert.equal(queue.list()[0].status, "completed", queue.list()[0].error ?? "");
     await assertContent(path.join(downloads, job.target), SEGMENTED_TOTAL);
   } finally {
-    queue.stop(); server.close();
+    await queue.stop(); server.close();
     await rm(directory, { recursive: true, force: true });
   }
 });
