@@ -100,6 +100,35 @@ test.describe("layout invariants", () => {
     expect(tooSmall, "controls below the 24px minimum on a touch screen").toEqual([]);
   });
 
+  // Both dialogs keep their removal buttons behind a disclosure whose buttons do not
+  // wrap, so a container narrower than they are pushes them straight off the card.
+  // It guards the width, not the clipping that a scrolling dialog body can also cause:
+  // that one depends on how tall the dialog's content happens to be.
+  for (const dialog of [
+    { view: "Nastavení", open: "Upravit knihovnu", card: ".library-edit-card" },
+    { view: "Doplňky", open: "Upravit doplněk", card: ".addon-edit-card" },
+  ] as const) {
+    test(`removal options stay inside the ${dialog.open} dialog`, async ({ page }) => {
+      await openView(page, dialog.view);
+      await page.getByRole("button", { name: dialog.open }).first().click();
+      const card = page.locator(dialog.card);
+      await expect(card).toBeVisible();
+
+      const disclosure = card.locator(".library-admin-danger");
+      // The summary is styled `display:inline-flex`, which costs it the implicit button
+      // role, so it is reached as the element it is rather than by role.
+      await disclosure.locator("summary").click();
+      const options = disclosure.locator("> div");
+      await expect(options).toBeVisible();
+      await options.scrollIntoViewIfNeeded();
+
+      const [inner, outer] = await Promise.all([options.boundingBox(), card.boundingBox()]);
+      expect(inner!.x, "the options hang off the left of the dialog").toBeGreaterThanOrEqual(outer!.x - 1);
+      expect(inner!.x + inner!.width, "the options hang off the right of the dialog").toBeLessThanOrEqual(outer!.x + outer!.width + 1);
+      expect(inner!.y + inner!.height, "the options hang below the dialog").toBeLessThanOrEqual(outer!.y + outer!.height + 1);
+    });
+  }
+
   test("the poster grid fits whole columns", async ({ page }) => {
     await openView(page, "Katalog");
     const grid = page.locator(".poster-grid");

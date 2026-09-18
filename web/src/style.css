@@ -916,12 +916,12 @@ img.broken{visibility:hidden}
 .library-admin-buttons{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .library-admin-buttons button{padding:7px 11px;font-size:11px}
 .library-admin-buttons .library-admin-scan{grid-column:1/-1;border-color:#ff5b3855;color:var(--accent2);background:#ff5b3810}
-.library-admin-danger{position:relative;justify-self:end}
+.library-admin-danger{min-width:0}
 .library-admin-danger summary{display:inline-flex;align-items:center;gap:7px;padding:8px 10px;color:var(--muted);font-size:11px;font-weight:700;cursor:pointer;list-style:none}
 .library-admin-danger summary::-webkit-details-marker{display:none}
 .library-admin-danger summary svg{width:15px;height:15px}
 .library-admin-danger[open] summary{color:var(--red)}
-.library-admin-danger>div{position:absolute;z-index:5;right:0;top:calc(100% + 5px);display:grid;gap:6px;width:max-content;max-width:260px;padding:8px;border:1px solid var(--line);border-radius:10px;background:var(--panel2);box-shadow:0 12px 30px #0009}
+.library-admin-danger>div{display:grid;gap:6px;width:max-content;max-width:100%;margin-top:6px;padding:8px;border:1px solid var(--line);border-radius:10px;background:var(--panel2)}
 .library-admin-danger button{justify-content:flex-start;padding:8px 10px;font-size:11px;white-space:nowrap}
 .library-badge{font-style:normal;font-size:10px;font-weight:700;color:var(--muted);border:1px solid var(--line);border-radius:99px;padding:2px 8px}
 .library-badge.warn{color:#e7b867;border-color:#e7b86766;background:#2a2113}
@@ -940,7 +940,7 @@ img.broken{visibility:hidden}
 .library-edit-defaults{display:grid;gap:10px;padding:11px 12px;border:1px solid var(--line);border-radius:9px;background:#0d111788}
 .library-edit-defaults>strong{font-size:11px}
 .library-edit-section .library-admin-scan{justify-content:center;padding:9px 11px;border-color:#ff5b3855;color:var(--accent2);background:#ff5b3810}
-.library-edit-section .library-admin-danger{justify-self:start}
+
 .library-edit-footer{display:flex;justify-content:flex-end;gap:8px}
 .library-picker-section{display:grid;gap:10px;padding-top:14px;border-top:1px solid var(--line)}
 .library-picker-details{padding-top:0;border-top:0}
@@ -985,7 +985,7 @@ img.broken{visibility:hidden}
 .library-picker-footer .login-error{margin:0}
 .library-picker-footer .primary{justify-self:end;min-width:180px}
 .library-picker-footer .primary:disabled{border-color:var(--line);background:#252c37;color:var(--muted);box-shadow:none}
-@media(max-width:700px){.library-picker-fields,.library-manager-section .library-manager{grid-template-columns:1fr}.library-admin-row{padding:14px}.library-admin-head{display:grid}.library-admin-flags{justify-content:flex-start;max-width:none}.library-admin-controls{grid-template-columns:1fr}.library-admin-controls label.library-check:last-child{grid-column:auto}.library-admin-buttons button{width:100%}.library-admin-danger{justify-self:start}.library-admin-danger>div{left:0;right:auto}.library-picker-card,.library-edit-card{width:100%;max-height:96dvh;border-radius:16px 16px 0 0}.library-picker-manual{grid-template-columns:1fr}.library-picker-manual button{width:100%}.library-picker-footer .primary{justify-self:stretch;width:100%}.library-edit-folder{grid-template-columns:1fr}.library-edit-folder button{justify-self:start}.library-edit-footer{display:grid}.library-edit-footer button{width:100%}}
+@media(max-width:700px){.library-picker-fields,.library-manager-section .library-manager{grid-template-columns:1fr}.library-admin-row{padding:14px}.library-admin-head{display:grid}.library-admin-flags{justify-content:flex-start;max-width:none}.library-admin-controls{grid-template-columns:1fr}.library-admin-controls label.library-check:last-child{grid-column:auto}.library-admin-buttons button{width:100%}.library-picker-card,.library-edit-card{width:100%;max-height:96dvh;border-radius:16px 16px 0 0}.library-picker-manual{grid-template-columns:1fr}.library-picker-manual button{width:100%}.library-picker-footer .primary{justify-self:stretch;width:100%}.library-edit-folder{grid-template-columns:1fr}.library-edit-folder button{justify-self:start}.library-edit-footer{display:grid}.library-edit-footer button{width:100%}}
 
 /* Safari in a tab lays this fixed overlay out against the large viewport, so its own chrome
    pushed the video past the bottom edge. --player-viewport-* track the visual viewport. */
