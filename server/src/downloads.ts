@@ -164,6 +164,9 @@ export async function volumeSpace(target: string) {
 export class DownloadQueue {
   private jobs: DownloadJob[] = [];
   private active = new Map<string, AbortController>();
+  /** The transfers still in flight, so stop() can wait for their last state write. */
+  private running = new Set<Promise<void>>();
+  private stopped = false;
   private pauseRequested = new Set<string>();
   private pumpScheduled = false;
   private saveTimer?: NodeJS.Timeout;
@@ -232,7 +235,11 @@ export class DownloadQueue {
   setResolver(resolver: StreamResolver) { this.resolver = resolver; }
   setDebrid(engine: DebridEngine) { this.debrid = engine; }
   haltInfo() { return this.halt ? { ...this.halt } : null; }
-  stop() {
+  /** Aborts everything and resolves once the transfers have written their last state.
+   *  Callers that delete the data directory afterwards have to await it, or a straggling
+   *  save recreates the file underneath them. */
+  async stop() {
+    this.stopped = true;
     if (this.saveTimer) clearTimeout(this.saveTimer);
     if (this.retryTimer) clearTimeout(this.retryTimer);
     if (this.spaceWatch) clearInterval(this.spaceWatch);
@@ -241,6 +248,8 @@ export class DownloadQueue {
     for (const timer of this.debridTimers.values()) clearTimeout(timer);
     this.debridTimers.clear();
     for (const controller of this.active.values()) controller.abort();
+    await Promise.all([...this.running]);
+    await this.saveChain;
   }
 
   async load() {
@@ -724,7 +733,7 @@ export class DownloadQueue {
     this.pumpScheduled = true;
     queueMicrotask(() => {
       this.pumpScheduled = false;
-      if (this.halt) return;
+      if (this.halt || this.stopped) return;
       const limit = Math.max(1, Math.min(8, this.concurrency()));
       const perProvider = Math.max(1, Math.min(8, this.perProvider()));
       const taken = new Map<string, number>();
@@ -738,7 +747,9 @@ export class DownloadQueue {
         });
         if (!job) break;
         const key = this.provider(job); taken.set(key, (taken.get(key) ?? 0) + 1);
-        void this.download(job);
+        const run = this.download(job);
+        this.running.add(run);
+        void run.then(() => this.running.delete(run), () => this.running.delete(run));
       }
       const waiting = this.jobs.filter((item) => item.status === "queued" && !this.active.has(item.id) && (item.notBefore ?? 0) > now);
       if (waiting.length) {
