@@ -3,7 +3,7 @@ import { mkdtemp, readdir, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { ImageProxy, imageId } from "./images.js";
+import { ImageProxy, imageId, narrowArtwork } from "./images.js";
 import { configureSecureMode } from "./secure.js";
 import { initLogger } from "./logger.js";
 
@@ -148,4 +148,71 @@ test("an image served again survives its own age", async () => {
   const other = proxy.proxied("https://cdn.example/other.jpg")!.split("/").pop()!;
   await proxy.fetch(other);
   assert.ok((await proxy.fetch(id))?.file, "a picture somebody keeps looking at is not the one dropped");
+});
+
+test("a metahub background steps one size down", () => {
+  assert.equal(
+    narrowArtwork("https://images.metahub.space/background/medium/tt0903747/img"),
+    "https://images.metahub.space/background/small/tt0903747/img",
+  );
+  assert.equal(
+    narrowArtwork("https://images.metahub.space/background/large/tt0903747/img?token=1"),
+    "https://images.metahub.space/background/small/tt0903747/img?token=1",
+  );
+});
+
+test("everything a narrower tile cannot use keeps its address", () => {
+  const untouched = [
+    "https://images.metahub.space/background/small/tt0903747/img",
+    "https://images.metahub.space/poster/medium/tt0903747/img",
+    "https://images.metahub.space/logo/large/tt0903747/img",
+    "https://images.example/background/medium/tt0903747/img",
+    "https://images.metahub.space.evil.example/background/medium/tt0903747/img",
+    "images.metahub.space/background/medium/tt0903747/img",
+    "",
+  ];
+  for (const url of untouched) assert.equal(narrowArtwork(url), url);
+});
+
+test("only the background is narrowed on the way to the cache", async () => {
+  const { proxy, calls } = await harness();
+  const meta = proxy.rewriteMeta({
+    id: "tt1", type: "movie", name: "Film",
+    poster: "https://images.metahub.space/poster/medium/tt0903747/img",
+    background: "https://images.metahub.space/background/medium/tt0903747/img",
+    logo: "https://images.metahub.space/logo/medium/tt0903747/img",
+    videos: [{ id: "1", thumbnail: "https://images.metahub.space/background/medium/tt0903747/still.jpg" }],
+  });
+  const thumbnail = (meta.videos as Array<Record<string, unknown>>)[0]!.thumbnail as string;
+  for (const link of [meta.poster, meta.background, meta.logo, thumbnail]) await proxy.fetch(String(link).split("/").pop()!);
+  assert.deepEqual(calls, [
+    "https://images.metahub.space/poster/medium/tt0903747/img",
+    "https://images.metahub.space/background/small/tt0903747/img",
+    "https://images.metahub.space/logo/medium/tt0903747/img",
+    "https://images.metahub.space/background/medium/tt0903747/still.jpg",
+  ]);
+});
+
+test("a picture over the cap is turned away before any resize", async () => {
+  const { proxy, calls, dir } = await harness(async () => imageResponse(Buffer.alloc(9 * 1024 * 1024, 7), "image/jpeg"));
+  const id = proxy.proxied(REMOTE)!.split("/").pop()!;
+  assert.equal(await proxy.fetch(id), undefined);
+  assert.deepEqual(calls, [REMOTE]);
+  assert.deepEqual((await readdir(dir)).filter((name) => name !== "index.json"), []);
+});
+
+test("a picture ffmpeg cannot read is kept as it was fetched", async () => {
+  const { proxy } = await harness();
+  const id = proxy.proxied(REMOTE)!.split("/").pop()!;
+  const image = await proxy.fetch(id);
+  assert.equal(image?.type, "image/png");
+  assert.deepEqual(await readFile(image!.file), PNG);
+});
+
+test("a metahub address with a dot segment cannot be narrowed onto another host", () => {
+  // The first implementation spliced by byte offset into the original string, and a
+  // pathname the URL parser had normalised made that offset land inside the hostname.
+  const narrowed = narrowArtwork("https://images.metahub.space/background/medium/../medium/tt1/img");
+  assert.equal(new URL(narrowed).host, "images.metahub.space");
+  assert.equal(narrowed, "https://images.metahub.space/background/small/tt1/img");
 });
