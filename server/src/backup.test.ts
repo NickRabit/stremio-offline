@@ -10,7 +10,7 @@ const library = (over: Partial<LibraryRecord> & { id: string; root: string }): L
 });
 
 test("a backup keeps the settings, the order and the addon's sensitive URL", () => {
-  const settings = { ...defaultSettings(), concurrentDownloads: 4, audioLanguage: "sk", realDebridToken: "rd-secret", libraryScanPauseOnDownload: true };
+  const settings = { ...defaultSettings(), concurrentDownloads: 4, audioLanguage: "sk", realDebridToken: "rd-secret", libraryScanPauseOnDownload: true, catalogTileShape: "wide" as const, libraryTileShape: "wide" as const };
   const backup = createSettingsBackup(settings, [{
     key: "secret-key", manifestUrl: "https://example.com/token/abc/manifest.json", role: "source", enabled: false, globalSearch: false,
     addedAt: "2026-01-01T00:00:00.000Z", downloadSettings: defaultDownloadSettings(),
@@ -19,6 +19,8 @@ test("a backup keeps the settings, the order and the addon's sensitive URL", () 
   assert.equal(backup.settings.concurrentDownloads, 4);
   assert.equal(backup.settings.realDebridToken, "rd-secret");
   assert.equal(parseSettingsBackup(backup).settings.libraryScanPauseOnDownload, true);
+  assert.equal(parseSettingsBackup(backup).settings.catalogTileShape, "wide");
+  assert.equal(parseSettingsBackup(backup).settings.libraryTileShape, "wide");
   assert.equal(backup.addons[0].manifestUrl, "https://example.com/token/abc/manifest.json");
   assert.equal(backup.addons[0].globalSearch, false);
   assert.equal("key" in backup.addons[0], false);
@@ -36,9 +38,18 @@ test("an import refuses a foreign format and normalises the values", () => {
   assert.equal("artworkLocation" in parsed.settings, false, "the retired global is not restored");
   assert.equal(parsed.settings.realDebridToken, "");
   assert.equal(parsed.settings.libraryScanPauseOnDownload, false);
+  assert.equal(parsed.settings.catalogTileShape, "poster");
+  assert.equal(parsed.settings.libraryTileShape, "poster");
   assert.equal(parsed.settings.downloadTitleLanguage, "sk");
   assert.deepEqual(parsed.addons[0].downloadSettings, defaultDownloadSettings());
   assert.equal(parsed.addons[0].globalSearch, true);
+
+  const junk = parseSettingsBackup({
+    format: "stremio-offline-settings", version: 2, settings: { catalogTileShape: "landscape", libraryTileShape: 7 },
+    addons: [],
+  });
+  assert.equal(junk.settings.catalogTileShape, "poster");
+  assert.equal(junk.settings.libraryTileShape, "poster");
 });
 
 test("a backup carries the libraries and a rule that names one survives a round trip", () => {

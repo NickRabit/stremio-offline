@@ -3009,6 +3009,12 @@ app.patch("/api/settings", asyncRoute(async (req, res) => {
       const value = String(req.body.libraryTileSize);
       state.settings.libraryTileSize = value === "compact" || value === "small" || value === "large" ? value : "medium";
     }
+    if (req.body.catalogTileShape !== undefined) {
+      state.settings.catalogTileShape = String(req.body.catalogTileShape) === "wide" ? "wide" : "poster";
+    }
+    if (req.body.libraryTileShape !== undefined) {
+      state.settings.libraryTileShape = String(req.body.libraryTileShape) === "wide" ? "wide" : "poster";
+    }
     if (realDebridToken !== undefined) state.settings.realDebridToken = realDebridToken;
     if (tmdbApiKey !== undefined) state.settings.tmdbApiKey = tmdbApiKey;
   });

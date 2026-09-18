@@ -12,6 +12,7 @@ import type { ProgressSeries } from "./progress-series.js";
 export const SCHEMA_VERSION = 2;
 
 export type TileSize = "compact" | "small" | "medium" | "large";
+export type TileShape = "poster" | "wide";
 export interface Settings {
   concurrentDownloads: number; parallelPerProvider: number;
   /** Connections one file is split across. Above one, each part is fetched over its own range request. */
@@ -29,6 +30,7 @@ export interface Settings {
   /** Hours between automatic addon manifest refreshes; 0 leaves it to the buttons. */
   addonRefreshHours: number;
   catalogTileSize: TileSize; libraryTileSize: TileSize;
+  catalogTileShape: TileShape; libraryTileShape: TileShape;
   /** Where a download lands when the addon rule names no library. An empty id falls
    *  back to the first enabled library of the kind, then to the first `mixed` one. */
   defaultMovieLibrary: string; defaultSeriesLibrary: string;
@@ -64,7 +66,7 @@ export interface State { schemaVersion?: number;
   /** The last episode of a show that ran to the end, per series id. What turns a
    *  finished episode into the next one in Continue watching. */
   watchedSeries?: Record<string, { name: string; poster?: string; addonKey?: string; season: number; episode: number; updatedAt: string }> }
-const baseSettings: Settings = { concurrentDownloads: 1, parallelPerProvider: 1, downloadSegments: 2, uiLanguage: "en", audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui", mergeByName: true, streamSort: "recommended", trackProgress: true, showResumeRow: true, libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, addonRefreshHours: 24, catalogTileSize: "medium", libraryTileSize: "medium", defaultMovieLibrary: "", defaultSeriesLibrary: "", realDebridToken: "", tmdbApiKey: "" };
+const baseSettings: Settings = { concurrentDownloads: 1, parallelPerProvider: 1, downloadSegments: 2, uiLanguage: "en", audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui", mergeByName: true, streamSort: "recommended", trackProgress: true, showResumeRow: true, libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, addonRefreshHours: 24, catalogTileSize: "medium", libraryTileSize: "medium", catalogTileShape: "poster", libraryTileShape: "poster", defaultMovieLibrary: "", defaultSeriesLibrary: "", realDebridToken: "", tmdbApiKey: "" };
 
 /** A fresh install starts with the one library the download directory has always been,
  *  so it never runs the migration an upgrade needs. */
