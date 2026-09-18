@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { libraryTool } from "./library-tools";
 import { copyFile, mkdir, rm, stat } from "node:fs/promises";
 import path from "node:path";
 
@@ -25,7 +26,7 @@ test("library tools create a folder and the API enforces the bulk cap", async ({
   await page.goto("/");
   await page.getByRole("button", { name: "Knihovna", exact: true }).click();
   page.once("dialog", (dialog) => dialog.accept(created));
-  await page.getByRole("button", { name: "Vytvořit složku" }).click();
+  (await libraryTool(page, "Vytvořit složku")).click();
   await expect(page.getByText("Složka vytvořena.")).toBeVisible();
   await expect.poll(() => stat(path.join(downloads, created)).then((info) => info.isDirectory(), () => false)).toBe(true);
 
