@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ArrowDown, ArrowUp, Check, ChevronRight, CornerLeftUp, FolderOpen, FolderPlus, HardDrive, Pencil, Plus, RefreshCw, Search, Sparkles, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, ChevronRight, CornerLeftUp, FolderOpen, FolderPlus, HardDrive, Plus, RefreshCw, Search, SlidersHorizontal, Sparkles, Trash2, X } from "lucide-react";
 import { api, describeError } from "./api";
 import { t, useI18n } from "./i18n";
 import { bytes, SettingControl, SettingsSectionHead } from "./settings-ui";
@@ -18,20 +18,21 @@ export function LibraryManager({ restricted = false, onChanged, onError, onNotif
   useI18n();
   const [libraries, setLibraries] = useState<LibraryView[]>([]);
   const [picker, setPicker] = useState<{ reroot?: LibraryView } | null>(null);
+  const [editing, setEditing] = useState<LibraryView | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const load = async () => setLibraries(await api.libraries());
+  const load = async () => {
+    const rows = await api.libraries();
+    setLibraries(rows);
+    return rows;
+  };
   useEffect(() => { void load().catch(onError); }, []);
 
-  const patch = async (library: LibraryView, body: Parameters<typeof api.updateLibrary>[1], done: string) => {
+  const patch = async (library: LibraryView, body: Parameters<typeof api.updateLibrary>[1], done = t("library.updated")) => {
     setBusy(true);
-    try { await api.updateLibrary(library.id, body); await load(); onChanged?.(); onNotify(done); }
-    catch (error) { onError(error); }
+    try { await api.updateLibrary(library.id, body); await load(); onChanged?.(); onNotify(done); return true; }
+    catch (error) { onError(error); return false; }
     finally { setBusy(false); }
-  };
-  const rename = (library: LibraryView) => {
-    const wanted = prompt(t("library.renamePrompt"), library.name);
-    if (wanted && wanted !== library.name) void patch(library, { name: wanted }, t("library.updated"));
   };
   const scan = async (library: LibraryView) => {
     try { await api.startLibraryScan({ libraryId: library.id }); onNotify(t("library.scanStarted")); }
@@ -58,10 +59,10 @@ export function LibraryManager({ restricted = false, onChanged, onError, onNotif
     finally { setBusy(false); }
   };
   const remove = async (library: LibraryView, forget: boolean) => {
-    if (!confirm(t(forget ? "library.removeForgetConfirm" : "library.removeConfirm", { name: library.name }))) return;
+    if (!confirm(t(forget ? "library.removeForgetConfirm" : "library.removeConfirm", { name: library.name }))) return false;
     setBusy(true);
-    try { await api.deleteLibrary(library.id, forget); await load(); onChanged?.(); onNotify(t("library.removed")); }
-    catch (error) { onError(error); }
+    try { await api.deleteLibrary(library.id, forget); await load(); onChanged?.(); onNotify(t("library.removed")); return true; }
+    catch (error) { onError(error); return false; }
     finally { setBusy(false); }
   };
 
@@ -79,7 +80,7 @@ export function LibraryManager({ restricted = false, onChanged, onError, onNotif
           <small className="library-admin-root" title={library.root}>{library.root}</small>
         </div>
         <span className="library-admin-flags">
-          {restricted && <i className="library-badge">{libraryTypeLabel(library.type)}</i>}
+          <i className="library-badge">{libraryTypeLabel(library.type)}</i>
           {library.defaultMovie && <i className="library-badge">{t("library.defaultMovie")}</i>}
           {library.defaultSeries && <i className="library-badge">{t("library.defaultSeries")}</i>}
           {!library.enabled && <i className="library-badge off">{t("library.disabled")}</i>}
@@ -96,59 +97,19 @@ export function LibraryManager({ restricted = false, onChanged, onError, onNotif
         </span>}
       </div>
       <small className="library-admin-counts">{t("library.libraryCounts", { titles: library.titles, files: library.files, size: bytes(library.bytes) })}</small>
-      {!restricted && <div className="library-admin-controls">
-        <label><span>{t("library.libraryType")}</span>
-          <select aria-label={t("library.libraryType")} value={library.type} disabled={busy}
-            onChange={(event) => void patch(library, { type: event.target.value as LibraryType }, t("library.updated"))}>
-            {TYPES.map((type) => <option key={type} value={type}>{libraryTypeLabel(type)}</option>)}
-          </select></label>
-        <label className="library-check">
-          <span className="switch"><input type="checkbox" checked={library.enabled} disabled={busy}
-            onChange={(event) => void patch(library, { enabled: event.target.checked }, t("library.updated"))}/><span/></span>
-          <span>{t("library.enabled")}</span></label>
-        {(["movie", "series"] as const).map((kind) => {
-          const serves = library.type === kind || library.type === "mixed";
-          const key = kind === "movie" ? "defaultMovie" : "defaultSeries";
-          return <label className="library-check" key={key} title={serves ? undefined : t("library.defaultTypeHint")}>
-            <span className="switch"><input type="checkbox" checked={library[key]} disabled={busy || !serves}
-              onChange={(event) => void patch(library, { [key]: event.target.checked }, t("library.updated"))}/><span/></span>
-            <span>{t(`library.${key}`)}</span></label>;
-        })}
-        <label className="library-check">
-          <span className="switch"><input type="checkbox" checked={library.writeArtwork} disabled={busy || library.readOnly}
-            onChange={(event) => void patch(library, { writeArtwork: event.target.checked }, t("library.updated"))}/><span/></span>
-          <span>{t("library.writeArtwork")}</span></label>
-        <label className="library-check">
-          <span className="switch"><input type="checkbox" checked={library.mosaic !== false} disabled={busy}
-            onChange={(event) => void patch(library, { mosaic: event.target.checked }, t("library.updated"))}/><span/></span>
-          <span>{t("library.mosaic")}</span></label>
-        <label className="library-check">
-          <span className="switch"><input type="checkbox" checked={library.showInContinueWatching !== false} disabled={busy}
-            onChange={(event) => void patch(library, { showInContinueWatching: event.target.checked }, t("library.showInContinueWatching"))}/><span/></span>
-          <span>{t("library.showInContinueWatching")}</span></label>
-      </div>}
       {!restricted && <footer className="library-admin-footer">
-        <div className="library-admin-buttons">
-          <button className="library-admin-scan" onClick={() => void scan(library)}><Sparkles/> {t("library.scanThis")}</button>
-          <button onClick={() => setPicker({ reroot: library })}><FolderOpen/> {t("library.reroot")}</button>
-          <button onClick={() => void rename(library)}><Pencil/> {t("library.rename")}</button>
-        </div>
-        <details className="library-admin-danger">
-          <summary><Trash2/> {t("library.removeOptions")}</summary>
-          <div>
-            {libraries.length > 1
-              ? <>
-                <button className="danger" onClick={() => void remove(library, false)}><Trash2/> {t("library.removeLibrary")}</button>
-                <button className="danger" onClick={() => void remove(library, true)}><Trash2/> {t("library.removeForget")}</button>
-              </>
-              : <p className="identify-hint">{t("library.removeLastHint")}</p>}
-          </div>
-        </details>
+        <button onClick={() => setEditing(library)} disabled={busy}><SlidersHorizontal/> {t("library.editLibrary")}</button>
       </footer>}
     </article>)}
     {!libraries.length && <p className="identify-hint">{t("library.emptyText")}</p>}
+    {editing && <LibraryEditDialog key={`${editing.id}:${editing.root}`} library={editing} libraryCount={libraries.length} onClose={() => setEditing(null)}
+      onSave={async (body) => { if (await patch(editing, body)) setEditing(null); }}
+      onScan={() => scan(editing)} onReroot={() => setPicker({ reroot: editing })}
+      onRemove={async (forget) => { if (await remove(editing, forget)) setEditing(null); }}/>
+    }
     {picker && <RootPicker reroot={picker.reroot} onClose={() => setPicker(null)} onError={onError} onLibrariesChanged={onChanged}
-      onDone={async (message) => { setPicker(null); await load(); onChanged?.(); onNotify(message); }}/>}
+      onDone={async (message) => { setPicker(null); const rows = await load(); const updated = rows.find((row) => row.id === picker.reroot?.id); if (updated) setEditing(updated); onChanged?.(); onNotify(message); }}/>
+    }
   </div>;
 }
 
@@ -169,6 +130,106 @@ export function LibraryManagerDialog({ onClose, ...rest }: Parameters<typeof Lib
       </div>
       <LibraryManager {...rest} />
     </div>
+  </div>;
+}
+
+type LibrarySettingsPatch = Parameters<typeof api.updateLibrary>[1];
+
+function LibraryEditDialog({ library, libraryCount, onClose, onSave, onScan, onReroot, onRemove }:
+  { library: LibraryView; libraryCount: number; onClose: () => void; onSave: (patch: LibrarySettingsPatch) => Promise<void>; onScan: () => Promise<void>; onReroot: () => void; onRemove: (forget: boolean) => Promise<void> }) {
+  useI18n();
+  const [draft, setDraft] = useState(() => ({
+    name: library.name, type: library.type, enabled: library.enabled, writeArtwork: library.writeArtwork,
+    mosaic: library.mosaic !== false, showInContinueWatching: library.showInContinueWatching !== false,
+    defaultMovie: library.defaultMovie, defaultSeries: library.defaultSeries,
+  }));
+  const [busy, setBusy] = useState(false);
+  const serves = (kind: "movie" | "series") => draft.type === kind || draft.type === "mixed";
+  const dirty = draft.name.trim() !== library.name || draft.type !== library.type || draft.enabled !== library.enabled
+    || draft.writeArtwork !== library.writeArtwork || draft.mosaic !== (library.mosaic !== false)
+    || draft.showInContinueWatching !== (library.showInContinueWatching !== false)
+    || draft.defaultMovie !== library.defaultMovie || draft.defaultSeries !== library.defaultSeries;
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape" && !busy) onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [busy, onClose]);
+  const update = (patch: Partial<typeof draft>) => setDraft((current) => ({ ...current, ...patch }));
+  const setType = (type: LibraryType) => update({ type, ...(type === "movie" ? { defaultSeries: false } : type === "series" ? { defaultMovie: false } : {}) });
+  const run = async (action: () => Promise<void>) => {
+    setBusy(true);
+    try { await action(); }
+    finally { setBusy(false); }
+  };
+  const save = async () => {
+    const name = draft.name.trim();
+    if (!name || !dirty) return;
+    const patch: LibrarySettingsPatch = {};
+    if (name !== library.name) patch.name = name;
+    if (draft.type !== library.type) patch.type = draft.type;
+    if (draft.enabled !== library.enabled) patch.enabled = draft.enabled;
+    if (draft.writeArtwork !== library.writeArtwork) patch.writeArtwork = draft.writeArtwork;
+    if (draft.mosaic !== (library.mosaic !== false)) patch.mosaic = draft.mosaic;
+    if (draft.showInContinueWatching !== (library.showInContinueWatching !== false)) patch.showInContinueWatching = draft.showInContinueWatching;
+    if (draft.defaultMovie !== library.defaultMovie) patch.defaultMovie = draft.defaultMovie;
+    if (draft.defaultSeries !== library.defaultSeries) patch.defaultSeries = draft.defaultSeries;
+    await run(() => onSave(patch));
+  };
+  const toggle = (key: "enabled" | "writeArtwork" | "mosaic" | "showInContinueWatching" | "defaultMovie" | "defaultSeries", label: string, disabled = false, title?: string) =>
+    <label className="library-check" title={title}>
+      <span className="switch"><input type="checkbox" checked={draft[key]} disabled={busy || disabled}
+        onChange={(event) => update({ [key]: event.target.checked } as Partial<typeof draft>)}/><span/></span>
+      <span>{label}</span>
+    </label>;
+
+  return <div className="identify-overlay" role="dialog" aria-modal="true" aria-label={t("library.editLibrary")}
+    onClick={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }}>
+    <form className="panel identify-card library-edit-card" onSubmit={(event) => { event.preventDefault(); void save(); }}>
+      <div className="identify-head">
+        <h2>{t("library.editLibrary")}</h2>
+        <button type="button" className="icon-button" aria-label={t("common.cancel")} disabled={busy} onClick={onClose}><X/></button>
+      </div>
+      <div className="dialog-body library-edit-body">
+        <section className="library-edit-section">
+          <div className="library-picker-section-head"><h3>{t("library.detailsHeading")}</h3></div>
+          <div className="library-picker-fields">
+            <label><span>{t("library.libraryName")}</span><input value={draft.name} autoComplete="off" aria-label={t("library.libraryName")} onChange={(event) => update({ name: event.target.value })}/></label>
+            <label><span>{t("library.libraryType")}</span><select value={draft.type} aria-label={t("library.libraryType")} disabled={busy} onChange={(event) => setType(event.target.value as LibraryType)}>{TYPES.map((type) => <option key={type} value={type}>{libraryTypeLabel(type)}</option>)}</select></label>
+          </div>
+          <div className="library-edit-folder"><span>{t("library.folderHeading")}</span><strong title={library.root}>{library.root}</strong><button type="button" disabled={busy} onClick={onReroot}><FolderOpen/> {t("library.reroot")}</button></div>
+        </section>
+        <section className="library-edit-section">
+          <div className="library-picker-section-head"><h3>{t("library.availabilityHeading")}</h3></div>
+          <div className="library-edit-controls">
+            {toggle("enabled", t("library.enabled"))}
+            <div className="library-edit-defaults"><strong>{t("library.defaultDestinations")}</strong>
+              {toggle("defaultMovie", t("library.defaultMovie"), !serves("movie"), !serves("movie") ? t("library.defaultTypeHint") : undefined)}
+              {toggle("defaultSeries", t("library.defaultSeries"), !serves("series"), !serves("series") ? t("library.defaultTypeHint") : undefined)}
+            </div>
+          </div>
+        </section>
+        <section className="library-edit-section">
+          <div className="library-picker-section-head"><h3>{t("library.presentationHeading")}</h3></div>
+          <div className="library-edit-controls">
+            {toggle("writeArtwork", t("library.writeArtwork"), library.readOnly)}
+            {toggle("mosaic", t("library.mosaic"))}
+            {toggle("showInContinueWatching", t("library.showInContinueWatching"))}
+          </div>
+        </section>
+        <section className="library-edit-section">
+          <div className="library-picker-section-head"><h3>{t("library.actionsHeading")}</h3></div>
+          <button type="button" className="library-admin-scan" disabled={busy} onClick={() => void run(onScan)}><Sparkles/> {t("library.scanThis")}</button>
+          <details className="library-admin-danger">
+            <summary><Trash2/> {t("library.removeOptions")}</summary>
+            <div>{libraryCount > 1
+              ? <><button type="button" className="danger" disabled={busy} onClick={() => void run(() => onRemove(false))}><Trash2/> {t("library.removeLibrary")}</button>
+                <button type="button" className="danger" disabled={busy} onClick={() => void run(() => onRemove(true))}><Trash2/> {t("library.removeForget")}</button></>
+              : <p className="identify-hint">{t("library.removeLastHint")}</p>}</div>
+          </details>
+        </section>
+      </div>
+      <footer className="dialog-footer library-edit-footer"><button type="button" disabled={busy} onClick={onClose}>{t("common.cancel")}</button><button className="primary" disabled={busy || !dirty || !draft.name.trim()}>{t("library.saveChanges")}</button></footer>
+    </form>
   </div>;
 }
 
