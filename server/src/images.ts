@@ -1,6 +1,8 @@
-import { createHash } from "node:crypto";
+import { execFile } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
 import { log } from "./logger.js";
 import { guardedFetch } from "./outbound.js";
 import { secureMode } from "./secure.js";
@@ -18,6 +20,8 @@ import type { MetaItem } from "./types.js";
 const PREFIX = "/api/image/";
 const MAX_BYTES = 8 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 20_000;
+const TILE_WIDTH = 640;
+const FFMPEG_TIMEOUT_MS = 15_000;
 
 const EXTENSIONS: Record<string, string> = {
   "image/jpeg": "jpg", "image/jpg": "jpg", "image/png": "png", "image/webp": "webp",
@@ -28,8 +32,59 @@ const TYPES: Record<string, string> = { jpg: "image/jpeg", png: "image/png", web
 /** Only the host goes into the log; the address itself is what this module hides. */
 const hostOf = (url: string) => { try { return new URL(url).host; } catch { return "?"; } };
 
+const METAHUB_HOST = "images.metahub.space";
+const WIDE_SIZES = new Set(["medium", "large"]);
+
+/**
+ * Metahub serves the same picture under several widths, and /medium/ is megabytes
+ * where the grid wants a tile. Only a background is narrowed: the detail page shows
+ * that field behind a gradient, while a poster has to stay readable.
+ */
+export function narrowArtwork(url: string): string {
+  let parsed: URL;
+  try { parsed = new URL(url); } catch { return url; }
+  if (parsed.host !== METAHUB_HOST) return url;
+  const segments = parsed.pathname.split("/");
+  for (let index = 1; index < segments.length - 1; index += 1) {
+    if (segments[index] !== "background" || !WIDE_SIZES.has(segments[index + 1]!)) continue;
+    segments[index + 1] = "small";
+    parsed.pathname = segments.join("/");
+    return parsed.toString();
+  }
+  return url;
+}
+
 export const imageId = (url: string) => createHash("sha256").update(url).digest("base64url").slice(0, 32);
 export const isProxiedImage = (value: string) => value.startsWith(PREFIX);
+
+const jpegWidth = (data: Buffer) => {
+  let offset = 2;
+  while (offset + 9 <= data.length) {
+    if (data[offset] !== 0xff) { offset += 1; continue; }
+    const marker = data[offset + 1]!;
+    if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) { offset += 2; continue; }
+    const length = data.readUInt16BE(offset + 2);
+    if (length < 2) return undefined;
+    if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) return data.readUInt16BE(offset + 7);
+    offset += 2 + length;
+  }
+  return undefined;
+};
+
+/** Pixel width out of the file header, or undefined for a format this does not read. */
+function imageWidth(data: Buffer): number | undefined {
+  if (data.length >= 24 && data.readUInt32BE(0) === 0x89504e47 && data.toString("latin1", 12, 16) === "IHDR") return data.readUInt32BE(16);
+  if (data.length >= 4 && data[0] === 0xff && data[1] === 0xd8) return jpegWidth(data);
+  if (data.length >= 30 && data.toString("latin1", 0, 4) === "RIFF" && data.toString("latin1", 8, 12) === "WEBP") {
+    const chunk = data.toString("latin1", 12, 16);
+    if (chunk === "VP8X") return data.readUIntLE(24, 3) + 1;
+    if (chunk === "VP8 ") return data.readUInt16LE(26) & 0x3fff;
+    if (chunk === "VP8L") return (data.readUInt16LE(21) & 0x3fff) + 1;
+    return undefined;
+  }
+  if (data.length >= 26 && data[0] === 0x42 && data[1] === 0x4d) return Math.abs(data.readInt32LE(18));
+  return undefined;
+}
 
 interface Entry {
   url: string;
@@ -151,7 +206,9 @@ export class ImageProxy {
   }
 
   rewriteMeta<T extends MetaItem>(item: T): T {
-    if (!secureMode()) return item;
+    const background = typeof item.background === "string" ? narrowArtwork(item.background) : item.background;
+    // Secure mode off still narrows a background: the page then loads it from the CDN itself.
+    if (!secureMode()) return background === item.background ? item : { ...item, background };
     const videos = item.videos?.map((video) => {
       const thumbnail = typeof video.thumbnail === "string" ? this.proxied(video.thumbnail) : video.thumbnail;
       return thumbnail === video.thumbnail ? video : { ...video, thumbnail };
@@ -162,13 +219,34 @@ export class ImageProxy {
       ...item,
       ...galleries,
       poster: this.proxied(item.poster),
-      background: this.proxied(item.background),
+      background: this.proxied(background),
       logo: typeof item.logo === "string" ? this.proxied(item.logo) : item.logo,
       ...(videos ? { videos } : {}),
     };
   }
 
   private path(id: string, ext: string) { return path.join(this.dir, `${id}.${ext}`); }
+
+  /** Fewer bytes on disk: the fetched picture is re-encoded once, or comes back as it was. */
+  private async downscale(data: Buffer, ext: string): Promise<Buffer> {
+    if (ext === "svg" || ext === "gif") return data;
+    const width = imageWidth(data);
+    if (width !== undefined && width <= TILE_WIDTH) return data;
+    const temp = path.join(this.dir, `.resize-${randomUUID()}`);
+    try {
+      await writeFile(temp, data, { mode: 0o600 });
+      const { stdout } = await promisify(execFile)("ffmpeg", [
+        "-hide_banner", "-loglevel", "error", "-nostdin", "-threads", "1", "-i", temp,
+        "-vf", "scale='min(640,iw)':-2", "-q:v", "5", "-c:v", "mjpeg", "-f", "image2pipe", "pipe:1",
+      ], { encoding: "buffer", timeout: FFMPEG_TIMEOUT_MS, killSignal: "SIGKILL", maxBuffer: MAX_BYTES * 2 });
+      return stdout.length && stdout.length < data.length ? stdout : data;
+    } catch (error) {
+      log("DEBUG", "The image stays at the size it was fetched", { reason: String(error).slice(0, 120) });
+      return data;
+    } finally {
+      await rm(temp, { force: true });
+    }
+  }
 
   /** Cached bytes, or one fetch shared by everyone who asked at the same time. */
   async fetch(id: string): Promise<CachedImage | undefined> {
@@ -200,14 +278,17 @@ export class ImageProxy {
       const type = (response.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase();
       const ext = EXTENSIONS[type];
       if (!ext) { await response.body?.cancel(); return rejected(`content-type ${type || "missing"}`); }
-      const data = Buffer.from(await response.arrayBuffer());
-      if (!data.length || data.length > MAX_BYTES) return rejected(`${data.length} bytes`);
+      const fetched = Buffer.from(await response.arrayBuffer());
+      if (!fetched.length || fetched.length > MAX_BYTES) return rejected(`${fetched.length} bytes`);
       await mkdir(this.dir, { recursive: true });
-      const target = this.path(id, ext);
+      const data = await this.downscale(fetched, ext);
+      // The same buffer back means nothing was re-encoded; mjpeg output is a jpeg.
+      const storedExt = data === fetched ? ext : "jpg";
+      const target = this.path(id, storedExt);
       const temp = `${target}.tmp`;
       await writeFile(temp, data, { mode: 0o600 });
       await rename(temp, target);
-      entry.ext = ext;
+      entry.ext = storedExt;
       entry.bytes = data.length;
       entry.at = Date.now();
       this.save();
