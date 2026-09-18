@@ -4,7 +4,7 @@ import type { SearchResult } from "./addons.js";
 import { log } from "./logger.js";
 import {
   autoAccept, cacheFieldsFromMeta, episodesFromMeta, knownTitleOf, lookupSkipped, needsRefresh, pickSuggestion, scanMiss,
-  scannedRecently, scanSkipReason, scoreHit,
+  scannedRecently, scanSkipReason, scoreHit, yearFromMeta,
   type LibraryEpisodeRecord, type LibraryMetaRecord, type LibrarySuggestion, type TitleUnit,
 } from "./library-match.js";
 import { parseMediaPath } from "./library-parse.js";
@@ -376,7 +376,19 @@ export class LibraryScan {
     // Global-search opt-outs do not affect library matching.
     const found = await this.opts.searchAll(addons, parsed.query, unit.kind);
     const hits = found.items.filter((item) => item.name).map((item) => scoreHit(parsed, item, unit.kind));
-    return { called: true, accept: autoAccept(hits), suggestion: pickSuggestion(hits) };
+    const accept = autoAccept(hits);
+    const suggestion = pickSuggestion(hits);
+    // Why a title stayed unmatched is the question the scan gets asked most, and the scores
+    // that decided it are gone the moment this returns. Debug level: one line per title.
+    if (!accept) log("DEBUG", "No match was accepted for the title", {
+      query: parsed.query, kind: unit.kind, hits: hits.length,
+      best: hits.length
+        ? [...hits].sort((a, b) => b.score - a.score).slice(0, 3)
+          .map((hit) => ({ name: hit.item.name, year: yearFromMeta(hit.item), score: hit.score, autoEligible: hit.autoEligible }))
+        : undefined,
+      suggested: suggestion?.name,
+    });
+    return { called: true, accept, suggestion };
   }
 
   private save() {

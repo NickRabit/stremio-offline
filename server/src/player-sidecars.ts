@@ -70,7 +70,7 @@ interface Job {
   revision: string; track: number; start: number; file: string;
   directory: string; args: (start: number) => Promise<string[]>;
   controller: AbortController; done: Promise<void>;
-  running: boolean; complete: boolean; served: boolean;
+  running: boolean; started: boolean; complete: boolean; served: boolean;
   /** Consecutive failed bursts, and when the next one may be started. */
   failures: number; waitUntil: number;
   /** How far the cues written so far reach, refreshed whenever the player asks for them. */
@@ -105,7 +105,7 @@ export class PlayerSidecars {
     const job: Job = {
       revision, track, start, file: path.join(directory, `sidecar-${revision}.vtt`),
       directory, args, controller: new AbortController(), done: Promise.resolve(),
-      running: false, complete: false, served: false, coverage: -Infinity, failures: 0, waitUntil: 0,
+      running: false, started: false, complete: false, served: false, coverage: -Infinity, failures: 0, waitUntil: 0,
     };
     this.jobs.set(id, job);
     void (async () => {
@@ -121,8 +121,11 @@ export class PlayerSidecars {
     const { signal } = job.controller;
     // A read that was already on its way must not start a reader for a session that has since
     // been closed: its FFmpeg would outlive the media it reads and hammer a revoked source.
-    if (signal.aborted || this.jobs.get(id) !== job || this.released.has(id)) return;
+    // And one burst at a time: two callers that both found the job before it had started would
+    // otherwise run two FFmpegs over the same file, truncating what the other has written.
+    if (job.running || signal.aborted || this.jobs.get(id) !== job || this.released.has(id)) return;
     job.running = true;
+    job.started = true;
     log("INFO", "Reading embedded subtitles", { id, track: job.track, from: Math.round(from), why });
     const startedAt = Date.now();
     job.done = (async () => {
@@ -155,7 +158,9 @@ export class PlayerSidecars {
   /** The reader runs in bursts: it fills the cues a quarter of an hour ahead and then
    *  releases the source, so a seek or a track switch has a connection to open. */
   private keepAhead(job: Job, id: string, offset: number) {
-    if (this.released.has(id) || job.complete || Date.now() < job.waitUntil) return;
+    // A job that has not started is already on its way: it waits for the reader it replaced to
+    // let go of the source. Starting it here would defeat that wait and could double the read.
+    if (!job.started || this.released.has(id) || job.complete || Date.now() < job.waitUntil) return;
     if (job.running && job.coverage >= offset + SIDECAR_AHEAD_S) { void this.pause(job); return; }
     if (!job.running && job.coverage < offset + SIDECAR_RESUME_LEAD_S) {
       const from = Number.isFinite(job.coverage) ? Math.max(job.start, job.coverage) : job.start;
@@ -178,10 +183,14 @@ export class PlayerSidecars {
   async read(id: string, revision: string | undefined, offset: number, delay = 0, position: number | null = offset): Promise<{ text: string; complete: boolean; coverage: number } | undefined> {
     const job = this.jobs.get(id);
     if (!job || (revision !== undefined && job.revision !== revision)) return undefined;
+    // Taken before the file is read. A reader that finishes while this read is in flight
+    // rewrites the file, and a file caught mid-rewrite is empty: read afterwards, that
+    // becomes an empty track the player is told is the whole of it and never asks for again.
+    const complete = job.complete;
     let raw: string;
     try { raw = await readFile(job.file, "utf8"); } catch { return undefined; }
-    const text = job.complete ? raw : completeVttBlocks(raw);
-    if (!job.complete) {
+    const text = complete ? raw : completeVttBlocks(raw);
+    if (!complete) {
       job.coverage = vttCoverage(text);
       if (position !== null) this.keepAhead(job, id, position);
       if (job.coverage < offset + SIDECAR_LEAD_S) {
@@ -193,12 +202,12 @@ export class PlayerSidecars {
     if (!job.served) {
       job.served = true;
       const first = text.split(/\n\n+/).find((block) => block.includes("-->"))?.split("\n")[0];
-      log("INFO", "Embedded subtitles reached the player", { id, track: job.track, complete: job.complete, from: Math.round(offset), delay, first });
+      log("INFO", "Embedded subtitles reached the player", { id, track: job.track, complete, from: Math.round(offset), delay, first });
     }
     // The delay is the viewer's own correction: a positive one holds the cues back.
     const shift = offset - delay;
     const shifted = shift !== 0 ? shiftVtt(text, shift) : text;
-    return { text: shifted, complete: job.complete, coverage: job.complete ? Infinity : job.coverage };
+    return { text: shifted, complete, coverage: complete ? Infinity : job.coverage };
   }
 
   /** Lets go of the source without losing the cues, for a conversion that needs to open it. */

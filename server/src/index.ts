@@ -42,6 +42,7 @@ import { LibraryAutoScan } from "./library-autoscan.js";
 import { watchLibrary } from "./library-watch.js";
 import { ArtworkQueue, artworkBesideMedia, episodeArtName, fileMayUseFolderArtwork, findArtwork, framePosition, POSTER_OUTPUT, savePosterAs, saveFrame, type PosterOutcome } from "./artwork.js";
 import { clearedCookie, createSession, DECOY_HASH, LoginThrottle, pruneRevoked, envCredentials, hashPassword, INTERNAL_TOKEN, parseCookies, readSession, secretEquals, REMEMBER_DAYS, SESSION_COOKIE, sessionCookie, verifyPassword } from "./auth.js";
+import { RepeatFilter } from "./access-log.js";
 import { randomBytes, randomUUID } from "node:crypto";
 import type { ClientCapabilities, PlaybackOptions } from "./playback.js";
 import type { MediaInfo } from "./naming.js";
@@ -213,7 +214,15 @@ const internalMediaRequest = (req: express.Request) =>
   isInternalMediaPath(req.path) &&
   ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(req.socket.remoteAddress ?? "") &&
   req.query.token === INTERNAL_TOKEN;
-const airplayRequest = (req: express.Request) => airplayAccess.authorize(req.method, req.originalUrl.split("?")[0], req.query.airplay);
+// Memoised: the authentication gate and the restricted-mode gate both ask, and a refusal
+// that is written down twice reads like two separate attempts.
+const airplayGrants = new WeakMap<express.Request, ReturnType<typeof airplayAccess.authorize>>();
+const airplayRequest = (req: express.Request) => {
+  if (airplayGrants.has(req)) return airplayGrants.get(req);
+  const grant = airplayAccess.authorize(req.method, req.originalUrl.split("?")[0], req.query.airplay);
+  airplayGrants.set(req, grant);
+  return grant;
+};
 const playbackResponse = <T extends { id: string; url: string }>(value: T): T => ({ ...value, url: airplayAccess.url(value.id, value.url) });
 const activeMedia = new Set<{ owner: ResourceOwner; res: express.Response; resourceId?: string }>();
 const trackMedia = (owner: ResourceOwner, res: express.Response, resourceId?: string) => {
@@ -285,10 +294,25 @@ const asyncRoute = (fn: express.RequestHandler) => (req: express.Request, res: e
 // Without a sign-in only the server status and the sign-in itself are open. /api/proxy
 // especially must not be public, or anyone could pull foreign addresses through this server.
 const OPEN_PATHS = new Set(["/status", "/auth/login", "/auth/me", "/auth/setup"]);
+const unauthorized = new RepeatFilter();
 app.use("/api", (req, res, next) => {
   if (OPEN_PATHS.has(req.path)) return next();
   if (internalMediaRequest(req) || airplayRequest(req)) return next();
-  if (!currentUser(req)) return res.status(401).json({ error: "Not signed in.", messageKey: "err.notSignedIn" });
+  if (!currentUser(req)) {
+    // This one never reaches the error handler, so without a line here a run of refused
+    // requests -- an expired session, or somebody trying the API from outside -- leaves no
+    // trace above DEBUG. Only whether a session cookie came along is recorded, never its value.
+    const session = SESSION_COOKIE in parseCookies(req.headers.cookie) ? "expired or invalid" : "none";
+    // The session state is part of the key: a browser whose sign-in ran out says something
+    // a stream of requests carrying no cookie at all does not, and it must not be swallowed
+    // by whichever of the two knocked first.
+    const repeat = unauthorized.record(`${req.ip ?? "unknown"} ${req.path} ${session}`);
+    if (repeat) log("WARN", "Request without a valid session", {
+      req: req.id, method: req.method, path: req.path, from: req.ip ?? "unknown", session,
+      ...(repeat.suppressed ? { alsoRefused: repeat.suppressed } : {}),
+    });
+    return res.status(401).json({ error: "Not signed in.", messageKey: "err.notSignedIn" });
+  }
   next();
 });
 app.use("/api", restrictedMiddleware({

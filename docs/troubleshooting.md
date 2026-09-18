@@ -28,9 +28,17 @@ off. The Diagnostics page can wipe the log.
 The same lines go to standard output, so `docker compose logs` sees them.
 
 Stream addresses are logged as scheme and host only; tokens and passwords are
-not logged at all.
+not logged at all. A refused request records that a session cookie or an AirPlay
+token was presented and why it was not accepted, never the credential itself.
 
-`LOG_LEVEL=DEBUG` adds request and conversion detail.
+A request that arrives without a valid session, and an AirPlay request that is
+turned away, are recorded at `WARN`. Both repeat -- a player whose session
+expired retries several times a second -- so each is reported once a minute per
+address and path, and the next line carries an `alsoRefused` count of the ones
+held back in between.
+
+`LOG_LEVEL=DEBUG` adds request and conversion detail, and the scores that
+decided a library title was left unmatched.
 
 ## When an addon stops answering
 

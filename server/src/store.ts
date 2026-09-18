@@ -5,6 +5,7 @@ import type { AuthState } from "./auth.js";
 import { normalizeDownloadSettings } from "./naming.js";
 import type { UiLanguage } from "./language.js";
 import { newLibraryId, type DepartedLibrary, type LibraryRecord, type RootGrant } from "./libraries.js";
+import { log } from "./logger.js";
 import type { ProgressSeries } from "./progress-series.js";
 
 /** `state.json` shape version. A state without it predates libraries and migrates once. */
@@ -123,11 +124,22 @@ export class Store {
   /** Writes run one after another, or two concurrent saves would fight over the same .tmp file. */
   async update(mutator: (state: State) => void) {
     mutator(this.state);
-    this.chain = this.chain.then(async () => {
+    const write = this.chain.then(async () => {
       const temp = `${this.filename}.tmp`;
       await writeFile(temp, JSON.stringify(this.state, null, 2), { mode: 0o600 });
       await rename(temp, this.filename);
     });
-    return this.chain;
+    // The queue continues past a failed write. Chaining onto the rejection itself would
+    // skip every later save without a word, and the state would only live in memory until
+    // the next restart threw it away. The caller still gets the rejection.
+    this.chain = write.catch((error: unknown) => {
+      // The state carries the account and the addon tokens, so only the reason is recorded.
+      log("ERROR", "The state could not be saved", {
+        file: path.basename(this.filename),
+        code: (error as NodeJS.ErrnoException)?.code,
+        reason: error instanceof Error ? error.message : String(error),
+      });
+    });
+    return write;
   }
 }
