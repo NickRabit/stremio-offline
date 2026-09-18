@@ -332,9 +332,7 @@ main.view-catalog{padding-top:98px}main.view-catalog .heading{margin-bottom:8px}
   main.view-catalog .filterbar .scope-badge,main.view-catalog .filterbar .filter-note{display:none}
   main.view-catalog .catalog-layout{display:block;min-height:0;height:0;flex:1 1 auto}
   main.view-catalog .result-panel{height:100%;margin:0;padding:10px}
-  /* The one grid that stays absolute. There is room for about one row here, so a tile
-     sized by the setting would show a third of it and nothing else. */
-  main.view-catalog .poster-grid{grid-template-columns:repeat(auto-fill,minmax(82px,1fr));gap:9px}
+  main.view-catalog .poster-grid{gap:9px}
   main.view-catalog .detail-panel{display:none}
   main.view-catalog .detail-panel.mobile-open{position:fixed;z-index:45;inset:54px 0 0 calc(56px + env(safe-area-inset-left, 0px));display:grid;grid-template-columns:minmax(210px,.72fr) minmax(0,1.5fr);grid-template-rows:36px minmax(0,1fr);gap:6px 8px;min-height:0;margin:0;padding:0 max(10px, env(safe-area-inset-right, 0px)) max(8px, env(safe-area-inset-bottom, 0px)) 8px;overflow:hidden;overflow-x:clip;overscroll-behavior:none;overscroll-behavior-x:none;touch-action:pan-y;border:0;border-radius:0;background:var(--bg);box-shadow:none}
   main.view-catalog .detail-panel.series-sources-layout.mobile-open{grid-template-columns:84px minmax(0,1fr)}
@@ -467,9 +465,9 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
   .browse-tools>button{flex:0 0 auto}
 }
 
-.library-page{--library-tile-poster:clamp(150px,12cqw,300px);--library-tile-wide:clamp(250px,20cqw,500px)}.library-tiles-large .library-page{--library-tile-poster:clamp(150px,12cqw,300px);--library-tile-wide:clamp(250px,20cqw,500px)}
-.library-page .browse-grid{grid-template-columns:repeat(auto-fill,minmax(min(100%,var(--library-tile-min,var(--library-tile-poster,150px))),1fr));gap:20px 16px}
-.library-tiles-compact .library-page{--library-tile-poster:clamp(78px,5.5cqw,130px);--library-tile-wide:clamp(132px,9cqw,220px)}.library-tiles-small .library-page{--library-tile-poster:clamp(96px,6.5cqw,160px);--library-tile-wide:clamp(160px,11cqw,270px)}.library-tiles-medium .library-page{--library-tile-poster:clamp(112px,6.5cqw,195px);--library-tile-wide:clamp(170px,11cqw,330px)}
+.library-page{--library-tile-poster:clamp(155px,12cqw,300px);--library-tile-wide:clamp(250px,20cqw,500px)}.library-tiles-large .library-page{--library-tile-poster:clamp(155px,12cqw,300px);--library-tile-wide:clamp(250px,20cqw,500px)}
+.library-page .browse-grid{grid-template-columns:repeat(auto-fill,minmax(min(100%,var(--library-tile-min,var(--library-tile-poster,155px))),1fr));gap:20px 16px}
+.library-tiles-compact .library-page{--library-tile-poster:clamp(110px,5.5cqw,150px);--library-tile-wide:clamp(180px,9cqw,250px)}.library-tiles-small .library-page{--library-tile-poster:clamp(130px,6.5cqw,180px);--library-tile-wide:clamp(210px,11cqw,290px)}.library-tiles-medium .library-page{--library-tile-poster:clamp(155px,8cqw,220px);--library-tile-wide:clamp(250px,13cqw,350px)}
 .library-open{display:block;width:100%;padding:0;border:0;background:transparent;text-align:left;min-width:0}
 .library-page .browse-grid .browse-item{display:flex;flex-direction:column}
 .library-page .browse-grid .library-open{display:flex;flex-direction:column;align-items:stretch;justify-content:flex-start;gap:0;flex:1;height:100%;border:1px solid var(--line);border-radius:11px;background:var(--panel)}
@@ -628,7 +626,7 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .library-page .browse-rows .library-action{justify-content:flex-start}
 .library-page .browse-rows .library-desc{font-weight:400;max-width:80ch}
 .library-page .browse-rows .browse-art{width:72px;aspect-ratio:2/3}.library-page .browse-rows .library-copy strong{margin-top:0}.library-page .browse-rows .browse-menu{position:absolute;top:50%;transform:translateY(-50%)}.library-page .browse-rows .browse-actions{top:65%;z-index:5}
-@media(max-width:700px){.library-page .browse-grid{grid-template-columns:repeat(auto-fill,minmax(min(100%,var(--library-tile-min,var(--library-tile-poster,150px))),1fr));gap:16px 10px}.library-page .browse-grid .browse-item.library .library-open{grid-template-columns:112px minmax(0,1fr);min-height:168px}.library-page .browse-grid .browse-item.library .browse-art{min-height:168px}.library-page .browse-grid .browse-item.library .library-copy{padding:14px}.library-favorites{gap:12px;padding:12px}.favorites-collage{width:92px;height:78px}.favorites-collage img{width:44px;height:66px}.favorites-collage img:nth-child(2){left:23px}.favorites-collage img:nth-child(3){left:46px}.favorites-copy strong{font-size:17px}.library-page .browse-tools{width:100%}.library-page .browse-tools .search-input{flex-basis:100%}.library-page .browse-rows .library-open{grid-template-columns:48px minmax(0,1fr);gap:6px 12px}.library-page .browse-rows .browse-art{width:48px;grid-row:1/3}.library-page .browse-rows .library-action{grid-column:2;min-height:36px;padding:4px 2px;font-size:11px}.library-page .browse-menu{width:44px;height:44px;top:5px;right:5px}.library-page .browse-actions{top:52px}}
+@media(max-width:700px){.library-page .browse-grid{grid-template-columns:repeat(auto-fill,minmax(min(100%,var(--library-tile-min,var(--library-tile-poster,155px))),1fr));gap:16px 10px}.library-page .browse-grid .browse-item.library .library-open{grid-template-columns:112px minmax(0,1fr);min-height:168px}.library-page .browse-grid .browse-item.library .browse-art{min-height:168px}.library-page .browse-grid .browse-item.library .library-copy{padding:14px}.library-favorites{gap:12px;padding:12px}.favorites-collage{width:92px;height:78px}.favorites-collage img{width:44px;height:66px}.favorites-collage img:nth-child(2){left:23px}.favorites-collage img:nth-child(3){left:46px}.favorites-copy strong{font-size:17px}.library-page .browse-tools{width:100%}.library-page .browse-tools .search-input{flex-basis:100%}.library-page .browse-rows .library-open{grid-template-columns:48px minmax(0,1fr);gap:6px 12px}.library-page .browse-rows .browse-art{width:48px;grid-row:1/3}.library-page .browse-rows .library-action{grid-column:2;min-height:36px;padding:4px 2px;font-size:11px}.library-page .browse-menu{width:44px;height:44px;top:5px;right:5px}.library-page .browse-actions{top:52px}}
 
 /* The toolbar is one button wider once the manager shortcut joins it, and what gives way
    is the crumb: at the narrow desktop widths "Knihovna" collapsed into a three-line sliver.
