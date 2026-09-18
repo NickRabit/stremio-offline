@@ -106,6 +106,8 @@ const clickLabelled = async (scope: ParentNode, label: string) => {
   await act(async () => { button!.click(); await Promise.resolve(); });
 };
 
+const openEditor = async () => clickIn(host, "Edit library");
+
 const picker = () => host.querySelector(".library-picker-card") as HTMLElement;
 
 it("the picker can name a folder that does not exist yet, and the create request makes it", async () => {
@@ -186,6 +188,7 @@ it("re-rooting can name a folder that does not exist yet", async () => {
   await act(async () => { root.render(<LibraryManager onError={vi.fn()} onNotify={vi.fn()}/>); });
   await act(async () => { await Promise.resolve(); });
 
+  await openEditor();
   await clickIn(host, "Change folder");
   await clickIn(picker(), "downloads");
   await fillIn(picker(), "New folder", "Archive");
@@ -229,7 +232,7 @@ it("the picker scrolls in one place, with the selection next to the button that 
   expect(footer.querySelector("button.primary")).toBeTruthy();
 });
 
-it("the mosaic of covers can be turned off for one library", async () => {
+it("the mosaic of covers can be turned off in the library dialog", async () => {
   const patched: Record<string, unknown>[] = [];
   fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
     if (init?.method === "PATCH") { patched.push(JSON.parse(String(init.body))); return json(library({ mosaic: false })); }
@@ -238,16 +241,19 @@ it("the mosaic of covers can be turned off for one library", async () => {
   await act(async () => { root.render(<LibraryManager onError={vi.fn()} onNotify={vi.fn()}/>); });
   await act(async () => { await Promise.resolve(); });
 
+  expect(host.querySelectorAll(".library-admin-controls")).toHaveLength(0);
+  await openEditor();
   const box = [...host.querySelectorAll<HTMLInputElement>("input[type=checkbox]")]
     .find((input) => input.closest("label")?.textContent?.includes("Show a mosaic of covers"))!;
-  expect(box, "the switch is on the library card").toBeTruthy();
+  expect(box, "the switch is in the library dialog").toBeTruthy();
   expect(box.checked, "a library that never said otherwise keeps its mosaic").toBe(true);
   await act(async () => { box.click(); await Promise.resolve(); });
+  await clickIn(host, "Save changes");
 
   expect(patched).toEqual([{ mosaic: false }]);
 });
 
-it("can keep a library out of Continue watching", async () => {
+it("can keep a library out of Continue watching from the library dialog", async () => {
   const patched: Record<string, unknown>[] = [];
   fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
     if (init?.method === "PATCH") { patched.push(JSON.parse(String(init.body))); return json(library({ showInContinueWatching: false })); }
@@ -256,12 +262,33 @@ it("can keep a library out of Continue watching", async () => {
   await act(async () => { root.render(<LibraryManager onError={vi.fn()} onNotify={vi.fn()}/>); });
   await act(async () => { await Promise.resolve(); });
 
+  await openEditor();
   const box = [...host.querySelectorAll<HTMLInputElement>("input[type=checkbox]")]
     .find((input) => input.closest("label")?.textContent?.includes("Show in Continue watching"))!;
   expect(box.checked, "libraries remain visible unless explicitly excluded").toBe(true);
   await act(async () => { box.click(); await Promise.resolve(); });
+  await clickIn(host, "Save changes");
 
   expect(patched).toEqual([{ showInContinueWatching: false }]);
+});
+
+it("saves a renamed library and its settings in one request", async () => {
+  const patched: Record<string, unknown>[] = [];
+  fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+    if (init?.method === "PATCH") { patched.push(JSON.parse(String(init.body))); return json(library({ name: "Cinema", enabled: false, mosaic: false })); }
+    return json([library()]);
+  });
+  await act(async () => { root.render(<LibraryManager onError={vi.fn()} onNotify={vi.fn()}/>); });
+  await act(async () => { await Promise.resolve(); });
+
+  await openEditor();
+  await fillIn(host, "Name", "Cinema");
+  const boxes = [...host.querySelectorAll<HTMLInputElement>("input[type=checkbox]")];
+  await act(async () => { boxes.find((input) => input.closest("label")?.textContent?.includes("Enabled"))!.click(); });
+  await act(async () => { boxes.find((input) => input.closest("label")?.textContent?.includes("Show a mosaic of covers"))!.click(); });
+  await clickIn(host, "Save changes");
+
+  expect(patched).toEqual([{ name: "Cinema", enabled: false, mosaic: false }]);
 });
 
 /** Re-rooting used to rewrite the record and move nothing, with nothing on screen saying so.
@@ -285,6 +312,7 @@ it("re-rooting can take the content along, and says which it is doing", async ()
   await act(async () => { root.render(<LibraryManager onError={vi.fn()} onNotify={vi.fn()}/>); });
   await act(async () => { await Promise.resolve(); });
 
+  await openEditor();
   await clickIn(host, "Change folder");
   await clickIn(picker(), "downloads");
   await clickIn(picker(), "Use this folder");
