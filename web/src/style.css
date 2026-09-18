@@ -728,18 +728,16 @@ img.broken{visibility:hidden}
 
 .library-maintenance{position:relative}
 .library-maintenance-actions{display:flex;flex-wrap:wrap;gap:8px}
-.library-page .library-maintenance-toggle{display:none}
-@media(max-width:700px){
+.library-page .library-maintenance-toggle{display:flex;width:44px;height:44px;padding:8px}
+.library-maintenance-actions{display:none;position:absolute;right:0;top:calc(100% + 8px);z-index:10;width:max-content;max-width:calc(100vw - 64px);padding:6px;border:1px solid var(--line);border-radius:10px;background:var(--panel2);box-shadow:0 12px 30px #0009}
+.library-maintenance-actions.open{display:grid}
+.library-page .library-maintenance-actions button{justify-content:flex-start;text-align:left;font-size:12px;border:0;background:transparent}
+.library-page .library-maintenance-actions button:hover{background:#ffffff10}@media(max-width:700px){
   .library-page .browse-tools{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:6px}
   .library-page .browse-tools .search-input{grid-column:1/4;min-width:0}
   .library-page .browse-tools>select{grid-column:4/-1}
   .library-page .library-maintenance{grid-column:auto}
   .library-page .browse-tools>button,.library-page .browse-tools select{width:100%;padding:8px;min-width:0}
-  .library-page .library-maintenance-toggle{display:flex;width:44px;height:44px;padding:8px}
-  .library-maintenance-actions{display:none;position:absolute;right:0;top:calc(100% + 8px);z-index:10;width:max-content;max-width:calc(100vw - 64px);padding:6px;border:1px solid var(--line);border-radius:10px;background:var(--panel2);box-shadow:0 12px 30px #0009}
-  .library-maintenance-actions.open{display:grid}
-  .library-page .library-maintenance-actions button{justify-content:flex-start;text-align:left;font-size:12px;border:0;background:transparent}
-  .library-page .library-maintenance-actions button:hover{background:#ffffff10}
 }
 
 /* Keep metadata independent of provider response timing. */
