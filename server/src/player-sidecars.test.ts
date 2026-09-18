@@ -54,6 +54,33 @@ test("seeking forward keeps the reader that is already writing those cues", asyn
   } finally { await sidecars.stop("session"); await rm(directory, { recursive: true, force: true }); }
 });
 
+test("a reader that replaces another is started once, not once per caller", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "sidecar-once-"));
+  const starts: number[] = [];
+  const open = new Set<string>();
+  let overlapped = false;
+  const sidecars = new PlayerSidecars(async (args, file, _append, signal) => {
+    if (open.has(file)) overlapped = true;
+    open.add(file);
+    starts.push(Number(args[args.indexOf("-ss") + 1] ?? 0));
+    await writeFile(file, `WEBVTT\n\n${cue(3000, 3100, "line")}\n\n`);
+    try { await new Promise<void>((resolve) => signal.addEventListener("abort", () => setTimeout(resolve, 20), { once: true })); }
+    finally { open.delete(file); }
+  });
+  try {
+    const args = async (start: number) => (start > 0 ? ["-ss", start.toFixed(3)] : []);
+    sidecars.ensure("session", directory, 2, 100, args);
+    // A seek away from where the first reader began replaces it, and the replacement waits
+    // for the old FFmpeg to let go of the source before it starts.
+    sidecars.ensure("session", directory, 2, 500, args);
+    // The player asks for the position it has just moved to while that wait is still on.
+    sidecars.ensure("session", directory, 2, 500, args);
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    assert.equal(starts.filter((start) => start === 500).length, 1, "the new position is read once");
+    assert.equal(overlapped, false, "two readers never write the same file");
+  } finally { await sidecars.stop("session"); await rm(directory, { recursive: true, force: true }); }
+});
+
 test("a jump back before the reader's start, or another track, begins a new one", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "sidecar-back-"));
   const starts: number[] = [];
