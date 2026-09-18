@@ -93,14 +93,20 @@ test("an addon kept out of Continue watching hides its titles and keeps their po
     .filter((entry: { manifest: { id: string } }) => entry.manifest.id === "cz.stremio.offline.e2e");
   const card = () => page.locator(".addon-card", { has: page.getByRole("heading", { name: "E2E doplněk" }) });
   const tile = (key: string) => page.locator(`.poster-card[data-catalog-key="${key}"]`);
-  const toggle = () => card().getByRole("checkbox", { name: "Zobrazovat v Pokračovat ve sledování" });
+  const dialog = () => page.getByRole("dialog", { name: "Upravit doplněk" });
+  const toggle = () => dialog().getByRole("checkbox", { name: "Zobrazovat v Pokračovat ve sledování" });
   const stored = async () => (await (await request.get("/api/addons")).json())
     .find((entry: { key: string }) => entry.key === addon.key).showInContinueWatching as boolean;
-  const openAddon = async () => {
+  // The switch is staged in the addon dialog, so flipping it is two steps: set and save.
+  const setContinueWatching = async (on: boolean) => {
     await page.getByRole("button", { name: "Doplňky", exact: true }).click();
-    // The switch lives in the card's manifest section, which starts collapsed.
-    await card().getByRole("button", { name: "Manifest a export" }).click();
+    await card().getByRole("button", { name: "Upravit doplněk" }).click();
     await expect(toggle()).toBeVisible();
+    await expect(toggle()).toBeChecked({ checked: !on });
+    await toggle().click();
+    await dialog().getByRole("button", { name: "Uložit změny" }).click();
+    await expect(dialog()).toBeHidden();
+    await expect.poll(stored).toBe(on);
   };
   const openList = async () => {
     await page.goto("/");
@@ -118,10 +124,7 @@ test("an addon kept out of Continue watching hides its titles and keeps their po
     await expect(tile("movie:tt-e2e-movie")).toBeVisible();
     await expect(tile("movie:tt-e2e-old")).toBeVisible();
 
-    await openAddon();
-    await expect(toggle()).toBeChecked();
-    await toggle().click();
-    await expect.poll(stored).toBe(false);
+    await setContinueWatching(false);
 
     await openList();
     await expect(tile("movie:tt-e2e-movie"), "the addon's own titles leave the list").toHaveCount(0);
@@ -129,9 +132,7 @@ test("an addon kept out of Continue watching hides its titles and keeps their po
     expect(await (await request.get(`/api/progress/${encodeURIComponent("movie:tt-e2e-movie")}`)).json(), "the position is kept")
       .toMatchObject({ position: 120 });
 
-    await openAddon();
-    await toggle().click();
-    await expect.poll(stored).toBe(true);
+    await setContinueWatching(true);
     await openList();
     await expect(tile("movie:tt-e2e-movie")).toBeVisible();
   } finally {

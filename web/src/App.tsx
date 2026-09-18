@@ -3,11 +3,12 @@ import { ArrowDown, BarChart3, ArrowUp, Check, RectangleHorizontal, RectangleVer
 import { queueDestination } from "./queue-target";
 import { api, ApiError, describeError, logDownloadUrl, saveToDevice } from "./api";
 import { AccountSettings, LoginScreen } from "./Login";
-import { bytes, SettingControl, SettingsSectionHead } from "./settings-ui";
+import { bytes, Heading, hideBroken, SettingControl, SettingsSectionHead } from "./settings-ui";
 import { LOCALES, LOCALE_NAMES } from "./i18n";
 import { Player } from "./Player";
 import { TrailerPlayer } from "./TrailerPlayer";
 import { IdentifyDialog } from "./IdentifyDialog";
+import { AddonManager } from "./AddonManager";
 import { LibraryManager, LibraryManagerDialog, libraryTypeLabel } from "./LibraryManager";
 import { TileArt } from "./TileArt";
 import { MoveDialog } from "./MoveDialog";
@@ -60,9 +61,6 @@ type GalleryImage = { url: string; label: string; shape: "poster" | "wide" };
  *  `series` on a progress entry describes an episode key and never reaches this strip. */
 type ResumeTile = Omit<ProgressEntry, "series"> & Partial<Pick<BrowseFile, "season" | "episode" | "series">>;
 
-/** Artwork comes through the server; when a provider does not deliver, leave the
- *  placeholder underneath rather than a broken image icon. */
-const hideBroken = (event: React.SyntheticEvent<HTMLImageElement>) => event.currentTarget.classList.add("broken");
 /** Addons name types freely; only the two we filter by have a translation. */
 const typeLabel = (type: string) => type === "movie" ? t("catalog.movies") : type === "series" ? t("catalog.series") : type;
 /** The same type as a parenthesised hint next to a catalogue's own name. */
@@ -1751,7 +1749,7 @@ export function App() {
           </>}
         </div>
       </section>}
-      {view === "addons" && <Addons addons={addons} libraries={libraries} restricted={restricted} onChanged={refresh} onNotify={notify} onError={fail}/>} 
+      {view === "addons" && <AddonManager addons={addons} libraries={libraries} restricted={restricted} onChanged={refresh} onNotify={notify} onError={fail}/>} 
       {view === "downloads" && <Downloads jobs={downloads} libraries={libraries} halt={queueHalt} refresh={loadDownloads} onError={fail} onReveal={revealInLibrary}/>}
       {view === "stats" && <StatsPanel key={statsReset} onError={fail}/>}
       {view === "settings" && <SettingsPage build={buildInfo} restricted={restricted} settings={settings} languages={languages} libraries={libraries} session={session!} onSession={setSession} onSave={saveSettings} onLibrariesChanged={refreshLibraries} onImported={async (backup) => {
@@ -1813,7 +1811,6 @@ function MediaGallery({ images, index, onIndex, onClose }: { images: GalleryImag
     {images.length > 1 && <div className="gallery-thumbnails">{images.map((image, itemIndex) => <button key={image.url} className={itemIndex === index ? "selected" : ""} aria-label={t("gallery.show", { label: image.label })} onClick={() => onIndex(itemIndex)}><img src={image.url} alt="" loading="lazy" onError={hideBroken}/></button>)}</div>}
   </div>;
 }
-function Heading({ eyebrow, title }: { eyebrow: string; title: string }) { return <div className="heading"><small>{eyebrow}</small><h2>{title}</h2></div>; }
 function Empty({ icon, title, text }: { icon: React.ReactNode; title: string; text: string }) { return <div className="empty"><i>{icon}</i><h3>{title}</h3><p>{text}</p></div>; }
 function Onboarding({ onOpen }: { onOpen: () => void }) { return <div className="panel onboarding"><i><PackagePlus/></i><h2>{t("onboarding.title")}</h2><p>{t("onboarding.text")}</p><button className="primary" onClick={onOpen}><Plus/> {t("onboarding.action")}</button></div>; }
 
@@ -2170,172 +2167,6 @@ function DiagnosticsSection({ build, onNotify, onError }: { build: BuildInfo | n
       </div>}
     </div>}
   </section>;
-}
-
-function Addons({ addons, libraries = [], restricted = false, onChanged, onNotify, onError }: { addons: Addon[]; libraries?: LibraryView[]; restricted?: boolean; onChanged: () => Promise<void>; onNotify: (s:string)=>void; onError:(e:unknown)=>void }) {
-  const [url, setUrl] = useState(""); const [role, setRole] = useState("both"); const [busy, setBusy] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
-  // A manifest is only read when the addon is added, so nothing here notices when the
-  // provider adds a catalogue or stops serving a resource. This asks them all again.
-  const refreshAll = async () => {
-    setRefreshing(true);
-    try {
-      const { changed, failed } = await api.refreshAddons();
-      await onChanged();
-      const done = changed ? t("addons.refreshAllDone", { count: changed }) : t("addons.refreshAllNone");
-      onNotify(failed ? `${done} ${t("addons.refreshAllFailed", { count: failed })}` : done);
-    } catch (err) { onError(err); }
-    finally { setRefreshing(false); }
-  };
-  const submit = async (e: FormEvent) => { e.preventDefault(); setBusy(true); try { await api.addAddon(url, role); setUrl(""); await onChanged(); onNotify(t("addons.added")); } catch (err) { onError(err); } finally { setBusy(false); } };
-  return <section><Heading eyebrow={t("addons.eyebrow")} title={t("addons.title")}/><p className="lead">{t("addons.leadBefore")} <code>manifest.json</code>. {t("addons.leadAfter")}</p>
-    {restricted && <p className="notice">{t("restricted.notice")}</p>}
-    {!restricted && <form className="panel addon-form" onSubmit={submit}><label><span>{t("addons.manifestUrl")}</span><input value={url} onChange={(e)=>setUrl(e.target.value)} placeholder="https://…/manifest.json" required/></label><label><span>{t("addons.role")}</span><select value={role} onChange={(e)=>setRole(e.target.value)}><option value="both">{t("addons.roleBoth")}</option><option value="catalog">{t("addons.roleCatalog")}</option><option value="source">{t("addons.roleSource")}</option></select></label><button className="primary" disabled={busy}><Plus/> {t("common.add")}</button></form>}
-    {!restricted && addons.length > 0 && <div className="addon-tools"><button disabled={refreshing} onClick={() => void refreshAll()}><RefreshCw/> {t(refreshing ? "common.loading" : "addons.refreshAll")}</button></div>}
-    {[
-      { key: "sources", title: t("addons.streamSources"), text: t("addons.streamSourcesText"), ordered: true, list: addons.filter((addon) => addon.role !== "catalog") },
-      { key: "catalogs", title: t("addons.catalogsTitle"), text: t("addons.catalogsText"), ordered: false, list: addons.filter((addon) => addon.role === "catalog") },
-    ].filter((group) => group.list.length > 0).map((group) => <div className="addon-group" key={group.key}>
-      <div className="subhead"><h3>{group.title}</h3><span>{group.text}</span></div>
-      <div className="addon-grid">{group.list.map((addon, index) => restricted
-        ? <AddonCardReadOnly key={addon.key} addon={addon}/>
-        : <AddonCard key={addon.key} addon={addon} libraries={libraries}
-            index={group.ordered ? index : -1} total={group.list.length}
-            onChanged={onChanged} onNotify={onNotify} onError={onError}/>)}</div>
-    </div>)}
-  </section>;
-}
-
-function AddonCardReadOnly({ addon }: { addon: Addon }) {
-  return <article className="panel addon-card">
-    {addon.manifest.logo ? <img src={addon.manifest.logo} alt=""/> : <div className="addon-logo"><PackagePlus/></div>}
-    <div className="addon-body"><div className="addon-title"><h3>{addon.manifest.name}</h3>{addon.manifest.behaviorHints?.p2p && <span className="p2p">P2P</span>}</div><p>{addon.manifest.description}</p><small>{addon.manifest.version} · {t(addon.role === "catalog" ? "addons.isCatalog" : addon.role === "source" ? "addons.isSource" : "addons.isBoth")}</small></div>
-    {addon.role !== "source" && <label className="switch" title={t("addons.globalSearchHint")}><input aria-label={t("addons.globalSearch")} type="checkbox" checked={addon.globalSearch} disabled readOnly/><span/></label>}
-  </article>;
-}
-
-function AddonCard({ addon, libraries, index, total, onChanged, onNotify, onError }: { addon: Addon; libraries: LibraryView[]; index: number; total: number; onChanged: () => Promise<void>; onNotify: (s:string)=>void; onError:(e:unknown)=>void }) {
-  const clone = (value: AddonDownloadSettings): AddonDownloadSettings => ({ movie: { ...value.movie }, series: { ...value.series } });
-  const storedSettings = addon.downloadSettings ?? { movie: { subfolder: "", layout: "structured" }, series: { subfolder: "", layout: "structured" } };
-  const [draft, setDraft] = useState<AddonDownloadSettings>(() => clone(storedSettings));
-  const [saving, setSaving] = useState(false);
-  const [storageOpen, setStorageOpen] = useState(false);
-  const [manifestOpen, setManifestOpen] = useState(false);
-  const [manifestUrl, setManifestUrl] = useState("");
-  const [manifestRole, setManifestRole] = useState(addon.role);
-  const [manifestBusy, setManifestBusy] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
-  const refresh = async () => {
-    setRefreshing(true);
-    try {
-      const result = await api.refreshAddon(addon.key);
-      await onChanged();
-      onNotify(result.changed ? t("addons.refreshedTo", { addon: result.addon.manifest.name, version: result.version }) : t("addons.refreshUpToDate", { addon: addon.manifest.name }));
-    } catch (error) { onError(error); }
-    finally { setRefreshing(false); }
-  };
-
-  // The interface normally hides the real address because of the token; it is fetched on opening.
-  const openManifest = async () => {
-    const next = !manifestOpen;
-    setManifestOpen(next);
-    if (!next || manifestUrl) return;
-    try {
-      const full = await api.exportAddon(addon.key) as { manifestUrl: string; role: string };
-      setManifestUrl(full.manifestUrl); setManifestRole(full.role as Addon["role"]);
-    } catch (error) { onError(error); }
-  };
-  const saveManifest = async () => {
-    setManifestBusy(true);
-    try { await api.updateAddon(addon.key, { url: manifestUrl.trim(), role: manifestRole }); await onChanged(); onNotify(t("addons.updated")); }
-    catch (error) { onError(error); }
-    finally { setManifestBusy(false); }
-  };
-  const exportManifest = async () => {
-    try {
-      const full = await api.exportAddon(addon.key);
-      const blob = new Blob([JSON.stringify(full, null, 2)], { type: "application/json" });
-      const href = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = href; link.download = `${addon.manifest.name.replace(/[^\w.-]+/g, "-")}.json`;
-      link.click(); URL.revokeObjectURL(href);
-      onNotify(t("addons.manifestSaved"));
-    } catch (error) { onError(error); }
-  };
-  const providesStreams = (addon.manifest.resources ?? []).some((resource) => typeof resource === "string" ? resource === "stream" : resource.name === "stream");
-  useEffect(() => { if (addon.downloadSettings) setDraft(clone(addon.downloadSettings)); }, [addon.downloadSettings]);
-  const change = (kind: "movie" | "series", patch: Partial<AddonDownloadSettings["movie"]>) => setDraft((current) => ({ ...current, [kind]: { ...current[kind], ...patch } }));
-  /** Where a rule may point: the same set the server accepts, in the same order, so the
-   *  "Default" entry names the library the queue would fall back to. */
-  const offered = (kind: "movie" | "series") => libraries
-    .filter((library) => library.enabled && !library.unreachable && !library.readOnly && (library.type === kind || library.type === "mixed"))
-    .sort((a, b) => a.order - b.order);
-  const defaultLibrary = (kind: "movie" | "series") => {
-    const available = offered(kind);
-    return available.find((library) => (kind === "movie" ? library.defaultMovie : library.defaultSeries)) ?? available[0];
-  };
-  // A rule may name a library that is no longer offered (switched off, unplugged, removed).
-  // It stays visible and stays selected: silently rewriting somebody's rule would be worse.
-  const strayLibrary = (kind: "movie" | "series") => {
-    const wanted = draft[kind].libraryId;
-    return wanted && !offered(kind).some((library) => library.id === wanted) ? libraries.find((library) => library.id === wanted) : undefined;
-  };
-  const preview = (kind: "movie" | "series") => {
-    const rule = draft[kind];
-    const folder = rule.subfolder.trim().replaceAll("\\", "/").replace(/^\/+|\/+$/g, "");
-    const root = `${(libraries.find((library) => library.id === rule.libraryId) ?? defaultLibrary(kind))?.root ?? t("addons.noLibraryRoot")}${folder ? `/${folder}` : ""}`;
-    if (kind === "movie") return rule.layout === "flat" ? `${root}/${t("addons.sampleMovie")}.mkv` : `${root}/${t("addons.sampleMovie")}/${t("addons.sampleMovie")}.mkv`;
-    return rule.layout === "flat" ? `${root}/${t("addons.sampleShow")} - S01E01 - ${t("addons.sampleEpisode")}.mkv` : `${root}/${t("addons.sampleShow")}/01 ${t("addons.sampleSeasonFolder")}/01 - ${t("addons.sampleEpisode")}.mkv`;
-  };
-  const save = async () => { setSaving(true); try { const saved = await api.updateAddon(addon.key, { downloadSettings: draft }); if (saved.downloadSettings) setDraft(clone(saved.downloadSettings)); await onChanged(); onNotify(t("addons.storageSaved", { addon: addon.manifest.name })); } catch (error) { onError(error); } finally { setSaving(false); } };
-  return <article className={`panel addon-card ${storageOpen ? "storage-expanded" : ""}`}>
-    {addon.manifest.logo ? <img src={addon.manifest.logo} alt="" onError={hideBroken}/> : <div className="addon-logo"><PackagePlus/></div>}
-    <div className="addon-body"><div className="addon-title"><h3>{addon.manifest.name}</h3>{addon.manifest.behaviorHints?.p2p && <span className="p2p">P2P</span>}</div><p>{addon.manifest.description || addon.displayUrl}</p><small>{addon.manifest.version} · {t(addon.role === "catalog" ? "addons.isCatalog" : addon.role === "source" ? "addons.isSource" : "addons.isBoth")}</small></div>
-    <div className="addon-actions">{index >= 0 && <div className="addon-order">
-      <button title={t("addons.higherPriority")} disabled={index === 0} onClick={async()=>{try { await api.moveAddon(addon.key, -1); await onChanged(); } catch (error) { onError(error); }}}><ArrowUp/></button>
-      <button title={t("addons.lowerPriority")} disabled={index === total - 1} onClick={async()=>{try { await api.moveAddon(addon.key, 1); await onChanged(); } catch (error) { onError(error); }}}><ArrowDown/></button>
-    </div>}<button className="icon-button" title={t("addons.refresh")} disabled={refreshing} onClick={() => void refresh()}><RefreshCw/></button><label className="switch" title={addon.essential ? t("addons.essential") : undefined}><input aria-label={t("addons.enabled")} type="checkbox" checked={addon.enabled} disabled={addon.essential} onChange={async (event)=>{try { await api.toggleAddon(addon.key,event.target.checked); await onChanged(); } catch (error) { onError(error); }}}/><span/></label>{addon.essential
-      ? <span className="addon-essential" title={t("addons.essential")}><ShieldCheck/></span>
-      : <button className="danger icon-button" title={t("common.remove")} onClick={async()=>{try { await api.deleteAddon(addon.key); await onChanged(); } catch (error) { onError(error); }}}><Trash2/></button>}</div>
-    <button className={`storage-toggle ${manifestOpen ? "open" : ""}`} onClick={() => void openManifest()} aria-expanded={manifestOpen}><Link2/> <span>{t("addons.manifestAndExport")}</span><ChevronDown/></button>
-    {manifestOpen && <div className="addon-download-settings">
-      <div className="addon-download-head"><strong>{t("addons.manifestAddress")}</strong><small>{t("addons.manifestAddressHint")}</small></div>
-      <label className="manifest-field"><span>URL</span>
-        <input value={manifestUrl} onChange={(event) => setManifestUrl(event.target.value)} placeholder={t("common.loading")} spellCheck={false}/></label>
-      <label className="manifest-field"><span>{t("addons.role")}</span>
-        <select value={manifestRole} onChange={(event) => setManifestRole(event.target.value as Addon["role"])}>
-          <option value="both">{t("addons.roleBoth")}</option><option value="catalog">{t("addons.roleCatalog")}</option><option value="source">{t("addons.roleSource")}</option>
-        </select></label>
-      {addon.role !== "source" && <div className="addon-setting"><div><strong>{t("addons.globalSearch")}</strong><small>{t("addons.globalSearchHint")}</small></div><label className="switch"><input aria-label={t("addons.globalSearch")} type="checkbox" checked={addon.globalSearch} onChange={async (event) => { try { await api.updateAddon(addon.key, { globalSearch: event.target.checked }); await onChanged(); } catch (error) { onError(error); } }}/><span/></label></div>}
-      {addon.role !== "source" && <div className="addon-setting"><div><strong>{t("addons.showInContinueWatching")}</strong><small>{t("addons.showInContinueWatchingHint")}</small></div><label className="switch"><input aria-label={t("addons.showInContinueWatching")} type="checkbox" checked={addon.showInContinueWatching !== false} onChange={async (event) => { try { await api.updateAddon(addon.key, { showInContinueWatching: event.target.checked }); await onChanged(); } catch (error) { onError(error); } }}/><span/></label></div>}
-      <div className="manifest-actions">
-        <button className="primary" disabled={manifestBusy || !manifestUrl.trim()} onClick={() => void saveManifest()}><Check/> {t("common.save")}</button>
-        <button onClick={async () => { try { await copyText(manifestUrl); onNotify(t("addons.urlCopied")); } catch (error) { onError(error); } }}><Copy/> {t("addons.copyUrl")}</button>
-        <button onClick={() => void exportManifest()}><FileJson/> {t("addons.exportJson")}</button>
-      </div>
-    </div>}
-    {providesStreams && <button className={`storage-toggle ${storageOpen ? "open" : ""}`} onClick={() => setStorageOpen((value) => !value)} aria-expanded={storageOpen}><FolderCog/> <span>{t("addons.storageSettings")}</span><ChevronDown/></button>}
-    {providesStreams && storageOpen && <div className="addon-download-settings"><div className="addon-download-head"><strong>{t("addons.whereToStore")}</strong><small>{t("addons.whereToStoreHint")}</small></div>
-      <div className="download-rule-grid">{(["movie", "series"] as const).map((kind) => {
-        const kindLabel = t(kind === "movie" ? "catalog.movies" : "catalog.series");
-        const chosen = libraries.find((library) => library.id === draft[kind].libraryId);
-        const stray = strayLibrary(kind);
-        const fallback = defaultLibrary(kind);
-        return <div className="download-rule" key={kind}><b>{kindLabel}</b>
-          <label><span>{t("addons.saveTo")}</span>
-            <select aria-label={t("addons.saveToLabel", { kind: kindLabel })} value={draft[kind].libraryId ?? ""}
-              onChange={(event) => change(kind, { libraryId: event.target.value || undefined })}>
-              <option value="">{fallback ? t("addons.saveToDefaultNamed", { name: fallback.name }) : t("addons.saveToDefault")}</option>
-              {offered(kind).map((library) => <option key={library.id} value={library.id}>{library.name}</option>)}
-              {stray && <option value={stray.id}>{t("addons.saveToUnavailable", { name: stray.name })}</option>}
-            </select></label>
-          <label className="folder-label"><span>{t("addons.subfolder")}</span><div className="folder-field"><code>{chosen?.root ?? fallback?.root ?? ""}/</code><input aria-label={t("addons.subfolderLabel", { kind: kindLabel })} value={draft[kind].subfolder} onChange={(event) => change(kind, { subfolder: event.target.value })} placeholder={t("addons.subfolderPlaceholder")}/></div></label>
-          <label><span>{t("addons.layout")}</span><select aria-label={t("addons.layoutLabel", { kind: kindLabel })} value={draft[kind].layout} onChange={(event) => change(kind, { layout: event.target.value as "flat" | "structured" })}><option value="structured">{t("addons.layoutStructured")}</option><option value="flat">{t("addons.layoutFlat")}</option></select></label>
-          <small className="path-preview">{t("addons.example")} <code>{preview(kind)}</code></small></div>;
-      })}</div>
-      <div className="download-settings-actions"><button onClick={() => { setDraft(clone(storedSettings)); setStorageOpen(false); }}>{t("common.cancel")}</button><button className="primary save-download-settings" disabled={saving} onClick={() => void save()}>{t(saving ? "common.saving" : "settings.saveSettings")}</button></div>
-    </div>}
-  </article>;
 }
 
 function Downloads({ jobs, libraries, halt, refresh, onError, onReveal }: { jobs: DownloadJob[]; libraries: LibraryView[]; halt: QueueHalt | null; refresh: () => Promise<void>; onError: (e: unknown) => void; onReveal: (target: string) => void }) {
