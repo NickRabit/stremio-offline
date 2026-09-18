@@ -115,12 +115,16 @@ test("a granted root is added, previewed and revoked without losing what it reme
   await tools.getByRole("button", { name: "Zrušit" }).click();
   await expect(tools).toHaveCount(0);
 
-  // A rename goes through the prompt and the row follows.
+  // Renaming belongs with the library's other settings, and the row follows the saved dialog.
   await page.getByRole("button", { name: "Nastavení", exact: true }).click();
   const manager = page.locator(".library-manager");
   await expect(manager.locator(".library-admin-row")).toHaveCount(2);
-  page.once("dialog", (prompt) => void prompt.accept("Přejmenovaná"));
-  await manager.locator(".library-admin-row", { hasText: "Granted" }).getByRole("button", { name: "Přejmenovat" }).click();
+  const grantedRow = manager.locator(".library-admin-row", { hasText: "Granted" });
+  await grantedRow.getByRole("button", { name: "Upravit knihovnu" }).click();
+  const editor = page.getByRole("dialog", { name: "Upravit knihovnu" });
+  await editor.getByLabel("Název").fill("Přejmenovaná");
+  await editor.getByRole("button", { name: "Uložit změny" }).click();
+  await expect(editor).toHaveCount(0);
   await expect(manager.locator(".library-admin-row", { hasText: "Přejmenovaná" })).toBeVisible();
   await expect(manager.locator(".library-admin-row", { hasText: "Přejmenovaná" })).toContainText("Filmy");
 
@@ -216,17 +220,21 @@ test("each kind's default library is claimed and released from the library row",
   expect(await narrowed.json(), "the series default survives, the movie one does not")
     .toMatchObject({ type: "series", defaultMovie: false, defaultSeries: true });
 
-  // The row carries both switches, and the one the type rules out is off and disabled.
+  // The dialog carries both switches, and the one the type rules out is off and disabled.
   await page.goto("/");
   await page.getByRole("button", { name: "Nastavení", exact: true }).click();
   const row = page.locator(".library-manager .library-admin-row", { hasText: "Sklad" });
-  const movies = row.getByRole("checkbox", { name: "Výchozí pro filmy" });
-  const series = row.getByRole("checkbox", { name: "Výchozí pro seriály" });
+  await row.getByRole("button", { name: "Upravit knihovnu" }).click();
+  const editor = page.getByRole("dialog", { name: "Upravit knihovnu" });
+  const movies = editor.getByRole("checkbox", { name: "Výchozí pro filmy" });
+  const series = editor.getByRole("checkbox", { name: "Výchozí pro seriály" });
   await expect(movies).toBeDisabled();
   await expect(series).toBeChecked();
   // The switch paints a span over its input, so the click goes to the label around both.
-  await row.locator("label.library-check", { hasText: "Výchozí pro seriály" }).click();
+  await editor.locator("label.library-check", { hasText: "Výchozí pro seriály" }).click();
   await expect(series).not.toBeChecked();
+  await editor.getByRole("button", { name: "Uložit změny" }).click();
+  await expect(editor).toHaveCount(0);
   await expect(row.locator(".library-admin-flags")).not.toContainText("Výchozí pro seriály");
   expect((await (await request.get("/api/libraries")).json())
     .every((entry: { defaultSeries: boolean }) => !entry.defaultSeries), "released, and nobody else took it").toBe(true);

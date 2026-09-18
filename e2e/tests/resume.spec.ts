@@ -67,7 +67,11 @@ test("a library kept out of Continue watching hides its rows and keeps their pos
     await page.getByRole("button", { name: "Knihovna", exact: true }).click();
     await expect(strip(), "the homepage strip drops it too").toHaveCount(0);
     await page.getByRole("button", { name: "Nastavení", exact: true }).click();
-    await expect(page.getByRole("checkbox", { name: "Zobrazovat v Pokračovat ve sledování" })).not.toBeChecked();
+    const row = page.locator(".library-manager .library-admin-row", { hasText: library.name });
+    await row.getByRole("button", { name: "Upravit knihovnu" }).click();
+    const editor = page.getByRole("dialog", { name: "Upravit knihovnu" });
+    await expect(editor.getByRole("checkbox", { name: "Zobrazovat v Pokračovat ve sledování" })).not.toBeChecked();
+    await editor.getByRole("button", { name: "Zrušit" }).last().click();
 
     expect(await (await request.patch(`/api/libraries/${library.id}`, { data: { showInContinueWatching: true } })).json())
       .toMatchObject({ showInContinueWatching: true });
