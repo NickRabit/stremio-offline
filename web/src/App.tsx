@@ -2173,36 +2173,18 @@ function DiagnosticsSection({ build, onNotify, onError }: { build: BuildInfo | n
 }
 
 function Addons({ addons, libraries = [], restricted = false, onChanged, onNotify, onError }: { addons: Addon[]; libraries?: LibraryView[]; restricted?: boolean; onChanged: () => Promise<void>; onNotify: (s:string)=>void; onError:(e:unknown)=>void }) {
-  const [url, setUrl] = useState(""); const [role, setRole] = useState("both"); const [busy, setBusy] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
-  // A manifest is only read when the addon is added, so nothing here notices when the
-  // provider adds a catalogue or stops serving a resource. This asks them all again.
-  const refreshAll = async () => {
-    setRefreshing(true);
-    try {
-      const { changed, failed } = await api.refreshAddons();
-      await onChanged();
-      const done = changed ? t("addons.refreshAllDone", { count: changed }) : t("addons.refreshAllNone");
-      onNotify(failed ? `${done} ${t("addons.refreshAllFailed", { count: failed })}` : done);
-    } catch (err) { onError(err); }
-    finally { setRefreshing(false); }
-  };
-  const submit = async (e: FormEvent) => { e.preventDefault(); setBusy(true); try { await api.addAddon(url, role); setUrl(""); await onChanged(); onNotify(t("addons.added")); } catch (err) { onError(err); } finally { setBusy(false); } };
+  const [url, setUrl] = useState(""); const [role, setRole] = useState("both"); const [busy, setBusy] = useState(false); const [refreshing, setRefreshing] = useState(false);
+  const [selectedKey, setSelectedKey] = useState<string | null>(addons[0]?.key ?? null); const [filter, setFilter] = useState("all");
+  const refreshAll = async () => { setRefreshing(true); try { const { changed, failed } = await api.refreshAddons(); await onChanged(); const done = changed ? t("addons.refreshAllDone", { count: changed }) : t("addons.refreshAllNone"); onNotify(failed ? `${done} ${t("addons.refreshAllFailed", { count: failed })}` : done); } catch (err) { onError(err); } finally { setRefreshing(false); } };
+  const submit = async (event: FormEvent) => { event.preventDefault(); setBusy(true); try { await api.addAddon(url, role); setUrl(""); await onChanged(); onNotify(t("addons.added")); } catch (err) { onError(err); } finally { setBusy(false); } };
+  useEffect(() => { if (!addons.some((addon) => addon.key === selectedKey)) setSelectedKey(addons[0]?.key ?? null); }, [addons, selectedKey]);
+  const visible = addons.filter((addon) => filter === "active" ? addon.enabled : filter === "sources" ? addon.role !== "catalog" : filter === "catalogs" ? addon.role !== "source" : true);
+  const selected = addons.find((addon) => addon.key === selectedKey) ?? visible[0];
+  const sources = addons.filter((addon) => addon.role !== "catalog"); const sourceIndex = selected && selected.role !== "catalog" ? sources.findIndex((addon) => addon.key === selected.key) : -1;
   return <section><Heading eyebrow={t("addons.eyebrow")} title={t("addons.title")}/><p className="lead">{t("addons.leadBefore")} <code>manifest.json</code>. {t("addons.leadAfter")}</p>
     {restricted && <p className="notice">{t("restricted.notice")}</p>}
-    {!restricted && <form className="panel addon-form" onSubmit={submit}><label><span>{t("addons.manifestUrl")}</span><input value={url} onChange={(e)=>setUrl(e.target.value)} placeholder="https://…/manifest.json" required/></label><label><span>{t("addons.role")}</span><select value={role} onChange={(e)=>setRole(e.target.value)}><option value="both">{t("addons.roleBoth")}</option><option value="catalog">{t("addons.roleCatalog")}</option><option value="source">{t("addons.roleSource")}</option></select></label><button className="primary" disabled={busy}><Plus/> {t("common.add")}</button></form>}
-    {!restricted && addons.length > 0 && <div className="addon-tools"><button disabled={refreshing} onClick={() => void refreshAll()}><RefreshCw/> {t(refreshing ? "common.loading" : "addons.refreshAll")}</button></div>}
-    {[
-      { key: "sources", title: t("addons.streamSources"), text: t("addons.streamSourcesText"), ordered: true, list: addons.filter((addon) => addon.role !== "catalog") },
-      { key: "catalogs", title: t("addons.catalogsTitle"), text: t("addons.catalogsText"), ordered: false, list: addons.filter((addon) => addon.role === "catalog") },
-    ].filter((group) => group.list.length > 0).map((group) => <div className="addon-group" key={group.key}>
-      <div className="subhead"><h3>{group.title}</h3><span>{group.text}</span></div>
-      <div className="addon-grid">{group.list.map((addon, index) => restricted
-        ? <AddonCardReadOnly key={addon.key} addon={addon}/>
-        : <AddonCard key={addon.key} addon={addon} libraries={libraries}
-            index={group.ordered ? index : -1} total={group.list.length}
-            onChanged={onChanged} onNotify={onNotify} onError={onError}/>)}</div>
-    </div>)}
+    {!restricted && <form className="panel addon-form" onSubmit={submit}><label><span>{t("addons.manifestUrl")}</span><input value={url} onChange={(event)=>setUrl(event.target.value)} placeholder="https://…/manifest.json" required/></label><label><span>{t("addons.role")}</span><select value={role} onChange={(event)=>setRole(event.target.value)}><option value="both">{t("addons.roleBoth")}</option><option value="catalog">{t("addons.roleCatalog")}</option><option value="source">{t("addons.roleSource")}</option></select></label><button className="primary" disabled={busy}><Plus/> {t("common.add")}</button></form>}
+    {addons.length > 0 && <div className="addon-workspace"><aside className="panel addon-list" aria-label={t("nav.addons")}><div className="addon-list-head"><strong>{t("addons.installed", { count: addons.length })}</strong>{!restricted && <button className="icon-button" title={t("addons.refreshAll")} disabled={refreshing} onClick={() => void refreshAll()}><RefreshCw/></button>}</div><div className="addon-filter">{(["all", "active", "sources", "catalogs"] as const).map((value) => <button key={value} className={filter === value ? "active" : ""} onClick={() => setFilter(value)}>{t(`addons.filter${value[0].toUpperCase()}${value.slice(1)}` as Key)}</button>)}</div><div className="addon-list-items">{visible.map((addon) => <button key={addon.key} className={`addon-list-item ${selected?.key === addon.key ? "selected" : ""}`} onClick={() => setSelectedKey(addon.key)}>{addon.manifest.logo ? <img src={addon.manifest.logo} alt="" onError={hideBroken}/> : <span className="addon-logo"><PackagePlus/></span>}<span><strong>{addon.manifest.name}</strong><small>{t(addon.role === "catalog" ? "addons.isCatalog" : addon.role === "source" ? "addons.isSource" : "addons.isBoth")} · {addon.manifest.version}</small></span><i className={addon.enabled ? "on" : "off"}>{t(addon.enabled ? "addons.statusOn" : "addons.statusOff")}</i></button>)}</div>{!visible.length && <p className="addon-list-empty">{t("addons.noMatches")}</p>}</aside>{selected && (restricted ? <AddonCardReadOnly addon={selected}/> : <AddonDetail key={selected.key} addon={selected} libraries={libraries} index={sourceIndex} total={sources.length} onChanged={onChanged} onNotify={onNotify} onError={onError}/>)}</div>}
   </section>;
 }
 
@@ -2214,13 +2196,13 @@ function AddonCardReadOnly({ addon }: { addon: Addon }) {
   </article>;
 }
 
-function AddonCard({ addon, libraries, index, total, onChanged, onNotify, onError }: { addon: Addon; libraries: LibraryView[]; index: number; total: number; onChanged: () => Promise<void>; onNotify: (s:string)=>void; onError:(e:unknown)=>void }) {
+function AddonDetail({ addon, libraries, index, total, onChanged, onNotify, onError }: { addon: Addon; libraries: LibraryView[]; index: number; total: number; onChanged: () => Promise<void>; onNotify: (s:string)=>void; onError:(e:unknown)=>void }) {
   const clone = (value: AddonDownloadSettings): AddonDownloadSettings => ({ movie: { ...value.movie }, series: { ...value.series } });
   const storedSettings = addon.downloadSettings ?? { movie: { subfolder: "", layout: "structured" }, series: { subfolder: "", layout: "structured" } };
   const [draft, setDraft] = useState<AddonDownloadSettings>(() => clone(storedSettings));
   const [saving, setSaving] = useState(false);
-  const [storageOpen, setStorageOpen] = useState(false);
-  const [manifestOpen, setManifestOpen] = useState(false);
+  const [tab, setTab] = useState<"usage" | "storage" | "connection">("usage");
+  const [manifestRevealed, setManifestRevealed] = useState(false);
   const [manifestUrl, setManifestUrl] = useState("");
   const [manifestRole, setManifestRole] = useState(addon.role);
   const [manifestBusy, setManifestBusy] = useState(false);
@@ -2235,14 +2217,11 @@ function AddonCard({ addon, libraries, index, total, onChanged, onNotify, onErro
     finally { setRefreshing(false); }
   };
 
-  // The interface normally hides the real address because of the token; it is fetched on opening.
-  const openManifest = async () => {
-    const next = !manifestOpen;
-    setManifestOpen(next);
-    if (!next || manifestUrl) return;
+  const revealManifest = async () => {
+    if (manifestUrl) { setManifestRevealed(true); return; }
     try {
       const full = await api.exportAddon(addon.key) as { manifestUrl: string; role: string };
-      setManifestUrl(full.manifestUrl); setManifestRole(full.role as Addon["role"]);
+      setManifestUrl(full.manifestUrl); setManifestRole(full.role as Addon["role"]); setManifestRevealed(true);
     } catch (error) { onError(error); }
   };
   const saveManifest = async () => {
@@ -2288,7 +2267,8 @@ function AddonCard({ addon, libraries, index, total, onChanged, onNotify, onErro
     return rule.layout === "flat" ? `${root}/${t("addons.sampleShow")} - S01E01 - ${t("addons.sampleEpisode")}.mkv` : `${root}/${t("addons.sampleShow")}/01 ${t("addons.sampleSeasonFolder")}/01 - ${t("addons.sampleEpisode")}.mkv`;
   };
   const save = async () => { setSaving(true); try { const saved = await api.updateAddon(addon.key, { downloadSettings: draft }); if (saved.downloadSettings) setDraft(clone(saved.downloadSettings)); await onChanged(); onNotify(t("addons.storageSaved", { addon: addon.manifest.name })); } catch (error) { onError(error); } finally { setSaving(false); } };
-  return <article className={`panel addon-card ${storageOpen ? "storage-expanded" : ""}`}>
+  return <article className="panel addon-detail">
+    <header className="addon-detail-head">
     {addon.manifest.logo ? <img src={addon.manifest.logo} alt="" onError={hideBroken}/> : <div className="addon-logo"><PackagePlus/></div>}
     <div className="addon-body"><div className="addon-title"><h3>{addon.manifest.name}</h3>{addon.manifest.behaviorHints?.p2p && <span className="p2p">P2P</span>}</div><p>{addon.manifest.description || addon.displayUrl}</p><small>{addon.manifest.version} · {t(addon.role === "catalog" ? "addons.isCatalog" : addon.role === "source" ? "addons.isSource" : "addons.isBoth")}</small></div>
     <div className="addon-actions">{index >= 0 && <div className="addon-order">
@@ -2297,25 +2277,29 @@ function AddonCard({ addon, libraries, index, total, onChanged, onNotify, onErro
     </div>}<button className="icon-button" title={t("addons.refresh")} disabled={refreshing} onClick={() => void refresh()}><RefreshCw/></button><label className="switch" title={addon.essential ? t("addons.essential") : undefined}><input aria-label={t("addons.enabled")} type="checkbox" checked={addon.enabled} disabled={addon.essential} onChange={async (event)=>{try { await api.toggleAddon(addon.key,event.target.checked); await onChanged(); } catch (error) { onError(error); }}}/><span/></label>{addon.essential
       ? <span className="addon-essential" title={t("addons.essential")}><ShieldCheck/></span>
       : <button className="danger icon-button" title={t("common.remove")} onClick={async()=>{try { await api.deleteAddon(addon.key); await onChanged(); } catch (error) { onError(error); }}}><Trash2/></button>}</div>
-    <button className={`storage-toggle ${manifestOpen ? "open" : ""}`} onClick={() => void openManifest()} aria-expanded={manifestOpen}><Link2/> <span>{t("addons.manifestAndExport")}</span><ChevronDown/></button>
-    {manifestOpen && <div className="addon-download-settings">
+    </header>
+    <div className="addon-tabs" role="tablist"><button role="tab" aria-selected={tab === "usage"} className={tab === "usage" ? "active" : ""} onClick={() => setTab("usage")}>{t("addons.tabUsage")}</button>{providesStreams && <button role="tab" aria-selected={tab === "storage"} className={tab === "storage" ? "active" : ""} onClick={() => setTab("storage")}>{t("addons.tabStorage")}</button>}<button role="tab" aria-selected={tab === "connection"} className={tab === "connection" ? "active" : ""} onClick={() => setTab("connection")}>{t("addons.tabConnection")}</button></div>
+    {tab === "usage" && <div className="addon-detail-body"><div className="addon-download-head"><strong>{t("addons.usageTitle")}</strong><small>{t("addons.usageHint")}</small></div>
+      {addon.role !== "source" && <div className="addon-setting"><div><strong>{t("addons.globalSearch")}</strong><small>{t("addons.globalSearchHint")}</small></div><label className="switch"><input aria-label={t("addons.globalSearch")} type="checkbox" checked={addon.globalSearch} onChange={async (event) => { try { await api.updateAddon(addon.key, { globalSearch: event.target.checked }); await onChanged(); } catch (error) { onError(error); } }}/><span/></label></div>}
+      {addon.role !== "source" && <div className="addon-setting"><div><strong>{t("addons.showInContinueWatching")}</strong><small>{t("addons.showInContinueWatchingHint")}</small></div><label className="switch"><input aria-label={t("addons.showInContinueWatching")} type="checkbox" checked={addon.showInContinueWatching !== false} onChange={async (event) => { try { await api.updateAddon(addon.key, { showInContinueWatching: event.target.checked }); await onChanged(); } catch (error) { onError(error); } }}/><span/></label></div>}
+      {index >= 0 && <div className="addon-priority"><span>{t("addons.priority")}</span><strong>{index + 1} / {total}</strong><small>{t("addons.streamSourcesText")}</small></div>}
+    </div>}
+    {tab === "connection" && <div className="addon-detail-body">
+      {!manifestRevealed ? <div className="addon-address-hidden"><strong>{t("addons.manifestAddress")}</strong><span>{t("addons.addressHidden")}</span><button onClick={() => void revealManifest()}><Link2/> {t("addons.revealAddress")}</button></div> : <div className="addon-download-settings">
       <div className="addon-download-head"><strong>{t("addons.manifestAddress")}</strong><small>{t("addons.manifestAddressHint")}</small></div>
-      <label className="manifest-field"><span>URL</span>
+      <label className="manifest-field"><span>{t("addons.address")}</span>
         <input value={manifestUrl} onChange={(event) => setManifestUrl(event.target.value)} placeholder={t("common.loading")} spellCheck={false}/></label>
       <label className="manifest-field"><span>{t("addons.role")}</span>
         <select value={manifestRole} onChange={(event) => setManifestRole(event.target.value as Addon["role"])}>
           <option value="both">{t("addons.roleBoth")}</option><option value="catalog">{t("addons.roleCatalog")}</option><option value="source">{t("addons.roleSource")}</option>
         </select></label>
-      {addon.role !== "source" && <div className="addon-setting"><div><strong>{t("addons.globalSearch")}</strong><small>{t("addons.globalSearchHint")}</small></div><label className="switch"><input aria-label={t("addons.globalSearch")} type="checkbox" checked={addon.globalSearch} onChange={async (event) => { try { await api.updateAddon(addon.key, { globalSearch: event.target.checked }); await onChanged(); } catch (error) { onError(error); } }}/><span/></label></div>}
-      {addon.role !== "source" && <div className="addon-setting"><div><strong>{t("addons.showInContinueWatching")}</strong><small>{t("addons.showInContinueWatchingHint")}</small></div><label className="switch"><input aria-label={t("addons.showInContinueWatching")} type="checkbox" checked={addon.showInContinueWatching !== false} onChange={async (event) => { try { await api.updateAddon(addon.key, { showInContinueWatching: event.target.checked }); await onChanged(); } catch (error) { onError(error); } }}/><span/></label></div>}
       <div className="manifest-actions">
         <button className="primary" disabled={manifestBusy || !manifestUrl.trim()} onClick={() => void saveManifest()}><Check/> {t("common.save")}</button>
         <button onClick={async () => { try { await copyText(manifestUrl); onNotify(t("addons.urlCopied")); } catch (error) { onError(error); } }}><Copy/> {t("addons.copyUrl")}</button>
         <button onClick={() => void exportManifest()}><FileJson/> {t("addons.exportJson")}</button>
       </div>
-    </div>}
-    {providesStreams && <button className={`storage-toggle ${storageOpen ? "open" : ""}`} onClick={() => setStorageOpen((value) => !value)} aria-expanded={storageOpen}><FolderCog/> <span>{t("addons.storageSettings")}</span><ChevronDown/></button>}
-    {providesStreams && storageOpen && <div className="addon-download-settings"><div className="addon-download-head"><strong>{t("addons.whereToStore")}</strong><small>{t("addons.whereToStoreHint")}</small></div>
+    </div>}</div>}
+    {tab === "storage" && providesStreams && <div className="addon-detail-body"><div className="addon-download-settings"><div className="addon-download-head"><strong>{t("addons.whereToStore")}</strong><small>{t("addons.whereToStoreHint")}</small></div>
       <div className="download-rule-grid">{(["movie", "series"] as const).map((kind) => {
         const kindLabel = t(kind === "movie" ? "catalog.movies" : "catalog.series");
         const chosen = libraries.find((library) => library.id === draft[kind].libraryId);
@@ -2333,8 +2317,8 @@ function AddonCard({ addon, libraries, index, total, onChanged, onNotify, onErro
           <label><span>{t("addons.layout")}</span><select aria-label={t("addons.layoutLabel", { kind: kindLabel })} value={draft[kind].layout} onChange={(event) => change(kind, { layout: event.target.value as "flat" | "structured" })}><option value="structured">{t("addons.layoutStructured")}</option><option value="flat">{t("addons.layoutFlat")}</option></select></label>
           <small className="path-preview">{t("addons.example")} <code>{preview(kind)}</code></small></div>;
       })}</div>
-      <div className="download-settings-actions"><button onClick={() => { setDraft(clone(storedSettings)); setStorageOpen(false); }}>{t("common.cancel")}</button><button className="primary save-download-settings" disabled={saving} onClick={() => void save()}>{t(saving ? "common.saving" : "settings.saveSettings")}</button></div>
-    </div>}
+      <div className="download-settings-actions"><button onClick={() => setDraft(clone(storedSettings))}>{t("common.cancel")}</button><button className="primary save-download-settings" disabled={saving} onClick={() => void save()}>{t(saving ? "common.saving" : "settings.saveSettings")}</button></div>
+    </div></div>}
   </article>;
 }
 
