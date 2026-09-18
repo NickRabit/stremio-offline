@@ -143,9 +143,9 @@ export interface BrowseMeta {
    *  move dialog then offers every library rather than refusing on a guess. */
   titleType?: "movie" | "series";
 }
-export interface BrowseFolder extends BrowseMeta { path: string; name: string; fileCount: number; size: number; poster?: string }
+export interface BrowseFolder extends BrowseMeta { path: string; name: string; fileCount: number; size: number; poster?: string; wide?: string }
 export interface BrowseFile extends LibraryFile, BrowseMeta {
-  poster?: string; progress?: { position: number; duration: number };
+  poster?: string; wide?: string; progress?: { position: number; duration: number };
   /** The show this episode belongs to, on a Continue watching row only. */
   series?: { name: string };
 }

@@ -51,7 +51,10 @@ export interface LibraryScanOpts {
     suggestions: Record<string, LibrarySuggestion>,
     episodes: Record<string, LibraryEpisodeRecord>,
   ) => void) => Promise<void>;
-  savePoster: (key: string, url: string | undefined) => void;
+  savePoster: (key: string, url: string | undefined, backdrop?: string) => void;
+  /** Fills a missing wide variant of an entry the run walks. The host queues it like any other
+   *  artwork job, so a rescan backfills the library without waiting for a browse. */
+  fillWideArtwork?: (key: string) => void;
   deleteGeneratedArt: (key: string) => Promise<void>;
   busy: () => ScanPauseReason | undefined;
   /** A key is qualified, so the scan cannot build a path from one root: the host resolves it. */
@@ -95,6 +98,8 @@ function idForPrefix(raw: string, prefixes: string[], needle: string): string | 
 export class LibraryScan {
   private state: ScanState = idle();
   private units = new Map<string, TitleUnit>();
+  /** Entries this run has to ask for a wide variant, until it is allowed to work. */
+  private eagerWide: string[] = [];
   /** Keys whose turn re-reads an existing binding instead of looking for a match. */
   private readonly refreshing = new Set<string>();
   private readonly stateFile: string;
@@ -161,6 +166,10 @@ export class LibraryScan {
       return isPathWithin(unit.key, scope) || isPathWithin(scope, unit.key);
     };
     const wanted = units.filter(inRun);
+    // Every entry in the run is walked for its metadata anyway, so its missing wide variant is
+    // asked for here too -- once the run may work, so a scan started during playback is not
+    // left without it. One artwork job at a time, and a title without a backdrop is throttled.
+    this.eagerWide = wanted.map((unit) => unit.key);
     // Asking for one item is a deliberate act, so it ignores the searched-in-vain memory.
     const again = force || Boolean(scope);
     const queued = wanted.filter((unit) => {
@@ -203,6 +212,7 @@ export class LibraryScan {
 
   async stop() {
     this.cancelled = true;
+    this.eagerWide = [];
     this.state = { ...idle(), updatedAt: nowIso() };
     await this.save();
   }
@@ -235,6 +245,11 @@ export class LibraryScan {
           this.state.status = "running";
           delete this.state.pauseReason;
           await this.save();
+        }
+        if (this.eagerWide.length) {
+          const keys = this.eagerWide;
+          this.eagerWide = [];
+          for (const key of keys) this.opts.fillWideArtwork?.(key);
         }
         const key = this.state.remaining[0];
         if (!key) {
@@ -299,7 +314,7 @@ export class LibraryScan {
         if (!wrote) { await this.finishUnit("skipped"); return; }
         if (!this.opts.busy()) {
           await this.opts.deleteGeneratedArt(key);
-          this.opts.savePoster(key, (meta ?? item).poster);
+          this.opts.savePoster(key, (meta ?? item).poster, (meta ?? item).background);
         }
         log("INFO", "Library title matched", { key, type: item.type, id: item.id, source: "scan" });
         await this.finishUnit("matched");

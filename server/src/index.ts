@@ -40,7 +40,7 @@ import { LibraryScan } from "./library-scan.js";
 import { createLibraryProbe, type LibraryHealth } from "./library-probe.js";
 import { LibraryAutoScan } from "./library-autoscan.js";
 import { watchLibrary } from "./library-watch.js";
-import { ArtworkQueue, artworkBesideMedia, episodeArtName, fileMayUseFolderArtwork, findArtwork, framePosition, POSTER_OUTPUT, savePosterAs, saveFrame, type PosterOutcome } from "./artwork.js";
+import { ArtworkQueue, artNames, artOutput, artVariantKey, artworkBesideMedia, BACKDROP_OUTPUT, episodeArtName, fileMayUseFolderArtwork, findArtwork, framePosition, POSTER_OUTPUT, saveBackdropAs, saveFrame, savePosterAs, type ArtShape, type PosterOutcome } from "./artwork.js";
 import { clearedCookie, createSession, DECOY_HASH, LoginThrottle, pruneRevoked, envCredentials, hashPassword, INTERNAL_TOKEN, parseCookies, readSession, secretEquals, REMEMBER_DAYS, SESSION_COOKIE, sessionCookie, verifyPassword } from "./auth.js";
 import { RepeatFilter } from "./access-log.js";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -907,8 +907,12 @@ const libraryRootBrowse = async () => {
   return { path: "", items, total: items.length, pending };
 };
 
-const thumbUrl = async (param: "path" | "dir" | "key", value: string, art: string | undefined) =>
-  (art ? `/api/library/thumb?${param}=${encodeURIComponent(value)}&v=${await artStamp(art)}` : undefined);
+/** The address of one shape's variant. The poster address is the one the interface already
+ *  holds, so the shape is named only for a backdrop. */
+const thumbUrl = async (param: "path" | "dir" | "key", value: string, art: string | undefined, shape: ArtShape = "poster") =>
+  (art
+    ? `/api/library/thumb?${param}=${encodeURIComponent(value)}${shape === "wide" ? "&shape=wide" : ""}&v=${await artStamp(art)}`
+    : undefined);
 
 const artworkQueue = new ArtworkQueue();
 const fileExists = async (file: string) => { try { await access(file); return true; } catch { return false; } };
@@ -942,30 +946,38 @@ const saveArtwork = async (key: string, target: string, write: () => Promise<boo
   return saved;
 };
 
-/** `saveArtwork` with the reason kept, for the posters the catalogue hands us: one of them not
+/** `saveArtwork` with the reason kept, for the pictures the catalogue hands us: one of them not
  *  arriving used to be silent end to end, and a blank title nobody can explain is worse than a
  *  warning in the log. */
-const savePosterReport = async (key: string, target: string, url: string, what: string) => {
+const saveArtworkReport = async (
+  key: string, target: string, url: string, what: string,
+  save: (target: string, url: string) => Promise<PosterOutcome>,
+) => {
   let refusal: Extract<PosterOutcome, { ok: false }> | undefined;
   const saved = await saveArtwork(key, target, async () => {
-    const outcome = await savePosterAs(target, url);
+    const outcome = await save(target, url);
     if (!outcome.ok) refusal = outcome;
     return outcome.ok;
   });
   if (!saved) log("WARN", `${what} could not be saved`, { key, host: hostOf(url), target, reason: refusal?.reason ?? "no-file", detail: refusal?.detail });
   return saved;
 };
+const savePosterReport = (key: string, target: string, url: string, what: string) =>
+  saveArtworkReport(key, target, url, what, savePosterAs);
+/** The wide variant is narrowed on the way in, which is why it has a writer of its own. */
+const saveBackdropReport = (key: string, target: string, url: string) =>
+  saveArtworkReport(key, target, url, "The catalogue backdrop", saveBackdropAs);
 
 /** Someone else's picture in the folder always wins: nothing is overwritten or regenerated. */
-async function locateArtwork(entry: Awaited<ReturnType<typeof scanLibrary>>[number]) {
+async function locateArtwork(entry: Awaited<ReturnType<typeof scanLibrary>>[number], shape: ArtShape = "poster") {
   const directory = entryDirectory(entry);
   if (directory) {
     const folder = mediaPath(directory);
-    const existing = await findArtwork(folder);
+    const existing = await findArtwork(folder, artNames(shape));
     if (existing) return path.join(folder, existing);
   }
-  const own = dataArtworkFile(libraryKey(entry.key));
-  return await fileExists(own) ? own : undefined;
+  const own = storeArt(libraryKey(entry.key), shape);
+  return own && await fileExists(own) ? own : undefined;
 }
 
 /** Fills a missing thumbnail: the poster from metadata first, otherwise a representative frame from the video. */
@@ -1350,17 +1362,19 @@ const describeLibraryPath = async (key: string) => {
   return describePath(library.root, relative, carveOutsOf(library));
 };
 
-/** Thumbnail of one video. Next to the video it is looked up by Jellyfin's naming convention. */
-async function locateFileArtwork(key: string) {
+/** Thumbnail of one video. Next to the video it is looked up by Jellyfin's naming convention.
+ *  An episode still is a landscape frame, so it serves the wide shape as it is; the portrait
+ *  one keeps its own slot. */
+async function locateFileArtwork(key: string, shape: ArtShape = "poster") {
   const media = path.join(posixDir(mediaPath(key)), episodeArtName(posixBase(key)));
   if (await fileExists(media)) return media;
-  const own = dataArtworkFile(key);
-  if (await fileExists(own)) return own;
+  const own = storeArt(key, shape);
+  if (own && await fileExists(own)) return own;
   // The folder's picture belongs to a film only when the folder is the film's folder: a title
   // bound through that folder, not one bound on the file itself, which is what a film moved
   // into a shared folder becomes.
   const cover = knownTitleEntry(key, metaStore.qualifiedMeta());
-  if (fileMayUseFolderArtwork(key, cover?.record.type, cover?.key)) return locateFolderArtwork(posixDir(key));
+  if (fileMayUseFolderArtwork(key, cover?.record.type, cover?.key)) return locateFolderArtwork(posixDir(key), shape);
   return undefined;
 }
 
@@ -1402,31 +1416,84 @@ const scheduleMetaBackfill = (type: string, id: string) => {
 };
 
 const isFileKey = (key: string) => isVideo(posixBase(key));
-const hashedArt = (key: string) => isFileKey(key) ? dataArtworkFile(key) : dataArtworkFile(`dir:${key}`);
-const mediaPosterExists = async (key: string) => {
+const ART_SHAPES: ArtShape[] = ["poster", "wide"];
+/** Where one variant of a key sits in the generated store, or nothing where the store cannot
+ *  place it: a `#wide` suffix on a library's own key would land on the library id, which the
+ *  store refuses. Such a key keeps the poster it has always had and gets no wide variant. */
+const storeArt = (key: string, shape: ArtShape = "poster") => {
+  const variant = artVariantKey(key, shape);
+  const parsed = parseLibraryPath(variant.startsWith("dir:") ? variant.slice(4) : variant);
+  return parsed ? dataArtworkFile(variant) : undefined;
+};
+/** Both files of one shape, because a key can name a file or a folder and the caller does not
+ *  always know which. */
+const generatedArtFiles = (key: string, shape: ArtShape) =>
+  [storeArt(key, shape), storeArt(`dir:${key}`, shape)].filter((file): file is string => file !== undefined);
+/** Where a folder's variant sits: the `dir:` prefix keeps a file and a folder of the same name
+ *  apart. */
+const hashedArt = (key: string, shape: ArtShape = "poster") =>
+  isFileKey(key) ? storeArt(key, shape) : storeArt(`dir:${key}`, shape);
+const removeGeneratedArt = async (key: string) => {
+  for (const shape of ART_SHAPES) for (const file of generatedArtFiles(key, shape)) await removeArtwork(file);
+  // Artwork deleted on purpose may be asked for again: the retry window is for titles that have
+  // none, not for a picture somebody just removed.
+  backdropTried.delete(artworkQueueKey(key, "wide"));
+};
+/** Where a shape's variant goes when the library allows writing next to the media. The poster
+ *  keeps the name it has always had; the wide one is the backdrop Jellyfin and Emby read. */
+const besideMediaTarget = (key: string, shape: ArtShape) =>
+  isFileKey(key)
+    ? path.join(posixDir(mediaPath(key)), shape === "wide" ? BACKDROP_OUTPUT : episodeArtName(posixBase(key)))
+    : path.join(mediaPath(key), artOutput(shape));
+/** Whether a file's backdrop may be dropped next to the media. The backdrop of a folder is a
+ *  title's picture only where the folder is the film's own -- the same gate the poster goes
+ *  through -- so an episode keeps its wide variant in the store, where it is looked up again. */
+const wideBesideMedia = (key: string) => {
+  if (!artworkBesideMediaFor(key)) return false;
+  if (!isFileKey(key)) return true;
+  const cover = knownTitleEntry(key, metaStore.qualifiedMeta());
+  return fileMayUseFolderArtwork(key, cover?.record.type, cover?.key);
+};
+/** Where one variant of an item's artwork is written: next to the media where the library allows
+ *  it, in the generated store otherwise, and nowhere where the store cannot place it. */
+const artworkTarget = (key: string, shape: ArtShape) =>
+  (shape === "wide" ? wideBesideMedia(key) : artworkBesideMediaFor(key)) ? besideMediaTarget(key, shape) : hashedArt(key, shape);
+/** The queue key of one shape's job for an item. The two shapes never share a key, so a
+ *  backdrop is queued while the poster job for the same item is still running. */
+const artworkQueueKey = (key: string, shape: ArtShape) =>
+  artVariantKey(isFileKey(key) ? `file:${key}` : `dir:${key}`, shape);
+const mediaArtExists = async (key: string, shape: ArtShape) => {
   const folder = isFileKey(key) ? posixDir(key) : key;
   if (!folder) return false;
-  return Boolean(await findArtwork(mediaPath(folder)));
+  return Boolean(await findArtwork(mediaPath(folder), artNames(shape)));
 };
-const writeCatalogPoster = async (key: string, url?: string) => {
-  if (!url || !key || key === ".") return false;
-  if (await mediaPosterExists(key)) {
+
+/** One shape of the catalogue artwork. A picture of the folder's own always wins for that
+ *  shape, and the stale copy in the generated store goes either way. */
+const writeCatalogArt = async (key: string, url: string | undefined, shape: ArtShape) => {
+  if (!url) return false;
+  if (await mediaArtExists(key, shape)) {
     // Not a failure: a picture of the folder's own always wins, and it is worth being able to
     // see that this is why nothing was written.
-    log("DEBUG", "The folder has its own picture, the catalogue poster was not written", { key });
+    log("DEBUG", "The folder has its own picture, the catalogue artwork was not written", { key, shape });
     return false;
   }
-  await removeArtwork(dataArtworkFile(key));
-  await removeArtwork(dataArtworkFile(`dir:${key}`));
-  const toMedia = artworkBesideMediaFor(key);
-  const asFile = isFileKey(key);
-  const target = toMedia
-    ? (asFile
-      ? path.join(posixDir(mediaPath(key)), episodeArtName(posixBase(key)))
-      : path.join(mediaPath(key), POSTER_OUTPUT))
-    : hashedArt(key);
+  for (const file of generatedArtFiles(key, shape)) await removeArtwork(file);
+  const target = artworkTarget(key, shape);
+  if (!target) return false;
   await mkdir(path.dirname(target), { recursive: true });
-  return savePosterReport(key, target, url, "The catalogue poster");
+  return shape === "wide"
+    ? saveBackdropReport(key, target, url)
+    : savePosterReport(key, target, url, "The catalogue poster");
+};
+
+/** Both variants in one pass, from the poster and the background the metadata carries side by
+ *  side. Every match writes through here, so a newly matched title has both pictures at once. */
+const writeCatalogPoster = async (key: string, url?: string, backdrop?: string) => {
+  if (!key || key === ".") return false;
+  const poster = await writeCatalogArt(key, url, "poster");
+  await writeCatalogArt(key, backdrop, "wide");
+  return poster;
 };
 
 /** The binding on this exact path, ignoring one inherited from a parent folder. */
@@ -1436,10 +1503,9 @@ const ownRecord = (relative: string, records: Record<string, LibraryMetaRecord>)
 /** Generated thumbnails of a path and everything under it. A changed binding makes
  *  them stale: the poster of the old title, or a frame grabbed while unmatched. */
 const clearGeneratedArt = async (key: string) => {
-  await removeArtwork(dataArtworkFile(key));
-  await removeArtwork(dataArtworkFile(`dir:${key}`));
+  await removeGeneratedArt(key);
   for (const file of await libraryFiles()) {
-    if (file.relative !== key && isPathWithin(file.relative, key)) await removeArtwork(dataArtworkFile(file.relative));
+    if (file.relative !== key && isPathWithin(file.relative, key)) await removeGeneratedArt(file.relative);
   }
 };
 
@@ -1486,44 +1552,95 @@ async function catalogPosterIfBound(key: string, target: string) {
   return false;
 }
 
-function scheduleFileArtwork(key: string) {
+// A title the catalogue has no backdrop for would be asked again on every single browse, so a
+// finished attempt holds it back for the same six hours the metadata backfill waits.
+const backdropTried = new Map<string, number>();
+const backdropDue = (key: string) => {
+  const tried = backdropTried.get(key);
+  return tried == null || Date.now() - tried >= BACKFILL_RETRY_MS;
+};
+const rememberBackdropAttempt = (key: string) => {
+  backdropTried.set(key, Date.now());
+  for (const [seen, at] of backdropTried) if (Date.now() - at > BACKFILL_RETRY_MS) backdropTried.delete(seen);
+};
+/** Nobody is waiting for a frame grab while a video plays, and one that was tried lately is
+ *  left alone: this is the most expensive picture the server makes. */
+const backdropWanted = (queueKey: string) => backdropDue(queueKey) && !playbackBusy();
+
+/** The wide variant of a bound title, taken from the catalogue. An episode still is not a
+ *  backdrop: the still next to the file is landscape already and was found before this runs. */
+async function catalogBackdropIfBound(key: string, target: string) {
+  const known = knownTitleOf(key, metaStore.qualifiedMeta());
+  if (!known) return false;
+  const meta = await cachedMeta(known.type, known.id);
+  if (!meta?.background) return false;
+  if (await saveBackdropReport(key, target, meta.background)) {
+    log("INFO", "Backdrop filled in from metadata", { path: key });
+    return true;
+  }
+  return false;
+}
+
+function scheduleFileArtwork(key: string, shape: ArtShape = "poster") {
+  const queueKey = artworkQueueKey(key, shape);
   // Same guard as scheduleArtwork: a page reload while the frame grab is still
   // running must not pile up another one behind it.
-  if (artworkQueue.has(`file:${key}`)) return;
-  artworkQueue.run(`file:${key}`, async () => {
-    if (await locateFileArtwork(key)) return;
+  if (artworkQueue.has(queueKey)) return;
+  if (shape === "wide" && !backdropWanted(queueKey)) return;
+  artworkQueue.run(queueKey, async () => {
+    if (shape === "wide" && playbackBusy()) return;
+    if (await locateFileArtwork(key, shape)) return;
+    // The attempt starts here: one that finds nothing is not repeated on the next browse.
+    if (shape === "wide") rememberBackdropAttempt(queueKey);
     const source = await realpath(mediaPath(key)).catch(() => undefined);
     if (!source) return;
-    const target = artworkBesideMediaFor(key)
-      ? path.join(posixDir(mediaPath(key)), episodeArtName(posixBase(key)))
-      : dataArtworkFile(key);
+    const target = artworkTarget(key, shape);
+    if (!target) return;
     await mkdir(path.dirname(target), { recursive: true });
-    if (await catalogPosterIfBound(key, target)) return;
-    if (await locateFileArtwork(key)) return;
-    if (await catalogPosterIfBound(key, target)) return;
+    if (shape === "wide") {
+      if (await catalogBackdropIfBound(key, target)) return;
+      if (await locateFileArtwork(key, "wide")) return;
+    }
+    else {
+      if (await catalogPosterIfBound(key, target)) return;
+      if (await locateFileArtwork(key)) return;
+      if (await catalogPosterIfBound(key, target)) return;
+    }
     const info = await playback.inspect({ url: `file://${wirePath(key)}` }).catch(() => undefined);
     await saveArtwork(key, target, () => saveFrame(source, target, framePosition(info?.duration)));
   });
 }
 
-/** Folder thumbnail: its own picture, then the poster from metadata, otherwise a frame from the first video inside. */
-async function locateFolderArtwork(key: string) {
+/** Folder thumbnail: its own picture, then the one from metadata, otherwise a frame from the first video inside. */
+async function locateFolderArtwork(key: string, shape: ArtShape = "poster") {
   const folder = mediaPath(key);
-  const existing = await findArtwork(folder);
+  const existing = await findArtwork(folder, artNames(shape));
   if (existing) return path.join(folder, existing);
-  const own = dataArtworkFile(`dir:${key}`);
-  return await fileExists(own) ? own : undefined;
+  const own = storeArt(`dir:${key}`, shape);
+  return own && await fileExists(own) ? own : undefined;
 }
 
-function scheduleFolderArtwork(key: string) {
-  if (artworkQueue.has(`dir:${key}`)) return;
-  artworkQueue.run(`dir:${key}`, async () => {
-    if (await locateFolderArtwork(key)) return;
-    const target = artworkBesideMediaFor(key) ? path.join(mediaPath(key), POSTER_OUTPUT) : dataArtworkFile(`dir:${key}`);
+function scheduleFolderArtwork(key: string, shape: ArtShape = "poster") {
+  const queueKey = artworkQueueKey(key, shape);
+  if (artworkQueue.has(queueKey)) return;
+  if (shape === "wide" && !backdropWanted(queueKey)) return;
+  artworkQueue.run(queueKey, async () => {
+    if (shape === "wide" && playbackBusy()) return;
+    if (await locateFolderArtwork(key, shape)) return;
+    // The attempt starts here: one that finds nothing is not repeated on the next browse.
+    if (shape === "wide") rememberBackdropAttempt(queueKey);
+    const target = artworkTarget(key, shape);
+    if (!target) return;
     await mkdir(path.dirname(target), { recursive: true });
-    if (await catalogPosterIfBound(key, target)) return;
-    if (await locateFolderArtwork(key)) return;
-    if (await catalogPosterIfBound(key, target)) return;
+    if (shape === "wide") {
+      if (await catalogBackdropIfBound(key, target)) return;
+      if (await locateFolderArtwork(key, "wide")) return;
+    }
+    else {
+      if (await catalogPosterIfBound(key, target)) return;
+      if (await locateFolderArtwork(key)) return;
+      if (await catalogPosterIfBound(key, target)) return;
+    }
     const { library, relative } = libraryOfKey(key);
     const inside = await browseDirectory(library.root, relative, "", 0, 20,
       "name", false, "", undefined, carveOutsOf(library));
@@ -1568,15 +1685,21 @@ async function sweepArtwork() {
     const valid = new Set<string>();
     // The ancestor rows matter: a folder is keyed `dir:<path>` for paths that appear in
     // no file and in no binding, because a folder is not a file.
+    const rememberArt = (key: string) => {
+      for (const shape of ART_SHAPES) {
+        const file = storeArt(key, shape);
+        if (file) valid.add(path.basename(file));
+      }
+    };
     const remember = (key: string) => {
-      valid.add(path.basename(dataArtworkFile(key)));
+      rememberArt(key);
       const parts = key.split("/");
       for (let depth = 1; depth < parts.length; depth += 1) {
-        valid.add(path.basename(dataArtworkFile(`dir:${parts.slice(0, depth).join("/")}`)));
+        rememberArt(`dir:${parts.slice(0, depth).join("/")}`);
       }
     };
     for (const entry of await scanLibrary(library.root, carveOutsOf(library))) {
-      valid.add(path.basename(dataArtworkFile(libraryPath(library.id, entry.key))));
+      rememberArt(libraryPath(library.id, entry.key));
       for (const file of entry.files) remember(libraryPath(library.id, file.path));
     }
     for (const key of queued) if (parseLibraryPath(key)?.libraryId === library.id) remember(key);
@@ -1806,12 +1929,15 @@ app.get("/api/library/resume", asyncRoute(async (req, res) => {
   const skip = Math.max(0, Number(req.query.skip) || 0);
   const limit = Math.max(1, Math.min(120, Number(req.query.limit) || 60));
   const page = await Promise.all(ordered.slice(skip, skip + limit).map(async (item) => {
-    const art = await locateFileArtwork(libraryKey(item.path));
-    if (!art) scheduleFileArtwork(libraryKey(item.path));
+    const key = libraryKey(item.path);
+    const art = await locateFileArtwork(key);
+    if (!art) scheduleFileArtwork(key);
+    const wide = await locateFileArtwork(key, "wide");
+    if (!wide) scheduleFileArtwork(key, "wide");
     const { item: withMeta, backfill } = attachBrowseMeta(item);
-    return { ...withMeta, poster: await thumbUrl("path", item.path, art), backfill };
+    return { ...withMeta, poster: await thumbUrl("path", item.path, art), wide: await thumbUrl("path", item.path, wide, "wide"), backfill };
   }));
-  res.json({ path: ":resume", items: page.map(({ backfill: _backfill, seriesKey: _seriesKey, ...item }) => item), total: ordered.length, pending: page.some((item) => !item.poster || item.backfill) });
+  res.json({ path: ":resume", items: page.map(({ backfill: _backfill, seriesKey: _seriesKey, ...item }) => item), total: ordered.length, pending: page.some((item) => !item.poster || !item.wide || item.backfill) });
 }));
 
 app.get("/api/library/favorites", asyncRoute(async (req, res) => {
@@ -1834,11 +1960,14 @@ app.get("/api/library/favorites", asyncRoute(async (req, res) => {
     const key = libraryKey(item.path);
     const art = item.kind === "folder" ? await locateFolderArtwork(key) : await locateFileArtwork(key);
     if (!art) (item.kind === "folder" ? scheduleFolderArtwork : scheduleFileArtwork)(key);
+    const wide = item.kind === "folder" ? await locateFolderArtwork(key, "wide") : await locateFileArtwork(key, "wide");
+    if (!wide) (item.kind === "folder" ? scheduleFolderArtwork : scheduleFileArtwork)(key, "wide");
     const poster = await thumbUrl(item.kind === "folder" ? "dir" : "path", item.path, art);
+    const wideUrl = await thumbUrl(item.kind === "folder" ? "dir" : "path", item.path, wide, "wide");
     const { item: withMeta, backfill } = attachBrowseMeta(item);
-    return { ...withMeta, favorite: true, poster, backfill };
+    return { ...withMeta, favorite: true, poster, wide: wideUrl, backfill };
   }));
-  res.json({ path: ":favorites", items: page.map(({ backfill: _backfill, ...item }) => item), total: ordered.length, pending: page.some((item) => !item.poster || item.backfill) });
+  res.json({ path: ":favorites", items: page.map(({ backfill: _backfill, ...item }) => item), total: ordered.length, pending: page.some((item) => !item.poster || !item.wide || item.backfill) });
 }));
 
 app.get("/api/library/browse", asyncRoute(async (req, res) => {
@@ -1876,23 +2005,33 @@ app.get("/api/library/browse", asyncRoute(async (req, res) => {
     if (item.kind === "folder") {
       const art = await locateFolderArtwork(key);
       if (!art) scheduleFolderArtwork(key);
+      const wide = await locateFolderArtwork(key, "wide");
+      if (!wide) scheduleFolderArtwork(key, "wide");
       const { item: withMeta, backfill } = attachBrowseMeta({ ...item, path });
-      return { ...withMeta, path, poster: await thumbUrl("dir", path, art), backfill };
+      return {
+        ...withMeta, path,
+        poster: await thumbUrl("dir", path, art),
+        wide: await thumbUrl("dir", path, wide, "wide"),
+        backfill,
+      };
     }
     const art = await locateFileArtwork(key);
     if (!art) scheduleFileArtwork(key);
+    const wide = await locateFileArtwork(key, "wide");
+    if (!wide) scheduleFileArtwork(key, "wide");
     const watched = store.progress()[`file:${key}`];
     const { item: withMeta, backfill } = attachBrowseMeta({ ...item, path });
     return {
       ...withMeta,
       path,
       poster: await thumbUrl("path", path, art),
+      wide: await thumbUrl("path", path, wide, "wide"),
       progress: watched ? { position: watched.position, duration: watched.duration } : undefined,
       backfill,
     };
   }));
   const marked = withFavorites(items);
-  res.json({ ...result, path: wirePath(inLibrary(result.path)), items: marked.map(({ backfill: _backfill, ...item }) => item), pending: marked.some((item) => !item.poster || item.backfill) });
+  res.json({ ...result, path: wirePath(inLibrary(result.path)), items: marked.map(({ backfill: _backfill, ...item }) => item), pending: marked.some((item) => !item.poster || !item.wide || item.backfill) });
 }));
 
 // Deleting, renaming and moving touch real files, hence the path and root checks.
@@ -1948,9 +2087,12 @@ const relocateArtwork = async (items: string[], relative: string, nextRelative: 
   for (const item of items) {
     const next = remapPath(item, relative, nextRelative);
     for (const [from, to] of [[item, next], [`dir:${item}`, `dir:${next}`]]) {
-      const result = await artworks.moveKey(from!, to!);
-      if (!result.carried && result.reason === "failed") {
-        log("WARN", "A thumbnail could not follow its item", { from, to, detail: result.detail });
+      for (const shape of ART_SHAPES) {
+        const moved = artVariantKey(from!, shape), target = artVariantKey(to!, shape);
+        const result = await artworks.moveKey(moved, target);
+        if (!result.carried && result.reason === "failed") {
+          log("WARN", "A thumbnail could not follow its item", { from: moved, to: target, detail: result.detail });
+        }
       }
     }
   }
@@ -1961,9 +2103,12 @@ const duplicateArtwork = async (items: string[], relative: string, nextRelative:
   for (const item of items) {
     const next = remapPath(item, relative, nextRelative);
     for (const [from, to] of [[item, next], [`dir:${item}`, `dir:${next}`]]) {
-      const result = await artworks.copyKey(from!, to!);
-      if (!result.carried && result.reason === "failed") {
-        log("WARN", "A thumbnail could not be copied to the item's new key", { from, to, detail: result.detail });
+      for (const shape of ART_SHAPES) {
+        const copied = artVariantKey(from!, shape), target = artVariantKey(to!, shape);
+        const result = await artworks.copyKey(copied, target);
+        if (!result.carried && result.reason === "failed") {
+          log("WARN", "A thumbnail could not be copied to the item's new key", { from: copied, to: target, detail: result.detail });
+        }
       }
     }
   }
@@ -1974,9 +2119,12 @@ const duplicateArtwork = async (items: string[], relative: string, nextRelative:
  *  shows up blank and the folder's copy is swept as an orphan an hour later. Copied rather than
  *  moved, because whatever stays in the folder is still that title's. */
 const carryCoveringArtwork = async (cover: string, nextKey: string) => {
-  const result = await artworks.copyKey(`dir:${cover}`, isFileKey(nextKey) ? nextKey : `dir:${nextKey}`);
-  if (!result.carried && result.reason === "failed") {
-    log("WARN", "The picture of the folder a title is bound through could not travel with it", { cover, next: nextKey, detail: result.detail });
+  const to = isFileKey(nextKey) ? nextKey : `dir:${nextKey}`;
+  for (const shape of ART_SHAPES) {
+    const result = await artworks.copyKey(artVariantKey(`dir:${cover}`, shape), artVariantKey(to, shape));
+    if (!result.carried && result.reason === "failed") {
+      log("WARN", "The picture of the folder a title is bound through could not travel with it", { cover, next: nextKey, shape, detail: result.detail });
+    }
   }
 };
 
@@ -1988,8 +2136,7 @@ const pruneEmptiedFolders = async (key: string) => {
   for (const folder of gone) {
     const folderKey = libraryPath(library.id, folder);
     await rm(mediaPath(folderKey), { recursive: true, force: true });
-    await removeArtwork(dataArtworkFile(folderKey));
-    await removeArtwork(dataArtworkFile(`dir:${folderKey}`));
+    await removeGeneratedArt(folderKey);
     await forgetLibraryPath(folderKey);
   }
   if (gone.length) log("INFO", "Emptied folders removed", { folders: gone });
@@ -2002,8 +2149,7 @@ const deleteLibraryItem = async (relative: string) => {
   const info = await stat(resolved.absolute).catch(() => undefined);
   if (!info) throw new AppError("The file or folder does not exist.", "err.pathMissing");
   await rm(resolved.absolute, { recursive: true, force: true });
-  await removeArtwork(dataArtworkFile(resolved.key));
-  await removeArtwork(dataArtworkFile(`dir:${resolved.key}`));
+  await removeGeneratedArt(resolved.key);
   const orphans = await forgetLibraryPath(resolved.key);
   const pruned = await pruneEmptiedFolders(resolved.key);
   invalidateLibrary();
@@ -2159,15 +2305,18 @@ app.post("/api/library/move", asyncRoute(async (req, res) => {
 }));
 
 app.get("/api/library/thumb", asyncRoute(async (req, res) => {
+  // An unknown shape asks for the poster, the way an unknown tile size is the medium one: every
+  // address the interface already holds names no shape at all.
+  const shape: ArtShape = String(req.query.shape ?? "") === "wide" ? "wide" : "poster";
   const filePath = req.query.path ? libraryKey(String(req.query.path)) : undefined;
   const dirPath = req.query.dir ? libraryKey(String(req.query.dir)) : undefined;
   let art: string | undefined;
-  if (filePath) art = await locateFileArtwork(filePath);
-  else if (dirPath) art = await locateFolderArtwork(dirPath);
+  if (filePath) art = await locateFileArtwork(filePath, shape);
+  else if (dirPath) art = await locateFolderArtwork(dirPath, shape);
   else {
     const selected = String(req.query.key ?? "");
     const entry = (await libraryEntries()).find((item) => item.key === libraryKey(selected));
-    art = entry && await locateArtwork(entry);
+    art = entry && await locateArtwork(entry, shape);
   }
   if (!art) return res.status(404).end();
   void artworks.served(art);
@@ -2185,20 +2334,24 @@ const titleKey = (target: string, media: MediaInfo | undefined, flat: boolean) =
   return media?.kind === "episode" && media.season != null ? path.dirname(directory) : directory;
 };
 
-/** The catalogue poster is saved as the job is queued, so it is in the library before the file
+/** The catalogue artwork is saved as the job is queued, so it is in the library before the file
  *  is. `fallback` is the catalogue's own answer, tried only when the first address fails: the
- *  poster the client handed over is the one the viewer expects, but it may be a dead link. */
-const saveCatalogPoster = (key: string, url?: string, fallback?: string) => {
-  if (!key || key === "." || (!url && !fallback)) return;
+ *  poster the client handed over is the one the viewer expects, but it may be a dead link.
+ *  `backdrop` rides along, so both variants of a newly matched title arrive together. */
+const saveCatalogPoster = (key: string, url?: string, fallback?: string, backdrop?: string) => {
+  if (!key || key === "." || (!url && !fallback && !backdrop)) return;
   const queueKey = isFileKey(key) ? `file:${key}` : `dir:${key}`;
   artworkQueue.run(queueKey, async () => {
-    if (url && await writeCatalogPoster(key, url)) {
+    if (url && await writeCatalogPoster(key, url, backdrop)) {
       log("INFO", "Poster from the catalog saved", { key });
       return;
     }
-    if (fallback && fallback !== url && await writeCatalogPoster(key, fallback)) {
+    if (fallback && fallback !== url && await writeCatalogPoster(key, fallback, backdrop)) {
       log("INFO", "Poster from the catalog saved", { key, source: "metadata" });
+      return;
     }
+    // A title the catalogue has only a background for still gets that.
+    if (!url && !fallback) await writeCatalogPoster(key, undefined, backdrop);
   });
 };
 
@@ -2231,7 +2384,13 @@ const libraryScan = new LibraryScan({
     await metaStore.updateQualified(mutator);
     invalidateLibrary();
   },
-  savePoster: (key, url) => saveCatalogPoster(key, url),
+  savePoster: (key, url, backdrop) => saveCatalogPoster(key, url, undefined, backdrop),
+  // The scan walks every entry anyway, so a missing wide variant is filled from here as well:
+  // "scan again" backfills the library instead of leaving it to the first landscape browse.
+  fillWideArtwork: (key) => {
+    if (isFileKey(key)) scheduleFileArtwork(key, "wide");
+    else scheduleFolderArtwork(key, "wide");
+  },
   deleteGeneratedArt: (key) => clearGeneratedArt(key),
   busy: () => {
     if (libraryOpsWriting) return "operation";
@@ -2285,7 +2444,7 @@ const rememberTitle = async (target: string, media: MediaInfo | undefined, flat:
   // The poster the client was looking at when it pressed download is the one to save: it needs
   // no round trip, and for an addon that answers `metadata()` with nothing it is the only one
   // there will ever be. The catalogue's own poster is the second chance, not the first.
-  saveCatalogPoster(key, media.poster, meta?.poster);
+  saveCatalogPoster(key, media.poster, meta?.poster, meta?.background);
 };
 
 // Completion invalidates the scan at once. For a lazy job the target path is known
@@ -2428,7 +2587,7 @@ const matchLibraryItem = async (body: LibraryMatchRequest) => {
   invalidateLibrary();
   await clearGeneratedArt(bindKey);
   if (requestKey !== bindKey) await clearGeneratedArt(requestKey);
-  if (id) saveCatalogPoster(bindKey, episodeRow?.thumbnail ?? meta?.poster);
+  if (id) saveCatalogPoster(bindKey, episodeRow?.thumbnail ?? meta?.poster, undefined, meta?.background);
   log("INFO", "Library title matched", { key: bindKey, type, id: id || null, source: "user", ...(episode != null ? { season: season ?? 1, episode } : {}) });
   return { key: wirePath(bindKey), type, id: id || null };
 };

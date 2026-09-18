@@ -1,12 +1,59 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { createServer, type Server } from "node:http";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { ArtworkQueue, artworkBesideMedia, fileMayUseFolderArtwork, savePosterAs } from "./artwork.js";
+import { promisify } from "node:util";
+import {
+  artNames, artOutput, artVariantKey, ArtworkQueue, artworkBesideMedia, BACKDROP_NAMES, fileMayUseFolderArtwork,
+  findArtwork, POSTER_NAMES, saveBackdropAs, savePosterAs,
+} from "./artwork.js";
+import { ArtworkCache } from "./artwork-cache.js";
 
 process.env.ALLOW_PRIVATE_ADDONS = "1";
+
+const ffmpeg = promisify(execFile);
+const hasFfmpeg = await ffmpeg("ffmpeg", ["-version"]).then(() => true, () => false);
+
+test("a shape names the pictures in a folder and the file we write", () => {
+  assert.deepEqual(artNames("poster"), POSTER_NAMES);
+  assert.deepEqual(artNames("wide"), BACKDROP_NAMES);
+  assert.equal(artOutput("poster"), "poster.jpg");
+  assert.equal(artOutput("wide"), "backdrop.jpg");
+  assert.equal(artOutput("wide"), BACKDROP_NAMES[0], "the wide variant is the name Jellyfin reads first");
+});
+
+test("the backdrop names keep their order: fanart.jpg serves, backdrop.jpg beats it", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "artwork-names-"));
+  try {
+    assert.equal(await findArtwork(directory, BACKDROP_NAMES), undefined);
+    await writeFile(path.join(directory, "fanart.jpg"), Buffer.from([1]));
+    assert.equal(await findArtwork(directory, BACKDROP_NAMES), "fanart.jpg", "a fanart is a backdrop where backdrop.jpg is absent");
+    assert.equal(await findArtwork(directory), undefined, "and it is not a poster");
+    await writeFile(path.join(directory, "backdrop.jpg"), Buffer.from([1]));
+    assert.equal(await findArtwork(directory, BACKDROP_NAMES), "backdrop.jpg");
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("the poster key stays byte-for-byte what it is today, the wide one is a second sha1", () => {
+  const key = "lib_ab12cd34/Show/01 serie/01.mkv";
+  const cache = new ArtworkCache("/data/artwork-test");
+  const named = (name: string) => `${createHash("sha1").update(name).digest("hex")}.jpg`;
+  assert.equal(artVariantKey(key, "poster"), key, "no file on disk is renamed by the second variant");
+  assert.equal(artVariantKey(key, "wide"), `${key}#wide`);
+  assert.notEqual(artVariantKey(key, "wide"), artVariantKey(key, "poster"));
+  assert.equal(path.basename(cache.file(artVariantKey(key, "poster"))), named("Show/01 serie/01.mkv"));
+  // The same directory, so the byte accounting and the eviction of the cache need no change.
+  assert.equal(path.dirname(cache.file(artVariantKey(key, "wide"))), path.dirname(cache.file(key)));
+  assert.equal(path.basename(cache.file(artVariantKey(key, "wide"))), named("Show/01 serie/01.mkv#wide"));
+  // A folder key takes the same suffix, and lands beside the folder's poster.
+  const folder = "dir:lib_ab12cd34/Show";
+  assert.equal(path.basename(cache.file(artVariantKey(folder, "wide"))), named("dir:Show#wide"));
+  assert.equal(path.dirname(cache.file(artVariantKey(folder, "wide"))), path.dirname(cache.file(folder)));
+});
 
 test("a poster lands next to the media only where the library allows writing", () => {
   const healthy = { unreachable: false, readOnly: false };
@@ -83,6 +130,25 @@ test("a poster that does not arrive says why", async () => {
     assert.equal(refused.ok === false && refused.reason, "failed");
     // And the one that works still works.
     assert.deepEqual(await savePosterAs(target, `${base}/ok`), { ok: true });
+  } finally {
+    await new Promise<void>((resolve) => (server as Server).close(() => resolve()));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a catalogue backdrop is narrowed before it is stored", { skip: !hasFfmpeg }, async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "backdrop-"));
+  const source = path.join(directory, "source.jpg");
+  await ffmpeg("ffmpeg", ["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=size=1280x720:duration=1", "-frames:v", "1", "-y", source]);
+  const data = await readFile(source);
+  const server = createServer((_req, res) => { res.writeHead(200, { "content-type": "image/jpeg" }).end(data); });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  try {
+    const target = path.join(directory, "backdrop.jpg");
+    assert.deepEqual(await saveBackdropAs(target, `${base}/wide.jpg`), { ok: true });
+    const { stdout } = await ffmpeg("ffprobe", ["-v", "error", "-select_streams", "v", "-show_entries", "stream=width", "-of", "csv=p=0", target]);
+    assert.ok(Number(stdout.trim()) <= 640, `stored ${stdout.trim()} px wide`);
   } finally {
     await new Promise<void>((resolve) => (server as Server).close(() => resolve()));
     await rm(directory, { recursive: true, force: true });

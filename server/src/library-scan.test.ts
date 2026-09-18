@@ -11,7 +11,8 @@ const movie = (key: string): TitleUnit => ({ key, kind: "movie", relative: key, 
 const series = (key: string): TitleUnit => ({ key, kind: "series", relative: key, sampleFiles: [`${key}/a.mkv`] });
 const TTL = 14 * 24 * 60 * 60_000;
 const stale = () => new Date(Date.now() - TTL - 60_000).toISOString();
-const hit = (name: string, id = "tt1"): MetaItem => ({ id, type: "movie", name, releaseInfo: "2020", poster: "http://x/p.jpg", description: "Plot" });
+const hit = (name: string, id = "tt1"): MetaItem =>
+  ({ id, type: "movie", name, releaseInfo: "2020", poster: "http://x/p.jpg", background: "http://x/b.jpg", description: "Plot" });
 
 const waitFor = async (pred: () => boolean, ms = 2_000) => {
   const start = Date.now();
@@ -29,6 +30,8 @@ const harness = async (overrides: Partial<LibraryScanOpts> = {}) => {
     episodes: Record<string, LibraryEpisodeRecord>;
   } = { meta: {}, suggestions: {}, episodes: {} };
   const posters: string[] = [];
+  const posterBackdrops: string[] = [];
+  const backdrops: string[] = [];
   const deleted: string[] = [];
   const searches: string[] = [];
   const metas: string[] = [];
@@ -46,7 +49,8 @@ const harness = async (overrides: Partial<LibraryScanOpts> = {}) => {
     libraryMeta: () => store.meta,
     librarySuggestions: () => store.suggestions,
     updateMeta: async (mutator) => { mutator(store.meta, store.suggestions, store.episodes); },
-    savePoster: (key) => { posters.push(key); },
+    savePoster: (key, _url, backdrop) => { posters.push(key); if (backdrop) posterBackdrops.push(backdrop); },
+    fillWideArtwork: (key) => { backdrops.push(key); },
     deleteGeneratedArt: async (key) => { deleted.push(key); },
     busy: () => busy,
     pathExists: async () => true,
@@ -61,13 +65,13 @@ const harness = async (overrides: Partial<LibraryScanOpts> = {}) => {
     metadata: async (addons, type, id) => { metas.push(id); return opts.metadata(addons, type, id); },
   });
   return {
-    dataDir, scan, store, posters, deleted, searches, metas, frames,
+    dataDir, scan, store, posters, posterBackdrops, backdrops, deleted, searches, metas, frames,
     setBusy: (value: ScanPauseReason | undefined) => { busy = value; },
     close: async () => { await scan.stop(); await rm(dataDir, { recursive: true, force: true }); },
   };
 };
 
-test("a unique title auto-accepts, deletes hashed art and saves the catalog poster", async () => {
+test("a unique title auto-accepts, deletes hashed art and saves both catalog variants", async () => {
   const h = await harness();
   try {
     await h.scan.start();
@@ -78,7 +82,32 @@ test("a unique title auto-accepts, deletes hashed art and saves the catalog post
     assert.equal(h.store.meta.Foo?.locked, false);
     assert.deepEqual(h.deleted, ["Foo"]);
     assert.deepEqual(h.posters, ["Foo"]);
+    assert.deepEqual(h.posterBackdrops, ["http://x/b.jpg"], "the background of the match rides along");
     assert.deepEqual(h.frames, []);
+  } finally { await h.close(); }
+});
+
+test("the run asks for the wide variant of every entry it walks, bound or not", async () => {
+  const h = await harness({ units: async () => [movie("Foo"), movie("Bar")] });
+  try {
+    h.store.meta.Bar = { type: "movie", id: "tt9", source: "scan" };
+    await h.scan.start();
+    await waitFor(() => h.scan.snapshot().status === "completed");
+    assert.equal(h.scan.snapshot().matched, 1, "only the unbound title is matched again");
+    assert.deepEqual([...h.backdrops].sort(), ["Bar", "Foo"]);
+  } finally { await h.close(); }
+});
+
+test("a run held back by playback asks for the wide variants once it may work", async () => {
+  const h = await harness();
+  try {
+    h.setBusy("playback");
+    await h.scan.start();
+    await waitFor(() => h.scan.snapshot().status === "paused");
+    assert.deepEqual(h.backdrops, [], "nothing is generated while a video plays");
+    h.setBusy(undefined);
+    await waitFor(() => h.scan.snapshot().status === "completed");
+    assert.deepEqual(h.backdrops, ["Foo"]);
   } finally { await h.close(); }
 });
 
