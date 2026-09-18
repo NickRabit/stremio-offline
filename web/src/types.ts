@@ -12,7 +12,7 @@ export interface Addon {
   showInContinueWatching?: boolean;
   /** Cinemeta: the interface hides its remove and off switches. */
   essential?: boolean;
-  configurable?: boolean; downloadSettings?: AddonDownloadSettings; manifest: { id: string; name: string; version: string; description?: string; logo?: string; resources?: Array<string | { name: string }>; behaviorHints?: { p2p?: boolean } };
+  configurable?: boolean; downloadSettings?: AddonDownloadSettings; manifest: { id: string; name: string; version: string; description?: string; logo?: string; resources?: Array<string | { name: string }>; catalogs?: Array<{ id: string; type: string; name?: string }>; behaviorHints?: { p2p?: boolean } };
 }
 export interface Catalog { addonKey: string; addonName: string; type: string; id: string; name?: string; extra?: Array<{ name: string; isRequired?: boolean; options?: string[] }> }
 export interface SearchableCatalog { addonKey: string; addonName: string; globalSearch: boolean; type: string; id: string; name: string }
