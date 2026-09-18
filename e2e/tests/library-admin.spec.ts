@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { libraryTool } from "./library-tools";
 import { mkdir, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -72,7 +73,7 @@ test("a granted root is added, previewed and revoked without losing what it reme
 
   // The library tools open the same manager the settings section renders. On a wide
   // viewport these actions are inline; the toggle that hides them is the mobile layout.
-  await page.getByRole("button", { name: "Knihovny", exact: true }).click();
+  (await libraryTool(page, "Knihovny")).click();
   const dialog = page.getByRole("dialog", { name: "Knihovny" });
   await expect(dialog.locator(".library-admin-row")).toHaveCount(2);
 
@@ -92,7 +93,7 @@ test("a granted root is added, previewed and revoked without losing what it reme
   // adds the library -- the only way in for an owner whose app runs in a container.
   const added = path.join(grantedRoot, "Nové filmy");
   expect(await stat(added).catch(() => undefined), "nothing is created before the library is").toBeUndefined();
-  await page.getByRole("button", { name: "Knihovny", exact: true }).click();
+  (await libraryTool(page, "Knihovny")).click();
   const tools = page.getByRole("dialog", { name: "Knihovny" });
   await tools.getByRole("button", { name: "Přidat knihovnu" }).click();
   const creator = page.getByRole("dialog", { name: "Vyberte složku" });

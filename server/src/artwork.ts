@@ -69,16 +69,29 @@ const sharesFolderName = (relative: string, parent: string) =>
 
 const exists = async (file: string) => { try { await access(file); return true; } catch { return false; } };
 
-/** Returns the name of an existing picture in the folder, whoever produced it. */
-export async function findArtwork(directory: string, names = POSTER_NAMES): Promise<string | undefined> {
-  let entries: string[];
-  try { entries = await readdir(directory); } catch { return undefined; }
-  const lower = new Map(entries.map((name) => [name.toLowerCase(), name]));
+/** A folder's names, lowercased for the lookup and mapped back to what is on disk.
+ *  Read once and asked twice: a browse row wants a poster and a backdrop out of the
+ *  same directory, and on a network mount the second listing is not free. */
+export type FolderListing = Map<string, string>;
+
+export async function readFolderListing(directory: string): Promise<FolderListing | undefined> {
+  try { return new Map((await readdir(directory)).map((name) => [name.toLowerCase(), name])); }
+  catch { return undefined; }
+}
+
+/** The first of `names` the folder holds, whoever produced it. The order is the priority. */
+export function pickArtwork(listing: FolderListing | undefined, names: string[]): string | undefined {
+  if (!listing) return undefined;
   for (const candidate of names) {
-    const found = lower.get(candidate);
+    const found = listing.get(candidate);
     if (found) return found;
   }
   return undefined;
+}
+
+/** Returns the name of an existing picture in the folder, whoever produced it. */
+export async function findArtwork(directory: string, names = POSTER_NAMES): Promise<string | undefined> {
+  return pickArtwork(await readFolderListing(directory), names);
 }
 
 /** Written through a temporary file, so half a picture never shows up. */
