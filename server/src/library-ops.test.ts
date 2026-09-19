@@ -7,13 +7,17 @@ import { AppError } from "./errors.js";
 import { isInside } from "./libraries.js";
 import { LibraryOps, type LibraryOp, type LibraryOpsOptions, type OpsState } from "./library-ops.js";
 
-const waitFor = async (predicate: () => boolean, timeout = 2_000) => {
+const waitFor = async (predicate: () => boolean | Promise<boolean>, timeout = 2_000) => {
   const started = Date.now();
-  while (!predicate()) {
+  while (!(await predicate())) {
     if (Date.now() - started > timeout) throw new Error("timed out");
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
 };
+
+/** The queue moves a job in memory first and persists it afterwards, so a wait on the
+ *  snapshot says nothing about the file. A test that asserts the file has to wait for it. */
+const storedJobs = async (file: string) => JSON.parse(await readFile(file, "utf8")).jobs as { status: string }[];
 
 const harness = async (execute?: LibraryOpsOptions["execute"]) => {
   const dataDir = await mkdtemp(path.join(tmpdir(), "stremio-ops-"));
@@ -71,20 +75,22 @@ test("load resumes a persisted in-flight job at its current item", async () => {
   const queues: LibraryOps[] = [h.queue];
   try {
     const operation: LibraryOp = { op: "copy", items: ["one", "two"], target: "target" };
-    await writeFile(path.join(h.dataDir, "library-ops.json"), JSON.stringify({ version: 1, jobs: [{
+    const file = path.join(h.dataDir, "library-ops.json");
+    await writeFile(file, JSON.stringify({ version: 1, jobs: [{
       id: "job", operation, op: "copy", status: "running", total: 2, done: 0, failed: 0,
       bytes: 4, bytesTotal: 10, current: "one", startedAt: new Date().toISOString(), results: [],
     }] }));
     const resumed = new LibraryOps({
-      file: path.join(h.dataDir, "library-ops.json"), retryMs: 10,
+      file, retryMs: 10,
       execute: async (_operation, item) => { h.seen.push(item); return {}; },
     });
     queues.push(resumed);
     await resumed.load();
-    await waitFor(() => resumed.snapshot().jobs[0]?.status === "completed");
+    await waitFor(async () => resumed.snapshot().jobs[0]?.status === "completed"
+      && (await storedJobs(file))[0]?.status === "completed");
     assert.deepEqual(h.seen, ["one", "two"]);
     assert.equal(resumed.snapshot().jobs[0]?.done, 2);
-    assert.equal(JSON.parse(await readFile(path.join(h.dataDir, "library-ops.json"), "utf8")).jobs[0].status, "completed");
+    assert.equal((await storedJobs(file))[0]?.status, "completed");
   } finally { await cleanup(h.dataDir, queues); }
 });
 
