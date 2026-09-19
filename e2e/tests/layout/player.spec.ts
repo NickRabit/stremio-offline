@@ -92,8 +92,16 @@ test("video clicks dismiss controls and settings; double-click toggles fullscree
   ));
   const hasFinePointer = await page.evaluate(() => window.matchMedia("(pointer: fine)").matches);
   if (!hasFinePointer) {
+    // Without a fine pointer the double click must not reach the fullscreen toggle. It cannot
+    // be checked by asserting that nothing is fullscreen, though: a touch phone held sideways
+    // is put into fullscreen by the player itself on the first gesture, which Chromium on
+    // Android allows and iOS Safari does not, so the two coarse projects start this line in
+    // different states. What has to hold in both is that the gesture changes nothing.
+    const fullscreenBefore = await page.evaluate(() => document.fullscreenElement !== null);
     await video.dispatchEvent("dblclick");
-    await expect.poll(() => page.evaluate(() => document.fullscreenElement === null)).toBe(true);
+    await page.waitForTimeout(400);
+    expect(await page.evaluate(() => document.fullscreenElement !== null),
+      "a double click toggled fullscreen on a touch screen").toBe(fullscreenBefore);
     await expect(overlay.locator(".fullscreen-notice")).toHaveCount(0);
     return;
   }

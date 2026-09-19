@@ -199,11 +199,28 @@ test.describe("layout invariants", () => {
       .toBeLessThanOrEqual(cardBox.y + cardBox.height + 1);
     expect(Math.abs((await card.boundingBox())!.y - cardBox.y), "the card moved instead of the body").toBeLessThan(1);
 
-    // The first block has to stay where it was, so its own buttons are still reachable.
+    // The account block's own button has to be reachable, and on a screen that can hold the
+    // block it has to be there without scrolling first. Asserting the second everywhere would
+    // be asserting the impossible: a phone held sideways leaves the body about 160 pixels and
+    // the block needs three hundred, so there the requirement is that scrolling reaches it.
     await body.evaluate((element) => { element.scrollTop = 0; });
-    const apply = (await dialog.locator(".user-edit-password button").boundingBox())!;
-    expect(apply.y).toBeGreaterThanOrEqual(cardBox.y - 1);
-    expect(apply.y + apply.height).toBeLessThanOrEqual(cardBox.y + cardBox.height + 1);
+    const section = dialog.locator(".user-edit-section").first();
+    const fits = (await section.boundingBox())!.height <= (await body.boundingBox())!.height + 1;
+    const apply = dialog.locator(".user-edit-password button");
+    if (fits) {
+      const box = (await apply.boundingBox())!;
+      expect(box.y, `${testInfo.project.name}: the account block fits but its button starts above the dialog`)
+        .toBeGreaterThanOrEqual(cardBox.y - 1);
+      expect(box.y + box.height, `${testInfo.project.name}: the account block fits, yet its button is past the fold`)
+        .toBeLessThanOrEqual(cardBox.y + cardBox.height + 1);
+    } else {
+      await apply.scrollIntoViewIfNeeded();
+      const box = (await apply.boundingBox())!;
+      expect(box.y + box.height, `${testInfo.project.name}: the account block's button cannot be scrolled into the dialog`)
+        .toBeLessThanOrEqual(cardBox.y + cardBox.height + 1);
+      expect(Math.abs((await card.boundingBox())!.y - cardBox.y), "reaching the button moved the card").toBeLessThan(1);
+      await body.evaluate((element) => { element.scrollTop = 0; });
+    }
 
     // Each grant list is a scroller of its own: it may not grow the dialog, and its rows are
     // reached by scrolling the list rather than by pushing the blocks below it off the screen.

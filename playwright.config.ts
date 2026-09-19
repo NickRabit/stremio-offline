@@ -8,7 +8,8 @@ export const addonManifest = `http://127.0.0.1:${addonPort}/manifest.json`;
 const storageState = "e2e/.tmp/session.json";
 
 // Chosen to sit on either side of the breakpoints in web/src/style.css, which are
-// 700px, 980px, a 780px height rule, and a landscape rule bounded by 980x500.
+// 700px, 980px, a 780px height rule, a landscape rule bounded by 980x500, and a
+// 460px height rule paired with 440px of width for the account dialog.
 export const viewports = [
   { name: "desktop", use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } } },
   { name: "desktop-short", use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 760 } } },
@@ -16,6 +17,10 @@ export const viewports = [
   { name: "tablet", use: { ...devices["Desktop Chrome"], viewport: { width: 820, height: 1180 }, hasTouch: true, isMobile: true } },
   { name: "mobile", use: { ...devices["iPhone 13"] } },
   { name: "mobile-landscape", use: { ...devices["iPhone 13 landscape"] } },
+  // An Android phone held sideways is 360 tall, not the iPhone's 390, and the
+  // account dialog fits in one and not the other -- it is the tightest box the
+  // interface has to survive, so it is a project rather than a spot check.
+  { name: "mobile-landscape-small", use: { ...devices["Pixel 5 landscape"] } },
 ];
 
 export default defineConfig({

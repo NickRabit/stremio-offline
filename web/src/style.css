@@ -1210,3 +1210,11 @@ img.broken{visibility:hidden}
   .user-edit-fields,.user-edit-password{grid-template-columns:minmax(0,1fr)}
   .user-edit-password button{width:100%}
 }
+/* A phone held sideways is narrow enough for the rule above to stack the fields, and short
+   enough that stacking them puts the account block's own button under the fold. Width is not
+   what is scarce there -- 440px leaves two 219px columns with nothing clipped -- so below
+   460px of height the two-column rhythm comes back and the block fits again. */
+@media(max-height:460px) and (min-width:440px){
+  .user-edit-fields,.user-edit-password{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .user-edit-password button{width:auto}
+}
