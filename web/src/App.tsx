@@ -1,5 +1,5 @@
 import { FormEvent, ReactNode, UIEvent, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, BarChart3, ArrowUp, Check, RectangleHorizontal, RectangleVertical, Copy, FolderInput, FolderOpen, ImageOff, Images, KeyRound, Languages, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, ShieldCheck, Sparkles, Star, FileJson, Link2, LogOut, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, FileText, Film, FolderCog, HardDrive, Library, PackagePlus, Pause, Play, Plus, RefreshCw, Search, SearchX, Settings, Subtitles, Trash2, Upload, X } from "lucide-react";
+import { ArrowDown, BarChart3, ArrowUp, Check, RectangleHorizontal, RectangleVertical, Copy, FolderInput, FolderOpen, ImageOff, Images, KeyRound, Languages, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, ShieldCheck, SlidersHorizontal, Sparkles, Star, FileJson, Link2, LogOut, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, FileText, Film, FolderCog, HardDrive, Library, PackagePlus, Pause, Play, Plus, RefreshCw, Search, SearchX, Settings, Subtitles, Trash2, Upload, X } from "lucide-react";
 import { queueDestination } from "./queue-target";
 import { api, ApiError, describeError, logDownloadUrl, saveToDevice } from "./api";
 import { AccountSettings, LoginScreen } from "./Login";
@@ -118,6 +118,7 @@ export function App() {
   const [galleryIndex, setGalleryIndex] = useState<number | null>(null);
   const [detailCompact, setDetailCompact] = useState(false);
   const [catalogCompact, setCatalogCompact] = useState(false);
+  const [libraryCompact, setLibraryCompact] = useState(false);
   const scrollDirection = useRef(new WeakMap<HTMLElement, { top: number; travel: number; until: number }>());
   function compactOnScroll(event: UIEvent<HTMLDivElement>, compact: boolean, update: (value: boolean) => void) {
     if (playerOpenRef.current || restoringScroll.current) return;
@@ -130,7 +131,7 @@ export function App() {
     // Hysteresis, and it is deliberately lopsided. Hiding asks for a deliberate push down and
     // only once the list has really left its top; bringing the header back asks for much more,
     // because a thumb that drifts twenty pixels upward did not mean to ask for it.
-    const next = top <= 32 ? false : travel > 56 && top > 80 ? true : travel < -96 ? false : compact;
+    const next = top <= 32 ? false : travel > 56 && top > 80 ? true : compact;
     const header = element.closest(".detail-panel")?.querySelector(".hero");
     const headerHeight = header?.getBoundingClientRect().height ?? 200;
     // Keep the list scrollable after hiding its header, so reversing direction still restores it.
@@ -1482,7 +1483,7 @@ export function App() {
         if ((event.target as HTMLElement).closest(".searchbar,.filterbar")) setCatalogCompact(false);
       }}><Heading eyebrow={t("catalog.eyebrow")} title={t("catalog.title")}/>
         {!catalogs.length ? (restricted ? <Empty icon={<PackagePlus/>} title={t("onboarding.title")} text={t("restricted.notice")}/> : <Onboarding onOpen={() => setView("addons")}/>) : <>
-          <form className="searchbar" onSubmit={submitSearch}>
+          <div className={`fold${catalogCompact ? " closed" : ""}`}><form className="searchbar" onSubmit={submitSearch}>
             <div className="search-input"><Search/><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={t("catalog.searchPlaceholder")}/></div>
             <label className="scope-select"><span>{t("catalog.searchScopeIn")}</span><select aria-label={t("catalog.searchScope")} value={searchScopeValue} onChange={(e) => pickSearchScope(e.target.value)}>
               <option value="">{t("catalog.allAddons")}</option>
@@ -1493,7 +1494,7 @@ export function App() {
             </select></label>
             <button className="primary" disabled={busy}><Search/> {t("catalog.search")}</button>
             {submittedQuery && <button type="button" onClick={() => { setSearch(""); setSubmittedQuery(""); }}><X/> {t("common.cancel")}</button>}
-          </form>
+          </form></div>
           <div className="filterbar">
             {submittedQuery
               ? <>
@@ -1514,9 +1515,9 @@ export function App() {
                 </>}
             <label><span>{t("common.sorting")}</span><select aria-label={t("catalog.sorting")} value={sort} onChange={(e) => setSort(e.target.value)}><option value="default">{t("catalog.sortAddon")}</option><option value="name">{t("catalog.sortName")}</option><option value="year">{t("catalog.sortYear")}</option></select></label>
             {sort !== "default" && <small className="filter-note">{t("catalog.sortNote")}</small>}
-            <button title={t(settings.catalogTileShape === "wide" ? "catalog.shapePoster" : "catalog.shapeWide")} aria-pressed={settings.catalogTileShape === "wide"} onClick={() => void toggleShape("catalogTileShape")}>{settings.catalogTileShape === "wide" ? <RectangleVertical/> : <RectangleHorizontal/>}</button>
+            <button className="shape-toggle" title={t(settings.catalogTileShape === "wide" ? "catalog.shapePoster" : "catalog.shapeWide")} aria-pressed={settings.catalogTileShape === "wide"} onClick={() => void toggleShape("catalogTileShape")}>{settings.catalogTileShape === "wide" ? <RectangleVertical/> : <RectangleHorizontal/>}</button>
             {/* The one control the collapsed header keeps: it unfolds the search block and hands over the caret. */}
-            <button className="header-expand" title={t("catalog.search")} aria-label={t("catalog.search")} aria-expanded={!catalogCompact} onClick={(event) => {
+            <button className="header-expand" title={t("catalog.showTools")} aria-label={t("catalog.showTools")} aria-expanded={!catalogCompact} onClick={(event) => {
               setCatalogCompact(false);
               // A folded box cannot take focus, so the caret waits for the fold itself to finish
               // rather than for a guessed number of milliseconds. The timer is the way out when
@@ -1530,7 +1531,7 @@ export function App() {
               };
               bar?.addEventListener("transitionend", onEnd);
               window.setTimeout(() => { bar?.removeEventListener("transitionend", onEnd); focus(); }, 400);
-            }}><Search/></button>
+            }}><SlidersHorizontal/></button>
           </div>
           <div className="catalog-layout"><section className="panel result-panel"><div className="panel-head"><h3>{submittedQuery ? t("catalog.searchHeading", { query: submittedQuery }) : t("catalog.results")}</h3><span>{t("catalog.itemCount", { count: visibleItems.length })}{hasMore ? "+" : ""}</span></div>
             <div className="poster-grid" ref={gridRef} onScroll={(event) => { compactOnScroll(event, catalogCompact, setCatalogCompact); scheduleViewAnchor(); }}>
@@ -1604,7 +1605,7 @@ export function App() {
           </> : <Empty icon={<Film/>} title={t("catalog.pickTitle")} text={t("catalog.pickText")}/>}</section></div>
         </>}
       </section>}
-      {view === "library" && <section className="library-page" onKeyDown={(event) => { if (event.key === "Escape") setMenuFor(null); }} onClick={() => menuFor && setMenuFor(null)}><Heading eyebrow={t("library.eyebrow")} title={t("library.title")}/>
+      {view === "library" && <section className={`library-page${libraryCompact ? " library-compact" : ""}`} onKeyDown={(event) => { if (event.key === "Escape") setMenuFor(null); }} onClick={() => menuFor && setMenuFor(null)}><Heading eyebrow={t("library.eyebrow")} title={t("library.title")}/>
         <div className="panel browse-panel">
         <div className="browse-head">
         <div className="browse-bar">
@@ -1623,6 +1624,7 @@ export function App() {
             </span>)}
           </nav>
           <div className="browse-tools">
+            <div className={`fold browse-fold${libraryCompact ? " closed" : ""}`}><div className="browse-fold-inner">
             {!libraryList && <div className="search-input"><Search/><input value={browseQuery} aria-label={t("library.filter")} placeholder={t("library.filterPlaceholder")} onChange={(event) => setBrowseQuery(event.target.value)}/></div>}
             {!libraryList && <select aria-label={t("common.sorting")} value={browseSort} onChange={(event) => {
               const next = event.target.value as LibrarySort;
@@ -1641,9 +1643,12 @@ export function App() {
             {!libraryList && <button title={t(browseView === "grid" ? "library.viewRows" : "library.viewTiles")} onClick={() => setBrowseView((value) => value === "grid" ? "list" : "grid")}>
               {browseView === "grid" ? <List/> : <LayoutGrid/>}
             </button>}
-            {!libraryList && browseView === "grid" && <button title={t(settings.libraryTileShape === "wide" ? "library.shapePoster" : "library.shapeWide")} aria-pressed={settings.libraryTileShape === "wide"} onClick={() => void toggleShape("libraryTileShape")}>{settings.libraryTileShape === "wide" ? <RectangleVertical/> : <RectangleHorizontal/>}</button>}
             {!libraryList && <button className={selectionMode ? "active-filter" : ""} title={t("library.selectMode")} aria-pressed={selectionMode}
               onClick={() => { setMenuFor(null); if (selectionMode) leaveSelection(); else setSelectionMode(true); }}><Check/></button>}
+            </div></div>
+            {/* What a folded header keeps: where the tiles stand, the tools, and the way back. */}
+            <div className="browse-keep">
+            {!libraryList && browseView === "grid" && <button className="shape-toggle" title={t(settings.libraryTileShape === "wide" ? "library.shapePoster" : "library.shapeWide")} aria-pressed={settings.libraryTileShape === "wide"} onClick={() => void toggleShape("libraryTileShape")}>{settings.libraryTileShape === "wide" ? <RectangleVertical/> : <RectangleHorizontal/>}</button>}
             <div className="library-maintenance" onKeyDown={(event) => {
               if (event.key === "Escape" && menuFor === ":library-tools") event.currentTarget.querySelector<HTMLButtonElement>(".library-maintenance-toggle")?.focus();
             }}>
@@ -1668,6 +1673,8 @@ export function App() {
                   <Library/> {t("library.libraries")}
                 </button>}
               </div>
+            </div>
+            <button className="header-expand" title={t("library.showTools")} aria-label={t("library.showTools")} aria-expanded={!libraryCompact} onClick={() => setLibraryCompact(false)}><SlidersHorizontal/></button>
             </div>
           </div>
         </div>
@@ -1706,6 +1713,7 @@ export function App() {
         </div>
         <div className="browse-scroll" ref={browseScrollRef} onScroll={(event) => {
           if (!restoringScroll.current && !playerOpenRef.current) scrollByView.current.library = event.currentTarget.scrollTop;
+          compactOnScroll(event, libraryCompact, setLibraryCompact);
           scheduleViewAnchor();
         }}>
         {settings.showResumeRow && !browsePath && !onlyFavorites && localResume.length > 0 && <div className="resume-row">
