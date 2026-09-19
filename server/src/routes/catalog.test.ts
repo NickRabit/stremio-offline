@@ -5,9 +5,12 @@ import { test } from "node:test";
 import express from "express";
 import { messageKeyOf } from "../errors.js";
 import type { ExternalIdStore } from "../external-ids.js";
+import type { LibraryMetaRecord } from "../library-match.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
+import type { LibraryRecord } from "../libraries.js";
 import type { Store, UserPrefs } from "../store.js";
 import type { AddonRecord, AddonRole, CatalogDefinition, MetaItem } from "../types.js";
+import type { UserRecord } from "../users.js";
 import { registerCatalogRoutes, type CatalogDeps } from "./catalog.js";
 
 interface Harness {
@@ -29,18 +32,22 @@ const addon = (key: string, catalogs: CatalogDefinition[], options: { role?: Add
 
 /** The routes take everything they need from the context, so the app here is a real express
  *  instance over fake collaborators that record what they were asked to do. */
-const mount = async (records: AddonRecord[] = [], meta: MetaItem | null = null): Promise<Harness> => {
+const mount = async (records: AddonRecord[] = [], meta: MetaItem | null = null, options: {
+  libraries?: LibraryRecord[];
+  viewer?: UserRecord;
+  bound?: Record<string, LibraryMetaRecord>;
+} = {}): Promise<Harness> => {
   const lookups: Harness["lookups"] = [];
   const store = {
     addons: () => records,
-    libraries: () => [],
+    libraries: () => options.libraries ?? [],
     settings: () => ({ tmdbApiKey: undefined }),
   } as unknown as Store;
   const deps: CatalogDeps = {
     store,
     needsSetup: () => false,
     currentSession: () => undefined,
-    currentUser: () => undefined,
+    currentUser: () => options.viewer,
     isSecure: () => false,
     stopOwnedPlayback: async () => undefined,
     tmdbProvider: () => undefined,
@@ -50,7 +57,7 @@ const mount = async (records: AddonRecord[] = [], meta: MetaItem | null = null):
     ownerOf: () => ({ sid: "session-1", expiresAt: Number.MAX_SAFE_INTEGER }),
     trackMedia: () => undefined,
     libraryKey: (value) => value,
-    metaStore: { qualifiedMeta: () => ({}) } as unknown as LibraryMetaStore,
+    metaStore: { qualifiedMeta: () => options.bound ?? ({}) } as unknown as LibraryMetaStore,
     externalIds: { ids: async () => ({}) } as unknown as ExternalIdStore,
     subtitleDelay: () => 0,
   };
@@ -124,4 +131,44 @@ test("GET /api/meta/:type/:id prefers the language named by the query", async (t
   const response = await api(harness.base, "/api/meta/movie/tt1?language=de");
   assert.equal(response.status, 200);
   assert.deepEqual(harness.lookups, [{ type: "movie", id: "tt1", language: "de" }]);
+});
+
+const alice = { id: "usr_00000002", username: "alice", role: "user" } as unknown as UserRecord;
+const admin = { id: "usr_00000001", username: "ada", role: "admin" } as unknown as UserRecord;
+const library = (id: string, visibleTo?: string[]): LibraryRecord => ({
+  id, name: id, type: "mixed", root: `/media/${id}`, enabled: true, order: 0, addedAt: "", writeArtwork: false,
+  ...(visibleTo ? { visibleTo } : {}),
+});
+
+test("a path in a library the caller may not see reads exactly like one with no binding", async (t) => {
+  const bound = { "lib_00000001/Films/Heat": { type: "movie", id: "tt1", name: "Heat" } };
+  const harness = await mount([], null, { libraries: [library("lib_00000001"), library("lib_00000002", [alice.id])], viewer: alice, bound });
+  t.after(harness.close);
+
+  const refused = await api(harness.base, `/api/library/links?path=${encodeURIComponent("lib_00000001/Films/Heat")}`);
+  assert.equal(refused.status, 200);
+  assert.deepEqual(await refused.json(), { links: [] }, "an invisible path is answered like an unbound one");
+
+  const trailer = await api(harness.base, `/api/library/trailer?path=${encodeURIComponent("lib_00000001/Films/Heat")}`);
+  assert.equal(trailer.status, 200);
+  assert.deepEqual(await trailer.json(), { trailer: null });
+});
+
+test("a granted path still answers with its links", async (t) => {
+  const bound = { "lib_00000002/Films/Heat": { type: "movie", id: "tt1", name: "Heat" } };
+  const harness = await mount([], null, { libraries: [library("lib_00000002", [alice.id])], viewer: alice, bound });
+  t.after(harness.close);
+
+  const response = await api(harness.base, `/api/library/links?path=${encodeURIComponent("lib_00000002/Films/Heat")}`);
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { links: [{ site: "imdb", url: "https://www.imdb.com/title/tt1/" }] });
+});
+
+test("an administrator still reads a binding in a library nobody was granted", async (t) => {
+  const bound = { "lib_00000001/Films/Heat": { type: "movie", id: "tt1", name: "Heat" } };
+  const harness = await mount([], null, { libraries: [library("lib_00000001")], viewer: admin, bound });
+  t.after(harness.close);
+
+  const response = await api(harness.base, `/api/library/links?path=${encodeURIComponent("lib_00000001/Films/Heat")}`);
+  assert.deepEqual(await response.json(), { links: [{ site: "imdb", url: "https://www.imdb.com/title/tt1/" }] });
 });

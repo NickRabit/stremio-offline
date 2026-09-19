@@ -965,6 +965,8 @@ export const en = {
   "err.invalidRequest": "The request was not understood.",
   "err.pathMissing": "The file or folder does not exist.",
   "err.libraryNotFound": "The library was not found.",
+  "err.unknownUser": "That account does not exist.",
+  "err.adminAlwaysSees": "An administrator already sees every library.",
   "err.libraryNameRequired": "Give the library a name.",
   "err.libraryTypeUnknown": "Unknown library type.",
   "err.libraryDefaultType": "This library does not take that kind, so it cannot be its default.",

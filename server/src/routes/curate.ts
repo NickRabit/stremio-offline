@@ -3,7 +3,7 @@ import path from "node:path";
 import { readdir, stat } from "node:fs/promises";
 import { AppError } from "../errors.js";
 import { normalizeLanguage } from "../language.js";
-import { libraryFor, parseLibraryPath, posixBase, resolveLibraryPath } from "../libraries.js";
+import { libraryFor, parseLibraryPath, posixBase, resolveLibraryPath, type Viewer } from "../libraries.js";
 import type { LibraryAutoScan } from "../library-autoscan.js";
 import { episodeNumberOf, knownTitleOf, lookupSkipped, matchKeyFor, matchStatus, needsBackfill, scanMiss, suggestionFor, type LibraryMetaRecord, type TitleUnit } from "../library-match.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
@@ -24,7 +24,7 @@ export interface CurateDeps extends RouteContext {
   libraryFiles(): Promise<FoundFile[]>;
   libraryOps: LibraryOps;
   libraryScan: LibraryScan;
-  libraryTarget(value: string): Promise<string>;
+  libraryTarget(value: string, viewer: Viewer | undefined): Promise<string>;
   libraryUnits(): Promise<TitleUnit[]>;
   matchLibraryItem(body: { path?: unknown; key?: unknown; id?: unknown; type?: unknown; scope?: unknown; season?: unknown; episode?: unknown; skipLookup?: unknown; skipMosaic?: unknown }, language?: string): Promise<{ key: string; type?: string; id?: string | null; skipLookup?: boolean; skipMosaic?: boolean }>;
   metaStore: LibraryMetaStore;
@@ -37,7 +37,7 @@ export interface CurateDeps extends RouteContext {
 }
 
 export function registerCurateRoutes(app: express.Application, deps: CurateDeps): void {
-  const { store, invalidateLibrary, libraryAutoScan, libraryFiles, libraryOps, libraryScan, libraryTarget, libraryUnits, matchLibraryItem, metaStore, ownRecord, ownerOf, prefsOf, refreshLibraryHealth, scheduleMetaBackfill, wirePath } = deps;
+  const { store, currentUser, invalidateLibrary, libraryAutoScan, libraryFiles, libraryOps, libraryScan, libraryTarget, libraryUnits, matchLibraryItem, metaStore, ownRecord, ownerOf, prefsOf, refreshLibraryHealth, scheduleMetaBackfill, wirePath } = deps;
 
   app.get("/api/library/identity", asyncRoute(async (req, res) => {
     const relative = String(req.query.path ?? "").trim();
@@ -158,7 +158,7 @@ export function registerCurateRoutes(app: express.Application, deps: CurateDeps)
     res.setHeader("cache-control", "private, no-store");
     if (!source.url?.startsWith("file://")) return void res.json(null);
     const relative = source.url.slice(7);
-    const target = await libraryTarget(relative);
+    const target = await libraryTarget(relative, currentUser(req));
     const next = await nextVideoFile(target, req.path.startsWith("/api/library/previous/") ? -1 : 1);
     res.json(next ? { path: path.posix.join(path.posix.dirname(relative), next), title: next } : null);
   }));
@@ -166,7 +166,7 @@ export function registerCurateRoutes(app: express.Application, deps: CurateDeps)
   app.post("/api/library/source", asyncRoute(async (req, res) => {
     const requested = String(req.body.path ?? "").trim();
     const resolved = requested ? await resolveLibraryPath(store.libraries(), requested) : undefined;
-    const target = resolved && await libraryTarget(requested).catch(() => undefined);
+    const target = resolved && await libraryTarget(requested, currentUser(req)).catch(() => undefined);
     if (!resolved || !target || !(await stat(target).catch(() => undefined))?.isFile()) throw new ResourceError(404, "RESOURCE_NOT_FOUND");
     const relative = resolved.relative;
     const key = resolved.key;

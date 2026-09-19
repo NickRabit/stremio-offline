@@ -1,5 +1,7 @@
 import type express from "express";
 import type { SessionInfo } from "../auth.js";
+import type { Viewer } from "../libraries.js";
+import { ResourceError } from "../media-resources.js";
 import type { Store } from "../store.js";
 import type { UserRecord } from "../users.js";
 
@@ -20,3 +22,11 @@ export interface RouteContext {
 
 export const asyncRoute = (fn: express.RequestHandler): express.RequestHandler =>
   (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+
+/** The account a request speaks for, as much of it as a library visibility check needs.
+ *  Every route that serves a person runs behind the sign-in gate, so a request that names
+ *  nobody is a bug rather than a case. */
+export const viewerOf = (user: UserRecord | undefined): Viewer => {
+  if (!user) throw new ResourceError(401, "AUTH_REQUIRED");
+  return { id: user.id, role: user.role };
+};

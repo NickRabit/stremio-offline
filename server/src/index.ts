@@ -41,7 +41,7 @@ import { randomUUID } from "node:crypto";
 import type { MediaInfo } from "./naming.js";
 import { defaultDownloadSettings } from "./naming.js";
 import { AppError, messageKeyOf } from "./errors.js";
-import { carveOuts, queuedArtworkKey, defaultLibrary, isInside, libraryFor, libraryPath, parseLibraryPath, posixBase, posixDir, posixJoin, realAncestor, relativeWithin, resolveLibraryPath, toFs, toPosix, type LibraryRecord, type LibraryType, type RootGrant } from "./libraries.js";
+import { carveOuts, queuedArtworkKey, defaultLibrary, isInside, libraryFor, libraryPath, libraryVisible, parseLibraryPath, posixBase, posixDir, posixJoin, realAncestor, relativeWithin, resolveLibraryPath, toFs, toPosix, visibleLibraries, type LibraryRecord, type LibraryType, type RootGrant, type Viewer } from "./libraries.js";
 import { envGrants, grantView, mergeGrants } from "./library-grants.js";
 import { migrateStateFile } from "./library-migrate.js";
 import { LibraryMetaStore } from "./library-meta-store.js";
@@ -53,7 +53,7 @@ import { registerAddonsRoutes } from "./routes/addons.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerCatalogRoutes } from "./routes/catalog.js";
 import { registerContentRoutes } from "./routes/content.js";
-import { asyncRoute, type RouteContext } from "./routes/context.js";
+import { asyncRoute, viewerOf, type RouteContext } from "./routes/context.js";
 import { registerCurateRoutes } from "./routes/curate.js";
 import { registerDeviceRoutes } from "./routes/device.js";
 import { registerDiagnosticsRoutes } from "./routes/diagnostics.js";
@@ -291,10 +291,13 @@ const trackMedia = (owner: ResourceOwner, res: express.Response, resourceId?: st
 };
 /** The one guard every library file read goes through: it refuses a dot segment, a
  *  traversal and a symlink that leaves the root, whether the client sent a relative
- *  path or a qualified key. */
-const libraryTarget = async (value: string) => {
+ *  path or a qualified key. It also refuses a path in a library the viewer may not see,
+ *  with the answer an unresolvable path already gets, so the two are indistinguishable.
+ *  `viewer` is the account the read is for; work the server does for itself -- a probe, a
+ *  scan, the artwork queue -- passes none and keeps seeing every library. */
+const libraryTarget = async (value: string, viewer: Viewer | undefined) => {
   const resolved = await resolveLibraryPath(store.libraries(), value);
-  if (!resolved) throw new ResourceError(404, "RESOURCE_NOT_FOUND");
+  if (!resolved || (viewer !== undefined && !libraryVisible(resolved.library, viewer))) throw new ResourceError(404, "RESOURCE_NOT_FOUND");
   const real = await realpath(resolved.absolute).catch(() => undefined);
   if (!real) {
     // The resource was found; the file behind it was not. "Select the source again" would
@@ -655,14 +658,14 @@ const artStamp = async (file: string) => {
   const info = await stat(file).catch(() => undefined);
   return info ? Math.round(info.mtimeMs).toString(36) : "0";
 };
-/** The libraries as browse rows, for an empty path while more than one is configured.
- *  Counts come from the walks the library listing already holds, so opening the root does
- *  not walk the tree again. */
-const libraryRootBrowse = async () => {
+/** The libraries the viewer may see, as browse rows, for an empty path while more than one
+ *  is configured. Counts come from the walks the library listing already holds, so opening
+ *  the root does not walk the tree again. */
+const libraryRootBrowse = async (viewer: Viewer) => {
   await refreshLibraryHealth();
   const [stats, entries] = await Promise.all([libraryStats(), libraryEntries()]);
   let pending = false;
-  const items = await Promise.all([...store.libraries()].sort((a, b) => a.order - b.order).map(async (library) => {
+  const items = await Promise.all([...visibleLibraries(store.libraries(), viewer)].sort((a, b) => a.order - b.order).map(async (library) => {
     const counts = stats.get(library.id) ?? { titles: 0, files: 0, bytes: 0 };
     const key = libraryPath(library.id, "");
     const path = wirePath(key);
@@ -833,6 +836,7 @@ const libraryView = (library: LibraryRecord, health: LibraryHealth, stats: { tit
   writeArtwork: library.writeArtwork,
   mosaic: library.mosaic !== false,
   showInContinueWatching: library.showInContinueWatching !== false,
+  visibleTo: library.visibleTo ?? [],
   unreachable: health.unreachable, readOnly: health.readOnly,
   defaultMovie: store.settings().defaultMovieLibrary === library.id,
   defaultSeries: store.settings().defaultSeriesLibrary === library.id,
@@ -843,8 +847,9 @@ const libraryView = (library: LibraryRecord, health: LibraryHealth, stats: { tit
  *  uses the OS dialog instead and never calls it. Which is also why both of its reads are
  *  denied in restricted mode: they are the one place that names directories on the host. */
 
-app.get("/api/library", asyncRoute(async (_req, res) => {
-  const entries = await libraryEntries();
+app.get("/api/library", asyncRoute(async (req, res) => {
+  const visible = new Set(visibleLibraries(store.libraries(), viewerOf(currentUser(req))).map((library) => library.id));
+  const entries = (await libraryEntries()).filter((entry) => visible.has(parseLibraryPath(entry.key)?.libraryId ?? ""));
   const summaries = await Promise.all(entries.map(async (entry) => {
     const art = await locateArtwork(entry);
     if (!art) scheduleArtwork(entry);
@@ -1499,7 +1504,7 @@ const browsedLibraries = new Set<string>();
 /** A library the interface opened is worth keeping current: the walk of a library nobody
  *  looked at is what the freshness pass is allowed to skip. */
 const markBrowsed = (library: LibraryRecord) => { browsedLibraries.add(library.id); };
-registerContentRoutes(app, { ...routeContext, attachBrowseMeta, carveOutsOf, dataOf, deleteLibraryItem, fileExists, invalidateLibrary, libraryEntries, libraryKey, libraryRootBrowse, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, prefsOf, progressOf, relativeKeyIn, relocateLibraryPath, scheduleFileArtwork, scheduleFolderArtwork, singleLibrary, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites });
+registerContentRoutes(app, { ...routeContext, attachBrowseMeta, carveOutsOf, dataOf, deleteLibraryItem, fileExists, invalidateLibrary, libraryEntries, libraryKey, libraryRootBrowse, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, prefsOf, progressOf, relativeKeyIn, relocateLibraryPath, scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites });
 const libraryScan = new LibraryScan({
   dataDir: DATA_DIR,
   // The scan works on keys, so the walk it injects is the qualified one.

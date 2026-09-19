@@ -960,6 +960,8 @@ export const cs: Catalog = {
   "err.invalidRequest": "Požadavku nešlo rozumět.",
   "err.pathMissing": "Soubor ani složka neexistuje.",
   "err.libraryNotFound": "Knihovna nebyla nalezena.",
+  "err.unknownUser": "Takový účet neexistuje.",
+  "err.adminAlwaysSees": "Administrátor vidí všechny knihovny.",
   "err.libraryNameRequired": "Zadejte název knihovny.",
   "err.libraryTypeUnknown": "Neznámý typ knihovny.",
   "err.libraryDefaultType": "Tahle knihovna daný druh nepřijímá, nemůže pro něj být výchozí.",

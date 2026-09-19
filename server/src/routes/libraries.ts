@@ -4,7 +4,7 @@ import { constants } from "node:fs";
 import { access, mkdir, readdir, realpath, rm, stat } from "node:fs/promises";
 import { artworks } from "../artwork-cache.js";
 import { AppError } from "../errors.js";
-import { activeDeparted, carveOuts, DEPARTED_MAX, departedIdFor, isInside, libraryPath, newLibraryId, parseLibraryPath, posixBase, toPosix, type LibraryRecord, type RootGrant } from "../libraries.js";
+import { activeDeparted, carveOuts, DEPARTED_MAX, departedIdFor, isInside, libraryPath, newLibraryId, parseLibraryPath, posixBase, toPosix, visibleLibraries, type LibraryRecord, type RootGrant } from "../libraries.js";
 import { asLibraryType, checkLibraryRemoval, checkLibraryRoot, checkRerootItems, checkRerootPaths, libraryFlag } from "../library-admin.js";
 import { grantingRoot, insideGrant } from "../library-grants.js";
 import { listVideos, type WalkBudget } from "../library.js";
@@ -14,8 +14,8 @@ import type { LibraryOps } from "../library-ops.js";
 import type { LibraryHealth, LibraryProbe } from "../library-probe.js";
 import { log } from "../logger.js";
 import type { State } from "../store.js";
-import type { UserData } from "../users.js";
-import { asyncRoute, type RouteContext } from "./context.js";
+import { findUserById, type UserData } from "../users.js";
+import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
 
 export interface LibrariesDeps extends RouteContext {
   accountIdOf(req?: express.Request): string | undefined;
@@ -34,7 +34,7 @@ export interface LibrariesDeps extends RouteContext {
 }
 
 export function registerLibrariesRoutes(app: express.Application, deps: LibrariesDeps): void {
-  const { store, accountIdOf, grantRows, healthOf, invalidateLibrary, libraryGrants, libraryStats, libraryView, mutateData, progressOf, refreshLibraryHealth, libraryProbe, metaStore, libraryOps } = deps;
+  const { store, currentUser, accountIdOf, grantRows, healthOf, invalidateLibrary, libraryGrants, libraryStats, libraryView, mutateData, progressOf, refreshLibraryHealth, libraryProbe, metaStore, libraryOps } = deps;
 
   /** The same check the module makes, raised as the failure the interface renders. */
   async function requireLibraryRoot(value: unknown, opts: { create?: boolean; exceptId?: string } = {}): Promise<string> {
@@ -43,10 +43,10 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
     return checked.root;
   }
 
-  app.get("/api/libraries", asyncRoute(async (_req, res) => {
+  app.get("/api/libraries", asyncRoute(async (req, res) => {
     await refreshLibraryHealth();
     const stats = await libraryStats();
-    const libraries = [...store.libraries()].sort((a, b) => a.order - b.order);
+    const libraries = [...visibleLibraries(store.libraries(), viewerOf(currentUser(req)))].sort((a, b) => a.order - b.order);
     res.json(libraries.map((library) => libraryView(library, healthOf(library), stats.get(library.id) ?? { titles: 0, files: 0, bytes: 0 })));
   }));
 
@@ -213,6 +213,20 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
     if (req.body?.showInContinueWatching !== undefined) patch.showInContinueWatching = req.body.showInContinueWatching !== false;
     if (req.body?.order !== undefined && Number.isFinite(Number(req.body.order))) patch.order = Number(req.body.order);
     if (req.body?.writeArtwork !== undefined) patch.writeArtwork = req.body.writeArtwork === true;
+    if (req.body?.visibleTo !== undefined) {
+      if (!Array.isArray(req.body.visibleTo)) throw new AppError("The list of accounts has to be an array.", "err.invalidRequest", 400);
+      const wanted = new Set<string>();
+      for (const value of req.body.visibleTo) {
+        const id = String(value);
+        const user = findUserById(store.users(), id);
+        if (!user) throw new AppError("That account does not exist.", "err.unknownUser");
+        // An administrator sees every library by role, so their id in the list would read as
+        // though removing it took the library away.
+        if (user.role === "admin") throw new AppError("An administrator already sees every library.", "err.adminAlwaysSees");
+        wanted.add(id);
+      }
+      patch.visibleTo = [...wanted];
+    }
     if (req.body?.root !== undefined) patch.root = await requireLibraryRoot(req.body.root, { exceptId: target.id, create: req.body?.create === true });
     // The default lives in the settings -- one id per kind, so claiming it takes it from
     // whoever held it -- but it reads as a property of the library, and that is where the

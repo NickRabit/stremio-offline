@@ -5,6 +5,7 @@ import { AppError } from "../errors.js";
 import { ExternalIdStore, siteLinks } from "../external-ids.js";
 import { images } from "../images.js";
 import { normalizeLanguage } from "../language.js";
+import { libraryFor, libraryVisible, parseLibraryPath, type Viewer } from "../libraries.js";
 import { knownTitleEntry } from "../library-match.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import { mediaResources, ResourceError, safeSourceText, type ResourceOwner } from "../media-resources.js";
@@ -14,13 +15,13 @@ import type { UserPrefs } from "../store.js";
 import { trailerFor } from "../trailers.js";
 import type { MetaItem, StreamItem } from "../types.js";
 import { shiftVtt } from "../vtt.js";
-import { asyncRoute, type RouteContext } from "./context.js";
+import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
 
 export interface CatalogDeps extends RouteContext {
   tmdbProvider(language: string): MetaProvider | undefined;
   cachedMeta(type: string, id: string, language?: string): Promise<MetaItem | null>;
   prefsOf(req?: express.Request): UserPrefs;
-  libraryTarget(value: string): Promise<string>;
+  libraryTarget(value: string, viewer: Viewer | undefined): Promise<string>;
   ownerOf(req: express.Request): ResourceOwner;
   trackMedia(owner: ResourceOwner, res: express.Response, resourceId?: string): void;
   libraryKey(value: string): string;
@@ -30,7 +31,17 @@ export interface CatalogDeps extends RouteContext {
 }
 
 export function registerCatalogRoutes(app: express.Application, deps: CatalogDeps): void {
-  const { store, cachedMeta, prefsOf, libraryTarget, ownerOf, trackMedia, libraryKey, metaStore, externalIds, subtitleDelay } = deps;
+  const { store, currentUser, cachedMeta, prefsOf, libraryTarget, ownerOf, trackMedia, libraryKey, metaStore, externalIds, subtitleDelay } = deps;
+
+  /** The binding key for a path the caller may see. A path in an invisible library reads
+   *  exactly like one that carries no binding, which is what these two endpoints already
+   *  answer for a path nothing is bound to. */
+  const boundKey = (raw: string, viewer: Viewer) => {
+    const key = libraryKey(raw);
+    const libraryId = parseLibraryPath(key)?.libraryId;
+    const library = libraryId ? libraryFor(store.libraries(), libraryId) : undefined;
+    return library && libraryVisible(library, viewer) ? key : undefined;
+  };
 
   const titleTrailer = (type: string, id: string, language: string) => {
     const apiKey = store.settings().tmdbApiKey;
@@ -66,7 +77,8 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
   app.get("/api/library/trailer", asyncRoute(async (req, res) => {
     const language = normalizeLanguage(String(req.query.language ?? "")) ?? prefsOf(req).uiLanguage;
     const raw = String(req.query.path ?? "").trim();
-    const entry = raw ? knownTitleEntry(libraryKey(raw), metaStore.qualifiedMeta()) : undefined;
+    const key = raw ? boundKey(raw, viewerOf(currentUser(req))) : undefined;
+    const entry = key ? knownTitleEntry(key, metaStore.qualifiedMeta()) : undefined;
     res.json({ trailer: entry ? await titleTrailer(entry.record.type, entry.record.id, language) : null });
   }));
   app.get("/api/trailer/:type/:id", asyncRoute(async (req, res) => {
@@ -78,7 +90,8 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
   app.get("/api/library/links", asyncRoute(async (req, res) => {
     const language = normalizeLanguage(String(req.query.language ?? "")) ?? prefsOf(req).uiLanguage;
     const raw = String(req.query.path ?? "").trim();
-    const entry = raw ? knownTitleEntry(libraryKey(raw), metaStore.qualifiedMeta()) : undefined;
+    const key = raw ? boundKey(raw, viewerOf(currentUser(req))) : undefined;
+    const entry = key ? knownTitleEntry(key, metaStore.qualifiedMeta()) : undefined;
     if (!entry) return res.json({ links: [] });
     const ids = (await externalIds.ids(entry.record.id)) ?? {};
     res.json({ links: siteLinks(entry.record.type, entry.record.id, ids, language) });
@@ -127,7 +140,7 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
     trackMedia(owner, res, resource.parent);
     const raw = resource.stream.url!;
     if (raw.startsWith("file://")) {
-      const target = await libraryTarget(raw.slice(7));
+      const target = await libraryTarget(raw.slice(7), currentUser(req));
       const text = await readFile(target, "utf8");
       const vtt = text.trimStart().startsWith("WEBVTT") ? text : `WEBVTT\n\n${text.replace(/^\ufeff/, "").replace(/\r/g, "").replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, "$1.$2").replace(/^\d+\n(?=\d{2}:\d{2}:\d{2}[.,]\d{3} -->)/gm, "")}`;
       return void res.type("text/vtt; charset=utf-8").send(vtt);

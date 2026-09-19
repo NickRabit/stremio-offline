@@ -7,10 +7,10 @@ import path from "node:path";
 import { test } from "node:test";
 import express from "express";
 import { messageKeyOf } from "../errors.js";
-import { relativeWithin, type LibraryRecord } from "../libraries.js";
+import { libraryPath, parseLibraryPath, relativeWithin, visibleLibraries, type LibraryRecord } from "../libraries.js";
 import type { LibraryEntry } from "../library.js";
 import type { Store, UserPrefs } from "../store.js";
-import { emptyUserData } from "../users.js";
+import { emptyUserData, type UserRecord } from "../users.js";
 import { registerContentRoutes, type ContentDeps } from "./content.js";
 
 const instancePrefs: UserPrefs = {
@@ -36,10 +36,15 @@ interface Harness {
   close(): Promise<void>;
 }
 
-const library = (id: string, root: string, order = 0): LibraryRecord => ({
+const library = (id: string, root: string, order = 0, visibleTo?: string[]): LibraryRecord => ({
   id, name: `Library ${id}`, type: "mixed", root, enabled: true, order,
-  addedAt: "2024-01-01T00:00:00.000Z", writeArtwork: false,
+  addedAt: "2024-01-01T00:00:00.000Z", writeArtwork: false, ...(visibleTo ? { visibleTo } : {}),
 });
+
+const ADA = "usr_00000001";
+const BOB = "usr_00000002";
+const admin = { id: ADA, username: "ada", role: "admin" } as unknown as UserRecord;
+const ordinary = { id: BOB, username: "bob", role: "user" } as unknown as UserRecord;
 
 const put = async (root: string, relative: string) => {
   await mkdir(path.dirname(path.join(root, relative)), { recursive: true });
@@ -55,12 +60,11 @@ const makeRoot = () => mkdtemp(path.join(tmpdir(), "stremio-content-"));
  *  is real: the resolver, the browse walk and the name checks are module singletons. */
 const mount = async (libraries: LibraryRecord[], entries: LibraryEntry[] = []): Promise<Harness> => {
   const calls: Calls = { browsed: [], rootBrowses: 0, deleted: [], transfers: [], relocated: [], thumbAsked: [], entriesAsked: 0, artworkAsked: [] };
-  const rootBrowse = { path: "", items: libraries.map((record) => ({ kind: "library", libraryId: record.id, name: record.name })), total: libraries.length, pending: false };
   const deps: ContentDeps = {
     store: { libraries: () => libraries } as unknown as Store,
     needsSetup: () => false,
     currentSession: () => undefined,
-    currentUser: () => undefined,
+    currentUser: (req) => (req.header("x-user") === BOB ? ordinary : admin),
     isSecure: () => false,
     stopOwnedPlayback: async () => undefined,
     attachBrowseMeta: (item) => ({ item, backfill: false }),
@@ -70,8 +74,16 @@ const mount = async (libraries: LibraryRecord[], entries: LibraryEntry[] = []): 
     fileExists: async (file) => exists(file),
     invalidateLibrary: () => undefined,
     libraryEntries: async () => { calls.entriesAsked += 1; return entries; },
-    libraryKey: (value) => value,
-    libraryRootBrowse: async () => { calls.rootBrowses += 1; return rootBrowse; },
+    libraryKey: (value) => {
+      const parsed = parseLibraryPath(value);
+      if (parsed) return libraryPath(parsed.libraryId, parsed.relative);
+      return libraries.length === 1 ? libraryPath(libraries[0]!.id, value) : value;
+    },
+    libraryRootBrowse: async (viewer) => {
+      calls.rootBrowses += 1;
+      const visible = visibleLibraries(libraries, viewer);
+      return { path: "", items: visible.map((record) => ({ kind: "library", libraryId: record.id, name: record.name })), total: visible.length, pending: false };
+    },
     locateArtwork: async (entry) => { calls.artworkAsked.push(entry.key); return undefined; },
     locateFileArtwork: async (key) => { calls.thumbAsked.push(key); return undefined; },
     locateFolderArtwork: async (key) => { calls.thumbAsked.push(key); return undefined; },
@@ -83,7 +95,6 @@ const mount = async (libraries: LibraryRecord[], entries: LibraryEntry[] = []): 
     relocateLibraryPath: async (key, nextKey) => { calls.relocated.push({ key, nextKey }); },
     scheduleFileArtwork: () => undefined,
     scheduleFolderArtwork: () => undefined,
-    singleLibrary: () => libraries[0]!,
     sweepArtwork: async () => undefined,
     thumbUrl: async () => undefined,
     transferLibraryItem: async (relative, folder, copy, _progress, confirmTypeMismatch) => {
@@ -116,10 +127,13 @@ const mount = async (libraries: LibraryRecord[], entries: LibraryEntry[] = []): 
   };
 };
 
-const api = (base: string, pathname: string, init: { method?: string; body?: unknown } = {}) =>
+const api = (base: string, pathname: string, init: { method?: string; body?: unknown; user?: string } = {}) =>
   fetch(`${base}${pathname}`, {
     method: init.method ?? "GET",
-    headers: init.body === undefined ? {} : { "content-type": "application/json" },
+    headers: {
+      ...(init.body === undefined ? {} : { "content-type": "application/json" }),
+      ...(init.user ? { "x-user": init.user } : {}),
+    },
     body: init.body === undefined ? undefined : JSON.stringify(init.body),
   });
 
@@ -157,6 +171,59 @@ test("GET /api/library/browse lists what is inside one library", async (t) => {
   assert.equal(body.total, 1);
   assert.deepEqual(body.items.map((item) => [item.kind, item.path, item.label]), [["file", "Films/Heat.mkv", "Heat"]]);
   assert.equal(harness.calls.rootBrowses, 0, "one library is opened, not listed");
+});
+
+test("GET /api/library/browse lists only granted libraries to an ordinary user", async (t) => {
+  const harness = await mount([
+    library("lib_00000001", "/media/films", 0, [BOB]),
+    library("lib_00000002", "/media/shows", 1),
+  ]);
+  t.after(harness.close);
+
+  const user = await (await api(harness.base, "/api/library/browse", { user: BOB })).json() as { items: Array<{ libraryId: string }> };
+  assert.deepEqual(user.items.map((item) => item.libraryId), ["lib_00000001"]);
+
+  const administrator = await (await api(harness.base, "/api/library/browse")).json() as { items: Array<{ libraryId: string }> };
+  assert.deepEqual(administrator.items.map((item) => item.libraryId), ["lib_00000001", "lib_00000002"], "an administrator sees every library");
+});
+
+test("browsing into a library the caller may not see answers like one that does not exist", async (t) => {
+  const root = await makeRoot();
+  await put(root, "Films/Heat.mkv");
+  const harness = await mount([library("lib_00000001", root), library("lib_00000002", "/media/shows", 1, [BOB])]);
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const invisible = await api(harness.base, `/api/library/browse?path=${encodeURIComponent("lib_00000001/Films")}`, { user: BOB });
+  const missing = await api(harness.base, `/api/library/browse?path=${encodeURIComponent("lib_00000099/Films")}`, { user: BOB });
+
+  assert.equal(invisible.status, missing.status);
+  assert.deepEqual(await invisible.json(), await missing.json(), "the two are indistinguishable");
+});
+
+test("GET /api/library/thumb answers 404 for a path in a library the caller may not see", async (t) => {
+  const harness = await mount([
+    library("lib_00000001", "/media/films"),
+    library("lib_00000002", "/media/shows", 1, [BOB]),
+  ]);
+  t.after(harness.close);
+
+  const response = await api(harness.base, `/api/library/thumb?path=${encodeURIComponent("lib_00000001/Films/Heat.mkv")}`, { user: BOB });
+
+  assert.equal(response.status, 404);
+  assert.deepEqual(harness.calls.thumbAsked, [], "the artwork is never looked up for a library the caller may not see");
+});
+
+test("GET /api/library/folders refuses a path in a library the caller may not see", async (t) => {
+  const harness = await mount([
+    library("lib_00000001", "/media/films"),
+    library("lib_00000002", "/media/shows", 1, [BOB]),
+  ]);
+  t.after(harness.close);
+
+  const response = await api(harness.base, `/api/library/folders?path=${encodeURIComponent("lib_00000001/Films")}`, { user: BOB });
+
+  assert.equal(response.status, 400);
+  assert.equal((await response.json() as { messageKey?: string }).messageKey, "err.invalidPath");
 });
 
 test("GET /api/library/browse marks the library it read as browsed", async (t) => {
@@ -240,7 +307,7 @@ test("GET /api/library/thumb answers 404 for a path with no artwork", async (t) 
   const response = await api(harness.base, `/api/library/thumb?path=${encodeURIComponent("Films/Missing.mkv")}`);
 
   assert.equal(response.status, 404);
-  assert.deepEqual(harness.calls.thumbAsked, ["Films/Missing.mkv"]);
+  assert.deepEqual(harness.calls.thumbAsked, ["lib_00000001/Films/Missing.mkv"], "the wire path is qualified before it is looked up");
 });
 
 test("GET /api/library/thumb answers 404 for a key whose artwork is missing", async (t) => {

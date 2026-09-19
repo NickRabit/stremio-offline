@@ -5,7 +5,7 @@ import { images } from "../images.js";
 import { knownTitleEntry } from "../library-match.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import { sortFiles, type BrowseItem } from "../library.js";
-import { libraryPath, showsInContinueWatching, type LibraryRecord } from "../libraries.js";
+import { libraryFor, libraryPath, libraryVisible, parseLibraryPath, showsInContinueWatching, type LibraryRecord, type Viewer } from "../libraries.js";
 import { log } from "../logger.js";
 import { markersOwingRow, nextEpisodeOf } from "../next-episode.js";
 import { groupSeriesProgress, seriesOf, type ProgressSeries } from "../progress-series.js";
@@ -13,7 +13,7 @@ import { groupResumeRows } from "../resume-group.js";
 import type { StoredProgress, UserPrefs, WatchedMarker, WatchlistEntry } from "../store.js";
 import type { MetaItem } from "../types.js";
 import type { UserData } from "../users.js";
-import { asyncRoute, type RouteContext } from "./context.js";
+import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
 
 /** The shape of the personal maps, pinned beside the endpoints that read and write them. */
 
@@ -41,7 +41,16 @@ export interface PersonalDeps extends RouteContext {
 }
 
 export function registerPersonalRoutes(app: express.Application, deps: PersonalDeps): void {
-  const { store, attachBrowseMeta, cachedMeta, dataOf, describeLibraryPath, libraryKey, libraryOfKey, locateFileArtwork, locateFolderArtworkPair, markersOf, metaStore, posterOf, prefsOf, progressOf, scheduleFileArtwork, scheduleFolderArtwork, setLibraryFavorite, thumbUrl, updateData, watchlistOf, wirePath } = deps;
+  const { store, currentUser, attachBrowseMeta, cachedMeta, dataOf, describeLibraryPath, libraryKey, libraryOfKey, locateFileArtwork, locateFolderArtworkPair, markersOf, metaStore, posterOf, prefsOf, progressOf, scheduleFileArtwork, scheduleFolderArtwork, setLibraryFavorite, thumbUrl, updateData, watchlistOf, wirePath } = deps;
+
+  /** Whether the caller may see the library a stored path names. A path that names no
+   *  library -- an unqualified row from before, or one whose library is gone -- is kept:
+   *  the row is the caller's, and what they can no longer open drops out further down. */
+  const pathVisible = (key: string, viewer: Viewer, libraries: LibraryRecord[]) => {
+    const parsed = parseLibraryPath(key);
+    const library = parsed ? libraryFor(libraries, parsed.libraryId) : undefined;
+    return !library || libraryVisible(library, viewer);
+  };
 
   // Starred catalogue titles. The key is type and id, because no file has to exist for them.
   app.get("/api/watchlist", (req, res) => {
@@ -93,9 +102,15 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
   app.get("/api/progress", asyncRoute(async (req, res) => {
     const data = dataOf(req);
     const all = progressOf(data);
+    const viewer = viewerOf(currentUser(req));
+    const libraries = store.libraries();
     // One row per series, whichever episode was watched last. The cut to 40 titles happens
     // after the markers have had their say, so a show does not spend the row on every episode.
-    const rows = groupSeriesProgress(Object.entries(all).map(([key, value]) => ({ ...value, key })));
+    // A row whose file is in a library the caller has lost drops out here, the way it does
+    // from the resume list: it is the same row, read through a different door.
+    const rows = groupSeriesProgress(Object.entries(all)
+      .filter(([, value]) => !value.path || pathVisible(value.path, viewer, libraries))
+      .map(([key, value]) => ({ ...value, key })));
     const shown = rows.flatMap((row) => (row.series ? [row.series.id] : []));
     const over: string[] = [];
     const language = prefsOf(req).uiLanguage;
@@ -130,7 +145,8 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
   }));
   app.get("/api/progress/:key", (req, res) => {
     const found = progressOf(dataOf(req))[storedProgressKey(String(req.params.key))];
-    res.json(found ? { ...found, poster: images.proxied(found.poster) } : null);
+    const visible = !found?.path || pathVisible(found.path, viewerOf(currentUser(req)), store.libraries());
+    res.json(found && visible ? { ...found, poster: images.proxied(found.poster) } : null);
   });
   app.post("/api/progress", asyncRoute(async (req, res) => {
     // With tracking switched off the position is written nowhere.
@@ -210,10 +226,11 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     const data = dataOf(req);
     const favorites = new Set(data.favorites);
     const query = String(req.query.query ?? "").trim().toLocaleLowerCase();
+    const viewer = viewerOf(currentUser(req));
     const libraries = store.libraries();
     const records = metaStore.qualifiedMeta();
     const entries = Object.entries(progressOf(data)).filter(([key, entry]) =>
-      key.startsWith("file:") && Boolean(entry.path) && showsInContinueWatching(entry.path!, libraries));
+      key.startsWith("file:") && Boolean(entry.path) && showsInContinueWatching(entry.path!, libraries) && pathVisible(entry.path!, viewer, libraries));
     const described = await Promise.all(entries.map(async ([, entry]) => {
       const item = await describeLibraryPath(entry.path!);
       if (!item || item.kind !== "file") return [];
@@ -255,7 +272,9 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
   app.get("/api/library/favorites", asyncRoute(async (req, res) => {
     const sorts = new Set(["name", "added", "size", "random"]);
     const sort = sorts.has(String(req.query.sort)) ? String(req.query.sort) as "name" : "name";
-    const described = await Promise.all(dataOf(req).favorites.map(async (stored) => {
+    const viewer = viewerOf(currentUser(req));
+    const libraries = store.libraries();
+    const described = await Promise.all(dataOf(req).favorites.filter((stored) => pathVisible(stored, viewer, libraries)).map(async (stored) => {
       const item = await describeLibraryPath(stored);
       return item && { ...item, path: wirePath(libraryKey(stored)) };
     }));

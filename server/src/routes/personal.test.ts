@@ -4,10 +4,11 @@ import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 import express from "express";
 import { messageKeyOf } from "../errors.js";
+import { parseLibraryPath, type LibraryRecord } from "../libraries.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import { ResourceError } from "../media-resources.js";
 import type { Store, UserPrefs } from "../store.js";
-import { emptyUserData, type UserData } from "../users.js";
+import { emptyUserData, type UserData, type UserRecord } from "../users.js";
 import { registerPersonalRoutes, type PersonalDeps } from "./personal.js";
 
 type WatchlistEntry = { type: string; id: string; name: string; poster?: string; addedAt: string };
@@ -35,7 +36,7 @@ interface Harness {
 
 /** The header stands in for the session: the two users are the two callers the routes
  *  have to keep apart, and `dataOf`/`updateData` refuse a request that names neither. */
-const mount = async (): Promise<Harness> => {
+const mount = async (libraries: LibraryRecord[] = []): Promise<Harness> => {
   const users = new Map<string, UserData>([[ALICE, emptyUserData()], [BOB, emptyUserData()]]);
   const prefsAsked: string[] = [];
   const favoriteCalls: Harness["favoriteCalls"] = [];
@@ -44,10 +45,13 @@ const mount = async (): Promise<Harness> => {
     return id && users.has(id) ? id : undefined;
   };
   const deps: PersonalDeps = {
-    store: { libraries: () => [], settings: () => ({ ...instancePrefs }) } as unknown as Store,
+    store: { libraries: () => libraries, settings: () => ({ ...instancePrefs }) } as unknown as Store,
     needsSetup: () => false,
     currentSession: () => undefined,
-    currentUser: () => undefined,
+    currentUser: (req) => {
+      const id = userOf(req);
+      return id ? { id, username: id, role: "user" } as unknown as UserRecord : undefined;
+    },
     isSecure: () => false,
     stopOwnedPlayback: async () => undefined,
     attachBrowseMeta: (item) => ({ item, backfill: false }),
@@ -57,9 +61,15 @@ const mount = async (): Promise<Harness> => {
       if (!id) throw new ResourceError(401, "AUTH_REQUIRED");
       return users.get(id)!;
     },
-    describeLibraryPath: async () => undefined,
+    describeLibraryPath: async (key) => {
+      const relative = parseLibraryPath(key)?.relative ?? key;
+      return { kind: "file", path: relative, label: relative.slice(relative.lastIndexOf("/") + 1), season: null, episode: null, size: 0, modified: "2024-01-01T00:00:00.000Z" };
+    },
     libraryKey: (value) => value,
-    libraryOfKey: () => { throw new Error("the resume row is not under test"); },
+    libraryOfKey: (key) => {
+      const parsed = parseLibraryPath(key)!;
+      return { library: libraries.find((item) => item.id === parsed.libraryId)!, relative: parsed.relative };
+    },
     locateFileArtwork: async () => undefined,
     locateFolderArtworkPair: async () => ({ poster: undefined, wide: undefined }),
     markersOf: (data) => data.watchedSeries as Record<string, WatchedMarker>,
@@ -211,4 +221,54 @@ test("POST /api/library/favorite hands setLibraryFavorite the relative path and 
     { relative: "Films/Heat.mkv", wanted: true },
     { relative: "Films/Heat.mkv", wanted: false },
   ]);
+});
+
+const granted: LibraryRecord = { id: "lib_00000002", name: "Shows", type: "mixed", root: "/media/shows", enabled: true, order: 1, addedAt: "", writeArtwork: false, visibleTo: [ALICE] };
+const lost: LibraryRecord = { id: "lib_00000001", name: "Films", type: "mixed", root: "/media/films", enabled: true, order: 0, addedAt: "", writeArtwork: false };
+
+test("GET /api/library/resume drops a row whose library the caller has lost and still answers", async (t) => {
+  const harness = await mount([lost, granted]);
+  t.after(harness.close);
+  harness.data(ALICE).progress = {
+    "file:lib_00000001/Films/Heat.mkv": { position: 60, duration: 600, title: "Heat", path: "lib_00000001/Films/Heat.mkv", updatedAt: "2024-01-02T00:00:00.000Z" },
+    "file:lib_00000002/Shows/01.mkv": { position: 30, duration: 600, title: "Pilot", path: "lib_00000002/Shows/01.mkv", updatedAt: "2024-01-01T00:00:00.000Z" },
+  };
+
+  const response = await api(harness.base, "/api/library/resume", { user: ALICE });
+
+  assert.equal(response.status, 200, "losing a library must not fail the whole request");
+  const body = await response.json() as { items: Array<{ path: string }>; total: number };
+  assert.deepEqual(body.items.map((item) => item.path), ["lib_00000002/Shows/01.mkv"], "the row from the library the caller lost is gone, the other stays");
+  assert.equal(body.total, 1);
+});
+
+test("GET /api/library/favorites drops a row whose library the caller has lost", async (t) => {
+  const harness = await mount([lost, granted]);
+  t.after(harness.close);
+  harness.data(ALICE).favorites = ["lib_00000001/Films/Heat.mkv", "lib_00000002/Shows/01.mkv"];
+
+  const response = await api(harness.base, "/api/library/favorites", { user: ALICE });
+
+  assert.equal(response.status, 200);
+  const body = await response.json() as { items: Array<{ path: string }> };
+  assert.deepEqual(body.items.map((item) => item.path), ["lib_00000002/Shows/01.mkv"]);
+});
+
+test("GET /api/progress drops the rows whose library the caller has lost", async (t) => {
+  const harness = await mount([lost, granted]);
+  t.after(harness.close);
+  harness.data(ALICE).progress = {
+    "file:lib_00000001/Films/Heat.mkv": { position: 60, duration: 600, title: "Heat", path: "lib_00000001/Films/Heat.mkv", updatedAt: "2024-01-02T00:00:00.000Z" },
+    "file:lib_00000002/Shows/01.mkv": { position: 30, duration: 600, title: "Pilot", path: "lib_00000002/Shows/01.mkv", updatedAt: "2024-01-01T00:00:00.000Z" },
+  };
+
+  const response = await api(harness.base, "/api/progress", { user: ALICE });
+
+  assert.equal(response.status, 200);
+  const body = await response.json() as Array<{ path?: string }>;
+  assert.deepEqual(body.map((row) => row.path), ["lib_00000002/Shows/01.mkv"], "the same row resume drops is dropped here too");
+
+  const one = await api(harness.base, `/api/progress/${encodeURIComponent("file:lib_00000001/Films/Heat.mkv")}`, { user: ALICE });
+  assert.equal(one.status, 200);
+  assert.equal(await one.json(), null, "and one row read by key answers as if it were not stored");
 });

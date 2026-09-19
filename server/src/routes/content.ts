@@ -4,14 +4,14 @@ import { mkdir, rename, stat } from "node:fs/promises";
 import { artworks } from "../artwork-cache.js";
 import type { ArtShape } from "../artwork.js";
 import { AppError } from "../errors.js";
-import { libraryPath, posixDir, posixJoin, resolveLibraryPath, sameFile, type LibraryRecord } from "../libraries.js";
+import { libraryFor, libraryPath, libraryVisible, parseLibraryPath, posixDir, posixJoin, resolveLibraryPath, sameFile, visibleLibraries, type LibraryRecord, type Viewer } from "../libraries.js";
 import { browseDirectory, listFolders, type LibraryEntry } from "../library.js";
 import type { TransferProgress } from "../library-transfer.js";
 import { log } from "../logger.js";
 import { safeName } from "../naming.js";
 import type { StoredProgress, UserPrefs } from "../store.js";
 import type { UserData } from "../users.js";
-import { asyncRoute, type RouteContext } from "./context.js";
+import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
 
 /** Browsing a library and the file operations under it. */
 export interface ContentDeps extends RouteContext {
@@ -23,7 +23,7 @@ export interface ContentDeps extends RouteContext {
   invalidateLibrary(): void;
   libraryEntries(): Promise<LibraryEntry[]>;
   libraryKey(value: string): string;
-  libraryRootBrowse(): Promise<{ path: string; items: unknown[]; total: number; pending: boolean }>;
+  libraryRootBrowse(viewer: Viewer): Promise<{ path: string; items: unknown[]; total: number; pending: boolean }>;
   locateArtwork(entry: LibraryEntry, shape?: ArtShape): Promise<string | undefined>;
   locateFileArtwork(key: string, shape?: ArtShape): Promise<string | undefined>;
   locateFolderArtwork(key: string, shape?: ArtShape): Promise<string | undefined>;
@@ -35,7 +35,6 @@ export interface ContentDeps extends RouteContext {
   relocateLibraryPath(key: string, nextKey: string, pin?: boolean): Promise<void>;
   scheduleFileArtwork(key: string, shape?: ArtShape): void;
   scheduleFolderArtwork(key: string, shape?: ArtShape): void;
-  singleLibrary(): LibraryRecord;
   sweepArtwork(): Promise<void>;
   thumbUrl(param: "path" | "dir" | "key", value: string, art: string | undefined, shape?: ArtShape): Promise<string | undefined>;
   transferLibraryItem(relative: string, folder: string, copy?: boolean, progress?: TransferProgress, confirmTypeMismatch?: boolean): Promise<string>;
@@ -44,7 +43,15 @@ export interface ContentDeps extends RouteContext {
 }
 
 export function registerContentRoutes(app: express.Application, deps: ContentDeps): void {
-  const { store, attachBrowseMeta, carveOutsOf, dataOf, deleteLibraryItem, fileExists, invalidateLibrary, libraryEntries, libraryKey, libraryRootBrowse, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, prefsOf, progressOf, relativeKeyIn, relocateLibraryPath, scheduleFileArtwork, scheduleFolderArtwork, singleLibrary, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites } = deps;
+  const { store, currentUser, attachBrowseMeta, carveOutsOf, dataOf, deleteLibraryItem, fileExists, invalidateLibrary, libraryEntries, libraryKey, libraryRootBrowse, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, prefsOf, progressOf, relativeKeyIn, relocateLibraryPath, scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites } = deps;
+
+  /** Whether a key names a library the viewer may see. A key in an invisible library is
+   *  refused wherever a key to a missing one is, so the two cannot be told apart. */
+  const keyVisible = (key: string, viewer: Viewer) => {
+    const libraryId = parseLibraryPath(key)?.libraryId;
+    const library = libraryId ? libraryFor(store.libraries(), libraryId) : undefined;
+    return Boolean(library && libraryVisible(library, viewer));
+  };
 
   app.get("/api/library/browse", asyncRoute(async (req, res) => {
     const requested = String(req.query.path ?? "");
@@ -53,19 +60,22 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     const sort = sorts.has(String(req.query.sort)) ? String(req.query.sort) as "name" : "name";
     const onlyFavorites = req.query.favorites === "1";
     void sweepArtwork();
-    const libraries = store.libraries();
+    const configured = store.libraries();
+    const viewer = viewerOf(currentUser(req));
+    const libraries = visibleLibraries(configured, viewer);
     // An empty path is the single library's root while that is the whole setup, and the list
-    // of libraries once there are more. Configured is what counts, not enabled and not
-    // reachable: a library switched off or on a disk that is away is still part of the setup,
-    // and a browse root that changed shape when a drive spun down would be worse than a row
-    // with a warning. The row says so instead of hiding it.
-    if (!requested && libraries.length !== 1) {
-      res.json(await libraryRootBrowse());
+    // of the libraries the viewer may see once more than one is configured. Configured is what
+    // counts, not enabled and not reachable: a library switched off or on a disk that is away
+    // is still part of the setup, and a browse root that changed shape when a drive spun down
+    // would be worse than a row with a warning. The row says so instead of hiding it.
+    if (!requested && configured.length !== 1) {
+      res.json(await libraryRootBrowse(viewer));
       return;
     }
     const resolved = requested ? await resolveLibraryPath(libraries, requested) : undefined;
     if (requested && !resolved) throw new AppError("Invalid path.", "err.invalidPath");
-    const library = resolved?.library ?? singleLibrary();
+    if (!libraries.length) throw new AppError("Invalid path.", "err.invalidPath");
+    const library = resolved?.library ?? libraries[0]!;
     markBrowsed(library);
     const inLibrary = (path: string) => libraryPath(library.id, path);
     const data = dataOf(req);
@@ -161,7 +171,7 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
    *  into one of them is perfectly reasonable, so this lists them all. */
   app.get("/api/library/folders", asyncRoute(async (req, res) => {
     const relative = String(req.query.path ?? "").trim();
-    const resolved = await resolveLibraryPath(store.libraries(), relative);
+    const resolved = await resolveLibraryPath(visibleLibraries(store.libraries(), viewerOf(currentUser(req))), relative);
     if (!resolved) throw new AppError("Invalid path.", "err.invalidPath");
     markBrowsed(resolved.library);
     const folders = await listFolders(resolved.library.root, resolved.relative, carveOutsOf(resolved.library));
@@ -180,15 +190,16 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
   app.get("/api/library/thumb", asyncRoute(async (req, res) => {
     // An unknown shape asks for the poster, the way an unknown tile size is the medium one: every
     // address the interface already holds names no shape at all.
+    const viewer = viewerOf(currentUser(req));
     const shape: ArtShape = String(req.query.shape ?? "") === "wide" ? "wide" : "poster";
     const filePath = req.query.path ? libraryKey(String(req.query.path)) : undefined;
     const dirPath = req.query.dir ? libraryKey(String(req.query.dir)) : undefined;
     let art: string | undefined;
-    if (filePath) art = await locateFileArtwork(filePath, shape);
-    else if (dirPath) art = await locateFolderArtwork(dirPath, shape);
+    if (filePath) art = keyVisible(filePath, viewer) ? await locateFileArtwork(filePath, shape) : undefined;
+    else if (dirPath) art = keyVisible(dirPath, viewer) ? await locateFolderArtwork(dirPath, shape) : undefined;
     else {
       const selected = String(req.query.key ?? "");
-      const entry = (await libraryEntries()).find((item) => item.key === libraryKey(selected));
+      const entry = (await libraryEntries()).find((item) => item.key === libraryKey(selected) && keyVisible(item.key, viewer));
       art = entry && await locateArtwork(entry, shape);
     }
     if (!art) return res.status(404).end();

@@ -10,6 +10,7 @@ import type { LibraryOps } from "../library-ops.js";
 import type { LibraryHealth } from "../library-probe.js";
 import type { LibraryRecord, RootGrant } from "../libraries.js";
 import type { Store } from "../store.js";
+import type { UserRecord } from "../users.js";
 import { registerLibrariesRoutes, type LibrariesDeps } from "./libraries.js";
 
 interface Harness {
@@ -27,6 +28,11 @@ const library = (id: string, order: number): LibraryRecord => ({
   addedAt: "2024-01-01T00:00:00.000Z", writeArtwork: false,
 });
 
+const ADA = "usr_00000001";
+const BOB = "usr_00000002";
+const admin = { id: ADA, username: "ada", role: "admin" } as unknown as UserRecord;
+const ordinary = { id: BOB, username: "bob", role: "user" } as unknown as UserRecord;
+
 const stats = new Map([["alpha", { titles: 3, files: 4, bytes: 5 }]]);
 
 /** The routes take everything they need from the context, so the app here is a real express
@@ -37,6 +43,7 @@ const mount = async (records: LibraryRecord[] = [library("alpha", 0)], env: Root
   const enqueued: unknown[] = [];
   const store = {
     libraries: () => state.libraries,
+    users: () => [admin, ordinary],
     grants: () => state.grants,
     departed: () => state.departed,
     update: async (mutate: (value: typeof state) => void) => { mutate(state); },
@@ -45,7 +52,7 @@ const mount = async (records: LibraryRecord[] = [library("alpha", 0)], env: Root
     store,
     needsSetup: () => false,
     currentSession: () => undefined,
-    currentUser: () => undefined,
+    currentUser: (req) => (req.header("x-user") === BOB ? ordinary : admin),
     isSecure: () => false,
     stopOwnedPlayback: async () => undefined,
     accountIdOf: () => "usr_00000001",
@@ -93,10 +100,13 @@ const mount = async (records: LibraryRecord[] = [library("alpha", 0)], env: Root
   };
 };
 
-const api = (base: string, pathname: string, init: { method?: string; body?: unknown } = {}) =>
+const api = (base: string, pathname: string, init: { method?: string; body?: unknown; user?: string } = {}) =>
   fetch(`${base}${pathname}`, {
     method: init.method ?? "GET",
-    headers: init.body === undefined ? {} : { "content-type": "application/json" },
+    headers: {
+      ...(init.body === undefined ? {} : { "content-type": "application/json" }),
+      ...(init.user ? { "x-user": init.user } : {}),
+    },
     body: init.body === undefined ? undefined : JSON.stringify(init.body),
   });
 
@@ -116,6 +126,45 @@ test("GET /api/libraries passes every record through libraryView with its health
   assert.deepEqual(harness.viewed[0].health, { unreachable: true, readOnly: false });
   assert.deepEqual(harness.viewed[0].stats, { titles: 3, files: 4, bytes: 5 });
   assert.deepEqual(harness.viewed[1].stats, { titles: 0, files: 0, bytes: 0 });
+});
+
+test("GET /api/libraries answers an ordinary user with the libraries granted to them", async (t) => {
+  const harness = await mount([library("alpha", 0), { ...library("beta", 1), visibleTo: [BOB] }]);
+  t.after(harness.close);
+
+  const administrator = await (await api(harness.base, "/api/libraries")).json() as Array<{ id: string }>;
+  assert.deepEqual(administrator.map((item) => item.id), ["alpha", "beta"], "an administrator sees every library");
+
+  const user = await (await api(harness.base, "/api/libraries", { user: BOB })).json() as Array<{ id: string }>;
+  assert.deepEqual(user.map((item) => item.id), ["beta"], "a user sees only what was granted to them");
+});
+
+test("PATCH /api/libraries/:id sets visibleTo and collapses duplicates", async (t) => {
+  const harness = await mount([library("alpha", 0)]);
+  t.after(harness.close);
+  const response = await api(harness.base, "/api/libraries/alpha", { method: "PATCH", body: { visibleTo: [BOB, BOB] } });
+  assert.equal(response.status, 200);
+  assert.deepEqual(harness.stored()[0]!.visibleTo, [BOB]);
+});
+
+test("PATCH /api/libraries/:id refuses an account that does not exist", async (t) => {
+  const harness = await mount([library("alpha", 0)]);
+  t.after(harness.close);
+  const response = await api(harness.base, "/api/libraries/alpha", { method: "PATCH", body: { visibleTo: ["usr_ffffffff"] } });
+  assert.equal(response.status, 400);
+  const body = await failure(response);
+  assert.equal(body.messageKey, "err.unknownUser");
+  assert.equal(body.error, "That account does not exist.");
+  assert.equal(harness.stored()[0]!.visibleTo, undefined, "a refused id leaves the library as it was");
+});
+
+test("PATCH /api/libraries/:id refuses an administrator's id", async (t) => {
+  const harness = await mount([library("alpha", 0)]);
+  t.after(harness.close);
+  const response = await api(harness.base, "/api/libraries/alpha", { method: "PATCH", body: { visibleTo: [ADA] } });
+  assert.equal(response.status, 400);
+  assert.equal((await failure(response)).messageKey, "err.adminAlwaysSees");
+  assert.equal(harness.stored()[0]!.visibleTo, undefined);
 });
 
 test("PATCH /api/libraries/:id refuses an unknown id", async (t) => {

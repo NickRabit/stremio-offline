@@ -5,6 +5,7 @@ import path from "node:path";
 import type { AirPlayAccess } from "../airplay-access.js";
 import { INTERNAL_TOKEN } from "../auth.js";
 import { normalizeLanguage } from "../language.js";
+import type { Viewer } from "../libraries.js";
 import { log } from "../logger.js";
 import { mediaChildPath, mediaResources, openMediaUrl, ResourceError, safeSourceText, type ResourceOwner } from "../media-resources.js";
 import { readMediaText, rewritePlaylist } from "../media-playlist.js";
@@ -24,7 +25,7 @@ export interface PlaybackDeps extends RouteContext {
   countBytes(res: express.Response, meta: TrafficMeta, session?: string): void;
   httpSourceOf(req: express.Request): Promise<StreamItem>;
   internalMediaRequest(req: express.Request): boolean;
-  libraryTarget(value: string): Promise<string>;
+  libraryTarget(value: string, viewer: Viewer | undefined): Promise<string>;
   noteSourceQuiet(key: string): void;
   ownerOf(req: express.Request): ResourceOwner;
   playback: PlaybackManager;
@@ -210,7 +211,9 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
     }
     if (raw.startsWith("file://")) {
       const relative = raw.slice(7);
-      const target = await libraryTarget(relative);
+      // FFmpeg and AirPlay read this without a cookie, so the request names no viewer: the
+      // path was resolved for a session before the resource the read follows existed.
+      const target = await libraryTarget(relative, currentUser(req));
       countBytes(res, { source: "library", provider: "knihovna", title: path.basename(relative), kind: "other" }, ownedSession);
       return void res.sendFile(path.basename(target), { root: path.dirname(target), acceptRanges: true, dotfiles: "deny" }, (error) => {
         if (error && !res.headersSent) res.status(404).end();

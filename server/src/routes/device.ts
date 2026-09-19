@@ -5,7 +5,7 @@ import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { isPlaylist } from "../downloads.js";
 import { AppError } from "../errors.js";
-import { posixBase } from "../libraries.js";
+import { posixBase, type Viewer } from "../libraries.js";
 import { log } from "../logger.js";
 import { ResourceError, type DeviceDownloadTicket, type ResourceOwner } from "../media-resources.js";
 import { defaultDownloadSettings, deviceFilename, type MediaInfo } from "../naming.js";
@@ -25,7 +25,7 @@ export interface DeviceDeps extends RouteContext {
   }>;
   DEVICE_TICKET_TTL: number;
   httpSourceOf(req: express.Request): Promise<StreamItem>;
-  libraryTarget(value: string): Promise<string>;
+  libraryTarget(value: string, viewer: Viewer | undefined): Promise<string>;
   mediaSource(value: unknown): MediaInfo | undefined;
   ownerOf(req: express.Request): ResourceOwner;
   pruneDeviceDownloadTickets(): void;
@@ -34,7 +34,7 @@ export interface DeviceDeps extends RouteContext {
 }
 
 export function registerDeviceRoutes(app: express.Application, deps: DeviceDeps): void {
-  const { store, countBytes, deviceDownloadTickets, DEVICE_TICKET_TTL, httpSourceOf, libraryTarget, mediaSource, ownerOf, pruneDeviceDownloadTickets, statMeta, trackMedia } = deps;
+  const { store, currentUser, countBytes, deviceDownloadTickets, DEVICE_TICKET_TTL, httpSourceOf, libraryTarget, mediaSource, ownerOf, pruneDeviceDownloadTickets, statMeta, trackMedia } = deps;
 
   /** Keep the external address out of the download link by exchanging it for a short-lived ticket. */
   app.post("/api/device-download", asyncRoute(async (req, res) => {
@@ -44,7 +44,7 @@ export function registerDeviceRoutes(app: express.Application, deps: DeviceDeps)
     const stream = await httpSourceOf(req);
     if (stream.url?.startsWith("file://")) {
       const relative = stream.url.slice(7);
-      const target = relative ? await libraryTarget(relative).catch(() => undefined) : undefined;
+      const target = relative ? await libraryTarget(relative, currentUser(req)).catch(() => undefined) : undefined;
       const info = target ? await stat(target).catch(() => undefined) : undefined;
       if (!target || !info?.isFile()) throw new ResourceError(404, "RESOURCE_NOT_FOUND");
       ticket = {
@@ -79,7 +79,7 @@ export function registerDeviceRoutes(app: express.Application, deps: DeviceDeps)
     res.setHeader("cache-control", "private, no-store");
     trackMedia(ticket.owner, res);
     if (ticket.source.kind === "local") {
-      const target = await libraryTarget(ticket.source.path);
+      const target = await libraryTarget(ticket.source.path, currentUser(req));
       if (!target) return res.status(404).json({ error: "The file was not found in the library.", messageKey: "err.libraryFileMissing" });
       countBytes(res, { source: "library", provider: "knihovna", title: ticket.filename, kind: "other" });
       return void res.download(path.basename(target), ticket.filename, { root: path.dirname(target), acceptRanges: true, dotfiles: "deny" }, (error) => {

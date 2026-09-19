@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { activeDeparted, carveOuts, defaultLibrary, DEPARTED_MAX, departedIdFor, libraryFor, libraryPath, parseLibraryPath, relativeWithin, resolveLibraryPath, sameFile, showsInContinueWatching, toFs, toPosix, type DepartedLibrary, type LibraryRecord, queuedArtworkKey } from "./libraries.js";
+import { activeDeparted, carveOuts, defaultLibrary, DEPARTED_MAX, departedIdFor, libraryFor, libraryPath, libraryVisible, parseLibraryPath, relativeWithin, resolveLibraryPath, sameFile, showsInContinueWatching, toFs, toPosix, visibleLibraries, type DepartedLibrary, type LibraryRecord, queuedArtworkKey } from "./libraries.js";
 
 const library = (over: Partial<LibraryRecord> = {}): LibraryRecord => ({
   id: "lib_ab12cd34", name: "Filmy", type: "movie", root: "/media/filmy", enabled: true,
@@ -40,6 +40,31 @@ test("a library is in Continue watching unless it was turned off", () => {
   assert.equal(showsInContinueWatching("lib_ab12cd34/Show/01.mkv", [library({ showInContinueWatching: true })]), true, "turning it back on brings the stored rows with it");
   assert.equal(showsInContinueWatching("Show/01.mkv", [off]), true, "a path no library claims belongs to no switch");
   assert.equal(showsInContinueWatching("lib_11111111/Show/01.mkv", [off]), true, "a library that is gone hides nothing");
+});
+
+test("an administrator sees every library, whatever its list says", () => {
+  const admin = { id: "usr_00000001", role: "admin" as const };
+  assert.equal(libraryVisible(library({ visibleTo: ["usr_00000002"] }), admin), true, "a list grants other people, it does not withhold from an administrator");
+  assert.equal(libraryVisible(library({ visibleTo: [] }), admin), true, "an empty list grants nobody, the role still does");
+  assert.equal(libraryVisible(library(), admin), true, "and so does an absent one");
+});
+
+test("a user sees a library only when their id is on the list", () => {
+  const viewer = { id: "usr_00000002", role: "user" as const };
+  assert.equal(libraryVisible(library({ visibleTo: ["usr_00000002"] }), viewer), true);
+  assert.equal(libraryVisible(library({ visibleTo: ["usr_00000002", "usr_00000003"] }), viewer), true);
+  assert.equal(libraryVisible(library({ visibleTo: ["usr_00000003"] }), viewer), false);
+  assert.equal(libraryVisible(library({ visibleTo: [] }), viewer), false, "an empty list is administrators only");
+  assert.equal(libraryVisible(library(), viewer), false, "an absent list is administrators only too");
+});
+
+test("visibleLibraries keeps the order it was given", () => {
+  const viewer = { id: "usr_00000002", role: "user" as const };
+  const first = library({ id: "lib_11111111", visibleTo: ["usr_00000002"] });
+  const hidden = library({ id: "lib_22222222" });
+  const third = library({ id: "lib_33333333", visibleTo: ["usr_00000002"] });
+  assert.deepEqual(visibleLibraries([first, hidden, third], viewer).map((item) => item.id), ["lib_11111111", "lib_33333333"]);
+  assert.deepEqual(visibleLibraries([third, hidden, first], viewer).map((item) => item.id), ["lib_33333333", "lib_11111111"]);
 });
 
 test("the wire separator is POSIX and the filesystem one is native", () => {
