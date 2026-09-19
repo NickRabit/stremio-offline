@@ -1,6 +1,6 @@
 import type express from "express";
 import { allowedAddons } from "../addons.js";
-import type { AudioMode, DownloadQueue, DownloadSelection, SubtitleMode } from "../downloads.js";
+import { ownerMayDownload, type AudioMode, type DownloadQueue, type DownloadSelection, type SubtitleMode } from "../downloads.js";
 import { AppError } from "../errors.js";
 import { normalizeLanguage } from "../language.js";
 import { log } from "../logger.js";
@@ -27,17 +27,42 @@ export interface DownloadsDeps extends RouteContext {
 export function registerDownloadRoutes(app: express.Application, deps: DownloadsDeps): void {
   const { store, currentUser, queue, jobView, sourceOf, mediaSource, posterOf, rememberTitle, titleKey, saveCatalogPoster, libraryKey, cachedMeta, prefsOf } = deps;
 
-  app.get("/api/downloads", (_req, res) => {
+  /** The owner-bound check where a failure reaches the caller instead of pausing a job. The
+   *  rights are asked before the body is read; the source and the library the rule names are
+   *  asked again once they are known. */
+  const assertMayQueue = (req: express.Request, job: { stream?: StreamItem; libraryId?: string } = {}) => {
+    const owner = currentUser(req);
+    if (owner && ownerMayDownload({ owner, addons: store.addons(), libraries: store.libraries() }, job)) return;
+    throw new AppError("This account may not download to the library.", "err.downloadLibraryNotAllowed", 403);
+  };
+
+  /** A job the caller does not own is answered exactly like one that is not there: 403 would
+   *  tell the caller that the id exists. */
+  const requireOwnJob = (req: express.Request, id: string): string => {
+    const viewer = viewerOf(currentUser(req));
+    const job = queue.list().find((item) => item.id === id);
+    if (!job || (viewer.role !== "admin" && job.ownerUserId !== viewer.id)) {
+      throw new AppError("The item was not found.", "err.itemNotFound", 404);
+    }
+    return id;
+  };
+
+  app.get("/api/downloads", (req, res) => {
+    const viewer = viewerOf(currentUser(req));
     const snapshot = queue.snapshot();
-    res.json({ ...snapshot, jobs: snapshot.jobs.map(jobView) });
+    const jobs = snapshot.jobs.filter((job) => viewer.role === "admin" || job.ownerUserId === viewer.id);
+    res.json({ ...snapshot, jobs: jobs.map(jobView) });
   });
   app.post("/api/downloads", asyncRoute(async (req, res) => {
+    const owner = currentUser(req);
+    assertMayQueue(req);
     const stream = sourceOf(req);
     const media = mediaSource(req.body.media);
     const addon = store.addons().find((item) => item.key === stream.addonKey);
     const settings = addon?.downloadSettings ?? defaultDownloadSettings();
     const targetSettings = media?.kind === "episode" ? settings.series : settings.movie;
-    const job = await queue.add(String(req.body.title ?? "video"), stream, media, targetSettings);
+    assertMayQueue(req, { stream, libraryId: targetSettings.libraryId });
+    const job = await queue.add(String(req.body.title ?? "video"), stream, media, targetSettings, owner?.id);
     await rememberTitle(job.target, media, targetSettings.layout === "flat");
     const posterKey = titleKey(job.target, media, targetSettings.layout === "flat");
     if (posterKey && posterKey !== ".") saveCatalogPoster(libraryKey(posterKey), media?.poster);
@@ -45,6 +70,8 @@ export function registerDownloadRoutes(app: express.Application, deps: Downloads
   }));
   // Adding episodes in bulk: the jobs are lazy, streams are asked for at download time.
   app.post("/api/downloads/bulk", asyncRoute(async (req, res) => {
+    const owner = currentUser(req);
+    assertMayQueue(req);
     const title = String(req.body.title ?? "").trim() || "Show";
     const type = String(req.body.type ?? "series");
     const parent = req.body.media && typeof req.body.media === "object" ? req.body.media as Record<string, unknown> : {};
@@ -82,6 +109,7 @@ export function registerDownloadRoutes(app: express.Application, deps: Downloads
       fallbackSubtitleLanguage: fallbackSubtitleLanguage === subtitleLanguage ? undefined : fallbackSubtitleLanguage,
       targetSettings: firstAddon?.downloadSettings.series ?? defaultDownloadSettings().series,
     };
+    assertMayQueue(req, { libraryId: selection.targetSettings.libraryId });
     let added = 0, skipped = 0;
     for (const episode of episodes) {
       const videoId = String(episode.id ?? "").trim();
@@ -91,16 +119,16 @@ export function registerDownloadRoutes(app: express.Application, deps: Downloads
       const episodeTitle = episode.title ? String(episode.title) : undefined;
       const jobTitle = `${title} · ${episodeTitle ?? (season != null ? `S${String(season).padStart(2, "0")}E${String(number ?? 0).padStart(2, "0")}` : `Episode ${number ?? "?"}`)}`;
       const media: MediaInfo = { kind: "episode", title, season, episode: number, episodeTitle, id: parentId, metaType, poster };
-      const job = await queue.addPending(jobTitle, { type, videoId, selection }, media);
+      const job = await queue.addPending(jobTitle, { type, videoId, selection }, media, owner?.id);
       if (job) added += 1; else skipped += 1;
     }
     log("INFO", "Bulk addition to the queue", { title, added, skipped });
     res.status(201).json({ added, skipped });
   }));
-  app.post("/api/downloads/:id/pause", asyncRoute(async (req, res) => { await queue.pause(String(req.params.id)); res.status(204).end(); }));
-  app.post("/api/downloads/:id/resume", asyncRoute(async (req, res) => { await queue.resume(String(req.params.id)); res.status(204).end(); }));
-  app.post("/api/downloads/:id/retry", asyncRoute(async (req, res) => { await queue.retry(String(req.params.id)); res.status(204).end(); }));
+  app.post("/api/downloads/:id/pause", asyncRoute(async (req, res) => { await queue.pause(requireOwnJob(req, String(req.params.id))); res.status(204).end(); }));
+  app.post("/api/downloads/:id/resume", asyncRoute(async (req, res) => { await queue.resume(requireOwnJob(req, String(req.params.id))); res.status(204).end(); }));
+  app.post("/api/downloads/:id/retry", asyncRoute(async (req, res) => { await queue.retry(requireOwnJob(req, String(req.params.id))); res.status(204).end(); }));
   app.post("/api/downloads/:id/move", asyncRoute(async (req, res) => { await queue.move(String(req.params.id), Number(req.body.direction) < 0 ? -1 : 1); res.status(204).end(); }));
-  app.delete("/api/downloads/:id", asyncRoute(async (req, res) => { await queue.remove(String(req.params.id)); res.status(204).end(); }));
+  app.delete("/api/downloads/:id", asyncRoute(async (req, res) => { await queue.remove(requireOwnJob(req, String(req.params.id))); res.status(204).end(); }));
   app.delete("/api/downloads", asyncRoute(async (_req, res) => { await queue.clearCompleted(); res.status(204).end(); }));
 }

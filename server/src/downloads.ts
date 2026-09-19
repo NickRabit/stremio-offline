@@ -5,7 +5,8 @@ import { mkdir, open, readFile, rename, stat, statfs, unlink, writeFile, type Fi
 import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import type { AddonDownloadSettings, StreamItem, SubtitleItem } from "./types.js";
+import { addonAllowed } from "./addons.js";
+import type { AddonDownloadSettings, AddonRecord, StreamItem, SubtitleItem } from "./types.js";
 import { defaultDownloadSettings, joinTarget, streamExtension, targetPath, type MediaInfo } from "./naming.js";
 import type { DownloadTargetSettings } from "./types.js";
 import { safeFetch } from "./security.js";
@@ -18,7 +19,8 @@ import {
 } from "./download-policy.js";
 import { isRetryableDebridFailure, type DebridAdvance } from "./debrid.js";
 import { playlistArgs } from "./probe.js";
-import { libraryPath, parseLibraryPath, relativeWithin, type LibraryRecord } from "./libraries.js";
+import { libraryPath, libraryVisible, parseLibraryPath, relativeWithin, type LibraryRecord, type Viewer } from "./libraries.js";
+import type { UserRecord } from "./users.js";
 import {
   planSegments, segmentCount, segmentedBytes, segmentSize, usableSegments, type Segment,
 } from "./download-segments.js";
@@ -27,8 +29,10 @@ import { readMediaText } from "./media-playlist.js";
 export type { QueueHalt };
 export type DownloadStatus = "queued" | "waiting" | "checking" | "downloading" | "paused" | "completed" | "failed";
 /** `library` is not a fault: the rule's library is switched off, read-only or away, and the job
- *  waits for it rather than landing somewhere the user did not ask for. */
-export type PauseReason = "user" | "storage" | "library";
+ *  waits for it rather than landing somewhere the user did not ask for. `permission` is not a
+ *  fault either: the account behind the job may no longer queue it, and the job keeps its
+ *  place until the right is back. */
+export type PauseReason = "user" | "storage" | "library" | "permission";
 export type SubtitleMode = "off" | "optional" | "required";
 /** How hard the requested audio language is. `strict` trusts only what ffprobe reads out of the
  *  file; `listed` lets the addon's own listing say so, for files that carry no language tag at
@@ -65,6 +69,9 @@ export interface DownloadResolution {
  *  reaches it. `tried` guards against repeating addresses that already failed. */
 export interface DownloadJob {
   id: string; title: string; stream?: StreamItem; media?: MediaInfo;
+  /** Who asked for this job. A job queued before ownership existed belongs to
+   *  the administrator the state migrated into. */
+  ownerUserId?: string;
   source?: { type: string; videoId: string; tried: string[]; selection?: DownloadSelection };
   subtitle?: SubtitleItem;
   resolution?: DownloadResolution;
@@ -93,6 +100,48 @@ export interface DownloadJob {
   rangesIgnored?: boolean;
   createdAt: string; updatedAt: string; startedAt?: string; completedAt?: string;
 }
+
+/** Queueing onto the NAS is a right an administrator hands out. The role is what grants an
+ *  administrator, never the flags: those are for ordinary users, and a migrated
+ *  administrator's may say anything. */
+export const mayDownloadToLibrary = (user: Pick<UserRecord, "role" | "permissions">): boolean =>
+  user.role === "admin" || user.permissions.downloadToLibrary;
+
+/** The same rule for saving to the device at the keyboard, which is on by default. */
+export const mayDownloadToDevice = (user: Pick<UserRecord, "role" | "permissions">): boolean =>
+  user.role === "admin" || user.permissions.downloadToDevice;
+
+/** What the owner-bound check reads: the account that asked for the job, the addons and the
+ *  libraries as they stand at this moment. Structural, so this module stays free of the store. */
+export interface DownloadOwnerScope {
+  owner?: Pick<UserRecord, "id" | "role" | "disabled" | "permissions">;
+  addons: AddonRecord[];
+  libraries: LibraryRecord[];
+}
+
+/**
+ * The owner-bound check, answered from the current state every time it is asked because a
+ * queued job outlives the request that queued it: the account must still exist and may queue,
+ * the source addon must be allowed to it and enabled, and the target library must be visible
+ * to it, enabled and writable. A part whose subject is not chosen yet is left to the moment it
+ * is known -- a lazy job has no source until the resolver picks one, and a library that has
+ * been removed is waited for -- so the check is asked again once they are.
+ */
+export function ownerMayDownload(scope: DownloadOwnerScope, job: { stream?: StreamItem; libraryId?: string; target?: string }): boolean {
+  const owner = scope.owner;
+  if (!owner || owner.disabled || !mayDownloadToLibrary(owner)) return false;
+  const viewer: Viewer = { id: owner.id, role: owner.role };
+  const addonKey = job.stream?.addonKey;
+  if (addonKey) {
+    const addon = scope.addons.find((item) => item.key === addonKey);
+    if (!addon?.enabled || !addonAllowed(addon, viewer)) return false;
+  }
+  const libraryId = job.libraryId ?? (job.target ? parseLibraryPath(job.target)?.libraryId : undefined);
+  const library = libraryId ? scope.libraries.find((item) => item.id === libraryId) : undefined;
+  if (library && (!libraryVisible(library, viewer) || !library.enabled || Boolean(library.readOnly))) return false;
+  return true;
+}
+
 export type StreamResolver = (source: NonNullable<DownloadJob["source"]>) => Promise<{
   stream: StreamItem;
   settings: AddonDownloadSettings;
@@ -129,10 +178,24 @@ export interface QueueHooks {
   debridPollMs?: number;
   debridRetryMs?: number;
   debridTimeoutMs?: number;
+  /** Who owns a job queued before ownership existed: the administrator the single-account
+   *  state migrated into. Read at every use rather than migrated into the queue file. */
+  legacyOwnerId?: () => string | undefined;
+  /** The owner-bound check, with the account, the addons and the libraries as they are now.
+   *  A refusal pauses the job instead of failing it, so its place is kept for when the
+   *  permission comes back. Absent in a queue built without accounts: nothing gates it. */
+  ownerAllowed?: (job: DownloadJob) => boolean | Promise<boolean>;
 }
 
 const exists = async (file: string) => { try { await stat(file); return true; } catch { return false; } };
 const MiB = 1024 ** 2;
+
+/** What a job paused on a missing permission carries: the interface translates the key, and
+ *  the English text is the fallback for a client that does not know it. */
+const PERMISSION_PAUSE = {
+  message: "Paused: the permission for this download is gone.",
+  key: "download.pausedNoPermission",
+};
 
 /** The rule's library is not there to be written to right now. Not a failure: the job waits,
  *  because sending one title to a fallback root would scatter a season across two libraries.
@@ -208,6 +271,8 @@ export class DownloadQueue {
   private readonly debridPollMs: number;
   private readonly debridRetryMs: number;
   private readonly debridTimeoutMs: number;
+  private readonly legacyOwnerId?: () => string | undefined;
+  private readonly ownerAllowed?: (job: DownloadJob) => boolean | Promise<boolean>;
   private debridTimers = new Map<string, NodeJS.Timeout>();
   private debridBusy = new Set<string>();
   /** Called after a successful finish, so the library can produce a thumbnail straight away. */
@@ -242,6 +307,8 @@ export class DownloadQueue {
     this.debridPollMs = hooks.debridPollMs ?? 15_000;
     this.debridRetryMs = hooks.debridRetryMs ?? 30_000;
     this.debridTimeoutMs = hooks.debridTimeoutMs ?? 72 * 60 * 60_000;
+    this.legacyOwnerId = hooks.legacyOwnerId;
+    this.ownerAllowed = hooks.ownerAllowed;
   }
 
   /** index.ts owns source selection for lazy jobs, because it needs the addons and the settings. */
@@ -298,6 +365,14 @@ export class DownloadQueue {
   list() { return this.jobs.map((job, index) => ({ ...this.publicJob(job), order: index })); }
   snapshot() { return { jobs: this.list(), halt: this.haltInfo() }; }
 
+  /** Who asked for a job. A job queued before ownership existed belongs to the administrator
+   *  the single-account state migrated into: the answer is resolved here, on reading the job,
+   *  and lands in the queue file only when something else writes it. */
+  ownerOf(job: Pick<DownloadJob, "ownerUserId">): string | undefined {
+    if (!job.ownerUserId) job.ownerUserId = this.legacyOwnerId?.();
+    return job.ownerUserId;
+  }
+
   /** The library a new job writes into. A rule that names a library nobody can write to right
    *  now -- removed, switched off, read-only or on a disk that is away -- falls back to the
    *  default for the kind: a download that can land somewhere sensible must not fail, and
@@ -342,6 +417,23 @@ export class DownloadQueue {
     job.updatedAt = job.pausedAt;
     log("INFO", "Download paused, the library it goes to is not available", { id: job.id, title: job.title, library: error.libraryId, removed: error.gone || undefined });
     this.watchLibraries();
+  }
+
+  /** The owner-bound check as the queue asks it: the answer comes from the account, the
+   *  addons and the libraries as they are now, never from the request that queued the job.
+   *  A refusal pauses the job rather than failing it, because the work is not wrong and the
+   *  queue position is worth keeping for when the permission comes back. */
+  private async ownerRefused(job: DownloadJob): Promise<boolean> {
+    return this.ownerAllowed ? !await this.ownerAllowed(job) : false;
+  }
+
+  private pauseForPermission(job: DownloadJob) {
+    job.status = "paused";
+    job.pauseReason = "permission";
+    job.speed = 0;
+    this.setError(job, PERMISSION_PAUSE.message, PERMISSION_PAUSE.key);
+    job.updatedAt = new Date().toISOString();
+    log("INFO", "Download paused, the account behind it may no longer queue it", { id: job.id, title: job.title });
   }
 
   /** Jobs waiting for a library ask again on a timer, and go back to the queue by themselves
@@ -420,8 +512,8 @@ export class DownloadQueue {
     return located ? path.join(located.root, located.relative) : undefined;
   }
 
-  async add(title: string, stream: StreamItem, media?: MediaInfo, targetSettings: DownloadTargetSettings = defaultDownloadSettings().movie) {
-    if (!stream.url && stream.infoHash) return this.addDebrid(title, stream, media, targetSettings);
+  async add(title: string, stream: StreamItem, media?: MediaInfo, targetSettings: DownloadTargetSettings = defaultDownloadSettings().movie, ownerUserId?: string) {
+    if (!stream.url && stream.infoHash) return this.addDebrid(title, stream, media, targetSettings, ownerUserId);
     if (!stream.url) throw new AppError("Only a direct HTTP stream can be downloaded.", "err.downloadNeedsHttp");
     // Without this check a double click on Download yields the same film twice, because
     // uniqueTarget happily hands the second job a name with "(2)".
@@ -432,7 +524,7 @@ export class DownloadQueue {
     const extension = streamExtension(stream);
     const kind = media?.kind === "episode" ? "series" : "movie";
     const now = new Date().toISOString();
-    const job: DownloadJob = { id: crypto.randomUUID(), title, stream, media, status: "queued", target: "", received: 0, speed: 0, targetSettings, createdAt: now, updatedAt: now };
+    const job: DownloadJob = { id: crypto.randomUUID(), ownerUserId, title, stream, media, status: "queued", target: "", received: 0, speed: 0, targetSettings, createdAt: now, updatedAt: now };
     try {
       const library = await this.resolveLibrary(kind, targetSettings);
       if (!library) throw new NoLibraryForKindError(kind);
@@ -452,13 +544,13 @@ export class DownloadQueue {
     return Boolean(left?.infoHash && left.infoHash === right.infoHash && (left.fileIdx ?? 0) === (right.fileIdx ?? 0));
   }
 
-  private async addDebrid(title: string, stream: StreamItem, media: MediaInfo | undefined, targetSettings: DownloadTargetSettings) {
+  private async addDebrid(title: string, stream: StreamItem, media: MediaInfo | undefined, targetSettings: DownloadTargetSettings, ownerUserId?: string) {
     if (!this.debrid?.configured()) throw new AppError("Set up Real-Debrid in Settings first.", "err.debridNotConfigured");
     const duplicate = this.jobs.find((job) => this.sameTorrent(job.stream, stream) && job.status !== "failed");
     if (duplicate && duplicate.status !== "completed") throw new AppError("This torrent is already in the queue.", "err.torrentQueued");
     const now = new Date().toISOString();
     const job: DownloadJob = {
-      id: crypto.randomUUID(), title, stream, media, status: "waiting", target: "", received: 0, speed: 0,
+      id: crypto.randomUUID(), ownerUserId, title, stream, media, status: "waiting", target: "", received: 0, speed: 0,
       debrid: {}, targetSettings, createdAt: now, updatedAt: now,
     };
     try {
@@ -479,10 +571,10 @@ export class DownloadQueue {
   }
 
   /** A lazy job: both target and source are filled in when the download starts. A duplicate episode is not added. */
-  async addPending(title: string, source: { type: string; videoId: string; selection?: DownloadSelection }, media?: MediaInfo) {
+  async addPending(title: string, source: { type: string; videoId: string; selection?: DownloadSelection }, media?: MediaInfo, ownerUserId?: string) {
     if (this.jobs.some((job) => job.source?.videoId === source.videoId && job.status !== "completed" && job.status !== "failed")) return undefined;
     const now = new Date().toISOString();
-    const job: DownloadJob = { id: crypto.randomUUID(), title, media, source: { ...source, tried: [] }, status: "queued", target: "", received: 0, speed: 0, createdAt: now, updatedAt: now };
+    const job: DownloadJob = { id: crypto.randomUUID(), ownerUserId, title, media, source: { ...source, tried: [] }, status: "queued", target: "", received: 0, speed: 0, createdAt: now, updatedAt: now };
     this.jobs.push(job); await this.save(); this.pump(); return this.publicJob(job);
   }
 
@@ -518,6 +610,13 @@ export class DownloadQueue {
   async resume(id: string) {
     const job = this.require(id);
     if (!(["paused", "failed"] as DownloadStatus[]).includes(job.status)) throw new AppError("This item cannot be resumed.", "err.cannotResume");
+    // Read again here rather than trusted from when the job was paused: the right may have
+    // gone while it waited, and the answer is what decides.
+    if (await this.ownerRefused(job)) {
+      this.pauseForPermission(job);
+      await this.save();
+      return;
+    }
     if (job.pauseReason === "library" && job.libraryId) {
       const library = (await this.libraryState?.(job.libraryId)) ?? this.libraries().find((item) => item.id === job.libraryId);
       if (!library || !libraryUsable(library)) throw new AppError("The library this download goes to is not available right now.", "err.libraryNotWritable");
@@ -673,8 +772,9 @@ export class DownloadQueue {
 
   private require(id: string) { const job = this.jobs.find((item) => item.id === id); if (!job) throw new AppError("The item was not found.", "err.itemNotFound"); return job; }
   /** Source addresses (often carrying tokens) must not reach the interface; only the lazy flag goes out. */
-  private publicJob({ stream, source, subtitle: _subtitle, notBefore: _notBefore, debrid, segments, ...job }: DownloadJob) {
-    return { ...job, pending: !stream && Boolean(source), debridProgress: debrid?.progress, segments: segments?.length };
+  private publicJob(job: DownloadJob) {
+    const { stream, source, subtitle: _subtitle, notBefore: _notBefore, debrid, segments, ...rest } = job;
+    return { ...rest, ownerUserId: this.ownerOf(job), pending: !stream && Boolean(source), debridProgress: debrid?.progress, segments: segments?.length };
   }
   /** Saves have to run one after another: concurrent writes share one .tmp and the second
    *  rename then has nothing to move. A failed state write must not bring the server down either. */
@@ -1053,7 +1153,22 @@ export class DownloadQueue {
     let inactivity: NodeJS.Timeout | undefined;
     let stalled = false;
     try {
-      if (!job.stream) await this.resolve(job);
+      // The owner is read afresh before any work: the right to queue may be gone since the
+      // job was added, and nothing about the request that added it can speak for it now.
+      if (await this.ownerRefused(job)) {
+        this.pauseForPermission(job);
+        return;
+      }
+      if (!job.stream) {
+        await this.resolve(job);
+        if (controller.signal.aborted) throw new Error("The download was stopped.");
+        // The lazy resolve is where this matters most: the enqueue validated a selection, not
+        // the addon the resolver eventually picks, and the owner may have lost that one.
+        if (await this.ownerRefused(job)) {
+          this.pauseForPermission(job);
+          return;
+        }
+      }
       if (controller.signal.aborted) throw new Error("The download was stopped.");
       job.status = "downloading";
       // The provider is known only after a source is picked. If it is busy, the job goes back to

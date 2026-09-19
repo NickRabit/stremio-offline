@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 import { stat } from "node:fs/promises";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
-import { isPlaylist } from "../downloads.js";
+import { isPlaylist, mayDownloadToDevice } from "../downloads.js";
 import { AppError } from "../errors.js";
 import { posixBase, type Viewer } from "../libraries.js";
 import { log } from "../logger.js";
@@ -36,8 +36,19 @@ export interface DeviceDeps extends RouteContext {
 export function registerDeviceRoutes(app: express.Application, deps: DeviceDeps): void {
   const { store, currentUser, countBytes, deviceDownloadTickets, DEVICE_TICKET_TTL, httpSourceOf, libraryTarget, mediaSource, ownerOf, pruneDeviceDownloadTickets, statMeta, trackMedia } = deps;
 
+  /** Saving to the device is a right an administrator hands out, and it is read at every use:
+   *  taking it away stops a ticket that was minted while it was still there. This governs the
+   *  application only: it does not stop a browser saving what a playback it is allowed to
+   *  watch hands it. */
+  const assertMaySaveToDevice = (req: express.Request) => {
+    const owner = currentUser(req);
+    if (owner && mayDownloadToDevice(owner)) return;
+    throw new AppError("This account may not save to the device.", "err.downloadDeviceNotAllowed", 403);
+  };
+
   /** Keep the external address out of the download link by exchanging it for a short-lived ticket. */
   app.post("/api/device-download", asyncRoute(async (req, res) => {
+    assertMaySaveToDevice(req);
     pruneDeviceDownloadTickets();
     let ticket: DeviceDownloadTicket;
     const owner = ownerOf(req);
@@ -75,6 +86,7 @@ export function registerDeviceRoutes(app: express.Application, deps: DeviceDeps)
     pruneDeviceDownloadTickets();
     const ticket = deviceDownloadTickets.get(String(req.params.id));
     if (!ticket || ticket.owner.sid !== ownerOf(req).sid) return res.status(404).json({ error: "The download link expired. Start the download again.", messageKey: "err.downloadTicketExpired" });
+    assertMaySaveToDevice(req);
 
     res.setHeader("cache-control", "private, no-store");
     trackMedia(ticket.owner, res);

@@ -6,19 +6,25 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import express from "express";
+import { messageKeyOf } from "../errors.js";
 import { ResourceError, type ResourceOwner } from "../media-resources.js";
 import type { Store } from "../store.js";
 import type { StreamItem } from "../types.js";
+import type { UserPermissions, UserRecord } from "../users.js";
 import { registerDeviceRoutes, type DeviceDeps } from "./device.js";
 
 const ADA: ResourceOwner = { sid: "sid-ada", expiresAt: Date.now() + 60_000 };
 const BOB: ResourceOwner = { sid: "sid-bob", expiresAt: Date.now() + 60_000 };
 const TTL = 24 * 60 * 60_000;
 const SOURCE = "Movies/Some Movie.mkv";
+const ADA_ID = "usr_00000001";
+const BOB_ID = "usr_00000002";
 
 interface Harness {
   base: string;
   tickets: DeviceDeps["deviceDownloadTickets"];
+  /** The rights of the ordinary account, so a test can take one away mid-flight. */
+  permissions: UserPermissions;
   close(): Promise<void>;
 }
 
@@ -30,12 +36,21 @@ const mount = async (): Promise<Harness> => {
   await writeFile(file, "movie bytes");
   const tickets: DeviceDeps["deviceDownloadTickets"] = new Map();
   const ownerOf = (req: express.Request) => (req.header("x-user") === "bob" ? BOB : ADA);
+  const permissions: UserPermissions = { downloadToLibrary: false, downloadToDevice: true };
+  const account = (id: string, username: string, role: "admin" | "user"): UserRecord => ({
+    id, username, role, createdAt: "2026-01-01T00:00:00.000Z",
+    permissions: role === "admin" ? { downloadToLibrary: false, downloadToDevice: false } : permissions,
+    permissionsVersion: 0,
+  } as unknown as UserRecord);
+  // The administrator's stored flags are deliberately false: the role is what grants.
+  const ada = account(ADA_ID, "ada", "admin");
+  const bob = account(BOB_ID, "bob", "user");
 
   const deps: DeviceDeps = {
     store: { addons: () => [], libraries: () => [] } as unknown as Store,
     needsSetup: () => false,
     currentSession: () => undefined,
-    currentUser: () => undefined,
+    currentUser: (req: express.Request) => (req.header("x-user") === "bob" ? bob : ada),
     isSecure: () => false,
     stopOwnedPlayback: async () => undefined,
     countBytes: () => undefined,
@@ -61,7 +76,7 @@ const mount = async (): Promise<Harness> => {
   registerDeviceRoutes(app, deps);
   app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
     const status = typeof (error as { status?: unknown }).status === "number" ? (error as { status: number }).status : 400;
-    res.status(status).json({ error: error instanceof Error ? error.message : String(error) });
+    res.status(status).json({ error: error instanceof Error ? error.message : String(error), messageKey: messageKeyOf(error) });
   });
   const server = app.listen(0, "127.0.0.1");
   await once(server, "listening");
@@ -69,6 +84,7 @@ const mount = async (): Promise<Harness> => {
   return {
     base: `http://127.0.0.1:${port}`,
     tickets,
+    permissions,
     close: async () => {
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -130,4 +146,29 @@ test("GET /api/device-download/:id drops an expired ticket instead of serving it
   const body = await response.json() as { messageKey?: string };
   assert.equal(body.messageKey, "err.downloadTicketExpired");
   assert.equal(harness.tickets.has("expired"), false, "an expired ticket does not stay in the map");
+});
+
+test("POST /api/device-download refuses an account that may not save to the device", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  harness.permissions.downloadToDevice = false;
+
+  const response = await api(harness.base, "/api/device-download", { method: "POST", user: "bob", body: {} });
+  assert.equal(response.status, 403);
+  assert.equal((await response.json() as { messageKey?: string }).messageKey, "err.downloadDeviceNotAllowed");
+  assert.equal(harness.tickets.size, 0, "no ticket is minted");
+});
+
+test("taking the device permission away stops a ticket that was already minted", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const minted = await api(harness.base, "/api/device-download", { method: "POST", user: "bob", body: {} });
+  assert.equal(minted.status, 201);
+  const { url } = await minted.json() as { url: string };
+  assert.equal((await api(harness.base, url, { user: "bob" })).status, 200, "the ticket works while the right is there");
+
+  harness.permissions.downloadToDevice = false;
+  const refused = await api(harness.base, url, { user: "bob" });
+  assert.equal(refused.status, 403);
+  assert.equal((await refused.json() as { messageKey?: string }).messageKey, "err.downloadDeviceNotAllowed");
 });

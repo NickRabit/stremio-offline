@@ -4,7 +4,7 @@ import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 import express from "express";
 import type { DownloadQueue } from "../downloads.js";
-import { messageKeyOf } from "../errors.js";
+import { AppError, messageKeyOf } from "../errors.js";
 import { defaultDownloadSettings, type MediaInfo } from "../naming.js";
 import type { Store, UserPrefs } from "../store.js";
 import type { UserRecord } from "../users.js";
@@ -12,9 +12,11 @@ import { registerDownloadRoutes, type DownloadsDeps } from "./downloads.js";
 
 interface Harness {
   base: string;
+  added: Array<{ title: string; ownerUserId?: string }>;
+  actions: string[];
   moves: Array<{ id: string; direction: number }>;
   viewed: Array<{ id?: string; media?: MediaInfo; target?: string }>;
-  pending: Array<{ selection?: { addonKeys?: string[] } }>;
+  pending: Array<{ selection?: { addonKeys?: string[] }; ownerUserId?: string }>;
   close(): Promise<void>;
 }
 
@@ -30,25 +32,49 @@ const streamAddon = (key: string, options: { enabled?: boolean; role?: string; a
 
 const ADA = "usr_00000001";
 const BOB = "usr_00000002";
-const admin = { id: ADA, username: "ada", role: "admin" } as unknown as UserRecord;
-const ordinary = { id: BOB, username: "bob", role: "user" } as unknown as UserRecord;
+/** A record shaped the way the store keeps one, so the flags the check must not read are on it. */
+const account = (id: string, role: "admin" | "user", downloadToLibrary: boolean): UserRecord => ({
+  id, username: role === "admin" ? "ada" : "bob", role, createdAt: "2026-01-01T00:00:00.000Z",
+  permissions: { downloadToLibrary, downloadToDevice: true }, permissionsVersion: 0,
+} as unknown as UserRecord);
+/** The administrator a migrated install has: the flags say false and the role is what grants. */
+const admin = account(ADA, "admin", false);
+const ordinary = account(BOB, "user", true);
+const denied = account(BOB, "user", false);
 
 /** The routes take everything they need from the context, so the app here is a real express
  *  instance over fake collaborators that record what they were asked to do. */
-const mount = async (addons: unknown[] = [streamAddon("stream-addon")], options: { viewer?: UserRecord } = {}): Promise<Harness> => {
+const mount = async (
+  addons: unknown[] = [streamAddon("stream-addon")],
+  options: { viewer?: UserRecord; jobs?: Array<{ id: string; ownerUserId?: string }> } = {},
+): Promise<Harness> => {
+  const jobs = options.jobs ?? [{ id: "job-1", ownerUserId: ADA }, { id: "job-2", ownerUserId: ADA }];
+  const added: Array<{ title: string; ownerUserId?: string }> = [];
+  const actions: string[] = [];
   const moves: Array<{ id: string; direction: number }> = [];
   const viewed: Array<{ id?: string; media?: MediaInfo; target?: string }> = [];
-  const pending: Array<{ selection?: { addonKeys?: string[] } }> = [];
+  const pending: Array<{ selection?: { addonKeys?: string[] }; ownerUserId?: string }> = [];
+  /** What the queue does with an id it does not hold, so a foreign job can be compared with one. */
+  const require = (name: string, id: string) => {
+    if (!jobs.some((job) => job.id === id)) throw new AppError("The item was not found.", "err.itemNotFound");
+    actions.push(`${name}:${id}`);
+  };
   const queue = {
-    snapshot: () => ({ jobs: [{ id: "job-1" }, { id: "job-2" }], halt: null }),
-    list: () => [],
-    add: async () => ({ id: "job-1", target: "Movies/Film/Film.mkv" }),
-    addPending: async (_title: string, source: { selection?: { addonKeys?: string[] } }) => { pending.push(source); return { id: "job-1" }; },
-    pause: async () => undefined,
-    resume: async () => undefined,
-    retry: async () => undefined,
+    snapshot: () => ({ jobs, halt: null }),
+    list: () => jobs,
+    add: async (title: string, _stream: unknown, _media: unknown, _settings: unknown, ownerUserId?: string) => {
+      added.push({ title, ownerUserId });
+      return { id: "job-1", target: "Movies/Film/Film.mkv" };
+    },
+    addPending: async (_title: string, source: { selection?: { addonKeys?: string[] } }, _media: unknown, ownerUserId?: string) => {
+      pending.push({ ...source, ownerUserId });
+      return { id: "job-1" };
+    },
+    pause: async (id: string) => { require("pause", id); },
+    resume: async (id: string) => { require("resume", id); },
+    retry: async (id: string) => { require("retry", id); },
     move: async (id: string, direction: number) => { moves.push({ id, direction }); },
-    remove: async () => undefined,
+    remove: async (id: string) => { require("remove", id); },
     clearCompleted: async () => undefined,
   };
   const deps: DownloadsDeps = {
@@ -85,6 +111,8 @@ const mount = async (addons: unknown[] = [streamAddon("stream-addon")], options:
   const { port } = server.address() as AddressInfo;
   return {
     base: `http://127.0.0.1:${port}`,
+    added,
+    actions,
     moves,
     viewed,
     pending,
@@ -203,4 +231,69 @@ test("POST /api/downloads/:id/move passes -1 for a negative direction and +1 for
     { id: "job-9", direction: 1 },
     { id: "job-9", direction: 1 },
   ]);
+});
+
+test("GET /api/downloads shows an administrator every job and a user only their own", async (t) => {
+  const jobs = [{ id: "job-1", ownerUserId: ADA }, { id: "job-2", ownerUserId: BOB }];
+  const administrator = await mount(undefined, { viewer: admin, jobs });
+  t.after(administrator.close);
+  const all = await (await api(administrator.base, "/api/downloads")).json() as { jobs: Array<{ id: string }>; halt: unknown };
+  assert.deepEqual(all.jobs.map((job) => job.id), ["job-1", "job-2"], "an administrator sees every job");
+  assert.equal(all.halt, null, "the queue-wide fields describe the queue, not a job");
+
+  const user = await mount(undefined, { viewer: ordinary, jobs });
+  t.after(user.close);
+  const mine = await (await api(user.base, "/api/downloads")).json() as { jobs: Array<{ id: string }> };
+  assert.deepEqual(mine.jobs.map((job) => job.id), ["job-2"], "a user sees only the jobs they asked for");
+});
+
+test("acting on somebody else's job answers exactly like an id that is not there", async (t) => {
+  const harness = await mount(undefined, { viewer: ordinary, jobs: [{ id: "job-1", ownerUserId: ADA }] });
+  t.after(harness.close);
+  const actions = [
+    { method: "POST", path: "/api/downloads/job-1/pause" },
+    { method: "POST", path: "/api/downloads/job-1/resume" },
+    { method: "POST", path: "/api/downloads/job-1/retry" },
+    { method: "DELETE", path: "/api/downloads/job-1" },
+  ];
+  for (const { method, path } of actions) {
+    const foreign = await api(harness.base, path, { method });
+    const unknown = await api(harness.base, path.replace("job-1", "job-not-here"), { method });
+    assert.equal(foreign.status, 404, `${method} ${path}`);
+    assert.equal(foreign.status, unknown.status, `${method} ${path} answers with the same status`);
+    assert.deepEqual(await foreign.json(), await unknown.json(), `${method} ${path} gives nothing away`);
+  }
+  assert.deepEqual(harness.actions, [], "the queue is never asked to act on a job the caller does not own");
+});
+
+test("POST /api/downloads refuses an account without the library permission and queues nothing", async (t) => {
+  const harness = await mount(undefined, { viewer: denied });
+  t.after(harness.close);
+  const response = await api(harness.base, "/api/downloads", { method: "POST", body: { title: "Film" } });
+  assert.equal(response.status, 403);
+  assert.equal(await keyOf(response), "err.downloadLibraryNotAllowed");
+  assert.deepEqual(harness.added, [], "nothing is queued");
+});
+
+test("POST /api/downloads/bulk refuses an account without the library permission", async (t) => {
+  const harness = await mount(undefined, { viewer: denied });
+  t.after(harness.close);
+  const response = await api(harness.base, "/api/downloads/bulk", {
+    method: "POST",
+    body: { title: "Show", episodes: episodes(1), selection: { addonKeys: ["stream-addon"], audioLanguage: "en" } },
+  });
+  assert.equal(response.status, 403);
+  assert.equal(await keyOf(response), "err.downloadLibraryNotAllowed");
+  assert.deepEqual(harness.pending, [], "nothing is queued");
+});
+
+test("an administrator queues onto the NAS whatever the stored flags say", async (t) => {
+  // The flags are what an ordinary user is granted; an administrator passes by role alone,
+  // and a migrated administrator's stored flags need not say true.
+  assert.equal(admin.permissions.downloadToLibrary, false);
+  const harness = await mount(undefined, { viewer: admin });
+  t.after(harness.close);
+  const response = await api(harness.base, "/api/downloads", { method: "POST", body: { title: "Film" } });
+  assert.equal(response.status, 201);
+  assert.deepEqual(harness.added.map((job) => job.ownerUserId), [ADA], "the job records who asked for it");
 });

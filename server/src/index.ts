@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { allowedAddons, loadAddon, metadata, searchAll, searchableCatalogs, streams, subtitles, type MetaProvider } from "./addons.js";
 import { autoRefreshEnabled, refreshDue, refreshManifests, type RefreshOutcome } from "./addon-refresh.js";
 import { rankStreams } from "./ranking.js";
-import { DownloadQueue } from "./downloads.js";
+import { DownloadQueue, ownerMayDownload, type DownloadJob } from "./downloads.js";
 import { selectDownloadSource } from "./download-selection.js";
 import { StatsLog, type TrafficEvent, type TrafficMeta } from "./stats.js";
 import { Throughput } from "./throughput.js";
@@ -22,7 +22,7 @@ import { outbound } from "./outbound.js";
 import { images } from "./images.js";
 import { configureSecureMode, secureMode, securityHeaders } from "./secure.js";
 import { Store, type State, type UserPrefs, type WatchlistEntry, type StoredProgress, type WatchedMarker } from "./store.js";
-import { emptyUserData, findUserById, type UserData } from "./users.js";
+import { emptyUserData, findUserById, type UserData, type UserRecord } from "./users.js";
 import type { ProgressSeries } from "./progress-series.js";
 import { advanceTorrent } from "./debrid.js";
 import { tmdbMeta } from "./tmdb.js";
@@ -117,10 +117,33 @@ const airplayAccess = new AirPlayAccess(mediaResources);
  *  library is never a destination, so it is left out of the choice. */
 const downloadDefaultLibrary = (kind: "movie" | "series") =>
   defaultLibrary(store.libraries().filter((library) => !library.readOnly), store.settings(), kind === "series" ? "episode" : "movie");
+/** The account a job queued before ownership existed belongs to: the administrator the
+ *  single-account state migrated into, which is the oldest one. A disabled account stops
+ *  speaking for the queue, so a replacement administrator inherits those jobs rather than
+ *  finding them paused; with two administrators the rule still names exactly one. */
+const migratedAdminId = (): string | undefined => {
+  const oldest = (admins: UserRecord[]) => [...admins]
+    .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id))[0]?.id;
+  const admins = store.users().filter((user) => user.role === "admin");
+  return oldest(admins.filter((user) => !user.disabled)) ?? oldest(admins);
+};
+/** Who owns a job: the account that asked for it, or the migrated administrator for one
+ *  queued before ownership existed. The queue resolves the same rule when it reads a job. */
+const ownerIdOf = (job: { ownerUserId?: string }): string | undefined => job.ownerUserId ?? migratedAdminId();
+/** The owner-bound check the queue asks at start, at retry and after a lazy resolve. The
+ *  account, the addons and the libraries are read again every time: the job outlives the
+ *  request that queued it, so nothing about that request may be trusted now. */
+const ownerMayUseQueue = (job: DownloadJob): boolean => ownerMayDownload({
+  owner: findUserById(store.users(), ownerIdOf(job) ?? ""),
+  addons: store.addons(),
+  libraries: store.libraries(),
+}, job);
 const queue = new DownloadQueue(() => store.settings().concurrentDownloads, () => store.settings().parallelPerProvider ?? 1, undefined, undefined, {
   segments: () => store.settings().downloadSegments ?? 1,
   libraries: () => store.libraries(),
   defaultLibrary: downloadDefaultLibrary,
+  legacyOwnerId: migratedAdminId,
+  ownerAllowed: ownerMayUseQueue,
   // A job paused for a library asks whether it is back; the probe is refreshed first so a
   // disk that was plugged in is seen within the queue's own retry, not the cache's.
   libraryState: async (libraryId) => { await refreshLibraryHealth(); return libraryFor(store.libraries(), libraryId); },
