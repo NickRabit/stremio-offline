@@ -1,4 +1,4 @@
-import { FormEvent, ReactNode, UIEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, ReactNode, TouchEvent as ReactTouchEvent, UIEvent, WheelEvent as ReactWheelEvent, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDown, BarChart3, ArrowUp, Check, RectangleHorizontal, RectangleVertical, Copy, FolderInput, FolderOpen, ImageOff, Images, KeyRound, Languages, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, ShieldCheck, SlidersHorizontal, Sparkles, Star, FileJson, Link2, LogOut, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, FileText, Film, FolderCog, HardDrive, Library, PackagePlus, Pause, Play, Plus, RefreshCw, Search, SearchX, Settings, Subtitles, Trash2, Upload, X } from "lucide-react";
 import { queueDestination } from "./queue-target";
 import { api, ApiError, describeError, logDownloadUrl, saveToDevice } from "./api";
@@ -570,6 +570,44 @@ export function App() {
     pickedRef.current = true;
     setPlayerOpen(true);
   };
+
+  // Chrome that sits outside the list is a dead zone for a gesture: a finger that lands on the
+  // header scrolls nothing -- and a header that has just sprung back at the top of the list is
+  // exactly where the next finger lands, which made the list look stuck. A wheel or a drag that
+  // starts on the chrome is handed to the list instead. Anything that scrolls on its own keeps
+  // its gesture: the mobile detail panel and the episode and source lists live in here too.
+  const chromeDrag = useRef<number | null>(null);
+  const ownScroller = (target: EventTarget | null, stop: HTMLElement) => {
+    let node = target instanceof HTMLElement ? target : null;
+    while (node && node !== stop) {
+      const style = getComputedStyle(node);
+      // A panel laid over the view -- the detail on a phone -- owns everything that happens on
+      // it, scrollable or not. Forwarding from there would drag the list hidden behind it.
+      if (style.position === "fixed") return true;
+      if ((style.overflowY === "auto" || style.overflowY === "scroll") && node.scrollHeight > node.clientHeight) return true;
+      node = node.parentElement;
+    }
+    return false;
+  };
+  const chromeGestures = (scroller: () => HTMLDivElement | null) => ({
+    onWheel: (event: ReactWheelEvent<HTMLElement>) => {
+      const list = scroller();
+      if (!list || ownScroller(event.target, event.currentTarget)) return;
+      list.scrollTop += event.deltaY;
+    },
+    onTouchStart: (event: ReactTouchEvent<HTMLElement>) => {
+      chromeDrag.current = scroller() && !ownScroller(event.target, event.currentTarget) ? event.touches[0].clientY : null;
+    },
+    onTouchMove: (event: ReactTouchEvent<HTMLElement>) => {
+      const list = scroller();
+      const from = chromeDrag.current;
+      if (!list || from === null) return;
+      const y = event.touches[0].clientY;
+      chromeDrag.current = y;
+      list.scrollTop += from - y;
+    },
+    onTouchEnd: () => { chromeDrag.current = null; },
+  });
 
   // Where the two lists that survive a rotation keep their position: both scroll inside a box
   // of their own now -- the catalogue in its grid, the library in its listing.
@@ -1479,7 +1517,7 @@ export function App() {
       <Nav icon={<BarChart3/>} label={t("nav.stats")} active={view === "stats"} onClick={() => openView("stats")}/>
     </nav><div className="sidebar-bottom"><button className="sidebar-toggle" onClick={toggleSidebar} title={t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")} aria-label={t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")}>{sidebarCollapsed ? <PanelLeftOpen/> : <PanelLeftClose/>}<span>{t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")}</span></button><div className="addon-status"><small>{t("app.activeAddons")}</small><strong>{addons.filter((a) => a.enabled).length}</strong><span>{t("app.catalogsAndSources")}</span></div></div></aside>
     <main className={`view-${view}`}>
-      {view === "catalog" && <section className={`catalog-view ${catalogCompact ? "catalog-compact" : ""}`} onFocusCapture={(event) => {
+      {view === "catalog" && <section className={`catalog-view ${catalogCompact ? "catalog-compact" : ""}`} {...chromeGestures(() => gridRef.current)} onFocusCapture={(event) => {
         if ((event.target as HTMLElement).closest(".searchbar,.filterbar")) setCatalogCompact(false);
       }}><Heading eyebrow={t("catalog.eyebrow")} title={t("catalog.title")}/>
         {!catalogs.length ? (restricted ? <Empty icon={<PackagePlus/>} title={t("onboarding.title")} text={t("restricted.notice")}/> : <Onboarding onOpen={() => setView("addons")}/>) : <>
@@ -1605,7 +1643,7 @@ export function App() {
           </> : <Empty icon={<Film/>} title={t("catalog.pickTitle")} text={t("catalog.pickText")}/>}</section></div>
         </>}
       </section>}
-      {view === "library" && <section className={`library-page${libraryCompact ? " library-compact" : ""}`} onKeyDown={(event) => { if (event.key === "Escape") setMenuFor(null); }} onClick={() => menuFor && setMenuFor(null)}><Heading eyebrow={t("library.eyebrow")} title={t("library.title")}/>
+      {view === "library" && <section className={`library-page${libraryCompact ? " library-compact" : ""}`} {...chromeGestures(() => browseScrollRef.current)} onKeyDown={(event) => { if (event.key === "Escape") setMenuFor(null); }} onClick={() => menuFor && setMenuFor(null)}><Heading eyebrow={t("library.eyebrow")} title={t("library.title")}/>
         <div className="panel browse-panel">
         <div className="browse-head">
         <div className="browse-bar">
