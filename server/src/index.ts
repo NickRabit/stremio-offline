@@ -5,14 +5,13 @@ import { nextVideoFile } from "./next-file.js";
 import { isInternalMediaPath, mediaChildPath, mediaResources, openMediaUrl, ResourceError, safeSourceText, type ResourceOwner } from "./media-resources.js";
 import { readMediaText, rewritePlaylist } from "./media-playlist.js";
 import { AirPlayAccess } from "./airplay-access.js";
-import { shiftVtt } from "./vtt.js";
 import path from "node:path";
 import { constants } from "node:fs";
 import { access, mkdir, readdir, readFile, realpath, rename, rm, stat, statfs, writeFile } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
-import { loadAddon, catalog, metadata, searchAll, searchableCatalogs, streamCandidates, streams, subtitles, type MetaProvider } from "./addons.js";
-import { autoRefreshEnabled, manifestChanged, normalizeRefreshHours, refreshDue, refreshManifests, type RefreshOutcome } from "./addon-refresh.js";
+import { loadAddon, metadata, searchAll, searchableCatalogs, streams, subtitles, type MetaProvider } from "./addons.js";
+import { autoRefreshEnabled, normalizeRefreshHours, refreshDue, refreshManifests, type RefreshOutcome } from "./addon-refresh.js";
 import { rankStreams } from "./ranking.js";
 import { DownloadQueue, isPlaylist } from "./downloads.js";
 import { selectDownloadSource } from "./download-selection.js";
@@ -20,9 +19,9 @@ import { StatsLog, type TrafficEvent, type TrafficMeta } from "./stats.js";
 import { Throughput } from "./throughput.js";
 import { build } from "./build.js";
 import { PlaybackManager, sourceTitle } from "./playback.js";
-import { essentialAddon, publicAddon, publicAddonRestricted, redirectedHeaders, safeFetch, validateRemoteUrl } from "./security.js";
+import { publicAddon, publicAddonRestricted, redirectedHeaders, safeFetch, validateRemoteUrl } from "./security.js";
 import { RestrictedError, restrictedMiddleware, restrictedMode } from "./restricted.js";
-import { guardedFetch, outbound } from "./outbound.js";
+import { outbound } from "./outbound.js";
 import { images } from "./images.js";
 import { configureSecureMode, secureMode, securityHeaders } from "./secure.js";
 import { publicSettings, Store, type InstanceSettings, type Settings, type State, type UserPrefs } from "./store.js";
@@ -31,8 +30,8 @@ import { groupSeriesProgress, seriesOf, type ProgressSeries } from "./progress-s
 import { markersOwingRow, nextEpisodeOf } from "./next-episode.js";
 import { advanceTorrent, normalizeToken, verifyRealDebridToken } from "./debrid.js";
 import { tmdbMeta, verifyTmdbKey } from "./tmdb.js";
-import { clearTrailerCache, trailerFor } from "./trailers.js";
-import { ExternalIdStore, siteLinks } from "./external-ids.js";
+import { clearTrailerCache } from "./trailers.js";
+import { ExternalIdStore } from "./external-ids.js";
 import { currentLevel, flushLog, initLogger, log, parseLevel, startLogMaintenance, setLevel } from "./logger.js";
 import { browseDirectory, describePath, emptiedFolders, entryDirectory, isPathWithin, isVideo, listFolders, listVideos, moveDestination, orphanedCatalogKeys, pageFiles, remapPath, scanLibrary, sortFiles, summarize, type FoundFile, type LibraryEntry, type WalkBudget } from "./library.js";
 import { browseMeta, cacheFieldsFromMeta, episodeKey, episodeNumberOf, episodesFromMeta, dropKeyed, knownTitleEntry, knownTitleOf, lookupSkipped, matchKeyFor, matchStatus, mosaicSkipped, needsBackfill, needsEpisodes, scanMiss, suggestionFor, titleUnits, unmatchAt, type LibraryMetaRecord, type TitleKind, type TitleUnit } from "./library-match.js";
@@ -47,7 +46,7 @@ import { RepeatFilter } from "./access-log.js";
 import { randomBytes, randomUUID } from "node:crypto";
 import type { ClientCapabilities, PlaybackOptions } from "./playback.js";
 import type { MediaInfo } from "./naming.js";
-import { defaultDownloadSettings, deviceFilename, normalizeDownloadSettings, safeName } from "./naming.js";
+import { defaultDownloadSettings, deviceFilename, safeName } from "./naming.js";
 import { LANGUAGE_NAMES, isUiLanguage, normalizeLanguage } from "./language.js";
 import { AppError, messageKeyOf } from "./errors.js";
 import { activeDeparted, carveOuts, queuedArtworkKey, defaultLibrary, DEPARTED_MAX, departedIdFor, isInside, libraryFor, libraryPath, newLibraryId, parseLibraryPath, posixBase, posixDir, posixJoin, realAncestor, relativeWithin, resolveLibraryPath, sameFile, showsInContinueWatching, toFs, toPosix, type LibraryRecord, type LibraryType, type RootGrant } from "./libraries.js";
@@ -56,12 +55,14 @@ import { asLibraryType, checkLibraryRemoval, checkLibraryRoot, checkRerootItems,
 import { migrateStateFile } from "./library-migrate.js";
 import { LibraryMetaStore } from "./library-meta-store.js";
 import { artworks } from "./artwork-cache.js";
-import type { AddonRecord, AddonRole, MetaItem, StreamItem } from "./types.js";
+import type { AddonRecord, MetaItem, StreamItem } from "./types.js";
 import { createSettingsBackup, parseSettingsBackup, remapBackupLibraries } from "./backup.js";
 import { LibraryOps, type LibraryOp } from "./library-ops.js";
 import { transferLibraryPath, type TransferProgress } from "./library-transfer.js";
 import { groupResumeRows } from "./resume-group.js";
+import { registerAddonsRoutes } from "./routes/addons.js";
 import { registerAuthRoutes } from "./routes/auth.js";
+import { registerCatalogRoutes } from "./routes/catalog.js";
 import { asyncRoute, type RouteContext } from "./routes/context.js";
 import { registerDiagnosticsRoutes } from "./routes/diagnostics.js";
 import { registerDownloadRoutes } from "./routes/downloads.js";
@@ -432,38 +433,6 @@ const publicAddonView = (addon: AddonRecord) =>
   (restrictedMode() ? withProxiedLogo(publicAddonRestricted(addon)) : withProxiedLogo(publicAddon(addon)));
 
 app.get("/api/status", (_req, res) => res.json({ status: "ok", ...build, restricted: restrictedMode(), secure: secureMode() }));
-app.get("/api/addons", (_req, res) => res.json(store.addons().map(publicAddonView)));
-app.post("/api/addons", asyncRoute(async (req, res) => {
-  const role = (["catalog", "source", "both"].includes(req.body.role) ? req.body.role : "both") as AddonRole;
-  const addon = await loadAddon(String(req.body.url ?? ""), role);
-  if (store.addons().some((item) => item.manifest.id === addon.manifest.id && item.manifestUrl === addon.manifestUrl)) throw new AppError("This manifest is already added.", "err.manifestExists");
-  await store.update((state) => state.addons.push(addon)); res.status(201).json(publicAddonView(addon));
-}));
-// The order of addons is also their priority when sources are ranked.
-app.post("/api/addons/:key/move", asyncRoute(async (req, res) => {
-  const direction = Number(req.body.direction) < 0 ? -1 : 1;
-  await store.update((state) => {
-    const index = state.addons.findIndex((addon) => addon.key === req.params.key);
-    if (index < 0) throw new AppError("The addon was not found.", "err.addonNotFound");
-    const next = Math.max(0, Math.min(state.addons.length - 1, index + direction));
-    if (next === index) return;
-    const [addon] = state.addons.splice(index, 1);
-    state.addons.splice(next, 0, addon);
-  });
-  res.status(204).end();
-}));
-app.delete("/api/addons/:key", asyncRoute(async (req, res) => {
-  const existing = store.addons().find((a) => a.key === req.params.key);
-  if (existing && essentialAddon(existing)) throw new AppError("Cinemeta provides the library metadata and cannot be removed.", "err.essentialAddon");
-  await store.update((state) => { state.addons = state.addons.filter((a) => a.key !== req.params.key); });
-  res.status(204).end();
-}));
-// The full record including the token-bearing address. The interface hides it elsewhere; handing it out here is deliberate.
-app.get("/api/addons/:key/export", asyncRoute(async (req, res) => {
-  const addon = store.addons().find((a) => a.key === req.params.key);
-  if (!addon) throw new AppError("The addon was not found.", "err.addonNotFound");
-  res.json({ manifestUrl: addon.manifestUrl, role: addon.role, enabled: addon.enabled, globalSearch: addon.globalSearch, addedAt: addon.addedAt, downloadSettings: addon.downloadSettings, manifest: addon.manifest });
-}));
 // A manifest is a snapshot from the moment the addon was added: its catalogues,
 // resources and id prefixes decide what the addon is asked for, so a stale copy
 // quietly hides catalogues and skips sources. Refreshing rewrites the manifest and
@@ -479,28 +448,6 @@ const storeRefreshed = async (outcomes: RefreshOutcome[]) => {
   });
   for (const outcome of updated) log("INFO", "Addon manifest updated", { name: outcome.name, from: outcome.previousVersion, to: outcome.version });
 };
-app.post("/api/addons/refresh", asyncRoute(async (_req, res) => {
-  const outcomes = await refreshManifests(store.addons(), loadAddon);
-  await storeRefreshed(outcomes);
-  res.json({
-    changed: outcomes.filter((outcome) => outcome.changed).length,
-    failed: outcomes.filter((outcome) => outcome.error).length,
-    addons: store.addons().map(publicAddonView),
-  });
-}));
-app.post("/api/addons/:key/refresh", asyncRoute(async (req, res) => {
-  const existing = store.addons().find((a) => a.key === req.params.key);
-  if (!existing) throw new AppError("The addon was not found.", "err.addonNotFound");
-  // The error travels to the interface as it is: a single refresh was asked for by
-  // hand, so whoever pressed the button wants to know why the addon did not answer.
-  const loaded = await loadAddon(existing.manifestUrl, existing.role);
-  // Read before the write: the store hands out the live record, so applying the
-  // refresh replaces the manifest this variable points at.
-  const previousVersion = existing.manifest.version;
-  const changed = manifestChanged(existing.manifest, loaded.manifest);
-  await storeRefreshed([{ key: existing.key, name: loaded.manifest.name, previousVersion, version: loaded.manifest.version, changed, manifest: loaded.manifest }]);
-  res.json({ addon: publicAddonView(store.addons().find((a) => a.key === existing.key)!), changed, previousVersion, version: loaded.manifest.version });
-}));
 // The automatic round is a background chore: it never blocks the boot, it asks only
 // the addons actually in use, and a provider that is down costs a log line. The
 // interval lives in Settings, so the tick only asks whether a round is due -- a
@@ -520,147 +467,11 @@ if (autoRefreshEnabled()) {
     setInterval(() => void autoRefresh(), AUTO_REFRESH_CHECK_MS).unref();
   }, AUTO_REFRESH_FIRST_MS).unref();
 }
-app.patch("/api/addons/:key", asyncRoute(async (req, res) => {
-  const existing = store.addons().find((a) => a.key === req.params.key);
-  if (!existing) throw new AppError("The addon was not found.", "err.addonNotFound");
-  const role = ["catalog", "source", "both"].includes(req.body.role) ? req.body.role as AddonRole : existing.role;
-  // Switching it off, or down to a stream-only role, would take the metadata with it.
-  if (essentialAddon(existing) && (req.body.enabled === false || role === "source")) {
-    throw new AppError("Cinemeta provides the library metadata and cannot be switched off.", "err.essentialAddon");
-  }
-  // A different address means reloading the manifest. The key, the order and the save
-  // rules stay, so a reconfigured addon need not be removed and added again.
-  const url = req.body.url === undefined ? undefined : String(req.body.url).trim();
-  // The settings are validated before the write: the mutator changes state in place, so
-  // an exception halfway through would leave changes in memory that are never persisted.
-  // It also rejects a nonsensical request before fetching a manifest for it.
-  const downloadSettings = req.body.downloadSettings === undefined ? undefined : normalizeDownloadSettings(req.body.downloadSettings, store.libraries());
-  const reloaded = url && url !== existing.manifestUrl ? await loadAddon(url, role) : undefined;
-  await store.update((state) => {
-    const addon = state.addons.find((a) => a.key === req.params.key);
-    if (!addon) throw new AppError("The addon was not found.", "err.addonNotFound");
-    if (typeof req.body.enabled === "boolean") addon.enabled = req.body.enabled;
-    if (typeof req.body.globalSearch === "boolean") addon.globalSearch = req.body.globalSearch;
-    if (typeof req.body.showInContinueWatching === "boolean") addon.showInContinueWatching = req.body.showInContinueWatching;
-    if (downloadSettings) addon.downloadSettings = downloadSettings;
-    addon.role = role;
-    if (reloaded) { addon.manifestUrl = reloaded.manifestUrl; addon.manifest = reloaded.manifest; }
-  });
-  if (reloaded) log("INFO", "Addon reconfigured", { name: reloaded.manifest.name, role });
-  res.json(publicAddonView(store.addons().find((a) => a.key === req.params.key)!));
-}));
-app.get("/api/catalogs", (_req, res) => res.json(store.addons().filter((a) => a.enabled && a.role !== "source").flatMap((addon) => (addon.manifest.catalogs ?? []).map((item) => ({ ...item, addonKey: addon.key, addonName: addon.manifest.name })) )));
-app.get("/api/catalog", asyncRoute(async (req, res) => {
-  const addon = store.addons().find((a) => a.key === req.query.addon); if (!addon) throw new AppError("The addon was not found.", "err.addonNotFound");
-  const items = await catalog(addon, String(req.query.type), String(req.query.id), req.query.search ? String(req.query.search) : undefined, Number(req.query.skip) || 0, req.query.genre ? String(req.query.genre) : undefined);
-  res.json(items.map((item) => images.rewriteMeta(item)));
-}));
-app.get("/api/search", asyncRoute(async (req, res) => {
-  const query = String(req.query.query ?? "").trim();
-  if (!query) throw new AppError("Enter a search term.", "err.emptyQuery");
-  const type = req.query.type ? String(req.query.type) : undefined;
-  const addonKey = req.query.addon ? String(req.query.addon) : undefined;
-  const found = await searchAll(store.addons(), query, type, req.query.cursor ? String(req.query.cursor) : undefined, {
-    addonKey,
-    catalogType: addonKey && req.query.catalogType ? String(req.query.catalogType) : undefined,
-    catalogId: addonKey && req.query.catalogId ? String(req.query.catalogId) : undefined,
-    respectGlobalSearch: !addonKey,
-  });
-  res.json({ ...found, items: found.items.map((item) => images.rewriteMeta(item)) });
-}));
-app.get("/api/searchable", (_req, res) => res.json(searchableCatalogs(store.addons()).map(({ addon, definition }) => ({ addonKey: addon.key, addonName: addon.manifest.name, globalSearch: addon.globalSearch, type: definition.type, id: definition.id, name: definition.name ?? definition.id }))));
+registerAddonsRoutes(app, { ...routeContext, storeRefreshed, publicAddonView });
 const tmdbProvider = (language: string): MetaProvider | undefined => {
   const apiKey = store.settings().tmdbApiKey;
   return apiKey ? (type, id) => tmdbMeta(type, id, { apiKey, language }) : undefined;
 };
-const titleTrailer = (type: string, id: string, language: string) => {
-  const apiKey = store.settings().tmdbApiKey;
-  return trailerFor(store.addons(), type, id, language, apiKey ? { apiKey, language } : undefined);
-};
-app.get("/api/meta/:type/:id", asyncRoute(async (req, res) => {
-  const language = normalizeLanguage(String(req.query.language ?? "")) ?? prefsOf(req).uiLanguage;
-  const meta = await cachedMeta(String(req.params.type), String(req.params.id), language);
-  if (!meta) return res.status(404).json({ error: "Metadata nebyla nalezena." });
-  res.json(images.rewriteMeta(meta));
-}));
-app.get("/api/library/trailer", asyncRoute(async (req, res) => {
-  const language = normalizeLanguage(String(req.query.language ?? "")) ?? prefsOf(req).uiLanguage;
-  const raw = String(req.query.path ?? "").trim();
-  const entry = raw ? knownTitleEntry(libraryKey(raw), metaStore.qualifiedMeta()) : undefined;
-  res.json({ trailer: entry ? await titleTrailer(entry.record.type, entry.record.id, language) : null });
-}));
-app.get("/api/trailer/:type/:id", asyncRoute(async (req, res) => {
-  const language = normalizeLanguage(String(req.query.language ?? "")) ?? prefsOf(req).uiLanguage;
-  res.json({ trailer: await titleTrailer(String(req.params.type), String(req.params.id), language) });
-}));
-/** The same row for a folder that is bound to a title. A path with no binding asks
- *  Wikidata nothing and answers no links. */
-app.get("/api/library/links", asyncRoute(async (req, res) => {
-  const language = normalizeLanguage(String(req.query.language ?? "")) ?? prefsOf(req).uiLanguage;
-  const raw = String(req.query.path ?? "").trim();
-  const entry = raw ? knownTitleEntry(libraryKey(raw), metaStore.qualifiedMeta()) : undefined;
-  if (!entry) return res.json({ links: [] });
-  const ids = (await externalIds.ids(entry.record.id)) ?? {};
-  res.json({ links: siteLinks(entry.record.type, entry.record.id, ids, language) });
-}));
-/** The sites worth checking before watching. Wikidata supplies two ids, the catalogue id
- *  the rest; when it cannot be reached the links it would have added are simply missing. */
-app.get("/api/links/:type/:id", asyncRoute(async (req, res) => {
-  const id = String(req.params.id);
-  const language = normalizeLanguage(String(req.query.language ?? "")) ?? prefsOf(req).uiLanguage;
-  const ids = /^tt\d+$/.test(id) ? await externalIds.ids(id) : {};
-  res.json({ links: siteLinks(String(req.params.type), id, ids ?? {}, language) });
-}));
-/** Opaque id in, cached bytes out. An id we never handed out means nothing here. */
-app.get("/api/image/:id", asyncRoute(async (req, res) => {
-  const cached = await images.fetch(String(req.params.id));
-  if (!cached) return res.status(404).end();
-  res.setHeader("content-type", cached.type);
-  res.setHeader("etag", cached.etag);
-  res.setHeader("cache-control", "private, max-age=86400");
-  if (req.headers["if-none-match"] === cached.etag) return res.status(304).end();
-  // The path is ours, not the caller's, and a data directory may well sit inside a
-  // dotted folder -- which sendFile refuses unless told otherwise.
-  res.sendFile(cached.file, { dotfiles: "allow" }, (error) => { if (error && !res.headersSent) res.status(404).end(); });
-}));
-app.get("/api/stream-sources/:type/:id", (req, res) => res.json(
-  streamCandidates(store.addons(), String(req.params.type), String(req.params.id)).map((addon) => ({ key: addon.key, name: addon.manifest.name }))));
-app.get("/api/streams/:type/:id", asyncRoute(async (req, res) => {
-  const owner = ownerOf(req);
-  const items = await streams(store.addons(), String(req.params.type), String(req.params.id), req.query.addon ? String(req.query.addon) : undefined);
-  if (ownerOf(req).sid !== owner.sid) throw new ResourceError(401, "AUTH_REQUIRED");
-  res.setHeader("cache-control", "private, no-store").json(mediaResources.listing(items, owner));
-}));
-app.get("/api/subtitles/:type/:id", asyncRoute(async (req, res) => {
-  const owner = ownerOf(req);
-  const items = await subtitles(store.addons(), String(req.params.type), String(req.params.id));
-  res.setHeader("cache-control", "private, no-store").json(items.map((item) => ({
-    subtitleId: mediaResources.add({ url: item.url }, owner, "subtitle"),
-    lang: safeSourceText(item.lang, { url: item.url }), addonName: safeSourceText(item.addonName, { url: item.url }),
-  })));
-}));
-app.get("/api/subtitle/:subtitleId", asyncRoute(async (req, res) => {
-  res.setHeader("cache-control", "private, no-store");
-  if ("url" in req.query || "headers" in req.query) throw new ResourceError(400, "UNSAFE_SOURCE_INPUT");
-  const owner = ownerOf(req);
-  const resource = mediaResources.get(String(req.params.subtitleId), owner.sid, "subtitle");
-  trackMedia(owner, res, resource.parent);
-  const raw = resource.stream.url!;
-  if (raw.startsWith("file://")) {
-    const target = await libraryTarget(raw.slice(7));
-    const text = await readFile(target, "utf8");
-    const vtt = text.trimStart().startsWith("WEBVTT") ? text : `WEBVTT\n\n${text.replace(/^\ufeff/, "").replace(/\r/g, "").replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, "$1.$2").replace(/^\d+\n(?=\d{2}:\d{2}:\d{2}[.,]\d{3} -->)/gm, "")}`;
-    return void res.type("text/vtt; charset=utf-8").send(vtt);
-  }
-  const controller = new AbortController();
-  res.once("close", () => { if (!res.writableEnded) controller.abort(); });
-  const response = await guardedFetch(raw, { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(20_000)]) });
-  if (!response.ok) { await response.body?.cancel(); throw new Error("Subtitle source unavailable."); }
-  let text = await readMediaText(response); if (!text.trimStart().startsWith("WEBVTT")) text = `WEBVTT\n\n${text.replace(/^\ufeff/, "").replace(/\r/g, "").replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, "$1.$2").replace(/^\d+\n(?=\d{2}:\d{2}:\d{2}[.,]\d{3} -->)/gm, "")}`;
-  const shift = (Number(req.query.offset) || 0) - subtitleDelay(req.query.delay);
-  if (shift) text = shiftVtt(text, shift);
-  res.type("text/vtt; charset=utf-8").setHeader("cache-control", "private, no-store").send(text);
-}));
 /** The viewer's own correction for subtitles that run ahead of the picture or behind it. */
 const SUBTITLE_DELAY_LIMIT_S = 30;
 const subtitleDelay = (value: unknown) => {
@@ -793,6 +604,7 @@ const cachedMeta = async (type: string, id: string, language: string = prefsOf()
 let libraryCache: { at: number; entries: Awaited<ReturnType<typeof scanLibrary>> } | undefined;
 let videoCache: { at: number; files: Awaited<ReturnType<typeof listVideos>> } | undefined;
 const invalidateLibrary = () => { libraryCache = undefined; videoCache = undefined; unitCache = undefined; };
+registerCatalogRoutes(app, { ...routeContext, tmdbProvider, cachedMeta, prefsOf, libraryTarget, ownerOf, trackMedia, libraryKey, metaStore, externalIds, subtitleDelay });
 const libraryFiles = async () => {
   if (videoCache && Date.now() - videoCache.at < 30_000) return videoCache.files;
   const files: FoundFile[] = [];
