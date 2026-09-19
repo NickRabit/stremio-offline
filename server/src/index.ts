@@ -13,8 +13,8 @@ import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { loadAddon, catalog, metadata, searchAll, searchableCatalogs, streamCandidates, streams, subtitles, type MetaProvider } from "./addons.js";
 import { autoRefreshEnabled, manifestChanged, normalizeRefreshHours, refreshDue, refreshManifests, type RefreshOutcome } from "./addon-refresh.js";
-import { rankStreams, titleLanguage } from "./ranking.js";
-import { DownloadQueue, isPlaylist, type AudioMode, type DownloadSelection, type SubtitleMode } from "./downloads.js";
+import { rankStreams } from "./ranking.js";
+import { DownloadQueue, isPlaylist } from "./downloads.js";
 import { selectDownloadSource } from "./download-selection.js";
 import { StatsLog, type TrafficEvent, type TrafficMeta } from "./stats.js";
 import { Throughput } from "./throughput.js";
@@ -22,7 +22,7 @@ import { build } from "./build.js";
 import { PlaybackManager, sourceTitle } from "./playback.js";
 import { essentialAddon, publicAddon, publicAddonRestricted, redirectedHeaders, safeFetch, validateRemoteUrl } from "./security.js";
 import { RestrictedError, restrictedMiddleware, restrictedMode } from "./restricted.js";
-import { guardedFetch, metadataOutbound, outbound } from "./outbound.js";
+import { guardedFetch, outbound } from "./outbound.js";
 import { images } from "./images.js";
 import { configureSecureMode, secureMode, securityHeaders } from "./secure.js";
 import { publicSettings, Store, type InstanceSettings, type Settings, type State, type UserPrefs } from "./store.js";
@@ -33,7 +33,7 @@ import { advanceTorrent, normalizeToken, verifyRealDebridToken } from "./debrid.
 import { tmdbMeta, verifyTmdbKey } from "./tmdb.js";
 import { clearTrailerCache, trailerFor } from "./trailers.js";
 import { ExternalIdStore, siteLinks } from "./external-ids.js";
-import { clearLog, currentLevel, flushLog, initLogger, log, parseLevel, readLog, startLogMaintenance, setLevel } from "./logger.js";
+import { currentLevel, flushLog, initLogger, log, parseLevel, startLogMaintenance, setLevel } from "./logger.js";
 import { browseDirectory, describePath, emptiedFolders, entryDirectory, isPathWithin, isVideo, listFolders, listVideos, moveDestination, orphanedCatalogKeys, pageFiles, remapPath, scanLibrary, sortFiles, summarize, type FoundFile, type LibraryEntry, type WalkBudget } from "./library.js";
 import { browseMeta, cacheFieldsFromMeta, episodeKey, episodeNumberOf, episodesFromMeta, dropKeyed, knownTitleEntry, knownTitleOf, lookupSkipped, matchKeyFor, matchStatus, mosaicSkipped, needsBackfill, needsEpisodes, scanMiss, suggestionFor, titleUnits, unmatchAt, type LibraryMetaRecord, type TitleKind, type TitleUnit } from "./library-match.js";
 import { parseMediaPath } from "./library-parse.js";
@@ -62,7 +62,9 @@ import { LibraryOps, type LibraryOp } from "./library-ops.js";
 import { transferLibraryPath, type TransferProgress } from "./library-transfer.js";
 import { groupResumeRows } from "./resume-group.js";
 import { registerAuthRoutes } from "./routes/auth.js";
-import { asyncRoute } from "./routes/context.js";
+import { asyncRoute, type RouteContext } from "./routes/context.js";
+import { registerDiagnosticsRoutes } from "./routes/diagnostics.js";
+import { registerDownloadRoutes } from "./routes/downloads.js";
 
 const STREAM_SORTS = new Set(["recommended", "size-desc", "size-asc", "addon"]);
 const DATA_DIR = process.env.DATA_DIR ?? "/data";
@@ -396,7 +398,8 @@ setInterval(() => {
   }
 }, 1000).unref();
 
-registerAuthRoutes(app, { store, needsSetup, currentSession, currentUser, isSecure, stopOwnedPlayback });
+const routeContext: RouteContext = { store, needsSetup, currentSession, currentUser, isSecure, stopOwnedPlayback };
+registerAuthRoutes(app, routeContext);
 
 /** The page only ever holds our own id, so anything it hands back is turned into the
  *  real address again before it is stored or downloaded. */
@@ -2919,167 +2922,15 @@ app.get("/api/device-download/:id", asyncRoute(async (req, res) => {
   try { await pipeline(Readable.fromWeb(upstream.body as never), res, { signal: controller.signal }); }
   catch (error) { if (!res.destroyed && !res.writableEnded) throw error; }
 }));
-app.get("/api/downloads", (_req, res) => {
-  const snapshot = queue.snapshot();
-  res.json({ ...snapshot, jobs: snapshot.jobs.map(jobView) });
-});
-app.post("/api/downloads", asyncRoute(async (req, res) => {
-  const stream = sourceOf(req);
-  const media = mediaSource(req.body.media);
-  const addon = store.addons().find((item) => item.key === stream.addonKey);
-  const settings = addon?.downloadSettings ?? defaultDownloadSettings();
-  const targetSettings = media?.kind === "episode" ? settings.series : settings.movie;
-  const job = await queue.add(String(req.body.title ?? "video"), stream, media, targetSettings);
-  await rememberTitle(job.target, media, targetSettings.layout === "flat");
-  const posterKey = titleKey(job.target, media, targetSettings.layout === "flat");
-  if (posterKey && posterKey !== ".") saveCatalogPoster(libraryKey(posterKey), media?.poster);
-  res.status(201).json(jobView(job));
-}));
-// Adding episodes in bulk: the jobs are lazy, streams are asked for at download time.
-app.post("/api/downloads/bulk", asyncRoute(async (req, res) => {
-  const title = String(req.body.title ?? "").trim() || "Show";
-  const type = String(req.body.type ?? "series");
-  const parent = req.body.media && typeof req.body.media === "object" ? req.body.media as Record<string, unknown> : {};
-  const parentId = String(parent.id ?? "").trim() || undefined;
-  const poster = posterOf(parent.poster);
-  const metaType = String(parent.metaType ?? type).trim() || type;
-  const episodes = Array.isArray(req.body.episodes) ? req.body.episodes as Array<Record<string, unknown>> : [];
-  if (!episodes.length) throw new AppError("Missing episode list.", "err.missingEpisodes");
-  if (episodes.length > 500) throw new AppError("At most 500 episodes at a time.", "err.tooManyEpisodes");
-  const rawSelection = req.body.selection && typeof req.body.selection === "object" ? req.body.selection as Record<string, unknown> : {};
-  const addonKeys = Array.isArray(rawSelection.addonKeys)
-    ? [...new Set(rawSelection.addonKeys.map(String))].filter((key) => store.addons().some((addon) => addon.key === key && addon.enabled && addon.role !== "catalog"))
-    : [];
-  if (!addonKeys.length) throw new AppError("Pick at least one stream addon.", "err.missingDownloadSources");
-  const sourceStrategy = String(rawSelection.sourceStrategy) === "largest" ? "largest" : "priority";
-  const audioLanguage = normalizeLanguage(String(rawSelection.audioLanguage ?? ""));
-  if (!audioLanguage) throw new AppError("Pick an audio language.", "err.missingAudioLanguage");
-  const fallbackAudioLanguage = normalizeLanguage(String(rawSelection.fallbackAudioLanguage ?? ""));
-  const audioMode: AudioMode = ["strict", "preferred"].includes(String(rawSelection.audioMode)) ? String(rawSelection.audioMode) as AudioMode : "listed";
-  const subtitleMode: SubtitleMode = ["optional", "required"].includes(String(rawSelection.subtitleMode)) ? String(rawSelection.subtitleMode) as SubtitleMode : "off";
-  const subtitleLanguage = subtitleMode === "off" ? undefined : normalizeLanguage(String(rawSelection.subtitleLanguage ?? ""));
-  if (subtitleMode !== "off" && !subtitleLanguage) throw new AppError("Pick a subtitle language.", "err.missingSubtitleLanguage");
-  const fallbackSubtitleLanguage = subtitleMode === "off" ? undefined : normalizeLanguage(String(rawSelection.fallbackSubtitleLanguage ?? ""));
-  const firstAddon = store.addons().find((addon) => addon.key === addonKeys[0]);
-  // A source whose addon found no language falls back to the one the title's own metadata names.
-  const metaLanguage = parentId ? titleLanguage((await cachedMeta(metaType, parentId, prefsOf(req).uiLanguage))?.language) : undefined;
-  const selection: DownloadSelection = {
-    addonKeys, sourceStrategy, audioLanguage,
-    fallbackAudioLanguage: fallbackAudioLanguage === audioLanguage ? undefined : fallbackAudioLanguage,
-    audioMode,
-    titleLanguage: metaLanguage,
-    subtitleMode, subtitleLanguage,
-    fallbackSubtitleLanguage: fallbackSubtitleLanguage === subtitleLanguage ? undefined : fallbackSubtitleLanguage,
-    targetSettings: firstAddon?.downloadSettings.series ?? defaultDownloadSettings().series,
-  };
-  let added = 0, skipped = 0;
-  for (const episode of episodes) {
-    const videoId = String(episode.id ?? "").trim();
-    if (!videoId) { skipped += 1; continue; }
-    const season = episode.season == null ? undefined : Number(episode.season);
-    const number = episode.episode == null ? undefined : Number(episode.episode);
-    const episodeTitle = episode.title ? String(episode.title) : undefined;
-    const jobTitle = `${title} · ${episodeTitle ?? (season != null ? `S${String(season).padStart(2, "0")}E${String(number ?? 0).padStart(2, "0")}` : `Episode ${number ?? "?"}`)}`;
-    const media: MediaInfo = { kind: "episode", title, season, episode: number, episodeTitle, id: parentId, metaType, poster };
-    const job = await queue.addPending(jobTitle, { type, videoId, selection }, media);
-    if (job) added += 1; else skipped += 1;
-  }
-  log("INFO", "Bulk addition to the queue", { title, added, skipped });
-  res.status(201).json({ added, skipped });
-}));
-app.post("/api/downloads/:id/pause", asyncRoute(async (req, res) => { await queue.pause(String(req.params.id)); res.status(204).end(); }));
-app.post("/api/downloads/:id/resume", asyncRoute(async (req, res) => { await queue.resume(String(req.params.id)); res.status(204).end(); }));
-app.post("/api/downloads/:id/retry", asyncRoute(async (req, res) => { await queue.retry(String(req.params.id)); res.status(204).end(); }));
-app.post("/api/downloads/:id/move", asyncRoute(async (req, res) => { await queue.move(String(req.params.id), Number(req.body.direction) < 0 ? -1 : 1); res.status(204).end(); }));
-app.delete("/api/downloads/:id", asyncRoute(async (req, res) => { await queue.remove(String(req.params.id)); res.status(204).end(); }));
-app.delete("/api/downloads", asyncRoute(async (_req, res) => { await queue.clearCompleted(); res.status(204).end(); }));
+registerDownloadRoutes(app, { ...routeContext, queue, jobView, sourceOf, mediaSource, posterOf, rememberTitle, titleKey, saveCatalogPoster, libraryKey, cachedMeta, prefsOf });
 /** The one flat object the interface reads: the instance's settings and the caller's own. */
 const settingsView = (req: express.Request) => ({ ...publicSettings(store.settings()), ...prefsOf(req) });
 app.get("/api/settings", (req, res) => res.json(settingsView(req)));
-app.get("/api/stats", (req, res) => res.json(stats.summary(Number(req.query.hours) || 720)));
-/** Playback running at this moment. The statistics otherwise look backwards; this is the
- * one view of what the line is carrying right now. */
-app.get("/api/stats/streams", (_req, res) => res.json(playback.active().map((session) => {
-  const meta = playbackMeta(session.stream);
-  const { bytes, rate } = throughput.read(session.id);
-  return {
-    id: session.id,
-    title: safeSourceText(sourceTitle(session.stream), session.stream) || meta.title,
-    source: meta.source,
-    provider: meta.source === "library" ? undefined : meta.provider,
-    addonName: safeSourceText(session.stream.addonName, session.stream),
-    mode: session.mode, hardware: session.hardware, quality: session.quality,
-    duration: session.duration, startedAt: session.startedAt, idleSeconds: session.idleSeconds,
-    bytes, rate,
-  };
-})));
-app.get("/api/logs", asyncRoute(async (req, res) => {
-  const tail = Math.max(0, Math.min(5000, Number(req.query.tail) || 0));
-  const hours = Math.max(0, Math.min(24 * 365, Number(req.query.hours) || 0));
-  const search = typeof req.query.q === "string" ? req.query.q.trim().slice(0, 100) : "";
-  const text = await readLog({ tail: tail || undefined, level: parseLevel(req.query.level), hours: hours || undefined, search: search || undefined });
-  res.type("text/plain; charset=utf-8");
-  // Viewing in the interface wants text in the window; downloading wants a file.
-  if (req.query.inline !== "1") res.setHeader("content-disposition", "attachment; filename=stremio-offline.log");
-  res.send(text);
-}));
-app.delete("/api/logs", asyncRoute(async (req, res) => {
-  await clearLog();
-  log("INFO", "Log cleared from the interface", { user: currentUser(req)?.username });
-  res.status(204).end();
-}));
-
-/** The browser is the only place where playback failure is actually visible. Without this
- * channel hls.js and video element errors end up in a console the user never opens. */
-const CLIENT_LOG_PER_MINUTE = 30;
-const clientReports = new Map<string, { count: number; resetAt: number }>();
-app.post("/api/client-log", (req, res) => {
-  const now = Date.now();
-  const who = currentUser(req)?.username ?? req.ip ?? "anonymous";
-  const bucket = clientReports.get(who);
-  if (!bucket || bucket.resetAt <= now) clientReports.set(who, { count: 1, resetAt: now + 60_000 });
-  // A looping player can report an error a hundred times a second; the excess is dropped quietly.
-  else if (bucket.count >= CLIENT_LOG_PER_MINUTE) return void res.status(204).end();
-  else bucket.count += 1;
-  if (clientReports.size > 200) for (const [key, value] of clientReports) if (value.resetAt <= now) clientReports.delete(key);
-
-  const level = parseLevel(req.body?.level) ?? "WARN";
-  const message = String(req.body?.message ?? "").slice(0, 200) || "client report";
-  const context = req.body?.context && typeof req.body.context === "object" && !Array.isArray(req.body.context)
-    ? req.body.context as Record<string, unknown> : {};
-  log(level, `[web] ${message}`, { ...context, req: req.id, user: currentUser(req)?.username, ua: String(req.headers["user-agent"] ?? "").slice(0, 160) });
-  res.status(204).end();
-});
-
 const freeSpace = async (target: string) => {
   try { const info = await statfs(target); return { path: target, freeBytes: info.bavail * info.bsize, totalBytes: info.blocks * info.bsize }; }
   catch { return { path: target }; }
 };
-/** Server state for troubleshooting. It does not belong in /api/status, which needs no sign-in. */
-app.get("/api/diagnostics", asyncRoute(async (_req, res) => {
-  const jobs = queue.list();
-  const byStatus: Record<string, number> = {};
-  for (const job of jobs) byStatus[job.status] = (byStatus[job.status] ?? 0) + 1;
-  res.json({
-    ...build,
-    node: process.version,
-    uptimeSeconds: Math.round(process.uptime()),
-    memoryMb: Math.round(process.memoryUsage().rss / (1024 * 1024)),
-    logLevel: currentLevel(),
-    logRetentionDays: Math.max(0, Number(process.env.LOG_RETENTION_DAYS ?? 7) || 0),
-    playback: playback.diagnostics(),
-    downloads: {
-      total: jobs.length, byStatus,
-      halt: queue.haltInfo(),
-      failed: jobs.filter((job) => job.status === "failed").slice(0, 10).map((job) => ({ id: job.id, title: job.title, error: job.error, errorKey: job.errorKey })),
-    },
-    addons: store.addons().map((addon) => ({ name: addon.manifest.name, role: addon.role, enabled: addon.enabled })),
-    outbound: outbound.diagnostics(),
-    metadataOutbound: metadataOutbound.diagnostics(),
-    libraryScan: libraryScan.snapshot(),
-    storage: [await freeSpace(DATA_DIR), ...await Promise.all(store.libraries().map((library) => freeSpace(library.root)))],
-  });
-}));
+registerDiagnosticsRoutes(app, { ...routeContext, stats, playback, throughput, queue, libraryScan, playbackMeta, freeSpace, dataDir: DATA_DIR });
 
 /** The backup file carries both halves of the settings in one flat object, the way the
  *  interface reads them, so an import has to put every key back where it now belongs. The
