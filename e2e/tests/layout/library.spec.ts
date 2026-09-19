@@ -41,7 +41,10 @@ test("library cards, favorites and folder navigation", async ({ page }, testInfo
     expect(Math.abs(card.metadata - first.metadata)).toBeLessThan(1);
     expect(Math.abs(card.action - first.action)).toBeLessThan(1);
   }
-  await expect(page).toHaveScreenshot("library-cards.png", { fullPage: true });
+  // Soft, and so is the list below: one test holds both baselines, and a hard first
+  // assertion ends the run there, so a stale second one stays invisible until the
+  // first is fixed. Soft reports both, and the assertions after them still run.
+  await expect.soft(page).toHaveScreenshot("library-cards.png", { fullPage: true });
   await page.getByRole("button", { name: "Možnosti: Seriály", exact: true }).click();
   await expect(page.getByRole("button", { name: "Odebrat z oblíbených", exact: true })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
@@ -61,7 +64,7 @@ test("library cards, favorites and folder navigation", async ({ page }, testInfo
   await expect(page.locator(".browse-rows .library-open")).toHaveCount(2);
   await page.waitForTimeout(1000);
   await expect(page.locator(".browse-rows .library-open")).toHaveCount(2);
-  await expect(page).toHaveScreenshot("library-list.png", { fullPage: true });
+  await expect.soft(page).toHaveScreenshot("library-list.png", { fullPage: true });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   if (testInfo.project.use.hasTouch) {
     const buttons = await page.locator(".browse-menu").evaluateAll((items) => items.map((item) => item.getBoundingClientRect().height));
