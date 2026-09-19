@@ -961,6 +961,8 @@ export const cs: Catalog = {
   "err.libraryTypeUnknown": "Neznámý typ knihovny.",
   "err.libraryDefaultType": "Tahle knihovna daný druh nepřijímá, nemůže pro něj být výchozí.",
   "err.libraryTypeMismatch": "Tato knihovna nebere tento druh titulku.",
+  "err.noLibraryForMovies": "Žádná knihovna nepřijímá filmy.",
+  "err.noLibraryForSeries": "Žádná knihovna nepřijímá seriály.",
   "err.libraryRootRequired": "Knihovna potřebuje kořenovou složku.",
   "err.libraryRootAbsolute": "Cesta musí být absolutní.",
   "err.libraryRootNotGranted": "Tahle složka leží mimo všechna povolená kořenová umístění.",

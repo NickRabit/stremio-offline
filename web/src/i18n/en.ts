@@ -966,6 +966,8 @@ export const en = {
   "err.libraryTypeUnknown": "Unknown library type.",
   "err.libraryDefaultType": "This library does not take that kind, so it cannot be its default.",
   "err.libraryTypeMismatch": "That library does not take this kind of title.",
+  "err.noLibraryForMovies": "No library takes films.",
+  "err.noLibraryForSeries": "No library takes series.",
   "err.libraryRootRequired": "A library needs a root folder.",
   "err.libraryRootAbsolute": "The path has to be absolute.",
   "err.libraryRootNotGranted": "That folder is outside every granted root.",
