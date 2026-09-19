@@ -1,6 +1,7 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Search, X } from "lucide-react";
 import { api, describeError } from "./api";
+import { useDialogViewport } from "./dialog-viewport";
 import { t, useI18n } from "./i18n";
 import type { IdentityPreview, Meta, Video } from "./types";
 
@@ -10,6 +11,8 @@ const numbered = (videos: Video[]) => videos.filter((video) => typeof video.seas
 
 export function IdentifyDialog({ path, paths, onClose, onApplied }: { path: string; paths?: string[]; onClose: () => void; onApplied: (id?: string) => void }) {
   useI18n();
+  const overlay = useRef<HTMLDivElement>(null);
+  useDialogViewport(overlay);
   const [identity, setIdentity] = useState<IdentityPreview | null>(null);
   const [title, setTitle] = useState("");
   const [year, setYear] = useState("");
@@ -79,6 +82,8 @@ export function IdentifyDialog({ path, paths, onClose, onApplied }: { path: stri
 
   const search = async (event?: FormEvent) => {
     event?.preventDefault();
+    // On a phone the keyboard covers the results the search is about to load.
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
     setBusy(true); setError("");
     try {
       const query = year.trim() ? `${title.trim()} ${year.trim()}` : title.trim();
@@ -106,7 +111,7 @@ export function IdentifyDialog({ path, paths, onClose, onApplied }: { path: stri
   const canScope = Boolean(identity?.file) && !paths?.length;
   const unitName = identity && identity.key !== identity.path ? identity.key : (identity?.label ?? path);
 
-  return <div className="identify-overlay" role="dialog" aria-modal="true" aria-label={t("library.identify")} onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+  return <div className="identify-overlay" ref={overlay} role="dialog" aria-modal="true" aria-label={t("library.identify")} onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <form className="panel identify-card dialog-split" onSubmit={search}>
       <div className="identify-head">
         <h2>{t(identity?.match === "matched" ? "library.fixMatch" : "library.identify")}</h2>
