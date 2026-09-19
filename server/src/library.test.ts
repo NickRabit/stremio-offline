@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { browseDirectory, buildLibrary, describePath, emptiedFolders, listFolders, moveDestination, libraryFingerprint, numberedEpisode, isPathWithin, isVideo, listVideos, orphanedCatalogKeys, pageFiles, parseEpisode, parseSeason, remapPath, resolveInside, sortFiles, summarize } from "./library.js";
+import { browseDirectory, buildLibrary, clearBrowseCache, describePath, emptiedFolders, hasVideo, listFolders, moveDestination, libraryFingerprint, numberedEpisode, isPathWithin, isVideo, listVideos, orphanedCatalogKeys, pageFiles, parseEpisode, parseSeason, remapPath, resolveInside, sortFiles, summarize, type BrowseResult } from "./library.js";
 
 const file = (relative: string, size = 100, modified = "2026-01-01T00:00:00.000Z") => ({ relative, size, modified });
 
@@ -196,6 +196,150 @@ test("favourites are filtered before paging", async () => {
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("a favourites filter is not served the list a plain call cached", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "stremio-favorite-cache-"));
+  try {
+    await mkdir(path.join(root, "kolekce"));
+    await Promise.all(Array.from({ length: 80 }, (_, index) =>
+      writeFile(path.join(root, "kolekce", `video-${String(index).padStart(2, "0")}.mp4`), "")));
+    // The same folder and query, so only the filter differs. The filter has to stay per request.
+    const plain = await browseDirectory(root, "kolekce", "", 0, 60, "name");
+    assert.equal(plain.total, 80);
+    const wanted = path.join("kolekce", "video-70.mp4");
+    const filtered = await browseDirectory(root, "kolekce", "", 0, 60, "name", false, "", new Set([wanted]));
+    assert.equal(filtered.total, 1);
+    assert.deepEqual(filtered.items.map((item) => item.path), [wanted]);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("a folder listing is the same whichever path built it", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "stremio-identical-"));
+  try {
+    await mkdir(path.join(root, "Alpha"));
+    await mkdir(path.join(root, "Beta", "01 serie"), { recursive: true });
+    await mkdir(path.join(root, "Lehká", "a", "b"), { recursive: true });
+    await mkdir(path.join(root, "Bez videa"));
+    await writeFile(path.join(root, "Alpha", "01.mkv"), Buffer.alloc(100));
+    await writeFile(path.join(root, "Alpha", "02.mkv"), Buffer.alloc(200));
+    await writeFile(path.join(root, "Beta", "01 serie", "01.mkv"), Buffer.alloc(50));
+    await writeFile(path.join(root, "Beta", "01 serie", "02.mkv"), Buffer.alloc(60));
+    await writeFile(path.join(root, "Beta", "03.mkv"), Buffer.alloc(70));
+    await writeFile(path.join(root, "Lehká", "a", "b", "hluboko.mp4"), Buffer.alloc(30));
+    await writeFile(path.join(root, "Bez videa", "poznámka.txt"), "nic");
+    await writeFile(path.join(root, "volný.mp4"), Buffer.alloc(11));
+
+    // The walk a listing has to agree with is the one listVideos did all along.
+    const expected = new Map<string, { fileCount: number; size: number }>([
+      ["Alpha", { fileCount: 2, size: 300 }],
+      ["Beta", { fileCount: 3, size: 180 }],
+      ["Lehká", { fileCount: 1, size: 30 }],
+    ]);
+    for (const [folder, wanted] of expected) {
+      const inside = await listVideos(root, folder);
+      assert.deepEqual({ fileCount: inside.length, size: inside.reduce((sum, file) => sum + file.size, 0) }, wanted, folder);
+    }
+
+    const shape = (result: BrowseResult) => result.items.map((item) => ({
+      path: item.path,
+      fileCount: item.kind === "folder" ? item.fileCount : 0,
+      size: item.size,
+    })).sort((a, b) => a.path.localeCompare(b.path));
+
+    // A random order is a hash of the path, so it takes the same cheap path as a name sort.
+    const shapes: ReturnType<typeof shape>[] = [];
+    for (const sort of ["name", "added", "size", "random"] as const) {
+      clearBrowseCache();
+      const result = await browseDirectory(root, "", "", 0, 50, sort, sort !== "name");
+      assert.equal(result.total, expected.size + 1, `${sort}: the empty folder and the text file are not listed`);
+      for (const [folder, wanted] of expected) {
+        const item = result.items.find((entry) => entry.path === folder);
+        assert.ok(item && item.kind === "folder", `${sort}: ${folder} is listed`);
+        assert.deepEqual({ fileCount: item.fileCount, size: item.size }, wanted, `${sort}: ${folder}`);
+      }
+      shapes.push(shape(result));
+    }
+    assert.deepEqual(shapes[1], shapes[0], "the order by date is the same list");
+    assert.deepEqual(shapes[2], shapes[0], "the order by size is the same list");
+    assert.deepEqual(shapes[3], shapes[0], "the random order is the same list");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("a folder holding no video is not listed, however deep the video sits", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "stremio-hasvideo-"));
+  try {
+    await mkdir(path.join(root, "Jen text"));
+    await mkdir(path.join(root, "Hluboko", "a", "b"), { recursive: true });
+    await writeFile(path.join(root, "Jen text", "poznámka.txt"), "x");
+    await writeFile(path.join(root, "Hluboko", "a", "b", "film.mkv"), "xx");
+    const result = await browseDirectory(root, "", "", 0, 20, "name");
+    assert.deepEqual(result.items.map((item) => item.path), ["Hluboko"]);
+    assert.equal(result.total, 1);
+    const folder = result.items[0];
+    assert.ok(folder && folder.kind === "folder");
+    assert.equal(folder.fileCount, 1);
+    assert.equal(folder.size, 2);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("hasVideo answers what the walk would, without stating a single file", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "stremio-hasvideo-walk-"));
+  try {
+    await mkdir(path.join(root, "Obrazky", ".skryté"), { recursive: true });
+    await mkdir(path.join(root, "Cizí", "Show"), { recursive: true });
+    await writeFile(path.join(root, "Obrazky", ".skryté", "film.mkv"), "x");
+    await writeFile(path.join(root, "Cizí", "Show", "01.mkv"), "x");
+    let deep = path.join(root, "Hloubka");
+    for (let level = 0; level < 10; level += 1) deep = path.join(deep, `u${level}`);
+    await mkdir(deep, { recursive: true });
+    await writeFile(path.join(deep, "film.mkv"), "x");
+
+    assert.equal(await hasVideo(root, "Obrazky"), false, "a dotfile folder is not entered");
+    assert.equal(await hasVideo(root, "Cizí"), true);
+    assert.equal(await hasVideo(root, "Cizí", new Set(["Cizí/Show"])), false, "a carve-out is not entered either");
+    assert.equal(await hasVideo(root, "Hloubka"), false, "the depth cap matches the walk");
+    assert.equal(await hasVideo(root, "Nic"), false, "a folder that is not there holds nothing");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("a later page of one folder is served from the listing cache", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "stremio-page-cache-"));
+  try {
+    for (const [folder, files] of [["Alfa", 1], ["Beta", 2], ["Gama", 3]] as const) {
+      await mkdir(path.join(root, folder));
+      for (let index = 0; index < files; index += 1) await writeFile(path.join(root, folder, `${index}.mkv`), Buffer.alloc(100));
+    }
+    // Ordering by size needs every aggregate, so the first page walks all three folders.
+    const first = await browseDirectory(root, "", "", 0, 2, "size", true);
+    assert.deepEqual(first.items.map((item) => item.path), ["Gama", "Beta"]);
+    assert.deepEqual(first.items.map((item) => item.kind === "folder" ? item.fileCount : 0), [3, 2]);
+
+    // A change inside a subtree leaves the folder's own mtime alone, so a page rebuilt from the
+    // disk would see an empty Alfa. The page the cache serves still knows what is in it.
+    await rm(path.join(root, "Alfa", "0.mkv"));
+    const second = await browseDirectory(root, "", "", 2, 2, "size", true);
+    assert.equal(second.total, 3, "the listing was rebuilt instead of read from the cache");
+    assert.deepEqual(second.items.map((item) => item.path), ["Alfa"]);
+    const folder = second.items[0];
+    assert.ok(folder && folder.kind === "folder");
+    assert.equal(folder.fileCount, 1);
+    assert.equal(folder.size, 100);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("a video written into a folder shows up in its listing", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "stremio-newfile-"));
+  try {
+    await mkdir(path.join(root, "Alpha"));
+    await writeFile(path.join(root, "Alpha", "01.mkv"), "x");
+    const before = await browseDirectory(root, "Alpha", "", 0, 20, "name");
+    assert.deepEqual(before.items.map((item) => item.path), ["Alpha/01.mkv"]);
+    await writeFile(path.join(root, "Alpha", "02.mkv"), "x");
+    const after = await browseDirectory(root, "Alpha", "", 0, 20, "name");
+    assert.equal(after.total, 2, "the folder's own mtime moved, so the cached listing is stale");
+    assert.deepEqual(after.items.map((item) => item.path), ["Alpha/01.mkv", "Alpha/02.mkv"]);
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test("listVideos walks the same tree scanLibrary uses", async () => {
