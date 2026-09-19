@@ -122,12 +122,17 @@ export function App() {
   const scrollDirection = useRef(new WeakMap<HTMLElement, { top: number; travel: number; until: number }>());
   // A tap does not end the scroll: Safari's momentum runs on for a while afterwards, and those
   // events would fold the header the tap has just opened, which opens again, which folds -- the
-  // flicker. A header opened by hand is held open until a real gesture asks for something else.
-  const heldOpen = useRef(false);
+  // flicker. So a header opened by hand is held open, but only for as long as that fling lasts.
+  // The hold ends three ways, and it needs all three: a new gesture, the list falling quiet, and
+  // a ceiling. Leaning on the gesture alone once left the header stuck open, because a hold that
+  // outlives what it was for stops the next scroll from folding anything.
+  const heldOpen = useRef(0);
+  const holdIdle = useRef(0);
+  const releaseHold = () => { heldOpen.current = 0; window.clearTimeout(holdIdle.current); };
+  const holdHeaderOpen = () => { heldOpen.current = performance.now() + 1500; };
   useEffect(() => {
-    const release = () => { heldOpen.current = false; };
-    for (const event of ["touchstart", "wheel", "keydown"]) window.addEventListener(event, release, { passive: true });
-    return () => { for (const event of ["touchstart", "wheel", "keydown"]) window.removeEventListener(event, release); };
+    for (const event of ["touchstart", "wheel", "keydown"]) window.addEventListener(event, releaseHold, { passive: true });
+    return () => { for (const event of ["touchstart", "wheel", "keydown"]) window.removeEventListener(event, releaseHold); };
   }, []);
   function compactOnScroll(event: UIEvent<HTMLDivElement>, compact: boolean, update: (value: boolean) => void) {
     if (playerOpenRef.current || restoringScroll.current) return;
@@ -147,7 +152,13 @@ export function App() {
     const canHide = element.scrollHeight - element.clientHeight > headerHeight + 32;
     // The cooldown outlasts the fold itself: while it animates, the list changes height and
     // reports scroll of its own, which must not be read as the reader asking for anything.
-    const changed = !heldOpen.current && now >= previous.until && next !== compact && (!next || canHide);
+    const held = now < heldOpen.current;
+    if (held) {
+      // The fling is still going, so keep holding -- and let go shortly after it stops.
+      window.clearTimeout(holdIdle.current);
+      holdIdle.current = window.setTimeout(releaseHold, 160);
+    }
+    const changed = !held && now >= previous.until && next !== compact && (!next || canHide);
     scrollDirection.current.set(element, { top, travel: changed ? 0 : travel, until: changed ? now + 400 : previous.until });
     if (changed) update(next);
   }
@@ -1583,7 +1594,7 @@ export function App() {
             <button className="shape-toggle" title={t(settings.catalogTileShape === "wide" ? "catalog.shapePoster" : "catalog.shapeWide")} aria-pressed={settings.catalogTileShape === "wide"} onClick={() => void toggleShape("catalogTileShape")}>{settings.catalogTileShape === "wide" ? <RectangleVertical/> : <RectangleHorizontal/>}</button>
             {/* The one control the collapsed header keeps: it unfolds the search block and hands over the caret. */}
             <button className="header-expand" title={t("catalog.showTools")} aria-label={t("catalog.showTools")} aria-expanded={!catalogCompact} onClick={(event) => {
-              heldOpen.current = true;
+              holdHeaderOpen();
               setCatalogCompact(false);
               // A folded box cannot take focus, so the caret waits for the fold itself to finish
               // rather than for a guessed number of milliseconds. The timer is the way out when
@@ -1740,7 +1751,7 @@ export function App() {
                 </button>}
               </div>
             </div>
-            <button className="header-expand" title={t("library.showTools")} aria-label={t("library.showTools")} aria-expanded={!libraryCompact} onClick={() => { heldOpen.current = true; setLibraryCompact(false); }}><SlidersHorizontal/></button>
+            <button className="header-expand" title={t("library.showTools")} aria-label={t("library.showTools")} aria-expanded={!libraryCompact} onClick={() => { holdHeaderOpen(); setLibraryCompact(false); }}><SlidersHorizontal/></button>
             </div>
           </div>
         </div>
