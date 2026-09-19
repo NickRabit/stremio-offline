@@ -17,6 +17,7 @@ import { build } from "./build.js";
 import { PlaybackManager, sourceTitle } from "./playback.js";
 import { publicAddon, publicAddonRestricted } from "./security.js";
 import { RestrictedError, restrictedMiddleware, restrictedMode } from "./restricted.js";
+import { roleMiddleware } from "./roles.js";
 import { outbound } from "./outbound.js";
 import { images } from "./images.js";
 import { configureSecureMode, secureMode, securityHeaders } from "./secure.js";
@@ -376,6 +377,13 @@ app.use("/api", (req, res, next) => {
   }
   next();
 });
+// Roles and restricted mode are independent gates; both must pass. The role gate only
+// decides whether the path is one an ordinary user may reach at all.
+app.use("/api", roleMiddleware({
+  isOpen: (req) => OPEN_PATHS.has(req.path),
+  isInternal: (req) => internalMediaRequest(req) || Boolean(airplayRequest(req)),
+  roleOf: (req) => currentUser(req)?.role,
+}));
 app.use("/api", restrictedMiddleware({
   isOpen: (req) => OPEN_PATHS.has(req.path),
   isInternal: (req) => internalMediaRequest(req) || Boolean(airplayRequest(req)),

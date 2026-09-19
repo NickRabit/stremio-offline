@@ -7,11 +7,12 @@ import type { DownloadQueue } from "../downloads.js";
 import { messageKeyOf } from "../errors.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import { defaultInstanceSettings, defaultPrefs, type State, type Store, type UserPrefs } from "../store.js";
-import { emptyUserData, type UserData, type UserRecord } from "../users.js";
+import { emptyUserData, type Role, type UserData, type UserRecord } from "../users.js";
 import { registerSettingsRoutes, type SettingsDeps } from "./settings.js";
 
 const ADA = "usr_00000001";
 const BOB = "usr_00000002";
+const CAROL = "usr_00000003";
 const STREAM_SORTS = new Set(["recommended", "size-desc", "size-asc", "addon"]);
 
 interface Harness {
@@ -31,9 +32,16 @@ const mount = async (): Promise<Harness> => {
     userData: {
       [ADA]: { ...emptyUserData(), prefs: { ...defaultPrefs(), uiLanguage: "en" } },
       [BOB]: { ...emptyUserData(), prefs: { ...defaultPrefs(), uiLanguage: "cs", mergeByName: false } },
+      [CAROL]: { ...emptyUserData(), prefs: { ...defaultPrefs(), uiLanguage: "en" } },
     },
   } as State;
-  const userIdOf = (req: express.Request) => (req.header("x-user") === "bob" ? BOB : ADA);
+  const callers: Record<string, { username: string; role: Role }> = {
+    [ADA]: { username: "ada", role: "admin" },
+    [BOB]: { username: "bob", role: "admin" },
+    [CAROL]: { username: "carol", role: "user" },
+  };
+  const userIdOf = (req: express.Request) =>
+    req.header("x-user") === "bob" ? BOB : req.header("x-user") === "carol" ? CAROL : ADA;
   const prefsOf = (req?: express.Request): UserPrefs =>
     req ? { ...defaultPrefs(), ...state.userData?.[userIdOf(req)]?.prefs as Partial<UserPrefs> } : defaultPrefs();
 
@@ -46,7 +54,7 @@ const mount = async (): Promise<Harness> => {
     } as unknown as Store,
     needsSetup: () => false,
     currentSession: () => undefined,
-    currentUser: (req) => ({ id: userIdOf(req), username: userIdOf(req) === BOB ? "bob" : "ada" }) as UserRecord,
+    currentUser: (req) => ({ id: userIdOf(req), ...callers[userIdOf(req)] }) as UserRecord,
     isSecure: () => false,
     stopOwnedPlayback: async () => undefined,
     STREAM_SORTS,
@@ -86,7 +94,7 @@ const mount = async (): Promise<Harness> => {
   };
 };
 
-const api = (base: string, pathname: string, init: { method?: string; body?: unknown; user?: "ada" | "bob" } = {}) =>
+const api = (base: string, pathname: string, init: { method?: string; body?: unknown; user?: "ada" | "bob" | "carol" } = {}) =>
   fetch(`${base}${pathname}`, {
     method: init.method ?? "GET",
     headers: {
@@ -189,4 +197,59 @@ test("POST /api/settings/import puts each key of a flat backup back on the side 
   const body = await response.json() as { remapped: number; settings: Record<string, unknown> };
   assert.equal(body.remapped, 0);
   assert.equal(body.settings.uiLanguage, "cs");
+});
+
+test("PATCH /api/settings lets an ordinary user change only their own preferences", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+
+  const response = await api(harness.base, "/api/settings", {
+    method: "PATCH",
+    user: "carol",
+    body: { libraryTileSize: "large", uiLanguage: "cs" },
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(harness.state.userData?.[CAROL]?.prefs.libraryTileSize, "large");
+  assert.equal(harness.state.userData?.[CAROL]?.prefs.uiLanguage, "cs");
+  assert.equal(harness.state.userData?.[ADA]?.prefs.libraryTileSize, "medium", "the other people keep theirs");
+  assert.equal("libraryTileSize" in harness.state.settings, false, "a personal key never reaches the instance half");
+});
+
+test("PATCH /api/settings refuses an ordinary user an instance key and writes nothing", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const settingsBefore = { ...harness.state.settings };
+  const prefsBefore = { ...harness.state.userData?.[CAROL]?.prefs } as Partial<UserPrefs>;
+
+  const response = await api(harness.base, "/api/settings", {
+    method: "PATCH",
+    user: "carol",
+    body: { concurrentDownloads: 5 },
+  });
+
+  assert.equal(response.status, 403);
+  const body = await response.json() as { messageKey?: string };
+  assert.equal(body.messageKey, "err.notAllowed");
+  assert.deepEqual(harness.state.settings, settingsBefore, "the instance half is untouched");
+  assert.deepEqual(harness.state.userData?.[CAROL]?.prefs, prefsBefore);
+});
+
+test("PATCH /api/settings refuses a body that mixes the halves as a whole", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const settingsBefore = { ...harness.state.settings };
+  const prefsBefore = { ...harness.state.userData?.[CAROL]?.prefs } as Partial<UserPrefs>;
+
+  const response = await api(harness.base, "/api/settings", {
+    method: "PATCH",
+    user: "carol",
+    body: { libraryTileSize: "large", concurrentDownloads: 5 },
+  });
+
+  assert.equal(response.status, 403);
+  const body = await response.json() as { messageKey?: string };
+  assert.equal(body.messageKey, "err.notAllowed");
+  assert.deepEqual(harness.state.settings, settingsBefore, "the instance key is not written");
+  assert.equal(harness.state.userData?.[CAROL]?.prefs.libraryTileSize, prefsBefore.libraryTileSize, "the personal key is not applied either");
 });

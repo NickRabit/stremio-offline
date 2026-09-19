@@ -937,6 +937,7 @@ export const en = {
   // Server failures. The key travels with the response; the server's English text
   // stands in for anything not listed here.
   "err.restricted": "This instance is in restricted mode.",
+  "err.notAllowed": "This account may not do that.",
   "err.notSignedIn": "Not signed in.",
   "err.setupDone": "An account already exists.",
   "err.badCredentials": "Wrong username or password.",

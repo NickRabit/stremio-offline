@@ -932,6 +932,7 @@ export const cs: Catalog = {
 
   // Chyby ze serveru.
   "err.restricted": "Tato instance běží v omezeném režimu.",
+  "err.notAllowed": "Tento účet na to nemá oprávnění.",
   "err.notSignedIn": "Nepřihlášeno.",
   "err.setupDone": "Účet už existuje.",
   "err.badCredentials": "Nesprávné jméno nebo heslo.",

@@ -8,6 +8,7 @@ import { LANGUAGE_NAMES, isUiLanguage, normalizeLanguage } from "../language.js"
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import { currentLevel, log, parseLevel, setLevel } from "../logger.js";
 import { publicAddon } from "../security.js";
+import { ForbiddenError } from "../roles.js";
 import { publicSettings, type InstanceSettings, type Settings, type State, type UserPrefs } from "../store.js";
 import { verifyTmdbKey } from "../tmdb.js";
 import { clearTrailerCache } from "../trailers.js";
@@ -99,6 +100,12 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
     res.json({ settings: settingsView(req), addons: store.addons().map(publicAddon), remapped: parsed.remaps.length });
   }));
   app.patch("/api/settings", asyncRoute(async (req, res) => {
+    // The path is open to an ordinary user, the instance keys are not: a body that names
+    // any of them is refused whole, rather than answered with a success that changed nothing.
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    if (currentUser(req)?.role !== "admin" && Object.keys(body).some((key) => !(PERSONAL_SETTINGS as readonly string[]).includes(key))) {
+      throw new ForbiddenError();
+    }
     let realDebridToken: string | undefined;
     if (req.body.realDebridToken !== undefined) {
       realDebridToken = normalizeToken(req.body.realDebridToken);
