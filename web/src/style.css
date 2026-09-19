@@ -20,6 +20,9 @@
      left a folded block standing at the height of the controls inside it. */
   .fold{display:grid;grid-template-rows:1fr;min-width:0;min-height:0;transition:grid-template-rows .34s cubic-bezier(.22,.7,.26,1),opacity .2s ease,margin .34s cubic-bezier(.22,.7,.26,1)}
   /* The row can shrink to nothing, but a box keeps its own padding and border, so those go too. */
+  /* Where the fold is a real grid, its contents need a box of their own, or the controls become
+     grid items and stack into a column. Portrait narrows it to six columns further down. */
+  .browse-fold-inner{display:flex;flex-wrap:wrap;align-items:center;gap:8px;min-width:0}
   .fold>*{min-height:0;overflow:hidden;transition:padding .34s cubic-bezier(.22,.7,.26,1),border-width .34s cubic-bezier(.22,.7,.26,1)}
   .catalog-view>.fold{flex:0 0 auto;margin-bottom:9px}
   .fold.closed{grid-template-rows:0fr;opacity:0;margin-top:0;margin-bottom:0;pointer-events:none}
@@ -29,12 +32,27 @@
      written as `main.view-catalog .searchbar`, which outweighs a plainer selector here and left
      a folded block standing at the height of its own padding. */
   .catalog-view .fold.closed>*,.browse-bar .fold.closed>*{padding-top:0;padding-bottom:0;border-top-width:0;border-bottom-width:0;row-gap:0}
+  /* Collapsed, the filter bar is the one row that stays: which catalogue this is, and the way back to search. */
+  .catalog-view.catalog-compact>.filterbar{grid-template-columns:minmax(0,1fr) auto auto}
+  .catalog-view.catalog-compact>.filterbar>label:not(.catalog-filter),.catalog-view.catalog-compact>.filterbar>.filter-note,.catalog-view.catalog-compact>.filterbar>.scope-badge,.catalog-view.catalog-compact>.filterbar>button:not(.header-expand):not(.shape-toggle){display:none}
+  .catalog-view.catalog-compact>.filterbar>label.catalog-filter{grid-column:auto}
+  .catalog-view.catalog-compact>.filterbar>label.catalog-filter>span{display:none}
+  .catalog-view.catalog-compact .header-expand{display:inline-flex}
+  /* The tools stop being a row of their own: what folds away takes a full row under the
+     breadcrumbs, and what stays sits beside them. */
+  .library-page .browse-tools{display:contents}
+  /* The kept controls belong beside the breadcrumbs; what folds takes the row below. A folded
+     row still holds its width, so leaving it in the flow pushed those controls onto a line of
+     their own. */
+  .library-page .browse-fold{order:1;flex:1 1 100%}
+  .library-page .browse-keep{display:flex;align-self:flex-start;flex:0 0 auto;gap:6px}
+  .library-page .browse-keep>button,.library-page .browse-keep .library-maintenance-toggle{flex:0 0 auto;width:44px;height:44px;min-height:44px;padding:8px}
   .library-page.library-compact .browse-keep .library-maintenance{display:none}
   .library-page.library-compact .header-expand{display:inline-flex}
-  /* Folded, the trail shrinks to the folder you are in -- the way back is the chevron beside it. */
+  /* Folded, the trail keeps every step but stops wrapping: one line, and the long names give way
+     first. Hiding the steps saved a few pixels and cost the reader the way back up the tree. */
   .library-page.library-compact .crumbs{flex-wrap:nowrap;min-width:0}
-  .library-page.library-compact .crumbs:has(span)>button:not(.library-back){display:none}
-  .library-page.library-compact .crumbs>span:not(:last-of-type),.library-page.library-compact .crumbs>span>svg{display:none}
+  .library-page.library-compact .crumbs>*{min-width:0}
   .library-page.library-compact .crumbs button{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 }
 .header-expand{display:none;align-self:end;min-height:42px}
@@ -290,12 +308,6 @@ main.view-catalog{padding-top:98px}main.view-catalog .heading{margin-bottom:8px}
   /* The search block folds rather than vanishing: `display:none` cannot be animated, and the jump
      was the thing that made the header feel like it was fighting the scroll. */
   .catalog-view .searchbar{margin-bottom:0}
-  /* Collapsed, the filter bar is the one row that stays: which catalogue this is, and the way back to search. */
-  .catalog-view.catalog-compact>.filterbar{grid-template-columns:minmax(0,1fr) auto auto}
-  .catalog-view.catalog-compact>.filterbar>label:not(.catalog-filter),.catalog-view.catalog-compact>.filterbar>.filter-note,.catalog-view.catalog-compact>.filterbar>.scope-badge,.catalog-view.catalog-compact>.filterbar>button:not(.header-expand):not(.shape-toggle){display:none}
-  .catalog-view.catalog-compact>.filterbar>label.catalog-filter{grid-column:auto}
-  .catalog-view.catalog-compact>.filterbar>label.catalog-filter>span{display:none}
-  .catalog-view.catalog-compact .header-expand{display:inline-flex}
   .catalog-layout .detail-panel{display:none}
   .catalog-layout .detail-panel.mobile-open{position:fixed;z-index:45;inset:66px 0 calc(68px + env(safe-area-inset-bottom, 0px));display:flex;flex-direction:column;min-height:0;margin:0;padding:0 12px 12px;overflow-y:auto;overflow-anchor:none;overscroll-behavior:contain;border:0;border-radius:0;background:var(--bg);box-shadow:none}
   .mobile-detail-head{position:sticky;z-index:8;top:0;display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:10px;margin:0 -12px 10px;padding:9px 12px;border-bottom:1px solid var(--line);background:#0b0e13f2;backdrop-filter:blur(14px)}
@@ -812,17 +824,11 @@ img.broken{visibility:hidden}
 .library-maintenance-actions.open{display:grid}
 .library-page .library-maintenance-actions button{justify-content:flex-start;text-align:left;font-size:12px;border:0;background:transparent}
 .library-page .library-maintenance-actions button:hover{background:#ffffff10}@media(max-width:700px){
-  /* The tools stop being a row of their own: what folds away takes a full row under the
-     breadcrumbs, and what stays sits beside them. */
-  .library-page .browse-tools{display:contents}
-  /* The kept controls belong beside the breadcrumbs; what folds takes the row below. */
-  .library-page .browse-fold{order:1;flex:1 1 100%}
+  /* Portrait has room for six columns of controls and no more. */
   .library-page .browse-fold-inner{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:6px}
   .library-page .browse-fold-inner .search-input{grid-column:1/4;min-width:0}
   .library-page .browse-fold-inner>select{grid-column:4/-1}
   .library-page .browse-fold-inner>button,.library-page .browse-fold-inner select{width:100%;padding:8px;min-width:0}
-  .library-page .browse-keep{display:flex;align-self:flex-start;flex:0 0 auto;gap:6px}
-  .library-page .browse-keep>button,.library-page .browse-keep .library-maintenance-toggle{flex:0 0 auto;width:44px;height:44px;min-height:44px;padding:8px}
 }
 
 /* Keep metadata independent of provider response timing. */
@@ -851,7 +857,6 @@ img.broken{visibility:hidden}
   .detail-panel .hero.has-gallery .detail-copy{max-width:calc(100% - 70px)}
   .detail-panel .gallery-open{position:absolute;width:58px;padding:3px}
   .detail-panel .gallery-open img{width:48px;height:66px}
-  .catalog-view.catalog-compact .header-expand{display:inline-flex}
   .detail-workflow .stream-list button{min-height:44px}
 }
 
