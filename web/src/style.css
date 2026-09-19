@@ -19,6 +19,13 @@
   .catalog-view>.fold{margin-bottom:9px}
   .fold.closed{grid-template-rows:0fr;opacity:0;margin-top:0;margin-bottom:0;pointer-events:none}
   .fold.closed>*{padding-top:0;padding-bottom:0;border-top-width:0;border-bottom-width:0}
+  .library-page.library-compact .browse-keep .library-maintenance{display:none}
+  .library-page.library-compact .header-expand{display:inline-flex}
+  /* Folded, the trail shrinks to the folder you are in -- the way back is the chevron beside it. */
+  .library-page.library-compact .crumbs{flex-wrap:nowrap;min-width:0}
+  .library-page.library-compact .crumbs:has(span)>button:not(.library-back){display:none}
+  .library-page.library-compact .crumbs>span:not(:last-of-type),.library-page.library-compact .crumbs>span>svg{display:none}
+  .library-page.library-compact .crumbs button{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 }
 .header-expand{display:none;align-self:end;min-height:42px}
 .title-chips{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
@@ -372,7 +379,7 @@ main.view-catalog{padding-top:98px}main.view-catalog .heading{margin-bottom:8px}
   main{padding:62px max(10px, env(safe-area-inset-right, 0px)) max(16px, env(safe-area-inset-bottom, 0px)) calc(66px + env(safe-area-inset-left, 0px))}
   main.view-catalog{display:flex;height:100dvh;flex-direction:column;padding-bottom:max(8px, env(safe-area-inset-bottom, 0px));overflow:hidden}
   main.view-catalog>.catalog-view{display:flex;flex:1 1 auto;min-height:0;flex-direction:column;overflow:hidden}
-  main.view-catalog .heading{display:none}
+  main.view-catalog .heading,main.view-library>.library-page>.heading{display:none}
   main.view-catalog .searchbar{grid-template-columns:minmax(180px,1fr) 190px auto auto;gap:7px;margin-bottom:7px;padding:7px}
   main.view-catalog .search-input{grid-column:auto}
   main.view-catalog .searchbar input,main.view-catalog .searchbar select,main.view-catalog .searchbar button{min-height:36px;padding-top:6px;padding-bottom:6px}
@@ -807,13 +814,6 @@ img.broken{visibility:hidden}
   .library-page .browse-fold-inner>button,.library-page .browse-fold-inner select{width:100%;padding:8px;min-width:0}
   .library-page .browse-keep{display:flex;align-self:flex-start;flex:0 0 auto;gap:6px}
   .library-page .browse-keep>button,.library-page .browse-keep .library-maintenance-toggle{flex:0 0 auto;width:44px;height:44px;min-height:44px;padding:8px}
-  .library-page.library-compact .browse-keep .library-maintenance{display:none}
-  .library-page.library-compact .header-expand{display:inline-flex}
-  /* Folded, the trail shrinks to the folder you are in -- the way back is the chevron beside it. */
-  .library-page.library-compact .crumbs{flex-wrap:nowrap;min-width:0}
-  .library-page.library-compact .crumbs:has(span)>button:not(.library-back){display:none}
-  .library-page.library-compact .crumbs>span:not(:last-of-type),.library-page.library-compact .crumbs>span>svg{display:none}
-  .library-page.library-compact .crumbs button{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 }
 
 /* Keep metadata independent of provider response timing. */
@@ -826,7 +826,7 @@ img.broken{visibility:hidden}
 .skeleton-line{display:block;width:100%;height:10px;margin-bottom:4px;border-radius:4px;background:var(--line);animation:skeleton-pulse 1.4s infinite}
 .skeleton-line:last-child{width:60%}
 @keyframes skeleton-pulse{0%,100%{opacity:.5}50%{opacity:.9}}
-@media(prefers-reduced-motion:reduce){.skeleton-line{animation:none}.fold{transition:none}}
+@media(prefers-reduced-motion:reduce){.skeleton-line{animation:none}.fold,.fold>*{transition:none}}
 @media(max-width:700px) and (orientation:portrait){
   main.view-catalog>.catalog-view>.heading,main.view-library>.library-page>.heading{display:none}
   .detail-panel .catalog-description summary{min-height:44px;display:flex;align-items:center}
