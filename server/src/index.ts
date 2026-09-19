@@ -22,7 +22,7 @@ import { build } from "./build.js";
 import { PlaybackManager, sourceTitle } from "./playback.js";
 import { essentialAddon, publicAddon, publicAddonRestricted, redirectedHeaders, safeFetch, validateRemoteUrl } from "./security.js";
 import { RestrictedError, logoutDenied, restrictedMiddleware, restrictedMode } from "./restricted.js";
-import { guardedFetch, outbound } from "./outbound.js";
+import { guardedFetch, metadataOutbound, outbound } from "./outbound.js";
 import { images } from "./images.js";
 import { configureSecureMode, secureMode, securityHeaders } from "./secure.js";
 import { publicSettings, Store } from "./store.js";
@@ -3097,6 +3097,7 @@ app.get("/api/diagnostics", asyncRoute(async (_req, res) => {
     },
     addons: store.addons().map((addon) => ({ name: addon.manifest.name, role: addon.role, enabled: addon.enabled })),
     outbound: outbound.diagnostics(),
+    metadataOutbound: metadataOutbound.diagnostics(),
     libraryScan: libraryScan.snapshot(),
     storage: [await freeSpace(DATA_DIR), ...await Promise.all(store.libraries().map((library) => freeSpace(library.root)))],
   });

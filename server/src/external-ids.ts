@@ -2,7 +2,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { FetchLike } from "./debrid.js";
 import { log } from "./logger.js";
-import { guardedFetch } from "./outbound.js";
+import { guardedMetadataFetch } from "./outbound.js";
 
 /** Ids of the sites a title links to. IMDb is the catalogue id, the other two come
  *  from Wikidata. */
@@ -12,7 +12,8 @@ export interface SiteLink { site: "csfd" | "tmdb" | "imdb"; url: string }
 const WIKIDATA_ENDPOINT = "https://query.wikidata.org/sparql";
 /** Wikidata answers 403 without a descriptive agent. */
 const USER_AGENT = "StremioOffline (+https://github.com/NickRabit/stremio-offline)";
-const TIMEOUT_MS = 12_000;
+/** WDQS's own hard query limit is 60 s and a cold query ordinarily takes 15-30 s. */
+const TIMEOUT_MS = 45_000;
 /** An answer that names no ids is the memory of a fruitless search, not a fact. */
 const NEGATIVE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const IMDB_ID = /^tt\d+$/;
@@ -52,9 +53,10 @@ async function writeAtomic(file: string, data: string) {
  */
 export class ExternalIdStore {
   private entries: Record<string, CachedIds> = {};
+  private inFlight = new Map<string, Promise<ExternalIds | null>>();
   private readonly file: string;
 
-  constructor(dataDir: string, private readonly fetchImpl: FetchLike = guardedFetch) {
+  constructor(dataDir: string, private readonly fetchImpl: FetchLike = guardedMetadataFetch) {
     this.file = path.join(dataDir, "external-ids.json");
   }
 
@@ -81,11 +83,18 @@ export class ExternalIdStore {
       const ids = withoutEmpty(cached);
       if (Object.keys(ids).length > 0 || Date.now() - Date.parse(cached.at) < NEGATIVE_TTL_MS) return ids;
     }
-    const found = await this.lookup(imdbId);
-    if (!found) return null;
-    this.entries[imdbId] = { ...found, at: new Date().toISOString() };
-    await this.save();
-    return found;
+    let pending = this.inFlight.get(imdbId);
+    if (!pending) {
+      pending = (async () => {
+        const found = await this.lookup(imdbId);
+        if (!found) return null;
+        this.entries[imdbId] = { ...found, at: new Date().toISOString() };
+        await this.save();
+        return found;
+      })().finally(() => this.inFlight.delete(imdbId));
+      this.inFlight.set(imdbId, pending);
+    }
+    return pending;
   }
 
   private async lookup(imdbId: string): Promise<ExternalIds | null> {

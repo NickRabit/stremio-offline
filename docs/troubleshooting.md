@@ -73,6 +73,35 @@ off.
 Downloads and video playback do **not** go through the guard — a long transfer
 would hold a slot, and stopping playback would look like an outage.
 
+## When a title is missing its links
+
+A title's TMDB and ČSFD links are read from Wikidata through one SPARQL query per
+title. A cold query that nobody has run for a while takes 15–30 s before Wikidata
+caches its own answer; the same query then answers in well under a second. The
+first time a title is opened the link can therefore arrive after a noticeable
+pause, and a title whose lookup failed stays without it until the next attempt.
+
+A successful answer is kept in `external-ids.json` in `DATA_DIR`, so the query
+runs once per title, and an answer that names no ids is remembered for 30 days.
+The file is the place to look when the same title keeps losing its links.
+
+Wikidata has a guard of its own, separate from the addon guard, because it is
+legitimately slower: two queries at a time, a 1.5 s gap between them and three
+failures before the host is taken out of service. A timeout **we** set is not
+counted as a failure — the lookup fails, the links stay partial, and other titles
+are unaffected. Connection errors, HTTP 5xx and 429 still open the breaker, and
+`Retry-After` decides the pause.
+
+The state is visible in `/api/diagnostics` under `metadataOutbound` (the addon
+guard keeps its own `outbound` row). `WIKIDATA_GUARD=0` turns the guard off.
+
+In the log the symptom looks like this:
+
+```
+WARN Wikidata could not be reached, the links stay partial {"id":"tt0107290","reason":"The operation was aborted due to timeout"}
+WARN Wikidata did not answer, the links stay partial {"id":"tt0107290","status":429}
+```
+
 ## Rolling the image back
 
 An upgrade to a build with libraries rewrites `state.json`: stored paths gain a

@@ -121,6 +121,22 @@ Details in [Troubleshooting](troubleshooting.md#when-an-addon-stops-answering).
 | `ADDON_BREAKER_COOLDOWN_MS` | `30000` | First cooldown; each further outage doubles it. |
 | `ADDON_BREAKER_MAX_COOLDOWN_MS` | `300000` | Ceiling for that doubling. |
 
+## Wikidata guard
+
+Wikidata answers slower than an addon, so it has a guard of its own with wider spacing.
+A timeout we set ourselves never counts as the host being down. Details in
+[Troubleshooting](troubleshooting.md#when-a-title-is-missing-its-links).
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `WIKIDATA_GUARD` | `1` | `0` turns concurrency limiting and the circuit breaker off. |
+| `WIKIDATA_MAX_CONCURRENT` | `2` | Concurrent queries allowed to `query.wikidata.org`. |
+| `WIKIDATA_MAX_QUEUE` | `4` | Requests waiting for a slot on that host. |
+| `WIKIDATA_MIN_INTERVAL_MS` | `1500` | Minimum gap between queries, so a row of titles does not burn the query budget. |
+| `WIKIDATA_BREAKER_FAILURES` | `3` | Consecutive failures before the host is taken out of service. |
+| `WIKIDATA_BREAKER_COOLDOWN_MS` | `30000` | First cooldown; each further outage doubles it. |
+| `WIKIDATA_BREAKER_MAX_COOLDOWN_MS` | `300000` | Ceiling for that doubling. |
+
 ## Addon manifests
 
 A manifest is stored when the addon is added, and it decides which catalogues are
