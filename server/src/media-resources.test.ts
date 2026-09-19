@@ -160,3 +160,21 @@ test("a full registry drops the oldest selections instead of refusing new ones",
   assert.equal(registry.get(fresh, owner.sid, "source").id, fresh);
   assert.equal(registry.get(active.resourceId, owner.sid, "media").id, active.resourceId);
 });
+
+test("a released media resource leaves its owner a tombstone instead of a plain miss", () => {
+  const registry = new MediaResources(() => 0);
+  const released = registry.mediaStream(source, owner);
+  registry.remove(released.resourceId, true);
+  assert.throws(() => registry.get(released.resourceId, owner.sid, "media"), { status: 410, code: "RESOURCE_EXPIRED" });
+  const dropped = registry.mediaStream(source, owner);
+  registry.remove(dropped.resourceId);
+  assert.throws(() => registry.get(dropped.resourceId, owner.sid, "media"), { status: 404, code: "RESOURCE_NOT_FOUND" });
+});
+
+test("a subtitle child is tombstoned with the media resource it hangs off", () => {
+  const registry = new MediaResources(() => 0);
+  const media = registry.mediaStream(source, owner);
+  const child = registry.add({ url: "https://provider.test/sub" }, owner, "subtitle", media.resourceId);
+  registry.remove(media.resourceId, true);
+  assert.throws(() => registry.get(child, owner.sid, "subtitle"), { status: 410, code: "RESOURCE_EXPIRED" });
+});

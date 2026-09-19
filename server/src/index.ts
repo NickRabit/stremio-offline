@@ -104,7 +104,12 @@ const queue = new DownloadQueue(() => store.settings().concurrentDownloads, () =
 }); const playback = new PlaybackManager(undefined, (id) => {
   const owned = playbackOwners.get(id);
   if (owned) {
-    mediaResources.remove(owned.resourceId);
+    // The tombstone matters: a player that has just been closed still has range requests in
+    // the air, and a 404 invites it to try them again. 410 says the resource is gone for good.
+    mediaResources.remove(owned.resourceId, true);
+    // Destroyed, not ended. The proxy aborts its upstream only for a response that was cut
+    // (`!res.writableEnded`) -- see the note at the media route. Ending these politely would
+    // leave the connection to the source reading on.
     for (const active of activeMedia) if (active.resourceId === owned.resourceId) active.res.destroy();
   }
   if (owned) rangeCache.forget(owned.resourceId);
@@ -237,7 +242,12 @@ const libraryTarget = async (value: string) => {
   const resolved = await resolveLibraryPath(store.libraries(), value);
   if (!resolved) throw new ResourceError(404, "RESOURCE_NOT_FOUND");
   const real = await realpath(resolved.absolute).catch(() => undefined);
-  if (!real) throw new ResourceError(404, "RESOURCE_NOT_FOUND");
+  if (!real) {
+    // The resource was found; the file behind it was not. "Select the source again" would
+    // send the viewer back to a list that hands them the same missing file.
+    log("WARN", "A library file is no longer where the library says it is", { path: resolved.key });
+    throw new AppError("The file was not found in the library.", "err.libraryFileMissing", 404);
+  }
   return real;
 };
 const safeInspection = (info: Awaited<ReturnType<PlaybackManager["inspect"]>>, stream: StreamItem) => ({
@@ -322,7 +332,12 @@ app.use("/api", restrictedMiddleware({
 
 setInterval(() => {
   for (const active of activeMedia) if (active.owner.expiresAt <= Date.now()) active.res.destroy();
-  for (const [id, owned] of playbackOwners) if (owned.owner.expiresAt <= Date.now()) void playback.stop(id);
+  for (const [id, owned] of playbackOwners) if (owned.owner.expiresAt <= Date.now()) {
+    // Playback outliving the sign-in that started it is the one teardown nobody asked for.
+    // Its late reads answer 410 like any other closed session, so said here or not at all.
+    log("INFO", "Playback stopped, the viewer's session had expired", { id });
+    void playback.stop(id);
+  }
 }, 1000).unref();
 
 app.get("/api/auth/me", (req, res) => {
@@ -3397,6 +3412,12 @@ app.get(["/api/media/:resourceId", "/api/media/:resourceId/u/:signed"], asyncRou
   const headerTimeout = setTimeout(() => { headerTimedOut = true; controller.abort(); }, quiet ? SOURCE_QUIET_HEADER_MS : SOURCE_HEADER_MS);
   // Seek and stop close the previous Range. Without aborting here the old
   // upstream keeps downloading from the debrid host and starves the new one.
+  //
+  // `!res.writableEnded` is the whole point: this fires for a response that was cut, not one
+  // that finished. Whoever tears a transfer down must therefore destroy it. `res.end()` sets
+  // `writableEnded`, the abort never runs, and the source reads on until it times out -- which
+  // shows up as a seek that buffers forever under load, not as an error anyone can find.
+  // Callers that rely on this: the PlaybackManager release hook, and stopOwnedPlayback.
   res.on("close", () => { if (!res.writableEnded) controller.abort(); });
   // These hosts drop a connection now and then, on a range deep into a large file as
   // readily as on the first byte. Handing that straight to FFmpeg ends the conversion and
@@ -3547,6 +3568,10 @@ app.use((error: unknown, req: express.Request, res: express.Response, _next: exp
     log("INFO", "Rejected a restricted-mode mutation", {
       req: req.id, method: req.method, path: req.path, status: 403, user: currentUser(req),
     });
+  } else if (error instanceof ResourceError && error.status === 410 && /^(?:\/api)?\/media\//.test(req.path)) {
+    // A player that has just been closed is still reading the ranges it had open. The
+    // session is gone, the answer is correct, and it is not a fault worth an ERROR.
+    log("DEBUG", "A closed session was still being read", { req: req.id, path: req.path, user: currentUser(req) });
   } else {
     log("ERROR", "Request failed", {
       req: req.id, method: req.method, path: req.path, status,
