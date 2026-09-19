@@ -1,5 +1,5 @@
-import { FormEvent, UIEvent, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, BarChart3, ArrowUp, Check, RectangleHorizontal, RectangleVertical, Copy, FolderInput, FolderOpen, ImageOff, Images, KeyRound, Languages, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, ShieldCheck, Sparkles, Star, FileJson, Link2, LogOut, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, FileText, Film, FolderCog, HardDrive, Library, PackagePlus, Pause, Play, Plus, RefreshCw, Search, SearchX, Settings, Subtitles, Trash2, Upload, X } from "lucide-react";
+import { FormEvent, ReactNode, TouchEvent as ReactTouchEvent, UIEvent, WheelEvent as ReactWheelEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ArrowDown, BarChart3, ArrowUp, Check, RectangleHorizontal, RectangleVertical, Copy, FolderInput, FolderOpen, ImageOff, Images, KeyRound, Languages, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, ShieldCheck, SlidersHorizontal, Sparkles, Star, FileJson, Link2, LogOut, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, FileText, Film, FolderCog, HardDrive, Library, PackagePlus, Pause, Play, Plus, RefreshCw, Search, SearchX, Settings, Subtitles, Trash2, Upload, X } from "lucide-react";
 import { queueDestination } from "./queue-target";
 import { api, ApiError, describeError, logDownloadUrl, saveToDevice } from "./api";
 import { AccountSettings, LoginScreen } from "./Login";
@@ -118,8 +118,27 @@ export function App() {
   const [galleryIndex, setGalleryIndex] = useState<number | null>(null);
   const [detailCompact, setDetailCompact] = useState(false);
   const [catalogCompact, setCatalogCompact] = useState(false);
+  const [libraryCompact, setLibraryCompact] = useState(false);
   const scrollDirection = useRef(new WeakMap<HTMLElement, { top: number; travel: number; until: number }>());
-  function compactOnScroll(event: UIEvent<HTMLDivElement>, compact: boolean, update: (value: boolean) => void) {
+  // A tap does not end the scroll: Safari's momentum runs on for a while afterwards, and those
+  // events would fold the header the tap has just opened, which opens again, which folds -- the
+  // flicker. So a header opened by hand is held open for as long as that fling lasts, and a
+  // fling can last several seconds. Nothing counts it down: it ends when the list falls quiet,
+  // or when a new gesture asks for something else. A hold on a timer was tried and it expired
+  // mid-fling, folding the header under the reader; a hold that only a gesture could end was
+  // tried too, and it outlived the fling and left the header stuck open.
+  const heldOpen = useRef(false);
+  const holdIdle = useRef(0);
+  const releaseHold = () => { heldOpen.current = false; window.clearTimeout(holdIdle.current); };
+  const holdHeaderOpen = () => { heldOpen.current = true; };
+  useEffect(() => {
+    for (const event of ["touchstart", "wheel", "keydown"]) window.addEventListener(event, releaseHold, { passive: true });
+    return () => { for (const event of ["touchstart", "wheel", "keydown"]) window.removeEventListener(event, releaseHold); };
+  }, []);
+  // `revealOnPull` belongs to a header with no way back of its own -- the detail's metadata, which
+  // only a pull can restore. Where a button offers to bring the header back, a pull must not: the
+  // reader who drifts twenty pixels upward did not ask for it.
+  function compactOnScroll(event: UIEvent<HTMLDivElement>, compact: boolean, update: (value: boolean) => void, revealOnPull = false) {
     if (playerOpenRef.current || restoringScroll.current) return;
     const element = event.currentTarget;
     const top = Math.max(0, element.scrollTop);
@@ -127,12 +146,23 @@ export function App() {
     const delta = top - previous.top;
     const travel = Math.sign(delta) === Math.sign(previous.travel) ? previous.travel + delta : delta;
     const now = performance.now();
-    const next = top <= 0 ? false : travel > 32 ? true : travel < -24 ? false : compact;
+    // Hysteresis, and it is deliberately lopsided. Hiding asks for a deliberate push down and
+    // only once the list has really left its top; bringing the header back asks for much more,
+    // because a thumb that drifts twenty pixels upward did not mean to ask for it.
+    const next = top <= 32 ? false
+      : travel > 56 && top > 80 ? true
+      : revealOnPull && travel < -64 ? false
+      : compact;
     const header = element.closest(".detail-panel")?.querySelector(".hero");
     const headerHeight = header?.getBoundingClientRect().height ?? 200;
     // Keep the list scrollable after hiding its header, so reversing direction still restores it.
     const canHide = element.scrollHeight - element.clientHeight > headerHeight + 32;
-    const changed = now >= previous.until && next !== compact && (!next || canHide);
+    if (heldOpen.current) {
+      // Still moving, so keep holding -- and let go shortly after it stops.
+      window.clearTimeout(holdIdle.current);
+      holdIdle.current = window.setTimeout(releaseHold, 160);
+    }
+    const changed = !heldOpen.current && now >= previous.until && next !== compact && (!next || canHide);
     scrollDirection.current.set(element, { top, travel: changed ? 0 : travel, until: changed ? now + 250 : previous.until });
     if (changed) update(next);
   }
@@ -418,6 +448,14 @@ export function App() {
       ? <a className="trailer-action" href={action.href} target="_blank" rel="noopener noreferrer" title={t("trailers.openHint")}>{t("trailers.openOnYouTube")}</a>
       : <button className="trailer-action" title={t("trailers.openHint")} onClick={() => setTrailerOpen(action.trailer)}>{t("trailers.watch")}</button>;
   };
+  /** Everything that identifies a title, as one row of chips of one size: the watchlist star and
+   *  the kind where there is one, then the trailer and the sites that know the title. The
+   *  catalogue detail and a library menu render the same row, so they look the same. */
+  const titleChips = (trailer: Trailer | null, links: SiteLink[], leading?: ReactNode) => {
+    const trailerChip = trailerPill(trailer);
+    if (!leading && !trailerChip && !links.length) return null;
+    return <div className="title-chips">{leading}{trailerChip}{titleLinksRow(links)}</div>;
+  };
   /** A menu is asked about once per path per session; the answer is chrome either way. */
   const loadLibraryLinks = (item: TreeItem) => {
     if (item.match !== "matched" || askedLibraryLinks.current.has(item.path)) return;
@@ -499,7 +537,7 @@ export function App() {
   const [pendingSources, setPendingSources] = useState(0);
   const pickedRef = useRef(false); const sourcesRequestRef = useRef(0);
   const linksRequestRef = useRef(0); const trailerRequestRef = useRef(0); const askedLibraryLinks = useRef(new Set<string>()); const askedLibraryTrailers = useRef(new Set<string>());
-  const loadingRef = useRef(false); const requestRef = useRef(0); const itemsRef = useRef<Meta[]>([]); const gridRef = useRef<HTMLDivElement>(null); const detailRef = useRef<HTMLElement>(null);
+  const loadingRef = useRef(false); const requestRef = useRef(0); const itemsRef = useRef<Meta[]>([]); const gridRef = useRef<HTMLDivElement>(null); const browseScrollRef = useRef<HTMLDivElement | null>(null); const detailRef = useRef<HTMLElement>(null);
   const playerOpenRef = useRef(false); const playbackReturn = useRef<PlaybackReturn | null>(null);
   const viewAnchor = useRef<ViewAnchor | null>(null); const anchorFrozen = useRef(false); const anchorFrame = useRef(0);
   // The built-in lists look like a catalogue, they just do not come from an addon.
@@ -533,30 +571,84 @@ export function App() {
       ?? candidates.find((element) => element.dataset[attribute] === key && element.getClientRects().length > 0)
       ?? candidates.find((element) => element.dataset[attribute] === key);
   };
+  // Only the library keeps its offset in a box of its own; every other view still rides the document.
+  const viewScrollTop = () => viewRef.current === "library" ? browseScrollRef.current?.scrollTop ?? 0 : window.scrollY;
+  /** The box a listing scrolls in, by the kind of tile that was played from it. */
+  const scrollerOf = (kind?: PlaybackAnchor["kind"]) =>
+    kind === "catalog" ? gridRef.current : kind === "library" ? browseScrollRef.current : null;
   const capturePlaybackReturn = (anchor?: PlaybackAnchor): PlaybackReturn => {
     const element = anchor && findPlaybackAnchor(anchor);
-    const grid = anchor?.kind === "catalog" ? gridRef.current : null;
-    const viewportTop = grid?.getBoundingClientRect().top ?? 0;
-    const viewportHeight = grid?.clientHeight || window.innerHeight;
+    const scroller = scrollerOf(anchor?.kind);
+    const viewportTop = scroller?.getBoundingClientRect().top ?? 0;
+    const viewportHeight = scroller?.clientHeight || window.innerHeight;
     return {
       view,
       windowY: window.scrollY,
-      gridY: grid?.scrollTop,
+      gridY: scroller?.scrollTop,
       catalogCompact,
       anchor: element && anchor ? { ...anchor, element, ratio: (element.getBoundingClientRect().top - viewportTop) / viewportHeight } : undefined,
     };
   };
   const openPlayer = (anchor?: PlaybackAnchor) => {
     playbackReturn.current = capturePlaybackReturn(anchor);
-    scrollByView.current[view] = window.scrollY;
+    scrollByView.current[view] = viewScrollTop();
     playerOpenRef.current = true;
     pickedRef.current = true;
     setPlayerOpen(true);
   };
 
-  // Where the two lists that survive a rotation keep their position: the catalogue scrolls
-  // inside its own grid, the library scrolls with the document.
-  const anchorScroller = () => viewRef.current === "catalog" ? gridRef.current : null;
+  // Chrome that sits outside the list is a dead zone for a gesture: a finger that lands on the
+  // header scrolls nothing -- and a header that has just sprung back at the top of the list is
+  // exactly where the next finger lands, which made the list look stuck. A wheel or a drag that
+  // starts on the chrome is handed to the list instead. Anything that scrolls on its own keeps
+  // its gesture: the mobile detail panel and the episode and source lists live in here too.
+  const chromeDrag = useRef<{ from: number; dragging: boolean } | null>(null);
+  const ownScroller = (target: EventTarget | null, stop: HTMLElement) => {
+    // An icon is an SVGElement and not an HTMLElement -- start the walk at any element, or a
+    // gesture that lands on one is read as though it had landed on nothing.
+    let node = target instanceof Element ? target : null;
+    while (node && node !== stop) {
+      const style = getComputedStyle(node);
+      // A panel laid over the view -- the detail on a phone -- owns everything that happens on
+      // it, scrollable or not. Forwarding from there would drag the list hidden behind it.
+      if (style.position === "fixed") return true;
+      if ((style.overflowY === "auto" || style.overflowY === "scroll") && node.scrollHeight > node.clientHeight) return true;
+      node = node.parentElement;
+    }
+    return false;
+  };
+  const chromeGestures = (scroller: () => HTMLDivElement | null) => ({
+    onWheel: (event: ReactWheelEvent<HTMLElement>) => {
+      const list = scroller();
+      if (!list || ownScroller(event.target, event.currentTarget)) return;
+      list.scrollTop += event.deltaY;
+    },
+    onTouchStart: (event: ReactTouchEvent<HTMLElement>) => {
+      // A control keeps its own touch. Nudging the list from under a button being pressed is
+      // what made the header flicker: no tap is perfectly still, and every stray pixel moved
+      // the list, which then folded the header the tap had just opened.
+      const onControl = event.target instanceof Element && event.target.closest("button,a,input,select,textarea,label");
+      chromeDrag.current = scroller() && !onControl && !ownScroller(event.target, event.currentTarget)
+        ? { from: event.touches[0].clientY, dragging: false }
+        : null;
+    },
+    onTouchMove: (event: ReactTouchEvent<HTMLElement>) => {
+      const list = scroller();
+      const drag = chromeDrag.current;
+      if (!list || !drag) return;
+      const y = event.touches[0].clientY;
+      // A drag has to travel before it counts as one, or a wobbling finger scrolls the list.
+      if (!drag.dragging && Math.abs(drag.from - y) < 8) return;
+      drag.dragging = true;
+      list.scrollTop += drag.from - y;
+      drag.from = y;
+    },
+    onTouchEnd: () => { chromeDrag.current = null; },
+  });
+
+  // Where the two lists that survive a rotation keep their position: both scroll inside a box
+  // of their own now -- the catalogue in its grid, the library in its listing.
+  const anchorScroller = () => viewRef.current === "catalog" ? gridRef.current : viewRef.current === "library" ? browseScrollRef.current : null;
   const anchorKind = () => viewRef.current === "catalog" ? "catalog" as const : viewRef.current === "library" ? "library" as const : null;
   const trackViewAnchor = () => {
     if (anchorFrozen.current || restoringScroll.current || playerOpenRef.current) return;
@@ -587,7 +679,8 @@ export function App() {
 
   useEffect(() => {
     const onScroll = () => {
-      if (!restoringScroll.current && !playerOpenRef.current) scrollByView.current[viewRef.current] = window.scrollY;
+      // The library's listing scrolls on its own, so the document offset says nothing about it.
+      if (!restoringScroll.current && !playerOpenRef.current && viewRef.current !== "library") scrollByView.current[viewRef.current] = window.scrollY;
       scheduleViewAnchor();
     };
     window.addEventListener("scroll", onScroll, { passive: true });
@@ -614,7 +707,7 @@ export function App() {
         listening = false;
         for (const event of ["wheel", "touchmove", "keydown"]) window.removeEventListener(event, release);
       }
-      scrollByView.current[viewRef.current] = window.scrollY;
+      scrollByView.current[viewRef.current] = viewScrollTop();
     };
     const onResize = () => {
       const next = viewportShape();
@@ -652,6 +745,14 @@ export function App() {
     const deadline = performance.now() + 1500;
     let handle = 0;
     const apply = () => {
+      if (viewRef.current === "library") {
+        const element = browseScrollRef.current;
+        if (element) element.scrollTop = wanted;
+        // The listing may not hold its content yet, so the position is chased until it sticks.
+        if ((!element || Math.abs(element.scrollTop - wanted) > 1) && performance.now() < deadline) handle = requestAnimationFrame(apply);
+        else restoringScroll.current = false;
+        return;
+      }
       window.scrollTo(0, wanted);
       if (Math.abs(window.scrollY - wanted) > 1 && performance.now() < deadline) handle = requestAnimationFrame(apply);
       else restoringScroll.current = false;
@@ -677,12 +778,12 @@ export function App() {
     const apply = () => {
       const anchor = saved.anchor;
       const element = anchor && (anchor.element.isConnected ? anchor.element : findPlaybackAnchor(anchor));
-      if (anchor?.kind === "catalog") {
-        const grid = gridRef.current;
-        if (grid && element) {
-          const current = element.getBoundingClientRect().top - grid.getBoundingClientRect().top;
-          grid.scrollTop += current - anchor.ratio * grid.clientHeight;
-        } else if (grid && saved.gridY != null) grid.scrollTop = saved.gridY;
+      const scroller = scrollerOf(anchor?.kind);
+      if (scroller && anchor) {
+        if (element) {
+          const current = element.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+          scroller.scrollTop += current - anchor.ratio * scroller.clientHeight;
+        } else if (saved.gridY != null) scroller.scrollTop = saved.gridY;
       } else if (element && anchor) {
         window.scrollBy(0, element.getBoundingClientRect().top - anchor.ratio * window.innerHeight);
       } else window.scrollTo(0, saved.windowY);
@@ -737,6 +838,7 @@ export function App() {
     setEpisodesOpen(true); setSeason(null); setCatalogReset((value) => value + 1);
   };
   const resetLibrary = () => {
+    setLibraryCompact(false);
     setMenuFor(null); setFromFavorites(false); setBrowseFocus(null);
     setBrowsePath(""); setBrowseQuery("");
     setBrowseSort("name"); setBrowseDesc(false); setOnlyFavorites(false);
@@ -749,6 +851,10 @@ export function App() {
     if (target === "catalog") resetCatalog();
     else if (target === "library") resetLibrary();
     else if (target === "stats") setStatsReset((value) => value + 1);
+    // The catalogue and the library scroll in a box of their own, so the document offset is not
+    // the one that holds their position.
+    const list = target === "catalog" ? gridRef.current : target === "library" ? browseScrollRef.current : null;
+    if (list) list.scrollTop = 0;
     window.scrollTo(0, 0);
   };
   const toggleSidebar = () => setSidebarCollapsed((current) => {
@@ -937,15 +1043,17 @@ export function App() {
   // Page-scroll paging, the same as in the catalogue. The button stays as a fallback.
   useEffect(() => {
     if (view !== "library" || !browse) return;
+    const element = browseScrollRef.current;
+    if (!element) return;
     const nactenych = browse.items.length;
     if (nactenych >= browse.total) return;
     const onScroll = () => {
-      if (browseBusy) return;
-      if (window.innerHeight + window.scrollY >= document.body.offsetHeight - 500) void loadBrowse(browsePath, nactenych);
+      if (browseBusy || restoringScroll.current) return;
+      if (element.scrollTop + element.clientHeight >= element.scrollHeight - 500) void loadBrowse(browsePath, nactenych);
     };
-    window.addEventListener("scroll", onScroll, { passive: true });
+    element.addEventListener("scroll", onScroll, { passive: true });
     onScroll();
-    return () => window.removeEventListener("scroll", onScroll);
+    return () => element.removeEventListener("scroll", onScroll);
   }, [view, browse, browseBusy, browsePath]);
 
   // The wanted entry need not be on the first page, so pages load until it turns up.
@@ -995,8 +1103,12 @@ export function App() {
     setBrowsePath(slash > 0 ? target.slice(0, slash) : "");
     focusScrolled.current = null;
     setBrowseFocus(target);
+    // The view is switched in this same tick, so the scroller of the new listing need not exist
+    // yet; the stored offset is what the restore reads.
+    scrollByView.current.library = 0;
+    const scroller = browseScrollRef.current;
+    if (scroller) scroller.scrollTop = 0;
     setView("library");
-    window.scrollTo(0, 0);
   };
 
   const [previousFile, setPreviousFile] = useState<{ path: string; title: string } | null>(null);
@@ -1446,12 +1558,12 @@ export function App() {
       <Nav icon={<Settings/>} label={t("nav.settings")} active={view === "settings"} onClick={() => openView("settings")}/>
       <Nav icon={<BarChart3/>} label={t("nav.stats")} active={view === "stats"} onClick={() => openView("stats")}/>
     </nav><div className="sidebar-bottom"><button className="sidebar-toggle" onClick={toggleSidebar} title={t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")} aria-label={t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")}>{sidebarCollapsed ? <PanelLeftOpen/> : <PanelLeftClose/>}<span>{t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")}</span></button><div className="addon-status"><small>{t("app.activeAddons")}</small><strong>{addons.filter((a) => a.enabled).length}</strong><span>{t("app.catalogsAndSources")}</span></div></div></aside>
-    <main className={view === "catalog" ? "view-catalog" : ""}>
-      {view === "catalog" && <section className={`catalog-view ${catalogCompact ? "catalog-compact" : ""}`} onFocusCapture={(event) => {
+    <main className={`view-${view}`}>
+      {view === "catalog" && <section className={`catalog-view ${catalogCompact ? "catalog-compact" : ""}`} {...chromeGestures(() => gridRef.current)} onFocusCapture={(event) => {
         if ((event.target as HTMLElement).closest(".searchbar,.filterbar")) setCatalogCompact(false);
       }}><Heading eyebrow={t("catalog.eyebrow")} title={t("catalog.title")}/>
         {!catalogs.length ? (restricted ? <Empty icon={<PackagePlus/>} title={t("onboarding.title")} text={t("restricted.notice")}/> : <Onboarding onOpen={() => setView("addons")}/>) : <>
-          <form className="searchbar" onSubmit={submitSearch}>
+          <div className={`fold${catalogCompact ? " closed" : ""}`}><form className="searchbar" onSubmit={submitSearch}>
             <div className="search-input"><Search/><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={t("catalog.searchPlaceholder")}/></div>
             <label className="scope-select"><span>{t("catalog.searchScopeIn")}</span><select aria-label={t("catalog.searchScope")} value={searchScopeValue} onChange={(e) => pickSearchScope(e.target.value)}>
               <option value="">{t("catalog.allAddons")}</option>
@@ -1462,7 +1574,7 @@ export function App() {
             </select></label>
             <button className="primary" disabled={busy}><Search/> {t("catalog.search")}</button>
             {submittedQuery && <button type="button" onClick={() => { setSearch(""); setSubmittedQuery(""); }}><X/> {t("common.cancel")}</button>}
-          </form>
+          </form></div>
           <div className="filterbar">
             {submittedQuery
               ? <>
@@ -1483,7 +1595,24 @@ export function App() {
                 </>}
             <label><span>{t("common.sorting")}</span><select aria-label={t("catalog.sorting")} value={sort} onChange={(e) => setSort(e.target.value)}><option value="default">{t("catalog.sortAddon")}</option><option value="name">{t("catalog.sortName")}</option><option value="year">{t("catalog.sortYear")}</option></select></label>
             {sort !== "default" && <small className="filter-note">{t("catalog.sortNote")}</small>}
-            <button title={t(settings.catalogTileShape === "wide" ? "catalog.shapePoster" : "catalog.shapeWide")} aria-pressed={settings.catalogTileShape === "wide"} onClick={() => void toggleShape("catalogTileShape")}>{settings.catalogTileShape === "wide" ? <RectangleVertical/> : <RectangleHorizontal/>}</button>
+            <button className="shape-toggle" title={t(settings.catalogTileShape === "wide" ? "catalog.shapePoster" : "catalog.shapeWide")} aria-pressed={settings.catalogTileShape === "wide"} onClick={() => void toggleShape("catalogTileShape")}>{settings.catalogTileShape === "wide" ? <RectangleVertical/> : <RectangleHorizontal/>}</button>
+            {/* The one control the collapsed header keeps: it unfolds the search block and hands over the caret. */}
+            <button className="header-expand" title={t("catalog.showTools")} aria-label={t("catalog.showTools")} aria-expanded={!catalogCompact} onClick={(event) => {
+              holdHeaderOpen();
+              setCatalogCompact(false);
+              // A folded box cannot take focus, so the caret waits for the fold itself to finish
+              // rather than for a guessed number of milliseconds. The timer is the way out when
+              // there is no transition to wait for, as with reduced motion.
+              const bar = event.currentTarget.closest(".catalog-view")?.querySelector(".searchbar");
+              const focus = () => bar?.querySelector<HTMLInputElement>(".search-input input")?.focus();
+              const onEnd = (ended: Event) => {
+                if ((ended as TransitionEvent).propertyName !== "max-height") return;
+                bar?.removeEventListener("transitionend", onEnd);
+                focus();
+              };
+              bar?.addEventListener("transitionend", onEnd);
+              window.setTimeout(() => { bar?.removeEventListener("transitionend", onEnd); focus(); }, 400);
+            }}><SlidersHorizontal/></button>
           </div>
           <div className="catalog-layout"><section className="panel result-panel"><div className="panel-head"><h3>{submittedQuery ? t("catalog.searchHeading", { query: submittedQuery }) : t("catalog.results")}</h3><span>{t("catalog.itemCount", { count: visibleItems.length })}{hasMore ? "+" : ""}</span></div>
             <div className="poster-grid" ref={gridRef} onScroll={(event) => { compactOnScroll(event, catalogCompact, setCatalogCompact); scheduleViewAnchor(); }}>
@@ -1521,10 +1650,10 @@ export function App() {
             {busy && <div className="loading">{t("common.loading")}</div>}
           </section><section ref={detailRef} className={`panel detail-panel ${selected ? "mobile-open" : ""} ${selected?.videos?.length && episodesOpen ? "series-episodes-layout" : ""} ${sourcesLoaded && (selected?.videos?.length ? selectedVideo && !episodesOpen : true) ? "series-sources-layout" : ""} ${detailCompact ? "hero-compact" : ""}`}>{selected ? <>
             <div className="mobile-detail-head"><button onClick={selected.videos?.length && selectedVideo && !episodesOpen ? () => setEpisodesOpen(true) : closeMeta}><ChevronLeft/> {t(selected.videos?.length && selectedVideo && !episodesOpen ? "episodes.heading" : "catalog.results")}</button><strong>{selected.name}</strong></div>
-            <div className="detail-primary"><div className={`hero ${selected.videos?.length ? "series-hero" : ""} ${galleryImages.length ? "has-gallery" : ""}`} style={selected.background ? { backgroundImage: `linear-gradient(90deg,#121721 25%,transparent),url(${selected.background})` } : undefined}><div className="detail-copy"><button className={`watch-star ${inWatchlist(selected.type, selected.id) ? "on" : ""}`} title={t(inWatchlist(selected.type, selected.id) ? "watchlist.remove" : "watchlist.add")}
-                onClick={() => void toggleWatchlist(selected)}><Star/></button><span className="pill">{t(selected.type === "series" ? "catalog.oneSeries" : "catalog.oneMovie")}</span>{trailerPill(titleTrailer)}{titleLinksRow(titleLinks)}<h2>{selected.name}</h2><p className="meta-line">{imdbRating(selected) && <b className="imdb-rating" title={t("catalog.imdbRating", { rating: imdbRating(selected)! })}><Star/>{imdbRating(selected)}</b>}{imdbRating(selected) && [selected.releaseInfo || selected.year, ...(selected.genres || []).slice(0, 3)].filter(Boolean).length ? " · " : ""}{[selected.releaseInfo || selected.year, ...(selected.genres || []).slice(0, 3)].filter(Boolean).join(" · ")}</p><div className="catalog-description" aria-busy={metaLoading}><p className="description-preview" aria-hidden={metaLoading ? true : undefined}>{metaLoading ? skeletonLines : (selected.description || t("catalog.noDescription"))}</p><details key={selected.id}><summary>{t("catalog.description")}</summary><p tabIndex={0}>{metaLoading ? skeletonLines : (selected.description || t("catalog.noDescription"))}</p></details></div></div>{galleryImages.length > 0 && <button className={`gallery-open ${galleryImages[0].shape}`} onClick={() => setGalleryIndex(0)} title={t("gallery.openHint")}><img src={galleryImages[0].url} alt="" onError={hideBroken}/><span><Images/> {galleryImages.length > 1 ? t("gallery.stillCount", { count: galleryImages.length }) : t("gallery.enlarge")}</span></button>}</div></div>
+            <div className="detail-primary"><div className={`hero ${selected.videos?.length ? "series-hero" : ""} ${galleryImages.length ? "has-gallery" : ""}`} style={selected.background ? { backgroundImage: `linear-gradient(90deg,#121721 25%,transparent),url(${selected.background})` } : undefined}><div className="detail-copy">{titleChips(titleTrailer, titleLinks, <><button className={`watch-star ${inWatchlist(selected.type, selected.id) ? "on" : ""}`} title={t(inWatchlist(selected.type, selected.id) ? "watchlist.remove" : "watchlist.add")}
+                onClick={() => void toggleWatchlist(selected)}><Star/></button><span className="pill">{t(selected.type === "series" ? "catalog.oneSeries" : "catalog.oneMovie")}</span></>)}<h2>{selected.name}</h2><p className="meta-line">{imdbRating(selected) && <b className="imdb-rating" title={t("catalog.imdbRating", { rating: imdbRating(selected)! })}><Star/>{imdbRating(selected)}</b>}{imdbRating(selected) && [selected.releaseInfo || selected.year, ...(selected.genres || []).slice(0, 3)].filter(Boolean).length ? " · " : ""}{[selected.releaseInfo || selected.year, ...(selected.genres || []).slice(0, 3)].filter(Boolean).join(" · ")}</p><div className="catalog-description" aria-busy={metaLoading}><p className="description-preview" aria-hidden={metaLoading ? true : undefined}>{metaLoading ? skeletonLines : (selected.description || t("catalog.noDescription"))}</p><details key={selected.id}><summary>{t("catalog.description")}</summary><p tabIndex={0}>{metaLoading ? skeletonLines : (selected.description || t("catalog.noDescription"))}</p></details></div></div>{galleryImages.length > 0 && <button className={`gallery-open ${galleryImages[0].shape}`} onClick={() => setGalleryIndex(0)} title={t("gallery.openHint")}><img src={galleryImages[0].url} alt="" onError={hideBroken}/><span><Images/> {galleryImages.length > 1 ? t("gallery.stillCount", { count: galleryImages.length }) : t("gallery.enlarge")}</span></button>}</div></div>
             <div className="detail-workflow">
-            {selected.videos?.length ? <div className={`episodes ${selectedVideo && !episodesOpen ? "collapsed" : ""}`}>{selectedVideo && !episodesOpen ? <div className="episode-current"><small>{t("episodes.chosen")}</small><b>{selectedVideo.season != null ? `${String(selectedVideo.season).padStart(2,"0")}×${String(selectedVideo.episode || 0).padStart(2,"0")}` : t("episodes.part")}</b><span>{selectedVideo.title || selectedVideo.name || t("episodes.one")}</span><button onClick={() => setEpisodesOpen(true)}>{t("episodes.change")}</button></div> : <><div className="subhead episode-head"><h3>{t("episodes.heading")}</h3><div className="episode-tools">{seasons.length > 1 && <select className="season-select" aria-label={t("episodes.season")} value={activeSeason ?? ""} onChange={(event) => setSeason(Number(event.target.value))}>{seasons.map((value) => <option key={value} value={value}>{value === 0 ? t("episodes.specials") : t("episodes.seasonNumber", { season: value })}</option>)}</select>}{activeSeason != null && <button title={activeSeason === 0 ? t("episodes.downloadSpecials") : t("episodes.downloadSeason", { season: activeSeason })} onClick={() => void enqueueEpisodes("season")}><Download/> {activeSeason === 0 ? t("episodes.specials") : t("episodes.seasonShort", { season: activeSeason })}</button>}<button title={t("episodes.downloadShow")} onClick={() => void enqueueEpisodes("series")}><Download/> {t("episodes.wholeShow")}</button>{selectedVideo ? <button onClick={() => setEpisodesOpen(false)}>{t("common.collapse")}</button> : <span>{visibleEpisodes.length}</span>}</div></div><div className="episode-list" onScroll={(event) => compactOnScroll(event, detailCompact, setDetailCompact)}>{visibleEpisodes.map((video, index) => <button key={video.id || index} className={selectedVideo?.id === video.id ? "selected" : ""} onClick={() => { setEpisodesOpen(false); void loadSources(video); }}><b>{video.season != null ? `${String(video.season).padStart(2,"0")}×${String(video.episode || 0).padStart(2,"0")}` : index + 1}</b><span>{video.title || video.name || t("episodes.one")}</span><ChevronRight/></button>)}</div></>}</div> : !sourcesLoaded && <button className="primary wide" onClick={() => loadSources()} disabled={busy}>{t("sources.load")}</button>}
+            {selected.videos?.length ? <div className={`episodes ${selectedVideo && !episodesOpen ? "collapsed" : ""}`}>{selectedVideo && !episodesOpen ? <div className="episode-current"><small>{t("episodes.chosen")}</small><b>{selectedVideo.season != null ? `${String(selectedVideo.season).padStart(2,"0")}×${String(selectedVideo.episode || 0).padStart(2,"0")}` : t("episodes.part")}</b><span>{selectedVideo.title || selectedVideo.name || t("episodes.one")}</span><button onClick={() => setEpisodesOpen(true)}>{t("episodes.change")}</button></div> : <><div className="subhead episode-head"><h3>{t("episodes.heading")}</h3><div className="episode-tools">{seasons.length > 1 && <select className="season-select" aria-label={t("episodes.season")} value={activeSeason ?? ""} onChange={(event) => setSeason(Number(event.target.value))}>{seasons.map((value) => <option key={value} value={value}>{value === 0 ? t("episodes.specials") : t("episodes.seasonNumber", { season: value })}</option>)}</select>}{activeSeason != null && <button title={activeSeason === 0 ? t("episodes.downloadSpecials") : t("episodes.downloadSeason", { season: activeSeason })} onClick={() => void enqueueEpisodes("season")}><Download/> {activeSeason === 0 ? t("episodes.specials") : t("episodes.seasonShort", { season: activeSeason })}</button>}<button title={t("episodes.downloadShow")} onClick={() => void enqueueEpisodes("series")}><Download/> {t("episodes.wholeShow")}</button>{selectedVideo ? <button onClick={() => setEpisodesOpen(false)}>{t("common.collapse")}</button> : <span>{visibleEpisodes.length}</span>}</div></div><div className="episode-list" onScroll={(event) => compactOnScroll(event, detailCompact, setDetailCompact, true)}>{visibleEpisodes.map((video, index) => <button key={video.id || index} className={selectedVideo?.id === video.id ? "selected" : ""} onClick={() => { setEpisodesOpen(false); void loadSources(video); }}><b>{video.season != null ? `${String(video.season).padStart(2,"0")}×${String(video.episode || 0).padStart(2,"0")}` : index + 1}</b><span>{video.title || video.name || t("episodes.one")}</span><ChevronRight/></button>)}</div></>}</div> : !sourcesLoaded && <button className="primary wide" onClick={() => loadSources()} disabled={busy}>{t("sources.load")}</button>}
             {sourcesLoaded && (!selected.videos?.length || !episodesOpen) && <div className="sources"><div className="subhead"><h3>{t("sources.heading")}</h3><span>{visibleStreams.length === streams.length ? streams.length : t("sources.ofTotal", { shown: visibleStreams.length, total: streams.length })}{pendingSources > 0 ? ` · ${t("sources.loadingFrom", { count: pendingSources })}` : ""}</span></div>
               {streams.length > 1 && <div className="stream-filters">
                 <label><span>{t("sources.addon")}</span><select value={streamAddon} onChange={(event) => setStreamAddon(event.target.value)}>
@@ -1541,7 +1670,7 @@ export function App() {
                   <option value="size-asc">{t("sources.sortSmallest")}</option>
                   <option value="addon">{t("sources.sortAddon")}</option>
                 </select></label>
-              </div>}<div className="stream-list" onScroll={(event) => compactOnScroll(event, detailCompact, setDetailCompact)}>{visibleStreams.map((stream, index) => <button key={index} className={selectedStream === stream ? "selected" : ""} onClick={() => { pickedRef.current = true; setSelectedStream(stream); }}><i className={stream.kind === "torrent" ? "rd" : stream.playable ? undefined : "ext"}>{streamBadge(stream)}</i><span><strong>{streamLabel(stream)}</strong><small>{stream.addonName}</small></span><span className="stream-meta">{streamSize(stream) ? <b>{bytes(streamSize(stream))}</b> : null}<small>{streamLanguages(stream, metaLanguage).map((code) => <em className="lang-badge" key={code} title={t("sources.languageGuess")}>{label(code)}</em>)}</small></span>{selectedStream === stream && <Check/>}</button>)}</div>
+              </div>}<div className="stream-list" onScroll={(event) => compactOnScroll(event, detailCompact, setDetailCompact, true)}>{visibleStreams.map((stream, index) => <button key={index} className={selectedStream === stream ? "selected" : ""} onClick={() => { pickedRef.current = true; setSelectedStream(stream); }}><i className={stream.kind === "torrent" ? "rd" : stream.playable ? undefined : "ext"}>{streamBadge(stream)}</i><span><strong>{streamLabel(stream)}</strong><small>{stream.addonName}</small></span><span className="stream-meta">{streamSize(stream) ? <b>{bytes(streamSize(stream))}</b> : null}<small>{streamLanguages(stream, metaLanguage).map((code) => <em className="lang-badge" key={code} title={t("sources.languageGuess")}>{label(code)}</em>)}</small></span>{selectedStream === stream && <Check/>}</button>)}</div>
               {!streams.length && pendingSources === 0 && <div className="no-sources">{t("sources.none")}</div>}
               {!streams.length && pendingSources > 0 && <div className="no-sources">{t("sources.asking")}</div>}
               {Boolean(streams.length) && !visibleStreams.length && hiddenTorrents && !streamAddon && !streamLanguage && <div className="no-sources">{t("sources.onlyTorrentsBefore")} <button className="link-button" onClick={() => openView("settings")}>{t("nav.settings")}</button> {t("sources.onlyTorrentsAfter")}</div>}
@@ -1557,28 +1686,9 @@ export function App() {
           </> : <Empty icon={<Film/>} title={t("catalog.pickTitle")} text={t("catalog.pickText")}/>}</section></div>
         </>}
       </section>}
-      {view === "library" && <section className="library-page" onKeyDown={(event) => { if (event.key === "Escape") setMenuFor(null); }} onClick={() => menuFor && setMenuFor(null)}><Heading eyebrow={t("library.eyebrow")} title={t("library.title")}/>
-        {settings.showResumeRow && !browsePath && !onlyFavorites && localResume.length > 0 && <div className="resume-row">
-          <div className="subhead"><h3>{t("library.continueWatching")}</h3><button className="resume-show-all" onClick={() => { setBrowseQuery(""); setOnlyFavorites(false); setFromFavorites(false); setMenuFor(null); setBrowseSort("added"); setBrowseDesc(true); setBrowsePath(":resume"); }}>{t("library.showAll")} ({resumePreview?.total ?? localResume.length}) <ChevronRight/></button></div>
-          <div className="resume-strip">
-            {localResume.slice(0, 8).map((item) => <button className="browse-item" key={item.key} data-path={item.path} onClick={() => {
-              if (item.path) void playLocal(item.title, item.path, item.poster, item.season != null);
-            }}>
-              <span className="browse-art">
-                {item.poster ? <img src={item.poster} alt="" loading="lazy"/> : <Film/>}
-                <i className="browse-play"><CirclePlay/></i>
-                <i className="resume-bar"><i style={{ width: `${Math.min(100, Math.round(item.position / (item.duration || 1) * 100))}%` }}/></i>
-              </span>
-              <span className="browse-menu" onClick={(event) => { event.stopPropagation(); setMenuFor(menuFor === item.key ? null : item.key); }}><MoreVertical/></span>
-              <strong>{item.series?.name ?? item.title}</strong>
-              <small>{item.season != null ? `${item.season}×${String(item.episode ?? 0).padStart(2, "0")} ` : ""}{t("library.remaining", { time: fmtEta(Math.max(0, item.duration - item.position)) })}</small>
-              {menuFor === item.key && <span className="browse-actions" onClick={(event) => event.stopPropagation()}>
-                <button onClick={() => { if (item.path) revealInLibrary(item.path); }}><HardDrive/> {t("library.showInLibrary")}</button>
-              </span>}
-            </button>)}
-          </div>
-        </div>}
+      {view === "library" && <section className={`library-page${libraryCompact ? " library-compact" : ""}`} {...chromeGestures(() => browseScrollRef.current)} onKeyDown={(event) => { if (event.key === "Escape") setMenuFor(null); }} onClick={() => menuFor && setMenuFor(null)}><Heading eyebrow={t("library.eyebrow")} title={t("library.title")}/>
         <div className="panel browse-panel">
+        <div className="browse-head">
         <div className="browse-bar">
           <nav className="crumbs" aria-label={t("library.breadcrumbs")}>
             {browsePath && <button className="library-back" aria-label={t("library.folderUp")} onClick={() => { setBrowseQuery(""); setMenuFor(null); if (browsePath.startsWith(":")) setFromFavorites(false); setBrowsePath(browsePath.startsWith(":") ? "" : browsePath.includes("/") ? browsePath.slice(0, browsePath.lastIndexOf("/")) : fromFavorites ? ":favorites" : ""); }}><ChevronLeft/></button>}
@@ -1595,6 +1705,7 @@ export function App() {
             </span>)}
           </nav>
           <div className="browse-tools">
+            <div className={`fold browse-fold${libraryCompact ? " closed" : ""}`}><div className="browse-fold-inner">
             {!libraryList && <div className="search-input"><Search/><input value={browseQuery} aria-label={t("library.filter")} placeholder={t("library.filterPlaceholder")} onChange={(event) => setBrowseQuery(event.target.value)}/></div>}
             {!libraryList && <select aria-label={t("common.sorting")} value={browseSort} onChange={(event) => {
               const next = event.target.value as LibrarySort;
@@ -1613,9 +1724,12 @@ export function App() {
             {!libraryList && <button title={t(browseView === "grid" ? "library.viewRows" : "library.viewTiles")} onClick={() => setBrowseView((value) => value === "grid" ? "list" : "grid")}>
               {browseView === "grid" ? <List/> : <LayoutGrid/>}
             </button>}
-            {!libraryList && browseView === "grid" && <button title={t(settings.libraryTileShape === "wide" ? "library.shapePoster" : "library.shapeWide")} aria-pressed={settings.libraryTileShape === "wide"} onClick={() => void toggleShape("libraryTileShape")}>{settings.libraryTileShape === "wide" ? <RectangleVertical/> : <RectangleHorizontal/>}</button>}
             {!libraryList && <button className={selectionMode ? "active-filter" : ""} title={t("library.selectMode")} aria-pressed={selectionMode}
               onClick={() => { setMenuFor(null); if (selectionMode) leaveSelection(); else setSelectionMode(true); }}><Check/></button>}
+            </div></div>
+            {/* What a folded header keeps: where the tiles stand, the tools, and the way back. */}
+            <div className="browse-keep">
+            {!libraryList && browseView === "grid" && <button className="shape-toggle" title={t(settings.libraryTileShape === "wide" ? "library.shapePoster" : "library.shapeWide")} aria-pressed={settings.libraryTileShape === "wide"} onClick={() => void toggleShape("libraryTileShape")}>{settings.libraryTileShape === "wide" ? <RectangleVertical/> : <RectangleHorizontal/>}</button>}
             <div className="library-maintenance" onKeyDown={(event) => {
               if (event.key === "Escape" && menuFor === ":library-tools") event.currentTarget.querySelector<HTMLButtonElement>(".library-maintenance-toggle")?.focus();
             }}>
@@ -1641,6 +1755,8 @@ export function App() {
                 </button>}
               </div>
             </div>
+            <button className="header-expand" title={t("library.showTools")} aria-label={t("library.showTools")} aria-expanded={!libraryCompact} onClick={() => { holdHeaderOpen(); setLibraryCompact(false); }}><SlidersHorizontal/></button>
+            </div>
           </div>
         </div>
         {libraryScan && (libraryScan.status === "running" || libraryScan.status === "paused") && <div className="library-scan-status" role="status">
@@ -1650,14 +1766,6 @@ export function App() {
           {libraryScan.pauseReason === "breaker" && <span>{t("library.scanPausedAddon")}</span>}
           {libraryScan.pauseReason === "operation" && <span>{t("library.scanPausedOperation")}</span>}
           <button type="button" onClick={() => void stopScan()}>{t("library.scanStop")}</button>
-        </div>}
-        {!browsePath && !scanHintDismissed && !libraryScan?.finishedAt && (browse?.total ?? 0) >= 10 && <div className="library-scan-hint" role="status">
-          <span>{t("library.scanHint")}</span>
-          <button type="button" onClick={dismissScanHint}>{t("library.dismissHint")}</button>
-        </div>}
-        {suggestionCount > 0 && !scanning && <div className="library-scan-hint" role="status">
-          <span>{t("library.suggestionsWaiting", { count: suggestionCount })}</span>
-          <button type="button" onClick={() => setSuggestionsOpen(true)}>{t("library.suggestionsReview")}</button>
         </div>}
         {activeLibraryOp && <div className="library-op-status" role="status">
           <div><strong>{t(`library.bulkOp.${activeLibraryOp.op}` as Key)}</strong>
@@ -1682,6 +1790,40 @@ export function App() {
           <button disabled={!selectedPaths.size} onClick={() => void startBulk({ op: "forget", items: [...selectedPaths] })}><RotateCcw/> {t("library.markUnwatched")}</button>
           <button className="danger" disabled={!selectedPaths.size} onClick={deleteBulk}><Trash2/> {t("common.delete")}</button>
           <button onClick={leaveSelection}><X/> {t("common.cancel")}</button>
+        </div>}
+        </div>
+        <div className="browse-scroll" ref={browseScrollRef} onScroll={(event) => {
+          if (!restoringScroll.current && !playerOpenRef.current) scrollByView.current.library = event.currentTarget.scrollTop;
+          compactOnScroll(event, libraryCompact, setLibraryCompact);
+          scheduleViewAnchor();
+        }}>
+        {settings.showResumeRow && !browsePath && !onlyFavorites && localResume.length > 0 && <div className="resume-row">
+          <div className="subhead"><h3>{t("library.continueWatching")}</h3><button className="resume-show-all" onClick={() => { setBrowseQuery(""); setOnlyFavorites(false); setFromFavorites(false); setMenuFor(null); setBrowseSort("added"); setBrowseDesc(true); setBrowsePath(":resume"); }}>{t("library.showAll")} ({resumePreview?.total ?? localResume.length}) <ChevronRight/></button></div>
+          <div className="resume-strip">
+            {localResume.slice(0, 8).map((item) => <button className="browse-item" key={item.key} data-path={item.path} onClick={() => {
+              if (item.path) void playLocal(item.title, item.path, item.poster, item.season != null);
+            }}>
+              <span className="browse-art">
+                {item.poster ? <img src={item.poster} alt="" loading="lazy"/> : <Film/>}
+                <i className="browse-play"><CirclePlay/></i>
+                <i className="resume-bar"><i style={{ width: `${Math.min(100, Math.round(item.position / (item.duration || 1) * 100))}%` }}/></i>
+              </span>
+              <span className="browse-menu" onClick={(event) => { event.stopPropagation(); setMenuFor(menuFor === item.key ? null : item.key); }}><MoreVertical/></span>
+              <strong>{item.series?.name ?? item.title}</strong>
+              <small>{item.season != null ? `${item.season}×${String(item.episode ?? 0).padStart(2, "0")} ` : ""}{t("library.remaining", { time: fmtEta(Math.max(0, item.duration - item.position)) })}</small>
+              {menuFor === item.key && <span className="browse-actions" onClick={(event) => event.stopPropagation()}>
+                <button onClick={() => { if (item.path) revealInLibrary(item.path); }}><HardDrive/> {t("library.showInLibrary")}</button>
+              </span>}
+            </button>)}
+          </div>
+        </div>}
+        {!browsePath && !scanHintDismissed && !libraryScan?.finishedAt && (browse?.total ?? 0) >= 10 && <div className="library-scan-hint" role="status">
+          <span>{t("library.scanHint")}</span>
+          <button type="button" onClick={dismissScanHint}>{t("library.dismissHint")}</button>
+        </div>}
+        {suggestionCount > 0 && !scanning && <div className="library-scan-hint" role="status">
+          <span>{t("library.suggestionsWaiting", { count: suggestionCount })}</span>
+          <button type="button" onClick={() => setSuggestionsOpen(true)}>{t("library.suggestionsReview")}</button>
         </div>}
 
         {!browsePath && !onlyFavorites && !browseQuery && <button className="library-favorites" onClick={() => { setBrowseQuery(""); setFromFavorites(false); setBrowsePath(":favorites"); }}>
@@ -1710,7 +1852,7 @@ export function App() {
                     {selectionMode && <button className="browse-select" aria-label={t("library.selectItem", { name: item.name })} aria-pressed={selectedPaths.has(item.path)} onClick={(event) => { event.stopPropagation(); toggleSelection(item.path); }}>{selectedPaths.has(item.path) && <Check/>}</button>}
                     {!selectionMode && <button className="browse-menu" aria-label={t("library.options", { name: item.name })} aria-expanded={menuFor === item.path} onClick={(event) => { event.stopPropagation(); openMenu(item); }}><MoreVertical/></button>}
                     {!selectionMode && menuFor === item.path && <span className="browse-actions" onClick={(event) => event.stopPropagation()}>
-                      {item.match === "matched" && <>{trailerPill(libraryTrailers[item.path] ?? null)}{titleLinksRow(libraryLinks[item.path] ?? [])}</>}
+                      {item.match === "matched" && titleChips(libraryTrailers[item.path] ?? null, libraryLinks[item.path] ?? [])}
                       {matchActions(item)}
                       <button onClick={() => void toggleFavorite(item.path, !item.favorite)}><Star/> {t(item.favorite ? "favorite.remove" : "favorite.add")}</button>
                       <button onClick={() => void renameItem(item.path, item.name)}><Pencil/> {t("library.rename")}</button>
@@ -1727,7 +1869,7 @@ export function App() {
                     {selectionMode && <button className="browse-select" aria-label={t("library.selectItem", { name: item.label })} aria-pressed={selectedPaths.has(item.path)} onClick={(event) => { event.stopPropagation(); toggleSelection(item.path); }}>{selectedPaths.has(item.path) && <Check/>}</button>}
                     {!selectionMode && <button className="browse-menu" aria-label={t("library.options", { name: item.label })} aria-expanded={menuFor === item.path} onClick={(event) => { event.stopPropagation(); openMenu(item); }}><MoreVertical/></button>}
                     {!selectionMode && menuFor === item.path && <span className="browse-actions" onClick={(event) => event.stopPropagation()}>
-                      {item.match === "matched" && <>{trailerPill(libraryTrailers[item.path] ?? null)}{titleLinksRow(libraryLinks[item.path] ?? [])}</>}
+                      {item.match === "matched" && titleChips(libraryTrailers[item.path] ?? null, libraryLinks[item.path] ?? [])}
                       {matchActions(item)}
                       <button onClick={() => void toggleFavorite(item.path, !item.favorite)}><Star/> {t(item.favorite ? "favorite.remove" : "favorite.add")}</button>
                       {item.progress && <button onClick={() => revealInLibrary(item.path)}><HardDrive/> {t("library.showInLibrary")}</button>}
@@ -1747,6 +1889,7 @@ export function App() {
               </div>;
             })()}
           </>}
+        </div>
         </div>
       </section>}
       {view === "addons" && <AddonManager addons={addons} libraries={libraries} restricted={restricted} onChanged={refresh} onNotify={notify} onError={fail}/>} 

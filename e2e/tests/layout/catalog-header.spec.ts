@@ -137,7 +137,7 @@ test("phone source scrolling hides metadata and restores it before reaching the 
   expect(await list.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
 });
 
-test("phone catalog search returns when scrolling upwards", async ({ page }, testInfo) => {
+test("phone catalog search waits to be asked back, by the button or by the top of the list", async ({ page }, testInfo) => {
   test.skip(!["mobile", "mobile-landscape"].includes(testInfo.project.name), "compact phone catalog");
   await page.route("**/api/catalog?**", async (route) => {
     const response = await route.fetch();
@@ -153,8 +153,22 @@ test("phone catalog search returns when scrolling upwards", async ({ page }, tes
   await expect(list.locator(".poster-card")).toHaveCount(60);
   await list.evaluate((element) => { element.scrollTop = 500; });
   await expect(page.locator(".searchbar")).toBeHidden();
+
+  // A pull is not a request: the header a reader folded away stays folded until asked.
   await page.waitForTimeout(300);
   await list.evaluate((element) => { element.scrollTop -= 80; });
+  await page.waitForTimeout(300);
+  await expect(page.locator(".searchbar")).toBeHidden();
+
+  // The top of the list is one way back.
+  await list.evaluate((element) => { element.scrollTop = 0; });
+  await expect(page.locator(".searchbar")).toBeVisible();
+
+  // The button is the other, and it leaves the list where the reader had it.
+  await page.waitForTimeout(300);
+  await list.evaluate((element) => { element.scrollTop = 500; });
+  await expect(page.locator(".searchbar")).toBeHidden();
+  await page.getByRole("button", { name: "Zobrazit hledání a filtry" }).click();
   await expect(page.locator(".searchbar")).toBeVisible();
   expect(await list.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
 });

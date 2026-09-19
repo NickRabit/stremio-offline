@@ -1,4 +1,5 @@
 import { readdir, stat } from "node:fs/promises";
+import type { Dirent } from "node:fs";
 import path from "node:path";
 import { posixBase, posixDir, posixJoin, toFs } from "./libraries.js";
 
@@ -328,16 +329,67 @@ export type BrowseItem =
 /** One sorted list. Two arrays would split that order back into groups when rendered. */
 export interface BrowseResult { path: string; items: BrowseItem[]; total: number }
 
-/** The contents of one folder: its subfolders and videos. It does not descend; that is what opening a folder is for. */
-export async function browseDirectory(root: string, relative: string, query = "", skip = 0, limit = 60,
-  sort: LibrarySort = "name", descending = false, seed = "", onlyPaths?: ReadonlySet<string>,
-  exclude?: ReadonlySet<string>): Promise<BrowseResult> {
-  const target = resolveInside(root, relative);
-  if (!target) return { path: relative, items: [], total: 0 };
+/** Whether any video sits under this folder. Stops at the first one, unlike listVideos. */
+export async function hasVideo(root: string, relative: string, exclude?: ReadonlySet<string>, depth = 0): Promise<boolean> {
+  if (depth > 8) return false;
   let entries;
-  try { entries = await readdir(target, { withFileTypes: true }); } catch { return { path: relative, items: [], total: 0 }; }
+  try { entries = await readdir(path.join(root, toFs(relative)), { withFileTypes: true }); }
+  catch { return false; }
+  for (const entry of entries) {
+    if (entry.name.startsWith(".")) continue;
+    if (entry.isDirectory()) {
+      const next = posixJoin(relative, entry.name);
+      if (exclude?.has(next)) continue;
+      if (await hasVideo(root, next, exclude, depth + 1)) return true;
+      continue;
+    }
+    if (entry.isFile() && isVideo(entry.name)) return true;
+  }
+  return false;
+}
 
-  const needle = query.trim().toLowerCase();
+/** One entry of the list as returned by browseDirectory: a folder with its aggregates, a file
+ *  with its size and date, or both halves carrying only what an order by name needs. */
+interface MixedItem {
+  path: string; label: string; size: number; modified: string;
+  season?: number | null; episode?: number | null; folder?: BrowseFolder; file?: LibraryFile;
+}
+
+interface BrowseCacheEntry { complete: boolean; mtimeMs?: number; builtAt: number; mixed: MixedItem[] }
+
+const BROWSE_CACHE_MS = 20_000;
+const BROWSE_CACHE_MAX = 64;
+const browseCache = new Map<string, BrowseCacheEntry>();
+
+/** Pages 2..N of a folder should not repeat the walk page 1 already did. Entries are
+ *  dropped when the folder's own mtime moves, and in any case after `BROWSE_CACHE_MS`. */
+export function clearBrowseCache(): void {
+  browseCache.clear();
+}
+
+const browseCacheKey = (root: string, relative: string, query: string, exclude?: ReadonlySet<string>) =>
+  `${root}\u0000${relative}\u0000${query}\u0000${exclude?.size ? [...exclude].sort().join("\u0001") : ""}`;
+
+function readBrowseCache(key: string, mtimeMs: number | undefined): BrowseCacheEntry | undefined {
+  const entry = browseCache.get(key);
+  if (!entry) return undefined;
+  if (Date.now() - entry.builtAt > BROWSE_CACHE_MS || entry.mtimeMs !== mtimeMs) {
+    browseCache.delete(key);
+    return undefined;
+  }
+  return entry;
+}
+
+function writeBrowseCache(key: string, entry: BrowseCacheEntry): void {
+  browseCache.delete(key);
+  browseCache.set(key, entry);
+  while (browseCache.size > BROWSE_CACHE_MAX) browseCache.delete(browseCache.keys().next().value!);
+}
+
+/** The folder's own entries as one unsorted list. `cheap` skips every aggregate a sort by
+ *  name does not read, and leaves `size` and `modified` for the page that actually shows them. */
+async function readMixed(root: string, relative: string, entries: Dirent[], needle: string,
+  exclude: ReadonlySet<string> | undefined, cheap: boolean): Promise<MixedItem[]> {
   const folders: BrowseFolder[] = [];
   const files: LibraryFile[] = [];
 
@@ -346,9 +398,14 @@ export async function browseDirectory(root: string, relative: string, query = ""
     const childRelative = posixJoin(relative, entry.name);
     if (exclude?.has(childRelative)) continue;
     if (entry.isDirectory()) {
+      if (needle && !entry.name.toLowerCase().includes(needle)) continue;
+      if (cheap) {
+        if (!await hasVideo(root, childRelative, exclude)) continue;
+        folders.push({ path: childRelative, name: entry.name, fileCount: 0, size: 0, modified: "" });
+        continue;
+      }
       const inside = await listVideos(root, childRelative, 0, exclude);
       if (!inside.length) continue;
-      if (needle && !entry.name.toLowerCase().includes(needle)) continue;
       folders.push({
         path: childRelative, name: entry.name, fileCount: inside.length,
         size: inside.reduce((sum, f) => sum + f.size, 0),
@@ -359,9 +416,17 @@ export async function browseDirectory(root: string, relative: string, query = ""
     if (!entry.isFile() || !isVideo(entry.name)) continue;
     const label = entry.name.replace(/\.[^.]+$/, "");
     if (needle && !label.toLowerCase().includes(needle)) continue;
+    const numbers = numberedEpisode(childRelative);
+    if (cheap) {
+      files.push({
+        path: childRelative, label,
+        season: numbers?.season ?? null, episode: numbers?.episode ?? null,
+        size: 0, modified: "",
+      });
+      continue;
+    }
     try {
       const info = await stat(path.join(root, toFs(childRelative)));
-      const numbers = numberedEpisode(childRelative);
       files.push({
         path: childRelative, label,
         season: numbers?.season ?? null, episode: numbers?.episode ?? null,
@@ -370,26 +435,66 @@ export async function browseDirectory(root: string, relative: string, query = ""
     } catch { /* it disappeared in the meantime */ }
   }
 
-  // Folders and files are sorted as one list. Taken separately, sorting by date or size
-  // would produce two independent runs one after the other.
-  type Mixed = {
-    path: string; label: string; size: number; modified: string;
-    season?: number | null; episode?: number | null; folder?: BrowseFolder; file?: LibraryFile;
-  };
-  const mixed: Mixed[] = [
+  return [
     ...folders.map((folder) => ({ path: folder.path, label: folder.name, size: folder.size, modified: folder.modified, folder })),
     ...files.map((file) => ({ path: file.path, label: file.label, size: file.size, modified: file.modified, season: file.season, episode: file.episode, file })),
   ];
+}
+
+/** The contents of one folder: its subfolders and videos. It does not descend; that is what opening a folder is for. */
+export async function browseDirectory(root: string, relative: string, query = "", skip = 0, limit = 60,
+  sort: LibrarySort = "name", descending = false, seed = "", onlyPaths?: ReadonlySet<string>,
+  exclude?: ReadonlySet<string>): Promise<BrowseResult> {
+  const target = resolveInside(root, relative);
+  if (!target) return { path: relative, items: [], total: 0 };
+  const info = await stat(target).catch(() => undefined);
+  // Ordering by date or size needs every aggregate, so those sorts walk the whole folder and
+  // rely on the cache instead. A name and a random order read only the label and the path, so
+  // they can leave the walk to the page that is actually returned.
+  const cheap = sort === "name" || sort === "random";
+  const key = browseCacheKey(root, relative, query, exclude);
+  const cached = readBrowseCache(key, info?.mtimeMs);
+
+  let mixed: MixedItem[];
+  let complete: boolean;
+  if (cached && (cheap || cached.complete)) {
+    mixed = cached.mixed;
+    complete = cached.complete;
+  } else {
+    let entries;
+    try { entries = await readdir(target, { withFileTypes: true }); } catch { return { path: relative, items: [], total: 0 }; }
+    mixed = await readMixed(root, relative, entries, query.trim().toLowerCase(), exclude, cheap);
+    complete = !cheap;
+    writeBrowseCache(key, { complete, mtimeMs: info?.mtimeMs, builtAt: Date.now(), mixed });
+  }
+
   // The filter has to run before paging. Otherwise a favourite on the second page would
   // never be seen and the total would be wrong.
   const ordered = sortFiles(mixed, sort, descending, seed)
     .filter((item) => !onlyPaths || onlyPaths.has(item.path));
   const page = ordered.slice(skip, skip + limit);
-  return {
-    path: relative,
-    items: page.map((item) => item.folder
-      ? { kind: "folder" as const, ...item.folder }
-      : { kind: "file" as const, ...item.file! }),
-    total: ordered.length,
-  };
+
+  const items: BrowseItem[] = [];
+  for (const item of page) {
+    if (item.folder) {
+      if (complete) { items.push({ kind: "folder", ...item.folder }); continue; }
+      const inside = await listVideos(root, item.folder.path, 0, exclude);
+      items.push({
+        kind: "folder", ...item.folder,
+        fileCount: inside.length,
+        size: inside.reduce((sum, f) => sum + f.size, 0),
+        modified: inside.map((f) => f.modified).sort().at(-1) ?? "",
+      });
+      continue;
+    }
+    const file = item.file!;
+    if (complete) { items.push({ kind: "file", ...file }); continue; }
+    const fileInfo = await stat(path.join(root, toFs(file.path))).catch(() => undefined);
+    items.push({
+      kind: "file", ...file,
+      size: fileInfo?.size ?? file.size,
+      modified: fileInfo?.mtime.toISOString() ?? file.modified,
+    });
+  }
+  return { path: relative, items, total: ordered.length };
 }

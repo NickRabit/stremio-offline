@@ -809,6 +809,8 @@ export const en = {
   "catalog.shapePoster": "Zobrazit plakáty",
   "library.shapeWide": "Zobrazit dlaždice na šířku",
   "library.shapePoster": "Zobrazit plakáty",
+  "catalog.showTools": "Show search and filters",
+  "library.showTools": "Show filter and tools",
   "settings.catalogShape": "Tvar dlaždic katalogu",
   "settings.catalogShapeHint": "Plakáty na výšku, nebo obrázky na šířku tam, kde je doplněk má.",
   "settings.libraryShape": "Tvar dlaždic knihovny",
