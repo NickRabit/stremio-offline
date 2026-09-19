@@ -120,6 +120,15 @@ export function App() {
   const [catalogCompact, setCatalogCompact] = useState(false);
   const [libraryCompact, setLibraryCompact] = useState(false);
   const scrollDirection = useRef(new WeakMap<HTMLElement, { top: number; travel: number; until: number }>());
+  // A tap does not end the scroll: Safari's momentum runs on for a while afterwards, and those
+  // events would fold the header the tap has just opened, which opens again, which folds -- the
+  // flicker. A header opened by hand is held open until a real gesture asks for something else.
+  const heldOpen = useRef(false);
+  useEffect(() => {
+    const release = () => { heldOpen.current = false; };
+    for (const event of ["touchstart", "wheel", "keydown"]) window.addEventListener(event, release, { passive: true });
+    return () => { for (const event of ["touchstart", "wheel", "keydown"]) window.removeEventListener(event, release); };
+  }, []);
   function compactOnScroll(event: UIEvent<HTMLDivElement>, compact: boolean, update: (value: boolean) => void) {
     if (playerOpenRef.current || restoringScroll.current) return;
     const element = event.currentTarget;
@@ -136,8 +145,10 @@ export function App() {
     const headerHeight = header?.getBoundingClientRect().height ?? 200;
     // Keep the list scrollable after hiding its header, so reversing direction still restores it.
     const canHide = element.scrollHeight - element.clientHeight > headerHeight + 32;
-    const changed = now >= previous.until && next !== compact && (!next || canHide);
-    scrollDirection.current.set(element, { top, travel: changed ? 0 : travel, until: changed ? now + 250 : previous.until });
+    // The cooldown outlasts the fold itself: while it animates, the list changes height and
+    // reports scroll of its own, which must not be read as the reader asking for anything.
+    const changed = !heldOpen.current && now >= previous.until && next !== compact && (!next || canHide);
+    scrollDirection.current.set(element, { top, travel: changed ? 0 : travel, until: changed ? now + 400 : previous.until });
     if (changed) update(next);
   }
   type TreeItem = Extract<BrowseItem, { kind: "folder" | "file" }>;
@@ -576,7 +587,7 @@ export function App() {
   // exactly where the next finger lands, which made the list look stuck. A wheel or a drag that
   // starts on the chrome is handed to the list instead. Anything that scrolls on its own keeps
   // its gesture: the mobile detail panel and the episode and source lists live in here too.
-  const chromeDrag = useRef<number | null>(null);
+  const chromeDrag = useRef<{ from: number; dragging: boolean } | null>(null);
   const ownScroller = (target: EventTarget | null, stop: HTMLElement) => {
     // An icon is an SVGElement and not an HTMLElement -- start the walk at any element, or a
     // gesture that lands on one is read as though it had landed on nothing.
@@ -598,15 +609,24 @@ export function App() {
       list.scrollTop += event.deltaY;
     },
     onTouchStart: (event: ReactTouchEvent<HTMLElement>) => {
-      chromeDrag.current = scroller() && !ownScroller(event.target, event.currentTarget) ? event.touches[0].clientY : null;
+      // A control keeps its own touch. Nudging the list from under a button being pressed is
+      // what made the header flicker: no tap is perfectly still, and every stray pixel moved
+      // the list, which then folded the header the tap had just opened.
+      const onControl = event.target instanceof Element && event.target.closest("button,a,input,select,textarea,label");
+      chromeDrag.current = scroller() && !onControl && !ownScroller(event.target, event.currentTarget)
+        ? { from: event.touches[0].clientY, dragging: false }
+        : null;
     },
     onTouchMove: (event: ReactTouchEvent<HTMLElement>) => {
       const list = scroller();
-      const from = chromeDrag.current;
-      if (!list || from === null) return;
+      const drag = chromeDrag.current;
+      if (!list || !drag) return;
       const y = event.touches[0].clientY;
-      chromeDrag.current = y;
-      list.scrollTop += from - y;
+      // A drag has to travel before it counts as one, or a wobbling finger scrolls the list.
+      if (!drag.dragging && Math.abs(drag.from - y) < 8) return;
+      drag.dragging = true;
+      list.scrollTop += drag.from - y;
+      drag.from = y;
     },
     onTouchEnd: () => { chromeDrag.current = null; },
   });
@@ -1563,6 +1583,7 @@ export function App() {
             <button className="shape-toggle" title={t(settings.catalogTileShape === "wide" ? "catalog.shapePoster" : "catalog.shapeWide")} aria-pressed={settings.catalogTileShape === "wide"} onClick={() => void toggleShape("catalogTileShape")}>{settings.catalogTileShape === "wide" ? <RectangleVertical/> : <RectangleHorizontal/>}</button>
             {/* The one control the collapsed header keeps: it unfolds the search block and hands over the caret. */}
             <button className="header-expand" title={t("catalog.showTools")} aria-label={t("catalog.showTools")} aria-expanded={!catalogCompact} onClick={(event) => {
+              heldOpen.current = true;
               setCatalogCompact(false);
               // A folded box cannot take focus, so the caret waits for the fold itself to finish
               // rather than for a guessed number of milliseconds. The timer is the way out when
@@ -1719,7 +1740,7 @@ export function App() {
                 </button>}
               </div>
             </div>
-            <button className="header-expand" title={t("library.showTools")} aria-label={t("library.showTools")} aria-expanded={!libraryCompact} onClick={() => setLibraryCompact(false)}><SlidersHorizontal/></button>
+            <button className="header-expand" title={t("library.showTools")} aria-label={t("library.showTools")} aria-expanded={!libraryCompact} onClick={() => { heldOpen.current = true; setLibraryCompact(false); }}><SlidersHorizontal/></button>
             </div>
           </div>
         </div>
