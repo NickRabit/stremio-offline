@@ -578,7 +578,9 @@ export function App() {
   // its gesture: the mobile detail panel and the episode and source lists live in here too.
   const chromeDrag = useRef<number | null>(null);
   const ownScroller = (target: EventTarget | null, stop: HTMLElement) => {
-    let node = target instanceof HTMLElement ? target : null;
+    // An icon is an SVGElement and not an HTMLElement -- start the walk at any element, or a
+    // gesture that lands on one is read as though it had landed on nothing.
+    let node = target instanceof Element ? target : null;
     while (node && node !== stop) {
       const style = getComputedStyle(node);
       // A panel laid over the view -- the detail on a phone -- owns everything that happens on
@@ -801,6 +803,7 @@ export function App() {
     setEpisodesOpen(true); setSeason(null); setCatalogReset((value) => value + 1);
   };
   const resetLibrary = () => {
+    setLibraryCompact(false);
     setMenuFor(null); setFromFavorites(false); setBrowseFocus(null);
     setBrowsePath(""); setBrowseQuery("");
     setBrowseSort("name"); setBrowseDesc(false); setOnlyFavorites(false);
@@ -813,6 +816,10 @@ export function App() {
     if (target === "catalog") resetCatalog();
     else if (target === "library") resetLibrary();
     else if (target === "stats") setStatsReset((value) => value + 1);
+    // The catalogue and the library scroll in a box of their own, so the document offset is not
+    // the one that holds their position.
+    const list = target === "catalog" ? gridRef.current : target === "library" ? browseScrollRef.current : null;
+    if (list) list.scrollTop = 0;
     window.scrollTo(0, 0);
   };
   const toggleSidebar = () => setSidebarCollapsed((current) => {
