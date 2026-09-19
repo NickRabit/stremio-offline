@@ -17,6 +17,9 @@ interface Harness {
   base: string;
   store: Store;
   stopped: Array<string | undefined>;
+  stoppedUsers: string[];
+  /** Which sweep ran, so a test can tell a session teardown from a whole-account one. */
+  sweeps: string[];
   close(): Promise<void>;
 }
 
@@ -29,6 +32,8 @@ const mount = async (state?: unknown): Promise<Harness> => {
   const store = new Store(dir, dir);
   await store.load();
   const stopped: Array<string | undefined> = [];
+  const stoppedUsers: string[] = [];
+  const sweeps: string[] = [];
   const currentSession = (req: express.Request): SessionInfo | undefined => {
     const token = parseCookies(req.headers.cookie)[SESSION_COOKIE];
     const id = sessionUserId(token);
@@ -48,6 +53,10 @@ const mount = async (state?: unknown): Promise<Harness> => {
     },
     isSecure: (req) => req.headers["x-forwarded-proto"] === "https" || req.protocol === "https",
     stopOwnedPlayback: async (sid) => { stopped.push(sid); },
+    stopUserAccess: async (userId) => { stoppedUsers.push(userId); sweeps.push(`full:${userId}`); },
+    stopUserSessions: async (userId) => { stoppedUsers.push(userId); sweeps.push(`sessions:${userId}`); },
+    requireAccess: () => undefined,
+    stopContentAccess: async () => undefined,
   };
   const app = express();
   // The sign-in throttle counts failures per address, and every test here talks to one
@@ -66,6 +75,7 @@ const mount = async (state?: unknown): Promise<Harness> => {
     base: `http://127.0.0.1:${port}`,
     store,
     stopped,
+    stoppedUsers, sweeps,
     close: async () => {
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -247,7 +257,26 @@ test("POST /api/auth/logout with everywhere rotates only that account's secret",
   const otherAfter = findUserById(harness.store.users(), other.id);
   assert.equal(otherAfter?.secret, "other-secret");
   assert.equal(readSession(otherAfter!.secret, otherSession)?.userId, other.id, "the other person's session still verifies");
-  assert.deepEqual(harness.stopped, [undefined]);
+  // Every device of that one account is swept, and nobody else's: "sign out everywhere"
+  // stops the streams the other devices left running, not the whole instance's.
+  assert.deepEqual(harness.stoppedUsers, [owner.id]);
+  assert.deepEqual(harness.stopped, []);
+});
+
+test("signing out everywhere leaves the account's downloads queued", async (t) => {
+  // A queued download is owner-bound, not session-bound: it is queued precisely so it can
+  // outlive the browser. Sweeping the whole account here would stop a film downloading
+  // because somebody closed a laptop, so sign-out reaches only what is held open.
+  const harness = await mount();
+  t.after(harness.close);
+  const owner = await seedUser(harness.store, { password: "current-secret", secret: "old-secret" });
+  const cookie = sessionCookie(createSession("old-secret", owner.id, Date.now() + 60_000, "sid-queue"), true, false);
+
+  const response = await api(harness.base, "/api/auth/logout", { method: "POST", body: { everywhere: true }, cookie });
+
+  assert.equal(response.status, 204);
+  assert.deepEqual(harness.sweeps, [`sessions:${owner.id}`],
+    "the session sweep runs; the full account sweep, which pauses downloads, does not");
 });
 
 test("POST /api/auth/logout without everywhere records the session id in revoked", async (t) => {
@@ -296,4 +325,5 @@ test("PATCH /api/auth/password rotates the caller's secret and leaves another ac
   assert.equal(readSession(changed.secret, issued)?.userId, owner.id);
   assert.equal((await api(harness.base, "/api/auth/me", { cookie: `${SESSION_COOKIE}=${issued}` })).status, 200);
   assert.equal(findUserById(harness.store.users(), other.id)?.secret, "other-secret", "the other person is untouched");
+  assert.deepEqual(harness.stoppedUsers, [owner.id], "every session of that account is swept, and only that account's");
 });

@@ -13,8 +13,8 @@ import type { StreamItem } from "../types.js";
 import type { UserPermissions, UserRecord } from "../users.js";
 import { registerDeviceRoutes, type DeviceDeps } from "./device.js";
 
-const ADA: ResourceOwner = { sid: "sid-ada", expiresAt: Date.now() + 60_000 };
-const BOB: ResourceOwner = { sid: "sid-bob", expiresAt: Date.now() + 60_000 };
+const ADA: ResourceOwner = { userId: "usr_00000001", sid: "sid-ada", expiresAt: Date.now() + 60_000 };
+const BOB: ResourceOwner = { userId: "usr_00000002", sid: "sid-bob", expiresAt: Date.now() + 60_000 };
 const TTL = 24 * 60 * 60_000;
 const SOURCE = "Movies/Some Movie.mkv";
 const ADA_ID = "usr_00000001";
@@ -53,6 +53,10 @@ const mount = async (): Promise<Harness> => {
     currentUser: (req: express.Request) => (req.header("x-user") === "bob" ? bob : ada),
     isSecure: () => false,
     stopOwnedPlayback: async () => undefined,
+    stopUserAccess: async () => undefined,
+    stopUserSessions: async () => undefined,
+    requireAccess: () => undefined,
+    stopContentAccess: async () => undefined,
     countBytes: () => undefined,
     deviceDownloadTickets: tickets,
     DEVICE_TICKET_TTL: TTL,

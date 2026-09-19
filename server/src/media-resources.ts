@@ -3,7 +3,10 @@ import { INTERNAL_TOKEN } from "./auth.js";
 import type { PublicStream, StreamItem } from "./types.js";
 import type { MediaInfo } from "./naming.js";
 
-export interface ResourceOwner { sid: string; expiresAt: number }
+/** Who holds a resource. `userId` answers permission and ownership questions; `sid` keeps
+ *  one person's phone and their television apart, and is what a single device is signed
+ *  out by. */
+export interface ResourceOwner { userId: string; sid: string; expiresAt: number }
 
 /** A one-shot permit to pull a file down to the device at the keyboard. It is bound to the
  *  session that asked for it and never outlives it, so it lives beside the owner it names. */
@@ -222,6 +225,25 @@ export class MediaResources {
     for (const record of this.entries.values()) if (!sid || record.owner.sid === sid) this.remove(record.id);
   }
 
+  /** Everything one account holds, across all its devices. */
+  revokeUser(userId: string): string[] {
+    return this.revokeWhere((owner) => owner.userId === userId);
+  }
+
+  /** Removes every resource the predicate names and answers with the ids, so that the
+   *  responses reading them can be destroyed by the same sweep. A child whose parent goes
+   *  is removed with it and its id is part of the answer, which is what the reader of a
+   *  subtitle is tracked under. */
+  revokeWhere(match: (owner: ResourceOwner, stream: StreamItem) => boolean): string[] {
+    const removed: string[] = [];
+    for (const record of [...this.entries.values()]) {
+      if (!match(record.owner, record.stream)) continue;
+      removed.push(record.id);
+      this.remove(record.id);
+    }
+    return removed;
+  }
+
   mediaStream(source: StreamItem, owner: ResourceOwner): { stream: StreamItem; resourceId: string } {
     const resourceId = this.add(source, owner, "media", undefined, true);
     const stream = structuredClone(this.get(resourceId, owner.sid, "media").stream);
@@ -232,7 +254,7 @@ export class MediaResources {
   path(stream: StreamItem): string {
     let id = this.bindings.get(stream);
     if (!id) {
-      id = this.add(stream, { sid: "internal", expiresAt: this.now() + 30 * 60_000 }, "media");
+      id = this.add(stream, { userId: "internal", sid: "internal", expiresAt: this.now() + 30 * 60_000 }, "media");
       this.bindings.set(stream, id);
     }
     return `/api/media/${id}`;

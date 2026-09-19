@@ -41,6 +41,7 @@ import { randomUUID } from "node:crypto";
 import type { MediaInfo } from "./naming.js";
 import { defaultDownloadSettings } from "./naming.js";
 import { AppError, messageKeyOf } from "./errors.js";
+import { accessLost, contentOf, Revocations, type AccessClaim, type AccessNeed, type ActiveTransfer, type StopContentOptions } from "./revocation.js";
 import { carveOuts, queuedArtworkKey, defaultLibrary, isInside, libraryFor, libraryPath, libraryVisible, parseLibraryPath, posixBase, posixDir, posixJoin, realAncestor, relativeWithin, resolveLibraryPath, toFs, toPosix, visibleLibraries, type LibraryRecord, type LibraryType, type RootGrant, type Viewer } from "./libraries.js";
 import { envGrants, grantView, mergeGrants } from "./library-grants.js";
 import { migrateStateFile } from "./library-migrate.js";
@@ -230,6 +231,9 @@ await playback.load();
 const needsSetup = () => !store.users().length && !envCredentials();
 
 const isSecure = (req: express.Request) => req.headers["x-forwarded-proto"] === "https" || req.protocol === "https";
+/** What each request held when it resolved its account, captured once and compared again
+ *  before anything is handed over. Keyed by the request, so it lives no longer than it does. */
+const accessClaims = new WeakMap<express.Request, AccessClaim>();
 const currentSession = (req: express.Request): SessionInfo | undefined => {
   const token = parseCookies(req.headers.cookie)[SESSION_COOKIE];
   // The token names a user, and the secret that checks it belongs to that user: an id that
@@ -240,7 +244,14 @@ const currentSession = (req: express.Request): SessionInfo | undefined => {
   const info = readSession(user.secret, token);
   if (!info || info.userId !== user.id) return undefined;
   // A signed-out session is invalid even with a signature that still verifies.
-  return user.revoked?.[info.sid] ? undefined : info;
+  if (user.revoked?.[info.sid]) return undefined;
+  // Read once, at the start of the request: a permission withdrawn, an account disabled or
+  // a secret rotated while the request waited must fail its own re-check, whichever of the
+  // two -- the sweep or the check -- happens to run first.
+  if (token && !accessClaims.has(req)) {
+    accessClaims.set(req, { userId: user.id, sid: info.sid, token, permissionsVersion: user.permissionsVersion });
+  }
+  return info;
 };
 const currentUser = (req: express.Request) => {
   const session = currentSession(req);
@@ -281,7 +292,7 @@ const markersOf = (data: UserData) => data.watchedSeries as Record<string, Watch
 const ownerOf = (req: express.Request): ResourceOwner => {
   const session = currentSession(req);
   if (!session) throw new ResourceError(401, "AUTH_REQUIRED");
-  return { sid: session.sid, expiresAt: session.expiresAt };
+  return { userId: session.userId, sid: session.sid, expiresAt: session.expiresAt };
 };
 const sourceOf = (req: express.Request): StreamItem => {
   if (["stream", "url", "headers", "path"].some((key) => key in (req.body ?? {}))) throw new ResourceError(400, "UNSAFE_SOURCE_INPUT");
@@ -306,9 +317,9 @@ const airplayRequest = (req: express.Request) => {
   return grant;
 };
 const playbackResponse = <T extends { id: string; url: string }>(value: T): T => ({ ...value, url: airplayAccess.url(value.id, value.url) });
-const activeMedia = new Set<{ owner: ResourceOwner; res: express.Response; resourceId?: string }>();
-const trackMedia = (owner: ResourceOwner, res: express.Response, resourceId?: string) => {
-  const active = { owner, res, resourceId };
+const activeMedia = new Set<ActiveTransfer>();
+const trackMedia = (owner: ResourceOwner, res: express.Response, resourceId?: string, subject?: { device?: boolean; addonKey?: string; libraryId?: string }) => {
+  const active: ActiveTransfer = { owner, res, resourceId, ...(subject ?? {}) };
   activeMedia.add(active);
   res.once("close", () => activeMedia.delete(active));
 };
@@ -336,11 +347,53 @@ const safeInspection = (info: Awaited<ReturnType<PlaybackManager["inspect"]>>, s
   audioTracks: (info?.audioTracks ?? []).map((track) => ({ ...track, title: safeSourceText(track.title, stream), language: safeSourceText(track.language, stream), codec: safeSourceText(track.codec, stream) })),
   subtitleTracks: (info?.subtitleTracks ?? []).map((track) => ({ ...track, title: safeSourceText(track.title, stream), language: safeSourceText(track.language, stream), codec: safeSourceText(track.codec, stream) })),
 });
-const stopOwnedPlayback = async (sid?: string) => {
-  mediaResources.revoke(sid);
-  for (const active of activeMedia) if (!sid || active.owner.sid === sid) active.res.destroy();
-  for (const [id, owned] of playbackOwners) if (!sid || owned.owner.sid === sid) await playback.stop(id);
-  for (const [id, ticket] of deviceDownloadTickets) if (!sid || ticket.owner.sid === sid) deviceDownloadTickets.delete(id);
+const DEVICE_TICKET_TTL = 24 * 60 * 60_000;
+const deviceDownloadTickets = new Map<string, DeviceDownloadTicket>();
+const pruneDeviceDownloadTickets = () => {
+  const now = Date.now();
+  for (const [key, ticket] of deviceDownloadTickets) if (ticket.expiresAt <= now) deviceDownloadTickets.delete(key);
+  // Bound memory use on long-running servers; expired links can be recreated with another click.
+  while (deviceDownloadTickets.size > 500) deviceDownloadTickets.delete(deviceDownloadTickets.keys().next().value!);
+};
+
+/** The teardown half of a revocation. Every cause picks its own scope: a sign-out reaches
+ *  one session, a disabled or deleted account reaches everything it held, and a library or
+ *  an addon reaches only the resources that touch it. */
+const revocations = new Revocations({
+  resources: mediaResources,
+  airplay: airplayAccess,
+  playbackOwners,
+  activeMedia,
+  deviceTickets: deviceDownloadTickets,
+  stopPlayback: (id) => playback.stop(id),
+  queue,
+});
+/** One session: what signing out one device drops. */
+const stopOwnedPlayback = (sid: string) => revocations.stopSession(sid);
+/** Everything one account holds, across all its devices. */
+const stopUserAccess = (userId: string) => revocations.stopUser(userId);
+/** A sign-out or a password change reaches only what the account is holding open. Its
+ *  queued downloads are owner-bound, not session-bound, and must outlive both. */
+const stopUserSessions = (userId: string) => revocations.stopUserSessions(userId);
+/** One account's hold on one library or addon. Passing no user sweeps everybody,
+ *  which is what a global disable needs. */
+const stopContentAccess = (opts: StopContentOptions) => revocations.stopContent(opts);
+
+/** The re-check half: whether the request may still be answered. `session` means it no
+ *  longer signs anybody in, `rights` that what it asked for was taken away while it waited. */
+const lostAccess = (req: express.Request, need: AccessNeed = {}): "session" | "rights" | undefined => {
+  const claim = accessClaims.get(req);
+  if (!accessLost(store, claim, need)) return undefined;
+  const user = claim ? findUserById(store.users(), claim.userId) : undefined;
+  const signedOut = !user || user.disabled || Boolean(user.revoked?.[claim!.sid]);
+  return signedOut ? "session" : "rights";
+};
+/** Refuses at the moment a resource is issued or a transfer started. Never awaited between
+ *  this and the registration: an await in between reopens the window it exists to close. */
+const requireAccess = (req: express.Request, need: AccessNeed = {}): void => {
+  const loss = lostAccess(req, need);
+  if (!loss) return;
+  throw loss === "session" ? new ResourceError(401, "AUTH_REQUIRED") : new ResourceError(404, "RESOURCE_NOT_FOUND");
 };
 
 app.use(securityHeaders());
@@ -425,7 +478,7 @@ setInterval(() => {
   }
 }, 1000).unref();
 
-const routeContext: RouteContext = { store, needsSetup, currentSession, currentUser, isSecure, stopOwnedPlayback };
+const routeContext: RouteContext = { store, needsSetup, currentSession, currentUser, isSecure, stopOwnedPlayback, stopUserAccess, stopUserSessions, requireAccess, stopContentAccess };
 registerAuthRoutes(app, routeContext);
 
 /** The page only ever holds our own id, so anything it hands back is turned into the
@@ -532,14 +585,6 @@ const noteSourceQuiet = (key: string) => {
 };
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const DEVICE_TICKET_TTL = 24 * 60 * 60_000;
-const deviceDownloadTickets = new Map<string, DeviceDownloadTicket>();
-const pruneDeviceDownloadTickets = () => {
-  const now = Date.now();
-  for (const [key, ticket] of deviceDownloadTickets) if (ticket.expiresAt <= now) deviceDownloadTickets.delete(key);
-  // Bound memory use on long-running servers; expired links can be recreated with another click.
-  while (deviceDownloadTickets.size > 500) deviceDownloadTickets.delete(deviceDownloadTickets.keys().next().value!);
-};
 /** Every path inside the server is a qualified key; the client speaks relative paths
  *  while one library is configured, and `wirePath` is the single place that turns one
  *  back into the other. */

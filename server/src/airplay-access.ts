@@ -24,6 +24,17 @@ export class AirPlayAccess {
     this.sessions.delete(playbackId);
   }
 
+  /** Drops every grant the predicate names. A sweep reaches a person or a piece of content,
+   *  not one playback session, and a grant is a bearer credential that would otherwise
+   *  outlive the request it was made for. */
+  removeWhere(match: (grant: { playbackId: string; owner: ResourceOwner; resourceId: string }) => boolean) {
+    for (const grant of [...this.grants.values()]) {
+      if (!match(grant)) continue;
+      this.grants.delete(grant.token);
+      if (this.sessions.get(grant.playbackId) === grant.token) this.sessions.delete(grant.playbackId);
+    }
+  }
+
   url(playbackId: string, url: string): string {
     const token = this.sessions.get(playbackId);
     return token ? `${url}${url.includes("?") ? "&" : "?"}airplay=${token}` : url;

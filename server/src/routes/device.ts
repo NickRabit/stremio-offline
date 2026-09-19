@@ -9,6 +9,7 @@ import { posixBase, type Viewer } from "../libraries.js";
 import { log } from "../logger.js";
 import { ResourceError, type DeviceDownloadTicket, type ResourceOwner } from "../media-resources.js";
 import { defaultDownloadSettings, deviceFilename, type MediaInfo } from "../naming.js";
+import { contentOf, type AccessNeed } from "../revocation.js";
 import { safeFetch, validateRemoteUrl } from "../security.js";
 import type { TrafficMeta } from "../stats.js";
 import type { StreamItem } from "../types.js";
@@ -29,12 +30,13 @@ export interface DeviceDeps extends RouteContext {
   mediaSource(value: unknown): MediaInfo | undefined;
   ownerOf(req: express.Request): ResourceOwner;
   pruneDeviceDownloadTickets(): void;
+  requireAccess(req: express.Request, need?: AccessNeed): void;
   statMeta(job: { source?: TrafficMeta["source"]; url?: string; addonKey?: string; addonName?: string; title: string; kind?: string }): TrafficMeta;
-  trackMedia(owner: ResourceOwner, res: express.Response, resourceId?: string): void;
+  trackMedia(owner: ResourceOwner, res: express.Response, resourceId?: string, subject?: { device?: boolean; addonKey?: string; libraryId?: string }): void;
 }
 
 export function registerDeviceRoutes(app: express.Application, deps: DeviceDeps): void {
-  const { store, currentUser, countBytes, deviceDownloadTickets, DEVICE_TICKET_TTL, httpSourceOf, libraryTarget, mediaSource, ownerOf, pruneDeviceDownloadTickets, statMeta, trackMedia } = deps;
+  const { store, currentUser, countBytes, deviceDownloadTickets, DEVICE_TICKET_TTL, httpSourceOf, libraryTarget, mediaSource, ownerOf, pruneDeviceDownloadTickets, requireAccess, statMeta, trackMedia } = deps;
 
   /** Saving to the device is a right an administrator hands out, and it is read at every use:
    *  taking it away stops a ticket that was minted while it was still there. This governs the
@@ -78,6 +80,9 @@ export function registerDeviceRoutes(app: express.Application, deps: DeviceDeps)
       };
     }
     const id = randomBytes(24).toString("base64url");
+    // A ticket is a permission to save this content: it is checked against the account and
+    // the content as they stand now, in one step with the write.
+    requireAccess(req, { permission: "downloadToDevice", ...contentOf(stream) });
     deviceDownloadTickets.set(id, ticket);
     res.status(201).json({ url: `/api/device-download/${id}`, filename: ticket.filename });
   }));
@@ -87,9 +92,13 @@ export function registerDeviceRoutes(app: express.Application, deps: DeviceDeps)
     const ticket = deviceDownloadTickets.get(String(req.params.id));
     if (!ticket || ticket.owner.sid !== ownerOf(req).sid) return res.status(404).json({ error: "The download link expired. Start the download again.", messageKey: "err.downloadTicketExpired" });
     assertMaySaveToDevice(req);
+    const content = ticket.source.kind === "local"
+      ? contentOf({ url: `file://${ticket.source.path}` })
+      : contentOf(ticket.source.stream);
+    requireAccess(req, { permission: "downloadToDevice", ...content });
 
     res.setHeader("cache-control", "private, no-store");
-    trackMedia(ticket.owner, res);
+    trackMedia(ticket.owner, res, undefined, { device: true, ...content });
     if (ticket.source.kind === "local") {
       const target = await libraryTarget(ticket.source.path, currentUser(req));
       if (!target) return res.status(404).json({ error: "The file was not found in the library.", messageKey: "err.libraryFileMissing" });

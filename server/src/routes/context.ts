@@ -2,6 +2,7 @@ import type express from "express";
 import type { SessionInfo } from "../auth.js";
 import type { Viewer } from "../libraries.js";
 import { ResourceError } from "../media-resources.js";
+import type { AccessNeed, StopContentOptions } from "../revocation.js";
 import type { Store } from "../store.js";
 import type { UserRecord } from "../users.js";
 
@@ -15,9 +16,19 @@ export interface RouteContext {
   /** The account the request speaks for, or nothing when it carries no usable session. */
   currentUser(req: express.Request): UserRecord | undefined;
   isSecure(req: express.Request): boolean;
-  /** Tears down the media, playback and device-download resources of one
-   *  session, or of every session when `sid` is omitted. */
-  stopOwnedPlayback(sid?: string): Promise<void>;
+  /** Tears down the media, playback and device-download resources of one session.
+   *  Another device of the same person is left alone. */
+  stopOwnedPlayback(sid: string): Promise<void>;
+  /** Everything one account holds, across all its devices. A password change and a
+   *  sign-out everywhere reach this rather than the session sweep. */
+  stopUserAccess(userId: string): Promise<void>;
+  /** Only what the account holds open. A sign-out must not touch its download queue. */
+  stopUserSessions(userId: string): Promise<void>;
+  /** Refuses at the moment a resource is issued or a transfer started: the account, its
+   *  session, the secret behind the token, the rights and the content as they stand now. */
+  requireAccess(req: express.Request, need?: AccessNeed): void;
+  /** One account's hold on one library or addon, or everybody's when no user is named. */
+  stopContentAccess(opts: StopContentOptions): Promise<void>;
 }
 
 export const asyncRoute = (fn: express.RequestHandler): express.RequestHandler =>

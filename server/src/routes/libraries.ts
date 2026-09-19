@@ -14,7 +14,7 @@ import type { LibraryOps } from "../library-ops.js";
 import type { LibraryHealth, LibraryProbe } from "../library-probe.js";
 import { log } from "../logger.js";
 import type { State } from "../store.js";
-import { findUserById, type UserData } from "../users.js";
+import { bumpPermissions, findUserById, usersToBump, type UserData } from "../users.js";
 import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
 
 export interface LibrariesDeps extends RouteContext {
@@ -34,13 +34,25 @@ export interface LibrariesDeps extends RouteContext {
 }
 
 export function registerLibrariesRoutes(app: express.Application, deps: LibrariesDeps): void {
-  const { store, currentUser, accountIdOf, grantRows, healthOf, invalidateLibrary, libraryGrants, libraryStats, libraryView, mutateData, progressOf, refreshLibraryHealth, libraryProbe, metaStore, libraryOps } = deps;
+  const { store, currentUser, accountIdOf, grantRows, healthOf, invalidateLibrary, libraryGrants, libraryStats, libraryView, mutateData, progressOf, refreshLibraryHealth, libraryProbe, metaStore, libraryOps, stopContentAccess } = deps;
 
   /** The same check the module makes, raised as the failure the interface renders. */
   async function requireLibraryRoot(value: unknown, opts: { create?: boolean; exceptId?: string } = {}): Promise<string> {
     const checked = await checkLibraryRoot({ grants: libraryGrants(), libraries: store.libraries(), root: value, ...opts });
     if (!checked.ok) throw new AppError(checked.message, checked.messageKey, checked.status);
     return checked.root;
+  }
+
+  /** A grant edit and a global switch each reach only their own cause: the accounts that
+   *  just lost sight of this library, or everybody it was switched off for. Called after
+   *  the write, never before -- a request that slips between the two fails its own check. */
+  async function sweepLibraryLoss(before: LibraryRecord, after: LibraryRecord): Promise<void> {
+    if (before.enabled && !after.enabled) {
+      await stopContentAccess({ libraryId: after.id });
+      return;
+    }
+    const removed = (before.visibleTo ?? []).filter((id) => !(after.visibleTo ?? []).includes(id));
+    for (const userId of removed) await stopContentAccess({ userId, libraryId: after.id });
   }
 
   app.get("/api/libraries", asyncRoute(async (req, res) => {
@@ -156,6 +168,9 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
       state.libraries = (state.libraries ?? []).map((library) =>
         affected.some((item) => item.id === library.id) ? { ...library, enabled: false } : library);
     });
+    // A revoked root disables the libraries under it: their content is withdrawn from
+    // everybody at once, so everybody's hold on it goes with the switch.
+    for (const library of affected) await stopContentAccess({ libraryId: library.id });
     invalidateLibrary();
     await refreshLibraryHealth();
     for (const library of affected) log("INFO", "Library disabled with its revoked grant", { library: library.id, root: library.root });
@@ -253,8 +268,13 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
         throw new AppError(`A ${record.type} library cannot be the default for ${kind === "movie" ? "movies" : "series"}.`, "err.libraryDefaultType");
       }
     }
+    // A visibleTo edit is a permission change for everybody it named, on both sides: the
+    // accounts just removed are the ones whose in-flight requests most need to fail their
+    // re-check, and a naive "everyone now listed" would miss exactly them.
+    const bumped = patch.visibleTo === undefined ? [] : usersToBump(target.visibleTo, patch.visibleTo);
     await store.update((state) => {
       state.libraries = (state.libraries ?? []).map((library) => library.id === record.id ? record : library);
+      if (bumped.length) state.users = bumpPermissions(state.users ?? [], bumped);
       // The default pickers resolve at use, so a type change only strands the kinds the new
       // type no longer serves.
       if (state.settings) {
@@ -269,6 +289,7 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
         }
       }
     });
+    await sweepLibraryLoss(target, record);
     invalidateLibrary();
     await refreshLibraryHealth();
     const stats = await libraryStats();
@@ -304,6 +325,7 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
         }));
       });
     });
+    await stopContentAccess({ libraryId: target.id });
     if (forget) {
       await metaStore.forget(target.id);
       await rm(artworks.dirOf(target.id), { recursive: true, force: true });

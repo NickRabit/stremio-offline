@@ -6,7 +6,7 @@ import { log } from "../logger.js";
 import { normalizeDownloadSettings } from "../naming.js";
 import { essentialAddon, publicAddon, publicAddonRestricted } from "../security.js";
 import type { AddonRecord, AddonRole } from "../types.js";
-import { findUserById } from "../users.js";
+import { bumpPermissions, findUserById, usersToBump } from "../users.js";
 import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
 
 export interface AddonsDeps extends RouteContext {
@@ -15,7 +15,7 @@ export interface AddonsDeps extends RouteContext {
 }
 
 export function registerAddonsRoutes(app: express.Application, deps: AddonsDeps): void {
-  const { store, currentUser, storeRefreshed, publicAddonView } = deps;
+  const { store, currentUser, storeRefreshed, publicAddonView, stopContentAccess } = deps;
 
   app.get("/api/addons", (req, res) => res.json(allowedAddons(store.addons(), viewerOf(currentUser(req))).map(publicAddonView)));
   app.post("/api/addons", asyncRoute(async (req, res) => {
@@ -41,6 +41,9 @@ export function registerAddonsRoutes(app: express.Application, deps: AddonsDeps)
     const existing = store.addons().find((a) => a.key === req.params.key);
     if (existing && essentialAddon(existing)) throw new AppError("Cinemeta provides the library metadata and cannot be removed.", "err.essentialAddon");
     await store.update((state) => { state.addons = state.addons.filter((a) => a.key !== req.params.key); });
+    // The record is gone, so nothing can be played or saved from it again: what is already
+    // running on it is cut, for every account at once.
+    if (existing) await stopContentAccess({ addonKey: existing.key });
     res.status(204).end();
   }));
   // The full record including the token-bearing address. The interface hides it elsewhere; handing it out here is deliberate.
@@ -102,6 +105,12 @@ export function registerAddonsRoutes(app: express.Application, deps: AddonsDeps)
     // It also rejects a nonsensical request before fetching a manifest for it.
     const downloadSettings = req.body.downloadSettings === undefined ? undefined : normalizeDownloadSettings(req.body.downloadSettings, store.libraries());
     const reloaded = url && url !== existing.manifestUrl ? await loadAddon(url, role) : undefined;
+    // Read before the write: the mutator changes the live record, and the sweep needs the
+    // switch as it was on either side of it.
+    const before = { enabled: existing.enabled, allowedUsers: existing.allowedUsers };
+    // A grant edit is a permission change on both sides: the accounts just removed are the
+    // ones whose in-flight requests most need to fail their re-check.
+    const bumped = allowedUsers === undefined ? [] : usersToBump(before.allowedUsers, allowedUsers);
     await store.update((state) => {
       const addon = state.addons.find((a) => a.key === req.params.key);
       if (!addon) throw new AppError("The addon was not found.", "err.addonNotFound");
@@ -110,9 +119,19 @@ export function registerAddonsRoutes(app: express.Application, deps: AddonsDeps)
       if (typeof req.body.showInContinueWatching === "boolean") addon.showInContinueWatching = req.body.showInContinueWatching;
       if (downloadSettings) addon.downloadSettings = downloadSettings;
       if (allowedUsers) addon.allowedUsers = allowedUsers;
+      if (bumped.length) state.users = bumpPermissions(state.users ?? [], bumped);
       addon.role = role;
       if (reloaded) { addon.manifestUrl = reloaded.manifestUrl; addon.manifest = reloaded.manifest; }
     });
+    const after = store.addons().find((a) => a.key === req.params.key);
+    if (after) {
+      // Switching it off takes it from everybody, which no counter records.
+      if (before.enabled && !after.enabled) await stopContentAccess({ addonKey: after.key });
+      else {
+        const removed = (before.allowedUsers ?? []).filter((id) => !(after.allowedUsers ?? []).includes(id));
+        for (const userId of removed) await stopContentAccess({ userId, addonKey: after.key });
+      }
+    }
     if (reloaded) log("INFO", "Addon reconfigured", { name: reloaded.manifest.name, role });
     res.json(publicAddonView(store.addons().find((a) => a.key === req.params.key)!));
   }));

@@ -8,6 +8,7 @@ import { normalizeLanguage } from "../language.js";
 import type { Viewer } from "../libraries.js";
 import { log } from "../logger.js";
 import { mediaChildPath, mediaResources, openMediaUrl, ResourceError, safeSourceText, type ResourceOwner } from "../media-resources.js";
+import { contentOf } from "../revocation.js";
 import { readMediaText, rewritePlaylist } from "../media-playlist.js";
 import type { ClientCapabilities, PlaybackManager, PlaybackOptions } from "../playback.js";
 import type { RangeCache } from "../range-cache.js";
@@ -54,7 +55,7 @@ export interface PlaybackDeps extends RouteContext {
 }
 
 export function registerPlaybackRoutes(app: express.Application, deps: PlaybackDeps): void {
-  const { airplayAccess, airplayRequest, answerHeaders, countBytes, currentSession, currentUser, httpSourceOf, internalMediaRequest, libraryTarget, noteSourceQuiet, ownerOf, playback, playbackMeta, playbackOwners, playbackResponse, prefsOf, quietSources, rangeCache, safeInspection, sleep, sourceIsQuiet, stats, subtitleDelay, trackMedia, SOURCE_ATTEMPTS, SOURCE_RETRY_MS, SOURCE_RESUMES, SOURCE_HEADER_MS, SOURCE_QUIET_HEADER_MS } = deps;
+  const { airplayAccess, airplayRequest, answerHeaders, countBytes, currentSession, currentUser, httpSourceOf, internalMediaRequest, libraryTarget, noteSourceQuiet, ownerOf, playback, playbackMeta, playbackOwners, playbackResponse, prefsOf, quietSources, rangeCache, requireAccess, safeInspection, sleep, sourceIsQuiet, stats, subtitleDelay, trackMedia, SOURCE_ATTEMPTS, SOURCE_RETRY_MS, SOURCE_RESUMES, SOURCE_HEADER_MS, SOURCE_QUIET_HEADER_MS } = deps;
 
   app.post("/api/inspect", asyncRoute(async (req, res) => {
     const stream = await httpSourceOf(req);
@@ -74,7 +75,12 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
     if (req.body.time !== undefined) options.startTime = Math.max(0, Number(req.body.time) || 0);
     if (req.body.quality !== undefined) options.quality = req.body.quality === null ? null : Number(req.body.quality);
     const owner = ownerOf(req);
-    const prepared = mediaResources.mediaStream(await httpSourceOf(req), owner);
+    const stream = await httpSourceOf(req);
+    // The resource is minted in one step with the check: everything the request awaited --
+    // the source lookup included -- happened before it.
+    const need = contentOf(stream);
+    requireAccess(req, need);
+    const prepared = mediaResources.mediaStream(stream, owner);
     let started;
     const subtitleIds: Record<string, string> = {};
     try {
@@ -85,13 +91,16 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
         subtitleIds[id] = mediaResources.add(subtitle.stream, owner, "subtitle", prepared.resourceId);
       }
       started = await playback.start(prepared.stream, req.body.capabilities as ClientCapabilities, options);
-      if (currentSession(req)?.sid !== owner.sid) {
-        await playback.stop(started.id);
-        throw new ResourceError(401, "AUTH_REQUIRED");
-      }
+      // FFmpeg took its time starting: the account, its session and its rights are re-read
+      // here, and the registration below follows in the same synchronous step.
+      requireAccess(req, need);
       playbackOwners.set(started.id, { owner, resourceId: prepared.resourceId });
       if (req.body.capabilities?.airplay === true) airplayAccess.create(started.id, owner, prepared.resourceId);
-    } catch (error) { mediaResources.remove(prepared.resourceId); throw error; }
+    } catch (error) {
+      if (started) await playback.stop(started.id);
+      mediaResources.remove(prepared.resourceId);
+      throw error;
+    }
     // Bytes are counted by the proxy or by the library; only the item itself is added here,
     // so that "how much there was" is not limited to downloads.
     void stats.complete(playbackMeta(prepared.stream));

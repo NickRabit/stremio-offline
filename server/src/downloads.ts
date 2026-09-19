@@ -607,6 +607,36 @@ export class DownloadQueue {
     for (let attempt = 0; attempt < 100 && this.active.has(id); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 25));
   }
 
+  /** Pauses the queued and running jobs a named cause takes away. A transfer in flight is
+   *  aborted rather than left running behind a paused row: the sweep that calls this is the
+   *  answer to work that keeps going on its own. A job already paused, failed or finished is
+   *  left as it is -- it is not running, and its own reason is a different statement. */
+  async pauseMatching(match: (job: DownloadJob) => boolean): Promise<number> {
+    const running: DownloadStatus[] = ["queued", "waiting", "checking", "downloading"];
+    const hit = this.jobs.filter((job) => running.includes(job.status) && match(job));
+    for (const job of hit) {
+      this.clearDebrid(job.id);
+      if (this.active.has(job.id)) this.pauseRequested.add(job.id);
+      this.pauseForPermission(job);
+      this.active.get(job.id)?.abort();
+    }
+    if (!hit.length) return 0;
+    await this.save();
+    this.pump();
+    for (const job of hit) {
+      for (let attempt = 0; attempt < 100 && this.active.has(job.id); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    return hit.length;
+  }
+
+  /** Drops every unfinished job the predicate names, its partial file with it. What is
+   *  completed stays: it is in the library and belongs to nobody's access any more. */
+  async removeMatching(match: (job: DownloadJob) => boolean): Promise<number> {
+    const ids = this.jobs.filter((job) => job.status !== "completed" && match(job)).map((job) => job.id);
+    for (const id of ids) await this.remove(id);
+    return ids.length;
+  }
+
   async resume(id: string) {
     const job = this.require(id);
     if (!(["paused", "failed"] as DownloadStatus[]).includes(job.status)) throw new AppError("This item cannot be resumed.", "err.cannotResume");

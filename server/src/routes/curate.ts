@@ -37,7 +37,7 @@ export interface CurateDeps extends RouteContext {
 }
 
 export function registerCurateRoutes(app: express.Application, deps: CurateDeps): void {
-  const { store, currentUser, invalidateLibrary, libraryAutoScan, libraryFiles, libraryOps, libraryScan, libraryTarget, libraryUnits, matchLibraryItem, metaStore, ownRecord, ownerOf, prefsOf, refreshLibraryHealth, scheduleMetaBackfill, wirePath } = deps;
+  const { store, currentUser, invalidateLibrary, libraryAutoScan, libraryFiles, libraryOps, libraryScan, libraryTarget, libraryUnits, matchLibraryItem, metaStore, ownRecord, ownerOf, prefsOf, refreshLibraryHealth, requireAccess, scheduleMetaBackfill, wirePath } = deps;
 
   app.get("/api/library/identity", asyncRoute(async (req, res) => {
     const relative = String(req.query.path ?? "").trim();
@@ -179,6 +179,9 @@ export function registerCurateRoutes(app: express.Application, deps: CurateDeps)
       if (!match) return [];
       return [{ url: `file://${path.posix.join(path.posix.dirname(key), entry.name)}`, lang: normalizeLanguage(match[1]) }];
     });
+    // The media resource and its sidecars are minted here, in one step with the check: the
+    // library may have been switched off, or its grant withdrawn, while the tree was read.
+    requireAccess(req, { libraryId: parseLibraryPath(key)?.libraryId });
     res.setHeader("cache-control", "private, no-store").json(mediaResources.publicStream({ url: `file://${key}`, subtitles: sidecars, behaviorHints: { filename: path.basename(relative) } }, ownerOf(req)));
   }));
 }

@@ -22,8 +22,8 @@ import { registerPlaybackRoutes, type PlaybackDeps } from "./playback.js";
 const ID = "pb_000001";
 const RESOURCE = "res_000001";
 const TOKEN = "airplay-token";
-const ADA: ResourceOwner = { sid: "sid-ada", expiresAt: Date.now() + 3_600_000 };
-const BOB: ResourceOwner = { sid: "sid-bob", expiresAt: Date.now() + 3_600_000 };
+const ADA: ResourceOwner = { userId: "usr_00000001", sid: "sid-ada", expiresAt: Date.now() + 3_600_000 };
+const BOB: ResourceOwner = { userId: "usr_00000002", sid: "sid-bob", expiresAt: Date.now() + 3_600_000 };
 
 interface Harness {
   base: string;
@@ -48,6 +48,10 @@ const mount = async (): Promise<Harness> => {
     currentUser: (req) => ({ username: userOf(req) }) as unknown as UserRecord,
     isSecure: () => false,
     stopOwnedPlayback: async () => undefined,
+    stopUserAccess: async () => undefined,
+    stopUserSessions: async () => undefined,
+    requireAccess: () => undefined,
+    stopContentAccess: async () => undefined,
     airplayAccess: { create: () => undefined, remove: () => undefined, url: (_id: string, url: string) => url } as unknown as AirPlayAccess,
     airplayRequest: (req) => {
       if (req.query.airplay !== TOKEN) return undefined;

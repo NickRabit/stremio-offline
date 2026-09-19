@@ -106,13 +106,16 @@ export function registerAuthRoutes(app: express.Application, ctx: RouteContext):
       // A new secret invalidates every token issued so far at once.
       const nextSecret = randomBytes(32).toString("hex");
       await ctx.store.update((state) => withUser(state, info.userId, (user) => ({ ...user, secret: nextSecret, revoked: {} })));
+      // The secret stops the next request; the sweep reaches the film and the device
+      // download that are already running on the other devices.
+      await ctx.stopUserSessions(info.userId);
       log("INFO", "Signed out on all devices", { username: findUserById(ctx.store.users(), info.userId)?.username });
     } else {
       await ctx.store.update((state) => withUser(state, info.userId, (user) =>
         ({ ...user, revoked: { ...pruneRevoked(user.revoked), [info.sid]: info.expiresAt } })));
+      await ctx.stopOwnedPlayback(info.sid);
       log("INFO", "Sign-out", { username: findUserById(ctx.store.users(), info.userId)?.username });
     }
-    await ctx.stopOwnedPlayback(req.body?.everywhere ? undefined : info.sid);
     res.status(204).end();
   }));
   app.patch("/api/auth/password", asyncRoute(async (req, res) => {
@@ -128,7 +131,9 @@ export function registerAuthRoutes(app: express.Application, ctx: RouteContext):
     const nextSecret = randomBytes(32).toString("hex");
     await ctx.store.update((state) => withUser(state, account.id, (user) => ({ ...user, username, passwordHash, secret: nextSecret, revoked: {} })));
     res.setHeader("set-cookie", sessionCookie(createSession(nextSecret, account.id, Date.now() + REMEMBER_DAYS * 24 * 60 * 60 * 1000), true, ctx.isSecure(req)));
-    await ctx.stopOwnedPlayback();
+    // Rotating the secret stops the next request; a stream already open on another device
+    // keeps reading its resource until the sweep reaches it.
+    await ctx.stopUserSessions(account.id);
     log("INFO", "Credentials changed", { username });
     res.json({ username });
   }));

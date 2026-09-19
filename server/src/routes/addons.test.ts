@@ -52,6 +52,10 @@ const mount = async (records: AddonRecord[] = [addon("alpha")]): Promise<Harness
     currentUser: (req) => (req.header("x-user") === BOB ? ordinary : admin),
     isSecure: () => false,
     stopOwnedPlayback: async () => undefined,
+    stopUserAccess: async () => undefined,
+    stopUserSessions: async () => undefined,
+    requireAccess: () => undefined,
+    stopContentAccess: async () => undefined,
     storeRefreshed: async () => undefined,
     publicAddonView: (record) => {
       viewed.push(record);

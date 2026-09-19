@@ -31,7 +31,7 @@ export interface CatalogDeps extends RouteContext {
 }
 
 export function registerCatalogRoutes(app: express.Application, deps: CatalogDeps): void {
-  const { store, currentUser, cachedMeta, prefsOf, libraryTarget, ownerOf, trackMedia, libraryKey, metaStore, externalIds, subtitleDelay } = deps;
+  const { store, currentUser, cachedMeta, prefsOf, libraryTarget, ownerOf, trackMedia, libraryKey, metaStore, externalIds, subtitleDelay, requireAccess } = deps;
 
   /** The addons this caller may use, read once per request. A disabled addon is left out
    *  later by the helpers that honour `enabled`; visibility narrows an enabled addon only. */
@@ -126,12 +126,18 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
   app.get("/api/streams/:type/:id", asyncRoute(async (req, res) => {
     const owner = ownerOf(req);
     const items = await streams(usable(req), String(req.params.type), String(req.params.id), req.query.addon ? String(req.query.addon) : undefined);
-    if (ownerOf(req).sid !== owner.sid) throw new ResourceError(401, "AUTH_REQUIRED");
+    // The listing hands out one resource per source, and the addons that answered took as
+    // long as they liked: an addon switched off, or a grant withdrawn, while they were
+    // answering must not get one. Nothing is awaited between the check and the listing.
+    for (const addonKey of new Set(items.map((item) => item.addonKey).filter((key): key is string => Boolean(key)))) {
+      requireAccess(req, { addonKey });
+    }
     res.setHeader("cache-control", "private, no-store").json(mediaResources.listing(items, owner));
   }));
   app.get("/api/subtitles/:type/:id", asyncRoute(async (req, res) => {
     const owner = ownerOf(req);
     const items = await subtitles(usable(req), String(req.params.type), String(req.params.id));
+    requireAccess(req);
     res.setHeader("cache-control", "private, no-store").json(items.map((item) => ({
       subtitleId: mediaResources.add({ url: item.url }, owner, "subtitle"),
       lang: safeSourceText(item.lang, { url: item.url }), addonName: safeSourceText(item.addonName, { url: item.url }),
@@ -142,7 +148,8 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
     if ("url" in req.query || "headers" in req.query) throw new ResourceError(400, "UNSAFE_SOURCE_INPUT");
     const owner = ownerOf(req);
     const resource = mediaResources.get(String(req.params.subtitleId), owner.sid, "subtitle");
-    trackMedia(owner, res, resource.parent);
+    requireAccess(req);
+    trackMedia(owner, res, resource.parent ?? resource.id);
     const raw = resource.stream.url!;
     if (raw.startsWith("file://")) {
       const target = await libraryTarget(raw.slice(7), currentUser(req));

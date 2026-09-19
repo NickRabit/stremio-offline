@@ -88,6 +88,10 @@ const mount = async (options: { libraries?: LibraryRecord[]; records?: Record<st
     currentUser: () => undefined,
     isSecure: () => false,
     stopOwnedPlayback: async () => undefined,
+    stopUserAccess: async () => undefined,
+    stopUserSessions: async () => undefined,
+    requireAccess: () => undefined,
+    stopContentAccess: async () => undefined,
     invalidateLibrary: () => { calls.invalidated += 1; },
     libraryAutoScan: { remember: async () => { calls.remembered += 1; } } as unknown as LibraryAutoScan,
     libraryFiles: async () => [],
@@ -109,7 +113,7 @@ const mount = async (options: { libraries?: LibraryRecord[]; records?: Record<st
       update: async () => undefined,
     } as unknown as LibraryMetaStore,
     ownRecord: () => undefined,
-    ownerOf: (): ResourceOwner => ({ sid: "sid-1", expiresAt: Date.now() + 60_000 }),
+    ownerOf: (): ResourceOwner => ({ userId: "usr_00000001", sid: "sid-1", expiresAt: Date.now() + 60_000 }),
     prefsOf: (req) => (req ? callerPrefs : instancePrefs),
     refreshLibraryHealth: async () => new Map(),
     scheduleMetaBackfill: () => false,
@@ -258,7 +262,7 @@ test("GET next and previous step through one folder from the one registration", 
   const harness = await mount({ libraries: [library("lib_00000001", root)] });
   t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
 
-  const owner: ResourceOwner = { sid: "sid-1", expiresAt: Date.now() + 60_000 };
+  const owner: ResourceOwner = { userId: "usr_00000001", sid: "sid-1", expiresAt: Date.now() + 60_000 };
   const middle = mediaResources.add({ url: "file://lib_00000001/Films/Ronin.mkv" }, owner, "source");
 
   const next = await api(harness.base, `/api/library/next/${middle}`);

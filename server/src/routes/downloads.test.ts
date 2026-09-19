@@ -84,6 +84,10 @@ const mount = async (
     currentUser: () => options.viewer ?? admin,
     isSecure: () => false,
     stopOwnedPlayback: async () => undefined,
+    stopUserAccess: async () => undefined,
+    stopUserSessions: async () => undefined,
+    requireAccess: () => undefined,
+    stopContentAccess: async () => undefined,
     queue: queue as unknown as DownloadQueue,
     jobView: <T extends { media?: MediaInfo; target?: string }>(job: T) => {
       viewed.push(job);
