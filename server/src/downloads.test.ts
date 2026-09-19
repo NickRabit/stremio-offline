@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
 import { createWriteStream, existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { Writable } from "node:stream";
 import test from "node:test";
 import { DownloadQueue, isPlaylist } from "./downloads.js";
+import { AppError } from "./errors.js";
+import { relativeWithin, type LibraryRecord } from "./libraries.js";
 import { defaultDownloadSettings } from "./naming.js";
 
 const MB = 1024 * 1024;
@@ -35,16 +37,29 @@ const waitFor = async (queue: DownloadQueue, predicate: () => boolean, ms = 15_0
   throw new Error(`timeout: ${JSON.stringify(queue.snapshot())}`);
 };
 
+const LIBRARY_ID = "lib_d10ad10a";
+/** A queue refuses a download no library accepts, so every test queue has one library rooted
+ *  at the download directory -- the shape a migrated install has. */
+const downloadLibrary = (root: string): LibraryRecord => ({
+  id: LIBRARY_ID, name: "Downloads", type: "mixed", root, enabled: true, order: 0,
+  addedAt: "2026-01-01T00:00:00.000Z", writeArtwork: false,
+});
+const queuedFile = (downloads: string, target: string) => path.join(downloads, relativeWithin(LIBRARY_ID, target));
+
 const tempQueue = async (hooks: ConstructorParameters<typeof DownloadQueue>[4] = {}) => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-dl-"));
-  const queue = new DownloadQueue(() => 1, () => 1, path.join(directory, "data"), path.join(directory, "downloads"), {
+  const downloads = path.join(directory, "downloads");
+  const library = downloadLibrary(downloads);
+  const queue = new DownloadQueue(() => 1, () => 1, path.join(directory, "data"), downloads, {
     retryDelay: () => 30,
     stallInitialMs: 5_000,
     stallTransferMs: 5_000,
+    libraries: () => [library],
+    defaultLibrary: () => library,
     ...hooks,
   });
   await queue.load();
-  return { directory, queue, downloads: path.join(directory, "downloads") };
+  return { directory, queue, downloads };
 };
 
 const listen = (handler: (req: IncomingMessage, res: ServerResponse) => void | Promise<void>) => new Promise<{ server: Server; port: number }>((resolve) => {
@@ -74,7 +89,12 @@ const flakyServer = () => new Promise<{ server: Server; port: number; drops: () 
 test("after an outage and a resumed transfer the retry budget comes back", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-dl-"));
   const { server, port, drops } = await flakyServer();
-  const manager = new DownloadQueue(() => 1, () => 1, path.join(directory, "data"), path.join(directory, "downloads"));
+  const downloads = path.join(directory, "downloads");
+  const library = downloadLibrary(downloads);
+  const manager = new DownloadQueue(() => 1, () => 1, path.join(directory, "data"), downloads, {
+    libraries: () => [library],
+    defaultLibrary: () => library,
+  });
   try {
     await manager.load();
     await manager.add("Pokus", { url: `http://127.0.0.1:${port}/video.mp4` });
@@ -89,7 +109,7 @@ test("after an outage and a resumed transfer the retry budget comes back", async
     assert.ok(job.completedAt);
     assert.ok(Date.parse(job.completedAt) >= Date.parse(job.startedAt));
     assert.equal(job.retryCount, 0, "after a resumed transfer the retry budget should be full again");
-    assert.equal((await stat(path.join(directory, "downloads", job.target))).size, TOTAL);
+    assert.equal((await stat(queuedFile(downloads, job.target))).size, TOTAL);
   } finally {
     await manager.stop();
     server.close();
@@ -113,7 +133,12 @@ const countingServer = (bytes = 2 * MB) => new Promise<{ server: Server; port: n
 const runThree = async (perProvider: number) => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-dl-"));
   const { server, port, peak } = await countingServer();
-  const queue = new DownloadQueue(() => 4, () => perProvider, path.join(directory, "data"), path.join(directory, "downloads"));
+  const downloads = path.join(directory, "downloads");
+  const library = downloadLibrary(downloads);
+  const queue = new DownloadQueue(() => 4, () => perProvider, path.join(directory, "data"), downloads, {
+    libraries: () => [library],
+    defaultLibrary: () => library,
+  });
   try {
     await queue.load();
     for (const name of ["Prvni", "Druhy", "Treti"]) await queue.add(name, { url: `http://127.0.0.1:${port}/${name}.mp4` });
@@ -157,6 +182,7 @@ test("a save rule sends the file into the library it names", async () => {
   const downloadDir = path.join(directory, "downloads");
   const archiveRoot = path.join(directory, "archive");
   const archive = { id: "lib_12345678", name: "Archive", type: "movie" as const, root: archiveRoot, enabled: true, order: 0, addedAt: "2026-01-01T00:00:00.000Z", writeArtwork: true };
+  const downloads = downloadLibrary(downloadDir);
   const size = 4096;
   const { server, port } = await listen((_req, res) => {
     res.writeHead(200, { "content-length": String(size), "content-type": "video/mp4" });
@@ -165,7 +191,8 @@ test("a save rule sends the file into the library it names", async () => {
   const queue = new DownloadQueue(() => 1, () => 1, path.join(directory, "data"), downloadDir, {
     stallInitialMs: 5_000, stallTransferMs: 5_000,
     libraryRetryMs: 20, libraryWaitMs: 60,
-    libraries: () => [archive],
+    libraries: () => [archive, downloads],
+    defaultLibrary: () => downloads,
     libraryState: async (libraryId) => libraryId === archive.id ? archive : undefined,
   });
   await queue.load();
@@ -270,6 +297,168 @@ test("a job waits for a removed library and finishes there once it is added agai
   }
 });
 
+test("a series download no library accepts is refused before it is queued", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-dl-"));
+  const downloadDir = path.join(directory, "downloads");
+  const films = { id: "lib_f11f5000", name: "Films", type: "movie" as const, root: path.join(directory, "films"), enabled: true, order: 0, addedAt: "2026-01-01T00:00:00.000Z", writeArtwork: true };
+  const queue = new DownloadQueue(() => 1, () => 1, path.join(directory, "data"), downloadDir, { libraries: () => [films] });
+  await queue.load();
+  try {
+    await assert.rejects(
+      () => queue.add("Show", { url: "http://127.0.0.1:1/show-s01e01.mp4" }, { kind: "episode", title: "Show", season: 1, episode: 1 }),
+      (error: unknown) => {
+        assert.ok(error instanceof AppError, `the refusal has to be an AppError, got ${String(error)}`);
+        assert.equal(error.messageKey, "err.noLibraryForSeries");
+        return true;
+      });
+    assert.deepEqual(queue.list(), [], "a refused download is not queued");
+    assert.deepEqual(await readdir(downloadDir), [], "and nothing is written to the download directory");
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a debrid download no library accepts is refused at the same point", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-dl-"));
+  const downloadDir = path.join(directory, "downloads");
+  const films = { id: "lib_f11f5000", name: "Films", type: "movie" as const, root: path.join(directory, "films"), enabled: true, order: 0, addedAt: "2026-01-01T00:00:00.000Z", writeArtwork: true };
+  const queue = new DownloadQueue(() => 1, () => 1, path.join(directory, "data"), downloadDir, {
+    libraries: () => [films],
+    debrid: { configured: () => true, advance: async () => ({ ready: false, torrentId: "rd1", progress: 0, status: "queued" }) },
+  });
+  await queue.load();
+  try {
+    await assert.rejects(
+      () => queue.add("Show", { infoHash: "59e11cef8c2152ac73681092844ebd3db19025bc", fileIdx: 0 }, { kind: "episode", title: "Show", season: 1, episode: 1 }),
+      (error: unknown) => {
+        assert.ok(error instanceof AppError, `the refusal has to be an AppError, got ${String(error)}`);
+        assert.equal(error.messageKey, "err.noLibraryForSeries");
+        return true;
+      });
+    assert.deepEqual(queue.list(), [], "a refused torrent is not queued either");
+    assert.deepEqual(await readdir(downloadDir), [], "and nothing is written to the download directory");
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a pending job no library accepts fails when the queue resolves it", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-dl-"));
+  const downloadDir = path.join(directory, "downloads");
+  const filmsRoot = path.join(directory, "films");
+  const films = { id: "lib_f11f5000", name: "Films", type: "movie" as const, root: filmsRoot, enabled: true, order: 0, addedAt: "2026-01-01T00:00:00.000Z", writeArtwork: true };
+  const queue = new DownloadQueue(() => 1, () => 1, path.join(directory, "data"), downloadDir, { libraries: () => [films] });
+  queue.setResolver(async () => ({ stream: { url: "http://127.0.0.1:1/show-s01e01.mp4" }, settings: defaultDownloadSettings() }));
+  await queue.load();
+  try {
+    await queue.addPending("Show", { type: "series", videoId: "tt1:1:1" }, { kind: "episode", title: "Show", season: 1, episode: 1 });
+    await waitFor(queue, () => queue.list()[0]?.status === "failed");
+    const job = queue.list()[0];
+    assert.equal(job.errorKey, "err.noLibraryForSeries");
+    assert.equal(job.target, "", "no name is chosen when there is nowhere to write");
+    assert.deepEqual(await readdir(downloadDir), [], "nothing is written to the download directory");
+    await assert.rejects(stat(filmsRoot), "and nothing into the library that does not take the kind");
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a mixed library takes both kinds", async () => {
+  const size = 4096;
+  const { server, port } = await listen((_req, res) => {
+    res.writeHead(200, { "content-length": String(size), "content-type": "video/mp4" });
+    void send(res, size).then(() => res.end());
+  });
+  const { directory, queue, downloads } = await tempQueue();
+  try {
+    const film = await queue.add("Film", { url: `http://127.0.0.1:${port}/film.mp4` });
+    const episode = await queue.add("Show", { url: `http://127.0.0.1:${port}/show.mp4` }, { kind: "episode", title: "Show", season: 1, episode: 1 });
+    assert.equal(film.status, "queued", "the film is accepted");
+    assert.equal(episode.status, "queued", "and so is the episode");
+    await waitFor(queue, () => queue.list().every((job) => job.status === "completed"));
+    assert.equal((await stat(queuedFile(downloads, film.target))).size, size, "the film landed in the mixed library");
+    assert.equal((await stat(queuedFile(downloads, episode.target))).size, size, "and so did the episode");
+  } finally {
+    await queue.stop();
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a job whose library never comes back fails when no library takes its kind", async () => {
+  const size = 4096;
+  const { server, port } = await listen((_req, res) => {
+    res.writeHead(200, { "content-length": String(size), "content-type": "video/mp4" });
+    void send(res, size).then(() => res.end());
+  });
+  const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-dl-"));
+  const downloadDir = path.join(directory, "downloads");
+  const films = { id: "lib_f11f5000", name: "Films", type: "movie" as const, root: path.join(directory, "films"), enabled: true, order: 0, addedAt: "2026-01-01T00:00:00.000Z", writeArtwork: true };
+  const gone = "lib_g0ne0001";
+  let filmsReachable = false;
+  const queue = new DownloadQueue(() => 1, () => 1, path.join(directory, "data"), downloadDir, {
+    stallInitialMs: 5_000, stallTransferMs: 5_000,
+    libraryRetryMs: 20, libraryWaitMs: 40,
+    // The series library the first job names was removed; the film library is merely away.
+    libraries: () => [filmsReachable ? films : { ...films, unreachable: true }],
+    libraryState: async (libraryId) => libraryId === films.id ? (filmsReachable ? films : { ...films, unreachable: true }) : undefined,
+  });
+  await queue.load();
+  try {
+    const first = await queue.add("Show", { url: `http://127.0.0.1:${port}/show.mp4` }, { kind: "episode", title: "Show", season: 1, episode: 1 }, { subfolder: "", layout: "structured", libraryId: gone });
+    const second = await queue.add("Film", { url: `http://127.0.0.1:${port}/film.mp4` }, undefined, { subfolder: "", layout: "structured", libraryId: films.id });
+    assert.equal(first.status, "paused", "the job waits for the library that went away");
+    assert.equal(second.status, "paused", "and so does the one behind it");
+
+    // The film library comes back; the series library does not, and no library here takes series.
+    filmsReachable = true;
+    await waitFor(queue, () => {
+      const jobs = queue.list();
+      return jobs.find((job) => job.id === first.id)?.status === "failed" && jobs.find((job) => job.id === second.id)?.status === "completed";
+    });
+    const failed = queue.list().find((job) => job.id === first.id)!;
+    assert.equal(failed.errorKey, "err.noLibraryForSeries");
+    assert.equal(failed.pauseReason, undefined, "it is a failure, not a pause");
+    assert.deepEqual(await readdir(downloadDir), [], "it did not fall back to the download directory");
+  } finally {
+    await queue.stop();
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a job queued before libraries keeps its unqualified target under the download directory", async () => {
+  const size = 8192;
+  const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-dl-"));
+  const data = path.join(directory, "data");
+  const downloads = path.join(directory, "downloads");
+  await mkdir(data, { recursive: true });
+  await mkdir(downloads, { recursive: true });
+  const { server, port } = await listen((_req, res) => {
+    res.writeHead(200, { "content-length": String(size), "content-type": "video/mp4" });
+    res.end(Buffer.alloc(size, 5));
+  });
+  await writeFile(path.join(data, "downloads.json"), JSON.stringify([{
+    id: "legacy", title: "Legacy", status: "queued", target: "Legacy/Legacy.mp4", received: 0, speed: 0,
+    createdAt: "2020-01-01T00:00:00.000Z", updatedAt: "2020-01-01T00:00:00.000Z",
+    stream: { url: `http://127.0.0.1:${port}/legacy.mp4` },
+  }]));
+  const queue = new DownloadQueue(() => 1, () => 1, data, downloads, { libraries: () => [] });
+  try {
+    await queue.load();
+    await waitFor(queue, () => queue.list()[0].status === "completed" || queue.list()[0].status === "failed");
+    assert.equal(queue.list()[0].status, "completed", queue.list()[0].error);
+    assert.equal((await stat(path.join(downloads, "Legacy", "Legacy.mp4"))).size, size);
+  } finally {
+    await queue.stop();
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("a clean close short of Content-Length is retried from the .part file", async () => {
   const size = 32 * 1024;
   const drop = 8 * 1024;
@@ -295,7 +484,7 @@ test("a clean close short of Content-Length is retried from the .part file", asy
     const job = queue.list()[0];
     assert.equal(job.status, "completed", job.error);
     assert.ok(requests >= 2, "the short first response must be followed by a Range resume");
-    assert.equal((await stat(path.join(downloads, job.target))).size, size);
+    assert.equal((await stat(queuedFile(downloads, job.target))).size, size);
   } finally {
     await queue.stop();
     server.close();
@@ -378,7 +567,7 @@ test("the queue resumes by itself once free space returns", async () => {
     await waitFor(queue, () => queue.list()[0].status === "completed" || queue.list()[0].status === "failed");
     assert.equal(queue.list()[0].status, "completed", queue.list()[0].error);
     assert.equal(queue.haltInfo(), null);
-    assert.equal((await stat(path.join(downloads, queue.list()[0].target))).size, size);
+    assert.equal((await stat(queuedFile(downloads, queue.list()[0].target))).size, size);
   } finally {
     await queue.stop();
     server.close();
@@ -405,7 +594,7 @@ test("a 206 that restarts at byte 0 does not append onto the .part file", async 
     await waitFor(queue, () => queue.list()[0].status === "completed" || queue.list()[0].status === "failed");
     const job = queue.list()[0];
     assert.equal(job.status, "completed", job.error);
-    const body = await readFile(path.join(downloads, job.target));
+    const body = await readFile(queuedFile(downloads, job.target));
     assert.equal(body.length, size);
     assert.ok(body.every((byte) => byte === 2), "the restarted payload must replace the partial, not follow it");
   } finally {
@@ -564,7 +753,7 @@ test("a torrent waits on Real-Debrid then downloads over HTTP without taking a s
     const torrent = queue.list().find((job) => job.title === "Film")!;
     assert.equal(torrent.status, "completed");
     assert.equal(torrent.debridProgress, 100);
-    assert.equal((await stat(path.join(downloads, torrent.target))).size, payload.length);
+    assert.equal((await stat(queuedFile(downloads, torrent.target))).size, payload.length);
     assert.ok(calls >= 2);
   } finally {
     await queue.stop();
@@ -703,7 +892,7 @@ test("a file is fetched over several connections and lands byte for byte", async
     assert.equal(done.status, "completed", done.error ?? "");
     assert.equal(done.segments, undefined, "a finished download keeps no plan");
     assert.equal(peak(), 3, "all three segments should have run at once");
-    await assertContent(path.join(downloads, job.target), SEGMENTED_TOTAL);
+    await assertContent(queuedFile(downloads, job.target), SEGMENTED_TOTAL);
   } finally {
     await queue.stop(); server.close();
     await rm(directory, { recursive: true, force: true });
@@ -718,7 +907,7 @@ test("a source that ignores ranges is downloaded over one stream", async () => {
     await waitFor(queue, () => queue.list()[0].status === "completed" || queue.list()[0].status === "failed", 60_000);
     assert.equal(queue.list()[0].status, "completed", queue.list()[0].error ?? "");
     assert.equal(peak(), 0, "no ranged transfer should have started");
-    await assertContent(path.join(downloads, job.target), SEGMENTED_TOTAL);
+    await assertContent(queuedFile(downloads, job.target), SEGMENTED_TOTAL);
   } finally {
     await queue.stop(); server.close();
     await rm(directory, { recursive: true, force: true });
@@ -739,7 +928,7 @@ test("a source that lies to the probe and then ignores ranges finishes as one st
     assert.equal(requests().filter((range) => range === "bytes=0-0").length, 1, "the doomed plan must be built exactly once");
     assert.ok(plans.length > 0, "the transfer that succeeds should have reported progress");
     assert.deepEqual([...new Set(plans)], [undefined], "the attempt that succeeds must carry no plan");
-    await assertContent(path.join(downloads, job.target), SEGMENTED_TOTAL);
+    await assertContent(queuedFile(downloads, job.target), SEGMENTED_TOTAL);
   } finally {
     await queue.stop(); server.close();
     await rm(directory, { recursive: true, force: true });
@@ -759,7 +948,7 @@ test("the part file of an abandoned plan is gone before the single stream writes
     assert.equal(queue.list()[0].status, "completed", queue.list()[0].error ?? "");
     assert.equal(queue.list()[0].rangesIgnored, true, "the plan has to have been abandoned for this to prove anything");
     assert.deepEqual(partAtWrite, [false], "a part file written at segment offsets must not survive into the single stream");
-    await assertContent(path.join(downloads, job.target), SEGMENTED_TOTAL);
+    await assertContent(queuedFile(downloads, job.target), SEGMENTED_TOTAL);
   } finally {
     await queue.stop(); server.close();
     await rm(directory, { recursive: true, force: true });
@@ -854,7 +1043,7 @@ test("a source that lies does not deny ranges to the source that follows it", as
     assert.equal(job.status, "completed", job.error ?? "");
     assert.ok(!job.rangesIgnored, "a flag describing the first source must not reach the second");
     assert.equal(honest.peak(), 3, "the honest source has to be segmented on its own merits");
-    await assertContent(path.join(downloads, job.target), SEGMENTED_TOTAL);
+    await assertContent(queuedFile(downloads, job.target), SEGMENTED_TOTAL);
   } finally {
     await queue.stop(); liar.server.close(); honest.server.close();
     await rm(directory, { recursive: true, force: true });
@@ -869,7 +1058,7 @@ test("a segment cut mid-transfer resumes at its own offset", async () => {
     await waitFor(queue, () => queue.list()[0].status === "completed" || queue.list()[0].status === "failed", 60_000);
     assert.equal(queue.list()[0].status, "completed", queue.list()[0].error ?? "");
     assert.ok(requests().some((range) => /^bytes=[1-9]\d+-\d+$/.test(range)), `a retry should have asked for a later offset: ${requests().join(", ")}`);
-    await assertContent(path.join(downloads, job.target), SEGMENTED_TOTAL);
+    await assertContent(queuedFile(downloads, job.target), SEGMENTED_TOTAL);
   } finally {
     await queue.stop(); server.close();
     await rm(directory, { recursive: true, force: true });
@@ -886,11 +1075,11 @@ test("a paused segmented download keeps its plan and finishes after a resume", a
     const paused = queue.list()[0];
     assert.equal(paused.status, "paused");
     assert.equal(paused.segments, 2, "the plan has to survive the pause");
-    assert.equal((await stat(path.join(downloads, `${job.target}.part`))).size, SEGMENTED_TOTAL, "the part file keeps its full size");
+    assert.equal((await stat(queuedFile(downloads, `${job.target}.part`))).size, SEGMENTED_TOTAL, "the part file keeps its full size");
     await queue.resume(job.id);
     await waitFor(queue, () => queue.list()[0].status === "completed" || queue.list()[0].status === "failed", 60_000);
     assert.equal(queue.list()[0].status, "completed", queue.list()[0].error ?? "");
-    await assertContent(path.join(downloads, job.target), SEGMENTED_TOTAL);
+    await assertContent(queuedFile(downloads, job.target), SEGMENTED_TOTAL);
   } finally {
     await queue.stop(); server.close();
     await rm(directory, { recursive: true, force: true });
