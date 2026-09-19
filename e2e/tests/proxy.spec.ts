@@ -129,7 +129,9 @@ test("HLS children are opaque, deduplicated and revoked with their playback", as
   expect(new Set(children.map((path) => path.split("/")[3])).size).toBe(1);
   for (const child of children) expect((await request.get(child)).status()).toBe(200);
   await request.delete(`/api/playback/${playback.id}`);
-  for (const child of children) expect((await request.get(child)).status()).toBe(404);
+  // Gone, not missing. A player closed mid-read still has range requests in the air, and
+  // 404 invites it to send them again -- which it did, 56 times in half a second.
+  for (const child of children) expect((await request.get(child)).status()).toBe(410);
 });
 
 test("sources, playback, subtitles and downloads enforce session ownership and reject raw input", async ({ request, playwright }) => {
