@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createSession, DECOY_HASH, hashPassword, LoginThrottle, parseCookies, pruneRevoked, readSession, secretEquals, sessionCookie, verifyPassword } from "./auth.js";
+import { createSession, DECOY_HASH, hashPassword, LoginThrottle, parseCookies, pruneRevoked, readSession, secretEquals, sessionCookie, sessionUserId, verifyPassword } from "./auth.js";
 
 test("a password hash holds no password and the same password hashes differently every time", async () => {
   const first = await hashPassword("tajneheslo");
@@ -23,16 +23,17 @@ test("a corrupted hash does not throw, it only fails", async () => {
   }
 });
 
-test("a valid token returns the user and the session id", () => {
-  const token = createSession("tajemstvi", "ondra", Date.now() + 60_000);
+test("a valid token round-trips the user id and the session id", () => {
+  const token = createSession("tajemstvi", "usr_a1b2c3d4", Date.now() + 60_000);
   const info = readSession("tajemstvi", token);
-  assert.equal(info?.username, "ondra");
+  assert.equal(info?.userId, "usr_a1b2c3d4");
   assert.ok(info?.sid, "a session needs an id, or it cannot be revoked");
+  assert.equal(sessionUserId(token), "usr_a1b2c3d4", "the payload names the user before the signature is checked");
 });
 
 test("every sign-in gets a session id of its own", () => {
-  const a = readSession("tajemstvi", createSession("tajemstvi", "ondra", Date.now() + 60_000));
-  const b = readSession("tajemstvi", createSession("tajemstvi", "ondra", Date.now() + 60_000));
+  const a = readSession("tajemstvi", createSession("tajemstvi", "usr_a1b2c3d4", Date.now() + 60_000));
+  const b = readSession("tajemstvi", createSession("tajemstvi", "usr_a1b2c3d4", Date.now() + 60_000));
   assert.notEqual(a?.sid, b?.sid, "otherwise signing out would drop the other devices too");
 });
 
@@ -42,26 +43,28 @@ test("the revoked list loses what has expired anyway", () => {
   assert.deepEqual(pruneRevoked(undefined), {});
 });
 
-test("a token signed with another secret does not pass", () => {
-  const token = createSession("tajemstvi", "ondra", Date.now() + 60_000);
-  assert.equal(readSession("jine-tajemstvi", token), undefined);
+test("a token signed with another user's secret does not pass", () => {
+  const token = createSession("tajemstvi-ondry", "usr_a1b2c3d4", Date.now() + 60_000);
+  assert.equal(readSession("tajemstvi-petra", token), undefined);
+  assert.equal(sessionUserId(token), "usr_a1b2c3d4", "its payload still names the user it was made for");
 });
 
 test("an expired token does not pass", () => {
-  const token = createSession("tajemstvi", "ondra", Date.now() - 1000);
+  const token = createSession("tajemstvi", "usr_a1b2c3d4", Date.now() - 1000);
   assert.equal(readSession("tajemstvi", token), undefined);
 });
 
 test("a forged token payload does not pass", () => {
-  const token = createSession("tajemstvi", "ondra", Date.now() + 60_000);
+  const token = createSession("tajemstvi", "usr_a1b2c3d4", Date.now() + 60_000);
   const [, signature] = token.split(".");
-  const cizi = Buffer.from(JSON.stringify({ u: "admin", e: Date.now() + 60_000 })).toString("base64url");
+  const cizi = Buffer.from(JSON.stringify({ u: "usr_deadbeef", e: Date.now() + 60_000 })).toString("base64url");
   assert.equal(readSession("tajemstvi", `${cizi}.${signature}`), undefined);
 });
 
 test("a nonsensical token does not throw", () => {
   for (const token of [undefined, "", "abc", "a.b.c", "..", "eyJ9.xxx"]) {
     assert.equal(readSession("tajemstvi", token), undefined);
+    assert.equal(sessionUserId(token), undefined);
   }
 });
 

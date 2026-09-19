@@ -25,7 +25,8 @@ import { RestrictedError, restrictedMiddleware, restrictedMode } from "./restric
 import { guardedFetch, metadataOutbound, outbound } from "./outbound.js";
 import { images } from "./images.js";
 import { configureSecureMode, secureMode, securityHeaders } from "./secure.js";
-import { publicSettings, Store } from "./store.js";
+import { publicSettings, Store, type InstanceSettings, type Settings, type State, type UserPrefs } from "./store.js";
+import { emptyUserData, findUserById, PERSONAL_SETTINGS, type UserData } from "./users.js";
 import { groupSeriesProgress, seriesOf, type ProgressSeries } from "./progress-series.js";
 import { markersOwingRow, nextEpisodeOf } from "./next-episode.js";
 import { advanceTorrent, normalizeToken, verifyRealDebridToken } from "./debrid.js";
@@ -41,7 +42,7 @@ import { createLibraryProbe, type LibraryHealth } from "./library-probe.js";
 import { LibraryAutoScan } from "./library-autoscan.js";
 import { watchLibrary } from "./library-watch.js";
 import { ArtworkQueue, artNames, artOutput, artVariantKey, artworkBesideMedia, BACKDROP_OUTPUT, episodeArtName, fileMayUseFolderArtwork, findArtwork, type FolderListing, framePosition, pickArtwork, readFolderListing, POSTER_OUTPUT, saveBackdropAs, saveFrame, savePosterAs, type ArtShape, type PosterOutcome } from "./artwork.js";
-import { envCredentials, INTERNAL_TOKEN, parseCookies, readSession, SESSION_COOKIE } from "./auth.js";
+import { envCredentials, INTERNAL_TOKEN, parseCookies, readSession, sessionUserId, SESSION_COOKIE, type SessionInfo } from "./auth.js";
 import { RepeatFilter } from "./access-log.js";
 import { randomBytes, randomUUID } from "node:crypto";
 import type { ClientCapabilities, PlaybackOptions } from "./playback.js";
@@ -81,6 +82,27 @@ await externalIds.load();
 if (libraryMigration.migrated) log("INFO", "State migrated to libraries", { libraryId: libraryMigration.libraryId, paths: libraryMigration.paths, artwork: libraryMigration.artwork });
 if (libraryMigration.metadata) log("INFO", "Library metadata moved out of the state", { rows: libraryMigration.metadata });
 if (libraryMigration.artworkSetting) log("INFO", "The global artwork location was retired", { libraries: libraryMigration.artworkSetting });
+// Before anything reads the state. A default password would have to go straight away, so
+// none is created: the first boot ends on the screen where the user creates the account.
+// Installs still running on admin/admin lose it and go through the same setup: the
+// migration refuses to carry them over, so what is left is an object nothing reads.
+const preAccountsAccount = store.auth();
+if (preAccountsAccount) {
+  await store.update((state) => { state.auth = undefined; });
+  if (preAccountsAccount.isDefault) log("WARN", "The default admin/admin sign-in was removed, create your own account on the next visit");
+}
+// An install that only ever had ADMIN_USERNAME / ADMIN_PASSWORD has no stored account,
+// and after accounts a session has to name one. It is a working install, so it gets a real
+// administrator from the credentials it already carries rather than the setup screen.
+const adopted = await store.adoptEnvCredentials(envCredentials());
+if (adopted) log("WARN", "An administrator was created from the environment credentials, they can now be removed", { username: adopted.username });
+// The operator's recovery. The store answers against the value it acted on last, so a
+// variable left in the container configuration does nothing on the next boot.
+const resetValue = process.env.ADMIN_PASSWORD_RESET;
+if (resetValue) {
+  const reset = await store.resetPasswordFromEnv(process.env.ADMIN_USERNAME, resetValue);
+  if (reset) log("WARN", "The account password was reset from the environment", { username: reset.username });
+}
 // A level chosen in the interface outlives the container it was chosen in.
 const savedLevel = parseLevel(store.settings().logLevel);
 if (savedLevel) setLevel(savedLevel);
@@ -172,7 +194,9 @@ queue.setResolver(async (source) => {
     const addon = store.addons().find((item) => item.key === selected.stream.addonKey);
     return { ...selected, settings: addon?.downloadSettings ?? defaultDownloadSettings() };
   }
-  const ranked = rankStreams(candidates, store.settings().audioLanguage, priority);
+  // The queue picks a source with no request in hand: the one account's language is the
+  // one to pick it in.
+  const ranked = rankStreams(candidates, prefsOf().audioLanguage, priority);
   const next = ranked.find((stream) => !source.tried.includes(stream.url!));
   if (!next) return undefined;
   const addon = store.addons().find((item) => item.key === next.addonKey);
@@ -180,28 +204,60 @@ queue.setResolver(async (source) => {
 });
 await playback.load();
 
-// A default password would have to go straight away, so none is created: the first
-// boot ends on the screen where the user creates the account. Installs still running
-// on admin/admin lose it and go through the same setup.
-if (store.auth()?.isDefault) {
-  await store.update((state) => { state.auth = undefined; });
-  log("WARN", "The default admin/admin sign-in was removed, create your own account on the next visit");
-}
-/** With no stored account and no fallback credentials from the environment, nothing can be done. */
-const needsSetup = () => !store.auth() && !envCredentials();
+/** With no account at all and no fallback credentials, nothing can be done. */
+const needsSetup = () => !store.users().length && !envCredentials();
 
-const secret = () => store.auth()?.secret ?? "";
 const isSecure = (req: express.Request) => req.headers["x-forwarded-proto"] === "https" || req.protocol === "https";
-const knownUser = (name: string) => name === store.auth()?.username || name === envCredentials()?.username;
-const currentSession = (req: express.Request) => {
-  // With no account there is nothing to sign with, so no token can be valid.
-  if (!store.auth()) return undefined;
-  const info = readSession(secret(), parseCookies(req.headers.cookie)[SESSION_COOKIE]);
-  if (!info || !knownUser(info.username)) return undefined;
+const currentSession = (req: express.Request): SessionInfo | undefined => {
+  const token = parseCookies(req.headers.cookie)[SESSION_COOKIE];
+  // The token names a user, and the secret that checks it belongs to that user: an id that
+  // resolves to nobody, or to an account that may not sign in, is not a session.
+  const id = sessionUserId(token);
+  const user = id ? findUserById(store.users(), id) : undefined;
+  if (!user || user.disabled) return undefined;
+  const info = readSession(user.secret, token);
+  if (!info || info.userId !== user.id) return undefined;
   // A signed-out session is invalid even with a signature that still verifies.
-  return store.auth()?.revoked?.[info.sid] ? undefined : info;
+  return user.revoked?.[info.sid] ? undefined : info;
 };
-const currentUser = (req: express.Request) => currentSession(req)?.username;
+const currentUser = (req: express.Request) => {
+  const session = currentSession(req);
+  return session ? findUserById(store.users(), session.userId) : undefined;
+};
+
+/** Which account a call speaks for. A request answers with the account its session names;
+ *  work with no request in hand -- a library job resumed from disk, the artwork queue --
+ *  belongs to the one account this release has. */
+const accountIdOf = (req?: express.Request): string | undefined =>
+  req ? currentUser(req)?.id : store.users()[0]?.id;
+/** That person's settings, over the built-in defaults while the instance has no account. */
+const prefsOf = (req?: express.Request): UserPrefs => store.prefs(accountIdOf(req));
+/** The four personal maps of the state, read. A request with no usable session must not
+ *  read somebody else's rows. */
+const dataOf = (req: express.Request): UserData => {
+  const id = accountIdOf(req);
+  if (!id) throw new ResourceError(401, "AUTH_REQUIRED");
+  return store.userData(id);
+};
+/** Applies the mutation inside a state mutator the caller already has open. */
+const mutateData = (state: State, id: string, mutate: (data: UserData) => void) => {
+  const data = state.userData?.[id] ?? emptyUserData();
+  mutate(data);
+  state.userData = { ...(state.userData ?? {}), [id]: data };
+};
+const updateData = async (req: express.Request | undefined, mutate: (data: UserData) => void): Promise<void> => {
+  const id = accountIdOf(req);
+  if (!id) throw new ResourceError(401, "AUTH_REQUIRED");
+  await store.update((state) => mutateData(state, id, mutate));
+};
+/** What the four personal maps hold. `UserData` keeps them opaque, so that the user model
+ *  stays clear of the library and progress modules; the server is where they are pinned. */
+type WatchlistEntry = { type: string; id: string; name: string; poster?: string; addedAt: string };
+type StoredProgress = { position: number; duration: number; title: string; path?: string; poster?: string; addonKey?: string; series?: ProgressSeries; updatedAt: string };
+type WatchedMarker = { name: string; poster?: string; addonKey?: string; season: number; episode: number; updatedAt: string };
+const watchlistOf = (data: UserData) => data.watchlist as Record<string, WatchlistEntry>;
+const progressOf = (data: UserData) => data.progress as Record<string, StoredProgress>;
+const markersOf = (data: UserData) => data.watchedSeries as Record<string, WatchedMarker>;
 
 const ownerOf = (req: express.Request): ResourceOwner => {
   const session = currentSession(req);
@@ -340,7 +396,7 @@ setInterval(() => {
   }
 }, 1000).unref();
 
-registerAuthRoutes(app, { store, needsSetup, currentSession, currentUser, secret, isSecure, stopOwnedPlayback });
+registerAuthRoutes(app, { store, needsSetup, currentSession, currentUser, isSecure, stopOwnedPlayback });
 
 /** The page only ever holds our own id, so anything it hands back is turned into the
  *  real address again before it is stored or downloaded. */
@@ -519,25 +575,25 @@ const titleTrailer = (type: string, id: string, language: string) => {
   return trailerFor(store.addons(), type, id, language, apiKey ? { apiKey, language } : undefined);
 };
 app.get("/api/meta/:type/:id", asyncRoute(async (req, res) => {
-  const language = normalizeLanguage(String(req.query.language ?? "")) ?? store.settings().uiLanguage;
+  const language = normalizeLanguage(String(req.query.language ?? "")) ?? prefsOf(req).uiLanguage;
   const meta = await cachedMeta(String(req.params.type), String(req.params.id), language);
   if (!meta) return res.status(404).json({ error: "Metadata nebyla nalezena." });
   res.json(images.rewriteMeta(meta));
 }));
 app.get("/api/library/trailer", asyncRoute(async (req, res) => {
-  const language = normalizeLanguage(String(req.query.language ?? "")) ?? store.settings().uiLanguage;
+  const language = normalizeLanguage(String(req.query.language ?? "")) ?? prefsOf(req).uiLanguage;
   const raw = String(req.query.path ?? "").trim();
   const entry = raw ? knownTitleEntry(libraryKey(raw), metaStore.qualifiedMeta()) : undefined;
   res.json({ trailer: entry ? await titleTrailer(entry.record.type, entry.record.id, language) : null });
 }));
 app.get("/api/trailer/:type/:id", asyncRoute(async (req, res) => {
-  const language = normalizeLanguage(String(req.query.language ?? "")) ?? store.settings().uiLanguage;
+  const language = normalizeLanguage(String(req.query.language ?? "")) ?? prefsOf(req).uiLanguage;
   res.json({ trailer: await titleTrailer(String(req.params.type), String(req.params.id), language) });
 }));
 /** The same row for a folder that is bound to a title. A path with no binding asks
  *  Wikidata nothing and answers no links. */
 app.get("/api/library/links", asyncRoute(async (req, res) => {
-  const language = normalizeLanguage(String(req.query.language ?? "")) ?? store.settings().uiLanguage;
+  const language = normalizeLanguage(String(req.query.language ?? "")) ?? prefsOf(req).uiLanguage;
   const raw = String(req.query.path ?? "").trim();
   const entry = raw ? knownTitleEntry(libraryKey(raw), metaStore.qualifiedMeta()) : undefined;
   if (!entry) return res.json({ links: [] });
@@ -548,7 +604,7 @@ app.get("/api/library/links", asyncRoute(async (req, res) => {
  *  the rest; when it cannot be reached the links it would have added are simply missing. */
 app.get("/api/links/:type/:id", asyncRoute(async (req, res) => {
   const id = String(req.params.id);
-  const language = normalizeLanguage(String(req.query.language ?? "")) ?? store.settings().uiLanguage;
+  const language = normalizeLanguage(String(req.query.language ?? "")) ?? prefsOf(req).uiLanguage;
   const ids = /^tt\d+$/.test(id) ? await externalIds.ids(id) : {};
   res.json({ links: siteLinks(String(req.params.type), id, ids ?? {}, language) });
 }));
@@ -717,7 +773,10 @@ const relativeKeyIn = (libraryId: string, key: string) => {
 };
 
 const metaCache = new Map<string, { value: MetaItem | null; at: number }>();
-const cachedMeta = async (type: string, id: string, language: string = store.settings().uiLanguage) => {
+/** A lookup with no request in hand -- the artwork queue, a backfill, a job that has just
+ *  finished -- reads the language of the one account. A caller that knows which person is
+ *  asking passes that person's language. */
+const cachedMeta = async (type: string, id: string, language: string = prefsOf().uiLanguage) => {
   const key = `${type}:${id}:${language}`;
   const hit = metaCache.get(key);
   if (hit && Date.now() - hit.at < 6 * 60 * 60_000) return hit.value;
@@ -1207,6 +1266,7 @@ app.delete("/api/libraries/:id", asyncRoute(async (req, res) => {
   // again is not a new library that has to be matched all over. The note is what makes the
   // dialog's promise true, and it is dropped with the rest when the user asks to forget.
   const realRoot = await realpath(path.resolve(target.root)).catch(() => path.resolve(target.root));
+  const ownerId = accountIdOf(req);
   await store.update((state) => {
     state.libraries = (state.libraries ?? []).filter((library) => library.id !== target.id);
     const kept = activeDeparted(state.departed ?? []).filter((entry) => entry.id !== target.id);
@@ -1215,12 +1275,14 @@ app.delete("/api/libraries/:id", asyncRoute(async (req, res) => {
       if (state.settings.defaultMovieLibrary === target.id) state.settings.defaultMovieLibrary = "";
       if (state.settings.defaultSeriesLibrary === target.id) state.settings.defaultSeriesLibrary = "";
     }
-    if (!forget) return;
-    state.favorites = (state.favorites ?? []).filter((key) => parseLibraryPath(key)?.libraryId !== target.id);
-    state.progress = Object.fromEntries(Object.entries(state.progress ?? {}).filter(([key, value]) => {
-      const owner = key.startsWith("file:") ? key.slice(5) : value.path ?? "";
-      return parseLibraryPath(owner)?.libraryId !== target.id;
-    }));
+    if (!forget || !ownerId) return;
+    mutateData(state, ownerId, (data) => {
+      data.favorites = data.favorites.filter((key) => parseLibraryPath(key)?.libraryId !== target.id);
+      data.progress = Object.fromEntries(Object.entries(progressOf(data)).filter(([key, value]) => {
+        const owner = key.startsWith("file:") ? key.slice(5) : value.path ?? "";
+        return parseLibraryPath(owner)?.libraryId !== target.id;
+      }));
+    });
   });
   if (forget) {
     await metaStore.forget(target.id);
@@ -1301,14 +1363,16 @@ const metaBackfill = new ArtworkQueue();
 // about on every single browse, so a finished attempt holds for a while.
 const BACKFILL_RETRY_MS = 6 * 60 * 60_000;
 const metaBackfillTried = new Map<string, number>();
-const scheduleMetaBackfill = (type: string, id: string) => {
+/** The language travels with the work: the row that asked for it knows whose settings
+ *  saw it, and the fetch that runs later has no request to read them from. */
+const scheduleMetaBackfill = (type: string, id: string, language: string) => {
   const key = `${type}:${id}`;
   const tried = metaBackfillTried.get(key);
   if (!id || playbackBusy()) return false;
   if (tried != null && Date.now() - tried < BACKFILL_RETRY_MS) return false;
   metaBackfill.run(key, async () => {
     if (playbackBusy()) return;
-    const meta = await cachedMeta(type, id);
+    const meta = await cachedMeta(type, id, language);
     metaBackfillTried.set(key, Date.now());
     for (const [seen, at] of metaBackfillTried) if (Date.now() - at > BACKFILL_RETRY_MS) metaBackfillTried.delete(seen);
     if (!meta) return;
@@ -1425,7 +1489,7 @@ const clearGeneratedArt = async (key: string) => {
   }
 };
 
-const attachBrowseMeta = <T extends { path: string; kind: string; name?: string; label?: string }>(item: T) => {
+const attachBrowseMeta = <T extends { path: string; kind: string; name?: string; label?: string }>(item: T, language: string) => {
   const records = metaStore.qualifiedMeta();
   const episodes = metaStore.episodes();
   const key = libraryKey(item.path);
@@ -1434,9 +1498,9 @@ const attachBrowseMeta = <T extends { path: string; kind: string; name?: string;
   const known = knownTitleOf(key, records);
   const numbers = item.kind === "file" ? episodeNumberOf(key, ownRecord(key, records)) : undefined;
   // Only a key can answer with a better language; without one every record stays wanted as it is.
-  const wantedLanguage = store.settings().tmdbApiKey ? store.settings().uiLanguage : undefined;
+  const wantedLanguage = store.settings().tmdbApiKey ? language : undefined;
   const wanted = needsBackfill(known, undefined, wantedLanguage) || needsEpisodes(known, numbers, episodes);
-  const backfill = wanted && scheduleMetaBackfill(known!.type, known!.id);
+  const backfill = wanted && scheduleMetaBackfill(known!.type, known!.id, language);
   // The move dialog offers only the libraries that take what it is about to hand them,
   // and a row without a binding has no kind to compare -- the server stays the backstop.
   const titled = known && (known.type === "movie" || known.type === "series") ? { titleType: known.type } : {};
@@ -1644,14 +1708,14 @@ async function sweepArtwork() {
 }
 
 // A favourite is only a flag on a path. Nothing is moved anywhere.
-const withFavorites = <T extends { path: string }>(items: T[]) => {
-  const favorites = new Set(store.favorites());
+const withFavorites = <T extends { path: string }>(items: T[], data: UserData) => {
+  const favorites = new Set(data.favorites);
   return items.map((item) => ({ ...item, favorite: favorites.has(libraryKey(item.path)) }));
 };
 
 // Starred catalogue titles. The key is type and id, because no file has to exist for them.
-app.get("/api/watchlist", (_req, res) => {
-  const all = store.watchlist();
+app.get("/api/watchlist", (req, res) => {
+  const all = watchlistOf(dataOf(req));
   res.json(Object.entries(all)
     .map(([key, value]) => ({ key, ...value, poster: images.proxied(value.poster) }))
     .sort((a, b) => b.addedAt.localeCompare(a.addedAt)));
@@ -1662,11 +1726,11 @@ app.post("/api/watchlist", asyncRoute(async (req, res) => {
   if (!id) throw new AppError("Missing title id.", "err.missingTitleId");
   const key = `${type}:${id}`;
   const wanted = Boolean(req.body.favorite);
-  await store.update((state) => {
-    const all = { ...state.watchlist };
+  await updateData(req, (data) => {
+    const all = { ...watchlistOf(data) };
     if (wanted) all[key] = { type, id, name: String(req.body.name ?? id), poster: posterOf(req.body.poster), addedAt: new Date().toISOString() };
     else delete all[key];
-    state.watchlist = all;
+    data.watchlist = all;
   });
   res.json({ key, favorite: wanted });
 }));
@@ -1695,18 +1759,20 @@ const reportedSeries = (key: string, title: string, body: unknown): ProgressSeri
 };
 /** One row of Continue watching, either a stored position or the next episode a finished
  *  one left behind. */
-type ProgressRow = { key: string; position: number; duration: number; title: string; path?: string; poster?: string; addonKey?: string; series?: ProgressSeries; pending?: true; updatedAt: string };
-app.get("/api/progress", asyncRoute(async (_req, res) => {
-  const all = store.progress();
+type ProgressRow = StoredProgress & { key: string; pending?: true };
+app.get("/api/progress", asyncRoute(async (req, res) => {
+  const data = dataOf(req);
+  const all = progressOf(data);
   // One row per series, whichever episode was watched last. The cut to 40 titles happens
   // after the markers have had their say, so a show does not spend the row on every episode.
   const rows = groupSeriesProgress(Object.entries(all).map(([key, value]) => ({ ...value, key })));
   const shown = rows.flatMap((row) => (row.series ? [row.series.id] : []));
   const over: string[] = [];
-  const pending = await Promise.all(markersOwingRow(store.watchedSeries(), shown).map(async ([id, marker]): Promise<ProgressRow | undefined> => {
+  const language = prefsOf(req).uiLanguage;
+  const pending = await Promise.all(markersOwingRow(markersOf(data), shown).map(async ([id, marker]): Promise<ProgressRow | undefined> => {
     // The six-hour cache answers most of these. An addon that stays quiet answers null,
     // which leaves the marker alone: one unreachable show must fail by itself.
-    const meta = await cachedMeta("series", id);
+    const meta = await cachedMeta("series", id, language);
     if (!meta) return undefined;
     const next = nextEpisodeOf(meta.videos, marker);
     if (!next) { over.push(id); return undefined; }
@@ -1721,10 +1787,10 @@ app.get("/api/progress", asyncRoute(async (_req, res) => {
     };
   }));
   // A show that ran out of episodes leaves Continue watching for good.
-  if (over.length) await store.update((state) => {
-    const markers = { ...state.watchedSeries };
+  if (over.length) await updateData(req, (fresh) => {
+    const markers = { ...markersOf(fresh) };
     for (const id of over) delete markers[id];
-    state.watchedSeries = markers;
+    fresh.watchedSeries = markers;
   });
   const items = [...rows, ...pending.filter((row) => row !== undefined)]
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
@@ -1733,21 +1799,21 @@ app.get("/api/progress", asyncRoute(async (_req, res) => {
   res.json(items);
 }));
 app.get("/api/progress/:key", (req, res) => {
-  const found = store.progress()[storedProgressKey(String(req.params.key))];
+  const found = progressOf(dataOf(req))[storedProgressKey(String(req.params.key))];
   res.json(found ? { ...found, poster: images.proxied(found.poster) } : null);
 });
 app.post("/api/progress", asyncRoute(async (req, res) => {
   // With tracking switched off the position is written nowhere.
-  if (!store.settings().trackProgress) return res.status(204).end();
+  if (!prefsOf(req).trackProgress) return res.status(204).end();
   const key = storedProgressKey(String(req.body.key ?? "").trim());
   const position = Number(req.body.position) || 0;
   const duration = Number(req.body.duration) || 0;
   if (!key) throw new AppError("Missing title key.", "err.missingTitleKey");
-  await store.update((state) => {
-    const all = { ...state.progress };
+  await updateData(req, (data) => {
+    const all = { ...progressOf(data) };
     const previous = all[key];
     const title = String(req.body.title ?? previous?.title ?? "Video");
-    const record = {
+    const record: StoredProgress = {
       position, duration,
       title,
       path: req.body.path ? libraryKey(String(req.body.path)) : previous?.path,
@@ -1757,7 +1823,7 @@ app.post("/api/progress", asyncRoute(async (req, res) => {
       updatedAt: new Date().toISOString(),
     };
     const series = seriesOf(key, record);
-    const markers = { ...state.watchedSeries };
+    const markers = { ...markersOf(data) };
     // Any report beats the marker of the show it belongs to, so the next episode of a
     // finished one never stands beside the episode being watched now.
     if (series) delete markers[series.id];
@@ -1773,43 +1839,45 @@ app.post("/api/progress", asyncRoute(async (req, res) => {
     } else all[key] = record;
     // The list must not grow without bound.
     const keys = Object.keys(all).sort((a, b) => all[b]!.updatedAt.localeCompare(all[a]!.updatedAt));
-    state.progress = Object.fromEntries(keys.slice(0, 60).map((item) => [item, all[item]!]));
+    data.progress = Object.fromEntries(keys.slice(0, 60).map((item) => [item, all[item]!]));
     const markerIds = Object.keys(markers).sort((a, b) => markers[b]!.updatedAt.localeCompare(markers[a]!.updatedAt));
-    state.watchedSeries = Object.fromEntries(markerIds.slice(0, 60).map((id) => [id, markers[id]!]));
+    data.watchedSeries = Object.fromEntries(markerIds.slice(0, 60).map((id) => [id, markers[id]!]));
   });
   res.status(204).end();
 }));
-app.delete("/api/progress", asyncRoute(async (_req, res) => {
-  await store.update((state) => { state.progress = {}; state.watchedSeries = {}; });
+app.delete("/api/progress", asyncRoute(async (req, res) => {
+  await updateData(req, (data) => { data.progress = {}; data.watchedSeries = {}; });
   log("INFO", "Watch history cleared");
   res.status(204).end();
 }));
 app.delete("/api/progress/:key", asyncRoute(async (req, res) => {
-  await store.update((state) => {
+  await updateData(req, (data) => {
     const key = storedProgressKey(String(req.params.key));
-    const all = { ...state.progress };
+    const all = { ...progressOf(data) };
     const removed = all[key];
     delete all[key];
-    state.progress = all;
+    data.progress = all;
     // The row a finished episode leaves behind is not stored, so forgetting that row has
     // to forget the marker that draws it.
     const series = seriesOf(key, { title: removed?.title ?? "", series: removed?.series });
     if (series) {
-      const markers = { ...state.watchedSeries };
+      const markers = { ...markersOf(data) };
       delete markers[series.id];
-      state.watchedSeries = markers;
+      data.watchedSeries = markers;
     }
   });
   res.status(204).end();
 }));
 
+/** Called from the route and from a library job, which runs with no request: the one
+ *  account this release has owns the flag either way. */
 const setLibraryFavorite = async (relative: string, wanted: boolean) => {
   const resolved = relative ? await resolveLibraryPath(store.libraries(), relative) : undefined;
   if (!resolved) throw new AppError("Invalid path.", "err.invalidPath");
-  await store.update((state) => {
-    const current = new Set(state.favorites ?? []);
+  await updateData(undefined, (data) => {
+    const current = new Set(data.favorites);
     if (wanted) current.add(resolved.key); else current.delete(resolved.key);
-    state.favorites = [...current];
+    data.favorites = [...current];
   });
 };
 
@@ -1821,11 +1889,12 @@ app.post("/api/library/favorite", asyncRoute(async (req, res) => {
 }));
 
 app.get("/api/library/resume", asyncRoute(async (req, res) => {
-  const favorites = new Set(store.favorites());
+  const data = dataOf(req);
+  const favorites = new Set(data.favorites);
   const query = String(req.query.query ?? "").trim().toLocaleLowerCase();
   const libraries = store.libraries();
   const records = metaStore.qualifiedMeta();
-  const entries = Object.entries(store.progress()).filter(([key, entry]) =>
+  const entries = Object.entries(progressOf(data)).filter(([key, entry]) =>
     key.startsWith("file:") && Boolean(entry.path) && showsInContinueWatching(entry.path!, libraries));
   const described = await Promise.all(entries.map(async ([, entry]) => {
     const item = await describeLibraryPath(entry.path!);
@@ -1859,7 +1928,7 @@ app.get("/api/library/resume", asyncRoute(async (req, res) => {
     if (!art) scheduleFileArtwork(key);
     const wide = await locateFileArtwork(key, "wide");
     if (!wide) scheduleFileArtwork(key, "wide");
-    const { item: withMeta, backfill } = attachBrowseMeta(item);
+    const { item: withMeta, backfill } = attachBrowseMeta(item, prefsOf(req).uiLanguage);
     return { ...withMeta, poster: await thumbUrl("path", item.path, art), wide: await thumbUrl("path", item.path, wide, "wide"), backfill };
   }));
   res.json({ path: ":resume", items: page.map(({ backfill: _backfill, seriesKey: _seriesKey, ...item }) => item), total: ordered.length, pending: page.some((item) => !item.poster || !item.wide || item.backfill) });
@@ -1868,7 +1937,7 @@ app.get("/api/library/resume", asyncRoute(async (req, res) => {
 app.get("/api/library/favorites", asyncRoute(async (req, res) => {
   const sorts = new Set(["name", "added", "size", "random"]);
   const sort = sorts.has(String(req.query.sort)) ? String(req.query.sort) as "name" : "name";
-  const described = await Promise.all(store.favorites().map(async (stored) => {
+  const described = await Promise.all(dataOf(req).favorites.map(async (stored) => {
     const item = await describeLibraryPath(stored);
     return item && { ...item, path: wirePath(libraryKey(stored)) };
   }));
@@ -1890,7 +1959,7 @@ app.get("/api/library/favorites", asyncRoute(async (req, res) => {
     if (!wide) (item.kind === "folder" ? scheduleFolderArtwork : scheduleFileArtwork)(key, "wide");
     const poster = await thumbUrl(item.kind === "folder" ? "dir" : "path", item.path, art);
     const wideUrl = await thumbUrl(item.kind === "folder" ? "dir" : "path", item.path, wide, "wide");
-    const { item: withMeta, backfill } = attachBrowseMeta(item);
+    const { item: withMeta, backfill } = attachBrowseMeta(item, prefsOf(req).uiLanguage);
     return { ...withMeta, favorite: true, poster, wide: wideUrl, backfill };
   }));
   res.json({ path: ":favorites", items: page.map(({ backfill: _backfill, ...item }) => item), total: ordered.length, pending: page.some((item) => !item.poster || !item.wide || item.backfill) });
@@ -1918,8 +1987,9 @@ app.get("/api/library/browse", asyncRoute(async (req, res) => {
   const library = resolved?.library ?? singleLibrary();
   markBrowsed(library);
   const inLibrary = (path: string) => libraryPath(library.id, path);
+  const data = dataOf(req);
   const favoritePaths = onlyFavorites
-    ? new Set(store.favorites().map((key) => relativeKeyIn(library.id, key)).filter((value): value is string => value !== undefined))
+    ? new Set(data.favorites.map((key) => relativeKeyIn(library.id, key)).filter((value): value is string => value !== undefined))
     : undefined;
   const result = await browseDirectory(library.root, resolved?.relative ?? "", String(req.query.query ?? ""),
     Math.max(0, Number(req.query.skip) || 0), limit, sort, req.query.order === "desc", String(req.query.seed ?? ""), favoritePaths,
@@ -1932,7 +2002,7 @@ app.get("/api/library/browse", asyncRoute(async (req, res) => {
       const { poster: art, wide } = await locateFolderArtworkPair(key);
       if (!art) scheduleFolderArtwork(key);
       if (!wide) scheduleFolderArtwork(key, "wide");
-      const { item: withMeta, backfill } = attachBrowseMeta({ ...item, path });
+      const { item: withMeta, backfill } = attachBrowseMeta({ ...item, path }, prefsOf(req).uiLanguage);
       return {
         ...withMeta, path,
         poster: await thumbUrl("dir", path, art),
@@ -1944,8 +2014,8 @@ app.get("/api/library/browse", asyncRoute(async (req, res) => {
     if (!art) scheduleFileArtwork(key);
     const wide = await locateFileArtwork(key, "wide");
     if (!wide) scheduleFileArtwork(key, "wide");
-    const watched = store.progress()[`file:${key}`];
-    const { item: withMeta, backfill } = attachBrowseMeta({ ...item, path });
+    const watched = progressOf(data)[`file:${key}`];
+    const { item: withMeta, backfill } = attachBrowseMeta({ ...item, path }, prefsOf(req).uiLanguage);
     return {
       ...withMeta,
       path,
@@ -1955,7 +2025,7 @@ app.get("/api/library/browse", asyncRoute(async (req, res) => {
       backfill,
     };
   }));
-  const marked = withFavorites(items);
+  const marked = withFavorites(items, data);
   res.json({ ...result, path: wirePath(inLibrary(result.path)), items: marked.map(({ backfill: _backfill, ...item }) => item), pending: marked.some((item) => !item.poster || !item.wide || item.backfill) });
 }));
 
@@ -1974,14 +2044,15 @@ const forgetLibraryPath = async (key: string) => {
     file.meta = dropKeyed(file.meta, target.relative);
     file.suggestions = dropKeyed(file.suggestions, target.relative);
   });
-  await store.update((state) => {
-    state.favorites = (state.favorites ?? []).filter((item) => !isPathWithin(item, key));
-    state.progress = Object.fromEntries(Object.entries(state.progress ?? {}).filter(([progressKey, value]) => {
+  // Also reached from a library job, which has no request: the one account owns the rows.
+  await updateData(undefined, (data) => {
+    data.favorites = data.favorites.filter((item) => !isPathWithin(item, key));
+    data.progress = Object.fromEntries(Object.entries(progressOf(data)).filter(([progressKey, value]) => {
       if (orphans.has(progressKey)) return false;
       const itemPath = progressKey.startsWith("file:") ? progressKey.slice(5) : value.path;
       return !itemPath || !isPathWithin(itemPath, key);
     }));
-    state.watchlist = Object.fromEntries(Object.entries(state.watchlist ?? {}).filter(([watchKey]) => !orphans.has(watchKey)));
+    data.watchlist = Object.fromEntries(Object.entries(watchlistOf(data)).filter(([watchKey]) => !orphans.has(watchKey)));
   });
   return orphans;
 };
@@ -1993,9 +2064,9 @@ const relocateLibraryPath = async (key: string, nextKey: string, pin = false) =>
   // The bindings live in one file per library, so a move into another library rewrites two
   // of them and the store is the only place that can do both.
   await metaStore.relocate(key, nextKey, pin);
-  await store.update((state) => {
-    state.favorites = (state.favorites ?? []).map((item) => remapPath(item, key, nextKey));
-    state.progress = Object.fromEntries(Object.entries(state.progress ?? {}).map(([progressKey, value]) => {
+  await updateData(undefined, (data) => {
+    data.favorites = data.favorites.map((item) => remapPath(item, key, nextKey));
+    data.progress = Object.fromEntries(Object.entries(progressOf(data)).map(([progressKey, value]) => {
       const filePath = progressKey.startsWith("file:") ? progressKey.slice(5) : undefined;
       const nextProgressKey = filePath ? `file:${remapPath(filePath, key, nextKey)}` : progressKey;
       const nextPath = value.path ? remapPath(value.path, key, nextKey) : value.path;
@@ -2410,8 +2481,9 @@ app.get("/api/library/identity", asyncRoute(async (req, res) => {
   const records = metaStore.qualifiedMeta();
   const suggestions = metaStore.qualifiedSuggestions();
   const known = knownTitleOf(resolved.key, records);
-  const wantedLanguage = store.settings().tmdbApiKey ? store.settings().uiLanguage : undefined;
-  if (needsBackfill(known, undefined, wantedLanguage)) scheduleMetaBackfill(known!.type, known!.id);
+  const language = prefsOf(req).uiLanguage;
+  const wantedLanguage = store.settings().tmdbApiKey ? language : undefined;
+  if (needsBackfill(known, undefined, wantedLanguage)) scheduleMetaBackfill(known!.type, known!.id, language);
   const suggestion = suggestionFor(unitKey, suggestions);
   const isFile = isVideo(posixBase(resolved.key));
   const numbers = episodeNumberOf(resolved.key, ownRecord(resolved.key, records));
@@ -2433,7 +2505,9 @@ app.get("/api/library/identity", asyncRoute(async (req, res) => {
 
 type LibraryMatchRequest = { path?: unknown; key?: unknown; id?: unknown; type?: unknown; scope?: unknown; season?: unknown; episode?: unknown; skipLookup?: unknown; skipMosaic?: unknown };
 
-const matchLibraryItem = async (body: LibraryMatchRequest) => {
+/** A library job matches with no request in hand, so the language of the one account is
+ *  the one to bind the metadata in; the dialog passes the caller's own. */
+const matchLibraryItem = async (body: LibraryMatchRequest, language = prefsOf().uiLanguage) => {
   const requested = String(body.path ?? body.key ?? "").trim();
   const resolved = requested ? await resolveLibraryPath(store.libraries(), requested) : undefined;
   if (!resolved) throw new AppError("Invalid path.", "err.invalidPath");
@@ -2486,7 +2560,7 @@ const matchLibraryItem = async (body: LibraryMatchRequest) => {
   const season = number(body.season);
   // "file" binds the one video the user clicked, "unit" the whole title it belongs to.
   const bindKey = body.scope === "file" ? requestKey : unitKey;
-  const meta = id ? await cachedMeta(type, id) : null;
+  const meta = id ? await cachedMeta(type, id, language) : null;
   const fields = cacheFieldsFromMeta(meta);
   const episodeRows = episodesFromMeta(meta);
   const at = new Date().toISOString();
@@ -2518,7 +2592,7 @@ const matchLibraryItem = async (body: LibraryMatchRequest) => {
 };
 
 app.post("/api/library/match", asyncRoute(async (req, res) => {
-  res.json(await matchLibraryItem(req.body ?? {}));
+  res.json(await matchLibraryItem(req.body ?? {}, prefsOf(req).uiLanguage));
 }));
 
 const parseLibraryOp = (value: unknown): LibraryOp => {
@@ -2614,8 +2688,9 @@ const libraryOps = new LibraryOps({
       else if (operation.op === "skipLookup") await matchLibraryItem({ path: item, skipLookup: operation.skipLookup });
       else if (operation.op === "mosaic") await matchLibraryItem({ path: item, skipMosaic: !operation.mosaic });
       else if (operation.op === "forget") {
-        await store.update((state) => {
-          state.progress = Object.fromEntries(Object.entries(state.progress ?? {}).filter(([key, record]) => {
+        // A library job, no request: the one account owns the rows it is dropping.
+        await updateData(undefined, (data) => {
+          data.progress = Object.fromEntries(Object.entries(progressOf(data)).filter(([key, record]) => {
             const stored = key.startsWith("file:") ? key.slice(5) : record.path;
             return !stored || !isPathWithin(stored, resolved.key);
           }));
@@ -2887,7 +2962,7 @@ app.post("/api/downloads/bulk", asyncRoute(async (req, res) => {
   const fallbackSubtitleLanguage = subtitleMode === "off" ? undefined : normalizeLanguage(String(rawSelection.fallbackSubtitleLanguage ?? ""));
   const firstAddon = store.addons().find((addon) => addon.key === addonKeys[0]);
   // A source whose addon found no language falls back to the one the title's own metadata names.
-  const metaLanguage = parentId ? titleLanguage((await cachedMeta(metaType, parentId))?.language) : undefined;
+  const metaLanguage = parentId ? titleLanguage((await cachedMeta(metaType, parentId, prefsOf(req).uiLanguage))?.language) : undefined;
   const selection: DownloadSelection = {
     addonKeys, sourceStrategy, audioLanguage,
     fallbackAudioLanguage: fallbackAudioLanguage === audioLanguage ? undefined : fallbackAudioLanguage,
@@ -2918,7 +2993,9 @@ app.post("/api/downloads/:id/retry", asyncRoute(async (req, res) => { await queu
 app.post("/api/downloads/:id/move", asyncRoute(async (req, res) => { await queue.move(String(req.params.id), Number(req.body.direction) < 0 ? -1 : 1); res.status(204).end(); }));
 app.delete("/api/downloads/:id", asyncRoute(async (req, res) => { await queue.remove(String(req.params.id)); res.status(204).end(); }));
 app.delete("/api/downloads", asyncRoute(async (_req, res) => { await queue.clearCompleted(); res.status(204).end(); }));
-app.get("/api/settings", (_req, res) => res.json(publicSettings(store.settings())));
+/** The one flat object the interface reads: the instance's settings and the caller's own. */
+const settingsView = (req: express.Request) => ({ ...publicSettings(store.settings()), ...prefsOf(req) });
+app.get("/api/settings", (req, res) => res.json(settingsView(req)));
 app.get("/api/stats", (req, res) => res.json(stats.summary(Number(req.query.hours) || 720)));
 /** Playback running at this moment. The statistics otherwise look backwards; this is the
  * one view of what the line is carrying right now. */
@@ -2948,7 +3025,7 @@ app.get("/api/logs", asyncRoute(async (req, res) => {
 }));
 app.delete("/api/logs", asyncRoute(async (req, res) => {
   await clearLog();
-  log("INFO", "Log cleared from the interface", { user: currentUser(req) });
+  log("INFO", "Log cleared from the interface", { user: currentUser(req)?.username });
   res.status(204).end();
 }));
 
@@ -2958,7 +3035,7 @@ const CLIENT_LOG_PER_MINUTE = 30;
 const clientReports = new Map<string, { count: number; resetAt: number }>();
 app.post("/api/client-log", (req, res) => {
   const now = Date.now();
-  const who = currentUser(req) ?? req.ip ?? "anonymous";
+  const who = currentUser(req)?.username ?? req.ip ?? "anonymous";
   const bucket = clientReports.get(who);
   if (!bucket || bucket.resetAt <= now) clientReports.set(who, { count: 1, resetAt: now + 60_000 });
   // A looping player can report an error a hundred times a second; the excess is dropped quietly.
@@ -2970,7 +3047,7 @@ app.post("/api/client-log", (req, res) => {
   const message = String(req.body?.message ?? "").slice(0, 200) || "client report";
   const context = req.body?.context && typeof req.body.context === "object" && !Array.isArray(req.body.context)
     ? req.body.context as Record<string, unknown> : {};
-  log(level, `[web] ${message}`, { ...context, req: req.id, user: currentUser(req), ua: String(req.headers["user-agent"] ?? "").slice(0, 160) });
+  log(level, `[web] ${message}`, { ...context, req: req.id, user: currentUser(req)?.username, ua: String(req.headers["user-agent"] ?? "").slice(0, 160) });
   res.status(204).end();
 });
 
@@ -3004,10 +3081,27 @@ app.get("/api/diagnostics", asyncRoute(async (_req, res) => {
   });
 }));
 
-app.get("/api/settings/export", asyncRoute(async (_req, res) => {
+/** The backup file carries both halves of the settings in one flat object, the way the
+ *  interface reads them, so an import has to put every key back where it now belongs. The
+ *  two halves are spelled out rather than looped over `PERSONAL_SETTINGS`, so a key added
+ *  to one of them and forgotten here fails the build. */
+const splitSettings = (flat: Settings): { instance: InstanceSettings; prefs: Partial<UserPrefs> } => {
+  const {
+    uiLanguage, audioLanguage, subtitleLanguage, downloadTitleLanguage,
+    mergeByName, streamSort, trackProgress, showResumeRow,
+    catalogTileSize, libraryTileSize, catalogTileShape, libraryTileShape,
+    ...instance
+  } = flat;
+  return {
+    instance,
+    prefs: { uiLanguage, audioLanguage, subtitleLanguage, downloadTitleLanguage, mergeByName, streamSort, trackProgress, showResumeRow, catalogTileSize, libraryTileSize, catalogTileShape, libraryTileShape },
+  };
+};
+
+app.get("/api/settings/export", asyncRoute(async (req, res) => {
   await metaStore.flush();
   res.setHeader("content-disposition", `attachment; filename=stremio-offline-settings-${new Date().toISOString().slice(0, 10)}.json`);
-  res.json(createSettingsBackup(store.settings(), store.addons(), store.libraries()));
+  res.json(createSettingsBackup({ ...store.settings(), ...prefsOf(req) }, store.addons(), store.libraries()));
 }));
 app.post("/api/settings/import", asyncRoute(async (req, res) => {
   // The libraries are this instance's, so a rule that names one from somewhere else is
@@ -3038,14 +3132,17 @@ app.post("/api/settings/import", asyncRoute(async (req, res) => {
     identities.add(identity);
   }
   await store.update((state) => {
-    state.settings = backup.settings;
+    const split = splitSettings(backup.settings);
+    state.settings = split.instance;
     state.addons = loaded;
     state.defaultsInstalled = true;
+    const userId = accountIdOf(req);
+    if (userId) mutateData(state, userId, (data) => { data.prefs = { ...data.prefs, ...split.prefs }; });
   });
   streamCache.clear();
   queue.changed();
   log("INFO", "Settings backup imported", { addons: loaded.length, version: backup.version, remapped: parsed.remaps.length });
-  res.json({ settings: publicSettings(store.settings()), addons: store.addons().map(publicAddon), remapped: parsed.remaps.length });
+  res.json({ settings: settingsView(req), addons: store.addons().map(publicAddon), remapped: parsed.remaps.length });
 }));
 app.patch("/api/settings", asyncRoute(async (req, res) => {
   let realDebridToken: string | undefined;
@@ -3058,18 +3155,23 @@ app.patch("/api/settings", asyncRoute(async (req, res) => {
     tmdbApiKey = String(req.body.tmdbApiKey).trim();
     if (tmdbApiKey) await verifyTmdbKey(tmdbApiKey);
   }
-  const languageBefore = store.settings().uiLanguage;
+  const languageBefore = prefsOf(req).uiLanguage;
+  const userId = accountIdOf(req);
+  const touchesPrefs = PERSONAL_SETTINGS.some((key) => req.body[key] !== undefined);
   await store.update((state) => {
+    // The body is one flat object; each key goes to the half that owns it. Only the keys the
+    // body names are written, so a preference nobody touched keeps the value it had.
+    const prefs: Record<string, unknown> = { ...(userId ? state.userData?.[userId]?.prefs : undefined) };
     if (req.body.concurrentDownloads !== undefined) state.settings.concurrentDownloads = Math.max(1, Math.min(8, Number(req.body.concurrentDownloads) || 1));
     if (req.body.parallelPerProvider !== undefined) state.settings.parallelPerProvider = Math.max(1, Math.min(8, Number(req.body.parallelPerProvider) || 1));
     if (req.body.downloadSegments !== undefined) state.settings.downloadSegments = Math.max(1, Math.min(8, Number(req.body.downloadSegments) || 1));
-    if (req.body.uiLanguage !== undefined && isUiLanguage(req.body.uiLanguage)) state.settings.uiLanguage = req.body.uiLanguage;
-    if (req.body.audioLanguage !== undefined) state.settings.audioLanguage = normalizeLanguage(String(req.body.audioLanguage)) ?? state.settings.audioLanguage;
-    if (req.body.subtitleLanguage !== undefined) state.settings.subtitleLanguage = normalizeLanguage(String(req.body.subtitleLanguage)) ?? state.settings.subtitleLanguage;
-    if (req.body.downloadTitleLanguage !== undefined) state.settings.downloadTitleLanguage = req.body.downloadTitleLanguage === "ui" ? "ui" : normalizeLanguage(String(req.body.downloadTitleLanguage)) ?? state.settings.downloadTitleLanguage;
-    if (req.body.mergeByName !== undefined) state.settings.mergeByName = Boolean(req.body.mergeByName);
-    if (req.body.trackProgress !== undefined) state.settings.trackProgress = Boolean(req.body.trackProgress);
-    if (req.body.showResumeRow !== undefined) state.settings.showResumeRow = Boolean(req.body.showResumeRow);
+    if (req.body.uiLanguage !== undefined && isUiLanguage(req.body.uiLanguage)) prefs.uiLanguage = req.body.uiLanguage;
+    if (req.body.audioLanguage !== undefined) prefs.audioLanguage = normalizeLanguage(String(req.body.audioLanguage)) ?? prefs.audioLanguage;
+    if (req.body.subtitleLanguage !== undefined) prefs.subtitleLanguage = normalizeLanguage(String(req.body.subtitleLanguage)) ?? prefs.subtitleLanguage;
+    if (req.body.downloadTitleLanguage !== undefined) prefs.downloadTitleLanguage = req.body.downloadTitleLanguage === "ui" ? "ui" : normalizeLanguage(String(req.body.downloadTitleLanguage)) ?? prefs.downloadTitleLanguage;
+    if (req.body.mergeByName !== undefined) prefs.mergeByName = Boolean(req.body.mergeByName);
+    if (req.body.trackProgress !== undefined) prefs.trackProgress = Boolean(req.body.trackProgress);
+    if (req.body.showResumeRow !== undefined) prefs.showResumeRow = Boolean(req.body.showResumeRow);
     if (req.body.libraryAutoScan !== undefined) state.settings.libraryAutoScan = Boolean(req.body.libraryAutoScan);
     if (req.body.libraryScanPauseOnDownload !== undefined) state.settings.libraryScanPauseOnDownload = Boolean(req.body.libraryScanPauseOnDownload);
     // Detail has to be recorded before it can be read: a line the server never wrote is not
@@ -3078,32 +3180,33 @@ app.patch("/api/settings", asyncRoute(async (req, res) => {
       const wanted = parseLevel(req.body.logLevel);
       state.settings.logLevel = wanted;
       setLevel(wanted ?? parseLevel(process.env.LOG_LEVEL) ?? "INFO");
-      log("INFO", "The server log level was changed from the interface", { level: currentLevel(), user: currentUser(req) });
+      log("INFO", "The server log level was changed from the interface", { level: currentLevel(), user: currentUser(req)?.username });
     }
     if (req.body.secureMode !== undefined) state.settings.secureMode = Boolean(req.body.secureMode);
     if (req.body.addonRefreshHours !== undefined) state.settings.addonRefreshHours = normalizeRefreshHours(req.body.addonRefreshHours);
     if (req.body.streamSort !== undefined) {
       const value = String(req.body.streamSort);
-      state.settings.streamSort = STREAM_SORTS.has(value) ? value : "recommended";
+      prefs.streamSort = STREAM_SORTS.has(value) ? value : "recommended";
     }
     if (req.body.catalogTileSize !== undefined) {
       const value = String(req.body.catalogTileSize);
-      state.settings.catalogTileSize = value === "compact" || value === "small" || value === "large" ? value : "medium";
+      prefs.catalogTileSize = value === "compact" || value === "small" || value === "large" ? value : "medium";
     }
     if (req.body.libraryTileSize !== undefined) {
       const value = String(req.body.libraryTileSize);
-      state.settings.libraryTileSize = value === "compact" || value === "small" || value === "large" ? value : "medium";
+      prefs.libraryTileSize = value === "compact" || value === "small" || value === "large" ? value : "medium";
     }
     if (req.body.catalogTileShape !== undefined) {
-      state.settings.catalogTileShape = String(req.body.catalogTileShape) === "wide" ? "wide" : "poster";
+      prefs.catalogTileShape = String(req.body.catalogTileShape) === "wide" ? "wide" : "poster";
     }
     if (req.body.libraryTileShape !== undefined) {
-      state.settings.libraryTileShape = String(req.body.libraryTileShape) === "wide" ? "wide" : "poster";
+      prefs.libraryTileShape = String(req.body.libraryTileShape) === "wide" ? "wide" : "poster";
     }
     if (realDebridToken !== undefined) state.settings.realDebridToken = realDebridToken;
     if (tmdbApiKey !== undefined) state.settings.tmdbApiKey = tmdbApiKey;
+    if (userId && touchesPrefs) mutateData(state, userId, (data) => { data.prefs = prefs; });
   });
-  const languageChanged = store.settings().uiLanguage !== languageBefore;
+  const languageChanged = prefsOf(req).uiLanguage !== languageBefore;
   if (tmdbApiKey !== undefined || languageChanged) {
     // The metadata cache key cannot see a TMDB key change on its own.
     metaCache.clear();
@@ -3120,7 +3223,7 @@ app.patch("/api/settings", asyncRoute(async (req, res) => {
     });
     invalidateLibrary();
   }
-  queue.changed(); res.json(publicSettings(store.settings()));
+  queue.changed(); res.json(settingsView(req));
 }));
 app.get("/api/languages", (_req, res) => res.json(Object.entries(LANGUAGE_NAMES).map(([code, name]) => ({ code, name }))));
 app.post("/api/inspect", asyncRoute(async (req, res) => {
@@ -3129,7 +3232,7 @@ app.post("/api/inspect", asyncRoute(async (req, res) => {
   res.setHeader("cache-control", "private, no-store").json(safeInspection(info, stream));
 }));
 app.post("/api/playback", asyncRoute(async (req, res) => {
-  const settings = store.settings();
+  const settings = prefsOf(req);
   const options: PlaybackOptions = { audioLanguage: settings.audioLanguage, subtitleLanguage: settings.subtitleLanguage };
   if (req.body.audioLanguage !== undefined) options.audioLanguage = normalizeLanguage(String(req.body.audioLanguage)) ?? settings.audioLanguage;
   if (req.body.subtitleLanguage !== undefined) {
@@ -3190,7 +3293,7 @@ app.post("/api/playback/:id/track", asyncRoute(async (req, res) => res.json(play
 })))));
 app.delete("/api/playback/:id", asyncRoute(async (req, res) => {
   // Who closed a session is the difference between a viewer leaving and the server giving up.
-  log("INFO", "Playback session closed by the player", { id: String(req.params.id), user: currentSession(req)?.username });
+  log("INFO", "Playback session closed by the player", { id: String(req.params.id), user: currentUser(req)?.username });
   await playback.stop(String(req.params.id));
   res.status(204).end();
 }));
@@ -3468,16 +3571,16 @@ app.use((error: unknown, req: express.Request, res: express.Response, _next: exp
   const message = error instanceof Error ? error.message : String(error);
   if (error instanceof RestrictedError || messageKeyOf(error) === "err.restricted") {
     log("INFO", "Rejected a restricted-mode mutation", {
-      req: req.id, method: req.method, path: req.path, status: 403, user: currentUser(req),
+      req: req.id, method: req.method, path: req.path, status: 403, user: currentUser(req)?.username,
     });
   } else if (error instanceof ResourceError && error.status === 410 && /^(?:\/api)?\/media\//.test(req.path)) {
     // A player that has just been closed is still reading the ranges it had open. The
     // session is gone, the answer is correct, and it is not a fault worth an ERROR.
-    log("DEBUG", "A closed session was still being read", { req: req.id, path: req.path, user: currentUser(req) });
+    log("DEBUG", "A closed session was still being read", { req: req.id, path: req.path, user: currentUser(req)?.username });
   } else {
     log("ERROR", "Request failed", {
       req: req.id, method: req.method, path: req.path, status,
-      user: currentUser(req), reason: message,
+      user: currentUser(req)?.username, reason: message,
       stack: error instanceof Error ? error.stack : undefined,
     });
   }
