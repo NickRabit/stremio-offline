@@ -140,4 +140,101 @@ test.describe("layout invariants", () => {
     }));
     expect(widest, "a poster hangs past the edge of its grid").toBeLessThanOrEqual(gridWidth + 1);
   });
+
+  // The Users dialog is the one screen that stacks four blocks -- the account, the libraries it
+  // may see, the addons it may use and what it may download -- and a phone-landscape height has
+  // to hold all of them. The grants are stubbed: what is checked here is how a long list
+  // behaves, and the length of one is the point rather than which library somebody was given.
+  test("the users dialog fits the screen and scrolls inside itself", async ({ page }, testInfo) => {
+    const grantee = {
+      id: "user-1", username: "příjemce", role: "user", disabled: false, mustChangePassword: false,
+      createdAt: "2026-01-01T00:00:00.000Z", permissions: { downloadToLibrary: false, downloadToDevice: true },
+      libraries: 0, addons: 0,
+    };
+    const libraries = Array.from({ length: 16 }, (_, index) => ({
+      id: `lib_${(index + 1).toString(16).padStart(8, "0")}`, name: `Knihovna ${index + 1}`, type: "mixed",
+      root: `/library/${index + 1}`, enabled: true, order: index, addedAt: "2026-01-01T00:00:00.000Z",
+      writeArtwork: false, unreachable: false, readOnly: false, defaultMovie: false, defaultSeries: false,
+      titles: 0, files: 0, bytes: 0,
+    }));
+    const addons = Array.from({ length: 16 }, (_, index) => ({
+      key: `addon-${index}`, role: "both", enabled: true, globalSearch: false,
+      manifest: { id: `e2e.addon.${index}`, name: `Doplněk ${index + 1}`, version: "1.0.0" },
+    }));
+    await page.route("**/api/users", (route) => route.fulfill({ json: [grantee] }));
+    await page.route("**/api/libraries", (route) => route.fulfill({ json: libraries }));
+    await page.route("**/api/addons", (route) => route.fulfill({ json: addons }));
+
+    await openView(page, "Nastavení");
+    const edit = page.locator(".user-manager-section").getByRole("button", { name: "Upravit", exact: true });
+    await expect(edit).toBeVisible();
+    await edit.click();
+    const dialog = page.getByRole("dialog", { name: "Upravit účet" });
+    await expect(dialog).toBeVisible();
+
+    const card = dialog.locator(".identify-card");
+    const cardBox = (await card.boundingBox())!;
+    const viewport = page.viewportSize()!;
+    expect(cardBox.y, `${testInfo.project.name}: the dialog starts above the screen`).toBeGreaterThanOrEqual(-1);
+    expect(cardBox.y + cardBox.height, `${testInfo.project.name}: the dialog reaches past the fold`)
+      .toBeLessThanOrEqual(viewport.height + 1);
+
+    const { scrollWidth, clientWidth, offenders } = await horizontalOverflow(page);
+    expect(offenders, "elements past the right edge with the users dialog open").toEqual([]);
+    expect(scrollWidth, "the users dialog overflows horizontally").toBeLessThanOrEqual(clientWidth + 1);
+
+    // The blocks live in the body and the body is what moves. Scrolling it may not move the
+    // card, and the last block has to come into view instead of staying under the fold.
+    const body = dialog.locator(".dialog-body");
+    const bodyBox = (await body.boundingBox())!;
+    expect(bodyBox.y).toBeGreaterThanOrEqual(cardBox.y - 1);
+    expect(bodyBox.y + bodyBox.height).toBeLessThanOrEqual(cardBox.y + cardBox.height + 1);
+    const scrolled = await body.evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+      return element.scrollTop;
+    });
+    expect(scrolled, `${testInfo.project.name}: the dialog body does not scroll`).toBeGreaterThan(0);
+    const lastSwitch = (await dialog.locator(".user-switch").last().boundingBox())!;
+    expect(lastSwitch.y + lastSwitch.height, "the last block is still past the fold")
+      .toBeLessThanOrEqual(cardBox.y + cardBox.height + 1);
+    expect(Math.abs((await card.boundingBox())!.y - cardBox.y), "the card moved instead of the body").toBeLessThan(1);
+
+    // The first block has to stay where it was, so its own buttons are still reachable.
+    await body.evaluate((element) => { element.scrollTop = 0; });
+    const apply = (await dialog.locator(".user-edit-password button").boundingBox())!;
+    expect(apply.y).toBeGreaterThanOrEqual(cardBox.y - 1);
+    expect(apply.y + apply.height).toBeLessThanOrEqual(cardBox.y + cardBox.height + 1);
+
+    // Each grant list is a scroller of its own: it may not grow the dialog, and its rows are
+    // reached by scrolling the list rather than by pushing the blocks below it off the screen.
+    const lists = dialog.locator(".user-grant-list");
+    await expect(lists).toHaveCount(2);
+    for (const list of await lists.all()) {
+      const box = (await list.boundingBox())!;
+      expect(box.x).toBeGreaterThanOrEqual(cardBox.x - 1);
+      expect(box.x + box.width).toBeLessThanOrEqual(cardBox.x + cardBox.width + 1);
+      const measured = await list.evaluate((element) => {
+        element.scrollTop = element.scrollHeight;
+        return { scrolled: element.scrollTop, hidden: element.scrollHeight - element.clientHeight, overflow: getComputedStyle(element).overflowY };
+      });
+      expect(measured.hidden, "the grant list fits, so this checked nothing").toBeGreaterThan(0);
+      expect(measured.scrolled, "the grant list does not scroll inside itself").toBeGreaterThan(0);
+      expect(measured.overflow).toBe("auto");
+    }
+    expect(Math.abs((await card.boundingBox())!.y - cardBox.y), "a grant list scrolled the dialog").toBeLessThan(1);
+
+    // The file's touch rule, applied to this dialog: a tick is painted over by the label a
+    // finger actually hits, so the label is the box that has to be big enough.
+    if (testInfo.project.use.hasTouch) {
+      const tooSmall = await dialog.evaluate((element) => {
+        const minimum = 24;
+        return [...element.querySelectorAll<HTMLElement>("button, input, select")]
+          .map((control) => control.closest<HTMLElement>("label") ?? control)
+          .map((target) => ({ target, box: target.getBoundingClientRect() }))
+          .filter(({ box }) => box.width > 0 && box.height > 0 && (box.width < minimum || box.height < minimum))
+          .map(({ target, box }) => `${target.tagName} "${target.textContent?.trim().slice(0, 20)}": ${Math.round(box.width)}x${Math.round(box.height)}`);
+      });
+      expect(tooSmall, "controls below the 24px minimum in the users dialog").toEqual([]);
+    }
+  });
 });

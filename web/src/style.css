@@ -1181,8 +1181,13 @@ img.broken{visibility:hidden}
 .user-edit-danger{display:grid;gap:8px;padding-top:12px;border-top:1px solid var(--line)}
 .user-edit-danger>button{justify-self:start;border-color:#f06a7655;color:var(--red)}
 .user-edit-switches{display:grid;gap:12px}
-.user-switch{display:flex;align-items:flex-start;gap:10px}
+.user-switch{display:flex;align-items:flex-start;gap:10px;min-height:24px}
+/* The row is the hit area, so it carries the same 42x24 track the library dialog gives its
+   own switch: the shared 36x21 default is under the touch minimum on a phone. */
 .user-switch .switch{flex:0 0 auto}
+.user-switch .switch span{width:42px;height:24px}
+.user-switch .switch span:after{width:18px;height:18px}
+.user-switch .switch input:checked+span:after{left:21px}
 .user-switch>span:last-child{display:grid;gap:4px}
 .user-switch strong{font-size:12px}
 .user-switch small{font-size:11px;line-height:1.45;color:var(--muted)}
@@ -1192,6 +1197,15 @@ img.broken{visibility:hidden}
 .user-grant-row input{flex:0 0 auto;width:auto;accent-color:var(--accent)}
 .user-grant-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .user-grant-row .library-badge{flex:0 0 auto}
+/* A phone in landscape leaves about 375px for the whole dialog, and the account block --
+   name, role, the switch, a password field and its button -- does not fit in it at the
+   desktop rhythm. Tightening the spacing there keeps the block's own button on screen when
+   the dialog opens, rather than three pixels under the fold. */
+@media(max-height:460px){
+  .user-edit-section{gap:8px;padding-block:10px}
+  .user-edit-fields{gap:8px}
+  .user-grant-list{max-height:min(30dvh,160px)}
+}
 @media(max-width:700px){
   .user-edit-fields,.user-edit-password{grid-template-columns:minmax(0,1fr)}
   .user-edit-password button{width:100%}
