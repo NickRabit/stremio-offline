@@ -190,3 +190,41 @@ it("keeps the head and the action outside the one scrolling region", async () =>
   expect(apply.closest(".dialog-foot"), "the action is pinned outside the scroller").toBeTruthy();
   expect(apply.closest(".dialog-body")).toBeNull();
 });
+
+/** The on-screen keyboard shrinks the visual viewport, not the layout one. Sized against the
+ *  layout viewport the sheet ran off the phone's screen, taking the search button and the
+ *  results with it, and nothing scrolled them back. */
+it("sizes the overlay to the part of the screen the keyboard leaves", async () => {
+  const listeners: Record<string, () => void> = {};
+  const viewport = {
+    height: 780,
+    offsetTop: 0,
+    addEventListener: (event: string, handler: () => void) => { listeners[event] = handler; },
+    removeEventListener: (event: string) => { delete listeners[event]; },
+  };
+  vi.stubGlobal("visualViewport", viewport);
+  fetchMock.mockImplementation((url: string) =>
+    Promise.resolve(json(String(url).includes("/api/library/identity") ? identity : { items: [], hasMore: false, cursor: "", sources: 1 })));
+  await act(async () => { root.render(<IdentifyDialog path="Father Ted" onClose={() => undefined} onApplied={() => undefined}/>); });
+
+  const overlay = host.querySelector<HTMLElement>(".identify-overlay")!;
+  expect(overlay.style.getPropertyValue("--dialog-viewport-height")).toBe("780px");
+  viewport.height = 340;
+  viewport.offsetTop = 60;
+  act(() => listeners.resize());
+  expect(overlay.style.getPropertyValue("--dialog-viewport-height")).toBe("340px");
+  expect(overlay.style.getPropertyValue("--dialog-viewport-top")).toBe("60px");
+});
+
+/** The keyboard hides the very results the search is about to load. */
+it("drops focus when the search is submitted", async () => {
+  fetchMock.mockImplementation((url: string) =>
+    Promise.resolve(json(String(url).includes("/api/library/identity") ? identity : { items: [], hasMore: false, cursor: "", sources: 1 })));
+  await act(async () => { root.render(<IdentifyDialog path="Father Ted" onClose={() => undefined} onApplied={() => undefined}/>); });
+  const input = host.querySelector<HTMLInputElement>(".dialog-body input")!;
+  input.focus();
+  expect(document.activeElement).toBe(input);
+  const form = host.querySelector<HTMLFormElement>("form")!;
+  await act(async () => { form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
+  expect(document.activeElement).not.toBe(input);
+});

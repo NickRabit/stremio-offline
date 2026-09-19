@@ -158,3 +158,52 @@ test("showing a finished download highlights the file in a crowded folder", asyn
   await expect(focused).toBeInViewport();
   await expect(page.locator(".browse-item")).toHaveCount(24);
 });
+
+// The fix-match dialog is the one that opens with a keyboard, so it is the one that showed
+// what a sheet sized against the layout viewport does: the action and the results ended up
+// off the screen, and the long file names ran past the card.
+test("the identify dialog stays inside the screen", async ({ page }) => {
+  await page.route("**/api/library/browse?*", (route) => route.fulfill({ json: { path: "", items: [file], total: 1, pending: false } }));
+  await page.route("**/api/library/identity?*", (route) => route.fulfill({
+    json: {
+      path: file.path, key: file.path, kind: "movie", file: true, label: file.label,
+      parsed: { title: "Cesta za obzor", query: "Cesta za obzor", year: 2024 },
+      match: "matched", bound: { type: "movie", id: "tt1", name: "Cesta za obzor" },
+    },
+  }));
+  await page.route("**/api/search?*", (route) => route.fulfill({
+    json: {
+      items: [
+        { id: "tt1", type: "movie", name: "Cesta za obzor", releaseInfo: "2024", poster: poster("#936347") },
+        { id: "tt2", type: "movie", name: "Cesta.za.obzor.2024.BluRay.1080p.DTS-HD.MA.5.1.x264-CHD.mkv", releaseInfo: "2024" },
+      ],
+      hasMore: false, cursor: "", sources: 1,
+    },
+  }));
+  await page.goto("/");
+  await page.getByRole("button", { name: "Knihovna", exact: true }).click();
+  await page.getByRole("button", { name: `Možnosti: ${file.label}` }).click();
+  await page.getByRole("button", { name: "Opravit přiřazení…", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+  const apply = dialog.getByRole("button", { name: "Použít tento titul" });
+  await expect(apply).toBeInViewport();
+  await expect(dialog.locator(".identify-results button")).toHaveCount(2);
+
+  const card = (await dialog.locator(".identify-card").boundingBox())!;
+  const height = await page.evaluate(() => innerHeight);
+  expect(card.y).toBeGreaterThanOrEqual(-1);
+  expect(card.y + card.height).toBeLessThanOrEqual(height + 1);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  const name = (await dialog.locator(".identify-results button").last().locator("strong").boundingBox())!;
+  expect(name.x + name.width).toBeLessThanOrEqual(card.x + card.width + 1);
+
+  // The results are reachable by scrolling the body, not by moving the card.
+  const scrolled = await dialog.locator(".dialog-body").evaluate((body) => {
+    body.scrollTop = body.scrollHeight;
+    return body.scrollTop;
+  });
+  expect(scrolled).toBeGreaterThanOrEqual(0);
+  const after = (await dialog.locator(".identify-card").boundingBox())!;
+  expect(Math.abs(after.y - card.y)).toBeLessThan(1);
+});
