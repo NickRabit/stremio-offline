@@ -64,7 +64,9 @@ test.describe("screenshots", () => {
 
   test("library", async ({ page }) => {
     await openView(page, "Knihovna");
-    await expect(page.getByRole("heading", { name: "Stažené soubory" })).toBeVisible();
+    // The page heading is the one part of this header a phone does not show, so the trail is
+    // what says the listing has arrived at every width.
+    await expect(page.locator(".browse-head .crumbs")).toBeVisible();
     await expect(page).toHaveScreenshot("library.png", { fullPage: true });
   });
 

@@ -1072,28 +1072,10 @@ export function App() {
       return;
     }
     if (focusScrolled.current === browseFocus) return;
-    const wanted = () => document.querySelector(`[data-path="${CSS.escape(browseFocus)}"]`);
-    wanted()?.scrollIntoView({ block: "center", behavior: "smooth" });
+    document.querySelector(`[data-path="${CSS.escape(browseFocus)}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" });
     focusScrolled.current = browseFocus;
-    // A tile that has not been rendered yet stands at its estimated height, so the list settles
-    // under the scroll that was aimed through it and can leave the file off screen. The aim is
-    // taken again, but only while it is actually wrong, so a scroll that landed keeps its glide.
-    let tries = 0;
-    let aim = 0;
-    const correct = () => {
-      const element = wanted();
-      const list = browseScrollRef.current;
-      if (element && list) {
-        const box = element.getBoundingClientRect();
-        const view = list.getBoundingClientRect();
-        if (box.top < view.top || box.bottom > view.bottom) element.scrollIntoView({ block: "center" });
-      }
-      if (tries++ < 40) aim = requestAnimationFrame(correct);
-    };
-    aim = requestAnimationFrame(correct);
     window.clearTimeout(focusTimer.current);
     focusTimer.current = window.setTimeout(() => setBrowseFocus(null), 5000);
-    return () => cancelAnimationFrame(aim);
   }, [view, browse, browseBusy, browseFocus]);
 
   // Artwork is finished in the background; once it is ready the page refreshes itself.

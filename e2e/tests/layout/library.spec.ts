@@ -24,8 +24,13 @@ test("library cards, favorites and folder navigation", async ({ page }, testInfo
     await page.keyboard.press("Escape");
     await expect(tools).toBeFocused();
     await expect(tools).toHaveAttribute("aria-expanded", "false");
-    const toolbar = (await page.locator(".browse-tools").boundingBox())!;
+    // The tools that fold away are the block that must stay small; what stays behind sits on the
+    // breadcrumb line and costs the listing nothing.
+    const toolbar = (await page.locator(".browse-fold").boundingBox())!;
     expect(toolbar.height).toBeLessThanOrEqual(100);
+    const trail = (await page.locator(".crumbs").boundingBox())!;
+    const kept = (await page.locator(".browse-keep").boundingBox())!;
+    expect(kept.y).toBeLessThan(trail.y + trail.height);
   }
   const art = page.locator(".browse-grid .browse-art").first();
   const box = (await art.boundingBox())!;

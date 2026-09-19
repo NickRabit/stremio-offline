@@ -554,11 +554,6 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 /* A listing can hold thousands of tiles. The ones outside the scroller are neither laid out nor
    painted; the intrinsic size is only the placeholder a tile that was never rendered is given,
    so the scrollbar settles once the tiles above the fold have been measured. */
-/* A listing of thousands of tiles must not lay them all out. `content-visibility` also brings
-   paint containment, which would cut the options menu off at the tile's edge -- so the one tile
-   holding an open menu gives the containment up while it is open. */
-.browse-grid .browse-item:not(:has(.browse-actions)){content-visibility:auto;contain-intrinsic-size:auto 240px}
-.browse-rows .browse-item:not(:has(.browse-actions)){content-visibility:auto;contain-intrinsic-size:auto 78px}
 .library-page .browse-grid .library-open{display:flex;flex-direction:column;align-items:stretch;justify-content:flex-start;gap:0;flex:1;height:100%;border:1px solid var(--line);border-radius:11px;background:var(--panel)}
 .library-page .browse-grid:has(.browse-item.library){grid-template-columns:repeat(auto-fit,minmax(min(360px,100%),1fr))}
 .library-page .browse-grid .browse-item.library .library-open{display:grid;grid-template-columns:clamp(150px,40%,210px) minmax(0,1fr);grid-template-rows:minmax(0,1fr) auto;min-height:200px}
@@ -723,7 +718,9 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
    is the crumb: at the narrow desktop widths "Knihovna" collapsed into a three-line sliver.
    It keeps a floor instead, so the tools wrap to a second row -- the shape the bar already
    takes on a phone. A single-library install never renders that button and is untouched. */
-.library-page .browse-bar:has(.browse-tools .library-maintenance .library-manager-shortcut) .crumbs{min-width:min(220px,100%)}
+/* Room for the trail once a second library adds a shortcut to the toolbar -- but never so much
+   that the controls sitting beside it get pushed onto a row of their own. */
+.library-page .browse-bar:has(.browse-tools .library-maintenance .library-manager-shortcut) .crumbs{min-width:min(220px,calc(100% - 118px))}
 
 .library-page .browse-panel{overflow:visible}.library-page .browse-head{border-radius:14px 14px 0 0}.library-page .browse-grid .browse-actions{right:0;width:100%;min-width:0;max-width:100%}
 
