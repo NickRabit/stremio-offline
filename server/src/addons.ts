@@ -49,6 +49,19 @@ export const addonAllowed = (addon: AddonRecord, viewer: Viewer): boolean =>
 export const allowedAddons = (addons: AddonRecord[], viewer: Viewer): AddonRecord[] =>
   addons.filter((addon) => addonAllowed(addon, viewer));
 
+/** The addons this account sees, in the order it prefers them. Unknown keys
+ *  are dropped and unlisted addons follow in the instance's own order, so a
+ *  personal list never has to be repaired when the instance changes. */
+export const orderedForUser = (addons: AddonRecord[], order: string[] | undefined): AddonRecord[] => {
+  if (!order?.length) return addons;
+  const present = new Set(addons.map((addon) => addon.key));
+  const rank = new Map<string, number>();
+  for (const key of order) if (present.has(key) && !rank.has(key)) rank.set(key, rank.size);
+  if (!rank.size) return addons;
+  // `sort` is stable, so the addons no list names keep the instance's own order.
+  return [...addons].sort((a, b) => (rank.get(a.key) ?? rank.size) - (rank.get(b.key) ?? rank.size));
+};
+
 function baseUrl(addon: AddonRecord): URL { return new URL("./", addon.manifestUrl); }
 
 export function addonMetadataLanguage(addon: AddonRecord): string | undefined {

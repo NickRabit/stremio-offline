@@ -54,6 +54,7 @@ export const USER_ALLOWED: Rule[] = [
   { method: "GET", pattern: /^\/subtitles\/[^/]+\/[^/]+$/ },
   { method: "GET", pattern: /^\/subtitle\/[^/]+$/ },
   { method: "GET", pattern: /^\/addons$/ },
+  { method: "PUT", pattern: /^\/addons\/order$/ },
   { method: "GET", pattern: /^\/languages$/ },
   { method: "GET", pattern: /^\/settings$/ },
   { method: "POST", pattern: /^\/inspect$/ },

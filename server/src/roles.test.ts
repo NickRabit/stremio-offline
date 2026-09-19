@@ -45,6 +45,7 @@ const ALLOWED: Array<[string, string]> = [
   ["GET", "/subtitles/movie/tt1254207"],
   ["GET", "/subtitle/sub-1"],
   ["GET", "/addons"],
+  ["PUT", "/addons/order"],
   ["GET", "/languages"],
   ["GET", "/settings"],
   ["POST", "/inspect"],

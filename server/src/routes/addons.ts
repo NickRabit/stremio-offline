@@ -1,12 +1,12 @@
 import type express from "express";
 import { manifestChanged, refreshManifests, type RefreshOutcome } from "../addon-refresh.js";
-import { allowedAddons, loadAddon } from "../addons.js";
+import { allowedAddons, loadAddon, orderedForUser } from "../addons.js";
 import { AppError } from "../errors.js";
 import { log } from "../logger.js";
 import { normalizeDownloadSettings } from "../naming.js";
 import { essentialAddon, publicAddon, publicAddonRestricted } from "../security.js";
 import type { AddonRecord, AddonRole } from "../types.js";
-import { bumpPermissions, findUserById, usersToBump } from "../users.js";
+import { bumpPermissions, emptyUserData, findUserById, usersToBump } from "../users.js";
 import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
 
 export interface AddonsDeps extends RouteContext {
@@ -17,7 +17,41 @@ export interface AddonsDeps extends RouteContext {
 export function registerAddonsRoutes(app: express.Application, deps: AddonsDeps): void {
   const { store, currentUser, storeRefreshed, publicAddonView, stopContentAccess } = deps;
 
-  app.get("/api/addons", (req, res) => res.json(allowedAddons(store.addons(), viewerOf(currentUser(req))).map(publicAddonView)));
+  /** The caller's own priority, and only for an ordinary account. An administrator reads
+   *  the global order, because that is the one their arrows edit: showing them a personal
+   *  overlay while the note says "this applies to everybody" would be a lie, and reordering
+   *  from that view would scramble the global list. A personal order kept from before a
+   *  promotion is left stored and simply not applied. */
+  const orderOf = (req: express.Request) => {
+    const user = currentUser(req);
+    return user && user.role !== "admin" ? store.userData(user.id).addonOrder : undefined;
+  };
+  /** Keys the caller may see, in one copy each: an invisible key would record what
+   *  somebody was once allowed, which is exactly what the overlay must not become. */
+  const visibleOrder = (value: unknown, visible: Set<string>): string[] => {
+    if (!Array.isArray(value)) throw new AppError("The order has to be a list of addon keys.", "err.invalidRequest", 400);
+    const order: string[] = [];
+    for (const entry of value) {
+      const key = String(entry);
+      if (visible.has(key) && !order.includes(key)) order.push(key);
+    }
+    return order;
+  };
+
+  app.get("/api/addons", (req, res) => res.json(
+    orderedForUser(allowedAddons(store.addons(), viewerOf(currentUser(req))), orderOf(req)).map(publicAddonView)));
+  // A person's own priority. Every account may set it; it never touches the global order,
+  // which stays the administrator's `move` below.
+  app.put("/api/addons/order", asyncRoute(async (req, res) => {
+    const viewer = viewerOf(currentUser(req));
+    const order = visibleOrder(req.body?.order, new Set(allowedAddons(store.addons(), viewer).map((addon) => addon.key)));
+    await store.update((state) => {
+      const data = state.userData?.[viewer.id] ?? emptyUserData();
+      data.addonOrder = order;
+      state.userData = { ...(state.userData ?? {}), [viewer.id]: data };
+    });
+    res.status(204).end();
+  }));
   app.post("/api/addons", asyncRoute(async (req, res) => {
     const role = (["catalog", "source", "both"].includes(req.body.role) ? req.body.role : "both") as AddonRole;
     const addon = await loadAddon(String(req.body.url ?? ""), role);

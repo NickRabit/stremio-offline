@@ -722,6 +722,8 @@ export const en = {
   "addons.isBoth": "catalog and sources",
   "addons.higherPriority": "Higher priority when sources are ranked",
   "addons.lowerPriority": "Lower priority when sources are ranked",
+  "addons.orderGlobal": "This order applies to everybody.",
+  "addons.orderPersonal": "This order is yours alone.",
   "addons.manifestAddressHint": "Reconfigured the addon? Paste its new address here — the order, the on/off state and the storage rules are kept. The address may contain a token, so treat it like a password.",
   "addons.urlCopied": "Address copied.",
   "addons.copyUrl": "Copy URL",

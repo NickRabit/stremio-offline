@@ -46,6 +46,7 @@ export const api = {
   addons: () => request<Addon[]>("/api/addons"),
   addAddon: (url: string, role: string) => request<Addon>("/api/addons", { method: "POST", body: JSON.stringify({ url, role }) }),
   moveAddon: (key: string, direction: -1 | 1) => request<void>(`/api/addons/${key}/move`, { method: "POST", body: JSON.stringify({ direction }) }),
+  setAddonOrder: (order: string[]) => request<void>("/api/addons/order", { method: "PUT", body: JSON.stringify({ order }) }),
   exportAddon: (key: string) => request<Record<string, unknown>>(`/api/addons/${key}/export`),
   deleteAddon: (key: string) => request<void>(`/api/addons/${key}`, { method: "DELETE" }),
   refreshAddon: (key: string) => request<{ addon: Addon; changed: boolean; previousVersion: string; version: string }>(`/api/addons/${key}/refresh`, { method: "POST" }),

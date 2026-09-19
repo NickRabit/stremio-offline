@@ -718,6 +718,8 @@ export const cs: Catalog = {
   "addons.isBoth": "katalog i zdroje",
   "addons.higherPriority": "Vyšší priorita při řazení zdrojů",
   "addons.lowerPriority": "Nižší priorita při řazení zdrojů",
+  "addons.orderGlobal": "Toto pořadí platí pro všechny.",
+  "addons.orderPersonal": "Toto pořadí je jen tvoje.",
   "addons.manifestAddressHint": "Překonfigurovali jste doplněk? Vložte sem novou adresu — pořadí, zapnutí i pravidla ukládání zůstanou. Adresa může obsahovat token, zacházejte s ní jako s heslem.",
   "addons.urlCopied": "Adresa zkopírována.",
   "addons.copyUrl": "Kopírovat URL",

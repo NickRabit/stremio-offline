@@ -1,6 +1,6 @@
 import type express from "express";
 import { readFile } from "node:fs/promises";
-import { allowedAddons, catalog, searchAll, searchableCatalogs, streamCandidates, streams, subtitles, type MetaProvider } from "../addons.js";
+import { allowedAddons, catalog, orderedForUser, searchAll, searchableCatalogs, streamCandidates, streams, subtitles, type MetaProvider } from "../addons.js";
 import { AppError } from "../errors.js";
 import { ExternalIdStore, siteLinks } from "../external-ids.js";
 import { images } from "../images.js";
@@ -121,8 +121,13 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
     // dotted folder -- which sendFile refuses unless told otherwise.
     res.sendFile(cached.file, { dotfiles: "allow" }, (error) => { if (error && !res.headersSent) res.status(404).end(); });
   }));
-  app.get("/api/stream-sources/:type/:id", (req, res) => res.json(
-    streamCandidates(usable(req), String(req.params.type), String(req.params.id)).map((addon) => ({ key: addon.key, name: addon.manifest.name }))));
+  app.get("/api/stream-sources/:type/:id", (req, res) => {
+    // The picker lists these in the caller's own order, the same one `GET /api/addons` answers.
+    const user = currentUser(req);
+    const order = user ? store.userData(user.id).addonOrder : undefined;
+    res.json(streamCandidates(orderedForUser(usable(req), order), String(req.params.type), String(req.params.id))
+      .map((addon) => ({ key: addon.key, name: addon.manifest.name })));
+  });
   app.get("/api/streams/:type/:id", asyncRoute(async (req, res) => {
     const owner = ownerOf(req);
     const items = await streams(usable(req), String(req.params.type), String(req.params.id), req.query.addon ? String(req.query.addon) : undefined);

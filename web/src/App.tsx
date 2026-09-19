@@ -1899,7 +1899,7 @@ export function App() {
         </div>
         </div>
       </section>}
-      {view === "addons" && <AddonManager addons={addons} libraries={libraries} restricted={restricted || !admin} onChanged={refresh} onNotify={notify} onError={fail}/>} 
+      {view === "addons" && <AddonManager addons={addons} libraries={libraries} restricted={restricted} admin={admin} onChanged={refresh} onNotify={notify} onError={fail}/>} 
       {view === "downloads" && <Downloads jobs={downloads} libraries={libraries} halt={queueHalt} refresh={loadDownloads} onError={fail} onReveal={revealInLibrary}/>}
       {view === "stats" && <StatsPanel key={statsReset} onError={fail}/>}
       {view === "settings" && <SettingsPage build={buildInfo} restricted={restricted} settings={settings} languages={languages} libraries={libraries} session={session!} onSession={setSession} onSave={saveSettings} onLibrariesChanged={refreshLibraries} onImported={async (backup) => {

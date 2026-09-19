@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { addonAllowed, addonMetadataLanguage, allowedAddons, metadata, searchableCatalogs, streamCandidates } from "./addons.js";
+import { addonAllowed, addonMetadataLanguage, allowedAddons, metadata, orderedForUser, searchableCatalogs, streamCandidates } from "./addons.js";
 import type { Viewer } from "./libraries.js";
 import { defaultDownloadSettings } from "./naming.js";
 import type { AddonRecord } from "./types.js";
@@ -43,6 +43,30 @@ test("addonAllowed refuses a user who is not on the list", () => {
   assert.equal(addonAllowed({ ...addon("alpha"), allowedUsers: ["usr_ffffffff"] }, ordinary), false);
   assert.equal(addonAllowed({ ...addon("alpha"), allowedUsers: [ordinary.id] }, ordinary), true);
   assert.deepEqual(allowedAddons([addon("alpha"), { ...addon("beta"), allowedUsers: [ordinary.id] }], ordinary).map((item) => item.key), ["beta"]);
+});
+
+test("orderedForUser puts the listed addons first in their order and the rest after in the global order", () => {
+  const addons = [addon("alpha"), addon("beta"), addon("gamma")];
+  assert.deepEqual(orderedForUser(addons, ["gamma", "alpha"]).map((item) => item.key), ["gamma", "alpha", "beta"]);
+  assert.deepEqual(orderedForUser(addons, ["gamma"]).map((item) => item.key), ["gamma", "alpha", "beta"], "an addon the list does not name keeps its place after");
+});
+
+test("orderedForUser ignores a key that names no addon", () => {
+  const addons = [addon("alpha"), addon("beta")];
+  assert.deepEqual(orderedForUser(addons, ["missing", "beta"]).map((item) => item.key), ["beta", "alpha"]);
+  assert.deepEqual(orderedForUser(addons, ["missing"]).map((item) => item.key), ["alpha", "beta"], "a list of stale keys changes nothing");
+});
+
+test("an absent or empty order is exactly the global order", () => {
+  const addons = [addon("alpha"), addon("beta")];
+  assert.deepEqual(orderedForUser(addons, undefined).map((item) => item.key), ["alpha", "beta"]);
+  assert.deepEqual(orderedForUser(addons, []).map((item) => item.key), ["alpha", "beta"]);
+});
+
+test("ordering is applied after filtering, so an addon the user cannot see never appears", () => {
+  const addons = [addon("alpha"), { ...addon("beta"), allowedUsers: [ordinary.id] }, addon("gamma")];
+  const visible = allowedAddons(addons, ordinary);
+  assert.deepEqual(orderedForUser(visible, ["alpha", "beta"]).map((item) => item.key), ["beta"], "the order names alpha, but the filter already dropped it");
 });
 
 test("search scope can select an addon or one of its catalogues", () => {

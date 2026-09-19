@@ -1094,6 +1094,7 @@ img.broken{visibility:hidden}
    another site, everything below them acts on the file. */
 .tile-blur{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;filter:blur(18px) saturate(1.2);transform:scale(1.12);opacity:.55}.tile-fit{position:relative;width:100%;height:100%;object-fit:contain}.poster-wrap .tile-blur,.poster-wrap .tile-fit{aspect-ratio:var(--catalog-tile-aspect,2/3);border-radius:9px}.poster-wrap .tile-blur{border:0}@media(prefers-reduced-motion:reduce){.tile-blur{transform:none}}
 .addon-tools{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin:-10px 0 18px}
+.addon-order-note{font-size:11px;color:var(--muted);margin:0 0 18px}
 .addon-filter{min-width:220px;flex:0 1 300px;padding:9px 11px;font-size:12px}
 .addon-card{display:grid;grid-template-rows:auto auto 1fr;gap:12px;align-content:start;min-width:0;padding:16px}
 .addon-card.disabled{opacity:.62}
