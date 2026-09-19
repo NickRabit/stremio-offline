@@ -7,11 +7,20 @@ import { normalizeDownloadSettings } from "./naming.js";
 import type { UiLanguage } from "./language.js";
 import { newLibraryId, type DepartedLibrary, type LibraryRecord, type RootGrant } from "./libraries.js";
 import { log } from "./logger.js";
+import type { ProgressSeries } from "./progress-series.js";
 import { emptyUserData, type EnvReset, envResetApplied, envResetPending, findUser, type MigratableState, migrateUsers, newUserId, type UserData, type UserRecord } from "./users.js";
 
 /** `state.json` shape version. 2 is the libraries shape, 3 the accounts one; a state
  *  without a version predates both and is migrated on the way in. */
 export const SCHEMA_VERSION = 3;
+
+/** The shapes inside `UserData`. It keeps its maps opaque so the user model stays clear of
+ *  the progress and library modules; they are pinned here, once, because both `index.ts` and
+ *  the route modules read the same rows and two copies would drift apart in silence. */
+export type WatchlistEntry = { type: string; id: string; name: string; poster?: string; addedAt: string };
+export type StoredProgress = { position: number; duration: number; title: string; path?: string; poster?: string; addonKey?: string; series?: ProgressSeries; updatedAt: string };
+export type WatchedMarker = { name: string; poster?: string; addonKey?: string; season: number; episode: number; updatedAt: string };
+
 
 export type TileSize = "compact" | "small" | "medium" | "large";
 export type TileShape = "poster" | "wide";

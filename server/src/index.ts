@@ -24,16 +24,15 @@ import { RestrictedError, restrictedMiddleware, restrictedMode } from "./restric
 import { outbound } from "./outbound.js";
 import { images } from "./images.js";
 import { configureSecureMode, secureMode, securityHeaders } from "./secure.js";
-import { publicSettings, Store, type InstanceSettings, type Settings, type State, type UserPrefs } from "./store.js";
+import { publicSettings, Store, type InstanceSettings, type Settings, type State, type UserPrefs, type WatchlistEntry, type StoredProgress, type WatchedMarker } from "./store.js";
 import { emptyUserData, findUserById, PERSONAL_SETTINGS, type UserData } from "./users.js";
-import { groupSeriesProgress, seriesOf, type ProgressSeries } from "./progress-series.js";
-import { markersOwingRow, nextEpisodeOf } from "./next-episode.js";
+import type { ProgressSeries } from "./progress-series.js";
 import { advanceTorrent, normalizeToken, verifyRealDebridToken } from "./debrid.js";
 import { tmdbMeta, verifyTmdbKey } from "./tmdb.js";
 import { clearTrailerCache } from "./trailers.js";
 import { ExternalIdStore } from "./external-ids.js";
 import { currentLevel, flushLog, initLogger, log, parseLevel, startLogMaintenance, setLevel } from "./logger.js";
-import { browseDirectory, describePath, emptiedFolders, entryDirectory, isPathWithin, isVideo, listFolders, listVideos, moveDestination, orphanedCatalogKeys, pageFiles, remapPath, scanLibrary, sortFiles, summarize, type FoundFile, type LibraryEntry } from "./library.js";
+import { browseDirectory, describePath, emptiedFolders, entryDirectory, isPathWithin, isVideo, listFolders, listVideos, moveDestination, orphanedCatalogKeys, pageFiles, remapPath, scanLibrary, summarize, type FoundFile, type LibraryEntry } from "./library.js";
 import { browseMeta, cacheFieldsFromMeta, episodeKey, episodeNumberOf, episodesFromMeta, dropKeyed, knownTitleEntry, knownTitleOf, lookupSkipped, matchKeyFor, matchStatus, mosaicSkipped, needsBackfill, needsEpisodes, scanMiss, suggestionFor, titleUnits, unmatchAt, type LibraryMetaRecord, type TitleKind, type TitleUnit } from "./library-match.js";
 import { parseMediaPath } from "./library-parse.js";
 import { LibraryScan } from "./library-scan.js";
@@ -49,7 +48,7 @@ import type { MediaInfo } from "./naming.js";
 import { defaultDownloadSettings, deviceFilename, safeName } from "./naming.js";
 import { LANGUAGE_NAMES, isUiLanguage, normalizeLanguage } from "./language.js";
 import { AppError, messageKeyOf } from "./errors.js";
-import { carveOuts, queuedArtworkKey, defaultLibrary, isInside, libraryFor, libraryPath, parseLibraryPath, posixBase, posixDir, posixJoin, realAncestor, relativeWithin, resolveLibraryPath, sameFile, showsInContinueWatching, toFs, toPosix, type LibraryRecord, type LibraryType, type RootGrant } from "./libraries.js";
+import { carveOuts, queuedArtworkKey, defaultLibrary, isInside, libraryFor, libraryPath, parseLibraryPath, posixBase, posixDir, posixJoin, realAncestor, relativeWithin, resolveLibraryPath, sameFile, toFs, toPosix, type LibraryRecord, type LibraryType, type RootGrant } from "./libraries.js";
 import { envGrants, grantView, mergeGrants } from "./library-grants.js";
 import { migrateStateFile } from "./library-migrate.js";
 import { LibraryMetaStore } from "./library-meta-store.js";
@@ -58,7 +57,6 @@ import type { AddonRecord, MetaItem, StreamItem } from "./types.js";
 import { createSettingsBackup, parseSettingsBackup, remapBackupLibraries } from "./backup.js";
 import { LibraryOps, type LibraryOp } from "./library-ops.js";
 import { transferLibraryPath, type TransferProgress } from "./library-transfer.js";
-import { groupResumeRows } from "./resume-group.js";
 import { registerAddonsRoutes } from "./routes/addons.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerCatalogRoutes } from "./routes/catalog.js";
@@ -66,6 +64,7 @@ import { asyncRoute, type RouteContext } from "./routes/context.js";
 import { registerDiagnosticsRoutes } from "./routes/diagnostics.js";
 import { registerDownloadRoutes } from "./routes/downloads.js";
 import { registerLibrariesRoutes } from "./routes/libraries.js";
+import { registerPersonalRoutes } from "./routes/personal.js";
 
 const STREAM_SORTS = new Set(["recommended", "size-desc", "size-asc", "addon"]);
 const DATA_DIR = process.env.DATA_DIR ?? "/data";
@@ -255,9 +254,6 @@ const updateData = async (req: express.Request | undefined, mutate: (data: UserD
 };
 /** What the four personal maps hold. `UserData` keeps them opaque, so that the user model
  *  stays clear of the library and progress modules; the server is where they are pinned. */
-type WatchlistEntry = { type: string; id: string; name: string; poster?: string; addedAt: string };
-type StoredProgress = { position: number; duration: number; title: string; path?: string; poster?: string; addonKey?: string; series?: ProgressSeries; updatedAt: string };
-type WatchedMarker = { name: string; poster?: string; addonKey?: string; season: number; episode: number; updatedAt: string };
 const watchlistOf = (data: UserData) => data.watchlist as Record<string, WatchlistEntry>;
 const progressOf = (data: UserData) => data.progress as Record<string, StoredProgress>;
 const markersOf = (data: UserData) => data.watchedSeries as Record<string, WatchedMarker>;
@@ -1244,162 +1240,6 @@ const withFavorites = <T extends { path: string }>(items: T[], data: UserData) =
   return items.map((item) => ({ ...item, favorite: favorites.has(libraryKey(item.path)) }));
 };
 
-// Starred catalogue titles. The key is type and id, because no file has to exist for them.
-app.get("/api/watchlist", (req, res) => {
-  const all = watchlistOf(dataOf(req));
-  res.json(Object.entries(all)
-    .map(([key, value]) => ({ key, ...value, poster: images.proxied(value.poster) }))
-    .sort((a, b) => b.addedAt.localeCompare(a.addedAt)));
-});
-app.post("/api/watchlist", asyncRoute(async (req, res) => {
-  const type = String(req.body.type ?? "movie");
-  const id = String(req.body.id ?? "").trim();
-  if (!id) throw new AppError("Missing title id.", "err.missingTitleId");
-  const key = `${type}:${id}`;
-  const wanted = Boolean(req.body.favorite);
-  await updateData(req, (data) => {
-    const all = { ...watchlistOf(data) };
-    if (wanted) all[key] = { type, id, name: String(req.body.name ?? id), poster: posterOf(req.body.poster), addedAt: new Date().toISOString() };
-    else delete all[key];
-    data.watchlist = all;
-  });
-  res.json({ key, favorite: wanted });
-}));
-
-// Resume list: the position is reported as it goes, and a finished title forgets itself.
-const PROGRESS_DONE = 0.94;
-/** The client speaks relative paths; a stored progress entry is keyed by the qualified
- *  one. A catalogue title key is not a path and travels untouched. */
-const storedProgressKey = (key: string) => key.startsWith("file:") ? `file:${libraryKey(key.slice(5))}` : key;
-const wireProgressKey = (key: string) => key.startsWith("file:") ? `file:${wirePath(key.slice(5))}` : key;
-/** The `series` field of a report: the body names the series, and whatever it leaves
- *  out the episode key fills in. An id that is not a non-empty string means no series. */
-const reportedSeries = (key: string, title: string, body: unknown): ProgressSeries | undefined => {
-  const field = body && typeof body === "object" ? body as { id?: unknown; name?: unknown; season?: unknown; episode?: unknown } : {};
-  const id = typeof field.id === "string" ? field.id.trim() : "";
-  if (!id) return undefined;
-  const derived = seriesOf(key, { title });
-  const name = typeof field.name === "string" ? field.name.trim() : "";
-  const season = Number(field.season), episode = Number(field.episode);
-  return {
-    id,
-    name: name || derived?.name || title,
-    season: Number.isFinite(season) ? season : derived?.season ?? 0,
-    episode: Number.isFinite(episode) ? episode : derived?.episode ?? 0,
-  };
-};
-/** One row of Continue watching, either a stored position or the next episode a finished
- *  one left behind. */
-type ProgressRow = StoredProgress & { key: string; pending?: true };
-app.get("/api/progress", asyncRoute(async (req, res) => {
-  const data = dataOf(req);
-  const all = progressOf(data);
-  // One row per series, whichever episode was watched last. The cut to 40 titles happens
-  // after the markers have had their say, so a show does not spend the row on every episode.
-  const rows = groupSeriesProgress(Object.entries(all).map(([key, value]) => ({ ...value, key })));
-  const shown = rows.flatMap((row) => (row.series ? [row.series.id] : []));
-  const over: string[] = [];
-  const language = prefsOf(req).uiLanguage;
-  const pending = await Promise.all(markersOwingRow(markersOf(data), shown).map(async ([id, marker]): Promise<ProgressRow | undefined> => {
-    // The six-hour cache answers most of these. An addon that stays quiet answers null,
-    // which leaves the marker alone: one unreachable show must fail by itself.
-    const meta = await cachedMeta("series", id, language);
-    if (!meta) return undefined;
-    const next = nextEpisodeOf(meta.videos, marker);
-    if (!next) { over.push(id); return undefined; }
-    return {
-      key: `series:${id}:${next.season}:${next.episode}`,
-      position: 0, duration: 0,
-      title: next.name ? `${marker.name} · ${next.name}` : marker.name,
-      poster: marker.poster, addonKey: marker.addonKey,
-      series: { id, name: marker.name, season: next.season, episode: next.episode },
-      pending: true,
-      updatedAt: marker.updatedAt,
-    };
-  }));
-  // A show that ran out of episodes leaves Continue watching for good.
-  if (over.length) await updateData(req, (fresh) => {
-    const markers = { ...markersOf(fresh) };
-    for (const id of over) delete markers[id];
-    fresh.watchedSeries = markers;
-  });
-  const items = [...rows, ...pending.filter((row) => row !== undefined)]
-    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-    .slice(0, 40)
-    .map((value) => ({ ...value, key: wireProgressKey(value.key), path: value.path ? wirePath(value.path) : value.path, poster: images.proxied(value.poster) }));
-  res.json(items);
-}));
-app.get("/api/progress/:key", (req, res) => {
-  const found = progressOf(dataOf(req))[storedProgressKey(String(req.params.key))];
-  res.json(found ? { ...found, poster: images.proxied(found.poster) } : null);
-});
-app.post("/api/progress", asyncRoute(async (req, res) => {
-  // With tracking switched off the position is written nowhere.
-  if (!prefsOf(req).trackProgress) return res.status(204).end();
-  const key = storedProgressKey(String(req.body.key ?? "").trim());
-  const position = Number(req.body.position) || 0;
-  const duration = Number(req.body.duration) || 0;
-  if (!key) throw new AppError("Missing title key.", "err.missingTitleKey");
-  await updateData(req, (data) => {
-    const all = { ...progressOf(data) };
-    const previous = all[key];
-    const title = String(req.body.title ?? previous?.title ?? "Video");
-    const record: StoredProgress = {
-      position, duration,
-      title,
-      path: req.body.path ? libraryKey(String(req.body.path)) : previous?.path,
-      poster: posterOf(req.body.poster) ?? previous?.poster,
-      addonKey: typeof req.body.addonKey === "string" ? req.body.addonKey : previous?.addonKey,
-      series: reportedSeries(key, title, req.body.series) ?? previous?.series,
-      updatedAt: new Date().toISOString(),
-    };
-    const series = seriesOf(key, record);
-    const markers = { ...markersOf(data) };
-    // Any report beats the marker of the show it belongs to, so the next episode of a
-    // finished one never stands beside the episode being watched now.
-    if (series) delete markers[series.id];
-    // Neither an almost-finished title nor the very beginning is worth keeping. A finished
-    // episode leaves the show's next one behind instead of nothing at all.
-    const finished = duration > 0 && position / duration > PROGRESS_DONE;
-    if (finished || (duration > 0 && position < 30)) {
-      delete all[key];
-      if (finished && series) markers[series.id] = {
-        name: series.name, poster: record.poster, addonKey: record.addonKey,
-        season: series.season, episode: series.episode, updatedAt: record.updatedAt,
-      };
-    } else all[key] = record;
-    // The list must not grow without bound.
-    const keys = Object.keys(all).sort((a, b) => all[b]!.updatedAt.localeCompare(all[a]!.updatedAt));
-    data.progress = Object.fromEntries(keys.slice(0, 60).map((item) => [item, all[item]!]));
-    const markerIds = Object.keys(markers).sort((a, b) => markers[b]!.updatedAt.localeCompare(markers[a]!.updatedAt));
-    data.watchedSeries = Object.fromEntries(markerIds.slice(0, 60).map((id) => [id, markers[id]!]));
-  });
-  res.status(204).end();
-}));
-app.delete("/api/progress", asyncRoute(async (req, res) => {
-  await updateData(req, (data) => { data.progress = {}; data.watchedSeries = {}; });
-  log("INFO", "Watch history cleared");
-  res.status(204).end();
-}));
-app.delete("/api/progress/:key", asyncRoute(async (req, res) => {
-  await updateData(req, (data) => {
-    const key = storedProgressKey(String(req.params.key));
-    const all = { ...progressOf(data) };
-    const removed = all[key];
-    delete all[key];
-    data.progress = all;
-    // The row a finished episode leaves behind is not stored, so forgetting that row has
-    // to forget the marker that draws it.
-    const series = seriesOf(key, { title: removed?.title ?? "", series: removed?.series });
-    if (series) {
-      const markers = { ...markersOf(data) };
-      delete markers[series.id];
-      data.watchedSeries = markers;
-    }
-  });
-  res.status(204).end();
-}));
-
 /** Called from the route and from a library job, which runs with no request: the one
  *  account this release has owns the flag either way. */
 const setLibraryFavorite = async (relative: string, wanted: boolean) => {
@@ -1412,89 +1252,7 @@ const setLibraryFavorite = async (relative: string, wanted: boolean) => {
   });
 };
 
-app.post("/api/library/favorite", asyncRoute(async (req, res) => {
-  const relative = String(req.body.path ?? "").trim();
-  const wanted = Boolean(req.body.favorite);
-  await setLibraryFavorite(relative, wanted);
-  res.json({ path: relative, favorite: wanted });
-}));
-
-app.get("/api/library/resume", asyncRoute(async (req, res) => {
-  const data = dataOf(req);
-  const favorites = new Set(data.favorites);
-  const query = String(req.query.query ?? "").trim().toLocaleLowerCase();
-  const libraries = store.libraries();
-  const records = metaStore.qualifiedMeta();
-  const entries = Object.entries(progressOf(data)).filter(([key, entry]) =>
-    key.startsWith("file:") && Boolean(entry.path) && showsInContinueWatching(entry.path!, libraries));
-  const described = await Promise.all(entries.map(async ([, entry]) => {
-    const item = await describeLibraryPath(entry.path!);
-    if (!item || item.kind !== "file") return [];
-    // `describePath` answers library-relative, and the row already knows which library it
-    // came from. Qualifying it through the single-library shim instead asks an install with
-    // two of them a question it cannot answer, and the whole resume row returns 400.
-    const libraryId = libraryOfKey(entry.path!).library.id;
-    const key = libraryPath(libraryId, item.path);
-    // The binding sits on the show's folder, so two season folders of one show answer with the
-    // same key and the grouping below turns them into a single tile.
-    const bound = knownTitleEntry(libraryKey(key), records);
-    const series = bound?.record.type === "series" ? { key: bound.key, name: bound.record.name } : undefined;
-    return [{ ...item, path: wirePath(key), label: entry.title || item.label, modified: entry.updatedAt,
-      progress: { position: entry.position, duration: entry.duration }, favorite: favorites.has(key),
-      seriesKey: series?.key,
-      ...(series?.name ? { series: { name: series.name } } : {}) }];
-  }));
-  // One tile per show before the filters, the sort and the slice, so `total` and the paging
-  // both count what the interface can open.
-  const items = groupResumeRows(described.flat())
-    .filter((item) => (!query || item.label.toLocaleLowerCase().includes(query)) && (req.query.favorites !== "1" || item.favorite));
-  const sorts = new Set(["name", "added", "size", "random"]);
-  const sort = sorts.has(String(req.query.sort)) ? String(req.query.sort) as "name" : "added";
-  const ordered = sortFiles(items, sort, req.query.order !== "asc", String(req.query.seed ?? ""));
-  const skip = Math.max(0, Number(req.query.skip) || 0);
-  const limit = Math.max(1, Math.min(120, Number(req.query.limit) || 60));
-  const page = await Promise.all(ordered.slice(skip, skip + limit).map(async (item) => {
-    const key = libraryKey(item.path);
-    const art = await locateFileArtwork(key);
-    if (!art) scheduleFileArtwork(key);
-    const wide = await locateFileArtwork(key, "wide");
-    if (!wide) scheduleFileArtwork(key, "wide");
-    const { item: withMeta, backfill } = attachBrowseMeta(item, prefsOf(req).uiLanguage);
-    return { ...withMeta, poster: await thumbUrl("path", item.path, art), wide: await thumbUrl("path", item.path, wide, "wide"), backfill };
-  }));
-  res.json({ path: ":resume", items: page.map(({ backfill: _backfill, seriesKey: _seriesKey, ...item }) => item), total: ordered.length, pending: page.some((item) => !item.poster || !item.wide || item.backfill) });
-}));
-
-app.get("/api/library/favorites", asyncRoute(async (req, res) => {
-  const sorts = new Set(["name", "added", "size", "random"]);
-  const sort = sorts.has(String(req.query.sort)) ? String(req.query.sort) as "name" : "name";
-  const described = await Promise.all(dataOf(req).favorites.map(async (stored) => {
-    const item = await describeLibraryPath(stored);
-    return item && { ...item, path: wirePath(libraryKey(stored)) };
-  }));
-  // Paths that disappeared meanwhile are skipped but not dropped from the list:
-  // the disk may be temporarily unavailable, and losing favourites over that is worse.
-  const present = described.filter(Boolean) as NonNullable<typeof described[number]>[];
-  const mixed = present.map((item) => ({
-    ...item, label: item.kind === "folder" ? item.name : item.label,
-  }));
-  const ordered = sortFiles(mixed, sort, req.query.order === "desc", String(req.query.seed ?? ""));
-  const skip = Math.max(0, Number(req.query.skip) || 0);
-  const limit = Math.max(1, Math.min(120, Number(req.query.limit) || 60));
-  const page = await Promise.all(ordered.slice(skip, skip + limit).map(async (item) => {
-    const key = libraryKey(item.path);
-    const { poster: art, wide } = item.kind === "folder"
-      ? await locateFolderArtworkPair(key)
-      : { poster: await locateFileArtwork(key), wide: await locateFileArtwork(key, "wide") };
-    if (!art) (item.kind === "folder" ? scheduleFolderArtwork : scheduleFileArtwork)(key);
-    if (!wide) (item.kind === "folder" ? scheduleFolderArtwork : scheduleFileArtwork)(key, "wide");
-    const poster = await thumbUrl(item.kind === "folder" ? "dir" : "path", item.path, art);
-    const wideUrl = await thumbUrl(item.kind === "folder" ? "dir" : "path", item.path, wide, "wide");
-    const { item: withMeta, backfill } = attachBrowseMeta(item, prefsOf(req).uiLanguage);
-    return { ...withMeta, favorite: true, poster, wide: wideUrl, backfill };
-  }));
-  res.json({ path: ":favorites", items: page.map(({ backfill: _backfill, ...item }) => item), total: ordered.length, pending: page.some((item) => !item.poster || !item.wide || item.backfill) });
-}));
+registerPersonalRoutes(app, { ...routeContext, attachBrowseMeta, cachedMeta, dataOf, describeLibraryPath, libraryKey, libraryOfKey, locateFileArtwork, locateFolderArtworkPair, markersOf, metaStore, posterOf, prefsOf, progressOf, scheduleFileArtwork, scheduleFolderArtwork, setLibraryFavorite, thumbUrl, updateData, watchlistOf, wirePath });
 
 app.get("/api/library/browse", asyncRoute(async (req, res) => {
   const requested = String(req.query.path ?? "");
