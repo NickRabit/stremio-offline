@@ -8,6 +8,7 @@ import { defaultDownloadSettings } from "../naming.js";
 import { publicAddon } from "../security.js";
 import type { Store } from "../store.js";
 import type { AddonRecord, AddonRole } from "../types.js";
+import type { UserRecord } from "../users.js";
 import { registerAddonsRoutes, type AddonsDeps } from "./addons.js";
 
 interface Harness {
@@ -28,6 +29,11 @@ const addon = (key: string, role: AddonRole = "both"): AddonRecord => ({
   downloadSettings: defaultDownloadSettings(),
 });
 
+const ADA = "usr_00000001";
+const BOB = "usr_00000002";
+const admin = { id: ADA, username: "ada", role: "admin" } as unknown as UserRecord;
+const ordinary = { id: BOB, username: "bob", role: "user" } as unknown as UserRecord;
+
 /** The routes take everything they need from the context, so the app here is a real express
  *  instance over fake collaborators that record what they were asked to do. */
 const mount = async (records: AddonRecord[] = [addon("alpha")]): Promise<Harness> => {
@@ -36,13 +42,14 @@ const mount = async (records: AddonRecord[] = [addon("alpha")]): Promise<Harness
   const store = {
     addons: () => state.addons,
     libraries: () => [],
+    users: () => [admin, ordinary],
     update: async (mutate: (value: typeof state) => void) => { mutate(state); },
   } as unknown as Store;
   const deps: AddonsDeps = {
     store,
     needsSetup: () => false,
     currentSession: () => undefined,
-    currentUser: () => undefined,
+    currentUser: (req) => (req.header("x-user") === BOB ? ordinary : admin),
     isSecure: () => false,
     stopOwnedPlayback: async () => undefined,
     storeRefreshed: async () => undefined,
@@ -73,14 +80,18 @@ const mount = async (records: AddonRecord[] = [addon("alpha")]): Promise<Harness
   };
 };
 
-const api = (base: string, pathname: string, init: { method?: string; body?: unknown } = {}) =>
+const api = (base: string, pathname: string, init: { method?: string; body?: unknown; user?: string } = {}) =>
   fetch(`${base}${pathname}`, {
     method: init.method ?? "GET",
-    headers: init.body === undefined ? {} : { "content-type": "application/json" },
+    headers: {
+      ...(init.body === undefined ? {} : { "content-type": "application/json" }),
+      ...(init.user ? { "x-user": init.user } : {}),
+    },
     body: init.body === undefined ? undefined : JSON.stringify(init.body),
   });
 
 const keysOf = (harness: Harness) => harness.stored().map((record) => record.key);
+const failure = async (response: Response) => (await response.json()) as { error: string; messageKey?: string };
 
 test("GET /api/addons passes every record through publicAddonView", async (t) => {
   const harness = await mount([addon("alpha"), addon("beta")]);
@@ -91,6 +102,46 @@ test("GET /api/addons passes every record through publicAddonView", async (t) =>
   assert.deepEqual(body.map((item) => item.key), ["alpha", "beta"]);
   assert.deepEqual(body.map((item) => item.viewed), [true, true]);
   assert.deepEqual(harness.viewed.map((record) => record.key), ["alpha", "beta"]);
+});
+
+test("GET /api/addons answers an ordinary user with the addons granted to them", async (t) => {
+  const harness = await mount([addon("alpha"), { ...addon("beta"), allowedUsers: [BOB] }]);
+  t.after(harness.close);
+
+  const administrator = await (await api(harness.base, "/api/addons")).json() as Array<{ key: string }>;
+  assert.deepEqual(administrator.map((item) => item.key), ["alpha", "beta"], "an administrator sees every addon");
+
+  const user = await (await api(harness.base, "/api/addons", { user: BOB })).json() as Array<{ key: string }>;
+  assert.deepEqual(user.map((item) => item.key), ["beta"], "a user sees only what was granted to them");
+});
+
+test("PATCH /api/addons/:key sets allowedUsers and collapses duplicates", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const response = await api(harness.base, "/api/addons/alpha", { method: "PATCH", body: { allowedUsers: [BOB, BOB] } });
+  assert.equal(response.status, 200);
+  assert.deepEqual(harness.stored()[0]!.allowedUsers, [BOB]);
+  assert.deepEqual((await response.json() as { allowedUsers: string[] }).allowedUsers, [BOB], "the dashboard is told the grants");
+});
+
+test("PATCH /api/addons/:key refuses an account that does not exist", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const response = await api(harness.base, "/api/addons/alpha", { method: "PATCH", body: { allowedUsers: ["usr_ffffffff"] } });
+  assert.equal(response.status, 400);
+  const body = await failure(response);
+  assert.equal(body.messageKey, "err.unknownUser");
+  assert.equal(body.error, "That account does not exist.");
+  assert.equal(harness.stored()[0]!.allowedUsers, undefined, "a refused id leaves the addon as it was");
+});
+
+test("PATCH /api/addons/:key refuses an administrator's id", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const response = await api(harness.base, "/api/addons/alpha", { method: "PATCH", body: { allowedUsers: [ADA] } });
+  assert.equal(response.status, 400);
+  assert.equal((await failure(response)).messageKey, "err.adminAlwaysUsesAddons");
+  assert.equal(harness.stored()[0]!.allowedUsers, undefined);
 });
 
 test("DELETE /api/addons/:key removes only the named key", async (t) => {

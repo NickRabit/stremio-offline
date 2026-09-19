@@ -19,14 +19,18 @@ interface Harness {
   close(): Promise<void>;
 }
 
-const addon = (key: string, catalogs: CatalogDefinition[], options: { role?: AddonRole; enabled?: boolean; globalSearch?: boolean } = {}): AddonRecord => ({
+const alice = { id: "usr_00000002", username: "alice", role: "user" } as unknown as UserRecord;
+const admin = { id: "usr_00000001", username: "ada", role: "admin" } as unknown as UserRecord;
+
+const addon = (key: string, catalogs: CatalogDefinition[], options: { role?: AddonRole; enabled?: boolean; globalSearch?: boolean; allowedUsers?: string[]; resources?: string[] } = {}): AddonRecord => ({
   key,
   manifestUrl: `https://${key}.example/manifest.json`,
   role: options.role ?? "catalog",
   enabled: options.enabled ?? true,
   globalSearch: options.globalSearch ?? true,
+  ...(options.allowedUsers ? { allowedUsers: options.allowedUsers } : {}),
   addedAt: "2024-01-01T00:00:00.000Z",
-  manifest: { id: key, name: `Addon ${key}`, version: "1.0.0", catalogs },
+  manifest: { id: key, name: `Addon ${key}`, version: "1.0.0", ...(options.resources ? { resources: options.resources } : {}), catalogs },
   downloadSettings: { movie: { subfolder: "", layout: "structured" }, series: { subfolder: "", layout: "structured" } },
 });
 
@@ -37,6 +41,7 @@ const mount = async (records: AddonRecord[] = [], meta: MetaItem | null = null, 
   viewer?: UserRecord;
   bound?: Record<string, LibraryMetaRecord>;
 } = {}): Promise<Harness> => {
+  const viewer = options.viewer ?? admin;
   const lookups: Harness["lookups"] = [];
   const store = {
     addons: () => records,
@@ -47,7 +52,7 @@ const mount = async (records: AddonRecord[] = [], meta: MetaItem | null = null, 
     store,
     needsSetup: () => false,
     currentSession: () => undefined,
-    currentUser: () => options.viewer,
+    currentUser: () => viewer,
     isSecure: () => false,
     stopOwnedPlayback: async () => undefined,
     tmdbProvider: () => undefined,
@@ -133,8 +138,6 @@ test("GET /api/meta/:type/:id prefers the language named by the query", async (t
   assert.deepEqual(harness.lookups, [{ type: "movie", id: "tt1", language: "de" }]);
 });
 
-const alice = { id: "usr_00000002", username: "alice", role: "user" } as unknown as UserRecord;
-const admin = { id: "usr_00000001", username: "ada", role: "admin" } as unknown as UserRecord;
 const library = (id: string, visibleTo?: string[]): LibraryRecord => ({
   id, name: id, type: "mixed", root: `/media/${id}`, enabled: true, order: 0, addedAt: "", writeArtwork: false,
   ...(visibleTo ? { visibleTo } : {}),
@@ -171,4 +174,75 @@ test("an administrator still reads a binding in a library nobody was granted", a
 
   const response = await api(harness.base, `/api/library/links?path=${encodeURIComponent("lib_00000001/Films/Heat")}`);
   assert.deepEqual(await response.json(), { links: [{ site: "imdb", url: "https://www.imdb.com/title/tt1/" }] });
+});
+
+const searchable = [{ type: "movie", id: "top", name: "Top", extra: [{ name: "search" }] }];
+const grantedToAlice = (key: string, catalogs = searchable, options: Parameters<typeof addon>[2] = {}) =>
+  addon(key, catalogs, { allowedUsers: [alice.id], ...options });
+
+test("GET /api/catalogs and /api/searchable omit an addon the caller may not use", async (t) => {
+  const records = [grantedToAlice("open"), addon("shut", searchable)];
+
+  const administrator = await mount(records, null, { viewer: admin });
+  t.after(administrator.close);
+  const adminCatalogs = await (await api(administrator.base, "/api/catalogs")).json() as Array<{ addonKey: string }>;
+  assert.deepEqual(adminCatalogs.map((item) => item.addonKey), ["open", "shut"], "an administrator sees every catalogue");
+
+  const user = await mount(records, null, { viewer: alice });
+  t.after(user.close);
+  const userCatalogs = await (await api(user.base, "/api/catalogs")).json() as Array<{ addonKey: string }>;
+  assert.deepEqual(userCatalogs.map((item) => item.addonKey), ["open"], "a disallowed addon's catalogue is gone");
+  const userSearchable = await (await api(user.base, "/api/searchable")).json() as Array<{ addonKey: string }>;
+  assert.deepEqual(userSearchable.map((item) => item.addonKey), ["open"], "and so is its search entry");
+});
+
+test("GET /api/catalog answers an addon the caller may not use as an unknown one", async (t) => {
+  const harness = await mount([addon("shut", searchable)], null, { viewer: alice });
+  t.after(harness.close);
+
+  const refused = await api(harness.base, "/api/catalog?addon=shut&type=movie&id=top");
+  const unknown = await api(harness.base, "/api/catalog?addon=nobody&type=movie&id=top");
+
+  assert.equal(refused.status, unknown.status);
+  assert.deepEqual(await refused.json(), await unknown.json(), "a refusal reads exactly like an unknown addon");
+  assert.equal(refused.status, 400);
+});
+
+const json = (body: unknown) => new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
+
+/** Serves the addon requests from a stub instead of the network, and leaves the test's own
+ *  calls to the loopback server alone. */
+async function withStubbedAddons(handler: (url: string) => Response, run: () => Promise<void>) {
+  const originalFetch = globalThis.fetch;
+  const originalFlag = process.env.ALLOW_PRIVATE_ADDONS;
+  process.env.ALLOW_PRIVATE_ADDONS = "1";
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    return /^https?:\/\/(127\.0\.0\.1|localhost)\b/.test(url) ? originalFetch(input, init) : handler(url);
+  }) as typeof fetch;
+  try { await run(); }
+  finally {
+    globalThis.fetch = originalFetch;
+    if (originalFlag === undefined) delete process.env.ALLOW_PRIVATE_ADDONS;
+    else process.env.ALLOW_PRIVATE_ADDONS = originalFlag;
+  }
+}
+
+test("GET /api/streams/:type/:id returns no source from an addon the caller may not use", async (t) => {
+  const records = [
+    addon("open", [], { role: "source", allowedUsers: [alice.id], resources: ["stream"] }),
+    addon("shut", [], { role: "source", resources: ["stream"] }),
+  ];
+  const user = await mount(records, null, { viewer: alice });
+  t.after(user.close);
+  const administrator = await mount(records, null, { viewer: admin });
+  t.after(administrator.close);
+
+  await withStubbedAddons((url) => json({ streams: [{ url: `https://cdn.example/${new URL(url).host}/movie.mp4`, name: new URL(url).host }] }), async () => {
+    const refused = await (await api(user.base, "/api/streams/movie/tt1")).json() as Array<{ addonKey: string }>;
+    assert.deepEqual(refused.map((item) => item.addonKey), ["open"], "the disallowed addon contributes nothing");
+
+    const all = await (await api(administrator.base, "/api/streams/movie/tt1")).json() as Array<{ addonKey: string }>;
+    assert.deepEqual(all.map((item) => item.addonKey).sort(), ["open", "shut"], "an administrator still reaches both");
+  });
 });

@@ -1,4 +1,5 @@
 import type express from "express";
+import { allowedAddons } from "../addons.js";
 import type { AudioMode, DownloadQueue, DownloadSelection, SubtitleMode } from "../downloads.js";
 import { AppError } from "../errors.js";
 import { normalizeLanguage } from "../language.js";
@@ -7,7 +8,7 @@ import { defaultDownloadSettings, type MediaInfo } from "../naming.js";
 import { titleLanguage } from "../ranking.js";
 import type { UserPrefs } from "../store.js";
 import type { MetaItem, StreamItem } from "../types.js";
-import { asyncRoute, type RouteContext } from "./context.js";
+import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
 
 export interface DownloadsDeps extends RouteContext {
   queue: DownloadQueue;
@@ -24,7 +25,7 @@ export interface DownloadsDeps extends RouteContext {
 }
 
 export function registerDownloadRoutes(app: express.Application, deps: DownloadsDeps): void {
-  const { store, queue, jobView, sourceOf, mediaSource, posterOf, rememberTitle, titleKey, saveCatalogPoster, libraryKey, cachedMeta, prefsOf } = deps;
+  const { store, currentUser, queue, jobView, sourceOf, mediaSource, posterOf, rememberTitle, titleKey, saveCatalogPoster, libraryKey, cachedMeta, prefsOf } = deps;
 
   app.get("/api/downloads", (_req, res) => {
     const snapshot = queue.snapshot();
@@ -54,8 +55,10 @@ export function registerDownloadRoutes(app: express.Application, deps: Downloads
     if (!episodes.length) throw new AppError("Missing episode list.", "err.missingEpisodes");
     if (episodes.length > 500) throw new AppError("At most 500 episodes at a time.", "err.tooManyEpisodes");
     const rawSelection = req.body.selection && typeof req.body.selection === "object" ? req.body.selection as Record<string, unknown> : {};
+    // The caller's own addons, so a disallowed key cannot be smuggled in by naming it here.
+    const usable = allowedAddons(store.addons(), viewerOf(currentUser(req)));
     const addonKeys = Array.isArray(rawSelection.addonKeys)
-      ? [...new Set(rawSelection.addonKeys.map(String))].filter((key) => store.addons().some((addon) => addon.key === key && addon.enabled && addon.role !== "catalog"))
+      ? [...new Set(rawSelection.addonKeys.map(String))].filter((key) => usable.some((addon) => addon.key === key && addon.enabled && addon.role !== "catalog"))
       : [];
     if (!addonKeys.length) throw new AppError("Pick at least one stream addon.", "err.missingDownloadSources");
     const sourceStrategy = String(rawSelection.sourceStrategy) === "largest" ? "largest" : "priority";

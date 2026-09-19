@@ -7,34 +7,43 @@ import type { DownloadQueue } from "../downloads.js";
 import { messageKeyOf } from "../errors.js";
 import { defaultDownloadSettings, type MediaInfo } from "../naming.js";
 import type { Store, UserPrefs } from "../store.js";
+import type { UserRecord } from "../users.js";
 import { registerDownloadRoutes, type DownloadsDeps } from "./downloads.js";
 
 interface Harness {
   base: string;
   moves: Array<{ id: string; direction: number }>;
   viewed: Array<{ id?: string; media?: MediaInfo; target?: string }>;
+  pending: Array<{ selection?: { addonKeys?: string[] } }>;
   close(): Promise<void>;
 }
 
 /** A stream addon the bulk handler accepts: enabled, not a catalogue, with save rules. */
-const streamAddon = (key: string, options: { enabled?: boolean; role?: string } = {}) => ({
+const streamAddon = (key: string, options: { enabled?: boolean; role?: string; allowedUsers?: string[] } = {}) => ({
   key,
   enabled: options.enabled ?? true,
   role: options.role ?? "source",
+  ...(options.allowedUsers ? { allowedUsers: options.allowedUsers } : {}),
   manifest: { id: key, name: key },
   downloadSettings: defaultDownloadSettings(),
 });
 
+const ADA = "usr_00000001";
+const BOB = "usr_00000002";
+const admin = { id: ADA, username: "ada", role: "admin" } as unknown as UserRecord;
+const ordinary = { id: BOB, username: "bob", role: "user" } as unknown as UserRecord;
+
 /** The routes take everything they need from the context, so the app here is a real express
  *  instance over fake collaborators that record what they were asked to do. */
-const mount = async (addons: unknown[] = [streamAddon("stream-addon")]): Promise<Harness> => {
+const mount = async (addons: unknown[] = [streamAddon("stream-addon")], options: { viewer?: UserRecord } = {}): Promise<Harness> => {
   const moves: Array<{ id: string; direction: number }> = [];
   const viewed: Array<{ id?: string; media?: MediaInfo; target?: string }> = [];
+  const pending: Array<{ selection?: { addonKeys?: string[] } }> = [];
   const queue = {
     snapshot: () => ({ jobs: [{ id: "job-1" }, { id: "job-2" }], halt: null }),
     list: () => [],
     add: async () => ({ id: "job-1", target: "Movies/Film/Film.mkv" }),
-    addPending: async () => ({ id: "job-1" }),
+    addPending: async (_title: string, source: { selection?: { addonKeys?: string[] } }) => { pending.push(source); return { id: "job-1" }; },
     pause: async () => undefined,
     resume: async () => undefined,
     retry: async () => undefined,
@@ -46,7 +55,7 @@ const mount = async (addons: unknown[] = [streamAddon("stream-addon")]): Promise
     store: { addons: () => addons, libraries: () => [] } as unknown as Store,
     needsSetup: () => false,
     currentSession: () => undefined,
-    currentUser: () => undefined,
+    currentUser: () => options.viewer ?? admin,
     isSecure: () => false,
     stopOwnedPlayback: async () => undefined,
     queue: queue as unknown as DownloadQueue,
@@ -78,6 +87,7 @@ const mount = async (addons: unknown[] = [streamAddon("stream-addon")]): Promise
     base: `http://127.0.0.1:${port}`,
     moves,
     viewed,
+    pending,
     close: async () => {
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -144,6 +154,28 @@ test("POST /api/downloads/bulk refuses a selection with no audio language", asyn
   });
   assert.equal(response.status, 400);
   assert.equal(await keyOf(response), "err.missingAudioLanguage");
+});
+
+test("POST /api/downloads/bulk refuses addons the caller may not use and queues only from the allowed ones", async (t) => {
+  const harness = await mount(
+    [streamAddon("open", { allowedUsers: [BOB] }), streamAddon("shut")],
+    { viewer: ordinary },
+  );
+  t.after(harness.close);
+
+  const refused = await api(harness.base, "/api/downloads/bulk", {
+    method: "POST",
+    body: { title: "Show", episodes: episodes(1), selection: { addonKeys: ["shut"], audioLanguage: "en" } },
+  });
+  assert.equal(refused.status, 400);
+  assert.equal(await keyOf(refused), "err.missingDownloadSources", "naming only a disallowed addon leaves nothing to pick from");
+
+  const mixed = await api(harness.base, "/api/downloads/bulk", {
+    method: "POST",
+    body: { title: "Show", episodes: episodes(1), selection: { addonKeys: ["shut", "open"], audioLanguage: "en" } },
+  });
+  assert.equal(mixed.status, 201);
+  assert.deepEqual(harness.pending.map((source) => source.selection?.addonKeys), [["open"]], "the disallowed key never reaches the queue");
 });
 
 test("POST /api/downloads/bulk refuses required subtitles without a subtitle language", async (t) => {

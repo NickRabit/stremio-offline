@@ -1,6 +1,6 @@
 import type express from "express";
 import { readFile } from "node:fs/promises";
-import { catalog, searchAll, searchableCatalogs, streamCandidates, streams, subtitles, type MetaProvider } from "../addons.js";
+import { allowedAddons, catalog, searchAll, searchableCatalogs, streamCandidates, streams, subtitles, type MetaProvider } from "../addons.js";
 import { AppError } from "../errors.js";
 import { ExternalIdStore, siteLinks } from "../external-ids.js";
 import { images } from "../images.js";
@@ -19,7 +19,7 @@ import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
 
 export interface CatalogDeps extends RouteContext {
   tmdbProvider(language: string): MetaProvider | undefined;
-  cachedMeta(type: string, id: string, language?: string): Promise<MetaItem | null>;
+  cachedMeta(type: string, id: string, language?: string, viewer?: Viewer): Promise<MetaItem | null>;
   prefsOf(req?: express.Request): UserPrefs;
   libraryTarget(value: string, viewer: Viewer | undefined): Promise<string>;
   ownerOf(req: express.Request): ResourceOwner;
@@ -33,6 +33,10 @@ export interface CatalogDeps extends RouteContext {
 export function registerCatalogRoutes(app: express.Application, deps: CatalogDeps): void {
   const { store, currentUser, cachedMeta, prefsOf, libraryTarget, ownerOf, trackMedia, libraryKey, metaStore, externalIds, subtitleDelay } = deps;
 
+  /** The addons this caller may use, read once per request. A disabled addon is left out
+   *  later by the helpers that honour `enabled`; visibility narrows an enabled addon only. */
+  const usable = (req: express.Request) => allowedAddons(store.addons(), viewerOf(currentUser(req)));
+
   /** The binding key for a path the caller may see. A path in an invisible library reads
    *  exactly like one that carries no binding, which is what these two endpoints already
    *  answer for a path nothing is bound to. */
@@ -43,14 +47,14 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
     return library && libraryVisible(library, viewer) ? key : undefined;
   };
 
-  const titleTrailer = (type: string, id: string, language: string) => {
+  const titleTrailer = (type: string, id: string, language: string, viewer: Viewer) => {
     const apiKey = store.settings().tmdbApiKey;
-    return trailerFor(store.addons(), type, id, language, apiKey ? { apiKey, language } : undefined);
+    return trailerFor(allowedAddons(store.addons(), viewer), type, id, language, apiKey ? { apiKey, language } : undefined);
   };
 
-  app.get("/api/catalogs", (_req, res) => res.json(store.addons().filter((a) => a.enabled && a.role !== "source").flatMap((addon) => (addon.manifest.catalogs ?? []).map((item) => ({ ...item, addonKey: addon.key, addonName: addon.manifest.name })) )));
+  app.get("/api/catalogs", (req, res) => res.json(usable(req).filter((a) => a.enabled && a.role !== "source").flatMap((addon) => (addon.manifest.catalogs ?? []).map((item) => ({ ...item, addonKey: addon.key, addonName: addon.manifest.name })) )));
   app.get("/api/catalog", asyncRoute(async (req, res) => {
-    const addon = store.addons().find((a) => a.key === req.query.addon); if (!addon) throw new AppError("The addon was not found.", "err.addonNotFound");
+    const addon = usable(req).find((a) => a.key === req.query.addon); if (!addon) throw new AppError("The addon was not found.", "err.addonNotFound");
     const items = await catalog(addon, String(req.query.type), String(req.query.id), req.query.search ? String(req.query.search) : undefined, Number(req.query.skip) || 0, req.query.genre ? String(req.query.genre) : undefined);
     res.json(items.map((item) => images.rewriteMeta(item)));
   }));
@@ -59,7 +63,7 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
     if (!query) throw new AppError("Enter a search term.", "err.emptyQuery");
     const type = req.query.type ? String(req.query.type) : undefined;
     const addonKey = req.query.addon ? String(req.query.addon) : undefined;
-    const found = await searchAll(store.addons(), query, type, req.query.cursor ? String(req.query.cursor) : undefined, {
+    const found = await searchAll(usable(req), query, type, req.query.cursor ? String(req.query.cursor) : undefined, {
       addonKey,
       catalogType: addonKey && req.query.catalogType ? String(req.query.catalogType) : undefined,
       catalogId: addonKey && req.query.catalogId ? String(req.query.catalogId) : undefined,
@@ -67,23 +71,24 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
     });
     res.json({ ...found, items: found.items.map((item) => images.rewriteMeta(item)) });
   }));
-  app.get("/api/searchable", (_req, res) => res.json(searchableCatalogs(store.addons()).map(({ addon, definition }) => ({ addonKey: addon.key, addonName: addon.manifest.name, globalSearch: addon.globalSearch, type: definition.type, id: definition.id, name: definition.name ?? definition.id }))));
+  app.get("/api/searchable", (req, res) => res.json(searchableCatalogs(usable(req)).map(({ addon, definition }) => ({ addonKey: addon.key, addonName: addon.manifest.name, globalSearch: addon.globalSearch, type: definition.type, id: definition.id, name: definition.name ?? definition.id }))));
   app.get("/api/meta/:type/:id", asyncRoute(async (req, res) => {
     const language = normalizeLanguage(String(req.query.language ?? "")) ?? prefsOf(req).uiLanguage;
-    const meta = await cachedMeta(String(req.params.type), String(req.params.id), language);
+    const meta = await cachedMeta(String(req.params.type), String(req.params.id), language, viewerOf(currentUser(req)));
     if (!meta) return res.status(404).json({ error: "Metadata nebyla nalezena." });
     res.json(images.rewriteMeta(meta));
   }));
   app.get("/api/library/trailer", asyncRoute(async (req, res) => {
     const language = normalizeLanguage(String(req.query.language ?? "")) ?? prefsOf(req).uiLanguage;
+    const viewer = viewerOf(currentUser(req));
     const raw = String(req.query.path ?? "").trim();
-    const key = raw ? boundKey(raw, viewerOf(currentUser(req))) : undefined;
+    const key = raw ? boundKey(raw, viewer) : undefined;
     const entry = key ? knownTitleEntry(key, metaStore.qualifiedMeta()) : undefined;
-    res.json({ trailer: entry ? await titleTrailer(entry.record.type, entry.record.id, language) : null });
+    res.json({ trailer: entry ? await titleTrailer(entry.record.type, entry.record.id, language, viewer) : null });
   }));
   app.get("/api/trailer/:type/:id", asyncRoute(async (req, res) => {
     const language = normalizeLanguage(String(req.query.language ?? "")) ?? prefsOf(req).uiLanguage;
-    res.json({ trailer: await titleTrailer(String(req.params.type), String(req.params.id), language) });
+    res.json({ trailer: await titleTrailer(String(req.params.type), String(req.params.id), language, viewerOf(currentUser(req))) });
   }));
   /** The same row for a folder that is bound to a title. A path with no binding asks
    *  Wikidata nothing and answers no links. */
@@ -117,16 +122,16 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
     res.sendFile(cached.file, { dotfiles: "allow" }, (error) => { if (error && !res.headersSent) res.status(404).end(); });
   }));
   app.get("/api/stream-sources/:type/:id", (req, res) => res.json(
-    streamCandidates(store.addons(), String(req.params.type), String(req.params.id)).map((addon) => ({ key: addon.key, name: addon.manifest.name }))));
+    streamCandidates(usable(req), String(req.params.type), String(req.params.id)).map((addon) => ({ key: addon.key, name: addon.manifest.name }))));
   app.get("/api/streams/:type/:id", asyncRoute(async (req, res) => {
     const owner = ownerOf(req);
-    const items = await streams(store.addons(), String(req.params.type), String(req.params.id), req.query.addon ? String(req.query.addon) : undefined);
+    const items = await streams(usable(req), String(req.params.type), String(req.params.id), req.query.addon ? String(req.query.addon) : undefined);
     if (ownerOf(req).sid !== owner.sid) throw new ResourceError(401, "AUTH_REQUIRED");
     res.setHeader("cache-control", "private, no-store").json(mediaResources.listing(items, owner));
   }));
   app.get("/api/subtitles/:type/:id", asyncRoute(async (req, res) => {
     const owner = ownerOf(req);
-    const items = await subtitles(store.addons(), String(req.params.type), String(req.params.id));
+    const items = await subtitles(usable(req), String(req.params.type), String(req.params.id));
     res.setHeader("cache-control", "private, no-store").json(items.map((item) => ({
       subtitleId: mediaResources.add({ url: item.url }, owner, "subtitle"),
       lang: safeSourceText(item.lang, { url: item.url }), addonName: safeSourceText(item.addonName, { url: item.url }),

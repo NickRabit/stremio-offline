@@ -46,7 +46,9 @@ async function fromCinemeta(addons: AddonRecord[], type: string, id: string): Pr
 
 export async function trailerFor(addons: AddonRecord[], type: string, id: string, language: string, tmdb?: TmdbConfig): Promise<Trailer | null> {
   if (type !== "movie" && type !== "series") return null;
-  const key = `${type}:${id}:${language}`;
+  // A trailer can come from Cinemeta, so the cache cannot be shared between callers whose
+  // allowance differs: the addons the caller may use are part of the key.
+  const key = `${type}:${id}:${language}:${addons.map((addon) => addon.key).join(",")}`;
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < TTL_MS) return hit.value;
 

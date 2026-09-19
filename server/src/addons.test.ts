@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { addonMetadataLanguage, metadata, searchableCatalogs } from "./addons.js";
+import { addonAllowed, addonMetadataLanguage, allowedAddons, metadata, searchableCatalogs, streamCandidates } from "./addons.js";
+import type { Viewer } from "./libraries.js";
 import { defaultDownloadSettings } from "./naming.js";
 import type { AddonRecord } from "./types.js";
 
@@ -26,6 +27,23 @@ const addon = (key: string, globalSearch = true): AddonRecord => ({
 
 const keys = (addons: AddonRecord[], scope?: Parameters<typeof searchableCatalogs>[2]) =>
   searchableCatalogs(addons, undefined, scope).map(({ addon: item, definition }) => `${item.key}:${definition.type}:${definition.id}`);
+
+const admin: Viewer = { id: "usr_00000001", role: "admin" };
+const ordinary: Viewer = { id: "usr_00000002", role: "user" };
+
+test("addonAllowed lets an administrator use every addon, whatever the list says", () => {
+  assert.equal(addonAllowed(addon("alpha"), admin), true, "an absent list still admits an administrator");
+  assert.equal(addonAllowed({ ...addon("alpha"), allowedUsers: [] }, admin), true, "an empty list too");
+  assert.equal(addonAllowed({ ...addon("alpha"), allowedUsers: [ordinary.id] }, admin), true, "a grant to somebody else does not narrow it");
+});
+
+test("addonAllowed refuses a user who is not on the list", () => {
+  assert.equal(addonAllowed(addon("alpha"), ordinary), false, "an absent list grants nobody");
+  assert.equal(addonAllowed({ ...addon("alpha"), allowedUsers: [] }, ordinary), false);
+  assert.equal(addonAllowed({ ...addon("alpha"), allowedUsers: ["usr_ffffffff"] }, ordinary), false);
+  assert.equal(addonAllowed({ ...addon("alpha"), allowedUsers: [ordinary.id] }, ordinary), true);
+  assert.deepEqual(allowedAddons([addon("alpha"), { ...addon("beta"), allowedUsers: [ordinary.id] }], ordinary).map((item) => item.key), ["beta"]);
+});
 
 test("search scope can select an addon or one of its catalogues", () => {
   const addons = [addon("alpha"), addon("beta")];
@@ -121,4 +139,21 @@ test("without a provider the first addon with a description ends the loop", asyn
     assert.deepEqual(result, { id: "tt2", type: "movie", name: "Name", description: "Description" });
   });
   assert.equal(calls.length, 1);
+});
+
+test("a disabled addon is refused for an administrator too, where enabled is enforced", async () => {
+  const disabledMeta = { ...metaAddon("cinemeta"), enabled: false };
+  const disabledStream = { ...metaAddon("streamer"), enabled: false, role: "source" as const, manifest: { ...metaAddon("streamer").manifest, resources: ["stream"] } };
+  const granted = allowedAddons([disabledMeta, disabledStream], admin);
+  assert.equal(addonAllowed(disabledMeta, admin), true, "addonAllowed answers for visibility, not for enabled");
+
+  // `enabled` lives in the searchableCatalogs/streamCandidates/metadata helpers, which drop a
+  // disabled addon before an administrator gets anywhere: visibility never widens a disabled one.
+  const calls: string[] = [];
+  await withStubbedAddons((url) => { calls.push(String(url)); return json({ meta: {} }); }, async () => {
+    assert.deepEqual(searchableCatalogs(granted), [], "a disabled addon has no catalogue");
+    assert.deepEqual(streamCandidates(granted, "movie", "tt1"), [], "and no source");
+    assert.equal(await metadata(granted, "movie", "tt1", "en"), null, "and no metadata");
+  });
+  assert.equal(calls.length, 0, "a disabled addon is never asked");
 });

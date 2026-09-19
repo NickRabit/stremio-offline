@@ -6,7 +6,7 @@ import path from "node:path";
 import { constants } from "node:fs";
 import { access, mkdir, readdir, realpath, rm, stat, statfs, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { loadAddon, metadata, searchAll, searchableCatalogs, streams, subtitles, type MetaProvider } from "./addons.js";
+import { allowedAddons, loadAddon, metadata, searchAll, searchableCatalogs, streams, subtitles, type MetaProvider } from "./addons.js";
 import { autoRefreshEnabled, refreshDue, refreshManifests, type RefreshOutcome } from "./addon-refresh.js";
 import { rankStreams } from "./ranking.js";
 import { DownloadQueue } from "./downloads.js";
@@ -587,11 +587,15 @@ const metaCache = new Map<string, { value: MetaItem | null; at: number }>();
 /** A lookup with no request in hand -- the artwork queue, a backfill, a job that has just
  *  finished -- reads the language of the one account. A caller that knows which person is
  *  asking passes that person's language. */
-const cachedMeta = async (type: string, id: string, language: string = prefsOf().uiLanguage) => {
-  const key = `${type}:${id}:${language}`;
+const cachedMeta = async (type: string, id: string, language: string = prefsOf().uiLanguage, viewer?: Viewer) => {
+  // The answer is merged from every candidate addon, so it cannot be filtered after the
+  // fact: the allowance is part of the key, or one person's grants would decide what
+  // another sees. A caller with no viewer reads every addon, as the background work needs.
+  const sources = viewer ? allowedAddons(store.addons(), viewer) : store.addons();
+  const key = `${type}:${id}:${language}:${viewer ? sources.map((addon) => addon.key).join(",") : "*"}`;
   const hit = metaCache.get(key);
   if (hit && Date.now() - hit.at < 6 * 60 * 60_000) return hit.value;
-  const value = await metadata(store.addons(), type, id, language, tmdbProvider(language)).catch(() => null);
+  const value = await metadata(sources, type, id, language, tmdbProvider(language)).catch(() => null);
   if (metaCache.size > 300) metaCache.clear();
   // A failed lookup is not an answer: caching it would hold a title empty for six hours.
   if (value) metaCache.set(key, { value, at: Date.now() });

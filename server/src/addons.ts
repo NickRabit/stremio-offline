@@ -1,5 +1,6 @@
 import { AppError } from "./errors.js";
 import { createHash, randomUUID } from "node:crypto";
+import type { Viewer } from "./libraries.js";
 import type { AddonRecord, AddonRole, CatalogDefinition, MetaItem, StremioManifest, StreamItem, SubtitleItem } from "./types.js";
 import { validateRemoteUrl } from "./security.js";
 import { guardedFetch } from "./outbound.js";
@@ -36,6 +37,17 @@ export async function loadAddon(rawUrl: string, role: AddonRole): Promise<AddonR
     addedAt: new Date().toISOString(), manifest, downloadSettings: defaultDownloadSettings(),
   };
 }
+
+/** May this account use this addon? An administrator may use every addon,
+ *  including ones nobody has been granted -- but never a disabled one: the
+ *  `enabled` switch is enforced by the helpers below (`searchableCatalogs`,
+ *  `streamCandidates`, `metadata`, `subtitles`), which drop a disabled addon
+ *  before its audience is considered. */
+export const addonAllowed = (addon: AddonRecord, viewer: Viewer): boolean =>
+  viewer.role === "admin" || (addon.allowedUsers ?? []).includes(viewer.id);
+
+export const allowedAddons = (addons: AddonRecord[], viewer: Viewer): AddonRecord[] =>
+  addons.filter((addon) => addonAllowed(addon, viewer));
 
 function baseUrl(addon: AddonRecord): URL { return new URL("./", addon.manifestUrl); }
 

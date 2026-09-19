@@ -1,12 +1,13 @@
 import type express from "express";
 import { manifestChanged, refreshManifests, type RefreshOutcome } from "../addon-refresh.js";
-import { loadAddon } from "../addons.js";
+import { allowedAddons, loadAddon } from "../addons.js";
 import { AppError } from "../errors.js";
 import { log } from "../logger.js";
 import { normalizeDownloadSettings } from "../naming.js";
 import { essentialAddon, publicAddon, publicAddonRestricted } from "../security.js";
 import type { AddonRecord, AddonRole } from "../types.js";
-import { asyncRoute, type RouteContext } from "./context.js";
+import { findUserById } from "../users.js";
+import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
 
 export interface AddonsDeps extends RouteContext {
   storeRefreshed(outcomes: RefreshOutcome[]): Promise<void>;
@@ -14,9 +15,9 @@ export interface AddonsDeps extends RouteContext {
 }
 
 export function registerAddonsRoutes(app: express.Application, deps: AddonsDeps): void {
-  const { store, storeRefreshed, publicAddonView } = deps;
+  const { store, currentUser, storeRefreshed, publicAddonView } = deps;
 
-  app.get("/api/addons", (_req, res) => res.json(store.addons().map(publicAddonView)));
+  app.get("/api/addons", (req, res) => res.json(allowedAddons(store.addons(), viewerOf(currentUser(req))).map(publicAddonView)));
   app.post("/api/addons", asyncRoute(async (req, res) => {
     const role = (["catalog", "source", "both"].includes(req.body.role) ? req.body.role : "both") as AddonRole;
     const addon = await loadAddon(String(req.body.url ?? ""), role);
@@ -81,6 +82,21 @@ export function registerAddonsRoutes(app: express.Application, deps: AddonsDeps)
     // A different address means reloading the manifest. The key, the order and the save
     // rules stay, so a reconfigured addon need not be removed and added again.
     const url = req.body.url === undefined ? undefined : String(req.body.url).trim();
+    let allowedUsers: string[] | undefined;
+    if (req.body.allowedUsers !== undefined) {
+      if (!Array.isArray(req.body.allowedUsers)) throw new AppError("The list of accounts has to be an array.", "err.invalidRequest", 400);
+      const wanted = new Set<string>();
+      for (const value of req.body.allowedUsers) {
+        const id = String(value);
+        const user = findUserById(store.users(), id);
+        if (!user) throw new AppError("That account does not exist.", "err.unknownUser");
+        // An administrator uses every addon by role, so their id in the list would read as
+        // though removing it took the addon away.
+        if (user.role === "admin") throw new AppError("An administrator can already use every addon.", "err.adminAlwaysUsesAddons");
+        wanted.add(id);
+      }
+      allowedUsers = [...wanted];
+    }
     // The settings are validated before the write: the mutator changes state in place, so
     // an exception halfway through would leave changes in memory that are never persisted.
     // It also rejects a nonsensical request before fetching a manifest for it.
@@ -93,6 +109,7 @@ export function registerAddonsRoutes(app: express.Application, deps: AddonsDeps)
       if (typeof req.body.globalSearch === "boolean") addon.globalSearch = req.body.globalSearch;
       if (typeof req.body.showInContinueWatching === "boolean") addon.showInContinueWatching = req.body.showInContinueWatching;
       if (downloadSettings) addon.downloadSettings = downloadSettings;
+      if (allowedUsers) addon.allowedUsers = allowedUsers;
       addon.role = role;
       if (reloaded) { addon.manifestUrl = reloaded.manifestUrl; addon.manifest = reloaded.manifest; }
     });

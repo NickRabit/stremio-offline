@@ -941,6 +941,7 @@ export const cs: Catalog = {
   "err.wrongCurrentPassword": "Stávající heslo nesouhlasí.",
   "err.addonNotFound": "Doplněk nebyl nalezen.",
   "err.essentialAddon": "Cinemeta dodává metadata knihovny, nejde odebrat ani vypnout.",
+  "err.adminAlwaysUsesAddons": "Administrátor už může používat všechny doplňky.",
   "err.manifestExists": "Tenhle manifest už je přidaný.",
   "err.addonNotJson": "Doplněk nevrátil JSON.",
   "err.tmdbKeyRejected": "TMDB odmítlo API klíč.",

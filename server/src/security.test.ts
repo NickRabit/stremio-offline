@@ -76,7 +76,7 @@ test("publicAddonRestricted is an allowlist and drops token-adjacent fields", ()
   const addon = sampleAddon();
   (addon.manifest as { extra?: string }).extra = "should-not-leak";
   const published = publicAddonRestricted(addon);
-  assert.deepEqual(Object.keys(published).sort(), ["enabled", "essential", "globalSearch", "key", "manifest", "role", "showInContinueWatching"]);
+  assert.deepEqual(Object.keys(published).sort(), ["allowedUsers", "enabled", "essential", "globalSearch", "key", "manifest", "role", "showInContinueWatching"]);
   assert.deepEqual(Object.keys(published.manifest).sort(), ["behaviorHints", "description", "id", "logo", "name", "resources", "version"]);
   assert.equal("displayUrl" in published, false);
   assert.equal("downloadSettings" in published, false);
@@ -89,6 +89,7 @@ test("publicAddonRestricted is an allowlist and drops token-adjacent fields", ()
   assert.equal(published.manifest.logo, "https://torrentio.strem.fun/logo.png");
   assert.equal(published.globalSearch, false);
   assert.equal(published.showInContinueWatching, true);
+  assert.deepEqual(published.allowedUsers, [], "the grants are shown, as the library view shows visibleTo");
 });
 
 test("publicAddon still redacts the path but keeps downloadSettings", () => {
