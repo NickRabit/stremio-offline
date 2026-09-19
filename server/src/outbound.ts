@@ -24,6 +24,7 @@ export interface GuardConfig {
   failureThreshold: number;
   cooldownMs: number;
   maxCooldownMs: number;
+  countTimeoutsAsFailure: boolean;
 }
 
 const number = (value: string | undefined, fallback: number, min = 0) => {
@@ -40,6 +41,20 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): GuardConfig
     failureThreshold: Math.max(1, number(env.ADDON_BREAKER_FAILURES, 5, 1)),
     cooldownMs: Math.max(1000, number(env.ADDON_BREAKER_COOLDOWN_MS, 30_000, 1000)),
     maxCooldownMs: Math.max(1000, number(env.ADDON_BREAKER_MAX_COOLDOWN_MS, 300_000, 1000)),
+    countTimeoutsAsFailure: true,
+  };
+}
+
+export function metadataConfigFromEnv(env: NodeJS.ProcessEnv = process.env): GuardConfig {
+  return {
+    enabled: env.WIKIDATA_GUARD !== "0",
+    maxConcurrent: Math.max(1, number(env.WIKIDATA_MAX_CONCURRENT, 2, 1)),
+    minIntervalMs: number(env.WIKIDATA_MIN_INTERVAL_MS, 1500),
+    maxQueue: Math.max(1, number(env.WIKIDATA_MAX_QUEUE, 4, 1)),
+    failureThreshold: Math.max(1, number(env.WIKIDATA_BREAKER_FAILURES, 3, 1)),
+    cooldownMs: Math.max(1000, number(env.WIKIDATA_BREAKER_COOLDOWN_MS, 30_000, 1000)),
+    maxCooldownMs: Math.max(1000, number(env.WIKIDATA_BREAKER_MAX_COOLDOWN_MS, 300_000, 1000)),
+    countTimeoutsAsFailure: false,
   };
 }
 
@@ -78,6 +93,10 @@ export function retryAfterMs(header: string | null, now: number): number | undef
 }
 
 const IDLE_MS = 60 * 60_000;
+
+/** `AbortSignal.timeout` rejects with TimeoutError; an explicit abort with AbortError. */
+const isOwnTimeout = (error: unknown) =>
+  error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
 
 export class OutboundGuard {
   private hosts = new Map<string, HostState>();
@@ -199,7 +218,13 @@ export class OutboundGuard {
       }
       return response;
     } catch (error) {
-      this.fail(host, entry, error instanceof Error ? error.message : String(error));
+      // A deadline we set ourselves says nothing about the provider. The call still fails
+      // and the caller still copes; it just must not count towards opening the breaker.
+      if (this.config.countTimeoutsAsFailure || !isOwnTimeout(error)) {
+        this.fail(host, entry, error instanceof Error ? error.message : String(error));
+      } else {
+        entry.trialInFlight = false;
+      }
       throw error;
     } finally {
       this.release(entry);
@@ -225,6 +250,8 @@ export class OutboundGuard {
 
 export const outbound = new OutboundGuard();
 
+export const metadataOutbound = new OutboundGuard(metadataConfigFromEnv());
+
 const hostOf = (raw: string): string | undefined => {
   try { return new URL(raw.replace(/^stremio:\/\//i, "https://")).hostname.toLowerCase(); }
   catch { return undefined; }
@@ -238,4 +265,12 @@ export async function guardedFetch(raw: string, init: RequestInit = {}): Promise
   const host = hostOf(raw);
   if (!host) return safeFetch(raw, init);
   return outbound.run(host, () => safeFetch(raw, init));
+}
+
+/** Metadata providers that are legitimately slow. A cold Wikidata SPARQL query runs
+ *  longer than any deadline worth setting, so our own abort says nothing about the host. */
+export async function guardedMetadataFetch(raw: string, init: RequestInit = {}): Promise<Response> {
+  const host = hostOf(raw);
+  if (!host) return safeFetch(raw, init);
+  return metadataOutbound.run(host, () => safeFetch(raw, init));
 }

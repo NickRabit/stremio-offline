@@ -74,6 +74,56 @@ test("a second lookup of the same id asks Wikidata nothing", async (t) => {
   assert.equal(calls, 1);
 });
 
+test("two concurrent lookups of one id share a single query", async (t) => {
+  const dir = await tempDir();
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  let calls = 0;
+  const store = new ExternalIdStore(dir, async () => {
+    calls += 1;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    return bindings([{ tmdbMovie: { value: "31410" } }]);
+  });
+  await store.load();
+
+  const [first, second] = await Promise.all([store.ids("tt0090257"), store.ids("tt0090257")]);
+
+  assert.equal(calls, 1);
+  assert.deepEqual(first, { tmdbMovie: "31410" });
+  assert.deepEqual(second, first);
+  // One query means one save: the write sits inside the promise both callers await.
+  const written = JSON.parse(await readFile(cacheFile(dir), "utf8")) as { entries: Record<string, unknown> };
+  assert.deepEqual(Object.keys(written.entries), ["tt0090257"]);
+});
+
+test("a lookup that throws answers null and writes no cache file", async (t) => {
+  const dir = await tempDir();
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const store = new ExternalIdStore(dir, async () => { throw new Error("The operation was aborted due to timeout"); });
+  await store.load();
+
+  assert.equal(await store.ids("tt0090257"), null);
+  await assert.rejects(readFile(cacheFile(dir), "utf8"));
+});
+
+test("a throttled lookup answers null, caches nothing and is tried again", async (t) => {
+  const dir = await tempDir();
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  let calls = 0;
+  const store = new ExternalIdStore(dir, async () => {
+    calls += 1;
+    return calls === 1
+      ? new Response("too many requests", { status: 429, headers: { "retry-after": "120" } })
+      : bindings([]);
+  });
+  await store.load();
+
+  assert.equal(await store.ids("tt0090257"), null);
+  await assert.rejects(readFile(cacheFile(dir), "utf8"));
+
+  assert.deepEqual(await store.ids("tt0090257"), {});
+  assert.equal(calls, 2);
+});
+
 test("the answer is written to disk and a fresh store reads it back without a call", async (t) => {
   const dir = await tempDir();
   t.after(() => rm(dir, { recursive: true, force: true }));

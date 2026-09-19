@@ -4,14 +4,14 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { initLogger } from "./logger.js";
-import { GuardRejection, OutboundGuard, configFromEnv, retryAfterMs } from "./outbound.js";
+import { GuardRejection, OutboundGuard, configFromEnv, metadataConfigFromEnv, retryAfterMs } from "./outbound.js";
 
 process.env.LOG_STDOUT = "0";
 await initLogger(await mkdtemp(path.join(os.tmpdir(), "stremio-outbound-")));
 
 const config = (overrides: Partial<ReturnType<typeof configFromEnv>> = {}) => ({
   enabled: true, maxConcurrent: 2, minIntervalMs: 0, maxQueue: 4,
-  failureThreshold: 3, cooldownMs: 30_000, maxCooldownMs: 120_000, ...overrides,
+  failureThreshold: 3, cooldownMs: 30_000, maxCooldownMs: 120_000, countTimeoutsAsFailure: true, ...overrides,
 });
 
 /** Guard driven by a clock the test moves by hand, so no case has to wait in real time. */
@@ -24,6 +24,10 @@ function harness(overrides: Partial<ReturnType<typeof configFromEnv>> = {}) {
 const reply = (status: number, headers: Record<string, string> = {}) =>
   async () => new Response("{}", { status, headers });
 const boom = async (): Promise<Response> => { throw new Error("connection refused"); };
+/** What AbortSignal.timeout produces -- our own deadline, not the host's trouble. */
+const ownTimeout = async (): Promise<Response> => {
+  throw Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" });
+};
 
 test("failures below the threshold keep the host in service", async () => {
   const { guard } = harness();
@@ -56,6 +60,38 @@ test("server errors open the breaker", async () => {
   const { guard } = harness();
   for (let attempt = 0; attempt < 3; attempt += 1) assert.equal((await guard.run("addon.test", reply(503))).status, 503);
   await assert.rejects(guard.run("addon.test", reply(200)), GuardRejection);
+});
+
+test("our own timeout still takes the addon out of service", async () => {
+  const { guard } = harness();
+  for (let attempt = 0; attempt < 3; attempt += 1) await assert.rejects(guard.run("addon.test", ownTimeout), /timeout/);
+  await assert.rejects(guard.run("addon.test", reply(200)), GuardRejection);
+});
+
+test("a guard that counts only the provider's failures ignores our own timeout", async () => {
+  const { guard } = harness({ countTimeoutsAsFailure: false });
+  for (let attempt = 0; attempt < 5; attempt += 1) await assert.rejects(guard.run("wikidata.test", ownTimeout), /timeout/);
+  assert.equal((await guard.run("wikidata.test", reply(200))).status, 200);
+});
+
+test("a plain error still opens that guard", async () => {
+  const { guard } = harness({ countTimeoutsAsFailure: false });
+  for (let attempt = 0; attempt < 3; attempt += 1) await assert.rejects(guard.run("wikidata.test", boom));
+  await assert.rejects(guard.run("wikidata.test", reply(200)), GuardRejection);
+});
+
+test("a 429 still opens that guard, and Retry-After decides the pause", async () => {
+  const { guard, advance } = harness({ countTimeoutsAsFailure: false });
+  assert.equal((await guard.run("wikidata.test", reply(429, { "retry-after": "90" }))).status, 429);
+
+  const [entry] = guard.diagnostics();
+  assert.equal(entry.state, "open");
+  assert.equal(entry.opensInSeconds, 90);
+
+  advance(60_000);
+  await assert.rejects(guard.run("wikidata.test", reply(200)), GuardRejection);
+  advance(30_000);
+  assert.equal((await guard.run("wikidata.test", reply(200))).status, 200);
 });
 
 test("a successful trial after the cooldown puts the host back in service", async () => {
@@ -173,8 +209,22 @@ test("the environment falls back to sane defaults", () => {
   assert.equal(defaults.maxConcurrent, 8);
   assert.equal(defaults.minIntervalMs, 0);
   assert.equal(defaults.failureThreshold, 5);
+  assert.equal(defaults.countTimeoutsAsFailure, true);
   assert.equal(configFromEnv({ ADDON_GUARD: "0" }).enabled, false);
   assert.equal(configFromEnv({ ADDON_MAX_CONCURRENT: "0" }).maxConcurrent, 8);
   assert.equal(configFromEnv({ ADDON_MAX_CONCURRENT: "8" }).maxConcurrent, 8);
   assert.equal(configFromEnv({ ADDON_BREAKER_COOLDOWN_MS: "5" }).cooldownMs, 30_000);
+});
+
+test("the metadata guard is slower and does not count our own timeouts", () => {
+  const defaults = metadataConfigFromEnv({});
+  assert.equal(defaults.enabled, true);
+  assert.equal(defaults.maxConcurrent, 2);
+  assert.equal(defaults.minIntervalMs, 1500);
+  assert.equal(defaults.maxQueue, 4);
+  assert.equal(defaults.failureThreshold, 3);
+  assert.equal(defaults.cooldownMs, 30_000);
+  assert.equal(defaults.maxCooldownMs, 300_000);
+  assert.equal(defaults.countTimeoutsAsFailure, false);
+  assert.equal(metadataConfigFromEnv({ WIKIDATA_GUARD: "0" }).enabled, false);
 });
