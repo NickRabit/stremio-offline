@@ -6,6 +6,7 @@ import { buildLibrary, listVideos, type LibraryEntry } from "./library.js";
 import { libraryPath, newLibraryId, parseLibraryPath, relativeWithin, toPosix, type LibraryRecord } from "./libraries.js";
 import { writeEpisodesFile, writeLibraryFile } from "./library-meta-store.js";
 import type { LibraryEpisodeRecord, LibraryMetaRecord, LibrarySuggestion } from "./library-match.js";
+import type { ProgressSeries } from "./progress-series.js";
 import { log } from "./logger.js";
 import { SCHEMA_VERSION, type State } from "./store.js";
 
@@ -21,8 +22,13 @@ export interface MigrationSummary {
   artworkSetting: number;
 }
 
-/** The match history as every build before this one stored it: inline in `state.json`. */
-type InlineState = State & {
+/** A file from before the accounts shape: the match history and the personal maps are
+ *  inline in `state.json`. This runs before `Store.load()`, so it reads the file's own
+ *  shape -- by the time the store answers, both live somewhere else. */
+export type InlineState = State & {
+  favorites?: string[];
+  progress?: Record<string, { position: number; duration: number; title: string; path?: string; poster?: string; addonKey?: string; series?: ProgressSeries; updatedAt: string }>;
+  watchlist?: Record<string, { type: string; id: string; name: string; poster?: string; addedAt: string }>;
   libraryMeta?: Record<string, LibraryMetaRecord>;
   librarySuggestions?: Record<string, LibrarySuggestion>;
   libraryEpisodes?: Record<string, LibraryEpisodeRecord>;
@@ -32,6 +38,10 @@ type InlineState = State & {
 type GlobalArtworkState = InlineState & { settings?: State["settings"] & { artworkLocation?: "data" | "media" } };
 
 const nothing = (): MigrationSummary => ({ migrated: false, paths: 0, metadata: 0, artwork: { mapped: 0, removed: 0 }, artworkSetting: 0 });
+/** The `schemaVersion` the libraries build writes. Anything below it predates libraries and
+ *  is what this file migrates; a later version -- the accounts shape -- already has one, so
+ *  comparing against the current `SCHEMA_VERSION` would mint a second library for it. */
+const LIBRARIES_SCHEMA_VERSION = 2;
 /** The old global is the marker: it is read once and removed, so this runs once per install. */
 const hasArtworkLocation = (state: GlobalArtworkState) => Boolean(state.settings && "artworkLocation" in state.settings);
 const artworkName = (key: string) => `${createHash("sha1").update(key).digest("hex")}.jpg`;
@@ -47,7 +57,7 @@ export async function migrateStateFile(dataDir: string, downloadDir: string): Pr
   });
   if (raw === undefined) return nothing();
   const state = JSON.parse(raw) as GlobalArtworkState;
-  const legacy = (state.schemaVersion ?? 1) < SCHEMA_VERSION;
+  const legacy = (state.schemaVersion ?? 1) < LIBRARIES_SCHEMA_VERSION;
   const inline = Boolean(state.libraryMeta || state.librarySuggestions || state.libraryEpisodes);
   const globalArtwork = hasArtworkLocation(state);
   if (!legacy && !inline && !globalArtwork) return nothing();

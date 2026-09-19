@@ -1,8 +1,18 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import { INTERNAL_TOKEN } from "./auth.js";
 import type { PublicStream, StreamItem } from "./types.js";
+import type { MediaInfo } from "./naming.js";
 
 export interface ResourceOwner { sid: string; expiresAt: number }
+
+/** A one-shot permit to pull a file down to the device at the keyboard. It is bound to the
+ *  session that asked for it and never outlives it, so it lives beside the owner it names. */
+export interface DeviceDownloadTicket {
+  owner: ResourceOwner;
+  expiresAt: number;
+  filename: string;
+  source: { kind: "local"; path: string } | { kind: "remote"; stream: StreamItem; title: string; media?: MediaInfo };
+}
 export type ResourceScope = "source" | "media" | "subtitle";
 interface Resource {
   id: string; owner: ResourceOwner; scope: ResourceScope; stream: StreamItem;
