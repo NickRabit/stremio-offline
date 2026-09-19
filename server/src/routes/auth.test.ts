@@ -327,3 +327,22 @@ test("PATCH /api/auth/password rotates the caller's secret and leaves another ac
   assert.equal(findUserById(harness.store.users(), other.id)?.secret, "other-secret", "the other person is untouched");
   assert.deepEqual(harness.stoppedUsers, [owner.id], "every session of that account is swept, and only that account's");
 });
+
+test("PATCH /api/auth/password clears the must-change flag an administrator set", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const owner = await seedUser(harness.store, { password: "admin-set" });
+  await harness.store.update((state) => {
+    state.users = (state.users ?? []).map((user) => user.id === owner.id ? { ...user, mustChangePassword: true } : user);
+  });
+  const cookie = `${SESSION_COOKIE}=${createSession(owner.secret, owner.id, Date.now() + 60_000, "sid-must-change")}`;
+
+  const response = await api(harness.base, "/api/auth/password", {
+    method: "PATCH", cookie,
+    body: { currentPassword: "admin-set", newPassword: "my-own-choice" },
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(findUserById(harness.store.users(), owner.id)?.mustChangePassword, false,
+    "the password is the account's own now, so nothing is left to change");
+});

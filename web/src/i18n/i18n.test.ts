@@ -1,3 +1,5 @@
+import { readdirSync, readFileSync } from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { detectLocale } from "./detect";
 import { pluralForm } from "./plural";
@@ -68,5 +70,37 @@ describe("catalogues", () => {
       const got = new Set(placeholders(cs[key]));
       expect({ key, missing: [...wanted].filter((name) => !got.has(name)) }).toEqual({ key, missing: [] });
     }
+  });
+});
+
+/** A key the server can send that the catalogue does not carry falls back to the server's
+ *  English text, so a Czech reader gets an English sentence. The build cannot catch it --
+ *  `cs.ts` is typed against `en.ts`, and neither is typed against the server -- so the two
+ *  sides are compared here instead. Three keys were found missing this way. */
+describe("every message key the server can send exists in the catalogue", () => {
+  const serverKeys = () => {
+    // vitest runs from the web workspace, so the server sits one level up.
+    const root = path.resolve(process.cwd(), "../server/src");
+    const keys = new Set<string>();
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const child = path.join(dir, entry.name);
+        if (entry.isDirectory()) { walk(child); continue; }
+        if (!entry.name.endsWith(".ts") || entry.name.endsWith(".test.ts")) continue;
+        for (const [, key] of readFileSync(child, "utf8").matchAll(/"((?:err|auth|download)\.[A-Za-z0-9_]+)"/g)) keys.add(key);
+      }
+    };
+    walk(root);
+    return [...keys].sort();
+  };
+
+  it("en.ts carries them all", () => {
+    const missing = serverKeys().filter((key) => !(key in en));
+    expect(missing, `add these to web/src/i18n/en.ts: ${missing.join(", ")}`).toEqual([]);
+  });
+
+  it("cs.ts carries them all", () => {
+    const missing = serverKeys().filter((key) => !(key in cs));
+    expect(missing, `add these to web/src/i18n/cs.ts: ${missing.join(", ")}`).toEqual([]);
   });
 });

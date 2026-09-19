@@ -17,7 +17,7 @@ import { build } from "./build.js";
 import { PlaybackManager, sourceTitle } from "./playback.js";
 import { publicAddon, publicAddonRestricted } from "./security.js";
 import { RestrictedError, restrictedMiddleware, restrictedMode } from "./restricted.js";
-import { roleMiddleware } from "./roles.js";
+import { passwordChangeMiddleware, roleMiddleware } from "./roles.js";
 import { outbound } from "./outbound.js";
 import { images } from "./images.js";
 import { configureSecureMode, secureMode, securityHeaders } from "./secure.js";
@@ -63,6 +63,7 @@ import { registerLibrariesRoutes } from "./routes/libraries.js";
 import { registerPersonalRoutes } from "./routes/personal.js";
 import { registerPlaybackRoutes } from "./routes/playback.js";
 import { registerSettingsRoutes } from "./routes/settings.js";
+import { registerUsersRoutes } from "./routes/users.js";
 
 const STREAM_SORTS = new Set(["recommended", "size-desc", "size-asc", "addon"]);
 const DATA_DIR = process.env.DATA_DIR ?? "/data";
@@ -375,6 +376,12 @@ const stopUserAccess = (userId: string) => revocations.stopUser(userId);
 /** A sign-out or a password change reaches only what the account is holding open. Its
  *  queued downloads are owner-bound, not session-bound, and must outlive both. */
 const stopUserSessions = (userId: string) => revocations.stopUserSessions(userId);
+/** An account that is gone: what it holds open, its unfinished queue work and the partial
+ *  files behind it. A finished file is library content and never leaves with the account. */
+const deleteUserAccess = (userId: string) => revocations.deleteUser(userId);
+/** What an edit took away from one account: switching it off goes entirely, losing the
+ *  right to queue pauses the queue behind it and touches nothing else. */
+const permissionsChanged = (before: UserRecord, after: UserRecord) => revocations.permissionsChanged(before, after);
 /** One account's hold on one library or addon. Passing no user sweeps everybody,
  *  which is what a global disable needs. */
 const stopContentAccess = (opts: StopContentOptions) => revocations.stopContent(opts);
@@ -463,6 +470,13 @@ app.use("/api", roleMiddleware({
   isInternal: (req) => internalMediaRequest(req) || Boolean(airplayRequest(req)),
   roleOf: (req) => currentUser(req)?.role,
 }));
+// Beside the role gate, because it is the same kind of decision: an account that still owes
+// a password change reaches the account endpoints and nothing else, whatever its role is.
+app.use("/api", passwordChangeMiddleware({
+  isOpen: (req) => OPEN_PATHS.has(req.path),
+  isInternal: (req) => internalMediaRequest(req) || Boolean(airplayRequest(req)),
+  mustChange: (req) => currentUser(req)?.mustChangePassword,
+}));
 app.use("/api", restrictedMiddleware({
   isOpen: (req) => OPEN_PATHS.has(req.path),
   isInternal: (req) => internalMediaRequest(req) || Boolean(airplayRequest(req)),
@@ -480,6 +494,7 @@ setInterval(() => {
 
 const routeContext: RouteContext = { store, needsSetup, currentSession, currentUser, isSecure, stopOwnedPlayback, stopUserAccess, stopUserSessions, requireAccess, stopContentAccess };
 registerAuthRoutes(app, routeContext);
+registerUsersRoutes(app, { ...routeContext, deleteUserAccess, permissionsChanged });
 
 /** The page only ever holds our own id, so anything it hands back is turned into the
  *  real address again before it is stored or downloaded. */

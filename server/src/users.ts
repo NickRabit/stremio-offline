@@ -48,6 +48,33 @@ export interface UserData {
   watchedSeries: Record<string, unknown>;
 }
 
+/** The account as anything outside the process may see it. The hash is what a password is
+ *  checked against, the secret signs that account's sessions and the ledger says which of
+ *  them were withdrawn: none of the three leaves the server. */
+export interface PublicUser {
+  id: string;
+  username: string;
+  role: Role;
+  disabled: boolean;
+  mustChangePassword: boolean;
+  createdAt: string;
+  lastSeenAt?: string;
+  permissions: UserPermissions;
+}
+
+export function publicUser(record: UserRecord): PublicUser {
+  return {
+    id: record.id,
+    username: record.username,
+    role: record.role,
+    disabled: Boolean(record.disabled),
+    mustChangePassword: Boolean(record.mustChangePassword),
+    createdAt: record.createdAt,
+    ...(record.lastSeenAt ? { lastSeenAt: record.lastSeenAt } : {}),
+    permissions: { ...record.permissions },
+  };
+}
+
 export const USER_ID = /^usr_[0-9a-f]{8}$/;
 
 /** Mirrors `newLibraryId()` in libraries.ts. Collision-checked against the ids

@@ -129,7 +129,10 @@ export function registerAuthRoutes(app: express.Application, ctx: RouteContext):
     const passwordHash = await hashPassword(nextPassword);
     // A new secret invalidates every token issued so far, other devices included.
     const nextSecret = randomBytes(32).toString("hex");
-    await ctx.store.update((state) => withUser(state, account.id, (user) => ({ ...user, username, passwordHash, secret: nextSecret, revoked: {} })));
+    // The password is the account's own now, so the administrator-set one and the block it
+    // carried are gone with it.
+    await ctx.store.update((state) => withUser(state, account.id, (user) =>
+      ({ ...user, username, passwordHash, secret: nextSecret, revoked: {}, mustChangePassword: false })));
     res.setHeader("set-cookie", sessionCookie(createSession(nextSecret, account.id, Date.now() + REMEMBER_DAYS * 24 * 60 * 60 * 1000), true, ctx.isSecure(req)));
     // Rotating the secret stops the next request; a stream already open on another device
     // keeps reading its resource until the sweep reaches it.

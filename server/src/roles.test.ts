@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Request, Response } from "express";
 import { RestrictedError, restrictedMiddleware } from "./restricted.js";
-import { ForbiddenError, USER_ALLOWED, isUserAllowed, roleMiddleware } from "./roles.js";
+import { AppError } from "./errors.js";
+import { ForbiddenError, MUST_CHANGE_ALLOWED, USER_ALLOWED, isMustChangePathAllowed, isUserAllowed, passwordChangeMiddleware, roleMiddleware } from "./roles.js";
 import type { Role } from "./users.js";
 
 /** One concrete path per rule of USER_ALLOWED. The table is pinned in both directions, so
@@ -148,6 +149,42 @@ test("an open path, an internal read and a request with no role pass through", (
   assert.equal(invoke("POST", "/auth/login", { isOpen: true }), undefined);
   assert.equal(invoke("GET", "/media/abc", { isInternal: true }), undefined);
   assert.equal(invoke("POST", "/addons"), undefined, "the auth gate ahead has already answered");
+});
+
+const invokePasswordChange = (method: string, path: string, opts?: { mustChange?: boolean; isOpen?: boolean; isInternal?: boolean }) => {
+  let passed: unknown = "not-called";
+  passwordChangeMiddleware({
+    isOpen: () => Boolean(opts?.isOpen),
+    isInternal: () => Boolean(opts?.isInternal),
+    mustChange: () => opts?.mustChange,
+  })({ method, path } as Request, {} as Response, ((error?: unknown) => { passed = error; }) as () => void);
+  return passed;
+};
+
+const MUST_CHANGE_PATHS: Array<[string, string]> = [["GET", "/auth/me"], ["PATCH", "/auth/password"], ["POST", "/auth/logout"]];
+
+test("an account that must change its password reaches the account endpoints and nothing else", () => {
+  for (const [method, path] of MUST_CHANGE_PATHS) {
+    assert.equal(isMustChangePathAllowed(method, path), true, `${method} ${path}`);
+    assert.equal(invokePasswordChange(method, path, { mustChange: true }), undefined, `${method} ${path}`);
+  }
+  // Paths the role gate lets an ordinary user reach are refused here: the two gates answer
+  // different questions, and a password somebody else chose closes browsing and downloading.
+  const otherPaths = ALLOWED.filter(([method, path]) => !MUST_CHANGE_PATHS.some(([m, p]) => m === method && p === path));
+  for (const [method, path] of otherPaths) assert.equal(isMustChangePathAllowed(method, path), false, `${method} ${path}`);
+  assert.equal(MUST_CHANGE_ALLOWED.length, MUST_CHANGE_PATHS.length);
+  const error = invokePasswordChange("GET", "/library", { mustChange: true });
+  assert.ok(error instanceof AppError, "a third endpoint is refused");
+  assert.equal(error.status, 403);
+  assert.equal(error.messageKey, "err.mustChangePassword");
+  assert.equal(error.message, "Change your password before continuing.");
+});
+
+test("the password-change gate passes an account that owes nothing, an open path and an internal read", () => {
+  assert.equal(invokePasswordChange("GET", "/library"), undefined, "nothing is owed");
+  assert.equal(invokePasswordChange("GET", "/library", { mustChange: false }), undefined);
+  assert.equal(invokePasswordChange("GET", "/library", { mustChange: true, isOpen: true }), undefined);
+  assert.equal(invokePasswordChange("GET", "/media/abc", { mustChange: true, isInternal: true }), undefined);
 });
 
 test("the role gate and the restricted gate are independent", (t) => {

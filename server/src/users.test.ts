@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { hashPassword } from "./auth.js";
 import {
   assertAdminRemains, bumpPermissions, emptyUserData, enabledAdmins, envResetApplied, envResetPending, findUser, findUserById,
-  migrateUsers, newUserPermissions, newUserId, normalizeUsername, PASSWORD_MIN, PERSONAL_SETTINGS, USER_ID,
+  migrateUsers, newUserPermissions, newUserId, normalizeUsername, PASSWORD_MIN, PERSONAL_SETTINGS, publicUser, USER_ID,
   USERNAME_MIN, usersToBump, type MigratableState, type UserRecord,
 } from "./users.js";
 
@@ -49,6 +49,33 @@ test("a name finds its record whichever spelling was typed", () => {
   assert.equal(findUser(users, "nikdo"), undefined);
   assert.equal(findUserById(users, "usr_00000002")?.username, "petr");
   assert.equal(findUserById(users, "usr_deadbeef"), undefined);
+});
+
+test("the public shape of an account carries neither the hash, the secret nor the ledger", () => {
+  const view = publicUser(user({ revoked: { "sid-1": 4102444800000 }, disabled: true, mustChangePassword: true, lastSeenAt: "2026-02-01T00:00:00.000Z" }));
+  assert.deepEqual(Object.keys(view).sort(), ["createdAt", "disabled", "id", "lastSeenAt", "mustChangePassword", "permissions", "role", "username"]);
+  assert.equal("passwordHash" in view, false);
+  assert.equal("secret" in view, false);
+  assert.equal("revoked" in view, false);
+  assert.deepEqual(view, {
+    id: "usr_a1b2c3d4",
+    username: "ondra",
+    role: "user",
+    disabled: true,
+    mustChangePassword: true,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    lastSeenAt: "2026-02-01T00:00:00.000Z",
+    permissions: { downloadToLibrary: false, downloadToDevice: true },
+  });
+});
+
+test("the public shape states the flags a fresh account does not carry", () => {
+  const view = publicUser(admin());
+  assert.equal(view.disabled, false);
+  assert.equal(view.mustChangePassword, false);
+  assert.equal("lastSeenAt" in view, false, "an account that was never seen has no such row");
+  assert.deepEqual(Object.keys(view).sort(), ["createdAt", "disabled", "id", "mustChangePassword", "permissions", "role", "username"]);
+  assert.notEqual(view.permissions, admin().permissions, "the rights are copied, not handed out live");
 });
 
 test("the last enabled administrator cannot be demoted, disabled or deleted", () => {

@@ -80,6 +80,17 @@ export const USER_ALLOWED: Rule[] = [
 
 export const isUserAllowed = (method: string, path: string) => match(USER_ALLOWED, method, path);
 
+/** What an account whose password an administrator chose may still reach: the three calls
+ *  that let it read its own name, replace that password and sign out. Everything else is
+ *  refused, because the password it carries is one two people know. */
+export const MUST_CHANGE_ALLOWED: Rule[] = [
+  { method: "GET", pattern: /^\/auth\/me$/ },
+  { method: "PATCH", pattern: /^\/auth\/password$/ },
+  { method: "POST", pattern: /^\/auth\/logout$/ },
+];
+
+export const isMustChangePathAllowed = (method: string, path: string) => match(MUST_CHANGE_ALLOWED, method, path);
+
 export const roleMiddleware = (opts: {
   isOpen: (req: Request) => boolean;
   isInternal: (req: Request) => boolean;
@@ -90,4 +101,19 @@ export const roleMiddleware = (opts: {
     if (opts.roleOf(req) !== "user") return next();
     if (isUserAllowed(req.method, req.path)) return next();
     next(new ForbiddenError());
+  };
+
+/** The gate beside the role gate: a session that still owes a password change reaches only
+ *  the account endpoints, whatever its role is. Refused rather than redirected, so a client
+ *  that never saw the flag cannot browse or download behind it. */
+export const passwordChangeMiddleware = (opts: {
+  isOpen: (req: Request) => boolean;
+  isInternal: (req: Request) => boolean;
+  mustChange: (req: Request) => boolean | undefined;
+}): RequestHandler =>
+  (req, _res, next) => {
+    if (opts.isOpen(req) || opts.isInternal(req)) return next();
+    if (!opts.mustChange(req)) return next();
+    if (isMustChangePathAllowed(req.method, req.path)) return next();
+    next(new AppError("Change your password before continuing.", "err.mustChangePassword", 403));
   };
