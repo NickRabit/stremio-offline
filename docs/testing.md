@@ -29,7 +29,10 @@ browser.
 
 ### L0 -- server (existing)
 
-`npm test` runs `tsx --test server/src/*.test.ts`. No change planned.
+`npm test` runs `tsx --test server/src/*.test.ts server/src/routes/*.test.ts`.
+The second pattern is there because the HTTP layer is moving out of
+`index.ts` area by area; a further directory under `server/src` needs its own
+pattern, as `sh` does not expand `**` recursively.
 
 ### L1 -- client unit and component tests
 

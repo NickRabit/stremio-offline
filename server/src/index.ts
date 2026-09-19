@@ -21,7 +21,7 @@ import { Throughput } from "./throughput.js";
 import { build } from "./build.js";
 import { PlaybackManager, sourceTitle } from "./playback.js";
 import { essentialAddon, publicAddon, publicAddonRestricted, redirectedHeaders, safeFetch, validateRemoteUrl } from "./security.js";
-import { RestrictedError, logoutDenied, restrictedMiddleware, restrictedMode } from "./restricted.js";
+import { RestrictedError, restrictedMiddleware, restrictedMode } from "./restricted.js";
 import { guardedFetch, metadataOutbound, outbound } from "./outbound.js";
 import { images } from "./images.js";
 import { configureSecureMode, secureMode, securityHeaders } from "./secure.js";
@@ -41,7 +41,7 @@ import { createLibraryProbe, type LibraryHealth } from "./library-probe.js";
 import { LibraryAutoScan } from "./library-autoscan.js";
 import { watchLibrary } from "./library-watch.js";
 import { ArtworkQueue, artNames, artOutput, artVariantKey, artworkBesideMedia, BACKDROP_OUTPUT, episodeArtName, fileMayUseFolderArtwork, findArtwork, type FolderListing, framePosition, pickArtwork, readFolderListing, POSTER_OUTPUT, saveBackdropAs, saveFrame, savePosterAs, type ArtShape, type PosterOutcome } from "./artwork.js";
-import { clearedCookie, createSession, DECOY_HASH, LoginThrottle, pruneRevoked, envCredentials, hashPassword, INTERNAL_TOKEN, parseCookies, readSession, secretEquals, REMEMBER_DAYS, SESSION_COOKIE, sessionCookie, verifyPassword } from "./auth.js";
+import { envCredentials, INTERNAL_TOKEN, parseCookies, readSession, SESSION_COOKIE } from "./auth.js";
 import { RepeatFilter } from "./access-log.js";
 import { randomBytes, randomUUID } from "node:crypto";
 import type { ClientCapabilities, PlaybackOptions } from "./playback.js";
@@ -60,6 +60,8 @@ import { createSettingsBackup, parseSettingsBackup, remapBackupLibraries } from 
 import { LibraryOps, type LibraryOp } from "./library-ops.js";
 import { transferLibraryPath, type TransferProgress } from "./library-transfer.js";
 import { groupResumeRows } from "./resume-group.js";
+import { registerAuthRoutes } from "./routes/auth.js";
+import { asyncRoute } from "./routes/context.js";
 
 const STREAM_SORTS = new Set(["recommended", "size-desc", "size-asc", "addon"]);
 const DATA_DIR = process.env.DATA_DIR ?? "/data";
@@ -299,8 +301,6 @@ const playbackMeta = (stream: StreamItem): TrafficMeta => stream.url?.startsWith
   ? { source: "library", provider: "knihovna", title: path.basename(stream.url.slice(7)), kind: "other" }
   : statMeta({ source: "catalog", url: stream.url, title: sourceTitle(stream) || providerOf(stream.url), addonKey: stream.addonKey, addonName: stream.addonName });
 
-const asyncRoute = (fn: express.RequestHandler) => (req: express.Request, res: express.Response, next: express.NextFunction) => Promise.resolve(fn(req, res, next)).catch(next);
-
 // Without a sign-in only the server status and the sign-in itself are open. /api/proxy
 // especially must not be public, or anyone could pull foreign addresses through this server.
 const OPEN_PATHS = new Set(["/status", "/auth/login", "/auth/me", "/auth/setup"]);
@@ -340,106 +340,7 @@ setInterval(() => {
   }
 }, 1000).unref();
 
-app.get("/api/auth/me", (req, res) => {
-  // The language rides along on the one call the sign-in and setup screens can make
-  // unauthenticated; without it they would render before knowing which one to use.
-  const language = store.settings().uiLanguage;
-  if (needsSetup()) return res.json({ setup: true, language });
-  const user = currentUser(req);
-  if (!user) return res.status(401).json({ error: "Not signed in.", messageKey: "err.notSignedIn", language });
-  res.json({ username: user, language });
-});
-
-/** First-run account setup. Available only until an account exists. */
-app.post("/api/auth/setup", asyncRoute(async (req, res) => {
-  if (!needsSetup()) throw new AppError("An account already exists.", "err.setupDone");
-  const username = String(req.body.username ?? "").trim();
-  const password = String(req.body.password ?? "");
-  if (username.length < 3) throw new AppError("The username needs at least 3 characters.", "auth.usernameTooShort");
-  if (password.length < 6) throw new AppError("The password needs at least 6 characters.", "auth.passwordTooShort");
-  const language = isUiLanguage(req.body.language) ? req.body.language : undefined;
-  const passwordHash = await hashPassword(password);
-  const nextSecret = randomBytes(32).toString("hex");
-  await store.update((state) => {
-    state.auth = { username, passwordHash, secret: nextSecret, isDefault: false, revoked: {} };
-    // The first-run language choice is also the best guess at which audio and
-    // subtitles this household wants. Both stay editable in Settings afterwards.
-    // A client that sends no language leaves the interface where it is, and the
-    // tracks still follow it -- otherwise they would keep the English default.
-    const chosen = language ?? state.settings.uiLanguage;
-    state.settings = { ...state.settings, uiLanguage: chosen, audioLanguage: chosen, subtitleLanguage: chosen };
-  });
-  res.setHeader("set-cookie", sessionCookie(createSession(nextSecret, username, Date.now() + REMEMBER_DAYS * 24 * 60 * 60 * 1000), true, isSecure(req)));
-  log("INFO", "Account created on first run", { username, language });
-  res.status(201).json({ username, language: store.settings().uiLanguage });
-}));
-const logins = new LoginThrottle();
-app.post("/api/auth/login", asyncRoute(async (req, res) => {
-  const username = String(req.body.username ?? "");
-  const password = String(req.body.password ?? "");
-  const remember = Boolean(req.body.remember);
-  const from = req.ip ?? "unknown";
-  const wait = logins.retryAfterMs(from);
-  if (wait > 0) {
-    const seconds = Math.ceil(wait / 1000);
-    log("WARN", "Sign-in refused after repeated failures", { username, from, waitSeconds: seconds });
-    res.setHeader("retry-after", String(seconds));
-    return res.status(429).json({ error: `Too many failed attempts. Try again in ${seconds} s.`, messageKey: "err.tooManyAttempts", vars: { seconds } });
-  }
-  const stored = store.auth();
-  const fromEnv = envCredentials();
-  // The hash is always computed, even for a name nobody has: a short circuit here
-  // would answer an unknown name faster and hand out the list of real ones.
-  const passwordMatches = await verifyPassword(password, stored?.passwordHash ?? DECOY_HASH);
-  const bySettings = passwordMatches && Boolean(stored) && secretEquals(username, stored?.username ?? "");
-  const byEnv = Boolean(fromEnv) && secretEquals(username, fromEnv?.username ?? "") && secretEquals(password, fromEnv?.password ?? "");
-  if (!bySettings && !byEnv) {
-    logins.fail(from);
-    log("WARN", "Failed sign-in", { username, from });
-    return res.status(401).json({ error: "Wrong username or password.", messageKey: "err.badCredentials" });
-  }
-  logins.succeed(from);
-  const expiresAt = Date.now() + (remember ? REMEMBER_DAYS : 1) * 24 * 60 * 60 * 1000;
-  res.setHeader("set-cookie", sessionCookie(createSession(secret(), username, expiresAt), remember, isSecure(req)));
-  log("INFO", "Sign-in", { username, remember, viaEnvCredentials: byEnv && !bySettings });
-  res.json({ username });
-}));
-app.post("/api/auth/logout", asyncRoute(async (req, res) => {
-  if (logoutDenied(req.body)) throw new RestrictedError();
-  const info = currentSession(req);
-  res.setHeader("set-cookie", clearedCookie());
-  if (!info) return res.status(204).end();
-  if (req.body?.everywhere) {
-    // A new secret invalidates every token issued so far at once.
-    const nextSecret = randomBytes(32).toString("hex");
-    await store.update((state) => { if (state.auth) state.auth = { ...state.auth, secret: nextSecret, revoked: {} }; });
-    log("INFO", "Signed out on all devices", { username: info.username });
-  } else {
-    await store.update((state) => {
-      if (state.auth) state.auth = { ...state.auth, revoked: { ...pruneRevoked(state.auth.revoked), [info.sid]: info.expiresAt } };
-    });
-    log("INFO", "Sign-out", { username: info.username });
-  }
-  await stopOwnedPlayback(req.body?.everywhere ? undefined : info.sid);
-  res.status(204).end();
-}));
-app.patch("/api/auth/password", asyncRoute(async (req, res) => {
-  const stored = store.auth();
-  if (!stored) throw new AppError("No account has been created yet.", "err.noAccount");
-  const current = String(req.body.currentPassword ?? "");
-  if (!await verifyPassword(current, stored.passwordHash)) throw new AppError("The current password is wrong.", "err.wrongCurrentPassword");
-  const nextPassword = String(req.body.newPassword ?? "");
-  if (nextPassword.length < 6) throw new AppError("The new password needs at least 6 characters.", "auth.newPasswordTooShort");
-  const username = String(req.body.username ?? stored.username).trim() || stored.username;
-  const passwordHash = await hashPassword(nextPassword);
-  // A new secret invalidates every token issued so far, other devices included.
-  const nextSecret = randomBytes(32).toString("hex");
-  await store.update((state) => { state.auth = { username, passwordHash, secret: nextSecret, isDefault: false, revoked: {} }; });
-  res.setHeader("set-cookie", sessionCookie(createSession(nextSecret, username, Date.now() + REMEMBER_DAYS * 24 * 60 * 60 * 1000), true, isSecure(req)));
-  await stopOwnedPlayback();
-  log("INFO", "Credentials changed", { username });
-  res.json({ username });
-}));
+registerAuthRoutes(app, { store, needsSetup, currentSession, currentUser, secret, isSecure, stopOwnedPlayback });
 
 /** The page only ever holds our own id, so anything it hands back is turned into the
  *  real address again before it is stored or downloaded. */
