@@ -939,6 +939,7 @@ export const cs: Catalog = {
   "err.noAccount": "Účet zatím není založený.",
   "err.wrongCurrentPassword": "Stávající heslo nesouhlasí.",
   "err.addonNotFound": "Doplněk nebyl nalezen.",
+  "err.metaNotFound": "Metadata nebyla nalezena.",
   "err.essentialAddon": "Cinemeta dodává metadata knihovny, nejde odebrat ani vypnout.",
   "err.manifestExists": "Tenhle manifest už je přidaný.",
   "err.addonNotJson": "Doplněk nevrátil JSON.",

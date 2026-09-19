@@ -620,7 +620,7 @@ const titleTrailer = (type: string, id: string, language: string) => {
 app.get("/api/meta/:type/:id", asyncRoute(async (req, res) => {
   const language = normalizeLanguage(String(req.query.language ?? "")) ?? store.settings().uiLanguage;
   const meta = await cachedMeta(String(req.params.type), String(req.params.id), language);
-  if (!meta) return res.status(404).json({ error: "Metadata nebyla nalezena." });
+  if (!meta) throw new AppError("The metadata was not found.", "err.metaNotFound", 404);
   res.json(images.rewriteMeta(meta));
 }));
 app.get("/api/library/trailer", asyncRoute(async (req, res) => {
@@ -3265,7 +3265,7 @@ app.post("/api/playback", asyncRoute(async (req, res) => {
 }));
 app.use("/api/playback/:id", (req, res, next) => {
   const owned = playbackOwners.get(String(req.params.id));
-  if (!owned || owned.owner.sid !== (airplayRequest(req)?.owner.sid ?? currentSession(req)?.sid)) return res.status(404).json({ error: "Playback session unavailable.", code: "RESOURCE_NOT_FOUND" });
+  if (!owned || owned.owner.sid !== (airplayRequest(req)?.owner.sid ?? currentSession(req)?.sid)) return res.status(404).json({ error: "The playback session no longer exists.", messageKey: "err.playbackSessionGone", code: "RESOURCE_NOT_FOUND" });
   res.setHeader("cache-control", "private, no-store");
   playback.attended(String(req.params.id));
   next();
