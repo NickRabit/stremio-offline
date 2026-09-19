@@ -7,7 +7,7 @@ import { readMediaText, rewritePlaylist } from "./media-playlist.js";
 import { AirPlayAccess } from "./airplay-access.js";
 import path from "node:path";
 import { constants } from "node:fs";
-import { access, mkdir, readdir, readFile, realpath, rename, rm, stat, statfs, writeFile } from "node:fs/promises";
+import { access, mkdir, readdir, readFile, realpath, rm, stat, statfs, writeFile } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { loadAddon, metadata, searchAll, searchableCatalogs, streams, subtitles, type MetaProvider } from "./addons.js";
@@ -32,7 +32,7 @@ import { tmdbMeta, verifyTmdbKey } from "./tmdb.js";
 import { clearTrailerCache } from "./trailers.js";
 import { ExternalIdStore } from "./external-ids.js";
 import { currentLevel, flushLog, initLogger, log, parseLevel, startLogMaintenance, setLevel } from "./logger.js";
-import { browseDirectory, describePath, emptiedFolders, entryDirectory, isPathWithin, isVideo, listFolders, listVideos, moveDestination, orphanedCatalogKeys, pageFiles, remapPath, scanLibrary, summarize, type FoundFile, type LibraryEntry } from "./library.js";
+import { browseDirectory, describePath, emptiedFolders, entryDirectory, isPathWithin, isVideo, listVideos, moveDestination, orphanedCatalogKeys, pageFiles, remapPath, scanLibrary, summarize, type FoundFile, type LibraryEntry } from "./library.js";
 import { browseMeta, cacheFieldsFromMeta, episodeKey, episodeNumberOf, episodesFromMeta, dropKeyed, knownTitleEntry, knownTitleOf, lookupSkipped, matchKeyFor, matchStatus, mosaicSkipped, needsBackfill, needsEpisodes, scanMiss, suggestionFor, titleUnits, unmatchAt, type LibraryMetaRecord, type TitleKind, type TitleUnit } from "./library-match.js";
 import { parseMediaPath } from "./library-parse.js";
 import { LibraryScan } from "./library-scan.js";
@@ -45,10 +45,10 @@ import { RepeatFilter } from "./access-log.js";
 import { randomBytes, randomUUID } from "node:crypto";
 import type { ClientCapabilities, PlaybackOptions } from "./playback.js";
 import type { MediaInfo } from "./naming.js";
-import { defaultDownloadSettings, deviceFilename, safeName } from "./naming.js";
+import { defaultDownloadSettings, deviceFilename } from "./naming.js";
 import { LANGUAGE_NAMES, isUiLanguage, normalizeLanguage } from "./language.js";
 import { AppError, messageKeyOf } from "./errors.js";
-import { carveOuts, queuedArtworkKey, defaultLibrary, isInside, libraryFor, libraryPath, parseLibraryPath, posixBase, posixDir, posixJoin, realAncestor, relativeWithin, resolveLibraryPath, sameFile, toFs, toPosix, type LibraryRecord, type LibraryType, type RootGrant } from "./libraries.js";
+import { carveOuts, queuedArtworkKey, defaultLibrary, isInside, libraryFor, libraryPath, parseLibraryPath, posixBase, posixDir, posixJoin, realAncestor, relativeWithin, resolveLibraryPath, toFs, toPosix, type LibraryRecord, type LibraryType, type RootGrant } from "./libraries.js";
 import { envGrants, grantView, mergeGrants } from "./library-grants.js";
 import { migrateStateFile } from "./library-migrate.js";
 import { LibraryMetaStore } from "./library-meta-store.js";
@@ -60,6 +60,7 @@ import { transferLibraryPath, type TransferProgress } from "./library-transfer.j
 import { registerAddonsRoutes } from "./routes/addons.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerCatalogRoutes } from "./routes/catalog.js";
+import { registerContentRoutes } from "./routes/content.js";
 import { asyncRoute, type RouteContext } from "./routes/context.js";
 import { registerDiagnosticsRoutes } from "./routes/diagnostics.js";
 import { registerDownloadRoutes } from "./routes/downloads.js";
@@ -1254,70 +1255,6 @@ const setLibraryFavorite = async (relative: string, wanted: boolean) => {
 
 registerPersonalRoutes(app, { ...routeContext, attachBrowseMeta, cachedMeta, dataOf, describeLibraryPath, libraryKey, libraryOfKey, locateFileArtwork, locateFolderArtworkPair, markersOf, metaStore, posterOf, prefsOf, progressOf, scheduleFileArtwork, scheduleFolderArtwork, setLibraryFavorite, thumbUrl, updateData, watchlistOf, wirePath });
 
-app.get("/api/library/browse", asyncRoute(async (req, res) => {
-  const requested = String(req.query.path ?? "");
-  const limit = Math.max(1, Math.min(120, Number(req.query.limit) || 60));
-  const sorts = new Set(["name", "added", "size", "random"]);
-  const sort = sorts.has(String(req.query.sort)) ? String(req.query.sort) as "name" : "name";
-  const onlyFavorites = req.query.favorites === "1";
-  void sweepArtwork();
-  const libraries = store.libraries();
-  // An empty path is the single library's root while that is the whole setup, and the list
-  // of libraries once there are more. Configured is what counts, not enabled and not
-  // reachable: a library switched off or on a disk that is away is still part of the setup,
-  // and a browse root that changed shape when a drive spun down would be worse than a row
-  // with a warning. The row says so instead of hiding it.
-  if (!requested && libraries.length !== 1) {
-    res.json(await libraryRootBrowse());
-    return;
-  }
-  const resolved = requested ? await resolveLibraryPath(libraries, requested) : undefined;
-  if (requested && !resolved) throw new AppError("Invalid path.", "err.invalidPath");
-  const library = resolved?.library ?? singleLibrary();
-  markBrowsed(library);
-  const inLibrary = (path: string) => libraryPath(library.id, path);
-  const data = dataOf(req);
-  const favoritePaths = onlyFavorites
-    ? new Set(data.favorites.map((key) => relativeKeyIn(library.id, key)).filter((value): value is string => value !== undefined))
-    : undefined;
-  const result = await browseDirectory(library.root, resolved?.relative ?? "", String(req.query.query ?? ""),
-    Math.max(0, Number(req.query.skip) || 0), limit, sort, req.query.order === "desc", String(req.query.seed ?? ""), favoritePaths,
-    carveOutsOf(library));
-  // Missing thumbnails are produced in the background; the client asks for the page again shortly.
-  const items = await Promise.all(result.items.map(async (item) => {
-    const key = inLibrary(item.path);
-    const path = wirePath(key);
-    if (item.kind === "folder") {
-      const { poster: art, wide } = await locateFolderArtworkPair(key);
-      if (!art) scheduleFolderArtwork(key);
-      if (!wide) scheduleFolderArtwork(key, "wide");
-      const { item: withMeta, backfill } = attachBrowseMeta({ ...item, path }, prefsOf(req).uiLanguage);
-      return {
-        ...withMeta, path,
-        poster: await thumbUrl("dir", path, art),
-        wide: await thumbUrl("dir", path, wide, "wide"),
-        backfill,
-      };
-    }
-    const art = await locateFileArtwork(key);
-    if (!art) scheduleFileArtwork(key);
-    const wide = await locateFileArtwork(key, "wide");
-    if (!wide) scheduleFileArtwork(key, "wide");
-    const watched = progressOf(data)[`file:${key}`];
-    const { item: withMeta, backfill } = attachBrowseMeta({ ...item, path }, prefsOf(req).uiLanguage);
-    return {
-      ...withMeta,
-      path,
-      poster: await thumbUrl("path", path, art),
-      wide: await thumbUrl("path", path, wide, "wide"),
-      progress: watched ? { position: watched.position, duration: watched.duration } : undefined,
-      backfill,
-    };
-  }));
-  const marked = withFavorites(items, data);
-  res.json({ ...result, path: wirePath(inLibrary(result.path)), items: marked.map(({ backfill: _backfill, ...item }) => item), pending: marked.some((item) => !item.poster || !item.wide || item.backfill) });
-}));
-
 // Deleting, renaming and moving touch real files, hence the path and root checks.
 
 /** Everything the store remembers about a path, dropped in one go. Returns the catalogue
@@ -1441,65 +1378,6 @@ const deleteLibraryItem = async (relative: string) => {
   log("INFO", "Deleted from the library", { path: relative, directory: info.isDirectory(), forgottenTitles: [...orphans], pruned });
 };
 
-app.delete("/api/library/item", asyncRoute(async (req, res) => {
-  const relative = String(req.query.path ?? "").trim();
-  await deleteLibraryItem(relative);
-  res.status(204).end();
-}));
-
-app.post("/api/library/folder", asyncRoute(async (req, res) => {
-  const parent = String(req.body?.path ?? "").trim();
-  const resolved = await resolveLibraryPath(store.libraries(), parent);
-  if (!resolved) throw new AppError("Invalid path.", "err.invalidPath");
-  const info = await stat(resolved.absolute).catch(() => undefined);
-  if (!info?.isDirectory()) throw new AppError("The destination folder does not exist.", "err.targetMissing");
-  const rawName = String(req.body?.name ?? "").trim();
-  if (!rawName || /^\.+$/.test(rawName)) throw new AppError("Invalid name.", "err.invalidName");
-  const name = safeName(rawName);
-  const relative = posixJoin(resolved.relative, name);
-  const target = await resolveLibraryPath(store.libraries(), libraryPath(resolved.library.id, relative));
-  if (!target) throw new AppError("Invalid path.", "err.invalidPath");
-  if (await fileExists(target.absolute)) throw new AppError("A file with that name already exists.", "err.nameTaken");
-  await mkdir(target.absolute);
-  invalidateLibrary();
-  res.status(201).json({ path: wirePath(target.key) });
-}));
-
-app.post("/api/library/rename", asyncRoute(async (req, res) => {
-  const relative = String(req.body.path ?? "").trim();
-  const resolved = relative ? await resolveLibraryPath(store.libraries(), relative) : undefined;
-  if (!resolved || !resolved.relative) throw new AppError("Invalid path.", "err.invalidPath");
-  const info = await stat(resolved.absolute).catch(() => undefined);
-  if (!info) throw new AppError("The file or folder does not exist.", "err.pathMissing");
-
-  const extension = info.isDirectory() ? "" : path.extname(relative);
-  const wanted = safeName(String(req.body.name ?? "").replace(/\.[^.]+$/, ""));
-  const nextRelative = posixJoin(posixDir(relative), `${wanted}${extension}`);
-  const target = await resolveLibraryPath(store.libraries(), nextRelative);
-  if (!target) throw new AppError("Invalid name.", "err.invalidName");
-  // A rename that only changes the case of a name is a real rename where the filesystem folds
-  // case; there the target is the same file, and `fileExists` must not be read as a clash.
-  if (!sameFile(target.absolute, resolved.absolute) && await fileExists(target.absolute)) throw new AppError("A file with that name already exists.", "err.nameTaken");
-
-  await rename(resolved.absolute, target.absolute);
-  await relocateLibraryPath(resolved.key, target.key);
-  invalidateLibrary();
-  log("INFO", "Renamed in the library", { from: relative, to: nextRelative });
-  res.json({ path: nextRelative });
-}));
-
-/** The destination picker. Browsing hides folders with no video in them; moving something
- *  into one of them is perfectly reasonable, so this lists them all. */
-app.get("/api/library/folders", asyncRoute(async (req, res) => {
-  const relative = String(req.query.path ?? "").trim();
-  const resolved = await resolveLibraryPath(store.libraries(), relative);
-  if (!resolved) throw new AppError("Invalid path.", "err.invalidPath");
-  markBrowsed(resolved.library);
-  const folders = await listFolders(resolved.library.root, resolved.relative, carveOutsOf(resolved.library));
-  // A move destination travels back through resolveLibraryPath, so it is qualified too.
-  res.json({ path: relative, folders: folders.map((folder) => ({ ...folder, path: wirePath(libraryPath(resolved.library.id, folder.path)) })) });
-}));
-
 /** The kind of the unit an item belongs to: its own binding first, the structure the source
  *  library gives it otherwise, because an unbound file carries no type of its own. */
 const unitKindOf = async (key: string): Promise<TitleKind | undefined> => {
@@ -1581,33 +1459,6 @@ const transferLibraryItem = async (relative: string, folder: string, copy = fals
   return moved;
 };
 
-app.post("/api/library/move", asyncRoute(async (req, res) => {
-  // `copy` is honoured rather than ignored: the field was silently dropped before, so a client
-  // that asked for a copy got a move -- the original deleted -- with a success in the response.
-  const moved = await transferLibraryItem(String(req.body.path ?? "").trim(), String(req.body.folder ?? "").trim(),
-    req.body.copy === true, undefined, req.body.confirmTypeMismatch === true);
-  res.json({ path: moved });
-}));
-
-app.get("/api/library/thumb", asyncRoute(async (req, res) => {
-  // An unknown shape asks for the poster, the way an unknown tile size is the medium one: every
-  // address the interface already holds names no shape at all.
-  const shape: ArtShape = String(req.query.shape ?? "") === "wide" ? "wide" : "poster";
-  const filePath = req.query.path ? libraryKey(String(req.query.path)) : undefined;
-  const dirPath = req.query.dir ? libraryKey(String(req.query.dir)) : undefined;
-  let art: string | undefined;
-  if (filePath) art = await locateFileArtwork(filePath, shape);
-  else if (dirPath) art = await locateFolderArtwork(dirPath, shape);
-  else {
-    const selected = String(req.query.key ?? "");
-    const entry = (await libraryEntries()).find((item) => item.key === libraryKey(selected));
-    art = entry && await locateArtwork(entry, shape);
-  }
-  if (!art) return res.status(404).end();
-  void artworks.served(art);
-  res.setHeader("cache-control", "private, no-store");
-  res.sendFile(art, { dotfiles: "allow" }, (error) => { if (error && !res.headersSent) res.status(404).end(); });
-}));
 // Manual binding of a title to a folder, for a file that did not arrive through the queue.
 /** Binds the folder the file will land in to a catalogue title, so metadata need not be guessed. */
 /** A title is represented by its folder. A flat layout has none, so the file stands for itself.
@@ -1651,6 +1502,7 @@ const browsedLibraries = new Set<string>();
 /** A library the interface opened is worth keeping current: the walk of a library nobody
  *  looked at is what the freshness pass is allowed to skip. */
 const markBrowsed = (library: LibraryRecord) => { browsedLibraries.add(library.id); };
+registerContentRoutes(app, { ...routeContext, attachBrowseMeta, carveOutsOf, dataOf, deleteLibraryItem, fileExists, invalidateLibrary, libraryEntries, libraryKey, libraryRootBrowse, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, prefsOf, progressOf, relativeKeyIn, relocateLibraryPath, scheduleFileArtwork, scheduleFolderArtwork, singleLibrary, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites });
 const libraryScan = new LibraryScan({
   dataDir: DATA_DIR,
   // The scan works on keys, so the walk it injects is the qualified one.
