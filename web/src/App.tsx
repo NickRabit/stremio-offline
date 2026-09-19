@@ -122,14 +122,15 @@ export function App() {
   const scrollDirection = useRef(new WeakMap<HTMLElement, { top: number; travel: number; until: number }>());
   // A tap does not end the scroll: Safari's momentum runs on for a while afterwards, and those
   // events would fold the header the tap has just opened, which opens again, which folds -- the
-  // flicker. So a header opened by hand is held open, but only for as long as that fling lasts.
-  // The hold ends three ways, and it needs all three: a new gesture, the list falling quiet, and
-  // a ceiling. Leaning on the gesture alone once left the header stuck open, because a hold that
-  // outlives what it was for stops the next scroll from folding anything.
-  const heldOpen = useRef(0);
+  // flicker. So a header opened by hand is held open for as long as that fling lasts, and a
+  // fling can last several seconds. Nothing counts it down: it ends when the list falls quiet,
+  // or when a new gesture asks for something else. A hold on a timer was tried and it expired
+  // mid-fling, folding the header under the reader; a hold that only a gesture could end was
+  // tried too, and it outlived the fling and left the header stuck open.
+  const heldOpen = useRef(false);
   const holdIdle = useRef(0);
-  const releaseHold = () => { heldOpen.current = 0; window.clearTimeout(holdIdle.current); };
-  const holdHeaderOpen = () => { heldOpen.current = performance.now() + 1500; };
+  const releaseHold = () => { heldOpen.current = false; window.clearTimeout(holdIdle.current); };
+  const holdHeaderOpen = () => { heldOpen.current = true; };
   useEffect(() => {
     for (const event of ["touchstart", "wheel", "keydown"]) window.addEventListener(event, releaseHold, { passive: true });
     return () => { for (const event of ["touchstart", "wheel", "keydown"]) window.removeEventListener(event, releaseHold); };
@@ -152,13 +153,12 @@ export function App() {
     const canHide = element.scrollHeight - element.clientHeight > headerHeight + 32;
     // The cooldown outlasts the fold itself: while it animates, the list changes height and
     // reports scroll of its own, which must not be read as the reader asking for anything.
-    const held = now < heldOpen.current;
-    if (held) {
-      // The fling is still going, so keep holding -- and let go shortly after it stops.
+    if (heldOpen.current) {
+      // Still moving, so keep holding -- and let go shortly after it stops.
       window.clearTimeout(holdIdle.current);
       holdIdle.current = window.setTimeout(releaseHold, 160);
     }
-    const changed = !held && now >= previous.until && next !== compact && (!next || canHide);
+    const changed = !heldOpen.current && now >= previous.until && next !== compact && (!next || canHide);
     scrollDirection.current.set(element, { top, travel: changed ? 0 : travel, until: changed ? now + 400 : previous.until });
     if (changed) update(next);
   }
