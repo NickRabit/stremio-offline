@@ -1141,3 +1141,57 @@ img.broken{visibility:hidden}
 .stream-list .stream-meta b{font-size:11px;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
 .stream-list .stream-meta small{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:3px;margin:0;overflow:visible}
 .stream-list .stream-meta .lang-badge{margin-left:0}
+
+/* Who is signed in. The name is written out rather than kept in a tooltip, which several
+   accounts make useless and a touch screen does not show at all. A phone cannot hold the
+   wordmark, the name, the role and the sign-out button on one line, so the two labels that
+   carry no identity give way: the logo keeps its mark, the button keeps its icon, its
+   title and its accessible name. */
+.topbar-right{min-width:0}
+.topbar-user{display:flex;align-items:center;gap:12px;min-width:0}
+.topbar-user-name{display:flex;align-items:center;gap:7px;min-width:0}
+.topbar-user-name>strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;font-weight:700}
+@media(max-width:700px){
+  .topbar .brand h1{display:none}
+  .topbar .signout .signout-label{display:none}
+}
+
+/* The accounts panel: the same card as a library, with a header that wraps a long name
+   beside its badges instead of clipping it, and grant lists that scroll inside the dialog
+   rather than pushing its controls below the fold. */
+.user-manager{display:grid;gap:12px}
+.user-manager-section .user-manager{grid-template-columns:repeat(auto-fit,minmax(min(420px,100%),1fr));align-items:stretch}
+.user-manager-section .library-manager-actions,.user-manager-section .identify-hint{grid-column:1/-1}
+.user-admin-row{grid-template-rows:auto auto auto auto;gap:8px}
+.user-admin-head{flex-wrap:wrap}
+.user-admin-title>strong{overflow:visible;text-overflow:clip;white-space:normal;overflow-wrap:anywhere}
+.user-admin-state{display:flex;align-items:center;flex-wrap:wrap;gap:6px;font-size:11px;color:var(--muted)}
+.user-admin-seen{font-size:11px;color:var(--muted)}
+.user-edit-card{width:min(660px,100%);max-height:min(100%,820px)}
+.user-edit-card>.identify-head h2{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.user-edit-body{display:grid;gap:0}
+.user-edit-section{display:grid;gap:12px;min-width:0;padding:15px 0;border-top:1px solid var(--line)}
+.user-edit-section:first-child{padding-top:0;border-top:0}
+.user-edit-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.user-edit-field{display:grid;gap:6px;min-width:0}
+.user-edit-field>span{font-size:11px;font-weight:700;color:var(--muted)}
+.user-edit-password{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;gap:8px}
+.user-edit-password button{white-space:nowrap}
+.user-edit-danger{display:grid;gap:8px;padding-top:12px;border-top:1px solid var(--line)}
+.user-edit-danger>button{justify-self:start;border-color:#f06a7655;color:var(--red)}
+.user-edit-switches{display:grid;gap:12px}
+.user-switch{display:flex;align-items:flex-start;gap:10px}
+.user-switch .switch{flex:0 0 auto}
+.user-switch>span:last-child{display:grid;gap:4px}
+.user-switch strong{font-size:12px}
+.user-switch small{font-size:11px;line-height:1.45;color:var(--muted)}
+.user-grant-list{display:grid;gap:4px;max-height:min(38dvh,300px);overflow:auto;overscroll-behavior:contain;padding:8px;border:1px solid var(--line);border-radius:9px;background:#10151d}
+.user-grant-row{display:flex;align-items:center;gap:10px;min-width:0;padding:7px 8px;border-radius:7px;font-size:12px}
+.user-grant-row:hover{background:#1b222d}
+.user-grant-row input{flex:0 0 auto;width:auto;accent-color:var(--accent)}
+.user-grant-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.user-grant-row .library-badge{flex:0 0 auto}
+@media(max-width:700px){
+  .user-edit-fields,.user-edit-password{grid-template-columns:minmax(0,1fr)}
+  .user-edit-password button{width:100%}
+}

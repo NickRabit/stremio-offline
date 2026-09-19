@@ -172,7 +172,7 @@ test("POST /api/auth/setup refuses once an account exists", async (t) => {
   t.after(harness.close);
   const created = await api(harness.base, "/api/auth/setup", { method: "POST", body: { username: "owner", password: "secret1", language: "cs" } });
   assert.equal(created.status, 201);
-  assert.deepEqual(await created.json(), { username: "owner", language: "cs" });
+  assert.deepEqual(await created.json(), { username: "owner", role: "admin", language: "cs" });
   const [record] = harness.store.users();
   assert.equal(harness.store.users().length, 1, "a fresh install ends up with one account");
   assert.equal(record?.username, "owner");
@@ -211,14 +211,33 @@ test("signing in as the migrated user works and the cookie names the user id", a
   assert.equal(harness.store.users().length, 1, "the migration leaves the install with one account");
   const response = await api(harness.base, "/api/auth/login", { method: "POST", body: { username: "Ondra", password: "migrated-secret" }, ip: "10.1.0.1" });
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { username: "Ondra" });
+  assert.deepEqual(await response.json(), { username: "Ondra", role: "admin" });
   const cookie = parseCookies(response.headers.get("set-cookie") ?? "")[SESSION_COOKIE];
   assert.equal(sessionUserId(cookie), owner?.id);
   assert.equal(readSession(owner?.secret ?? "", cookie)?.userId, owner?.id);
   // The language and the personal data came across with the account.
   const me = await api(harness.base, "/api/auth/me", { cookie: `${SESSION_COOKIE}=${cookie}` });
-  assert.deepEqual(await me.json(), { username: "Ondra", language: "cs" });
+  assert.deepEqual(await me.json(), { username: "Ondra", role: "admin", language: "cs" });
   assert.deepEqual(harness.store.userData(owner?.id ?? "").progress, { "movie:tt1": { position: 12, duration: 100, title: "Neco", updatedAt: "2026-01-01T00:00:00.000Z" } });
+});
+
+test("a sign-in records when the account was last seen, and a sign-out leaves it there", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const owner = await seedUser(harness.store, { password: "current-secret" });
+  assert.equal(findUserById(harness.store.users(), owner.id)?.lastSeenAt, undefined, "an account nobody signed in to has no such row");
+  const wrong = await api(harness.base, "/api/auth/login", { method: "POST", body: { username: "owner", password: "not-it" }, ip: "10.2.0.1" });
+  assert.equal(wrong.status, 401);
+  assert.equal(findUserById(harness.store.users(), owner.id)?.lastSeenAt, undefined, "a refused sign-in is not a visit");
+  const response = await api(harness.base, "/api/auth/login", { method: "POST", body: { username: "owner", password: "current-secret" }, ip: "10.2.0.1" });
+  assert.equal(response.status, 200);
+  const seen = findUserById(harness.store.users(), owner.id)?.lastSeenAt;
+  assert.ok(seen, "the sign-in is written down");
+  assert.ok(!Number.isNaN(Date.parse(seen)), "it is a timestamp the interface can format");
+  const cookie = parseCookies(response.headers.get("set-cookie") ?? "")[SESSION_COOKIE];
+  const out = await api(harness.base, "/api/auth/logout", { method: "POST", cookie });
+  assert.equal(out.status, 204);
+  assert.equal(findUserById(harness.store.users(), owner.id)?.lastSeenAt, seen, "signing out does not clear the column");
 });
 
 test("a disabled account is refused exactly like a wrong password", async (t) => {
@@ -316,7 +335,7 @@ test("PATCH /api/auth/password rotates the caller's secret and leaves another ac
     body: { currentPassword: "current-secret", newPassword: "nove-heslo" },
   });
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { username: "owner" });
+  assert.deepEqual(await response.json(), { username: "owner", role: "admin" });
   const changed = findUserById(harness.store.users(), owner.id);
   assert.ok(changed && changed.secret !== "old-secret", "every token issued before the change stops working");
   assert.ok(await verifyPassword("nove-heslo", changed.passwordHash));

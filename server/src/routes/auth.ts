@@ -27,7 +27,7 @@ export function registerAuthRoutes(app: express.Application, ctx: RouteContext):
     const language = ctx.store.prefs(user?.id ?? ctx.store.users()[0]?.id).uiLanguage;
     if (ctx.needsSetup()) return res.json({ setup: true, language });
     if (!user) return res.status(401).json({ error: "Not signed in.", messageKey: "err.notSignedIn", language });
-    res.json({ username: user.username, language });
+    res.json({ username: user.username, role: user.role, language });
   });
 
   /** First-run account setup. Available only until an account exists. */
@@ -58,7 +58,7 @@ export function registerAuthRoutes(app: express.Application, ctx: RouteContext):
     });
     res.setHeader("set-cookie", sessionCookie(createSession(secret, id, Date.now() + REMEMBER_DAYS * 24 * 60 * 60 * 1000), true, ctx.isSecure(req)));
     log("INFO", "Account created on first run", { username, language: chosen });
-    res.status(201).json({ username, language: chosen });
+    res.status(201).json({ username, role: "admin", language: chosen });
   }));
   app.post("/api/auth/login", asyncRoute(async (req, res) => {
     const username = String(req.body.username ?? "");
@@ -94,8 +94,12 @@ export function registerAuthRoutes(app: express.Application, ctx: RouteContext):
     logins.succeed(from);
     const expiresAt = Date.now() + (remember ? REMEMBER_DAYS : 1) * 24 * 60 * 60 * 1000;
     res.setHeader("set-cookie", sessionCookie(createSession(signIn.secret, signIn.id, expiresAt), remember, ctx.isSecure(req)));
+    // The column answers "who still uses this account" for an administrator, so it records
+    // the sign-in and not every request: writing the state file on each call would be a real
+    // cost for a value nobody reads that way.
+    await ctx.store.update((state) => withUser(state, signIn.id, (user) => ({ ...user, lastSeenAt: new Date().toISOString() })));
     log("INFO", "Sign-in", { username: signIn.username, remember, viaEnvCredentials: byEnv && !bySettings });
-    res.json({ username: signIn.username });
+    res.json({ username: signIn.username, role: signIn.role });
   }));
   app.post("/api/auth/logout", asyncRoute(async (req, res) => {
     if (logoutDenied(req.body)) throw new RestrictedError();
@@ -138,6 +142,6 @@ export function registerAuthRoutes(app: express.Application, ctx: RouteContext):
     // keeps reading its resource until the sweep reaches it.
     await ctx.stopUserSessions(account.id);
     log("INFO", "Credentials changed", { username });
-    res.json({ username });
+    res.json({ username, role: account.role });
   }));
 }

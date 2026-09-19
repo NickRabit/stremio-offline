@@ -10,6 +10,8 @@ export interface AddonDownloadSettings { movie: DownloadTargetSettings; series: 
 export interface Addon {
   key: string; role: "catalog" | "source" | "both"; enabled: boolean; globalSearch: boolean; displayUrl?: string;
   showInContinueWatching?: boolean;
+  /** The accounts this addon is granted to; an empty list means every ordinary user. */
+  allowedUsers?: string[];
   /** Cinemeta: the interface hides its remove and off switches. */
   essential?: boolean;
   configurable?: boolean; downloadSettings?: AddonDownloadSettings; manifest: { id: string; name: string; version: string; description?: string; logo?: string; resources?: Array<string | { name: string }>; catalogs?: Array<{ id: string; type: string; name?: string }>; behaviorHints?: { p2p?: boolean } };
@@ -126,7 +128,20 @@ export interface PlaybackSession {
   playlist?: boolean;
 }
 
-export interface Session { username: string; language?: Locale }
+export type UserRole = "admin" | "user";
+export interface UserPermissions {
+  /** May queue a download onto the server. */
+  downloadToLibrary: boolean;
+  /** May save allowed content to the device at the keyboard. */
+  downloadToDevice: boolean;
+}
+/** One account as `GET /api/users` sends it: the public fields and the two grant counts. */
+export interface UserAccount {
+  id: string; username: string; role: UserRole; disabled: boolean; mustChangePassword: boolean;
+  createdAt: string; lastSeenAt?: string; permissions: UserPermissions;
+  libraries: number; addons: number;
+}
+export interface Session { username: string; role: UserRole; language?: Locale }
 /** A fresh install answers with the setup order instead of a session. Both carry the
  *  stored language: the sign-in and setup screens render before any other call. */
 export type AuthStatus = (Session | { setup: true }) & { language?: Locale };
@@ -165,6 +180,8 @@ export interface LibraryView {
   id: string; name: string; type: LibraryType; root?: string; enabled: boolean; order: number;
   addedAt: string; writeArtwork: boolean; mosaic?: boolean; showInContinueWatching?: boolean; unreachable: boolean; readOnly: boolean;
   defaultMovie: boolean; defaultSeries: boolean; titles: number; files: number; bytes: number;
+  /** The accounts this library is granted to; an empty list means every ordinary user. */
+  visibleTo?: string[];
 }
 export type BrowseItem =
   | ({ kind: "folder"; favorite?: boolean } & BrowseFolder)
