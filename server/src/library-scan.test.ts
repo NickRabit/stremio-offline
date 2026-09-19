@@ -14,9 +14,9 @@ const stale = () => new Date(Date.now() - TTL - 60_000).toISOString();
 const hit = (name: string, id = "tt1"): MetaItem =>
   ({ id, type: "movie", name, releaseInfo: "2020", poster: "http://x/p.jpg", background: "http://x/b.jpg", description: "Plot" });
 
-const waitFor = async (pred: () => boolean, ms = 2_000) => {
+const waitFor = async (pred: () => boolean | Promise<boolean>, ms = 2_000) => {
   const start = Date.now();
-  while (!pred()) {
+  while (!(await pred())) {
     if (Date.now() - start > ms) throw new Error("timed out");
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
@@ -353,11 +353,13 @@ test("missing paths skip and persist without an addon call", async () => {
   const h = await harness({ pathExists: async () => false });
   try {
     await h.scan.start();
-    await waitFor(() => h.scan.snapshot().status === "completed");
+    // The scan turns the status in memory before the save lands, so waiting on the
+    // snapshot alone would read the file too early.
+    const saved = async () => JSON.parse(await readFile(path.join(h.dataDir, "library-scan.json"), "utf8")) as { status: string; skipped: number };
+    await waitFor(async () => h.scan.snapshot().status === "completed" && (await saved()).status === "completed");
     assert.equal(h.scan.snapshot().skipped, 1);
     assert.equal(h.searches.length, 0);
-    const saved = JSON.parse(await readFile(path.join(h.dataDir, "library-scan.json"), "utf8")) as { skipped: number };
-    assert.equal(saved.skipped, 1);
+    assert.equal((await saved()).skipped, 1);
   } finally { await h.close(); }
 });
 
