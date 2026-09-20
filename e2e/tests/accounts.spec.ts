@@ -191,7 +191,8 @@ test.describe("accounts", () => {
       // still goes through.
       await row.getByRole("button", { name: "Upravit" }).click();
       await dialog.getByRole("tab", { name: /^Doplňky/ }).click();
-      await addonBox.click();
+      // Granted further up and never withdrawn, so it is read rather than clicked: clicking
+      // it here took the grant away and then asserted it was there.
       await expect(addonBox).toBeChecked();
       await dialog.getByRole("tab", { name: /^Účet/ }).click();
       await dialog.getByLabel("Role").selectOption("admin");
