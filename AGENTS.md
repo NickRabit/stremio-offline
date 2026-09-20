@@ -69,6 +69,7 @@ endpoint `/api/status`, which must return `{"status":"ok",…}`.
 | Test layers and what belongs where | [docs/testing.md](docs/testing.md) |
 | Backlog and product direction | [docs/roadmap.md](docs/roadmap.md) |
 | Environment variables | [docs/configuration.md](docs/configuration.md) |
+| Accounts, roles and per-user access | [docs/users.md](docs/users.md) |
 | Contributor workflow | [CONTRIBUTING.md](CONTRIBUTING.md) |
 
 Some working documents are deliberately untracked (see `.gitignore`). Read them

@@ -27,10 +27,14 @@ used from a browser on the home network.
   Range, and pauses itself when the disk fills up.
 - **A local library** of what you downloaded, with artwork, continue watching,
   and a list of your own.
+- **Several libraries** — another disk, films and series kept apart, a friend's
+  folder mounted read-only — and a metadata scan that turns a folder of files
+  into titles with posters and descriptions.
 - **English or Czech**, chosen on first run and changeable in Settings. The
   choice at setup also seeds the preferred audio and subtitle languages.
-- **One account, created on first run.** No default password, no anonymous
-  access.
+- **Accounts, created on first run.** No default password, no anonymous access.
+  An administrator adds one per person and decides which libraries and addons
+  each of them sees.
 - **Diagnostics in the UI** — grouped errors, a filterable log, and what
   playback actually failed on.
 
@@ -49,9 +53,9 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-Open `http://localhost:8090`. The first screen creates the only account; until
-then the server serves nothing else. Downloaded files land in the host directory
-set by `DOWNLOAD_PATH`.
+Open `http://localhost:8090`. The first screen creates the administrator; until
+an account exists the server serves nothing else. Downloaded files land in the
+host directory set by `DOWNLOAD_PATH`.
 
 To run a prebuilt image instead of building locally:
 
@@ -93,8 +97,11 @@ on demand, so a catalogue the provider adds later still shows up. See
 | [Install on a Synology NAS](docs/install-synology.md) | Container Manager and SSH paths, `PUID`/`PGID`, backups, reverse proxy |
 | [Configuration reference](docs/configuration.md) | Every environment variable, with defaults |
 | [Playback](docs/playback.md) | Direct play vs. remux vs. transcode, seeking, tracks, subtitles |
+| [Trailers](docs/trailers.md) | Where the trailer comes from, and how secure mode plays it |
 | [Addons and downloads](docs/downloads.md) | Debrid addons, the queue, save rules, config backup |
 | [Libraries](docs/libraries.md) | Several roots, types, artwork per library, splitting the download folder |
+| [Library identification](docs/library-metadata.md) | How folders become titles, the scan, suggestions and Identify |
+| [Accounts](docs/users.md) | Roles, per-user libraries and addons, passwords, recovery |
 | [Hardware acceleration](docs/hardware-acceleration.md) | QuickSync and VAAPI, and how to tell it is really running |
 | [Diagnostics and troubleshooting](docs/troubleshooting.md) | The log, the addon guard, symptom-to-page index |
 | [Building and releasing](docs/building.md) | Local builds, GHCR, version tags, Windows and macOS hosts |
@@ -133,9 +140,12 @@ marks the cookie `Secure` itself.
 - Manifests and streams aimed at a private network are blocked by default. For
   your own LAN addons, set `ALLOW_ADDON_HOSTS`, or `ALLOW_PRIVATE_ADDONS=1` if
   you know why.
-- The password is stored only as a scrypt hash, and the session carries a signed
-  ticket. Signing out of all devices rotates the signing secret, so previously
-  issued tickets stop working at once.
+- Passwords are stored only as scrypt hashes, and a session carries a signed
+  ticket scoped to one account. Signing out of all devices rotates that
+  account's signing secret, so previously issued tickets stop working at once.
+- An ordinary account reaches only the libraries and addons an administrator
+  granted it, and a library it was not granted answers exactly as one that does
+  not exist. Taking a right away stops the streams and devices relying on it.
 - After five failed sign-ins from one address, every further failure pauses
   sign-in, doubling from a second up to a minute; a success clears the record
   and the count is forgotten after fifteen minutes. The cap stays low on

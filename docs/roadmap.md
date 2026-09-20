@@ -9,184 +9,175 @@ needs VAAPI. See [Hardware acceleration](hardware-acceleration.md) for the setup
 
 ## Done
 
-These used to be open notes. They are in `main` now.
+Shipped and living in `main`. The list is here to stop settled questions from
+being reopened, not as a changelog.
 
-- Local library: browse and play downloaded files from disk.
-- Continue watching and My list, including cleanup when a title is deleted from the library.
-- Image workflow is manual (`workflow_dispatch`) plus version tags. It does not build on every commit. Building on merge to `main` can wait until the branch workflow settles.
-- Secure mode: artwork from addons is fetched and cached by the server, the page gets an opaque link, and a Content-Security-Policy keeps the browser from loading anything else.
-- Settings export/import, including installed addons and their save rules. Tokens in addon URLs mean the file is a secret.
-- Subtitle cue background no longer fights the player chrome when the timeline shows or hides.
-- Fullscreen keeps HTML subtitles visible on Windows Chrome/Brave (the video is no longer promoted over the cue layer).
-- Hide/show subtitles from the player icon or `c`/`t` without restarting FFmpeg.
-- Clicking the current sidebar section resets it (filters, path, scroll). Clicking it from another section restores the last filters and position.
-- Jump from a finished download job to the file in the library.
-- Mobile item / stream / play / download flow (catalog detail, landscape, control sizing).
-- Save to the current device from the stream picker, the player, and the library, always through the server proxy.
-- Diagnostics panel: levels, rotation, retention, redaction, client playback errors, grouped issues.
-- Per-host guard on outbound addon calls: concurrency cap, queue, and a circuit breaker.
-- English documentation, MIT license, and the GitHub community files (contributing, security, code of conduct, issue and pull request templates).
-- GHCR image plus manual and tag-driven build workflows (`ghcr.io/nickrabit/stremio-offline`).
-- Download queue: classify failures (network vs source vs disk), Range resume after a clean drop, halt the queue on ENOSPC and resume when space returns.
-- Mobile player scrubber: press anywhere on the bar, including the unplayed part, and drag the current position forward or back without first jumping to the press point.
-- Download queue on a phone: stacked layout so the page is usable.
-- iPhone landscape: the left menu clears the notch with a safe-area layout.
-- Interface in English and Czech: English (or the browser's language when we ship it) on a fresh install, a picker on the first-run screen that also seeds the preferred audio and subtitles, and a Language setting afterwards. An install from before the change keeps Czech. Server messages travel as English text plus a catalogue key, so a stored download error follows the language too.
-- Real-Debrid client: API token in Settings, torrent rows no longer look like HTTP, waiting queue jobs that do not take an HTTP slot, play only when an HTTPS URL exists now, in-app toasts for the two hand-offs.
-- Restricted / demo mode (`RESTRICTED_MODE=1`): process-wide lock so a shared instance cannot change addons, settings or the password, and cannot export tokens. Off by default.
-- Smart season and whole-show downloads: ordered addons or largest-file selection across sources, verified audio language with fallback, and optional or required embedded/addon subtitles resolved per episode at the front of the queue.
-- Tile size that follows the panel rather than a fixed pixel count: each of the four settings is a floor, a ceiling and a share of the panel the grid sits in, read through a container query so the catalogue's split with the detail panel stays untouched. A narrowing window drops a column instead of shrinking every tile.
-- Portrait or landscape tiles, per page, from a button on the catalogue and one in the library. A library title keeps both pictures: the poster it always had and a backdrop taken from the bound catalogue title, a `backdrop.jpg` beside the media, or the frame grabbed from the video, which was landscape all along and had been drawn cropped into a portrait box. Titles already on disk fill in as they are browsed and on a rescan, with no migration. Where only one picture exists the tile letterboxes it rather than cropping.
-- Cached artwork sized for a tile: a metahub background is narrowed to its small variant before the proxy ever sees the address, and anything else is re-encoded once to 640px as it is cached, through the ffmpeg already in the image.
+- Local library: browse and play downloaded files from disk, with continue
+  watching, favourites and clean-up when a title leaves.
+- **Several libraries**: named roots with a type, managed from the interface,
+  added inside a granted root, moved and copied between each other, removed
+  against disabled, re-added with their identity intact, and split out of the
+  download directory without moving a file. See
+  [Libraries](libraries.md).
+- **Library identification**: a path parser and scorer turn folders into titles,
+  a durable scan job matches them against the catalogues, low-confidence hits
+  wait as suggestions, and Identify / Fix match / Unmatch are the manual
+  override. See [Library identification](library-metadata.md).
+- **Accounts**: more than one, an administrator and ordinary users, per-user
+  library and addon visibility, per-user download permissions, per-user addon
+  order and personal settings, session revocation when a right is taken away,
+  and the admin dashboard. See [Accounts](users.md).
+- Secure mode: artwork from addons is fetched and cached by the server, the page
+  gets an opaque link, and a Content-Security-Policy keeps the browser from
+  loading anything else.
+- Settings export/import, including installed addons, their save rules and the
+  names and roots of the libraries. Tokens in addon URLs mean the file is a
+  secret.
+- Playback: direct play vs. remux vs. transcode, on-demand timeline previews,
+  next/previous episode, embedded and addon subtitles, and the player volume
+  remembered on the device. See [Playback](playback.md).
+- Trailers from Cinemeta, with TMDB as a fallback: in-app when secure mode is
+  off, an external tab when it is on. See [Trailers](trailers.md).
+- Download queue: survives a restart, resumes `.part` files with HTTP Range,
+  pauses on ENOSPC and resumes when space returns, retries a dead source,
+  segmented transfers, and the torrent hand-off through Real-Debrid.
+- Smart season and whole-show downloads: ordered addons or largest-file
+  selection, verified audio language with fallback, and optional or required
+  subtitles resolved per episode at the front of the queue.
+- Stats split by where the traffic comes from — a download, catalogue playback
+  or library playback — with library traffic kept out of the external figures.
+- Diagnostics panel: levels, rotation, retention, redaction, client playback
+  errors, grouped issues, and a per-host guard on outbound addon calls.
+- English or Czech throughout, chosen on first run; server messages travel as
+  English text plus a catalogue key.
+- Tile size that follows the panel, portrait or landscape tiles per page, and
+  cached artwork sized for a tile.
+- Restricted / demo mode (`RESTRICTED_MODE=1`), English documentation, the
+  community files, the GHCR image and the build and release workflows.
 
 ## Next (daily friction)
 
 ### Player and mobile chrome
 
-- [x] Keep episode navigation, seek/play, and settings in one compact row on portrait iPhones.
-- [x] Click the video to hide controls and dismiss playback settings.
-- [x] Hide the mouse cursor after ten idle seconds in fullscreen.
-- [x] Use only overlay fullscreen and hide the button when unsupported, keeping custom controls on Safari.
+- Improve Safari landscape chrome behavior on a physical iPhone/iPad; WebKit
+  automation cannot emulate browser chrome, so this needs a device.
+- Catalog actions **To library** / **To device** are clipped at the bottom of the
+  sheet.
 
-- [x] Compact direct/transcoded playback labels with HW/SW for transcoding.
-- [x] On-demand timeline image previews for mouse hover and touch scrubbing, with bounded server work and cache.
-- [x] Previous/next-episode buttons for naturally sorted video files in the same library folder.
-- [x] Restore document scrolling after inner scrolling kept Safari's tab bar permanently expanded.
-- [ ] Improve Safari landscape chrome behavior on a physical iPhone/iPad; WebKit automation cannot emulate browser chrome.
+### Library
 
-- Catalog actions **To library** / **To device** are clipped at the bottom of the sheet.
+- A guided split of the download directory from the library manager. The
+  supported route — carve-outs plus **Change folder** — is written up in
+  [Libraries](libraries.md#splitting-the-download-directory); what is missing is
+  a wizard that offers it at the moment someone needs it.
+- Bulk rename by pattern. Deliberately out of the first multi-library release;
+  the operations queue is shaped to take it without a migration.
 
-### Stats
+### Follow show
 
-Stats currently follow finished library downloads and ignore catalog playback. Local library playback is LAN traffic and should not be mixed into the same counter.
-
-Pick one:
-
-- stop counting playback at all, or
-- split the page into **Downloads** vs **Playback** (catalog / remote vs library / local).
-
-Do not keep a single number that pretends to be watch time.
+Daily check for new episodes of a show, enqueued as lazy jobs. The lazy-job
+plumbing exists; the watch list and the scheduler do not. Torrent sources should
+enqueue the same way.
 
 ### Queue robustness
 
-- Optional later: night-only window, speed limit, notify when the queue drains, delete watched files. In-app notify (toast + Stahování badge) is shared with the debrid waiting state below; push out of the browser is later.
+Optional later: a night-only window, a speed limit, and a notice when the queue
+drains. The in-app notice is shared with the debrid waiting state; push out of
+the browser is later.
 
-### Torrents and Real-Debrid
+### Search
 
-Shipped. Remaining: follow-show can later enqueue torrent sources the same way;
-push / ntfy out of the browser.
+Live input (~400 ms debounce), recent queries, suggestions from already loaded
+catalogs, and an optional rank-by-title-match.
 
-## Engineering health (before the next feature)
+## Engineering health
 
 Feature work is cheap now; long-lived complexity is not. These items are about
 keeping the code changeable and the data safe, and they are worth taking in this
 order. Each one is independently mergeable — do not fold two of them into one
 refactor, and do not carry a feature along with one.
 
-### Split the HTTP layer out of `index.ts`
-
-`server/src/index.ts` is 3085 lines and registers 97 routes. The domain modules
-next to it are fine; `index.ts` is the problem, because it is bootstrap, wiring,
-router, auth boundary and orchestration for libraries, playback, downloads,
-settings and diagnostics all at once. Every change reads it, so every change is
-expensive, and two agents working in parallel collide in it.
-
-Move the handlers into `server/src/routes/` by area (auth, addons, playback,
-downloads, libraries, settings, diagnostics) and leave composition behind. This
-is a move, not a rewrite: no behaviour change, no API change, no state format
-change, no DI framework and no new dependency. Done when changing one endpoint
-means opening one small file and the existing suites stay green.
-
-### Version the persisted state and test the migrations
-
-Only libraries have an explicit migration today (`library-migrate.ts`). The main
-state, settings, addons, the download queue, the artwork index, history, favourites
-and resume positions have no version and no test that an old file still loads.
-
-Give a version to the structures that actually change shape — not to everything —
-and keep real state directories from released versions as fixtures
-(`server/test-fixtures/state/<version>/`), with a test that loading one produces
-the expected current state. Migration must be deterministic, idempotent where it
-can be, and safe when the process dies halfway. An upgrade must never require
-hand-editing a JSON file, no valid user data may be dropped in silence, and a
-failed migration must name the file and the reason.
-
 ### Make destructive filesystem paths fail safe
 
 The rule: when the app cannot tell **"the library is empty"** from **"the library
 could not be read"**, it must not clean anything up. Uncertainty stops.
 
-The cross-library artwork loss in `LIBRARY_BUGS.md` is exactly this shape — a
-swallowed `ENOENT`, a file orphaned under the old key, and an hour later the sweep
-took it for good. Walk the rest of the same surface: library add / remove / forget /
-disable / re-enable / re-root / reconnect / type change; file rename, move, copy,
-delete, bulk and cross-library operations, including across filesystems; artwork
-generation, replacement, cleanup and orphan detection; metadata binding after an
-external rename or a vanished file. A destructive path gets explicit preconditions
-and never swallows an error, a failure never leaves a success showing in the
-interface, and each case found gets a regression test at the domain layer.
+The cross-library artwork loss was exactly this shape — a swallowed `ENOENT`, a
+file orphaned under the old key, and an hour later the sweep took it for good. The
+library add / remove / forget / disable / re-enable / re-root / reconnect / type
+change paths have been through it since, and the sweep and the migration check
+the root before deleting. Walk the rest of the same surface: file rename, move,
+copy, delete, bulk and cross-library operations, including across filesystems;
+artwork generation, replacement, cleanup and orphan detection; metadata binding
+after an external rename or a vanished file. A destructive path gets explicit
+preconditions and never swallows an error, a failure never leaves a success
+showing in the interface, and each case found gets a regression test at the
+domain layer.
 
 ### Give interrupted operations a defined restart
 
-Downloads have `.part` files and a resume. Nothing else does: a library move or
-copy, a bulk operation, artwork generation, a scan, a metadata update or a
-transcode killed mid-flight has no stated behaviour on the next start.
+Downloads have `.part` files and a resume, and a library scan or bulk job
+survives a restart through `library-scan.json` and `library-ops.json`. Nothing
+else does: artwork generation, a metadata update or a transcode killed mid-flight
+has no stated behaviour on the next start, and a cross-mount copy stages through
+a name derived from the destination.
 
-After a restart every interrupted operation should end up resumed, retried, marked
-failed, cleaned up, or shown to the user — never displayed as finished while the
-disk holds half a file. Temporary and staging files need deterministic names,
-a rule for collisions and an owner that clears them, and a partial destination must
-never be scannable as complete media.
+After a restart every interrupted operation should end up resumed, retried,
+marked failed, cleaned up, or shown to the user — never displayed as finished
+while the disk holds half a file. Temporary and staging files need deterministic
+names, a rule for collisions and an owner that clears them, and a partial
+destination must never be scannable as complete media.
 
 ### Playback hardening
 
 Direct play → remux → transcode stays the order, and it should be deterministic
 and testable rather than discovered per stream. What needs checking: byte ranges
-and seeking on direct play; the fragmented MP4 lifecycle and audio-only conversion
-on remux; cancellation, client disconnect and concurrent sessions on transcode —
-no FFmpeg process may outlive its request; and VAAPI/QuickSync falling back to
-software instead of failing. A failed playback should tell us the source, the mode
-chosen, hardware or software, and the stage that failed, without a token or a full
-private stream URL reaching the log.
+and seeking on direct play; the fragmented MP4 lifecycle and audio-only
+conversion on remux; cancellation, client disconnect and concurrent sessions on
+transcode — no FFmpeg process may outlive its request; and the VAAPI failure
+counter turning into a clean software fallback instead of a failed playback. A
+failed playback should tell us the source, the mode chosen, hardware or software,
+and the stage that failed, without a token or a full private stream URL reaching
+the log.
 
 ### Backup scope, written down
 
-`backup.ts` exports and imports settings. What a backup means is not written down:
-which data must be preserved (addons, preferences, library definitions, favourites,
-resume state, metadata bindings, download settings), which is genuinely rebuildable
-cache — verified, not assumed — and how secrets in addon URLs are handled. Restore
-validates the file before applying any of it, fails loudly on an incompatible or
-partial backup, and stays explicit about remapping when the filesystem roots moved.
+`backup.ts` exports and imports settings and addons — the libraries' names and
+roots are remapped on the way back in — and it deliberately carries neither the
+accounts nor the media library. What a backup means beyond that is not written
+down: which data must be preserved (favourites, resume state, metadata bindings,
+download settings), which is genuinely rebuildable cache — verified, not
+assumed — and how secrets in addon URLs are handled. Restore validates the file
+before applying any of it, fails loudly on an incompatible or partial backup, and
+stays explicit about remapping when the filesystem roots moved. A full-instance
+restore, accounts included, is a separate undesigned operation.
 
 ### A classification behind the errors
 
 `AppError` already carries English text plus a catalogue key. What is missing is a
 stable code and a class — source, network, storage, library, playback, transcode,
-addon, authentication, configuration, internal — so the diagnostics panel can group
-failures, say whether the thing is still going, and say whether a retry helps,
-instead of showing a raw exception string. Redaction stays covered by tests.
+addon, authentication, configuration, internal — so the diagnostics panel can
+group failures, say whether the thing is still going, and say whether a retry
+helps, instead of showing a raw exception string. Redaction stays covered by
+tests.
 
 ## Later
 
-### Library and discovery
-
-- **Library metadata**: posters and descriptions for folders that did not arrive through the download queue. Spec in [library-metadata.md](library-metadata.md). Path parser, title units and scoring ship first; Identify, the scan job and library chrome follow.
-- **Multiple libraries**: several named roots with a type (movie / series / mixed),
-  managed from the interface, items moved between them, per-addon save targets,
-  bulk file operations, and the metadata/cache groundwork that goes with it.
-  Spec in [multi-library.md](multi-library.md), state of the work and what is
-  left in [multi-library-handoff.md](multi-library-handoff.md). It supersedes the "Plex-like
-  separate libraries" rejection in [library-metadata.md](library-metadata.md).
-- **Follow show**: daily check for new episodes, enqueue as lazy jobs. The lazy-job plumbing exists; the watch list and scheduler do not.
-- Search: live input (~400 ms debounce), recent queries, suggestions from already loaded catalogs, optional rank-by-title-match.
-
 ### Access and multi-instance
 
-- Profiles: addons, settings, history and favorites per profile; user management; lockable profiles; kids profiles that honour age metadata when the catalog provides it.
-- Configurable LAN IP/host for the running container. The web client should try that address first so playback on the home network does not hairpin through Cloudflare Tunnel. Fail closed: never treat an unauthenticated LAN probe as an open door.
-- Remote client mode: another instance (Docker or native) can use this one as the download/playback server, including an instance published behind a Cloudflare Tunnel with explicit auth.
+- Profiles beyond an account: lockable profiles, kids profiles that honour age
+  metadata when the catalog provides it, and switching between them without a
+  password. Accounts already separate addons, libraries, history and settings.
+- Configurable LAN IP/host for the running container. The web client should try
+  that address first so playback on the home network does not hairpin through a
+  reverse proxy or Cloudflare Tunnel. Fail closed: never treat an unauthenticated
+  LAN probe as an open door.
+- Remote client mode: another instance (Docker or native) can use this one as the
+  download/playback server, including an instance published behind a Cloudflare
+  Tunnel with explicit auth.
 
-Do not expose the app directly to the internet. HTTPS reverse proxy or a VPN remains the rule; the cookie is only `Secure` when the server sees HTTPS.
+Do not expose the app directly to the internet. An HTTPS reverse proxy or a VPN
+remains the rule; the cookie is only `Secure` when the server sees HTTPS.
 
 ### Packaging
 
@@ -195,7 +186,8 @@ Do not expose the app directly to the internet. HTTPS reverse proxy or a VPN rem
 ### Tests
 
 Stream sorting and filtering is still checked by hand against real addon
-payloads. See [testing.md](testing.md) for the layers that do exist.
+payloads. The screenshot matrix and the viewport projects are described in
+[Testing](testing.md).
 
 The suite is strong and should stay cheap to keep. When it starts costing more
 than it catches, the things to look for are an end-to-end test proving something
@@ -207,6 +199,8 @@ is a defect, not weather.
 
 - A local torrent engine on the NAS.
 - Playing an uncached torrent in the player while Real-Debrid is still leeching.
-- AllDebrid, Premiumize, or a second debrid provider before Real-Debrid is in daily use.
+- AllDebrid, Premiumize, or a second debrid provider before Real-Debrid is in
+  daily use.
 - Parsing the API token out of a Torrentio (or other addon) manifest URL.
-- Building the image on every push. Revisit after features land through pull requests instead of bursts on `main`.
+- Building the image on every push. Revisit after features land through pull
+  requests instead of bursts on `main`.
