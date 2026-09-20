@@ -72,3 +72,21 @@ test("a hyphen without spaces splits a bilingual query", () => {
   assert.equal(result.title, "Jižanská pohostinnost-Southern Comfort");
   assert.equal(result.query, "Southern Comfort");
 });
+
+test("a library id is not a parent folder", () => {
+  const flat = parseMediaPath("lib_00000001/Heat.1995.1080p.BluRay.x264.mkv");
+  assert.equal(flat.title, "Heat");
+  assert.equal(flat.year, 1995);
+  assert.equal(parseMediaPath("lib_00000001/Heat.mkv").title, "Heat");
+  assert.equal(parseMediaPath("lib_00000001/Films/Heat.mkv").title, "Films");
+  assert.equal(parseMediaPath("Films/Heat.mkv").title, "Films");
+});
+
+test("a folder that only looks like a library id still counts as a parent", () => {
+  assert.equal(parseMediaPath("lib_zzzzzzzz/Heat.mkv").title, "lib zzzzzzzz");
+  assert.equal(parseMediaPath("lib_0000001/Heat.mkv").title, "lib 0000001");
+});
+
+test("a library root folder keeps its own name", () => {
+  assert.equal(parseMediaPath("lib_00000001/Heat (1995)").title, "Heat");
+});

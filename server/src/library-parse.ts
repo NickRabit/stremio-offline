@@ -1,4 +1,5 @@
 import { isVideo } from "./library.js";
+import { LIBRARY_ID } from "./libraries.js";
 
 export const QUALITY_TOKENS = [
   "2160p", "1080p", "720p", "576p", "480p", "4k", "uhd",
@@ -53,12 +54,14 @@ const RELEASE_GROUP = /-[A-Za-z0-9]{2,15}$/;
 const phrasePattern = (phrase: string) =>
   new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/ /g, "[\\s._]+"), "gi");
 
-/** Folder name or root filename; a trailing video file uses its parent folder. */
+/** Folder name or root filename; a trailing video file uses its parent folder.
+ *  The library id of a qualified key is not a folder anybody named, so a file
+ *  sitting in the library root falls back to its own name. */
 function subjectName(relative: string): string {
   const parts = relative.split(/[/\\]/).filter(Boolean);
   const last = parts.at(-1) ?? relative;
   if (!isVideo(last)) return last;
-  if (parts.length > 1) return parts[parts.length - 2]!;
+  if (parts.length > 2 || (parts.length === 2 && !LIBRARY_ID.test(parts[0]!))) return parts[parts.length - 2]!;
   return last.replace(/\.[^.]+$/, "");
 }
 
