@@ -342,6 +342,11 @@ function RootPicker({ reroot, onClose, onDone, onError, onLibrariesChanged }:
     catch (value) { setError(describeError(value)); }
     finally { setBusy(false); }
   };
+  // Why the confirm is dead, in the user's words. It used to be `disabled` and nothing else,
+  // and at phone height the field it was waiting on is scrolled out of sight.
+  const blocked = !selected ? t("library.pickerNeedsFolder")
+    : !reroot && !name.trim() ? t("library.pickerNeedsName")
+    : "";
   const crumbs = browse && browse.path ? browse.path.split("/") : [];
   const visibleEntries = browse?.entries.filter((entry) => entry.name.toLocaleLowerCase().includes(folderFilter.trim().toLocaleLowerCase())) ?? [];
   return <div className="identify-overlay" role="dialog" aria-modal="true" aria-label={t("library.chooseFolder")}
@@ -423,12 +428,23 @@ function RootPicker({ reroot, onClose, onDone, onError, onLibrariesChanged }:
           </button>}
         </details>
       </section>
-      </div>
-      <footer className="library-picker-footer dialog-foot">
+      {/* Everything that appears, disappears or resizes lives in the body. In the footer it
+          resized the footer, and the folder list above it moved under the cursor: picking a
+          folder made the list 49px shorter, because the estimate and the scan switch arrived
+          underneath it. At 667x375 it had eaten the dialog -- 313px of footer, 14px of body,
+          and the confirm button off the bottom of the screen. */}
+      <section className="library-picker-section library-picker-outcome">
+        {reroot && <fieldset className="library-reroot-choice">
+          <legend>{t("library.rerootWhat")}</legend>
+          <label><input type="radio" name="reroot-mode" checked={!carryContent} onChange={() => setCarryContent(false)}/>
+            <span><strong>{t("library.rerootPointOnly")}</strong>{t("library.rerootPointOnlyHint")}</span></label>
+          <label><input type="radio" name="reroot-mode" checked={carryContent} onChange={() => setCarryContent(true)}/>
+            <span><strong>{t("library.rerootMove")}</strong>{t("library.rerootMoveHint")}</span></label>
+        </fieldset>}
         <div className={`library-picker-selection${selected ? " selected" : ""}`} aria-live="polite">
           <span>{t("library.selectedFolder")}</span>
           <strong title={selected}>{selected || t("library.pickerNothingSelected")}</strong>
-          {pendingCreate && <p>{t("library.newFolderPending")}</p>}
+          {pendingCreate && <p>{t(reroot ? "library.newFolderPendingReroot" : "library.newFolderPending")}</p>}
           {estimate && <p className="library-picker-estimate">
             {t("library.estimate", { titles: estimate.titles, files: estimate.files })}
             {estimate.identified ? ` · ${t("library.estimateIdentified", { count: estimate.identified })}` : ""}
@@ -438,17 +454,25 @@ function RootPicker({ reroot, onClose, onDone, onError, onLibrariesChanged }:
             <span className="switch"><input type="checkbox" checked={scanNow} onChange={(event) => setScanNow(event.target.checked)}/><span/></span>
             <span>{t("library.scanNow")}</span></label>}
         </div>
-        {reroot && <fieldset className="library-reroot-choice">
-          <legend>{t("library.rerootWhat")}</legend>
-          <label><input type="radio" name="reroot-mode" checked={!carryContent} onChange={() => setCarryContent(false)}/>
-            <span><strong>{t("library.rerootPointOnly")}</strong>{t("library.rerootPointOnlyHint")}</span></label>
-          <label><input type="radio" name="reroot-mode" checked={carryContent} onChange={() => setCarryContent(true)}/>
-            <span><strong>{t("library.rerootMove")}</strong>{t("library.rerootMoveHint")}</span></label>
-        </fieldset>}
+      </section>
+      </div>
+      <footer className="library-picker-footer dialog-foot">
         {error && <p className="login-error">{error}</p>}
-        <button type="button" className="primary" disabled={busy || !selected || (!reroot && !name.trim())} onClick={() => void apply()}>
-          {reroot ? (carryContent ? t("library.rerootMoveConfirm") : t("library.rerootConfirm")) : t("library.addConfirm")}
-        </button>
+        <div className="library-picker-actions">
+          {/* One line, always present, never taller: what will be confirmed, or why it
+              cannot be. The folder stays next to the button that acts on it -- that part of
+              the old footer was right -- while everything that changes height moved into
+              the body, which is what had made this footer 313px of a 375px dialog. And a
+              primary that is dead for a reason scrolled out of sight was the picker's
+              oldest complaint, so the same line carries the reason. */}
+          <p className={`library-picker-status${blocked ? " blocked" : ""}`} title={blocked || selected} aria-live="polite">
+            {blocked || selected}
+          </p>
+          <button type="button" onClick={onClose} disabled={busy}>{t("common.cancel")}</button>
+          <button type="button" className="primary" disabled={busy || Boolean(blocked)} onClick={() => void apply()}>
+            {reroot ? (carryContent ? t("library.rerootMoveConfirm") : t("library.rerootConfirm")) : t("library.addConfirm")}
+          </button>
+        </div>
       </footer>
     </div>
   </div>;

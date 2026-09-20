@@ -214,7 +214,11 @@ export function isLibraryId(value: string): boolean {
 
 /** Strip the separators that carry no meaning on the wire. */
 function normalize(value: string): string {
-  return toPosix(value).replace(/^\/+|\/+$/g, "");
+  // Repeated separators are collapsed, not just trimmed. `path.resolve` collapses them on
+  // the way to the syscall, so a spelling that survives here reaches the same directory
+  // under a name no string comparison recognises -- and the carve-out guard and the
+  // listing's exclusion are both string comparisons.
+  return toPosix(value).replace(/\/{2,}/g, "/").replace(/^\/+|\/+$/g, "");
 }
 
 /** The deepest existing ancestor of `target`, resolved. A path that does not exist yet

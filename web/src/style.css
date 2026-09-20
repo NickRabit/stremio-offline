@@ -1076,9 +1076,26 @@ img.broken{visibility:hidden}
 .library-reroot-choice label span{color:var(--muted);line-height:1.45}
 .library-reroot-choice label strong{color:var(--text)}
 .library-picker-footer .login-error{margin:0}
+.library-picker-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px}
+/* One line that never wraps, so the footer's height is a constant whatever is selected. */
+.library-picker-status{flex:1 1 auto;min-width:0;margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;color:var(--muted)}
+.library-picker-status.blocked{color:var(--text)}
+/* The buttons keep their own width inside the row, or the primary's full-width rule from
+   the narrow breakpoint grows over the line that says what is about to happen. */
+.library-picker-footer .library-picker-actions button{flex:0 0 auto;width:auto;justify-self:auto}
+/* Under about 560px the status and the two buttons no longer share a row without pushing
+   the primary off the edge, so the status takes a row of its own. It is still exactly one
+   line, so the footer's height is still a constant -- just a taller one. */
+@media(max-width:560px){
+  .library-picker-actions{flex-wrap:wrap}
+  .library-picker-status{flex:1 0 100%}
+}
+/* The outcome block reads as the consequence of the choice above it, so it sits at the end
+   of the body rather than in the footer, where its own height moved the folder list. */
+.library-picker-outcome{gap:10px}
 .library-picker-footer .primary{justify-self:end;min-width:180px}
 .library-picker-footer .primary:disabled{border-color:var(--line);background:#252c37;color:var(--muted);box-shadow:none}
-@media(max-width:700px){.library-picker-fields,.library-manager-section .library-manager{grid-template-columns:1fr}.library-admin-row{padding:14px}.library-admin-head{display:grid}.library-admin-flags{justify-content:flex-start;max-width:none}.library-admin-controls{grid-template-columns:1fr}.library-admin-controls label.library-check:last-child{grid-column:auto}.library-admin-buttons button{width:100%}.library-picker-card,.library-edit-card{width:100%;border-radius:16px 16px 0 0}.library-picker-manual{grid-template-columns:1fr}.library-picker-manual button{width:100%}.library-picker-footer .primary{justify-self:stretch;width:100%}.library-edit-folder{grid-template-columns:1fr}.library-edit-folder button{justify-self:start}.library-edit-footer{display:grid}.library-edit-footer button{width:100%}}
+@media(max-width:700px){.library-picker-fields,.library-manager-section .library-manager{grid-template-columns:1fr}.library-admin-row{padding:14px}.library-admin-head{display:grid}.library-admin-flags{justify-content:flex-start;max-width:none}.library-admin-controls{grid-template-columns:1fr}.library-admin-controls label.library-check:last-child{grid-column:auto}.library-admin-buttons button{width:100%}.library-picker-card,.library-edit-card{width:100%;border-radius:16px 16px 0 0}.library-picker-manual{grid-template-columns:1fr}.library-picker-manual button{width:100%}.library-edit-folder{grid-template-columns:1fr}.library-edit-folder button{justify-self:start}.library-edit-footer{display:grid}.library-edit-footer button{width:100%}}
 
 /* Safari in a tab lays this fixed overlay out against the large viewport, so its own chrome
    pushed the video past the bottom edge. --player-viewport-* track the visual viewport. */
@@ -1138,9 +1155,16 @@ img.broken{visibility:hidden}
    screen it was given. */
 @media(max-height:460px){
   .library-edit-section,.addon-edit-section{gap:8px;padding-block:10px}
-  .library-manager{gap:8px}
-  .library-admin-row{gap:8px;padding-block:10px}
+  /* Scoped to the dialog's own card: `.library-manager` and `.library-admin-row` are also
+     the Settings page's inline library section, which this block was never aimed at. */
+  .library-manager-card .library-manager{gap:8px}
+  .library-manager-card .library-admin-row{gap:8px;padding-block:10px}
   .move-card .move-list button{padding-block:8px}
+  /* Narrow stacks the footer's buttons full width, which is right on a phone held upright
+     and wrong held sideways: 667x375 is both narrow and short, and stacked they took 173px
+     of a 375px dialog -- as much as the content. Side by side, they take one row. */
+  .library-edit-footer,.addon-edit-footer{display:flex;justify-content:flex-end}
+  .library-edit-footer button,.addon-edit-footer button{width:auto}
 }
 .library-check .switch span{width:42px;height:24px}
 .library-check .switch span:after{width:18px;height:18px}

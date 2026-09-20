@@ -219,17 +219,36 @@ it("the libraries can be reordered, and the order is written as a sequence", asy
   ]);
 });
 
-it("the picker scrolls in one place, with the selection next to the button that acts on it", async () => {
+it("the picker scrolls in one place, and its footer cannot change height", async () => {
   await openPicker([], false);
 
   const card = picker();
   const body = card.querySelector(".dialog-body")!;
   expect(card.classList.contains("dialog-split")).toBe(true);
   expect(body.querySelector(".move-list"), "the folder list scrolls with the rest of the body").toBeTruthy();
-  expect(body.querySelector(".library-picker-selection"), "the selection is not in the scroller").toBeNull();
+
+  // This reverses an earlier decision. The selection block used to sit in the footer, so
+  // that the chosen folder stayed beside the button confirming it -- right in intent, but
+  // it carried the estimate, the scan switch and the re-root radios with it, all of which
+  // come and go. Measured at 667x375 the footer had grown to 313px of a 375px dialog, the
+  // body was 14px, and the confirm button was off the bottom of the screen; picking a
+  // folder shifted the list under the cursor by 49px. So the varying parts moved into the
+  // body and the footer keeps one line that never wraps.
+  expect(body.querySelector(".library-picker-selection"), "the parts that change height are in the body").toBeTruthy();
   const footer = card.querySelector(".library-picker-footer")!;
-  expect(footer.querySelector(".library-picker-selection")).toBeTruthy();
+  expect(footer.querySelector(".library-picker-selection"), "and no longer in the footer").toBeNull();
+  expect(footer.querySelector(".library-picker-status"), "the footer still says what will be confirmed").toBeTruthy();
   expect(footer.querySelector("button.primary")).toBeTruthy();
+});
+
+it("the picker says why the confirm is disabled instead of only greying it out", async () => {
+  await openPicker([], false);
+
+  const footer = picker().querySelector(".library-picker-footer")!;
+  const status = footer.querySelector(".library-picker-status")!;
+  expect(footer.querySelector<HTMLButtonElement>("button.primary")!.disabled).toBe(true);
+  expect(status.classList.contains("blocked")).toBe(true);
+  expect(status.textContent).toBeTruthy();
 });
 
 it("the mosaic of covers can be turned off in the library dialog", async () => {
