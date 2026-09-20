@@ -207,11 +207,6 @@ export function migrateUsers(state: MigratableState, now: () => string = () => n
   if (state.users || !state.auth || state.auth.isDefault) return { migrated: false };
   const auth = state.auth;
   const id = newUserId(Object.keys(state.userData ?? {}));
-  const settings = state.settings ?? {};
-  const prefs: Record<string, unknown> = {};
-  for (const key of PERSONAL_SETTINGS) {
-    if (Object.prototype.hasOwnProperty.call(settings, key)) prefs[key] = settings[key];
-  }
   state.users = [{
     id,
     username: auth.username,
@@ -225,15 +220,35 @@ export function migrateUsers(state: MigratableState, now: () => string = () => n
     permissions: { downloadToLibrary: true, downloadToDevice: true },
     permissionsVersion: 0,
   }];
+  claimLegacyData(state, id);
+  delete state.auth;
+  state.schemaVersion = 3;
+  return { migrated: true, userId: id };
+}
+
+/** Moves what an install kept before accounts -- the favourites, the watchlist, the progress,
+ *  the series markers and the personal half of the settings -- onto one account.
+ *
+ *  Two paths arrive here. An install with a stored password is migrated above. An install
+ *  configured only with `ADMIN_USERNAME` and `ADMIN_PASSWORD` has no `auth` block to migrate,
+ *  so it used to be given an account and nothing else: its history stayed at the top level in
+ *  a shape nothing reads any more, and its language fell back to the built-in English. */
+export function claimLegacyData(state: MigratableState, id: string): void {
+  const settings = state.settings ?? {};
+  const prefs: Record<string, unknown> = {};
+  for (const key of PERSONAL_SETTINGS) {
+    if (Object.prototype.hasOwnProperty.call(settings, key)) prefs[key] = settings[key];
+  }
+  const held = state.userData?.[id];
   state.userData = {
     ...(state.userData ?? {}),
     [id]: {
-      prefs,
-      favorites: state.favorites ?? [],
-      watchlist: state.watchlist ?? {},
-      progress: state.progress ?? {},
-      watchedSeries: state.watchedSeries ?? {},
-    },
+      prefs: { ...prefs, ...(held?.prefs as Record<string, unknown> | undefined) },
+      favorites: held?.favorites?.length ? held.favorites : state.favorites ?? [],
+      watchlist: Object.keys(held?.watchlist ?? {}).length ? held!.watchlist : state.watchlist ?? {},
+      progress: Object.keys(held?.progress ?? {}).length ? held!.progress : state.progress ?? {},
+      watchedSeries: Object.keys(held?.watchedSeries ?? {}).length ? held!.watchedSeries : state.watchedSeries ?? {},
+    } as UserData,
   };
   delete state.favorites;
   delete state.watchlist;
@@ -244,9 +259,23 @@ export function migrateUsers(state: MigratableState, now: () => string = () => n
     for (const key of PERSONAL_SETTINGS) delete remaining[key];
     state.settings = remaining;
   }
-  delete state.auth;
-  state.schemaVersion = 3;
-  return { migrated: true, userId: id };
+}
+
+/** Applies one change to every account's rows.
+ *
+ *  A file that is renamed, moved or deleted is not one person's. Each account stores its own
+ *  favourites and progress against the same path, so a sweep that reaches only one of them --
+ *  which is what falling back to "the first account" amounts to -- leaves everybody else
+ *  pointing at something that is no longer there. */
+export function forEachUserData(
+  state: { users?: UserRecord[]; userData?: Record<string, UserData> },
+  mutate: (data: UserData) => void,
+): void {
+  for (const user of state.users ?? []) {
+    const data = state.userData?.[user.id] ?? emptyUserData();
+    mutate(data);
+    state.userData = { ...(state.userData ?? {}), [user.id]: data };
+  }
 }
 
 export const newUserPermissions = (): UserPermissions =>

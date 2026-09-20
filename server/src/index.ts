@@ -22,7 +22,7 @@ import { outbound } from "./outbound.js";
 import { images } from "./images.js";
 import { configureSecureMode, secureMode, securityHeaders } from "./secure.js";
 import { Store, type State, type UserPrefs, type WatchlistEntry, type StoredProgress, type WatchedMarker } from "./store.js";
-import { emptyUserData, findUserById, type UserData, type UserRecord } from "./users.js";
+import { emptyUserData, findUserById, forEachUserData, type UserData, type UserRecord } from "./users.js";
 import type { ProgressSeries } from "./progress-series.js";
 import { advanceTorrent } from "./debrid.js";
 import { tmdbMeta } from "./tmdb.js";
@@ -198,32 +198,42 @@ if (!store.defaultsInstalled()) {
 // Source pick for lazy queue jobs: the addons are asked at download time and the
 // answer is held for a while, so repeated attempts at one episode do not hammer them.
 const streamCache = new Map<string, { at: number; items: StreamItem[] }>();
-const cachedStreams = async (type: string, id: string) => {
-  const key = `${type}:${id}`;
+/** The allowed set is part of the key, not a filter over the answer: the candidates are
+ *  merged from whichever addons were asked, so one account's cache entry would otherwise
+ *  hand another account sources it may not use -- and, worse, they would already have been
+ *  contacted on its behalf. */
+const cachedStreams = async (sources: AddonRecord[], type: string, id: string) => {
+  const key = `${type}:${id}:${sources.map((addon) => addon.key).join(",")}`;
   const hit = streamCache.get(key);
   if (hit && Date.now() - hit.at < 5 * 60_000) return hit.items;
-  const items = await streams(store.addons(), type, id);
+  const items = await streams(sources, type, id);
   if (streamCache.size > 100) streamCache.clear();
   streamCache.set(key, { at: Date.now(), items });
   return items;
 };
-queue.setResolver(async (source) => {
-  const priority = new Map(store.addons().map((addon, index) => [addon.key, index]));
-  const candidates = (await cachedStreams(source.type, source.videoId)).filter((stream) => stream.url);
+queue.setResolver(async (source, ownerUserId) => {
+  // Narrowed before a single request goes out. Checking the chosen stream afterwards is too
+  // late twice over: the addons have already been asked on this account's behalf, and the
+  // external subtitle that comes back with the choice is never checked at all.
+  const owner = ownerUserId ? findUserById(store.users(), ownerUserId) : undefined;
+  // A job whose owner is gone resolves against nothing rather than against everything.
+  if (ownerUserId && !owner) return undefined;
+  const usable = owner ? allowedAddons(store.addons(), { id: owner.id, role: owner.role }) : store.addons();
+  const priority = new Map(usable.map((addon, index) => [addon.key, index]));
+  const candidates = (await cachedStreams(usable, source.type, source.videoId)).filter((stream) => stream.url);
   if (source.selection) {
     await serverReady;
-    const external = source.selection.subtitleMode === "off" ? [] : await subtitles(store.addons(), source.type, source.videoId);
+    const external = source.selection.subtitleMode === "off" ? [] : await subtitles(usable, source.type, source.videoId);
     const selected = await selectDownloadSource({ candidates, subtitles: external, selection: source.selection, tried: source.tried, inspect: (stream) => playback.inspect(stream) });
     if (!selected) return undefined;
-    const addon = store.addons().find((item) => item.key === selected.stream.addonKey);
+    const addon = usable.find((item) => item.key === selected.stream.addonKey);
     return { ...selected, settings: addon?.downloadSettings ?? defaultDownloadSettings() };
   }
-  // The queue picks a source with no request in hand: the one account's language is the
-  // one to pick it in.
-  const ranked = rankStreams(candidates, prefsOf().audioLanguage, priority);
+  // The queue picks a source with no request in hand, so the language is the owner's.
+  const ranked = rankStreams(candidates, store.prefs(ownerUserId).audioLanguage, priority);
   const next = ranked.find((stream) => !source.tried.includes(stream.url!));
   if (!next) return undefined;
-  const addon = store.addons().find((item) => item.key === next.addonKey);
+  const addon = usable.find((item) => item.key === next.addonKey);
   return { stream: next, settings: addon?.downloadSettings ?? defaultDownloadSettings() };
 });
 await playback.load();
@@ -283,6 +293,16 @@ const updateData = async (req: express.Request | undefined, mutate: (data: UserD
   const id = accountIdOf(req);
   if (!id) throw new ResourceError(401, "AUTH_REQUIRED");
   await store.update((state) => mutateData(state, id, mutate));
+};
+/** One named account's rows, for work that outlives the request that asked for it. */
+const updateOneData = async (id: string, mutate: (data: UserData) => void): Promise<void> => {
+  await store.update((state) => mutateData(state, id, mutate));
+};
+/** Every account's rows. A file that is renamed, moved or deleted is not one person's: each
+ *  account stores its own favourites and progress against the same path, so fixing only the
+ *  first one leaves everybody else pointing at something that is no longer there. */
+const updateEveryData = async (mutate: (data: UserData) => void): Promise<void> => {
+  await store.update((state) => forEachUserData(state, mutate));
 };
 /** What the four personal maps hold. `UserData` keeps them opaque, so that the user model
  *  stays clear of the library and progress modules; the server is where they are pinned. */
@@ -1331,12 +1351,14 @@ const withFavorites = <T extends { path: string }>(items: T[], data: UserData) =
   return items.map((item) => ({ ...item, favorite: favorites.has(libraryKey(item.path)) }));
 };
 
-/** Called from the route and from a library job, which runs with no request: the one
- *  account this release has owns the flag either way. */
-const setLibraryFavorite = async (relative: string, wanted: boolean) => {
+/** A star is one person's, so whoever asked for it owns it. Called from the route and from a
+ *  library job, which runs with no request in hand -- so the account is passed rather than
+ *  looked up, and a job that has lost its owner writes nowhere. */
+const setLibraryFavorite = async (relative: string, wanted: boolean, userId: string | undefined) => {
   const resolved = relative ? await resolveLibraryPath(store.libraries(), relative) : undefined;
   if (!resolved) throw new AppError("Invalid path.", "err.invalidPath");
-  await updateData(undefined, (data) => {
+  if (!userId) throw new ResourceError(401, "AUTH_REQUIRED");
+  await updateOneData(userId, (data) => {
     const current = new Set(data.favorites);
     if (wanted) current.add(resolved.key); else current.delete(resolved.key);
     data.favorites = [...current];
@@ -1360,8 +1382,10 @@ const forgetLibraryPath = async (key: string) => {
     file.meta = dropKeyed(file.meta, target.relative);
     file.suggestions = dropKeyed(file.suggestions, target.relative);
   });
-  // Also reached from a library job, which has no request: the one account owns the rows.
-  await updateData(undefined, (data) => {
+  // Every account: the file is gone for all of them, so each one's stored rows have to lose
+  // it. Fixing only the first leaves everybody else with a star and a resume position on a
+  // path that no longer exists.
+  await updateEveryData((data) => {
     data.favorites = data.favorites.filter((item) => !isPathWithin(item, key));
     data.progress = Object.fromEntries(Object.entries(progressOf(data)).filter(([progressKey, value]) => {
       if (orphans.has(progressKey)) return false;
@@ -1380,7 +1404,9 @@ const relocateLibraryPath = async (key: string, nextKey: string, pin = false) =>
   // The bindings live in one file per library, so a move into another library rewrites two
   // of them and the store is the only place that can do both.
   await metaStore.relocate(key, nextKey, pin);
-  await updateData(undefined, (data) => {
+  // Every account, for the same reason a deletion reaches them all: the path moved for
+  // everybody who had stored anything against it.
+  await updateEveryData((data) => {
     data.favorites = data.favorites.map((item) => remapPath(item, key, nextKey));
     data.progress = Object.fromEntries(Object.entries(progressOf(data)).map(([progressKey, value]) => {
       const filePath = progressKey.startsWith("file:") ? progressKey.slice(5) : undefined;
@@ -1851,14 +1877,15 @@ const libraryOps = new LibraryOps({
         };
       }
       if (operation.op === "delete") await deleteLibraryItem(item);
-      else if (operation.op === "favorite") await setLibraryFavorite(item, operation.favorite);
+      else if (operation.op === "favorite") await setLibraryFavorite(item, operation.favorite, operation.ownerUserId);
       else if (operation.op === "match") await matchLibraryItem({ path: item, type: operation.type, id: operation.id });
       else if (operation.op === "unmatch") await matchLibraryItem({ path: item, type: "movie", id: "" });
       else if (operation.op === "skipLookup") await matchLibraryItem({ path: item, skipLookup: operation.skipLookup });
       else if (operation.op === "mosaic") await matchLibraryItem({ path: item, skipMosaic: !operation.mosaic });
       else if (operation.op === "forget") {
-        // A library job, no request: the one account owns the rows it is dropping.
-        await updateData(undefined, (data) => {
+        // Whoever asked: forgetting is a personal act, and the job outlives the request.
+        if (!operation.ownerUserId) throw new ResourceError(401, "AUTH_REQUIRED");
+        await updateOneData(operation.ownerUserId, (data) => {
           data.progress = Object.fromEntries(Object.entries(progressOf(data)).filter(([key, record]) => {
             const stored = key.startsWith("file:") ? key.slice(5) : record.path;
             return !stored || !isPathWithin(stored, resolved.key);

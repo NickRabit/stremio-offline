@@ -11,6 +11,7 @@ import type { LibraryRecord } from "../libraries.js";
 import type { Store, UserPrefs } from "../store.js";
 import type { AddonRecord, AddonRole, CatalogDefinition, MetaItem } from "../types.js";
 import type { UserRecord } from "../users.js";
+import { mediaResources } from "../media-resources.js";
 import { registerCatalogRoutes, type CatalogDeps } from "./catalog.js";
 
 interface Harness {
@@ -212,6 +213,20 @@ test("GET /api/catalog answers an addon the caller may not use as an unknown one
   assert.equal(refused.status, 400);
 });
 
+test("GET /api/catalog answers a switched-off addon as an unknown one", async (t) => {
+  const harness = await mount([addon("off-addon", [{ type: "movie", id: "hidden" }], { enabled: false })]);
+  t.after(harness.close);
+
+  // The listing drops it, so nobody is offered it -- but an id somebody already has is a
+  // direct request that never passes the listing, and switching an addon off has to mean
+  // switching it off.
+  const refused = await api(harness.base, "/api/catalog?addon=off-addon&type=movie&id=hidden");
+  const unknown = await api(harness.base, "/api/catalog?addon=nobody&type=movie&id=hidden");
+  assert.equal(refused.status, unknown.status);
+  assert.deepEqual(await refused.json(), await unknown.json());
+  assert.equal(refused.status, 400);
+});
+
 const json = (body: unknown) => new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
 
 /** Serves the addon requests from a stub instead of the network, and leaves the test's own
@@ -248,5 +263,21 @@ test("GET /api/streams/:type/:id returns no source from an addon the caller may 
 
     const all = await (await api(administrator.base, "/api/streams/movie/tt1")).json() as Array<{ addonKey: string }>;
     assert.deepEqual(all.map((item) => item.addonKey).sort(), ["open", "shut"], "an administrator still reaches both");
+  });
+});
+
+test("a subtitle remembers which addon it came from", async (t) => {
+  const records = [addon("subs", [], { role: "source", allowedUsers: [alice.id], resources: ["subtitles"] })];
+  const harness = await mount(records, null, { viewer: alice });
+  t.after(harness.close);
+
+  await withStubbedAddons((url) => json({ subtitles: [{ url: `https://cdn.example/${new URL(url).host}/sub.srt`, lang: "cs" }] }), async () => {
+    const listed = await (await api(harness.base, "/api/subtitles/movie/tt1")).json() as Array<{ subtitleId: string }>;
+    assert.equal(listed.length, 1);
+    // Without the key the record names no content at all, so the sweep that runs when an
+    // addon is removed or taken away cannot recognise it, and the subtitle goes on being
+    // served from an addon the account may no longer use.
+    const resource = mediaResources.get(listed[0].subtitleId, "session-1", "subtitle");
+    assert.equal(resource.stream.addonKey, "subs");
   });
 });

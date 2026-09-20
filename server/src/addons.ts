@@ -259,7 +259,9 @@ export async function subtitles(addons: AddonRecord[], type: string, id: string)
   const candidates = addons.filter((a) => a.enabled && supports(a, "subtitles", type, id));
   const results = await Promise.allSettled(candidates.map(async (addon) => {
     const response = await jsonFetch<{ subtitles?: SubtitleItem[] }>(resourceUrl(addon, "subtitles", type, id));
-    return (response.subtitles ?? []).map((subtitle) => ({ ...subtitle, addonName: addon.manifest.name }));
+    // The key as well as the name, the way a stream carries it: the name is for the person
+    // choosing, the key is what a permission check and a revocation sweep match on.
+    return (response.subtitles ?? []).map((subtitle) => ({ ...subtitle, addonKey: addon.key, addonName: addon.manifest.name }));
   }));
   results.forEach((result, index) => {
     if (result.status === "rejected") log("WARN", "Addon request failed", { operation: "subtitles", addon: candidates[index].manifest.name, type, id, reason: reasonOf(result.reason) });

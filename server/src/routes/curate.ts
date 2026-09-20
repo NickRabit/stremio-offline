@@ -103,7 +103,9 @@ export function registerCurateRoutes(app: express.Application, deps: CurateDeps)
 
   app.get("/api/library/ops", (_req, res) => res.json(libraryOps.snapshot()));
   app.post("/api/library/ops", asyncRoute(async (req, res) => {
-    const job = await libraryOps.enqueue(parseLibraryOp(req.body));
+    // The account that asked, carried on the job: `favorite` and `forget` write to somebody's
+    // own rows, and by the time they run the request is long gone.
+    const job = await libraryOps.enqueue({ ...parseLibraryOp(req.body), ownerUserId: currentUser(req)?.id });
     res.status(202).json({ id: job.id });
   }));
   app.delete("/api/library/ops/:id", asyncRoute(async (req, res) => {

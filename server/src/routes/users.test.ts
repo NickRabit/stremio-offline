@@ -331,6 +331,41 @@ test("a new account starts in the language the administrator is using", async (t
   assert.equal(harness.store.prefs(created.id).subtitleLanguage, "cs");
 });
 
+test("an account creation in flight does not survive the administrator losing the role", async (t) => {
+  const harness = await mount({ users: [admin, { ...bob, role: "admin" as const }] });
+  t.after(harness.close);
+
+  // Hashing takes long enough for the gate's answer to go stale inside the request. Ada is
+  // demoted while her creation is in the middle of it; without a second look at the write,
+  // the request lands and mints an administrator on the authority of a role she no longer has.
+  const creating = api(harness.base, "/api/users", { method: "POST", body: { username: "carol", password: "hunter2", role: "admin" } });
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  await harness.store.update((state) => {
+    state.users = (state.users ?? []).map((user) => user.id === ADA ? { ...user, role: "user" as const } : user);
+  });
+
+  const response = await creating;
+  assert.equal(response.status, 403);
+  assert.equal(await keyOf(response), "err.notAllowed");
+  assert.equal(findUser(harness.store.users(), "carol"), undefined, "the account was created anyway");
+});
+
+test("a password reset in flight does not survive the administrator losing the role", async (t) => {
+  const harness = await mount({ users: [admin, bob, carol] });
+  t.after(harness.close);
+  const before = findUserById(harness.store.users(), BOB)!.passwordHash;
+
+  const resetting = api(harness.base, `/api/users/${BOB}/password`, { method: "PATCH", body: { password: "nastaveno-adminem" } });
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  await harness.store.update((state) => {
+    state.users = (state.users ?? []).map((user) => user.id === ADA ? { ...user, disabled: true } : user);
+  });
+
+  const response = await resetting;
+  assert.equal(response.status, 403);
+  assert.equal(findUserById(harness.store.users(), BOB)?.passwordHash, before, "somebody else's password was set anyway");
+});
+
 test("POST /api/users refuses a name that is taken, whatever its case", async (t) => {
   const harness = await mount({ users: [admin, bob] });
   t.after(harness.close);

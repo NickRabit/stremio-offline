@@ -88,6 +88,7 @@ export interface SubtitleItem {
   id?: string;
   url: string;
   lang?: string;
+  addonKey?: string;
   addonName?: string;
   [key: string]: unknown;
 }

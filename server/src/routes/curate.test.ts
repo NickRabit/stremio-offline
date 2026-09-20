@@ -17,6 +17,7 @@ import type { LibraryOp, LibraryOps } from "../library-ops.js";
 import { LibraryScan } from "../library-scan.js";
 import { mediaResources, type ResourceOwner } from "../media-resources.js";
 import type { Store, UserPrefs } from "../store.js";
+import type { UserRecord } from "../users.js";
 import { registerCurateRoutes, type CurateDeps } from "./curate.js";
 
 const instancePrefs: UserPrefs = {
@@ -60,6 +61,8 @@ const makeRoot = (prefix: string) => mkdtemp(path.join(tmpdir(), prefix));
 
 /** The scan is the module's own, held in a paused state by a busy host so the run it starts
  *  stays the run a second request meets. Everything else is a fake that records the calls. */
+const ADA = "usr_00000001";
+
 const mount = async (options: { libraries?: LibraryRecord[]; records?: Record<string, LibraryMetaRecord>; suggestions?: Record<string, LibrarySuggestion> } = {}): Promise<Harness> => {
   const libraries = options.libraries ?? [library("lib_00000001", "/media/films")];
   const calls: Calls = { cancelled: [], enqueued: [], invalidated: 0, matched: [], remembered: 0, unitWalks: 0 };
@@ -85,7 +88,8 @@ const mount = async (options: { libraries?: LibraryRecord[]; records?: Record<st
     store: { libraries: () => libraries, settings: () => ({ tmdbApiKey: undefined }) } as unknown as Store,
     needsSetup: () => false,
     currentSession: () => undefined,
-    currentUser: () => undefined,
+    // A real account, so the owner an operation carries is a value the test can see.
+    currentUser: () => ({ id: ADA, username: "ada", role: "admin" } as UserRecord),
     isSecure: () => false,
     stopOwnedPlayback: async () => undefined,
     stopUserAccess: async () => undefined,
@@ -164,8 +168,10 @@ test("POST /api/library/ops enqueues what parseLibraryOp read from the body", as
 
   assert.equal(response.status, 202);
   assert.deepEqual(await response.json(), { id: "job_new" });
+  // The account rides along: `favorite` and `forget` write to somebody's own rows, and the
+  // job is carried out long after this request is gone.
   assert.deepEqual(harness.calls.enqueued, [
-    { op: "match", items: ["Films/Heat.mkv"], type: "movie", id: "tt0113277" },
+    { op: "match", items: ["Films/Heat.mkv"], type: "movie", id: "tt0113277", ownerUserId: ADA },
   ]);
 });
 

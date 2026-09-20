@@ -8,7 +8,7 @@ import type { UiLanguage } from "./language.js";
 import { newLibraryId, type DepartedLibrary, type LibraryRecord, type RootGrant } from "./libraries.js";
 import { log } from "./logger.js";
 import type { ProgressSeries } from "./progress-series.js";
-import { emptyUserData, type EnvReset, envResetApplied, envResetPending, findUser, type MigratableState, migrateUsers, newUserId, type UserData, type UserRecord } from "./users.js";
+import { claimLegacyData, emptyUserData, type EnvReset, envResetApplied, envResetPending, findUser, type MigratableState, migrateUsers, newUserId, type UserData, type UserRecord } from "./users.js";
 
 /** `state.json` shape version. 2 is the libraries shape, 3 the accounts one; a state
  *  without a version predates both and is migrated on the way in. */
@@ -192,7 +192,14 @@ export class Store {
       permissions: { downloadToLibrary: true, downloadToDevice: true },
       permissionsVersion: 0,
     };
-    await this.update((state) => { state.users = [record]; });
+    // Whatever the install already had is this account's: an install running on the variables
+    // alone has no `auth` block, so `migrateUsers` never ran and its favourites, history and
+    // language are still at the top level in the shape that predates accounts.
+    await this.update((state) => {
+      state.users = [record];
+      claimLegacyData(state as unknown as MigratableState, record.id);
+      state.schemaVersion = 3;
+    });
     return record;
   }
   async resetPasswordFromEnv(username: string | undefined, password: string): Promise<UserRecord | undefined> {

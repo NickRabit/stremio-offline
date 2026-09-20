@@ -4,7 +4,13 @@ import { randomUUID } from "node:crypto";
 import { messageKeyOf } from "./errors.js";
 import { log } from "./logger.js";
 
-export type LibraryOp =
+/** Who asked for the operation. A job is carried out long after the request that queued it,
+ *  and two of these write to somebody's own rows -- the star and the forgotten progress --
+ *  so the job has to remember whose they are rather than fall back to whoever is first in
+ *  the list. */
+export interface LibraryOpActor { ownerUserId?: string }
+
+export type LibraryOp = LibraryOpActor & (
   | { op: "move"; items: string[]; target: string; confirmTypeMismatch?: boolean }
   | { op: "copy"; items: string[]; target: string; confirmTypeMismatch?: boolean }
   | { op: "reroot"; items: string[]; libraryId: string; from: string; to: string }
@@ -15,7 +21,7 @@ export type LibraryOp =
   | { op: "skipLookup"; items: string[]; skipLookup: boolean }
   | { op: "mosaic"; items: string[]; mosaic: boolean }
   | { op: "artwork"; items: string[] }
-  | { op: "forget"; items: string[] };
+  | { op: "forget"; items: string[] });
 
 export type OpsStatus = "running" | "paused" | "completed" | "failed" | "cancelled";
 

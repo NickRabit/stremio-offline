@@ -142,7 +142,10 @@ export function ownerMayDownload(scope: DownloadOwnerScope, job: { stream?: Stre
   return true;
 }
 
-export type StreamResolver = (source: NonNullable<DownloadJob["source"]>) => Promise<{
+/** The owner travels with the source: a job is picked up long after the request that queued
+ *  it, and choosing between candidates means asking addons. Which addons may be asked is the
+ *  owner's business, so the resolver cannot be given the source alone. */
+export type StreamResolver = (source: NonNullable<DownloadJob["source"]>, ownerUserId: string | undefined) => Promise<{
   stream: StreamItem;
   settings: AddonDownloadSettings;
   subtitle?: SubtitleItem;
@@ -945,7 +948,7 @@ export class DownloadQueue {
     if (!job.source) throw new SourceError("The job has neither a source nor a rule for finding one.");
     if (!this.resolver) throw new SourceError("Source selection is unavailable.");
     const startedAt = this.now();
-    const resolved = await this.resolver(job.source);
+    const resolved = await this.resolver(job.source, this.ownerOf(job));
     const selectionMs = this.now() - startedAt;
     if (!resolved?.stream.url) {
       const selection = job.source.selection;

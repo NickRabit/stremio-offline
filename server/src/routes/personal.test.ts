@@ -9,6 +9,7 @@ import type { LibraryMetaStore } from "../library-meta-store.js";
 import { ResourceError } from "../media-resources.js";
 import type { Store, UserPrefs } from "../store.js";
 import { emptyUserData, type UserData, type UserRecord } from "../users.js";
+import type { MetaItem, AddonRecord } from "../types.js";
 import { registerPersonalRoutes, type PersonalDeps } from "./personal.js";
 
 type WatchlistEntry = { type: string; id: string; name: string; poster?: string; addedAt: string };
@@ -29,13 +30,17 @@ interface Harness {
   base: string;
   /** Whose preferences each `prefsOf` call asked for. */
   prefsAsked: string[];
-  favoriteCalls: Array<{ relative: string; wanted: boolean }>;
+  favoriteCalls: Array<{ relative: string; wanted: boolean; userId: string | undefined }>;
   data(user: string): UserData;
   close(): Promise<void>;
 }
 
 /** The header stands in for the session: the two users are the two callers the routes
  *  have to keep apart, and `dataOf`/`updateData` refuse a request that names neither. */
+const addons: AddonRecord[] = [];
+let metaLookups: Array<{ type: string; id: string; viewer: string | undefined }> = [];
+let metaAnswer: MetaItem | null = null;
+
 const mount = async (libraries: LibraryRecord[] = []): Promise<Harness> => {
   const users = new Map<string, UserData>([[ALICE, emptyUserData()], [BOB, emptyUserData()]]);
   const prefsAsked: string[] = [];
@@ -45,7 +50,7 @@ const mount = async (libraries: LibraryRecord[] = []): Promise<Harness> => {
     return id && users.has(id) ? id : undefined;
   };
   const deps: PersonalDeps = {
-    store: { libraries: () => libraries, settings: () => ({ ...instancePrefs }) } as unknown as Store,
+    store: { libraries: () => libraries, addons: () => addons, settings: () => ({ ...instancePrefs }) } as unknown as Store,
     needsSetup: () => false,
     currentSession: () => undefined,
     currentUser: (req) => {
@@ -59,7 +64,7 @@ const mount = async (libraries: LibraryRecord[] = []): Promise<Harness> => {
     requireAccess: () => undefined,
     stopContentAccess: async () => undefined,
     attachBrowseMeta: (item) => ({ item, backfill: false }),
-    cachedMeta: async () => null,
+    cachedMeta: async (type, id, language, viewer) => { metaLookups.push({ type, id, viewer: viewer?.id }); return metaAnswer; },
     dataOf: (req) => {
       const id = userOf(req);
       if (!id) throw new ResourceError(401, "AUTH_REQUIRED");
@@ -87,7 +92,7 @@ const mount = async (libraries: LibraryRecord[] = []): Promise<Harness> => {
     progressOf: (data) => data.progress as Record<string, StoredProgress>,
     scheduleFileArtwork: () => undefined,
     scheduleFolderArtwork: () => undefined,
-    setLibraryFavorite: async (relative, wanted) => { favoriteCalls.push({ relative, wanted }); },
+    setLibraryFavorite: async (relative, wanted, userId) => { favoriteCalls.push({ relative, wanted, userId }); },
     thumbUrl: async () => undefined,
     updateData: async (req, mutate) => {
       const id = userOf(req);
@@ -221,9 +226,11 @@ test("POST /api/library/favorite hands setLibraryFavorite the relative path and 
   assert.equal(removed.status, 200);
   assert.deepEqual(await removed.json(), { path: "Films/Heat.mkv", favorite: false });
 
+  // The account that clicked, not whoever is first in the list: a star is one person's, and
+  // two different people starred and unstarred here.
   assert.deepEqual(harness.favoriteCalls, [
-    { relative: "Films/Heat.mkv", wanted: true },
-    { relative: "Films/Heat.mkv", wanted: false },
+    { relative: "Films/Heat.mkv", wanted: true, userId: ALICE },
+    { relative: "Films/Heat.mkv", wanted: false, userId: BOB },
   ]);
 });
 
@@ -256,6 +263,34 @@ test("GET /api/library/favorites drops a row whose library the caller has lost",
   assert.equal(response.status, 200);
   const body = await response.json() as { items: Array<{ path: string }> };
   assert.deepEqual(body.items.map((item) => item.path), ["lib_00000002/Shows/01.mkv"]);
+});
+
+test("Continue watching neither shows nor asks an addon the caller may not use", async (t) => {
+  addons.splice(0, addons.length,
+    { key: "mine", manifestUrl: "https://mine.example/manifest.json", role: "both", enabled: true, globalSearch: true,
+      addedAt: "", allowedUsers: [ALICE], manifest: { id: "mine", name: "Mine", version: "1" } } as AddonRecord,
+    { key: "theirs", manifestUrl: "https://theirs.example/manifest.json", role: "both", enabled: true, globalSearch: true,
+      addedAt: "", manifest: { id: "theirs", name: "Theirs", version: "1" } } as AddonRecord);
+  t.after(() => { addons.splice(0, addons.length); });
+  metaLookups = [];
+  metaAnswer = { id: "tt1", type: "series", name: "Mine", videos: [{ season: 1, episode: 2, name: "Second" }] } as MetaItem;
+  t.after(() => { metaAnswer = null; });
+
+  const harness = await mount([granted]);
+  t.after(harness.close);
+  harness.data(ALICE).watchedSeries = {
+    tt1: { name: "Mine", addonKey: "mine", season: 1, episode: 1, updatedAt: "2024-01-02T00:00:00.000Z" },
+    tt2: { name: "Theirs", addonKey: "theirs", season: 1, episode: 1, updatedAt: "2024-01-01T00:00:00.000Z" },
+  };
+
+  const response = await api(harness.base, "/api/progress", { user: ALICE });
+  assert.equal(response.status, 200);
+  const body = await response.json() as Array<{ key: string }>;
+  // Offering a next episode from an addon this account was never given is one thing; finding
+  // out whether there is one, by asking that addon, is the leak itself.
+  assert.deepEqual(metaLookups.map((entry) => entry.id), ["tt1"], "the addon the account may not use was contacted");
+  assert.equal(metaLookups[0]?.viewer, ALICE, "the lookup merged every addon on the instance");
+  assert.deepEqual(body.filter((row) => row.key?.startsWith("series:")).map((row) => row.key), ["series:tt1:1:2"]);
 });
 
 test("GET /api/progress drops the rows whose library the caller has lost", async (t) => {

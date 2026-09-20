@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto";
 import { hashPassword } from "../auth.js";
 import { AppError } from "../errors.js";
 import { log } from "../logger.js";
+import { ForbiddenError } from "../roles.js";
 import { ResourceError } from "../media-resources.js";
 import type { State } from "../store.js";
 import {
@@ -45,6 +46,15 @@ export function registerUsersRoutes(app: express.Application, deps: UsersDeps): 
     const actor = currentUser(req);
     if (!actor) throw new ResourceError(401, "AUTH_REQUIRED");
     return actor;
+  };
+
+  /** The actor as it stands at the moment of the write. Hashing a password takes long enough
+   *  for the role gate's answer to go stale inside the request: an administrator demoted or
+   *  switched off while one of these was in flight would still get their write. Read inside
+   *  the mutator, where the list cannot move again before the write lands. */
+  const stillAdmin = (state: State, actor: UserRecord): void => {
+    const now = (state.users ?? []).find((user) => user.id === actor.id);
+    if (!now || now.disabled || now.role !== "admin" || now.secret !== actor.secret) throw new ForbiddenError();
   };
 
   const requireUser = (id: string): UserRecord => {
@@ -113,6 +123,7 @@ export function registerUsersRoutes(app: express.Application, deps: UsersDeps): 
       permissionsVersion: 0,
     };
     await store.update((state) => {
+      stillAdmin(state, actor);
       // Inside the mutator, like every other refusal that reads the list: a name taken in the
       // window between a check before the write and the write itself must not slip through.
       if (findUser(state.users ?? [], username)) {
@@ -193,7 +204,10 @@ export function registerUsersRoutes(app: express.Application, deps: UsersDeps): 
     if (password.length < PASSWORD_MIN) throw new AppError(`The new password needs at least ${PASSWORD_MIN} characters.`, "auth.newPasswordTooShort");
     const passwordHash = await hashPassword(password);
     const secret = randomBytes(32).toString("hex");
-    await store.update((state) => withUser(state, id, (user) => ({ ...user, passwordHash, secret, mustChangePassword: true, revoked: {} })));
+    await store.update((state) => {
+      stillAdmin(state, actor);
+      withUser(state, id, (user) => ({ ...user, passwordHash, secret, mustChangePassword: true, revoked: {} }));
+    });
     // The new secret stops the next request; the sweep reaches the film, the device ticket
     // and the AirPlay grant already in flight on that account's devices. The administrator's
     // own session belongs to another secret and is left alone.

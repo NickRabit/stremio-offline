@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { hashPassword } from "./auth.js";
 import {
-  assertAdminRemains, bumpPermissions, emptyUserData, enabledAdmins, envResetApplied, envResetPending, findUser, findUserById,
+  assertAdminRemains, bumpPermissions, emptyUserData, enabledAdmins, envResetApplied, envResetPending, findUser, findUserById, forEachUserData,
   migrateUsers, newUserPermissions, newUserId, normalizeUsername, PASSWORD_MIN, PERSONAL_SETTINGS, publicUser, USER_ID,
-  USERNAME_MIN, usersToBump, type MigratableState, type UserRecord,
+  USERNAME_MIN, usersToBump, type MigratableState, type UserData, type UserRecord,
 } from "./users.js";
 
 const user = (over: Partial<UserRecord> = {}): UserRecord => ({
@@ -253,4 +253,29 @@ test("the old admin/admin account is not migrated, so setup still reclaims it", 
   const snapshot = structuredClone(state);
   assert.deepEqual(migrateUsers(state), { migrated: false });
   assert.deepEqual(state, snapshot, "a default account is left for the boot-time removal to throw away");
+});
+
+test("a shared change reaches every account's rows, not just the first", () => {
+  const state = {
+    users: [
+      user({ id: "usr_00000001", username: "ada" }),
+      user({ id: "usr_00000002", username: "bob" }),
+      user({ id: "usr_00000003", username: "carol" }),
+    ],
+    userData: {
+      usr_00000001: { ...emptyUserData(), favorites: ["lib_1/Old"] },
+      usr_00000002: { ...emptyUserData(), favorites: ["lib_1/Old", "lib_1/Other"] },
+      // Carol has nothing stored yet, which must not stop the sweep reaching the rest.
+    } as Record<string, UserData>,
+  };
+
+  forEachUserData(state, (data) => {
+    data.favorites = data.favorites.map((item) => item === "lib_1/Old" ? "lib_1/New" : item);
+  });
+
+  // A renamed file is not one person's: each account stores its own rows against the same
+  // path, so reaching only the first leaves the others pointing at something that is gone.
+  assert.deepEqual(state.userData.usr_00000001.favorites, ["lib_1/New"]);
+  assert.deepEqual(state.userData.usr_00000002.favorites, ["lib_1/New", "lib_1/Other"]);
+  assert.deepEqual(state.userData.usr_00000003.favorites, []);
 });

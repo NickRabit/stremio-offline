@@ -54,7 +54,11 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
 
   app.get("/api/catalogs", (req, res) => res.json(usable(req).filter((a) => a.enabled && a.role !== "source").flatMap((addon) => (addon.manifest.catalogs ?? []).map((item) => ({ ...item, addonKey: addon.key, addonName: addon.manifest.name })) )));
   app.get("/api/catalog", asyncRoute(async (req, res) => {
-    const addon = usable(req).find((a) => a.key === req.query.addon); if (!addon) throw new AppError("The addon was not found.", "err.addonNotFound");
+    // Switched off as well as allowed: `usable` narrows by who is asking, and the listing
+    // above drops the disabled ones, but a catalogue id somebody already has is a direct
+    // request that never passes the listing. Answered as a miss, which is what it now is.
+    const addon = usable(req).find((a) => a.key === req.query.addon && a.enabled);
+    if (!addon) throw new AppError("The addon was not found.", "err.addonNotFound");
     const items = await catalog(addon, String(req.query.type), String(req.query.id), req.query.search ? String(req.query.search) : undefined, Number(req.query.skip) || 0, req.query.genre ? String(req.query.genre) : undefined);
     res.json(items.map((item) => images.rewriteMeta(item)));
   }));
@@ -143,8 +147,11 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
     const owner = ownerOf(req);
     const items = await subtitles(usable(req), String(req.params.type), String(req.params.id));
     requireAccess(req);
+    // The addon travels with the resource. Without it the record names no content, so the
+    // sweep that runs when an addon is removed or taken away cannot recognise it, and the
+    // subtitle keeps being served from an addon the account may no longer use.
     res.setHeader("cache-control", "private, no-store").json(items.map((item) => ({
-      subtitleId: mediaResources.add({ url: item.url }, owner, "subtitle"),
+      subtitleId: mediaResources.add({ url: item.url, addonKey: item.addonKey }, owner, "subtitle"),
       lang: safeSourceText(item.lang, { url: item.url }), addonName: safeSourceText(item.addonName, { url: item.url }),
     })));
   }));
@@ -153,7 +160,9 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
     if ("url" in req.query || "headers" in req.query) throw new ResourceError(400, "UNSAFE_SOURCE_INPUT");
     const owner = ownerOf(req);
     const resource = mediaResources.get(String(req.params.subtitleId), owner.sid, "subtitle");
-    requireAccess(req);
+    // Re-checked against the addon it came from, the way a stream is: the resource may have
+    // been minted while the account still had it.
+    requireAccess(req, { addonKey: resource.stream.addonKey });
     trackMedia(owner, res, resource.parent ?? resource.id);
     const raw = resource.stream.url!;
     if (raw.startsWith("file://")) {

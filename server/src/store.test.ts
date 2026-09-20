@@ -262,6 +262,38 @@ test("the operator's password reset fires once and is inert on the next boot", a
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
+test("an environment install keeps the history and the language it already had", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "store-env-claim-"));
+  // An install configured only with the variables never had an `auth` block, so `migrateUsers`
+  // has nothing to migrate and leaves everything at the top level in the shape that predates
+  // accounts. Without a claim the account is created beside it and reads none of it: the
+  // history comes back empty and the interface reverts to the built-in English.
+  await writeFile(path.join(dir, "state.json"), JSON.stringify({
+    settings: { uiLanguage: "cs", audioLanguage: "cs", concurrentDownloads: 4 },
+    favorites: ["lib_1/Film"],
+    watchlist: { "movie:tt1": { type: "movie", id: "tt1" } },
+    progress: { "file:lib_1/Film.mkv": { position: 12, duration: 100 } },
+    watchedSeries: { "tt2": { name: "Show" } },
+    addons: [], libraries: [],
+  }), "utf8");
+
+  const store = new Store(dir, path.join(dir, "downloads"));
+  await store.load();
+  const adopted = (await store.adoptEnvCredentials({ username: "ondra", password: "tajneheslo" }))!;
+  assert.ok(adopted);
+
+  const data = store.userData(adopted.id);
+  assert.deepEqual(data.favorites, ["lib_1/Film"]);
+  assert.deepEqual(Object.keys(data.watchlist), ["movie:tt1"]);
+  assert.deepEqual(Object.keys(data.progress), ["file:lib_1/Film.mkv"]);
+  assert.deepEqual(Object.keys(data.watchedSeries), ["tt2"]);
+  assert.equal(store.prefs(adopted.id).uiLanguage, "cs");
+  assert.equal(store.prefs(adopted.id).audioLanguage, "cs");
+  // The personal half leaves the instance half behind, as it does in the other migration.
+  assert.equal("uiLanguage" in store.settings(), false);
+  assert.equal(store.settings().concurrentDownloads, 4);
+});
+
 test("an install running only on the environment credentials gets a real administrator", async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "store-env-adopt-"));
   const store = new Store(dir, path.join(dir, "downloads"));

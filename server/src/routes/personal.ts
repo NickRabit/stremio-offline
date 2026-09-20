@@ -1,4 +1,5 @@
 import type express from "express";
+import { allowedAddons } from "../addons.js";
 import type { ArtShape } from "../artwork.js";
 import { AppError } from "../errors.js";
 import { images } from "../images.js";
@@ -19,7 +20,7 @@ import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
 
 export interface PersonalDeps extends RouteContext {
   attachBrowseMeta<T extends { path: string; kind: string; name?: string; label?: string }>(item: T, language: string): { item: T; backfill: boolean };
-  cachedMeta(type: string, id: string, language?: string): Promise<MetaItem | null>;
+  cachedMeta(type: string, id: string, language?: string, viewer?: Viewer): Promise<MetaItem | null>;
   dataOf(req: express.Request): UserData;
   describeLibraryPath(key: string): Promise<BrowseItem | undefined>;
   libraryKey(value: string): string;
@@ -33,7 +34,7 @@ export interface PersonalDeps extends RouteContext {
   progressOf(data: UserData): Record<string, StoredProgress>;
   scheduleFileArtwork(key: string, shape?: ArtShape): void;
   scheduleFolderArtwork(key: string, shape?: ArtShape): void;
-  setLibraryFavorite(relative: string, wanted: boolean): Promise<void>;
+  setLibraryFavorite(relative: string, wanted: boolean, userId: string | undefined): Promise<void>;
   thumbUrl(param: "path" | "dir" | "key", value: string, art: string | undefined, shape?: ArtShape): Promise<string | undefined>;
   updateData(req: express.Request | undefined, mutate: (data: UserData) => void): Promise<void>;
   watchlistOf(data: UserData): Record<string, WatchlistEntry>;
@@ -114,10 +115,19 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     const shown = rows.flatMap((row) => (row.series ? [row.series.id] : []));
     const over: string[] = [];
     const language = prefsOf(req).uiLanguage;
-    const pending = await Promise.all(markersOwingRow(markersOf(data), shown).map(async ([id, marker]): Promise<ProgressRow | undefined> => {
+    const allowed = new Set(allowedAddons(store.addons(), viewer).map((addon) => addon.key));
+    // A marker remembers which addon the show came from. One the caller may no longer use
+    // has no row here: showing it would offer a next episode from a source this account is
+    // not allowed to ask, and finding that out by asking is itself the leak.
+    const owed = markersOwingRow(markersOf(data), shown)
+      .filter(([, marker]) => !marker.addonKey || allowed.has(marker.addonKey));
+    const pending = await Promise.all(owed.map(async ([id, marker]): Promise<ProgressRow | undefined> => {
       // The six-hour cache answers most of these. An addon that stays quiet answers null,
       // which leaves the marker alone: one unreachable show must fail by itself.
-      const meta = await cachedMeta("series", id, language);
+      //
+      // The viewer goes with it: without one the lookup merges every addon on the instance,
+      // so a request for the next episode reaches addons this account was never given.
+      const meta = await cachedMeta("series", id, language, viewer);
       if (!meta) return undefined;
       const next = nextEpisodeOf(meta.videos, marker);
       if (!next) { over.push(id); return undefined; }
@@ -218,7 +228,7 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
   app.post("/api/library/favorite", asyncRoute(async (req, res) => {
     const relative = String(req.body.path ?? "").trim();
     const wanted = Boolean(req.body.favorite);
-    await setLibraryFavorite(relative, wanted);
+    await setLibraryFavorite(relative, wanted, currentUser(req)?.id);
     res.json({ path: relative, favorite: wanted });
   }));
 
