@@ -294,7 +294,9 @@ test("POST /api/users creates an account with the defaults of a new user", async
   assert.equal(record.passwordHash.startsWith("scrypt$"), true);
   assert.equal(record.secret.length, 64);
   assert.equal(await verifyPassword("hunter2", record.passwordHash), true);
-  assert.deepEqual(harness.store.userData(record.id), emptyUserData());
+  // Empty but for the language, which is seeded from the administrator making the account:
+  // nothing has been watched, queued or reordered yet.
+  assert.deepEqual({ ...harness.store.userData(record.id), prefs: undefined }, { ...emptyUserData(), prefs: undefined });
   assert.equal(harness.store.users().length, 2);
 });
 
@@ -309,6 +311,23 @@ test("POST /api/users refuses a name or a password under the bounds the model se
   assert.equal(shortPassword.status, 400);
   assert.equal(await keyOf(shortPassword), "auth.passwordTooShort");
   assert.equal(harness.store.users().length, 1, "nothing was created");
+});
+
+test("a new account starts in the language the administrator is using", async (t) => {
+  const harness = await mount({
+    users: [admin],
+    userData: { [ADA]: { ...emptyUserData(), prefs: { uiLanguage: "cs", audioLanguage: "cs", subtitleLanguage: "cs" } } },
+  });
+  t.after(harness.close);
+
+  const response = await api(harness.base, "/api/users", { method: "POST", body: { username: "bob", password: "hunter2" } });
+  assert.equal(response.status, 201);
+  const created = await response.json() as { id: string };
+  // Left unseeded it would answer the built-in English default, and somebody on a Czech
+  // install would sign in for the first time into a language nobody here chose.
+  assert.equal(harness.store.prefs(created.id).uiLanguage, "cs");
+  assert.equal(harness.store.prefs(created.id).audioLanguage, "cs");
+  assert.equal(harness.store.prefs(created.id).subtitleLanguage, "cs");
 });
 
 test("POST /api/users refuses a name that is taken, whatever its case", async (t) => {
@@ -331,6 +350,41 @@ test("the accounts API is administrator-only", async (t) => {
   const removed = await api(harness.base, `/api/users/${ADA}`, { method: "DELETE", user: BOB });
   assert.equal(removed.status, 403);
   assert.equal(findUserById(harness.store.users(), ADA)?.username, "ada");
+});
+
+test("promoting an account takes its id out of every grant list", async (t) => {
+  const harness = await mount({
+    users: [admin, bob, carol],
+    libraries: (dir) => [library(path.join(dir, "downloads"), [BOB, CAROL])],
+    addons: [addon("alpha", [BOB, CAROL])],
+  });
+  t.after(harness.close);
+
+  const response = await api(harness.base, `/api/users/${BOB}`, { method: "PATCH", body: { role: "admin" } });
+  assert.equal(response.status, 200);
+  assert.equal(findUserById(harness.store.users(), BOB)?.role, "admin");
+
+  // Left behind, the id would be more than untidy. Both endpoints take the whole list and
+  // both refuse an administrator's id, so one stale entry makes that library and that addon
+  // impossible to save again -- for Carol too, who never changed.
+  assert.deepEqual(harness.store.libraries()[0]?.visibleTo, [CAROL], "the promoted id is still on the library");
+  assert.deepEqual(harness.store.addons()[0]?.allowedUsers, [CAROL], "the promoted id is still on the addon");
+});
+
+test("a demotion leaves the grant lists alone", async (t) => {
+  const harness = await mount({
+    users: [admin, { ...bob, role: "admin" as const }, carol],
+    libraries: (dir) => [library(path.join(dir, "downloads"), [CAROL])],
+    addons: [addon("alpha", [CAROL])],
+  });
+  t.after(harness.close);
+
+  const response = await api(harness.base, `/api/users/${BOB}`, { method: "PATCH", body: { role: "user" } });
+  assert.equal(response.status, 200);
+  // Coming back down grants nothing: an account demoted to ordinary starts with what the
+  // resources say, which is nothing, rather than with whatever it held before.
+  assert.deepEqual(harness.store.libraries()[0]?.visibleTo, [CAROL]);
+  assert.deepEqual(harness.store.addons()[0]?.allowedUsers, [CAROL]);
 });
 
 test("the last administrator cannot be demoted or switched off", async (t) => {

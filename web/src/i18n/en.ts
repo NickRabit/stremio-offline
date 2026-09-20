@@ -634,7 +634,7 @@ export const en = {
   "users.added": "Account created.",
   "users.lastAdminHint": "This is the only enabled administrator. An instance needs one, so the role, the state and the deletion of this account cannot be changed.",
   "users.selfDeleteHint": "This is the account you are signed in with, so it cannot be deleted.",
-  "users.grantsAfterCreate": "Create the account first, then choose what it may use.",
+  "users.grantsOnCreate": "Everything switched on is ticked. Clear what this account should not have \u2014 the ticks are applied the moment it is created.",
   "users.grantLibrary": "{library} is visible to this account",
   "users.grantAddon": "{addon} is available to this account",
   "users.downloadToLibrary": "Download to the library",

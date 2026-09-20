@@ -119,6 +119,22 @@ function UserEditDialog({ account, accounts, libraries, addons, session, onClose
   const [role, setRole] = useState<UserRole>("user");
   const [permissions, setPermissions] = useState<UserPermissions>({ downloadToLibrary: false, downloadToDevice: true });
   const [busy, setBusy] = useState(false);
+  /** What a new account will be granted the moment it exists. Everything switched on is
+   *  ticked to begin with, because an account that can see nothing is a support call rather
+   *  than a safe default -- but the ticks are shown and can be cleared, so the grant is the
+   *  administrator's decision either way and nothing is written they cannot see. Something
+   *  switched off starts unticked, since granting it would promise what does not work, and
+   *  can still be ticked for when it comes back.
+   *
+   *  Only the departures from that default are held, not the ticks themselves: the lists
+   *  arrive from the server and a snapshot taken at mount would be empty if the dialog
+   *  opened first, silently granting nothing. */
+  const [override, setOverride] = useState<Record<string, boolean>>({});
+  // One map over two namespaces, so a library id and an addon key are kept apart.
+  const willGrant = (key: string, enabled: boolean) => override[key] ?? enabled;
+  const pick = (key: string, on: boolean) => setOverride((current) => ({ ...current, [key]: on }));
+  const libraryKey = (id: string) => `library:${id}`;
+  const addonKey = (key: string) => `addon:${key}`;
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => { if (event.key === "Escape" && !busy) onClose(); };
@@ -150,6 +166,19 @@ function UserEditDialog({ account, accounts, libraries, addons, session, onClose
         permissions: { downloadToLibrary: permissions.downloadToLibrary, downloadToDevice: permissions.downloadToDevice },
       });
       setPassword("");
+      // The account exists from here on, so a grant that fails must not look like a creation
+      // that failed. Each write is reported through the parent as it lands, and the dialog
+      // reopens on the account either way, where the ticks show what actually took.
+      if (created.role !== "admin") {
+        for (const library of libraries) {
+          if (!willGrant(libraryKey(library.id), library.enabled)) continue;
+          onLibraryUpdated(await api.updateLibrary(library.id, { visibleTo: [...new Set([...(library.visibleTo ?? []), created.id])] }));
+        }
+        for (const addon of addons) {
+          if (!willGrant(addonKey(addon.key), addon.enabled)) continue;
+          onAddonUpdated(await api.updateAddon(addon.key, { allowedUsers: [...new Set([...(addon.allowedUsers ?? []), created.id])] }));
+        }
+      }
       await onCreated(created);
       onNotify(t("users.added"));
       return;
@@ -186,7 +215,7 @@ function UserEditDialog({ account, accounts, libraries, addons, session, onClose
   const heading = (text: string) => <div className="library-picker-section-head"><h3>{text}</h3></div>;
   const grant = (label: string, badge: ReactNode, checked: boolean, ariaLabel: string, onChange: (value: boolean) => void) =>
     <label className="user-grant-row" key={ariaLabel}>
-      <input type="checkbox" checked={checked} disabled={busy || !account} aria-label={ariaLabel}
+      <input type="checkbox" checked={checked} disabled={busy} aria-label={ariaLabel}
         onChange={(event) => onChange(event.target.checked)}/>
       <span className="user-grant-name">{label}</span>
       {badge}
@@ -243,28 +272,26 @@ function UserEditDialog({ account, accounts, libraries, addons, session, onClose
         </section>
         <section className="user-edit-section">
           {heading(t("users.librariesHeading"))}
-          {!account
-            ? <p className="identify-hint">{t("users.grantsAfterCreate")}</p>
-            : currentRole === "admin"
-              ? <p className="identify-hint">{t("users.seesEverything")}</p>
-              : <div className="user-grant-list">{libraries.map((library) =>
-                grant(library.name, <i className="library-badge">{libraryTypeLabel(library.type)}</i>,
-                  (library.visibleTo ?? []).includes(account.id),
+          {currentRole === "admin"
+            ? <p className="identify-hint">{t("users.seesEverything")}</p>
+            : <><div className="user-grant-list">{libraries.map((library) =>
+                grant(library.name, <><i className="library-badge">{libraryTypeLabel(library.type)}</i>
+                  {!library.enabled && <i className="library-badge off">{t("library.disabled")}</i>}</>,
+                  account ? (library.visibleTo ?? []).includes(account.id) : willGrant(libraryKey(library.id), library.enabled),
                   t("users.grantLibrary", { library: library.name }),
-                  (value) => setLibraryGrant(library, value)))}</div>}
+                  (value) => account ? setLibraryGrant(library, value) : pick(libraryKey(library.id), value)))}</div>
+              {creating && <p className="identify-hint">{t("users.grantsOnCreate")}</p>}</>}
         </section>
         <section className="user-edit-section">
           {heading(t("users.addonsHeading"))}
-          {!account
-            ? <p className="identify-hint">{t("users.grantsAfterCreate")}</p>
-            : currentRole === "admin"
-              ? <p className="identify-hint">{t("users.seesEverything")}</p>
-              : <div className="user-grant-list">{addons.map((addon) =>
+          {currentRole === "admin"
+            ? <p className="identify-hint">{t("users.seesEverything")}</p>
+            : <div className="user-grant-list">{addons.map((addon) =>
                 grant(addon.manifest.name, <><i className="library-badge">{addonRoleLabel(addon.role)}</i>
                   {!addon.enabled && <i className="library-badge off">{t("addons.badgeOff")}</i>}</>,
-                  (addon.allowedUsers ?? []).includes(account.id),
+                  account ? (addon.allowedUsers ?? []).includes(account.id) : willGrant(addonKey(addon.key), addon.enabled),
                   t("users.grantAddon", { addon: addon.manifest.name }),
-                  (value) => setAddonGrant(addon, value)))}</div>}
+                  (value) => account ? setAddonGrant(addon, value) : pick(addonKey(addon.key), value)))}</div>}
         </section>
         {currentRole !== "admin" && <section className="user-edit-section">
           {heading(t("users.downloadsHeading"))}

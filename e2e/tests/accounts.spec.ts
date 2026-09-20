@@ -76,6 +76,20 @@ test.describe("accounts", () => {
       const dialog = page.getByRole("dialog", { name: "Upravit účet" });
       await dialog.getByLabel("Uživatelské jméno").fill(guest.name);
       await dialog.getByLabel("Heslo").fill(guest.password);
+
+      // Everything switched on is offered ticked, so an account is usable the moment it
+      // exists rather than blind until somebody remembers to grant it something. The ticks
+      // are shown and can be cleared, which is what this spec does: its story needs one
+      // library of several and an account with no addon yet, so it starts from nothing and
+      // the grants below are what move the counts.
+      // Only the grant lists: the download switches are checkboxes too, and theirs is covered
+      // by the track that is drawn over it.
+      const offered = await dialog.locator(".user-grant-list").getByRole("checkbox").all();
+      const ticked = await Promise.all(offered.map((box) => box.isChecked()));
+      expect(ticked.filter(Boolean).length, "nothing was offered for a new account").toBeGreaterThan(0);
+      for (const [index, box] of offered.entries()) if (ticked[index]) await box.click();
+      for (const box of offered) await expect(box).not.toBeChecked();
+
       await dialog.getByRole("button", { name: "Založit účet" }).click();
       await expect(page.getByText("Účet vytvořen.")).toBeVisible();
       await dialog.getByRole("button", { name: "Zavřít" }).click();
@@ -102,8 +116,8 @@ test.describe("accounts", () => {
       guestContext = await browser.newContext({ storageState: { cookies: [], origins: [] } });
       const guestPage = await guestContext.newPage();
       await signIn(guestPage, guest);
-      // A brand-new account inherits no language and starts in the browser's, so it is pinned
-      // the way the first run pins the administrator's, and read back in the suite's language.
+      // A new account is seeded with the language of the administrator who made it. Pinning it
+      // here anyway keeps the spec independent of what the setup project chose.
       await guestContext.request.patch("/api/settings", { data: { uiLanguage: "cs" } });
       await guestPage.reload();
 
@@ -158,6 +172,26 @@ test.describe("accounts", () => {
       await expect(own.getByRole("button", { name: "Smazat účet" })).toBeDisabled();
       await expect(own.getByText(/jediný zapnutý administrátor/)).toBeVisible();
       await own.getByRole("button", { name: "Zavřít" }).click();
+
+      // Promoting the account takes its grants with it. Left behind, the id would make this
+      // library impossible to save again -- both endpoints send the whole list and both
+      // refuse an administrator's id -- so the check that matters is that the very next edit
+      // still goes through.
+      await row.getByRole("button", { name: "Upravit" }).click();
+      await addonBox.click();
+      await expect(addonBox).toBeChecked();
+      await dialog.getByLabel("Role").selectOption("admin");
+      await expect(dialog.getByText("Vidí všechny knihovny i doplňky podle role.").first()).toBeVisible();
+      await dialog.getByRole("button", { name: "Zavřít" }).click();
+
+      const swept = await page.request.get("/api/addons")
+        .then((response) => response.json() as Promise<Array<{ key: string; allowedUsers?: string[] }>>);
+      const guestId = await page.request.get("/api/users")
+        .then((response) => response.json() as Promise<Array<{ id: string; username: string }>>)
+        .then((rows) => rows.find((entry) => entry.username === guest.name)!.id);
+      expect(swept.flatMap((entry) => entry.allowedUsers ?? []), "the promoted id is still on an addon").not.toContain(guestId);
+      const saved = await page.request.patch(`/api/addons/${swept[0].key}`, { data: { allowedUsers: swept[0].allowedUsers ?? [] } });
+      expect(saved.status(), "the addon can no longer be saved after a promotion").toBe(200);
     } finally {
       // The instance goes back to the state it was found in even when an assertion failed, and
       // a failure while cleaning up must not hide the one that brought the run here.

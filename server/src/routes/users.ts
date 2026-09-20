@@ -22,6 +22,20 @@ export interface UsersDeps extends RouteContext {
   permissionsChanged(before: UserRecord, after: UserRecord): Promise<void>;
 }
 
+/** Take one account's id out of every grant list. Two things need it, for the same reason:
+ *  the id no longer belongs there and a list that still carries it cannot be saved again.
+ *  Both endpoints send the whole list back and both refuse an id that is not an ordinary
+ *  account, so one stale entry makes that library or addon permanently uneditable -- for
+ *  every other account too, not only the one that changed. */
+const sweepGrants = (state: State, id: string): void => {
+  state.libraries = (state.libraries ?? []).map((library) => library.visibleTo?.includes(id)
+    ? { ...library, visibleTo: library.visibleTo.filter((entry) => entry !== id) }
+    : library);
+  state.addons = state.addons.map((addon) => addon.allowedUsers?.includes(id)
+    ? { ...addon, allowedUsers: addon.allowedUsers.filter((entry) => entry !== id) }
+    : addon);
+};
+
 export function registerUsersRoutes(app: express.Application, deps: UsersDeps): void {
   const { store, currentUser, deleteUserAccess, permissionsChanged, stopUserAccess } = deps;
 
@@ -105,7 +119,16 @@ export function registerUsersRoutes(app: express.Application, deps: UsersDeps): 
         throw new AppError("That username is already in use.", "err.usernameTaken", 409);
       }
       state.users = [...(state.users ?? []), record];
-      state.userData = { ...(state.userData ?? {}), [record.id]: emptyUserData() };
+      // An account with nothing written for it answers the built-in defaults, which are
+      // English: on a Czech install the person would sign in for the first time and find the
+      // interface in a language nobody here chose. First run seeds this from the language
+      // picked there; an account made in the dashboard takes the same guess from whoever is
+      // making it, and can change all three in Settings afterwards.
+      const chosen = store.prefs(actor.id).uiLanguage;
+      state.userData = {
+        ...(state.userData ?? {}),
+        [record.id]: { ...emptyUserData(), prefs: { uiLanguage: chosen, audioLanguage: chosen, subtitleLanguage: chosen } },
+      };
     });
     audit("Account created", actor, record, { role: record.role });
     res.status(201).json(view(record));
@@ -138,6 +161,10 @@ export function registerUsersRoutes(app: express.Application, deps: UsersDeps): 
           || next.permissions.downloadToDevice !== user.permissions.downloadToDevice;
         return changed ? { ...next, permissionsVersion: user.permissionsVersion + 1 } : user;
       });
+      // A promotion makes every grant this account held meaningless -- an administrator sees
+      // every library and uses every addon by role -- and leaves the id somewhere it may no
+      // longer be written. Sweeping here is what keeps the lists saveable.
+      if (role === "admin" && before.role !== "admin") sweepGrants(state, id);
     });
     const after = requireUser(id);
     if (!changed) return res.json(view(after));
@@ -178,14 +205,8 @@ export function registerUsersRoutes(app: express.Application, deps: UsersDeps): 
       assertAdminRemains(state.users ?? [], { kind: "delete", id });
       state.users = (state.users ?? []).filter((user) => user.id !== id);
       if (state.userData) delete state.userData[id];
-      // A left-behind id is a dangling reference, and ids are never reused: sweeping the
-      // grant lists is what keeps them honest.
-      state.libraries = (state.libraries ?? []).map((library) => library.visibleTo
-        ? { ...library, visibleTo: library.visibleTo.filter((entry) => entry !== id) }
-        : library);
-      state.addons = state.addons.map((addon) => addon.allowedUsers
-        ? { ...addon, allowedUsers: addon.allowedUsers.filter((entry) => entry !== id) }
-        : addon);
+      // A left-behind id is a dangling reference, and ids are never reused.
+      sweepGrants(state, id);
     });
     await deleteUserAccess(id);
     audit("Account deleted", actor, before);

@@ -630,7 +630,7 @@ export const cs: Catalog = {
   "users.added": "Účet vytvořen.",
   "users.lastAdminHint": "Tohle je jediný zapnutý administrátor. Instance jednoho potřebuje, takže jeho roli, stav ani smazání nemůžeš změnit.",
   "users.selfDeleteHint": "Tohle je účet, pod kterým jsi přihlášený, takže ho nemůžeš smazat.",
-  "users.grantsAfterCreate": "Nejdřív účet vytvoř, pak zvol, co smí používat.",
+  "users.grantsOnCreate": "Zapnut\u00e9 polo\u017eky jsou za\u0161krtnut\u00e9. Odzna\u010d, co m\u00edt nem\u00e1 \u2014 z\u00e1\u0161krty se ulo\u017e\u00ed hned p\u0159i zalo\u017een\u00ed \u00fa\u010dtu.",
   "users.grantLibrary": "{library} je pro tenhle účet viditelná",
   "users.grantAddon": "{addon} je pro tenhle účet dostupný",
   "users.downloadToLibrary": "Stahovat do knihovny",
