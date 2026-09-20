@@ -28,7 +28,7 @@ import { advanceTorrent } from "./debrid.js";
 import { tmdbMeta } from "./tmdb.js";
 import { ExternalIdStore } from "./external-ids.js";
 import { currentLevel, flushLog, initLogger, log, parseLevel, startLogMaintenance, setLevel } from "./logger.js";
-import { browseDirectory, describePath, emptiedFolders, entryDirectory, isPathWithin, isVideo, listVideos, moveDestination, orphanedCatalogKeys, pageFiles, remapPath, scanLibrary, summarize, type FoundFile, type LibraryEntry } from "./library.js";
+import { browseDirectory, describePath, emptiedFolders, entryDirectory, holdsLibraryRoot, isPathWithin, isVideo, listVideos, moveDestination, orphanedCatalogKeys, pageFiles, remapPath, scanLibrary, summarize, type FoundFile, type LibraryEntry } from "./library.js";
 import { browseMeta, cacheFieldsFromMeta, episodeKey, episodeNumberOf, episodesFromMeta, dropKeyed, knownTitleEntry, knownTitleOf, matchKeyFor, mosaicSkipped, needsBackfill, needsEpisodes, titleUnits, unmatchAt, type LibraryMetaRecord, type TitleKind, type TitleUnit } from "./library-match.js";
 import { LibraryScan } from "./library-scan.js";
 import { createLibraryProbe, type LibraryHealth } from "./library-probe.js";
@@ -1497,6 +1497,10 @@ const deleteLibraryItem = async (relative: string) => {
   if (!resolved || !resolved.relative) throw new AppError("Invalid path.", "err.invalidPath");
   const info = await stat(resolved.absolute).catch(() => undefined);
   if (!info) throw new AppError("The file or folder does not exist.", "err.pathMissing");
+  // A recursive remove would take the nested library with it.
+  if (holdsLibraryRoot(carveOutsOf(resolved.library), resolved.relative)) {
+    throw new AppError("This folder holds another library. Move that library out first.", "err.libraryHoldsAnother", 409);
+  }
   await rm(resolved.absolute, { recursive: true, force: true });
   await removeGeneratedArt(resolved.key);
   const orphans = await forgetLibraryPath(resolved.key);
@@ -1536,6 +1540,11 @@ const transferLibraryItem = async (relative: string, folder: string, copy = fals
   if (!resolved || !resolved.relative) throw new AppError("Invalid path.", "err.invalidPath");
   const info = await stat(resolved.absolute).catch(() => undefined);
   if (!info) throw new AppError("The file or folder does not exist.", "err.pathMissing");
+  // Moving or copying the folder would take the nested library with it, and a copy would
+  // leave a second set of its media for the next scan to adopt.
+  if (holdsLibraryRoot(carveOutsOf(resolved.library), resolved.relative)) {
+    throw new AppError("This folder holds another library. Move that library out first.", "err.libraryHoldsAnother", 409);
+  }
 
   const folderResolved = await resolveLibraryPath(store.libraries(), folder);
   if (!folderResolved) throw new AppError("Invalid path.", "err.invalidPath");

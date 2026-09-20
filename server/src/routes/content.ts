@@ -6,7 +6,7 @@ import type { ArtShape } from "../artwork.js";
 import { AppError } from "../errors.js";
 import { assertStillAdmin } from "../roles.js";
 import { libraryFor, libraryPath, libraryVisible, parseLibraryPath, posixDir, posixJoin, resolveLibraryPath, sameFile, visibleLibraries, type LibraryRecord, type Viewer } from "../libraries.js";
-import { browseDirectory, listFolders, type LibraryEntry } from "../library.js";
+import { browseDirectory, holdsLibraryRoot, listFolders, type LibraryEntry } from "../library.js";
 import type { TransferProgress } from "../library-transfer.js";
 import { log } from "../logger.js";
 import { assertUsableName } from "../naming.js";
@@ -152,6 +152,9 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     if (!resolved || !resolved.relative) throw new AppError("Invalid path.", "err.invalidPath");
     const info = await stat(resolved.absolute).catch(() => undefined);
     if (!info) throw new AppError("The file or folder does not exist.", "err.pathMissing");
+    if (holdsLibraryRoot(carveOutsOf(resolved.library), resolved.relative)) {
+      throw new AppError("This folder holds another library. Move that library out first.", "err.libraryHoldsAnother", 409);
+    }
 
     const extension = info.isDirectory() ? "" : path.extname(relative);
     const typed = String(req.body.name ?? "").trim();

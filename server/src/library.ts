@@ -99,11 +99,11 @@ export function isPathWithin(value: string, parent: string): boolean {
   return Boolean(parent) && SEPARATORS.some((separator) => value.startsWith(`${parent}${separator}`));
 }
 
-/** True when `folder` is a carve-out itself or holds one: deleting it would delete
- *  another library. */
-function excludedUnder(exclude: ReadonlySet<string> | undefined, folder: string): boolean {
-  if (!exclude?.size) return false;
-  for (const path of exclude) if (isPathWithin(path, folder)) return true;
+/** True when `relative` is another library's root itself or holds one: deleting, moving or
+ *  renaming it would take that library with it. */
+export function holdsLibraryRoot(carveOuts: ReadonlySet<string> | undefined, relative: string): boolean {
+  if (!carveOuts?.size) return false;
+  for (const path of carveOuts) if (isPathWithin(path, relative)) return true;
   return false;
 }
 
@@ -130,7 +130,7 @@ export async function emptiedFolders(root: string, relative: string, exclude?: R
   let folder = posixDir(relative);
   while (folder) {
     if (!resolveInside(root, folder)) break;
-    if (excludedUnder(exclude, folder)) break;
+    if (holdsLibraryRoot(exclude, folder)) break;
     if ((await listVideos(root, folder, 0, exclude)).length) break;
     gone.push(folder);
     folder = posixDir(folder);

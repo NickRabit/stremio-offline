@@ -1030,6 +1030,7 @@ export const cs: Catalog = {
   "err.libraryRootAmbiguous": "Je nakonfigurováno více knihoven. Otevřete jednu z nich.",
   "err.libraryLast": "Tohle je jediná knihovna. Místo odebrání ji nasměrujte na jinou složku.",
   "err.libraryRerootCarveOut": "Uvnitř téhle knihovny je jiná knihovna. Nejdřív ji přesuňte ven, nebo na novou složku jen ukažte bez přesunu.",
+  "err.libraryHoldsAnother": "V téhle složce je jiná knihovna. Nejdřív ji přesuňte jinam.",
   "err.libraryRerootNested": "Nová složka je uvnitř té staré.",
   "err.libraryRerootEmpty": "V téhle složce není co přesouvat.",
   "err.libraryRerootCollision": "V nové složce už něco se stejným jménem je.",

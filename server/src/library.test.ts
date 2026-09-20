@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { browseDirectory, buildLibrary, clearBrowseCache, describePath, emptiedFolders, hasVideo, listFolders, moveDestination, libraryFingerprint, numberedEpisode, isPathWithin, isVideo, listVideos, orphanedCatalogKeys, pageFiles, parseEpisode, parseSeason, remapPath, resolveInside, sortFiles, summarize, type BrowseResult } from "./library.js";
+import { browseDirectory, buildLibrary, clearBrowseCache, describePath, emptiedFolders, hasVideo, holdsLibraryRoot, listFolders, moveDestination, libraryFingerprint, numberedEpisode, isPathWithin, isVideo, listVideos, orphanedCatalogKeys, pageFiles, parseEpisode, parseSeason, remapPath, resolveInside, sortFiles, summarize, type BrowseResult } from "./library.js";
 
 const file = (relative: string, size = 100, modified = "2026-01-01T00:00:00.000Z") => ({ relative, size, modified });
 
@@ -96,6 +96,26 @@ test("renaming a path keeps its children and leaves a similar name alone", () =>
   assert.equal(remapPath("Serial 2/01.mkv", "Serial", "Novy serial"), "Serial 2/01.mkv");
   assert.equal(isPathWithin("Serial/01 serie/01.mkv", "Serial"), true);
   assert.equal(isPathWithin("Serial 2/01.mkv", "Serial"), false);
+});
+
+test("a folder is refused when it is another library's root or holds one, at any depth", () => {
+  assert.equal(holdsLibraryRoot(new Set(["Archiv"]), "Archiv"), true, "the carve-out itself");
+  const deep = new Set(["Archiv/Serialy"]);
+  assert.equal(holdsLibraryRoot(deep, "Archiv/Serialy"), true, "the carve-out two levels down");
+  assert.equal(holdsLibraryRoot(deep, "Archiv"), true, "the folder that holds it");
+  const deeper = new Set(["Inbox/Archiv/Serialy"]);
+  assert.equal(holdsLibraryRoot(deeper, "Inbox/Archiv"), true, "a holder at depth one");
+  assert.equal(holdsLibraryRoot(deeper, "Inbox"), true, "a holder at depth two");
+});
+
+test("a name that only shares a prefix is not a carve-out, and an empty set refuses nothing", () => {
+  const carveOuts = new Set(["Archiv"]);
+  assert.equal(holdsLibraryRoot(carveOuts, "Archiv2"), false, "a sibling whose name starts the same");
+  assert.equal(holdsLibraryRoot(carveOuts, "Archiv/Jine"), false, "a folder inside the carve-out does not hold it");
+  assert.equal(holdsLibraryRoot(new Set(), "Archiv"), false, "nothing is excluded");
+  assert.equal(holdsLibraryRoot(undefined, "Archiv"), false);
+  // Every write guard is handed a non-empty relative path: the root is refused as invalid first.
+  assert.equal(holdsLibraryRoot(carveOuts, ""), false, "the library root itself");
 });
 
 test("non-video files are ignored", () => {

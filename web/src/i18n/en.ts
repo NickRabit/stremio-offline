@@ -1035,6 +1035,7 @@ export const en = {
   "err.libraryRootAmbiguous": "Several libraries are configured. Open one of them.",
   "err.libraryLast": "This is the only library. Point it at another folder instead of removing it.",
   "err.libraryRerootCarveOut": "Another library sits inside this one. Move it out first, or point at the new folder without moving.",
+  "err.libraryHoldsAnother": "This folder holds another library. Move that library out first.",
   "err.libraryRerootNested": "The new folder is inside the old one.",
   "err.libraryRerootEmpty": "There is nothing in this folder to move.",
   "err.libraryRerootCollision": "The new folder already holds something with the same name.",
