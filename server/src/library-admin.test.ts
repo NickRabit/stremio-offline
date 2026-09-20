@@ -246,3 +246,23 @@ test("a root that cannot be created records the errno the interface hides", asyn
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("a new folder beside the old root is a valid re-root destination", async () => {
+  // The destination does not exist yet, so it resolves through its nearest existing
+  // ancestor -- which also holds the old root. Comparing the source against that ancestor
+  // refused every ordinary "make a folder next to this one and move the content into it".
+  const dataDir = await mkdtemp(path.join(tmpdir(), "reroot-"));
+  const from = path.join(dataDir, "Old");
+  await mkdir(from, { recursive: true });
+  try {
+    const beside = await checkRerootPaths({ from, to: path.join(dataDir, "New"), carveOuts: [] });
+    assert.equal(beside.ok, true, "a sibling that does not exist yet is allowed");
+
+    const inside = await checkRerootPaths({ from, to: path.join(from, "New"), carveOuts: [] });
+    assert.equal(inside.ok, false, "a folder inside the old root is still refused");
+    if (!inside.ok) assert.equal(inside.messageKey, "err.libraryRerootNested");
+
+    const parent = await checkRerootPaths({ from, to: dataDir, carveOuts: [] });
+    assert.equal(parent.ok, false, "the source's own parent is still refused");
+  } finally { await rm(dataDir, { recursive: true, force: true }); }
+});

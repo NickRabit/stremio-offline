@@ -515,3 +515,15 @@ test("the destination picker lists folders browsing would hide", async () => {
     assert.deepEqual(await listFolders(root, path.join("..", "..")), [], "nothing outside the root");
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+test("the carve-out guard compares folders, not spellings", () => {
+  // On macOS and Windows `Archiv` and `archiv` are one directory. A guard that compares
+  // the strings would let the other spelling through -- and once a nested root is recorded
+  // in a different case than its parent's tree, it would miss the canonical one too.
+  const carveOuts = new Set(["Archiv/Serialy"]);
+  assert.equal(holdsLibraryRoot(carveOuts, "Archiv"), true, "the canonical spelling");
+  assert.equal(holdsLibraryRoot(carveOuts, "archiv"), true, "the folded spelling is the same folder");
+  assert.equal(holdsLibraryRoot(new Set(["Archiv/serialy"]), "Archiv/Serialy"), true,
+    "a carve-out recorded in another case still guards the folder the listing shows");
+  assert.equal(holdsLibraryRoot(carveOuts, "Archiv2"), false, "a shared prefix is not containment");
+});

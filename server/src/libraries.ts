@@ -89,6 +89,13 @@ const CASE_INSENSITIVE_FS = process.platform === "win32" || process.platform ===
 export const sameFile = (left: string, right: string, caseInsensitive = CASE_INSENSITIVE_FS) =>
   left === right || (caseInsensitive && left.toLowerCase() === right.toLowerCase());
 
+/** A path in the form this filesystem compares by. On a volume that folds case -- macOS,
+ *  Windows, an SMB share -- two spellings are one directory, so a guard that compares the
+ *  strings is not guarding the folder. Same parameter as `sameFile`, for the same reason:
+ *  the rule has to be testable on a runner that does not fold. */
+export const foldPath = (value: string, caseInsensitive = CASE_INSENSITIVE_FS) =>
+  caseInsensitive ? value.toLowerCase() : value;
+
 /** Paths crossing a module boundary use `/`; `path.sep` appears only at a syscall. */
 export const toPosix = (value: string) => value.split(path.sep).join("/");
 export const toFs = (value: string) => value.split("/").join(path.sep);
@@ -232,6 +239,24 @@ export async function realAncestor(target: string): Promise<string | undefined> 
       if (parent === current) return undefined;
       current = parent;
     }
+  }
+}
+
+/** A path resolved as far as it exists, with the part that does not exist yet kept on the
+ *  end. `realAncestor` answers only the existing part, which is the wrong thing to compare
+ *  a sibling against: on macOS `/tmp` is a symlink, so a resolved source and an unresolved
+ *  destination never match, and a folder that is not there yet has no realpath of its own. */
+export async function realTarget(target: string): Promise<string> {
+  const absolute = path.resolve(target);
+  const tail: string[] = [];
+  let current = absolute;
+  for (;;) {
+    const resolved = await realpath(current).catch(() => undefined);
+    if (resolved) return tail.length ? path.join(resolved, ...tail.reverse()) : resolved;
+    const parent = path.dirname(current);
+    if (parent === current) return absolute;
+    tail.push(path.basename(current));
+    current = parent;
   }
 }
 

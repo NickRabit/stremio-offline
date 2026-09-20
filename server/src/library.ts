@@ -1,7 +1,7 @@
 import { readdir, stat } from "node:fs/promises";
 import type { Dirent } from "node:fs";
 import path from "node:path";
-import { posixBase, posixDir, posixJoin, toFs } from "./libraries.js";
+import { foldPath, posixBase, posixDir, posixJoin, toFs } from "./libraries.js";
 
 const VIDEO = new Set([".mkv", ".mp4", ".avi", ".m4v", ".mov", ".webm", ".ts", ".m2ts", ".wmv", ".flv", ".mpg", ".mpeg"]);
 
@@ -103,7 +103,11 @@ export function isPathWithin(value: string, parent: string): boolean {
  *  renaming it would take that library with it. */
 export function holdsLibraryRoot(carveOuts: ReadonlySet<string> | undefined, relative: string): boolean {
   if (!carveOuts?.size) return false;
-  for (const path of carveOuts) if (isPathWithin(path, relative)) return true;
+  // Folded, because on a case-folding volume `Archiv` and `archiv` are one directory: a
+  // guard that compares the spellings would let the other one through, and a nested root
+  // recorded in a different case than its parent's tree would not be seen at all.
+  const folder = foldPath(relative);
+  for (const path of carveOuts) if (isPathWithin(foldPath(path), folder)) return true;
   return false;
 }
 

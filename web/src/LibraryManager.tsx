@@ -346,6 +346,10 @@ function RootPicker({ reroot, onClose, onDone, onError, onLibrariesChanged }:
   // and at phone height the field it was waiting on is scrolled out of sight.
   const blocked = !selected ? t("library.pickerNeedsFolder")
     : !reroot && !name.trim() ? t("library.pickerNeedsName")
+    // The re-root dialog opens with the library's current folder already selected, so
+    // "move the content here" was live in the state it opens in and the server refused it
+    // every time.
+    : reroot && carryContent && selected === reroot.root ? t("library.pickerSameFolder")
     : "";
   const crumbs = browse && browse.path ? browse.path.split("/") : [];
   const visibleEntries = browse?.entries.filter((entry) => entry.name.toLocaleLowerCase().includes(folderFilter.trim().toLocaleLowerCase())) ?? [];

@@ -485,6 +485,7 @@ export const en = {
   "library.selectFolder": "Select {name}",
   "library.pickerGrantHint": "Choose one of the locations above, or open it to pick a folder inside.",
   "library.pickerEmpty": "No subfolder here.",
+  "library.pickerSameFolder": "The library is already in this folder.",
   "library.pickerNeedsFolder": "Choose a folder first.",
   "library.pickerNeedsName": "Give the library a name.",
   "library.pickerNothingSelected": "Nothing selected yet.",

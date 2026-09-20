@@ -481,6 +481,7 @@ export const cs: Catalog = {
   "library.selectFolder": "Vybrat {name}",
   "library.pickerGrantHint": "Vyberte některé z umístění výše, nebo ho otevřete a zvolte složku uvnitř.",
   "library.pickerEmpty": "Žádná podsložka.",
+  "library.pickerSameFolder": "Knihovna už v téhle složce je.",
   "library.pickerNeedsFolder": "Nejdřív vyberte složku.",
   "library.pickerNeedsName": "Zadejte název knihovny.",
   "library.pickerNothingSelected": "Zatím nic nevybráno.",
