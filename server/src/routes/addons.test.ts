@@ -14,6 +14,7 @@ import { registerAddonsRoutes, type AddonsDeps } from "./addons.js";
 
 interface Harness {
   base: string;
+  demote: (id: string) => void;
   viewed: AddonRecord[];
   stored: () => AddonRecord[];
   data: (id: string) => UserData | undefined;
@@ -43,14 +44,16 @@ const granted = (key: string): AddonRecord => ({ ...addon(key), allowedUsers: [B
 /** The routes take everything they need from the context, so the app here is a real express
  *  instance over fake collaborators that record what they were asked to do. */
 const mount = async (records: AddonRecord[] = [addon("alpha")]): Promise<Harness> => {
-  const state = { addons: records, userData: { [BOB]: emptyUserData(), [CAROL]: emptyUserData() } as Record<string, UserData> };
+  // `users` lives in the state, not only behind `store.users()`: a mutator reads the state,
+  // and the write-time role check is one of the things that does.
+  const state = { addons: records, users: [admin, ordinary, other], userData: { [BOB]: emptyUserData(), [CAROL]: emptyUserData() } as Record<string, UserData> };
   const viewed: AddonRecord[] = [];
   const userOf = (req: express.Request) =>
     req.header("x-user") === BOB ? ordinary : req.header("x-user") === CAROL ? other : admin;
   const store = {
     addons: () => state.addons,
     libraries: () => [],
-    users: () => [admin, ordinary, other],
+    users: () => state.users,
     userData: (id: string) => state.userData[id] ?? emptyUserData(),
     update: async (mutate: (value: typeof state) => void) => { mutate(state); },
   } as unknown as Store;
@@ -89,6 +92,7 @@ const mount = async (records: AddonRecord[] = [addon("alpha")]): Promise<Harness
     base: `http://127.0.0.1:${port}`,
     viewed,
     stored: () => state.addons,
+    demote: (id: string) => { state.users = state.users.map((user) => user.id === id ? { ...user, role: "user" } as UserRecord : user); },
     data: (id: string) => state.userData[id],
     close: async () => {
       server.closeAllConnections();
@@ -260,4 +264,18 @@ test("an administrator with a stored order still reads the global one", async (t
   const keys = ((await (await api(harness.base, "/api/addons")).json()) as Array<{ key: string }>).map((item) => item.key);
 
   assert.deepEqual(keys, ["alpha", "beta", "gamma"], "the overlay is stored but not applied");
+});
+
+test("an addon edit in flight does not survive the administrator losing the role", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+
+  // The gate answers once, at the start of the request. Everything that fetches a manifest
+  // or probes a folder before it writes can have that answer go stale inside the request.
+  harness.demote(ADA);
+  const response = await api(harness.base, "/api/addons/alpha", { method: "PATCH", body: { enabled: false } });
+
+  assert.equal(response.status, 403);
+  assert.equal((await failure(response)).messageKey, "err.notAllowed");
+  assert.equal(harness.stored()[0]?.enabled, true, "the write landed on a role the account no longer had");
 });

@@ -229,10 +229,10 @@ export class Revocations {
     this.deps.airplay.removeWhere((grant) => revoked.has(grant.resourceId));
     // A queued download keeps its place, like every other pause: the job is not wrong, the
     // library it writes to is simply not this account's to write to any more.
-    await this.pauseJobs((job) => this.deps.queue.ownerOf(job) === user.id && lost({
+    await this.pauseJobs((job) => this.deps.queue.ownerOf(job) === user.id && (lost({
       libraryId: job.libraryId ?? (job.target ? parseLibraryPath(job.target)?.libraryId : undefined),
       addonKey: job.stream?.addonKey,
-    }), user.id);
+    }) || lost({ addonKey: job.subtitle?.addonKey })), user.id);
   }
 
   /**
@@ -275,7 +275,10 @@ export class Revocations {
       const libraryId = job.libraryId ?? (job.target ? parseLibraryPath(job.target)?.libraryId : undefined);
       if (libraryId === opts.libraryId) return true;
     }
-    return opts.addonKey !== undefined && job.stream?.addonKey === opts.addonKey;
+    // The subtitle counts as much as the video: it is commonly chosen from another addon and
+    // is fetched on resume, which can be long after that addon was taken away.
+    return opts.addonKey !== undefined
+      && (job.stream?.addonKey === opts.addonKey || job.subtitle?.addonKey === opts.addonKey);
   }
 
   private async pauseJobs(match: (job: DownloadJob) => boolean, userId?: string) {

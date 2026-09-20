@@ -284,7 +284,12 @@ export class MediaResources {
       behaviorHints: { filename: record.behaviorHints?.filename, videoSize: record.behaviorHints?.videoSize,
         bingeGroup: record.behaviorHints?.bingeGroup },
       subtitles: (stream.subtitles ?? []).filter((item) => /^https?:\/\//i.test(item.url) || (kind === "library" && item.url.startsWith("file://"))).map((item) => ({
-        subtitleId: this.add({ url: item.url }, owner, "subtitle"),
+        // The addon travels with it, the way `GET /api/subtitles` mints one: a record that
+        // names no content cannot be recognised by the sweep that runs when an addon is
+        // removed or withdrawn, and the re-check at hand-over has nothing to check against.
+        // A subtitle inside a stream listing belongs to the addon that offered the stream
+        // unless it says otherwise; a library sidecar names its library through the url.
+        subtitleId: this.add({ url: item.url, addonKey: item.addonKey ?? stream.addonKey }, owner, "subtitle"),
         lang: safeSourceText(item.lang, stream), addonName: safeSourceText(item.addonName, stream),
       })),
     };

@@ -127,12 +127,14 @@ export interface DownloadOwnerScope {
  * is known -- a lazy job has no source until the resolver picks one, and a library that has
  * been removed is waited for -- so the check is asked again once they are.
  */
-export function ownerMayDownload(scope: DownloadOwnerScope, job: { stream?: StreamItem; libraryId?: string; target?: string }): boolean {
+export function ownerMayDownload(scope: DownloadOwnerScope, job: { stream?: StreamItem; subtitle?: SubtitleItem; libraryId?: string; target?: string }): boolean {
   const owner = scope.owner;
   if (!owner || owner.disabled || !mayDownloadToLibrary(owner)) return false;
   const viewer: Viewer = { id: owner.id, role: owner.role };
-  const addonKey = job.stream?.addonKey;
-  if (addonKey) {
+  // Both addons, not only the video's: an external subtitle is commonly chosen from a
+  // different one, and it is fetched on resume -- arbitrarily long after a withdrawal.
+  for (const addonKey of [job.stream?.addonKey, job.subtitle?.addonKey]) {
+    if (!addonKey) continue;
     const addon = scope.addons.find((item) => item.key === addonKey);
     if (!addon?.enabled || !addonAllowed(addon, viewer)) return false;
   }

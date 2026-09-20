@@ -8,7 +8,7 @@ import { LANGUAGE_NAMES, isUiLanguage, normalizeLanguage } from "../language.js"
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import { currentLevel, log, parseLevel, setLevel } from "../logger.js";
 import { publicAddon } from "../security.js";
-import { ForbiddenError } from "../roles.js";
+import { assertStillAdmin, ForbiddenError } from "../roles.js";
 import { publicSettings, type InstanceSettings, type Settings, type State, type UserPrefs } from "../store.js";
 import { verifyTmdbKey } from "../tmdb.js";
 import { clearTrailerCache } from "../trailers.js";
@@ -102,6 +102,9 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
     // the list as it was.
     const before = store.addons().map((addon) => ({ key: addon.key, enabled: addon.enabled }));
     await store.update((state) => {
+      // Every manifest was fetched before this point, which is ample time for the gate's
+      // answer to go stale.
+      assertStillAdmin(state.users ?? [], currentUser(req)!);
       const split = splitSettings(backup.settings);
       state.settings = split.instance;
       state.addons = loaded;

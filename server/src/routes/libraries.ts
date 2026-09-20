@@ -13,19 +13,18 @@ import type { LibraryMetaStore } from "../library-meta-store.js";
 import type { LibraryOps } from "../library-ops.js";
 import type { LibraryHealth, LibraryProbe } from "../library-probe.js";
 import { log } from "../logger.js";
+import { assertStillAdmin } from "../roles.js";
 import type { State } from "../store.js";
-import { bumpPermissions, findUserById, usersToBump, type UserData } from "../users.js";
+import { forEachUserData, bumpPermissions, findUserById, usersToBump, type UserData } from "../users.js";
 import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
 
 export interface LibrariesDeps extends RouteContext {
-  accountIdOf(req?: express.Request): string | undefined;
   grantRows(): Promise<Array<{ path: string; source: RootGrant["source"]; grantedAt: string; writable: boolean }>>;
   healthOf(library: LibraryRecord): LibraryHealth;
   invalidateLibrary(): void;
   libraryGrants(): RootGrant[];
   libraryStats(): Promise<Map<string, { titles: number; files: number; bytes: number }>>;
   libraryView(library: LibraryRecord, health: LibraryHealth, stats: { titles: number; files: number; bytes: number }): Record<string, unknown>;
-  mutateData(state: State, id: string, mutate: (data: UserData) => void): void;
   progressOf(data: UserData): Record<string, { path?: string }>;
   refreshLibraryHealth(): Promise<Map<string, LibraryHealth>>;
   libraryProbe: LibraryProbe;
@@ -34,7 +33,7 @@ export interface LibrariesDeps extends RouteContext {
 }
 
 export function registerLibrariesRoutes(app: express.Application, deps: LibrariesDeps): void {
-  const { store, currentUser, accountIdOf, grantRows, healthOf, invalidateLibrary, libraryGrants, libraryStats, libraryView, mutateData, progressOf, refreshLibraryHealth, libraryProbe, metaStore, libraryOps, stopContentAccess } = deps;
+  const { store, currentUser, grantRows, healthOf, invalidateLibrary, libraryGrants, libraryStats, libraryView, progressOf, refreshLibraryHealth, libraryProbe, metaStore, libraryOps, stopContentAccess } = deps;
 
   /** The same check the module makes, raised as the failure the interface renders. */
   async function requireLibraryRoot(value: unknown, opts: { create?: boolean; exceptId?: string } = {}): Promise<string> {
@@ -86,7 +85,9 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
       // not, and writing poster.jpg into it is the one thing that cannot be taken back.
       writeArtwork: req.body?.writeArtwork === true && !health.readOnly,
     };
+    // Probing the folder takes long enough for the gate's answer to go stale.
     await store.update((state) => {
+      assertStillAdmin(state.users ?? [], currentUser(req)!);
       state.libraries = [...(state.libraries ?? []), library];
       if (resumedId) state.departed = (state.departed ?? []).filter((entry) => entry.id !== resumedId);
     });
@@ -273,6 +274,7 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
     // re-check, and a naive "everyone now listed" would miss exactly them.
     const bumped = patch.visibleTo === undefined ? [] : usersToBump(target.visibleTo, patch.visibleTo);
     await store.update((state) => {
+      assertStillAdmin(state.users ?? [], currentUser(req)!);
       state.libraries = (state.libraries ?? []).map((library) => library.id === record.id ? record : library);
       if (bumped.length) state.users = bumpPermissions(state.users ?? [], bumped);
       // The default pickers resolve at use, so a type change only strands the kinds the new
@@ -307,8 +309,8 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
     // again is not a new library that has to be matched all over. The note is what makes the
     // dialog's promise true, and it is dropped with the rest when the user asks to forget.
     const realRoot = await realpath(path.resolve(target.root)).catch(() => path.resolve(target.root));
-    const ownerId = accountIdOf(req);
     await store.update((state) => {
+      assertStillAdmin(state.users ?? [], currentUser(req)!);
       state.libraries = (state.libraries ?? []).filter((library) => library.id !== target.id);
       const kept = activeDeparted(state.departed ?? []).filter((entry) => entry.id !== target.id);
       state.departed = forget ? kept : [...kept, { id: target.id, root: realRoot, removedAt: new Date().toISOString() }].slice(-DEPARTED_MAX);
@@ -316,8 +318,12 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
         if (state.settings.defaultMovieLibrary === target.id) state.settings.defaultMovieLibrary = "";
         if (state.settings.defaultSeriesLibrary === target.id) state.settings.defaultSeriesLibrary = "";
       }
-      if (!forget || !ownerId) return;
-      mutateData(state, ownerId, (data) => {
+      if (!forget) return;
+      // Every account, not the one that pressed the button. A library is an instance
+      // resource and forgetting it drops its metadata and artwork for good, so a row anybody
+      // still holds against it points at something that cannot come back -- and, once it is
+      // the only unresolvable id left, reads as a library they were never granted.
+      forEachUserData(state, (data) => {
         data.favorites = data.favorites.filter((key) => parseLibraryPath(key)?.libraryId !== target.id);
         data.progress = Object.fromEntries(Object.entries(progressOf(data)).filter(([key, value]) => {
           const owner = key.startsWith("file:") ? key.slice(5) : value.path ?? "";

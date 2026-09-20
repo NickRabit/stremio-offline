@@ -47,10 +47,16 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
   /** Whether the caller may see the library a stored path names. A path that names no
    *  library -- an unqualified row from before, or one whose library is gone -- is kept:
    *  the row is the caller's, and what they can no longer open drops out further down. */
+  /** A key with no library id at all is the single-library pass-through and is left alone.
+   *  A key that names a library which is no longer configured is a miss: treating it as
+   *  visible sends it on to be described, and the describing falls back to whichever library
+   *  is left -- so the row comes back showing a file from a library this account may never
+   *  have been granted. */
   const pathVisible = (key: string, viewer: Viewer, libraries: LibraryRecord[]) => {
     const parsed = parseLibraryPath(key);
-    const library = parsed ? libraryFor(libraries, parsed.libraryId) : undefined;
-    return !library || libraryVisible(library, viewer);
+    if (!parsed) return true;
+    const library = libraryFor(libraries, parsed.libraryId);
+    return Boolean(library) && libraryVisible(library!, viewer);
   };
 
   // Starred catalogue titles. The key is type and id, because no file has to exist for them.

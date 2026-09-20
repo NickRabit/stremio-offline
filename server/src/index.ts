@@ -641,11 +641,18 @@ const singleLibrary = () => {
  *  the prune all stop at them, or a delete would take the other library with it. */
 const carveOutsOf = (library: LibraryRecord) => new Set(carveOuts(store.libraries(), library));
 /** The library a key names, with the key's part below it. A key without a library id is
- *  the single-library pass-through; `singleLibrary` throws if there is no such library. */
+ *  the single-library pass-through; `singleLibrary` throws if there is no such library.
+ *
+ *  A key that names a library which is gone is a miss, not a reason to reach for another
+ *  one. Substituting `singleLibrary()` there described the row from whatever library
+ *  happened to be left -- handing back its file name, size and date, from a library the
+ *  caller may never have been granted. */
 const libraryOfKey = (key: string) => {
   const parsed = parseLibraryPath(key);
   if (!parsed) return { library: singleLibrary(), relative: key };
-  return { library: libraryFor(store.libraries(), parsed.libraryId) ?? singleLibrary(), relative: parsed.relative };
+  const library = libraryFor(store.libraries(), parsed.libraryId);
+  if (!library) throw new AppError("Invalid path.", "err.invalidPath");
+  return { library, relative: parsed.relative };
 };
 /** Qualifies a wire path; a path that already names a library is left alone. */
 const libraryKey = (value: string) => {
@@ -1919,7 +1926,7 @@ const libraryOps = new LibraryOps({
 });
 await libraryOps.load();
 
-registerLibrariesRoutes(app, { ...routeContext, accountIdOf, grantRows, healthOf, invalidateLibrary, libraryGrants, libraryStats, libraryView, mutateData, progressOf, refreshLibraryHealth, libraryProbe, metaStore, libraryOps });
+registerLibrariesRoutes(app, { ...routeContext, grantRows, healthOf, invalidateLibrary, libraryGrants, libraryStats, libraryView, progressOf, refreshLibraryHealth, libraryProbe, metaStore, libraryOps });
 
 registerCurateRoutes(app, { ...routeContext, invalidateLibrary, libraryAutoScan, libraryFiles, libraryOps, libraryScan, libraryTarget, libraryUnits, matchLibraryItem, metaStore, ownRecord, ownerOf, prefsOf, refreshLibraryHealth, scheduleMetaBackfill, wirePath });
 

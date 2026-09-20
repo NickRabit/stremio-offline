@@ -38,12 +38,14 @@ const stats = new Map([["alpha", { titles: 3, files: 4, bytes: 5 }]]);
 /** The routes take everything they need from the context, so the app here is a real express
  *  instance over fake collaborators that record what they were asked to do. */
 const mount = async (records: LibraryRecord[] = [library("alpha", 0)], env: RootGrant[] = []): Promise<Harness> => {
-  const state = { libraries: records, grants: [] as RootGrant[], departed: [] as Array<{ id: string; root: string; removedAt: string }> };
+  // `users` lives in the state, not only behind `store.users()`: a mutator reads the state,
+  // and the write-time role check is one of the things that does.
+  const state = { libraries: records, users: [admin, ordinary], grants: [] as RootGrant[], departed: [] as Array<{ id: string; root: string; removedAt: string }> };
   const viewed: Harness["viewed"] = [];
   const enqueued: unknown[] = [];
   const store = {
     libraries: () => state.libraries,
-    users: () => [admin, ordinary],
+    users: () => state.users,
     grants: () => state.grants,
     departed: () => state.departed,
     update: async (mutate: (value: typeof state) => void) => { mutate(state); },
@@ -59,7 +61,6 @@ const mount = async (records: LibraryRecord[] = [library("alpha", 0)], env: Root
     stopUserSessions: async () => undefined,
     requireAccess: () => undefined,
     stopContentAccess: async () => undefined,
-    accountIdOf: () => "usr_00000001",
     grantRows: async () => mergeGrants(env, state.grants).map((grant) => ({ ...grant, writable: true })),
     healthOf: (record) => ({ unreachable: record.id === "alpha", readOnly: record.id === "beta" }),
     invalidateLibrary: () => undefined,
@@ -69,7 +70,6 @@ const mount = async (records: LibraryRecord[] = [library("alpha", 0)], env: Root
       viewed.push({ id: record.id, health, stats: totals });
       return { id: record.id, name: record.name, unreachable: health.unreachable, readOnly: health.readOnly, ...totals };
     },
-    mutateData: (_state, _id, mutate) => mutate({ prefs: {}, favorites: [], watchlist: {}, progress: {}, watchedSeries: {} }),
     progressOf: () => ({}),
     refreshLibraryHealth: async () => new Map(),
     libraryProbe: {

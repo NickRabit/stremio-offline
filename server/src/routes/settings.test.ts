@@ -27,6 +27,13 @@ interface Harness {
  *  the harness keeps a real one and remembers which caller a request speaks for. */
 const mount = async (): Promise<Harness> => {
   const state = {
+    // `users` lives in the state, not only behind a stub: a mutator reads the state, and the
+    // write-time role check is one of the things that does.
+    users: [
+      { id: ADA, username: "ada", role: "admin", secret: "ada-secret", passwordHash: "", createdAt: "", permissions: { downloadToLibrary: true, downloadToDevice: true }, permissionsVersion: 0 },
+      { id: BOB, username: "bob", role: "admin", secret: "bob-secret", passwordHash: "", createdAt: "", permissions: { downloadToLibrary: true, downloadToDevice: true }, permissionsVersion: 0 },
+      { id: CAROL, username: "carol", role: "user", secret: "carol-secret", passwordHash: "", createdAt: "", permissions: { downloadToLibrary: false, downloadToDevice: true }, permissionsVersion: 0 },
+    ] as UserRecord[],
     addons: [],
     libraries: [],
     settings: { ...defaultInstanceSettings(), realDebridToken: "rd-token", tmdbApiKey: "tmdb-key" },
@@ -53,12 +60,13 @@ const mount = async (): Promise<Harness> => {
     store: {
       settings: () => state.settings,
       addons: () => state.addons,
+      users: () => state.users,
       libraries: () => state.libraries,
       update: async (mutate: (state: State) => void) => { mutate(state); },
     } as unknown as Store,
     needsSetup: () => false,
     currentSession: () => undefined,
-    currentUser: (req) => ({ id: userIdOf(req), ...callers[userIdOf(req)] }) as UserRecord,
+    currentUser: (req) => (state.users ?? []).find((user) => user.id === userIdOf(req)) as UserRecord,
     isSecure: () => false,
     stopOwnedPlayback: async () => undefined,
     stopUserAccess: async () => undefined,

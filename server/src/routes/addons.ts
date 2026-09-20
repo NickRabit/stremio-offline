@@ -3,6 +3,7 @@ import { manifestChanged, refreshManifests, type RefreshOutcome } from "../addon
 import { allowedAddons, loadAddon, orderedForUser } from "../addons.js";
 import { AppError } from "../errors.js";
 import { log } from "../logger.js";
+import { assertStillAdmin } from "../roles.js";
 import { normalizeDownloadSettings } from "../naming.js";
 import { essentialAddon, publicAddon, publicAddonRestricted } from "../security.js";
 import type { AddonRecord, AddonRole } from "../types.js";
@@ -53,10 +54,13 @@ export function registerAddonsRoutes(app: express.Application, deps: AddonsDeps)
     res.status(204).end();
   }));
   app.post("/api/addons", asyncRoute(async (req, res) => {
+    const actor = currentUser(req);
     const role = (["catalog", "source", "both"].includes(req.body.role) ? req.body.role : "both") as AddonRole;
     const addon = await loadAddon(String(req.body.url ?? ""), role);
     if (store.addons().some((item) => item.manifest.id === addon.manifest.id && item.manifestUrl === addon.manifestUrl)) throw new AppError("This manifest is already added.", "err.manifestExists");
-    await store.update((state) => state.addons.push(addon)); res.status(201).json(publicAddonView(addon));
+    // Fetching the manifest takes long enough for the gate's answer to go stale.
+    await store.update((state) => { assertStillAdmin(state.users ?? [], actor!); state.addons.push(addon); });
+    res.status(201).json(publicAddonView(addon));
   }));
   // The order of addons is also their priority when sources are ranked.
   app.post("/api/addons/:key/move", asyncRoute(async (req, res) => {
@@ -109,6 +113,7 @@ export function registerAddonsRoutes(app: express.Application, deps: AddonsDeps)
     res.json({ addon: publicAddonView(store.addons().find((a) => a.key === existing.key)!), changed, previousVersion, version: loaded.manifest.version });
   }));
   app.patch("/api/addons/:key", asyncRoute(async (req, res) => {
+    const actor = currentUser(req);
     const existing = store.addons().find((a) => a.key === req.params.key);
     if (!existing) throw new AppError("The addon was not found.", "err.addonNotFound");
     const role = ["catalog", "source", "both"].includes(req.body.role) ? req.body.role as AddonRole : existing.role;
@@ -146,6 +151,7 @@ export function registerAddonsRoutes(app: express.Application, deps: AddonsDeps)
     // ones whose in-flight requests most need to fail their re-check.
     const bumped = allowedUsers === undefined ? [] : usersToBump(before.allowedUsers, allowedUsers);
     await store.update((state) => {
+      assertStillAdmin(state.users ?? [], actor!);
       const addon = state.addons.find((a) => a.key === req.params.key);
       if (!addon) throw new AppError("The addon was not found.", "err.addonNotFound");
       if (typeof req.body.enabled === "boolean") addon.enabled = req.body.enabled;

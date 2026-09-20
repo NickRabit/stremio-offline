@@ -92,6 +92,24 @@ export const MUST_CHANGE_ALLOWED: Rule[] = [
 
 export const isMustChangePathAllowed = (method: string, path: string) => match(MUST_CHANGE_ALLOWED, method, path);
 
+/** The gate again, at the moment of the write.
+ *
+ *  The middleware answers once, at the start of the request. An administrator route that
+ *  awaits before it writes -- hashing a password, fetching a manifest, probing a folder --
+ *  can have that answer go stale inside the request: the account is demoted or switched off
+ *  while it waits, and the write still lands on the authority of a role it no longer has.
+ *
+ *  Called inside the same mutator as the write, where the list cannot move again. The secret
+ *  is compared too, so a password change or a sign-out everywhere invalidates it as surely
+ *  as a demotion does. */
+export const assertStillAdmin = (
+  users: Array<{ id: string; role: Role; secret: string; disabled?: boolean }>,
+  actor: { id: string; secret: string },
+): void => {
+  const now = users.find((user) => user.id === actor.id);
+  if (!now || now.disabled || now.role !== "admin" || now.secret !== actor.secret) throw new ForbiddenError();
+};
+
 export const roleMiddleware = (opts: {
   isOpen: (req: Request) => boolean;
   isInternal: (req: Request) => boolean;
