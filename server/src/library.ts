@@ -101,13 +101,19 @@ export function isPathWithin(value: string, parent: string): boolean {
 
 /** True when `relative` is another library's root itself or holds one: deleting, moving or
  *  renaming it would take that library with it. */
-export function holdsLibraryRoot(carveOuts: ReadonlySet<string> | undefined, relative: string): boolean {
+export function holdsLibraryRoot(
+  carveOuts: ReadonlySet<string> | undefined,
+  relative: string,
+  // Same parameter as `sameFile`, for the same reason: the rule is platform-dependent and
+  // has to be testable on a runner that does not fold. Linux is one, so CI is one.
+  caseInsensitive?: boolean,
+): boolean {
   if (!carveOuts?.size) return false;
   // Folded, because on a case-folding volume `Archiv` and `archiv` are one directory: a
   // guard that compares the spellings would let the other one through, and a nested root
   // recorded in a different case than its parent's tree would not be seen at all.
-  const folder = foldPath(relative);
-  for (const path of carveOuts) if (isPathWithin(foldPath(path), folder)) return true;
+  const folder = foldPath(relative, caseInsensitive);
+  for (const path of carveOuts) if (isPathWithin(foldPath(path, caseInsensitive), folder)) return true;
   return false;
 }
 

@@ -516,14 +516,20 @@ test("the destination picker lists folders browsing would hide", async () => {
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test("the carve-out guard compares folders, not spellings", () => {
-  // On macOS and Windows `Archiv` and `archiv` are one directory. A guard that compares
-  // the strings would let the other spelling through -- and once a nested root is recorded
-  // in a different case than its parent's tree, it would miss the canonical one too.
+test("the carve-out guard compares folders, not spellings, where the volume folds", () => {
+  // Platform-dependent on purpose, so the fold is a parameter: on macOS, Windows and an SMB
+  // share `Archiv` and `archiv` are one directory; on Linux -- and so on CI -- they are two,
+  // and folding there would refuse a delete the user is entitled to.
   const carveOuts = new Set(["Archiv/Serialy"]);
-  assert.equal(holdsLibraryRoot(carveOuts, "Archiv"), true, "the canonical spelling");
-  assert.equal(holdsLibraryRoot(carveOuts, "archiv"), true, "the folded spelling is the same folder");
-  assert.equal(holdsLibraryRoot(new Set(["Archiv/serialy"]), "Archiv/Serialy"), true,
+  const folding = (relative: string) => holdsLibraryRoot(carveOuts, relative, true);
+  const exact = (relative: string) => holdsLibraryRoot(carveOuts, relative, false);
+
+  assert.equal(folding("Archiv"), true, "the canonical spelling, folding volume");
+  assert.equal(exact("Archiv"), true, "the canonical spelling, case-sensitive volume");
+  assert.equal(folding("archiv"), true, "the folded spelling is the same folder");
+  assert.equal(exact("archiv"), false, "on a case-sensitive volume it is a different folder");
+  assert.equal(holdsLibraryRoot(new Set(["Archiv/serialy"]), "Archiv/Serialy", true), true,
     "a carve-out recorded in another case still guards the folder the listing shows");
-  assert.equal(holdsLibraryRoot(carveOuts, "Archiv2"), false, "a shared prefix is not containment");
+  assert.equal(folding("Archiv2"), false, "a shared prefix is not containment");
+  assert.equal(exact("Archiv2"), false, "a shared prefix is not containment either way");
 });
