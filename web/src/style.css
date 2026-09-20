@@ -267,6 +267,11 @@ main.view-catalog{padding-top:98px}main.view-catalog .heading{margin-bottom:8px}
 .stats-pick.chosen .stats-name{color:var(--text);font-weight:700}
 .stats-pick:not(.chosen) .stats-name{color:var(--muted)}
 .stats-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+/* A host row reuses .stats-name outside .stats-pick, where it is not a flex item, so the
+   clip never engaged and a long hostname pushed the row wide. */
+.stats-hosts li{display:flex;align-items:baseline;gap:6px;min-width:0}
+.stats-hosts li>b{margin-left:auto;flex:0 0 auto;font-variant-numeric:tabular-nums}
+.stats-hosts li>small{flex:0 0 auto}
 .stats-track{height:6px;border-radius:4px;background:var(--panel2);overflow:hidden;margin:5px 0 3px}
 .stats-track>span{display:block;height:100%;border-radius:4px;background:linear-gradient(90deg,var(--accent),var(--accent2))}
 .stats-breakdown small{color:var(--muted);font-size:11px}

@@ -92,10 +92,12 @@ const window = (events: TrafficEvent[], from: number): Window => {
   return { bytes, count };
 };
 
-/** A short list of the suffixes that cost two labels, not the public suffix list: an
- *  unlisted one (say `com.tr`) leaves one label too many, which keeps hosts of one
- *  site apart, and never merges two unrelated sites into one row. */
-const MULTI_PART_SUFFIXES = new Set(["co.uk", "org.uk", "ac.uk", "com.au", "co.nz", "co.jp", "com.br", "co.za"]);
+/** The second-level labels a country registry sells under, rather than a list of whole
+ *  suffixes. A list of suffixes was tried and got the failure direction backwards: an
+ *  unlisted one such as `com.tr` fell through to the last two labels, so `film.com.tr` and
+ *  `dizi.com.tr` became one row called `com.tr` -- every site in a country summed into a
+ *  stranger. Reading the shape instead covers every ccTLD at once, listed or not. */
+const REGISTRY_LABELS = new Set(["com", "co", "net", "org", "edu", "gov", "ac", "mil", "or", "ne", "gob", "nom"]);
 
 const IPV4 = /^\d{1,3}(?:\.\d{1,3}){3}$/;
 
@@ -108,8 +110,12 @@ export function registrableDomain(host: string): string {
   if (!name || name.includes(":") || IPV4.test(name)) return host;
   const labels = name.split(".");
   if (labels.length < 2) return host;
-  const suffix = labels.slice(-2).join(".");
-  return labels.slice(MULTI_PART_SUFFIXES.has(suffix) ? -3 : -2).join(".");
+  // `x.co.uk` and `x.com.tr` are three labels deep because the registry sells under the
+  // second one; `x.strem.fun` and `x.real-debrid.com` are two, because `fun` and `com` are
+  // not country codes. A two-letter last label is the ccTLD test.
+  const [second, last] = [labels.at(-2)!, labels.at(-1)!];
+  const underRegistry = labels.length > 2 && last.length === 2 && REGISTRY_LABELS.has(second);
+  return labels.slice(underRegistry ? -3 : -2).join(".");
 }
 
 const identify = {

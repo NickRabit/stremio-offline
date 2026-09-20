@@ -466,7 +466,7 @@ function RootPicker({ reroot, onClose, onDone, onError, onLibrariesChanged }:
               primary that is dead for a reason scrolled out of sight was the picker's
               oldest complaint, so the same line carries the reason. */}
           <p className={`library-picker-status${blocked ? " blocked" : ""}`} title={blocked || selected} aria-live="polite">
-            {blocked || selected}
+            {busy ? t("common.loading") : blocked || selected}
           </p>
           <button type="button" onClick={onClose} disabled={busy}>{t("common.cancel")}</button>
           <button type="button" className="primary" disabled={busy || Boolean(blocked)} onClick={() => void apply()}>

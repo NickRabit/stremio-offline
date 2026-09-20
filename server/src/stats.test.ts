@@ -71,6 +71,16 @@ test("a host is grouped under its registrable domain", () => {
     ["torrentio.strem.fun", "strem.fun"],
     ["tpb-adult-addon.click", "tpb-adult-addon.click"],
     ["cdn.jedna.co.uk", "jedna.co.uk"],
+    // A country registry that no allowlist names. The first attempt kept a list of whole
+    // suffixes, so an unlisted `com.tr` fell through to the last two labels and every
+    // Turkish site summed into one row called `com.tr`. These pin the failure direction.
+    ["film.com.tr", "film.com.tr"],
+    ["dizi.com.tr", "dizi.com.tr"],
+    ["a.co.in", "a.co.in"],
+    ["b.co.in", "b.co.in"],
+    ["shop.com.cn", "shop.com.cn"],
+    // Not a country code, so two labels even though the second-level label is generic.
+    ["cdn.net.example", "net.example"],
     ["cdn.jedna.cz.", "jedna.cz"],
     ["localhost", "localhost"],
     ["knihovna", "knihovna"],
