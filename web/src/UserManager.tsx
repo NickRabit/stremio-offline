@@ -89,7 +89,11 @@ export function UserManager({ session, restricted = false, onChanged, onNotify, 
         : t("users.counts", { libraries: account.libraries, addons: account.addons })}</small>
       <small className="user-admin-seen">{lastSeenText(account.lastSeenAt)}</small>
       {!restricted && <footer className="library-admin-footer">
-        <button onClick={() => setEditingId(account.id)} disabled={busy}>{t("users.edit")}</button>
+        {/* The lists are re-read as the dialog opens. They were loaded when Settings mounted,
+            and what an addon's switch says is an administrator's to change from another page
+            -- a badge that reports "off" for something switched on since is worse than no
+            badge at all. */}
+        <button onClick={() => { setEditingId(account.id); void load().catch(onError); }} disabled={busy}>{t("users.edit")}</button>
       </footer>}
     </article>)}
     {loaded && !accounts.length && <p className="identify-hint">{t("users.empty")}</p>}

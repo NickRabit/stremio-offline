@@ -49,6 +49,16 @@ export const addonAllowed = (addon: AddonRecord, viewer: Viewer): boolean =>
 export const allowedAddons = (addons: AddonRecord[], viewer: Viewer): AddonRecord[] =>
   addons.filter((addon) => addonAllowed(addon, viewer));
 
+/** The order one account reads its addons in: its own, and only if it is an ordinary account.
+ *  An administrator reads the instance order, because that is the one their arrows edit --
+ *  showing them a personal overlay while the note says "this applies to everybody" would be a
+ *  lie, and reordering from that view would scramble the global list. An order kept from
+ *  before a promotion stays stored and is simply not applied. */
+export const orderFor = (
+  user: { id: string; role: string } | undefined,
+  stored: (id: string) => string[] | undefined,
+): string[] | undefined => (user && user.role !== "admin" ? stored(user.id) : undefined);
+
 /** The addons this account sees, in the order it prefers them. Unknown keys
  *  are dropped and unlisted addons follow in the instance's own order, so a
  *  personal list never has to be repaired when the instance changes. */

@@ -278,3 +278,18 @@ test("an addon edit in flight does not survive the administrator losing the role
   assert.equal((await failure(response)).messageKey, "err.notAllowed");
   assert.equal(harness.stored()[0]?.enabled, true, "the write landed on a role the account no longer had");
 });
+
+test("a switched-off addon is listed for an administrator and not for anybody else", async (t) => {
+  const off = { ...granted("dark"), enabled: false };
+  const harness = await mount([granted("alpha"), off]);
+  t.after(harness.close);
+
+  const administrator = await (await api(harness.base, "/api/addons")).json() as Array<{ key: string }>;
+  assert.deepEqual(administrator.map((item) => item.key), ["alpha", "dark"], "the switch is the administrator's, so they see it");
+
+  // An ordinary account has no switch. Listing it there is an entry that cannot be used,
+  // fixed or removed -- it reads as something broken, and the count promises more than the
+  // account has.
+  const ordinary = await (await api(harness.base, "/api/addons", { user: BOB })).json() as Array<{ key: string }>;
+  assert.deepEqual(ordinary.map((item) => item.key), ["alpha"]);
+});

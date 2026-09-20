@@ -1,6 +1,6 @@
 import type express from "express";
 import { manifestChanged, refreshManifests, type RefreshOutcome } from "../addon-refresh.js";
-import { allowedAddons, loadAddon, orderedForUser } from "../addons.js";
+import { allowedAddons, loadAddon, orderedForUser, orderFor } from "../addons.js";
 import { AppError } from "../errors.js";
 import { log } from "../logger.js";
 import { assertStillAdmin } from "../roles.js";
@@ -18,15 +18,8 @@ export interface AddonsDeps extends RouteContext {
 export function registerAddonsRoutes(app: express.Application, deps: AddonsDeps): void {
   const { store, currentUser, storeRefreshed, publicAddonView, stopContentAccess } = deps;
 
-  /** The caller's own priority, and only for an ordinary account. An administrator reads
-   *  the global order, because that is the one their arrows edit: showing them a personal
-   *  overlay while the note says "this applies to everybody" would be a lie, and reordering
-   *  from that view would scramble the global list. A personal order kept from before a
-   *  promotion is left stored and simply not applied. */
-  const orderOf = (req: express.Request) => {
-    const user = currentUser(req);
-    return user && user.role !== "admin" ? store.userData(user.id).addonOrder : undefined;
-  };
+  const orderOf = (req: express.Request) =>
+    orderFor(currentUser(req), (id) => store.userData(id).addonOrder);
   /** Keys the caller may see, in one copy each: an invisible key would record what
    *  somebody was once allowed, which is exactly what the overlay must not become. */
   const visibleOrder = (value: unknown, visible: Set<string>): string[] => {
@@ -39,8 +32,16 @@ export function registerAddonsRoutes(app: express.Application, deps: AddonsDeps)
     return order;
   };
 
-  app.get("/api/addons", (req, res) => res.json(
-    orderedForUser(allowedAddons(store.addons(), viewerOf(currentUser(req))), orderOf(req)).map(publicAddonView)));
+  /** What the caller may use. An administrator sees the switched-off ones too, because the
+   *  switch is theirs; an ordinary account has no switch, so a disabled addon there is an
+   *  entry it cannot use, cannot fix and cannot remove -- it reads as something broken, and
+   *  the count beside it promises more than the account has. */
+  app.get("/api/addons", (req, res) => {
+    const user = currentUser(req);
+    const visible = allowedAddons(store.addons(), viewerOf(user));
+    const usable = user && user.role !== "admin" ? visible.filter((addon) => addon.enabled) : visible;
+    res.json(orderedForUser(usable, orderOf(req)).map(publicAddonView));
+  });
   // A person's own priority. Every account may set it; it never touches the global order,
   // which stays the administrator's `move` below.
   app.put("/api/addons/order", asyncRoute(async (req, res) => {

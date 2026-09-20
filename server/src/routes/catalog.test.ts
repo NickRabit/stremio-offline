@@ -40,6 +40,7 @@ const addon = (key: string, catalogs: CatalogDefinition[], options: { role?: Add
 const mount = async (records: AddonRecord[] = [], meta: MetaItem | null = null, options: {
   libraries?: LibraryRecord[];
   viewer?: UserRecord;
+  addonOrder?: Record<string, string[]>;
   bound?: Record<string, LibraryMetaRecord>;
 } = {}): Promise<Harness> => {
   const viewer = options.viewer ?? admin;
@@ -47,6 +48,8 @@ const mount = async (records: AddonRecord[] = [], meta: MetaItem | null = null, 
   const store = {
     addons: () => records,
     libraries: () => options.libraries ?? [],
+    // The caller's own addon priority, which every chooser list is ordered by.
+    userData: (id: string) => ({ addonOrder: options.addonOrder?.[id] ?? [] }),
     settings: () => ({ tmdbApiKey: undefined }),
   } as unknown as Store;
   const deps: CatalogDeps = {
@@ -278,5 +281,45 @@ test("a subtitle remembers which addon it came from", async (t) => {
     // served from an addon the account may no longer use.
     const resource = mediaResources.get(listed[0].subtitleId, "session-1", "subtitle");
     assert.equal(resource.stream.addonKey, "subs");
+  });
+});
+
+test("the sources a person picks from follow the priority they set, not the instance's", async (t) => {
+  const records = [
+    addon("first", [], { role: "source", allowedUsers: [alice.id], resources: ["stream"] }),
+    addon("second", [], { role: "source", allowedUsers: [alice.id], resources: ["stream"] }),
+  ];
+  // The instance lists `first` before `second`; Alice has said she wants the other way round.
+  // Priority is the one setting an ordinary account owns, so a list that ignores it -- and
+  // this is the list a source is actually chosen from -- makes that setting a lie.
+  const hers = await mount(records, null, { viewer: alice, addonOrder: { [alice.id]: ["second", "first"] } });
+  t.after(hers.close);
+  const instance = await mount(records, null, { viewer: admin });
+  t.after(instance.close);
+
+  await withStubbedAddons((url) => json({ streams: [{ url: `https://cdn.example/${new URL(url).host}/movie.mp4` }] }), async () => {
+    const mine = await (await api(hers.base, "/api/streams/movie/tt1")).json() as Array<{ addonKey: string }>;
+    assert.deepEqual(mine.map((item) => item.addonKey), ["second", "first"]);
+
+    // The administrator's arrows edit the instance order, so that is the one they read back.
+    const theirs = await (await api(instance.base, "/api/streams/movie/tt1")).json() as Array<{ addonKey: string }>;
+    assert.deepEqual(theirs.map((item) => item.addonKey), ["first", "second"]);
+  });
+});
+
+test("an administrator's own stored order is not applied to what they are shown", async (t) => {
+  const records = [
+    addon("first", [], { role: "source", resources: ["stream"] }),
+    addon("second", [], { role: "source", resources: ["stream"] }),
+  ];
+  // An order kept from before a promotion stays stored and is simply not applied: the arrows
+  // an administrator sees edit the instance order, and reading back a personal overlay would
+  // make those arrows appear to do something they do not.
+  const harness = await mount(records, null, { viewer: admin, addonOrder: { [admin.id]: ["second", "first"] } });
+  t.after(harness.close);
+
+  await withStubbedAddons((url) => json({ streams: [{ url: `https://cdn.example/${new URL(url).host}/movie.mp4` }] }), async () => {
+    const items = await (await api(harness.base, "/api/streams/movie/tt1")).json() as Array<{ addonKey: string }>;
+    assert.deepEqual(items.map((item) => item.addonKey), ["first", "second"]);
   });
 });

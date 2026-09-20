@@ -1,6 +1,6 @@
 import type express from "express";
 import { readFile } from "node:fs/promises";
-import { allowedAddons, catalog, orderedForUser, searchAll, searchableCatalogs, streamCandidates, streams, subtitles, type MetaProvider } from "../addons.js";
+import { allowedAddons, catalog, orderedForUser, orderFor, searchAll, searchableCatalogs, streamCandidates, streams, subtitles, type MetaProvider } from "../addons.js";
 import { AppError } from "../errors.js";
 import { ExternalIdStore, siteLinks } from "../external-ids.js";
 import { images } from "../images.js";
@@ -36,6 +36,11 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
   /** The addons this caller may use, read once per request. A disabled addon is left out
    *  later by the helpers that honour `enabled`; visibility narrows an enabled addon only. */
   const usable = (req: express.Request) => allowedAddons(store.addons(), viewerOf(currentUser(req)));
+  /** The same addons, in the order the caller put them in. Everything that asks addons for
+   *  something the caller will then choose between has to use this: the priority is the one
+   *  setting an ordinary account owns, so a list that ignores it makes that setting a lie. */
+  const inOrder = (req: express.Request) =>
+    orderedForUser(usable(req), orderFor(currentUser(req), (id) => store.userData(id).addonOrder));
 
   /** The binding key for a path the caller may see. A path in an invisible library reads
    *  exactly like one that carries no binding, which is what these two endpoints already
@@ -52,7 +57,7 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
     return trailerFor(allowedAddons(store.addons(), viewer), type, id, language, apiKey ? { apiKey, language } : undefined);
   };
 
-  app.get("/api/catalogs", (req, res) => res.json(usable(req).filter((a) => a.enabled && a.role !== "source").flatMap((addon) => (addon.manifest.catalogs ?? []).map((item) => ({ ...item, addonKey: addon.key, addonName: addon.manifest.name })) )));
+  app.get("/api/catalogs", (req, res) => res.json(inOrder(req).filter((a) => a.enabled && a.role !== "source").flatMap((addon) => (addon.manifest.catalogs ?? []).map((item) => ({ ...item, addonKey: addon.key, addonName: addon.manifest.name })) )));
   app.get("/api/catalog", asyncRoute(async (req, res) => {
     // Switched off as well as allowed: `usable` narrows by who is asking, and the listing
     // above drops the disabled ones, but a catalogue id somebody already has is a direct
@@ -67,7 +72,7 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
     if (!query) throw new AppError("Enter a search term.", "err.emptyQuery");
     const type = req.query.type ? String(req.query.type) : undefined;
     const addonKey = req.query.addon ? String(req.query.addon) : undefined;
-    const found = await searchAll(usable(req), query, type, req.query.cursor ? String(req.query.cursor) : undefined, {
+    const found = await searchAll(inOrder(req), query, type, req.query.cursor ? String(req.query.cursor) : undefined, {
       addonKey,
       catalogType: addonKey && req.query.catalogType ? String(req.query.catalogType) : undefined,
       catalogId: addonKey && req.query.catalogId ? String(req.query.catalogId) : undefined,
@@ -75,7 +80,7 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
     });
     res.json({ ...found, items: found.items.map((item) => images.rewriteMeta(item)) });
   }));
-  app.get("/api/searchable", (req, res) => res.json(searchableCatalogs(usable(req)).map(({ addon, definition }) => ({ addonKey: addon.key, addonName: addon.manifest.name, globalSearch: addon.globalSearch, type: definition.type, id: definition.id, name: definition.name ?? definition.id }))));
+  app.get("/api/searchable", (req, res) => res.json(searchableCatalogs(inOrder(req)).map(({ addon, definition }) => ({ addonKey: addon.key, addonName: addon.manifest.name, globalSearch: addon.globalSearch, type: definition.type, id: definition.id, name: definition.name ?? definition.id }))));
   app.get("/api/meta/:type/:id", asyncRoute(async (req, res) => {
     const language = normalizeLanguage(String(req.query.language ?? "")) ?? prefsOf(req).uiLanguage;
     const meta = await cachedMeta(String(req.params.type), String(req.params.id), language, viewerOf(currentUser(req)));
@@ -127,14 +132,12 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
   }));
   app.get("/api/stream-sources/:type/:id", (req, res) => {
     // The picker lists these in the caller's own order, the same one `GET /api/addons` answers.
-    const user = currentUser(req);
-    const order = user ? store.userData(user.id).addonOrder : undefined;
-    res.json(streamCandidates(orderedForUser(usable(req), order), String(req.params.type), String(req.params.id))
+    res.json(streamCandidates(inOrder(req), String(req.params.type), String(req.params.id))
       .map((addon) => ({ key: addon.key, name: addon.manifest.name })));
   });
   app.get("/api/streams/:type/:id", asyncRoute(async (req, res) => {
     const owner = ownerOf(req);
-    const items = await streams(usable(req), String(req.params.type), String(req.params.id), req.query.addon ? String(req.query.addon) : undefined);
+    const items = await streams(inOrder(req), String(req.params.type), String(req.params.id), req.query.addon ? String(req.query.addon) : undefined);
     // The listing hands out one resource per source, and the addons that answered took as
     // long as they liked: an addon switched off, or a grant withdrawn, while they were
     // answering must not get one. Nothing is awaited between the check and the listing.
@@ -145,7 +148,7 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
   }));
   app.get("/api/subtitles/:type/:id", asyncRoute(async (req, res) => {
     const owner = ownerOf(req);
-    const items = await subtitles(usable(req), String(req.params.type), String(req.params.id));
+    const items = await subtitles(inOrder(req), String(req.params.type), String(req.params.id));
     requireAccess(req);
     // The addon travels with the resource. Without it the record names no content, so the
     // sweep that runs when an addon is removed or taken away cannot recognise it, and the
