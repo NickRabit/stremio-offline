@@ -630,7 +630,7 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .identify-scope button{justify-content:flex-start;text-align:left;padding:8px 10px;font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}
 .identify-episode{display:grid;gap:8px;padding:10px;border:1px solid var(--line);border-radius:9px;background:#10151d}
 .identify-episode select{padding:8px 10px;font-size:12px}
-.move-card{width:min(480px,100%)}
+.move-card{width:min(480px,100%);max-height:100%}
 .move-libraries{display:flex;flex-wrap:wrap;gap:6px}
 .move-libraries button{padding:5px 10px;font-size:12px;border:1px solid var(--line);border-radius:999px;background:#10151d;color:var(--muted)}
 .move-libraries button[aria-pressed=true]{border-color:var(--accent2);color:var(--text)}
@@ -1020,9 +1020,11 @@ img.broken{visibility:hidden}
 .library-admin-danger button{justify-content:flex-start;padding:8px 10px;font-size:11px;white-space:nowrap}
 .library-badge{font-style:normal;font-size:10px;font-weight:700;color:var(--muted);border:1px solid var(--line);border-radius:99px;padding:2px 8px}
 .library-badge.warn{color:#e7b867;border-color:#e7b86766;background:#2a2113}
-.library-manager-card{width:min(760px,100%)}
-.library-picker-card{width:min(640px,100%);max-height:min(100%,780px)}
-.library-edit-card{width:min(620px,100%);max-height:min(100%,780px)}
+/* These four size to their content and stop at the screen. A pixel cap made them scroll
+   with room to spare -- a form that fits in the window should not have a scrollbar. */
+.library-manager-card{width:min(760px,100%);max-height:100%}
+.library-picker-card{width:min(640px,100%);max-height:100%}
+.library-edit-card{width:min(620px,100%);max-height:100%}
 .library-edit-body{display:grid;gap:0}
 .library-edit-section{display:grid;gap:12px;padding:15px 0;border-top:1px solid var(--line)}
 .library-edit-section:first-child{padding-top:0;border-top:0}
@@ -1158,6 +1160,13 @@ img.broken{visibility:hidden}
 /* A phone in landscape leaves about 375px for the whole dialog, and the desktop rhythm of
    the sections does not fit in it: the tightened spacing keeps the dialog inside the
    screen it was given. */
+/* Between a laptop and a short window the edit form is a little taller than the room it
+   gets, and a scrollbar for the last 80px is worse than a slightly tighter rhythm. */
+@media(max-height:880px){
+  .library-edit-section{gap:9px;padding-block:11px}
+  .library-edit-controls{gap:9px}
+  .library-edit-defaults{gap:8px;padding:10px}
+}
 @media(max-height:460px){
   .library-edit-section,.addon-edit-section{gap:8px;padding-block:10px}
   /* Scoped to the dialog's own card: `.library-manager` and `.library-admin-row` are also
