@@ -126,7 +126,7 @@ export function LibraryManagerDialog({ onClose, ...rest }: Parameters<typeof Lib
     <div className="panel identify-card dialog-split library-manager-card">
       <div className="identify-head">
         <h2>{t("library.libraries")}</h2>
-        <button type="button" className="icon-button" aria-label={t("common.cancel")} onClick={onClose}><X/></button>
+        <button type="button" className="icon-button" aria-label={t("common.close")} onClick={onClose}><X/></button>
       </div>
       <div className="dialog-body">
         <LibraryManager {...rest} />
@@ -189,7 +189,7 @@ function LibraryEditDialog({ library, libraryCount, onClose, onSave, onScan, onR
     <form className="panel identify-card dialog-split library-edit-card" onSubmit={(event) => { event.preventDefault(); void save(); }}>
       <div className="identify-head">
         <h2>{t("library.editLibrary")}</h2>
-        <button type="button" className="icon-button" aria-label={t("common.cancel")} disabled={busy} onClick={onClose}><X/></button>
+        <button type="button" className="icon-button" aria-label={t("common.close")} disabled={busy} onClick={onClose}><X/></button>
       </div>
       <div className="dialog-body library-edit-body">
         <section className="library-edit-section">
@@ -354,7 +354,7 @@ function RootPicker({ reroot, onClose, onDone, onError, onLibrariesChanged }:
     <div className="panel identify-card dialog-split library-picker-card">
       <div className="identify-head">
         <h2>{reroot ? t("library.reroot") : t("library.addLibrary")}</h2>
-        <button type="button" className="icon-button" aria-label={t("common.cancel")} onClick={onClose}><X/></button>
+        <button type="button" className="icon-button" aria-label={t("common.close")} onClick={onClose}><X/></button>
       </div>
       <div className="dialog-body">
       {!reroot && <section className="library-picker-section library-picker-details">

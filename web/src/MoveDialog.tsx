@@ -73,7 +73,7 @@ export function MoveDialog({ path, paths, copy = false, label, itemType, librari
     <div className="panel identify-card dialog-split move-card">
       <div className="identify-head">
         <h2>{t(copy ? "library.copyTitle" : "library.moveTitle", { name: label })}</h2>
-        <button type="button" className="icon-button" aria-label={t("common.cancel")} onClick={onClose}><X/></button>
+        <button type="button" className="icon-button" aria-label={t("common.close")} onClick={onClose}><X/></button>
       </div>
       {offered.length > 1 && <div className="move-libraries" role="group" aria-label={t("library.moveToLibrary")}>
         {offered.map((library) => <button type="button" key={library.id} aria-pressed={current?.id === library.id}

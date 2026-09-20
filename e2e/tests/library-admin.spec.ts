@@ -86,7 +86,7 @@ test("a granted root is added, previewed and revoked without losing what it reme
   await expect(picker).toContainText("Nalezeno 1 titulů, 1 souborů.");
   await picker.getByRole("button", { name: "Zrušit" }).click();
   await expect(picker).toHaveCount(0);
-  await dialog.getByRole("button", { name: "Zrušit" }).click();
+  await dialog.getByRole("button", { name: "Zavřít" }).click();
   await expect(dialog).toHaveCount(0);
 
   // A folder that is not on disk yet is named in the picker and created by the request that
@@ -113,7 +113,7 @@ test("a granted root is added, previewed and revoked without losing what it reme
   expect(made).toMatchObject({ name: "Nové filmy", type: "mixed" });
   await request.delete(`/api/libraries/${made.id}?forget=1`);
   await rm(added, { recursive: true, force: true });
-  await tools.getByRole("button", { name: "Zrušit" }).click();
+  await tools.getByRole("button", { name: "Zavřít" }).click();
   await expect(tools).toHaveCount(0);
 
   // Renaming belongs with the library's other settings, and the row follows the saved dialog.
