@@ -69,7 +69,6 @@ const mount = async (): Promise<Harness> => {
     currentUser: (req) => (state.users ?? []).find((user) => user.id === userIdOf(req)) as UserRecord,
     isSecure: () => false,
     stopOwnedPlayback: async () => undefined,
-    stopUserAccess: async () => undefined,
     stopUserSessions: async () => undefined,
     requireAccess: () => undefined,
     stopContentAccess: async (opts) => { harness.onStopContent?.(opts); },

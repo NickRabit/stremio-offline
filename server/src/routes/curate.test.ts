@@ -92,7 +92,6 @@ const mount = async (options: { libraries?: LibraryRecord[]; records?: Record<st
     currentUser: () => ({ id: ADA, username: "ada", role: "admin" } as UserRecord),
     isSecure: () => false,
     stopOwnedPlayback: async () => undefined,
-    stopUserAccess: async () => undefined,
     stopUserSessions: async () => undefined,
     requireAccess: () => undefined,
     stopContentAccess: async () => undefined,

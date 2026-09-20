@@ -33,7 +33,6 @@ const mount = async (jobs: unknown[] = []): Promise<Harness> => {
     currentUser: () => undefined,
     isSecure: () => false,
     stopOwnedPlayback: async () => undefined,
-    stopUserAccess: async () => undefined,
     stopUserSessions: async () => undefined,
     requireAccess: () => undefined,
     stopContentAccess: async () => undefined,

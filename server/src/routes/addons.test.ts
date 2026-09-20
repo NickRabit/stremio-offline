@@ -64,7 +64,6 @@ const mount = async (records: AddonRecord[] = [addon("alpha")]): Promise<Harness
     currentUser: userOf,
     isSecure: () => false,
     stopOwnedPlayback: async () => undefined,
-    stopUserAccess: async () => undefined,
     stopUserSessions: async () => undefined,
     requireAccess: () => undefined,
     stopContentAccess: async () => undefined,

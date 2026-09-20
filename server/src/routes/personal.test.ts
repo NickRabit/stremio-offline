@@ -59,7 +59,6 @@ const mount = async (libraries: LibraryRecord[] = []): Promise<Harness> => {
     },
     isSecure: () => false,
     stopOwnedPlayback: async () => undefined,
-    stopUserAccess: async () => undefined,
     stopUserSessions: async () => undefined,
     requireAccess: () => undefined,
     stopContentAccess: async () => undefined,

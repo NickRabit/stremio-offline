@@ -59,6 +59,10 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
     res.json(createSettingsBackup({ ...store.settings(), ...prefsOf(req) }, store.addons(), store.libraries()));
   }));
   app.post("/api/settings/import", asyncRoute(async (req, res) => {
+    // Captured before the manifests are fetched: read again inside the mutator it would
+    // answer `undefined` for an account switched off or signed out while this waited, and a
+    // record compared against itself proves nothing.
+    const actor = currentUser(req);
     // The libraries are this instance's, so a rule that names one from somewhere else is
     // remapped before anything is written: by root first, then by name.
     const parsed = remapBackupLibraries(parseSettingsBackup(req.body), store.libraries());
@@ -104,7 +108,7 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
     await store.update((state) => {
       // Every manifest was fetched before this point, which is ample time for the gate's
       // answer to go stale.
-      assertStillAdmin(state.users ?? [], currentUser(req)!);
+      assertStillAdmin(state.users ?? [], actor);
       const split = splitSettings(backup.settings);
       state.settings = split.instance;
       state.addons = loaded;

@@ -382,6 +382,7 @@ export const en = {
   "onboarding.title": "Add your first Stremio addon",
   "onboarding.text": "The app needs at least one catalog manifest. Source manifests can be added separately.",
   "onboarding.action": "Add a manifest",
+  "onboarding.noneGranted": "No addon has been made available to this account yet. An administrator decides which ones it may use.",
 
   // Library.
   "library.eyebrow": "LIBRARY",

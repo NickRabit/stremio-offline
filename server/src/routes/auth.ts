@@ -6,7 +6,7 @@ import { isUiLanguage } from "../language.js";
 import { log } from "../logger.js";
 import { logoutDenied, RestrictedError } from "../restricted.js";
 import type { State } from "../store.js";
-import { emptyUserData, findUser, findUserById, newUserId, USERNAME_MIN, type UserRecord } from "../users.js";
+import { claimLegacyData, emptyUserData, findUser, findUserById, type MigratableState, newUserId, USERNAME_MIN, type UserRecord } from "../users.js";
 import { asyncRoute, type RouteContext } from "./context.js";
 
 const logins = new LoginThrottle();
@@ -62,6 +62,13 @@ export function registerAuthRoutes(app: express.Application, ctx: RouteContext):
         ...(state.userData ?? {}),
         [id]: { ...emptyUserData(), prefs: { uiLanguage: chosen, audioLanguage: chosen, subtitleLanguage: chosen } },
       };
+      // Whatever the install already had belongs to the account being made. A fresh install
+      // has nothing to claim; an install that reached this screen because its `admin/admin`
+      // account was thrown away at boot has everything -- favourites, watchlist, progress and
+      // markers -- still at the top level, in the shape that predates accounts. The language
+      // just chosen wins over the one the old settings carried.
+      claimLegacyData(state as unknown as MigratableState, id);
+      state.schemaVersion = 3;
     });
     res.setHeader("set-cookie", sessionCookie(createSession(secret, id, Date.now() + REMEMBER_DAYS * 24 * 60 * 60 * 1000), true, ctx.isSecure(req)));
     log("INFO", "Account created on first run", { username, language: chosen });

@@ -57,7 +57,6 @@ const mount = async (records: LibraryRecord[] = [library("alpha", 0)], env: Root
     currentUser: (req) => (req.header("x-user") === BOB ? ordinary : admin),
     isSecure: () => false,
     stopOwnedPlayback: async () => undefined,
-    stopUserAccess: async () => undefined,
     stopUserSessions: async () => undefined,
     requireAccess: () => undefined,
     stopContentAccess: async () => undefined,

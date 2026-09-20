@@ -272,6 +272,12 @@ const currentUser = (req: express.Request) => {
 /** Which account a call speaks for. A request answers with the account its session names;
  *  work with no request in hand -- a library job resumed from disk, the artwork queue --
  *  belongs to the one account this release has. */
+/** Background work -- a scan, an artwork job, a metadata backfill -- has no request and so no
+ *  person to speak for. It reads the first account's settings, which is a deliberate choice of
+ *  *some* configured language over the built-in English, not a claim that the first account
+ *  owns anything. Nothing that writes personal rows may resolve its account this way: those
+ *  take the id explicitly, because after the first account is deleted the next one in the list
+ *  is an ordinary user who never asked for any of it. */
 const accountIdOf = (req?: express.Request): string | undefined =>
   req ? currentUser(req)?.id : store.users()[0]?.id;
 /** That person's settings, over the built-in defaults while the instance has no account. */
@@ -393,7 +399,6 @@ const revocations = new Revocations({
 /** One session: what signing out one device drops. */
 const stopOwnedPlayback = (sid: string) => revocations.stopSession(sid);
 /** Everything one account holds, across all its devices. */
-const stopUserAccess = (userId: string) => revocations.stopUser(userId);
 /** A sign-out or a password change reaches only what the account is holding open. Its
  *  queued downloads are owner-bound, not session-bound, and must outlive both. */
 const stopUserSessions = (userId: string) => revocations.stopUserSessions(userId);
@@ -513,7 +518,7 @@ setInterval(() => {
   }
 }, 1000).unref();
 
-const routeContext: RouteContext = { store, needsSetup, currentSession, currentUser, isSecure, stopOwnedPlayback, stopUserAccess, stopUserSessions, requireAccess, stopContentAccess };
+const routeContext: RouteContext = { store, needsSetup, currentSession, currentUser, isSecure, stopOwnedPlayback, stopUserSessions, requireAccess, stopContentAccess };
 registerAuthRoutes(app, routeContext);
 registerUsersRoutes(app, { ...routeContext, deleteUserAccess, permissionsChanged });
 

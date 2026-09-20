@@ -53,7 +53,6 @@ const mount = async (state?: unknown): Promise<Harness> => {
     },
     isSecure: (req) => req.headers["x-forwarded-proto"] === "https" || req.protocol === "https",
     stopOwnedPlayback: async (sid) => { stopped.push(sid); },
-    stopUserAccess: async (userId) => { stoppedUsers.push(userId); sweeps.push(`full:${userId}`); },
     stopUserSessions: async (userId) => { stoppedUsers.push(userId); sweeps.push(`sessions:${userId}`); },
     requireAccess: () => undefined,
     stopContentAccess: async () => undefined,
@@ -274,6 +273,34 @@ test("the must-change flag travels to the interface, which has no other way to k
     body: { currentPassword: "admin-set", newPassword: "moje-vlastni" },
   });
   assert.equal((await changed.json() as { mustChangePassword?: boolean }).mustChangePassword, false, "the interface would keep showing the form");
+});
+
+test("setup claims the history an install had before it was sent back to the setup screen", async (t) => {
+  // The old `admin/admin` account is thrown away at boot rather than migrated, so its owner
+  // arrives here -- with every favourite, watchlist row, resume position and marker still at
+  // the top level of the state, in the shape that predates accounts.
+  const harness = await mount({
+    settings: { uiLanguage: "en", concurrentDownloads: 4 },
+    favorites: ["lib_1/Film"],
+    watchlist: { "movie:tt1": { type: "movie", id: "tt1" } },
+    progress: { "file:lib_1/Film.mkv": { position: 12, duration: 100 } },
+    watchedSeries: { tt2: { name: "Show" } },
+  });
+  t.after(harness.close);
+
+  const created = await api(harness.base, "/api/auth/setup", { method: "POST", body: { username: "owner", password: "secret1", language: "cs" } });
+  assert.equal(created.status, 201);
+  const [record] = harness.store.users();
+
+  const data = harness.store.userData(record!.id);
+  assert.deepEqual(data.favorites, ["lib_1/Film"]);
+  assert.deepEqual(Object.keys(data.watchlist), ["movie:tt1"]);
+  assert.deepEqual(Object.keys(data.progress), ["file:lib_1/Film.mkv"]);
+  assert.deepEqual(Object.keys(data.watchedSeries), ["tt2"]);
+  // The language chosen on this screen wins over the one the old settings carried.
+  assert.equal(harness.store.prefs(record!.id).uiLanguage, "cs");
+  assert.equal("uiLanguage" in harness.store.settings(), false, "a personal key stayed on the instance half");
+  assert.equal(harness.store.settings().concurrentDownloads, 4);
 });
 
 test("POST /api/auth/login answers 401, then 429 with retry-after after six failures", async (t) => {

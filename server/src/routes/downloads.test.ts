@@ -84,7 +84,6 @@ const mount = async (
     currentUser: () => options.viewer ?? admin,
     isSecure: () => false,
     stopOwnedPlayback: async () => undefined,
-    stopUserAccess: async () => undefined,
     stopUserSessions: async () => undefined,
     requireAccess: () => undefined,
     stopContentAccess: async () => undefined,

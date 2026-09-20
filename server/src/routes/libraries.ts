@@ -62,6 +62,11 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
   }));
 
   app.post("/api/libraries", asyncRoute(async (req, res) => {
+    // The actor as the request resolved it, captured before anything is awaited. Reading it
+    // again inside the mutator would answer `undefined` in exactly the cases worth catching --
+    // the account switched off, the secret rotated, the session revoked -- and comparing a
+    // record against itself catches nothing at all.
+    const actor = currentUser(req);
     const name = String(req.body?.name ?? "").trim();
     if (!name) throw new AppError("Give the library a name.", "err.libraryNameRequired");
     const type = asLibraryType(req.body?.type);
@@ -87,7 +92,7 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
     };
     // Probing the folder takes long enough for the gate's answer to go stale.
     await store.update((state) => {
-      assertStillAdmin(state.users ?? [], currentUser(req)!);
+      assertStillAdmin(state.users ?? [], actor);
       state.libraries = [...(state.libraries ?? []), library];
       if (resumedId) state.departed = (state.departed ?? []).filter((entry) => entry.id !== resumedId);
     });
@@ -211,6 +216,11 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
   // The item routes come after every literal `/api/libraries/...` route: Express matches in
   // registration order, so a `:id` route above them would swallow `/libraries/grants`.
   app.patch("/api/libraries/:id", asyncRoute(async (req, res) => {
+    // The actor as the request resolved it, captured before anything is awaited. Reading it
+    // again inside the mutator would answer `undefined` in exactly the cases worth catching --
+    // the account switched off, the secret rotated, the session revoked -- and comparing a
+    // record against itself catches nothing at all.
+    const actor = currentUser(req);
     const target = store.libraries().find((library) => library.id === req.params.id);
     if (!target) throw new AppError("The library was not found.", "err.libraryNotFound", 404);
     const patch: Partial<LibraryRecord> = {};
@@ -274,7 +284,7 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
     // re-check, and a naive "everyone now listed" would miss exactly them.
     const bumped = patch.visibleTo === undefined ? [] : usersToBump(target.visibleTo, patch.visibleTo);
     await store.update((state) => {
-      assertStillAdmin(state.users ?? [], currentUser(req)!);
+      assertStillAdmin(state.users ?? [], actor);
       state.libraries = (state.libraries ?? []).map((library) => library.id === record.id ? record : library);
       if (bumped.length) state.users = bumpPermissions(state.users ?? [], bumped);
       // The default pickers resolve at use, so a type change only strands the kinds the new
@@ -300,6 +310,11 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
   }));
 
   app.delete("/api/libraries/:id", asyncRoute(async (req, res) => {
+    // The actor as the request resolved it, captured before anything is awaited. Reading it
+    // again inside the mutator would answer `undefined` in exactly the cases worth catching --
+    // the account switched off, the secret rotated, the session revoked -- and comparing a
+    // record against itself catches nothing at all.
+    const actor = currentUser(req);
     const check = checkLibraryRemoval(store.libraries(), String(req.params.id));
     if (!check.ok) throw new AppError(check.message, check.messageKey, check.status);
     const target = check.library;
@@ -310,7 +325,7 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
     // dialog's promise true, and it is dropped with the rest when the user asks to forget.
     const realRoot = await realpath(path.resolve(target.root)).catch(() => path.resolve(target.root));
     await store.update((state) => {
-      assertStillAdmin(state.users ?? [], currentUser(req)!);
+      assertStillAdmin(state.users ?? [], actor);
       state.libraries = (state.libraries ?? []).filter((library) => library.id !== target.id);
       const kept = activeDeparted(state.departed ?? []).filter((entry) => entry.id !== target.id);
       state.departed = forget ? kept : [...kept, { id: target.id, root: realRoot, removedAt: new Date().toISOString() }].slice(-DEPARTED_MAX);

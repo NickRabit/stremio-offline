@@ -193,7 +193,6 @@ const mount = async (options: {
     currentUser,
     isSecure: () => false,
     stopOwnedPlayback: async () => undefined,
-    stopUserAccess: (userId) => revocations.stopUser(userId),
     stopUserSessions: (userId) => revocations.stopUserSessions(userId),
     requireAccess: () => undefined,
     stopContentAccess: async () => undefined,

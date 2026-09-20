@@ -20,8 +20,6 @@ export interface RouteContext {
    *  Another device of the same person is left alone. */
   stopOwnedPlayback(sid: string): Promise<void>;
   /** Everything one account holds, across all its devices. A password change and a
-   *  sign-out everywhere reach this rather than the session sweep. */
-  stopUserAccess(userId: string): Promise<void>;
   /** Only what the account holds open. A sign-out must not touch its download queue. */
   stopUserSessions(userId: string): Promise<void>;
   /** Refuses at the moment a resource is issued or a transfer started: the account, its

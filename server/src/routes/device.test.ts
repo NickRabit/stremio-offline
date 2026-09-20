@@ -53,7 +53,6 @@ const mount = async (): Promise<Harness> => {
     currentUser: (req: express.Request) => (req.header("x-user") === "bob" ? bob : ada),
     isSecure: () => false,
     stopOwnedPlayback: async () => undefined,
-    stopUserAccess: async () => undefined,
     stopUserSessions: async () => undefined,
     requireAccess: () => undefined,
     stopContentAccess: async () => undefined,

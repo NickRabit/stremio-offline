@@ -3,7 +3,7 @@ import { test } from "node:test";
 import type { Request, Response } from "express";
 import { RestrictedError, restrictedMiddleware } from "./restricted.js";
 import { AppError } from "./errors.js";
-import { ForbiddenError, MUST_CHANGE_ALLOWED, USER_ALLOWED, isMustChangePathAllowed, isUserAllowed, passwordChangeMiddleware, roleMiddleware } from "./roles.js";
+import { assertStillAdmin, ForbiddenError, MUST_CHANGE_ALLOWED, USER_ALLOWED, isMustChangePathAllowed, isUserAllowed, passwordChangeMiddleware, roleMiddleware } from "./roles.js";
 import type { Role } from "./users.js";
 
 /** One concrete path per rule of USER_ALLOWED. The table is pinned in both directions, so
@@ -212,4 +212,22 @@ test("the role gate and the restricted gate are independent", (t) => {
   process.env.RESTRICTED_MODE = "1";
   assert.ok(run("admin") instanceof RestrictedError, "and is still stopped by the restricted gate");
   assert.ok(run("user") instanceof ForbiddenError, "an ordinary user is stopped by the role gate");
+});
+
+test("the write-time role check refuses every way an actor can have gone stale", () => {
+  const ada = { id: "usr_00000001", role: "admin" as Role, secret: "ada-secret" };
+  const users = [ada, { id: "usr_00000002", role: "user" as Role, secret: "bob-secret" }];
+
+  assert.equal(assertStillAdmin(users, ada), undefined, "an administrator who is still one passes");
+
+  // Every one of these is a state the request could have entered while it was awaiting, and
+  // each has to answer 403 rather than throw its way to a 500.
+  assert.throws(() => assertStillAdmin(users, undefined), ForbiddenError,
+    "a request that reaches the write with nobody to speak for it");
+  assert.throws(() => assertStillAdmin(users, { id: "usr_00000009", secret: "gone" }), ForbiddenError,
+    "an account deleted while the request waited");
+  assert.throws(() => assertStillAdmin(users, { id: ada.id, secret: "an-older-secret" }), ForbiddenError,
+    "a password change or a sign-out everywhere rotated the secret");
+  assert.throws(() => assertStillAdmin([{ ...ada, role: "user" }], ada), ForbiddenError, "a demotion");
+  assert.throws(() => assertStillAdmin([{ ...ada, disabled: true }], ada), ForbiddenError, "the account switched off");
 });

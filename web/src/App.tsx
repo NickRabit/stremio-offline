@@ -374,6 +374,9 @@ export function App() {
     } catch (error) { fail(error); }
   };
   const loadSuggestionCount = async () => {
+    // Matching suggestions are an administrator's business and the endpoint refuses anybody
+    // else, so an ordinary account would spend a refusal on every load to learn nothing.
+    if (session?.role !== "admin") return;
     try { setSuggestionCount((await api.librarySuggestions()).total); }
     catch { /* the count is optional chrome */ }
   };
@@ -1021,7 +1024,9 @@ export function App() {
   }, [ready, view, scanning]);
   const operationsActive = libraryOps.some((job) => job.status === "running" || job.status === "paused");
   useEffect(() => {
-    if (!ready || view !== "library") return;
+    // The library operations queue is administrator-only, reading included: polling it as an
+    // ordinary account is a refusal every few seconds for a panel that never shows.
+    if (!ready || view !== "library" || session?.role !== "admin") return;
     let cancelled = false;
     const tick = async () => {
       try {
@@ -1042,8 +1047,8 @@ export function App() {
     if (!operationsActive) return () => { cancelled = true; };
     const timer = window.setInterval(() => void tick(), 1000);
     return () => { cancelled = true; window.clearInterval(timer); };
-  }, [ready, view, operationsActive, browsePath]);
-  useEffect(() => { if (ready && view === "library") void loadSuggestionCount(); }, [ready, view, scanEpoch]);
+  }, [ready, view, session?.role, operationsActive, browsePath]);
+  useEffect(() => { if (ready && view === "library") void loadSuggestionCount(); }, [ready, view, session?.role, scanEpoch]);
   // Page-scroll paging, the same as in the catalogue. The button stays as a fallback.
   useEffect(() => {
     if (view !== "library" || !browse) return;
@@ -1567,13 +1572,19 @@ export function App() {
       <Nav icon={<Download/>} label={t("nav.downloads")} active={view === "downloads"} badge={downloads.filter((job) => job.status === "checking" || job.status === "downloading" || job.status === "queued" || job.status === "waiting").length} onClick={() => openView("downloads")}/>
       <Nav icon={<PackagePlus/>} label={t("nav.addons")} active={view === "addons"} badge={addons.length} onClick={() => openView("addons")}/>
       <Nav icon={<Settings/>} label={t("nav.settings")} active={view === "settings"} onClick={() => openView("settings")}/>
-      <Nav icon={<BarChart3/>} label={t("nav.stats")} active={view === "stats"} onClick={() => openView("stats")}/>
+      {/* `/api/stats` is administrator-only, so for anybody else this is a tab that loads an
+          error. */}
+      {session!.role === "admin" && <Nav icon={<BarChart3/>} label={t("nav.stats")} active={view === "stats"} onClick={() => openView("stats")}/>}
     </nav><div className="sidebar-bottom"><button className="sidebar-toggle" onClick={toggleSidebar} title={t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")} aria-label={t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")}>{sidebarCollapsed ? <PanelLeftOpen/> : <PanelLeftClose/>}<span>{t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")}</span></button><div className="addon-status"><small>{t("app.activeAddons")}</small><strong>{addons.filter((a) => a.enabled).length}</strong><span>{t("app.catalogsAndSources")}</span></div></div></aside>
     <main className={`view-${view}`}>
       {view === "catalog" && <section className={`catalog-view ${catalogCompact ? "catalog-compact" : ""}`} {...chromeGestures(() => gridRef.current)} onFocusCapture={(event) => {
         if ((event.target as HTMLElement).closest(".searchbar,.filterbar")) setCatalogCompact(false);
       }}><Heading eyebrow={t("catalog.eyebrow")} title={t("catalog.title")}/>
-        {!catalogs.length ? (restricted ? <Empty icon={<PackagePlus/>} title={t("onboarding.title")} text={t("restricted.notice")}/> : <Onboarding onOpen={() => setView("addons")}/>) : <>
+        {!catalogs.length ? (restricted || session!.role !== "admin"
+          // An ordinary account seeing no catalogue has not been granted an addon, and
+          // cannot add one: the invitation would lead to a screen it may not use.
+          ? <Empty icon={<PackagePlus/>} title={t("onboarding.title")} text={t(restricted ? "restricted.notice" : "onboarding.noneGranted")}/>
+          : <Onboarding onOpen={() => setView("addons")}/>) : <>
           <div className={`fold${catalogCompact ? " closed" : ""}`}><form className="searchbar" onSubmit={submitSearch}>
             <div className="search-input"><Search/><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={t("catalog.searchPlaceholder")}/></div>
             <label className="scope-select"><span>{t("catalog.searchScopeIn")}</span><select aria-label={t("catalog.searchScope")} value={searchScopeValue} onChange={(e) => pickSearchScope(e.target.value)}>

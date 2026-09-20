@@ -378,6 +378,7 @@ export const cs: Catalog = {
   "onboarding.title": "Přidejte první Stremio doplněk",
   "onboarding.text": "Aplikace potřebuje aspoň jeden katalogový manifest. Zdrojové manifesty můžete přidat zvlášť.",
   "onboarding.action": "Přidat manifest",
+  "onboarding.noneGranted": "Tomuhle \u00fa\u010dtu zat\u00edm nebyl zp\u0159\u00edstupn\u011bn \u017e\u00e1dn\u00fd dopln\u011bk. Kter\u00e9 sm\u00ed pou\u017e\u00edvat, ur\u010duje administr\u00e1tor.",
 
   // Knihovna.
   "library.eyebrow": "KNIHOVNA",

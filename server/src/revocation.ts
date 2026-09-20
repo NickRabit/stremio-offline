@@ -157,7 +157,6 @@ export class Revocations {
     if (removed) log("INFO", "Unfinished downloads cancelled with the account", { user: userId, jobs: removed });
   }
 
-  /** Everything an account holds except the queue: resources, grants and transfers. */
   /** Everything one account is *holding open* -- its media, playback, tickets and AirPlay
    *  grants, on every device -- and nothing else. This is what a sign-out everywhere and a
    *  password change reach for: the queue is owner-bound rather than session-bound, so a

@@ -101,11 +101,22 @@ export const isMustChangePathAllowed = (method: string, path: string) => match(M
  *
  *  Called inside the same mutator as the write, where the list cannot move again. The secret
  *  is compared too, so a password change or a sign-out everywhere invalidates it as surely
- *  as a demotion does. */
+ *  as a demotion does. The actor is the one the request resolved at its start: reading it
+ *  again here would answer nobody in exactly the cases worth catching, and a record compared
+ *  against itself proves nothing.
+ *
+ *  It deliberately does not cover work that has already touched the disk. A rename, a move
+ *  and a library re-root write files first and the state afterwards, and refusing the second
+ *  half would leave the state describing a tree that is no longer there. Those finish on the
+ *  authority they started with; the gate at the door is what decides whether they start. */
 export const assertStillAdmin = (
   users: Array<{ id: string; role: Role; secret: string; disabled?: boolean }>,
-  actor: { id: string; secret: string },
+  // Nullable on purpose. The caller resolves the actor at the start of the request, and a
+  // request that reaches a write with nobody to speak for it is refused rather than trusted --
+  // a missing actor must not become a TypeError answered as 500.
+  actor: { id: string; secret: string } | undefined,
 ): void => {
+  if (!actor) throw new ForbiddenError();
   const now = users.find((user) => user.id === actor.id);
   if (!now || now.disabled || now.role !== "admin" || now.secret !== actor.secret) throw new ForbiddenError();
 };

@@ -25,6 +25,8 @@ export interface DiagnosticsDeps extends RouteContext {
 /** The browser is the only place where playback failure is actually visible. Without this
  * channel hls.js and video element errors end up in a console the user never opens. */
 const CLIENT_LOG_PER_MINUTE = 30;
+/** Enough for a stack frame and a few identifiers; a report is a hint, not a payload. */
+const CLIENT_LOG_KEYS = 20;
 const clientReports = new Map<string, { count: number; resetAt: number }>();
 
 export function registerDiagnosticsRoutes(app: express.Application, deps: DiagnosticsDeps): void {
@@ -74,9 +76,14 @@ export function registerDiagnosticsRoutes(app: express.Application, deps: Diagno
 
     const level = parseLevel(req.body?.level) ?? "WARN";
     const message = String(req.body?.message ?? "").slice(0, 200) || "client report";
-    const context = req.body?.context && typeof req.body.context === "object" && !Array.isArray(req.body.context)
+    // Nested rather than spread. Every signed-in account may post here, and a spread let the
+    // caller name any field it liked -- including the ones the server's own audit lines use,
+    // such as `actor` and `userId`. Under one key it can still say anything, and nothing it
+    // says can be mistaken for something the server recorded.
+    const sent = req.body?.context && typeof req.body.context === "object" && !Array.isArray(req.body.context)
       ? req.body.context as Record<string, unknown> : {};
-    log(level, `[web] ${message}`, { ...context, req: req.id, user: currentUser(req)?.username, ua: String(req.headers["user-agent"] ?? "").slice(0, 160) });
+    const context = Object.fromEntries(Object.entries(sent).slice(0, CLIENT_LOG_KEYS));
+    log(level, `[web] ${message}`, { client: context, req: req.id, user: currentUser(req)?.username, ua: String(req.headers["user-agent"] ?? "").slice(0, 160) });
     res.status(204).end();
   });
 
