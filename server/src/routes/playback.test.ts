@@ -140,7 +140,7 @@ test("the ownership guard answers somebody else's session with a bare 404", asyn
   const response = await api(harness.base, `/api/playback/${ID}/ping`, { method: "POST", user: "bob" });
 
   assert.equal(response.status, 404, "404, so the answer does not confirm the session exists");
-  assert.deepEqual(await response.json(), { error: "Playback session unavailable.", code: "RESOURCE_NOT_FOUND" });
+  assert.deepEqual(await response.json(), { error: "The playback session no longer exists.", messageKey: "err.playbackSessionGone", code: "RESOURCE_NOT_FOUND" });
   assert.deepEqual(harness.attended, [], "a refused request never keeps the session alive");
 });
 

@@ -996,6 +996,7 @@ export const en = {
   "err.mustChangePassword": "Change your password before continuing.",
   "err.cannotDeleteSelf": "You cannot delete the account you are signed in with.",
   "err.addonNotFound": "The addon was not found.",
+  "err.metaNotFound": "The metadata was not found.",
   "err.essentialAddon": "Cinemeta provides the library metadata and cannot be removed or switched off.",
   "err.adminAlwaysUsesAddons": "An administrator can already use every addon.",
   "err.manifestExists": "This manifest is already added.",
