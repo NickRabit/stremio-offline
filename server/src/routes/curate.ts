@@ -2,6 +2,7 @@ import type express from "express";
 import path from "node:path";
 import { readdir, stat } from "node:fs/promises";
 import { AppError } from "../errors.js";
+import { assertStillAdmin } from "../roles.js";
 import { normalizeLanguage } from "../language.js";
 import { libraryFor, parseLibraryPath, posixBase, resolveLibraryPath, type Viewer } from "../libraries.js";
 import type { LibraryAutoScan } from "../library-autoscan.js";
@@ -72,6 +73,7 @@ export function registerCurateRoutes(app: express.Application, deps: CurateDeps)
   }));
 
   app.post("/api/library/match", asyncRoute(async (req, res) => {
+    assertStillAdmin(store.users(), currentUser(req));
     res.json(await matchLibraryItem(req.body ?? {}, prefsOf(req).uiLanguage));
   }));
 
@@ -105,10 +107,13 @@ export function registerCurateRoutes(app: express.Application, deps: CurateDeps)
   app.post("/api/library/ops", asyncRoute(async (req, res) => {
     // The account that asked, carried on the job: `favorite` and `forget` write to somebody's
     // own rows, and by the time they run the request is long gone.
-    const job = await libraryOps.enqueue({ ...parseLibraryOp(req.body), ownerUserId: currentUser(req)?.id });
+    const actor = currentUser(req);
+    assertStillAdmin(store.users(), actor);
+    const job = await libraryOps.enqueue({ ...parseLibraryOp(req.body), ownerUserId: actor?.id });
     res.status(202).json({ id: job.id });
   }));
   app.delete("/api/library/ops/:id", asyncRoute(async (req, res) => {
+    assertStillAdmin(store.users(), currentUser(req));
     if (!await libraryOps.cancel(String(req.params.id))) throw new AppError("Library operation not found.", "err.libraryOperationMissing", 404);
     res.status(204).end();
   }));
@@ -123,11 +128,13 @@ export function registerCurateRoutes(app: express.Application, deps: CurateDeps)
     res.json({ items, total: items.length });
   }));
   app.delete("/api/library/suggestion", asyncRoute(async (req, res) => {
+    const actor = currentUser(req);
     const requested = String(req.query.key ?? "").trim();
     const resolved = requested ? await resolveLibraryPath(store.libraries(), requested) : undefined;
     if (!resolved) throw new AppError("Invalid path.", "err.invalidPath");
     const key = resolved.key;
     const target = parseLibraryPath(key);
+    assertStillAdmin(store.users(), actor);
     if (target) await metaStore.update(target.libraryId, (file) => {
       const previous = file.suggestions[target.relative];
       // Kept as the memory of a searched unit, so the next scan walks past it.

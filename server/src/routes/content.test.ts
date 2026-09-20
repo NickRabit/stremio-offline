@@ -43,7 +43,7 @@ const library = (id: string, root: string, order = 0, visibleTo?: string[]): Lib
 
 const ADA = "usr_00000001";
 const BOB = "usr_00000002";
-const admin = { id: ADA, username: "ada", role: "admin" } as unknown as UserRecord;
+const admin = { id: ADA, username: "ada", role: "admin", secret: "ada-secret" } as unknown as UserRecord;
 const ordinary = { id: BOB, username: "bob", role: "user" } as unknown as UserRecord;
 
 const put = async (root: string, relative: string) => {
@@ -61,7 +61,7 @@ const makeRoot = () => mkdtemp(path.join(tmpdir(), "stremio-content-"));
 const mount = async (libraries: LibraryRecord[], entries: LibraryEntry[] = []): Promise<Harness> => {
   const calls: Calls = { browsed: [], rootBrowses: 0, deleted: [], transfers: [], relocated: [], thumbAsked: [], entriesAsked: 0, artworkAsked: [] };
   const deps: ContentDeps = {
-    store: { libraries: () => libraries } as unknown as Store,
+    store: { libraries: () => libraries, users: () => [admin, ordinary] } as unknown as Store,
     needsSetup: () => false,
     currentSession: () => undefined,
     currentUser: (req) => (req.header("x-user") === BOB ? ordinary : admin),

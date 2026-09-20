@@ -132,9 +132,11 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
     // The path is open to an ordinary user, the instance keys are not: a body that names
     // any of them is refused whole, rather than answered with a success that changed nothing.
     const body = (req.body ?? {}) as Record<string, unknown>;
-    if (currentUser(req)?.role !== "admin" && Object.keys(body).some((key) => !(PERSONAL_SETTINGS as readonly string[]).includes(key))) {
-      throw new ForbiddenError();
-    }
+    const touchesInstance = Object.keys(body).some((key) => !(PERSONAL_SETTINGS as readonly string[]).includes(key));
+    // Captured here, before the token checks go out over the network: read again at the write
+    // it would answer nobody for an account switched off or signed out while they ran.
+    const actor = currentUser(req);
+    if (actor?.role !== "admin" && touchesInstance) throw new ForbiddenError();
     let realDebridToken: string | undefined;
     if (req.body.realDebridToken !== undefined) {
       realDebridToken = normalizeToken(req.body.realDebridToken);
@@ -149,6 +151,9 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
     const userId = accountIdOf(req);
     const touchesPrefs = PERSONAL_SETTINGS.some((key) => req.body[key] !== undefined);
     await store.update((state) => {
+      // Only when the body reaches the instance half: an ordinary account writing its own
+      // preferences is not making an administrator's change and must not be asked to be one.
+      if (touchesInstance) assertStillAdmin(state.users ?? [], actor);
       // The body is one flat object; each key goes to the half that owns it. Only the keys the
       // body names are written, so a preference nobody touched keeps the value it had.
       const prefs: Record<string, unknown> = { ...(userId ? state.userData?.[userId]?.prefs : undefined) };

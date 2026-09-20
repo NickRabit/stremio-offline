@@ -90,8 +90,10 @@ export function registerAddonsRoutes(app: express.Application, deps: AddonsDeps)
     if (!addon) throw new AppError("The addon was not found.", "err.addonNotFound");
     res.json({ manifestUrl: addon.manifestUrl, role: addon.role, enabled: addon.enabled, globalSearch: addon.globalSearch, addedAt: addon.addedAt, downloadSettings: addon.downloadSettings, manifest: addon.manifest });
   }));
-  app.post("/api/addons/refresh", asyncRoute(async (_req, res) => {
+  app.post("/api/addons/refresh", asyncRoute(async (req, res) => {
+    const actor = currentUser(req);
     const outcomes = await refreshManifests(store.addons(), loadAddon);
+    assertStillAdmin(store.users(), actor);
     await storeRefreshed(outcomes);
     res.json({
       changed: outcomes.filter((outcome) => outcome.changed).length,
@@ -100,6 +102,7 @@ export function registerAddonsRoutes(app: express.Application, deps: AddonsDeps)
     });
   }));
   app.post("/api/addons/:key/refresh", asyncRoute(async (req, res) => {
+    const actorOfRefresh = currentUser(req);
     const existing = store.addons().find((a) => a.key === req.params.key);
     if (!existing) throw new AppError("The addon was not found.", "err.addonNotFound");
     // The error travels to the interface as it is: a single refresh was asked for by
@@ -109,6 +112,7 @@ export function registerAddonsRoutes(app: express.Application, deps: AddonsDeps)
     // refresh replaces the manifest this variable points at.
     const previousVersion = existing.manifest.version;
     const changed = manifestChanged(existing.manifest, loaded.manifest);
+    assertStillAdmin(store.users(), actorOfRefresh);
     await storeRefreshed([{ key: existing.key, name: loaded.manifest.name, previousVersion, version: loaded.manifest.version, changed, manifest: loaded.manifest }]);
     res.json({ addon: publicAddonView(store.addons().find((a) => a.key === existing.key)!), changed, previousVersion, version: loaded.manifest.version });
   }));

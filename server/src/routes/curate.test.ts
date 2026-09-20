@@ -62,6 +62,8 @@ const makeRoot = (prefix: string) => mkdtemp(path.join(tmpdir(), prefix));
 /** The scan is the module's own, held in a paused state by a busy host so the run it starts
  *  stays the run a second request meets. Everything else is a fake that records the calls. */
 const ADA = "usr_00000001";
+// A real list, so the write-time role check has something to read.
+const users: UserRecord[] = [{ id: ADA, username: "ada", role: "admin", secret: "ada-secret" } as UserRecord];
 
 const mount = async (options: { libraries?: LibraryRecord[]; records?: Record<string, LibraryMetaRecord>; suggestions?: Record<string, LibrarySuggestion> } = {}): Promise<Harness> => {
   const libraries = options.libraries ?? [library("lib_00000001", "/media/films")];
@@ -85,11 +87,11 @@ const mount = async (options: { libraries?: LibraryRecord[]; records?: Record<st
     wakeMs: 20,
   });
   const deps: CurateDeps = {
-    store: { libraries: () => libraries, settings: () => ({ tmdbApiKey: undefined }) } as unknown as Store,
+    store: { libraries: () => libraries, users: () => users, settings: () => ({ tmdbApiKey: undefined }) } as unknown as Store,
     needsSetup: () => false,
     currentSession: () => undefined,
     // A real account, so the owner an operation carries is a value the test can see.
-    currentUser: () => ({ id: ADA, username: "ada", role: "admin" } as UserRecord),
+    currentUser: () => users[0],
     isSecure: () => false,
     stopOwnedPlayback: async () => undefined,
     stopUserSessions: async () => undefined,

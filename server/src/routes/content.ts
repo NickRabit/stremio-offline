@@ -4,6 +4,7 @@ import { mkdir, rename, stat } from "node:fs/promises";
 import { artworks } from "../artwork-cache.js";
 import type { ArtShape } from "../artwork.js";
 import { AppError } from "../errors.js";
+import { assertStillAdmin } from "../roles.js";
 import { libraryFor, libraryPath, libraryVisible, parseLibraryPath, posixDir, posixJoin, resolveLibraryPath, sameFile, visibleLibraries, type LibraryRecord, type Viewer } from "../libraries.js";
 import { browseDirectory, listFolders, type LibraryEntry } from "../library.js";
 import type { TransferProgress } from "../library-transfer.js";
@@ -122,6 +123,7 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
 
   app.delete("/api/library/item", asyncRoute(async (req, res) => {
     const relative = String(req.query.path ?? "").trim();
+    assertStillAdmin(store.users(), currentUser(req));
     await deleteLibraryItem(relative);
     res.status(204).end();
   }));
@@ -145,6 +147,7 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
   }));
 
   app.post("/api/library/rename", asyncRoute(async (req, res) => {
+    const actor = currentUser(req);
     const relative = String(req.body.path ?? "").trim();
     const resolved = relative ? await resolveLibraryPath(store.libraries(), relative) : undefined;
     if (!resolved || !resolved.relative) throw new AppError("Invalid path.", "err.invalidPath");
@@ -160,6 +163,10 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     // case; there the target is the same file, and `fileExists` must not be read as a clash.
     if (!sameFile(target.absolute, resolved.absolute) && await fileExists(target.absolute)) throw new AppError("A file with that name already exists.", "err.nameTaken");
 
+    // The last moment before anything on disk moves. Checking here rather than at the state
+    // write is what closes the window without risking an inconsistency: refuse now and nothing
+    // has happened; refuse after the rename and the state would describe a file that moved.
+    assertStillAdmin(store.users(), actor);
     await rename(resolved.absolute, target.absolute);
     await relocateLibraryPath(resolved.key, target.key);
     invalidateLibrary();
@@ -180,6 +187,7 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
   }));
 
   app.post("/api/library/move", asyncRoute(async (req, res) => {
+    assertStillAdmin(store.users(), currentUser(req));
     // `copy` is honoured rather than ignored: the field was silently dropped before, so a client
     // that asked for a copy got a move -- the original deleted -- with a success in the response.
     const moved = await transferLibraryItem(String(req.body.path ?? "").trim(), String(req.body.folder ?? "").trim(),

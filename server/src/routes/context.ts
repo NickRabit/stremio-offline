@@ -19,8 +19,8 @@ export interface RouteContext {
   /** Tears down the media, playback and device-download resources of one session.
    *  Another device of the same person is left alone. */
   stopOwnedPlayback(sid: string): Promise<void>;
-  /** Everything one account holds, across all its devices. A password change and a
-  /** Only what the account holds open. A sign-out must not touch its download queue. */
+  /** Only what the account holds open, on every device: its media, playback, tickets and
+   *  AirPlay grants. A sign-out or a password change must not touch its download queue. */
   stopUserSessions(userId: string): Promise<void>;
   /** Refuses at the moment a resource is issued or a transfer started: the account, its
    *  session, the secret behind the token, the rights and the content as they stand now. */

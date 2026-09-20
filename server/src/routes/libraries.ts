@@ -142,6 +142,7 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
   app.get("/api/libraries/grants", asyncRoute(async (_req, res) => { res.json(await grantRows()); }));
 
   app.post("/api/libraries/grants", asyncRoute(async (req, res) => {
+    const actor = currentUser(req);
     const raw = String(req.body?.path ?? "").trim();
     if (!raw) throw new AppError("Missing folder.", "err.missingFolder");
     if (!path.isAbsolute(raw)) throw new AppError("The path has to be absolute.", "err.libraryRootAbsolute");
@@ -150,6 +151,7 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
     // A grant is recorded, never inferred: the request names a folder that is already there.
     if (!store.grants().some((grant) => path.resolve(grant.path) === root)) {
       await store.update((state) => {
+        assertStillAdmin(state.users ?? [], actor);
         state.grants = [...(state.grants ?? []), { path: root, source: "user", grantedAt: new Date().toISOString() }];
       });
       log("INFO", "Library root granted", { root });
@@ -158,6 +160,7 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
   }));
 
   app.delete("/api/libraries/grants", asyncRoute(async (req, res) => {
+    const actor = currentUser(req);
     const raw = String(req.body?.path ?? req.query.path ?? "").trim();
     if (!raw) throw new AppError("Missing folder.", "err.missingFolder");
     const root = path.resolve(raw);
@@ -170,6 +173,7 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
     // file and the artwork directory all stay, so granting the root again brings them back.
     const affected = store.libraries().filter((library) => isInside(path.resolve(library.root), root));
     await store.update((state) => {
+      assertStillAdmin(state.users ?? [], actor);
       state.grants = (state.grants ?? []).filter((grant) => path.resolve(grant.path) !== root);
       state.libraries = (state.libraries ?? []).map((library) =>
         affected.some((item) => item.id === library.id) ? { ...library, enabled: false } : library);

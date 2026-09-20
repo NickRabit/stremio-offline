@@ -269,10 +269,9 @@ const currentUser = (req: express.Request) => {
   return session ? findUserById(store.users(), session.userId) : undefined;
 };
 
-/** Which account a call speaks for. A request answers with the account its session names;
- *  work with no request in hand -- a library job resumed from disk, the artwork queue --
- *  belongs to the one account this release has. */
-/** Background work -- a scan, an artwork job, a metadata backfill -- has no request and so no
+/** Which account a call speaks for. A request answers with the account its session names.
+ *
+ *  Background work -- a scan, an artwork job, a metadata backfill -- has no request and so no
  *  person to speak for. It reads the first account's settings, which is a deliberate choice of
  *  *some* configured language over the built-in English, not a claim that the first account
  *  owns anything. Nothing that writes personal rows may resolve its account this way: those

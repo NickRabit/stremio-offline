@@ -15,6 +15,10 @@ import { registerLibrariesRoutes, type LibrariesDeps } from "./libraries.js";
 
 interface Harness {
   base: string;
+  /** Makes the session stop resolving, the way a sign-out everywhere or a switched-off
+   *  account does. `after` lets it answer the handler's own first read and nothing after. */
+  loseSession: (after: number) => void;
+  disable: (id: string) => void;
   viewed: Array<{ id: string; health: LibraryHealth; stats: { titles: number; files: number; bytes: number } }>;
   enqueued: unknown[];
   stored: () => LibraryRecord[];
@@ -38,6 +42,7 @@ const stats = new Map([["alpha", { titles: 3, files: 4, bytes: 5 }]]);
 /** The routes take everything they need from the context, so the app here is a real express
  *  instance over fake collaborators that record what they were asked to do. */
 const mount = async (records: LibraryRecord[] = [library("alpha", 0)], env: RootGrant[] = []): Promise<Harness> => {
+  let sessionReads: number | undefined;
   // `users` lives in the state, not only behind `store.users()`: a mutator reads the state,
   // and the write-time role check is one of the things that does.
   const state = { libraries: records, users: [admin, ordinary], grants: [] as RootGrant[], departed: [] as Array<{ id: string; root: string; removedAt: string }> };
@@ -54,7 +59,10 @@ const mount = async (records: LibraryRecord[] = [library("alpha", 0)], env: Root
     store,
     needsSetup: () => false,
     currentSession: () => undefined,
-    currentUser: (req) => (req.header("x-user") === BOB ? ordinary : admin),
+    currentUser: (req) => {
+      if (sessionReads !== undefined && sessionReads-- <= 0) return undefined;
+      return req.header("x-user") === BOB ? ordinary : admin;
+    },
     isSecure: () => false,
     stopOwnedPlayback: async () => undefined,
     stopUserSessions: async () => undefined,
@@ -95,6 +103,8 @@ const mount = async (records: LibraryRecord[] = [library("alpha", 0)], env: Root
     enqueued,
     stored: () => state.libraries,
     userGrants: () => state.grants,
+    loseSession: (after: number) => { sessionReads = after; },
+    disable: (id: string) => { state.users = state.users.map((user) => user.id === id ? { ...user, disabled: true } : user); },
     allGrants: () => mergeGrants(env, state.grants),
     close: async () => {
       server.closeAllConnections();
@@ -216,4 +226,22 @@ test("POST /api/libraries/:id/reroot refuses without moveContent", async (t) => 
   assert.equal(response.status, 400);
   assert.equal((await failure(response)).messageKey, "err.invalidRequest");
   assert.deepEqual(harness.enqueued, []);
+});
+
+test("the write-time check runs through the route, and refuses rather than failing", async (t) => {
+  const harness = await mount([library("alpha", 0)]);
+  t.after(harness.close);
+
+  // The account is switched off after the request has already resolved its actor -- which is
+  // every case the check exists for, and the point at which the session also stops resolving.
+  // Reaching the write on a role that has been taken away must answer 403, and it must be the
+  // refusal rather than a crash: the guard reads the captured actor against the list as it is
+  // now, so neither half of the comparison can quietly be the same record.
+  harness.disable(ADA);
+  harness.loseSession(1);
+
+  const response = await api(harness.base, "/api/libraries/alpha", { method: "PATCH", body: { visibleTo: [BOB] } });
+  assert.equal(response.status, 403, `expected a refusal, got ${response.status}`);
+  assert.equal((await failure(response)).messageKey, "err.notAllowed");
+  assert.deepEqual(harness.stored()[0]?.visibleTo, undefined, "the edit landed on a role the account no longer had");
 });
