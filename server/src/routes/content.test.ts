@@ -271,7 +271,7 @@ test("POST /api/library/rename refuses a target that already exists", async (t) 
 
 // The handler runs the name through safeName before it resolves the target, so a name that
 // would leave the library is never refused -- it is stripped of the escape and kept inside.
-test("POST /api/library/rename keeps a name that would leave the library inside the folder", async (t) => {
+test("POST /api/library/rename refuses a name it cannot use rather than inventing one", async (t) => {
   const root = await makeRoot();
   await put(root, "Films/Heat.mkv");
   const harness = await mount([library("lib_00000001", root)]);
@@ -279,11 +279,15 @@ test("POST /api/library/rename keeps a name that would leave the library inside 
 
   const response = await api(harness.base, "/api/library/rename", { method: "POST", body: { path: "Films/Heat.mkv", name: "../../Thief" } });
 
-  assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { path: "Films/video.mkv" });
-  assert.equal(await exists(path.join(root, "Films/video.mkv")), true);
+  // The escape never happens either way. What changed is the answer: the name used to be
+  // quietly rewritten to something usable -- "video" -- and reported as a success, so the
+  // file came back called something nobody asked for.
+  assert.equal(response.status, 400);
+  assert.equal((await response.json() as { messageKey?: string }).messageKey, "err.unusableName");
+  assert.equal(await exists(path.join(root, "Films/Heat.mkv")), true, "the file was renamed anyway");
+  assert.equal(await exists(path.join(root, "Films/video.mkv")), false);
   assert.equal(await exists(path.join(root, "Thief.mkv")), false);
-  assert.deepEqual(harness.calls.relocated, [{ key: "lib_00000001/Films/Heat.mkv", nextKey: "lib_00000001/Films/video.mkv" }]);
+  assert.deepEqual(harness.calls.relocated, [], "a refusal must not move any binding");
 });
 
 test("POST /api/library/move passes copy through to transferLibraryItem", async (t) => {

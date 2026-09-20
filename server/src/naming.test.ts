@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import path from "node:path";
 import { test } from "node:test";
-import { deviceFilename, joinTarget, normalizeDownloadSettings, safeName, safeSubfolder, streamExtension, targetPath } from "./naming.js";
+import { AppError } from "./errors.js";
+import { assertUsableName, deviceFilename, joinTarget, normalizeDownloadSettings, safeName, safeSubfolder, streamExtension, targetPath } from "./naming.js";
 import type { LibraryRecord } from "./libraries.js";
 
 test("a film goes into a folder of its own with the same name", () => {
@@ -155,4 +156,22 @@ test("device downloads use the same filename as the library", () => {
 
 test("URL extensions do not include the debrid query string", () => {
   assert.equal(streamExtension({ url: "https://download.example/Film.mp4?token=velmi-tajny" }), ".mp4");
+});
+
+test("a typed name that cannot be used as it stands is refused, not rewritten", () => {
+  // `safeName` turns each of these into something else; a rename must say so rather than
+  // quietly save the item under a name nobody asked for.
+  for (const refused of ["../../Thief", "Heat/Ronin", "Film: Director's Cut", "Why?", "Film.", ".hidden", "CON", "...", "a".repeat(151)]) {
+    assert.throws(() => assertUsableName(refused), (error: unknown) => error instanceof AppError, refused);
+  }
+  for (const empty of ["", "   "]) {
+    assert.throws(() => assertUsableName(empty), (error: unknown) => error instanceof AppError && error.messageKey === "err.emptyName", JSON.stringify(empty));
+  }
+});
+
+test("a usable typed name comes back tidied, not changed", () => {
+  assert.equal(assertUsableName("  Heat  "), "Heat");
+  assert.equal(assertUsableName("Heat   1995"), "Heat 1995");
+  assert.equal(assertUsableName("S.W.A.T. 2017"), "S.W.A.T. 2017");
+  assert.equal(assertUsableName("Amélie"), "Amélie");
 });

@@ -9,7 +9,7 @@ import { libraryFor, libraryPath, libraryVisible, parseLibraryPath, posixDir, po
 import { browseDirectory, listFolders, type LibraryEntry } from "../library.js";
 import type { TransferProgress } from "../library-transfer.js";
 import { log } from "../logger.js";
-import { safeName } from "../naming.js";
+import { assertUsableName } from "../naming.js";
 import type { StoredProgress, UserPrefs } from "../store.js";
 import type { UserData } from "../users.js";
 import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
@@ -134,9 +134,7 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     if (!resolved) throw new AppError("Invalid path.", "err.invalidPath");
     const info = await stat(resolved.absolute).catch(() => undefined);
     if (!info?.isDirectory()) throw new AppError("The destination folder does not exist.", "err.targetMissing");
-    const rawName = String(req.body?.name ?? "").trim();
-    if (!rawName || /^\.+$/.test(rawName)) throw new AppError("Invalid name.", "err.invalidName");
-    const name = safeName(rawName);
+    const name = assertUsableName(String(req.body?.name ?? ""));
     const relative = posixJoin(resolved.relative, name);
     const target = await resolveLibraryPath(store.libraries(), libraryPath(resolved.library.id, relative));
     if (!target) throw new AppError("Invalid path.", "err.invalidPath");
@@ -156,10 +154,15 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     if (!info) throw new AppError("The file or folder does not exist.", "err.pathMissing");
 
     const extension = info.isDirectory() ? "" : path.extname(relative);
-    const wanted = safeName(String(req.body.name ?? "").replace(/\.[^.]+$/, ""));
+    const typed = String(req.body.name ?? "").trim();
+    // Only the item's own extension is taken off what was typed. Any other dot belongs to the
+    // name -- "S.W.A.T. 2017" is not a file called "S.W.A.T" -- and cutting it would rename
+    // the item to something else than was asked for.
+    const stem = extension && typed.toLowerCase().endsWith(extension.toLowerCase()) ? typed.slice(0, -extension.length) : typed;
+    const wanted = assertUsableName(stem);
     const nextRelative = posixJoin(posixDir(relative), `${wanted}${extension}`);
     const target = await resolveLibraryPath(store.libraries(), nextRelative);
-    if (!target) throw new AppError("Invalid name.", "err.invalidName");
+    if (!target) throw new AppError("Invalid path.", "err.invalidPath");
     // A rename that only changes the case of a name is a real rename where the filesystem folds
     // case; there the target is the same file, and `fileExists` must not be read as a clash.
     if (!sameFile(target.absolute, resolved.absolute) && await fileExists(target.absolute)) throw new AppError("A file with that name already exists.", "err.nameTaken");

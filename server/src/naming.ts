@@ -35,6 +35,26 @@ export function safeName(value: string): string {
   return named.slice(0, 150).trim() || "video";
 }
 
+/** The tidying nobody would call a rename: the same characters, composed the same way,
+ *  with runs of whitespace collapsed. */
+const tidyName = (value: string) => value.normalize("NFC").split(/\s+/).filter(Boolean).join(" ");
+
+/** For a name somebody typed. `safeName` quietly rewrites whatever it cannot use, which for
+ *  a rename means the item ends up called something else than was asked for; refuse instead,
+ *  and let the interface say so. */
+export function assertUsableName(value: string): string {
+  const tidied = tidyName(value);
+  if (!tidied) throw new AppError("The name cannot be empty.", "err.emptyName");
+  if (tidied.length > 150) throw new AppError("The name can be at most 150 characters long.", "err.nameTooLong");
+  const safe = safeName(tidied);
+  if (safe !== tidied) {
+    throw new AppError(
+      "That name cannot be used. Leave out / \\ : * ? \" < > |, do not begin or end with a dot, and avoid device names such as CON or NUL.",
+      "err.unusableName");
+  }
+  return safe;
+}
+
 const pad = (value: number) => String(Math.max(0, Math.trunc(value))).padStart(2, "0");
 
 export const defaultDownloadSettings = (): AddonDownloadSettings => ({
