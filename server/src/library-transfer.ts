@@ -1,4 +1,5 @@
 import { createReadStream, createWriteStream } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { lstat, mkdir, open, readdir, rename, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
@@ -36,6 +37,21 @@ const copyTree = async (source: string, target: string, progress: { bytes: numbe
   });
   await pipeline(input, createWriteStream(target, { mode: info.mode }));
   await syncFile(target);
+};
+
+const exists = (candidate: string) => lstat(candidate).then(() => true, () => false);
+
+/** A staging path beside the target, so the final `rename` stays on the destination's
+ *  filesystem, carrying a per-call random suffix of its own. `${target}.part` is the
+ *  download queue's in-flight name: taking it, or clearing it, would destroy a download
+ *  that is running -- or a partial left by one that crashed. The candidate is only handed
+ *  out once it is known to be free, so a copy removes nothing but what it created. */
+const stagingPath = async (target: string): Promise<string> => {
+  for (let attempt = 0; attempt < 16; attempt += 1) {
+    const candidate = `${target}.${randomBytes(8).toString("hex")}.part`;
+    if (!await exists(candidate)) return candidate;
+  }
+  throw new Error(`No free staging name is available next to ${target}.`);
 };
 
 /** Drops the source of a finished move. The copy is already at the destination, so a
@@ -84,24 +100,34 @@ export async function transferLibraryPath(source: string, target: string, move: 
   if (move && await renameAcross(source, target)) {
     // A folder is renamed whole, so nothing was copied -- but the size is what the item
     // takes, and a progress bar that reads zero for a moved season is a lie about the item.
-    const bytes = sourceInfo.isDirectory() ? await byteSize(target) : sourceInfo.size;
+    // Measuring walks the tree that has just moved, and refuses a symlink the rename itself
+    // accepted: the item is already at the destination, so a measurement that fails falls
+    // back to the size `stat` gave instead of reporting a move that happened as a failure.
+    const bytes = sourceInfo.isDirectory() ? await byteSize(target).catch((error: unknown) => {
+      log("WARN", "The size of the moved item could not be measured", {
+        target, reason: (error instanceof Error ? error.message : String(error)).slice(0, 120),
+      });
+      return sourceInfo.size;
+    }) : sourceInfo.size;
     report(bytes, bytes);
     return { bytes, total: bytes };
   }
+  // The copy path refuses a tree holding a symlink before it writes anything: this `byteSize`
+  // is that pre-flight check, and its throw is deliberate.
   const total = await byteSize(source);
-  const temporary = `${target}.part`;
-  await rm(temporary, { recursive: true, force: true });
+  const temporary = await stagingPath(target);
   const progress = { bytes: 0, total, report };
   try {
     await copyTree(source, temporary, progress);
+    await rename(temporary, target);
   } catch (error) {
+    // Only the staging path this call reserved is cleared; the item itself stays where it was.
     await rm(temporary, { recursive: true, force: true });
     throw error;
   }
   // Past this point the copy is durable and in place. A failure now is about the source
   // that is left behind, not about the transfer: throwing would report a move that did
   // not happen, and the retry would only meet its own result as `err.nameTaken`.
-  await rename(temporary, target);
   const sourceLeft = move ? await removeMovedSource(source) : undefined;
   report(total, total);
   return { bytes: total, total, ...(sourceLeft ? { sourceLeft } : {}) };

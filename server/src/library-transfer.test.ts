@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { readdirSync } from "node:fs";
+import { chmod, mkdtemp, mkdir, readFile, readlink, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -20,6 +21,111 @@ test("copy stages a tree and reports byte progress", async () => {
     assert.deepEqual(result, { bytes: 10, total: 10 });
     assert.deepEqual(progress.at(-1), [10, 10]);
     await assert.rejects(stat(`${target}.part`));
+    assert.deepEqual(readdirSync(root).sort(), ["source", "target"]);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("a copy leaves a partial download of the same name alone", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "stremio-transfer-"));
+  try {
+    const source = path.join(root, "source.mkv");
+    const target = path.join(root, "target.mkv");
+    await writeFile(source, "video");
+    // The download queue writes exactly this path while a fetch is running.
+    await writeFile(`${target}.part`, "half a download");
+    await transferLibraryPath(source, target, false);
+    assert.equal(await readFile(target, "utf8"), "video");
+    assert.equal(await readFile(`${target}.part`, "utf8"), "half a download");
+    assert.deepEqual(readdirSync(root).sort(), ["source.mkv", "target.mkv", "target.mkv.part"]);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("a copy leaves a partial download directory of the same name alone", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "stremio-transfer-"));
+  try {
+    const source = path.join(root, "source");
+    const target = path.join(root, "target");
+    const partial = `${target}.part`;
+    await mkdir(source, { recursive: true });
+    await writeFile(path.join(source, "01.mkv"), "video");
+    await mkdir(path.join(partial, "nested"), { recursive: true });
+    await writeFile(path.join(partial, "nested", "segment"), "half a download");
+    await transferLibraryPath(source, target, false);
+    assert.equal(await readFile(path.join(target, "01.mkv"), "utf8"), "video");
+    assert.equal(await readFile(path.join(partial, "nested", "segment"), "utf8"), "half a download");
+    assert.deepEqual(readdirSync(root).sort(), ["source", "target", "target.part"]);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("two concurrent copies into one folder never share a staging path", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "stremio-transfer-"));
+  try {
+    const source = path.join(root, "source.mkv");
+    const target = path.join(root, "target.mkv");
+    await writeFile(source, Buffer.alloc(2 * 1024 * 1024, 7));
+    const staged = new Set<string>();
+    // What the folder holds mid-copy is the only place the staging names are visible.
+    const watch = () => { for (const name of readdirSync(root)) if (name.endsWith(".part")) staged.add(name); };
+    await Promise.all([
+      transferLibraryPath(source, target, false, watch),
+      transferLibraryPath(source, target, false, watch),
+    ]);
+    assert.equal(staged.size, 2, `two calls staged under ${[...staged].join(", ")}`);
+    assert.equal((await stat(target)).size, 2 * 1024 * 1024);
+    assert.deepEqual(readdirSync(root).sort(), ["source.mkv", "target.mkv"]);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("a copy that fails after staging clears its own staging path and nothing else", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "stremio-transfer-"));
+  try {
+    const source = path.join(root, "source.mkv");
+    const target = path.join(root, "target.mkv");
+    await writeFile(source, Buffer.alloc(256 * 1024, 5));
+    // The copy stages in full, and then cannot be published over a non-empty directory.
+    await mkdir(target);
+    await writeFile(path.join(target, "occupied"), "kept");
+    await writeFile(`${target}.part`, "half a download");
+    const staged = new Set<string>();
+    await assert.rejects(transferLibraryPath(source, target, false, () => {
+      for (const name of readdirSync(root)) if (name.endsWith(".part")) staged.add(name);
+    }));
+    assert.equal([...staged].filter((name) => name !== "target.mkv.part").length, 1, "the copy staged under a name of its own");
+    assert.deepEqual(readdirSync(root).sort(), ["source.mkv", "target.mkv", "target.mkv.part"]);
+    assert.deepEqual(readdirSync(target), ["occupied"]);
+    assert.equal(await readFile(`${target}.part`, "utf8"), "half a download");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("a move of a folder holding a relative symlink lands instead of failing", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "stremio-transfer-"));
+  try {
+    const source = path.join(root, "Season 1");
+    const target = path.join(root, "moved");
+    await mkdir(source, { recursive: true });
+    await writeFile(path.join(source, "01.mkv"), "video");
+    await symlink("01.mkv", path.join(source, "newest.mkv"));
+    const before = await stat(source);
+    const progress: Array<[number, number]> = [];
+    const result = await transferLibraryPath(source, target, true, (done, total) => progress.push([done, total]));
+    assert.equal(await readlink(path.join(target, "newest.mkv")), "01.mkv");
+    assert.equal(await readFile(path.join(target, "01.mkv"), "utf8"), "video");
+    await assert.rejects(stat(source));
+    // The walk over the moved tree refuses the link, so the count falls back to the source.
+    assert.deepEqual(result, { bytes: before.size, total: before.size });
+    assert.deepEqual(progress, [[before.size, before.size]]);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("a copy of a folder holding a symlink is still refused before anything is staged", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "stremio-transfer-"));
+  try {
+    const source = path.join(root, "Season 1");
+    await mkdir(source, { recursive: true });
+    await writeFile(path.join(source, "01.mkv"), "video");
+    await symlink("01.mkv", path.join(source, "newest.mkv"));
+    await assert.rejects(transferLibraryPath(source, path.join(root, "copy"), false), /Symbolic links cannot be copied\./);
+    assert.deepEqual(readdirSync(root).sort(), ["Season 1"]);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

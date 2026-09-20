@@ -226,6 +226,37 @@ test("cancelling a job that never started reports the state exactly once", async
   } finally { await cleanup(dataDir, queues); }
 });
 
+test("a cancel that lands while the pause hook waits never reaches the executor", async () => {
+  const dataDir = await mkdtemp(path.join(tmpdir(), "stremio-ops-"));
+  const queues: LibraryOps[] = [];
+  const ran: string[] = [];
+  const finished: string[] = [];
+  let entered: () => void = () => undefined;
+  let release: () => void = () => undefined;
+  const hookEntered = new Promise<void>((resolve) => { entered = resolve; });
+  const hold = new Promise<void>((resolve) => { release = resolve; });
+  try {
+    const queue = new LibraryOps({
+      file: path.join(dataDir, "race.json"), retryMs: 10,
+      // Slow on purpose, the way the real hook is: it refreshes library health and resolves
+      // paths while the job still says "paused" and has an item to run.
+      pause: async () => { entered(); await hold; return undefined; },
+      execute: async (_operation, item) => { ran.push(item); return {}; },
+      finished: (job) => { finished.push(job.status); },
+    });
+    queues.push(queue);
+    await queue.load();
+    const job = await queue.enqueue({ op: "delete", items: ["one"] });
+    await hookEntered;
+    assert.equal(await queue.cancel(job.id), true);
+    release();
+    await queue.settled();
+    assert.deepEqual(ran, [], "the item a user cancelled was not deleted");
+    assert.equal(queue.snapshot().jobs[0]?.status, "cancelled");
+    assert.deepEqual(finished, ["cancelled"]);
+  } finally { await cleanup(dataDir, queues); }
+});
+
 test("a finished hook that throws does not stop the next job", async () => {
   const dataDir = await mkdtemp(path.join(tmpdir(), "stremio-ops-"));
   const queues: LibraryOps[] = [];
