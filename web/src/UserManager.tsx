@@ -133,6 +133,11 @@ function UserEditDialog({ account, accounts, libraries, addons, session, onClose
    *  Only the departures from that default are held, not the ticks themselves: the lists
    *  arrive from the server and a snapshot taken at mount would be empty if the dialog
    *  opened first, silently granting nothing. */
+  /** One pane at a time. Four blocks stacked in a scrolling column meant a grant list was a
+   *  small box scrolling inside a long page that also scrolled -- two scrollbars fighting over
+   *  one gesture, and on a phone held sideways the whole thing was a squeeze. A pane fills the
+   *  dialog instead, so each list scrolls where the eye already is. */
+  const [tab, setTab] = useState<"account" | "libraries" | "addons" | "downloads">("account");
   const [override, setOverride] = useState<Record<string, boolean>>({});
   // One map over two namespaces, so a library id and an addon key are kept apart.
   const willGrant = (key: string, enabled: boolean) => override[key] ?? enabled;
@@ -216,7 +221,24 @@ function UserEditDialog({ account, accounts, libraries, addons, session, onClose
     });
   };
 
-  const heading = (text: string) => <div className="library-picker-section-head"><h3>{text}</h3></div>;
+  /** An administrator sees every library and addon by role and downloads without a
+   *  permission, so those three panes would each hold one sentence. They are left out, and a
+   *  strip of one tab is not drawn at all. */
+  const tabs = currentRole === "admin"
+    ? [{ id: "account" as const, label: t("users.accountHeading"), count: undefined }]
+    : [
+      { id: "account" as const, label: t("users.accountHeading"), count: undefined },
+      { id: "libraries" as const, label: t("users.librariesHeading"), count: libraries.length },
+      { id: "addons" as const, label: t("users.addonsHeading"), count: addons.length },
+      { id: "downloads" as const, label: t("users.downloadsHeading"), count: undefined },
+    ];
+  // Promoting somebody while their addons are on screen must not leave the dialog empty.
+  useEffect(() => { if (!tabs.some((entry) => entry.id === tab)) setTab("account"); }, [currentRole]);
+
+  /** The tab already names the pane, so repeating it inside is noise -- and on a phone held
+   *  sideways it is noise that costs a row of the list. Kept for the one case with no strip. */
+  const heading = (text: string) =>
+    tabs.length > 1 ? null : <div className="library-picker-section-head"><h3>{text}</h3></div>;
   const grant = (label: string, badge: ReactNode, checked: boolean, ariaLabel: string, onChange: (value: boolean) => void) =>
     <label className="user-grant-row" key={ariaLabel}>
       <input type="checkbox" checked={checked} disabled={busy} aria-label={ariaLabel}
@@ -238,8 +260,15 @@ function UserEditDialog({ account, accounts, libraries, addons, session, onClose
         <h2>{creating ? t("users.addAccount") : account.username}</h2>
         <button type="button" className="icon-button" aria-label={t("common.close")} disabled={busy} onClick={onClose}><X/></button>
       </div>
-      <div className="dialog-body user-edit-body">
-        <section className="user-edit-section">
+      {tabs.length > 1 && <div className="user-edit-tabs" role="tablist" aria-label={t("users.editAccount")}>
+        {tabs.map(({ id, label, count }) =>
+          <button key={id} type="button" role="tab" id={`user-tab-${id}`} aria-controls={`user-pane-${id}`}
+            aria-selected={tab === id} className={tab === id ? "active" : undefined} onClick={() => setTab(id)}>
+            {label}{count === undefined ? null : <i>{count}</i>}
+          </button>)}
+      </div>}
+      <div className="dialog-body user-edit-body" role="tabpanel" id={`user-pane-${tab}`} aria-labelledby={`user-tab-${tab}`}>
+        {tab === "account" && <section className="user-edit-section">
           {heading(t("users.accountHeading"))}
           <div className="user-edit-fields">
             <label className="user-edit-field"><span>{t("auth.username")}</span>
@@ -268,13 +297,16 @@ function UserEditDialog({ account, accounts, libraries, addons, session, onClose
               onClick={applyPassword}>{t(creating ? "auth.createAccount" : "users.password")}</button>
           </div>
           <p className="identify-hint">{t(creating ? "users.newAccountHint" : "users.passwordHint")}</p>
+          {/* An administrator has no grant panes, so the account pane is where the dialog says
+              why: otherwise the tabs simply vanish on promotion with nothing in their place. */}
+          {currentRole === "admin" && <p className="identify-hint">{t("users.seesEverything")}</p>}
           {account && <div className="user-edit-danger">
             <button type="button" className="danger" disabled={busy || locked || self} onClick={() => void onRemove(account)}>
               <Trash2/> {t("users.deleteAccount")}</button>
             {self && !locked && <p className="identify-hint">{t("users.selfDeleteHint")}</p>}
           </div>}
-        </section>
-        <section className="user-edit-section">
+        </section>}
+        {tab === "libraries" && <section className="user-edit-section">
           {heading(t("users.librariesHeading"))}
           {currentRole === "admin"
             ? <p className="identify-hint">{t("users.seesEverything")}</p>
@@ -285,8 +317,8 @@ function UserEditDialog({ account, accounts, libraries, addons, session, onClose
                   t("users.grantLibrary", { library: library.name }),
                   (value) => account ? setLibraryGrant(library, value) : pick(libraryKey(library.id), value)))}</div>
               {creating && <p className="identify-hint">{t("users.grantsOnCreate")}</p>}</>}
-        </section>
-        <section className="user-edit-section">
+        </section>}
+        {tab === "addons" && <section className="user-edit-section">
           {heading(t("users.addonsHeading"))}
           {currentRole === "admin"
             ? <p className="identify-hint">{t("users.seesEverything")}</p>
@@ -296,8 +328,8 @@ function UserEditDialog({ account, accounts, libraries, addons, session, onClose
                   account ? (addon.allowedUsers ?? []).includes(account.id) : willGrant(addonKey(addon.key), addon.enabled),
                   t("users.grantAddon", { addon: addon.manifest.name }),
                   (value) => account ? setAddonGrant(addon, value) : pick(addonKey(addon.key), value)))}</div>}
-        </section>
-        {currentRole !== "admin" && <section className="user-edit-section">
+        </section>}
+        {tab === "downloads" && currentRole !== "admin" && <section className="user-edit-section">
           {heading(t("users.downloadsHeading"))}
           <div className="user-edit-switches">
             {switchFor(t("users.downloadToLibrary"), t("users.downloadToLibraryHint"), currentPermissions.downloadToLibrary, false,

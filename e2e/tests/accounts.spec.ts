@@ -84,11 +84,20 @@ test.describe("accounts", () => {
       // the grants below are what move the counts.
       // Only the grant lists: the download switches are checkboxes too, and theirs is covered
       // by the track that is drawn over it.
-      const offered = await dialog.locator(".user-grant-list").getByRole("checkbox").all();
-      const ticked = await Promise.all(offered.map((box) => box.isChecked()));
-      expect(ticked.filter(Boolean).length, "nothing was offered for a new account").toBeGreaterThan(0);
-      for (const [index, box] of offered.entries()) if (ticked[index]) await box.click();
-      for (const box of offered) await expect(box).not.toBeChecked();
+      // The grants are a pane each now, and leaving a pane detaches its boxes -- so each one is
+      // read and cleared while it is the open one.
+      let offeredTicks = 0;
+      for (const pane of ["Knihovny", "Doplňky"]) {
+        await dialog.getByRole("tab", { name: new RegExp(`^${pane}`) }).click();
+        const boxes = await dialog.locator(".user-grant-list").getByRole("checkbox").all();
+        expect(boxes.length, `the ${pane} pane offered nothing to clear`).toBeGreaterThan(0);
+        for (const box of boxes) {
+          if (await box.isChecked()) { offeredTicks += 1; await box.click(); }
+          await expect(box).not.toBeChecked();
+        }
+      }
+      expect(offeredTicks, "nothing was offered for a new account").toBeGreaterThan(0);
+      await dialog.getByRole("tab", { name: /^Účet/ }).click();
 
       await dialog.getByRole("button", { name: "Založit účet" }).click();
       await expect(page.getByText("Účet vytvořen.")).toBeVisible();
@@ -102,6 +111,7 @@ test.describe("accounts", () => {
         .toHaveText("Vidí všechny knihovny i doplňky podle role.");
 
       await row.getByRole("button", { name: "Upravit" }).click();
+      await dialog.getByRole("tab", { name: /^Knihovny/ }).click();
       const library = dialog.getByRole("checkbox", { name: libraryGrant(granted.name) });
       await library.click();
       await expect(library).toBeChecked();
@@ -148,6 +158,7 @@ test.describe("accounts", () => {
       const [addon] = await page.request.get("/api/addons")
         .then((response) => response.json() as Promise<Array<{ manifest: { name: string } }>>);
       await row.getByRole("button", { name: "Upravit" }).click();
+      await dialog.getByRole("tab", { name: /^Doplňky/ }).click();
       const addonBox = dialog.getByRole("checkbox", { name: addonGrant(addon.manifest.name) });
       await addonBox.click();
       await expect(addonBox).toBeChecked();
@@ -158,6 +169,7 @@ test.describe("accounts", () => {
 
       // Withdrawing the library reaches the account on its next read.
       await row.getByRole("button", { name: "Upravit" }).click();
+      await dialog.getByRole("tab", { name: /^Knihovny/ }).click();
       await library.click();
       await expect(library).not.toBeChecked();
       await dialog.getByRole("button", { name: "Zavřít" }).click();
@@ -178,8 +190,10 @@ test.describe("accounts", () => {
       // refuse an administrator's id -- so the check that matters is that the very next edit
       // still goes through.
       await row.getByRole("button", { name: "Upravit" }).click();
+      await dialog.getByRole("tab", { name: /^Doplňky/ }).click();
       await addonBox.click();
       await expect(addonBox).toBeChecked();
+      await dialog.getByRole("tab", { name: /^Účet/ }).click();
       await dialog.getByLabel("Role").selectOption("admin");
       await expect(dialog.getByText("Vidí všechny knihovny i doplňky podle role.").first()).toBeVisible();
       await dialog.getByRole("button", { name: "Zavřít" }).click();

@@ -73,6 +73,14 @@ const clickText = async (text: string) => {
   expect(button, `"${text}" is on screen`).toBeTruthy();
   await act(async () => { button!.click(); await Promise.resolve(); });
 };
+/** The dialog is a pane at a time now, so a test that reaches for a grant or a download
+ *  switch has to open the pane holding it first. */
+const openPane = async (name: string) => {
+  const tab = [...host.querySelectorAll<HTMLButtonElement>('[role="tab"]')]
+    .find((candidate) => candidate.textContent?.trim().startsWith(name));
+  expect(tab, `the "${name}" pane is on screen`).toBeTruthy();
+  await act(async () => { tab!.click(); await Promise.resolve(); });
+};
 const clickLabel = async (label: string) => {
   const button = host.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
   expect(button, `"${label}" is on screen`).toBeTruthy();
@@ -140,6 +148,7 @@ it("a library tick writes the whole grant list back to the library", async () =>
     },
   });
   await clickText("Edit");
+  await openPane("Libraries");
 
   expect(host.querySelector<HTMLInputElement>('input[aria-label="Films is visible to this account"]')?.checked).toBe(false);
   await clickBox("Films is visible to this account");
@@ -158,6 +167,7 @@ it("a disabled addon is still granted, and the tick writes the whole list back",
     onWrite: (url, body) => { patched.push({ url, body }); return addon({ allowedUsers: body.allowedUsers as string[] }); },
   });
   await clickText("Edit");
+  await openPane("Addons");
 
   expect(host.textContent, "a switched-off addon still says so").toContain("off");
   await clickBox("Alpha is available to this account");
@@ -175,6 +185,7 @@ it("a refused grant leaves the checkbox as it was and reports why", async () => 
     onWrite: () => json({ error: "An administrator already sees every library.", messageKey: "err.adminAlwaysSees" }, 409),
   });
   await clickText("Edit");
+  await openPane("Libraries");
   await clickBox("Films is visible to this account");
 
   expect(onError).toHaveBeenCalledTimes(1);
@@ -209,6 +220,7 @@ it("the delete confirmation names all three outcomes", async () => {
 it("hides the downloads block from an administrator, and shows it to an ordinary account", async () => {
   await mount({ session: admin, users: [account(), account({ id: "usr_00000002", username: "bob", role: "user" })] });
   await clickText("Edit");
+  expect(host.querySelectorAll('[role="tab"]').length, "an administrator has nothing to switch between").toBe(0);
   expect(host.textContent).not.toContain("Download to the library");
   expect(host.textContent).not.toContain("Save to this device");
   expect(host.textContent, "an administrator's libraries are role, not grants").toContain("Sees every library and addon by role.");
@@ -216,6 +228,8 @@ it("hides the downloads block from an administrator, and shows it to an ordinary
 
   const edits = [...host.querySelectorAll("button")].filter((button) => button.textContent?.trim() === "Edit");
   await act(async () => { edits[1].click(); await Promise.resolve(); });
+  // An ordinary account has the pane; an administrator has no tab strip at all.
+  await openPane("Downloads");
   expect(host.textContent).toContain("Download to the library");
   expect(host.textContent).toContain("Save to this device");
 });

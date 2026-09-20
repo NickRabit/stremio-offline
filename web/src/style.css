@@ -1170,15 +1170,30 @@ img.broken{visibility:hidden}
 .user-admin-seen{font-size:11px;color:var(--muted)}
 .user-edit-card{width:min(660px,100%);max-height:min(100%,820px)}
 .user-edit-card>.identify-head h2{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.user-edit-body{display:grid;gap:0}
-.user-edit-section{display:grid;gap:12px;min-width:0;padding:15px 0;border-top:1px solid var(--line)}
-.user-edit-section:first-child{padding-top:0;border-top:0}
+/* One pane at a time, so a section is the whole body rather than a stop on a long scroll:
+   no rule above it, no rhythm to keep with the section that used to follow. */
+.user-edit-tabs{flex:0 0 auto;display:flex;gap:4px;min-width:0;padding:0 22px;border-bottom:1px solid var(--line);overflow-x:auto;scrollbar-width:none}
+.user-edit-tabs::-webkit-scrollbar{display:none}
+.user-edit-tabs button{flex:0 0 auto;display:flex;align-items:center;gap:7px;padding:10px 12px;border:0;border-bottom:2px solid transparent;border-radius:0;background:transparent;color:var(--muted);font-size:12px;font-weight:700}
+.user-edit-tabs button:hover{color:var(--text)}
+.user-edit-tabs button.active{color:var(--text);border-bottom-color:var(--accent)}
+.user-edit-tabs button i{font-style:normal;font-size:10px;font-weight:800;padding:1px 6px;border-radius:99px;background:#1b222d;color:var(--muted)}
+.user-edit-tabs button.active i{background:#ff5b3826;color:var(--accent)}
+/* Content sits at the top of the pane. Letting the rows share the height instead spreads a
+   short pane into a ladder of gaps, which is what a stretched grid does by default. */
+.user-edit-section{display:grid;align-content:start;gap:12px;min-width:0;padding:15px 0}
+/* The body holds exactly one pane, and that pane gets the height rather than a share of it. */
+.user-edit-body{display:grid;gap:0;padding-top:0;align-content:stretch;grid-template-rows:minmax(0,1fr)}
+/* The pane is the scroller now. A list that filled a fixed box inside a page that also
+   scrolled gave the same gesture two meanings; here it simply takes the room that is left. */
+.user-edit-body .user-edit-section:has(>.user-grant-list){align-content:stretch;grid-template-rows:auto minmax(0,1fr)}
+.user-edit-body .user-grant-list{max-height:none;min-height:0}
 .user-edit-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
 .user-edit-field{display:grid;gap:6px;min-width:0}
 .user-edit-field>span{font-size:11px;font-weight:700;color:var(--muted)}
 .user-edit-password{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;gap:8px}
 .user-edit-password button{white-space:nowrap}
-.user-edit-danger{display:grid;gap:8px;padding-top:12px;border-top:1px solid var(--line)}
+.user-edit-danger{display:grid;gap:8px;margin-top:4px;padding-top:12px;border-top:1px solid var(--line)}
 .user-edit-danger>button{justify-self:start;border-color:#f06a7655;color:var(--red)}
 .user-edit-switches{display:grid;gap:12px}
 .user-switch{display:flex;align-items:flex-start;gap:10px;min-height:24px}
@@ -1209,6 +1224,16 @@ img.broken{visibility:hidden}
 @media(max-width:700px){
   .user-edit-fields,.user-edit-password{grid-template-columns:minmax(0,1fr)}
   .user-edit-password button{width:100%}
+  /* Full screen, not a sheet. Sized to its pane it jumped on every switch and a short pane
+     left a third of the screen dark above it; given a fixed share of the height it stopped
+     jumping but still read as pinned to the bottom edge. Four panes of very different
+     lengths want the whole screen and a header where a header belongs. */
+  .user-edit-card{height:100%;max-height:100%;border-radius:0}
+  /* Four labels have to fit a phone's width, or the last one reads as cut off rather than
+     as something to scroll to. */
+  .user-edit-tabs{padding:0 16px;gap:0}
+  .user-edit-tabs button{padding:10px 7px;gap:5px;font-size:11px}
+  .user-edit-tabs button i{padding:1px 5px}
 }
 /* The password field and its button are one control in two parts, so they stay side by side
    wherever the width allows it. Stacked, the button lands a row below the field it belongs to
