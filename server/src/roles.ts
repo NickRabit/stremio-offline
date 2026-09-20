@@ -105,6 +105,12 @@ export const isMustChangePathAllowed = (method: string, path: string) => match(M
  *  again here would answer nobody in exactly the cases worth catching, and a record compared
  *  against itself proves nothing.
  *
+ *  Where it belongs: every administrator-only route that awaits *before* its first side
+ *  effect. Routes whose first await is the write itself have no window to close and are left
+ *  alone -- moving an addon, deleting one, clearing the log, reordering the queue, and the
+ *  account edits, whose checks are all synchronous up to the mutator. A read-only route has
+ *  nothing to guard at all.
+ *
  *  It deliberately does not cover work that has already touched the disk. A rename, a move
  *  and a library re-root write files first and the state afterwards, and refusing the second
  *  half would leave the state describing a tree that is no longer there. Those finish on the

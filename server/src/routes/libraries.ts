@@ -374,6 +374,10 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
     // make a folder, and a refused request must leave nothing behind.
     const paths = await checkRerootPaths({ from, to: path.resolve(String(req.body?.root ?? "").trim()), carveOuts: carveOuts(store.libraries(), target) });
     if (!paths.ok) throw new AppError(paths.message, paths.messageKey, paths.status);
+    // Before `create` can make a folder, which is this route's first side effect and the
+    // reason the refusals above come first. The job enqueued below moves a whole tree, so
+    // this is the least forgiving place in the interface to still be acting on a stale role.
+    assertStillAdmin(store.users(), currentUser(req));
     const root = await requireLibraryRoot(req.body?.root, { exceptId: target.id, create: req.body?.create === true });
     const items = await checkRerootItems({ from, to: root });
     if (!items.ok) throw new AppError(items.message, items.messageKey, items.status);

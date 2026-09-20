@@ -156,6 +156,9 @@ export function registerCurateRoutes(app: express.Application, deps: CurateDeps)
     // memory for half a minute, and "scan again" must not answer from a listing taken before
     // the file it is meant to find was copied in.
     invalidateLibrary();
+    // The scan writes metadata for as long as it runs, so the question is asked before it
+    // starts rather than at any of the writes behind it.
+    assertStillAdmin(store.users(), currentUser(req));
     const state = await libraryScan.start({ force: req.body?.force === true, path: resolved?.key ?? "", libraryId: library?.id });
     // A manual run covers the same ground, so the automatic one starts from here too.
     void libraryAutoScan.remember();

@@ -141,6 +141,7 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     const target = await resolveLibraryPath(store.libraries(), libraryPath(resolved.library.id, relative));
     if (!target) throw new AppError("Invalid path.", "err.invalidPath");
     if (await fileExists(target.absolute)) throw new AppError("A file with that name already exists.", "err.nameTaken");
+    assertStillAdmin(store.users(), currentUser(req));
     await mkdir(target.absolute);
     invalidateLibrary();
     res.status(201).json({ path: wirePath(target.key) });
