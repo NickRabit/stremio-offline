@@ -361,6 +361,7 @@ const pruneDeviceDownloadTickets = () => {
  *  one session, a disabled or deleted account reaches everything it held, and a library or
  *  an addon reaches only the resources that touch it. */
 const revocations = new Revocations({
+  source: { users: () => store.users(), addons: () => store.addons(), libraries: () => store.libraries() },
   resources: mediaResources,
   airplay: airplayAccess,
   playbackOwners,

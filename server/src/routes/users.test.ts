@@ -7,7 +7,7 @@ import path from "node:path";
 import { test } from "node:test";
 import express from "express";
 import { AirPlayAccess } from "../airplay-access.js";
-import { parseCookies, readSession, SESSION_COOKIE, sessionUserId, verifyPassword, type SessionInfo } from "../auth.js";
+import { createSession, parseCookies, readSession, SESSION_COOKIE, sessionUserId, verifyPassword, type SessionInfo } from "../auth.js";
 import { DownloadQueue, type DownloadJob } from "../downloads.js";
 import { messageKeyOf } from "../errors.js";
 import type { LibraryRecord } from "../libraries.js";
@@ -149,6 +149,7 @@ const mount = async (options: {
   const playbackOwners = new Map<string, { owner: ResourceOwner; resourceId: string }>();
   const stoppedPlayback: string[] = [];
   const revocations = new Revocations({
+    source: { users: () => store.users(), addons: () => store.addons(), libraries: () => store.libraries() },
     resources,
     airplay: new AirPlayAccess(resources),
     playbackOwners,
@@ -454,6 +455,89 @@ test("losing the right to queue pauses that account's downloads and leaves the f
   assert.deepEqual(harness.paused, ["job-bob"]);
   assert.equal(harness.jobs()[0]?.pauseReason, "permission");
   assert.equal(harness.activeMedia.has(watching), true, "watching was never in question");
+});
+
+test("switching an account off ends its sessions, so switching it back on asks for the password", async (t) => {
+  const harness = await mount({ users: [admin, { ...bob, secret: "bob-secret" }] });
+  t.after(harness.close);
+
+  const off = await api(harness.base, `/api/users/${BOB}`, { method: "PATCH", body: { disabled: true } });
+  assert.equal(off.status, 200);
+  const disabled = findUserById(harness.store.users(), BOB)!;
+  // Refusing while the switch is down is not enough on its own: the cookie would start
+  // answering again the moment somebody switched the account back on, and the device it was
+  // taken away from would be back in without signing in.
+  assert.notEqual(disabled.secret, "bob-secret", "the tokens it holds are still valid");
+  assert.deepEqual(disabled.revoked ?? {}, {});
+
+  const on = await api(harness.base, `/api/users/${BOB}`, { method: "PATCH", body: { disabled: false } });
+  assert.equal(on.status, 200);
+  const back = findUserById(harness.store.users(), BOB)!;
+  assert.equal(back.secret, disabled.secret, "switching it on again must not rotate anything else");
+  assert.equal(readSession("bob-secret", createSession("bob-secret", BOB, Date.now() + 60_000, "sid-old")) !== undefined, true);
+  assert.equal(readSession(back.secret, createSession("bob-secret", BOB, Date.now() + 60_000, "sid-old")), undefined,
+    "a token signed with the old secret still opens the account");
+});
+
+test("an administrator's password reset ends the sessions and leaves the queue running", async (t) => {
+  const harness = await mount({ users: [admin, bob], jobs: [job("job-bob", BOB, { status: "downloading" })] });
+  t.after(harness.close);
+  const owner = { userId: BOB, sid: "sid-bob", expiresAt: Date.now() + 60_000 };
+  const open = harness.resources.add({ url: "http://alpha.test/film.mkv" }, owner, "media");
+
+  const response = await api(harness.base, `/api/users/${BOB}/password`, { method: "PATCH", body: { password: "novy-tajny" } });
+  assert.equal(response.status, 200);
+  assert.throws(() => harness.resources.get(open, "sid-bob", "media"), "what the account held open survived the reset");
+  // A reset changes which credential opens the door and takes away no right. The account may
+  // still queue, and a download to the server is not something it is holding open, so pausing
+  // it would be punishing somebody for an administrator's action. Switching the account off is
+  // the tool for taking the right away.
+  assert.deepEqual(harness.paused, [], "the reset paused the queue");
+  assert.equal(harness.jobs()[0]?.status, "downloading");
+});
+
+test("a demotion cuts what the role was granting", async (t) => {
+  const harness = await mount({
+    users: [admin, { ...bob, role: "admin" as const }],
+    libraries: (dir) => [library(path.join(dir, "downloads"))],
+    addons: [addon("alpha")],
+  });
+  t.after(harness.close);
+  const owner = { userId: BOB, sid: "sid-bob", expiresAt: Date.now() + 60_000 };
+  // Held by the role alone: nothing names this account on either the library or the addon.
+  const byLibrary = harness.resources.add({ url: `file://${LIBRARY}/Film.mkv` }, owner, "media");
+  const byAddon = harness.resources.add({ url: "http://alpha.test/film.mkv", addonKey: "alpha" }, owner, "media");
+  let destroyed = false;
+  harness.activeMedia.add({ owner, res: { destroy: () => { destroyed = true; } }, resourceId: byLibrary });
+
+  const response = await api(harness.base, `/api/users/${BOB}`, { method: "PATCH", body: { role: "user" } });
+  assert.equal(response.status, 200);
+  // The counter stops the next request; this is about what is already open. Coming down from
+  // administrator is the largest withdrawal there is and no counter names what it costs.
+  assert.throws(() => harness.resources.get(byLibrary, "sid-bob", "media"), "the library resource the old role allowed is still open");
+  assert.throws(() => harness.resources.get(byAddon, "sid-bob", "media"), "the addon resource the old role allowed is still open");
+  assert.equal(destroyed, true, "the transfer already being written was left running");
+});
+
+test("a demotion leaves alone what the account was granted in its own right", async (t) => {
+  const harness = await mount({
+    users: [admin, { ...bob, role: "admin" as const }],
+    libraries: (dir) => [library(path.join(dir, "downloads"), [BOB])],
+    addons: [addon("alpha", [BOB])],
+  });
+  t.after(harness.close);
+  const owner = { userId: BOB, sid: "sid-bob", expiresAt: Date.now() + 60_000 };
+  const byLibrary = harness.resources.add({ url: `file://${LIBRARY}/Film.mkv` }, owner, "media");
+  const byAddon = harness.resources.add({ url: "http://alpha.test/film.mkv", addonKey: "alpha" }, owner, "media");
+  let destroyed = false;
+  harness.activeMedia.add({ owner, res: { destroy: () => { destroyed = true; } }, resourceId: byLibrary });
+
+  assert.equal((await api(harness.base, `/api/users/${BOB}`, { method: "PATCH", body: { role: "user" } })).status, 200);
+  // The sweep measures what is held against what is allowed now rather than cutting
+  // everything: a library and an addon this account is named on stay its to read.
+  assert.doesNotThrow(() => harness.resources.get(byLibrary, "sid-bob", "media"), "a granted library was swept away");
+  assert.doesNotThrow(() => harness.resources.get(byAddon, "sid-bob", "media"), "a granted addon was swept away");
+  assert.equal(destroyed, false, "a transfer the account still has the right to was destroyed");
 });
 
 test("switching an account off sweeps what it holds and keeps its history", async (t) => {

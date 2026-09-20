@@ -2,7 +2,7 @@ import { FormEvent, ReactNode, TouchEvent as ReactTouchEvent, UIEvent, WheelEven
 import { ArrowDown, BarChart3, ArrowUp, Check, RectangleHorizontal, RectangleVertical, Copy, FolderInput, FolderOpen, ImageOff, Images, KeyRound, Languages, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, ShieldCheck, SlidersHorizontal, Sparkles, Star, FileJson, Link2, LogOut, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, FileText, Film, FolderCog, HardDrive, Library, PackagePlus, Pause, Play, Plus, RefreshCw, Search, SearchX, Settings, Subtitles, Trash2, Upload, Users, X } from "lucide-react";
 import { queueDestination } from "./queue-target";
 import { api, ApiError, describeError, logDownloadUrl, saveToDevice } from "./api";
-import { AccountSettings, LoginScreen } from "./Login";
+import { AccountSettings, LoginScreen, PasswordChangeRequired } from "./Login";
 import { bytes, Heading, hideBroken, SettingControl, SettingsSectionHead } from "./settings-ui";
 import { LOCALES, LOCALE_NAMES } from "./i18n";
 import { Player } from "./Player";
@@ -1550,6 +1550,10 @@ export function App() {
 
   if (session === undefined) return <div className="login-screen"><div className="loading">{t("common.loading")}</div></div>;
   if (!ready) return <LoginScreen setup={setupNeeded} onSession={(next) => { setSetupNeeded(false); setSession(next); }}/>;
+  // Signed in, but on a password an administrator chose: the server allows this form, reading
+  // one's own name and signing out, and nothing else. Rendering the application here would
+  // render a shell whose every request comes back refused with nothing to explain it.
+  if (session?.mustChangePassword) return <PasswordChangeRequired session={session} onSession={setSession}/>;
 
   return <div className={`app-shell catalog-tiles-${settings.catalogTileSize} library-tiles-${settings.libraryTileSize} catalog-shape-${settings.catalogTileShape} library-shape-${settings.libraryTileShape}${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
     <header className="topbar"><button className="brand brand-home" title={t("app.goToCleanCatalog")} aria-label={t("app.goToCleanCatalog")} onClick={resetCatalog}><div className="brand-mark"><CirclePlay/></div><div><small>{t("auth.brandEyebrow")}</small><h1>Stremio <span>Offline</span></h1></div></button><div className="topbar-right">{restricted && <div className="restricted-chip">{t("restricted.chip")}</div>}<div className="online"><i/> {t("app.serverOnline")}</div>

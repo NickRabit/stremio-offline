@@ -38,6 +38,7 @@ export const cs: Catalog = {
   "auth.username": "Uživatelské jméno",
   "auth.password": "Heslo",
   "auth.passwordRepeat": "Heslo znovu",
+  "auth.mustChangeLead": "Heslo, kter\u00fdm se {username} p\u0159ihl\u00e1sil, nastavil administr\u00e1tor \u2014 zn\u00e1 ho tedy dvojice lid\u00ed. Zvol nov\u00e9 a pokra\u010duj.",
   "auth.remember": "Zůstat přihlášen na tomto zařízení (30 dní)",
   "auth.createAccount": "Založit účet",
   "auth.signIn": "Přihlásit se",

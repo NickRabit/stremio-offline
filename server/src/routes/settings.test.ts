@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
+import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 import express from "express";
@@ -18,6 +19,7 @@ const STREAM_SORTS = new Set(["recommended", "size-desc", "size-asc", "addon"]);
 interface Harness {
   base: string;
   state: State;
+  onStopContent?: (opts: { userId?: string; libraryId?: string; addonKey?: string }) => void;
   close(): Promise<void>;
 }
 
@@ -45,6 +47,8 @@ const mount = async (): Promise<Harness> => {
   const prefsOf = (req?: express.Request): UserPrefs =>
     req ? { ...defaultPrefs(), ...state.userData?.[userIdOf(req)]?.prefs as Partial<UserPrefs> } : defaultPrefs();
 
+  // Declared before the routes so a test can hook the sweep after mounting.
+  const harness = { state } as Harness;
   const deps: SettingsDeps = {
     store: {
       settings: () => state.settings,
@@ -60,7 +64,7 @@ const mount = async (): Promise<Harness> => {
     stopUserAccess: async () => undefined,
     stopUserSessions: async () => undefined,
     requireAccess: () => undefined,
-    stopContentAccess: async () => undefined,
+    stopContentAccess: async (opts) => { harness.onStopContent?.(opts); },
     STREAM_SORTS,
     accountIdOf: (req) => (req ? userIdOf(req) : ADA),
     invalidateLibrary: () => undefined,
@@ -88,14 +92,12 @@ const mount = async (): Promise<Harness> => {
   const server = app.listen(0, "127.0.0.1");
   await once(server, "listening");
   const { port } = server.address() as AddressInfo;
-  return {
-    base: `http://127.0.0.1:${port}`,
-    state,
-    close: async () => {
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
-    },
+  harness.base = `http://127.0.0.1:${port}`;
+  harness.close = async () => {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
   };
+  return harness;
 };
 
 const api = (base: string, pathname: string, init: { method?: string; body?: unknown; user?: "ada" | "bob" | "carol" } = {}) =>
@@ -201,6 +203,59 @@ test("POST /api/settings/import puts each key of a flat backup back on the side 
   const body = await response.json() as { remapped: number; settings: Record<string, unknown> };
   assert.equal(body.remapped, 0);
   assert.equal(body.settings.uiLanguage, "cs");
+});
+
+test("an import keeps the grants and the keys of the addons this instance already has", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  // `loadAddon` fetches the manifest for real, so the backup points at one this test serves.
+  const originalFlag = process.env.ALLOW_PRIVATE_ADDONS;
+  process.env.ALLOW_PRIVATE_ADDONS = "1";
+  t.after(() => { if (originalFlag === undefined) delete process.env.ALLOW_PRIVATE_ADDONS; else process.env.ALLOW_PRIVATE_ADDONS = originalFlag; });
+  const manifests = createServer((req, res) => {
+    const id = req.url === "/beta/manifest.json" ? "beta" : "alpha";
+    res.writeHead(200, { "content-type": "application/json" })
+      .end(JSON.stringify({ id, name: `Addon ${id}`, version: "1.0.0", resources: ["stream"], types: ["movie"], catalogs: [] }));
+  });
+  manifests.listen(0, "127.0.0.1");
+  await once(manifests, "listening");
+  t.after(() => new Promise<void>((resolve) => manifests.close(() => resolve())));
+  const origin = `http://127.0.0.1:${(manifests.address() as AddressInfo).port}`;
+  const alphaUrl = `${origin}/alpha/manifest.json`;
+  const betaUrl = `${origin}/beta/manifest.json`;
+
+  const kept = {
+    key: "alpha-key", manifestUrl: alphaUrl, role: "both", enabled: true, globalSearch: true,
+    addedAt: "2026-01-01T00:00:00.000Z", allowedUsers: [CAROL],
+    manifest: { id: "alpha", name: "Addon alpha", version: "1.0.0" },
+    downloadSettings: { movie: { subfolder: "", layout: "flat" }, series: { subfolder: "", layout: "flat" } },
+  };
+  const dropped = { ...kept, key: "beta-key", manifestUrl: betaUrl, manifest: { id: "beta", name: "Addon beta", version: "1.0.0" } };
+  harness.state.addons = [kept, dropped] as State["addons"];
+  const stopped: Array<{ addonKey?: string }> = [];
+  harness.onStopContent = (opts) => { stopped.push(opts); };
+
+  const response = await api(harness.base, "/api/settings/import", {
+    method: "POST",
+    user: "ada",
+    body: {
+      format: "stremio-offline-settings", version: 2, exportedAt: new Date().toISOString(),
+      settings: { concurrentDownloads: 3 },
+      addons: [{ manifestUrl: alphaUrl, role: "both", enabled: true, globalSearch: true, addedAt: "2026-01-01T00:00:00.000Z" }],
+      libraries: [],
+    },
+  });
+  assert.equal(response.status, 200);
+
+  // A backup carries the instance's configuration, not its accounts: the ids in a grant list
+  // belong to this install. Reloading the record must not quietly take every addon away from
+  // every ordinary account -- including when the backup being imported is this instance's own.
+  const [restored] = harness.state.addons;
+  assert.equal(harness.state.addons.length, 1);
+  assert.deepEqual(restored?.allowedUsers, [CAROL], "the import took the addon away from everyone it was granted to");
+  assert.equal(restored?.key, "alpha-key", "the key a grant and a personal order both point at was replaced");
+  // The addon the backup does not carry is gone for everybody, which no counter records.
+  assert.deepEqual(stopped, [{ addonKey: "beta-key" }]);
 });
 
 test("PATCH /api/settings lets an ordinary user change only their own preferences", async (t) => {

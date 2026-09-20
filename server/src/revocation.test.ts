@@ -25,6 +25,7 @@ function harness(jobs: DownloadJob[] = []) {
   const deviceTickets = new Map<string, DeviceDownloadTicket>();
   const playbackOwners = new Map<string, { owner: ResourceOwner; resourceId: string }>();
   const deps: RevocationDeps = {
+    source: { users: () => [], addons: () => [], libraries: () => [] },
     resources,
     airplay: new AirPlayAccess(resources),
     playbackOwners,

@@ -42,6 +42,7 @@ export const en = {
   "auth.username": "Username",
   "auth.password": "Password",
   "auth.passwordRepeat": "Repeat password",
+  "auth.mustChangeLead": "An administrator set the password {username} just signed in with, so two people know it. Choose a new one to carry on.",
   "auth.remember": "Stay signed in on this device (30 days)",
   "auth.createAccount": "Create account",
   "auth.signIn": "Sign in",

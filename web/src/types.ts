@@ -141,7 +141,9 @@ export interface UserAccount {
   createdAt: string; lastSeenAt?: string; permissions: UserPermissions;
   libraries: number; addons: number;
 }
-export interface Session { username: string; role: UserRole; language?: Locale }
+/** `mustChangePassword` is set when an administrator chose the password this session signed
+ *  in with. The server refuses everything but the change itself while it stands. */
+export interface Session { username: string; role: UserRole; language?: Locale; mustChangePassword?: boolean }
 /** A fresh install answers with the setup order instead of a session. Both carry the
  *  stored language: the sign-in and setup screens render before any other call. */
 export type AuthStatus = (Session | { setup: true }) & { language?: Locale };

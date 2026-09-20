@@ -108,6 +108,10 @@ export interface RevocationQueue {
 }
 
 export interface RevocationDeps {
+  /** What exists now, read the way `accessLost` reads it. A sweep that follows a change of
+   *  role cannot be told which libraries and addons were lost -- there may be every one of
+   *  them -- so it works the answer out instead. */
+  source: AccessSource;
   resources: MediaResources;
   airplay: AirPlayAccess;
   playbackOwners: Map<string, { owner: ResourceOwner; resourceId: string }>;
@@ -194,6 +198,43 @@ export class Revocations {
     await this.pauseJobs((job) => this.jobTouches(job, opts), opts.userId);
   }
 
+  /** Everything one account is holding that it may no longer reach. A change of role cannot
+   *  name the content it costs -- an administrator reaches every library and every addon by
+   *  role, and an ordinary account reaches only what it was granted -- so what is held is
+   *  measured against what is now allowed, one item at a time. */
+  async stopUnreachable(user: UserRecord): Promise<void> {
+    const viewer: Viewer = { id: user.id, role: user.role };
+    const libraries = this.deps.source.libraries();
+    const addons = this.deps.source.addons();
+    const lost = (content: Content): boolean => {
+      if (content.libraryId !== undefined) {
+        const library = libraries.find((item) => item.id === content.libraryId);
+        if (!library || !library.enabled || !libraryVisible(library, viewer)) return true;
+      }
+      if (content.addonKey !== undefined) {
+        const addon = addons.find((item) => item.key === content.addonKey);
+        if (!addon || !addon.enabled || !addonAllowed(addon, viewer)) return true;
+      }
+      return false;
+    };
+    const mine = (owner: ResourceOwner) => owner.userId === user.id;
+    const revoked = new Set(this.deps.resources.revokeWhere((owner, stream) => mine(owner) && lost(contentOf(stream))));
+    for (const active of this.deps.activeMedia) {
+      if (!mine(active.owner)) continue;
+      if (active.resourceId ? revoked.has(active.resourceId) : lost(active)) active.res.destroy();
+    }
+    for (const [id, owned] of this.deps.playbackOwners) {
+      if (mine(owned.owner) && revoked.has(owned.resourceId)) await this.deps.stopPlayback(id);
+    }
+    this.deps.airplay.removeWhere((grant) => revoked.has(grant.resourceId));
+    // A queued download keeps its place, like every other pause: the job is not wrong, the
+    // library it writes to is simply not this account's to write to any more.
+    await this.pauseJobs((job) => this.deps.queue.ownerOf(job) === user.id && lost({
+      libraryId: job.libraryId ?? (job.target ? parseLibraryPath(job.target)?.libraryId : undefined),
+      addonKey: job.stream?.addonKey,
+    }), user.id);
+  }
+
   /**
    * The download rights an account has just lost. Each cause reaches only what it covered:
    * taking away the right to queue must not stop the film somebody is watching, and taking
@@ -206,6 +247,11 @@ export class Revocations {
       await this.stopUser(after.id);
       return;
     }
+    // Coming down from administrator is the largest withdrawal there is: everything the role
+    // was granting goes at once, and what is left is whatever the resources name explicitly,
+    // which is usually nothing. The counter stops the next request; this reaches the film
+    // already playing and the transfer already running.
+    if (before.role === "admin" && after.role !== "admin") await this.stopUnreachable(after);
     if (mayDownloadToLibrary(before) && !mayDownloadToLibrary(after)) {
       await this.pauseJobs((job) => this.deps.queue.ownerOf(job) === after.id, after.id);
     }

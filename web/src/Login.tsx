@@ -63,6 +63,58 @@ export function LoginScreen({ setup, onSession }: { setup: boolean; onSession: (
   </div>;
 }
 
+/** The way out of a password an administrator chose. The server refuses everything but this
+ *  form, reading one's own name and signing out, so rendering the application would be
+ *  rendering a shell whose every request comes back refused with nothing to explain it. The
+ *  current password is the one that was just used to sign in, and is asked for again because
+ *  the endpoint verifies it. */
+export function PasswordChangeRequired({ session, onSession }: {
+  session: Session; onSession: (session: Session) => void;
+}) {
+  const { t } = useI18n();
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [repeat, setRepeat] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    setError("");
+    if (newPassword.length < 6) return setError(t("auth.newPasswordTooShort"));
+    if (newPassword !== repeat) return setError(t("auth.passwordMismatch"));
+    setBusy(true);
+    try { onSession(await api.changeCredentials({ currentPassword, newPassword })); }
+    catch (caught) { setError(describeError(caught)); }
+    finally { setBusy(false); }
+  };
+
+  const signOut = async () => { try { await api.logout(false); } finally { location.reload(); } };
+
+  return <div className="login-screen">
+    <form className="panel login-card" onSubmit={submit}>
+      <div className="login-brand"><div className="brand-mark"><CirclePlay/></div><div><small>{t("auth.brandEyebrow")}</small><h1>Stremio <span>Offline</span></h1></div></div>
+      <p className="login-warning"><ShieldAlert/> {t("auth.mustChangeLead", { username: session.username })}</p>
+
+      <label><span>{t("auth.currentPassword")}</span>
+        <input type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)}
+          autoComplete="current-password" autoFocus required/></label>
+
+      <label><span>{t("auth.newPassword")}</span>
+        <input type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)}
+          autoComplete="new-password" required/></label>
+
+      <label><span>{t("auth.passwordRepeat")}</span>
+        <input type="password" value={repeat} onChange={(event) => setRepeat(event.target.value)}
+          autoComplete="new-password" required/></label>
+
+      {error && <p className="login-error">{error}</p>}
+      <button className="primary" disabled={busy}><KeyRound/> {t("auth.changeCredentials")}</button>
+      <button type="button" onClick={() => void signOut()}><LogOut/> {t("auth.signOut")}</button>
+    </form>
+  </div>;
+}
+
 export function AccountSettings({ session, onSession, onNotify, onError, restricted = false }: {
   session: Session; onSession: (session: Session) => void;
   onNotify: (text: string) => void; onError: (error: unknown) => void; restricted?: boolean;

@@ -144,10 +144,18 @@ marks the cookie `Secure` itself.
 - Stream addresses are logged as scheme and host only. Tokens and passwords are
   never logged.
 
-**Forgotten password.** Set `ADMIN_USERNAME` and `ADMIN_PASSWORD` in `.env`,
-sign in with those, change the password in Settings, then unset them.
-Alternatively, delete the `auth` key from `state.json` in the data folder — the
-server then offers account creation again, and addons and the library stay.
+**Forgotten password.** Set `ADMIN_USERNAME` to the account and
+`ADMIN_PASSWORD_RESET` to the new password, then restart. The server resets
+that account's password on the next boot, signs its devices out and writes a
+warning line naming it. Changing the value is what makes it fire again, so a
+variable left in the container configuration does nothing on later restarts —
+but anyone who can read the file can read the password, so clear it once you
+are back in.
+
+`ADMIN_PASSWORD` is **not** a way to sign in. It seeds the administrator of an
+install that has never had an account, and nothing more: an identity with no
+record cannot own a download, cannot be audited and cannot be switched off, so
+recovery goes through a real account instead.
 
 To report a vulnerability, see [SECURITY.md](SECURITY.md).
 

@@ -37,7 +37,7 @@ const sweepGrants = (state: State, id: string): void => {
 };
 
 export function registerUsersRoutes(app: express.Application, deps: UsersDeps): void {
-  const { store, currentUser, deleteUserAccess, permissionsChanged, stopUserAccess } = deps;
+  const { store, currentUser, deleteUserAccess, permissionsChanged, stopUserSessions } = deps;
 
   /** The administrator the request speaks for. The role gate has already refused everybody
    *  else, so a request that names nobody is a bug rather than a case. */
@@ -149,10 +149,16 @@ export function registerUsersRoutes(app: express.Application, deps: UsersDeps): 
       if (role === "user") assertAdminRemains(state.users ?? [], { kind: "demote", id });
       if (disabled ?? Boolean(before.disabled)) assertAdminRemains(state.users ?? [], { kind: "disable", id });
       withUser(state, id, (user) => {
+        // Switching an account off rotates its secret, so every token it holds stops working
+        // for good. Without that the refusal lasts exactly as long as the switch: the old
+        // cookie starts answering again the moment somebody switches the account back on, and
+        // the device it was taken away from is back in without signing in.
+        const cutOff = disabled === true && !user.disabled;
         const next: UserRecord = {
           ...user,
           ...(role ? { role } : {}),
           ...(disabled === undefined ? {} : { disabled }),
+          ...(cutOff ? { secret: randomBytes(32).toString("hex"), revoked: {} } : {}),
           permissions,
         };
         changed = next.role !== user.role
@@ -191,7 +197,12 @@ export function registerUsersRoutes(app: express.Application, deps: UsersDeps): 
     // The new secret stops the next request; the sweep reaches the film, the device ticket
     // and the AirPlay grant already in flight on that account's devices. The administrator's
     // own session belongs to another secret and is left alone.
-    await stopUserAccess(id);
+    //
+    // Sessions, not the whole account: a reset changes which credential opens the door and
+    // takes away no right, so the queue keeps running. Somebody whose password was reset
+    // still has every permission they had, and a download to the server is not something
+    // they are holding open. Switching the account off is the tool for taking that away.
+    await stopUserSessions(id);
     audit("Account password reset", actor, before);
     res.json(view(requireUser(id)));
   }));

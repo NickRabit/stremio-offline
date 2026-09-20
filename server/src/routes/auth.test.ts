@@ -189,6 +189,93 @@ test("POST /api/auth/setup refuses once an account exists", async (t) => {
   assert.equal(await keyOf(again), "err.setupDone");
 });
 
+test("two setups arriving together leave one account, not two administrators", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+
+  // Hashing a password takes long enough for a second request to arrive in the middle of it,
+  // so a check made before that await is a check both requests pass. Sent together, without
+  // waiting for the first to answer, is exactly the shape that used to produce two.
+  const [first, second] = await Promise.all([
+    api(harness.base, "/api/auth/setup", { method: "POST", body: { username: "owner", password: "secret1" } }),
+    api(harness.base, "/api/auth/setup", { method: "POST", body: { username: "intruder", password: "secret2" } }),
+  ]);
+  const [won, lost] = first.status === 201 ? [first, second] : [second, first];
+  assert.equal(won.status, 201, `neither request won, got ${first.status} and ${second.status}`);
+  assert.equal(await keyOf(lost), "err.setupDone", `the second request was not refused, got ${lost.status}`);
+  assert.equal(harness.store.users().length, 1, "a fresh install ended up with more than one account");
+});
+
+test("the environment password is no longer a way in beside the stored one", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  await seedUser(harness.store, { username: "owner", password: "the-stored-one" });
+  process.env.ADMIN_USERNAME = "owner";
+  process.env.ADMIN_PASSWORD = "the-environment-one";
+  t.after(() => { delete process.env.ADMIN_USERNAME; delete process.env.ADMIN_PASSWORD; });
+
+  // An identity with no record cannot own a job, cannot be audited and cannot be disabled, so
+  // an operator who can set a variable would outrank the switch without leaving a trace.
+  // Recovery runs through ADMIN_PASSWORD_RESET, which resets a real account and says so.
+  const viaEnv = await api(harness.base, "/api/auth/login", { method: "POST", body: { username: "owner", password: "the-environment-one" } });
+  assert.equal(viaEnv.status, 401);
+  assert.equal(await keyOf(viaEnv), "err.badCredentials");
+  const stored = await api(harness.base, "/api/auth/login", { method: "POST", body: { username: "owner", password: "the-stored-one" } });
+  assert.equal(stored.status, 200, "the account's own password still signs it in");
+});
+
+test("a rename through the password form cannot take a name another account answers to", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const owner = await seedUser(harness.store, { username: "owner", password: "current-secret" });
+  await seedUser(harness.store, { id: "usr_00000002", username: "alice", password: "jine-heslo", secret: "alice-secret" });
+  const cookie = `${SESSION_COOKIE}=${createSession(owner.secret, owner.id, Date.now() + 60_000, "sid-rename")}`;
+
+  // This endpoint renames as well as re-passwords, and a name is how somebody signs in: two
+  // accounts called alice would hand the first match to both and leave the second unreachable.
+  for (const username of ["alice", "ALICE"]) {
+    const taken = await api(harness.base, "/api/auth/password", {
+      method: "PATCH", cookie, body: { username, currentPassword: "current-secret", newPassword: "nove-heslo" },
+    });
+    assert.equal(taken.status, 409, username);
+    assert.equal(await keyOf(taken), "err.usernameTaken");
+  }
+  assert.equal(findUserById(harness.store.users(), owner.id)?.username, "owner", "the rename was refused but written anyway");
+  assert.ok(await verifyPassword("current-secret", findUserById(harness.store.users(), owner.id)!.passwordHash),
+    "the password changed although the rename beside it was refused");
+
+  const short = await api(harness.base, "/api/auth/password", {
+    method: "PATCH", cookie, body: { username: "ab", currentPassword: "current-secret", newPassword: "nove-heslo" },
+  });
+  assert.equal(short.status, 400);
+  assert.equal(await keyOf(short), "auth.usernameTooShort");
+});
+
+test("the must-change flag travels to the interface, which has no other way to know", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const owner = await seedUser(harness.store, { password: "admin-set" });
+  await harness.store.update((state) => {
+    state.users = (state.users ?? []).map((user) => user.id === owner.id ? { ...user, mustChangePassword: true } : user);
+  });
+
+  // Without it the interface renders the whole application and watches every call come back
+  // refused, with nothing on screen to say why or what to do about it.
+  const signedIn = await api(harness.base, "/api/auth/login", { method: "POST", body: { username: "owner", password: "admin-set" } });
+  assert.equal(signedIn.status, 200);
+  assert.equal((await signedIn.json() as { mustChangePassword?: boolean }).mustChangePassword, true);
+
+  const cookie = parseCookies(signedIn.headers.get("set-cookie") ?? "")[SESSION_COOKIE];
+  const me = await api(harness.base, "/api/auth/me", { cookie: `${SESSION_COOKIE}=${cookie}` });
+  assert.equal((await me.json() as { mustChangePassword?: boolean }).mustChangePassword, true);
+
+  const changed = await api(harness.base, "/api/auth/password", {
+    method: "PATCH", cookie: `${SESSION_COOKIE}=${cookie}`,
+    body: { currentPassword: "admin-set", newPassword: "moje-vlastni" },
+  });
+  assert.equal((await changed.json() as { mustChangePassword?: boolean }).mustChangePassword, false, "the interface would keep showing the form");
+});
+
 test("POST /api/auth/login answers 401, then 429 with retry-after after six failures", async (t) => {
   const harness = await mount();
   t.after(harness.close);
@@ -211,13 +298,13 @@ test("signing in as the migrated user works and the cookie names the user id", a
   assert.equal(harness.store.users().length, 1, "the migration leaves the install with one account");
   const response = await api(harness.base, "/api/auth/login", { method: "POST", body: { username: "Ondra", password: "migrated-secret" }, ip: "10.1.0.1" });
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { username: "Ondra", role: "admin" });
+  assert.deepEqual(await response.json(), { username: "Ondra", role: "admin", mustChangePassword: false });
   const cookie = parseCookies(response.headers.get("set-cookie") ?? "")[SESSION_COOKIE];
   assert.equal(sessionUserId(cookie), owner?.id);
   assert.equal(readSession(owner?.secret ?? "", cookie)?.userId, owner?.id);
   // The language and the personal data came across with the account.
   const me = await api(harness.base, "/api/auth/me", { cookie: `${SESSION_COOKIE}=${cookie}` });
-  assert.deepEqual(await me.json(), { username: "Ondra", role: "admin", language: "cs" });
+  assert.deepEqual(await me.json(), { username: "Ondra", role: "admin", language: "cs", mustChangePassword: false });
   assert.deepEqual(harness.store.userData(owner?.id ?? "").progress, { "movie:tt1": { position: 12, duration: 100, title: "Neco", updatedAt: "2026-01-01T00:00:00.000Z" } });
 });
 
@@ -335,7 +422,7 @@ test("PATCH /api/auth/password rotates the caller's secret and leaves another ac
     body: { currentPassword: "current-secret", newPassword: "nove-heslo" },
   });
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { username: "owner", role: "admin" });
+  assert.deepEqual(await response.json(), { username: "owner", role: "admin", mustChangePassword: false });
   const changed = findUserById(harness.store.users(), owner.id);
   assert.ok(changed && changed.secret !== "old-secret", "every token issued before the change stops working");
   assert.ok(await verifyPassword("nove-heslo", changed.passwordHash));
