@@ -153,7 +153,7 @@ container does not start a round that is not due yet.
 
 ## Library metadata
 
-The scan is described in [Library metadata](library-metadata.md).
+The scan is described in [Library identification](library-metadata.md).
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
@@ -181,11 +181,11 @@ Details in [Playback](playback.md) and
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `RESTRICTED_MODE` | `0` | `1` locks the instance for a shared demo. Addons, settings, password and secret export become read-only. Guests can still browse, play, download to the library and save to their own device. Create the account (or inject `ADMIN_USERNAME` / `ADMIN_PASSWORD`) and confirm sign-in, then set `1` and recreate the container — not merely restart. This is not a second user. |
+| `RESTRICTED_MODE` | `0` | `1` locks the whole instance for a shared demo. Addons, settings, passwords and secret export become read-only, and the account list is visible but unchangeable. Guests can still browse, play, download to the library and save to their own device. Create the account (or inject `ADMIN_USERNAME` / `ADMIN_PASSWORD`) and confirm sign-in, then set `1` and recreate the container — not merely restart. For real separation between people use an account, not this: see [Accounts](users.md). |
 
 ## Account fallback
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `ADMIN_USERNAME` / `ADMIN_PASSWORD` | *(unset)* | Seeds the first administrator on an install that has never had an account, so a container can come up ready to use. They are not a way to sign in afterwards: once the account exists, its own password is the only one accepted. |
+| `ADMIN_USERNAME` / `ADMIN_PASSWORD` | *(unset)* | Seeds the first administrator on an install that has never had an account, so a container can come up ready to use. They are not a way to sign in afterwards: once the account exists, its own password is the only one accepted. Further accounts are made in **Settings → Users**; see [Accounts](users.md). |
 | `ADMIN_PASSWORD_RESET` | *(unset)* | Recovery for a forgotten password. With `ADMIN_USERNAME` naming the account, the next boot sets this as its password, signs its devices out and logs a warning naming it. The value is recorded in the state, so the same one does nothing on later restarts and a variable left behind cannot silently reset the account on every container update. Clear it once you are back in: anyone who can read the configuration can read it. |

@@ -1,8 +1,7 @@
 # Testing strategy
 
-This document describes how the project is tested, and the plan for the layers
-that are not built yet. It is written so that any phase can be picked up
-independently of the others.
+This document describes how the project is tested: the layers, what belongs in
+each of them, and how to run them.
 
 ## Why
 
@@ -30,9 +29,9 @@ browser.
 ### L0 -- server (existing)
 
 `npm test` runs `tsx --test server/src/*.test.ts server/src/routes/*.test.ts`.
-The second pattern is there because the HTTP layer is moving out of
-`index.ts` area by area; a further directory under `server/src` needs its own
-pattern, as `sh` does not expand `**` recursively.
+The HTTP layer lives in `server/src/routes/`, one area per file, behind the
+second pattern; a further directory under `server/src` needs its own pattern, as
+`sh` does not expand `**` recursively.
 
 ### L1 -- client unit and component tests
 
@@ -102,7 +101,12 @@ language filtering, the up-next countdown that carries playback into the next
 episode, queueing a download through to a finished job, a setting that survives
 a reload, diagnostics, and secure mode -- that catalogue payloads carry no
 provider address, that a page load touches nothing but the app's own origin, and
-that the Content-Security-Policy is served.
+that the Content-Security-Policy is served. `accounts.spec.ts` runs the
+two-account journey with both sessions live and asserts the property rather than
+describing it: a library an account was not granted answers with the same status
+*and the same body* as an id that was never created. Library administration,
+bulk operations, cross-library moves, identification and the trailer overlay have
+specs of their own.
 
 Restricted mode has a **separate Playwright config** (`playwright.restricted.config.ts`).
 It must not share `e2e/.tmp` or the unlocked session cookie. The fixture
@@ -125,9 +129,11 @@ exist in `web/src/style.css`:
 | --- | --- | --- |
 | `desktop` | 1440x900 | The >=981px layout: sidebar, two-column catalog |
 | `desktop-short` | 1280x760 | The `max-height: 780px` series-sources branch |
+| `tablet-landscape` | 1180x820, touch | The >=981px band on a short, wide screen |
 | `tablet` | 820x1180, touch | The 701-980px band |
 | `mobile` | 390x844 (iPhone 13) | The <=700px layout: bottom nav, 3-column poster grid |
 | `mobile-landscape` | 844x390, touch | `max-width:980 and max-height:500 and orientation:landscape`, plus the `mobileLandscape` branch in `Player.tsx` |
+| `mobile-landscape-small` | 802x293, touch (Pixel 5) | The tightest box the interface has to survive: an Android phone held sideways, where the account dialog has to fit and scroll in one place |
 
 The journey specs stay on one viewport -- they are about behaviour. Only the
 specs under `e2e/tests/layout` run across the whole matrix.
@@ -138,7 +144,7 @@ Three kinds of assertion, in increasing order of maintenance cost:
 no stored baselines, no upkeep. These catch the class of bug that has actually
 been shipped:
 
-- nothing escapes the page sideways, in any of the six views. Content inside a
+- nothing escapes the page sideways, in any of the six sections. Content inside a
   pane that scrolls horizontally on purpose -- the download table, a poster
   strip -- is exempt; only content that escapes the page itself counts.
 - the navigation follows the 700px breakpoint: a full-height sidebar above it,
@@ -148,10 +154,14 @@ been shipped:
   Anything roomier is a design choice and is deliberately not enforced, or the
   test would be dictating the layout rather than guarding it.
 - no poster hangs past the edge of its grid
+- the account dialog fits the screen and scrolls in one place only, which is the
+  tightest box the interface has to survive (`mobile-landscape-small`)
 
-**b) Screenshot baselines** (`e2e/tests/layout/screenshots.spec.ts`). Four
-screens -- catalog, a title detail with its sources, the library and settings --
-across four of the five projects. They live in
+**b) Screenshot baselines.** `screenshots.spec.ts` covers four screens --
+catalog, a title detail with its sources, the library and settings -- on every
+project except `desktop-short`. `library.spec.ts` adds two of its own, the
+library's grid (`library-cards.png`) and its rows (`library-list.png`), and those
+run on every project, `desktop-short` included. They live in
 `e2e/tests/layout/__screenshots__/<project>/`.
 
 They are only comparable when every one of them is produced in the same place,
@@ -192,8 +202,10 @@ Two decisions worth knowing about:
   safe and is not: bumping the poster title from 12px to 16px stayed under it on
   every screen. Runs inside the container are byte-stable, so the small fixed
   budget only has to absorb renderer noise.
-- **`desktop-short` has no baselines.** These four screens look the same at
-  1280x760 as at 1440x900. That project earns its place through the invariants,
+- **`desktop-short` keeps only the two library baselines.** The four screens in
+  `screenshots.spec.ts` look the same at 1280x760 as at 1440x900, so they are
+  skipped there, while the library grid and rows are compared because they do
+  differ at that height. That project earns its place through the invariants,
   which cover the 780px height rule; a megabyte of near-identical images does
   not.
 
@@ -390,6 +402,7 @@ pull request branch, so updating them is not a local-environment chore.
 | 2 | Playwright plus the fixture stack, first end-to-end journeys | Done |
 | 3 | Viewport matrix, layout invariants, accessibility checks | Done |
 | 4 | Screenshot baselines and the container workflow that updates them | Done |
+| 5 | The accounts journey, the users-dialog invariant, and the seventh viewport project (`mobile-landscape-small`) | Done |
 
 Phase 3 came before phase 4 on purpose. Layout invariants catch most real
 regressions and need no maintenance; screenshots are convincing but are a

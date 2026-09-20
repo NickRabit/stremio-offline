@@ -104,10 +104,13 @@ WARN Wikidata did not answer, the links stay partial {"id":"tt0107290","status":
 
 ## Rolling the image back
 
-An upgrade to a build with libraries rewrites `state.json`: stored paths gain a
-library id in front of them (`lib_ab12cd34/Show/01 serie/01.mkv`) and
-`schemaVersion` becomes `2`. An older image reading that file cannot resolve the
-paths, so the library would come up with no match history and no thumbnails.
+`state.json` carries a `schemaVersion`. Ours is `3`: version 2 is the libraries
+shape, where stored paths gained a library id in front of them
+(`lib_ab12cd34/Show/01 serie/01.mkv`), and version 3 is the accounts shape, where
+the single account became a list and the personal half of the settings moved
+into each account's own data. An older image reading that file cannot resolve
+the paths or find the account, so the library would come up with no match history
+and no thumbnails and you would be asked to set the instance up again.
 
 The migration copies the file it found to `state.json.v1.bak` in `DATA_DIR`
 before touching anything. To roll back, stop the container, copy that file over
@@ -119,6 +122,12 @@ cp data/state.json.v1.bak data/state.json
 
 Nothing in the library itself is renamed or moved by the migration, so a
 rollback loses nothing but the time spent on the newer build.
+
+The `v1.bak` name is the file the *libraries* migration wrote the first time it
+ran; later migrations leave it alone rather than overwriting it, so it stays the
+copy of the pre-libraries state. Rolling back a single version with it means
+losing the accounts as well. Per-library match history lives beside it in
+`library/<library id>.json` and is additive, so it survives either way.
 
 ## Common situations
 

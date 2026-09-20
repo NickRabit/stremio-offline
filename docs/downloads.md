@@ -133,10 +133,12 @@ series are saved. Each kind picks a **library** and a subfolder inside it:
   and nested paths such as `Webshare/Movies` work.
 
 A rule that names a library which is switched off, read-only, unplugged or
-removed is not offered again in the form, and a download that such a rule would
-send there falls back to the default instead of failing — nothing is lost, it
-lands where the default points. Files already in the library are never moved by
-a change of rule; it applies to newly queued items.
+removed is not offered again in the form. A download that such a rule would send
+there **pauses** and says why, rather than being redirected somewhere nobody
+asked for; it resumes by itself once the library is back. A file that is never
+going to land — the library was removed and not added back — takes the default
+for its kind after half an hour, and the log says so. Files already in the
+library are never moved by a change of rule; it applies to newly queued items.
 
 | Mode | Result |
 | --- | --- |
@@ -149,7 +151,7 @@ The change applies to newly queued items.
 
 **Settings** can export the configuration to JSON and import it later. The backup
 holds app settings, installed addon order and state, and their save rules. It
-does **not** hold the account, the library, or watch history.
+does **not** hold the accounts, the media library, or watch history.
 
 It does carry the *names and roots* of the libraries, so a save rule that names
 one survives the trip: an import points it at a library with the same root, then

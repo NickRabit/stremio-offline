@@ -123,12 +123,12 @@ leave one core for the system. The lasting fix is QuickSync — see
 
 ## Where data lives
 
-Beside downloaded films, the server keeps its own data: the account, addon list,
-library artwork, stats, and the download queue. That lives in `/data`, and
+Beside downloaded films, the server keeps its own data: the accounts, addon list,
+libraries, artwork, stats, and the download queue. That lives in `/data`, and
 `DATA_PATH` points at it — by default a `data` folder next to `compose.yml`.
 
 It is an ordinary folder, not a hidden Docker volume. Copy it to back it up;
-delete it to return the server to a fresh install (you lose the account and
+delete it to return the server to a fresh install (you lose the accounts and
 addons, downloaded files stay). On Synology, put it in a shared folder so it
 shows up in File Station.
 

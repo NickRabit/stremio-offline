@@ -172,13 +172,17 @@ Nothing about a library is hidden in a database:
 | `DATA_PATH/artwork/<library id>/` | The thumbnails the server generated for that library. |
 | `DATA_PATH/library-scan.json`, `library-ops.json` | An interrupted scan or bulk job, so it resumes instead of restarting. |
 
-Back up `DATA_PATH` and you have the account, the addons, the libraries and what
+Back up `DATA_PATH` and you have the accounts, the addons, the libraries and what
 they remember. The media is a separate question — see
 [downloads.md](downloads.md).
+
+With more than one account, a library is also something an administrator grants:
+it is visible only to the accounts ticked for it, and one that was not granted
+answers exactly as one that does not exist. See [Accounts](users.md).
 
 ## Related
 
 - [configuration.md](configuration.md) — `LIBRARY_ROOTS`, `ARTWORK_CACHE_MB`,
   `LIBRARY_META_TTL_DAYS`.
 - [library-metadata.md](library-metadata.md) — how folders become titles.
-- [multi-library.md](multi-library.md) — the design and the decisions behind it.
+- [users.md](users.md) — accounts and which libraries each of them sees.
