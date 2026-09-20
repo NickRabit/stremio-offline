@@ -108,7 +108,7 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
   }));
   app.use("/api/playback/:id", (req, res, next) => {
     const owned = playbackOwners.get(String(req.params.id));
-    if (!owned || owned.owner.sid !== (airplayRequest(req)?.owner.sid ?? currentSession(req)?.sid)) return res.status(404).json({ error: "Playback session unavailable.", code: "RESOURCE_NOT_FOUND" });
+    if (!owned || owned.owner.sid !== (airplayRequest(req)?.owner.sid ?? currentSession(req)?.sid)) return res.status(404).json({ error: "The playback session no longer exists.", messageKey: "err.playbackSessionGone", code: "RESOURCE_NOT_FOUND" });
     res.setHeader("cache-control", "private, no-store");
     playback.attended(String(req.params.id));
     next();

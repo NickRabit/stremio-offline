@@ -991,6 +991,7 @@ export const cs: Catalog = {
   "err.mustChangePassword": "Než budeš pokračovat, změň si heslo.",
   "err.cannotDeleteSelf": "Nemůžeš smazat účet, pod kterým jsi přihlášený.",
   "err.addonNotFound": "Doplněk nebyl nalezen.",
+  "err.metaNotFound": "Metadata nebyla nalezena.",
   "err.essentialAddon": "Cinemeta dodává metadata knihovny, nejde odebrat ani vypnout.",
   "err.adminAlwaysUsesAddons": "Administrátor už může používat všechny doplňky.",
   "err.manifestExists": "Tenhle manifest už je přidaný.",

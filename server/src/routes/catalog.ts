@@ -84,7 +84,7 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
   app.get("/api/meta/:type/:id", asyncRoute(async (req, res) => {
     const language = normalizeLanguage(String(req.query.language ?? "")) ?? prefsOf(req).uiLanguage;
     const meta = await cachedMeta(String(req.params.type), String(req.params.id), language, viewerOf(currentUser(req)));
-    if (!meta) return res.status(404).json({ error: "Metadata nebyla nalezena." });
+    if (!meta) throw new AppError("The metadata was not found.", "err.metaNotFound", 404);
     res.json(images.rewriteMeta(meta));
   }));
   app.get("/api/library/trailer", asyncRoute(async (req, res) => {
