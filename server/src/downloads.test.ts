@@ -297,6 +297,42 @@ test("a job waits for a removed library and finishes there once it is added agai
   }
 });
 
+test("a job whose owner lost the right pauses with the permission reason and runs once it is back", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-dl-"));
+  const downloads = path.join(directory, "downloads");
+  const library = downloadLibrary(downloads);
+  const size = 4096;
+  const { server, port } = await listen((_req, res) => {
+    res.writeHead(200, { "content-length": String(size), "content-type": "video/mp4" });
+    void send(res, size).then(() => res.end());
+  });
+  let allowed = false;
+  const queue = new DownloadQueue(() => 1, () => 1, path.join(directory, "data"), downloads, {
+    stallInitialMs: 5_000, stallTransferMs: 5_000,
+    libraries: () => [library],
+    defaultLibrary: () => library,
+    ownerAllowed: () => allowed,
+  });
+  await queue.load();
+  try {
+    const job = await queue.add("Film", { url: `http://127.0.0.1:${port}/film.mp4` });
+    await waitFor(queue, () => queue.list()[0]?.status === "paused");
+    const paused = queue.list()[0]!;
+    assert.equal(paused.pauseReason, "permission", "a missing right pauses the job instead of failing it");
+    assert.equal(paused.errorKey, "download.pausedNoPermission");
+    await assert.rejects(stat(path.join(downloads, "Film", "Film.mp4")), "nothing is written while the right is gone");
+
+    allowed = true;
+    await queue.resume(job.id);
+    await waitFor(queue, () => queue.list()[0]?.status === "completed");
+    assert.equal((await stat(queuedFile(downloads, queue.list()[0]!.target))).size, size);
+  } finally {
+    await queue.stop();
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("a series download no library accepts is refused before it is queued", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-dl-"));
   const downloadDir = path.join(directory, "downloads");

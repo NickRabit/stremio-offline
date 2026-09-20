@@ -109,6 +109,7 @@ export function publicAddon(addon: import("./types.js").AddonRecord) {
     enabled: addon.enabled,
     globalSearch: addon.globalSearch,
     showInContinueWatching: addon.showInContinueWatching !== false,
+    allowedUsers: addon.allowedUsers ?? [],
     essential: essentialAddon(addon),
     addedAt: addon.addedAt,
     manifest: addon.manifest,
@@ -128,6 +129,7 @@ export function publicAddonRestricted(addon: import("./types.js").AddonRecord) {
     enabled: addon.enabled,
     globalSearch: addon.globalSearch,
     showInContinueWatching: addon.showInContinueWatching !== false,
+    allowedUsers: addon.allowedUsers ?? [],
     essential: essentialAddon(addon),
     manifest: {
       id: addon.manifest.id,

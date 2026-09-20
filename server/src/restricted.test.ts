@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
@@ -187,8 +187,15 @@ const classify = (route: Parsed): Kind => {
 };
 
 test("index.ts route catalogue: implicit deny passes, orphan allow/deny regexes fail", () => {
-  const source = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "index.ts"), "utf8");
-  const openLiteral = source.match(/const OPEN_PATHS = new Set\(\[([^\]]+)\]\)/);
+  // Every file that registers a route, not only index.ts. The catalogue is a
+  // security guard: left reading index.ts alone it would keep passing while
+  // covering less with each area that moves into routes/.
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const indexSource = readFileSync(path.join(here, "index.ts"), "utf8");
+  const routeFiles = readdirSync(path.join(here, "routes")).filter((name) => name.endsWith(".ts") && !name.endsWith(".test.ts"));
+  assert.ok(routeFiles.length, "routes/ must hold the modules the routes moved into");
+  const source = [indexSource, ...routeFiles.map((name) => readFileSync(path.join(here, "routes", name), "utf8"))].join("\n");
+  const openLiteral = indexSource.match(/const OPEN_PATHS = new Set\(\[([^\]]+)\]\)/);
   assert.ok(openLiteral, "OPEN_PATHS must be readable from index.ts");
   const listed = [...openLiteral[1].matchAll(/"([^"]+)"/g)].map((item) => item[1]);
   assert.deepEqual(new Set(listed), OPEN_PATHS);

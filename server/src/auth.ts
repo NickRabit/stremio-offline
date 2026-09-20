@@ -7,13 +7,15 @@ const scrypt = promisify(scryptCallback) as (password: string, salt: Buffer, key
 export const INTERNAL_TOKEN = randomBytes(32).toString("hex");
 
 
+/** The one account as `state.json` held it before there was a list of users. `migrateUsers`
+ *  turns it into a record; boot throws out whatever it leaves behind. */
 export interface AuthState {
   username: string; passwordHash: string; secret: string; isDefault: boolean;
   /** Revoked sessions by identifier; the value is when they would have expired anyway. */
   revoked?: Record<string, number>;
 }
 
-export interface SessionInfo { username: string; sid: string; expiresAt: number }
+export interface SessionInfo { userId: string; sid: string; expiresAt: number }
 
 const equals = (a: Buffer, b: Buffer) => a.length === b.length && timingSafeEqual(a, b);
 
@@ -41,9 +43,20 @@ export async function verifyPassword(password: string, stored: string): Promise<
 
 /** A signed token with no server-side state, so a restart signs nobody out. Its own session
  *  identifier still allows revoking it before it expires on its own. */
-export function createSession(secret: string, username: string, expiresAt: number, sid = randomBytes(12).toString("base64url")): string {
-  const payload = Buffer.from(JSON.stringify({ u: username, e: expiresAt, s: sid })).toString("base64url");
+export function createSession(secret: string, userId: string, expiresAt: number, sid = randomBytes(12).toString("base64url")): string {
+  const payload = Buffer.from(JSON.stringify({ u: userId, e: expiresAt, s: sid })).toString("base64url");
   return `${payload}.${createHmac("sha256", secret).update(payload).digest("base64url")}`;
+}
+
+/** Which user a token names, read before its signature can be checked: the secret that
+ *  checks it belongs to that user, so the payload has to be read first. */
+export function sessionUserId(token: string | undefined): string | undefined {
+  const payload = token?.split(".")[0];
+  if (!payload) return undefined;
+  try {
+    const data = JSON.parse(Buffer.from(payload, "base64url").toString()) as { u?: unknown };
+    return typeof data.u === "string" && data.u ? data.u : undefined;
+  } catch { return undefined; }
 }
 
 export function readSession(secret: string, token: string | undefined): SessionInfo | undefined {
@@ -55,7 +68,7 @@ export function readSession(secret: string, token: string | undefined): SessionI
   try {
     const data = JSON.parse(Buffer.from(payload, "base64url").toString()) as { u?: string; e?: number; s?: string };
     if (!data.u || !data.e || !data.s || data.e < Date.now()) return undefined;
-    return { username: data.u, sid: data.s, expiresAt: data.e };
+    return { userId: data.u, sid: data.s, expiresAt: data.e };
   } catch { return undefined; }
 }
 

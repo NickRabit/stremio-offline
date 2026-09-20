@@ -140,4 +140,93 @@ test.describe("layout invariants", () => {
     }));
     expect(widest, "a poster hangs past the edge of its grid").toBeLessThanOrEqual(gridWidth + 1);
   });
+
+  // The Users dialog holds four blocks -- the account, the libraries it may see, the addons it
+  // may use and what it may download -- one pane at a time. The grants are stubbed: what is
+  // checked here is how a long list behaves, and its length is the point rather than which
+  // library somebody was given.
+  test("the users dialog fits the screen and scrolls in one place only", async ({ page }, testInfo) => {
+    const grantee = {
+      id: "user-1", username: "příjemce", role: "user", disabled: false, mustChangePassword: false,
+      createdAt: "2026-01-01T00:00:00.000Z", permissions: { downloadToLibrary: false, downloadToDevice: true },
+      libraries: 0, addons: 0,
+    };
+    const libraries = Array.from({ length: 16 }, (_, index) => ({
+      id: `lib_${(index + 1).toString(16).padStart(8, "0")}`, name: `Knihovna ${index + 1}`, type: "mixed",
+      root: `/library/${index + 1}`, enabled: true, order: index, addedAt: "2026-01-01T00:00:00.000Z",
+      writeArtwork: false, unreachable: false, readOnly: false, defaultMovie: false, defaultSeries: false,
+      titles: 0, files: 0, bytes: 0,
+    }));
+    // Enough that the list must overflow even on the roomiest viewport: the point of the
+    // check is what a list too long for its pane does, and sixteen now fit on a desktop.
+    const addons = Array.from({ length: 60 }, (_, index) => ({
+      key: `addon-${index}`, role: "both", enabled: true, globalSearch: false,
+      manifest: { id: `e2e.addon.${index}`, name: `Doplněk ${index + 1}`, version: "1.0.0" },
+    }));
+    await page.route("**/api/users", (route) => route.fulfill({ json: [grantee] }));
+    await page.route("**/api/libraries", (route) => route.fulfill({ json: libraries }));
+    await page.route("**/api/addons", (route) => route.fulfill({ json: addons }));
+
+    await openView(page, "Nastavení");
+    const edit = page.locator(".user-manager-section").getByRole("button", { name: "Upravit", exact: true });
+    await expect(edit).toBeVisible();
+    await edit.click();
+    const dialog = page.getByRole("dialog", { name: "Upravit účet" });
+    await expect(dialog).toBeVisible();
+
+    const card = dialog.locator(".identify-card");
+    const viewport = page.viewportSize()!;
+    const body = dialog.locator(".dialog-body");
+
+    for (const pane of ["Účet", "Knihovny", "Doplňky", "Stahování"]) {
+      await dialog.getByRole("tab", { name: new RegExp(`^${pane}`) }).click();
+      const box = (await card.boundingBox())!;
+      expect(box.y, `${testInfo.project.name}: the ${pane} pane starts above the screen`).toBeGreaterThanOrEqual(-1);
+      expect(box.y + box.height, `${testInfo.project.name}: the ${pane} pane reaches past the fold`)
+        .toBeLessThanOrEqual(viewport.height + 1);
+
+      const { scrollWidth, clientWidth, offenders } = await horizontalOverflow(page);
+      expect(offenders, `elements past the right edge on the ${pane} pane`).toEqual([]);
+      expect(scrollWidth, `the ${pane} pane overflows horizontally`).toBeLessThanOrEqual(clientWidth + 1);
+
+      // One scroller, never two. A pane holding a grant list gives the scrolling to the list,
+      // so the body around it must not scroll as well -- that pairing is what used to give the
+      // same gesture two meanings. A plain form has no list, and a phone held sideways is
+      // shorter than the account form is tall, so there the body is the one scroller and
+      // scrolling it is correct.
+      const hidden = await body.evaluate((element) => element.scrollHeight - element.clientHeight);
+      if (await dialog.locator(".user-grant-list").count()) {
+        expect(hidden, `${testInfo.project.name}: the ${pane} pane scrolls the whole dialog as well as its list`)
+          .toBeLessThanOrEqual(1);
+      }
+    }
+
+    // A list longer than the room it has scrolls where the eye already is, and moves nothing else.
+    await dialog.getByRole("tab", { name: /^Doplňky/ }).click();
+    const list = dialog.locator(".user-grant-list");
+    await expect(list).toHaveCount(1);
+    const before = (await card.boundingBox())!;
+    const measured = await list.evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+      return { scrolled: element.scrollTop, hidden: element.scrollHeight - element.clientHeight, overflow: getComputedStyle(element).overflowY };
+    });
+    expect(measured.hidden, "the addons fit, so this checked nothing").toBeGreaterThan(0);
+    expect(measured.scrolled, "the list does not scroll inside itself").toBeGreaterThan(0);
+    expect(measured.overflow).toBe("auto");
+    expect(Math.abs((await card.boundingBox())!.y - before.y), "scrolling the list moved the dialog").toBeLessThan(1);
+
+    // The file's touch rule, applied to this dialog: a tick is painted over by the label a
+    // finger actually hits, so the label is the box that has to be big enough.
+    if (testInfo.project.use.hasTouch) {
+      const tooSmall = await dialog.evaluate((element) => {
+        const minimum = 24;
+        return [...element.querySelectorAll<HTMLElement>("button, input, select")]
+          .map((control) => control.closest<HTMLElement>("label") ?? control)
+          .map((target) => ({ target, box: target.getBoundingClientRect() }))
+          .filter(({ box }) => box.width > 0 && box.height > 0 && (box.width < minimum || box.height < minimum))
+          .map(({ target, box }) => `${target.tagName} "${target.textContent?.trim().slice(0, 20)}": ${Math.round(box.width)}x${Math.round(box.height)}`);
+      });
+      expect(tooSmall, "controls below the 24px minimum in the users dialog").toEqual([]);
+    }
+  });
 });

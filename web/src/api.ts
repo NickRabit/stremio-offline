@@ -1,5 +1,5 @@
 import { serverText, t } from "./i18n";
-import type { ActiveStream, Diagnostics, BuildInfo, AuthStatus, StatsSummary, Addon, AddonDownloadSettings, Capabilities, Catalog, Download, DownloadSelection, DownloadSnapshot, Inspection, BrowseResult, IdentityPreview, LibraryFolder, LibraryOp, LibraryOpsState, ProgressEntry, WatchlistEntry, GrantBrowse, LibraryEstimate, LibraryGrant, LibrarySummary, LibraryType, LibraryView, Meta, PlaybackSession, ScanState, SearchResult, SearchableCatalog, SiteLink, SuggestionRow, Session, Settings, SettingsBackup, SettingsPatch, Stream, Subtitle, Trailer } from "./types";
+import type { ActiveStream, Diagnostics, BuildInfo, AuthStatus, StatsSummary, Addon, AddonDownloadSettings, Capabilities, Catalog, Download, DownloadSelection, DownloadSnapshot, Inspection, BrowseResult, IdentityPreview, LibraryFolder, LibraryOp, LibraryOpsState, ProgressEntry, WatchlistEntry, GrantBrowse, LibraryEstimate, LibraryGrant, LibrarySummary, LibraryType, LibraryView, Meta, PlaybackSession, ScanState, SearchResult, SearchableCatalog, SiteLink, SuggestionRow, Session, Settings, SettingsBackup, SettingsPatch, Stream, Subtitle, Trailer, UserAccount, UserPermissions, UserRole } from "./types";
 
 /** The status code has to reach the top, or a sign-out is indistinguishable from an ordinary error. */
 export class ApiError extends Error {
@@ -46,13 +46,14 @@ export const api = {
   addons: () => request<Addon[]>("/api/addons"),
   addAddon: (url: string, role: string) => request<Addon>("/api/addons", { method: "POST", body: JSON.stringify({ url, role }) }),
   moveAddon: (key: string, direction: -1 | 1) => request<void>(`/api/addons/${key}/move`, { method: "POST", body: JSON.stringify({ direction }) }),
+  setAddonOrder: (order: string[]) => request<void>("/api/addons/order", { method: "PUT", body: JSON.stringify({ order }) }),
   exportAddon: (key: string) => request<Record<string, unknown>>(`/api/addons/${key}/export`),
   deleteAddon: (key: string) => request<void>(`/api/addons/${key}`, { method: "DELETE" }),
   refreshAddon: (key: string) => request<{ addon: Addon; changed: boolean; previousVersion: string; version: string }>(`/api/addons/${key}/refresh`, { method: "POST" }),
   refreshAddons: () => request<{ changed: number; failed: number; addons: Addon[] }>("/api/addons/refresh", { method: "POST", timeoutMs: 120_000 }),
   stats: (hours: number) => request<StatsSummary>(`/api/stats?hours=${hours}`),
   activeStreams: () => request<ActiveStream[]>("/api/stats/streams"),
-  updateAddon: (key: string, patch: { enabled?: boolean; globalSearch?: boolean; showInContinueWatching?: boolean; url?: string; role?: string; downloadSettings?: AddonDownloadSettings }) => request<Addon>(`/api/addons/${key}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  updateAddon: (key: string, patch: { enabled?: boolean; globalSearch?: boolean; showInContinueWatching?: boolean; url?: string; role?: string; allowedUsers?: string[]; downloadSettings?: AddonDownloadSettings }) => request<Addon>(`/api/addons/${key}`, { method: "PATCH", body: JSON.stringify(patch) }),
   toggleAddon: (key: string, enabled: boolean) => request<Addon>(`/api/addons/${key}`, { method: "PATCH", body: JSON.stringify({ enabled }) }),
   catalogs: () => request<Catalog[]>("/api/catalogs"),
   catalog: (catalog: Catalog, search = "", skip = 0, genre = "") => request<Meta[]>(`/api/catalog?${q({ addon: catalog.addonKey, type: catalog.type, id: catalog.id, search: search || undefined, skip: skip || undefined, genre: genre || undefined })}`),
@@ -139,7 +140,7 @@ export const api = {
   libraries: () => request<LibraryView[]>("/api/libraries"),
   createLibrary: (body: { name: string; type: LibraryType; root: string; create?: boolean; writeArtwork?: boolean }) =>
     request<LibraryView>("/api/libraries", { method: "POST", body: JSON.stringify(body) }),
-  updateLibrary: (id: string, patch: { name?: string; type?: LibraryType; enabled?: boolean; order?: number; writeArtwork?: boolean; mosaic?: boolean; showInContinueWatching?: boolean; defaultMovie?: boolean; defaultSeries?: boolean; root?: string; create?: boolean }) =>
+  updateLibrary: (id: string, patch: { name?: string; type?: LibraryType; enabled?: boolean; order?: number; writeArtwork?: boolean; mosaic?: boolean; showInContinueWatching?: boolean; defaultMovie?: boolean; defaultSeries?: boolean; visibleTo?: string[]; root?: string; create?: boolean }) =>
     request<LibraryView>(`/api/libraries/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(patch) }),
   /** Re-rooting that carries the content over. Queued, so it answers with the job id and
    *  the library only follows once every item is across. */
@@ -166,6 +167,17 @@ export const api = {
   login: (username: string, password: string, remember: boolean) => request<Session>("/api/auth/login", { method: "POST", body: JSON.stringify({ username, password, remember }) }),
   logout: (everywhere = false) => request<void>("/api/auth/logout", { method: "POST", body: JSON.stringify({ everywhere }) }),
   changeCredentials: (payload: { username?: string; currentPassword?: string; newPassword: string }) => request<Session>("/api/auth/password", { method: "PATCH", body: JSON.stringify(payload) }),
+  /** The accounts an administrator manages. The grants themselves live on the resource:
+   *  a library tick writes `visibleTo` through `updateLibrary`, an addon tick
+   *  `allowedUsers` through `updateAddon`. */
+  users: () => request<UserAccount[]>("/api/users"),
+  createUser: (body: { username: string; password: string; role?: UserRole; permissions?: Partial<UserPermissions> }) =>
+    request<UserAccount>("/api/users", { method: "POST", body: JSON.stringify(body) }),
+  updateUser: (id: string, patch: { role?: UserRole; disabled?: boolean; permissions?: Partial<UserPermissions> }) =>
+    request<UserAccount>(`/api/users/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  setUserPassword: (id: string, password: string) =>
+    request<UserAccount>(`/api/users/${encodeURIComponent(id)}/password`, { method: "PATCH", body: JSON.stringify({ password }) }),
+  deleteUser: (id: string) => request<void>(`/api/users/${encodeURIComponent(id)}`, { method: "DELETE" }),
 };
 
 /** Hand the same-origin ticket to the browser so large files never pass through JavaScript memory. */

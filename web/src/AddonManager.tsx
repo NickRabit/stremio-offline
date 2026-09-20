@@ -24,8 +24,8 @@ const cloneDownloadSettings = (value: AddonDownloadSettings): AddonDownloadSetti
 /** The addon page: a summary card per addon and one dialog that owns its settings.
  *  Only the two list actions -- the on/off switch and the priority arrows -- write
  *  straight away; everything else is staged in the dialog and saved in one PATCH. */
-export function AddonManager({ addons, libraries = [], restricted = false, onChanged, onNotify, onError }:
-  { addons: Addon[]; libraries?: LibraryView[]; restricted?: boolean; onChanged: () => Promise<void>; onNotify: (message: string) => void; onError: (error: unknown) => void }) {
+export function AddonManager({ addons, libraries = [], restricted = false, admin = true, onChanged, onNotify, onError }:
+  { addons: Addon[]; libraries?: LibraryView[]; restricted?: boolean; admin?: boolean; onChanged: () => Promise<void>; onNotify: (message: string) => void; onError: (error: unknown) => void }) {
   useI18n();
   const [url, setUrl] = useState(""); const [role, setRole] = useState<Addon["role"]>("both");
   const [busy, setBusy] = useState(false);
@@ -33,6 +33,10 @@ export function AddonManager({ addons, libraries = [], restricted = false, onCha
   const [filter, setFilter] = useState("");
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const editing = addons.find((addon) => addon.key === editingKey) ?? null;
+  // An administrator sets the instance's order through `move`; everybody else sets their
+  // own after filtering. Restricted mode shows the list read-only, whatever the role.
+  const manages = admin && !restricted;
+  const personal = !admin && !restricted;
 
   // A manifest is only read when the addon is added, so nothing here notices when the
   // provider adds a catalogue or stops serving a resource. This asks them all again.
@@ -58,7 +62,15 @@ export function AddonManager({ addons, libraries = [], restricted = false, onCha
     catch (error) { onError(error); }
   };
   const move = async (addon: Addon, direction: -1 | 1) => {
-    try { await api.moveAddon(addon.key, direction); await onChanged(); }
+    try {
+      if (manages) await api.moveAddon(addon.key, direction);
+      else {
+        const order = movedOrder(addons, addon.key, direction);
+        if (!order) return;
+        await api.setAddonOrder(order);
+      }
+      await onChanged();
+    }
     catch (error) { onError(error); }
   };
 
@@ -73,7 +85,8 @@ export function AddonManager({ addons, libraries = [], restricted = false, onCha
   return <section><Heading eyebrow={t("addons.eyebrow")} title={t("addons.title")}/>
     <p className="lead">{t("addons.leadBefore")} <code>manifest.json</code>. {t("addons.leadAfter")}</p>
     {restricted && <p className="notice">{t("restricted.notice")}</p>}
-    {!restricted && <form className="panel addon-form" onSubmit={submit}>
+    {!restricted && <p className="addon-order-note">{t(admin ? "addons.orderGlobal" : "addons.orderPersonal")}</p>}
+    {manages && <form className="panel addon-form" onSubmit={submit}>
       <label><span>{t("addons.manifestUrl")}</span>
         <input value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://…/manifest.json" required/></label>
       <label><span>{t("addons.role")}</span>
@@ -85,14 +98,14 @@ export function AddonManager({ addons, libraries = [], restricted = false, onCha
     {addons.length > 0 && <div className="addon-tools">
       {addons.length > 8 && <input className="addon-filter" value={filter} aria-label={t("addons.filter")}
         placeholder={t("addons.filterPlaceholder")} onChange={(event) => setFilter(event.target.value)}/>}
-      {!restricted && <button disabled={refreshing} onClick={() => void refreshAll()}><RefreshCw/> {t(refreshing ? "common.loading" : "addons.refreshAll")}</button>}
+      {manages && <button disabled={refreshing} onClick={() => void refreshAll()}><RefreshCw/> {t(refreshing ? "common.loading" : "addons.refreshAll")}</button>}
     </div>}
     {groups.map((group) => {
       const visible = group.list.filter(matches);
       if (!visible.length) return null;
       return <div className="addon-group" key={group.key}>
         <div className="subhead"><h3>{group.title}</h3><span>{group.text}</span></div>
-        <div className="addon-grid">{visible.map((addon) => <AddonRow key={addon.key} addon={addon} restricted={restricted}
+        <div className="addon-grid">{visible.map((addon) => <AddonRow key={addon.key} addon={addon} manage={manages} personal={personal}
           index={group.ordered ? group.list.indexOf(addon) : -1} total={group.list.length} reorderable={group.ordered && !needle}
           onToggle={(enabled) => void toggle(addon, enabled)} onMove={(direction) => void move(addon, direction)}
           onEdit={() => setEditingKey(addon.key)}/>)}</div>
@@ -106,8 +119,8 @@ export function AddonManager({ addons, libraries = [], restricted = false, onCha
 }
 
 /** The summary: everything needed to pick an addon out of a long list, and nothing to set. */
-function AddonRow({ addon, restricted, index, total, reorderable, onToggle, onMove, onEdit }:
-  { addon: Addon; restricted: boolean; index: number; total: number; reorderable: boolean;
+function AddonRow({ addon, manage, personal, index, total, reorderable, onToggle, onMove, onEdit }:
+  { addon: Addon; manage: boolean; personal: boolean; index: number; total: number; reorderable: boolean;
     onToggle: (enabled: boolean) => void; onMove: (direction: -1 | 1) => void; onEdit: () => void }) {
   const catalogs = addon.manifest.catalogs?.length ?? 0;
   return <article className={`panel addon-card${addon.enabled ? "" : " disabled"}`}>
@@ -118,7 +131,7 @@ function AddonRow({ addon, restricted, index, total, reorderable, onToggle, onMo
           {addon.essential && <span className="addon-essential" title={t("addons.essential")}><ShieldCheck/></span>}</div>
         <p title={addon.manifest.description || addon.displayUrl}>{addon.manifest.description || addon.displayUrl}</p>
       </div>
-      {!restricted && <label className="switch" title={addon.essential ? t("addons.essential") : undefined}>
+      {manage && <label className="switch" title={addon.essential ? t("addons.essential") : undefined}>
         <input aria-label={t("addons.enabledFor", { addon: addon.manifest.name })} type="checkbox" checked={addon.enabled}
           disabled={addon.essential} onChange={(event) => onToggle(event.target.checked)}/><span/></label>}
     </div>
@@ -130,7 +143,7 @@ function AddonRow({ addon, restricted, index, total, reorderable, onToggle, onMo
       {addon.role !== "source" && !addon.globalSearch && <i className="library-badge">{t("addons.badgeNoGlobalSearch")}</i>}
       {!addon.enabled && <i className="library-badge off">{t("addons.badgeOff")}</i>}
     </span>
-    {!restricted && <footer className="addon-card-footer">
+    {(manage || personal) && <footer className="addon-card-footer">
       {index >= 0 && total > 1 && <span className="addon-order">
         <button type="button" className="icon-button" disabled={!reorderable || index === 0}
           title={reorderable ? t("addons.higherPriority") : t("addons.orderFiltered")}
@@ -139,9 +152,23 @@ function AddonRow({ addon, restricted, index, total, reorderable, onToggle, onMo
           title={reorderable ? t("addons.lowerPriority") : t("addons.orderFiltered")}
           aria-label={t("addons.lowerPriority")} onClick={() => onMove(1)}><ArrowDown/></button>
       </span>}
-      <button type="button" onClick={onEdit}><SlidersHorizontal/> {t("addons.editAddon")}</button>
+      {manage && <button type="button" onClick={onEdit}><SlidersHorizontal/> {t("addons.editAddon")}</button>}
     </footer>}
   </article>;
+}
+
+/** The whole list's key order after moving one addon inside its group. The other group --
+ *  the catalogues, which carry no arrows -- keeps its places; the source order is what the
+ *  picker ranks by. */
+function movedOrder(addons: Addon[], key: string, direction: -1 | 1): string[] | undefined {
+  const sources = addons.filter((addon) => addon.role !== "catalog");
+  const index = sources.findIndex((addon) => addon.key === key);
+  const next = Math.max(0, Math.min(sources.length - 1, index + direction));
+  if (index < 0 || next === index) return undefined;
+  const keys = sources.map((addon) => addon.key);
+  const [moved] = keys.splice(index, 1);
+  keys.splice(next, 0, moved);
+  return addons.map((addon) => (addon.role !== "catalog" ? keys.shift()! : addon.key));
 }
 
 type Draft = {

@@ -187,4 +187,5 @@ Details in [Playback](playback.md) and
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `ADMIN_USERNAME` / `ADMIN_PASSWORD` | *(unset)* | Emergency sign-in when the password is lost. Change the real password afterwards and unset these. |
+| `ADMIN_USERNAME` / `ADMIN_PASSWORD` | *(unset)* | Seeds the first administrator on an install that has never had an account, so a container can come up ready to use. They are not a way to sign in afterwards: once the account exists, its own password is the only one accepted. |
+| `ADMIN_PASSWORD_RESET` | *(unset)* | Recovery for a forgotten password. With `ADMIN_USERNAME` naming the account, the next boot sets this as its password, signs its devices out and logs a warning naming it. The value is recorded in the state, so the same one does nothing on later restarts and a variable left behind cannot silently reset the account on every container update. Clear it once you are back in: anyone who can read the configuration can read it. |

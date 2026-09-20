@@ -1,6 +1,7 @@
 import { realpath } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import path from "node:path";
+import type { Role } from "./users.js";
 
 /** `lib_` + 8 lowercase hex. Never derived from the path, never reused. */
 export const LIBRARY_ID = /^lib_[0-9a-f]{8}$/;
@@ -27,7 +28,23 @@ export interface LibraryRecord {
   showInContinueWatching?: boolean;
   /** The root could not be reached at the last check. Metadata and artwork stay. */
   unreachable?: boolean;
+  /** The users who may see this library. Absent or empty means administrators
+   *  only: a library added later is invisible until somebody says otherwise,
+   *  which is the safe direction for a list whose failure mode is disclosure. */
+  visibleTo?: string[];
 }
+
+/** The account a read speaks for, as much of it as a visibility check needs. Structural on
+ *  purpose: this module stays free of the store and of the whole user record. */
+export type Viewer = { id: string; role: Role };
+
+/** May this account see this library? An administrator sees every library,
+ *  including ones nobody has been granted. */
+export const libraryVisible = (library: LibraryRecord, viewer: Viewer): boolean =>
+  viewer.role === "admin" || (library.visibleTo ?? []).includes(viewer.id);
+
+export const visibleLibraries = (libraries: LibraryRecord[], viewer: Viewer): LibraryRecord[] =>
+  libraries.filter((library) => libraryVisible(library, viewer));
 
 /** A library that was removed without forgetting. Its id is kept so that adding the same
  *  folder again picks up its match history, its artwork and its favourite and resume rows

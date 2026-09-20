@@ -83,6 +83,22 @@ it("restricted mode renders the summary without the switch or the editor", async
   expect(button("Edit addon")).toBeUndefined();
 });
 
+it("an ordinary user reorders their own list and is told the order is theirs alone", async () => {
+  const second = addon({ key: "a2", manifest: { ...addon().manifest, id: "org.test2", name: "Second source" } });
+  await render([addon(), second], { admin: false });
+  expect(host.textContent).toContain("This order is yours alone.");
+  expect(button("Edit addon")).toBeUndefined();
+  expect(host.querySelector(".addon-card input")).toBeNull();
+
+  fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
+  const down = host.querySelectorAll<HTMLButtonElement>(".addon-card .addon-order button")[1]!;
+  await act(async () => { down.click(); });
+  await act(async () => { await Promise.resolve(); });
+  const put = fetchMock.mock.calls.find(([, init]) => init?.method === "PUT")!;
+  expect(put[0]).toBe("/api/addons/order");
+  expect(JSON.parse(put[1].body as string)).toEqual({ order: ["a2", "a1"] });
+});
+
 it("the dialog fetches the real address, which the list hides", async () => {
   await render([addon()]);
   await openEditor();

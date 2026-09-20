@@ -1,8 +1,21 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import { INTERNAL_TOKEN } from "./auth.js";
 import type { PublicStream, StreamItem } from "./types.js";
+import type { MediaInfo } from "./naming.js";
 
-export interface ResourceOwner { sid: string; expiresAt: number }
+/** Who holds a resource. `userId` answers permission and ownership questions; `sid` keeps
+ *  one person's phone and their television apart, and is what a single device is signed
+ *  out by. */
+export interface ResourceOwner { userId: string; sid: string; expiresAt: number }
+
+/** A one-shot permit to pull a file down to the device at the keyboard. It is bound to the
+ *  session that asked for it and never outlives it, so it lives beside the owner it names. */
+export interface DeviceDownloadTicket {
+  owner: ResourceOwner;
+  expiresAt: number;
+  filename: string;
+  source: { kind: "local"; path: string } | { kind: "remote"; stream: StreamItem; title: string; media?: MediaInfo };
+}
 export type ResourceScope = "source" | "media" | "subtitle";
 interface Resource {
   id: string; owner: ResourceOwner; scope: ResourceScope; stream: StreamItem;
@@ -212,6 +225,25 @@ export class MediaResources {
     for (const record of this.entries.values()) if (!sid || record.owner.sid === sid) this.remove(record.id);
   }
 
+  /** Everything one account holds, across all its devices. */
+  revokeUser(userId: string): string[] {
+    return this.revokeWhere((owner) => owner.userId === userId);
+  }
+
+  /** Removes every resource the predicate names and answers with the ids, so that the
+   *  responses reading them can be destroyed by the same sweep. A child whose parent goes
+   *  is removed with it and its id is part of the answer, which is what the reader of a
+   *  subtitle is tracked under. */
+  revokeWhere(match: (owner: ResourceOwner, stream: StreamItem) => boolean): string[] {
+    const removed: string[] = [];
+    for (const record of [...this.entries.values()]) {
+      if (!match(record.owner, record.stream)) continue;
+      removed.push(record.id);
+      this.remove(record.id);
+    }
+    return removed;
+  }
+
   mediaStream(source: StreamItem, owner: ResourceOwner): { stream: StreamItem; resourceId: string } {
     const resourceId = this.add(source, owner, "media", undefined, true);
     const stream = structuredClone(this.get(resourceId, owner.sid, "media").stream);
@@ -222,7 +254,7 @@ export class MediaResources {
   path(stream: StreamItem): string {
     let id = this.bindings.get(stream);
     if (!id) {
-      id = this.add(stream, { sid: "internal", expiresAt: this.now() + 30 * 60_000 }, "media");
+      id = this.add(stream, { userId: "internal", sid: "internal", expiresAt: this.now() + 30 * 60_000 }, "media");
       this.bindings.set(stream, id);
     }
     return `/api/media/${id}`;
@@ -252,7 +284,12 @@ export class MediaResources {
       behaviorHints: { filename: record.behaviorHints?.filename, videoSize: record.behaviorHints?.videoSize,
         bingeGroup: record.behaviorHints?.bingeGroup },
       subtitles: (stream.subtitles ?? []).filter((item) => /^https?:\/\//i.test(item.url) || (kind === "library" && item.url.startsWith("file://"))).map((item) => ({
-        subtitleId: this.add({ url: item.url }, owner, "subtitle"),
+        // The addon travels with it, the way `GET /api/subtitles` mints one: a record that
+        // names no content cannot be recognised by the sweep that runs when an addon is
+        // removed or withdrawn, and the re-check at hand-over has nothing to check against.
+        // A subtitle inside a stream listing belongs to the addon that offered the stream
+        // unless it says otherwise; a library sidecar names its library through the url.
+        subtitleId: this.add({ url: item.url, addonKey: item.addonKey ?? stream.addonKey }, owner, "subtitle"),
         lang: safeSourceText(item.lang, stream), addonName: safeSourceText(item.addonName, stream),
       })),
     };

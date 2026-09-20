@@ -7,7 +7,7 @@ import { mediaChildPath, MediaResources } from "./media-resources.js";
 function fixture() {
   let now = 1000;
   const resources = new MediaResources(() => now);
-  const owner = { sid: "owner", expiresAt: now + 24 * 60 * 60_000 };
+  const owner = { userId: "user", sid: "owner", expiresAt: now + 24 * 60 * 60_000 };
   const root = resources.add({ url: "https://example.test/video.mp4" }, owner, "media");
   const access = new AirPlayAccess(resources, () => now);
   access.create("playback-1", owner, root);
@@ -47,7 +47,7 @@ test("AirPlay grants expire and are revoked by stop and logout", () => {
 
 test("AirPlay grants never extend the login lifetime", () => {
   const f = fixture();
-  const shortOwner = { sid: "short", expiresAt: 2000 };
+  const shortOwner = { userId: "user", sid: "short", expiresAt: 2000 };
   const root = f.resources.add({ url: "https://example.test/short" }, shortOwner, "media");
   f.access.create("short", shortOwner, root);
   const token = new URL(f.access.url("short", `/api/media/${root}`), "http://test").searchParams.get("airplay");

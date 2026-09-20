@@ -1,5 +1,6 @@
 import { AppError } from "./errors.js";
 import { createHash, randomUUID } from "node:crypto";
+import type { Viewer } from "./libraries.js";
 import type { AddonRecord, AddonRole, CatalogDefinition, MetaItem, StremioManifest, StreamItem, SubtitleItem } from "./types.js";
 import { validateRemoteUrl } from "./security.js";
 import { guardedFetch } from "./outbound.js";
@@ -36,6 +37,40 @@ export async function loadAddon(rawUrl: string, role: AddonRole): Promise<AddonR
     addedAt: new Date().toISOString(), manifest, downloadSettings: defaultDownloadSettings(),
   };
 }
+
+/** May this account use this addon? An administrator may use every addon,
+ *  including ones nobody has been granted -- but never a disabled one: the
+ *  `enabled` switch is enforced by the helpers below (`searchableCatalogs`,
+ *  `streamCandidates`, `metadata`, `subtitles`), which drop a disabled addon
+ *  before its audience is considered. */
+export const addonAllowed = (addon: AddonRecord, viewer: Viewer): boolean =>
+  viewer.role === "admin" || (addon.allowedUsers ?? []).includes(viewer.id);
+
+export const allowedAddons = (addons: AddonRecord[], viewer: Viewer): AddonRecord[] =>
+  addons.filter((addon) => addonAllowed(addon, viewer));
+
+/** The order one account reads its addons in: its own, and only if it is an ordinary account.
+ *  An administrator reads the instance order, because that is the one their arrows edit --
+ *  showing them a personal overlay while the note says "this applies to everybody" would be a
+ *  lie, and reordering from that view would scramble the global list. An order kept from
+ *  before a promotion stays stored and is simply not applied. */
+export const orderFor = (
+  user: { id: string; role: string } | undefined,
+  stored: (id: string) => string[] | undefined,
+): string[] | undefined => (user && user.role !== "admin" ? stored(user.id) : undefined);
+
+/** The addons this account sees, in the order it prefers them. Unknown keys
+ *  are dropped and unlisted addons follow in the instance's own order, so a
+ *  personal list never has to be repaired when the instance changes. */
+export const orderedForUser = (addons: AddonRecord[], order: string[] | undefined): AddonRecord[] => {
+  if (!order?.length) return addons;
+  const present = new Set(addons.map((addon) => addon.key));
+  const rank = new Map<string, number>();
+  for (const key of order) if (present.has(key) && !rank.has(key)) rank.set(key, rank.size);
+  if (!rank.size) return addons;
+  // `sort` is stable, so the addons no list names keep the instance's own order.
+  return [...addons].sort((a, b) => (rank.get(a.key) ?? rank.size) - (rank.get(b.key) ?? rank.size));
+};
 
 function baseUrl(addon: AddonRecord): URL { return new URL("./", addon.manifestUrl); }
 
@@ -234,7 +269,9 @@ export async function subtitles(addons: AddonRecord[], type: string, id: string)
   const candidates = addons.filter((a) => a.enabled && supports(a, "subtitles", type, id));
   const results = await Promise.allSettled(candidates.map(async (addon) => {
     const response = await jsonFetch<{ subtitles?: SubtitleItem[] }>(resourceUrl(addon, "subtitles", type, id));
-    return (response.subtitles ?? []).map((subtitle) => ({ ...subtitle, addonName: addon.manifest.name }));
+    // The key as well as the name, the way a stream carries it: the name is for the person
+    // choosing, the key is what a permission check and a revocation sweep match on.
+    return (response.subtitles ?? []).map((subtitle) => ({ ...subtitle, addonKey: addon.key, addonName: addon.manifest.name }));
   }));
   results.forEach((result, index) => {
     if (result.status === "rejected") log("WARN", "Addon request failed", { operation: "subtitles", addon: candidates[index].manifest.name, type, id, reason: reasonOf(result.reason) });

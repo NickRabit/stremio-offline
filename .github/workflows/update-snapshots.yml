@@ -41,10 +41,14 @@ jobs:
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if git diff --quiet -- e2e/tests/layout/__screenshots__; then
+          # Staged first, then compared. `git diff` alone does not see an untracked
+          # file, so a viewport added to the matrix produced baselines that this step
+          # reported as "already match" and threw away, leaving a green run and a red
+          # pull request. The path keeps the -A to the baselines.
+          git add -A -- e2e/tests/layout/__screenshots__
+          if git diff --cached --quiet -- e2e/tests/layout/__screenshots__; then
             echo "Baselines already match; nothing to commit."
             exit 0
           fi
-          git add e2e/tests/layout/__screenshots__
           git commit -m "test: refresh screenshot baselines"
           git push origin HEAD:${{ inputs.branch }}

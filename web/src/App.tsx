@@ -1,8 +1,8 @@
 import { FormEvent, ReactNode, TouchEvent as ReactTouchEvent, UIEvent, WheelEvent as ReactWheelEvent, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, BarChart3, ArrowUp, Check, RectangleHorizontal, RectangleVertical, Copy, FolderInput, FolderOpen, ImageOff, Images, KeyRound, Languages, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, ShieldCheck, SlidersHorizontal, Sparkles, Star, FileJson, Link2, LogOut, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, FileText, Film, FolderCog, HardDrive, Library, PackagePlus, Pause, Play, Plus, RefreshCw, Search, SearchX, Settings, Subtitles, Trash2, Upload, X } from "lucide-react";
+import { ArrowDown, BarChart3, ArrowUp, Check, RectangleHorizontal, RectangleVertical, Copy, FolderInput, FolderOpen, ImageOff, Images, KeyRound, Languages, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, ShieldCheck, SlidersHorizontal, Sparkles, Star, FileJson, Link2, LogOut, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, FileText, Film, FolderCog, HardDrive, Library, PackagePlus, Pause, Play, Plus, RefreshCw, Search, SearchX, Settings, Subtitles, Trash2, Upload, Users, X } from "lucide-react";
 import { queueDestination } from "./queue-target";
 import { api, ApiError, describeError, logDownloadUrl, saveToDevice } from "./api";
-import { AccountSettings, LoginScreen } from "./Login";
+import { AccountSettings, LoginScreen, PasswordChangeRequired } from "./Login";
 import { bytes, Heading, hideBroken, SettingControl, SettingsSectionHead } from "./settings-ui";
 import { LOCALES, LOCALE_NAMES } from "./i18n";
 import { Player } from "./Player";
@@ -10,6 +10,7 @@ import { TrailerPlayer } from "./TrailerPlayer";
 import { IdentifyDialog } from "./IdentifyDialog";
 import { AddonManager } from "./AddonManager";
 import { LibraryManager, LibraryManagerDialog, libraryTypeLabel } from "./LibraryManager";
+import { UserManager } from "./UserManager";
 import { TileArt } from "./TileArt";
 import { MoveDialog } from "./MoveDialog";
 import { SuggestionsDialog } from "./SuggestionsDialog";
@@ -373,6 +374,9 @@ export function App() {
     } catch (error) { fail(error); }
   };
   const loadSuggestionCount = async () => {
+    // Matching suggestions are an administrator's business and the endpoint refuses anybody
+    // else, so an ordinary account would spend a refusal on every load to learn nothing.
+    if (session?.role !== "admin") return;
     try { setSuggestionCount((await api.librarySuggestions()).total); }
     catch { /* the count is optional chrome */ }
   };
@@ -891,6 +895,9 @@ export function App() {
   const [setupNeeded, setSetupNeeded] = useState(false);
   const [buildInfo, setBuildInfo] = useState<BuildInfo | null>(null);
   const restricted = buildInfo?.restricted === true;
+  // What the instance owns is administrator-only, and an ordinary user gets the same
+  // read-only shape the demo mode uses: the API refuses those writes either way.
+  const admin = session?.role === "admin";
   useEffect(() => { api.status().then(setBuildInfo).catch(() => setBuildInfo(null)); }, []);
   // The sign-in and setup screens render before anything else, so the stored language
   // rides along on this one call. Only a fresh install falls back to the browser's guess.
@@ -1017,7 +1024,9 @@ export function App() {
   }, [ready, view, scanning]);
   const operationsActive = libraryOps.some((job) => job.status === "running" || job.status === "paused");
   useEffect(() => {
-    if (!ready || view !== "library") return;
+    // The library operations queue is administrator-only, reading included: polling it as an
+    // ordinary account is a refusal every few seconds for a panel that never shows.
+    if (!ready || view !== "library" || session?.role !== "admin") return;
     let cancelled = false;
     const tick = async () => {
       try {
@@ -1038,8 +1047,8 @@ export function App() {
     if (!operationsActive) return () => { cancelled = true; };
     const timer = window.setInterval(() => void tick(), 1000);
     return () => { cancelled = true; window.clearInterval(timer); };
-  }, [ready, view, operationsActive, browsePath]);
-  useEffect(() => { if (ready && view === "library") void loadSuggestionCount(); }, [ready, view, scanEpoch]);
+  }, [ready, view, session?.role, operationsActive, browsePath]);
+  useEffect(() => { if (ready && view === "library") void loadSuggestionCount(); }, [ready, view, session?.role, scanEpoch]);
   // Page-scroll paging, the same as in the catalogue. The button stays as a fallback.
   useEffect(() => {
     if (view !== "library" || !browse) return;
@@ -1546,23 +1555,36 @@ export function App() {
 
   if (session === undefined) return <div className="login-screen"><div className="loading">{t("common.loading")}</div></div>;
   if (!ready) return <LoginScreen setup={setupNeeded} onSession={(next) => { setSetupNeeded(false); setSession(next); }}/>;
+  // Signed in, but on a password an administrator chose: the server allows this form, reading
+  // one's own name and signing out, and nothing else. Rendering the application here would
+  // render a shell whose every request comes back refused with nothing to explain it.
+  if (session?.mustChangePassword) return <PasswordChangeRequired session={session} onSession={setSession}/>;
 
   return <div className={`app-shell catalog-tiles-${settings.catalogTileSize} library-tiles-${settings.libraryTileSize} catalog-shape-${settings.catalogTileShape} library-shape-${settings.libraryTileShape}${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
     <header className="topbar"><button className="brand brand-home" title={t("app.goToCleanCatalog")} aria-label={t("app.goToCleanCatalog")} onClick={resetCatalog}><div className="brand-mark"><CirclePlay/></div><div><small>{t("auth.brandEyebrow")}</small><h1>Stremio <span>Offline</span></h1></div></button><div className="topbar-right">{restricted && <div className="restricted-chip">{t("restricted.chip")}</div>}<div className="online"><i/> {t("app.serverOnline")}</div>
-      <button className="signout" title={t("auth.signedInAs", { username: session?.username ?? "" })} onClick={async () => { try { await api.logout(); } finally { location.reload(); } }}><LogOut/> {t("app.signOut")}</button></div></header>
+      <div className="topbar-user"><span className="topbar-user-name">
+        <strong title={t("auth.signedInAs", { username: session?.username ?? "" })}>{session?.username}</strong>
+        {session?.role === "admin" && <i className="library-badge">{t("users.administrator")}</i>}
+      </span><button className="signout" title={t("auth.signedInAs", { username: session?.username ?? "" })} aria-label={t("app.signOut")} onClick={async () => { try { await api.logout(); } finally { location.reload(); } }}><LogOut/> <span className="signout-label">{t("app.signOut")}</span></button></div></div></header>
     <aside className="sidebar"><nav>
       <Nav icon={<Library/>} label={t("nav.catalog")} active={view === "catalog"} onClick={() => openView("catalog")}/>
       <Nav icon={<HardDrive/>} label={t("nav.library")} active={view === "library"} onClick={() => openView("library")}/>
       <Nav icon={<Download/>} label={t("nav.downloads")} active={view === "downloads"} badge={downloads.filter((job) => job.status === "checking" || job.status === "downloading" || job.status === "queued" || job.status === "waiting").length} onClick={() => openView("downloads")}/>
       <Nav icon={<PackagePlus/>} label={t("nav.addons")} active={view === "addons"} badge={addons.length} onClick={() => openView("addons")}/>
       <Nav icon={<Settings/>} label={t("nav.settings")} active={view === "settings"} onClick={() => openView("settings")}/>
-      <Nav icon={<BarChart3/>} label={t("nav.stats")} active={view === "stats"} onClick={() => openView("stats")}/>
+      {/* `/api/stats` is administrator-only, so for anybody else this is a tab that loads an
+          error. */}
+      {session!.role === "admin" && <Nav icon={<BarChart3/>} label={t("nav.stats")} active={view === "stats"} onClick={() => openView("stats")}/>}
     </nav><div className="sidebar-bottom"><button className="sidebar-toggle" onClick={toggleSidebar} title={t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")} aria-label={t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")}>{sidebarCollapsed ? <PanelLeftOpen/> : <PanelLeftClose/>}<span>{t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")}</span></button><div className="addon-status"><small>{t("app.activeAddons")}</small><strong>{addons.filter((a) => a.enabled).length}</strong><span>{t("app.catalogsAndSources")}</span></div></div></aside>
     <main className={`view-${view}`}>
       {view === "catalog" && <section className={`catalog-view ${catalogCompact ? "catalog-compact" : ""}`} {...chromeGestures(() => gridRef.current)} onFocusCapture={(event) => {
         if ((event.target as HTMLElement).closest(".searchbar,.filterbar")) setCatalogCompact(false);
       }}><Heading eyebrow={t("catalog.eyebrow")} title={t("catalog.title")}/>
-        {!catalogs.length ? (restricted ? <Empty icon={<PackagePlus/>} title={t("onboarding.title")} text={t("restricted.notice")}/> : <Onboarding onOpen={() => setView("addons")}/>) : <>
+        {!catalogs.length ? (restricted || session!.role !== "admin"
+          // An ordinary account seeing no catalogue has not been granted an addon, and
+          // cannot add one: the invitation would lead to a screen it may not use.
+          ? <Empty icon={<PackagePlus/>} title={t("onboarding.title")} text={t(restricted ? "restricted.notice" : "onboarding.noneGranted")}/>
+          : <Onboarding onOpen={() => setView("addons")}/>) : <>
           <div className={`fold${catalogCompact ? " closed" : ""}`}><form className="searchbar" onSubmit={submitSearch}>
             <div className="search-input"><Search/><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={t("catalog.searchPlaceholder")}/></div>
             <label className="scope-select"><span>{t("catalog.searchScopeIn")}</span><select aria-label={t("catalog.searchScope")} value={searchScopeValue} onChange={(e) => pickSearchScope(e.target.value)}>
@@ -1724,7 +1746,7 @@ export function App() {
             {!libraryList && <button title={t(browseView === "grid" ? "library.viewRows" : "library.viewTiles")} onClick={() => setBrowseView((value) => value === "grid" ? "list" : "grid")}>
               {browseView === "grid" ? <List/> : <LayoutGrid/>}
             </button>}
-            {!libraryList && <button className={selectionMode ? "active-filter" : ""} title={t("library.selectMode")} aria-pressed={selectionMode}
+            {admin && !libraryList && <button className={selectionMode ? "active-filter" : ""} title={t("library.selectMode")} aria-pressed={selectionMode}
               onClick={() => { setMenuFor(null); if (selectionMode) leaveSelection(); else setSelectionMode(true); }}><Check/></button>}
             </div></div>
             {/* What a folded header keeps: where the tiles stand, the tools, and the way back. */}
@@ -1853,11 +1875,13 @@ export function App() {
                     {!selectionMode && <button className="browse-menu" aria-label={t("library.options", { name: item.name })} aria-expanded={menuFor === item.path} onClick={(event) => { event.stopPropagation(); openMenu(item); }}><MoreVertical/></button>}
                     {!selectionMode && menuFor === item.path && <span className="browse-actions" onClick={(event) => event.stopPropagation()}>
                       {item.match === "matched" && titleChips(libraryTrailers[item.path] ?? null, libraryLinks[item.path] ?? [])}
-                      {matchActions(item)}
+                      {admin && matchActions(item)}
                       <button onClick={() => void toggleFavorite(item.path, !item.favorite)}><Star/> {t(item.favorite ? "favorite.remove" : "favorite.add")}</button>
-                      <button onClick={() => void renameItem(item.path, item.name)}><Pencil/> {t("library.rename")}</button>
-                      <button onClick={() => openMove(item.path, item.name, item.titleType)}><FolderInput/> {t("library.move")}</button>
-                      <button className="danger" onClick={() => void removeItem(item.path, item.name, true)}><Trash2/> {t("common.delete")}</button>
+                      {admin && <>
+                        <button onClick={() => void renameItem(item.path, item.name)}><Pencil/> {t("library.rename")}</button>
+                        <button onClick={() => openMove(item.path, item.name, item.titleType)}><FolderInput/> {t("library.move")}</button>
+                        <button className="danger" onClick={() => void removeItem(item.path, item.name, true)}><Trash2/> {t("common.delete")}</button>
+                      </>}
                     </span>}
                   </article>
                 : <article className={`browse-item${browseFocus === item.path ? " focused" : ""}${selectedPaths.has(item.path) ? " selected" : ""}`} key={item.path} data-path={item.path} aria-current={browseFocus === item.path ? "true" : undefined}><button className="library-open" onClick={() => selectionMode ? toggleSelection(item.path) : void playLocal(item.label, item.path, item.poster, item.season != null)}>
@@ -1870,14 +1894,16 @@ export function App() {
                     {!selectionMode && <button className="browse-menu" aria-label={t("library.options", { name: item.label })} aria-expanded={menuFor === item.path} onClick={(event) => { event.stopPropagation(); openMenu(item); }}><MoreVertical/></button>}
                     {!selectionMode && menuFor === item.path && <span className="browse-actions" onClick={(event) => event.stopPropagation()}>
                       {item.match === "matched" && titleChips(libraryTrailers[item.path] ?? null, libraryLinks[item.path] ?? [])}
-                      {matchActions(item)}
+                      {admin && matchActions(item)}
                       <button onClick={() => void toggleFavorite(item.path, !item.favorite)}><Star/> {t(item.favorite ? "favorite.remove" : "favorite.add")}</button>
                       {item.progress && <button onClick={() => revealInLibrary(item.path)}><HardDrive/> {t("library.showInLibrary")}</button>}
                       {item.progress && <button onClick={() => void forgetWatched(item.path)}><RotateCcw/> {t("library.markUnwatched")}</button>}
                       <button onClick={() => { setMenuFor(null); void downloadLibraryFile(item.path); }}><Download/> {t("library.downloadToDevice")}</button>
-                      <button onClick={() => void renameItem(item.path, item.label)}><Pencil/> {t("library.rename")}</button>
-                      <button onClick={() => openMove(item.path, item.label, item.titleType)}><FolderInput/> {t("library.move")}</button>
-                      <button className="danger" onClick={() => void removeItem(item.path, item.label, false)}><Trash2/> {t("common.delete")}</button>
+                      {admin && <>
+                        <button onClick={() => void renameItem(item.path, item.label)}><Pencil/> {t("library.rename")}</button>
+                        <button onClick={() => openMove(item.path, item.label, item.titleType)}><FolderInput/> {t("library.move")}</button>
+                        <button className="danger" onClick={() => void removeItem(item.path, item.label, false)}><Trash2/> {t("common.delete")}</button>
+                      </>}
                     </span>}
                   </article>)}
             </div>
@@ -1892,8 +1918,8 @@ export function App() {
         </div>
         </div>
       </section>}
-      {view === "addons" && <AddonManager addons={addons} libraries={libraries} restricted={restricted} onChanged={refresh} onNotify={notify} onError={fail}/>} 
-      {view === "downloads" && <Downloads jobs={downloads} libraries={libraries} halt={queueHalt} refresh={loadDownloads} onError={fail} onReveal={revealInLibrary}/>}
+      {view === "addons" && <AddonManager addons={addons} libraries={libraries} restricted={restricted} admin={admin} onChanged={refresh} onNotify={notify} onError={fail}/>} 
+      {view === "downloads" && <Downloads jobs={downloads} libraries={libraries} halt={queueHalt} admin={session!.role === "admin"} refresh={loadDownloads} onError={fail} onReveal={revealInLibrary}/>}
       {view === "stats" && <StatsPanel key={statsReset} onError={fail}/>}
       {view === "settings" && <SettingsPage build={buildInfo} restricted={restricted} settings={settings} languages={languages} libraries={libraries} session={session!} onSession={setSession} onSave={saveSettings} onLibrariesChanged={refreshLibraries} onImported={async (backup) => {
         const restored = await api.importSettings(backup);
@@ -1915,7 +1941,7 @@ export function App() {
       onDownload={enqueue}
       onDeviceDownload={() => localStream?.localPath ? downloadLibraryFile(localStream.localPath) : downloadStreamToDevice()}
       onClose={() => { setPlayerOpen(false); setLocalStream(null); setLocalEpisode(false); setPlaybackPreferences({}); }}/>
-    {libraryManagerOpen && <LibraryManagerDialog restricted={restricted} onClose={() => setLibraryManagerOpen(false)} onChanged={refreshLibraries} onError={fail} onNotify={notify}/>}
+    {libraryManagerOpen && <LibraryManagerDialog restricted={restricted || !admin} onClose={() => setLibraryManagerOpen(false)} onChanged={refreshLibraries} onError={fail} onNotify={notify}/>}
     {movePath && <MoveDialog path={movePath.path} paths={movePath.paths} copy={movePath.copy} label={movePath.label}
       itemType={movePath.type} libraries={libraries} onClose={() => setMovePath(null)} onMoved={(target) => void finishMove(target)}
       onQueued={(id) => { leaveSelection(); void trackQueuedOp(id); }}/>}
@@ -2035,6 +2061,9 @@ const refreshIntervalLabel = (hours: number) =>
 
 function SettingsPage({ build, restricted = false, settings, languages, libraries = [], session, onSession, onSave, onImported, onLibrariesChanged, onNotify, onError }: { build: BuildInfo | null; restricted?: boolean; settings: AppSettings; languages: Array<{ code: string; name: string }>; libraries?: LibraryView[]; session: Session; onSession: (session: Session) => void; onSave: (patch: SettingsPatch) => Promise<void>; onImported: (backup: unknown) => Promise<void>; onLibrariesChanged: () => void; onNotify: (message: string) => void; onError: (error: unknown) => void }) {
   const { t, locale, setLocale } = useI18n();
+  // An ordinary user decides only what is personal: everything the instance owns renders
+  // through the same `restricted` prop the demo mode uses, so it loses its controls.
+  const admin = session.role === "admin";
   // The names come from the browser in the active language, so they need sorting there too.
   const languageOptions = languages
     .map((item) => ({ code: item.code, name: languageName(item.code) }))
@@ -2076,31 +2105,48 @@ function SettingsPage({ build, restricted = false, settings, languages, librarie
   return <section className="settings-page"><div className="settings-title"><Heading eyebrow={t("settings.eyebrow")} title={t("settings.title")}/><span><Check/> {t("settings.autosave")}</span></div>
     {restricted && <p className="notice">{t("restricted.notice")}</p>}
     <div className="settings-grid">
-      <section className="panel settings-section library-manager-section"><SettingsSectionHead icon={<Library/>} title={t("library.libraries")} text={t("library.librariesHint")}/><LibraryManager restricted={restricted} onChanged={onLibrariesChanged} onError={onError} onNotify={onNotify}/></section>
+      <section className="panel settings-section library-manager-section"><SettingsSectionHead icon={<Library/>} title={t("library.libraries")} text={t("library.librariesHint")}/><LibraryManager restricted={restricted || !admin} onChanged={onLibrariesChanged} onError={onError} onNotify={onNotify}/></section>
+      {admin && <section className="panel settings-section user-manager-section"><SettingsSectionHead icon={<Users/>} title={t("users.title")} text={t("users.hint")}/><UserManager session={session} restricted={restricted} onChanged={onLibrariesChanged} onNotify={onNotify} onError={onError}/></section>}
       <section className="panel settings-section"><SettingsSectionHead icon={<Library/>} title={t("nav.library")} /><SettingControl title={t("settings.sameTitles")} text={t("settings.sameTitlesHint")}><select aria-label={t("settings.sameTitles")} disabled={restricted} value={settings.mergeByName ? "1" : "0"} onChange={(event) => void onSave({ mergeByName: event.target.value === "1" })}><option value="1">{t("settings.merge")}</option><option value="0">{t("settings.showSeparately")}</option></select></SettingControl>
         <SettingControl title={t("settings.resumeRow")} text={t("settings.resumeRowHint")}>
           <select aria-label={t("settings.resumeRowLabel")} disabled={restricted} value={settings.showResumeRow ? "1" : "0"} onChange={(event) => void onSave({ showResumeRow: event.target.value === "1" })}>
             <option value="1">{t("settings.show")}</option><option value="0">{t("settings.hide")}</option>
           </select></SettingControl>
         <SettingControl title={t("settings.autoScan")} text={t("settings.autoScanHint")}>
-          <select aria-label={t("settings.autoScanLabel")} disabled={restricted} value={settings.libraryAutoScan ? "1" : "0"} onChange={(event) => void onSave({ libraryAutoScan: event.target.value === "1" })}>
+          <select aria-label={t("settings.autoScanLabel")} disabled={restricted || !admin} value={settings.libraryAutoScan ? "1" : "0"} onChange={(event) => void onSave({ libraryAutoScan: event.target.value === "1" })}>
             <option value="1">{t("settings.autoScanOn")}</option><option value="0">{t("settings.autoScanOff")}</option>
           </select></SettingControl>
         <SettingControl title={t("settings.scanDuringDownload")} text={t("settings.scanDuringDownloadHint")}>
-          <select aria-label={t("settings.scanDuringDownloadLabel")} disabled={restricted} value={settings.libraryScanPauseOnDownload ? "0" : "1"} onChange={(event) => void onSave({ libraryScanPauseOnDownload: event.target.value === "0" })}>
+          <select aria-label={t("settings.scanDuringDownloadLabel")} disabled={restricted || !admin} value={settings.libraryScanPauseOnDownload ? "0" : "1"} onChange={(event) => void onSave({ libraryScanPauseOnDownload: event.target.value === "0" })}>
             <option value="1">{t("settings.scanDuringDownloadOn")}</option><option value="0">{t("settings.scanDuringDownloadOff")}</option>
           </select></SettingControl>
       </section>
       <section className="panel settings-section storage-section"><SettingsSectionHead icon={<HardDrive/>} title={t("settings.storageTitle")} text={t("settings.storageText")}/><p>{t("settings.artworkMoved")}</p><div className="storage-path"><span>{t("settings.dockerPath")}</span><code>{libraryRoot}</code></div><p>{t("settings.storageNoteBefore")} <code>DOWNLOAD_PATH</code> {t("settings.storageNoteAfter")}</p></section>
       <section className="panel settings-section"><SettingsSectionHead icon={<PackagePlus/>} title={t("settings.addonsTitle")} text={t("settings.addonsText")}/>
         <SettingControl title={t("settings.addonRefresh")} text={t("settings.addonRefreshHint")}>
-          <select aria-label={t("settings.addonRefreshLabel")} disabled={restricted} value={settings.addonRefreshHours ?? 24} onChange={(event) => void onSave({ addonRefreshHours: Number(event.target.value) })}>
+          <select aria-label={t("settings.addonRefreshLabel")} disabled={restricted || !admin} value={settings.addonRefreshHours ?? 24} onChange={(event) => void onSave({ addonRefreshHours: Number(event.target.value) })}>
             {REFRESH_HOURS.map((hours) => <option key={hours} value={hours}>{refreshIntervalLabel(hours)}</option>)}
           </select></SettingControl>
       </section>
-      <section className="panel settings-section"><SettingsSectionHead icon={<Download/>} title={t("nav.downloads")} text={t("settings.downloadsText")}/><SettingControl title={t("settings.downloadTitleLanguage")} text={t("settings.downloadTitleLanguageHint")}><select aria-label={t("settings.downloadTitleLanguage")} disabled={restricted} value={settings.downloadTitleLanguage} onChange={(event) => void onSave({ downloadTitleLanguage: event.target.value })}><option value="ui">{t("settings.downloadTitleLanguageUi", { language: LOCALE_NAMES[locale] })}</option>{languageOptions}</select></SettingControl><SettingControl title={t("settings.concurrent")} text={t("settings.concurrentHint")}><select aria-label={t("settings.concurrent")} disabled={restricted} value={settings.concurrentDownloads} onChange={(event) => void onSave({ concurrentDownloads: Number(event.target.value) })}>{[1,2,3,4,5,6,7,8].map((value) => <option key={value} value={value}>{value}</option>)}</select></SettingControl><SettingControl title={t("settings.perProvider")} text={t("settings.perProviderHint")}><select aria-label={t("settings.perProvider")} disabled={restricted} value={settings.parallelPerProvider ?? 1} onChange={(event) => void onSave({ parallelPerProvider: Number(event.target.value) })}>{[1,2,3,4].map((value) => <option key={value} value={value}>{value}</option>)}</select></SettingControl><SettingControl title={t("settings.segments")} text={t("settings.segmentsHint")}><select aria-label={t("settings.segments")} disabled={restricted} value={settings.downloadSegments ?? 1} onChange={(event) => void onSave({ downloadSegments: Number(event.target.value) })}>{[1,2,3,4,6,8].map((value) => <option key={value} value={value}>{value}</option>)}</select></SettingControl></section>
-      <TmdbSettings configured={settings.tmdbConfigured} onSave={onSave} onError={onError} restricted={restricted}/>
-      <RealDebridSettings configured={settings.realDebridConfigured} onSave={onSave} onError={onError} restricted={restricted}/>
+      <section className="panel settings-section"><SettingsSectionHead icon={<Download/>} title={t("nav.downloads")} text={t("settings.downloadsText")}/>
+        <SettingControl title={t("settings.downloadTitleLanguage")} text={t("settings.downloadTitleLanguageHint")}>
+          <select aria-label={t("settings.downloadTitleLanguage")} disabled={restricted} value={settings.downloadTitleLanguage} onChange={(event) => void onSave({ downloadTitleLanguage: event.target.value })}>
+            <option value="ui">{t("settings.downloadTitleLanguageUi", { language: LOCALE_NAMES[locale] })}</option>{languageOptions}
+          </select></SettingControl>
+        <SettingControl title={t("settings.concurrent")} text={t("settings.concurrentHint")}>
+          <select aria-label={t("settings.concurrent")} disabled={restricted || !admin} value={settings.concurrentDownloads} onChange={(event) => void onSave({ concurrentDownloads: Number(event.target.value) })}>
+            {[1,2,3,4,5,6,7,8].map((value) => <option key={value} value={value}>{value}</option>)}
+          </select></SettingControl>
+        <SettingControl title={t("settings.perProvider")} text={t("settings.perProviderHint")}>
+          <select aria-label={t("settings.perProvider")} disabled={restricted || !admin} value={settings.parallelPerProvider ?? 1} onChange={(event) => void onSave({ parallelPerProvider: Number(event.target.value) })}>
+            {[1,2,3,4].map((value) => <option key={value} value={value}>{value}</option>)}
+          </select></SettingControl>
+        <SettingControl title={t("settings.segments")} text={t("settings.segmentsHint")}>
+          <select aria-label={t("settings.segments")} disabled={restricted || !admin} value={settings.downloadSegments ?? 1} onChange={(event) => void onSave({ downloadSegments: Number(event.target.value) })}>
+            {[1,2,3,4,6,8].map((value) => <option key={value} value={value}>{value}</option>)}
+          </select></SettingControl></section>
+      <TmdbSettings configured={settings.tmdbConfigured} onSave={onSave} onError={onError} restricted={restricted || !admin}/>
+      <RealDebridSettings configured={settings.realDebridConfigured} onSave={onSave} onError={onError} restricted={restricted || !admin}/>
       <section className="panel settings-section playback-section"><SettingsSectionHead icon={<CirclePlay/>} title={t("settings.playbackTitle")} text={t("settings.playbackText")}/><div className="playback-settings"><SettingControl title={t("settings.audioLanguage")} text={t("settings.audioLanguageHint")}><select aria-label={t("settings.audioLanguageLabel")} disabled={restricted} value={settings.audioLanguage} onChange={(event) => void onSave({ audioLanguage: event.target.value })}>{languageOptions}</select></SettingControl><SettingControl title={t("settings.subtitleLanguage")} text={t("settings.subtitleLanguageHint")}><select aria-label={t("settings.subtitleLanguageLabel")} disabled={restricted} value={settings.subtitleLanguage} onChange={(event) => void onSave({ subtitleLanguage: event.target.value })}>{languageOptions}</select></SettingControl></div><SettingControl title={t("settings.streamSort")} text={t("settings.streamSortHint")}><select aria-label={t("settings.streamSort")} disabled={restricted} value={settings.streamSort} onChange={(event) => void onSave({ streamSort: event.target.value })}><option value="recommended">{t("sources.sortRecommended")}</option><option value="size-desc">{t("sources.sortLargest")}</option><option value="size-asc">{t("sources.sortSmallest")}</option><option value="addon">{t("sources.sortAddon")}</option></select></SettingControl><SettingControl title={t("settings.trackProgress")} text={t("settings.trackProgressHint")}>
           <select aria-label={t("settings.trackProgressLabel")} disabled={restricted} value={settings.trackProgress ? "1" : "0"} onChange={(event) => void onSave({ trackProgress: event.target.value === "1" })}>
             <option value="1">{t("settings.store")}</option><option value="0">{t("settings.doNotStore")}</option>
@@ -2119,13 +2165,13 @@ function SettingsPage({ build, restricted = false, settings, languages, librarie
         </SettingControl><SettingControl title={t("settings.catalogTiles")} text={t("settings.catalogTilesHint")}><select aria-label={t("settings.catalogTiles")} disabled={restricted} value={settings.catalogTileSize} onChange={(event) => void onSave({ catalogTileSize: event.target.value as AppSettings["catalogTileSize"] })}>{tileSizes.map((size) => <option key={size.value} value={size.value}>{t(size.key)}</option>)}</select></SettingControl><SettingControl title={t("settings.libraryTiles")} text={t("settings.libraryTilesHint")}><select aria-label={t("settings.libraryTiles")} disabled={restricted} value={settings.libraryTileSize} onChange={(event) => void onSave({ libraryTileSize: event.target.value as AppSettings["libraryTileSize"] })}>{tileSizes.map((size) => <option key={size.value} value={size.value}>{t(size.key)}</option>)}</select></SettingControl><SettingControl title={t("settings.catalogShape")} text={t("settings.catalogShapeHint")}><select aria-label={t("settings.catalogShape")} disabled={restricted} value={settings.catalogTileShape} onChange={(event) => void onSave({ catalogTileShape: event.target.value as AppSettings["catalogTileShape"] })}>{tileShapes.map((shape) => <option key={shape.value} value={shape.value}>{t(shape.key)}</option>)}</select></SettingControl><SettingControl title={t("settings.libraryShape")} text={t("settings.libraryShapeHint")}><select aria-label={t("settings.libraryShape")} disabled={restricted} value={settings.libraryTileShape} onChange={(event) => void onSave({ libraryTileShape: event.target.value as AppSettings["libraryTileShape"] })}>{tileShapes.map((shape) => <option key={shape.value} value={shape.value}>{t(shape.key)}</option>)}</select></SettingControl></section>
       <section className="panel settings-section"><SettingsSectionHead icon={<ShieldCheck/>} title={t("settings.privacyTitle")} text={t("settings.privacyText")}/>
         <SettingControl title={t("settings.secureMode")} text={t("settings.secureModeHint")}>
-          <select aria-label={t("settings.secureModeLabel")} disabled={restricted} value={settings.secureMode ? "1" : "0"} onChange={(event) => void onSave({ secureMode: event.target.value === "1" })}>
+          <select aria-label={t("settings.secureModeLabel")} disabled={restricted || !admin} value={settings.secureMode ? "1" : "0"} onChange={(event) => void onSave({ secureMode: event.target.value === "1" })}>
             <option value="1">{t("settings.secureModeOn")}</option><option value="0">{t("settings.secureModeOff")}</option>
           </select></SettingControl>
       </section>
       <AccountSettings session={session} onSession={onSession} onNotify={onNotify} onError={onError} restricted={restricted}/>
-      {!restricted && <section className="panel settings-section backup-section"><SettingsSectionHead icon={<FileJson/>} title={t("settings.backupTitle")} text={t("settings.backupText")}/><p>{t("settings.backupBody")}</p><p className="notice">{t("settings.backupWarning")}</p><div className="setting-actions"><button disabled={backupBusy} onClick={() => void exportSettings()}><Download/> {t("settings.export")}</button><button disabled={backupBusy} onClick={() => importInput.current?.click()}><Upload/> {t("settings.import")}</button><input ref={importInput} className="file-input" type="file" accept="application/json,.json" aria-label={t("settings.pickBackup")} onChange={(event) => void importSettings(event.target.files?.[0])}/></div></section>}
-      {!restricted && <DiagnosticsSection build={build} onNotify={onNotify} onError={onError}/>}
+      {!restricted && admin && <section className="panel settings-section backup-section"><SettingsSectionHead icon={<FileJson/>} title={t("settings.backupTitle")} text={t("settings.backupText")}/><p>{t("settings.backupBody")}</p><p className="notice">{t("settings.backupWarning")}</p><div className="setting-actions"><button disabled={backupBusy} onClick={() => void exportSettings()}><Download/> {t("settings.export")}</button><button disabled={backupBusy} onClick={() => importInput.current?.click()}><Upload/> {t("settings.import")}</button><input ref={importInput} className="file-input" type="file" accept="application/json,.json" aria-label={t("settings.pickBackup")} onChange={(event) => void importSettings(event.target.files?.[0])}/></div></section>}
+      {!restricted && admin && <DiagnosticsSection build={build} onNotify={onNotify} onError={onError}/>}
     </div>
   </section>;
 }
@@ -2312,7 +2358,11 @@ function DiagnosticsSection({ build, onNotify, onError }: { build: BuildInfo | n
   </section>;
 }
 
-function Downloads({ jobs, libraries, halt, refresh, onError, onReveal }: { jobs: DownloadJob[]; libraries: LibraryView[]; halt: QueueHalt | null; refresh: () => Promise<void>; onError: (e: unknown) => void; onReveal: (target: string) => void }) {
+/** `admin` gates the controls the role gate refuses outright. Reordering the queue and
+ *  clearing the completed list are instance-wide -- one queue, everybody's bandwidth -- so an
+ *  ordinary account may pause, resume, retry and remove its own job and nothing else.
+ *  Rendering the rest for it offers buttons whose only outcome is an error. */
+function Downloads({ jobs, libraries, halt, admin, refresh, onError, onReveal }: { jobs: DownloadJob[]; libraries: LibraryView[]; halt: QueueHalt | null; admin: boolean; refresh: () => Promise<void>; onError: (e: unknown) => void; onReveal: (target: string) => void }) {
   const [expandedJobs, setExpandedJobs] = useState<Record<string, boolean>>({});
   const [completedOpen, setCompletedOpen] = useState(false);
   const [pendingPage, setPendingPage] = useState(1);
@@ -2351,8 +2401,8 @@ function Downloads({ jobs, libraries, halt, refresh, onError, onReveal }: { jobs
   };
   useEffect(() => setPendingPage((page) => Math.min(page, Math.max(1, Math.ceil(groups.pending.length / pageSize)))), [groups.pending.length, pageSize]);
   useEffect(() => setCompletedPage((page) => Math.min(page, Math.max(1, Math.ceil(groups.completed.length / pageSize)))), [groups.completed.length, pageSize]);
-  const renderJob = (job: DownloadJob) => <div className={`download-row ${expandedJobs[job.id] ? "details-expanded" : ""}`} data-status={job.status} key={job.id}><div className="download-job">{job.status === "completed" && job.target ? <button className="link-button job-link" title={t("downloads.showInLibrary")} onClick={() => onReveal(job.target)}><span>{job.title}</span></button> : <strong>{job.title}</strong>}<div id={`queue-details-${job.id}`} className="queue-job-details">{job.target ? <>{queueDestination(job.target, libraries).library && <small className="queue-job-library"><Library aria-hidden="true"/> {queueDestination(job.target, libraries).library}</small>}<small>{queueDestination(job.target, libraries).path}</small></> : <small>{job.pending ? t("downloads.sourcePickedLater") : ""}</small>}{job.resolution && (job.resolution.audioLanguage || job.resolution.audioEvidence === "none") && <small>{job.resolution.audioEvidence === "none" ? t("downloads.audioUnverified", { count: job.resolution.checkedCandidates }) : `${t(job.resolution.fallbackUsed ? "downloads.checkedFallbackSource" : "downloads.checkedSource", { audio: label(job.resolution.audioLanguage), count: job.resolution.checkedCandidates })}${job.resolution.audioEvidence === "listing" ? ` · ${t("downloads.audioFromListing")}` : ""}`}{job.resolution.subtitleLanguage ? ` · ${t("downloads.subtitleReady", { language: label(job.resolution.subtitleLanguage) })}` : job.resolution.subtitleStatus === "missing" ? ` · ${t("downloads.subtitleMissing")}` : ""}</small>}<dl className="queue-times">{(["createdAt", "startedAt", "completedAt"] as const).map((field) => <div key={field}><dt>{t(`downloads.${field}`)}</dt><dd>{formatDate(job[field])}</dd></div>)}<div><dt>{t("downloads.duration")}</dt><dd>{duration(job) == null ? "—" : t("downloads.durationValue", { hours: Math.floor(duration(job)! / 3600000), minutes: Math.floor(duration(job)! / 60000) % 60, seconds: Math.floor(duration(job)! / 1000) % 60 })}</dd></div></dl></div>{job.pauseReason === "library" && <small className="queue-job-paused">{t("downloads.pausedLibrary")}</small>}{job.error && <small className="queue-job-error">{serverText(job.errorKey, job.error, job.errorVars)}</small>}</div><span className={`job-status ${job.status}`}>{statusLabel(job.status)}</span><div className="download-progress"><span>{job.status === "waiting" ? `${job.debridProgress ?? 0} %` : `${bytes(job.received)} / ${bytes(job.total)}`}</span><div className="progress"><i style={{width:`${job.status === "waiting" ? Math.min(100, job.debridProgress ?? 0) : job.total ? Math.min(100, job.received/job.total*100):0}%`}}/></div></div><span className="download-speed">{speed(job.speed)}{job.segments && job.segments > 1 ? <i className="segment-tag" title={t("downloads.segments", { count: job.segments })}>{`\u00d7${job.segments}`}</i> : null}<small>{eta(job)}</small></span><div className="queue-actions"><button className="queue-details-toggle" aria-expanded={!!expandedJobs[job.id]} aria-controls={`queue-details-${job.id}`} onClick={() => setExpandedJobs((current) => ({ ...current, [job.id]: !current[job.id] }))}>{t("downloads.details")}<ChevronDown aria-hidden="true"/></button>{job.status === "completed" && job.target && <button title={t("downloads.showInLibrary")} onClick={() => onReveal(job.target)}><HardDrive/></button>}{job.status !== "completed" && job.status !== "downloading" && job.status !== "checking" && <><button className="queue-priority" title={t("downloads.moveUp")} disabled={sort !== "order" || direction !== "asc" || job.order === 0} onClick={() => action(() => api.moveDownload(job.id, -1))}><ArrowUp/></button><button className="queue-priority" title={t("downloads.moveDown")} disabled={sort !== "order" || direction !== "asc" || job.order === jobs.length - 1} onClick={() => action(() => api.moveDownload(job.id, 1))}><ArrowDown/></button></>}{job.status === "checking" || job.status === "downloading" || job.status === "queued" || job.status === "waiting" ? <button title={t("player.pause")} onClick={() => action(() => api.downloadAction(job.id,"pause"))}><Pause/></button> : job.status === "paused" ? <button title={t("library.continue")} onClick={() => action(() => api.downloadAction(job.id,"resume"))}><Play/></button> : job.status === "failed" ? <button title={t("downloads.retry")} onClick={() => action(() => api.downloadAction(job.id,"retry"))}><RefreshCw/></button> : null}<button className="danger" title={t("downloads.removeFromQueue")} onClick={() => action(() => api.removeDownload(job.id))}><Trash2/></button></div></div>;
-  return <section className="downloads-page"><div className="download-title"><Heading eyebrow={t("downloads.eyebrow")} title={t("downloads.title")}/><button disabled={!jobs.some((job) => job.status === "completed")} onClick={() => action(api.clearCompleted)}><Trash2/> {t("downloads.clearCompleted")}</button></div>{halt && <div className="queue-halt" role="status">{serverText(halt.messageKey, halt.message)} {t("downloads.haltResumes")}</div>}<details className="queue-filters"><summary>{t("downloads.filters")}<span>{activeFilters > 0 && t("downloads.activeFilters", { count: activeFilters })}{sort !== "order" || direction !== "asc" ? ` · ${t(`downloads.${sort}` as Key)} (${t(direction === "asc" ? "downloads.asc" : "downloads.desc")})` : ""}</span><ChevronDown aria-hidden="true"/></summary><div className="queue-tools">
+  const renderJob = (job: DownloadJob) => <div className={`download-row ${expandedJobs[job.id] ? "details-expanded" : ""}`} data-status={job.status} key={job.id}><div className="download-job">{job.status === "completed" && job.target ? <button className="link-button job-link" title={t("downloads.showInLibrary")} onClick={() => onReveal(job.target)}><span>{job.title}</span></button> : <strong>{job.title}</strong>}<div id={`queue-details-${job.id}`} className="queue-job-details">{job.target ? <>{queueDestination(job.target, libraries).library && <small className="queue-job-library"><Library aria-hidden="true"/> {queueDestination(job.target, libraries).library}</small>}<small>{queueDestination(job.target, libraries).path}</small></> : <small>{job.pending ? t("downloads.sourcePickedLater") : ""}</small>}{job.resolution && (job.resolution.audioLanguage || job.resolution.audioEvidence === "none") && <small>{job.resolution.audioEvidence === "none" ? t("downloads.audioUnverified", { count: job.resolution.checkedCandidates }) : `${t(job.resolution.fallbackUsed ? "downloads.checkedFallbackSource" : "downloads.checkedSource", { audio: label(job.resolution.audioLanguage), count: job.resolution.checkedCandidates })}${job.resolution.audioEvidence === "listing" ? ` · ${t("downloads.audioFromListing")}` : ""}`}{job.resolution.subtitleLanguage ? ` · ${t("downloads.subtitleReady", { language: label(job.resolution.subtitleLanguage) })}` : job.resolution.subtitleStatus === "missing" ? ` · ${t("downloads.subtitleMissing")}` : ""}</small>}<dl className="queue-times">{(["createdAt", "startedAt", "completedAt"] as const).map((field) => <div key={field}><dt>{t(`downloads.${field}`)}</dt><dd>{formatDate(job[field])}</dd></div>)}<div><dt>{t("downloads.duration")}</dt><dd>{duration(job) == null ? "—" : t("downloads.durationValue", { hours: Math.floor(duration(job)! / 3600000), minutes: Math.floor(duration(job)! / 60000) % 60, seconds: Math.floor(duration(job)! / 1000) % 60 })}</dd></div></dl></div>{job.pauseReason === "library" && <small className="queue-job-paused">{t("downloads.pausedLibrary")}</small>}{job.error && <small className="queue-job-error">{serverText(job.errorKey, job.error, job.errorVars)}</small>}</div><span className={`job-status ${job.status}`}>{statusLabel(job.status)}</span><div className="download-progress"><span>{job.status === "waiting" ? `${job.debridProgress ?? 0} %` : `${bytes(job.received)} / ${bytes(job.total)}`}</span><div className="progress"><i style={{width:`${job.status === "waiting" ? Math.min(100, job.debridProgress ?? 0) : job.total ? Math.min(100, job.received/job.total*100):0}%`}}/></div></div><span className="download-speed">{speed(job.speed)}{job.segments && job.segments > 1 ? <i className="segment-tag" title={t("downloads.segments", { count: job.segments })}>{`\u00d7${job.segments}`}</i> : null}<small>{eta(job)}</small></span><div className="queue-actions"><button className="queue-details-toggle" aria-expanded={!!expandedJobs[job.id]} aria-controls={`queue-details-${job.id}`} onClick={() => setExpandedJobs((current) => ({ ...current, [job.id]: !current[job.id] }))}>{t("downloads.details")}<ChevronDown aria-hidden="true"/></button>{job.status === "completed" && job.target && <button title={t("downloads.showInLibrary")} onClick={() => onReveal(job.target)}><HardDrive/></button>}{admin && job.status !== "completed" && job.status !== "downloading" && job.status !== "checking" && <><button className="queue-priority" title={t("downloads.moveUp")} disabled={sort !== "order" || direction !== "asc" || job.order === 0} onClick={() => action(() => api.moveDownload(job.id, -1))}><ArrowUp/></button><button className="queue-priority" title={t("downloads.moveDown")} disabled={sort !== "order" || direction !== "asc" || job.order === jobs.length - 1} onClick={() => action(() => api.moveDownload(job.id, 1))}><ArrowDown/></button></>}{job.status === "checking" || job.status === "downloading" || job.status === "queued" || job.status === "waiting" ? <button title={t("player.pause")} onClick={() => action(() => api.downloadAction(job.id,"pause"))}><Pause/></button> : job.status === "paused" ? <button title={t("library.continue")} onClick={() => action(() => api.downloadAction(job.id,"resume"))}><Play/></button> : job.status === "failed" ? <button title={t("downloads.retry")} onClick={() => action(() => api.downloadAction(job.id,"retry"))}><RefreshCw/></button> : null}<button className="danger" title={t("downloads.removeFromQueue")} onClick={() => action(() => api.removeDownload(job.id))}><Trash2/></button></div></div>;
+  return <section className="downloads-page"><div className="download-title"><Heading eyebrow={t("downloads.eyebrow")} title={t("downloads.title")}/>{admin && <button disabled={!jobs.some((job) => job.status === "completed")} onClick={() => action(api.clearCompleted)}><Trash2/> {t("downloads.clearCompleted")}</button>}</div>{halt && <div className="queue-halt" role="status">{serverText(halt.messageKey, halt.message)} {t("downloads.haltResumes")}</div>}<details className="queue-filters"><summary>{t("downloads.filters")}<span>{activeFilters > 0 && t("downloads.activeFilters", { count: activeFilters })}{sort !== "order" || direction !== "asc" ? ` · ${t(`downloads.${sort}` as Key)} (${t(direction === "asc" ? "downloads.asc" : "downloads.desc")})` : ""}</span><ChevronDown aria-hidden="true"/></summary><div className="queue-tools">
     <label>{t("downloads.search")}<input value={query} onChange={(e) => setQuery(e.target.value)}/></label>
     <label>{t("downloads.filterStatus")}<select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">{t("downloads.all")}</option>{(["queued", "waiting", "checking", "downloading", "paused", "completed", "failed"] as const).map((value) => <option key={value} value={value}>{statusLabel(value)}</option>)}</select></label>
     <label>{t("downloads.sort")}<select value={sort} onChange={(e) => setSort(e.target.value)}>{(["order", "titleSort", "createdAt", "startedAt", "completedAt", "duration"] as const).map((value) => <option key={value} value={value}>{t(`downloads.${value}`)}</option>)}</select></label>

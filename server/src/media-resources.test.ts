@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { isInternalMediaPath, mediaChildPath, MediaResources, openMediaUrl, ResourceError, sealedMediaUrl } from "./media-resources.js";
 
-const owner = { sid: "owner-a", expiresAt: 10_000_000 };
+const owner = { userId: "user-a", sid: "owner-a", expiresAt: 10_000_000 };
 const source = { url: "https://provider-canary.test/private-canary?token=query-canary", title: "Movie query-canary", behaviorHints: { proxyHeaders: { request: { Authorization: "Bearer header-canary" } } }, subtitles: [{ url: "https://subtitle-canary.test/sub?secret=sub-canary", lang: "cs" }] };
 
 test("a raw infoHash is a torrent, not a playable HTTP source", () => {

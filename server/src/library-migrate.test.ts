@@ -4,12 +4,12 @@ import { mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from "node:fs/p
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { migrateLibraries, migrateStateFile } from "./library-migrate.js";
+import { migrateLibraries, migrateStateFile, type InlineState } from "./library-migrate.js";
 import { defaultSettings, SCHEMA_VERSION, type State } from "./store.js";
 
 const artworkName = (key: string) => `${createHash("sha1").update(key).digest("hex")}.jpg`;
 
-const v1State = (over: Partial<State> = {}): State => ({
+const v1State = (over: Partial<InlineState> = {}): InlineState => ({
   addons: [],
   settings: { defaultMovieLibrary: "", defaultSeriesLibrary: "" } as State["settings"],
   defaultsInstalled: true,
@@ -27,7 +27,7 @@ const v1State = (over: Partial<State> = {}): State => ({
   },
   watchlist: { "series:tt1": { type: "series", id: "tt1", name: "Show", addedAt: "2026-01-01T00:00:00.000Z" } },
   ...over,
-}) as State;
+}) as InlineState;
 
 test("a v1 state gains one library and qualified keys", async () => {
   const dataDir = await mkdtemp(path.join(tmpdir(), "migrate-"));
@@ -71,7 +71,7 @@ test("a state that never had settings does not gain any", async () => {
   const dataDir = await mkdtemp(path.join(tmpdir(), "migrate-"));
   const downloadDir = await mkdtemp(path.join(tmpdir(), "downloads-"));
   const { settings, ...withoutSettings } = v1State();
-  const state = withoutSettings as State;
+  const state = withoutSettings as InlineState;
   try {
     await migrateLibraries(state, { dataDir, downloadDir });
     assert.equal("settings" in state, false, "Store.load fills the defaults in, and a present blob would read as a legacy Czech install");
@@ -144,6 +144,31 @@ test("a flat thumbnail the libraries build wrote is moved as well", async () => 
     assert.equal(summary.artwork.mapped, 1);
     assert.equal((await stat(path.join(artwork, "lib_ab12cd34", artworkName("Show")))).size, 4);
     await assert.rejects(stat(flat), "nothing is left behind for the sweep to miss");
+  } finally { await rm(dataDir, { recursive: true, force: true }); await rm(downloadDir, { recursive: true, force: true }); }
+});
+
+test("a state the libraries build already migrated hands its metadata over", async () => {
+  const dataDir = await mkdtemp(path.join(tmpdir(), "migrate-"));
+  const downloadDir = await mkdtemp(path.join(tmpdir(), "downloads-"));
+  const file = path.join(dataDir, "state.json");
+  // What that release actually wrote: the version it knew, its library already in place
+  // and the personal maps already keyed with that library's id.
+  const state = {
+    schemaVersion: 2,
+    addons: [],
+    defaultsInstalled: true,
+    settings: { uiLanguage: "cs", concurrentDownloads: 2 },
+    libraries: [{ id: "lib_ab12cd34", name: "downloads", type: "mixed", root: downloadDir, enabled: true, order: 0, addedAt: "2026-01-01T00:00:00.000Z", writeArtwork: true }],
+    favorites: ["lib_ab12cd34/Film.mkv"],
+    progress: { "file:lib_ab12cd34/Film.mkv": { position: 10, duration: 100, title: "Film", path: "lib_ab12cd34/Film.mkv", updatedAt: "2026-01-01T00:00:00.000Z" } },
+  };
+  await writeFile(file, JSON.stringify(state));
+  try {
+    const summary = await migrateStateFile(dataDir, downloadDir);
+    assert.equal(summary.migrated, false, "a file that already has a library is not migrated again");
+    assert.equal(summary.paths, 0, "nothing is prefixed a second time");
+    assert.deepEqual(JSON.parse(await readFile(file, "utf8")), state, "and nothing about it is rewritten");
+    await assert.rejects(stat(`${file}.v1.bak`), "no backup is kept for a migration that did not run");
   } finally { await rm(dataDir, { recursive: true, force: true }); await rm(downloadDir, { recursive: true, force: true }); }
 });
 
