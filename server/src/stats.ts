@@ -32,7 +32,15 @@ export interface TrafficEvent extends TrafficMeta {
   items: number;
 }
 
-export interface Bucket { key: string; label: string; bytes: number; count: number }
+/** One host a grouped row stands for. `items` rather than `count`: it is the number of
+ *  finished transfers recorded on that host, not a bucket count. */
+export interface BucketHost { key: string; label: string; bytes: number; items: number }
+export interface Bucket {
+  key: string; label: string; bytes: number; count: number;
+  /** The concrete hosts this row groups, largest first. Absent when the row is
+   *  not a provider row, or when it groups exactly one host. */
+  hosts?: BucketHost[];
+}
 export interface Series { key: string; label: string; points: number[] }
 export interface Window { bytes: number; count: number }
 export type Step = "minute" | "hour" | "day";
@@ -84,8 +92,31 @@ const window = (events: TrafficEvent[], from: number): Window => {
   return { bytes, count };
 };
 
+/** A short list of the suffixes that cost two labels, not the public suffix list: an
+ *  unlisted one (say `com.tr`) leaves one label too many, which keeps hosts of one
+ *  site apart, and never merges two unrelated sites into one row. */
+const MULTI_PART_SUFFIXES = new Set(["co.uk", "org.uk", "ac.uk", "com.au", "co.nz", "co.jp", "com.br", "co.za"]);
+
+const IPV4 = /^\d{1,3}(?:\.\d{1,3}){3}$/;
+
+/** The name the outside world knows a host by: its last two labels, or three under a
+ *  multi-part suffix. Anything that is not a name -- a bare machine, an address
+ *  literal, an empty string -- comes back unchanged, as does a host with a single
+ *  label such as the `knihovna` used for playback from the library. */
+export function registrableDomain(host: string): string {
+  const name = host.replace(/\.+$/, "");
+  if (!name || name.includes(":") || IPV4.test(name)) return host;
+  const labels = name.split(".");
+  if (labels.length < 2) return host;
+  const suffix = labels.slice(-2).join(".");
+  return labels.slice(MULTI_PART_SUFFIXES.has(suffix) ? -3 : -2).join(".");
+}
+
 const identify = {
-  provider: (event: TrafficEvent) => ({ key: event.provider, label: event.provider }),
+  provider: (event: TrafficEvent) => {
+    const domain = registrableDomain(event.provider);
+    return { key: domain, label: domain };
+  },
   addon: (event: TrafficEvent) => ({ key: event.addonKey ?? event.provider, label: event.addonName ?? event.provider }),
   source: (event: TrafficEvent) => ({ key: event.source, label: SOURCE_LABEL[event.source] }),
 };
@@ -103,6 +134,8 @@ export function summarize(events: TrafficEvent[], hours = 720, now = new Date())
   const points = edges.map((at) => ({ at: new Date(at).toISOString(), bytes: 0, count: 0 }));
   const totals = { provider: new Map<string, Bucket>(), addon: new Map<string, Bucket>(), source: new Map<string, Bucket>() };
   const lines = { provider: new Map<string, Series>(), addon: new Map<string, Series>(), source: new Map<string, Series>() };
+  /** The hosts behind each provider row, kept so the interface can open the row. */
+  const providerHosts = new Map<string, Map<string, BucketHost>>();
 
   for (const event of events) {
     const at = Date.parse(event.at);
@@ -122,6 +155,14 @@ export function summarize(events: TrafficEvent[], hours = 720, now = new Date())
       const line = lines[kind].get(key) ?? { key, label, points: new Array(edges.length).fill(0) };
       line.points[index] += event.bytes;
       lines[kind].set(key, line);
+
+      if (kind === "provider") {
+        const hosts = providerHosts.get(key) ?? new Map();
+        const host = hosts.get(event.provider) ?? { key: event.provider, label: event.provider, bytes: 0, items: 0 };
+        host.bytes += event.bytes; host.items += event.items;
+        hosts.set(event.provider, host);
+        providerHosts.set(key, hosts);
+      }
     }
   }
 
@@ -131,6 +172,10 @@ export function summarize(events: TrafficEvent[], hours = 720, now = new Date())
   const addons = ranked(totals.addon);
   const sources = ranked(totals.source);
   const external = events.filter(isExternal);
+  for (const provider of providers) {
+    const hosts = providerHosts.get(provider.key);
+    if (hosts && hosts.size > 1) provider.hosts = [...hosts.values()].sort((a, b) => b.bytes - a.bytes);
+  }
 
   return {
     hour: window(external, now.getTime() - HOUR),

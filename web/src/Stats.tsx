@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "./api";
-import type { ActiveStream, StatsSeries, StatsSummary } from "./types";
+import type { ActiveStream, StatsBucket, StatsSeries, StatsSummary } from "./types";
 import { localeTag, serverText, t, useI18n } from "./i18n";
 
 const size = (value: number) => !value ? "0 B"
@@ -116,29 +116,57 @@ function Chart({ summary, lines }: { summary: StatsSummary; lines: Array<StatsSe
   </div>;
 }
 
-function Breakdown({ title, kind, items, chosen, onToggle, colors }: {
-  title: string; kind: string; items: StatsSummary["providers"];
+/** How many rows of a long breakdown show before the rest are asked for. The provider
+ *  list runs into dozens of rows, the addon list into dozens too. */
+const VISIBLE_ROWS = 8;
+
+/** One breakdown row: the row itself picks the series for the chart, while the count in
+ *  its footnote opens the hosts behind it -- so opening a row cannot disturb a selection. */
+function BreakdownRow({ kind, item, total, chosen, onToggle, colors }: {
+  kind: string; item: StatsBucket; total: number;
   chosen: Set<string>; onToggle: (id: string) => void; colors: Map<string, string>;
 }) {
+  const [open, setOpen] = useState(false);
+  const id = `${kind}:${item.key}`;
+  const color = colors.get(id);
+  const share = total ? (item.bytes / total) * 100 : 0;
+  return <li>
+    <button className={`stats-pick${chosen.has(id) ? " chosen" : ""}`} onClick={() => onToggle(id)}
+      aria-pressed={chosen.has(id)} title={chosen.has(id) ? t("stats.removeFromChart") : t("stats.addToChart")}>
+      <span className="stats-dot" style={color ? { background: color } : undefined}/>
+      <span className="stats-name">{seriesLabel(kind, item.key, item.label)}</span>
+      <b>{size(item.bytes)}</b>
+    </button>
+    <div className="stats-track"><span style={{ width: `${share}%`, background: color || undefined }}/></div>
+    <small>{files(item.count)} · {Math.round(share)} %{item.hosts && <> · <button className="link-button"
+      aria-expanded={open} onClick={() => setOpen(!open)}>
+      {open ? t("stats.showFewer") : t("stats.serverCount", { count: item.hosts.length })}
+    </button></>}</small>
+    {item.hosts && open && <ul className="stats-hosts">
+      {item.hosts.map((host) => <li key={host.key}>
+        <span className="stats-name">{host.label}</span> · <b>{size(host.bytes)}</b> · <small>{files(host.items)}</small>
+      </li>)}
+    </ul>}
+  </li>;
+}
+
+/** A breakdown stays short: the first few rows, then one control for the rest. */
+function Breakdown({ title, kind, items, chosen, onToggle, colors, cap }: {
+  title: string; kind: string; items: StatsSummary["providers"];
+  chosen: Set<string>; onToggle: (id: string) => void; colors: Map<string, string>; cap?: number;
+}) {
+  const [expanded, setExpanded] = useState(false);
   const total = items.reduce((sum, item) => sum + item.bytes, 0);
+  const visible = cap !== undefined && !expanded ? items.slice(0, cap) : items;
   return <section className="panel stats-breakdown">
     <h3>{title}</h3>
-    {!items.length ? <p className="stats-empty">{t("stats.emptyPeriod")}</p> : <ul>
-      {items.map((item) => {
-        const id = `${kind}:${item.key}`;
-        const color = colors.get(id);
-        return <li key={item.key}>
-          <button className={`stats-pick${chosen.has(id) ? " chosen" : ""}`} onClick={() => onToggle(id)}
-            aria-pressed={chosen.has(id)} title={chosen.has(id) ? t("stats.removeFromChart") : t("stats.addToChart")}>
-            <span className="stats-dot" style={color ? { background: color } : undefined}/>
-            <span className="stats-name">{seriesLabel(kind, item.key, item.label)}</span>
-            <b>{size(item.bytes)}</b>
-          </button>
-          <div className="stats-track"><span style={{ width: `${total ? (item.bytes / total) * 100 : 0}%`, background: color || undefined }}/></div>
-          <small>{files(item.count)} · {total ? Math.round((item.bytes / total) * 100) : 0} %</small>
-        </li>;
-      })}
-    </ul>}
+    {!items.length ? <p className="stats-empty">{t("stats.emptyPeriod")}</p> : <>
+      <ul>{visible.map((item) => <BreakdownRow key={item.key} kind={kind} item={item} total={total}
+        chosen={chosen} onToggle={onToggle} colors={colors}/>)}</ul>
+      {cap !== undefined && items.length > cap && <button className="link-button" onClick={() => setExpanded(!expanded)}>
+        {expanded ? t("stats.showFewer") : t("stats.showAll", { count: items.length })}
+      </button>}
+    </>}
   </section>;
 }
 
@@ -272,8 +300,8 @@ export function StatsPanel({ onError }: { onError: (error: unknown) => void }) {
       <p className="stats-hint">{t("stats.hint")}</p>
 
       <div className="stats-columns">
-        <Breakdown title={t("stats.byProvider")} kind="provider" items={summary.providers} chosen={chosen} onToggle={toggle} colors={colors}/>
-        <Breakdown title={t("stats.byAddon")} kind="addon" items={summary.addons} chosen={chosen} onToggle={toggle} colors={colors}/>
+        <Breakdown title={t("stats.byProvider")} kind="provider" items={summary.providers} chosen={chosen} onToggle={toggle} colors={colors} cap={VISIBLE_ROWS}/>
+        <Breakdown title={t("stats.byAddon")} kind="addon" items={summary.addons} chosen={chosen} onToggle={toggle} colors={colors} cap={VISIBLE_ROWS}/>
         <Breakdown title={t("stats.bySource")} kind="source" items={summary.sources} chosen={chosen} onToggle={toggle} colors={colors}/>
       </div>
     </>}
