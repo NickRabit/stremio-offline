@@ -1130,7 +1130,7 @@ img.broken{visibility:hidden}
    left a third of the screen dark above it -- the same reason the account dialog below
    gives for its own card. */
 @media(max-width:700px){
-  .library-edit-card,.library-manager-card,.move-card{height:100%;max-height:100%;border-radius:0}
+  .library-picker-card,.library-edit-card,.library-manager-card,.move-card{height:100%;max-height:100%;border-radius:0}
   .dialog-split>.move-libraries{padding:0 16px}
 }
 /* A phone in landscape leaves about 375px for the whole dialog, and the desktop rhythm of
