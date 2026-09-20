@@ -70,7 +70,7 @@ export function MoveDialog({ path, paths, copy = false, label, itemType, librari
 
   return <div className="identify-overlay" role="dialog" aria-modal="true" aria-label={t("library.move")}
     onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-    <div className="panel identify-card move-card">
+    <div className="panel identify-card dialog-split move-card">
       <div className="identify-head">
         <h2>{t(copy ? "library.copyTitle" : "library.moveTitle", { name: label })}</h2>
         <button type="button" className="icon-button" aria-label={t("common.cancel")} onClick={onClose}><X/></button>
@@ -79,30 +79,34 @@ export function MoveDialog({ path, paths, copy = false, label, itemType, librari
         {offered.map((library) => <button type="button" key={library.id} aria-pressed={current?.id === library.id}
           onClick={() => setFolder(qualified ? library.id : "")}>{library.name}</button>)}
       </div>}
-      <nav className="move-crumbs" aria-label={t("library.moveDestination")}>
-        <button type="button" onClick={() => open("")}><HardDrive/> {qualified && current ? current.name : t("library.rootFolder")}</button>
-        {crumbs.map((name, index) => <span key={name + index}>
-          <ChevronRight aria-hidden="true"/>
-          <button type="button" onClick={() => open(crumbs.slice(0, index + 1).join("/"))}>{name}</button>
-        </span>)}
-      </nav>
-      <div className="move-list">
-        {relative && <button type="button" className="move-up" onClick={() => open(parentOf(relative))}>
-          <CornerLeftUp/> {t("library.moveUp")}
-        </button>}
-        {folders.map((item) => <button type="button" key={item.path} disabled={moving.includes(item.path)} onClick={() => setFolder(item.path)}>
-          <FolderOpen/> <span>{item.name}</span> <ChevronRight/>
-        </button>)}
-        {!busy && !folders.length && <p className="identify-hint">{t("library.moveNoSubfolders")}</p>}
+      <div className="dialog-body">
+        <nav className="move-crumbs" aria-label={t("library.moveDestination")}>
+          <button type="button" onClick={() => open("")}><HardDrive/> {qualified && current ? current.name : t("library.rootFolder")}</button>
+          {crumbs.map((name, index) => <span key={name + index}>
+            <ChevronRight aria-hidden="true"/>
+            <button type="button" onClick={() => open(crumbs.slice(0, index + 1).join("/"))}>{name}</button>
+          </span>)}
+        </nav>
+        <div className="move-list">
+          {relative && <button type="button" className="move-up" onClick={() => open(parentOf(relative))}>
+            <CornerLeftUp/> {t("library.moveUp")}
+          </button>}
+          {folders.map((item) => <button type="button" key={item.path} disabled={moving.includes(item.path)} onClick={() => setFolder(item.path)}>
+            <FolderOpen/> <span>{item.name}</span> <ChevronRight/>
+          </button>)}
+          {!busy && !folders.length && <p className="identify-hint">{t("library.moveNoSubfolders")}</p>}
+        </div>
       </div>
-      {error && <p className="login-error">{error}</p>}
-      <p className="identify-hint">{inItself
-        ? t("library.moveIntoItself")
-        : unchanged ? t("library.moveSameFolder")
-          : t("library.moveTargetHint", { folder: relative || (qualified && current ? current.name : t("library.rootFolder")) })}</p>
-      <button type="button" className="primary" disabled={busy || inItself || unchanged} onClick={() => void move()}>
-        {t(copy ? "library.copyConfirm" : "library.moveConfirm")}
-      </button>
+      <footer className="dialog-foot">
+        {error && <p className="login-error">{error}</p>}
+        <p className="identify-hint">{inItself
+          ? t("library.moveIntoItself")
+          : unchanged ? t("library.moveSameFolder")
+            : t("library.moveTargetHint", { folder: relative || (qualified && current ? current.name : t("library.rootFolder")) })}</p>
+        <button type="button" className="primary" disabled={busy || inItself || unchanged} onClick={() => void move()}>
+          {t(copy ? "library.copyConfirm" : "library.moveConfirm")}
+        </button>
+      </footer>
     </div>
   </div>;
 }

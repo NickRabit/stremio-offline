@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { LibraryManager } from "./LibraryManager";
+import { LibraryManager, LibraryManagerDialog } from "./LibraryManager";
 import type { GrantBrowse, LibraryGrant, LibraryView } from "./types";
 import { setLocale } from "./i18n";
 
@@ -324,4 +324,40 @@ it("re-rooting can take the content along, and says which it is doing", async ()
 
   await clickIn(picker(), "Move the content here");
   expect(calls).toEqual([{ url: "/api/libraries/lib_ab12cd34/reroot", body: { root: "/downloads", moveContent: true } }]);
+});
+
+/** The card used to scroll while the settings inside it scrolled too, so the save button and
+ *  the close control fell off the bottom of a short window. One scroll region, with the head
+ *  and the action outside it. */
+it("the library dialog keeps the head and the save action outside the one scroller", async () => {
+  fetchMock.mockResolvedValue(json([library()]));
+  await act(async () => { root.render(<LibraryManager onError={vi.fn()} onNotify={vi.fn()}/>); });
+  await act(async () => { await Promise.resolve(); });
+
+  await openEditor();
+  const card = host.querySelector(".library-edit-card")!;
+  const body = card.querySelector(".dialog-body")!;
+  expect(card.classList.contains("dialog-split")).toBe(true);
+  expect(body.querySelector(".identify-head"), "the head is pinned outside the scroller").toBeNull();
+  const save = [...host.querySelectorAll("button")].find((button) => button.textContent?.trim() === "Save changes")!;
+  expect(save.closest(".dialog-foot"), "the action is pinned outside the scroller").toBeTruthy();
+  expect(save.closest(".dialog-body")).toBeNull();
+});
+
+/** Nothing here commits, so the list is the whole body: the head is the only thing the card
+ *  pins, and Escape is not the only way out of a phone-sized window. */
+it("the manager dialog scrolls its list, not the card", async () => {
+  fetchMock.mockResolvedValue(json([library(), library({ id: "lib_22222222", name: "Series", order: 1 })]));
+  await act(async () => {
+    root.render(<LibraryManagerDialog onClose={vi.fn()} onError={vi.fn()} onNotify={vi.fn()}/>);
+  });
+  await act(async () => { await Promise.resolve(); });
+
+  const card = host.querySelector(".library-manager-card")!;
+  const body = card.querySelector(".dialog-body")!;
+  expect(card.classList.contains("dialog-split")).toBe(true);
+  expect(body.querySelectorAll(".library-admin-row")).toHaveLength(2);
+  expect(body.querySelector(".library-manager-actions")).toBeTruthy();
+  expect(card.querySelector(".identify-head")?.closest(".dialog-body")).toBeNull();
+  expect(card.querySelector(".dialog-foot")).toBeNull();
 });

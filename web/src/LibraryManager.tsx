@@ -123,12 +123,14 @@ export function LibraryManagerDialog({ onClose, ...rest }: Parameters<typeof Lib
   }, [onClose]);
   return <div className="identify-overlay" role="dialog" aria-modal="true" aria-label={t("library.libraries")}
     onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-    <div className="panel identify-card library-manager-card">
+    <div className="panel identify-card dialog-split library-manager-card">
       <div className="identify-head">
         <h2>{t("library.libraries")}</h2>
         <button type="button" className="icon-button" aria-label={t("common.cancel")} onClick={onClose}><X/></button>
       </div>
-      <LibraryManager {...rest} />
+      <div className="dialog-body">
+        <LibraryManager {...rest} />
+      </div>
     </div>
   </div>;
 }
@@ -184,7 +186,7 @@ function LibraryEditDialog({ library, libraryCount, onClose, onSave, onScan, onR
 
   return <div className="identify-overlay" role="dialog" aria-modal="true" aria-label={t("library.editLibrary")}
     onClick={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }}>
-    <form className="panel identify-card library-edit-card" onSubmit={(event) => { event.preventDefault(); void save(); }}>
+    <form className="panel identify-card dialog-split library-edit-card" onSubmit={(event) => { event.preventDefault(); void save(); }}>
       <div className="identify-head">
         <h2>{t("library.editLibrary")}</h2>
         <button type="button" className="icon-button" aria-label={t("common.cancel")} disabled={busy} onClick={onClose}><X/></button>
@@ -228,7 +230,7 @@ function LibraryEditDialog({ library, libraryCount, onClose, onSave, onScan, onR
           </details>
         </section>
       </div>
-      <footer className="dialog-footer library-edit-footer"><button type="button" disabled={busy} onClick={onClose}>{t("common.cancel")}</button><button className="primary" disabled={busy || !dirty || !draft.name.trim()}>{t("library.saveChanges")}</button></footer>
+      <footer className="dialog-foot library-edit-footer"><button type="button" disabled={busy} onClick={onClose}>{t("common.cancel")}</button><button className="primary" disabled={busy || !dirty || !draft.name.trim()}>{t("library.saveChanges")}</button></footer>
     </form>
   </div>;
 }

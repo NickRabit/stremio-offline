@@ -139,3 +139,27 @@ it("queues several selected items as one copy operation", async () => {
   expect(JSON.parse(String((post[1] as RequestInit).body))).toEqual({ op: "copy", items: ["Films/one.mkv", "Films/two.mkv"], target: "Archive" });
   expect(onQueued).toHaveBeenCalled();
 });
+
+/** The list and the action used to share one scroller, so the wheel moved the folder list and
+ *  then the card, and the confirm button left the screen on the way. The chips stay under the
+ *  head, the list scrolls on its own, and the action sits outside it. */
+it("keeps the chips and the confirm button outside the one scrolling region", async () => {
+  fetchMock.mockResolvedValue(folders("Archive"));
+  const onMoved = vi.fn();
+  await act(async () => {
+    root.render(<MoveDialog path="lib_aaaaaaaa/Show/01.mkv" label="01" itemType="movie" onClose={vi.fn()} onMoved={onMoved}
+      libraries={[library("lib_aaaaaaaa", "Films", "movie"), library("lib_cccccccc", "Mixed", "mixed")]}/>);
+  });
+  await settle();
+
+  const card = host.querySelector(".move-card")!;
+  const body = card.querySelector(".dialog-body")!;
+  expect(card.classList.contains("dialog-split")).toBe(true);
+  expect(body.querySelector(".move-list")).toBeTruthy();
+  expect(body.querySelector(".move-crumbs")).toBeTruthy();
+  expect(body.querySelector(".move-libraries"), "the chips pin under the head").toBeNull();
+  expect(card.querySelector(".move-libraries")).toBeTruthy();
+  const confirm = confirmButton();
+  expect(confirm.closest(".dialog-foot"), "the action is pinned outside the scroller").toBeTruthy();
+  expect(confirm.closest(".dialog-body")).toBeNull();
+});

@@ -1040,6 +1040,9 @@ img.broken{visibility:hidden}
 .library-folder-filter svg{position:absolute;left:11px;top:50%;width:16px;height:16px;color:var(--muted);transform:translateY(-50%);pointer-events:none}
 .library-folder-filter input{padding-left:36px;font-size:12px}
 .dialog-split .move-list{max-height:none;overflow:visible}
+/* The chips are pinned between the head and the body, so they bring their own inset: the
+   shell's padding lives on the body and the foot, not on the card. */
+.dialog-split>.move-libraries{flex:0 0 auto;padding:0 22px}
 .library-picker-manual{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px}
 .library-picker-manual input{font-size:12px}
 .library-picker-manual button{white-space:nowrap}
@@ -1123,6 +1126,22 @@ img.broken{visibility:hidden}
 .addon-edit-footer{flex:0 0 auto;display:flex;justify-content:flex-end;gap:8px;padding:14px 22px 22px;border-top:1px solid var(--line);background:#121721f5}
 .addon-edit-footer .primary{min-width:150px}
 @media(max-width:700px){.addon-tools{justify-content:stretch}.addon-filter{flex:1 1 100%}.addon-head{grid-template-columns:42px minmax(0,1fr) auto}.addon-head>img,.addon-logo{width:42px;height:42px}.addon-edit-footer{display:grid}.addon-edit-footer button{width:100%}}
+/* Full screen, not a sheet. Sized to its pane it jumped on every switch and a short pane
+   left a third of the screen dark above it -- the same reason the account dialog below
+   gives for its own card. */
+@media(max-width:700px){
+  .library-edit-card,.library-manager-card,.move-card{height:100%;max-height:100%;border-radius:0}
+  .dialog-split>.move-libraries{padding:0 16px}
+}
+/* A phone in landscape leaves about 375px for the whole dialog, and the desktop rhythm of
+   the sections does not fit in it: the tightened spacing keeps the dialog inside the
+   screen it was given. */
+@media(max-height:460px){
+  .library-edit-section,.addon-edit-section{gap:8px;padding-block:10px}
+  .library-manager{gap:8px}
+  .library-admin-row{gap:8px;padding-block:10px}
+  .move-card .move-list button{padding-block:8px}
+}
 .library-check .switch span{width:42px;height:24px}
 .library-check .switch span:after{width:18px;height:18px}
 .library-check .switch input:checked+span:after{left:21px}

@@ -287,7 +287,7 @@ function AddonEditDialog({ addon, libraries, onClose, onChanged, onNotify, onErr
 
   return <div className="identify-overlay" role="dialog" aria-modal="true" aria-label={t("addons.editAddon")}
     onClick={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }}>
-    <form className="panel identify-card addon-edit-card" onSubmit={(event) => { event.preventDefault(); if (dirty && valid) void save(); }}>
+    <form className="panel identify-card dialog-split addon-edit-card" onSubmit={(event) => { event.preventDefault(); if (dirty && valid) void save(); }}>
       <div className="identify-head">
         <h2>{addon.manifest.name}</h2>
         <button type="button" className="icon-button" aria-label={t("common.close")} disabled={busy} onClick={onClose}><X/></button>
@@ -354,7 +354,7 @@ function AddonEditDialog({ addon, libraries, onClose, onChanged, onNotify, onErr
           {addon.essential && <p className="identify-hint">{t("addons.essential")}</p>}
         </section>
       </div>
-      <footer className="dialog-footer addon-edit-footer">
+      <footer className="dialog-foot addon-edit-footer">
         <button type="button" disabled={busy} onClick={onClose}>{t("common.cancel")}</button>
         <button className="primary" disabled={busy || !dirty || !valid}><Check/> {t(busy ? "common.saving" : "addons.saveChanges")}</button>
       </footer>
