@@ -64,8 +64,13 @@ export function registerDownloadRoutes(app: express.Application, deps: Downloads
     assertMayQueue(req, { stream, libraryId: targetSettings.libraryId });
     const job = await queue.add(String(req.body.title ?? "video"), stream, media, targetSettings, owner?.id);
     await rememberTitle(job.target, media, targetSettings.layout === "flat");
-    const posterKey = titleKey(job.target, media, targetSettings.layout === "flat");
-    if (posterKey && posterKey !== ".") saveCatalogPoster(libraryKey(posterKey), media?.poster);
+    // Only for a source the catalogue has no title for: `rememberTitle` already saved the
+    // artwork of one that has, and it knows the background as well. Repeating the write here
+    // with the poster alone put the picture back that the pair had just corrected.
+    if (!media?.id) {
+      const posterKey = titleKey(job.target, media, targetSettings.layout === "flat");
+      if (posterKey && posterKey !== ".") saveCatalogPoster(libraryKey(posterKey), media?.poster);
+    }
     res.status(201).json(jobView(job));
   }));
   // Adding episodes in bulk: the jobs are lazy, streams are asked for at download time.

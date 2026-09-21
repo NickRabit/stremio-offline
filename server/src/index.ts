@@ -34,7 +34,7 @@ import { LibraryScan } from "./library-scan.js";
 import { createLibraryProbe, type LibraryHealth } from "./library-probe.js";
 import { LibraryAutoScan } from "./library-autoscan.js";
 import { watchLibrary } from "./library-watch.js";
-import { ArtworkQueue, artNames, artOutput, artVariantKey, artworkBesideMedia, BACKDROP_OUTPUT, episodeArtName, fileMayUseFolderArtwork, findArtwork, type FolderListing, framePosition, pickArtwork, readFolderListing, POSTER_OUTPUT, saveBackdropAs, saveFrame, savePosterAs, type ArtShape, type PosterOutcome } from "./artwork.js";
+import { ArtworkQueue, artNames, artOutput, artVariantKey, artworkBesideMedia, BACKDROP_OUTPUT, episodeArtName, fileMayUseFolderArtwork, findArtwork, type FolderListing, framePosition, pickArtwork, pictureShape, readFolderListing, POSTER_OUTPUT, saveBackdropPicture, saveFrame, savePicture, takePicture, type ArtShape, type Picture, type PictureOutcome, type PosterOutcome } from "./artwork.js";
 import { envCredentials, INTERNAL_TOKEN, parseCookies, readSession, sessionUserId, SESSION_COOKIE, type SessionInfo } from "./auth.js";
 import { RepeatFilter } from "./access-log.js";
 import { randomUUID } from "node:crypto";
@@ -873,23 +873,46 @@ const saveArtwork = async (key: string, target: string, write: () => Promise<boo
  *  arriving used to be silent end to end, and a blank title nobody can explain is worse than a
  *  warning in the log. */
 const saveArtworkReport = async (
-  key: string, target: string, url: string, what: string,
-  save: (target: string, url: string) => Promise<PosterOutcome>,
+  key: string, target: string, taken: PictureOutcome, what: string,
+  save: (target: string, picture: Picture) => Promise<PosterOutcome>,
 ) => {
-  let refusal: Extract<PosterOutcome, { ok: false }> | undefined;
-  const saved = await saveArtwork(key, target, async () => {
-    const outcome = await save(target, url);
+  let refusal: Extract<PosterOutcome, { ok: false }> | undefined = taken.ok ? undefined : taken;
+  const saved = taken.ok && await saveArtwork(key, target, async () => {
+    const outcome = await save(target, taken.picture);
     if (!outcome.ok) refusal = outcome;
     return outcome.ok;
   });
-  if (!saved) log("WARN", `${what} could not be saved`, { key, host: hostOf(url), target, reason: refusal?.reason ?? "no-file", detail: refusal?.detail });
+  if (!saved) log("WARN", `${what} could not be saved`, { key, host: hostOf(taken.ok ? taken.picture.url : taken.url), target, reason: refusal?.reason ?? "no-file", detail: refusal?.detail });
   return saved;
 };
-const savePosterReport = (key: string, target: string, url: string, what: string) =>
-  saveArtworkReport(key, target, url, what, savePosterAs);
+const savePosterReport = (key: string, target: string, taken: PictureOutcome, what: string) =>
+  saveArtworkReport(key, target, taken, what, savePicture);
 /** The wide variant is narrowed on the way in, which is why it has a writer of its own. */
-const saveBackdropReport = (key: string, target: string, url: string) =>
-  saveArtworkReport(key, target, url, "The catalogue backdrop", saveBackdropAs);
+const saveBackdropReport = (key: string, target: string, taken: PictureOutcome) =>
+  saveArtworkReport(key, target, taken, "The catalogue backdrop", saveBackdropPicture);
+
+/** The picture to store under one variant.
+ *
+ *  The poster is whatever the catalogue calls the poster, even when it turns out to be
+ *  landscape: it is the picture the viewer was looking at when they pressed download, and the
+ *  library has to show them that one back. A tile letterboxes it if it has to.
+ *
+ *  The wide variant is decorative, so there the proportions decide. A `background` that is
+ *  really a portrait picture -- addons do hand those out -- would be letterboxed in every
+ *  landscape frame it was ever drawn in, so the poster takes the slot instead when the poster
+ *  is the landscape one of the two. Fetched only after the named address contradicts itself,
+ *  so an ordinary title costs no more than it did. */
+const catalogArt = async (wanted: ArtShape, posterUrl?: string, backdropUrl?: string) => {
+  const ownUrl = wanted === "wide" ? backdropUrl : posterUrl;
+  if (!ownUrl) return undefined;
+  const own = await takePicture(ownUrl);
+  if (wanted !== "wide" || !own.ok || !posterUrl || posterUrl === ownUrl) return own;
+  if (pictureShape(own.picture.data) !== "poster") return own;
+  const poster = await takePicture(posterUrl);
+  if (!poster.ok || pictureShape(poster.picture.data) !== "wide") return own;
+  log("INFO", "The catalogue's background is a portrait picture, its poster took the wide variant", { host: hostOf(posterUrl) });
+  return poster;
+};
 
 /** Someone else's picture in the folder always wins: nothing is overwritten or regenerated. */
 async function locateArtwork(entry: Awaited<ReturnType<typeof scanLibrary>>[number], shape: ArtShape = "poster") {
@@ -1016,13 +1039,17 @@ const describeLibraryPath = async (key: string) => {
  *  one keeps its own slot. */
 async function locateFileArtwork(key: string, shape: ArtShape = "poster") {
   const media = path.join(posixDir(mediaPath(key)), episodeArtName(posixBase(key)));
-  if (await fileExists(media)) return media;
+  const cover = knownTitleEntry(key, metaStore.qualifiedMeta());
+  // A still and a frame grab are landscape, so they serve the wide shape as they are. A film's
+  // is the catalogue poster instead: handing that out as the backdrop drew a portrait picture
+  // in a landscape frame and told the scheduler a backdrop was already there, so none was
+  // ever fetched.
+  if ((shape === "poster" || cover?.record.type !== "movie") && await fileExists(media)) return media;
   const own = storeArt(key, shape);
   if (own && await fileExists(own)) return own;
   // The folder's picture belongs to a film only when the folder is the film's folder: a title
   // bound through that folder, not one bound on the file itself, which is what a film moved
   // into a shared folder becomes.
-  const cover = knownTitleEntry(key, metaStore.qualifiedMeta());
   if (fileMayUseFolderArtwork(key, cover?.record.type, cover?.key)) return locateFolderArtwork(posixDir(key), shape);
   return undefined;
 }
@@ -1121,8 +1148,8 @@ const mediaArtExists = async (key: string, shape: ArtShape) => {
 
 /** One shape of the catalogue artwork. A picture of the folder's own always wins for that
  *  shape, and the stale copy in the generated store goes either way. */
-const writeCatalogArt = async (key: string, url: string | undefined, shape: ArtShape) => {
-  if (!url) return false;
+const writeCatalogArt = async (key: string, taken: PictureOutcome | undefined, shape: ArtShape) => {
+  if (!taken) return false;
   if (await mediaArtExists(key, shape)) {
     // Not a failure: a picture of the folder's own always wins, and it is worth being able to
     // see that this is why nothing was written.
@@ -1134,16 +1161,16 @@ const writeCatalogArt = async (key: string, url: string | undefined, shape: ArtS
   if (!target) return false;
   await mkdir(path.dirname(target), { recursive: true });
   return shape === "wide"
-    ? saveBackdropReport(key, target, url)
-    : savePosterReport(key, target, url, "The catalogue poster");
+    ? saveBackdropReport(key, target, taken)
+    : savePosterReport(key, target, taken, "The catalogue poster");
 };
 
 /** Both variants in one pass, from the poster and the background the metadata carries side by
  *  side. Every match writes through here, so a newly matched title has both pictures at once. */
 const writeCatalogPoster = async (key: string, url?: string, backdrop?: string) => {
   if (!key || key === ".") return false;
-  const poster = await writeCatalogArt(key, url, "poster");
-  await writeCatalogArt(key, backdrop, "wide");
+  const poster = await writeCatalogArt(key, await catalogArt("poster", url, backdrop), "poster");
+  await writeCatalogArt(key, await catalogArt("wide", url, backdrop), "wide");
   return poster;
 };
 
@@ -1188,7 +1215,7 @@ async function catalogPosterIfBound(key: string, target: string) {
     const numbers = episodeNumberOf(key, ownRecord(key, records));
     const row = numbers ? metaStore.episodes()[episodeKey(known.type, known.id, numbers.season, numbers.episode)] : undefined;
     if (!row?.thumbnail) return false;
-    if (await savePosterReport(key, target, row.thumbnail, "The episode still")) {
+    if (await savePosterReport(key, target, await takePicture(row.thumbnail), "The episode still")) {
       log("INFO", "Episode still filled in from metadata", { path: key });
       return true;
     }
@@ -1196,7 +1223,8 @@ async function catalogPosterIfBound(key: string, target: string) {
   }
   const meta = await cachedMeta(known.type, known.id);
   if (!meta?.poster) return false;
-  if (await savePosterReport(key, target, meta.poster, "The metadata poster")) {
+  const poster = await catalogArt("poster", meta.poster, meta.background);
+  if (poster && await savePosterReport(key, target, poster, "The metadata poster")) {
     log("INFO", "Poster filled in from metadata", { path: key });
     return true;
   }
@@ -1225,7 +1253,8 @@ async function catalogBackdropIfBound(key: string, target: string) {
   if (!known) return false;
   const meta = await cachedMeta(known.type, known.id);
   if (!meta?.background) return false;
-  if (await saveBackdropReport(key, target, meta.background)) {
+  const wide = await catalogArt("wide", meta.poster, meta.background);
+  if (wide && await saveBackdropReport(key, target, wide)) {
     log("INFO", "Backdrop filled in from metadata", { path: key });
     return true;
   }

@@ -123,16 +123,101 @@ const fetchPicture = async (url: string): Promise<FetchOutcome> => {
   }
 };
 
-/** Downloads a picture to an exact place. Used for the poster the client sent from the catalogue. */
-export async function savePosterAs(target: string, url: string): Promise<PosterOutcome> {
+/** A picture in hand. The address travels with the bytes: a picture that fails to be stored
+ *  still has to be able to say which host handed it over. */
+export interface Picture { url: string; data: Buffer }
+export type PictureOutcome =
+  | { ok: true; picture: Picture }
+  | (Extract<PosterOutcome, { ok: false }> & { url: string });
+
+/** Fetched once, so the proportions can be read before anything decides where it belongs. */
+export async function takePicture(url: string): Promise<PictureOutcome> {
   const fetched = await fetchPicture(url);
-  if (!fetched.ok) return fetched;
+  return fetched.ok ? { ok: true, picture: { url, data: fetched.data } } : { ...fetched, url };
+}
+
+/** WebP carries its size in one of three chunk layouts; the lossy one is what catalogues serve. */
+const webpSize = (data: Buffer) => {
+  const chunk = data.toString("latin1", 12, 16);
+  if (chunk === "VP8 " && data.length >= 30 && data.toString("latin1", 23, 26) === "\x9d\x01\x2a") {
+    return { width: data.readUInt16LE(26) & 0x3fff, height: data.readUInt16LE(28) & 0x3fff };
+  }
+  if (chunk === "VP8L" && data.length >= 25 && data[20] === 0x2f) {
+    const bits = data.readUInt32LE(21);
+    return { width: (bits & 0x3fff) + 1, height: ((bits >> 14) & 0x3fff) + 1 };
+  }
+  if (chunk === "VP8X" && data.length >= 30) {
+    return {
+      width: (data[24]! | (data[25]! << 8) | (data[26]! << 16)) + 1,
+      height: (data[27]! | (data[28]! << 8) | (data[29]! << 16)) + 1,
+    };
+  }
+  return undefined;
+};
+
+/** JPEG keeps its size in the frame header, which sits behind a chain of segments. */
+const jpegSize = (data: Buffer) => {
+  let offset = 2;
+  while (offset + 9 < data.length) {
+    if (data[offset] !== 0xff) { offset += 1; continue; }
+    const marker = data[offset + 1]!;
+    if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) { offset += 2; continue; }
+    const length = data.readUInt16BE(offset + 2);
+    // Every SOF but the four that are not frame headers at all.
+    if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)) {
+      return { width: data.readUInt16BE(offset + 7), height: data.readUInt16BE(offset + 5) };
+    }
+    if (length < 2) return undefined;
+    offset += 2 + length;
+  }
+  return undefined;
+};
+
+/** Width and height read out of the file header. Cheaper than asking ffmpeg, and the answer is
+ *  wanted before the picture has been written anywhere. */
+export function imageSize(data: Buffer): { width: number; height: number } | undefined {
+  if (data.length < 16) return undefined;
+  if (data.readUInt32BE(0) === 0x89504e47 && data.length >= 24) return { width: data.readUInt32BE(16), height: data.readUInt32BE(20) };
+  if (data.toString("latin1", 0, 3) === "GIF") return { width: data.readUInt16LE(6), height: data.readUInt16LE(8) };
+  if (data.toString("latin1", 0, 4) === "RIFF" && data.toString("latin1", 8, 12) === "WEBP") return webpSize(data);
+  if (data.readUInt16BE(0) === 0xffd8) return jpegSize(data);
+  return undefined;
+}
+
+/** How wide a picture has to be before it counts as landscape rather than as a poster. Tall
+ *  posters and 16:9 backdrops are both far past it; a squarish picture answers neither. */
+const SHAPE_RATIO = 1.15;
+
+/** The variant a picture really is, by its proportions. The catalogue's label is only a claim:
+ *  an addon that answers with a landscape `poster` and a portrait `background` has the two the
+ *  wrong way round, and a picture nobody can measure keeps whatever it was called. */
+export function pictureShape(data: Buffer): ArtShape | undefined {
+  const size = imageSize(data);
+  if (!size?.width || !size.height) return undefined;
+  if (size.width >= size.height * SHAPE_RATIO) return "wide";
+  if (size.height >= size.width * SHAPE_RATIO) return "poster";
+  return undefined;
+}
+
+/** Writes a picture already in hand to an exact place. Used for the poster the client sent
+ *  from the catalogue. */
+export async function savePicture(target: string, picture: Picture): Promise<PosterOutcome> {
   try {
-    await writeAtomic(target, fetched.data);
+    await writeAtomic(target, picture.data);
     return { ok: true };
   } catch (error) {
     return { ok: false, reason: "failed", detail: error instanceof Error ? error.message : String(error) };
   }
+}
+
+/** What a fetch refused, without the address: the outcome of a save is about the picture. */
+const refusalOf = (taken: Extract<PictureOutcome, { ok: false }>): PosterOutcome =>
+  ({ ok: false, reason: taken.reason, ...(taken.detail === undefined ? {} : { detail: taken.detail }) });
+
+/** Downloads a picture to an exact place. */
+export async function savePosterAs(target: string, url: string): Promise<PosterOutcome> {
+  const taken = await takePicture(url);
+  return taken.ok ? savePicture(target, taken.picture) : refusalOf(taken);
 }
 
 /** The widest a stored backdrop may be. The catalogue hands out 200 kB - 1 MB backgrounds, and
@@ -159,13 +244,11 @@ async function shrinkToWidth(source: string, target: string, width: number): Pro
 /** Downloads the wide variant of a catalogue picture and narrows it before it is stored. A
  *  picture ffmpeg could not read back is kept as it arrived: a large backdrop is worth more
  *  than a tile with no landscape picture at all. */
-export async function saveBackdropAs(target: string, url: string): Promise<PosterOutcome> {
-  const fetched = await fetchPicture(url);
-  if (!fetched.ok) return fetched;
+export async function saveBackdropPicture(target: string, picture: Picture): Promise<PosterOutcome> {
   const source = `${target}.src.jpg`;
   try {
     // The same mode a poster is written with, because the fallback below renames this very file.
-    await writeFile(source, fetched.data, { mode: 0o644 });
+    await writeFile(source, picture.data, { mode: 0o644 });
     if (!await shrinkToWidth(source, target, BACKDROP_WIDTH)) await rename(source, target);
     return { ok: true };
   } catch (error) {
@@ -173,6 +256,12 @@ export async function saveBackdropAs(target: string, url: string): Promise<Poste
   } finally {
     await rm(source, { force: true });
   }
+}
+
+/** The same for a picture that still has to be fetched. */
+export async function saveBackdropAs(target: string, url: string): Promise<PosterOutcome> {
+  const taken = await takePicture(url);
+  return taken.ok ? saveBackdropPicture(target, taken.picture) : refusalOf(taken);
 }
 
 export async function savePosterFromUrl(directory: string, url: string): Promise<boolean> {
