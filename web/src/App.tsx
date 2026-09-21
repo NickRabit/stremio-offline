@@ -23,7 +23,7 @@ import { label, titleLanguage } from "./languages";
 import { languageName, locale, localeTag, serverText, setLocale, t, useI18n, type Key, type Locale } from "./i18n";
 import { canQueue, pickDefaultStream, pickNextEpisodeStream, repickStream, streamBadge, streamLanguages, streamSize, visibleCatalogStreams, type StreamSort } from "./streams";
 import { parseSearchScope } from "./search-scope";
-import { localizedDownloadTitle, mergeMetaDetail } from "./meta";
+import { gridArt, localizedDownloadTitle, mergeMetaDetail } from "./meta";
 import { catalogResumeEntries, localResumeEntries } from "./resume-visibility";
 import { resumeTarget, resumeVideo, type ResumeTarget } from "./resume-target";
 import { trailerAction } from "./trailers";
@@ -168,7 +168,7 @@ export function App() {
     if (changed) update(next);
   }
   type TreeItem = Extract<BrowseItem, { kind: "folder" | "file" }>;
-  const [selectedCatalog, setSelectedCatalog] = useState(""); const [search, setSearch] = useState(""); const [items, setItems] = useState<Meta[]>([]); const [selected, setSelected] = useState<Meta | null>(null); const [selectedDownloadTitle, setSelectedDownloadTitle] = useState("");
+  const [selectedCatalog, setSelectedCatalog] = useState(""); const [search, setSearch] = useState(""); const [items, setItems] = useState<Meta[]>([]); const [selected, setSelected] = useState<Meta | null>(null); const [selectedSummary, setSelectedSummary] = useState<Meta | null>(null); const [selectedDownloadTitle, setSelectedDownloadTitle] = useState("");
   const [selectedVideo, setSelectedVideo] = useState<Video | null>(null); const [streams, setStreams] = useState<Stream[]>([]); const [selectedStream, setSelectedStream] = useState<Stream | null>(null); const [subtitles, setSubtitles] = useState<Subtitle[]>([]); const [localEpisode, setLocalEpisode] = useState(false); const [playbackPreferences, setPlaybackPreferences] = useState<{ audioLanguage?: string; subtitleLanguage?: string | null }>({});
   const nextEpisodePrefetchRef = useRef<{ id: string; promise: Promise<{ streams: Stream[]; subtitles: Subtitle[] }> } | null>(null);
   const [sourcesLoaded, setSourcesLoaded] = useState(false); const [metaLoading, setMetaLoading] = useState(false);
@@ -1387,7 +1387,9 @@ export function App() {
     const linksRequest = ++linksRequestRef.current;
     const trailerRequest = ++trailerRequestRef.current;
     setMetaLoading(true);
-    setSelected(item); setSelectedDownloadTitle(item.name); setSelectedVideo(null); setEpisodesOpen(true); setSeason(null); setStreams([]); setSelectedStream(null); setSubtitles([]); setSourcesLoaded(false); setGalleryIndex(null); setDetailCompact(false); setTitleLinks([]); setTitleTrailer(null);
+    // The row the grid drew from, kept beside the merged detail: its pictures are the ones on
+    // screen, and they are what a download has to carry into the library.
+    setSelected(item); setSelectedSummary(item); setSelectedDownloadTitle(item.name); setSelectedVideo(null); setEpisodesOpen(true); setSeason(null); setStreams([]); setSelectedStream(null); setSubtitles([]); setSourcesLoaded(false); setGalleryIndex(null); setDetailCompact(false); setTitleLinks([]); setTitleTrailer(null);
     requestAnimationFrame(() => detailRef.current?.scrollTo({ top: 0 }));
     const type = item.type || currentCatalog?.type || "movie";
     let detail = item;
@@ -1415,7 +1417,7 @@ export function App() {
     sourcesRequestRef.current += 1;
     linksRequestRef.current += 1;
     trailerRequestRef.current += 1;
-    setSelected(null); setSelectedDownloadTitle(""); setSelectedVideo(null); setStreams([]); setSelectedStream(null); setSubtitles([]); setSourcesLoaded(false); setGalleryIndex(null); setDetailCompact(false); setTitleLinks([]); setTitleTrailer(null);
+    setSelected(null); setSelectedSummary(null); setSelectedDownloadTitle(""); setSelectedVideo(null); setStreams([]); setSelectedStream(null); setSubtitles([]); setSourcesLoaded(false); setGalleryIndex(null); setDetailCompact(false); setTitleLinks([]); setTitleTrailer(null);
   };
   const loadSources = async (video?: Video) => {
     if (!selected) return; await fetchSources(selected.type || currentCatalog?.type || "movie", video?.id || selected.id, video);
@@ -1487,9 +1489,12 @@ export function App() {
       nextBusyRef.current = false; setNextBusy(false);
     }
   };
-  const selectedMedia = () => selectedVideo
-    ? { kind: "episode", title: baseDownloadTitle, season: selectedVideo.season, episode: selectedVideo.episode, episodeTitle: selectedVideo.title || selectedVideo.name, id: selected?.id, metaType: selected?.type, poster: selected?.poster }
-    : { kind: "movie", title: baseDownloadTitle, id: selected?.id, metaType: selected?.type, poster: selected?.poster };
+  const selectedMedia = () => {
+    const art = gridArt(selectedSummary, selected);
+    return selectedVideo
+      ? { kind: "episode", title: baseDownloadTitle, season: selectedVideo.season, episode: selectedVideo.episode, episodeTitle: selectedVideo.title || selectedVideo.name, id: selected?.id, metaType: selected?.type, ...art }
+      : { kind: "movie", title: baseDownloadTitle, id: selected?.id, metaType: selected?.type, ...art };
+  };
   const canPlay = Boolean(selectedStream?.playable);
   const enqueue = async () => {
     if (!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)) return false;
@@ -1539,7 +1544,7 @@ export function App() {
     setBulkDownload({
       label, title: baseDownloadTitle, type: metaType,
       episodes: episodes.map((video) => ({ id: String(video.id), season: video.season, episode: video.episode, title: video.title || video.name })),
-      media: { id: selected.id, metaType, poster: selected.poster },
+      media: { id: selected.id, metaType, ...gridArt(selectedSummary, selected) },
     });
   };
 

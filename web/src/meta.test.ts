@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { localizedDownloadTitle, mergeMetaDetail } from "./meta";
+import { gridArt, localizedDownloadTitle, mergeMetaDetail } from "./meta";
+import type { Meta } from "./types";
 
 describe("mergeMetaDetail", () => {
   it("keeps the localized catalog title when detailed metadata uses another language", () => {
@@ -41,5 +42,24 @@ describe("mergeMetaDetail", () => {
     );
 
     expect(merged.type).toBe("series");
+  });
+});
+
+describe("gridArt", () => {
+  it("takes the pictures from the catalogue row, not from the metadata detail", () => {
+    expect(gridArt({ poster: "row.jpg", background: "row-wide.jpg" } as Meta, { poster: "meta.jpg", background: "meta-wide.jpg" } as Meta))
+      .toEqual({ poster: "row.jpg", background: "row-wide.jpg" });
+  });
+
+  it("gives the wide variant the poster when the row has no background of its own", () => {
+    expect(gridArt({ poster: "row.jpg" } as Meta, { background: "meta-wide.jpg" } as Meta))
+      .toEqual({ poster: "row.jpg", background: "row.jpg" });
+  });
+
+  it("falls back to the detail where the row has nothing, as a resume row has not", () => {
+    expect(gridArt(null, { poster: "meta.jpg", background: "meta-wide.jpg" } as Meta))
+      .toEqual({ poster: "meta.jpg", background: "meta.jpg" });
+    expect(gridArt(null, { background: "meta-wide.jpg" } as Meta))
+      .toEqual({ poster: undefined, background: "meta-wide.jpg" });
   });
 });
