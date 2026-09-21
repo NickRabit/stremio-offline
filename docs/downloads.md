@@ -173,6 +173,10 @@ status and inclusive local-date filters can be combined. Dates can refer to
 when a job was added, first started or completed. Sorting changes the view only;
 priority arrows are enabled in ascending queue-priority order.
 
+The sort, the status filter, the date field and the page size are remembered for
+the signed-in account, so the queue opens the way that person left it. The search
+box and the from/to dates are not remembered.
+
 New downloads persist their first start and successful completion timestamps.
 Elapsed time is the interval between them, including pauses and retry waits.
 Older jobs without these timestamps display a dash and are excluded from filters

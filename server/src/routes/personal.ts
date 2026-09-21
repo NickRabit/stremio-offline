@@ -14,6 +14,7 @@ import { groupResumeRows } from "../resume-group.js";
 import type { StoredProgress, UserPrefs, WatchedMarker, WatchlistEntry } from "../store.js";
 import type { MetaItem } from "../types.js";
 import type { UserData } from "../users.js";
+import { applyPatch, parseViews } from "../views.js";
 import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
 
 /** The shape of the personal maps, pinned beside the endpoints that read and write them. */
@@ -79,6 +80,17 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
       data.watchlist = all;
     });
     res.json({ key, favorite: wanted });
+  }));
+
+  // Browsing chrome: the sort, the filter and the layout each account left the library and the
+  // download queue in. Personal, like the watchlist, and never part of the settings backup.
+  app.get("/api/views", (req, res) => {
+    res.json(parseViews(dataOf(req).views));
+  });
+  app.patch("/api/views", asyncRoute(async (req, res) => {
+    const next = applyPatch(parseViews(dataOf(req).views), req.body);
+    await updateData(req, (data) => { data.views = next; });
+    res.json(next);
   }));
 
   // Resume list: the position is reported as it goes, and a finished title forgets itself.

@@ -1,4 +1,7 @@
 import { expect, test } from "@playwright/test";
+import { resetViews } from "../library-tools";
+
+test.beforeEach(async ({ request }) => { await resetViews(request); });
 
 const poster = (color: string) => `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="240" height="360"><rect width="240" height="360" fill="${color}"/><circle cx="120" cy="130" r="70" fill="#ffffff22"/><path d="M0 360L130 170L240 360" fill="#00000033"/></svg>`)}`;
 const folder = { kind: "folder", path: "Seriály", name: "Seriály", fileCount: 8, size: 8e9, poster: poster("#38516d"), favorite: true, year: "1995", description: "Kněží na ostrově Craggy Island.", match: "matched" };

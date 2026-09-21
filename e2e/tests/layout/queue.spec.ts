@@ -1,4 +1,7 @@
 import { expect, test } from "@playwright/test";
+import { resetViews } from "../library-tools";
+
+test.beforeEach(async ({ request }) => { await resetViews(request); });
 
 test("running downloads lead the queue and status changes keep every job in its section", async ({ page }, testInfo) => {
   const base = { received: 650_000_000, total: 2_000_000_000, speed: 0, createdAt: "2026-09-01T10:00:00Z", updatedAt: "2026-09-02T10:01:30Z" };

@@ -39,6 +39,7 @@ export const DENIED_GETS: Rule[] = [
 export const ALLOWED_MUTATIONS: Rule[] = [
   { method: "POST", pattern: /^\/auth\/logout$/ },
   { method: "POST", pattern: /^\/watchlist$/ },
+  { method: "PATCH", pattern: /^\/views$/ },
   { method: "POST", pattern: /^\/progress$/ },
   { method: "DELETE", pattern: /^\/progress\/[^/]+$/ },
   { method: "POST", pattern: /^\/library\/favorite$/ },

@@ -23,6 +23,8 @@ const ALLOWED: Array<[string, string]> = [
   ["GET", "/library/favorites"],
   ["GET", "/library/resume"],
   ["POST", "/library/favorite"],
+  ["GET", "/views"],
+  ["PATCH", "/views"],
   ["GET", "/library"],
   ["GET", "/library/browse"],
   ["GET", "/library/thumb"],

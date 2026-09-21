@@ -31,6 +31,8 @@ export const USER_ALLOWED: Rule[] = [
   { method: "GET", pattern: /^\/library\/favorites$/ },
   { method: "GET", pattern: /^\/library\/resume$/ },
   { method: "POST", pattern: /^\/library\/favorite$/ },
+  { method: "GET", pattern: /^\/views$/ },
+  { method: "PATCH", pattern: /^\/views$/ },
   // Browsing and playing.
   { method: "GET", pattern: /^\/library$/ },
   { method: "GET", pattern: /^\/library\/browse$/ },

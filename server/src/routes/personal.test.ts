@@ -310,3 +310,70 @@ test("GET /api/progress drops the rows whose library the caller has lost", async
   assert.equal(one.status, 200);
   assert.equal(await one.json(), null, "and one row read by key answers as if it were not stored");
 });
+
+const defaultDownloads = { sort: "order", direction: "asc", status: "", dateField: "createdAt", pageSize: 20 };
+
+test("GET /api/views answers each caller with their own browsing chrome", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+
+  const patched = await api(harness.base, "/api/views", { method: "PATCH", user: ALICE, body: {
+    libraries: { lib_0000000a: { sort: "size", order: "desc", favoritesOnly: true, view: "list" } },
+  } });
+  assert.equal(patched.status, 200);
+  assert.deepEqual(await patched.json(), {
+    libraries: { lib_0000000a: { sort: "size", order: "desc", favoritesOnly: true, view: "list" } },
+    extras: {},
+    downloads: defaultDownloads,
+  });
+
+  const alice = await (await api(harness.base, "/api/views", { user: ALICE })).json() as {
+    libraries: Record<string, unknown>; downloads: unknown;
+  };
+  assert.deepEqual(alice.libraries, { lib_0000000a: { sort: "size", order: "desc", favoritesOnly: true, view: "list" } });
+
+  const bob = await (await api(harness.base, "/api/views", { user: BOB })).json() as { libraries: unknown; downloads: unknown };
+  assert.deepEqual(bob.libraries, {}, "Alice's library is not Bob's");
+  assert.deepEqual(bob.downloads, defaultDownloads);
+  assert.deepEqual(harness.data(BOB).views, undefined, "nothing is written to an account that never asked");
+});
+
+test("PATCH /api/views keeps one account's queue chrome out of another's", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+
+  const patched = await api(harness.base, "/api/views", { method: "PATCH", user: BOB, body: { downloads: { sort: "titleSort", pageSize: 50 } } });
+  assert.equal(patched.status, 200);
+  assert.deepEqual(await patched.json(), {
+    libraries: {},
+    extras: {},
+    downloads: { ...defaultDownloads, sort: "titleSort", pageSize: 50 },
+  });
+
+  const alice = await api(harness.base, "/api/views", { user: ALICE });
+  assert.deepEqual((await alice.json() as { downloads: unknown }).downloads, defaultDownloads);
+});
+
+test("/api/views is refused without a session, the way dataOf refuses", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+
+  const read = await api(harness.base, "/api/views");
+  const write = await api(harness.base, "/api/views", { method: "PATCH", body: { libraries: { lib_0000000a: { sort: "size" } } } });
+
+  assert.equal(read.status, 401);
+  assert.equal(write.status, 401);
+  assert.equal((await write.json() as { code?: string }).code, "AUTH_REQUIRED");
+  assert.deepEqual(harness.data(ALICE).views, undefined);
+});
+
+test("PATCH /api/views stores nothing but the fields it knows", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+
+  const response = await api(harness.base, "/api/views", { method: "PATCH", user: ALICE, body: { query: "foo", from: "2026-01-01" } });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { libraries: {}, extras: {}, downloads: defaultDownloads });
+  assert.deepEqual(harness.data(ALICE).views, { libraries: {}, extras: {}, downloads: defaultDownloads });
+});
