@@ -1,8 +1,9 @@
 import { createReadStream, createWriteStream } from "node:fs";
 import { randomBytes } from "node:crypto";
-import { lstat, mkdir, open, readdir, rename, rm, stat } from "node:fs/promises";
+import { lstat, mkdir, open, readdir, rename, rmdir, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
+import { AppError } from "./errors.js";
 import { log } from "./logger.js";
 
 export type TransferProgress = (bytes: number, total: number) => void;
@@ -54,6 +55,49 @@ const stagingPath = async (target: string): Promise<string> => {
   throw new Error(`No free staging name is available next to ${target}.`);
 };
 
+/** The same refusal the caller raises before the copy, so a name lost to another transfer
+ *  reads as a taken name and not as an internal failure. */
+const nameTaken = () => new AppError("A file with that name already exists.", "err.nameTaken");
+
+/** Takes the target's name with an atomic create, because `rename` on its own replaces whatever
+ *  is there without a word. A file is reserved with `O_CREAT | O_EXCL` and a folder with `mkdir`;
+ *  the swap then renames the staged item over either empty placeholder. */
+const reserveTarget = async (target: string, directory: boolean): Promise<void> => {
+  try {
+    if (directory) await mkdir(target);
+    else await (await open(target, "wx")).close();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") throw nameTaken();
+    throw error;
+  }
+};
+
+/** Drops a reservation whose rename never landed. A folder goes through `rmdir`, which refuses
+ *  a folder that gained content, so only the empty placeholder this call made can be removed. */
+const releaseTarget = async (target: string, directory: boolean): Promise<void> => {
+  try {
+    if (directory) await rmdir(target);
+    else await rm(target, { force: true });
+  } catch (error) {
+    log("WARN", "A reserved destination could not be released", {
+      target, reason: (error instanceof Error ? error.message : String(error)).slice(0, 120),
+    });
+  }
+};
+
+/** Publishes the staged copy at a name only this call may take. A second transfer into the same
+ *  name loses the reservation and is refused there: it never reaches the rename, so it cannot
+ *  overwrite what the winner put in place. */
+const publish = async (temporary: string, target: string, directory: boolean): Promise<void> => {
+  await reserveTarget(target, directory);
+  try {
+    await rename(temporary, target);
+  } catch (error) {
+    await releaseTarget(target, directory);
+    throw error;
+  }
+};
+
 /** Drops the source of a finished move. The copy is already at the destination, so a
  *  refusal here leaves a duplicate, not a lost item: it is reported, never thrown. The
  *  message comes back for the caller to log and show; `undefined` means the source is gone. */
@@ -78,15 +122,25 @@ export interface TransferResult {
 }
 
 /** Moves the item in one step when the filesystem allows it. `false` means it does not:
- *  the caller copies instead. Asking `stat` first would only be a guess -- two bind mounts
- *  of one host directory share a device number under Docker Desktop and still refuse the
- *  rename, while two btrfs subvolumes of one NAS volume carry different ones. The kernel
- *  knows, and a refused rename costs a syscall, so the move is simply tried. */
+ *  the caller copies instead. Asking for the device first would only be a guess -- two bind
+ *  mounts of one host directory share a device number under Docker Desktop and still refuse
+ *  the rename, while two btrfs subvolumes of one NAS volume carry different ones. The kernel
+ *  knows, and a refused rename costs a syscall, so the move is simply tried.
+ *
+ *  The destination is reserved first, the same way a staged copy reserves it, because a bare
+ *  rename would quietly replace a name another move has already taken -- and here the loser
+ *  would lose its source as well. The item's own kind picks the placeholder: a folder can only
+ *  be renamed over an empty folder. */
 export async function renameAcross(source: string, target: string): Promise<boolean> {
+  const directory = (await lstat(source)).isDirectory();
+  await reserveTarget(target, directory);
   try {
     await rename(source, target);
     return true;
   } catch (error) {
+    // The rename never landed, so the placeholder is still this call's to drop. It has to go
+    // before the fallback: the copy that follows would otherwise meet it and refuse itself.
+    await releaseTarget(target, directory);
     if ((error as NodeJS.ErrnoException).code !== "EXDEV") throw error;
     log("INFO", "The move crosses a filesystem, copying instead", { source, target });
     return false;
@@ -119,7 +173,7 @@ export async function transferLibraryPath(source: string, target: string, move: 
   const progress = { bytes: 0, total, report };
   try {
     await copyTree(source, temporary, progress);
-    await rename(temporary, target);
+    await publish(temporary, target, sourceInfo.isDirectory());
   } catch (error) {
     // Only the staging path this call reserved is cleared; the item itself stays where it was.
     await rm(temporary, { recursive: true, force: true });
