@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { rankStreams, streamLanguages, titleLanguage } from "./ranking.js";
+import { rankStreams, streamLanguages, streamSize, titleLanguage } from "./ranking.js";
 import type { StreamItem } from "./types.js";
 
 const stream = (parts: Partial<StreamItem>): StreamItem => ({ url: "https://a.test/x.mkv", ...parts });
@@ -52,4 +52,12 @@ test("Cinemeta's language name maps onto a code", () => {
   assert.equal(titleLanguage("Czech, Slovak"), "cs");
   assert.equal(titleLanguage("Klingon"), undefined);
   assert.equal(titleLanguage(undefined), undefined);
+});
+
+test("the size Luna abbreviates is read, and the bitrate beside it is not", () => {
+  assert.equal(streamSize(stream({ title: "2 Mb/s \u00b7 2:22:00 \u00b7 2.2G" })), 2.2e9);
+  assert.equal(streamSize(stream({ title: "\u{1F4BE} 35.09 GB" })), 35_090_000_000);
+  assert.equal(streamSize(stream({ title: "2 Mb/s" })), undefined);
+  assert.equal(streamSize(stream({ title: "1500 kbps" })), undefined);
+  assert.equal(streamSize(stream({ name: "4K", title: "HDR" })), undefined);
 });

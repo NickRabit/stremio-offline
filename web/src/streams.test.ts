@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { arrangeStreams, canQueue, pickDefaultStream, pickNextEpisodeStream, streamBadge, streamLanguages, streamSize, streamText, visibleCatalogStreams, repickStream, type StreamFilters } from "./streams";
+import { addonNotices, arrangeStreams, canQueue, noticeText, offeredStreams, pickDefaultStream, pickNextEpisodeStream, streamBadge, streamLanguages, streamSize, streamText, visibleCatalogStreams, repickStream, type StreamFilters } from "./streams";
 import type { Stream } from "./types";
 
 const stream = (parts: Partial<Stream>): Stream => ({ sourceId: "source", kind: "remote", playable: true, ...parts });
@@ -61,6 +61,23 @@ describe("streamSize", () => {
     expect(streamSize(stream({ title: "700 MB" }))).toBe(700e6);
     expect(streamSize(stream({ title: "1.5 TB" }))).toBe(1.5e12);
     expect(streamSize(stream({ title: "820 KB" }))).toBe(820e3);
+  });
+
+  it("reads the size Luna abbreviates and not the bitrate beside it", () => {
+    expect(streamSize(stream({ title: "2 Mb/s \u00b7 2:22:00 \u00b7 2.2G" }))).toBe(2.2e9);
+    expect(streamSize(stream({ title: "6 Mb/s \u00b7 2:22:33 \u00b7 6.3G" }))).toBe(6.3e9);
+    expect(streamSize(stream({ title: "1.4T" }))).toBe(1.4e12);
+  });
+
+  it("does not read a bitrate as a size", () => {
+    expect(streamSize(stream({ title: "2 Mb/s" }))).toBeUndefined();
+    expect(streamSize(stream({ title: "1500 kbps" }))).toBeUndefined();
+    expect(streamSize(stream({ title: "2 Mbit/s" }))).toBeUndefined();
+  });
+
+  it("does not read a resolution as a size", () => {
+    expect(streamSize(stream({ title: "Movie 4K HDR" }))).toBeUndefined();
+    expect(streamSize(stream({ title: "The Matrix 2K remaster" }))).toBeUndefined();
   });
 
   it("accepts a decimal comma", () => {
@@ -232,5 +249,33 @@ describe("repickStream", () => {
   it("clears the pick when nothing is left to play and nobody is watching", () => {
     expect(repickStream({ ...base, visible: [], selected: first, preferred: null })).toEqual({ move: true, to: null });
     expect(repickStream({ ...base, visible: [], selected: null, preferred: null })).toEqual({ move: false });
+  });
+});
+
+describe("addon notices", () => {
+  const notice = stream({ sourceId: "n1", kind: "unsupported", playable: false, name: "⚠ Luna", title: "VIP expires in 4 days.", addonName: "Luna" });
+  const playable = stream({ sourceId: "s1", name: "FullHD" });
+
+  it("keeps a source the server cannot play out of the list", () => {
+    expect(offeredStreams([notice, playable]).map((item) => item.sourceId)).toEqual(["s1"]);
+  });
+
+  it("reads the message from the field the addon used", () => {
+    expect(noticeText(notice)).toBe("VIP expires in 4 days.");
+    expect(noticeText(stream({ kind: "unsupported", playable: false, name: "Only a name" }))).toBe("Only a name");
+    expect(noticeText(stream({ kind: "unsupported", playable: false, title: "Two\n lines" }))).toBe("Two lines");
+  });
+
+  it("shows a message repeated by several addons once", () => {
+    const other = stream({ sourceId: "n2", kind: "unsupported", playable: false, title: "VIP expires in 4 days.", addonName: "Luna: Search" });
+    expect(addonNotices([notice, other, playable]).map((item) => item.sourceId)).toEqual(["n1"]);
+  });
+
+  it("drops a notice with nothing to say", () => {
+    expect(addonNotices([stream({ kind: "unsupported", playable: false })])).toEqual([]);
+  });
+
+  it("never picks a notice as the default source", () => {
+    expect(pickDefaultStream(offeredStreams([notice]))).toBeUndefined();
   });
 });
