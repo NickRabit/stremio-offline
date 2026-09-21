@@ -42,6 +42,8 @@ export interface UserData {
   /** Per-user addon priority, addon keys only. Unknown keys are ignored and
    *  missing ones sort after, in the global order. */
   addonOrder?: string[];
+  /** Per-account library / queue browse chrome. Shape pinned in views.ts. */
+  views?: Record<string, unknown>;
   favorites: string[];
   watchlist: Record<string, unknown>;
   progress: Record<string, unknown>;

@@ -66,6 +66,9 @@ the Library view opens straight into it, and with two or more it lists them
 first. A library that is switched off or whose disk is unplugged is still a
 configured library, and still counts.
 
+Sorting, the favourites-only filter and the grid/list layout are remembered per
+library and per account, so one person's choice does not follow another's.
+
 ## Types, moves and the queue
 
 Kinds are enforced where a mistake would be expensive. Moving a film into a

@@ -1,4 +1,22 @@
-import type { Page } from "@playwright/test";
+import type { APIRequestContext, Page } from "@playwright/test";
+
+const libraryViewDefaults = { sort: "name", order: "asc", favoritesOnly: false, view: "grid" };
+const downloadsViewDefaults = { sort: "order", direction: "asc", status: "", dateField: "createdAt", pageSize: 20 };
+
+/** Layout projects share one account. A queue left at 50 rows or a library left in
+ *  list mode would be the next project's setup, so each suite that drives those
+ *  controls puts the stored views back first. */
+export async function resetViews(request: APIRequestContext) {
+  const libraries = await (await request.get("/api/libraries")).json() as Array<{ id: string }>;
+  await request.patch("/api/views", { data: {
+    libraries: Object.fromEntries(libraries.map((library) => [library.id, libraryViewDefaults])),
+    extras: {
+      ":favorites": libraryViewDefaults,
+      ":resume": { sort: "added", order: "desc", favoritesOnly: false, view: "grid" },
+    },
+    downloads: downloadsViewDefaults,
+  } });
+}
 
 /**
  * Scanning, creating a folder and switching library live behind the tools toggle at every

@@ -251,6 +251,25 @@ export interface LibraryFolder { path: string; name: string }
 
 export interface BrowseResult { path: string; items: BrowseItem[]; total: number; pending: boolean }
 export type LibrarySort = "name" | "added" | "size" | "random";
+export type LibraryOrder = "asc" | "desc";
+export type LibraryLayout = "grid" | "list";
+export type ExtraView = ":favorites" | ":resume";
+export type DownloadSort = "order" | "titleSort" | "createdAt" | "startedAt" | "completedAt" | "duration";
+export type DownloadStatusFilter = "" | "queued" | "waiting" | "checking" | "downloading" | "paused" | "completed" | "failed";
+export type DownloadDateField = "createdAt" | "startedAt" | "completedAt";
+export type DownloadPageSize = 20 | 50 | 100;
+/** The browsing chrome one library or one extra folder was left in. Mirrors `LibraryViewPrefs`
+ *  in `server/src/views.ts`; the two workspaces cannot share a module. */
+export interface LibraryViewPrefs { sort: LibrarySort; order: LibraryOrder; favoritesOnly: boolean; view: LibraryLayout }
+export interface DownloadsViewPrefs {
+  sort: DownloadSort; direction: LibraryOrder; status: DownloadStatusFilter;
+  dateField: DownloadDateField; pageSize: DownloadPageSize;
+}
+export interface UserViews {
+  libraries: Record<string, LibraryViewPrefs>;
+  extras: Partial<Record<ExtraView, LibraryViewPrefs>>;
+  downloads: DownloadsViewPrefs;
+}
 /** `pending` marks the row a finished episode left behind: the next episode of the show,
  *  not yet started. It carries no position and draws no progress bar. */
 export interface ProgressEntry { key: string; position: number; duration: number; title: string; path?: string; poster?: string; addonKey?: string; series?: { id: string; name: string; season: number; episode: number }; pending?: true; updatedAt: string }

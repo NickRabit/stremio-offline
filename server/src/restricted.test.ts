@@ -59,6 +59,7 @@ test("secret GETs match DENIED_GETS and ordinary GETs do not", () => {
 test("ALLOWED_MUTATIONS covers the demo writes and omits configuration", () => {
   assert.equal(isAllowedMutation("POST", "/auth/logout"), true);
   assert.equal(isAllowedMutation("POST", "/watchlist"), true);
+  assert.equal(isAllowedMutation("PATCH", "/views"), true);
   assert.equal(isAllowedMutation("POST", "/progress"), true);
   assert.equal(isAllowedMutation("DELETE", "/progress/movie:tt1"), true);
   assert.equal(isAllowedMutation("POST", "/library/favorite"), true);

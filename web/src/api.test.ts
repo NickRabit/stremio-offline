@@ -139,6 +139,18 @@ describe("settings", () => {
   });
 });
 
+describe("views", () => {
+  it("patches the stored browsing chrome without putting it on the query string", async () => {
+    fetchMock.mockResolvedValue(json({ libraries: {}, extras: {}, downloads: {} }));
+    await api.updateViews({ libraries: { lib_0000000a: { sort: "size", order: "desc", favoritesOnly: true, view: "list" } } });
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/views");
+    expect(optionsOf().method).toBe("PATCH");
+    expect(JSON.parse(String(optionsOf().body))).toEqual({
+      libraries: { lib_0000000a: { sort: "size", order: "desc", favoritesOnly: true, view: "list" } },
+    });
+  });
+});
+
 describe("describeError", () => {
   it("translates a failure the server tagged with a key", async () => {
     fetchMock.mockResolvedValue(json({ error: "The addon was not found.", messageKey: "err.addonNotFound" }, 400));

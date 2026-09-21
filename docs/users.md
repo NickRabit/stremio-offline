@@ -6,9 +6,9 @@ people in the household: an administrator adds an account per person, and
 decides which libraries and addons each of them sees.
 
 An account is a real identity, not a second interface. Its own addon order,
-preferred languages, tile settings, favourites, watch history and resume
-positions are kept apart from everybody else's, and its unfinished downloads
-belong to it.
+preferred languages, tile settings, favourites, watch history, resume
+positions and the sort, filter and layout of the library and download queue are
+kept apart from everybody else's, and its unfinished downloads belong to it.
 
 ## Roles
 
