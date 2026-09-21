@@ -7,7 +7,7 @@ import { assertStillAdmin } from "../roles.js";
 import { normalizeDownloadSettings } from "../naming.js";
 import { essentialAddon, publicAddon, publicAddonRestricted } from "../security.js";
 import type { AddonRecord, AddonRole } from "../types.js";
-import { bumpPermissions, emptyUserData, findUserById, usersToBump } from "../users.js";
+import { bumpPermissions, dormantGrants, emptyUserData, findUserById, usersToBump } from "../users.js";
 import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
 
 export interface AddonsDeps extends RouteContext {
@@ -132,14 +132,17 @@ export function registerAddonsRoutes(app: express.Application, deps: AddonsDeps)
     let allowedUsers: string[] | undefined;
     if (req.body.allowedUsers !== undefined) {
       if (!Array.isArray(req.body.allowedUsers)) throw new AppError("The list of accounts has to be an array.", "err.invalidRequest", 400);
-      const wanted = new Set<string>();
+      // What an account held before it was promoted stays on the addon, unreadable by the
+      // dashboard and unwritable by it: the request carries the ordinary accounts only.
+      const wanted = new Set<string>(dormantGrants(store.users(), existing.allowedUsers));
       for (const value of req.body.allowedUsers) {
         const id = String(value);
         const user = findUserById(store.users(), id);
         if (!user) throw new AppError("That account does not exist.", "err.unknownUser");
-        // An administrator uses every addon by role, so their id in the list would read as
-        // though removing it took the addon away.
-        if (user.role === "admin") throw new AppError("An administrator can already use every addon.", "err.adminAlwaysUsesAddons");
+        // An administrator uses every addon by role, so granting it would read as though
+        // removing it took the addon away. An id already lying dormant there is not a grant
+        // being made and passes.
+        if (user.role === "admin" && !wanted.has(id)) throw new AppError("An administrator can already use every addon.", "err.adminAlwaysUsesAddons");
         wanted.add(id);
       }
       allowedUsers = [...wanted];

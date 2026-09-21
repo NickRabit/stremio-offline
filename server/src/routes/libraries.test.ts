@@ -171,6 +171,21 @@ test("PATCH /api/libraries/:id refuses an account that does not exist", async (t
   assert.equal(harness.stored()[0]!.visibleTo, undefined, "a refused id leaves the library as it was");
 });
 
+test("PATCH /api/libraries/:id keeps a dormant grant the request cannot name", async (t) => {
+  const harness = await mount([{ ...library("alpha", 0), visibleTo: [ADA, BOB] }]);
+  t.after(harness.close);
+  // ADA holds that grant from before the promotion. The dashboard hides the grant pane for an
+  // administrator, so the list it sends names the ordinary accounts only, and taking the
+  // request literally would throw away the one thing a demotion has to give back.
+  const cleared = await api(harness.base, "/api/libraries/alpha", { method: "PATCH", body: { visibleTo: [] } });
+  assert.equal(cleared.status, 200);
+  assert.deepEqual(harness.stored()[0]!.visibleTo, [ADA]);
+
+  const echoed = await api(harness.base, "/api/libraries/alpha", { method: "PATCH", body: { visibleTo: [ADA, BOB] } });
+  assert.equal(echoed.status, 200, "sending the dormant id back is not a grant being made");
+  assert.deepEqual(harness.stored()[0]!.visibleTo, [ADA, BOB]);
+});
+
 test("PATCH /api/libraries/:id refuses an administrator's id", async (t) => {
   const harness = await mount([library("alpha", 0)]);
   t.after(harness.close);

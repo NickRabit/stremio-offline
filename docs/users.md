@@ -52,6 +52,14 @@ while an account created through the API with no lists reaches nothing. Of the
 two download permissions, *Save to this device* is on for a new account and
 *Download to the library* is off until it is ticked.
 
+Promoting somebody to administrator does not clear what was ticked for them. The
+grants lie dormant — the role already sees every library and uses every addon, so
+the entry grants nothing and the dialog hides the panes — and they come back as
+they were if the account is made ordinary again. Nothing else records what an
+account was granted, so the alternative would be an administrator rebuilding the
+ticks by hand from memory. Deleting the account does clear the lists: that id
+will never name anybody again.
+
 A right that is taken away takes effect at once. Changing a role, a permission,
 an enabled flag or a grant list bumps the account's permission version, which
 signs its other devices out of the affected work and stops live streams that were

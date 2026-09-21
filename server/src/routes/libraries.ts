@@ -15,7 +15,7 @@ import type { LibraryHealth, LibraryProbe } from "../library-probe.js";
 import { log } from "../logger.js";
 import { assertStillAdmin } from "../roles.js";
 import type { State } from "../store.js";
-import { forEachUserData, bumpPermissions, findUserById, usersToBump, type UserData } from "../users.js";
+import { forEachUserData, bumpPermissions, dormantGrants, findUserById, usersToBump, type UserData } from "../users.js";
 import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
 
 export interface LibrariesDeps extends RouteContext {
@@ -245,14 +245,17 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
     if (req.body?.writeArtwork !== undefined) patch.writeArtwork = req.body.writeArtwork === true;
     if (req.body?.visibleTo !== undefined) {
       if (!Array.isArray(req.body.visibleTo)) throw new AppError("The list of accounts has to be an array.", "err.invalidRequest", 400);
-      const wanted = new Set<string>();
+      // What an account held before it was promoted stays on the library, unreadable by the
+      // dashboard and unwritable by it: the request carries the ordinary accounts only.
+      const wanted = new Set<string>(dormantGrants(store.users(), target.visibleTo));
       for (const value of req.body.visibleTo) {
         const id = String(value);
         const user = findUserById(store.users(), id);
         if (!user) throw new AppError("That account does not exist.", "err.unknownUser");
-        // An administrator sees every library by role, so their id in the list would read as
-        // though removing it took the library away.
-        if (user.role === "admin") throw new AppError("An administrator already sees every library.", "err.adminAlwaysSees");
+        // An administrator sees every library by role, so granting it would read as though
+        // removing it took the library away. An id already lying dormant there is not a
+        // grant being made and passes.
+        if (user.role === "admin" && !wanted.has(id)) throw new AppError("An administrator already sees every library.", "err.adminAlwaysSees");
         wanted.add(id);
       }
       patch.visibleTo = [...wanted];

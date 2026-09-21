@@ -137,6 +137,29 @@ it("an administrator's row says they see everything instead of counting librarie
   expect(rows[1].textContent).toContain("2 libraries · 3 addons");
 });
 
+it("a demoted account gets its grant panes back with the ticks it had", async () => {
+  const bob = account({ id: "usr_00000002", username: "bob", role: "admin" });
+  await mount({
+    session: admin, users: [bob, account()],
+    libraries: [library({ visibleTo: ["usr_00000002"] })],
+    addons: [addon({ allowedUsers: ["usr_00000002"] })],
+    onWrite: () => account({ id: "usr_00000002", username: "bob", role: "user", libraries: 1, addons: 1 }),
+  });
+  await clickText("Edit");
+  expect(host.textContent, "an administrator has no grant panes").toContain("Sees every library and addon by role.");
+
+  const role = host.querySelector<HTMLSelectElement>('select[aria-label="Role"]')!;
+  const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!;
+  await act(async () => { setter.call(role, "user"); role.dispatchEvent(new Event("change", { bubbles: true })); });
+
+  // The grants were never swept, so the panes come back reading what they read before the
+  // promotion: the administrator has nothing to rebuild by hand.
+  await openPane("Libraries");
+  expect(host.querySelector<HTMLInputElement>('input[aria-label="Films is visible to this account"]')?.checked).toBe(true);
+  await openPane("Addons");
+  expect(host.querySelector<HTMLInputElement>('input[aria-label="Alpha is available to this account"]')?.checked).toBe(true);
+});
+
 it("a library tick writes the whole grant list back to the library", async () => {
   const patched: Array<{ url: string; body: Record<string, unknown> }> = [];
   await mount({

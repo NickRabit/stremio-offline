@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { hashPassword } from "./auth.js";
 import {
-  assertAdminRemains, bumpPermissions, emptyUserData, enabledAdmins, envResetApplied, envResetPending, findUser, findUserById, forEachUserData,
+  assertAdminRemains, bumpPermissions, dormantGrants, emptyUserData, enabledAdmins, envResetApplied, envResetPending, findUser, findUserById, forEachUserData,
   migrateUsers, newUserPermissions, newUserId, normalizeUsername, PASSWORD_MIN, PERSONAL_SETTINGS, publicUser, USER_ID,
   USERNAME_MIN, usersToBump, type MigratableState, type UserData, type UserRecord,
 } from "./users.js";
@@ -127,6 +127,13 @@ test("bumping a permissions list names everyone who left it or entered it", () =
   assert.deepEqual(usersToBump(undefined, ["usr_3"]), ["usr_3"]);
   assert.deepEqual(usersToBump(["usr_1"], undefined), ["usr_1"]);
   assert.deepEqual(usersToBump(undefined, undefined), []);
+});
+
+test("a dormant grant is the one an administrator's id holds", () => {
+  const users = [admin(), user(), user({ id: "usr_00000003", username: "petr" })];
+  assert.deepEqual(dormantGrants(users, ["usr_a1b2c3d4", "usr_00000001", "usr_00000003"]), ["usr_00000001"]);
+  assert.deepEqual(dormantGrants(users, undefined), []);
+  assert.deepEqual(dormantGrants(users, ["usr_ffffffff"]), [], "an id nobody answers to is not dormant, it is dangling");
 });
 
 test("a permission bump touches only the named users and leaves the input array alone", () => {
