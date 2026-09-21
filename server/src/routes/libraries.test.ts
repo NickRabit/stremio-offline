@@ -19,7 +19,7 @@ interface Harness {
    *  account does. `after` lets it answer the handler's own first read and nothing after. */
   loseSession: (after: number) => void;
   disable: (id: string) => void;
-  viewed: Array<{ id: string; health: LibraryHealth; stats: { titles: number; files: number; bytes: number } }>;
+  viewed: Array<{ id: string; health: LibraryHealth; stats: { titles: number; files: number; bytes: number }; admin: boolean }>;
   enqueued: unknown[];
   stored: () => LibraryRecord[];
   userGrants: () => RootGrant[];
@@ -73,8 +73,8 @@ const mount = async (records: LibraryRecord[] = [library("alpha", 0)], env: Root
     invalidateLibrary: () => undefined,
     libraryGrants: () => mergeGrants(env, state.grants),
     libraryStats: async () => stats,
-    libraryView: (record, health, totals) => {
-      viewed.push({ id: record.id, health, stats: totals });
+    libraryView: (record, health, totals, admin) => {
+      viewed.push({ id: record.id, health, stats: totals, admin });
       return { id: record.id, name: record.name, unreachable: health.unreachable, readOnly: health.readOnly, ...totals };
     },
     progressOf: () => ({}),
@@ -150,6 +150,17 @@ test("GET /api/libraries answers an ordinary user with the libraries granted to 
 
   const user = await (await api(harness.base, "/api/libraries", { user: BOB })).json() as Array<{ id: string }>;
   assert.deepEqual(user.map((item) => item.id), ["beta"], "a user sees only what was granted to them");
+});
+
+test("GET /api/libraries tells the view whether the caller may be shown a root", async (t) => {
+  const harness = await mount([{ ...library("alpha", 0), visibleTo: [BOB] }]);
+  t.after(harness.close);
+
+  await api(harness.base, "/api/libraries");
+  await api(harness.base, "/api/libraries", { user: BOB });
+
+  assert.deepEqual(harness.viewed.map((item) => item.admin), [true, false],
+    "only an administrator is offered the path the library lives at on the host");
 });
 
 test("PATCH /api/libraries/:id sets visibleTo and collapses duplicates", async (t) => {

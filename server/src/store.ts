@@ -69,6 +69,18 @@ export function publicSettings(settings: InstanceSettings): PublicSettings {
   const { realDebridToken: token, tmdbApiKey: apiKey, ...rest } = settings;
   return { ...rest, realDebridConfigured: Boolean(token), tmdbConfigured: Boolean(apiKey) };
 }
+
+/** The instance half an ordinary account is answered with, and the only part of it the
+ *  ordinary interface behaves on: `secureMode` decides whether a trailer is framed or opens
+ *  in a new tab, and `realDebridConfigured` whether torrent sources are offered at all.
+ *  Everything else -- how the instance downloads, what it scans and when, which providers it
+ *  holds a token for, where a download lands -- is the operator's business and says more
+ *  about the host than an account has any reason to learn. An allow-list on purpose: an
+ *  instance key added later stays hidden until somebody decides otherwise. */
+export type MemberSettings = Pick<PublicSettings, "secureMode" | "realDebridConfigured">;
+
+export const memberSettings = (settings: PublicSettings): MemberSettings =>
+  ({ secureMode: settings.secureMode, realDebridConfigured: settings.realDebridConfigured });
 export interface State { schemaVersion?: number;
   /** The configured libraries, in display order. A migrated install has exactly one. */
   libraries?: LibraryRecord[];

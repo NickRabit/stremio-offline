@@ -966,11 +966,13 @@ const artworkBesideMediaFor = (key: string) => {
   return artworkBesideMedia(library, healthOf(library));
 };
 
-/** The wire view of a library. Restricted mode withholds `root`: the picker discloses host
- *  layout to somebody at the keyboard, and a shared instance renders names and counts only. */
-const libraryView = (library: LibraryRecord, health: LibraryHealth, stats: { titles: number; files: number; bytes: number }) => ({
+/** The wire view of a library. `root` reaches only a caller who can act on it. Restricted
+ *  mode withholds it because the picker discloses host layout to somebody at the keyboard and
+ *  a shared instance renders names and counts only; an ordinary account is withheld it for
+ *  the same reason, and loses nothing by it -- every view it has names a library by id. */
+const libraryView = (library: LibraryRecord, health: LibraryHealth, stats: { titles: number; files: number; bytes: number }, admin: boolean) => ({
   id: library.id, name: library.name, type: library.type,
-  ...(restrictedMode() ? {} : { root: toPosix(library.root) }),
+  ...(restrictedMode() || !admin ? {} : { root: toPosix(library.root) }),
   enabled: library.enabled, order: library.order, addedAt: library.addedAt,
   writeArtwork: library.writeArtwork,
   mosaic: library.mosaic !== false,

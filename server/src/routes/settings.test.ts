@@ -143,6 +143,43 @@ test("GET /api/settings answers the configured booleans and never the stored sec
   assert.equal(body.tmdbConfigured, true);
 });
 
+test("GET /api/settings tells an ordinary account nothing about the instance it cannot act on", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+
+  const carol = await (await api(harness.base, "/api/settings", { user: "carol" })).json() as Record<string, unknown>;
+
+  for (const key of ["concurrentDownloads", "parallelPerProvider", "downloadSegments", "libraryAutoScan",
+    "libraryScanPauseOnDownload", "logLevel", "addonRefreshHours", "defaultMovieLibrary", "defaultSeriesLibrary",
+    "tmdbConfigured", "realDebridToken", "tmdbApiKey"]) {
+    assert.equal(key in carol, false, `${key} is the operator's business`);
+  }
+  // Kept on purpose: without the one the interface offers torrent sources it cannot save,
+  // and without the other it frames a trailer the instance meant to send to a new tab.
+  assert.equal(carol.realDebridConfigured, true);
+  assert.equal(carol.secureMode, harness.state.settings.secureMode);
+  assert.equal(carol.uiLanguage, "en", "its own half arrives whole");
+  assert.equal(carol.libraryTileSize, "medium");
+
+  const ada = await (await api(harness.base, "/api/settings", { user: "ada" })).json() as Record<string, unknown>;
+  assert.equal(ada.concurrentDownloads, harness.state.settings.concurrentDownloads, "an administrator still reads it all");
+  assert.equal(ada.addonRefreshHours, harness.state.settings.addonRefreshHours);
+  assert.equal(ada.tmdbConfigured, true);
+});
+
+test("PATCH /api/settings answers an ordinary account with the same narrowed view", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+
+  const response = await api(harness.base, "/api/settings", { method: "PATCH", user: "carol", body: { libraryTileSize: "large" } });
+
+  assert.equal(response.status, 200);
+  const body = await response.json() as Record<string, unknown>;
+  assert.equal(body.libraryTileSize, "large");
+  assert.equal("concurrentDownloads" in body, false);
+  assert.equal("tmdbConfigured" in body, false);
+});
+
 test("PATCH /api/settings sends an instance key to the instance and a personal key to the caller", async (t) => {
   const harness = await mount();
   t.after(harness.close);

@@ -1,5 +1,5 @@
 import { serverText, t } from "./i18n";
-import type { ActiveStream, Diagnostics, BuildInfo, AuthStatus, StatsSummary, Addon, AddonDownloadSettings, Capabilities, Catalog, Download, DownloadSelection, DownloadSnapshot, Inspection, BrowseResult, IdentityPreview, LibraryFolder, LibraryOp, LibraryOpsState, ProgressEntry, WatchlistEntry, GrantBrowse, LibraryEstimate, LibraryGrant, LibrarySummary, LibraryType, LibraryView, Meta, PlaybackSession, ScanState, SearchResult, SearchableCatalog, SiteLink, SuggestionRow, Session, Settings, SettingsBackup, SettingsPatch, Stream, Subtitle, Trailer, UserAccount, UserPermissions, UserRole } from "./types";
+import type { ActiveStream, Diagnostics, BuildInfo, AuthStatus, StatsSummary, Addon, AddonDownloadSettings, Capabilities, Catalog, Download, DownloadSelection, DownloadSnapshot, Inspection, BrowseResult, IdentityPreview, LibraryFolder, LibraryOp, LibraryOpsState, ProgressEntry, WatchlistEntry, GrantBrowse, LibraryEstimate, LibraryGrant, LibrarySummary, LibraryType, LibraryView, Meta, PlaybackSession, ScanState, SearchResult, SearchableCatalog, SiteLink, SuggestionRow, Session, Settings, SettingsBackup, SettingsPatch, SettingsView, Stream, Subtitle, Trailer, UserAccount, UserPermissions, UserRole } from "./types";
 
 /** The status code has to reach the top, or a sign-out is indistinguishable from an ordinary error. */
 export class ApiError extends Error {
@@ -76,8 +76,8 @@ export const api = {
   moveDownload: (id: string, direction: -1 | 1) => request<void>(`/api/downloads/${id}/move`, { method: "POST", body: JSON.stringify({ direction }) }),
   removeDownload: (id: string) => request<void>(`/api/downloads/${id}`, { method: "DELETE" }),
   clearCompleted: () => request<void>("/api/downloads", { method: "DELETE" }),
-  settings: () => request<Settings>("/api/settings"),
-  updateSettings: (patch: SettingsPatch) => request<Settings>("/api/settings", { method: "PATCH", body: JSON.stringify(patch) }),
+  settings: () => request<SettingsView>("/api/settings"),
+  updateSettings: (patch: SettingsPatch) => request<SettingsView>("/api/settings", { method: "PATCH", body: JSON.stringify(patch) }),
   exportSettings: () => request<SettingsBackup>("/api/settings/export"),
   importSettings: (backup: unknown) => request<{ settings: Settings; addons: Addon[]; remapped: number }>("/api/settings/import", { method: "POST", body: JSON.stringify(backup), timeoutMs: 120_000 }),
   languages: () => request<Array<{ code: string; name: string }>>("/api/languages"),

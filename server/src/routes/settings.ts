@@ -9,7 +9,7 @@ import type { LibraryMetaStore } from "../library-meta-store.js";
 import { currentLevel, log, parseLevel, setLevel } from "../logger.js";
 import { publicAddon } from "../security.js";
 import { assertStillAdmin, ForbiddenError } from "../roles.js";
-import { publicSettings, type InstanceSettings, type Settings, type State, type UserPrefs } from "../store.js";
+import { memberSettings, publicSettings, type InstanceSettings, type Settings, type State, type UserPrefs } from "../store.js";
 import { verifyTmdbKey } from "../tmdb.js";
 import { clearTrailerCache } from "../trailers.js";
 import type { MetaItem, StreamItem } from "../types.js";
@@ -32,8 +32,15 @@ export interface SettingsDeps extends RouteContext {
 export function registerSettingsRoutes(app: express.Application, deps: SettingsDeps): void {
   const { store, STREAM_SORTS, accountIdOf, currentUser, invalidateLibrary, metaCache, metaStore, mutateData, prefsOf, queue, stopContentAccess, streamCache } = deps;
 
-  /** The one flat object the interface reads: the instance's settings and the caller's own. */
-  const settingsView = (req: express.Request) => ({ ...publicSettings(store.settings()), ...prefsOf(req) });
+  /** The one flat object the interface reads: the instance's settings and the caller's own.
+   *  An ordinary account is answered with its own half and the two instance flags the
+   *  ordinary interface behaves on -- see `memberSettings`. Not rendering the instance
+   *  panels was never enough on its own: a control the interface hides is still a value the
+   *  endpoint handed out, and this is where it was read from. */
+  const settingsView = (req: express.Request) => {
+    const instance = publicSettings(store.settings());
+    return { ...(currentUser(req)?.role === "admin" ? instance : memberSettings(instance)), ...prefsOf(req) };
+  };
   app.get("/api/settings", (req, res) => res.json(settingsView(req)));
 
   /** The backup file carries both halves of the settings in one flat object, the way the

@@ -154,8 +154,33 @@ test.describe("accounts", () => {
       await expect(guestPage.getByLabel("Souběžná stahování")).toHaveCount(0);
 
       const visible = await guestPage.request.get("/api/libraries")
-        .then((response) => response.json() as Promise<Array<{ id: string }>>);
+        .then((response) => response.json() as Promise<Array<{ id: string; root?: string }>>);
       expect(visible.map((entry) => entry.id), "the account sees the granted library and nothing else").toEqual([granted.id]);
+      // Hiding the instance panels is the interface agreeing with the server; these two ask the
+      // server directly, which is the only place the split actually holds.
+      expect(visible.map((entry) => entry.root), "a granted library is named, never placed on the host").toEqual([undefined]);
+      const asAdmin = await page.request.get("/api/libraries")
+        .then((response) => response.json() as Promise<Array<{ id: string; root?: string }>>);
+      expect(asAdmin.every((entry) => typeof entry.root === "string"), "an administrator still reads the roots").toBe(true);
+
+      // Every key of the instance half, spelled out rather than counted: a response that grew
+      // one back would pass a count. The list below leaves out `secureMode` and
+      // `realDebridConfigured` on purpose -- the interface drops torrent sources without the
+      // one and frames a trailer the wrong way without the other, so an account that is not
+      // told them behaves wrongly. The assertion after it holds them to being there.
+      const ownSettings = await guestPage.request.get("/api/settings")
+        .then((response) => response.json() as Promise<Record<string, unknown>>);
+      for (const instanceOnly of ["concurrentDownloads", "parallelPerProvider", "downloadSegments",
+        "libraryAutoScan", "libraryScanPauseOnDownload", "logLevel", "addonRefreshHours",
+        "defaultMovieLibrary", "defaultSeriesLibrary", "tmdbConfigured", "realDebridToken", "tmdbApiKey"]) {
+        expect(Object.keys(ownSettings), `${instanceOnly} says what the instance runs`).not.toContain(instanceOnly);
+      }
+      expect(ownSettings.uiLanguage, "its own half arrives whole").toBe("cs");
+      expect(Object.keys(ownSettings), "what the ordinary interface behaves on stays").toEqual(
+        expect.arrayContaining(["secureMode", "realDebridConfigured", "streamSort", "libraryTileSize"]));
+      // The export is administrator-only for a reason: it carries the raw tokens.
+      expect((await guestPage.request.get("/api/settings/export")).status(),
+        "the one settings route that hands out the tokens stays shut").toBe(403);
 
       expect((await guestPage.request.get("/api/users")).status(), "an administrator-only route refuses an ordinary account").toBe(403);
 

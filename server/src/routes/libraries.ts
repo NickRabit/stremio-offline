@@ -24,7 +24,7 @@ export interface LibrariesDeps extends RouteContext {
   invalidateLibrary(): void;
   libraryGrants(): RootGrant[];
   libraryStats(): Promise<Map<string, { titles: number; files: number; bytes: number }>>;
-  libraryView(library: LibraryRecord, health: LibraryHealth, stats: { titles: number; files: number; bytes: number }): Record<string, unknown>;
+  libraryView(library: LibraryRecord, health: LibraryHealth, stats: { titles: number; files: number; bytes: number }, admin: boolean): Record<string, unknown>;
   progressOf(data: UserData): Record<string, { path?: string }>;
   refreshLibraryHealth(): Promise<Map<string, LibraryHealth>>;
   libraryProbe: LibraryProbe;
@@ -58,7 +58,8 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
     await refreshLibraryHealth();
     const stats = await libraryStats();
     const libraries = [...visibleLibraries(store.libraries(), viewerOf(currentUser(req)))].sort((a, b) => a.order - b.order);
-    res.json(libraries.map((library) => libraryView(library, healthOf(library), stats.get(library.id) ?? { titles: 0, files: 0, bytes: 0 })));
+    const admin = currentUser(req)?.role === "admin";
+    res.json(libraries.map((library) => libraryView(library, healthOf(library), stats.get(library.id) ?? { titles: 0, files: 0, bytes: 0 }, admin)));
   }));
 
   app.post("/api/libraries", asyncRoute(async (req, res) => {
@@ -103,7 +104,8 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
     await refreshLibraryHealth();
     if (resumedId) log("INFO", "Library added again, it keeps what it remembered", { library: library.id, root: library.root, type });
     else log("INFO", "Library created", { library: library.id, root: library.root, type });
-    res.status(201).json(libraryView(library, health, { titles: 0, files: 0, bytes: 0 }));
+    // Creating a library is administrator-only, so the caller is one by the time this answers.
+    res.status(201).json(libraryView(library, health, { titles: 0, files: 0, bytes: 0 }, true));
   }));
 
   app.get("/api/libraries/browse", asyncRoute(async (req, res) => {
@@ -313,7 +315,8 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
     await refreshLibraryHealth();
     const stats = await libraryStats();
     log("INFO", "Library updated", { library: record.id, root: record.root, type: record.type, enabled: record.enabled });
-    res.json(libraryView(record, health, stats.get(record.id) ?? { titles: 0, files: 0, bytes: 0 }));
+    // As with the create above: only an administrator reaches this route.
+    res.json(libraryView(record, health, stats.get(record.id) ?? { titles: 0, files: 0, bytes: 0 }, true));
   }));
 
   app.delete("/api/libraries/:id", asyncRoute(async (req, res) => {
