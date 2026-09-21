@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { LibraryManager } from "./LibraryManager";
+import { LibraryManager, LibraryManagerDialog } from "./LibraryManager";
 import type { GrantBrowse, LibraryGrant, LibraryView } from "./types";
 import { setLocale } from "./i18n";
 
@@ -219,17 +219,36 @@ it("the libraries can be reordered, and the order is written as a sequence", asy
   ]);
 });
 
-it("the picker scrolls in one place, with the selection next to the button that acts on it", async () => {
+it("the picker scrolls in one place, and its footer cannot change height", async () => {
   await openPicker([], false);
 
   const card = picker();
   const body = card.querySelector(".dialog-body")!;
   expect(card.classList.contains("dialog-split")).toBe(true);
   expect(body.querySelector(".move-list"), "the folder list scrolls with the rest of the body").toBeTruthy();
-  expect(body.querySelector(".library-picker-selection"), "the selection is not in the scroller").toBeNull();
+
+  // This reverses an earlier decision. The selection block used to sit in the footer, so
+  // that the chosen folder stayed beside the button confirming it -- right in intent, but
+  // it carried the estimate, the scan switch and the re-root radios with it, all of which
+  // come and go. Measured at 667x375 the footer had grown to 313px of a 375px dialog, the
+  // body was 14px, and the confirm button was off the bottom of the screen; picking a
+  // folder shifted the list under the cursor by 49px. So the varying parts moved into the
+  // body and the footer keeps one line that never wraps.
+  expect(body.querySelector(".library-picker-selection"), "the parts that change height are in the body").toBeTruthy();
   const footer = card.querySelector(".library-picker-footer")!;
-  expect(footer.querySelector(".library-picker-selection")).toBeTruthy();
+  expect(footer.querySelector(".library-picker-selection"), "and no longer in the footer").toBeNull();
+  expect(footer.querySelector(".library-picker-status"), "the footer still says what will be confirmed").toBeTruthy();
   expect(footer.querySelector("button.primary")).toBeTruthy();
+});
+
+it("the picker says why the confirm is disabled instead of only greying it out", async () => {
+  await openPicker([], false);
+
+  const footer = picker().querySelector(".library-picker-footer")!;
+  const status = footer.querySelector(".library-picker-status")!;
+  expect(footer.querySelector<HTMLButtonElement>("button.primary")!.disabled).toBe(true);
+  expect(status.classList.contains("blocked")).toBe(true);
+  expect(status.textContent).toBeTruthy();
 });
 
 it("the mosaic of covers can be turned off in the library dialog", async () => {
@@ -324,4 +343,40 @@ it("re-rooting can take the content along, and says which it is doing", async ()
 
   await clickIn(picker(), "Move the content here");
   expect(calls).toEqual([{ url: "/api/libraries/lib_ab12cd34/reroot", body: { root: "/downloads", moveContent: true } }]);
+});
+
+/** The card used to scroll while the settings inside it scrolled too, so the save button and
+ *  the close control fell off the bottom of a short window. One scroll region, with the head
+ *  and the action outside it. */
+it("the library dialog keeps the head and the save action outside the one scroller", async () => {
+  fetchMock.mockResolvedValue(json([library()]));
+  await act(async () => { root.render(<LibraryManager onError={vi.fn()} onNotify={vi.fn()}/>); });
+  await act(async () => { await Promise.resolve(); });
+
+  await openEditor();
+  const card = host.querySelector(".library-edit-card")!;
+  const body = card.querySelector(".dialog-body")!;
+  expect(card.classList.contains("dialog-split")).toBe(true);
+  expect(body.querySelector(".identify-head"), "the head is pinned outside the scroller").toBeNull();
+  const save = [...host.querySelectorAll("button")].find((button) => button.textContent?.trim() === "Save changes")!;
+  expect(save.closest(".dialog-foot"), "the action is pinned outside the scroller").toBeTruthy();
+  expect(save.closest(".dialog-body")).toBeNull();
+});
+
+/** Nothing here commits, so the list is the whole body: the head is the only thing the card
+ *  pins, and Escape is not the only way out of a phone-sized window. */
+it("the manager dialog scrolls its list, not the card", async () => {
+  fetchMock.mockResolvedValue(json([library(), library({ id: "lib_22222222", name: "Series", order: 1 })]));
+  await act(async () => {
+    root.render(<LibraryManagerDialog onClose={vi.fn()} onError={vi.fn()} onNotify={vi.fn()}/>);
+  });
+  await act(async () => { await Promise.resolve(); });
+
+  const card = host.querySelector(".library-manager-card")!;
+  const body = card.querySelector(".dialog-body")!;
+  expect(card.classList.contains("dialog-split")).toBe(true);
+  expect(body.querySelectorAll(".library-admin-row")).toHaveLength(2);
+  expect(body.querySelector(".library-manager-actions")).toBeTruthy();
+  expect(card.querySelector(".identify-head")?.closest(".dialog-body")).toBeNull();
+  expect(card.querySelector(".dialog-foot")).toBeNull();
 });

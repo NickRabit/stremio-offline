@@ -28,7 +28,7 @@ import { advanceTorrent } from "./debrid.js";
 import { tmdbMeta } from "./tmdb.js";
 import { ExternalIdStore } from "./external-ids.js";
 import { currentLevel, flushLog, initLogger, log, parseLevel, startLogMaintenance, setLevel } from "./logger.js";
-import { browseDirectory, describePath, emptiedFolders, entryDirectory, isPathWithin, isVideo, listVideos, moveDestination, orphanedCatalogKeys, pageFiles, remapPath, scanLibrary, summarize, type FoundFile, type LibraryEntry } from "./library.js";
+import { browseDirectory, describePath, emptiedFolders, entryDirectory, holdsLibraryRoot, isPathWithin, isVideo, listVideos, moveDestination, orphanedCatalogKeys, pageFiles, remapPath, scanLibrary, summarize, type FoundFile, type LibraryEntry } from "./library.js";
 import { browseMeta, cacheFieldsFromMeta, episodeKey, episodeNumberOf, episodesFromMeta, dropKeyed, knownTitleEntry, knownTitleOf, matchKeyFor, mosaicSkipped, needsBackfill, needsEpisodes, titleUnits, unmatchAt, type LibraryMetaRecord, type TitleKind, type TitleUnit } from "./library-match.js";
 import { LibraryScan } from "./library-scan.js";
 import { createLibraryProbe, type LibraryHealth } from "./library-probe.js";
@@ -641,9 +641,26 @@ const singleLibrary = () => {
   }
   return libraries[0]!;
 };
+/** The folder a library really sits on: the root the probe resolved, which is the folder a
+ *  root reached through a symlink points at. Without an answer the spelling is all there is. */
+const realRootOf = (library: LibraryRecord) => libraryHealth.get(library.id)?.realRoot ?? path.resolve(library.root);
 /** Folders inside this library that another library owns. The walk, the pickers and
- *  the prune all stop at them, or a delete would take the other library with it. */
-const carveOutsOf = (library: LibraryRecord) => new Set(carveOuts(store.libraries(), library));
+ *  the prune all stop at them, or a delete would take the other library with it. Compared
+ *  as folders, not as the spellings the libraries were configured with: an alias into this
+ *  tree is a child of it whether or not its path reads that way. */
+const carveOutsOf = (library: LibraryRecord) => {
+  const libraries = store.libraries();
+  const spelled = (entry: LibraryRecord) => ({ id: entry.id, root: path.resolve(entry.root) });
+  const resolved = (entry: LibraryRecord) => ({ id: entry.id, root: realRootOf(entry) });
+  // Both readings, unioned. Before the first probe -- and for a root that was away when its
+  // probe ran -- `realRootOf` has only the spelling, and comparing spellings is what let an
+  // aliased child slip through. Taking both means a missing answer can only widen the set,
+  // never narrow it, so the gap before a probe fails closed rather than open.
+  return new Set([
+    ...carveOuts(libraries.map(spelled), spelled(library)),
+    ...carveOuts(libraries.map(resolved), resolved(library)),
+  ]);
+};
 /** The library a key names, with the key's part below it. A key without a library id is
  *  the single-library pass-through; `singleLibrary` throws if there is no such library.
  *
@@ -935,8 +952,11 @@ const libraryStats = async () => {
   return stats;
 };
 
+/** A library the probes have not answered for yet. The guard reads the fold from here, and an
+ *  unknown fold folds: refusing a delete the user has to do another way costs less than a
+ *  library that was inside the folder. */
 const healthOf = (library: LibraryRecord): LibraryHealth =>
-  libraryHealth.get(library.id) ?? { unreachable: false, readOnly: false };
+  libraryHealth.get(library.id) ?? { unreachable: false, readOnly: false, realRoot: path.resolve(library.root), caseInsensitive: true };
 
 /** Whether a poster for this key may be written next to the media. The library of the key
  *  decides, alone: an added archive, a read-only mount and one that is away all keep their
@@ -1481,7 +1501,7 @@ const carryCoveringArtwork = async (cover: string, nextKey: string) => {
  *  as the parent holds nothing to watch either. */
 const pruneEmptiedFolders = async (key: string) => {
   const { library, relative } = libraryOfKey(key);
-  const gone = await emptiedFolders(library.root, relative, carveOutsOf(library));
+  const gone = await emptiedFolders(library.root, relative, carveOutsOf(library), healthOf(library).caseInsensitive);
   for (const folder of gone) {
     const folderKey = libraryPath(library.id, folder);
     await rm(mediaPath(folderKey), { recursive: true, force: true });
@@ -1497,6 +1517,12 @@ const deleteLibraryItem = async (relative: string) => {
   if (!resolved || !resolved.relative) throw new AppError("Invalid path.", "err.invalidPath");
   const info = await stat(resolved.absolute).catch(() => undefined);
   if (!info) throw new AppError("The file or folder does not exist.", "err.pathMissing");
+  // A recursive remove would take the nested library with it. The fold comes from the volume
+  // this folder sits on: the carve-outs are compared as spellings inside this library's tree,
+  // so this library's probe -- not the process's platform -- decides.
+  if (holdsLibraryRoot(carveOutsOf(resolved.library), resolved.relative, healthOf(resolved.library).caseInsensitive)) {
+    throw new AppError("This folder holds another library. Move that library out first.", "err.libraryHoldsAnother", 409);
+  }
   await rm(resolved.absolute, { recursive: true, force: true });
   await removeGeneratedArt(resolved.key);
   const orphans = await forgetLibraryPath(resolved.key);
@@ -1536,6 +1562,12 @@ const transferLibraryItem = async (relative: string, folder: string, copy = fals
   if (!resolved || !resolved.relative) throw new AppError("Invalid path.", "err.invalidPath");
   const info = await stat(resolved.absolute).catch(() => undefined);
   if (!info) throw new AppError("The file or folder does not exist.", "err.pathMissing");
+  // Moving or copying the folder would take the nested library with it, and a copy would
+  // leave a second set of its media for the next scan to adopt. The fold comes from the
+  // volume the item sits on, which is the tree the carve-outs are compared in.
+  if (holdsLibraryRoot(carveOutsOf(resolved.library), resolved.relative, healthOf(resolved.library).caseInsensitive)) {
+    throw new AppError("This folder holds another library. Move that library out first.", "err.libraryHoldsAnother", 409);
+  }
 
   const folderResolved = await resolveLibraryPath(store.libraries(), folder);
   if (!folderResolved) throw new AppError("Invalid path.", "err.invalidPath");
@@ -1629,7 +1661,7 @@ const browsedLibraries = new Set<string>();
 /** A library the interface opened is worth keeping current: the walk of a library nobody
  *  looked at is what the freshness pass is allowed to skip. */
 const markBrowsed = (library: LibraryRecord) => { browsedLibraries.add(library.id); };
-registerContentRoutes(app, { ...routeContext, attachBrowseMeta, carveOutsOf, dataOf, deleteLibraryItem, fileExists, invalidateLibrary, libraryEntries, libraryKey, libraryRootBrowse, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, prefsOf, progressOf, relativeKeyIn, relocateLibraryPath, scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites });
+registerContentRoutes(app, { ...routeContext, attachBrowseMeta, carveOutsOf, dataOf, deleteLibraryItem, fileExists, healthOf, invalidateLibrary, libraryEntries, libraryKey, libraryRootBrowse, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, prefsOf, progressOf, relativeKeyIn, relocateLibraryPath, scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites });
 const libraryScan = new LibraryScan({
   dataDir: DATA_DIR,
   // The scan works on keys, so the walk it injects is the qualified one.

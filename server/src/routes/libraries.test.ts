@@ -69,7 +69,7 @@ const mount = async (records: LibraryRecord[] = [library("alpha", 0)], env: Root
     requireAccess: () => undefined,
     stopContentAccess: async () => undefined,
     grantRows: async () => mergeGrants(env, state.grants).map((grant) => ({ ...grant, writable: true })),
-    healthOf: (record) => ({ unreachable: record.id === "alpha", readOnly: record.id === "beta" }),
+    healthOf: (record) => ({ unreachable: record.id === "alpha", readOnly: record.id === "beta", realRoot: record.root, caseInsensitive: false }),
     invalidateLibrary: () => undefined,
     libraryGrants: () => mergeGrants(env, state.grants),
     libraryStats: async () => stats,
@@ -80,8 +80,8 @@ const mount = async (records: LibraryRecord[] = [library("alpha", 0)], env: Root
     progressOf: () => ({}),
     refreshLibraryHealth: async () => new Map(),
     libraryProbe: {
-      probe: async () => ({ unreachable: false, readOnly: false }),
-      cached: async () => ({ unreachable: false, readOnly: false }),
+      probe: async (root: string) => ({ unreachable: false, readOnly: false, realRoot: root, caseInsensitive: false }),
+      cached: async (root: string) => ({ unreachable: false, readOnly: false, realRoot: root, caseInsensitive: false }),
       invalidate: () => undefined,
     },
     metaStore: { qualifiedMeta: () => ({}), forget: async () => undefined } as unknown as LibraryMetaStore,
@@ -136,7 +136,7 @@ test("GET /api/libraries passes every record through libraryView with its health
   assert.deepEqual(body.map((item) => item.readOnly), [false, true]);
   assert.deepEqual(body.map((item) => [item.titles, item.files, item.bytes]), [[3, 4, 5], [0, 0, 0]]);
   assert.deepEqual(harness.viewed.map((item) => item.id), ["alpha", "beta"]);
-  assert.deepEqual(harness.viewed[0].health, { unreachable: true, readOnly: false });
+  assert.deepEqual(harness.viewed[0].health, { unreachable: true, readOnly: false, realRoot: "/media/alpha", caseInsensitive: false });
   assert.deepEqual(harness.viewed[0].stats, { titles: 3, files: 4, bytes: 5 });
   assert.deepEqual(harness.viewed[1].stats, { titles: 0, files: 0, bytes: 0 });
 });

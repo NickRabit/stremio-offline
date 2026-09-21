@@ -1,7 +1,7 @@
 import { readdir, stat } from "node:fs/promises";
 import type { Dirent } from "node:fs";
 import path from "node:path";
-import { posixBase, posixDir, posixJoin, toFs } from "./libraries.js";
+import { foldPath, posixBase, posixDir, posixJoin, toFs } from "./libraries.js";
 
 const VIDEO = new Set([".mkv", ".mp4", ".avi", ".m4v", ".mov", ".webm", ".ts", ".m2ts", ".wmv", ".flv", ".mpg", ".mpeg"]);
 
@@ -99,11 +99,25 @@ export function isPathWithin(value: string, parent: string): boolean {
   return Boolean(parent) && SEPARATORS.some((separator) => value.startsWith(`${parent}${separator}`));
 }
 
-/** True when `folder` is a carve-out itself or holds one: deleting it would delete
- *  another library. */
-function excludedUnder(exclude: ReadonlySet<string> | undefined, folder: string): boolean {
-  if (!exclude?.size) return false;
-  for (const path of exclude) if (isPathWithin(path, folder)) return true;
+/** True when `relative` is another library's root itself or holds one: deleting, moving or
+ *  renaming it would take that library with it. */
+export function holdsLibraryRoot(
+  carveOuts: ReadonlySet<string> | undefined,
+  relative: string,
+  // Same parameter as `sameFile`, for the same reason: the rule is platform-dependent and
+  // has to be testable on a runner that does not fold. Linux is one, so CI is one.
+  // An absent answer means no probe reached the volume, and an unknown fold folds: folding
+  // wrongly costs a delete the user has to do another way, not folding wrongly costs a
+  // library that was inside the folder.
+  caseInsensitive?: boolean,
+): boolean {
+  if (!carveOuts?.size) return false;
+  const fold = caseInsensitive ?? true;
+  // Folded, because on a case-folding volume `Archiv` and `archiv` are one directory: a
+  // guard that compares the spellings would let the other one through, and a nested root
+  // recorded in a different case than its parent's tree would not be seen at all.
+  const folder = foldPath(relative, fold);
+  for (const path of carveOuts) if (isPathWithin(foldPath(path, fold), folder)) return true;
   return false;
 }
 
@@ -125,12 +139,20 @@ export function orphanedCatalogKeys(meta: Record<string, { type: string; id: str
  * so the whole folder goes rather than an empty shell of it. Ordered deepest first.
  * A folder that holds another library is never emptied: deleting it would delete that
  * library, so the walk stops there whether or not it holds videos of its own. */
-export async function emptiedFolders(root: string, relative: string, exclude?: ReadonlySet<string>): Promise<string[]> {
+export async function emptiedFolders(
+  root: string,
+  relative: string,
+  exclude?: ReadonlySet<string>,
+  // The prune stops at a carve-out like every other caller, so it needs the same answer about
+  // the volume. Inheriting the default here meant the one path that deletes folders was the
+  // one path not using the fold the probe went and measured.
+  caseInsensitive?: boolean,
+): Promise<string[]> {
   const gone: string[] = [];
   let folder = posixDir(relative);
   while (folder) {
     if (!resolveInside(root, folder)) break;
-    if (excludedUnder(exclude, folder)) break;
+    if (holdsLibraryRoot(exclude, folder, caseInsensitive)) break;
     if ((await listVideos(root, folder, 0, exclude)).length) break;
     gone.push(folder);
     folder = posixDir(folder);

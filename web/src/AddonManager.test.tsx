@@ -186,3 +186,18 @@ it("filtering hides the other cards and locks the priority arrows", async () => 
   // Moving by one place while eight rows are hidden would land somewhere nobody chose.
   expect([...host.querySelectorAll<HTMLButtonElement>(".addon-order button")].every((element) => element.disabled)).toBe(true);
 });
+
+/** The editor scrolled as one block, so the settings took the save button off the bottom of a
+ *  short window. One scroll region, with the head and the action outside it. */
+it("keeps the head and the save action outside the one scrolling region", async () => {
+  await render([addon()]);
+  await openEditor();
+
+  const card = host.querySelector(".addon-edit-card")!;
+  const body = card.querySelector(".dialog-body")!;
+  expect(card.classList.contains("dialog-split")).toBe(true);
+  expect(body.querySelector(".identify-head"), "the head is pinned outside the scroller").toBeNull();
+  const save = button("Save changes")!;
+  expect(save.closest(".dialog-foot"), "the action is pinned outside the scroller").toBeTruthy();
+  expect(save.closest(".dialog-body")).toBeNull();
+});

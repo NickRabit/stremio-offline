@@ -1,7 +1,7 @@
 import { mkdir, readdir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { grantingRoot } from "./library-grants.js";
-import { isInside, realAncestor, type LibraryRecord, type LibraryType, type RootGrant } from "./libraries.js";
+import { isInside, realTarget, type LibraryRecord, type LibraryType, type RootGrant } from "./libraries.js";
 import { log } from "./logger.js";
 
 /** A root the deployment will accept, or why it will not. The message carries the catalogue
@@ -38,8 +38,11 @@ export async function checkRerootPaths(opts: {
   // one would be dragged along or would swallow the tree that is being moved. A destination
   // that does not exist yet resolves through its nearest real ancestor, so `create` cannot
   // sneak one root inside the other.
-  const real = async (value: string) => await realAncestor(value) ?? path.resolve(value);
-  const [from, to] = await Promise.all([real(opts.from), real(opts.to)]);
+  // Both sides resolved the same way, and the destination keeps the part of itself that
+  // does not exist yet. Resolving the destination only as far as it exists made every new
+  // folder read as its parent, so "make a folder next to this one and move the content
+  // there" -- a sibling of the old root -- was refused as being inside it.
+  const [from, to] = await Promise.all([realTarget(opts.from), realTarget(opts.to)]);
   if (from === to || isInside(to, from) || isInside(from, to)) {
     return refuseReroot("The new folder is inside the old one.", "err.libraryRerootNested", 409);
   }

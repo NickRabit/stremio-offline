@@ -124,8 +124,11 @@ export class LibraryOps {
   async cancel(id: string) {
     const job = this.jobs.find((candidate) => candidate.id === id);
     if (!job || job.status === "completed" || job.status === "failed" || job.status === "cancelled") return false;
+    // Both branches ask for the item to stop. The running branch leaves the item that is
+    // already under way to finish; the paused branch ends the job outright, and the flag
+    // is what tells `run`, still awaiting the pause hook, not to start anything.
+    job.cancelRequested = true;
     if (job.status === "running") {
-      job.cancelRequested = true;
       await this.save();
     } else {
       job.status = "cancelled";
@@ -165,6 +168,9 @@ export class LibraryOps {
         continue;
       }
       const reason = await this.options.pause?.(job.operation, item);
+      // The hook is slow on purpose and a `cancel` landing inside it has already ended the
+      // job: `finish` ran, so the item is dropped without touching the status or the hook.
+      if (isTerminal(job.status)) continue;
       if (reason) {
         job.pauseReason = reason;
         await this.save();
@@ -181,6 +187,16 @@ export class LibraryOps {
       const baseBytes = job.bytes;
       const baseTotal = job.bytesTotal;
       await this.save();
+      // A `cancel` landing while that write was in flight has asked for the item to stop and
+      // it has not started yet, so it never reaches the executor. `finish` has not run for
+      // this job, so this is the call that reports it.
+      if (job.cancelRequested) {
+        job.current = undefined;
+        job.status = "cancelled";
+        job.finishedAt = new Date().toISOString();
+        await this.finish(job);
+        continue;
+      }
       try {
         const result = await this.options.execute(job.operation, item, (bytes, total = bytes) => {
           job.bytes = baseBytes + Math.max(0, bytes);

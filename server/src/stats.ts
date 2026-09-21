@@ -32,7 +32,15 @@ export interface TrafficEvent extends TrafficMeta {
   items: number;
 }
 
-export interface Bucket { key: string; label: string; bytes: number; count: number }
+/** One host a grouped row stands for. `items` rather than `count`: it is the number of
+ *  finished transfers recorded on that host, not a bucket count. */
+export interface BucketHost { key: string; label: string; bytes: number; items: number }
+export interface Bucket {
+  key: string; label: string; bytes: number; count: number;
+  /** The concrete hosts this row groups, largest first. Absent when the row is
+   *  not a provider row, or when it groups exactly one host. */
+  hosts?: BucketHost[];
+}
 export interface Series { key: string; label: string; points: number[] }
 export interface Window { bytes: number; count: number }
 export type Step = "minute" | "hour" | "day";
@@ -84,8 +92,40 @@ const window = (events: TrafficEvent[], from: number): Window => {
   return { bytes, count };
 };
 
+/** Under a country code this function does not guess. Two attempts were made and both
+ *  merged unrelated operators into one row: a list of whole suffixes missed `com.tr`, and a
+ *  list of the labels a registry sells under missed `id.au`. Neither list can be completed
+ *  without the Public Suffix List, and a row that sums two strangers under a name neither
+ *  of them owns is worse than a row per host -- the count and the trend both become
+ *  fiction. So a two-letter last label means the host is kept whole; the shortening the
+ *  page needed comes from the eight-row cap, not from guessing.
+ *
+ *  What is left is a private suffix under a generic top level -- `a.blogspot.com` and
+ *  `b.blogspot.com` still share a row. That needs the Public Suffix List to fix, which is a
+ *  dependency this has not taken. */
+const COUNTRY_CODE = /^[a-z]{2}$/i;
+
+const IPV4 = /^\d{1,3}(?:\.\d{1,3}){3}$/;
+
+/** The name the outside world knows a host by: its last two labels, or three under a
+ *  multi-part suffix. Anything that is not a name -- a bare machine, an address
+ *  literal, an empty string -- comes back unchanged, as does a host with a single
+ *  label such as the `knihovna` used for playback from the library. */
+export function registrableDomain(host: string): string {
+  const name = host.replace(/\.+$/, "");
+  if (!name || name.includes(":") || IPV4.test(name)) return host;
+  const labels = name.split(".");
+  if (labels.length < 2) return host;
+  // A country code is where the guessing goes wrong, so it is where the guessing stops.
+  if (COUNTRY_CODE.test(labels.at(-1)!)) return name;
+  return labels.slice(-2).join(".");
+}
+
 const identify = {
-  provider: (event: TrafficEvent) => ({ key: event.provider, label: event.provider }),
+  provider: (event: TrafficEvent) => {
+    const domain = registrableDomain(event.provider);
+    return { key: domain, label: domain };
+  },
   addon: (event: TrafficEvent) => ({ key: event.addonKey ?? event.provider, label: event.addonName ?? event.provider }),
   source: (event: TrafficEvent) => ({ key: event.source, label: SOURCE_LABEL[event.source] }),
 };
@@ -103,6 +143,8 @@ export function summarize(events: TrafficEvent[], hours = 720, now = new Date())
   const points = edges.map((at) => ({ at: new Date(at).toISOString(), bytes: 0, count: 0 }));
   const totals = { provider: new Map<string, Bucket>(), addon: new Map<string, Bucket>(), source: new Map<string, Bucket>() };
   const lines = { provider: new Map<string, Series>(), addon: new Map<string, Series>(), source: new Map<string, Series>() };
+  /** The hosts behind each provider row, kept so the interface can open the row. */
+  const providerHosts = new Map<string, Map<string, BucketHost>>();
 
   for (const event of events) {
     const at = Date.parse(event.at);
@@ -122,6 +164,14 @@ export function summarize(events: TrafficEvent[], hours = 720, now = new Date())
       const line = lines[kind].get(key) ?? { key, label, points: new Array(edges.length).fill(0) };
       line.points[index] += event.bytes;
       lines[kind].set(key, line);
+
+      if (kind === "provider") {
+        const hosts = providerHosts.get(key) ?? new Map();
+        const host = hosts.get(event.provider) ?? { key: event.provider, label: event.provider, bytes: 0, items: 0 };
+        host.bytes += event.bytes; host.items += event.items;
+        hosts.set(event.provider, host);
+        providerHosts.set(key, hosts);
+      }
     }
   }
 
@@ -131,6 +181,10 @@ export function summarize(events: TrafficEvent[], hours = 720, now = new Date())
   const addons = ranked(totals.addon);
   const sources = ranked(totals.source);
   const external = events.filter(isExternal);
+  for (const provider of providers) {
+    const hosts = providerHosts.get(provider.key);
+    if (hosts && hosts.size > 1) provider.hosts = [...hosts.values()].sort((a, b) => b.bytes - a.bytes);
+  }
 
   return {
     hour: window(external, now.getTime() - HOUR),

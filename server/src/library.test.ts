@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { browseDirectory, buildLibrary, clearBrowseCache, describePath, emptiedFolders, hasVideo, listFolders, moveDestination, libraryFingerprint, numberedEpisode, isPathWithin, isVideo, listVideos, orphanedCatalogKeys, pageFiles, parseEpisode, parseSeason, remapPath, resolveInside, sortFiles, summarize, type BrowseResult } from "./library.js";
+import { browseDirectory, buildLibrary, clearBrowseCache, describePath, emptiedFolders, hasVideo, holdsLibraryRoot, listFolders, moveDestination, libraryFingerprint, numberedEpisode, isPathWithin, isVideo, listVideos, orphanedCatalogKeys, pageFiles, parseEpisode, parseSeason, remapPath, resolveInside, sortFiles, summarize, type BrowseResult } from "./library.js";
 
 const file = (relative: string, size = 100, modified = "2026-01-01T00:00:00.000Z") => ({ relative, size, modified });
 
@@ -96,6 +96,26 @@ test("renaming a path keeps its children and leaves a similar name alone", () =>
   assert.equal(remapPath("Serial 2/01.mkv", "Serial", "Novy serial"), "Serial 2/01.mkv");
   assert.equal(isPathWithin("Serial/01 serie/01.mkv", "Serial"), true);
   assert.equal(isPathWithin("Serial 2/01.mkv", "Serial"), false);
+});
+
+test("a folder is refused when it is another library's root or holds one, at any depth", () => {
+  assert.equal(holdsLibraryRoot(new Set(["Archiv"]), "Archiv"), true, "the carve-out itself");
+  const deep = new Set(["Archiv/Serialy"]);
+  assert.equal(holdsLibraryRoot(deep, "Archiv/Serialy"), true, "the carve-out two levels down");
+  assert.equal(holdsLibraryRoot(deep, "Archiv"), true, "the folder that holds it");
+  const deeper = new Set(["Inbox/Archiv/Serialy"]);
+  assert.equal(holdsLibraryRoot(deeper, "Inbox/Archiv"), true, "a holder at depth one");
+  assert.equal(holdsLibraryRoot(deeper, "Inbox"), true, "a holder at depth two");
+});
+
+test("a name that only shares a prefix is not a carve-out, and an empty set refuses nothing", () => {
+  const carveOuts = new Set(["Archiv"]);
+  assert.equal(holdsLibraryRoot(carveOuts, "Archiv2"), false, "a sibling whose name starts the same");
+  assert.equal(holdsLibraryRoot(carveOuts, "Archiv/Jine"), false, "a folder inside the carve-out does not hold it");
+  assert.equal(holdsLibraryRoot(new Set(), "Archiv"), false, "nothing is excluded");
+  assert.equal(holdsLibraryRoot(undefined, "Archiv"), false);
+  // Every write guard is handed a non-empty relative path: the root is refused as invalid first.
+  assert.equal(holdsLibraryRoot(carveOuts, ""), false, "the library root itself");
 });
 
 test("non-video files are ignored", () => {
@@ -494,4 +514,25 @@ test("the destination picker lists folders browsing would hide", async () => {
     ], "an empty folder is a destination, a dotfile and a video are not");
     assert.deepEqual(await listFolders(root, path.join("..", "..")), [], "nothing outside the root");
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("the carve-out guard compares folders, not spellings, where the volume folds", () => {
+  // Platform-dependent on purpose, so the fold is a parameter: on macOS, Windows and an SMB
+  // share `Archiv` and `archiv` are one directory; on Linux -- and so on CI -- they are two,
+  // and folding there would refuse a delete the user is entitled to.
+  const carveOuts = new Set(["Archiv/Serialy"]);
+  const folding = (relative: string) => holdsLibraryRoot(carveOuts, relative, true);
+  const exact = (relative: string) => holdsLibraryRoot(carveOuts, relative, false);
+
+  assert.equal(folding("Archiv"), true, "the canonical spelling, folding volume");
+  assert.equal(exact("Archiv"), true, "the canonical spelling, case-sensitive volume");
+  assert.equal(folding("archiv"), true, "the folded spelling is the same folder");
+  assert.equal(exact("archiv"), false, "on a case-sensitive volume it is a different folder");
+  assert.equal(holdsLibraryRoot(new Set(["Archiv/serialy"]), "Archiv/Serialy", true), true,
+    "a carve-out recorded in another case still guards the folder the listing shows");
+  assert.equal(folding("Archiv2"), false, "a shared prefix is not containment");
+  assert.equal(exact("Archiv2"), false, "a shared prefix is not containment either way");
+  // No probe reached the volume, and an unknown fold folds: refusing a delete the user has to
+  // do another way costs less than a library taken along by one.
+  assert.equal(holdsLibraryRoot(carveOuts, "archiv"), true, "a fold nobody answered with is folded");
 });

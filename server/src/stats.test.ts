@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { compact, summarize, type TrafficEvent, type TrafficSource } from "./stats.js";
+import { compact, registrableDomain, summarize, type TrafficEvent, type TrafficSource } from "./stats.js";
 
 const GB = 1024 ** 3;
 const now = new Date("2026-09-02T18:00:00");
@@ -56,11 +56,85 @@ test("a longer period goes by days and the series is continuous", () => {
   }
 });
 
-test("providers and addons are summed and ordered from the largest", () => {
+test("providers under a country code stay whole, addons stay as recorded, both ordered from the largest", () => {
   const { providers, addons } = summarize(sample, 30 * 24, now);
   assert.deepEqual(providers.map((item) => item.key), ["cdn.jedna.cz", "cdn.tri.cz", "cdn.dva.cz"]);
   assert.deepEqual(providers[0], { key: "cdn.jedna.cz", label: "cdn.jedna.cz", bytes: 5 * GB, count: 2 });
-  assert.deepEqual(addons.map((item) => item.key), providers.map((item) => item.key));
+  assert.deepEqual(addons.map((item) => item.key), ["cdn.jedna.cz", "cdn.tri.cz", "cdn.dva.cz"]);
+  assert.deepEqual(addons.map((item) => item.bytes), [5 * GB, 4 * GB, 1 * GB]);
+});
+
+test("a host is grouped under its registrable domain", () => {
+  const cases: Array<[string, string]> = [
+    ["den2-4.download.real-debrid.com", "real-debrid.com"],
+    ["cdn.freevideo.cz", "cdn.freevideo.cz"],
+    ["torrentio.strem.fun", "strem.fun"],
+    ["tpb-adult-addon.click", "tpb-adult-addon.click"],
+    ["cdn.jedna.co.uk", "cdn.jedna.co.uk"],
+    // A country registry that no allowlist names. The first attempt kept a list of whole
+    // suffixes, so an unlisted `com.tr` fell through to the last two labels and every
+    // Turkish site summed into one row called `com.tr`. These pin the failure direction.
+    ["film.com.tr", "film.com.tr"],
+    ["dizi.com.tr", "dizi.com.tr"],
+    ["a.co.in", "a.co.in"],
+    ["b.co.in", "b.co.in"],
+    ["shop.com.cn", "shop.com.cn"],
+    // A country code is where the guessing stops: no list of suffixes or of registry
+    // labels can be completed, and a row summing two strangers is worse than a row each.
+    ["one.id.au", "one.id.au"],
+    ["two.id.au", "two.id.au"],
+    ["one.github.io", "one.github.io"],
+    ["two.github.io", "two.github.io"],
+    // Not a country code, so two labels even though the second-level label is generic.
+    ["cdn.net.example", "net.example"],
+    ["cdn.jedna.cz.", "cdn.jedna.cz"],
+    ["localhost", "localhost"],
+    ["knihovna", "knihovna"],
+    ["unknown", "unknown"],
+    ["192.168.0.10", "192.168.0.10"],
+    ["2a00:1450:4001:80d::200e", "2a00:1450:4001:80d::200e"],
+    ["[2a00:1450:4001:80d::200e]", "[2a00:1450:4001:80d::200e]"],
+    ["", ""],
+  ];
+  for (const [host, expected] of cases) {
+    assert.equal(registrableDomain(host), expected, `registrableDomain(${JSON.stringify(host)})`);
+  }
+});
+
+test("two hosts of one domain share a row and keep their own bytes and items", () => {
+  const events: TrafficEvent[] = [
+    event(1, 3 * GB, "den2-4.download.real-debrid.com"),
+    event(2, 1 * GB, "131-4.download.real-debrid.com"),
+  ];
+  const [provider] = summarize(events, 24, now).providers;
+  assert.deepEqual(provider, {
+    key: "real-debrid.com", label: "real-debrid.com", bytes: 4 * GB, count: 2,
+    hosts: [
+      { key: "den2-4.download.real-debrid.com", label: "den2-4.download.real-debrid.com", bytes: 3 * GB, items: 1 },
+      { key: "131-4.download.real-debrid.com", label: "131-4.download.real-debrid.com", bytes: 1 * GB, items: 1 },
+    ],
+  });
+});
+
+test("a domain behind a single host carries no host list", () => {
+  const [provider] = summarize([event(1, GB, "cdn.jedna.cz")], 24, now).providers;
+  assert.equal(provider.hosts, undefined, "the row is the host itself, so there is nothing to open");
+});
+
+test("the addon and source breakdowns are untouched by the grouping", () => {
+  const events = [
+    event(1, 2 * GB, "den2-4.download.real-debrid.com", "Torrentio"),
+    event(2, 3 * GB, "den2-4.download.real-debrid.com", "Torrentio", "catalog"),
+    event(3, 1 * GB, "cdn.jedna.cz"),
+  ];
+  const summary = summarize(events, 24, now);
+  assert.deepEqual(summary.providers.map((item) => item.key), ["real-debrid.com", "cdn.jedna.cz"]);
+  assert.deepEqual(summary.addons, [
+    { key: "Torrentio", label: "Torrentio", bytes: 5 * GB, count: 2 },
+    { key: "cdn.jedna.cz", label: "cdn.jedna.cz", bytes: 1 * GB, count: 1 },
+  ], "an addon keeps the name it was recorded under, host or not");
+  assert.deepEqual(summary.sources.find((item) => item.key === "download"),
+    { key: "download", label: "Downloads", bytes: 3 * GB, count: 2 });
 });
 
 test("every source has its own series in the same order as the overview", () => {

@@ -87,7 +87,14 @@ export interface Diagnostics {
   storage: Array<{ path: string; freeBytes?: number; totalBytes?: number }>;
 }
 export interface StatsWindow { bytes: number; count: number }
-export interface StatsBucket { key: string; label: string; bytes: number; count: number }
+/** One host a grouped row stands for; `items` counts the finished transfers on that host. */
+export interface StatsBucketHost { key: string; label: string; bytes: number; items: number }
+export interface StatsBucket {
+  key: string; label: string; bytes: number; count: number;
+  /** The hosts a provider row groups, largest first. Absent on other rows and on a row
+   *  that groups exactly one host. */
+  hosts?: StatsBucketHost[];
+}
 export interface StatsSeries { key: string; label: string; points: number[] }
 export interface StatsSummary {
   hour: StatsWindow; day: StatsWindow; week: StatsWindow; month: StatsWindow; total: StatsWindow;

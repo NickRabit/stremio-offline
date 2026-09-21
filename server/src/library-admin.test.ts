@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { asLibraryType, checkLibraryRemoval, checkLibraryRoot, checkRerootItems, checkRerootPaths, libraryFlag } from "./library-admin.js";
-import type { LibraryRecord, RootGrant } from "./libraries.js";
+import { carveOuts, type LibraryRecord, type RootGrant } from "./libraries.js";
 import { flushLog } from "./logger.js";
 
 const grant = (p: string): RootGrant => ({ path: p, source: "env", grantedAt: "2026-01-01T00:00:00.000Z" });
@@ -75,6 +75,26 @@ test("a root inside another library's root is legal, and reads as a carve-out", 
     assert.deepEqual(libraryFlag([parent], child), { libraryId: parent.id, libraryRoot: false });
     assert.deepEqual(libraryFlag([parent], granted), { libraryId: parent.id, libraryRoot: true });
     assert.deepEqual(libraryFlag([parent], path.join(dataDir, "elsewhere")), {});
+  } finally { await rm(dataDir, { recursive: true, force: true }); }
+});
+
+test("a child reached through a symlink is a carve-out of the tree it points into", async () => {
+  const dataDir = await mkdtemp(path.join(tmpdir(), "admin-"));
+  const granted = path.join(dataDir, "granted");
+  const child = path.join(granted, "Archive", "Serialy");
+  const alias = path.join(dataDir, "alias");
+  await mkdir(child, { recursive: true });
+  await symlink(path.join(granted, "Archive"), alias);
+  const parent = library({ id: "lib_aaaaaaaa", root: granted });
+  const nested = library({ id: "lib_bbbbbbbb", root: path.join(alias, "Serialy") });
+  try {
+    const accepted = await checkLibraryRoot({ grants: [grant(granted)], libraries: [parent], root: nested.root });
+    assert.equal(accepted.ok, true, "the folder is another one than the parent's, whoever reaches it");
+    // Roots as the disk has them, which is what the guard compares: the alias resolves into the
+    // parent's tree, and the configured spelling alone would miss it.
+    const resolved = await Promise.all([parent, nested].map(async (entry) => ({ id: entry.id, root: await realpath(entry.root) })));
+    assert.deepEqual(carveOuts(resolved, resolved[0]!), ["Archive/Serialy"]);
+    assert.deepEqual(carveOuts([parent, nested], parent), [], "the spellings as they were configured share no tree");
   } finally { await rm(dataDir, { recursive: true, force: true }); }
 });
 
@@ -245,4 +265,56 @@ test("a root that cannot be created records the errno the interface hides", asyn
     await flushLog();
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test("a new folder beside the old root is a valid re-root destination", async () => {
+  // The destination does not exist yet, so it resolves through its nearest existing
+  // ancestor -- which also holds the old root. Comparing the source against that ancestor
+  // refused every ordinary "make a folder next to this one and move the content into it".
+  const dataDir = await mkdtemp(path.join(tmpdir(), "reroot-"));
+  const from = path.join(dataDir, "Old");
+  await mkdir(from, { recursive: true });
+  try {
+    const beside = await checkRerootPaths({ from, to: path.join(dataDir, "New"), carveOuts: [] });
+    assert.equal(beside.ok, true, "a sibling that does not exist yet is allowed");
+
+    const inside = await checkRerootPaths({ from, to: path.join(from, "New"), carveOuts: [] });
+    assert.equal(inside.ok, false, "a folder inside the old root is still refused");
+    if (!inside.ok) assert.equal(inside.messageKey, "err.libraryRerootNested");
+
+    const parent = await checkRerootPaths({ from, to: dataDir, carveOuts: [] });
+    assert.equal(parent.ok, false, "the source's own parent is still refused");
+  } finally { await rm(dataDir, { recursive: true, force: true }); }
+});
+
+test("one view resolved and one spelled misses a carve-out that the union of both catches", async () => {
+  // The state the guard is in between a restart and the first probe, and after a root was
+  // away when its own probe ran: one library's root has been resolved and another's is still
+  // the spelling it was configured with. Neither view alone sees the nested child then --
+  // which is the fail-open direction -- so the guard takes both and unions them.
+  const dataDir = await mkdtemp(path.join(tmpdir(), "mixed-"));
+  const real = path.join(dataDir, "data", "Archive");
+  const child = path.join(real, "Serialy");
+  const alias = path.join(dataDir, "box");
+  await mkdir(child, { recursive: true });
+  await symlink(real, alias);
+  try {
+    const parentSpelled = { id: "lib_aaaaaaaa", root: alias };
+    const parentResolved = { id: "lib_aaaaaaaa", root: await realpath(alias) };
+    const childSpelled = { id: "lib_bbbbbbbb", root: path.join(alias, "Serialy") };
+    const childResolved = { id: "lib_bbbbbbbb", root: await realpath(child) };
+
+    // Parent probed, child not: the resolved parent and the spelled child share no tree.
+    assert.deepEqual(carveOuts([parentResolved, childSpelled], parentResolved), [],
+      "the mixed view alone misses it, which is why the union exists");
+    // Both spellings agree, and so do both resolutions.
+    assert.deepEqual(carveOuts([parentSpelled, childSpelled], parentSpelled), ["Serialy"]);
+    assert.deepEqual(carveOuts([parentResolved, childResolved], parentResolved), ["Serialy"]);
+
+    const union = new Set([
+      ...carveOuts([parentSpelled, childSpelled], parentSpelled),
+      ...carveOuts([parentResolved, childSpelled], parentResolved),
+    ]);
+    assert.deepEqual([...union], ["Serialy"], "the union sees it whichever side has been probed");
+  } finally { await rm(dataDir, { recursive: true, force: true }); }
 });

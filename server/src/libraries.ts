@@ -89,6 +89,13 @@ const CASE_INSENSITIVE_FS = process.platform === "win32" || process.platform ===
 export const sameFile = (left: string, right: string, caseInsensitive = CASE_INSENSITIVE_FS) =>
   left === right || (caseInsensitive && left.toLowerCase() === right.toLowerCase());
 
+/** A path in the form this filesystem compares by. On a volume that folds case -- macOS,
+ *  Windows, an SMB share -- two spellings are one directory, so a guard that compares the
+ *  strings is not guarding the folder. Same parameter as `sameFile`, for the same reason:
+ *  the rule has to be testable on a runner that does not fold. */
+export const foldPath = (value: string, caseInsensitive = CASE_INSENSITIVE_FS) =>
+  caseInsensitive ? value.toLowerCase() : value;
+
 /** Paths crossing a module boundary use `/`; `path.sep` appears only at a syscall. */
 export const toPosix = (value: string) => value.split(path.sep).join("/");
 export const toFs = (value: string) => value.split("/").join(path.sep);
@@ -160,8 +167,14 @@ export function defaultLibrary(libraries: LibraryRecord[], settings: DefaultLibr
   return available.find((library) => library.type === wanted) ?? available.find((library) => library.type === "mixed");
 }
 
-/** Roots of other libraries that sit inside this one. The parent never walks or prunes them. */
-export function carveOuts(libraries: LibraryRecord[], library: LibraryRecord): string[] {
+/** Roots of other libraries that sit inside this one. The parent never walks or prunes them.
+ *  Compared as folders, not as configured spellings: the guard hands in the root the probe
+ *  resolved, so a child reached through a symlink is the folder it points at. Comparing the
+ *  spelling instead misses a child that sits in this tree under another name. */
+export function carveOuts(
+  libraries: readonly Pick<LibraryRecord, "id" | "root">[],
+  library: Pick<LibraryRecord, "id" | "root">,
+): string[] {
   const root = path.resolve(library.root);
   return libraries
     .filter((other) => other.id !== library.id)
@@ -214,7 +227,11 @@ export function isLibraryId(value: string): boolean {
 
 /** Strip the separators that carry no meaning on the wire. */
 function normalize(value: string): string {
-  return toPosix(value).replace(/^\/+|\/+$/g, "");
+  // Repeated separators are collapsed, not just trimmed. `path.resolve` collapses them on
+  // the way to the syscall, so a spelling that survives here reaches the same directory
+  // under a name no string comparison recognises -- and the carve-out guard and the
+  // listing's exclusion are both string comparisons.
+  return toPosix(value).replace(/\/{2,}/g, "/").replace(/^\/+|\/+$/g, "");
 }
 
 /** The deepest existing ancestor of `target`, resolved. A path that does not exist yet
@@ -228,6 +245,24 @@ export async function realAncestor(target: string): Promise<string | undefined> 
       if (parent === current) return undefined;
       current = parent;
     }
+  }
+}
+
+/** A path resolved as far as it exists, with the part that does not exist yet kept on the
+ *  end. `realAncestor` answers only the existing part, which is the wrong thing to compare
+ *  a sibling against: on macOS `/tmp` is a symlink, so a resolved source and an unresolved
+ *  destination never match, and a folder that is not there yet has no realpath of its own. */
+export async function realTarget(target: string): Promise<string> {
+  const absolute = path.resolve(target);
+  const tail: string[] = [];
+  let current = absolute;
+  for (;;) {
+    const resolved = await realpath(current).catch(() => undefined);
+    if (resolved) return tail.length ? path.join(resolved, ...tail.reverse()) : resolved;
+    const parent = path.dirname(current);
+    if (parent === current) return absolute;
+    tail.push(path.basename(current));
+    current = parent;
   }
 }
 
