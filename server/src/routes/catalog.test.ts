@@ -42,6 +42,7 @@ const mount = async (records: AddonRecord[] = [], meta: MetaItem | null = null, 
   viewer?: UserRecord;
   addonOrder?: Record<string, string[]>;
   bound?: Record<string, LibraryMetaRecord>;
+  access?: CatalogDeps["requireAccess"];
 } = {}): Promise<Harness> => {
   const viewer = options.viewer ?? admin;
   const lookups: Harness["lookups"] = [];
@@ -60,7 +61,7 @@ const mount = async (records: AddonRecord[] = [], meta: MetaItem | null = null, 
     isSecure: () => false,
     stopOwnedPlayback: async () => undefined,
     stopUserSessions: async () => undefined,
-    requireAccess: () => undefined,
+    requireAccess: options.access ?? (() => undefined),
     stopContentAccess: async () => undefined,
     tmdbProvider: () => undefined,
     cachedMeta: async (type, id, language) => { lookups.push({ type, id, language }); return meta; },
@@ -281,6 +282,28 @@ test("a subtitle remembers which addon it came from", async (t) => {
     // served from an addon the account may no longer use.
     const resource = mediaResources.get(listed[0].subtitleId, "session-1", "subtitle");
     assert.equal(resource.stream.addonKey, "subs");
+  });
+});
+
+test("the subtitle listing re-checks each addon it is about to name", async (t) => {
+  // A grant withdrawn while the addon was still answering has to reach the listing, the way
+  // it reaches the stream listing: otherwise the language, the addon's name and an issued id
+  // are handed over for a source the account no longer has.
+  const records = [addon("subs", [], { role: "source", allowedUsers: [alice.id], resources: ["subtitles"] })];
+  const asked: Array<string | undefined> = [];
+  const harness = await mount(records, null, {
+    viewer: alice,
+    access: (_req, need) => {
+      asked.push(need?.addonKey);
+      if (need?.addonKey === "subs") throw Object.assign(new Error("gone"), { status: 404 });
+    },
+  });
+  t.after(harness.close);
+
+  await withStubbedAddons((url) => json({ subtitles: [{ url: `https://cdn.example/${new URL(url).host}/sub.srt`, lang: "cs" }] }), async () => {
+    const response = await api(harness.base, "/api/subtitles/movie/tt1");
+    assert.equal(response.status, 404, "the listing is refused, not answered without the addon");
+    assert.deepEqual(asked, ["subs"], "the re-check names the addon, so it reaches the grant at all");
   });
 });
 

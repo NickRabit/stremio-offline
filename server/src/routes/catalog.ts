@@ -149,7 +149,12 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
   app.get("/api/subtitles/:type/:id", asyncRoute(async (req, res) => {
     const owner = ownerOf(req);
     const items = await subtitles(inOrder(req), String(req.params.type), String(req.params.id));
-    requireAccess(req);
+    // Per addon, the way the stream listing does it: a bare re-check never reaches the
+    // addon, so a grant withdrawn while the addon was answering would still be listed --
+    // language, addon name and an issued id for a source the account may no longer use.
+    for (const addonKey of new Set(items.map((item) => item.addonKey).filter((key): key is string => Boolean(key)))) {
+      requireAccess(req, { addonKey });
+    }
     // The addon travels with the resource. Without it the record names no content, so the
     // sweep that runs when an addon is removed or taken away cannot recognise it, and the
     // subtitle keeps being served from an addon the account may no longer use.
