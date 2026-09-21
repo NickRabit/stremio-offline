@@ -167,8 +167,14 @@ export function defaultLibrary(libraries: LibraryRecord[], settings: DefaultLibr
   return available.find((library) => library.type === wanted) ?? available.find((library) => library.type === "mixed");
 }
 
-/** Roots of other libraries that sit inside this one. The parent never walks or prunes them. */
-export function carveOuts(libraries: LibraryRecord[], library: LibraryRecord): string[] {
+/** Roots of other libraries that sit inside this one. The parent never walks or prunes them.
+ *  Compared as folders, not as configured spellings: the guard hands in the root the probe
+ *  resolved, so a child reached through a symlink is the folder it points at. Comparing the
+ *  spelling instead misses a child that sits in this tree under another name. */
+export function carveOuts(
+  libraries: readonly Pick<LibraryRecord, "id" | "root">[],
+  library: Pick<LibraryRecord, "id" | "root">,
+): string[] {
   const root = path.resolve(library.root);
   return libraries
     .filter((other) => other.id !== library.id)

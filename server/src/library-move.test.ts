@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -52,6 +52,8 @@ let filmsRoot: string;
 let showsRoot: string;
 let archiveRoot: string;
 let nestedRoot: string;
+let boxRoot: string;
+let aliasRoot: string;
 let mixedRoot: string;
 let child: ChildProcess;
 let log = "";
@@ -61,6 +63,8 @@ let films = "";
 let shows = "";
 let archive = "";
 let nested = "";
+let box = "";
+let aliased = "";
 let mixed = "";
 
 const api = (pathname: string, init: { method?: string; body?: unknown } = {}) =>
@@ -106,6 +110,10 @@ before(async () => {
   archiveRoot = path.join(granted, "Archiv");
   // A second library rooted two levels inside `Archiv`, so the folder `Archiv` holds it.
   nestedRoot = path.join(archiveRoot, "Archiv", "Serialy");
+  // A library whose only child is rooted at a symlink into its tree. The configured spelling
+  // reads as a folder beside `Box`, and only the folder it points at is inside it.
+  boxRoot = path.join(granted, "Box");
+  aliasRoot = path.join(granted, "Alias");
   mixedRoot = path.join(granted, "Smisene");
   await mkdir(dataDir, { recursive: true });
   // Seeded the way the e2e fixture seeds it: without this the first boot reaches for
@@ -126,6 +134,8 @@ before(async () => {
   await put(showsRoot, `${season}/10 - Copied confirmed.mkv`);
   await put(archiveRoot, "Second Show/Season 1/01 - Pilot.mkv");
   await put(nestedRoot, "Season 1/01 - Nested.mkv");
+  await put(boxRoot, "Archiv/Aliased/Season 1/01 - Aliased.mkv");
+  await symlink(path.join(boxRoot, "Archiv", "Aliased"), aliasRoot);
   await put(filmsRoot, "Volne/Film.mkv");
   await put(mixedRoot, "Document.mkv");
   await mkdir(filmsRoot, { recursive: true });
@@ -160,6 +170,8 @@ before(async () => {
   shows = await addLibrary("Serie", "series", showsRoot);
   archive = await addLibrary("Archiv", "series", archiveRoot);
   nested = await addLibrary("Serialy", "series", nestedRoot);
+  box = await addLibrary("Box", "mixed", boxRoot);
+  aliased = await addLibrary("Aliased", "mixed", aliasRoot);
   mixed = await addLibrary("Smisene", "mixed", mixedRoot);
 });
 
@@ -333,4 +345,52 @@ test("a folder with no library inside it still renames, moves and deletes", asyn
   const deleted = await api(`/api/library/item?path=${encodeURIComponent(`${mixed}/Volne2`)}`, { method: "DELETE" });
   assert.equal(deleted.status, 204);
   assert.equal(await exists(path.join(mixedRoot, "Volne2")), false);
+});
+
+/** The folder of the box library that holds the library rooted at the symlink. */
+const boxHolding = () => `${box}/Archiv`;
+/** The aliased library's own file, reached through the folder it really sits in. */
+const aliasedFile = () => path.join(boxRoot, "Archiv", "Aliased", "Season 1", "01 - Aliased.mkv");
+
+test("a child rooted at a symlink into the parent's tree is seen as nested", async () => {
+  const parent = await api(`/api/library/browse?path=${encodeURIComponent(boxHolding())}`);
+  assert.equal(parent.status, 200);
+  const listed = (await parent.json() as { items: Array<{ path: string }> }).items.map((item) => item.path);
+  assert.equal(listed.includes(`${boxHolding()}/Aliased`), false, "the folder the alias points at stays hidden");
+
+  // The library rooted at the symlink still reads its own folder, which is the one the parent
+  // hides: the alias does not cost it its content.
+  const own = await api(`/api/library/browse?path=${encodeURIComponent(aliased)}`);
+  assert.equal(own.status, 200);
+  const ownListed = (await own.json() as { items: Array<{ path: string }> }).items;
+  assert.ok(ownListed.length > 0, "the aliased library lists the season behind the symlink");
+});
+
+test("a delete, a move and a rename of the folder holding the aliased library are refused", async () => {
+  const deleted = await api(`/api/library/item?path=${encodeURIComponent(boxHolding())}`, { method: "DELETE" });
+  assert.equal(deleted.status, 409);
+  assert.deepEqual(await deleted.json(), {
+    error: "This folder holds another library. Move that library out first.",
+    messageKey: "err.libraryHoldsAnother",
+  });
+  assert.equal(await exists(aliasedFile()), true, "the aliased library's file is still there");
+
+  const moved = await move({ path: boxHolding(), folder: films });
+  assert.equal(moved.status, 409);
+  assert.equal((await moved.json() as { messageKey: string }).messageKey, "err.libraryHoldsAnother");
+  assert.equal(await exists(aliasedFile()), true, "the aliased library's file is still there");
+
+  const renamed = await api("/api/library/rename", { method: "POST", body: { path: boxHolding(), name: "Archiv jiny" } });
+  assert.equal(renamed.status, 409);
+  assert.equal((await renamed.json() as { messageKey: string }).messageKey, "err.libraryHoldsAnother");
+  assert.equal(await exists(aliasedFile()), true, "the aliased library's file is still there");
+  assert.equal(await exists(path.join(boxRoot, "Archiv")), true, "the folder itself stayed where it was");
+});
+
+test("a folder beside the aliased library is not part of it", async () => {
+  await put(boxRoot, "Archiv/Loose/Season 1/01 - Loose.mkv");
+  const deleted = await api(`/api/library/item?path=${encodeURIComponent(`${boxHolding()}/Loose`)}`, { method: "DELETE" });
+  assert.equal(deleted.status, 204, "the guard engages on the nested library, not on the folder that holds it");
+  assert.equal(await exists(path.join(boxRoot, "Archiv", "Loose")), false);
+  assert.equal(await exists(aliasedFile()), true, "the aliased library is untouched");
 });

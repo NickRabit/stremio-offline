@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { asLibraryType, checkLibraryRemoval, checkLibraryRoot, checkRerootItems, checkRerootPaths, libraryFlag } from "./library-admin.js";
-import type { LibraryRecord, RootGrant } from "./libraries.js";
+import { carveOuts, type LibraryRecord, type RootGrant } from "./libraries.js";
 import { flushLog } from "./logger.js";
 
 const grant = (p: string): RootGrant => ({ path: p, source: "env", grantedAt: "2026-01-01T00:00:00.000Z" });
@@ -75,6 +75,26 @@ test("a root inside another library's root is legal, and reads as a carve-out", 
     assert.deepEqual(libraryFlag([parent], child), { libraryId: parent.id, libraryRoot: false });
     assert.deepEqual(libraryFlag([parent], granted), { libraryId: parent.id, libraryRoot: true });
     assert.deepEqual(libraryFlag([parent], path.join(dataDir, "elsewhere")), {});
+  } finally { await rm(dataDir, { recursive: true, force: true }); }
+});
+
+test("a child reached through a symlink is a carve-out of the tree it points into", async () => {
+  const dataDir = await mkdtemp(path.join(tmpdir(), "admin-"));
+  const granted = path.join(dataDir, "granted");
+  const child = path.join(granted, "Archive", "Serialy");
+  const alias = path.join(dataDir, "alias");
+  await mkdir(child, { recursive: true });
+  await symlink(path.join(granted, "Archive"), alias);
+  const parent = library({ id: "lib_aaaaaaaa", root: granted });
+  const nested = library({ id: "lib_bbbbbbbb", root: path.join(alias, "Serialy") });
+  try {
+    const accepted = await checkLibraryRoot({ grants: [grant(granted)], libraries: [parent], root: nested.root });
+    assert.equal(accepted.ok, true, "the folder is another one than the parent's, whoever reaches it");
+    // Roots as the disk has them, which is what the guard compares: the alias resolves into the
+    // parent's tree, and the configured spelling alone would miss it.
+    const resolved = await Promise.all([parent, nested].map(async (entry) => ({ id: entry.id, root: await realpath(entry.root) })));
+    assert.deepEqual(carveOuts(resolved, resolved[0]!), ["Archive/Serialy"]);
+    assert.deepEqual(carveOuts([parent, nested], parent), [], "the spellings as they were configured share no tree");
   } finally { await rm(dataDir, { recursive: true, force: true }); }
 });
 

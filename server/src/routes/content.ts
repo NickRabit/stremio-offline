@@ -7,6 +7,7 @@ import { AppError } from "../errors.js";
 import { assertStillAdmin } from "../roles.js";
 import { libraryFor, libraryPath, libraryVisible, parseLibraryPath, posixDir, posixJoin, resolveLibraryPath, sameFile, visibleLibraries, type LibraryRecord, type Viewer } from "../libraries.js";
 import { browseDirectory, holdsLibraryRoot, listFolders, type LibraryEntry } from "../library.js";
+import type { LibraryHealth } from "../library-probe.js";
 import type { TransferProgress } from "../library-transfer.js";
 import { log } from "../logger.js";
 import { assertUsableName } from "../naming.js";
@@ -21,6 +22,7 @@ export interface ContentDeps extends RouteContext {
   dataOf(req: express.Request): UserData;
   deleteLibraryItem(relative: string): Promise<void>;
   fileExists(file: string): Promise<boolean>;
+  healthOf(library: LibraryRecord): LibraryHealth;
   invalidateLibrary(): void;
   libraryEntries(): Promise<LibraryEntry[]>;
   libraryKey(value: string): string;
@@ -44,7 +46,7 @@ export interface ContentDeps extends RouteContext {
 }
 
 export function registerContentRoutes(app: express.Application, deps: ContentDeps): void {
-  const { store, currentUser, attachBrowseMeta, carveOutsOf, dataOf, deleteLibraryItem, fileExists, invalidateLibrary, libraryEntries, libraryKey, libraryRootBrowse, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, prefsOf, progressOf, relativeKeyIn, relocateLibraryPath, scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites } = deps;
+  const { store, currentUser, attachBrowseMeta, carveOutsOf, dataOf, deleteLibraryItem, fileExists, healthOf, invalidateLibrary, libraryEntries, libraryKey, libraryRootBrowse, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, prefsOf, progressOf, relativeKeyIn, relocateLibraryPath, scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites } = deps;
 
   /** Whether a key names a library the viewer may see. A key in an invisible library is
    *  refused wherever a key to a missing one is, so the two cannot be told apart. */
@@ -152,7 +154,9 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     if (!resolved || !resolved.relative) throw new AppError("Invalid path.", "err.invalidPath");
     const info = await stat(resolved.absolute).catch(() => undefined);
     if (!info) throw new AppError("The file or folder does not exist.", "err.pathMissing");
-    if (holdsLibraryRoot(carveOutsOf(resolved.library), resolved.relative)) {
+    // The fold comes from the volume the folder sits on: the carve-outs are compared as
+    // spellings inside this library's tree, so this library's probe decides.
+    if (holdsLibraryRoot(carveOutsOf(resolved.library), resolved.relative, healthOf(resolved.library).caseInsensitive)) {
       throw new AppError("This folder holds another library. Move that library out first.", "err.libraryHoldsAnother", 409);
     }
 

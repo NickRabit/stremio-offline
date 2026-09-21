@@ -56,11 +56,11 @@ test("the poster key stays byte-for-byte what it is today, the wide one is a sec
 });
 
 test("a poster lands next to the media only where the library allows writing", () => {
-  const healthy = { unreachable: false, readOnly: false };
+  const healthy = { unreachable: false, readOnly: false, realRoot: "/media/Films", caseInsensitive: false };
   assert.equal(artworkBesideMedia({ writeArtwork: true }, healthy), true, "the library's own switch is the one control");
   assert.equal(artworkBesideMedia({ writeArtwork: false }, healthy), false, "a curated library keeps its folder to itself");
-  assert.equal(artworkBesideMedia({ writeArtwork: true }, { unreachable: false, readOnly: true }), false);
-  assert.equal(artworkBesideMedia({ writeArtwork: true }, { unreachable: true, readOnly: false }), false, "a mount that is down is not written to");
+  assert.equal(artworkBesideMedia({ writeArtwork: true }, { ...healthy, readOnly: true }), false);
+  assert.equal(artworkBesideMedia({ writeArtwork: true }, { ...healthy, unreachable: true }), false, "a mount that is down is not written to");
 });
 
 test("a movie file may reuse the folder poster, a series episode may not", () => {

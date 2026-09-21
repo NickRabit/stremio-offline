@@ -532,4 +532,7 @@ test("the carve-out guard compares folders, not spellings, where the volume fold
     "a carve-out recorded in another case still guards the folder the listing shows");
   assert.equal(folding("Archiv2"), false, "a shared prefix is not containment");
   assert.equal(exact("Archiv2"), false, "a shared prefix is not containment either way");
+  // No probe reached the volume, and an unknown fold folds: refusing a delete the user has to
+  // do another way costs less than a library taken along by one.
+  assert.equal(holdsLibraryRoot(carveOuts, "archiv"), true, "a fold nobody answered with is folded");
 });

@@ -106,14 +106,18 @@ export function holdsLibraryRoot(
   relative: string,
   // Same parameter as `sameFile`, for the same reason: the rule is platform-dependent and
   // has to be testable on a runner that does not fold. Linux is one, so CI is one.
+  // An absent answer means no probe reached the volume, and an unknown fold folds: folding
+  // wrongly costs a delete the user has to do another way, not folding wrongly costs a
+  // library that was inside the folder.
   caseInsensitive?: boolean,
 ): boolean {
   if (!carveOuts?.size) return false;
+  const fold = caseInsensitive ?? true;
   // Folded, because on a case-folding volume `Archiv` and `archiv` are one directory: a
   // guard that compares the spellings would let the other one through, and a nested root
   // recorded in a different case than its parent's tree would not be seen at all.
-  const folder = foldPath(relative, caseInsensitive);
-  for (const path of carveOuts) if (isPathWithin(foldPath(path, caseInsensitive), folder)) return true;
+  const folder = foldPath(relative, fold);
+  for (const path of carveOuts) if (isPathWithin(foldPath(path, fold), folder)) return true;
   return false;
 }
 

@@ -75,6 +75,7 @@ const mount = async (libraries: LibraryRecord[], entries: LibraryEntry[] = []): 
     dataOf: () => emptyUserData(),
     deleteLibraryItem: async (relative) => { calls.deleted.push(relative); },
     fileExists: async (file) => exists(file),
+    healthOf: (record) => ({ unreachable: false, readOnly: false, realRoot: record.root, caseInsensitive: false }),
     invalidateLibrary: () => undefined,
     libraryEntries: async () => { calls.entriesAsked += 1; return entries; },
     libraryKey: (value) => {
