@@ -9,7 +9,7 @@ test("activity filters and long filenames fit the statistics panel", async ({ pa
   await page.getByRole("button", { name: "Statistiky", exact: true }).click();
   const history = page.locator(".stats-history");
   await expect(history.getByText("A long movie title")).toBeVisible();
-  await history.getByLabel("Aktivita", { exact: true }).selectOption("library");
+  await history.getByRole("combobox", { name: "Aktivita", exact: true }).selectOption("library");
   await expect(history.getByText("A long movie title")).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true);
   for (const control of await history.locator("select, button").all()) {
