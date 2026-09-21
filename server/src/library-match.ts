@@ -54,6 +54,17 @@ export interface LibraryMetaRecord {
   /** Set when the binding names one episode instead of a whole title. */
   season?: number;
   episode?: number;
+  /** What the title's stored gallery holds, slot by slot. The pictures themselves live in the
+   *  generated-artwork store under the item's key; this says what each one is, so the interface
+   *  can name them without keeping a translated label on disk. */
+  gallery?: GalleryEntry[];
+}
+
+/** One picture of a title's gallery. `kind` is named, not translated: the interface has the
+ *  catalogue's wording for all four already. */
+export interface GalleryEntry {
+  kind: "poster" | "background" | "logo" | "still";
+  shape: "poster" | "wide";
 }
 
 /** One episode of a bound series, keyed by title and numbering rather than by path,
@@ -395,6 +406,8 @@ export interface BrowseMetaView {
   season?: number;
   episode?: number;
   suggestion?: LibrarySuggestion;
+  /** How many pictures the title's stored gallery holds. Absent where it holds none. */
+  gallery?: number;
 }
 
 export function browseMeta(
@@ -407,7 +420,10 @@ export function browseMeta(
   const match = matchStatus(relative, records, suggestions);
   const skipLookup = Boolean(records[relative]?.skipLookup);
   const skipMosaic = Boolean(records[relative]?.skipMosaic);
-  const base: BrowseMetaView = { match, ...(skipLookup ? { skipLookup } : {}), ...(skipMosaic ? { skipMosaic } : {}) };
+  // How many pictures the row can show, so a tile offers the button only where there is
+  // something behind it. The pictures themselves are asked for when it is pressed.
+  const gallery = records[relative]?.gallery?.length;
+  const base: BrowseMetaView = { match, ...(skipLookup ? { skipLookup } : {}), ...(skipMosaic ? { skipMosaic } : {}), ...(gallery ? { gallery } : {}) };
   if (match === "suggested") {
     const suggestion = suggestionFor(relative, suggestions);
     return suggestion ? { ...base, suggestion } : base;

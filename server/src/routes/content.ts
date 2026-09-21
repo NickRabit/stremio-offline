@@ -3,6 +3,7 @@ import path from "node:path";
 import { mkdir, rename, stat } from "node:fs/promises";
 import { artworks } from "../artwork-cache.js";
 import type { ArtShape } from "../artwork.js";
+import type { GalleryEntry } from "../library-match.js";
 import { AppError } from "../errors.js";
 import { assertStillAdmin } from "../roles.js";
 import { libraryFor, libraryPath, libraryVisible, parseLibraryPath, posixDir, posixJoin, resolveLibraryPath, sameFile, visibleLibraries, type LibraryRecord, type Viewer } from "../libraries.js";
@@ -22,6 +23,10 @@ export interface ContentDeps extends RouteContext {
   dataOf(req: express.Request): UserData;
   deleteLibraryItem(relative: string): Promise<void>;
   fileExists(file: string): Promise<boolean>;
+  /** What the binding says the title's gallery holds, slot by slot. */
+  galleryOf(key: string): GalleryEntry[];
+  /** Where one gallery slot's picture sits, or nothing where the store cannot place it. */
+  galleryArtwork(key: string, index: number): string | undefined;
   healthOf(library: LibraryRecord): LibraryHealth;
   invalidateLibrary(): void;
   libraryEntries(): Promise<LibraryEntry[]>;
@@ -46,7 +51,7 @@ export interface ContentDeps extends RouteContext {
 }
 
 export function registerContentRoutes(app: express.Application, deps: ContentDeps): void {
-  const { store, currentUser, attachBrowseMeta, carveOutsOf, dataOf, deleteLibraryItem, fileExists, healthOf, invalidateLibrary, libraryEntries, libraryKey, libraryRootBrowse, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, prefsOf, progressOf, relativeKeyIn, relocateLibraryPath, scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites } = deps;
+  const { store, currentUser, attachBrowseMeta, carveOutsOf, dataOf, deleteLibraryItem, fileExists, galleryArtwork, galleryOf, healthOf, invalidateLibrary, libraryEntries, libraryKey, libraryRootBrowse, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, prefsOf, progressOf, relativeKeyIn, relocateLibraryPath, scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites } = deps;
 
   /** Whether a key names a library the viewer may see. A key in an invisible library is
    *  refused wherever a key to a missing one is, so the two cannot be told apart. */
@@ -206,6 +211,22 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     res.json({ path: moved });
   }));
 
+  /** What a title's stored gallery holds, in the order the catalogue showed it. Only the
+   *  manifest travels: each picture is fetched from `thumb` as the viewer looks at it. */
+  app.get("/api/library/gallery", asyncRoute(async (req, res) => {
+    const viewer = viewerOf(currentUser(req));
+    const relative = String(req.query.path ?? "").trim();
+    const key = libraryKey(relative);
+    if (!keyVisible(key, viewer)) throw new AppError("The item was not found.", "err.itemNotFound", 404);
+    const wire = wirePath(key);
+    res.json({
+      images: galleryOf(key).map((entry, index) => ({
+        ...entry,
+        url: `/api/library/thumb?path=${encodeURIComponent(wire)}&gallery=${index}`,
+      })),
+    });
+  }));
+
   app.get("/api/library/thumb", asyncRoute(async (req, res) => {
     // An unknown shape asks for the poster, the way an unknown tile size is the medium one: every
     // address the interface already holds names no shape at all.
@@ -213,6 +234,17 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     const shape: ArtShape = String(req.query.shape ?? "") === "wide" ? "wide" : "poster";
     const filePath = req.query.path ? libraryKey(String(req.query.path)) : undefined;
     const dirPath = req.query.dir ? libraryKey(String(req.query.dir)) : undefined;
+    // A gallery slot is answered by its number, and only for a slot the binding says is there.
+    const slot = req.query.gallery === undefined ? undefined : Number(req.query.gallery);
+    if (slot !== undefined) {
+      const key = filePath ?? dirPath;
+      if (!key || !keyVisible(key, viewer) || !Number.isInteger(slot) || slot < 0 || slot >= galleryOf(key).length) return res.status(404).end();
+      const file = galleryArtwork(key, slot);
+      if (!file || !await fileExists(file)) return res.status(404).end();
+      void artworks.served(file);
+      res.setHeader("cache-control", "private, no-store");
+      return res.sendFile(file, { dotfiles: "allow" }, (error) => { if (error && !res.headersSent) res.status(404).end(); });
+    }
     let art: string | undefined;
     if (filePath) art = keyVisible(filePath, viewer) ? await locateFileArtwork(filePath, shape) : undefined;
     else if (dirPath) art = keyVisible(dirPath, viewer) ? await locateFolderArtwork(dirPath, shape) : undefined;

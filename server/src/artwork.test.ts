@@ -9,7 +9,7 @@ import { test } from "node:test";
 import { promisify } from "node:util";
 import {
   artNames, artOutput, artVariantKey, ArtworkQueue, artworkBesideMedia, BACKDROP_NAMES, fileMayUseFolderArtwork,
-  findArtwork, imageSize, pickArtwork, pictureShape, POSTER_NAMES, readFolderListing, saveBackdropAs, savePosterAs,
+  ART_VARIANTS, findArtwork, galleryVariant, GALLERY_SIZE, imageSize, pickArtwork, pictureShape, POSTER_NAMES, readFolderListing, saveBackdropAs, savePosterAs,
 } from "./artwork.js";
 import { ArtworkCache } from "./artwork-cache.js";
 
@@ -229,4 +229,16 @@ test("a picture is the variant its proportions make it, whatever it was called",
   // Near enough to square to be either: the catalogue's own label is left alone.
   assert.equal(pictureShape(png(1000, 1000)), undefined);
   assert.equal(pictureShape(Buffer.alloc(64)), undefined);
+});
+
+test("a gallery slot keeps its own key, and the poster keeps the one it has always had", () => {
+  // The poster's key is bare, so no file written before the variants existed is renamed.
+  assert.equal(artVariantKey("lib_1/film.mkv", "poster"), "lib_1/film.mkv");
+  assert.equal(artVariantKey("lib_1/film.mkv", "wide"), "lib_1/film.mkv#wide");
+  assert.equal(artVariantKey("lib_1/film.mkv", galleryVariant(0)), "lib_1/film.mkv#gallery0");
+  assert.equal(artVariantKey("lib_1/film.mkv", galleryVariant(17)), "lib_1/film.mkv#gallery17");
+  // Every variant is distinct, so nothing a move carries lands on top of anything else.
+  const keys = ART_VARIANTS.map((variant) => artVariantKey("lib_1/film.mkv", variant));
+  assert.equal(new Set(keys).size, keys.length);
+  assert.equal(ART_VARIANTS.length, GALLERY_SIZE + 2);
 });

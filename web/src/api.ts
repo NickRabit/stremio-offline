@@ -64,6 +64,7 @@ export const api = {
   libraryLinks: (path: string, language: string) => request<{ links: SiteLink[] }>(`/api/library/links?${q({ path, language })}`, { timeoutMs: 60_000 }),
   trailer: (type: string, id: string, language: string) => request<{ trailer: Trailer | null }>(`/api/trailer/${encodeURIComponent(type)}/${encodeURIComponent(id)}?${q({ language })}`),
   libraryTrailer: (path: string, language: string) => request<{ trailer: Trailer | null }>(`/api/library/trailer?${q({ path, language })}`),
+  libraryGallery: (path: string) => request<{ images: Array<{ url: string; kind: "poster" | "background" | "logo" | "still"; shape: "poster" | "wide" }> }>(`/api/library/gallery?${q({ path })}`),
   streamSources: (type: string, id: string) => request<Array<{ key: string; name: string }>>(`/api/stream-sources/${encodeURIComponent(type)}/${encodeURIComponent(id)}`),
   streams: (type: string, id: string, addon?: string) => request<Stream[]>(`/api/streams/${encodeURIComponent(type)}/${encodeURIComponent(id)}${addon ? `?addon=${encodeURIComponent(addon)}` : ""}`),
   subtitles: (type: string, id: string) => request<Subtitle[]>(`/api/subtitles/${encodeURIComponent(type)}/${encodeURIComponent(id)}`),

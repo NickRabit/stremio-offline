@@ -276,6 +276,7 @@ export const en = {
   "trailers.openOnYouTube": "TRAILER",
 
   // Image gallery.
+  "gallery.openStored": "Show the pictures of {name}",
   "gallery.title": "Image gallery",
   "gallery.poster": "Poster",
   "gallery.background": "Background",

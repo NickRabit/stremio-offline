@@ -29,12 +29,12 @@ import { tmdbMeta } from "./tmdb.js";
 import { ExternalIdStore } from "./external-ids.js";
 import { currentLevel, flushLog, initLogger, log, parseLevel, startLogMaintenance, setLevel } from "./logger.js";
 import { browseDirectory, describePath, emptiedFolders, entryDirectory, holdsLibraryRoot, isPathWithin, isVideo, listVideos, moveDestination, orphanedCatalogKeys, pageFiles, remapPath, scanLibrary, summarize, type FoundFile, type LibraryEntry } from "./library.js";
-import { browseMeta, cacheFieldsFromMeta, episodeKey, episodeNumberOf, episodesFromMeta, dropKeyed, knownTitleEntry, knownTitleOf, matchKeyFor, mosaicSkipped, needsBackfill, needsEpisodes, titleUnits, unmatchAt, type LibraryMetaRecord, type TitleKind, type TitleUnit } from "./library-match.js";
+import { browseMeta, cacheFieldsFromMeta, episodeKey, episodeNumberOf, episodesFromMeta, dropKeyed, knownTitleEntry, knownTitleOf, matchKeyFor, mosaicSkipped, needsBackfill, needsEpisodes, titleUnits, unmatchAt, type GalleryEntry, type LibraryMetaRecord, type TitleKind, type TitleUnit } from "./library-match.js";
 import { LibraryScan } from "./library-scan.js";
 import { createLibraryProbe, type LibraryHealth } from "./library-probe.js";
 import { LibraryAutoScan } from "./library-autoscan.js";
 import { watchLibrary } from "./library-watch.js";
-import { ArtworkQueue, artNames, artOutput, artVariantKey, artworkBesideMedia, BACKDROP_OUTPUT, episodeArtName, fileMayUseFolderArtwork, findArtwork, type FolderListing, framePosition, pickArtwork, pictureShape, readFolderListing, POSTER_OUTPUT, saveBackdropPicture, saveFrame, savePicture, takePicture, type ArtShape, type Picture, type PictureOutcome, type PosterOutcome } from "./artwork.js";
+import { ART_VARIANTS, ArtworkQueue, artNames, artOutput, artVariantKey, artworkBesideMedia, BACKDROP_OUTPUT, episodeArtName, fileMayUseFolderArtwork, findArtwork, type FolderListing, framePosition, galleryVariant, GALLERY_SIZE, pickArtwork, pictureShape, readFolderListing, POSTER_OUTPUT, saveBackdropPicture, saveFrame, savePicture, takePicture, saveGalleryPicture, type ArtShape, type ArtVariant, type Picture, type PictureOutcome, type PosterOutcome } from "./artwork.js";
 import { envCredentials, INTERNAL_TOKEN, parseCookies, readSession, sessionUserId, SESSION_COOKIE, type SessionInfo } from "./auth.js";
 import { RepeatFilter } from "./access-log.js";
 import { randomUUID } from "node:crypto";
@@ -530,7 +530,12 @@ const posterOf = (value: unknown): string | undefined => {
 
 const mediaSource = (value: unknown): MediaInfo | undefined => {
   const media = value as MediaInfo | undefined;
-  return media ? { ...media, poster: posterOf(media.poster), background: posterOf(media.background) } : undefined;
+  if (!media) return undefined;
+  const gallery = (Array.isArray(media.gallery) ? media.gallery : [])
+    .map((picture) => ({ ...picture, url: posterOf(picture?.url) }))
+    .filter((picture): picture is { url: string; kind: "poster" | "background" | "logo" | "still" } => Boolean(picture.url))
+    .slice(0, GALLERY_SIZE);
+  return { ...media, poster: posterOf(media.poster), background: posterOf(media.background), ...(gallery.length ? { gallery } : {}) };
 };
 
 /** The catalogue poster travels with the queued job and with library metadata as well. */
@@ -1094,25 +1099,24 @@ const scheduleMetaBackfill = (type: string, id: string, language: string) => {
 };
 
 const isFileKey = (key: string) => isVideo(posixBase(key));
-const ART_SHAPES: ArtShape[] = ["poster", "wide"];
 /** Where one variant of a key sits in the generated store, or nothing where the store cannot
  *  place it: a `#wide` suffix on a library's own key would land on the library id, which the
  *  store refuses. Such a key keeps the poster it has always had and gets no wide variant. */
-const storeArt = (key: string, shape: ArtShape = "poster") => {
+const storeArt = (key: string, shape: ArtVariant = "poster") => {
   const variant = artVariantKey(key, shape);
   const parsed = parseLibraryPath(variant.startsWith("dir:") ? variant.slice(4) : variant);
   return parsed ? dataArtworkFile(variant) : undefined;
 };
 /** Both files of one shape, because a key can name a file or a folder and the caller does not
  *  always know which. */
-const generatedArtFiles = (key: string, shape: ArtShape) =>
+const generatedArtFiles = (key: string, shape: ArtVariant) =>
   [storeArt(key, shape), storeArt(`dir:${key}`, shape)].filter((file): file is string => file !== undefined);
 /** Where a folder's variant sits: the `dir:` prefix keeps a file and a folder of the same name
  *  apart. */
 const hashedArt = (key: string, shape: ArtShape = "poster") =>
   isFileKey(key) ? storeArt(key, shape) : storeArt(`dir:${key}`, shape);
 const removeGeneratedArt = async (key: string) => {
-  for (const shape of ART_SHAPES) for (const file of generatedArtFiles(key, shape)) await removeArtwork(file);
+  for (const variant of ART_VARIANTS) for (const file of generatedArtFiles(key, variant)) await removeArtwork(file);
   // Artwork deleted on purpose may be asked for again: the retry window is for titles that have
   // none, not for a picture somebody just removed.
   backdropTried.delete(artworkQueueKey(key, "wide"));
@@ -1378,8 +1382,8 @@ async function sweepArtwork() {
     // The ancestor rows matter: a folder is keyed `dir:<path>` for paths that appear in
     // no file and in no binding, because a folder is not a file.
     const rememberArt = (key: string) => {
-      for (const shape of ART_SHAPES) {
-        const file = storeArt(key, shape);
+      for (const variant of ART_VARIANTS) {
+        const file = storeArt(key, variant);
         if (file) valid.add(path.basename(file));
       }
     };
@@ -1490,8 +1494,8 @@ const relocateArtwork = async (items: string[], relative: string, nextRelative: 
   for (const item of items) {
     const next = remapPath(item, relative, nextRelative);
     for (const [from, to] of [[item, next], [`dir:${item}`, `dir:${next}`]]) {
-      for (const shape of ART_SHAPES) {
-        const moved = artVariantKey(from!, shape), target = artVariantKey(to!, shape);
+      for (const variant of ART_VARIANTS) {
+        const moved = artVariantKey(from!, variant), target = artVariantKey(to!, variant);
         const result = await artworks.moveKey(moved, target);
         if (!result.carried && result.reason === "failed") {
           log("WARN", "A thumbnail could not follow its item", { from: moved, to: target, detail: result.detail });
@@ -1506,8 +1510,8 @@ const duplicateArtwork = async (items: string[], relative: string, nextRelative:
   for (const item of items) {
     const next = remapPath(item, relative, nextRelative);
     for (const [from, to] of [[item, next], [`dir:${item}`, `dir:${next}`]]) {
-      for (const shape of ART_SHAPES) {
-        const copied = artVariantKey(from!, shape), target = artVariantKey(to!, shape);
+      for (const variant of ART_VARIANTS) {
+        const copied = artVariantKey(from!, variant), target = artVariantKey(to!, variant);
         const result = await artworks.copyKey(copied, target);
         if (!result.carried && result.reason === "failed") {
           log("WARN", "A thumbnail could not be copied to the item's new key", { from: copied, to: target, detail: result.detail });
@@ -1523,10 +1527,10 @@ const duplicateArtwork = async (items: string[], relative: string, nextRelative:
  *  moved, because whatever stays in the folder is still that title's. */
 const carryCoveringArtwork = async (cover: string, nextKey: string) => {
   const to = isFileKey(nextKey) ? nextKey : `dir:${nextKey}`;
-  for (const shape of ART_SHAPES) {
-    const result = await artworks.copyKey(artVariantKey(`dir:${cover}`, shape), artVariantKey(to, shape));
+  for (const variant of ART_VARIANTS) {
+    const result = await artworks.copyKey(artVariantKey(`dir:${cover}`, variant), artVariantKey(to, variant));
     if (!result.carried && result.reason === "failed") {
-      log("WARN", "The picture of the folder a title is bound through could not travel with it", { cover, next: nextKey, shape, detail: result.detail });
+      log("WARN", "The picture of the folder a title is bound through could not travel with it", { cover, next: nextKey, variant, detail: result.detail });
     }
   }
 };
@@ -1684,6 +1688,40 @@ const saveCatalogPoster = (key: string, url?: string, fallback?: string, backdro
   });
 };
 
+/** The rest of a title's pictures, saved beside the two the tiles draw. They always go to the
+ *  generated store: Jellyfin has no convention to read them by, so writing them next to
+ *  somebody's media would only litter the folder. The manifest goes on the binding, because a
+ *  slot on disk says nothing about what is in it.
+ *
+ *  Queued behind its own key, so a title's gallery never delays the poster the listing is
+ *  waiting for. What cannot be fetched is left out rather than leaving a hole: the slots are
+ *  renumbered as they are written. */
+const saveCatalogGallery = (key: string, pictures: NonNullable<MediaInfo["gallery"]>) => {
+  const target = parseLibraryPath(key);
+  if (!target || !pictures.length) return;
+  artworkQueue.run(`gallery:${key}`, async () => {
+    const entries: GalleryEntry[] = [];
+    for (const picture of pictures.slice(0, GALLERY_SIZE)) {
+      const file = storeArt(isFileKey(key) ? key : `dir:${key}`, galleryVariant(entries.length));
+      if (!file) break;
+      const taken = await takePicture(picture.url);
+      if (!taken.ok) {
+        log("DEBUG", "A gallery picture was not saved", { key, kind: picture.kind, host: hostOf(picture.url), reason: taken.reason });
+        continue;
+      }
+      await mkdir(path.dirname(file), { recursive: true });
+      if (!await saveGenerated(file, async () => (await saveGalleryPicture(file, taken.picture)).ok)) continue;
+      entries.push({ kind: picture.kind, shape: pictureShape(taken.picture.data) === "poster" ? "poster" : "wide" });
+    }
+    if (!entries.length) return;
+    await metaStore.update(target.libraryId, (file) => {
+      const record = file.meta[target.relative];
+      if (record) record.gallery = entries;
+    });
+    log("INFO", "The title's gallery was saved", { key, pictures: entries.length });
+  });
+};
+
 const hostOf = (url: string) => { try { return new URL(url).host; } catch { return ""; } };
 const scanGapMs = Number(process.env.LIBRARY_SCAN_GAP_MS);
 /** Age at which the scan re-reads a bound series. `0` switches the pass off. */
@@ -1695,7 +1733,19 @@ const browsedLibraries = new Set<string>();
 /** A library the interface opened is worth keeping current: the walk of a library nobody
  *  looked at is what the freshness pass is allowed to skip. */
 const markBrowsed = (library: LibraryRecord) => { browsedLibraries.add(library.id); };
-registerContentRoutes(app, { ...routeContext, attachBrowseMeta, carveOutsOf, dataOf, deleteLibraryItem, fileExists, healthOf, invalidateLibrary, libraryEntries, libraryKey, libraryRootBrowse, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, prefsOf, progressOf, relativeKeyIn, relocateLibraryPath, scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites });
+/** What the binding says a title's gallery holds. An item nobody has saved one for answers
+ *  with nothing, which is how the interface knows not to offer the button. */
+const galleryOf = (key: string): GalleryEntry[] => {
+  const target = parseLibraryPath(key);
+  const record = target ? metaStore.qualifiedMeta()[key] : undefined;
+  return record?.gallery ?? [];
+};
+/** Where one gallery slot sits. Always the generated store: the gallery is never written
+ *  next to somebody's media. */
+const galleryArtwork = (key: string, index: number) =>
+  storeArt(isFileKey(key) ? key : `dir:${key}`, galleryVariant(index));
+
+registerContentRoutes(app, { ...routeContext, attachBrowseMeta, carveOutsOf, dataOf, deleteLibraryItem, fileExists, galleryArtwork, galleryOf, healthOf, invalidateLibrary, libraryEntries, libraryKey, libraryRootBrowse, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, prefsOf, progressOf, relativeKeyIn, relocateLibraryPath, scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites });
 const libraryScan = new LibraryScan({
   dataDir: DATA_DIR,
   // The scan works on keys, so the walk it injects is the qualified one.
@@ -1778,6 +1828,7 @@ const rememberTitle = async (target: string, media: MediaInfo | undefined, flat:
   // stopped matching the catalogue tile beside it. Metadata is the second chance, not the
   // first, for both variants.
   saveCatalogPoster(key, media.poster, meta?.poster, media.background ?? meta?.background);
+  if (media.gallery?.length) saveCatalogGallery(key, media.gallery);
 };
 
 // Completion invalidates the scan at once. For a lazy job the target path is known

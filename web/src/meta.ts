@@ -18,6 +18,12 @@ export function gridArt(summary?: Meta | null, detail?: Meta | null) {
   return { poster, background: summary?.background || poster || detail?.background };
 }
 
+/** The whole gallery as the download carries it: the addresses and what each picture is, so
+ *  the server can store them without a second opinion on their order. */
+export function galleryPayload(images: Array<{ url: string; kind: "poster" | "background" | "logo" | "still" }>) {
+  return images.map(({ url, kind }) => ({ url, kind }));
+}
+
 export function localizedDownloadTitle(summary: Meta, detail: Meta, language: string): string {
   return detail.nameLanguage === language ? detail.name : summary.name;
 }

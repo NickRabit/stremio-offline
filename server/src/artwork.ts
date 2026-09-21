@@ -24,10 +24,24 @@ export type ArtShape = "poster" | "wide";
 export const artNames = (shape: ArtShape) => shape === "wide" ? BACKDROP_NAMES : POSTER_NAMES;
 export const artOutput = (shape: ArtShape) => shape === "wide" ? BACKDROP_OUTPUT : POSTER_OUTPUT;
 
-/** The key a shape's variant holds in the generated-artwork store: a second sha1 in the same
+/** How many pictures of a title's gallery are kept. The catalogue shows the same number. */
+export const GALLERY_SIZE = 18;
+
+/** Everything one item can hold a picture for: the two shapes a tile draws, and the numbered
+ *  slots of the gallery behind them. */
+export type ArtVariant = ArtShape | `gallery${number}`;
+export const galleryVariant = (index: number) => `gallery${index}` as ArtVariant;
+export const galleryIndexOf = (variant: ArtVariant) =>
+  variant.startsWith("gallery") ? Number(variant.slice(7)) : undefined;
+/** Every variant, for the jobs that carry a whole item: a move, a copy, a deletion. A slot
+ *  nobody filled costs one lookup and reports itself absent. */
+export const ART_VARIANTS: ArtVariant[] =
+  ["poster", "wide", ...Array.from({ length: GALLERY_SIZE }, (_item, index) => galleryVariant(index))];
+
+/** The key a variant holds in the generated-artwork store: a second sha1 in the same
  *  directory, so it inherits the byte accounting and the eviction of `artwork-cache.ts`. The
- *  poster keeps the key it has always had, so no file on disk is renamed by the second one. */
-export const artVariantKey = (key: string, shape: ArtShape) => shape === "wide" ? `${key}#wide` : key;
+ *  poster keeps the key it has always had, so no file on disk is renamed by the others. */
+export const artVariantKey = (key: string, variant: ArtVariant) => variant === "poster" ? key : `${key}#${variant}`;
 
 /** A generated poster lands next to the media only where the library allows writing. A
  *  read-only root, a root that is away and a library the user keeps curated all fall back
@@ -245,11 +259,24 @@ async function shrinkToWidth(source: string, target: string, width: number): Pro
  *  picture ffmpeg could not read back is kept as it arrived: a large backdrop is worth more
  *  than a tile with no landscape picture at all. */
 export async function saveBackdropPicture(target: string, picture: Picture): Promise<PosterOutcome> {
+  return saveNarrowed(target, picture, BACKDROP_WIDTH);
+}
+
+/** The widest a stored gallery picture may be: enough to fill a phone or a laptop screen, and
+ *  narrow enough that eighteen of them per title do not evict the posters in use. */
+const GALLERY_WIDTH = 1280;
+
+/** One picture of a title's gallery, kept at viewing size rather than at the catalogue's. */
+export async function saveGalleryPicture(target: string, picture: Picture): Promise<PosterOutcome> {
+  return saveNarrowed(target, picture, GALLERY_WIDTH);
+}
+
+async function saveNarrowed(target: string, picture: Picture, width: number): Promise<PosterOutcome> {
   const source = `${target}.src.jpg`;
   try {
     // The same mode a poster is written with, because the fallback below renames this very file.
     await writeFile(source, picture.data, { mode: 0o644 });
-    if (!await shrinkToWidth(source, target, BACKDROP_WIDTH)) await rename(source, target);
+    if (!await shrinkToWidth(source, target, width)) await rename(source, target);
     return { ok: true };
   } catch (error) {
     return { ok: false, reason: "failed", detail: error instanceof Error ? error.message : String(error) };

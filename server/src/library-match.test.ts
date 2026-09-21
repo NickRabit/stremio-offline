@@ -459,3 +459,19 @@ test("an unmatched item inherits nothing and stays unmatched where it lands", ()
   const pinned = pinInherited(meta, {}, from, to);
   assert.deepEqual(pinned.meta, meta, "nothing covered it, so nothing is pinned");
 });
+
+test("browse meta says how many pictures a title's gallery holds, and nothing where it holds none", () => {
+  const withGallery = {
+    "Movies/one.mkv": {
+      type: "movie", id: "tt1", source: "download" as const,
+      gallery: [{ kind: "poster" as const, shape: "poster" as const }, { kind: "still" as const, shape: "wide" as const }],
+    },
+  };
+  assert.equal(browseMeta("Movies/one.mkv", "one", withGallery).gallery, 2);
+  const without = { "Movies/one.mkv": { type: "movie", id: "tt1", source: "download" as const } };
+  assert.equal(browseMeta("Movies/one.mkv", "one", without).gallery, undefined);
+  // A title bound through its folder does not lend its gallery to the files inside it: the
+  // pictures are stored under the key that owns them.
+  const folder = { Movies: { type: "movie", id: "tt1", source: "download" as const, gallery: [{ kind: "logo" as const, shape: "wide" as const }] } };
+  assert.equal(browseMeta("Movies/one.mkv", "one", folder).gallery, undefined);
+});
