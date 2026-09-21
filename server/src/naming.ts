@@ -7,8 +7,11 @@ export interface MediaInfo {
   /** The IMDb id from the catalogue, so metadata need not be guessed from the folder name. */
   id?: string;
   metaType?: string;
-  /** The poster from the catalogue. The client has it at hand, so it need not be looked up through metadata. */
+  /** The two pictures the catalogue grid drew for this title. The client has them at hand, so
+   *  they need not be looked up through metadata -- and looking them up gave a different
+   *  answer, which is how a library tile ended up showing a picture nobody had seen. */
   poster?: string;
+  background?: string;
   kind?: "movie" | "episode";
   /** The film's name, or the series name for an episode. */
   title?: string;

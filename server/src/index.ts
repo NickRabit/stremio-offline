@@ -530,11 +530,11 @@ const posterOf = (value: unknown): string | undefined => {
 
 const mediaSource = (value: unknown): MediaInfo | undefined => {
   const media = value as MediaInfo | undefined;
-  return media ? { ...media, poster: posterOf(media.poster) } : undefined;
+  return media ? { ...media, poster: posterOf(media.poster), background: posterOf(media.background) } : undefined;
 };
 
 /** The catalogue poster travels with the queued job and with library metadata as well. */
-const mediaView = (media: MediaInfo) => ({ ...media, poster: images.proxied(media.poster) });
+const mediaView = (media: MediaInfo) => ({ ...media, poster: images.proxied(media.poster), background: images.proxied(media.background) });
 /** A job's target is stored qualified, like every other key; the client gets the wire form,
  *  which stays relative while one library is configured. */
 const jobView = <T extends { media?: MediaInfo; target?: string }>(job: T): T => ({
@@ -1165,12 +1165,15 @@ const writeCatalogArt = async (key: string, taken: PictureOutcome | undefined, s
     : savePosterReport(key, target, taken, "The catalogue poster");
 };
 
-/** Both variants in one pass, from the poster and the background the metadata carries side by
- *  side. Every match writes through here, so a newly matched title has both pictures at once. */
+/** Both variants in one pass, from the two addresses the caller has settled on. Every match
+ *  writes through here, so a newly matched title has both pictures at once. */
 const writeCatalogPoster = async (key: string, url?: string, backdrop?: string) => {
   if (!key || key === ".") return false;
-  const poster = await writeCatalogArt(key, await catalogArt("poster", url, backdrop), "poster");
-  await writeCatalogArt(key, await catalogArt("wide", url, backdrop), "wide");
+  const poster = await writeCatalogArt(key, url ? await takePicture(url) : undefined, "poster");
+  // The same address for both is not a mistake: a catalogue row without a background drew its
+  // poster in the landscape tiles, and the wide variant has to hold that same picture or the
+  // scheduler fills the empty slot with one the grid never showed.
+  await writeCatalogArt(key, backdrop ? await takePicture(backdrop) : undefined, "wide");
   return poster;
 };
 
@@ -1768,10 +1771,13 @@ const rememberTitle = async (target: string, media: MediaInfo | undefined, flat:
     delete file.suggestions[destination.relative];
     Object.assign(episodes, episodeRows);
   });
-  // The poster the client was looking at when it pressed download is the one to save: it needs
-  // no round trip, and for an addon that answers `metadata()` with nothing it is the only one
-  // there will ever be. The catalogue's own poster is the second chance, not the first.
-  saveCatalogPoster(key, media.poster, meta?.poster, meta?.background);
+  // The two pictures the client was looking at when it pressed download are the ones to save:
+  // they need no round trip, and for an addon that answers `metadata()` with nothing they are
+  // the only ones there will ever be. More than that, they are what the grid drew, and asking
+  // the metadata again answers with a different picture often enough that the library tile
+  // stopped matching the catalogue tile beside it. Metadata is the second chance, not the
+  // first, for both variants.
+  saveCatalogPoster(key, media.poster, meta?.poster, media.background ?? meta?.background);
 };
 
 // Completion invalidates the scan at once. For a lazy job the target path is known
