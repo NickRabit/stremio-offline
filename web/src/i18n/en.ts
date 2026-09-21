@@ -375,7 +375,6 @@ export const en = {
   "sources.onlyTorrentsAfter": "they can be neither downloaded nor played.",
   "sources.noneMatchFilter": "None of the {count} sources matches the filter.",
   "sources.clearFilters": "Clear filters",
-  "sources.unsupported": "This source cannot be played through the server. Pick another one.",
   "sources.torrentNotice": "This source is a torrent. Send it To library — Real-Debrid fetches it first, then the app stores it. Play it from the library.",
   "sources.subtitleCount": "Subtitles from addons: {count}",
   "sources.audioInFile": "audio in the file",

@@ -5,9 +5,11 @@ import type { Stream } from "./types";
 export const streamText = (stream: Stream) =>
   [stream.name, stream.title, stream.description, stream.behaviorHints?.filename].filter(Boolean).join(" ");
 
-const UNITS: Record<string, number> = { tb: 1e12, gb: 1e9, mb: 1e6, kb: 1e3 };
-// Torrentio does not send the size in behaviorHints at all, only in the text as "💾 35.09 GB".
-const SIZE = /(\d+(?:[.,]\d+)?)\s*(TB|GB|MB|KB)\b/gi;
+const UNITS: Record<string, number> = { tb: 1e12, gb: 1e9, mb: 1e6, kb: 1e3, t: 1e12, g: 1e9 };
+// Torrentio does not send the size in behaviorHints at all, only in the text as "💾 35.09 GB",
+// and Luna abbreviates it to "2.2G". The bitrate sits in the same line ("2 Mb/s"), one unit away
+// from a megabyte, and taking it for the size turned a 2.2 GB film into 2 MB.
+const SIZE = /(\d+(?:[.,]\d+)?)\s*(TB|GB|MB|KB|T|G)\b(?!\s*(?:\/\s*s|ps|it)\b)/gi;
 
 export function streamSize(stream: Stream): number | undefined {
   const hinted = stream.behaviorHints?.videoSize;
@@ -126,4 +128,29 @@ export function repickStream<T>(state: {
   // A better source may arrive while paging, but the viewer's own pick is never overridden.
   if (!state.picked && state.pending > 0 && state.preferred && state.selected !== state.preferred) return { move: true, to: state.preferred };
   return { move: false };
+}
+
+/** An addon that cannot be played through the server is not offering a source; it is
+ *  talking to the viewer -- an expiring subscription, a link to its own setup page.
+ *  Such an entry belongs above the list as a message, never in it as something to pick:
+ *  left in, it is chosen by default when nothing else arrived and the viewer is told
+ *  their sources are broken when the addon simply found none. */
+export const isAddonNotice = (stream: Stream): boolean => stream.kind === "unsupported";
+
+export const noticeText = (stream: Stream): string =>
+  [stream.title, stream.description, stream.name].find((text) => text?.trim())?.trim().replace(/\s+/g, " ") ?? "";
+
+export const offeredStreams = (streams: Stream[]): Stream[] => streams.filter((stream) => !isAddonNotice(stream));
+
+/** One line per message. Addons repeat the same notice on every request, and a viewer
+ *  running several of them from one provider would otherwise read it several times. */
+export function addonNotices(streams: Stream[]): Stream[] {
+  const seen = new Set<string>();
+  return streams.filter((stream) => {
+    if (!isAddonNotice(stream)) return false;
+    const text = noticeText(stream);
+    if (!text || seen.has(text)) return false;
+    seen.add(text);
+    return true;
+  });
 }

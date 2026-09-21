@@ -371,7 +371,6 @@ export const cs: Catalog = {
   "sources.onlyTorrentsAfter": "je nelze stáhnout ani přehrát.",
   "sources.noneMatchFilter": "Filtru neodpovídá ani jeden z {count} zdrojů.",
   "sources.clearFilters": "Zrušit filtry",
-  "sources.unsupported": "Tenhle zdroj nejde přehrát přes server. Vyberte jiný.",
   "sources.torrentNotice": "Tenhle zdroj je torrent. Dejte ho Do knihovny — Real-Debrid ho nejdřív stáhne k sobě a appka ho pak uloží. Přehrajete ho z knihovny.",
   "sources.subtitleCount": "Titulky z doplňků: {count}",
   "sources.audioInFile": "zvuk v souboru",

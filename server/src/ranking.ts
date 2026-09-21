@@ -8,9 +8,11 @@ import type { StreamItem } from "./types.js";
 const streamText = (stream: StreamItem) =>
   [stream.name, stream.title, stream.description, stream.behaviorHints?.filename].filter(Boolean).join(" ");
 
-const UNITS: Record<string, number> = { tb: 1e12, gb: 1e9, mb: 1e6, kb: 1e3 };
-// Torrentio does not send the size in behaviorHints at all, only in the text as "💾 35.09 GB".
-const SIZE = /(\d+(?:[.,]\d+)?)\s*(TB|GB|MB|KB)\b/gi;
+const UNITS: Record<string, number> = { tb: 1e12, gb: 1e9, mb: 1e6, kb: 1e3, t: 1e12, g: 1e9 };
+// Torrentio does not send the size in behaviorHints at all, only in the text as "💾 35.09 GB",
+// and Luna abbreviates it to "2.2G". The bitrate sits in the same line ("2 Mb/s"), one unit away
+// from a megabyte, and taking it for the size turned a 2.2 GB film into 2 MB.
+const SIZE = /(\d+(?:[.,]\d+)?)\s*(TB|GB|MB|KB|T|G)\b(?!\s*(?:\/\s*s|ps|it)\b)/gi;
 
 export function streamSize(stream: StreamItem): number | undefined {
   const hinted = stream.behaviorHints?.videoSize;
