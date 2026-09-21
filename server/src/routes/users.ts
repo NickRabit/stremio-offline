@@ -23,11 +23,9 @@ export interface UsersDeps extends RouteContext {
   permissionsChanged(before: UserRecord, after: UserRecord): Promise<void>;
 }
 
-/** Take one account's id out of every grant list. Two things need it, for the same reason:
- *  the id no longer belongs there and a list that still carries it cannot be saved again.
- *  Both endpoints send the whole list back and both refuse an id that is not an ordinary
- *  account, so one stale entry makes that library or addon permanently uneditable -- for
- *  every other account too, not only the one that changed. */
+/** Take one deleted account's id out of every grant list. Only deletion needs it: the id
+ *  will never name anybody again, and ids are never reused, so what is left behind is a
+ *  dangling reference rather than a grant waiting for its account to come back. */
 const sweepGrants = (state: State, id: string): void => {
   state.libraries = (state.libraries ?? []).map((library) => library.visibleTo?.includes(id)
     ? { ...library, visibleTo: library.visibleTo.filter((entry) => entry !== id) }
@@ -55,12 +53,15 @@ export function registerUsersRoutes(app: express.Application, deps: UsersDeps): 
   };
 
   /** The account as the interface reads it: the public fields and what was granted to it. A
-   *  grant list is how an ordinary user gets something, so an administrator's counts stay at
-   *  zero rather than counting a list that grants nothing. */
+   *  grant list is how an ordinary user gets something, so an administrator's counts are
+   *  zero: the lists they are still named on are dormant and grant nothing, and the role
+   *  grants everything without them. */
   const view = (user: UserRecord) => ({
     ...publicUser(user),
-    libraries: store.libraries().filter((library) => (library.visibleTo ?? []).includes(user.id)).length,
-    addons: store.addons().filter((addon) => (addon.allowedUsers ?? []).includes(user.id)).length,
+    libraries: user.role === "admin" ? 0
+      : store.libraries().filter((library) => (library.visibleTo ?? []).includes(user.id)).length,
+    addons: user.role === "admin" ? 0
+      : store.addons().filter((addon) => (addon.allowedUsers ?? []).includes(user.id)).length,
   });
 
   /** One action, one line naming who did it and to whom, both by name and id: a hash in the
@@ -169,10 +170,6 @@ export function registerUsersRoutes(app: express.Application, deps: UsersDeps): 
           || next.permissions.downloadToDevice !== user.permissions.downloadToDevice;
         return changed ? { ...next, permissionsVersion: user.permissionsVersion + 1 } : user;
       });
-      // A promotion makes every grant this account held meaningless -- an administrator sees
-      // every library and uses every addon by role -- and leaves the id somewhere it may no
-      // longer be written. Sweeping here is what keeps the lists saveable.
-      if (role === "admin" && before.role !== "admin") sweepGrants(state, id);
     });
     const after = requireUser(id);
     if (!changed) return res.json(view(after));

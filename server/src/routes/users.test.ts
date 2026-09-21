@@ -387,7 +387,7 @@ test("the accounts API is administrator-only", async (t) => {
   assert.equal(findUserById(harness.store.users(), ADA)?.username, "ada");
 });
 
-test("promoting an account takes its id out of every grant list", async (t) => {
+test("promoting an account leaves its grants where they are", async (t) => {
   const harness = await mount({
     users: [admin, bob, carol],
     libraries: (dir) => [library(path.join(dir, "downloads"), [BOB, CAROL])],
@@ -399,27 +399,34 @@ test("promoting an account takes its id out of every grant list", async (t) => {
   assert.equal(response.status, 200);
   assert.equal(findUserById(harness.store.users(), BOB)?.role, "admin");
 
-  // Left behind, the id would be more than untidy. Both endpoints take the whole list and
-  // both refuse an administrator's id, so one stale entry makes that library and that addon
-  // impossible to save again -- for Carol too, who never changed.
-  assert.deepEqual(harness.store.libraries()[0]?.visibleTo, [CAROL], "the promoted id is still on the library");
-  assert.deepEqual(harness.store.addons()[0]?.allowedUsers, [CAROL], "the promoted id is still on the addon");
+  // The role grants everything, so the entry grants nothing while it sits there. Taking it
+  // out would be the one thing nobody can undo: what an account was granted is not written
+  // down anywhere else.
+  assert.deepEqual(harness.store.libraries()[0]?.visibleTo, [BOB, CAROL], "the grant lies dormant on the library");
+  assert.deepEqual(harness.store.addons()[0]?.allowedUsers, [BOB, CAROL], "the grant lies dormant on the addon");
+  const promoted = await response.json() as { libraries: number; addons: number };
+  assert.deepEqual([promoted.libraries, promoted.addons], [0, 0], "a dormant list is not counted as a grant");
 });
 
-test("a demotion leaves the grant lists alone", async (t) => {
+test("a promotion and a demotion leave the account with the grants it had", async (t) => {
   const harness = await mount({
-    users: [admin, { ...bob, role: "admin" as const }, carol],
-    libraries: (dir) => [library(path.join(dir, "downloads"), [CAROL])],
-    addons: [addon("alpha", [CAROL])],
+    users: [admin, bob, carol],
+    libraries: (dir) => [library(path.join(dir, "downloads"), [BOB, CAROL])],
+    addons: [addon("alpha", [BOB, CAROL])],
   });
   t.after(harness.close);
 
-  const response = await api(harness.base, `/api/users/${BOB}`, { method: "PATCH", body: { role: "user" } });
-  assert.equal(response.status, 200);
-  // Coming back down grants nothing: an account demoted to ordinary starts with what the
-  // resources say, which is nothing, rather than with whatever it held before.
-  assert.deepEqual(harness.store.libraries()[0]?.visibleTo, [CAROL]);
-  assert.deepEqual(harness.store.addons()[0]?.allowedUsers, [CAROL]);
+  for (const role of ["admin", "user"]) {
+    const response = await api(harness.base, `/api/users/${BOB}`, { method: "PATCH", body: { role } });
+    assert.equal(response.status, 200);
+  }
+
+  assert.equal(findUserById(harness.store.users(), BOB)?.role, "user");
+  assert.deepEqual(harness.store.libraries()[0]?.visibleTo, [BOB, CAROL], "the library grant came back with the role");
+  assert.deepEqual(harness.store.addons()[0]?.allowedUsers, [BOB, CAROL], "the addon grant came back with the role");
+  const rows = await (await api(harness.base, "/api/users")).json() as Array<{ id: string; libraries: number; addons: number }>;
+  const back = rows.find((row) => row.id === BOB);
+  assert.deepEqual([back?.libraries, back?.addons], [1, 1], "and the dashboard counts them again");
 });
 
 test("the last administrator cannot be demoted or switched off", async (t) => {

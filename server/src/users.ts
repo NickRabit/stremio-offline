@@ -135,6 +135,15 @@ export function usersToBump(before: string[] | undefined, after: string[] | unde
   return [...new Set([...(before ?? []), ...(after ?? [])])].sort();
 }
 
+/** The ids a grant edit has to carry over untouched: the accounts that are administrators
+ *  now. Their entry grants nothing -- the role already sees every library and uses every
+ *  addon -- so it lies dormant until the account is demoted, and comes back with it. The
+ *  dashboard hides the grant panes for an administrator and so never sends those ids, so an
+ *  edit that took the request's list literally would throw the dormant grants away. */
+export function dormantGrants(users: UserRecord[], held: string[] | undefined): string[] {
+  return (held ?? []).filter((id) => findUserById(users, id)?.role === "admin");
+}
+
 /** Returns a new array with `permissionsVersion` incremented on the named users. */
 export function bumpPermissions(users: UserRecord[], ids: Iterable<string>): UserRecord[] {
   const named = new Set(ids);

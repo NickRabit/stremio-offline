@@ -185,10 +185,10 @@ test.describe("accounts", () => {
       await expect(own.getByText(/jediný zapnutý administrátor/)).toBeVisible();
       await own.getByRole("button", { name: "Zavřít" }).click();
 
-      // Promoting the account takes its grants with it. Left behind, the id would make this
-      // library impossible to save again -- both endpoints send the whole list and both
-      // refuse an administrator's id -- so the check that matters is that the very next edit
-      // still goes through.
+      // Promoting the account puts its grants to sleep instead of burning them: the role
+      // grants everything, so the entry grants nothing while it sits there, and a demotion
+      // gets it back. What used to be the reason for sweeping still has to hold -- the very
+      // next edit of that addon must go through, although the dashboard cannot name the id.
       await row.getByRole("button", { name: "Upravit" }).click();
       await dialog.getByRole("tab", { name: /^Doplňky/ }).click();
       // Granted further up and never withdrawn, so it is read rather than clicked: clicking
@@ -199,14 +199,29 @@ test.describe("accounts", () => {
       await expect(dialog.getByText("Vidí všechny knihovny i doplňky podle role.").first()).toBeVisible();
       await dialog.getByRole("button", { name: "Zavřít" }).click();
 
-      const swept = await page.request.get("/api/addons")
-        .then((response) => response.json() as Promise<Array<{ key: string; allowedUsers?: string[] }>>);
       const guestId = await page.request.get("/api/users")
         .then((response) => response.json() as Promise<Array<{ id: string; username: string }>>)
         .then((rows) => rows.find((entry) => entry.username === guest.name)!.id);
-      expect(swept.flatMap((entry) => entry.allowedUsers ?? []), "the promoted id is still on an addon").not.toContain(guestId);
-      const saved = await page.request.patch(`/api/addons/${swept[0].key}`, { data: { allowedUsers: swept[0].allowedUsers ?? [] } });
-      expect(saved.status(), "the addon can no longer be saved after a promotion").toBe(200);
+      const dormant = await page.request.get("/api/addons")
+        .then((response) => response.json() as Promise<Array<{ key: string; allowedUsers?: string[] }>>)
+        .then((rows) => rows.find((entry) => (entry.allowedUsers ?? []).includes(guestId)));
+      expect(dormant, "the grant is still on the addon after the promotion").toBeTruthy();
+
+      // What the dashboard sends: the ordinary accounts only, because the grant pane is
+      // hidden for an administrator. The dormant id is the addon's to keep.
+      const saved = await page.request.patch(`/api/addons/${dormant!.key}`,
+        { data: { allowedUsers: (dormant!.allowedUsers ?? []).filter((id) => id !== guestId) } });
+      expect(saved.status(), "the addon can still be saved after a promotion").toBe(200);
+      expect(await saved.json().then((body: { allowedUsers?: string[] }) => body.allowedUsers ?? []),
+        "and the edit leaves the dormant grant where it was").toContain(guestId);
+
+      // And back down: the panes return with the ticks the account had, so nothing has to be
+      // rebuilt by hand.
+      await row.getByRole("button", { name: "Upravit" }).click();
+      await dialog.getByLabel("Role").selectOption("user");
+      await dialog.getByRole("tab", { name: /^Doplňky/ }).click();
+      await expect(addonBox, "the grant came back with the role").toBeChecked();
+      await dialog.getByRole("button", { name: "Zavřít" }).click();
     } finally {
       // The instance goes back to the state it was found in even when an assertion failed, and
       // a failure while cleaning up must not hide the one that brought the run here.
