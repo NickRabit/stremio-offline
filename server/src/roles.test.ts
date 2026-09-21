@@ -91,6 +91,7 @@ const REFUSED: Array<[string, string]> = [
   ["GET", "/logs"],
   ["GET", "/diagnostics"],
   ["GET", "/stats/streams"],
+  ["GET", "/stats/activity"],
   ["GET", "/settings/export"],
   ["POST", "/downloads/job-1/move"],
   ["DELETE", "/downloads"],

@@ -25,6 +25,7 @@ interface Harness {
   tickets: DeviceDeps["deviceDownloadTickets"];
   /** The rights of the ordinary account, so a test can take one away mid-flight. */
   permissions: UserPermissions;
+  activities: Array<Record<string, unknown>>;
   close(): Promise<void>;
 }
 
@@ -34,6 +35,7 @@ const mount = async (): Promise<Harness> => {
   const dir = await mkdtemp(path.join(tmpdir(), "routes-device-"));
   const file = path.join(dir, "Some Movie.mkv");
   await writeFile(file, "movie bytes");
+  const activities: Array<Record<string, unknown>> = [];
   const tickets: DeviceDeps["deviceDownloadTickets"] = new Map();
   const ownerOf = (req: express.Request) => (req.header("x-user") === "bob" ? BOB : ADA);
   const permissions: UserPermissions = { downloadToLibrary: false, downloadToDevice: true };
@@ -57,6 +59,7 @@ const mount = async (): Promise<Harness> => {
     requireAccess: () => undefined,
     stopContentAccess: async () => undefined,
     countBytes: () => undefined,
+    stats: { activity: { record: (entry: Record<string, unknown>) => activities.push(entry) } } as unknown as DeviceDeps["stats"],
     deviceDownloadTickets: tickets,
     DEVICE_TICKET_TTL: TTL,
     httpSourceOf: async () => ({ url: `file://${SOURCE}` }) as StreamItem,
@@ -88,6 +91,7 @@ const mount = async (): Promise<Harness> => {
     base: `http://127.0.0.1:${port}`,
     tickets,
     permissions,
+    activities,
     close: async () => {
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -174,4 +178,28 @@ test("taking the device permission away stops a ticket that was already minted",
   const refused = await api(harness.base, url, { user: "bob" });
   assert.equal(refused.status, 403);
   assert.equal((await refused.json() as { messageKey?: string }).messageKey, "err.downloadDeviceNotAllowed");
+});
+
+
+test("successful device transfer records its user, while HEAD does not", async (t) => {
+  const harness = await mount();
+  t.after(() => harness.close());
+  const minted = await fetch(`${harness.base}/api/device-download`, { method: "POST", headers: { "content-type": "application/json", "x-user": "bob" }, body: "{}" });
+  const ticket = await minted.json() as { url: string };
+  await fetch(`${harness.base}${ticket.url}`, { method: "HEAD", headers: { "x-user": "bob" } });
+  assert.equal(harness.activities.length, 0);
+  const response = await fetch(`${harness.base}${ticket.url}`, { headers: { "x-user": "bob" } });
+  await response.text();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(harness.activities.length, 1);
+  assert.equal(harness.activities[0].username, "bob");
+  assert.equal(harness.activities[0].kind, "device");
+  const partial = await fetch(`${harness.base}${ticket.url}`, { headers: { "x-user": "bob", range: "bytes=0-3" } });
+  assert.equal(partial.status, 206);
+  await partial.text();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(harness.activities[1].partial, true);
+  const missing = await fetch(`${harness.base}/api/device-download/missing`, { headers: { "x-user": "bob" } });
+  assert.equal(missing.status, 404);
+  assert.equal(harness.activities.length, 2);
 });

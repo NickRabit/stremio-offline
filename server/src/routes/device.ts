@@ -11,12 +11,13 @@ import { ResourceError, type DeviceDownloadTicket, type ResourceOwner } from "..
 import { defaultDownloadSettings, deviceFilename, type MediaInfo } from "../naming.js";
 import { contentOf, type AccessNeed } from "../revocation.js";
 import { safeFetch, validateRemoteUrl } from "../security.js";
-import type { TrafficMeta } from "../stats.js";
+import type { StatsLog, TrafficMeta } from "../stats.js";
 import type { StreamItem } from "../types.js";
 import { asyncRoute, type RouteContext } from "./context.js";
 
 /** Saving a stream on the device that asked for it, without handing out the source address. */
 export interface DeviceDeps extends RouteContext {
+  stats: StatsLog;
   countBytes(res: express.Response, meta: TrafficMeta, session?: string): void;
   deviceDownloadTickets: Map<string, {
     owner: ResourceOwner;
@@ -36,7 +37,7 @@ export interface DeviceDeps extends RouteContext {
 }
 
 export function registerDeviceRoutes(app: express.Application, deps: DeviceDeps): void {
-  const { store, currentUser, countBytes, deviceDownloadTickets, DEVICE_TICKET_TTL, httpSourceOf, libraryTarget, mediaSource, ownerOf, pruneDeviceDownloadTickets, requireAccess, statMeta, trackMedia } = deps;
+  const { store, currentUser, stats, countBytes, deviceDownloadTickets, DEVICE_TICKET_TTL, httpSourceOf, libraryTarget, mediaSource, ownerOf, pruneDeviceDownloadTickets, requireAccess, statMeta, trackMedia } = deps;
 
   /** Saving to the device is a right an administrator hands out, and it is read at every use:
    *  taking it away stops a ticket that was minted while it was still there. This governs the
@@ -99,11 +100,23 @@ export function registerDeviceRoutes(app: express.Application, deps: DeviceDeps)
 
     res.setHeader("cache-control", "private, no-store");
     trackMedia(ticket.owner, res, undefined, { device: true, ...content });
+    const user = currentUser(req);
+    let recorded = false;
+    const record = () => {
+      if (recorded || req.method === "HEAD" || !res.writableFinished || res.statusCode >= 400) return;
+      recorded = true;
+      stats.activity.record({ kind: "device", title: ticket.filename, filename: ticket.filename,
+        userId: user?.id, username: user?.username, partial: res.statusCode === 206,
+        bytes: Number(res.getHeader("content-length")) || undefined });
+    };
     if (ticket.source.kind === "local") {
       const target = await libraryTarget(ticket.source.path, currentUser(req));
       if (!target) return res.status(404).json({ error: "The file was not found in the library.", messageKey: "err.libraryFileMissing" });
       countBytes(res, { source: "library", provider: "knihovna", title: ticket.filename, kind: "other" });
       return void res.download(path.basename(target), ticket.filename, { root: path.dirname(target), acceptRanges: true, dotfiles: "deny" }, (error) => {
+        if (!error) {
+          if (res.writableFinished) record(); else res.once("finish", record);
+        }
         if (error && !res.headersSent) res.status(404).json({ error: "The file was not found in the library.", messageKey: "err.libraryFileMissing" });
       });
     }
@@ -150,9 +163,13 @@ export function registerDeviceRoutes(app: express.Application, deps: DeviceDeps)
       child.on("error", () => { if (!res.headersSent) res.status(502).end(); else res.destroy(); });
       child.on("close", (code) => {
         if (code !== 0) log("WARN", "Assembling a playlist for a device failed", { filename: ticket.filename, code, stderr: stderr.slice(-400) });
+        if (code === 0) {
+          if (res.writableFinished) record(); else res.once("finish", record);
+        }
         if (!res.writableEnded) res.end();
       });
-      return void child.stdout!.pipe(res);
+      child.stdout!.pipe(res, { end: false });
+      return;
     }
     const controller = new AbortController();
     const headerTimeout = setTimeout(() => controller.abort(), 30_000);
@@ -169,7 +186,7 @@ export function registerDeviceRoutes(app: express.Application, deps: DeviceDeps)
     }
     if (!upstream.body) return void res.end();
     const { Readable } = await import("node:stream");
-    try { await pipeline(Readable.fromWeb(upstream.body as never), res, { signal: controller.signal }); }
+    try { await pipeline(Readable.fromWeb(upstream.body as never), res, { signal: controller.signal }); record(); }
     catch (error) { if (!res.destroyed && !res.writableEnded) throw error; }
   }));
 }

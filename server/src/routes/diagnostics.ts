@@ -32,6 +32,10 @@ const clientReports = new Map<string, { count: number; resetAt: number }>();
 export function registerDiagnosticsRoutes(app: express.Application, deps: DiagnosticsDeps): void {
   const { store, currentUser, stats, playback, throughput, queue, libraryScan, playbackMeta, freeSpace, dataDir } = deps;
 
+  app.get("/api/stats/activity", (req, res) => {
+    res.setHeader("cache-control", "private, no-store");
+    res.json(stats.activity.page(Number(req.query.hours) || 720, String(req.query.kind ?? ""), String(req.query.user ?? ""), Number(req.query.before) || undefined));
+  });
   app.get("/api/stats", (req, res) => res.json(stats.summary(Number(req.query.hours) || 720)));
   /** Playback running at this moment. The statistics otherwise look backwards; this is the
    * one view of what the line is carrying right now. */

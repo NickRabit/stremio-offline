@@ -130,3 +130,21 @@ instance for a shared demo. Addons, settings, passwords and secret export become
 read-only for everybody, the account list is visible and unchangeable, and
 guests can still browse, play, download to the library and save to their own
 device. Real separation between people is an account.
+
+
+## Activity history
+
+Administrators can view recent playback starts, completed library downloads and
+successful device responses in Statistics, filtered by period, activity and user.
+The history stores the username at the time of the action and starts when this
+feature is installed; older traffic totals cannot reliably identify a user.
+Playback starts do not assert that a title was watched to the end. Device responses
+confirm that the server sent the response, not that a browser saved it on disk;
+range responses appear as partial transfers, and HEAD requests are excluded.
+
+The separate `activity.json` file retains at most 5,000 entries. Writes are
+coalesced over one second and flushed on graceful shutdown. Reads use memory,
+return at most 50 entries, and use an ID cursor so new events do not shift older
+pages. The interface requests history only on opening, filtering, paging or
+manual refresh, independently of the live-stream poll. A sudden process failure
+can lose the last second of history.

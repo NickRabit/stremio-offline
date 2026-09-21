@@ -1331,3 +1331,17 @@ img.broken{visibility:hidden}
 @media(max-height:460px) and (min-width:440px){
   .user-edit-fields{grid-template-columns:repeat(2,minmax(0,1fr))}
 }
+
+.stats-history { margin-block: 1rem; padding: 20px; }
+.stats-history-head, .stats-history-filters, .stats-history-pages { display: flex; align-items: center; gap: .75rem; flex-wrap: wrap; }
+.stats-history-head { justify-content: space-between; }
+.stats-history-filters label { display: grid; gap: .25rem; font-size: .8rem; }
+.stats-history-filters select { max-width: min(18rem, 100%); }
+.stats-history-list { max-height: 32rem; overflow-y: auto; list-style: none; padding: 0; margin: 1rem 0; }
+.stats-history-list li { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr); gap: 1rem; padding: .8rem 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.stats-history-list small { display: block; opacity: .65; margin-top: .25rem; }
+.stats-history-pages { justify-content: flex-end; }
+@media (max-width: 700px) {
+  .stats-history-list li { grid-template-columns: minmax(0, 1fr); gap: .4rem; }
+  .stats-history-filters, .stats-history-filters label { min-width: 0; max-width: 100%; }
+}
