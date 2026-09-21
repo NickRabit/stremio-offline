@@ -137,6 +137,22 @@ test.describe("accounts", () => {
       await expect(guestPage.locator(".user-manager-section")).toHaveCount(0);
       await expect(guestPage.getByText("Uživatelé", { exact: true })).toHaveCount(0);
 
+      // The rest of the audience split, pinned by what is on the page rather than by a count:
+      // an ordinary account keeps the settings that are its own, and the panels that configure
+      // the instance are absent, not merely disabled. A disabled control still tells the account
+      // what the instance runs, and the two credential panels would name the providers.
+      // The panel head is a `strong`, not a heading, so the title is matched as exact text.
+      const panel = (title: string) => guestPage.locator(`.settings-section .settings-section-head strong:text-is("${title}")`);
+      for (const instanceOnly of ["Knihovny", "Úložiště", "Doplňky", "Metadata z TMDB", "Real-Debrid", "Soukromí", "Záloha konfigurace", "Diagnostika"]) {
+        await expect(panel(instanceOnly), `${instanceOnly} configures the instance, so an ordinary account is not shown it`).toHaveCount(0);
+      }
+      for (const own of ["Knihovna", "Stahování", "Přehrávání", "Vzhled", "Přihlášení"]) {
+        await expect(panel(own), `${own} is the account's own setting and stays`).toHaveCount(1);
+      }
+      // An instance-wide control inside a panel the account does keep goes with it.
+      await expect(guestPage.getByLabel("Automatické dohledání metadat")).toHaveCount(0);
+      await expect(guestPage.getByLabel("Souběžná stahování")).toHaveCount(0);
+
       const visible = await guestPage.request.get("/api/libraries")
         .then((response) => response.json() as Promise<Array<{ id: string }>>);
       expect(visible.map((entry) => entry.id), "the account sees the granted library and nothing else").toEqual([granted.id]);
