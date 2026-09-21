@@ -9,7 +9,7 @@ import { test } from "node:test";
 import { promisify } from "node:util";
 import {
   artNames, artOutput, artVariantKey, ArtworkQueue, artworkBesideMedia, BACKDROP_NAMES, fileMayUseFolderArtwork,
-  findArtwork, pickArtwork, POSTER_NAMES, readFolderListing, saveBackdropAs, savePosterAs,
+  findArtwork, imageSize, pickArtwork, pictureShape, POSTER_NAMES, readFolderListing, saveBackdropAs, savePosterAs,
 } from "./artwork.js";
 import { ArtworkCache } from "./artwork-cache.js";
 
@@ -168,4 +168,65 @@ test("one listing answers both shapes, and an unreadable folder answers neither"
   assert.equal(await readFolderListing(path.join(directory, "gone")), undefined);
   assert.equal(pickArtwork(undefined, POSTER_NAMES), undefined);
   await rm(directory, { recursive: true, force: true });
+});
+
+/** Only the header is read, so a few bytes of one stand in for the whole picture. */
+const png = (width: number, height: number) => {
+  const data = Buffer.alloc(24);
+  data.writeUInt32BE(0x89504e47, 0);
+  data.writeUInt32BE(width, 16);
+  data.writeUInt32BE(height, 20);
+  return data;
+};
+const gif = (width: number, height: number) => {
+  const data = Buffer.alloc(16);
+  data.write("GIF89a", 0, "latin1");
+  data.writeUInt16LE(width, 6);
+  data.writeUInt16LE(height, 8);
+  return data;
+};
+const jpeg = (width: number, height: number) => {
+  const data = Buffer.alloc(32, 0);
+  data.writeUInt16BE(0xffd8, 0);
+  // One APP0 segment of its own length, then the frame header the size is read from.
+  data.writeUInt16BE(0xffe0, 2); data.writeUInt16BE(4, 4);
+  data.writeUInt16BE(0xffc0, 8); data.writeUInt16BE(11, 10);
+  data.writeUInt16BE(height, 13); data.writeUInt16BE(width, 15);
+  return data;
+};
+const webp = (width: number, height: number) => {
+  const data = Buffer.alloc(30, 0);
+  data.write("RIFF", 0, "latin1");
+  data.write("WEBP", 8, "latin1");
+  data.write("VP8 ", 12, "latin1");
+  data.write("\x9d\x01\x2a", 23, "latin1");
+  data.writeUInt16LE(width, 26);
+  data.writeUInt16LE(height, 28);
+  return data;
+};
+const webpLossless = (width: number, height: number) => {
+  const data = Buffer.alloc(25, 0);
+  data.write("RIFF", 0, "latin1");
+  data.write("WEBP", 8, "latin1");
+  data.write("VP8L", 12, "latin1");
+  data[20] = 0x2f;
+  data.writeUInt32LE((width - 1) | ((height - 1) << 14), 21);
+  return data;
+};
+
+test("imageSize reads the size out of every header a catalogue serves", () => {
+  assert.deepEqual(imageSize(png(300, 200)), { width: 300, height: 200 });
+  assert.deepEqual(imageSize(gif(300, 200)), { width: 300, height: 200 });
+  assert.deepEqual(imageSize(jpeg(300, 200)), { width: 300, height: 200 });
+  assert.deepEqual(imageSize(webp(1280, 720)), { width: 1280, height: 720 });
+  assert.deepEqual(imageSize(webpLossless(1024, 1979)), { width: 1024, height: 1979 });
+  assert.equal(imageSize(Buffer.alloc(64)), undefined);
+});
+
+test("a picture is the variant its proportions make it, whatever it was called", () => {
+  assert.equal(pictureShape(webp(1280, 720)), "wide");
+  assert.equal(pictureShape(png(1000, 1500)), "poster");
+  // Near enough to square to be either: the catalogue's own label is left alone.
+  assert.equal(pictureShape(png(1000, 1000)), undefined);
+  assert.equal(pictureShape(Buffer.alloc(64)), undefined);
 });
