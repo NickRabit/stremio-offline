@@ -827,7 +827,14 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
    is a fixed 180-260px against a `1fr` label, so every pixel a column loses comes out of the
    label: in two columns at 1280 it fell to 176px and nineteen of the twenty-three rows wrapped.
    The stacked form below already exists for phones; making each panel a container is what lets
-   a narrow column reach for it, and it is the same answer for the same shape. */
+   a narrow column reach for it, and it is the same answer for the same shape.
+
+   This also moves the phone threshold slightly, and deliberately. A container query measures
+   the content box, so the row is now asked about the width it actually lays out in rather than
+   about the page's, which was wider by the panel's own padding. Between roughly 900 and 950px
+   the row therefore stacks while the panel padding and the title -- which sit outside a panel,
+   or are the panel, and so still answer to `.settings-page` -- keep their wider form. Each rule
+   keys off the box it governs; the old single threshold was the approximation. */
 .settings-page .settings-section{container-type:inline-size}
 .settings-page .setting-actions button{min-height:42px;font-size:12px}
 .settings-page .diagnostics-section .settings-section-head{margin:0}

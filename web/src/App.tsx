@@ -2063,8 +2063,11 @@ const refreshIntervalLabel = (hours: number) =>
 
 function SettingsPage({ build, restricted = false, settings, languages, libraries = [], session, onSession, onSave, onImported, onLibrariesChanged, onNotify, onError }: { build: BuildInfo | null; restricted?: boolean; settings: AppSettings; languages: Array<{ code: string; name: string }>; libraries?: LibraryView[]; session: Session; onSession: (session: Session) => void; onSave: (patch: SettingsPatch) => Promise<void>; onImported: (backup: unknown) => Promise<void>; onLibrariesChanged: () => void; onNotify: (message: string) => void; onError: (error: unknown) => void }) {
   const { t, locale, setLocale } = useI18n();
-  // An ordinary user decides only what is personal: everything the instance owns renders
-  // through the same `restricted` prop the demo mode uses, so it loses its controls.
+  // An ordinary user decides only what is personal, and the panels the instance owns are
+  // not rendered for one at all -- a disabled control still says what the instance runs.
+  // `restricted` is a separate axis: it is the demo mode, and it takes the controls away
+  // from an administrator too. The server is what enforces either; this is the interface
+  // agreeing with it.
   const admin = session.role === "admin";
   // The names come from the browser in the active language, so they need sorting there too.
   const languageOptions = languages
