@@ -84,7 +84,10 @@ export function createLibraryProbe(opts: { timeoutMs?: number; ttlMs?: number; n
     if (!info?.isDirectory()) {
       // Nothing is known but the spelling: `realpath` would hang on the same mount that made
       // this stat fail, and there is no volume to ask about the fold.
-      return { unreachable: true, readOnly: false, realRoot: absolute, caseInsensitive: PLATFORM_CASE_INSENSITIVE };
+      // Unreachable is unanswered too, and an unanswered fold folds -- the same rule the
+      // write probe below uses. The platform constant is a fact about the process, not about
+      // a disk nobody could reach.
+      return { unreachable: true, readOnly: false, realRoot: absolute, caseInsensitive: true };
     }
     // Bounded like every other call: a half-dead mount hangs on a resolve as readily as on a stat.
     const real = await within(realpath(absolute), timeoutMs) ?? absolute;

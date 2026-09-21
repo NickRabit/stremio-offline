@@ -14,9 +14,6 @@ const temp = async (t: { after: (fn: () => Promise<void>) => void }) => {
 /** The two facts the callers of the health have always read, apart from the root and the fold. */
 const standing = (health: LibraryHealth) => ({ unreachable: health.unreachable, readOnly: health.readOnly });
 
-/** What the process would guess about a volume it could not ask. */
-const platformGuess = process.platform === "win32" || process.platform === "darwin";
-
 test("a writable directory is reachable and writable", async (t) => {
   const dir = await temp(t);
   const probe = createLibraryProbe();
@@ -59,14 +56,18 @@ test("the fold is read off the volume, not off the platform", async (t) => {
   assert.equal(health.caseInsensitive, Boolean(flipped), "this volume folds");
 });
 
-test("a root that could not be asked falls back to the platform guess", async (t) => {
+test("a root that could not be asked folds, whatever the platform would have guessed", async (t) => {
+  // Deliberately not the platform guess: that is a fact about the process, and answering a
+  // question about a disk with it is the mistake the probe exists to undo. It also hides
+  // itself on macOS, where the guess happens to be `true` -- this assertion only bites on a
+  // case-sensitive runner, which is what CI is.
   const dir = await temp(t);
   await chmod(dir, 0o500);
   const probe = createLibraryProbe();
   const missing = path.join(dir, "missing");
-  assert.equal((await probe.probe(missing)).caseInsensitive, platformGuess, "nothing reached the disk");
+  assert.equal((await probe.probe(missing)).caseInsensitive, true, "nothing reached the disk");
   if (process.getuid?.() === 0) return;
-  assert.equal((await probe.probe(dir)).caseInsensitive, platformGuess, "a read-only volume cannot be probed either");
+  assert.equal((await probe.probe(dir)).caseInsensitive, true, "a read-only volume cannot be probed either");
 });
 
 test("the case rule is one inode on one volume, driven both ways", () => {
