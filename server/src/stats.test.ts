@@ -56,10 +56,10 @@ test("a longer period goes by days and the series is continuous", () => {
   }
 });
 
-test("providers are grouped by domain, addons stay as recorded, both ordered from the largest", () => {
+test("providers under a country code stay whole, addons stay as recorded, both ordered from the largest", () => {
   const { providers, addons } = summarize(sample, 30 * 24, now);
-  assert.deepEqual(providers.map((item) => item.key), ["jedna.cz", "tri.cz", "dva.cz"]);
-  assert.deepEqual(providers[0], { key: "jedna.cz", label: "jedna.cz", bytes: 5 * GB, count: 2 });
+  assert.deepEqual(providers.map((item) => item.key), ["cdn.jedna.cz", "cdn.tri.cz", "cdn.dva.cz"]);
+  assert.deepEqual(providers[0], { key: "cdn.jedna.cz", label: "cdn.jedna.cz", bytes: 5 * GB, count: 2 });
   assert.deepEqual(addons.map((item) => item.key), ["cdn.jedna.cz", "cdn.tri.cz", "cdn.dva.cz"]);
   assert.deepEqual(addons.map((item) => item.bytes), [5 * GB, 4 * GB, 1 * GB]);
 });
@@ -67,10 +67,10 @@ test("providers are grouped by domain, addons stay as recorded, both ordered fro
 test("a host is grouped under its registrable domain", () => {
   const cases: Array<[string, string]> = [
     ["den2-4.download.real-debrid.com", "real-debrid.com"],
-    ["cdn.freevideo.cz", "freevideo.cz"],
+    ["cdn.freevideo.cz", "cdn.freevideo.cz"],
     ["torrentio.strem.fun", "strem.fun"],
     ["tpb-adult-addon.click", "tpb-adult-addon.click"],
-    ["cdn.jedna.co.uk", "jedna.co.uk"],
+    ["cdn.jedna.co.uk", "cdn.jedna.co.uk"],
     // A country registry that no allowlist names. The first attempt kept a list of whole
     // suffixes, so an unlisted `com.tr` fell through to the last two labels and every
     // Turkish site summed into one row called `com.tr`. These pin the failure direction.
@@ -79,9 +79,15 @@ test("a host is grouped under its registrable domain", () => {
     ["a.co.in", "a.co.in"],
     ["b.co.in", "b.co.in"],
     ["shop.com.cn", "shop.com.cn"],
+    // A country code is where the guessing stops: no list of suffixes or of registry
+    // labels can be completed, and a row summing two strangers is worse than a row each.
+    ["one.id.au", "one.id.au"],
+    ["two.id.au", "two.id.au"],
+    ["one.github.io", "one.github.io"],
+    ["two.github.io", "two.github.io"],
     // Not a country code, so two labels even though the second-level label is generic.
     ["cdn.net.example", "net.example"],
-    ["cdn.jedna.cz.", "jedna.cz"],
+    ["cdn.jedna.cz.", "cdn.jedna.cz"],
     ["localhost", "localhost"],
     ["knihovna", "knihovna"],
     ["unknown", "unknown"],
@@ -122,7 +128,7 @@ test("the addon and source breakdowns are untouched by the grouping", () => {
     event(3, 1 * GB, "cdn.jedna.cz"),
   ];
   const summary = summarize(events, 24, now);
-  assert.deepEqual(summary.providers.map((item) => item.key), ["real-debrid.com", "jedna.cz"]);
+  assert.deepEqual(summary.providers.map((item) => item.key), ["real-debrid.com", "cdn.jedna.cz"]);
   assert.deepEqual(summary.addons, [
     { key: "Torrentio", label: "Torrentio", bytes: 5 * GB, count: 2 },
     { key: "cdn.jedna.cz", label: "cdn.jedna.cz", bytes: 1 * GB, count: 1 },

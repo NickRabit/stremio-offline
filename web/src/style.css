@@ -634,7 +634,13 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .identify-episode{display:grid;gap:8px;padding:10px;border:1px solid var(--line);border-radius:9px;background:#10151d}
 .identify-episode select{padding:8px 10px;font-size:12px}
 .move-card{width:min(480px,100%);max-height:100%}
-.move-libraries{display:flex;flex-wrap:wrap;gap:6px}
+/* One row that scrolls sideways, not a block that wraps. Pinned outside the dialog's only
+   scroller, a wrapping row of chips grows downwards and eats the body it sits above -- with
+   enough libraries it recreates the collapse the shell was added to fix. The tab strip in
+   the account dialog is the same shape for the same reason. */
+.move-libraries{display:flex;gap:6px;min-width:0;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:none}
+.move-libraries::-webkit-scrollbar{display:none}
+.move-libraries button{flex:0 0 auto;max-width:15rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .move-libraries button{padding:5px 10px;font-size:12px;border:1px solid var(--line);border-radius:999px;background:#10151d;color:var(--muted)}
 .move-libraries button[aria-pressed=true]{border-color:var(--accent2);color:var(--text)}
 .move-crumbs{display:flex;flex-wrap:wrap;align-items:center;gap:2px;font-size:12px;color:var(--muted)}

@@ -92,12 +92,18 @@ const window = (events: TrafficEvent[], from: number): Window => {
   return { bytes, count };
 };
 
-/** The second-level labels a country registry sells under, rather than a list of whole
- *  suffixes. A list of suffixes was tried and got the failure direction backwards: an
- *  unlisted one such as `com.tr` fell through to the last two labels, so `film.com.tr` and
- *  `dizi.com.tr` became one row called `com.tr` -- every site in a country summed into a
- *  stranger. Reading the shape instead covers every ccTLD at once, listed or not. */
-const REGISTRY_LABELS = new Set(["com", "co", "net", "org", "edu", "gov", "ac", "mil", "or", "ne", "gob", "nom"]);
+/** Under a country code this function does not guess. Two attempts were made and both
+ *  merged unrelated operators into one row: a list of whole suffixes missed `com.tr`, and a
+ *  list of the labels a registry sells under missed `id.au`. Neither list can be completed
+ *  without the Public Suffix List, and a row that sums two strangers under a name neither
+ *  of them owns is worse than a row per host -- the count and the trend both become
+ *  fiction. So a two-letter last label means the host is kept whole; the shortening the
+ *  page needed comes from the eight-row cap, not from guessing.
+ *
+ *  What is left is a private suffix under a generic top level -- `a.blogspot.com` and
+ *  `b.blogspot.com` still share a row. That needs the Public Suffix List to fix, which is a
+ *  dependency this has not taken. */
+const COUNTRY_CODE = /^[a-z]{2}$/i;
 
 const IPV4 = /^\d{1,3}(?:\.\d{1,3}){3}$/;
 
@@ -110,12 +116,9 @@ export function registrableDomain(host: string): string {
   if (!name || name.includes(":") || IPV4.test(name)) return host;
   const labels = name.split(".");
   if (labels.length < 2) return host;
-  // `x.co.uk` and `x.com.tr` are three labels deep because the registry sells under the
-  // second one; `x.strem.fun` and `x.real-debrid.com` are two, because `fun` and `com` are
-  // not country codes. A two-letter last label is the ccTLD test.
-  const [second, last] = [labels.at(-2)!, labels.at(-1)!];
-  const underRegistry = labels.length > 2 && last.length === 2 && REGISTRY_LABELS.has(second);
-  return labels.slice(underRegistry ? -3 : -2).join(".");
+  // A country code is where the guessing goes wrong, so it is where the guessing stops.
+  if (COUNTRY_CODE.test(labels.at(-1)!)) return name;
+  return labels.slice(-2).join(".");
 }
 
 const identify = {
