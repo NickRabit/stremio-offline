@@ -12,6 +12,10 @@ export interface MediaInfo {
    *  answer, which is how a library tile ended up showing a picture nobody had seen. */
   poster?: string;
   background?: string;
+  /** Every picture the title's page had on offer, in the order the catalogue gallery shows
+   *  them. Saved beside the two tile pictures so the library can show the same gallery back
+   *  with no addon to ask. */
+  gallery?: Array<{ url: string; kind: "poster" | "background" | "logo" | "still" }>;
   kind?: "movie" | "episode";
   /** The film's name, or the series name for an episode. */
   title?: string;

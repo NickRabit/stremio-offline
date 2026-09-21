@@ -23,7 +23,7 @@ import { label, titleLanguage } from "./languages";
 import { languageName, locale, localeTag, serverText, setLocale, t, useI18n, type Key, type Locale } from "./i18n";
 import { canQueue, pickDefaultStream, pickNextEpisodeStream, repickStream, streamBadge, streamLanguages, streamSize, visibleCatalogStreams, type StreamSort } from "./streams";
 import { parseSearchScope } from "./search-scope";
-import { gridArt, localizedDownloadTitle, mergeMetaDetail } from "./meta";
+import { galleryPayload, gridArt, localizedDownloadTitle, mergeMetaDetail } from "./meta";
 import { catalogResumeEntries, localResumeEntries } from "./resume-visibility";
 import { resumeTarget, resumeVideo, type ResumeTarget } from "./resume-target";
 import { trailerAction } from "./trailers";
@@ -55,7 +55,8 @@ type PlaybackReturn = {
 };
 const speed = (value: number) => value ? `${bytes(value)}/s` : "—";
 const streamLabel = (item: Stream) => item.name || item.title?.split("\n")[0] || item.description?.split("\n")[0] || "Stream";
-type GalleryImage = { url: string; label: string; shape: "poster" | "wide" };
+type GalleryKind = "poster" | "background" | "logo" | "still";
+type GalleryImage = { url: string; label: string; shape: "poster" | "wide"; kind: GalleryKind };
 /** A Continue watching tile: the stored position plus the season, the episode number and the
  *  show, which only the preview answers. A tile without them offers no next episode.
  *  `series` comes from the library row, which knows the show by name; the catalogue's own
@@ -86,22 +87,22 @@ const galleryFor = (item: Meta | null): GalleryImage[] => {
   if (!item) return [];
   const images: GalleryImage[] = [];
   const seen = new Set<string>();
-  const add = (value: unknown, label: string, shape: GalleryImage["shape"]) => {
+  const add = (value: unknown, label: string, shape: GalleryImage["shape"], kind: GalleryKind) => {
     if (typeof value !== "string" || !value.trim() || seen.has(value)) return;
-    seen.add(value); images.push({ url: value, label, shape });
+    seen.add(value); images.push({ url: value, label, shape, kind });
   };
-  add(item.poster, t("gallery.poster"), "poster");
-  add(item.background, t("gallery.background"), "wide");
-  add(item.logo, t("gallery.logo"), "wide");
+  add(item.poster, t("gallery.poster"), "poster", "poster");
+  add(item.background, t("gallery.background"), "wide", "background");
+  add(item.logo, t("gallery.logo"), "wide", "logo");
   for (const key of ["images", "screenshots"]) {
     const values = item[key];
     if (!Array.isArray(values)) continue;
     for (const [index, value] of values.entries()) {
       const candidate = typeof value === "object" && value ? value as Record<string, unknown> : undefined;
-      add(typeof value === "string" ? value : candidate?.url ?? candidate?.src, t("gallery.still", { index: index + 1 }), "wide");
+      add(typeof value === "string" ? value : candidate?.url ?? candidate?.src, t("gallery.still", { index: index + 1 }), "wide", "still");
     }
   }
-  for (const video of item.videos ?? []) add(video.thumbnail, video.title || video.name || t("gallery.episodeStill"), "wide");
+  for (const video of item.videos ?? []) add(video.thumbnail, video.title || video.name || t("gallery.episodeStill"), "wide", "still");
   return images.slice(0, 18);
 };
 
@@ -117,6 +118,8 @@ export function App() {
   const restoringScroll = useRef(false);
   const viewRef = useRef<View>("catalog");
   const [galleryIndex, setGalleryIndex] = useState<number | null>(null);
+  /** A library item's saved pictures, which take the overlay over while it is open. */
+  const [storedGallery, setStoredGallery] = useState<GalleryImage[] | null>(null);
   const [detailCompact, setDetailCompact] = useState(false);
   const [catalogCompact, setCatalogCompact] = useState(false);
   const [libraryCompact, setLibraryCompact] = useState(false);
@@ -179,7 +182,7 @@ export function App() {
   const [trailerOpen, setTrailerOpen] = useState<Trailer | null>(null);
   const [episodesOpen, setEpisodesOpen] = useState(true);
   const [season, setSeason] = useState<number | null>(null);
-  const [bulkDownload, setBulkDownload] = useState<{ label: string; title: string; type: string; episodes: Array<{ id: string; season?: number; episode?: number; title?: string }>; media: { id?: string; metaType?: string; poster?: string } } | null>(null);
+  const [bulkDownload, setBulkDownload] = useState<{ label: string; title: string; type: string; episodes: Array<{ id: string; season?: number; episode?: number; title?: string }>; media: { id?: string; metaType?: string; poster?: string; background?: string; gallery?: Array<{ url: string; kind: GalleryKind }> } } | null>(null);
   const [downloads, setDownloads] = useState<DownloadJob[]>([]); const [queueHalt, setQueueHalt] = useState<QueueHalt | null>(null); const [busy, setBusy] = useState(false); const [message, setMessage] = useState(""); const [error, setError] = useState(""); const [playerOpen, setPlayerOpen] = useState(false);
   const [settings, setSettings] = useState<AppSettings>({ concurrentDownloads: 1, parallelPerProvider: 1, downloadSegments: 2, uiLanguage: locale(), audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui", mergeByName: true, streamSort: "recommended", trackProgress: true, showResumeRow: true, libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, addonRefreshHours: 24, catalogTileSize: "medium", libraryTileSize: "medium", catalogTileShape: "poster", libraryTileShape: "poster", realDebridConfigured: false, tmdbConfigured: false });
   const [languages, setLanguages] = useState<Array<{ code: string; name: string }>>([]);
@@ -558,6 +561,23 @@ export function App() {
   const activeSeason = season ?? selectedVideo?.season ?? seasons.find((value) => value > 0) ?? seasons[0] ?? null;
   const visibleEpisodes = (selected?.videos ?? []).filter((video) => seasons.length <= 1 || activeSeason === null || video.season === activeSeason);
   const galleryImages = useMemo(() => galleryFor(selected), [selected]);
+  const shownGallery = storedGallery ?? galleryImages;
+  const closeGallery = () => { setGalleryIndex(null); setStoredGallery(null); };
+  /** The pictures a downloaded title kept. Named here rather than on the server, which stores
+   *  what each one is and leaves the wording to the interface. */
+  const openStoredGallery = async (path: string) => {
+    setMenuFor(null);
+    try {
+      const { images } = await api.libraryGallery(path);
+      if (!images.length) return;
+      let stills = 0;
+      setStoredGallery(images.map((image) => ({
+        url: image.url, shape: image.shape, kind: image.kind,
+        label: image.kind === "still" ? t("gallery.still", { index: ++stills }) : t(`gallery.${image.kind}`),
+      })));
+      setGalleryIndex(0);
+    } catch (error) { fail(error); }
+  };
   useEffect(() => { remember("sort", browseSort); remember("order", browseDesc ? "desc" : "asc"); }, [browseSort, browseDesc]);
   useEffect(() => { remember("view", browseView); }, [browseView]);
   useEffect(() => { remember("favorites", onlyFavorites ? "1" : "0"); }, [onlyFavorites]);
@@ -1490,7 +1510,7 @@ export function App() {
     }
   };
   const selectedMedia = () => {
-    const art = gridArt(selectedSummary, selected);
+    const art = { ...gridArt(selectedSummary, selected), gallery: galleryPayload(galleryImages) };
     return selectedVideo
       ? { kind: "episode", title: baseDownloadTitle, season: selectedVideo.season, episode: selectedVideo.episode, episodeTitle: selectedVideo.title || selectedVideo.name, id: selected?.id, metaType: selected?.type, ...art }
       : { kind: "movie", title: baseDownloadTitle, id: selected?.id, metaType: selected?.type, ...art };
@@ -1544,7 +1564,7 @@ export function App() {
     setBulkDownload({
       label, title: baseDownloadTitle, type: metaType,
       episodes: episodes.map((video) => ({ id: String(video.id), season: video.season, episode: video.episode, title: video.title || video.name })),
-      media: { id: selected.id, metaType, ...gridArt(selectedSummary, selected) },
+      media: { id: selected.id, metaType, ...gridArt(selectedSummary, selected), gallery: galleryPayload(galleryImages) },
     });
   };
 
@@ -1881,6 +1901,7 @@ export function App() {
                     <span className="browse-art"><TileArt shape={settings.libraryTileShape} poster={item.poster} wide={item.wide} fallback={<FolderOpen/>}/><i className="browse-badge">{item.fileCount}</i>{item.favorite && <i className="fav-mark"><Star/></i>}</span>
                     <span className="library-copy"><strong>{item.name}</strong><small>{folderMeta(item)}</small>{descriptionLine(item) && <small className="library-desc" title={descriptionLine(item)}>{descriptionLine(item)}</small>}</span><span className="library-action"><FolderOpen/> {t("library.openFolder")} <ChevronRight/></span></button>
                     {selectionMode && <button className="browse-select" aria-label={t("library.selectItem", { name: item.name })} aria-pressed={selectedPaths.has(item.path)} onClick={(event) => { event.stopPropagation(); toggleSelection(item.path); }}>{selectedPaths.has(item.path) && <Check/>}</button>}
+                    {!selectionMode && (item.gallery ?? 0) > 0 && <button className="browse-gallery" aria-label={t("gallery.openStored", { name: item.name })} title={t("gallery.openStored", { name: item.name })} onClick={(event) => { event.stopPropagation(); void openStoredGallery(item.path); }}><Images/></button>}
                     {!selectionMode && <button className="browse-menu" aria-label={t("library.options", { name: item.name })} aria-expanded={menuFor === item.path} onClick={(event) => { event.stopPropagation(); openMenu(item); }}><MoreVertical/></button>}
                     {!selectionMode && menuFor === item.path && <span className="browse-actions" onClick={(event) => event.stopPropagation()}>
                       {item.match === "matched" && titleChips(libraryTrailers[item.path] ?? null, libraryLinks[item.path] ?? [])}
@@ -1900,6 +1921,7 @@ export function App() {
                     <span className="library-copy"><strong>{item.season != null ? `${item.season}×${String(item.episode ?? 0).padStart(2, "0")} ${item.label}` : item.label}</strong>
                     <small>{fileMeta(item)}</small>{descriptionLine(item) && <small className="library-desc" title={descriptionLine(item)}>{descriptionLine(item)}</small>}</span><span className="library-action"><Play/> {t(item.progress ? "library.continue" : "player.play")}</span></button>
                     {selectionMode && <button className="browse-select" aria-label={t("library.selectItem", { name: item.label })} aria-pressed={selectedPaths.has(item.path)} onClick={(event) => { event.stopPropagation(); toggleSelection(item.path); }}>{selectedPaths.has(item.path) && <Check/>}</button>}
+                    {!selectionMode && (item.gallery ?? 0) > 0 && <button className="browse-gallery" aria-label={t("gallery.openStored", { name: item.label })} title={t("gallery.openStored", { name: item.label })} onClick={(event) => { event.stopPropagation(); void openStoredGallery(item.path); }}><Images/></button>}
                     {!selectionMode && <button className="browse-menu" aria-label={t("library.options", { name: item.label })} aria-expanded={menuFor === item.path} onClick={(event) => { event.stopPropagation(); openMenu(item); }}><MoreVertical/></button>}
                     {!selectionMode && menuFor === item.path && <span className="browse-actions" onClick={(event) => event.stopPropagation()}>
                       {item.match === "matched" && titleChips(libraryTrailers[item.path] ?? null, libraryLinks[item.path] ?? [])}
@@ -1963,7 +1985,7 @@ export function App() {
       onChanged={() => { void loadSuggestionCount(); void loadBrowse(browsePath); }}
       onIdentify={(target) => { setSuggestionsOpen(false); setIdentifyPath(target); }}/>}
     {bulkDownload && <SeriesDownloadDialog type={bulkDownload.type} label={bulkDownload.label} episodes={bulkDownload.episodes} audioLanguage={settings.audioLanguage} subtitleLanguage={settings.subtitleLanguage} languages={languages} onClose={() => setBulkDownload(null)} onSubmit={submitBulkDownload}/>}
-    {galleryIndex !== null && galleryImages[galleryIndex] && <MediaGallery images={galleryImages} index={galleryIndex} onIndex={setGalleryIndex} onClose={() => setGalleryIndex(null)}/>}
+    {galleryIndex !== null && shownGallery[galleryIndex] && <MediaGallery images={shownGallery} index={galleryIndex} onIndex={setGalleryIndex} onClose={closeGallery}/>}
     {(message || error) && <div className={`toast ${error ? "error" : ""}`}>{error || message}<button onClick={() => {setError("");setMessage("");}}><X/></button></div>}
   </div>;
 }

@@ -175,6 +175,8 @@ export interface LibraryPage extends LibrarySummary { files: LibraryFile[]; tota
 export type LibraryMatch = "unmatched" | "matched" | "suggested" | "rejected";
 export interface MatchSuggestion { type: string; id: string; name: string; year?: number; score: number }
 export interface BrowseMeta {
+  /** How many pictures the title's stored gallery holds; absent where it holds none. */
+  gallery?: number;
   year?: string; description?: string; catalogName?: string; match?: LibraryMatch; skipLookup?: boolean; skipMosaic?: boolean; suggestion?: MatchSuggestion;
   /** The kind of the title this row is bound to. Absent when nothing is bound, and the
    *  move dialog then offers every library rather than refusing on a guess. */

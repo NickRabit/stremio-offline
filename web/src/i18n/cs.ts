@@ -272,6 +272,7 @@ export const cs: Catalog = {
   "trailers.openOnYouTube": "TRAILER",
 
   // Galerie obrázků.
+  "gallery.openStored": "Zobrazit obrázky: {name}",
   "gallery.title": "Galerie obrázků",
   "gallery.poster": "Plakát",
   "gallery.background": "Pozadí",

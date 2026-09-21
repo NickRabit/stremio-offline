@@ -715,6 +715,17 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .library-page button:focus-visible{outline:2px solid var(--accent2);outline-offset:3px}
 .library-page .browse-badge{left:8px;right:auto;bottom:8px;font-style:normal}
 .library-page .fav-mark{top:12px;left:12px;background:#10151ecc;border-radius:50%;padding:7px}
+/* The gallery button sits beside the menu, in the row's corner of actions, so the two controls
+   a tile offers are found in one place and the star keeps its own corner untouched. It holds a
+   44px touch target on a phone, where the menu grows to the same size and the button follows it
+   along; in the row layout both sit on the same centre line. */
+.library-page .browse-gallery{position:absolute;z-index:2;right:52px;top:8px;display:grid;place-items:center;width:36px;height:36px;padding:8px;border:1px solid #ffffff24;border-radius:9px;background:#10151eeb;color:var(--text)}
+.library-page .browse-gallery svg{width:16px;height:16px}
+.library-page .browse-rows .browse-gallery{top:50%;transform:translateY(-50%)}
+@media(max-width:700px){
+  .library-page .browse-gallery{width:44px;height:44px;top:5px;right:54px}
+  .library-page .browse-rows .browse-gallery{top:50%;right:54px}
+}
 .library-favorites{width:100%;display:flex;text-align:left;gap:20px;padding:16px;margin:16px 0 0;background:linear-gradient(110deg,#302835,#1b202d 65%);border-color:#54404b;border-radius:12px;overflow:hidden}
 .favorites-collage{position:relative;display:flex;flex-shrink:0;width:126px;height:92px;align-items:center;justify-content:center}
 .favorites-collage img{position:absolute;width:56px;height:84px;object-fit:cover;border:2px solid #817071;border-radius:6px;box-shadow:0 5px 15px #0005}
