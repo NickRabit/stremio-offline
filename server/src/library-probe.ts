@@ -93,7 +93,10 @@ export function createLibraryProbe(opts: { timeoutMs?: number; ttlMs?: number; n
       unreachable: false,
       readOnly: volume === undefined,
       realRoot: real,
-      caseInsensitive: volume?.caseInsensitive ?? PLATFORM_CASE_INSENSITIVE,
+      // A volume that could not be asked -- refused, failed or out of time -- is unknown, and
+      // an unknown fold folds. Falling back to the platform here answered a question about the
+      // disk with a fact about the process, which is the mistake this probe exists to undo.
+      caseInsensitive: volume?.caseInsensitive ?? true,
     };
   };
 

@@ -139,12 +139,20 @@ export function orphanedCatalogKeys(meta: Record<string, { type: string; id: str
  * so the whole folder goes rather than an empty shell of it. Ordered deepest first.
  * A folder that holds another library is never emptied: deleting it would delete that
  * library, so the walk stops there whether or not it holds videos of its own. */
-export async function emptiedFolders(root: string, relative: string, exclude?: ReadonlySet<string>): Promise<string[]> {
+export async function emptiedFolders(
+  root: string,
+  relative: string,
+  exclude?: ReadonlySet<string>,
+  // The prune stops at a carve-out like every other caller, so it needs the same answer about
+  // the volume. Inheriting the default here meant the one path that deletes folders was the
+  // one path not using the fold the probe went and measured.
+  caseInsensitive?: boolean,
+): Promise<string[]> {
   const gone: string[] = [];
   let folder = posixDir(relative);
   while (folder) {
     if (!resolveInside(root, folder)) break;
-    if (holdsLibraryRoot(exclude, folder)) break;
+    if (holdsLibraryRoot(exclude, folder, caseInsensitive)) break;
     if ((await listVideos(root, folder, 0, exclude)).length) break;
     gone.push(folder);
     folder = posixDir(folder);

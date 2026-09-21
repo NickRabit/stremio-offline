@@ -286,3 +286,35 @@ test("a new folder beside the old root is a valid re-root destination", async ()
     assert.equal(parent.ok, false, "the source's own parent is still refused");
   } finally { await rm(dataDir, { recursive: true, force: true }); }
 });
+
+test("one view resolved and one spelled misses a carve-out that the union of both catches", async () => {
+  // The state the guard is in between a restart and the first probe, and after a root was
+  // away when its own probe ran: one library's root has been resolved and another's is still
+  // the spelling it was configured with. Neither view alone sees the nested child then --
+  // which is the fail-open direction -- so the guard takes both and unions them.
+  const dataDir = await mkdtemp(path.join(tmpdir(), "mixed-"));
+  const real = path.join(dataDir, "data", "Archive");
+  const child = path.join(real, "Serialy");
+  const alias = path.join(dataDir, "box");
+  await mkdir(child, { recursive: true });
+  await symlink(real, alias);
+  try {
+    const parentSpelled = { id: "lib_aaaaaaaa", root: alias };
+    const parentResolved = { id: "lib_aaaaaaaa", root: await realpath(alias) };
+    const childSpelled = { id: "lib_bbbbbbbb", root: path.join(alias, "Serialy") };
+    const childResolved = { id: "lib_bbbbbbbb", root: await realpath(child) };
+
+    // Parent probed, child not: the resolved parent and the spelled child share no tree.
+    assert.deepEqual(carveOuts([parentResolved, childSpelled], parentResolved), [],
+      "the mixed view alone misses it, which is why the union exists");
+    // Both spellings agree, and so do both resolutions.
+    assert.deepEqual(carveOuts([parentSpelled, childSpelled], parentSpelled), ["Serialy"]);
+    assert.deepEqual(carveOuts([parentResolved, childResolved], parentResolved), ["Serialy"]);
+
+    const union = new Set([
+      ...carveOuts([parentSpelled, childSpelled], parentSpelled),
+      ...carveOuts([parentResolved, childSpelled], parentResolved),
+    ]);
+    assert.deepEqual([...union], ["Serialy"], "the union sees it whichever side has been probed");
+  } finally { await rm(dataDir, { recursive: true, force: true }); }
+});

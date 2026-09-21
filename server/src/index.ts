@@ -648,10 +648,19 @@ const realRootOf = (library: LibraryRecord) => libraryHealth.get(library.id)?.re
  *  the prune all stop at them, or a delete would take the other library with it. Compared
  *  as folders, not as the spellings the libraries were configured with: an alias into this
  *  tree is a child of it whether or not its path reads that way. */
-const carveOutsOf = (library: LibraryRecord) => new Set(carveOuts(
-  store.libraries().map((other) => ({ id: other.id, root: realRootOf(other) })),
-  { id: library.id, root: realRootOf(library) },
-));
+const carveOutsOf = (library: LibraryRecord) => {
+  const libraries = store.libraries();
+  const spelled = (entry: LibraryRecord) => ({ id: entry.id, root: path.resolve(entry.root) });
+  const resolved = (entry: LibraryRecord) => ({ id: entry.id, root: realRootOf(entry) });
+  // Both readings, unioned. Before the first probe -- and for a root that was away when its
+  // probe ran -- `realRootOf` has only the spelling, and comparing spellings is what let an
+  // aliased child slip through. Taking both means a missing answer can only widen the set,
+  // never narrow it, so the gap before a probe fails closed rather than open.
+  return new Set([
+    ...carveOuts(libraries.map(spelled), spelled(library)),
+    ...carveOuts(libraries.map(resolved), resolved(library)),
+  ]);
+};
 /** The library a key names, with the key's part below it. A key without a library id is
  *  the single-library pass-through; `singleLibrary` throws if there is no such library.
  *
@@ -1492,7 +1501,7 @@ const carryCoveringArtwork = async (cover: string, nextKey: string) => {
  *  as the parent holds nothing to watch either. */
 const pruneEmptiedFolders = async (key: string) => {
   const { library, relative } = libraryOfKey(key);
-  const gone = await emptiedFolders(library.root, relative, carveOutsOf(library));
+  const gone = await emptiedFolders(library.root, relative, carveOutsOf(library), healthOf(library).caseInsensitive);
   for (const folder of gone) {
     const folderKey = libraryPath(library.id, folder);
     await rm(mediaPath(folderKey), { recursive: true, force: true });

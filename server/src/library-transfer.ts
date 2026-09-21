@@ -62,7 +62,7 @@ const nameTaken = () => new AppError("A file with that name already exists.", "e
 /** Takes the target's name with an atomic create, because `rename` on its own replaces whatever
  *  is there without a word. A file is reserved with `O_CREAT | O_EXCL` and a folder with `mkdir`;
  *  the swap then renames the staged item over either empty placeholder. */
-const reserveTarget = async (target: string, directory: boolean): Promise<void> => {
+const reserveTarget = async (target: string, directory: boolean): Promise<{ ino: bigint; dev: bigint } | undefined> => {
   try {
     if (directory) await mkdir(target);
     else await (await open(target, "wx")).close();
@@ -70,14 +70,29 @@ const reserveTarget = async (target: string, directory: boolean): Promise<void> 
     if ((error as NodeJS.ErrnoException).code === "EEXIST") throw nameTaken();
     throw error;
   }
+  // The identity of what was just created, so the release can tell it from a file that
+  // replaced it in the meantime.
+  return directory ? undefined : await lstat(target, { bigint: true }).then(
+    (info) => ({ ino: info.ino, dev: info.dev }), () => undefined);
 };
 
-/** Drops a reservation whose rename never landed. A folder goes through `rmdir`, which refuses
- *  a folder that gained content, so only the empty placeholder this call made can be removed. */
-const releaseTarget = async (target: string, directory: boolean): Promise<void> => {
+/** Drops a reservation whose rename never landed, and only ever the placeholder this call
+ *  made. A folder goes through `rmdir`, which refuses one that gained content. A file is
+ *  checked by identity first: the reservation is not a lock -- a plain `rename` replaces it,
+ *  and the download queue's own commit does exactly that -- so by the time the release runs
+ *  the name may belong to somebody else, and `rm` would take their file with it. */
+const releaseTarget = async (target: string, directory: boolean, reserved?: { ino: bigint; dev: bigint }): Promise<void> => {
   try {
     if (directory) await rmdir(target);
-    else await rm(target, { force: true });
+    else {
+      const now = await lstat(target, { bigint: true }).catch(() => undefined);
+      if (!now) return;
+      if (reserved && (now.ino !== reserved.ino || now.dev !== reserved.dev)) {
+        log("INFO", "A reserved destination now belongs to somebody else, leaving it alone", { target });
+        return;
+      }
+      await rm(target, { force: true });
+    }
   } catch (error) {
     log("WARN", "A reserved destination could not be released", {
       target, reason: (error instanceof Error ? error.message : String(error)).slice(0, 120),
@@ -89,11 +104,11 @@ const releaseTarget = async (target: string, directory: boolean): Promise<void> 
  *  name loses the reservation and is refused there: it never reaches the rename, so it cannot
  *  overwrite what the winner put in place. */
 const publish = async (temporary: string, target: string, directory: boolean): Promise<void> => {
-  await reserveTarget(target, directory);
+  const reserved = await reserveTarget(target, directory);
   try {
     await rename(temporary, target);
   } catch (error) {
-    await releaseTarget(target, directory);
+    await releaseTarget(target, directory, reserved);
     throw error;
   }
 };
@@ -133,14 +148,14 @@ export interface TransferResult {
  *  be renamed over an empty folder. */
 export async function renameAcross(source: string, target: string): Promise<boolean> {
   const directory = (await lstat(source)).isDirectory();
-  await reserveTarget(target, directory);
+  const reserved = await reserveTarget(target, directory);
   try {
     await rename(source, target);
     return true;
   } catch (error) {
     // The rename never landed, so the placeholder is still this call's to drop. It has to go
     // before the fallback: the copy that follows would otherwise meet it and refuse itself.
-    await releaseTarget(target, directory);
+    await releaseTarget(target, directory, reserved);
     if ((error as NodeJS.ErrnoException).code !== "EXDEV") throw error;
     log("INFO", "The move crosses a filesystem, copying instead", { source, target });
     return false;
