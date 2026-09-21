@@ -787,11 +787,7 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .player-head .player-star span{display:none}
 @media(max-width:380px){.player-overlay .player-controls{gap:2px}.player-overlay .player-controls button{padding:6px}.player-overlay .player-controls button svg{width:20px}}
 
-/* Settings keep one reading order on any screen a person actually reads in one column.
-   Past that the page was a 1040px strip with most of a 2560px monitor empty beside it, so
-   above the thresholds below the panels flow into columns instead. Columns rather than a
-   grid on purpose: the panels are wildly different heights, and a grid would align them in
-   rows and leave the short ones trailing empty space. */
+/* Settings use one reading order at every viewport width. */
 .settings-page{max-width:1040px;container-type:inline-size}
 .settings-page .settings-title{margin-bottom:24px;flex-wrap:wrap;gap:12px}
 .settings-page .settings-grid{grid-template-columns:minmax(0,1fr);gap:18px}
@@ -810,32 +806,6 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .settings-page .credentials-field{flex:1;min-width:0;margin:0}
 .settings-page .credentials-field span{font-size:12px}
 .settings-page .credentials-row .setting-actions{border:0;padding:0;flex-shrink:0}
-
-/* Each panel is independent, so a column break inside one would be nonsense; `break-inside`
-   keeps them whole and `column-fill` evens the columns out. The margin replaces the grid's
-   `gap`, which a multi-column layout does not have. */
-@media(min-width:1280px){
-  .settings-page{max-width:min(100%,1680px)}
-  .settings-page .settings-grid{display:block;columns:2;column-gap:18px}
-  .settings-page .settings-grid>*{break-inside:avoid;margin:0 0 18px}
-}
-@media(min-width:1960px){
-  .settings-page{max-width:min(100%,2280px)}
-  .settings-page .settings-grid{columns:3}
-}
-/* A row decides its own shape from the panel it is in, not from the window. The control track
-   is a fixed 180-260px against a `1fr` label, so every pixel a column loses comes out of the
-   label: in two columns at 1280 it fell to 176px and nineteen of the twenty-three rows wrapped.
-   The stacked form below already exists for phones; making each panel a container is what lets
-   a narrow column reach for it, and it is the same answer for the same shape.
-
-   This also moves the phone threshold slightly, and deliberately. A container query measures
-   the content box, so the row is now asked about the width it actually lays out in rather than
-   about the page's, which was wider by the panel's own padding. Between roughly 900 and 950px
-   the row therefore stacks while the panel padding and the title -- which sit outside a panel,
-   or are the panel, and so still answer to `.settings-page` -- keep their wider form. Each rule
-   keys off the box it governs; the old single threshold was the approximation. */
-.settings-page .settings-section{container-type:inline-size}
 .settings-page .setting-actions button{min-height:42px;font-size:12px}
 .settings-page .diagnostics-section .settings-section-head{margin:0}
 @container(max-width:560px){
