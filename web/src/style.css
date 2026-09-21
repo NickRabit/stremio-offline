@@ -598,7 +598,10 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .library-op-status{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px 14px;align-items:center;margin:0 0 12px;padding:11px 14px;border:1px solid #ff795c55;border-radius:10px;background:#201713;font-size:11px}
 .library-op-status>div{display:flex;gap:10px;align-items:center;min-width:0}.library-op-status>div span,.library-op-status small{color:var(--muted)}
 .library-op-status>button{grid-column:2;grid-row:1/4;padding:6px 10px;font-size:11px}.library-op-progress{grid-column:1;display:block;height:5px;overflow:hidden;border-radius:99px;background:#342a27}.library-op-progress i{display:block;height:100%;background:var(--accent)}
-.library-bulk-bar{z-index:7;display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin:0 0 12px;padding:10px;border:1px solid #ff795c55;border-radius:10px;background:#161b24f5;box-shadow:0 10px 30px #0007;backdrop-filter:blur(12px)}
+/* The margin above is not decoration: the bar's own accent border landed flush against the
+   bottom edge of the accent-outlined "select items" toggle directly above it, and the two
+   read as one shape. */
+.library-bulk-bar{z-index:7;display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin:10px 0 12px;padding:10px;border:1px solid #ff795c55;border-radius:10px;background:#161b24f5;box-shadow:0 10px 30px #0007;backdrop-filter:blur(12px)}
 .library-bulk-bar strong{margin-right:auto;padding:0 6px;font-size:12px}.library-bulk-bar button{padding:7px 9px;font-size:10px}.library-bulk-bar button svg{width:14px;height:14px}
 .library-page .browse-item.selected .library-open{box-shadow:0 0 0 2px var(--accent)}
 .library-page .browse-select{position:absolute;z-index:3;right:8px;top:8px;width:36px;height:36px;padding:0;border:2px solid var(--accent2);border-radius:9px;background:#10151eeb}.library-page .browse-select[aria-pressed=true]{background:var(--accent)}
