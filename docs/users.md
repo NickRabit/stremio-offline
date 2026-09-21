@@ -28,6 +28,18 @@ downloads — and its own downloads. The instance's half, from secure mode and t
 log level to the refresh interval, the default libraries and the API tokens, is
 refused.
 
+It is not only refused to write: `GET /api/settings` does not answer an ordinary
+account with it either, and `GET /api/libraries` names each granted library
+without saying where it lives on the host. How many files the instance fetches
+at once, what it scans and when, whether it holds a TMDB or a Real-Debrid token,
+which library a download lands in, the path a library sits at — none of it
+reaches an account that could not change it anyway. Two flags are the exception,
+because the interface behaves on them rather than displaying them: **secure
+mode**, which decides whether a trailer is framed or opens in a new tab, and
+whether a Real-Debrid token is configured, without which the interface would
+offer torrent sources it cannot save. Both say nothing about the host beyond
+what watching already shows.
+
 ## What an administrator grants
 
 Everything lives in **Settings → Users**, one row per account, opened as a

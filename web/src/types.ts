@@ -122,6 +122,15 @@ export interface Settings {
   catalogTileShape: TileShape; libraryTileShape: TileShape;
   realDebridConfigured: boolean; tmdbConfigured: boolean;
 }
+/** The instance keys the settings endpoints leave out for an ordinary account, which is told
+ *  only what the ordinary interface behaves on: `secureMode` and `realDebridConfigured`. */
+type AdminOnlySetting =
+  | "concurrentDownloads" | "parallelPerProvider" | "downloadSegments"
+  | "libraryAutoScan" | "libraryScanPauseOnDownload" | "logLevel"
+  | "addonRefreshHours" | "tmdbConfigured";
+/** What GET and PATCH /api/settings answer. An administrator receives every key; everybody
+ *  else is missing the ones above, and the interface keeps its own defaults for them. */
+export type SettingsView = Omit<Settings, AdminOnlySetting> & Partial<Pick<Settings, AdminOnlySetting>>;
 export type SettingsPatch = Partial<Omit<Settings, "realDebridConfigured" | "tmdbConfigured">> & { realDebridToken?: string; tmdbApiKey?: string };
 export interface SettingsBackup {
   format: "stremio-offline-settings"; version: 1; exportedAt: string; settings: Settings;

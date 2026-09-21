@@ -911,7 +911,9 @@ export function App() {
   }, []);
   const ready = Boolean(session);
   // Loading data only makes sense after signing in; before that it would just throw 401s.
-  useEffect(() => { if (!ready) return; refresh().catch(fail); loadDownloads(); refreshLibraries(); api.settings().then((next) => { setSettings(next); setLocale(next.uiLanguage); }).catch(fail); api.languages().then(setLanguages).catch(() => undefined); }, [ready]);
+  // Every settings answer is merged into the state rather than assigned over it: an ordinary
+  // account is not told the instance keys, and the defaults above stand in for them.
+  useEffect(() => { if (!ready) return; refresh().catch(fail); loadDownloads(); refreshLibraries(); api.settings().then((next) => { setSettings((current: AppSettings) => ({ ...current, ...next })); setLocale(next.uiLanguage); }).catch(fail); api.languages().then(setLanguages).catch(() => undefined); }, [ready]);
   // Which addons are worth searching changes as they are switched on and off.
   useEffect(() => { api.searchable().then(setSearchable).catch(() => undefined); }, [addons]);
   // Only a file probe knows the exact languages, so we run one for the chosen stream.
@@ -928,14 +930,14 @@ export function App() {
     const before = settings[key];
     const next = before === "wide" ? "poster" : "wide";
     setSettings((current: AppSettings) => ({ ...current, [key]: next }));
-    try { setSettings(await api.updateSettings({ [key]: next })); }
+    try { const saved = await api.updateSettings({ [key]: next }); setSettings((current: AppSettings) => ({ ...current, ...saved })); }
     catch (e) { setSettings((current: AppSettings) => ({ ...current, [key]: before })); fail(e); }
   };
 
   const saveSettings = async (patch: SettingsPatch) => {
     const { realDebridToken: _token, tmdbApiKey: _apiKey, ...rest } = patch;
     if (Object.keys(rest).length) setSettings((current: AppSettings) => ({ ...current, ...rest }));
-    try { setSettings(await api.updateSettings(patch)); notify(t("settings.saved")); } catch (e) { fail(e); }
+    try { const saved = await api.updateSettings(patch); setSettings((current: AppSettings) => ({ ...current, ...saved })); notify(t("settings.saved")); } catch (e) { fail(e); }
   };
   // An empty path with more than one library configured is the library list; a
   // single-library install still opens straight into the tree.
