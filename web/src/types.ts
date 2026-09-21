@@ -274,3 +274,11 @@ export interface UserViews {
  *  not yet started. It carries no position and draws no progress bar. */
 export interface ProgressEntry { key: string; position: number; duration: number; title: string; path?: string; poster?: string; addonKey?: string; series?: { id: string; name: string; season: number; episode: number }; pending?: true; updatedAt: string }
 export interface WatchlistEntry { key: string; type: string; id: string; name: string; poster?: string; addedAt: string }
+
+export interface StatsActivity {
+  id: number; at: string; kind: "playback" | "library" | "device";
+  title: string; filename?: string; userId?: string; username?: string; bytes?: number; partial?: boolean;
+}
+export interface StatsActivityPage {
+  items: StatsActivity[]; total: number; next?: number; users: Array<{ id: string; username: string }>;
+}

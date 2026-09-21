@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "./api";
-import type { ActiveStream, StatsBucket, StatsSeries, StatsSummary } from "./types";
+import type { StatsActivityPage, ActiveStream, StatsBucket, StatsSeries, StatsSummary } from "./types";
 import { localeTag, serverText, t, useI18n } from "./i18n";
 
 const size = (value: number) => !value ? "0 B"
@@ -205,6 +205,58 @@ function Live({ streams, now }: { streams: ActiveStream[]; now: number }) {
   </section>;
 }
 
+function ActivityHistory({ hours, onError }: { hours: number; onError: (error: unknown) => void }) {
+  const { t } = useI18n();
+  const [kind, setKind] = useState("");
+  const [user, setUser] = useState("");
+  const [before, setBefore] = useState<number>();
+  const [previous, setPrevious] = useState<Array<number | undefined>>([]);
+  const [page, setPage] = useState<StatsActivityPage>();
+  const [loading, setLoading] = useState(true);
+  const [revision, setRevision] = useState(0);
+  const reset = () => { setBefore(undefined); setPrevious([]); };
+
+  useEffect(() => {
+    let alive = true;
+    setLoading(true);
+    api.activity(hours, kind, user, before)
+      .then((data) => { if (alive) setPage(data); })
+      .catch((error) => { if (alive) { setPage(undefined); onError(error); } })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, [hours, kind, user, before, revision]);
+
+  return <section className="panel stats-history" aria-busy={loading}>
+    <div className="stats-history-head">
+      <h3>{t("stats.history.title")}</h3>
+      <div className="stats-history-filters">
+        <label>{t("stats.history.kind")}<select value={kind} onChange={(event) => { setKind(event.target.value); reset(); }}>
+          <option value="">{t("stats.history.all")}</option>
+          {(["playback", "library", "device"] as const).map((value) => <option key={value} value={value}>{t(`stats.history.${value}`)}</option>)}
+        </select></label>
+        <label>{t("stats.history.user")}<select value={user} onChange={(event) => { setUser(event.target.value); reset(); }}>
+          <option value="">{t("stats.history.allUsers")}</option>
+          {page?.users.map((item) => <option key={item.id} value={item.id}>{item.username}</option>)}
+        </select></label>
+        <button disabled={loading} onClick={() => { reset(); setRevision((value) => value + 1); }}>{t("stats.history.refresh")}</button>
+      </div>
+    </div>
+    <p className="stats-hint">{t("stats.history.hint")}</p>
+    {loading ? <p>{t("common.loading")}</p> : !page?.items.length ? <p className="stats-empty">{t("stats.history.empty")}</p> : <>
+      <ul className="stats-history-list">{page.items.map((item) => <li key={item.id}>
+        <div><strong>{item.title}</strong>{item.filename && item.filename !== item.title && <small>{item.filename}</small>}</div>
+        <div><span>{t(`stats.history.${item.kind}`)}{item.partial ? ` · ${t("stats.history.partial")}` : ""}</span><small>{item.username ?? t("stats.history.unknownUser")}</small></div>
+        <div><time dateTime={item.at}>{new Date(item.at).toLocaleString(localeTag())}</time>{item.bytes !== undefined && <small>{size(item.bytes)}</small>}</div>
+      </li>)}</ul>
+      <div className="stats-history-pages">
+        <span>{t("stats.items", { count: page.total })}</span>
+        <button disabled={!previous.length} onClick={() => { setBefore(previous.at(-1)); setPrevious((values) => values.slice(0, -1)); }}>{t("stats.history.previous")}</button>
+        <button disabled={!page.next} onClick={() => { setPrevious((values) => [...values, before]); setBefore(page.next); }}>{t("stats.history.next")}</button>
+      </div>
+    </>}
+  </section>;
+}
+
 export function StatsPanel({ onError }: { onError: (error: unknown) => void }) {
   const { t } = useI18n();
   const [hours, setHours] = useState(720);
@@ -296,6 +348,8 @@ export function StatsPanel({ onError }: { onError: (error: unknown) => void }) {
           ? <Chart summary={summary} lines={lines}/>
           : <p className="stats-empty">{t("stats.noTraffic")}</p>}
       </section>
+
+      <ActivityHistory key={hours} hours={hours} onError={onError}/>
 
       <p className="stats-hint">{t("stats.hint")}</p>
 

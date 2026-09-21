@@ -77,7 +77,7 @@ const mount = async (): Promise<Harness> => {
     safeInspection: () => ({ duration: undefined, video: undefined, audioTracks: [], subtitleTracks: [] }),
     sleep: async () => undefined,
     sourceIsQuiet: () => false,
-    stats: { complete: () => undefined } as unknown as StatsLog,
+    stats: { complete: () => undefined, activity: { record: () => undefined } } as unknown as StatsLog,
     subtitleDelay: () => 0,
     trackMedia: () => undefined,
     SOURCE_ATTEMPTS: 3,

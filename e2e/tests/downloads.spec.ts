@@ -35,4 +35,10 @@ test("queues a source and the job reaches the download list", async ({ page }) =
   await expect(focused).toContainText("Zkušební film");
   await expect(focused).toContainText("Tento soubor");
   await expect(focused).toBeInViewport();
+  const history = await page.request.get("/api/stats/activity?hours=24&kind=library");
+  expect(history.ok()).toBe(true);
+  const activities = await history.json();
+  expect(activities.items).toEqual(expect.arrayContaining([
+    expect.objectContaining({ kind: "library", username: "e2e-admin", title: "Zkušební film" }),
+  ]));
 });

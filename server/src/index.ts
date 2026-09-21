@@ -1839,6 +1839,8 @@ const rememberTitle = async (target: string, media: MediaInfo | undefined, flat:
 queue.onProgress = (job, bytes) => stats.add(statMeta({ url: job.stream?.url, addonKey: job.stream?.addonKey, addonName: job.stream?.addonName, title: job.title, kind: job.media?.kind }), bytes);
 queue.onCompleted = async (job) => {
   invalidateLibrary();
+  const user = store.users().find((user) => user.id === job.ownerUserId);
+  stats.activity.record({ kind: "library", title: job.title, filename: path.basename(job.target), userId: job.ownerUserId, username: user?.username, bytes: job.received });
   await stats.complete(statMeta({ url: job.stream?.url, addonKey: job.stream?.addonKey, addonName: job.stream?.addonName, title: job.title, kind: job.media?.kind }));
   if (!job.source || !job.target || !job.media) return;
   const addon = store.addons().find((item) => item.key === job.stream?.addonKey);
@@ -1850,10 +1852,10 @@ queue.setDebrid({
   configured: () => Boolean(store.settings().realDebridToken),
   advance: (input) => advanceTorrent(store.settings().realDebridToken, input.infoHash, input.fileIdx, input.torrentId),
 });
+await stats.load();
 await queue.load();
 await libraryScan.load();
 if (autoScanAllowed) libraryAutoScan.start();
-await stats.load();
 // History comes from the queue so the statistics do not start empty; finished jobs can
 // be deleted, though, so from now on a record of our own is kept. Only what predates that
 // record is filled in -- anything newer is already in it.
@@ -2054,7 +2056,7 @@ registerLibrariesRoutes(app, { ...routeContext, grantRows, healthOf, invalidateL
 
 registerCurateRoutes(app, { ...routeContext, invalidateLibrary, libraryAutoScan, libraryFiles, libraryOps, libraryScan, libraryTarget, libraryUnits, matchLibraryItem, metaStore, ownRecord, ownerOf, prefsOf, refreshLibraryHealth, scheduleMetaBackfill, wirePath });
 
-registerDeviceRoutes(app, { ...routeContext, countBytes, deviceDownloadTickets, DEVICE_TICKET_TTL, httpSourceOf, libraryTarget, mediaSource, ownerOf, pruneDeviceDownloadTickets, statMeta, trackMedia });
+registerDeviceRoutes(app, { ...routeContext, stats, countBytes, deviceDownloadTickets, DEVICE_TICKET_TTL, httpSourceOf, libraryTarget, mediaSource, ownerOf, pruneDeviceDownloadTickets, statMeta, trackMedia });
 registerDownloadRoutes(app, { ...routeContext, queue, jobView, sourceOf, mediaSource, posterOf, rememberTitle, titleKey, saveCatalogPoster, libraryKey, cachedMeta, prefsOf });
 const freeSpace = async (target: string) => {
   try { const info = await statfs(target); return { path: target, freeBytes: info.bavail * info.bsize, totalBytes: info.blocks * info.bsize }; }
@@ -2118,6 +2120,6 @@ app.listen(port, "0.0.0.0", () => { markServerReady(); log("INFO", "Stremio Offl
 for (const signal of ["SIGTERM", "SIGINT"] as const) {
   process.once(signal, () => {
     log("INFO", "Shutting down", { signal });
-    void Promise.allSettled([images.flush(), artworks.flush(), metaStore.flush(), libraryOps.flush()]).then(flushLog).finally(() => process.exit(0));
+    void Promise.allSettled([stats.activity.flush(), images.flush(), artworks.flush(), metaStore.flush(), libraryOps.flush()]).then(flushLog).finally(() => process.exit(0));
   });
 }

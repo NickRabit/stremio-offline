@@ -104,6 +104,8 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
     // Bytes are counted by the proxy or by the library; only the item itself is added here,
     // so that "how much there was" is not limited to downloads.
     void stats.complete(playbackMeta(prepared.stream));
+    const user = currentUser(req);
+    stats.activity.record({ kind: "playback", title: safeSourceText(playbackMeta(prepared.stream).title, prepared.stream) ?? "", userId: user?.id, username: user?.username });
     res.status(201).setHeader("cache-control", "private, no-store").json({ ...playbackResponse(started), subtitleIds });
   }));
   app.use("/api/playback/:id", (req, res, next) => {

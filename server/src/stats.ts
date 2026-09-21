@@ -1,5 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { ActivityLog } from "./activity.js";
 
 /** Where the traffic flows from. The library reads a file from disk and so costs the line
  * nothing -- it is kept apart and not mixed into the external traffic figures. */
@@ -238,9 +239,15 @@ export class StatsLog {
   private timer?: NodeJS.Timeout;
   private compactedAt = 0;
 
-  constructor(dataDir = process.env.DATA_DIR ?? "/data") { this.file = path.join(dataDir, "stats.json"); }
+  readonly activity: ActivityLog;
+
+  constructor(dataDir = process.env.DATA_DIR ?? "/data") {
+    this.file = path.join(dataDir, "stats.json");
+    this.activity = new ActivityLog(dataDir);
+  }
 
   async load() {
+    await this.activity.load();
     await mkdir(path.dirname(this.file), { recursive: true });
     try {
       const stored: Array<Partial<TrafficEvent>> = JSON.parse(await readFile(this.file, "utf8"));

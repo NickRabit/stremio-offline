@@ -49,7 +49,7 @@ beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   setLocale("en");
   fetchMock = vi.fn((input: RequestInfo | URL) =>
-    Promise.resolve(json(String(input).includes("/api/stats/streams") ? [] : data)));
+    Promise.resolve(json(String(input).includes("/api/stats/activity") ? { items: [], users: [], total: 0 } : String(input).includes("/api/stats/streams") ? [] : data)));
   vi.stubGlobal("fetch", fetchMock);
   hostElement = document.createElement("div");
   document.body.appendChild(hostElement);
@@ -125,4 +125,32 @@ it("still plots a grouped row when it is selected, and survives opening it", asy
 
   await act(async () => { pick().click(); });
   expect(pick().getAttribute("aria-pressed")).toBe("false");
+});
+
+
+it("filters history on the server, pages by cursor and does not poll it with live streams", async () => {
+  vi.useFakeTimers();
+  fetchMock.mockImplementation((input: RequestInfo | URL) => {
+    const url = new URL(String(input), "http://localhost");
+    if (url.pathname !== "/api/stats/activity") return Promise.resolve(json(url.pathname.endsWith("streams") ? [] : data));
+    const older = url.searchParams.has("before");
+    return Promise.resolve(json({ items: [{ id: older ? 1 : 2, at: "2026-09-21T12:00:00Z", kind: "device", title: older ? "Older.mkv" : "Recent.mkv", username: "Ada" }], users: [{ id: "ada", username: "Ada" }], total: 2, next: older ? undefined : 2 }));
+  });
+  await render();
+  const history = hostElement.querySelector(".stats-history")!;
+  expect(history.textContent).toContain("Recent.mkv");
+  expect(history.textContent).toContain("Ada");
+  await act(async () => { [...history.querySelectorAll("button")].find((button) => button.textContent === "Older")!.click(); });
+  expect(history.textContent).toContain("Older.mkv");
+  const select = history.querySelector("select")!;
+  await act(async () => { select.value = "device"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+  expect(history.textContent).toContain("Recent.mkv");
+  const urls = fetchMock.mock.calls.map(([input]) => String(input)).filter((url) => url.includes("/activity"));
+  expect(urls.at(-1)).toContain("kind=device");
+  expect(urls.at(-1)).not.toContain("before=");
+  const streamCalls = fetchMock.mock.calls.filter(([input]) => String(input).includes("/streams")).length;
+  await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+  expect(fetchMock.mock.calls.filter(([input]) => String(input).includes("/streams"))).toHaveLength(streamCalls + 2);
+  expect(fetchMock.mock.calls.filter(([input]) => String(input).includes("/activity"))).toHaveLength(urls.length);
+  vi.useRealTimers();
 });
