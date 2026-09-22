@@ -21,6 +21,9 @@ jobs:
           node-version: "22"
           cache: npm
       - run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - run: npx tsc -p desktop
       - run: npx tsc --noEmit -p server
       - run: npx tsc --noEmit -p e2e
       # "npm run build" type-checks the web workspace on its way through, and
@@ -42,6 +45,8 @@ jobs:
           node-version: "22"
           cache: npm
       - run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
       - run: npm run build
       - run: apt-get update && apt-get install -y --no-install-recommends ffmpeg
       - run: npx playwright test
