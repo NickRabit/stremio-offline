@@ -696,6 +696,11 @@ const mediaPath = (key: string, ...rest: string[]) => {
   const { library, relative } = libraryOfKey(key);
   return path.join(library.root, toFs(posixJoin(relative, ...rest)));
 };
+/** Inspecting a library file reads it back over the loopback, so the url carries a wire
+ *  path -- the form `libraryTarget` resolves -- and never the filesystem path `mediaPath`
+ *  returns. An absolute path names no library, and once a second library is configured it
+ *  resolves to nothing at all: the probe 404s and the duration is silently lost. */
+const inspectLibraryFile = (key: string) => playback.inspect({ url: `file://${wirePath(key)}` }).catch(() => undefined);
 
 const libraryProbe = createLibraryProbe();
 const libraryHealth = new Map<string, LibraryHealth>();
@@ -946,7 +951,7 @@ function scheduleArtwork(entry: Awaited<ReturnType<typeof scanLibrary>>[number])
     if (await catalogPosterIfBound(libraryKey(entry.key), target)) return;
     const source = entry.files[0];
     if (!source) return;
-    const info = await playback.inspect({ url: `file://${source.path}` }).catch(() => undefined);
+    const info = await inspectLibraryFile(source.path);
     if (await saveArtwork(entry.key, target, () => saveFrame(mediaPath(source.path), target, framePosition(info?.duration)))) {
       log("INFO", "Thumbnail generated from the video", { key: entry.key });
     }
@@ -1293,7 +1298,7 @@ function scheduleFileArtwork(key: string, shape: ArtShape = "poster") {
       if (await locateFileArtwork(key)) return;
       if (await catalogPosterIfBound(key, target)) return;
     }
-    const info = await playback.inspect({ url: `file://${wirePath(key)}` }).catch(() => undefined);
+    const info = await inspectLibraryFile(key);
     await saveArtwork(key, target, () => saveFrame(source, target, framePosition(info?.duration)));
   });
 }
@@ -1346,9 +1351,9 @@ function scheduleFolderArtwork(key: string, shape: ArtShape = "poster") {
       if (sub) first = (await browseDirectory(library.root, sub.path, "", 0, 20, "name", false, "", undefined, carveOutsOf(library))).items.find((item) => item.kind === "file");
     }
     if (!first) return;
-    const source = mediaPath(libraryPath(library.id, first.path));
-    const info = await playback.inspect({ url: `file://${source}` }).catch(() => undefined);
-    await saveArtwork(key, target, () => saveFrame(source, target, framePosition(info?.duration)));
+    const sourceKey = libraryPath(library.id, first.path);
+    const info = await inspectLibraryFile(sourceKey);
+    await saveArtwork(key, target, () => saveFrame(mediaPath(sourceKey), target, framePosition(info?.duration)));
   });
 }
 

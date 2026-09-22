@@ -146,6 +146,29 @@ test("resolution refuses what the guard exists for", async () => {
   try { await rm(root, { recursive: true, force: true }); await rm(outside, { recursive: true, force: true }); } catch { /* best effort */ }
 });
 
+test("an absolute filesystem path is not a wire path", async () => {
+  // What `mediaPath` returns must never be handed back to `resolveLibraryPath`. The probe
+  // that inspects a library file reads it over the loopback, and a url built from the
+  // filesystem path resolves to nothing: the duration is lost and every frame grab falls
+  // back to a fixed position.
+  const root = await mkdtemp(path.join(tmpdir(), "libraries-"));
+  await mkdir(path.join(root, "Show"));
+  await writeFile(path.join(root, "Show", "01.mkv"), "x");
+  const only = library({ root });
+  const second = library({ id: "lib_ffffffff", root: path.join(root, "Show") });
+  const absolute = path.join(root, "Show", "01.mkv");
+  try {
+    assert.equal(await resolveLibraryPath([only, second], absolute), undefined, "with two libraries the path names none of them");
+
+    const alone = await resolveLibraryPath([only], absolute);
+    assert.notEqual(alone, undefined, "the single-library pass-through accepts it as a relative path");
+    assert.notEqual(alone?.absolute, absolute, "and points somewhere the file is not");
+
+    const key = await resolveLibraryPath([only, second], libraryPath(only.id, "Show/01.mkv"));
+    assert.equal(key?.absolute, absolute, "the qualified key is what resolves to the file");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test("a folder added again takes back the id it had before", async () => {
   const base = await mkdtemp(path.join(tmpdir(), "departed-"));
   const root = path.join(base, "Films");
