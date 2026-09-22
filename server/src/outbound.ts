@@ -1,5 +1,6 @@
 import { log } from "./logger.js";
 import { safeFetch } from "./security.js";
+import { AppError } from "./errors.js";
 
 /**
  * Guards outgoing calls to third-party addons. The circuit breaker is the point of
@@ -74,14 +75,16 @@ interface HostState {
   opened: number;
 }
 
-export class GuardRejection extends Error {
+const seconds = (ms: number) => Math.max(1, Math.round(ms / 1000));
+
+/** The refusal belongs to the interface, so it carries the same key and variables an
+ *  `AppError` does: the host and the wait reach the body translated and the header raw. */
+export class GuardRejection extends AppError {
   constructor(message: string, readonly host: string, readonly retryAfterMs: number) {
-    super(message);
+    super(message, "err.hostUnavailable", 503, { host, seconds: seconds(retryAfterMs) });
     this.name = "GuardRejection";
   }
 }
-
-const seconds = (ms: number) => Math.max(1, Math.round(ms / 1000));
 
 /** Providers ask for a pause in seconds or as an HTTP date; both forms appear in the wild. */
 export function retryAfterMs(header: string | null, now: number): number | undefined {
@@ -130,9 +133,11 @@ export class OutboundGuard {
     }
   }
 
-  private admit(host: string, entry: HostState) {
+  private admit(host: string, entry: HostState, interactive: boolean) {
     if (entry.state === "open") {
-      if (this.now() < entry.openUntil) {
+      // A person waiting at the screen takes the single trial slot even before the cooldown
+      // ends. The sweep that opened the breaker keeps failing fast and leaves the slot alone.
+      if (this.now() < entry.openUntil && !interactive) {
         entry.rejected += 1;
         throw new GuardRejection(
           `${host} keeps not answering, the next attempt is in ${seconds(entry.openUntil - this.now())} s.`,
@@ -196,11 +201,11 @@ export class OutboundGuard {
     log("WARN", "Circuit breaker opened for the host", { host, failures: entry.failures, pauseSeconds: seconds(pause), reason });
   }
 
-  async run(host: string, task: () => Promise<Response>): Promise<Response> {
+  async run(host: string, task: () => Promise<Response>, interactive = false): Promise<Response> {
     if (!this.config.enabled) return task();
     this.prune();
     const entry = this.stateOf(host);
-    this.admit(host, entry);
+    this.admit(host, entry, interactive);
     try {
       await this.acquire(entry);
     } catch (error) {
@@ -261,10 +266,10 @@ const hostOf = (raw: string): string | undefined => {
  * safeFetch plus the guard above. Only for short third-party calls -- addon JSON,
  * subtitles, artwork. Media transfers keep using safeFetch directly.
  */
-export async function guardedFetch(raw: string, init: RequestInit = {}): Promise<Response> {
+export async function guardedFetch(raw: string, init: RequestInit = {}, interactive = false): Promise<Response> {
   const host = hostOf(raw);
   if (!host) return safeFetch(raw, init);
-  return outbound.run(host, () => safeFetch(raw, init));
+  return outbound.run(host, () => safeFetch(raw, init), interactive);
 }
 
 /** Metadata providers that are legitimately slow. A cold Wikidata SPARQL query runs

@@ -18,7 +18,7 @@ import { PlaybackManager, sourceTitle } from "./playback.js";
 import { publicAddon, publicAddonRestricted } from "./security.js";
 import { RestrictedError, restrictedMiddleware, restrictedMode } from "./restricted.js";
 import { passwordChangeMiddleware, roleMiddleware } from "./roles.js";
-import { outbound } from "./outbound.js";
+import { GuardRejection, outbound } from "./outbound.js";
 import { images } from "./images.js";
 import { configureSecureMode, secureMode, securityHeaders } from "./secure.js";
 import { Store, type State, type UserPrefs, type WatchlistEntry, type StoredProgress, type WatchedMarker } from "./store.js";
@@ -42,7 +42,7 @@ import type { MediaInfo } from "./naming.js";
 import { defaultDownloadSettings } from "./naming.js";
 import { AppError, messageKeyOf } from "./errors.js";
 import { accessLost, contentOf, Revocations, type AccessClaim, type AccessNeed, type ActiveTransfer, type StopContentOptions } from "./revocation.js";
-import { carveOuts, queuedArtworkKey, defaultLibrary, isInside, libraryFor, libraryPath, libraryVisible, parseLibraryPath, posixBase, posixDir, posixJoin, realAncestor, relativeWithin, resolveLibraryPath, toFs, toPosix, visibleLibraries, type LibraryRecord, type LibraryType, type RootGrant, type Viewer } from "./libraries.js";
+import { carveOuts, queuedArtworkKey, defaultLibrary, isInside, libraryFor, libraryPath, libraryVisible, parseLibraryPath, playingUnder, posixBase, posixDir, posixJoin, realAncestor, relativeWithin, resolveLibraryPath, toFs, toPosix, visibleLibraries, type LibraryRecord, type LibraryType, type RootGrant, type Viewer } from "./libraries.js";
 import { envGrants, grantView, mergeGrants } from "./library-grants.js";
 import { migrateStateFile } from "./library-migrate.js";
 import { LibraryMetaStore } from "./library-meta-store.js";
@@ -696,6 +696,14 @@ const mediaPath = (key: string, ...rest: string[]) => {
   const { library, relative } = libraryOfKey(key);
   return path.join(library.root, toFs(posixJoin(relative, ...rest)));
 };
+/** Inspecting a library file reads it back over the loopback, so the url carries the
+ *  qualified key -- the form `libraryTarget` resolves -- and never the filesystem path
+ *  `mediaPath` returns. An absolute path names no library, and once a second library is
+ *  configured it resolves to nothing at all: the probe 404s and the duration is silently
+ *  lost. The key rather than `wirePath` deliberately: it resolves whichever wire format
+ *  the client speaks, so the server's own probe does not depend on how many libraries
+ *  happen to be configured. */
+const inspectLibraryFile = (key: string) => playback.inspect({ url: `file://${key}` }).catch(() => undefined);
 
 const libraryProbe = createLibraryProbe();
 const libraryHealth = new Map<string, LibraryHealth>();
@@ -732,7 +740,7 @@ const cachedMeta = async (type: string, id: string, language: string = prefsOf()
   const key = `${type}:${id}:${language}:${viewer ? sources.map((addon) => addon.key).join(",") : "*"}`;
   const hit = metaCache.get(key);
   if (hit && Date.now() - hit.at < 6 * 60 * 60_000) return hit.value;
-  const value = await metadata(sources, type, id, language, tmdbProvider(language)).catch(() => null);
+  const value = await metadata(sources, type, id, language, tmdbProvider(language), viewer !== undefined).catch(() => null);
   if (metaCache.size > 300) metaCache.clear();
   // A failed lookup is not an answer: caching it would hold a title empty for six hours.
   if (value) metaCache.set(key, { value, at: Date.now() });
@@ -946,7 +954,7 @@ function scheduleArtwork(entry: Awaited<ReturnType<typeof scanLibrary>>[number])
     if (await catalogPosterIfBound(libraryKey(entry.key), target)) return;
     const source = entry.files[0];
     if (!source) return;
-    const info = await playback.inspect({ url: `file://${source.path}` }).catch(() => undefined);
+    const info = await inspectLibraryFile(source.path);
     if (await saveArtwork(entry.key, target, () => saveFrame(mediaPath(source.path), target, framePosition(info?.duration)))) {
       log("INFO", "Thumbnail generated from the video", { key: entry.key });
     }
@@ -1293,7 +1301,7 @@ function scheduleFileArtwork(key: string, shape: ArtShape = "poster") {
       if (await locateFileArtwork(key)) return;
       if (await catalogPosterIfBound(key, target)) return;
     }
-    const info = await playback.inspect({ url: `file://${wirePath(key)}` }).catch(() => undefined);
+    const info = await inspectLibraryFile(key);
     await saveArtwork(key, target, () => saveFrame(source, target, framePosition(info?.duration)));
   });
 }
@@ -1346,9 +1354,9 @@ function scheduleFolderArtwork(key: string, shape: ArtShape = "poster") {
       if (sub) first = (await browseDirectory(library.root, sub.path, "", 0, 20, "name", false, "", undefined, carveOutsOf(library))).items.find((item) => item.kind === "file");
     }
     if (!first) return;
-    const source = mediaPath(libraryPath(library.id, first.path));
-    const info = await playback.inspect({ url: `file://${source}` }).catch(() => undefined);
-    await saveArtwork(key, target, () => saveFrame(source, target, framePosition(info?.duration)));
+    const sourceKey = libraryPath(library.id, first.path);
+    const info = await inspectLibraryFile(sourceKey);
+    await saveArtwork(key, target, () => saveFrame(mediaPath(sourceKey), target, framePosition(info?.duration)));
   });
 }
 
@@ -1949,6 +1957,13 @@ const matchLibraryItem = async (body: LibraryMatchRequest, language = prefsOf().
   return { key: wirePath(bindKey), type, id: id || null };
 };
 
+/** Whether a session is reading a file under this folder. A playing stream's url carries
+ *  the qualified key, not a filesystem path: handing it to `fileURLToPath` throws on the
+ *  library id it reads as a host, and the guard that swallowed the throw answered "nothing
+ *  is playing" every time -- so a bulk delete, move or reroot never waited for a viewer. */
+const playbackUnder = (root: string) =>
+  playingUnder(store.libraries(), playback.active().map((session) => session.stream.url), root);
+
 const libraryOps = new LibraryOps({
   file: path.join(DATA_DIR, "library-ops.json"),
   pause: async (operation, item) => {
@@ -1959,10 +1974,7 @@ const libraryOps = new LibraryOps({
       await refreshLibraryHealth();
       if (libraryHealth.get(operation.libraryId)?.unreachable) return "library";
       const source = path.join(operation.from, item);
-      if (playback.active().some((session) => {
-        if (!session.stream.url?.startsWith("file:")) return false;
-        try { return isInside(fileURLToPath(session.stream.url), source); } catch { return false; }
-      })) return "playback";
+      if (await playbackUnder(source)) return "playback";
       const writing = queue.list().filter((job) => job.target && (job.status === "checking" || job.status === "downloading"));
       if (writing.length) {
         const targets = await Promise.all(writing.map((job) => resolveLibraryPath(store.libraries(), job.target)));
@@ -1977,10 +1989,7 @@ const libraryOps = new LibraryOps({
       await refreshLibraryHealth();
       if (libraryHealth.get(library.id)?.unreachable) return "library";
     }
-    if (resolved && playback.active().some((session) => {
-      if (!session.stream.url?.startsWith("file:")) return false;
-      try { return isInside(fileURLToPath(session.stream.url), resolved.absolute); } catch { return false; }
-    })) return "playback";
+    if (resolved && await playbackUnder(resolved.absolute)) return "playback";
     if ((operation.op === "move" || operation.op === "copy") && queue.list().some((job) => job.status === "checking" || job.status === "downloading")) {
       const target = await resolveLibraryPath(store.libraries(), operation.target);
       const writing = await Promise.all(queue.list().filter((job) => job.target && (job.status === "checking" || job.status === "downloading")).map((job) => resolveLibraryPath(store.libraries(), job.target)));
@@ -2094,8 +2103,13 @@ app.use((error: unknown, req: express.Request, res: express.Response, _next: exp
     });
   }
   const mediaRoute = /^(?:\/api)?\/(?:media|playback|inspect|streams|subtitle|subtitles|device-download|library\/source)(?:\/|$)/.test(req.path);
-  const hideDetails = mediaRoute && !(error instanceof ResourceError) && status >= 500;
+  // A breaker refusal is the server's own sentence about its own state, not a source's
+  // answer, so the media routes have nothing to hide behind a generic 502 here.
+  const hideDetails = mediaRoute && !(error instanceof ResourceError) && !(error instanceof GuardRejection) && status >= 500;
   const vars = error instanceof AppError ? error.vars : undefined;
+  // The same wait the body carries as a variable, in seconds, for a client that only reads headers.
+  const retryAfter = (error as { retryAfterMs?: unknown }).retryAfterMs;
+  if (typeof retryAfter === "number" && retryAfter > 0) res.setHeader("retry-after", String(Math.max(1, Math.round(retryAfter / 1000))));
   res.status(hideDetails ? 502 : status).json({
     error: hideDetails ? "Media source request failed." : message,
     code: error instanceof ResourceError ? error.code : undefined,

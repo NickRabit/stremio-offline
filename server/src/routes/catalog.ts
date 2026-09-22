@@ -64,7 +64,7 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
     // request that never passes the listing. Answered as a miss, which is what it now is.
     const addon = usable(req).find((a) => a.key === req.query.addon && a.enabled);
     if (!addon) throw new AppError("The addon was not found.", "err.addonNotFound");
-    const items = await catalog(addon, String(req.query.type), String(req.query.id), req.query.search ? String(req.query.search) : undefined, Number(req.query.skip) || 0, req.query.genre ? String(req.query.genre) : undefined);
+    const items = await catalog(addon, String(req.query.type), String(req.query.id), req.query.search ? String(req.query.search) : undefined, Number(req.query.skip) || 0, req.query.genre ? String(req.query.genre) : undefined, true);
     res.json(items.map((item) => images.rewriteMeta(item)));
   }));
   app.get("/api/search", asyncRoute(async (req, res) => {
@@ -77,7 +77,7 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
       catalogType: addonKey && req.query.catalogType ? String(req.query.catalogType) : undefined,
       catalogId: addonKey && req.query.catalogId ? String(req.query.catalogId) : undefined,
       respectGlobalSearch: !addonKey,
-    });
+    }, true);
     res.json({ ...found, items: found.items.map((item) => images.rewriteMeta(item)) });
   }));
   app.get("/api/searchable", (req, res) => res.json(searchableCatalogs(inOrder(req)).map(({ addon, definition }) => ({ addonKey: addon.key, addonName: addon.manifest.name, globalSearch: addon.globalSearch, type: definition.type, id: definition.id, name: definition.name ?? definition.id }))));
@@ -137,7 +137,7 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
   });
   app.get("/api/streams/:type/:id", asyncRoute(async (req, res) => {
     const owner = ownerOf(req);
-    const items = await streams(inOrder(req), String(req.params.type), String(req.params.id), req.query.addon ? String(req.query.addon) : undefined);
+    const items = await streams(inOrder(req), String(req.params.type), String(req.params.id), req.query.addon ? String(req.query.addon) : undefined, true);
     // The listing hands out one resource per source, and the addons that answered took as
     // long as they liked: an addon switched off, or a grant withdrawn, while they were
     // answering must not get one. Nothing is awaited between the check and the listing.
@@ -148,7 +148,7 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
   }));
   app.get("/api/subtitles/:type/:id", asyncRoute(async (req, res) => {
     const owner = ownerOf(req);
-    const items = await subtitles(inOrder(req), String(req.params.type), String(req.params.id));
+    const items = await subtitles(inOrder(req), String(req.params.type), String(req.params.id), true);
     // Per addon, the way the stream listing does it: a bare re-check never reaches the
     // addon, so a grant withdrawn while the addon was answering would still be listed --
     // language, addon name and an issued id for a source the account may no longer use.

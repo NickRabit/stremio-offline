@@ -1007,6 +1007,7 @@ export const cs: Catalog = {
   "err.setupDone": "Účet už existuje.",
   "err.badCredentials": "Nesprávné jméno nebo heslo.",
   "err.tooManyAttempts": "Příliš mnoho neúspěšných pokusů. Zkuste to za {seconds} s.",
+  "err.hostUnavailable": "{host} neodpovídá. Zkuste to za {seconds} s.",
   "err.noAccount": "Účet zatím není založený.",
   "err.wrongCurrentPassword": "Stávající heslo nesouhlasí.",
   "err.usernameTaken": "Toto uživatelské jméno už existuje.",
