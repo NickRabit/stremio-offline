@@ -106,6 +106,17 @@ export class LibraryOps {
     return { jobs: this.jobs.map(publicJob) };
   }
 
+  /** Every item a job that has not finished still covers, in the wire form the request used.
+   *  A running job's whole item list counts, not only the item under way: the ones behind it
+   *  are about to be touched and a second operation on them would race the queue rather than
+   *  wait for it. A `reroot` job names its library instead: those items are relative to the
+   *  folder the library is leaving, which is not a path on the wire. */
+  activeItems(): string[] {
+    return this.jobs
+      .filter((job) => job.status === "running" || job.status === "paused")
+      .flatMap((job) => job.operation.op === "reroot" ? [job.operation.libraryId] : job.operation.items);
+  }
+
   async flush() { await this.saveTail; }
 
   async enqueue(operation: LibraryOp) {

@@ -6,7 +6,7 @@ import { assertStillAdmin } from "../roles.js";
 import { normalizeLanguage } from "../language.js";
 import { libraryFor, parseLibraryPath, posixBase, resolveLibraryPath, type Viewer } from "../libraries.js";
 import type { LibraryAutoScan } from "../library-autoscan.js";
-import { episodeNumberOf, knownTitleOf, lookupSkipped, matchKeyFor, matchStatus, needsBackfill, scanMiss, suggestionFor, type LibraryMetaRecord, type TitleUnit } from "../library-match.js";
+import { episodeNumberOf, knownTitleOf, matchKeyFor, matchStatus, needsBackfill, pendingSuggestionKeys, scanMiss, suggestionFor, type LibraryMetaRecord, type TitleUnit } from "../library-match.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import type { LibraryOp, LibraryOps } from "../library-ops.js";
 import { parseMediaPath } from "../library-parse.js";
@@ -24,6 +24,7 @@ export interface CurateDeps extends RouteContext {
   libraryAutoScan: LibraryAutoScan;
   libraryFiles(): Promise<FoundFile[]>;
   libraryOps: LibraryOps;
+  libraryPathBusy(keys: string[]): Promise<string | undefined>;
   libraryScan: LibraryScan;
   libraryTarget(value: string, viewer: Viewer | undefined): Promise<string>;
   libraryUnits(): Promise<TitleUnit[]>;
@@ -38,7 +39,7 @@ export interface CurateDeps extends RouteContext {
 }
 
 export function registerCurateRoutes(app: express.Application, deps: CurateDeps): void {
-  const { store, currentUser, invalidateLibrary, libraryAutoScan, libraryFiles, libraryOps, libraryScan, libraryTarget, libraryUnits, matchLibraryItem, metaStore, ownRecord, ownerOf, prefsOf, refreshLibraryHealth, requireAccess, scheduleMetaBackfill, wirePath } = deps;
+  const { store, currentUser, invalidateLibrary, libraryAutoScan, libraryFiles, libraryOps, libraryPathBusy, libraryScan, libraryTarget, libraryUnits, matchLibraryItem, metaStore, ownRecord, ownerOf, prefsOf, refreshLibraryHealth, requireAccess, scheduleMetaBackfill, wirePath } = deps;
 
   app.get("/api/library/identity", asyncRoute(async (req, res) => {
     const relative = String(req.query.path ?? "").trim();
@@ -109,7 +110,9 @@ export function registerCurateRoutes(app: express.Application, deps: CurateDeps)
     // own rows, and by the time they run the request is long gone.
     const actor = currentUser(req);
     assertStillAdmin(store.users(), actor);
-    const job = await libraryOps.enqueue({ ...parseLibraryOp(req.body), ownerUserId: actor?.id });
+    const operation = parseLibraryOp(req.body);
+    if (await libraryPathBusy(operation.items)) throw new AppError("The item is busy with another library operation.", "err.pathBusy", 409);
+    const job = await libraryOps.enqueue({ ...operation, ownerUserId: actor?.id });
     res.status(202).json({ id: job.id });
   }));
   app.delete("/api/library/ops/:id", asyncRoute(async (req, res) => {
@@ -121,9 +124,9 @@ export function registerCurateRoutes(app: express.Application, deps: CurateDeps)
   /** What the scan proposed and nobody has confirmed yet. */
   app.get("/api/library/suggestions", asyncRoute(async (_req, res) => {
     const records = metaStore.qualifiedMeta();
-    const items = Object.entries(metaStore.qualifiedSuggestions())
-      .filter(([key, suggestion]) => suggestion.id && !knownTitleOf(key, records)?.id && !lookupSkipped(key, records))
-      .map(([key, suggestion]) => ({ key: wirePath(key), label: posixBase(key), suggestion }))
+    const suggestions = metaStore.qualifiedSuggestions();
+    const items = pendingSuggestionKeys(records, suggestions)
+      .map((key) => ({ key: wirePath(key), label: posixBase(key), suggestion: suggestions[key]! }))
       .sort((a, b) => b.suggestion.score - a.suggestion.score);
     res.json({ items, total: items.length });
   }));

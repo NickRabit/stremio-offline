@@ -211,14 +211,24 @@ test("a file crosses into another library, and a typed library refuses the wrong
 
   // The type gate is the backstop behind the dialog: a series library takes no film.
   await dialog.getByRole("button", { name: "Přesunout sem" }).click();
-  await expect(dialog).toContainText("Tato knihovna nebere tento druh titulku.");
-  await expect(dialog).toBeVisible();
+  // One item and many take the same road now, so the refusal comes back from the queue as a
+  // failed job rather than from the request that used to wait for the copy.
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByText("Operace knihovny dokončena: 1 z 1 položek selhalo.")).toBeVisible();
+  expect(await stat(path.join(otherRoot, crossClip)).catch(() => undefined), "nothing crossed").toBeUndefined();
+  expect((await stat(path.join(downloads, crossName, crossClip))).isFile(), "and nothing left").toBe(true);
 
   const retyped = await request.patch(`/api/libraries/${library.id}`, { data: { type: "mixed" } });
   expect(retyped.status()).toBe(200);
 
-  await dialog.getByRole("button", { name: "Přesunout sem" }).click();
-  await expect(dialog).toHaveCount(0);
+  // Retyped, the same move is offered again, and this time it goes through.
+  await page.getByRole("button", { name: `Možnosti: ${crossLabel}` }).click();
+  await page.getByRole("button", { name: "Přesunout", exact: true }).click();
+  const again = page.getByRole("dialog");
+  await expect(again).toBeVisible();
+  await again.locator(".move-libraries button", { hasText: "Druhá" }).click();
+  await again.getByRole("button", { name: "Přesunout sem" }).click();
+  await expect(again).toHaveCount(0);
   // The listing follows the item across: the destination library is open and the file is in it.
   await expect(page.locator(".crumbs button", { hasText: "Druhá" })).toBeVisible();
   await expect(page.locator(".browse-item", { hasText: crossLabel })).toBeVisible();

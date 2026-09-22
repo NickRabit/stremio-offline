@@ -354,3 +354,59 @@ test("a reroot item pauses for playback although it is only a bare name", async 
     assert.deepEqual(seen, ["Show"]);
   } finally { await cleanup(dataDir, queues); }
 });
+
+test("activeItems covers every item of a running job, not only the one under way", async () => {
+  let release: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const h = await harness(async (_operation, item) => { if (item === "one") await gate; return {}; });
+  try {
+    const job = await h.queue.enqueue({ op: "copy", items: ["one", "two"], target: "Archive" });
+    await waitFor(() => h.queue.snapshot().jobs.find((candidate) => candidate.id === job.id)?.status === "running");
+    assert.deepEqual(h.queue.activeItems(), ["one", "two"], "the item behind the one under way is about to be touched");
+
+    release!();
+    await waitFor(() => h.queue.snapshot().jobs.find((candidate) => candidate.id === job.id)?.status === "completed");
+    assert.deepEqual(h.queue.activeItems(), [], "a completed job covers nothing");
+  } finally { await h.close(); }
+});
+
+test("activeItems holds a paused job, drops what ended, and names a reroot's library", async () => {
+  const dataDir = await mkdtemp(path.join(tmpdir(), "stremio-ops-"));
+  const queues: LibraryOps[] = [];
+  let blocked = true;
+  try {
+    const queue = new LibraryOps({
+      file: path.join(dataDir, "active.json"), retryMs: 10,
+      pause: () => blocked ? "playback" : undefined,
+      execute: async (_operation, item) => { if (item === "bad") throw new AppError("Missing", "err.pathMissing"); return {}; },
+    });
+    queues.push(queue);
+    await queue.load();
+
+    const paused = await queue.enqueue({ op: "delete", items: ["one", "two"] });
+    await waitFor(() => queue.snapshot().jobs.find((job) => job.id === paused.id)?.pauseReason === "playback");
+    assert.deepEqual(queue.activeItems(), ["one", "two"], "a paused job still covers what it was given");
+
+    blocked = false;
+    await waitFor(() => queue.snapshot().jobs.find((job) => job.id === paused.id)?.status === "completed");
+
+    const failed = await queue.enqueue({ op: "delete", items: ["bad"] });
+    await waitFor(() => queue.snapshot().jobs.find((job) => job.id === failed.id)?.status === "failed");
+    assert.deepEqual(queue.activeItems(), [], "a job that ran out of items covers nothing");
+
+    blocked = true;
+    const cancelled = await queue.enqueue({ op: "delete", items: ["three"] });
+    await waitFor(() => queue.snapshot().jobs.find((job) => job.id === cancelled.id)?.pauseReason === "playback");
+    await queue.cancel(cancelled.id);
+    await waitFor(() => queue.snapshot().jobs.find((job) => job.id === cancelled.id)?.status === "cancelled");
+    assert.deepEqual(queue.activeItems(), [], "a cancelled job covers nothing");
+
+    const reroot = await queue.enqueue({ op: "reroot", items: ["Show"], libraryId: "lib_00000001", from: "/old", to: "/new" });
+    await waitFor(() => queue.snapshot().jobs.find((job) => job.id === reroot.id)?.pauseReason === "playback");
+    assert.deepEqual(queue.activeItems(), ["lib_00000001"], "the names of a reroot are relative to the old root, so the library stands for them");
+
+    blocked = false;
+    await waitFor(() => queue.snapshot().jobs.find((job) => job.id === reroot.id)?.status === "completed");
+    assert.deepEqual(queue.activeItems(), [], "nothing stands once every job has ended");
+  } finally { await cleanup(dataDir, queues); }
+});

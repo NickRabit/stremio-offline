@@ -3,7 +3,7 @@ import path from "node:path";
 import { test } from "node:test";
 import {
   autoAccept, browseMeta, cacheFieldsFromMeta, clipText, dropKeyed, episodeKey, episodeNumberOf, episodesFromMeta, isExtraName,
-  knownTitleOf, lookupSkipped, mosaicSkipped, matchKeyFor, pinInherited, matchStatus, needsBackfill, needsEpisodes, needsRefresh, pickSuggestion, remapKeyed, scanMiss,
+  knownTitleOf, lookupSkipped, mosaicSkipped, matchKeyFor, pendingSuggestionKeys, pinInherited, matchStatus, needsBackfill, needsEpisodes, needsRefresh, pickSuggestion, remapKeyed, scanMiss,
   scannedRecently, scanSkipReason, scoreHit, suggestionFor, titleUnits, unmatchAt, viewMeta,
 } from "./library-match.js";
 import { parseMediaPath } from "./library-parse.js";
@@ -297,6 +297,21 @@ test("suggestions remap and drop like libraryMeta", () => {
   const suggestions = { "Foo/Bar": { type: "movie", id: "tt1", name: "Foo", score: 90 } };
   assert.deepEqual(remapKeyed(suggestions, "Foo", "Baz")["Baz/Bar"]?.id, "tt1");
   assert.deepEqual(dropKeyed(suggestions, "Foo"), {});
+});
+
+test("pendingSuggestionKeys keeps what the scan proposed and nobody confirmed", () => {
+  const records = {
+    "Films/Heat": { type: "movie", id: "tt0113277" },
+    "Films/Ignored": { type: "movie", id: "", source: "user" as const, skipLookup: true },
+  };
+  const suggestions = {
+    "Films/Heat": { type: "movie", id: "tt0113277", name: "Heat", score: 92 },
+    "Films/Ignored": { type: "movie", id: "tt0118688", name: "Batman & Robin", score: 80 },
+    "Films/Ronin": { type: "movie", id: "tt0122690", name: "Ronin", score: 88 },
+    "Films/Nothing": { type: "movie", id: "", name: "", score: 0 },
+  };
+
+  assert.deepEqual(pendingSuggestionKeys(records, suggestions), ["Films/Ronin"]);
 });
 
 const seriesMeta = (): MetaItem => ({

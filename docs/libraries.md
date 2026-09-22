@@ -78,6 +78,16 @@ match, its episode rows and its thumbnails across, so nothing is identified
 twice, and on one volume a move is an ordinary `rename` — instant, no matter how
 large the file.
 
+One item and a selection of five hundred take the same road: move, copy and
+delete all run in the queue. The dialog is out of the way as soon as the job is
+accepted, the strip under the toolbar shows its progress and its **Cancel**
+stops it, and the guards that apply to a bulk operation apply to a single file
+too — it waits for playback, for a download writing into the destination, and
+for a disk that is away. Two operations cannot work on one path at the same
+time: a job that is still running covers every item it was given, and the file
+inside a folder it holds, so a second move, rename or delete of any of them is
+refused rather than racing it.
+
 ## When a root is away or read-only
 
 A pulled disk, an unmounted share and a revoked grant are ordinary states, not

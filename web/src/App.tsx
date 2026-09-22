@@ -240,11 +240,14 @@ export function App() {
   const browseSeed = useRef(String(Date.now()));
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const [onlyFavorites, setOnlyFavorites] = useState(false);
+  // Not remembered between visits, unlike the favourites filter: this one is for working
+  // through what the scan proposed, and once that queue is empty it has nothing to show.
+  const [onlyUnconfirmed, setOnlyUnconfirmed] = useState(false);
   /** "Show in library" must find the file: turn favorites-only off for this visit without
    *  writing that to the account. The next scope apply would otherwise put the stored
    *  filter back on before the listing runs. */
   const suppressFavoritesApply = useRef(false);
-  browseLocation.current = JSON.stringify([browsePath, browseQuery, browseSort, browseDesc, onlyFavorites]);
+  browseLocation.current = JSON.stringify([browsePath, browseQuery, browseSort, browseDesc, onlyFavorites, onlyUnconfirmed]);
   // Preserve the favorites breadcrumb when entering a folder from favorites.
   const [fromFavorites, setFromFavorites] = useState(false);
   const [resume, setResume] = useState<ProgressEntry[]>([]);
@@ -272,10 +275,20 @@ export function App() {
     finishingOps.current.add(job.id);
     opsStatus.current.set(job.id, job.status);
     try {
-      await Promise.all([loadBrowse(browsePath), api.progressList().then(setResume), api.watchlist().then(setWatchlist)]);
+      // A move the user asked for by hand lands somewhere they did not see before, so the
+      // listing follows it there. Any other job only leaves a gap behind.
+      const target = job.op === "move" && job.total === 1 && job.failed === 0 ? job.results[0]?.to : undefined;
+      if (target) revealInLibrary(target);
+      else await loadBrowse(browsePath);
+      await Promise.all([api.progressList().then(setResume), api.watchlist().then(setWatchlist)]);
+      // A job the user stopped did not finish the item, so it keeps the plain wording even
+      // when it was the only one.
+      const single = job.status === "completed" && job.total === 1
+        ? job.op === "move" ? "library.moved" : job.op === "copy" ? "library.copied" : job.op === "delete" ? "library.deleted" : undefined
+        : undefined;
       notify(job.failed
         ? t("library.bulkFinishedFailed", { failed: job.failed, total: job.total })
-        : t("library.bulkFinished"));
+        : single ? t(single) : t("library.bulkFinished"));
     } finally { finishingOps.current.delete(job.id); }
   };
   const trackQueuedOp = async (id: string) => {
@@ -314,15 +327,7 @@ export function App() {
   const removeItem = async (itemPath: string, label: string, folder: boolean) => {
     setMenuFor(null);
     if (!confirm(t(folder ? "library.deleteFolderConfirm" : "library.deleteFileConfirm", { name: label }))) return;
-    // Deleting a file also drops its resume position and its catalogue star, so both
-    // lists are reloaded -- otherwise the deleted title would hang around in the rows.
-    try {
-      await api.deleteLibraryItem(itemPath);
-      notify(t("library.deleted"));
-      await loadBrowse(browsePath);
-      const [nextResume, nextWatchlist] = await Promise.all([api.progressList(), api.watchlist()]);
-      setResume(nextResume); setWatchlist(nextWatchlist);
-    } catch (error) { fail(error); }
+    void startBulk({ op: "delete", items: [itemPath] });
   };
   const toggleFavorite = async (itemPath: string, favorite: boolean) => {
     setMenuFor(null);
@@ -370,17 +375,6 @@ export function App() {
     try { await api.renameLibraryItem(itemPath, wanted); notify(t("library.renamed")); await loadBrowse(browsePath); } catch (error) { fail(error); }
   };
   const openMove = (itemPath: string, label: string, type?: "movie" | "series") => { setMenuFor(null); setMovePath({ path: itemPath, label, type }); };
-  /** Follows the item into its new folder: seeing where it landed beats staring at the
-   *  gap it left behind. The resume row and the star carry the old path, so both reload. */
-  const finishMove = async (target: string) => {
-    setMovePath(null);
-    notify(t("library.moved"));
-    revealInLibrary(target);
-    try {
-      const [nextResume, nextWatchlist] = await Promise.all([api.progressList(), api.watchlist()]);
-      setResume(nextResume); setWatchlist(nextWatchlist);
-    } catch (error) { fail(error); }
-  };
   const openIdentify = (itemPath: string) => { setMenuFor(null); setIdentifyPath(itemPath); };
   const unmatchItem = async (itemPath: string) => {
     setMenuFor(null);
@@ -1040,7 +1034,7 @@ export function App() {
   const libraryList = browsePath === "" && libraries.length > 1;
   const loadBrowse = async (target = browsePath, skip = 0) => {
     const request = ++browseRequest.current;
-    const wanted = JSON.stringify([target, browseQuery, browseSort, browseDesc, onlyFavorites]);
+    const wanted = JSON.stringify([target, browseQuery, browseSort, browseDesc, onlyFavorites, onlyUnconfirmed]);
     setBrowseBusy(true);
     try {
       const options = { skip, limit: 60, sort: browseSort, order: browseDesc ? "desc" : "asc", seed: browseSeed.current };
@@ -1049,14 +1043,14 @@ export function App() {
         ? await api.resumeLibrary({ ...options, query: browseQuery, favorites: onlyFavorites })
         : target === ":favorites"
         ? await api.favorites(options)
-        : await api.browse({ ...options, path: target, query: browseQuery, favorites: onlyFavorites });
+        : await api.browse({ ...options, path: target, query: browseQuery, favorites: onlyFavorites, unconfirmed: onlyUnconfirmed });
       if (request !== browseRequest.current || wanted !== browseLocation.current) return;
       setBrowse((previous) => skip && previous ? { ...page, items: [...previous.items, ...page.items] } : page);
     } catch (error) { if (request === browseRequest.current && wanted === browseLocation.current) fail(error); }
     finally { if (request === browseRequest.current) setBrowseBusy(false); }
   };
   const refreshBrowse = async (limit: number) => {
-    const location = JSON.stringify([browsePath, browseQuery, browseSort, browseDesc, onlyFavorites]);
+    const location = JSON.stringify([browsePath, browseQuery, browseSort, browseDesc, onlyFavorites, onlyUnconfirmed]);
     if (location !== browseLocation.current) return;
     const request = browseRequest.current;
     try {
@@ -1065,7 +1059,7 @@ export function App() {
         ? await api.resumeLibrary({ ...options, query: browseQuery, favorites: onlyFavorites })
         : browsePath === ":favorites"
         ? await api.favorites(options)
-        : await api.browse({ ...options, path: browsePath, query: browseQuery, favorites: onlyFavorites });
+        : await api.browse({ ...options, path: browsePath, query: browseQuery, favorites: onlyFavorites, unconfirmed: onlyUnconfirmed });
       if (location === browseLocation.current && request === browseRequest.current) setBrowse(page);
     } catch { /* Artwork refresh is optional. */ }
   };
@@ -1115,7 +1109,7 @@ export function App() {
   // The first listing waits for that apply: an account that sorts by size must not see the
   // name order first and then watch it jump.
   useEffect(() => { if (!ready || view !== "library" || !browseApplied) return; void loadBrowse(browsePath); },
-    [ready, view, browseApplied, browsePath, browseQuery, browseSort, browseDesc, onlyFavorites, scanEpoch]);
+    [ready, view, browseApplied, browsePath, browseQuery, browseSort, browseDesc, onlyFavorites, onlyUnconfirmed, scanEpoch]);
   useEffect(() => { setSelectionMode(false); setSelectedPaths(new Set()); }, [browsePath]);
   // Polling only means something while a scan is on; otherwise one look on entry is enough.
   const scanning = libraryScan?.status === "running" || libraryScan?.status === "paused";
@@ -1159,11 +1153,15 @@ export function App() {
       } catch { /* operation status is optional chrome */ }
     };
     void tick();
-    if (!operationsActive) return () => { cancelled = true; };
-    const timer = window.setInterval(() => void tick(), 1000);
+    // A job this tab did not queue still has to appear, so the idle wait is short enough to
+    // notice one -- and slow enough not to ask the server every second for nothing.
+    const timer = window.setInterval(() => void tick(), operationsActive ? 1000 : 5000);
     return () => { cancelled = true; window.clearInterval(timer); };
   }, [ready, view, session?.role, operationsActive, browsePath]);
   useEffect(() => { if (ready && view === "library") void loadSuggestionCount(); }, [ready, view, session?.role, scanEpoch]);
+  // Confirming the last title takes the button away with it, and a filter nobody can switch
+  // off would leave the listing empty for good.
+  useEffect(() => { if (!suggestionCount) setOnlyUnconfirmed(false); }, [suggestionCount]);
   // Page-scroll paging, the same as in the catalogue. The button stays as a fallback.
   useEffect(() => {
     if (view !== "library" || !browse) return;
@@ -1208,7 +1206,7 @@ export function App() {
   // reloaded the page. The wait doubles instead, and gives up rather than polling forever
   // over a file that will never produce a thumbnail.
   const artworkPolls = useRef(0);
-  useEffect(() => { artworkPolls.current = 0; }, [browsePath, browseQuery, browseSort, browseDesc, onlyFavorites, scanEpoch]);
+  useEffect(() => { artworkPolls.current = 0; }, [browsePath, browseQuery, browseSort, browseDesc, onlyFavorites, onlyUnconfirmed, scanEpoch]);
   useEffect(() => {
     if (view !== "library" || !browse?.pending) return;
     const attempt = artworkPolls.current;
@@ -1217,7 +1215,7 @@ export function App() {
     const nactenych = browse.items.length;
     const timer = setTimeout(() => { artworkPolls.current = attempt + 1; void refreshBrowse(nactenych); }, Math.min(8000, 1000 * 2 ** attempt));
     return () => clearTimeout(timer);
-  }, [view, browse, browsePath, browseQuery, browseSort, browseDesc, onlyFavorites]);
+  }, [view, browse, browsePath, browseQuery, browseSort, browseDesc, onlyFavorites, onlyUnconfirmed]);
 
   /** Jumping from the download queue: opens the folder the file sits in and finds it there.
    * The filters have to be cleared, or the wanted file would stay filtered out of the listing. */
@@ -1869,6 +1867,11 @@ export function App() {
             </button>}
             {!libraryList && <button className={onlyFavorites ? "active-filter" : ""} title={t("library.onlyFavorites")} disabled={browsePath === ":favorites"}
               onClick={() => { setOnlyFavorites((value) => !value); persistLibraryPrefs({ favoritesOnly: !onlyFavorites }); }}><Star/></button>}
+            {/* Only while the scan has something waiting: with nothing to confirm the filter
+                would list an empty folder and say nothing about why. */}
+            {!libraryList && suggestionCount > 0 && <button className={onlyUnconfirmed ? "active-filter" : ""} title={t("library.onlyUnconfirmed")}
+              aria-pressed={onlyUnconfirmed} disabled={browsePath === ":favorites" || browsePath === ":resume"}
+              onClick={() => setOnlyUnconfirmed((value) => !value)}><Sparkles/></button>}
             {!libraryList && <button title={t(browseView === "grid" ? "library.viewRows" : "library.viewTiles")} onClick={() => { setBrowseView((value) => value === "grid" ? "list" : "grid"); persistLibraryPrefs({ view: browseView === "grid" ? "list" : "grid" }); }}>
               {browseView === "grid" ? <List/> : <LayoutGrid/>}
             </button>}
@@ -1980,7 +1983,7 @@ export function App() {
         </button>}
         {!browse || !browse.items.length
           ? (browseBusy ? <div className="loading">{t("common.loading")}</div>
-            : <Empty icon={<HardDrive/>} title={t(browseQuery ? "library.emptyFilterTitle" : browsePath === ":resume" ? "library.emptyResumeTitle" : browsePath === ":favorites" || onlyFavorites ? "library.emptyFavoritesTitle" : "library.emptyTitle")} text={t(browseQuery ? "library.emptyFilterText" : browsePath === ":resume" ? "library.emptyResumeText" : browsePath === ":favorites" || onlyFavorites ? "library.emptyFavoritesText" : "library.emptyText")}/>)
+            : <Empty icon={<HardDrive/>} title={t(browseQuery ? "library.emptyFilterTitle" : onlyUnconfirmed ? "library.emptyUnconfirmedTitle" : browsePath === ":resume" ? "library.emptyResumeTitle" : browsePath === ":favorites" || onlyFavorites ? "library.emptyFavoritesTitle" : "library.emptyTitle")} text={t(browseQuery ? "library.emptyFilterText" : onlyUnconfirmed ? "library.emptyUnconfirmedText" : browsePath === ":resume" ? "library.emptyResumeText" : browsePath === ":favorites" || onlyFavorites ? "library.emptyFavoritesText" : "library.emptyText")}/>)
           : <>
             <div className={browseView === "grid" ? "browse-grid" : "browse-rows"}>
               {browse.items.map((item) => item.kind === "library"
@@ -2071,7 +2074,7 @@ export function App() {
       onClose={() => { setPlayerOpen(false); setLocalStream(null); setLocalEpisode(false); setPlaybackPreferences({}); }}/>
     {libraryManagerOpen && <LibraryManagerDialog restricted={restricted || !admin} onClose={() => setLibraryManagerOpen(false)} onChanged={refreshLibraries} onError={fail} onNotify={notify}/>}
     {movePath && <MoveDialog path={movePath.path} paths={movePath.paths} copy={movePath.copy} label={movePath.label}
-      itemType={movePath.type} libraries={libraries} onClose={() => setMovePath(null)} onMoved={(target) => void finishMove(target)}
+      itemType={movePath.type} libraries={libraries} onClose={() => setMovePath(null)}
       onQueued={(id) => { leaveSelection(); void trackQueuedOp(id); }}/>}
     {identifyPath && <IdentifyDialog path={identifyPath} onClose={() => setIdentifyPath(null)}
       onApplied={() => { setIdentifyPath(null); void loadSuggestionCount(); void loadBrowse(browsePath); }}/>}

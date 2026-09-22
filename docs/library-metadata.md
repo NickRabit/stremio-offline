@@ -70,7 +70,12 @@ item ignores that memory; a full rescan can be forced.
 The scan binds only at high confidence. A plausible but uncertain hit is offered
 instead: a banner above the grid counts the waiting titles, and **Review** opens
 the list with **Confirm**, **Identify** and **Dismiss** on each row. The same
-suggestion appears on the tile's own menu.
+suggestion appears on the tile's own menu, and the toolbar carries an
+**Awaiting confirmation only** filter beside the favourites one while the banner
+has something to count. It narrows the listing to the titles the scan is still
+asking about, at any depth below the folder you are in. The filter is not
+remembered between visits, unlike the favourites one: an empty library left
+filtered would look broken rather than finished.
 
 A match the scan made is never final. From the three-dot menu on a folder or a
 file:

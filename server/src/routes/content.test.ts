@@ -7,8 +7,10 @@ import path from "node:path";
 import { test } from "node:test";
 import express from "express";
 import { messageKeyOf } from "../errors.js";
-import { libraryPath, parseLibraryPath, relativeWithin, visibleLibraries, type LibraryRecord } from "../libraries.js";
-import type { LibraryEntry } from "../library.js";
+import { libraryPath, parseLibraryPath, relativeWithin, resolveLibraryPath, visibleLibraries, type LibraryRecord } from "../libraries.js";
+import type { LibraryMetaRecord, LibrarySuggestion } from "../library-match.js";
+import type { LibraryMetaStore } from "../library-meta-store.js";
+import { isPathWithin, type LibraryEntry } from "../library.js";
 import type { Store, UserPrefs } from "../store.js";
 import { emptyUserData, type UserRecord } from "../users.js";
 import { registerContentRoutes, type ContentDeps } from "./content.js";
@@ -36,6 +38,13 @@ interface Harness {
   close(): Promise<void>;
 }
 
+/** What the meta store and the account's own rows say, per test. */
+interface LibraryState {
+  records?: Record<string, LibraryMetaRecord>;
+  suggestions?: Record<string, LibrarySuggestion>;
+  favorites?: string[];
+}
+
 const library = (id: string, root: string, order = 0, visibleTo?: string[]): LibraryRecord => ({
   id, name: `Library ${id}`, type: "mixed", root, enabled: true, order,
   addedAt: "2024-01-01T00:00:00.000Z", writeArtwork: false, ...(visibleTo ? { visibleTo } : {}),
@@ -58,7 +67,7 @@ const makeRoot = () => mkdtemp(path.join(tmpdir(), "stremio-content-"));
 /** The routes take everything they need from the context, so the app here is a real express
  *  instance over fake collaborators that record what they were asked to do. The filesystem
  *  is real: the resolver, the browse walk and the name checks are module singletons. */
-const mount = async (libraries: LibraryRecord[], entries: LibraryEntry[] = []): Promise<Harness> => {
+const mount = async (libraries: LibraryRecord[], entries: LibraryEntry[] = [], activeItems: () => string[] = () => [], state: LibraryState = {}): Promise<Harness> => {
   const calls: Calls = { browsed: [], rootBrowses: 0, deleted: [], transfers: [], relocated: [], thumbAsked: [], entriesAsked: 0, artworkAsked: [] };
   const deps: ContentDeps = {
     store: { libraries: () => libraries, users: () => [admin, ordinary] } as unknown as Store,
@@ -72,7 +81,7 @@ const mount = async (libraries: LibraryRecord[], entries: LibraryEntry[] = []): 
     stopContentAccess: async () => undefined,
     attachBrowseMeta: (item) => ({ item, backfill: false }),
     carveOutsOf: () => new Set(),
-    dataOf: () => emptyUserData(),
+    dataOf: () => ({ ...emptyUserData(), favorites: state.favorites ?? [] }),
     deleteLibraryItem: async (relative) => { calls.deleted.push(relative); },
     fileExists: async (file) => exists(file),
     galleryOf: () => [],
@@ -85,6 +94,18 @@ const mount = async (libraries: LibraryRecord[], entries: LibraryEntry[] = []): 
       if (parsed) return libraryPath(parsed.libraryId, parsed.relative);
       return libraries.length === 1 ? libraryPath(libraries[0]!.id, value) : value;
     },
+    // The same question the server asks: is the key an active job's business, either way round.
+    libraryPathBusy: async (keys) => {
+      for (const key of keys) {
+        const wanted = await resolveLibraryPath(libraries, key);
+        if (!wanted) continue;
+        for (const item of activeItems()) {
+          const active = await resolveLibraryPath(libraries, item);
+          if (active && (isPathWithin(active.absolute, wanted.absolute) || isPathWithin(wanted.absolute, active.absolute))) return item;
+        }
+      }
+      return undefined;
+    },
     libraryRootBrowse: async (viewer) => {
       calls.rootBrowses += 1;
       const visible = visibleLibraries(libraries, viewer);
@@ -95,6 +116,10 @@ const mount = async (libraries: LibraryRecord[], entries: LibraryEntry[] = []): 
     locateFolderArtwork: async (key) => { calls.thumbAsked.push(key); return undefined; },
     locateFolderArtworkPair: async () => ({ poster: undefined, wide: undefined }),
     markBrowsed: (record) => { calls.browsed.push(record.id); },
+    metaStore: {
+      qualifiedMeta: () => state.records ?? {},
+      qualifiedSuggestions: () => state.suggestions ?? {},
+    } as unknown as LibraryMetaStore,
     prefsOf: () => instancePrefs,
     progressOf: () => ({}),
     relativeKeyIn: (libraryId, key) => (key.startsWith(`${libraryId}/`) ? key.slice(libraryId.length + 1) : undefined),
@@ -244,6 +269,73 @@ test("GET /api/library/browse marks the library it read as browsed", async (t) =
   assert.deepEqual(harness.calls.browsed, ["lib_00000001"]);
 });
 
+test("GET /api/library/browse lists only the unconfirmed rows when asked to", async (t) => {
+  const root = await makeRoot();
+  await put(root, "Heat/Heat.mkv");
+  await put(root, "Ronin.mkv");
+  await put(root, "Sisters/Sisters.mkv");
+  const harness = await mount([library("lib_00000001", root)], [], () => [], {
+    suggestions: {
+      "lib_00000001/Ronin.mkv": { type: "movie", id: "tt0122690", name: "Ronin", score: 88 },
+      "lib_00000001/Heat/Heat.mkv": { type: "movie", id: "tt0113277", name: "Heat", score: 92 },
+    },
+  });
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const everything = await (await api(harness.base, "/api/library/browse")).json() as { total: number };
+  assert.equal(everything.total, 3, "without the parameter nothing about the listing changes");
+
+  const body = await (await api(harness.base, "/api/library/browse?unconfirmed=1")).json() as { items: Array<{ path: string }>; total: number };
+
+  assert.deepEqual(body.items.map((item) => item.path), ["Heat", "Ronin.mkv"], "a row with no pending suggestion is left out");
+  assert.equal(body.total, 2, "the total counts the rows that are listed, not the ones the folder holds");
+
+  const page = await (await api(harness.base, "/api/library/browse?unconfirmed=1&limit=1")).json() as { items: Array<{ path: string }>; total: number };
+  assert.deepEqual(page.items.map((item) => item.path), ["Heat"]);
+  assert.equal(page.total, 2, "the filter runs before the page is cut, so the total holds for every page");
+});
+
+test("GET /api/library/browse keeps a folder whose child carries the suggestion", async (t) => {
+  const root = await makeRoot();
+  await put(root, "Films/Heat/Heat.mkv");
+  await put(root, "Films/Ronin.mkv");
+  const harness = await mount([library("lib_00000001", root)], [], () => [], {
+    suggestions: { "lib_00000001/Films/Heat/Heat.mkv": { type: "movie", id: "tt0113277", name: "Heat", score: 92 } },
+  });
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const body = await (await api(harness.base, "/api/library/browse?path=Films&unconfirmed=1")).json() as { items: Array<{ path: string; kind: string }>; total: number };
+
+  assert.deepEqual(body.items.map((item) => [item.kind, item.path]), [["folder", "Films/Heat"]]);
+  assert.equal(body.total, 1);
+});
+
+test("GET /api/library/browse narrows unconfirmed to the favourites when both are asked for", async (t) => {
+  const root = await makeRoot();
+  await put(root, "Films/Heat.mkv");
+  await put(root, "Films/Ronin.mkv");
+  await put(root, "Films/Thief.mkv");
+  const harness = await mount([library("lib_00000001", root)], [], () => [], {
+    suggestions: {
+      "lib_00000001/Films/Heat.mkv": { type: "movie", id: "tt0113277", name: "Heat", score: 92 },
+      "lib_00000001/Films/Ronin.mkv": { type: "movie", id: "tt0122690", name: "Ronin", score: 88 },
+    },
+    favorites: [
+      libraryPath("lib_00000001", "Films/Heat.mkv"),
+      libraryPath("lib_00000001", "Films/Thief.mkv"),
+    ],
+  });
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const pending = await (await api(harness.base, "/api/library/browse?path=Films&unconfirmed=1")).json() as { items: Array<{ path: string }>; total: number };
+  assert.deepEqual(pending.items.map((item) => item.path), ["Films/Heat.mkv", "Films/Ronin.mkv"]);
+
+  const both = await (await api(harness.base, "/api/library/browse?path=Films&unconfirmed=1&favorites=1")).json() as { items: Array<{ path: string }>; total: number };
+
+  assert.deepEqual(both.items.map((item) => item.path), ["Films/Heat.mkv"], "a row has to be a favourite and pending at once");
+  assert.equal(both.total, 1);
+});
+
 test("DELETE /api/library/item goes through deleteLibraryItem and touches no file itself", async (t) => {
   const root = await makeRoot();
   await put(root, "Films/Heat.mkv");
@@ -255,6 +347,38 @@ test("DELETE /api/library/item goes through deleteLibraryItem and touches no fil
   assert.equal(response.status, 204);
   assert.deepEqual(harness.calls.deleted, ["Films/Heat.mkv"], "the relative path travels trimmed");
   assert.equal(await exists(path.join(root, "Films/Heat.mkv")), true, "the route deletes nothing of its own");
+});
+
+test("move, rename and delete refuse a path a library job is working on, and work once it ends", async (t) => {
+  const root = await makeRoot();
+  await put(root, "Films/Heat.mkv");
+  await put(root, "Films/Ronin.mkv");
+  let active: string[] = ["Films"];
+  const harness = await mount([library("lib_00000001", root)], [], () => active);
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const move = () => api(harness.base, "/api/library/move", { method: "POST", body: { path: "Films/Heat.mkv", folder: "Archive" } });
+  const rename = () => api(harness.base, "/api/library/rename", { method: "POST", body: { path: "Films/Ronin.mkv", name: "Thief.mkv" } });
+  const remove = (pathname: string) => api(harness.base, `/api/library/item?path=${encodeURIComponent(pathname)}`, { method: "DELETE" });
+
+  for (const [name, response] of [["move", await move()], ["rename", await rename()], ["delete", await remove("Films/Heat.mkv")]] as const) {
+    assert.equal(response.status, 409, `${name} waits for the job under way`);
+    assert.equal((await response.json() as { messageKey?: string }).messageKey, "err.pathBusy");
+  }
+  assert.deepEqual(harness.calls.transfers.map((call) => call.relative), [], "nothing moved");
+  assert.equal(harness.calls.relocated.length, 0, "nothing was renamed");
+  assert.deepEqual(harness.calls.deleted.slice(), [], "nothing was deleted");
+  assert.equal(await exists(path.join(root, "Films/Heat.mkv")), true);
+
+  active = ["Films/Heat.mkv"];
+  assert.equal((await remove("Films")).status, 409, "the folder holding a busy file waits for the same job");
+
+  active = [];
+  assert.equal((await move()).status, 200);
+  assert.equal((await rename()).status, 200);
+  assert.equal((await remove("Films/Ronin.mkv")).status, 204);
+  assert.deepEqual(harness.calls.transfers.map((call) => call.relative), ["Films/Heat.mkv"]);
+  assert.deepEqual(harness.calls.deleted, ["Films/Ronin.mkv"]);
 });
 
 test("POST /api/library/rename refuses a target that already exists", async (t) => {
