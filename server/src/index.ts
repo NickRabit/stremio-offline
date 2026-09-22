@@ -696,11 +696,14 @@ const mediaPath = (key: string, ...rest: string[]) => {
   const { library, relative } = libraryOfKey(key);
   return path.join(library.root, toFs(posixJoin(relative, ...rest)));
 };
-/** Inspecting a library file reads it back over the loopback, so the url carries a wire
- *  path -- the form `libraryTarget` resolves -- and never the filesystem path `mediaPath`
- *  returns. An absolute path names no library, and once a second library is configured it
- *  resolves to nothing at all: the probe 404s and the duration is silently lost. */
-const inspectLibraryFile = (key: string) => playback.inspect({ url: `file://${wirePath(key)}` }).catch(() => undefined);
+/** Inspecting a library file reads it back over the loopback, so the url carries the
+ *  qualified key -- the form `libraryTarget` resolves -- and never the filesystem path
+ *  `mediaPath` returns. An absolute path names no library, and once a second library is
+ *  configured it resolves to nothing at all: the probe 404s and the duration is silently
+ *  lost. The key rather than `wirePath` deliberately: it resolves whichever wire format
+ *  the client speaks, so the server's own probe does not depend on how many libraries
+ *  happen to be configured. */
+const inspectLibraryFile = (key: string) => playback.inspect({ url: `file://${key}` }).catch(() => undefined);
 
 const libraryProbe = createLibraryProbe();
 const libraryHealth = new Map<string, LibraryHealth>();
