@@ -119,18 +119,27 @@ test("video clicks dismiss controls and settings; double-click toggles fullscree
   await expect.poll(() => page.evaluate(() => document.fullscreenElement === null)).toBe(true);
   await overlay.locator(".fullscreen-action").click();
   await expect.poll(() => page.evaluate(() => document.fullscreenElement?.classList.contains("player-overlay"))).toBe(true);
+  // Entering fullscreen reaches the player through a listener of its own, and the cursor
+  // countdown is armed by an effect of that state rather than by the click. Waiting for the
+  // button to say the player knows is what keeps the jumps below from being measured from
+  // before the countdown existed.
+  await expect(overlay.locator(".fullscreen-action")).toHaveAttribute("aria-label", "Ukončit celou obrazovku");
   await page.clock.install();
   // Pause a second *ahead* of the browser's clock rather than "now": the timestamp is read in
   // Node and reaches the browser after a round trip, and on a busy runner that instant is
-  // already in the past -- which the clock refuses ("Cannot fast-forward to the past"). The
-  // jump lands before the pointermove below starts the countdown, so the 9999/1 pair still
-  // measures exactly the idle timeout.
+  // already in the past -- which the clock refuses ("Cannot fast-forward to the past").
   await page.clock.pauseAt(new Date(Date.now() + 1_000));
-  await overlay.dispatchEvent("pointermove", { pointerType: "mouse" });
-  await page.clock.fastForward(9999);
-  await expect(overlay).not.toHaveClass(/cursor-hidden/);
-  await page.clock.fastForward(1);
-  await expect(overlay).toHaveClass(/cursor-hidden/);
+  // That effect is a task of React's, not of the clock's, and it can land between the two jumps
+  // below: a countdown armed after the first one is due a whole idle timeout later, which reads
+  // as "the cursor never hides". Every round therefore starts with a pointer move, so the
+  // 9999/1 pair measures the countdown that move armed, wherever the effect happened to land.
+  await expect(async () => {
+    await overlay.dispatchEvent("pointermove", { pointerType: "mouse" });
+    await page.clock.fastForward(9_999);
+    await expect(overlay).not.toHaveClass(/cursor-hidden/);
+    await page.clock.fastForward(1);
+    await expect(overlay).toHaveClass(/cursor-hidden/, { timeout: 1_000 });
+  }).toPass({ timeout: 15_000 });
   await expect(video).toHaveCSS("cursor", "none");
   await overlay.dispatchEvent("pointermove", { pointerType: "mouse" });
   await expect(overlay).not.toHaveClass(/cursor-hidden/);

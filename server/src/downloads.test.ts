@@ -190,7 +190,7 @@ test("a save rule sends the file into the library it names", async () => {
   });
   const queue = new DownloadQueue(() => 1, () => 1, path.join(directory, "data"), downloadDir, {
     stallInitialMs: 5_000, stallTransferMs: 5_000,
-    libraryRetryMs: 20, libraryWaitMs: 60,
+    libraryRetryMs: 20, libraryWaitMs: 500,
     libraries: () => [archive, downloads],
     defaultLibrary: () => downloads,
     libraryState: async (libraryId) => libraryId === archive.id ? archive : undefined,
@@ -205,10 +205,14 @@ test("a save rule sends the file into the library it names", async () => {
 
     // A rule that names a library this instance does not have waits for the re-add first, and
     // takes the default once that window has passed -- a queue that waits for ever is not
-    // honest either.
+    // honest either. The pause is read through the queue rather than off the snapshot `add`
+    // returned: `add` writes its state before it answers, and with a window shorter than that
+    // write a slow machine resumes the job first, which is how this once reported `queued`.
     const fallback = await queue.add("Other", { url: `http://127.0.0.1:${port}/other.mp4` }, undefined, { subfolder: "", layout: "structured", libraryId: "lib_99999999" });
-    assert.equal(fallback.status, "paused", "it waits for the library to come back");
-    assert.equal(fallback.target, "");
+    await waitFor(queue, () => queue.list().find((item) => item.id === fallback.id)?.status === "paused");
+    const waiting = queue.list().find((item) => item.id === fallback.id)!;
+    assert.equal(waiting.pauseReason, "library", "it waits for the library to come back");
+    assert.equal(waiting.target, "", "and no name is chosen while it waits");
     await waitFor(queue, () => queue.list().find((item) => item.id === fallback.id)?.status === "completed");
     assert.equal((await stat(path.join(downloadDir, "Other", "Other.mp4"))).size, size);
   } finally {
