@@ -221,6 +221,16 @@ export async function resolveLibraryPath(libraries: LibraryRecord[], value: stri
   return { library, relative, key: libraryPath(library.id, relative), absolute };
 }
 
+/** Whether any of these `file://` urls names a library file under `root`. The urls come
+ *  from playing sessions and carry a qualified key, never a filesystem path, so they are
+ *  resolved the way the media route resolves them rather than parsed as file urls --
+ *  `fileURLToPath` reads the library id as a host and throws on every one of them. */
+export async function playingUnder(libraries: LibraryRecord[], urls: readonly (string | undefined)[], root: string): Promise<boolean> {
+  const keys = urls.filter((url): url is string => !!url?.startsWith("file://")).map((url) => url.slice(7));
+  const targets = await Promise.all(keys.map((key) => resolveLibraryPath(libraries, key).catch(() => undefined)));
+  return targets.some((target) => target && isInside(target.absolute, root));
+}
+
 export function isLibraryId(value: string): boolean {
   return LIBRARY_ID.test(normalize(value));
 }

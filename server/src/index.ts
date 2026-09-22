@@ -42,7 +42,7 @@ import type { MediaInfo } from "./naming.js";
 import { defaultDownloadSettings } from "./naming.js";
 import { AppError, messageKeyOf } from "./errors.js";
 import { accessLost, contentOf, Revocations, type AccessClaim, type AccessNeed, type ActiveTransfer, type StopContentOptions } from "./revocation.js";
-import { carveOuts, queuedArtworkKey, defaultLibrary, isInside, libraryFor, libraryPath, libraryVisible, parseLibraryPath, posixBase, posixDir, posixJoin, realAncestor, relativeWithin, resolveLibraryPath, toFs, toPosix, visibleLibraries, type LibraryRecord, type LibraryType, type RootGrant, type Viewer } from "./libraries.js";
+import { carveOuts, queuedArtworkKey, defaultLibrary, isInside, libraryFor, libraryPath, libraryVisible, parseLibraryPath, playingUnder, posixBase, posixDir, posixJoin, realAncestor, relativeWithin, resolveLibraryPath, toFs, toPosix, visibleLibraries, type LibraryRecord, type LibraryType, type RootGrant, type Viewer } from "./libraries.js";
 import { envGrants, grantView, mergeGrants } from "./library-grants.js";
 import { migrateStateFile } from "./library-migrate.js";
 import { LibraryMetaStore } from "./library-meta-store.js";
@@ -1957,6 +1957,13 @@ const matchLibraryItem = async (body: LibraryMatchRequest, language = prefsOf().
   return { key: wirePath(bindKey), type, id: id || null };
 };
 
+/** Whether a session is reading a file under this folder. A playing stream's url carries
+ *  the qualified key, not a filesystem path: handing it to `fileURLToPath` throws on the
+ *  library id it reads as a host, and the guard that swallowed the throw answered "nothing
+ *  is playing" every time -- so a bulk delete, move or reroot never waited for a viewer. */
+const playbackUnder = (root: string) =>
+  playingUnder(store.libraries(), playback.active().map((session) => session.stream.url), root);
+
 const libraryOps = new LibraryOps({
   file: path.join(DATA_DIR, "library-ops.json"),
   pause: async (operation, item) => {
@@ -1967,10 +1974,7 @@ const libraryOps = new LibraryOps({
       await refreshLibraryHealth();
       if (libraryHealth.get(operation.libraryId)?.unreachable) return "library";
       const source = path.join(operation.from, item);
-      if (playback.active().some((session) => {
-        if (!session.stream.url?.startsWith("file:")) return false;
-        try { return isInside(fileURLToPath(session.stream.url), source); } catch { return false; }
-      })) return "playback";
+      if (await playbackUnder(source)) return "playback";
       const writing = queue.list().filter((job) => job.target && (job.status === "checking" || job.status === "downloading"));
       if (writing.length) {
         const targets = await Promise.all(writing.map((job) => resolveLibraryPath(store.libraries(), job.target)));
@@ -1985,10 +1989,7 @@ const libraryOps = new LibraryOps({
       await refreshLibraryHealth();
       if (libraryHealth.get(library.id)?.unreachable) return "library";
     }
-    if (resolved && playback.active().some((session) => {
-      if (!session.stream.url?.startsWith("file:")) return false;
-      try { return isInside(fileURLToPath(session.stream.url), resolved.absolute); } catch { return false; }
-    })) return "playback";
+    if (resolved && await playbackUnder(resolved.absolute)) return "playback";
     if ((operation.op === "move" || operation.op === "copy") && queue.list().some((job) => job.status === "checking" || job.status === "downloading")) {
       const target = await resolveLibraryPath(store.libraries(), operation.target);
       const writing = await Promise.all(queue.list().filter((job) => job.target && (job.status === "checking" || job.status === "downloading")).map((job) => resolveLibraryPath(store.libraries(), job.target)));

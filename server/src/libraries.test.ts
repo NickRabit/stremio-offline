@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { activeDeparted, carveOuts, defaultLibrary, DEPARTED_MAX, departedIdFor, libraryFor, libraryPath, libraryVisible, parseLibraryPath, relativeWithin, resolveLibraryPath, sameFile, showsInContinueWatching, toFs, toPosix, visibleLibraries, type DepartedLibrary, type LibraryRecord, queuedArtworkKey } from "./libraries.js";
+import { activeDeparted, carveOuts, defaultLibrary, DEPARTED_MAX, departedIdFor, libraryFor, libraryPath, libraryVisible, parseLibraryPath, playingUnder, relativeWithin, resolveLibraryPath, sameFile, showsInContinueWatching, toFs, toPosix, visibleLibraries, type DepartedLibrary, type LibraryRecord, queuedArtworkKey } from "./libraries.js";
 
 const library = (over: Partial<LibraryRecord> = {}): LibraryRecord => ({
   id: "lib_ab12cd34", name: "Filmy", type: "movie", root: "/media/filmy", enabled: true,
@@ -166,6 +166,26 @@ test("what the server hands its own reader resolves back to the file", async () 
     assert.equal(await resolveLibraryPath([only, second], absolute), undefined, "the filesystem path names no library");
     const alone = await resolveLibraryPath([only], absolute);
     assert.notEqual(alone?.absolute, absolute, "and with one library it resolves somewhere the file is not");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("a playing session is found under the folder an operation wants", async () => {
+  // The url a playing session carries is `file://` plus the qualified key. Reading it as
+  // a file url throws on the library id, which is what made this guard answer "nothing is
+  // playing" for every session there has ever been.
+  const root = await mkdtemp(path.join(tmpdir(), "libraries-"));
+  await mkdir(path.join(root, "Show"), { recursive: true });
+  await mkdir(path.join(root, "Other"), { recursive: true });
+  await writeFile(path.join(root, "Show", "01.mkv"), "x");
+  const only = library({ root });
+  const second = library({ id: "lib_ffffffff", root: path.join(root, "Other") });
+  const url = `file://${libraryPath(only.id, "Show/01.mkv")}`;
+  try {
+    assert.equal(await playingUnder([only, second], [url], path.join(root, "Show")), true);
+    assert.equal(await playingUnder([only, second], [url], path.resolve(root)), true, "a parent folder counts");
+    assert.equal(await playingUnder([only, second], [url], path.join(root, "Other")), false, "a sibling does not");
+    assert.equal(await playingUnder([only, second], [undefined, "https://example.test/x.mkv"], path.resolve(root)), false, "only library reads count");
+    assert.equal(await playingUnder([only, second], [], path.resolve(root)), false, "nothing playing");
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
