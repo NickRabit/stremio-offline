@@ -31,6 +31,7 @@ export interface ContentDeps extends RouteContext {
   invalidateLibrary(): void;
   libraryEntries(): Promise<LibraryEntry[]>;
   libraryKey(value: string): string;
+  libraryPathBusy(keys: string[]): Promise<string | undefined>;
   libraryRootBrowse(viewer: Viewer): Promise<{ path: string; items: unknown[]; total: number; pending: boolean }>;
   locateArtwork(entry: LibraryEntry, shape?: ArtShape): Promise<string | undefined>;
   locateFileArtwork(key: string, shape?: ArtShape): Promise<string | undefined>;
@@ -51,7 +52,7 @@ export interface ContentDeps extends RouteContext {
 }
 
 export function registerContentRoutes(app: express.Application, deps: ContentDeps): void {
-  const { store, currentUser, attachBrowseMeta, carveOutsOf, dataOf, deleteLibraryItem, fileExists, galleryArtwork, galleryOf, healthOf, invalidateLibrary, libraryEntries, libraryKey, libraryRootBrowse, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, prefsOf, progressOf, relativeKeyIn, relocateLibraryPath, scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites } = deps;
+  const { store, currentUser, attachBrowseMeta, carveOutsOf, dataOf, deleteLibraryItem, fileExists, galleryArtwork, galleryOf, healthOf, invalidateLibrary, libraryEntries, libraryKey, libraryPathBusy, libraryRootBrowse, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, prefsOf, progressOf, relativeKeyIn, relocateLibraryPath, scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites } = deps;
 
   /** Whether a key names a library the viewer may see. A key in an invisible library is
    *  refused wherever a key to a missing one is, so the two cannot be told apart. */
@@ -131,6 +132,7 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
   app.delete("/api/library/item", asyncRoute(async (req, res) => {
     const relative = String(req.query.path ?? "").trim();
     assertStillAdmin(store.users(), currentUser(req));
+    if (await libraryPathBusy([relative])) throw new AppError("The item is busy with another library operation.", "err.pathBusy", 409);
     await deleteLibraryItem(relative);
     res.status(204).end();
   }));
@@ -157,6 +159,7 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     const relative = String(req.body.path ?? "").trim();
     const resolved = relative ? await resolveLibraryPath(store.libraries(), relative) : undefined;
     if (!resolved || !resolved.relative) throw new AppError("Invalid path.", "err.invalidPath");
+    if (await libraryPathBusy([relative])) throw new AppError("The item is busy with another library operation.", "err.pathBusy", 409);
     const info = await stat(resolved.absolute).catch(() => undefined);
     if (!info) throw new AppError("The file or folder does not exist.", "err.pathMissing");
     // The fold comes from the volume the folder sits on: the carve-outs are compared as
@@ -204,9 +207,11 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
 
   app.post("/api/library/move", asyncRoute(async (req, res) => {
     assertStillAdmin(store.users(), currentUser(req));
+    const relative = String(req.body.path ?? "").trim();
+    if (await libraryPathBusy([relative])) throw new AppError("The item is busy with another library operation.", "err.pathBusy", 409);
     // `copy` is honoured rather than ignored: the field was silently dropped before, so a client
     // that asked for a copy got a move -- the original deleted -- with a success in the response.
-    const moved = await transferLibraryItem(String(req.body.path ?? "").trim(), String(req.body.folder ?? "").trim(),
+    const moved = await transferLibraryItem(relative, String(req.body.folder ?? "").trim(),
       req.body.copy === true, undefined, req.body.confirmTypeMismatch === true);
     res.json({ path: moved });
   }));

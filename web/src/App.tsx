@@ -272,10 +272,20 @@ export function App() {
     finishingOps.current.add(job.id);
     opsStatus.current.set(job.id, job.status);
     try {
-      await Promise.all([loadBrowse(browsePath), api.progressList().then(setResume), api.watchlist().then(setWatchlist)]);
+      // A move the user asked for by hand lands somewhere they did not see before, so the
+      // listing follows it there. Any other job only leaves a gap behind.
+      const target = job.op === "move" && job.total === 1 && job.failed === 0 ? job.results[0]?.to : undefined;
+      if (target) revealInLibrary(target);
+      else await loadBrowse(browsePath);
+      await Promise.all([api.progressList().then(setResume), api.watchlist().then(setWatchlist)]);
+      // A job the user stopped did not finish the item, so it keeps the plain wording even
+      // when it was the only one.
+      const single = job.status === "completed" && job.total === 1
+        ? job.op === "move" ? "library.moved" : job.op === "copy" ? "library.copied" : job.op === "delete" ? "library.deleted" : undefined
+        : undefined;
       notify(job.failed
         ? t("library.bulkFinishedFailed", { failed: job.failed, total: job.total })
-        : t("library.bulkFinished"));
+        : single ? t(single) : t("library.bulkFinished"));
     } finally { finishingOps.current.delete(job.id); }
   };
   const trackQueuedOp = async (id: string) => {
@@ -314,15 +324,7 @@ export function App() {
   const removeItem = async (itemPath: string, label: string, folder: boolean) => {
     setMenuFor(null);
     if (!confirm(t(folder ? "library.deleteFolderConfirm" : "library.deleteFileConfirm", { name: label }))) return;
-    // Deleting a file also drops its resume position and its catalogue star, so both
-    // lists are reloaded -- otherwise the deleted title would hang around in the rows.
-    try {
-      await api.deleteLibraryItem(itemPath);
-      notify(t("library.deleted"));
-      await loadBrowse(browsePath);
-      const [nextResume, nextWatchlist] = await Promise.all([api.progressList(), api.watchlist()]);
-      setResume(nextResume); setWatchlist(nextWatchlist);
-    } catch (error) { fail(error); }
+    void startBulk({ op: "delete", items: [itemPath] });
   };
   const toggleFavorite = async (itemPath: string, favorite: boolean) => {
     setMenuFor(null);
@@ -370,17 +372,6 @@ export function App() {
     try { await api.renameLibraryItem(itemPath, wanted); notify(t("library.renamed")); await loadBrowse(browsePath); } catch (error) { fail(error); }
   };
   const openMove = (itemPath: string, label: string, type?: "movie" | "series") => { setMenuFor(null); setMovePath({ path: itemPath, label, type }); };
-  /** Follows the item into its new folder: seeing where it landed beats staring at the
-   *  gap it left behind. The resume row and the star carry the old path, so both reload. */
-  const finishMove = async (target: string) => {
-    setMovePath(null);
-    notify(t("library.moved"));
-    revealInLibrary(target);
-    try {
-      const [nextResume, nextWatchlist] = await Promise.all([api.progressList(), api.watchlist()]);
-      setResume(nextResume); setWatchlist(nextWatchlist);
-    } catch (error) { fail(error); }
-  };
   const openIdentify = (itemPath: string) => { setMenuFor(null); setIdentifyPath(itemPath); };
   const unmatchItem = async (itemPath: string) => {
     setMenuFor(null);
@@ -1159,8 +1150,9 @@ export function App() {
       } catch { /* operation status is optional chrome */ }
     };
     void tick();
-    if (!operationsActive) return () => { cancelled = true; };
-    const timer = window.setInterval(() => void tick(), 1000);
+    // A job this tab did not queue still has to appear, so the idle wait is short enough to
+    // notice one -- and slow enough not to ask the server every second for nothing.
+    const timer = window.setInterval(() => void tick(), operationsActive ? 1000 : 5000);
     return () => { cancelled = true; window.clearInterval(timer); };
   }, [ready, view, session?.role, operationsActive, browsePath]);
   useEffect(() => { if (ready && view === "library") void loadSuggestionCount(); }, [ready, view, session?.role, scanEpoch]);
@@ -2071,7 +2063,7 @@ export function App() {
       onClose={() => { setPlayerOpen(false); setLocalStream(null); setLocalEpisode(false); setPlaybackPreferences({}); }}/>
     {libraryManagerOpen && <LibraryManagerDialog restricted={restricted || !admin} onClose={() => setLibraryManagerOpen(false)} onChanged={refreshLibraries} onError={fail} onNotify={notify}/>}
     {movePath && <MoveDialog path={movePath.path} paths={movePath.paths} copy={movePath.copy} label={movePath.label}
-      itemType={movePath.type} libraries={libraries} onClose={() => setMovePath(null)} onMoved={(target) => void finishMove(target)}
+      itemType={movePath.type} libraries={libraries} onClose={() => setMovePath(null)}
       onQueued={(id) => { leaveSelection(); void trackQueuedOp(id); }}/>}
     {identifyPath && <IdentifyDialog path={identifyPath} onClose={() => setIdentifyPath(null)}
       onApplied={() => { setIdentifyPath(null); void loadSuggestionCount(); void loadBrowse(browsePath); }}/>}

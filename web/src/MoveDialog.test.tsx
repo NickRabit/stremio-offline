@@ -33,10 +33,9 @@ const settle = async () => { await act(async () => { await Promise.resolve(); })
 const confirmButton = () => [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("Move here"))!;
 const click = async (element: Element) => { await act(async () => { element.dispatchEvent(new MouseEvent("click", { bubbles: true })); }); };
 
-const open = async (path: string, label: string, onMoved = vi.fn()) => {
-  await act(async () => { root.render(<MoveDialog path={path} label={label} onClose={vi.fn()} onMoved={onMoved}/>); });
+const open = async (path: string, label: string) => {
+  await act(async () => { root.render(<MoveDialog path={path} label={label} onClose={vi.fn()} onQueued={vi.fn()}/>); });
   await settle();
-  return onMoved;
 };
 
 it("opens in the folder the item sits in and refuses a move that changes nothing", async () => {
@@ -54,10 +53,15 @@ it("a folder cannot be moved into itself", async () => {
   expect((intoItself as HTMLButtonElement).disabled).toBe(true);
 });
 
-it("moves into the picked folder and reports the new path", async () => {
+it("queues a single item as one operation and closes the dialog at once", async () => {
   fetchMock.mockImplementation((url: string, options?: RequestInit) =>
-    Promise.resolve(options?.method === "POST" ? json({ path: "Archive/pilot.mkv" }) : folders("Archive")));
-  const onMoved = await open("Friends/pilot.mkv", "pilot");
+    Promise.resolve(options?.method === "POST" ? json({ id: "job-1" }, 202) : folders("Archive")));
+  const onQueued = vi.fn();
+  const onClose = vi.fn();
+  await act(async () => {
+    root.render(<MoveDialog path="Friends/pilot.mkv" label="pilot" onClose={onClose} onQueued={onQueued}/>);
+  });
+  await settle();
 
   const archive = [...host.querySelectorAll(".move-list button")].find((button) => button.textContent?.includes("Archive"))!;
   await click(archive);
@@ -67,9 +71,32 @@ it("moves into the picked folder and reports the new path", async () => {
   await click(confirmButton());
   await settle();
   const post = fetchMock.mock.calls.find(([, options]) => (options as RequestInit | undefined)?.method === "POST")!;
-  expect(post[0]).toBe("/api/library/move");
-  expect(JSON.parse(String((post[1] as RequestInit).body))).toEqual({ path: "Friends/pilot.mkv", folder: "Archive" });
-  expect(onMoved).toHaveBeenCalledWith("Archive/pilot.mkv");
+  expect(post[0]).toBe("/api/library/ops");
+  expect(JSON.parse(String((post[1] as RequestInit).body))).toEqual({ op: "move", items: ["Friends/pilot.mkv"], target: "Archive" });
+  expect(onQueued).toHaveBeenCalledWith("job-1");
+  expect(onClose).toHaveBeenCalled();
+});
+
+it("keeps the dialog open and says why when the queue refuses the item", async () => {
+  fetchMock.mockImplementation((url: string, options?: RequestInit) => Promise.resolve(
+    options?.method === "POST"
+      ? json({ error: "The item is busy with another library operation.", messageKey: "err.pathBusy" }, 409)
+      : folders("Archive"),
+  ));
+  const onClose = vi.fn();
+  await act(async () => {
+    root.render(<MoveDialog path="Friends/pilot.mkv" label="pilot" onClose={onClose} onQueued={vi.fn()}/>);
+  });
+  await settle();
+  await click([...host.querySelectorAll(".move-list button")].find((button) => button.textContent?.includes("Archive"))!);
+  await settle();
+
+  await click(confirmButton());
+  await settle();
+
+  expect(onClose).not.toHaveBeenCalled();
+  expect(host.textContent).toContain("The item is busy with another library operation.");
+  expect(confirmButton().disabled, "the user can pick somewhere else and try again").toBe(false);
 });
 
 const library = (id: string, name: string, type: LibraryType, extra: Partial<LibraryView> = {}): LibraryView => ({
@@ -78,18 +105,18 @@ const library = (id: string, name: string, type: LibraryType, extra: Partial<Lib
   titles: 0, files: 0, bytes: 0, ...extra,
 });
 
-it("with several libraries it offers the ones that take this kind and moves into one", async () => {
+it("with several libraries it offers the ones that take this kind and queues the move into one", async () => {
   fetchMock.mockImplementation((url: string, options?: RequestInit) =>
-    Promise.resolve(options?.method === "POST" ? json({ path: "lib_cccccccc/01.mkv" }) : folders("Archive")));
+    Promise.resolve(options?.method === "POST" ? json({ id: "job-1" }, 202) : folders("Archive")));
   const libraries = [
     library("lib_aaaaaaaa", "Films", "movie"),
     library("lib_bbbbbbbb", "Series", "series"),
     library("lib_cccccccc", "Mixed", "mixed"),
     library("lib_dddddddd", "Offline", "mixed", { unreachable: true }),
   ];
-  const onMoved = vi.fn();
+  const onQueued = vi.fn();
   await act(async () => {
-    root.render(<MoveDialog path="lib_aaaaaaaa/Show/01.mkv" label="01" itemType="movie" libraries={libraries} onClose={vi.fn()} onMoved={onMoved}/>);
+    root.render(<MoveDialog path="lib_aaaaaaaa/Show/01.mkv" label="01" itemType="movie" libraries={libraries} onClose={vi.fn()} onQueued={onQueued}/>);
   });
   await settle();
 
@@ -106,8 +133,9 @@ it("with several libraries it offers the ones that take this kind and moves into
   await click(confirmButton());
   await settle();
   const post = fetchMock.mock.calls.find(([, options]) => (options as RequestInit | undefined)?.method === "POST")!;
-  expect(JSON.parse(String((post[1] as RequestInit).body))).toEqual({ path: "lib_aaaaaaaa/Show/01.mkv", folder: "lib_cccccccc" });
-  expect(onMoved).toHaveBeenCalledWith("lib_cccccccc/01.mkv");
+  expect(post[0]).toBe("/api/library/ops");
+  expect(JSON.parse(String((post[1] as RequestInit).body))).toEqual({ op: "move", items: ["lib_aaaaaaaa/Show/01.mkv"], target: "lib_cccccccc" });
+  expect(onQueued).toHaveBeenCalledWith("job-1");
 });
 
 it("the library root is a destination of its own", async () => {
@@ -127,7 +155,7 @@ it("queues several selected items as one copy operation", async () => {
   const onQueued = vi.fn();
   await act(async () => {
     root.render(<MoveDialog path="Films/one.mkv" paths={["Films/one.mkv", "Films/two.mkv"]} copy label="2 items"
-      onClose={vi.fn()} onMoved={vi.fn()} onQueued={onQueued}/>);
+      onClose={vi.fn()} onQueued={onQueued}/>);
   });
   await settle();
   await click([...host.querySelectorAll(".move-list button")].find((button) => button.textContent?.includes("Archive"))!);
@@ -145,9 +173,8 @@ it("queues several selected items as one copy operation", async () => {
  *  head, the list scrolls on its own, and the action sits outside it. */
 it("keeps the chips and the confirm button outside the one scrolling region", async () => {
   fetchMock.mockResolvedValue(folders("Archive"));
-  const onMoved = vi.fn();
   await act(async () => {
-    root.render(<MoveDialog path="lib_aaaaaaaa/Show/01.mkv" label="01" itemType="movie" onClose={vi.fn()} onMoved={onMoved}
+    root.render(<MoveDialog path="lib_aaaaaaaa/Show/01.mkv" label="01" itemType="movie" onClose={vi.fn()} onQueued={vi.fn()}
       libraries={[library("lib_aaaaaaaa", "Films", "movie"), library("lib_cccccccc", "Mixed", "mixed")]}/>);
   });
   await settle();

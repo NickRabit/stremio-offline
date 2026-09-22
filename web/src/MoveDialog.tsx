@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ChevronRight, CornerLeftUp, FolderOpen, HardDrive, X } from "lucide-react";
 import { api, describeError } from "./api";
 import { t, useI18n } from "./i18n";
@@ -10,20 +10,29 @@ const parentOf = (folder: string) => folder.includes("/") ? folder.slice(0, fold
  *  one level up or into the folder next door -- is a couple of clicks away. With more than one
  *  library the same dialog crosses between them: the picked library's own tree is then walked,
  *  and only the libraries that take this kind of title are offered. */
-export function MoveDialog({ path, paths, copy = false, label, itemType, libraries = [], onClose, onMoved, onQueued }:
+export function MoveDialog({ path, paths, copy = false, label, itemType, libraries = [], onClose, onQueued }:
   { path: string; label: string; itemType?: "movie" | "series"; libraries?: LibraryView[];
-    paths?: string[]; copy?: boolean; onClose: () => void; onMoved: (target: string) => void; onQueued?: (id: string) => void }) {
+    paths?: string[]; copy?: boolean; onClose: () => void; onQueued?: (id: string) => void }) {
   useI18n();
   const [folder, setFolder] = useState(parentOf(path));
   const [folders, setFolders] = useState<LibraryFolder[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const chips = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
+
+  // The row is capped at a couple of lines, so the library being browsed can sit below the fold
+  // -- the one chip that has to be visible is the one that says where the listing comes from.
+  useEffect(() => {
+    // jsdom has no scrollIntoView, and neither has an older browser: the chip row degrades to
+    // what it was before, a row the reader scrolls themselves.
+    chips.current?.querySelector("[aria-pressed=true]")?.scrollIntoView?.({ block: "nearest" });
+  }, [folder, libraries.length]);
 
   useEffect(() => {
     let cancelled = false;
@@ -57,14 +66,11 @@ export function MoveDialog({ path, paths, copy = false, label, itemType, librari
   const move = async () => {
     setBusy(true);
     try {
-      if (paths?.length) {
-        const queued = await api.startLibraryOp({ op: copy ? "copy" : "move", items: paths, target: folder });
-        onQueued?.(queued.id);
-        onClose();
-        return;
-      }
-      const result = await api.moveLibraryItem(path, folder);
-      onMoved(result.path);
+      // One item and many take the same road: the move itself runs in the queue, and the
+      // dialog is out of the way the moment the job is accepted rather than when it is done.
+      const queued = await api.startLibraryOp({ op: copy ? "copy" : "move", items: paths?.length ? paths : [path], target: folder });
+      onQueued?.(queued.id);
+      onClose();
     } catch (value) { setError(describeError(value)); setBusy(false); }
   };
 
@@ -75,7 +81,7 @@ export function MoveDialog({ path, paths, copy = false, label, itemType, librari
         <h2>{t(copy ? "library.copyTitle" : "library.moveTitle", { name: label })}</h2>
         <button type="button" className="icon-button" aria-label={t("common.close")} onClick={onClose}><X/></button>
       </div>
-      {offered.length > 1 && <div className="move-libraries" role="group" aria-label={t("library.moveToLibrary")}>
+      {offered.length > 1 && <div className="move-libraries" ref={chips} role="group" aria-label={t("library.moveToLibrary")}>
         {offered.map((library) => <button type="button" key={library.id} aria-pressed={current?.id === library.id}
           onClick={() => setFolder(qualified ? library.id : "")}>{library.name}</button>)}
       </div>}

@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import express from "express";
 import { messageKeyOf } from "../errors.js";
 import { relativeWithin, resolveLibraryPath, type LibraryRecord } from "../libraries.js";
+import { isPathWithin } from "../library.js";
 import type { LibraryAutoScan } from "../library-autoscan.js";
 import type { LibraryMetaRecord, LibrarySuggestion } from "../library-match.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
@@ -65,8 +66,9 @@ const ADA = "usr_00000001";
 // A real list, so the write-time role check has something to read.
 const users: UserRecord[] = [{ id: ADA, username: "ada", role: "admin", secret: "ada-secret" } as UserRecord];
 
-const mount = async (options: { libraries?: LibraryRecord[]; records?: Record<string, LibraryMetaRecord>; suggestions?: Record<string, LibrarySuggestion> } = {}): Promise<Harness> => {
+const mount = async (options: { libraries?: LibraryRecord[]; records?: Record<string, LibraryMetaRecord>; suggestions?: Record<string, LibrarySuggestion>; activeItems?: () => string[] } = {}): Promise<Harness> => {
   const libraries = options.libraries ?? [library("lib_00000001", "/media/films")];
+  const activeItems = options.activeItems ?? (() => []);
   const calls: Calls = { cancelled: [], enqueued: [], invalidated: 0, matched: [], remembered: 0, unitWalks: 0 };
   const pendingOps = new Set(["job_1", "job_2"]);
   const dataDir = await makeRoot("stremio-curate-");
@@ -105,6 +107,18 @@ const mount = async (options: { libraries?: LibraryRecord[]; records?: Record<st
       enqueue: async (operation: LibraryOp) => { calls.enqueued.push(operation); return { id: "job_new" }; },
       snapshot: () => ({ jobs: [] }),
     } as unknown as LibraryOps,
+    // The same question the server asks: is the key an active job's business, either way round.
+    libraryPathBusy: async (keys) => {
+      for (const key of keys) {
+        const wanted = await resolveLibraryPath(libraries, key);
+        if (!wanted) continue;
+        for (const item of activeItems()) {
+          const active = await resolveLibraryPath(libraries, item);
+          if (active && (isPathWithin(active.absolute, wanted.absolute) || isPathWithin(wanted.absolute, active.absolute))) return item;
+        }
+      }
+      return undefined;
+    },
     libraryScan: scan,
     libraryTarget: async (value: string) => (await resolveLibraryPath(libraries, value))?.absolute ?? value,
     libraryUnits: async () => [],
@@ -189,6 +203,34 @@ test("POST /api/library/ops refuses a malformed body before the queue sees it", 
   assert.equal((await unknown.json() as { messageKey?: string }).messageKey, "err.invalidLibraryOperation");
 
   assert.deepEqual(harness.calls.enqueued, [], "the parser refuses it, the queue is never asked");
+});
+
+test("POST /api/library/ops refuses what a running job covers, in either direction", async (t) => {
+  const root = await makeRoot("stremio-curate-busy-");
+  await put(root, "Films/Heat.mkv");
+  await put(root, "Show/01.mkv");
+  let active: string[] = [];
+  const harness = await mount({ libraries: [library("lib_00000001", root)], activeItems: () => active });
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const enqueue = (items: string[]) => api(harness.base, "/api/library/ops", { method: "POST", body: { op: "delete", items } });
+
+  active = ["Films/Heat.mkv"];
+  const busyFile = await enqueue(["Films/Heat.mkv"]);
+  assert.equal(busyFile.status, 409);
+  assert.equal((await busyFile.json() as { messageKey?: string }).messageKey, "err.pathBusy");
+  assert.equal((await enqueue(["Films"])).status, 409, "the folder holding a busy file waits for the same job");
+  assert.equal((await enqueue(["Show/01.mkv"])).status, 202, "a job on one item covers nothing else");
+
+  active = ["Films"];
+  assert.equal((await enqueue(["Films/Heat.mkv"])).status, 409, "a folder under way covers the file inside it");
+
+  active = [];
+  const accepted = await enqueue(["Films/Heat.mkv"]);
+  assert.equal(accepted.status, 202);
+  assert.deepEqual(await accepted.json(), { id: "job_new" });
+  assert.deepEqual(harness.calls.enqueued.map((operation) => operation.items), [["Show/01.mkv"], ["Films/Heat.mkv"]],
+    "the queue only ever saw what no job was covering");
 });
 
 test("DELETE /api/library/ops/:id cancels the named job and nothing else", async (t) => {
