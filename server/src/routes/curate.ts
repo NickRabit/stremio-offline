@@ -6,7 +6,7 @@ import { assertStillAdmin } from "../roles.js";
 import { normalizeLanguage } from "../language.js";
 import { libraryFor, parseLibraryPath, posixBase, resolveLibraryPath, type Viewer } from "../libraries.js";
 import type { LibraryAutoScan } from "../library-autoscan.js";
-import { episodeNumberOf, knownTitleOf, lookupSkipped, matchKeyFor, matchStatus, needsBackfill, scanMiss, suggestionFor, type LibraryMetaRecord, type TitleUnit } from "../library-match.js";
+import { episodeNumberOf, knownTitleOf, matchKeyFor, matchStatus, needsBackfill, pendingSuggestionKeys, scanMiss, suggestionFor, type LibraryMetaRecord, type TitleUnit } from "../library-match.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import type { LibraryOp, LibraryOps } from "../library-ops.js";
 import { parseMediaPath } from "../library-parse.js";
@@ -124,9 +124,9 @@ export function registerCurateRoutes(app: express.Application, deps: CurateDeps)
   /** What the scan proposed and nobody has confirmed yet. */
   app.get("/api/library/suggestions", asyncRoute(async (_req, res) => {
     const records = metaStore.qualifiedMeta();
-    const items = Object.entries(metaStore.qualifiedSuggestions())
-      .filter(([key, suggestion]) => suggestion.id && !knownTitleOf(key, records)?.id && !lookupSkipped(key, records))
-      .map(([key, suggestion]) => ({ key: wirePath(key), label: posixBase(key), suggestion }))
+    const suggestions = metaStore.qualifiedSuggestions();
+    const items = pendingSuggestionKeys(records, suggestions)
+      .map((key) => ({ key: wirePath(key), label: posixBase(key), suggestion: suggestions[key]! }))
       .sort((a, b) => b.suggestion.score - a.suggestion.score);
     res.json({ items, total: items.length });
   }));
