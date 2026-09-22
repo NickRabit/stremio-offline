@@ -286,7 +286,11 @@ export function App() {
       const single = job.status === "completed" && job.total === 1
         ? job.op === "move" ? "library.moved" : job.op === "copy" ? "library.copied" : job.op === "delete" ? "library.deleted" : undefined
         : undefined;
-      notify(job.failed
+      // One item that failed has one reason, and the dialog that would have shown it has
+      // closed by now: a count of failures would leave the reason nowhere at all.
+      const only = job.total === 1 ? job.results.find((result) => !result.ok) : undefined;
+      if (only) fail(new ApiError(only.error ?? t("library.bulkFinishedFailed", { failed: 1, total: 1 }), 0, undefined, only.errorKey));
+      else notify(job.failed
         ? t("library.bulkFinishedFailed", { failed: job.failed, total: job.total })
         : single ? t(single) : t("library.bulkFinished"));
     } finally { finishingOps.current.delete(job.id); }

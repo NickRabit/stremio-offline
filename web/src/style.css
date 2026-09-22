@@ -603,11 +603,11 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
    read as one shape. */
 .library-bulk-bar{z-index:7;display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin:10px 0 12px;padding:10px;border:1px solid #ff795c55;border-radius:10px;background:#161b24f5;box-shadow:0 10px 30px #0007;backdrop-filter:blur(12px)}
 .library-bulk-bar strong{margin-right:auto;padding:0 6px;font-size:12px}.library-bulk-bar button{padding:7px 9px;font-size:10px}.library-bulk-bar button svg{width:14px;height:14px}
-/* These sit between the library header and the scroller, outside the padding both of those
-   carry, so without an inset of their own they run from one panel edge to the other. The
-   operation bar then puts its accent border flush against the toolbar directly above it and
-   the two read as one control. */
-.library-scan-status,.library-op-status,.library-bulk-bar{margin:12px 16px}
+/* These strips sit inside the library header, under the toolbar, so the header's own padding
+   already lines them up with the listing below -- what they lacked was room above. Without it
+   the operation bar's accent border landed flush against the toolbar and the two read as one
+   control. A horizontal margin here would indent them past the listing instead. */
+.library-scan-status,.library-op-status,.library-bulk-bar{margin:12px 0 0}
 .library-page .browse-item.selected .library-open{box-shadow:0 0 0 2px var(--accent)}
 .library-page .browse-select{position:absolute;z-index:3;right:8px;top:8px;width:36px;height:36px;padding:0;border:2px solid var(--accent2);border-radius:9px;background:#10151eeb}.library-page .browse-select[aria-pressed=true]{background:var(--accent)}
 @media(max-width:700px){.library-bulk-bar strong{flex-basis:100%}.library-op-status{grid-template-columns:1fr}.library-op-status>button{grid-column:1;grid-row:auto}.library-op-status>div{align-items:flex-start;flex-direction:column;gap:3px}}

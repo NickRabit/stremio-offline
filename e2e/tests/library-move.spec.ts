@@ -212,9 +212,10 @@ test("a file crosses into another library, and a typed library refuses the wrong
   // The type gate is the backstop behind the dialog: a series library takes no film.
   await dialog.getByRole("button", { name: "Přesunout sem" }).click();
   // One item and many take the same road now, so the refusal comes back from the queue as a
-  // failed job rather than from the request that used to wait for the copy.
+  // failed job rather than from the request that used to wait for the copy. The dialog that
+  // used to hold the reason is gone by then, so the reason is reported on its own.
   await expect(dialog).toHaveCount(0);
-  await expect(page.getByText("Operace knihovny dokončena: 1 z 1 položek selhalo.")).toBeVisible();
+  await expect(page.locator(".toast.error")).toContainText("Tato knihovna nebere tento druh titulku.");
   expect(await stat(path.join(otherRoot, crossClip)).catch(() => undefined), "nothing crossed").toBeUndefined();
   expect((await stat(path.join(downloads, crossName, crossClip))).isFile(), "and nothing left").toBe(true);
 
