@@ -56,3 +56,44 @@ export function httpAllowed(server: ServerOrigin): boolean {
   if (server.transport === "https") return true;
   return httpAllowedHost(server.host);
 }
+
+/** One persistent session per origin. Cookies ignore the port, so two servers on the same name must not share a jar. */
+export function partitionForOrigin(origin: string): string {
+  return `persist:stremio-${Buffer.from(origin, "utf8").toString("base64url")}`;
+}
+
+/** A link the system browser may open. Anything else stays in the shell, which refuses it. */
+export function externalBrowserUrl(input: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(input);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+  if (url.username || url.password) return null;
+  return url.href;
+}
+
+export type HostLookup = (host: string) => Promise<string[]>;
+
+/**
+ * Whether an HTTP request to `host` may be sent. An address is classified directly.
+ * A name is classified by every address it resolves to, and a failed or empty lookup
+ * is refused: the cookie must not leave before the destination is known.
+ */
+export async function httpDestinationAllowed(host: string, lookup: HostLookup): Promise<boolean> {
+  let name = host;
+  if (name.startsWith("[") && name.endsWith("]")) name = name.slice(1, -1);
+  if (name.endsWith(".")) name = name.slice(0, -1);
+  name = name.toLowerCase();
+  if (isIP(name) !== 0) return httpAllowedHost(name);
+  let addresses: string[];
+  try {
+    addresses = await lookup(name);
+  } catch {
+    return false;
+  }
+  if (addresses.length === 0) return false;
+  return addresses.every((address) => httpAllowedHost(address));
+}

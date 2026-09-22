@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { httpAllowed, httpAllowedHost, parseServerOrigin } from "./origin.js";
+import { externalBrowserUrl, httpAllowed, httpAllowedHost, httpDestinationAllowed, parseServerOrigin, partitionForOrigin } from "./origin.js";
 
 test("input that is not a bare origin is rejected", () => {
   const rejected = [
@@ -30,6 +30,41 @@ test("plain HTTP is allowed on loopback, names on the local network and private 
   const allowed = ["192.168.1.20", "10.1.2.3", "172.16.0.1", "172.31.255.255", "127.0.0.1", "127.1.2.3", "169.254.1.1", "localhost", "nas.local", "[::1]", "[fe80::1]", "[fd00::1]", "[::ffff:192.168.1.5]"];
   for (const host of allowed) assert.equal(httpAllowedHost(host), true, host);
   assert.equal(httpAllowed({ origin: "https://example.com", transport: "https", host: "example.com", port: "" }), true);
+});
+
+test("two origins never share a session, including two ports of one name", () => {
+  const first = partitionForOrigin("http://nas.local:8090");
+  const second = partitionForOrigin("http://nas.local:8091");
+  assert.notEqual(first, second);
+  assert.equal(first, partitionForOrigin("http://nas.local:8090"));
+  assert.notEqual(first, partitionForOrigin("https://nas.local:8090"));
+  assert.equal(first.startsWith("persist:stremio-"), true);
+  assert.equal(first.includes("/"), false);
+});
+
+test("only a plain http(s) link may leave the shell", () => {
+  assert.equal(externalBrowserUrl("https://addon.example/configure"), "https://addon.example/configure");
+  assert.equal(externalBrowserUrl("http://192.168.1.20:8090/docs"), "http://192.168.1.20:8090/docs");
+  assert.equal(externalBrowserUrl("javascript:alert(1)"), null);
+  assert.equal(externalBrowserUrl("file:///etc/passwd"), null);
+  assert.equal(externalBrowserUrl("http://user:pass@nas.local/configure"), null);
+  assert.equal(externalBrowserUrl("not a url"), null);
+});
+
+test("an HTTP request is sent only when every resolved address is private", async () => {
+  const lookup = async (host: string) => {
+    if (host === "nas.local") return ["192.168.1.5"];
+    if (host === "split.local") return ["192.168.1.5", "8.8.8.8"];
+    if (host === "gone.local") return [];
+    throw new Error("dns");
+  };
+  assert.equal(await httpDestinationAllowed("192.168.1.20", lookup), true);
+  assert.equal(await httpDestinationAllowed("8.8.8.8", lookup), false);
+  assert.equal(await httpDestinationAllowed("[::1]", lookup), true);
+  assert.equal(await httpDestinationAllowed("nas.local", lookup), true);
+  assert.equal(await httpDestinationAllowed("split.local", lookup), false);
+  assert.equal(await httpDestinationAllowed("gone.local", lookup), false);
+  assert.equal(await httpDestinationAllowed("broken.local", lookup), false);
 });
 
 test("plain HTTP is refused for the public internet and unused ranges", () => {

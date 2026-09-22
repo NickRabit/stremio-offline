@@ -1,14 +1,17 @@
-import { app, BaseWindow, ipcMain, session, WebContentsView, type IpcMainEvent, type IpcMainInvokeEvent } from "electron";
+import { app, BaseWindow, ipcMain, session, shell as electronShell, WebContentsView, type IpcMainEvent, type IpcMainInvokeEvent, type Session } from "electron";
 import { fileURLToPath } from "node:url";
 import { readSavedOrigin, writeSavedOrigin } from "./connection-file.js";
 import { catalogue } from "./i18n.js";
 import { layout, type LayoutMode } from "./layout.js";
-import { httpAllowedHost, parseServerOrigin, type ServerOrigin } from "./origin.js";
-import { fetchStatus, type ProbeResult } from "./status.js";
+import { externalBrowserUrl, httpAllowedHost, httpDestinationAllowed, parseServerOrigin, partitionForOrigin, type ServerOrigin } from "./origin.js";
+import { fetchStatus, type ProbeFailure, type ProbeResult } from "./status.js";
 
 type MessageKey = keyof ReturnType<typeof catalogue>;
 
-const PARTITION = "persist:stremio-desktop";
+// The player asks for fullscreen. Copy on an HTTPS server uses the sanitized clipboard write.
+const ALLOWED_PERMISSIONS = new Set<string>(["fullscreen", "clipboard-sanitized-write"]);
+const ABORTED = -3;
+
 const CONNECTION_PAGE = fileURLToPath(new URL("../static/connection.html", import.meta.url));
 const CONNECTION_PRELOAD = fileURLToPath(new URL("./preload.js", import.meta.url));
 
@@ -40,12 +43,15 @@ const CAPABILITIES = `() => {
 interface Shell {
   window: BaseWindow;
   connection: WebContentsView;
-  remote: WebContentsView;
+  remote: WebContentsView | null;
+  remotePartition: string | null;
 }
 
 let shell: Shell | null = null;
 let connected: ServerOrigin | null = null;
 let mode: LayoutMode = "connect";
+let loadFailure: ProbeFailure | null = null;
+const preparedPartitions = new Set<string>();
 
 const windowTitle = () => catalogue(app.getLocale())["connect.title"];
 
@@ -56,7 +62,7 @@ const applyMode = (next: LayoutMode) => {
   const { width, height } = current.window.getContentBounds();
   const bounds = layout({ width, height }, mode);
   current.connection.setBounds(bounds.chrome);
-  current.remote.setBounds(bounds.remote);
+  current.remote?.setBounds(bounds.remote);
 };
 
 /** The local page owns the wording, so main only names the message it wants shown. */
@@ -74,9 +80,52 @@ const originOf = (url: string) => {
   }
 };
 
+const hostOf = (url: string) => {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return null;
+  }
+};
+
 const onConnectedOrigin = (url: string) => connected !== null && originOf(url) === connected.origin;
 
-const guardRemoteNavigation = (event: { preventDefault: () => void }, url: string) => {
+const sameConnectedHost = (url: string) => {
+  const host = hostOf(url);
+  return connected !== null && host !== null && host.toLowerCase() === connected.host.toLowerCase();
+};
+
+const messageFor = (reason: ProbeFailure): MessageKey => reason === "insecure-transport" ? "connect.insecure" : reason === "unreachable" ? "connect.unreachable" : "connect.notStatus";
+
+const blankRemote = () => {
+  const remote = shell?.remote;
+  if (!remote || remote.webContents.isDestroyed()) return;
+  void remote.webContents.loadURL("about:blank")?.catch(() => {});
+};
+
+const failConnection = (reason: ProbeFailure) => {
+  loadFailure = reason;
+  const wasConnected = connected !== null;
+  connected = null;
+  if (mode !== "connect") {
+    applyMode("connect");
+    shell?.window.setTitle(windowTitle());
+    notifyConnection(messageFor(reason));
+  }
+  if (wasConnected) blankRemote();
+};
+
+const destroyRemote = () => {
+  const current = shell;
+  if (!current?.remote) return;
+  current.window.contentView.removeChildView(current.remote);
+  if (!current.remote.webContents.isDestroyed()) current.remote.webContents.close();
+  current.remote = null;
+  current.remotePartition = null;
+};
+
+const guardRemoteNavigation = (remote: WebContentsView, event: { preventDefault: () => void }, url: string) => {
+  if (shell?.remote !== remote) return;
   if (onConnectedOrigin(url)) return;
   event.preventDefault();
   if (!connected || originOf(url) === null) return;
@@ -84,50 +133,114 @@ const guardRemoteNavigation = (event: { preventDefault: () => void }, url: strin
   notifyConnection("connect.notStatus");
 };
 
-const watchRemoteResponses = () => {
-  session.fromPartition(PARTITION).webRequest.onResponseStarted({ urls: ["http://*/*"] }, (details) => {
-    if (connected?.transport !== "http") return;
-    // The shipped typings leave `ip` out of this event; the runtime details carry it.
+const openExternally = ({ url }: { url: string }) => {
+  const target = externalBrowserUrl(url);
+  if (target) void electronShell.openExternal(target).catch(() => {});
+  return { action: "deny" as const };
+};
+
+const httpRequestBlocked = async (ses: Session, rawUrl: string): Promise<boolean> => {
+  const host = hostOf(rawUrl);
+  if (!host) return true;
+  const allowed = await httpDestinationAllowed(host, async (name) => {
+    const resolved = await ses.resolveHost(name);
+    return resolved.endpoints.map((endpoint) => endpoint.address);
+  });
+  return !allowed;
+};
+
+const refusePublicHttp = (rawUrl: string, resourceType: string) => {
+  if (connected?.transport !== "http") return;
+  if (resourceType !== "mainFrame" && !sameConnectedHost(rawUrl)) return;
+  failConnection("insecure-transport");
+};
+
+const preparePartition = (partition: string) => {
+  if (preparedPartitions.has(partition)) return;
+  preparedPartitions.add(partition);
+  const ses = session.fromPartition(partition);
+  ses.setPermissionCheckHandler((_contents, permission) => ALLOWED_PERMISSIONS.has(permission));
+  ses.setPermissionRequestHandler((_contents, permission, callback) => {
+    callback(ALLOWED_PERMISSIONS.has(permission));
+  });
+  ses.webRequest.onBeforeRequest({ urls: ["http://*/*"] }, (details, callback) => {
+    void (async () => {
+      let cancel = false;
+      try {
+        cancel = await httpRequestBlocked(ses, details.url);
+      } catch {
+        cancel = true;
+      }
+      callback({ cancel });
+      if (cancel) refusePublicHttp(details.url, details.resourceType);
+    })();
+  });
+  // The socket may already exist here, but the HTTP request, including the cookie, has not been sent.
+  ses.webRequest.onBeforeSendHeaders({ urls: ["http://*/*"] }, (details, callback) => {
     const ip = (details as { ip?: string }).ip;
-    if (!ip || httpAllowedHost(ip)) return;
-    connected = null;
-    void shell?.remote.webContents.loadURL("about:blank")?.catch(() => {});
-    applyMode("connect");
-    notifyConnection("connect.insecure");
+    if (ip && !httpAllowedHost(ip)) {
+      callback({ cancel: true });
+      refusePublicHttp(details.url, details.resourceType);
+      return;
+    }
+    callback({});
   });
 };
 
-const createShell = () => {
-  const window = new BaseWindow({ width: 1100, height: 720, title: windowTitle() });
-  const remote = new WebContentsView({ webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true, partition: PARTITION } });
-  const connection = new WebContentsView({ webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true, preload: CONNECTION_PRELOAD } });
-
-  remote.webContents.setBackgroundThrottling(false);
-  remote.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-  remote.webContents.on("will-navigate", guardRemoteNavigation);
-  remote.webContents.on("will-redirect", guardRemoteNavigation);
-  remote.webContents.on("enter-html-full-screen", () => applyMode("fullscreen"));
-  remote.webContents.on("leave-html-full-screen", () => applyMode(connected ? "remote" : "connect"));
-  remote.webContents.on("did-finish-load", () => {
-    if (!onConnectedOrigin(remote.webContents.getURL())) return;
-    void remote.webContents.executeJavaScript(`(${CAPABILITIES})()`).then(
+const wireRemote = (remote: WebContentsView) => {
+  const contents = remote.webContents;
+  contents.setBackgroundThrottling(false);
+  contents.setWindowOpenHandler(openExternally);
+  contents.on("will-navigate", (event, url) => guardRemoteNavigation(remote, event, url));
+  contents.on("will-redirect", (event, url) => guardRemoteNavigation(remote, event, url));
+  contents.on("enter-html-full-screen", () => { if (shell?.remote === remote) applyMode("fullscreen"); });
+  contents.on("leave-html-full-screen", () => { if (shell?.remote === remote) applyMode(connected ? "remote" : "connect"); });
+  contents.on("did-finish-load", () => {
+    if (shell?.remote !== remote || !onConnectedOrigin(contents.getURL())) return;
+    void contents.executeJavaScript(`(${CAPABILITIES})()`).then(
       (value) => console.log("capabilities " + JSON.stringify(value)),
       () => console.log("capabilities unavailable"),
     );
   });
+  contents.on("did-fail-load", (_event, errorCode, _description, _url, isMainFrame) => {
+    if (shell?.remote !== remote || !isMainFrame || errorCode === ABORTED || !connected) return;
+    failConnection(loadFailure ?? "unreachable");
+  });
+};
+
+const mountRemote = (server: ServerOrigin): WebContentsView | null => {
+  const current = shell;
+  if (!current) return null;
+  const partition = partitionForOrigin(server.origin);
+  if (current.remote && current.remotePartition === partition) return current.remote;
+  destroyRemote();
+  preparePartition(partition);
+  const remote = new WebContentsView({
+    webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true, partition },
+  });
+  wireRemote(remote);
+  // Under the connection bar, which is already the top child.
+  current.window.contentView.addChildView(remote, 0);
+  current.remote = remote;
+  current.remotePartition = partition;
+  applyMode(mode);
+  return remote;
+};
+
+const createShell = () => {
+  const window = new BaseWindow({ width: 1100, height: 720, title: windowTitle() });
+  const connection = new WebContentsView({ webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true, preload: CONNECTION_PRELOAD } });
 
   connection.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   connection.webContents.on("will-navigate", (event) => event.preventDefault());
   void connection.webContents.loadFile(CONNECTION_PAGE);
 
-  // The bar is added last so it stays above the server page.
-  window.contentView.addChildView(remote);
   window.contentView.addChildView(connection);
   window.on("resize", () => applyMode(mode));
   window.on("enter-full-screen", () => applyMode(mode));
   window.on("leave-full-screen", () => applyMode(mode));
   window.on("closed", () => { shell = null; });
-  shell = { window, connection, remote };
+  shell = { window, connection, remote: null, remotePartition: null };
   applyMode("connect");
 };
 
@@ -150,9 +263,23 @@ const registerHandlers = () => {
     if (!result.ok) return result;
     const server = parseServerOrigin(origin);
     if (!server) return { ok: false, reason: "invalid" };
+    const remote = mountRemote(server);
+    if (!remote) return { ok: false, reason: "unreachable" };
     await writeSavedOrigin(app.getPath("userData"), server.origin);
+    loadFailure = null;
     connected = server;
-    void shell?.remote.webContents.loadURL(server.origin + "/")?.catch(() => {});
+    try {
+      await remote.webContents.loadURL(server.origin + "/");
+    } catch {
+      const reason = loadFailure ?? "unreachable";
+      loadFailure = null;
+      connected = null;
+      applyMode("connect");
+      shell?.window.setTitle(windowTitle());
+      blankRemote();
+      return { ok: false, reason };
+    }
+    if (!connected) return { ok: false, reason: loadFailure ?? "unreachable" };
     shell?.window.setTitle(server.origin);
     applyMode("remote");
     return result;
@@ -161,7 +288,8 @@ const registerHandlers = () => {
   ipcMain.handle("desktop:disconnect", async (event) => {
     if (!fromConnection(event)) throw new Error("desktop: unexpected sender");
     connected = null;
-    void shell?.remote.webContents.loadURL("about:blank")?.catch(() => {});
+    loadFailure = null;
+    destroyRemote();
     applyMode("connect");
     shell?.window.setTitle(windowTitle());
   });
@@ -175,6 +303,5 @@ app.on("activate", () => {
 
 void app.whenReady().then(() => {
   registerHandlers();
-  watchRemoteResponses();
   createShell();
 });
