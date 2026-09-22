@@ -42,13 +42,12 @@ const isPrivateAddress = (name: string): boolean => {
   return false;
 };
 
+/** Plain HTTP is only a private address written in the URL. A name is refused: the lookup is not the address the socket later uses. */
 export function httpAllowedHost(host: string): boolean {
   let name = host;
   if (name.startsWith("[") && name.endsWith("]")) name = name.slice(1, -1);
   if (name.endsWith(".")) name = name.slice(0, -1);
   name = name.toLowerCase();
-  if (name === "localhost") return true;
-  if (name.endsWith(".local") && name !== ".local") return true;
   return isPrivateAddress(name);
 }
 
@@ -75,25 +74,3 @@ export function externalBrowserUrl(input: string): string | null {
   return url.href;
 }
 
-export type HostLookup = (host: string) => Promise<string[]>;
-
-/**
- * Whether an HTTP request to `host` may be sent. An address is classified directly.
- * A name is classified by every address it resolves to, and a failed or empty lookup
- * is refused: the cookie must not leave before the destination is known.
- */
-export async function httpDestinationAllowed(host: string, lookup: HostLookup): Promise<boolean> {
-  let name = host;
-  if (name.startsWith("[") && name.endsWith("]")) name = name.slice(1, -1);
-  if (name.endsWith(".")) name = name.slice(0, -1);
-  name = name.toLowerCase();
-  if (isIP(name) !== 0) return httpAllowedHost(name);
-  let addresses: string[];
-  try {
-    addresses = await lookup(name);
-  } catch {
-    return false;
-  }
-  if (addresses.length === 0) return false;
-  return addresses.every((address) => httpAllowedHost(address));
-}

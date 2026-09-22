@@ -1,9 +1,9 @@
-import { app, BaseWindow, ipcMain, session, shell as electronShell, WebContentsView, type IpcMainEvent, type IpcMainInvokeEvent, type Session } from "electron";
+import { app, BaseWindow, ipcMain, session, shell as electronShell, WebContentsView, type IpcMainEvent, type IpcMainInvokeEvent } from "electron";
 import { fileURLToPath } from "node:url";
 import { readSavedOrigin, writeSavedOrigin } from "./connection-file.js";
 import { catalogue } from "./i18n.js";
 import { layout, type LayoutMode } from "./layout.js";
-import { externalBrowserUrl, httpAllowedHost, httpDestinationAllowed, parseServerOrigin, partitionForOrigin, type ServerOrigin } from "./origin.js";
+import { externalBrowserUrl, httpAllowedHost, parseServerOrigin, partitionForOrigin, type ServerOrigin } from "./origin.js";
 import { fetchStatus, type ProbeFailure, type ProbeResult } from "./status.js";
 
 type MessageKey = keyof ReturnType<typeof catalogue>;
@@ -139,14 +139,9 @@ const openExternally = ({ url }: { url: string }) => {
   return { action: "deny" as const };
 };
 
-const httpRequestBlocked = async (ses: Session, rawUrl: string): Promise<boolean> => {
+const httpRequestBlocked = (rawUrl: string): boolean => {
   const host = hostOf(rawUrl);
-  if (!host) return true;
-  const allowed = await httpDestinationAllowed(host, async (name) => {
-    const resolved = await ses.resolveHost(name);
-    return resolved.endpoints.map((endpoint) => endpoint.address);
-  });
-  return !allowed;
+  return !host || !httpAllowedHost(host);
 };
 
 const refusePublicHttp = (rawUrl: string, resourceType: string) => {
@@ -164,26 +159,9 @@ const preparePartition = (partition: string) => {
     callback(ALLOWED_PERMISSIONS.has(permission));
   });
   ses.webRequest.onBeforeRequest({ urls: ["http://*/*"] }, (details, callback) => {
-    void (async () => {
-      let cancel = false;
-      try {
-        cancel = await httpRequestBlocked(ses, details.url);
-      } catch {
-        cancel = true;
-      }
-      callback({ cancel });
-      if (cancel) refusePublicHttp(details.url, details.resourceType);
-    })();
-  });
-  // The socket may already exist here, but the HTTP request, including the cookie, has not been sent.
-  ses.webRequest.onBeforeSendHeaders({ urls: ["http://*/*"] }, (details, callback) => {
-    const ip = (details as { ip?: string }).ip;
-    if (ip && !httpAllowedHost(ip)) {
-      callback({ cancel: true });
-      refusePublicHttp(details.url, details.resourceType);
-      return;
-    }
-    callback({});
+    const cancel = httpRequestBlocked(details.url);
+    callback({ cancel });
+    if (cancel) refusePublicHttp(details.url, details.resourceType);
   });
 };
 

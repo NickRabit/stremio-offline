@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { externalBrowserUrl, httpAllowed, httpAllowedHost, httpDestinationAllowed, parseServerOrigin, partitionForOrigin } from "./origin.js";
+import { externalBrowserUrl, httpAllowed, httpAllowedHost, parseServerOrigin, partitionForOrigin } from "./origin.js";
 
 test("input that is not a bare origin is rejected", () => {
   const rejected = [
@@ -26,8 +26,8 @@ test("the origin, transport, host and port come from the address", () => {
   assert.deepEqual(parseServerOrigin("http://127.0.0.1"), { origin: "http://127.0.0.1", transport: "http", host: "127.0.0.1", port: "" });
 });
 
-test("plain HTTP is allowed on loopback, names on the local network and private addresses", () => {
-  const allowed = ["192.168.1.20", "10.1.2.3", "172.16.0.1", "172.31.255.255", "127.0.0.1", "127.1.2.3", "169.254.1.1", "localhost", "nas.local", "[::1]", "[fe80::1]", "[fd00::1]", "[::ffff:192.168.1.5]"];
+test("plain HTTP is allowed only for a private address", () => {
+  const allowed = ["192.168.1.20", "10.1.2.3", "172.16.0.1", "172.31.255.255", "127.0.0.1", "127.1.2.3", "169.254.1.1", "[::1]", "[fe80::1]", "[fd00::1]", "[::ffff:192.168.1.5]"];
   for (const host of allowed) assert.equal(httpAllowedHost(host), true, host);
   assert.equal(httpAllowed({ origin: "https://example.com", transport: "https", host: "example.com", port: "" }), true);
 });
@@ -51,24 +51,10 @@ test("only a plain http(s) link may leave the shell", () => {
   assert.equal(externalBrowserUrl("not a url"), null);
 });
 
-test("an HTTP request is sent only when every resolved address is private", async () => {
-  const lookup = async (host: string) => {
-    if (host === "nas.local") return ["192.168.1.5"];
-    if (host === "split.local") return ["192.168.1.5", "8.8.8.8"];
-    if (host === "gone.local") return [];
-    throw new Error("dns");
-  };
-  assert.equal(await httpDestinationAllowed("192.168.1.20", lookup), true);
-  assert.equal(await httpDestinationAllowed("8.8.8.8", lookup), false);
-  assert.equal(await httpDestinationAllowed("[::1]", lookup), true);
-  assert.equal(await httpDestinationAllowed("nas.local", lookup), true);
-  assert.equal(await httpDestinationAllowed("split.local", lookup), false);
-  assert.equal(await httpDestinationAllowed("gone.local", lookup), false);
-  assert.equal(await httpDestinationAllowed("broken.local", lookup), false);
-});
-
-test("plain HTTP is refused for the public internet and unused ranges", () => {
-  const refused = ["172.15.0.1", "172.32.0.1", "8.8.8.8", "0.0.0.0", "example.com", "[2001:db8::1]", "[::ffff:8.8.8.8]"];
+test("plain HTTP is refused for a name and for the public internet", () => {
+  const refused = ["localhost", "nas.local", "example.com", "172.15.0.1", "172.32.0.1", "8.8.8.8", "0.0.0.0", "[2001:db8::1]", "[::ffff:8.8.8.8]"];
   for (const host of refused) assert.equal(httpAllowedHost(host), false, host);
   assert.equal(httpAllowed({ origin: "http://8.8.8.8", transport: "http", host: "8.8.8.8", port: "" }), false);
+  assert.equal(httpAllowed({ origin: "http://nas.local:8090", transport: "http", host: "nas.local", port: "8090" }), false);
+  assert.equal(httpAllowed({ origin: "https://nas.local", transport: "https", host: "nas.local", port: "" }), true);
 });
