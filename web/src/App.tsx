@@ -240,11 +240,14 @@ export function App() {
   const browseSeed = useRef(String(Date.now()));
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const [onlyFavorites, setOnlyFavorites] = useState(false);
+  // Not remembered between visits, unlike the favourites filter: this one is for working
+  // through what the scan proposed, and once that queue is empty it has nothing to show.
+  const [onlyUnconfirmed, setOnlyUnconfirmed] = useState(false);
   /** "Show in library" must find the file: turn favorites-only off for this visit without
    *  writing that to the account. The next scope apply would otherwise put the stored
    *  filter back on before the listing runs. */
   const suppressFavoritesApply = useRef(false);
-  browseLocation.current = JSON.stringify([browsePath, browseQuery, browseSort, browseDesc, onlyFavorites]);
+  browseLocation.current = JSON.stringify([browsePath, browseQuery, browseSort, browseDesc, onlyFavorites, onlyUnconfirmed]);
   // Preserve the favorites breadcrumb when entering a folder from favorites.
   const [fromFavorites, setFromFavorites] = useState(false);
   const [resume, setResume] = useState<ProgressEntry[]>([]);
@@ -1031,7 +1034,7 @@ export function App() {
   const libraryList = browsePath === "" && libraries.length > 1;
   const loadBrowse = async (target = browsePath, skip = 0) => {
     const request = ++browseRequest.current;
-    const wanted = JSON.stringify([target, browseQuery, browseSort, browseDesc, onlyFavorites]);
+    const wanted = JSON.stringify([target, browseQuery, browseSort, browseDesc, onlyFavorites, onlyUnconfirmed]);
     setBrowseBusy(true);
     try {
       const options = { skip, limit: 60, sort: browseSort, order: browseDesc ? "desc" : "asc", seed: browseSeed.current };
@@ -1040,14 +1043,14 @@ export function App() {
         ? await api.resumeLibrary({ ...options, query: browseQuery, favorites: onlyFavorites })
         : target === ":favorites"
         ? await api.favorites(options)
-        : await api.browse({ ...options, path: target, query: browseQuery, favorites: onlyFavorites });
+        : await api.browse({ ...options, path: target, query: browseQuery, favorites: onlyFavorites, unconfirmed: onlyUnconfirmed });
       if (request !== browseRequest.current || wanted !== browseLocation.current) return;
       setBrowse((previous) => skip && previous ? { ...page, items: [...previous.items, ...page.items] } : page);
     } catch (error) { if (request === browseRequest.current && wanted === browseLocation.current) fail(error); }
     finally { if (request === browseRequest.current) setBrowseBusy(false); }
   };
   const refreshBrowse = async (limit: number) => {
-    const location = JSON.stringify([browsePath, browseQuery, browseSort, browseDesc, onlyFavorites]);
+    const location = JSON.stringify([browsePath, browseQuery, browseSort, browseDesc, onlyFavorites, onlyUnconfirmed]);
     if (location !== browseLocation.current) return;
     const request = browseRequest.current;
     try {
@@ -1056,7 +1059,7 @@ export function App() {
         ? await api.resumeLibrary({ ...options, query: browseQuery, favorites: onlyFavorites })
         : browsePath === ":favorites"
         ? await api.favorites(options)
-        : await api.browse({ ...options, path: browsePath, query: browseQuery, favorites: onlyFavorites });
+        : await api.browse({ ...options, path: browsePath, query: browseQuery, favorites: onlyFavorites, unconfirmed: onlyUnconfirmed });
       if (location === browseLocation.current && request === browseRequest.current) setBrowse(page);
     } catch { /* Artwork refresh is optional. */ }
   };
@@ -1106,7 +1109,7 @@ export function App() {
   // The first listing waits for that apply: an account that sorts by size must not see the
   // name order first and then watch it jump.
   useEffect(() => { if (!ready || view !== "library" || !browseApplied) return; void loadBrowse(browsePath); },
-    [ready, view, browseApplied, browsePath, browseQuery, browseSort, browseDesc, onlyFavorites, scanEpoch]);
+    [ready, view, browseApplied, browsePath, browseQuery, browseSort, browseDesc, onlyFavorites, onlyUnconfirmed, scanEpoch]);
   useEffect(() => { setSelectionMode(false); setSelectedPaths(new Set()); }, [browsePath]);
   // Polling only means something while a scan is on; otherwise one look on entry is enough.
   const scanning = libraryScan?.status === "running" || libraryScan?.status === "paused";
@@ -1156,6 +1159,9 @@ export function App() {
     return () => { cancelled = true; window.clearInterval(timer); };
   }, [ready, view, session?.role, operationsActive, browsePath]);
   useEffect(() => { if (ready && view === "library") void loadSuggestionCount(); }, [ready, view, session?.role, scanEpoch]);
+  // Confirming the last title takes the button away with it, and a filter nobody can switch
+  // off would leave the listing empty for good.
+  useEffect(() => { if (!suggestionCount) setOnlyUnconfirmed(false); }, [suggestionCount]);
   // Page-scroll paging, the same as in the catalogue. The button stays as a fallback.
   useEffect(() => {
     if (view !== "library" || !browse) return;
@@ -1200,7 +1206,7 @@ export function App() {
   // reloaded the page. The wait doubles instead, and gives up rather than polling forever
   // over a file that will never produce a thumbnail.
   const artworkPolls = useRef(0);
-  useEffect(() => { artworkPolls.current = 0; }, [browsePath, browseQuery, browseSort, browseDesc, onlyFavorites, scanEpoch]);
+  useEffect(() => { artworkPolls.current = 0; }, [browsePath, browseQuery, browseSort, browseDesc, onlyFavorites, onlyUnconfirmed, scanEpoch]);
   useEffect(() => {
     if (view !== "library" || !browse?.pending) return;
     const attempt = artworkPolls.current;
@@ -1209,7 +1215,7 @@ export function App() {
     const nactenych = browse.items.length;
     const timer = setTimeout(() => { artworkPolls.current = attempt + 1; void refreshBrowse(nactenych); }, Math.min(8000, 1000 * 2 ** attempt));
     return () => clearTimeout(timer);
-  }, [view, browse, browsePath, browseQuery, browseSort, browseDesc, onlyFavorites]);
+  }, [view, browse, browsePath, browseQuery, browseSort, browseDesc, onlyFavorites, onlyUnconfirmed]);
 
   /** Jumping from the download queue: opens the folder the file sits in and finds it there.
    * The filters have to be cleared, or the wanted file would stay filtered out of the listing. */
@@ -1861,6 +1867,11 @@ export function App() {
             </button>}
             {!libraryList && <button className={onlyFavorites ? "active-filter" : ""} title={t("library.onlyFavorites")} disabled={browsePath === ":favorites"}
               onClick={() => { setOnlyFavorites((value) => !value); persistLibraryPrefs({ favoritesOnly: !onlyFavorites }); }}><Star/></button>}
+            {/* Only while the scan has something waiting: with nothing to confirm the filter
+                would list an empty folder and say nothing about why. */}
+            {!libraryList && suggestionCount > 0 && <button className={onlyUnconfirmed ? "active-filter" : ""} title={t("library.onlyUnconfirmed")}
+              aria-pressed={onlyUnconfirmed} disabled={browsePath === ":favorites" || browsePath === ":resume"}
+              onClick={() => setOnlyUnconfirmed((value) => !value)}><Sparkles/></button>}
             {!libraryList && <button title={t(browseView === "grid" ? "library.viewRows" : "library.viewTiles")} onClick={() => { setBrowseView((value) => value === "grid" ? "list" : "grid"); persistLibraryPrefs({ view: browseView === "grid" ? "list" : "grid" }); }}>
               {browseView === "grid" ? <List/> : <LayoutGrid/>}
             </button>}
@@ -1972,7 +1983,7 @@ export function App() {
         </button>}
         {!browse || !browse.items.length
           ? (browseBusy ? <div className="loading">{t("common.loading")}</div>
-            : <Empty icon={<HardDrive/>} title={t(browseQuery ? "library.emptyFilterTitle" : browsePath === ":resume" ? "library.emptyResumeTitle" : browsePath === ":favorites" || onlyFavorites ? "library.emptyFavoritesTitle" : "library.emptyTitle")} text={t(browseQuery ? "library.emptyFilterText" : browsePath === ":resume" ? "library.emptyResumeText" : browsePath === ":favorites" || onlyFavorites ? "library.emptyFavoritesText" : "library.emptyText")}/>)
+            : <Empty icon={<HardDrive/>} title={t(browseQuery ? "library.emptyFilterTitle" : onlyUnconfirmed ? "library.emptyUnconfirmedTitle" : browsePath === ":resume" ? "library.emptyResumeTitle" : browsePath === ":favorites" || onlyFavorites ? "library.emptyFavoritesTitle" : "library.emptyTitle")} text={t(browseQuery ? "library.emptyFilterText" : onlyUnconfirmed ? "library.emptyUnconfirmedText" : browsePath === ":resume" ? "library.emptyResumeText" : browsePath === ":favorites" || onlyFavorites ? "library.emptyFavoritesText" : "library.emptyText")}/>)
           : <>
             <div className={browseView === "grid" ? "browse-grid" : "browse-rows"}>
               {browse.items.map((item) => item.kind === "library"
