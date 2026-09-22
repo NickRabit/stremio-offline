@@ -18,7 +18,7 @@ import { PlaybackManager, sourceTitle } from "./playback.js";
 import { publicAddon, publicAddonRestricted } from "./security.js";
 import { RestrictedError, restrictedMiddleware, restrictedMode } from "./restricted.js";
 import { passwordChangeMiddleware, roleMiddleware } from "./roles.js";
-import { outbound } from "./outbound.js";
+import { GuardRejection, outbound } from "./outbound.js";
 import { images } from "./images.js";
 import { configureSecureMode, secureMode, securityHeaders } from "./secure.js";
 import { Store, type State, type UserPrefs, type WatchlistEntry, type StoredProgress, type WatchedMarker } from "./store.js";
@@ -740,7 +740,7 @@ const cachedMeta = async (type: string, id: string, language: string = prefsOf()
   const key = `${type}:${id}:${language}:${viewer ? sources.map((addon) => addon.key).join(",") : "*"}`;
   const hit = metaCache.get(key);
   if (hit && Date.now() - hit.at < 6 * 60 * 60_000) return hit.value;
-  const value = await metadata(sources, type, id, language, tmdbProvider(language)).catch(() => null);
+  const value = await metadata(sources, type, id, language, tmdbProvider(language), viewer !== undefined).catch(() => null);
   if (metaCache.size > 300) metaCache.clear();
   // A failed lookup is not an answer: caching it would hold a title empty for six hours.
   if (value) metaCache.set(key, { value, at: Date.now() });
@@ -2103,8 +2103,13 @@ app.use((error: unknown, req: express.Request, res: express.Response, _next: exp
     });
   }
   const mediaRoute = /^(?:\/api)?\/(?:media|playback|inspect|streams|subtitle|subtitles|device-download|library\/source)(?:\/|$)/.test(req.path);
-  const hideDetails = mediaRoute && !(error instanceof ResourceError) && status >= 500;
+  // A breaker refusal is the server's own sentence about its own state, not a source's
+  // answer, so the media routes have nothing to hide behind a generic 502 here.
+  const hideDetails = mediaRoute && !(error instanceof ResourceError) && !(error instanceof GuardRejection) && status >= 500;
   const vars = error instanceof AppError ? error.vars : undefined;
+  // The same wait the body carries as a variable, in seconds, for a client that only reads headers.
+  const retryAfter = (error as { retryAfterMs?: unknown }).retryAfterMs;
+  if (typeof retryAfter === "number" && retryAfter > 0) res.setHeader("retry-after", String(Math.max(1, Math.round(retryAfter / 1000))));
   res.status(hideDetails ? 502 : status).json({
     error: hideDetails ? "Media source request failed." : message,
     code: error instanceof ResourceError ? error.code : undefined,

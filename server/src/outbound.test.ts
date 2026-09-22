@@ -129,6 +129,65 @@ test("a failed trial doubles the cooldown", async () => {
   assert.equal((await guard.run("addon.test", reply(200))).status, 200);
 });
 
+test("an interactive call is admitted while the breaker is open, and its success closes it", async () => {
+  const { guard } = harness();
+  for (let attempt = 0; attempt < 3; attempt += 1) await assert.rejects(guard.run("addon.test", boom));
+
+  assert.equal((await guard.run("addon.test", reply(200), true)).status, 200);
+  assert.deepEqual(guard.diagnostics(), []);
+});
+
+test("a second interactive call waits while the interactive trial is in flight", async () => {
+  const { guard } = harness();
+  for (let attempt = 0; attempt < 3; attempt += 1) await assert.rejects(guard.run("addon.test", boom));
+
+  let released = () => {};
+  const trial = guard.run("addon.test", () => new Promise<Response>((resolve) => { released = () => resolve(new Response("{}")); }), true);
+  await assert.rejects(guard.run("addon.test", reply(200), true), (error: unknown) => error instanceof GuardRejection && /being retried/.test(error.message));
+  released();
+  await trial;
+});
+
+test("a background call still fails fast and leaves the trial slot to the person", async () => {
+  const { guard } = harness();
+  for (let attempt = 0; attempt < 3; attempt += 1) await assert.rejects(guard.run("addon.test", boom));
+
+  let called = false;
+  await assert.rejects(
+    guard.run("addon.test", async () => { called = true; return new Response("{}"); }),
+    (error: unknown) => error instanceof GuardRejection && /the next attempt is in/.test(error.message),
+  );
+  assert.equal(called, false);
+  assert.equal(guard.diagnostics()[0].state, "open", "the slot is still there for an interactive call");
+  assert.equal((await guard.run("addon.test", reply(200), true)).status, 200);
+});
+
+test("a failed interactive trial doubles the cooldown", async () => {
+  const { guard, advance } = harness();
+  for (let attempt = 0; attempt < 3; attempt += 1) await assert.rejects(guard.run("addon.test", boom));
+
+  await assert.rejects(guard.run("addon.test", boom, true), /connection refused/);
+
+  advance(30_000);
+  await assert.rejects(guard.run("addon.test", reply(200)), GuardRejection);
+  advance(30_000);
+  assert.equal((await guard.run("addon.test", reply(200))).status, 200);
+});
+
+test("the refusal carries a 503, its key and the retry-after", async () => {
+  const { guard } = harness();
+  for (let attempt = 0; attempt < 3; attempt += 1) await assert.rejects(guard.run("addon.test", boom));
+
+  await assert.rejects(guard.run("addon.test", reply(200)), (error: unknown) => {
+    assert.ok(error instanceof GuardRejection);
+    assert.equal(error.status, 503);
+    assert.equal(error.messageKey, "err.hostUnavailable");
+    assert.equal(error.retryAfterMs, 30_000);
+    assert.deepEqual(error.vars, { host: "addon.test", seconds: 30 });
+    return true;
+  });
+});
+
 test("a Retry-After pause outweighs the default cooldown", async () => {
   const { guard, advance } = harness();
   assert.equal((await guard.run("addon.test", reply(429, { "retry-after": "90" }))).status, 429);

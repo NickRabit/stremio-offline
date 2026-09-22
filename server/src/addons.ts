@@ -13,12 +13,12 @@ const reasonOf = (error: unknown) => error instanceof Error ? error.message : St
 const TIMEOUT_MS = 12_000;
 const STREAM_TIMEOUT_MS = Number(process.env.STREAM_ADDON_TIMEOUT_MS ?? 60_000);
 
-async function jsonFetch<T>(rawUrl: string, timeoutMs = TIMEOUT_MS): Promise<T> {
+async function jsonFetch<T>(rawUrl: string, timeoutMs = TIMEOUT_MS, interactive = false): Promise<T> {
   const url = await validateRemoteUrl(rawUrl);
   const response = await guardedFetch(url.toString(), {
     signal: AbortSignal.timeout(timeoutMs),
     headers: { accept: "application/json", "user-agent": "StremioOffline/0.3.1" },
-  });
+  }, interactive);
   if (!response.ok) throw new Error(`The addon answered HTTP ${response.status}.`);
   const contentType = response.headers.get("content-type") ?? "";
   if (!contentType.includes("json")) throw new AppError("The addon did not return JSON.", "err.addonNotJson");
@@ -108,12 +108,12 @@ function supports(addon: AddonRecord, resource: string, type: string, id?: strin
   return !id || !prefixes?.length || prefixes.some((prefix) => id.startsWith(prefix));
 }
 
-export async function catalog(addon: AddonRecord, type: string, catalogId: string, search?: string, skip = 0, genre?: string) {
+export async function catalog(addon: AddonRecord, type: string, catalogId: string, search?: string, skip = 0, genre?: string, interactive = false) {
   const extras: Record<string, string | number> = {};
   if (search) extras.search = search;
   if (genre) extras.genre = genre;
   if (skip) extras.skip = skip;
-  const response = await jsonFetch<{ metas?: MetaItem[] }>(resourceUrl(addon, "catalog", type, catalogId, extras));
+  const response = await jsonFetch<{ metas?: MetaItem[] }>(resourceUrl(addon, "catalog", type, catalogId, extras), TIMEOUT_MS, interactive);
   return response.metas ?? [];
 }
 
@@ -162,7 +162,7 @@ const decodeCursor = (cursor?: string): Record<string, number> => {
 const encodeCursor = (offsets: Record<string, number>) => Buffer.from(JSON.stringify(offsets)).toString("base64url");
 
 /** Stremio asks every addon at once; one slow or broken addon must not bring the rest down. */
-export async function searchAll(addons: AddonRecord[], query: string, type: string | undefined, cursor?: string, scope?: SearchScope): Promise<SearchResult> {
+export async function searchAll(addons: AddonRecord[], query: string, type: string | undefined, cursor?: string, scope?: SearchScope, interactive = false): Promise<SearchResult> {
   const targets = searchableCatalogs(addons, type, scope);
   const offsets = decodeCursor(cursor);
   const nextOffsets: Record<string, number> = {};
@@ -171,7 +171,7 @@ export async function searchAll(addons: AddonRecord[], query: string, type: stri
     const key = `${addon.key}:${definition.type}:${definition.id}`;
     const from = offsets[key] ?? 0;
     if (from < 0) return { key, from, metas: [] as MetaItem[] };
-    const metas = await catalog(addon, definition.type, definition.id, query, from);
+    const metas = await catalog(addon, definition.type, definition.id, query, from, undefined, interactive);
     return { key, from, metas: metas.map((meta) => ({ ...meta, type: meta.type || definition.type, addonName: addon.manifest.name })) };
   }));
 
@@ -219,15 +219,15 @@ export type MetaProvider = (type: string, id: string) => Promise<MetaItem | null
 
 /** One metadata answer, kept public for focused consumers such as trailers that must not
  * use the aggregate's provider order. */
-export async function addonMetadata(addon: AddonRecord, type: string, id: string): Promise<MetaItem | null> {
+export async function addonMetadata(addon: AddonRecord, type: string, id: string, interactive = false): Promise<MetaItem | null> {
   if (!addon.enabled || addon.role === "source" || !supports(addon, "meta", type, id)) return null;
-  const response = await jsonFetch<{ meta?: MetaItem }>(resourceUrl(addon, "meta", type, id));
+  const response = await jsonFetch<{ meta?: MetaItem }>(resourceUrl(addon, "meta", type, id), TIMEOUT_MS, interactive);
   if (!response.meta) return null;
   const language = addonMetadataLanguage(addon);
   return { ...response.meta, ...(language ? { nameLanguage: language } : {}) };
 }
 
-export async function metadata(addons: AddonRecord[], type: string, id: string, preferredLanguage?: string, provider?: MetaProvider) {
+export async function metadata(addons: AddonRecord[], type: string, id: string, preferredLanguage?: string, provider?: MetaProvider, interactive = false) {
   let best: MetaItem | null = null;
   if (provider) {
     try { best = await provider(type, id); }
@@ -239,7 +239,7 @@ export async function metadata(addons: AddonRecord[], type: string, id: string, 
     : candidates;
   for (const addon of ordered) {
     try {
-      const meta = await addonMetadata(addon, type, id);
+      const meta = await addonMetadata(addon, type, id, interactive);
       if (!meta) continue;
       best = best ? fillMissingMeta(best, meta) : meta;
       if (best.description && (type !== "series" || (best.videos?.length ?? 0) > 0)) return best;
@@ -253,10 +253,10 @@ export function streamCandidates(addons: AddonRecord[], type: string, id: string
   return addons.filter((a) => a.enabled && a.role !== "catalog" && supports(a, "stream", type, id));
 }
 
-export async function streams(addons: AddonRecord[], type: string, id: string, addonKey?: string): Promise<StreamItem[]> {
+export async function streams(addons: AddonRecord[], type: string, id: string, addonKey?: string, interactive = false): Promise<StreamItem[]> {
   const candidates = streamCandidates(addons, type, id).filter((a) => !addonKey || a.key === addonKey);
   const results = await Promise.allSettled(candidates.map(async (addon) => {
-    const response = await jsonFetch<{ streams?: StreamItem[] }>(resourceUrl(addon, "stream", type, id), STREAM_TIMEOUT_MS);
+    const response = await jsonFetch<{ streams?: StreamItem[] }>(resourceUrl(addon, "stream", type, id), STREAM_TIMEOUT_MS, interactive);
     return (response.streams ?? []).map((stream) => ({ ...stream, addonKey: addon.key, addonName: addon.manifest.name }));
   }));
   results.forEach((result, index) => {
@@ -265,10 +265,10 @@ export async function streams(addons: AddonRecord[], type: string, id: string, a
   return results.flatMap((result) => result.status === "fulfilled" ? result.value : []);
 }
 
-export async function subtitles(addons: AddonRecord[], type: string, id: string): Promise<SubtitleItem[]> {
+export async function subtitles(addons: AddonRecord[], type: string, id: string, interactive = false): Promise<SubtitleItem[]> {
   const candidates = addons.filter((a) => a.enabled && supports(a, "subtitles", type, id));
   const results = await Promise.allSettled(candidates.map(async (addon) => {
-    const response = await jsonFetch<{ subtitles?: SubtitleItem[] }>(resourceUrl(addon, "subtitles", type, id));
+    const response = await jsonFetch<{ subtitles?: SubtitleItem[] }>(resourceUrl(addon, "subtitles", type, id), TIMEOUT_MS, interactive);
     // The key as well as the name, the way a stream carries it: the name is for the person
     // choosing, the key is what a permission check and a revocation sweep match on.
     return (response.subtitles ?? []).map((subtitle) => ({ ...subtitle, addonKey: addon.key, addonName: addon.manifest.name }));

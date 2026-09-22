@@ -1012,6 +1012,7 @@ export const en = {
   "err.setupDone": "An account already exists.",
   "err.badCredentials": "Wrong username or password.",
   "err.tooManyAttempts": "Too many failed attempts. Try again in {seconds} s.",
+  "err.hostUnavailable": "{host} is not answering. Try again in {seconds} s.",
   "err.noAccount": "No account has been created yet.",
   "err.wrongCurrentPassword": "The current password is wrong.",
   "err.usernameTaken": "That username is already in use.",
