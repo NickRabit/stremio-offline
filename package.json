@@ -1,7 +1,7 @@
 {
   "name": "stremio-offline",
   "private": true,
-  "version": "0.4.63",
+  "version": "0.4.64",
   "description": "Self-hosted web client for Stremio addons",
   "license": "MIT",
   "repository": {
@@ -14,17 +14,19 @@
   "homepage": "https://github.com/NickRabit/stremio-offline#readme",
   "workspaces": [
     "server",
-    "web"
+    "web",
+    "desktop"
   ],
   "scripts": {
     "build": "npm run build -w web && npm run build -w server",
-    "test": "npm run test -w server && npm run test -w web",
+    "test": "npm run test -w server && npm run test -w web && npm run test -w desktop",
     "test:e2e": "playwright test",
     "test:e2e:restricted": "playwright test -c playwright.restricted.config.ts",
     "test:e2e:docker": "npm run build && docker build -t stremio-offline-e2e -f e2e/Dockerfile . && docker run --rm -v \"$PWD\":/work -w /work -e CI=1 stremio-offline-e2e sh -c 'npx playwright test && npx playwright test -c playwright.restricted.config.ts'",
     "test:e2e:snapshots": "npm run build && docker build -t stremio-offline-e2e -f e2e/Dockerfile . && docker run --rm -v \"$PWD\":/work -w /work -e CI=1 stremio-offline-e2e npx playwright test --update-snapshots",
     "dev:server": "npm run dev -w server",
-    "dev:web": "npm run dev -w web"
+    "dev:web": "npm run dev -w web",
+    "dev:desktop": "npm run dev -w desktop"
   },
   "engines": {
     "node": ">=22"
