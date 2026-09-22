@@ -14,7 +14,7 @@ function privateReason(ip: string): string | undefined {
     if (a === 0) return "an unspecified address";
     if (a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168)) return "a private network";
     if (a === 127) return "localhost";
-    if (a === 169 && b === 254) return "link-local a metadata cloudu";
+    if (a === 169 && b === 254) return "link-local and cloud metadata";
     if (a === 100 && b >= 64 && b <= 127) return "CGNAT";
     if (a === 198 && (b === 18 || b === 19)) return "a test range";
     if (a >= 224) return "a multicast or reserved range";
