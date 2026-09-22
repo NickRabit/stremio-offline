@@ -158,12 +158,13 @@ export const api = {
   browseGrants: (path = "") => request<GrantBrowse>(`/api/libraries/browse?${q({ path: path || undefined })}`),
   previewLibrary: (body: { root: string; type: LibraryType }) =>
     request<LibraryEstimate>("/api/libraries/preview", { method: "POST", body: JSON.stringify(body) }),
-  browse: (options: { path?: string; query?: string; skip?: number; limit?: number; sort?: string; order?: string; seed?: string; favorites?: boolean }) =>
+  browse: (options: { path?: string; query?: string; skip?: number; limit?: number; sort?: string; order?: string; seed?: string; favorites?: boolean; unconfirmed?: boolean }) =>
     request<BrowseResult>(`/api/library/browse?${q({
       path: options.path || undefined, query: options.query || undefined,
       skip: options.skip || undefined, limit: options.limit ?? 60,
       sort: options.sort || undefined, order: options.order || undefined, seed: options.seed || undefined,
       favorites: options.favorites ? 1 : undefined,
+      unconfirmed: options.unconfirmed ? 1 : undefined,
     })}`),
   status: () => request<BuildInfo>("/api/status"),
   me: () => request<AuthStatus>("/api/auth/me"),

@@ -303,6 +303,18 @@ export function matchStatus(
   return suggestionFor(relative, suggestions) ? "suggested" : "unmatched";
 }
 
+/** The keys the scan proposed and nobody confirmed: a suggestion with an id, on a
+ *  title that is not already bound and whose lookup was not skipped. Qualified keys,
+ *  the form `metaStore.qualifiedSuggestions()` hands out. */
+export function pendingSuggestionKeys(
+  records: Record<string, LibraryMetaRecord>,
+  suggestions: Record<string, LibrarySuggestion>,
+): string[] {
+  return Object.entries(suggestions)
+    .filter(([key, suggestion]) => Boolean(suggestion.id) && !knownTitleOf(key, records)?.id && !lookupSkipped(key, records))
+    .map(([key]) => key);
+}
+
 /** Cut on a word boundary. The stored text is what the detail view shows, so a
  *  hard slice would lose the rest of the sentence for good. */
 export function clipText(value: string, max: number): string {

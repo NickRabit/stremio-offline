@@ -3,11 +3,12 @@ import path from "node:path";
 import { mkdir, rename, stat } from "node:fs/promises";
 import { artworks } from "../artwork-cache.js";
 import type { ArtShape } from "../artwork.js";
-import type { GalleryEntry } from "../library-match.js";
+import { pendingSuggestionKeys, type GalleryEntry, type LibraryMetaRecord, type LibrarySuggestion } from "../library-match.js";
 import { AppError } from "../errors.js";
 import { assertStillAdmin } from "../roles.js";
 import { libraryFor, libraryPath, libraryVisible, parseLibraryPath, posixDir, posixJoin, resolveLibraryPath, sameFile, visibleLibraries, type LibraryRecord, type Viewer } from "../libraries.js";
 import { browseDirectory, holdsLibraryRoot, listFolders, type LibraryEntry } from "../library.js";
+import type { LibraryMetaStore } from "../library-meta-store.js";
 import type { LibraryHealth } from "../library-probe.js";
 import type { TransferProgress } from "../library-transfer.js";
 import { log } from "../logger.js";
@@ -38,6 +39,7 @@ export interface ContentDeps extends RouteContext {
   locateFolderArtwork(key: string, shape?: ArtShape): Promise<string | undefined>;
   locateFolderArtworkPair(key: string): Promise<{ poster: string | undefined; wide: string | undefined }>;
   markBrowsed(library: LibraryRecord): void;
+  metaStore: LibraryMetaStore;
   prefsOf(req?: express.Request): UserPrefs;
   progressOf(data: UserData): Record<string, StoredProgress>;
   relativeKeyIn(libraryId: string, key: string): string | undefined;
@@ -52,7 +54,20 @@ export interface ContentDeps extends RouteContext {
 }
 
 export function registerContentRoutes(app: express.Application, deps: ContentDeps): void {
-  const { store, currentUser, attachBrowseMeta, carveOutsOf, dataOf, deleteLibraryItem, fileExists, galleryArtwork, galleryOf, healthOf, invalidateLibrary, libraryEntries, libraryKey, libraryPathBusy, libraryRootBrowse, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, prefsOf, progressOf, relativeKeyIn, relocateLibraryPath, scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites } = deps;
+  const { store, currentUser, attachBrowseMeta, carveOutsOf, dataOf, deleteLibraryItem, fileExists, galleryArtwork, galleryOf, healthOf, invalidateLibrary, libraryEntries, libraryKey, libraryPathBusy, libraryRootBrowse, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, metaStore, prefsOf, progressOf, relativeKeyIn, relocateLibraryPath, scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites } = deps;
+
+  /** The relative paths a pending suggestion covers: its own row, plus every folder above
+   *  it, so a folder holding an unconfirmed title is listed too. */
+  const pendingPathsIn = (libraryId: string): Set<string> => {
+    const paths = new Set<string>();
+    for (const key of pendingSuggestionKeys(metaStore.qualifiedMeta(), metaStore.qualifiedSuggestions())) {
+      const relative = relativeKeyIn(libraryId, key);
+      if (relative === undefined) continue;
+      const parts = relative.split("/");
+      for (let depth = parts.length; depth >= 1; depth -= 1) paths.add(parts.slice(0, depth).join("/"));
+    }
+    return paths;
+  };
 
   /** Whether a key names a library the viewer may see. A key in an invisible library is
    *  refused wherever a key to a missing one is, so the two cannot be told apart. */
@@ -68,6 +83,7 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     const sorts = new Set(["name", "added", "size", "random"]);
     const sort = sorts.has(String(req.query.sort)) ? String(req.query.sort) as "name" : "name";
     const onlyFavorites = req.query.favorites === "1";
+    const onlyUnconfirmed = req.query.unconfirmed === "1";
     void sweepArtwork();
     const configured = store.libraries();
     const viewer = viewerOf(currentUser(req));
@@ -91,8 +107,12 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     const favoritePaths = onlyFavorites
       ? new Set(data.favorites.map((key) => relativeKeyIn(library.id, key)).filter((value): value is string => value !== undefined))
       : undefined;
+    const unconfirmedPaths = onlyUnconfirmed ? pendingPathsIn(library.id) : undefined;
+    const onlyPaths = favoritePaths && unconfirmedPaths
+      ? new Set([...favoritePaths].filter((path) => unconfirmedPaths.has(path)))
+      : favoritePaths ?? unconfirmedPaths;
     const result = await browseDirectory(library.root, resolved?.relative ?? "", String(req.query.query ?? ""),
-      Math.max(0, Number(req.query.skip) || 0), limit, sort, req.query.order === "desc", String(req.query.seed ?? ""), favoritePaths,
+      Math.max(0, Number(req.query.skip) || 0), limit, sort, req.query.order === "desc", String(req.query.seed ?? ""), onlyPaths,
       carveOutsOf(library));
     // Missing thumbnails are produced in the background; the client asks for the page again shortly.
     const items = await Promise.all(result.items.map(async (item) => {
