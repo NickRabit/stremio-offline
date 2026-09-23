@@ -30,7 +30,9 @@ test("the operation strip keeps the listing's inset and clears the toolbar", asy
   await expect(strip).toBeVisible();
   const box = (await strip.boundingBox())!;
   const head = (await page.locator(".browse-head").boundingBox())!;
-  const tools = (await page.locator(".browse-tools").boundingBox())!;
+  // The bar, not `.browse-tools`: a landscape phone turns that row into `display: contents`,
+  // which leaves it without a box of its own -- and the controls it holds sit in the bar anyway.
+  const tools = (await page.locator(".browse-bar").boundingBox())!;
   const grid = (await page.locator(".browse-grid, .browse-rows").first().boundingBox())!;
 
   // It lines up with the listing below it rather than running to the panel's own edges.
