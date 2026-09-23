@@ -63,6 +63,13 @@ test.describe("screenshots", () => {
   });
 
   test("library", async ({ page }) => {
+    await page.route("**/api/library/browse?*", async (route) => {
+      const response = await route.fetch();
+      const result = await response.json();
+      const names = new Set(["Zkušební film", "Zkušební film (2024)", "Zkušební seriál"]);
+      const items = result.items.filter((item: { name?: string; label?: string }) => names.has(item.name ?? item.label ?? ""));
+      return route.fulfill({ response, json: { ...result, items, total: items.length } });
+    });
     await openView(page, "Knihovna");
     // The page heading is the one part of this header a phone does not show, so the trail is
     // what says the listing has arrived at every width.
@@ -71,6 +78,13 @@ test.describe("screenshots", () => {
   });
 
   test("settings", async ({ page }) => {
+    await page.route("**/api/libraries", async (route) => {
+      const response = await route.fetch();
+      const libraries = await response.json();
+      return route.fulfill({ response, json: libraries.map((library: Record<string, unknown>) => ({
+        ...library, titles: 3, files: 4, bytes: 15 * 1024,
+      })) });
+    });
     await openView(page, "Nastavení");
     await expect(page.getByRole("combobox", { name: "Velikost položek katalogu" })).toBeVisible();
     // The report count is different on every run, and at the narrow viewports its width
