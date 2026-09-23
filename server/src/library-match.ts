@@ -1,5 +1,5 @@
 import { isPathWithin, isVideo, numberedEpisode, parseSeason, remapPath, type FoundFile } from "./library.js";
-import { posixBase, type LibraryType } from "./libraries.js";
+import { parseLibraryPath, posixBase, type LibraryType } from "./libraries.js";
 import { parseMediaPath, type ParsedMedia } from "./library-parse.js";
 import type { MetaItem } from "./types.js";
 
@@ -28,8 +28,23 @@ export interface LibrarySuggestion {
   name: string;
   year?: number;
   score: number;
+  /** Name-only similarity, as an integer percentage. Older persisted suggestions lack it. */
+  titleSimilarity?: number;
   scannedAt?: string;
+  /** Why a high score still wants a look. Absent when nothing about the match is
+   *  worth explaining. */
+  reason?: SuggestionReason;
+  /** The candidate's own poster, as the provider gave it. The route proxies it before
+   *  the browser ever sees the address. */
+  poster?: string;
+  /** Set on a correction: the automatic binding this proposal would replace. */
+  replacesId?: string;
+  replacesName?: string;
+  replacesYear?: number;
 }
+
+/** The short explanation a proposal carries when a high score is not the whole story. */
+export type SuggestionReason = "ambiguous" | "year" | "correction";
 
 export interface LibraryMetaRecord {
   type: string;
@@ -186,16 +201,37 @@ export function autoAccept(hits: ScoredHit[], nowYear = new Date().getFullYear()
 /** Below this the best hit is noise -- offering it would only teach the user to distrust the list. */
 export const SUGGESTION_MIN_SCORE = 60;
 
+/** More than one distinct identity is close enough to be the one the file means. */
+function ambiguousHits(ranked: ScoredHit[]): boolean {
+  const top = ranked[0];
+  if (!top) return false;
+  const topName = normalizeTitle(top.item.name);
+  return ranked.some((hit) =>
+    hit !== top && top.score - hit.score < 15 && hit.titleSimilarity >= 0.90 && normalizeTitle(hit.item.name) !== topName);
+}
+
 export function pickSuggestion(hits: ScoredHit[], minScore = SUGGESTION_MIN_SCORE): LibrarySuggestion | undefined {
-  const top = [...hits].sort((a, b) => b.score - a.score)[0];
+  // A wrong type or a year off by more than two is not a safe match and is not offered as
+  // if it were: the proposal list is where a person decides, and a bad row wastes that.
+  const ranked = hits.filter((hit) => hit.autoEligible).sort((a, b) => b.score - a.score);
+  const top = ranked[0];
   if (!top || top.score < minScore) return undefined;
   const year = yearFromMeta(top.item);
+  // The number beside a proposal is title-name similarity, so everything that is not in
+  // that number gets said out loud instead of hiding behind 100%.
+  const reason: SuggestionReason | undefined = ambiguousHits(ranked)
+    ? "ambiguous"
+    : ranked.some((hit) => hit.yearDelta == null || hit.yearDelta > 0) ? "year" : undefined;
+  const poster = typeof top.item.poster === "string" && top.item.poster ? top.item.poster : undefined;
   return {
     type: top.item.type,
     id: top.item.id,
     name: top.item.name,
     score: top.score,
+    titleSimilarity: Math.round(top.titleSimilarity * 100),
     ...(year != null ? { year } : {}),
+    ...(reason ? { reason } : {}),
+    ...(poster ? { poster } : {}),
   };
 }
 
@@ -304,15 +340,38 @@ export function matchStatus(
 }
 
 /** The keys the scan proposed and nobody confirmed: a suggestion with an id, on a
- *  title that is not already bound and whose lookup was not skipped. Qualified keys,
- *  the form `metaStore.qualifiedSuggestions()` hands out. */
+ *  title that is not already bound and whose lookup was not skipped. A correction of an
+ *  unlocked automatic binding is one of them: it names the id it would replace, and the
+ *  ordinary proposal for a title that is already bound stays out. Qualified keys, the
+ *  form `metaStore.qualifiedSuggestions()` hands out. */
 export function pendingSuggestionKeys(
   records: Record<string, LibraryMetaRecord>,
   suggestions: Record<string, LibrarySuggestion>,
 ): string[] {
   return Object.entries(suggestions)
-    .filter(([key, suggestion]) => Boolean(suggestion.id) && !knownTitleOf(key, records)?.id && !lookupSkipped(key, records))
+    .filter(([key, suggestion]) => {
+      if (!suggestion.id || lookupSkipped(key, records)) return false;
+      const bound = knownTitleOf(key, records);
+      if (!bound?.id) return true;
+      return Boolean(suggestion.replacesId) && suggestion.replacesId === bound.id
+        && suggestion.id !== bound.id && bound.source === "scan" && bound.locked !== true;
+    })
     .map(([key]) => key);
+}
+
+/** The saved proposals a finished scan may drop: their library is here now, and no title
+ *  unit covers the key any more. A library that is away keeps its rows, so an unplugged
+ *  disk never reads as a library that lost everything. */
+export function staleSuggestionKeys(
+  suggestions: Record<string, LibrarySuggestion>,
+  units: TitleUnit[],
+  reachableLibraryIds: ReadonlySet<string>,
+): string[] {
+  return Object.keys(suggestions).filter((key) => {
+    const libraryId = parseLibraryPath(key)?.libraryId;
+    if (!libraryId || !reachableLibraryIds.has(libraryId)) return false;
+    return !units.some((unit) => isPathWithin(key, unit.key));
+  });
 }
 
 /** Cut on a word boundary. The stored text is what the detail view shows, so a

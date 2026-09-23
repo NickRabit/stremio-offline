@@ -1,5 +1,5 @@
 import { FormEvent, ReactNode, TouchEvent as ReactTouchEvent, UIEvent, WheelEvent as ReactWheelEvent, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, BarChart3, ArrowUp, Check, RectangleHorizontal, RectangleVertical, Copy, FolderInput, FolderOpen, ImageOff, Images, KeyRound, Languages, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, ShieldCheck, SlidersHorizontal, Sparkles, Star, FileJson, Link2, LogOut, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, FileText, Film, FolderCog, HardDrive, Library, PackagePlus, Pause, Play, Plus, RefreshCw, Search, SearchX, Settings, Subtitles, Trash2, Upload, Users, X } from "lucide-react";
+import { ArrowDown, BarChart3, ArrowUp, Check, RectangleHorizontal, RectangleVertical, Copy, FolderInput, FolderOpen, ImageOff, Images, KeyRound, Languages, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, ShieldCheck, ShieldQuestion, SlidersHorizontal, Sparkles, Star, FileJson, Link2, LogOut, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, FileText, Film, FolderCog, HardDrive, Library, PackagePlus, Pause, Play, Plus, RefreshCw, Search, SearchX, Settings, Subtitles, Trash2, Upload, Users, X } from "lucide-react";
 import { queueDestination } from "./queue-target";
 import { api, ApiError, describeError, logDownloadUrl, saveToDevice } from "./api";
 import { AccountSettings, LoginScreen, PasswordChangeRequired } from "./Login";
@@ -412,11 +412,30 @@ export function App() {
       void loadSuggestionCount();
     }
   };
+  /** The library the browse path is inside. One configured library has no prefix on the
+   *  wire path, so it is named by its own id rather than read out of the path. */
+  const currentLibraryId = libraries.length === 1
+    ? libraries[0]?.id
+    : libraries.find((library) => browsePath === library.id || browsePath.startsWith(`${library.id}/`))?.id;
   const startScan = async (options: { force?: boolean } = {}) => {
     try {
       scanWanted.current = true;
       const state = await api.startLibraryScan(options);
       scanStatus.current = state.status;
+      applyScanState(state);
+    } catch (error) { scanWanted.current = false; fail(error); }
+  };
+  /** The repair path for a wrong automatic binding: one library's unlocked scan records
+   *  are looked at again, and anything that now reads differently comes back as a proposal. */
+  const recheckAutomatic = async () => {
+    setMenuFor(null);
+    const libraryId = currentLibraryId;
+    if (!libraryId) { notify(t("library.recheckNeedsLibrary")); return; }
+    try {
+      scanWanted.current = true;
+      const state = await api.startLibraryScan({ recheckScanBindings: true, libraryId });
+      scanStatus.current = state.status;
+      notify(t("library.recheckStarted"));
       applyScanState(state);
     } catch (error) { scanWanted.current = false; fail(error); }
   };
@@ -1899,6 +1918,9 @@ export function App() {
                 <button title={t("library.rescanHint")} onClick={() => void startScan({ force: true })} disabled={scanning}>
                   <RefreshCw/> {t("library.rescan")}
                 </button>
+                <button title={t("library.recheckAutomaticHint")} onClick={() => void recheckAutomatic()} disabled={scanning || !currentLibraryId}>
+                  <ShieldQuestion/> {t("library.recheckAutomatic")}
+                </button>
                 {!libraryList && !browsePath.startsWith(":") && <button title={t("library.createFolder")} onClick={() => { setMenuFor(null); void createFolder(); }}>
                   <Plus/> {t("library.createFolder")}
                 </button>}
@@ -2085,6 +2107,7 @@ export function App() {
     {bulkIdentifyPaths?.length && <IdentifyDialog path={bulkIdentifyPaths[0]!} paths={bulkIdentifyPaths}
       onClose={() => setBulkIdentifyPaths(null)} onApplied={(id) => { setBulkIdentifyPaths(null); leaveSelection(); if (id) void trackQueuedOp(id); }}/>}
     {suggestionsOpen && <SuggestionsDialog
+      {...(currentLibraryId ? { libraryId: currentLibraryId } : {})}
       onClose={() => setSuggestionsOpen(false)}
       onChanged={() => { void loadSuggestionCount(); void loadBrowse(browsePath); }}
       onIdentify={(target) => { setSuggestionsOpen(false); setIdentifyPath(target); }}/>}

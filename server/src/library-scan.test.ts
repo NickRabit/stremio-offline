@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { LibraryScan, type LibraryScanOpts, type ScanPauseReason } from "./library-scan.js";
+import type { LibraryCandidate, LibraryCandidateSource } from "./library-candidates.js";
 import type { LibraryEpisodeRecord, LibraryMetaRecord, LibrarySuggestion, TitleUnit } from "./library-match.js";
 import type { MetaItem } from "./types.js";
 
@@ -22,7 +23,10 @@ const waitFor = async (pred: () => boolean | Promise<boolean>, ms = 2_000) => {
   }
 };
 
-const harness = async (overrides: Partial<LibraryScanOpts> = {}) => {
+/** The trusted search the scan is handed: only these candidates can ever be bound. */
+type Search = (query: string, kind: "movie" | "series", year: number | undefined) => Promise<MetaItem[]>;
+
+const harness = async (overrides: Partial<LibraryScanOpts> & { search?: Search; gallery?: (candidate: LibraryCandidate) => Promise<Array<{ url: string; kind: "poster" | "background" | "logo" }>> } = {}) => {
   const dataDir = await mkdtemp(path.join(tmpdir(), "stremio-scan-"));
   const store: {
     meta: Record<string, LibraryMetaRecord>;
@@ -36,20 +40,28 @@ const harness = async (overrides: Partial<LibraryScanOpts> = {}) => {
   const searches: string[] = [];
   const metas: string[] = [];
   const frames: string[] = [];
+  const galleries: Array<{ key: string; pictures: Array<{ url: string; kind: string }> }> = [];
   let busy: ScanPauseReason | undefined;
+  const search: Search = overrides.search ?? (async (query) => [hit(query)]);
+  const candidates: LibraryCandidateSource = {
+    searchLibraryCandidates: async (query, kind, year) => {
+      searches.push(query);
+      return (await search(query, kind, year)).map((item) => ({ item, provider: "cinemeta" as const }));
+    },
+    resolveSelected: async (candidate) => candidate.item,
+    galleryOf: async (candidate) => (overrides.gallery ? overrides.gallery(candidate) : []),
+  };
   const opts: LibraryScanOpts = {
     dataDir,
     units: async () => [movie("Foo")],
-    searchAll: async (_addons, query) => {
-      searches.push(query);
-      return { items: [hit(query)] };
-    },
+    candidates,
     metadata: async (_addons, type, id) => hit("Foo", id),
     addons: () => [],
     libraryMeta: () => store.meta,
     librarySuggestions: () => store.suggestions,
     updateMeta: async (mutator) => { mutator(store.meta, store.suggestions, store.episodes); },
     savePoster: (key, _url, backdrop) => { posters.push(key); if (backdrop) posterBackdrops.push(backdrop); },
+    saveGallery: (key, pictures) => { galleries.push({ key, pictures: pictures.map((picture) => ({ url: picture.url, kind: picture.kind })) }); },
     fillWideArtwork: (key) => { backdrops.push(key); },
     deleteGeneratedArt: async (key) => { deleted.push(key); },
     busy: () => busy,
@@ -66,7 +78,7 @@ const harness = async (overrides: Partial<LibraryScanOpts> = {}) => {
     metadata: async (addons, type, id) => { metas.push(id); return opts.metadata(addons, type, id); },
   });
   return {
-    dataDir, scan, store, posters, posterBackdrops, backdrops, deleted, searches, metas, frames,
+    dataDir, scan, store, posters, posterBackdrops, backdrops, deleted, searches, metas, frames, galleries,
     setBusy: (value: ScanPauseReason | undefined) => { busy = value; },
     close: async () => { await scan.stop(); await rm(dataDir, { recursive: true, force: true }); },
   };
@@ -139,7 +151,7 @@ test("catalog lookup skipped on a title is not searched", async () => {
 
 test("a nameless search hit does not fail the unit", async () => {
   const h = await harness({
-    searchAll: async () => ({ items: [{ id: "x", type: "movie" } as MetaItem, hit("Foo")] }),
+    search: async () => [{ id: "x", type: "movie" } as MetaItem, hit("Foo")],
   });
   try {
     await h.scan.start();
@@ -165,9 +177,9 @@ test("bound and locked units never enter the queue", async () => {
 
 test("a user lock taken during search is not overwritten", async () => {
   const h = await harness({
-    searchAll: async () => {
+    search: async () => {
       h.store.meta.Foo = { type: "movie", id: "tt-user", source: "user", locked: true };
-      return { items: [hit("Foo")] };
+      return [hit("Foo")];
     },
   });
   try {
@@ -182,7 +194,7 @@ test("a user lock taken during search is not overwritten", async () => {
 test("load retries the in-flight key still listed in remaining", async () => {
   const h = await harness({
     units: async () => [movie("Foo"), movie("Bar")],
-    searchAll: async (_addons, query) => ({ items: [hit(query, query === "Foo" ? "tt-foo" : "tt-bar")] }),
+    search: async (query) => [hit(query, query === "Foo" ? "tt-foo" : "tt-bar")],
   });
   try {
     await writeFile(path.join(h.dataDir, "library-scan.json"), JSON.stringify({
@@ -215,9 +227,9 @@ test("start while running or paused returns the current snapshot", async () => {
   let release!: () => void;
   const gate = new Promise<void>((resolve) => { release = resolve; });
   const h = await harness({
-    searchAll: async (_addons, query) => {
+    search: async (query) => {
       await gate;
-      return { items: [hit(query)] };
+      return [hit(query)];
     },
   });
   try {
@@ -258,7 +270,7 @@ test("a second run of an already-matched library has nothing to do", async () =>
 });
 
 test("a unit searched in vain is remembered and skipped, until a forced rescan", async () => {
-  const h = await harness({ searchAll: async (_addons, query) => { searches.push(query); return { items: [] }; } });
+  const h = await harness({ search: async (query) => { searches.push(query); return []; } });
   const searches: string[] = [];
   try {
     await h.scan.start();
@@ -368,7 +380,7 @@ test("a scan for one item leaves the rest of the library alone", async () => {
   const searches: string[] = [];
   const h = await harness({
     units: async () => [movie("Foo"), movie("Bar")],
-    searchAll: async (_addons, query) => { searches.push(query); return { items: [] }; },
+    search: async (query) => { searches.push(query); return []; },
   });
   try {
     await h.scan.start({ path: "Bar" });
@@ -385,7 +397,7 @@ test("a scan for one item leaves the rest of the library alone", async () => {
 test("a scan for one file covers the title unit that holds it", async () => {
   const searches: string[] = [];
   const h = await harness({
-    searchAll: async (_addons, query) => { searches.push(query); return { items: [] }; },
+    search: async (query) => { searches.push(query); return []; },
   });
   try {
     await h.scan.start({ path: path.join("Foo", "a.mkv") });
@@ -404,7 +416,7 @@ test("an automatic run asks only about the libraries it was given", async () => 
     ],
     browsed: () => new Set(["lib_aaaaaaaa", "lib_cccccccc"]),
     metaTtlMs: TTL,
-    searchAll: async (_addons, query) => { queries.push(query); return { items: [hit(query, `tt-${query}`)] }; },
+    search: async (query) => { queries.push(query); return [hit(query, `tt-${query}`)]; },
   });
   const before = stale();
   const bound = h.store.meta["lib_cccccccc/Omega"] = {
@@ -477,10 +489,10 @@ test("a library switched off mid-run finishes the item in flight and starts no o
   const h = await harness({
     units: async () => [movie("lib_aaaaaaaa/Alpha"), movie("lib_aaaaaaaa/Beta")],
     automaticLibraryEnabled: () => eligible,
-    searchAll: async (_addons, query) => {
+    search: async (query) => {
       queries.push(query);
       if (query === "Alpha") eligible = false;
-      return { items: [hit(query, `tt-${query}`)] };
+      return [hit(query, `tt-${query}`)];
     },
   });
   try {
@@ -490,5 +502,216 @@ test("a library switched off mid-run finishes the item in flight and starts no o
     assert.deepEqual(h.metas, ["tt-Alpha"], "including the follow-up metadata request of the item in flight");
     assert.equal(h.scan.snapshot().skipped, 1, "the queued item that was dropped is counted as skipped");
     assert.equal(h.store.meta["lib_aaaaaaaa/Beta"], undefined);
+  } finally { await h.close(); }
+});
+
+test("a same-name result the trusted providers did not offer cannot bind a title", async () => {
+  // The row behind the wrong Flashdance binding came from a catalogue addon. The scan only
+  // ever sees the trusted source, so what it cannot see it cannot bind.
+  const h = await harness({ search: async () => [] });
+  try {
+    await h.scan.start();
+    await waitFor(() => h.scan.snapshot().status === "completed");
+    assert.equal(h.scan.snapshot().matched, 0);
+    assert.equal(h.store.meta.Foo, undefined);
+    assert.ok(h.store.suggestions.Foo?.scannedAt, "the fruitless search is remembered");
+  } finally { await h.close(); }
+});
+
+test("an exact trusted candidate binds, and its gallery is saved beside the two pictures", async () => {
+  const h = await harness({
+    search: async (query) => [hit(query, "tt-exact")],
+    gallery: async () => [{ url: "https://image.tmdb.org/t/p/w500/alt.jpg", kind: "poster" }],
+  });
+  try {
+    await h.scan.start();
+    await waitFor(() => h.scan.snapshot().status === "completed");
+    assert.equal(h.store.meta.Foo?.id, "tt-exact");
+    assert.deepEqual(h.posters, ["Foo"]);
+    assert.deepEqual(h.galleries, [{ key: "Foo", pictures: [{ url: "https://image.tmdb.org/t/p/w500/alt.jpg", kind: "poster" }] }]);
+  } finally { await h.close(); }
+});
+
+test("a provider that answers nothing leaves the title unbound and does not fail the run", async () => {
+  const h = await harness({ search: async () => { throw new Error("Cinemeta is down"); } });
+  try {
+    await h.scan.start();
+    await waitFor(() => h.scan.snapshot().status === "completed");
+    assert.equal(h.scan.snapshot().failed, 0);
+    assert.equal(h.scan.snapshot().matched, 0);
+    assert.equal(h.store.meta.Foo, undefined);
+  } finally { await h.close(); }
+});
+
+test("a 100% name match with several years stays a proposal with a reason", async () => {
+  const h = await harness({
+    units: async () => [movie("Avengers")],
+    search: async () => [
+      { id: "tt0848228", type: "movie", name: "The Avengers", releaseInfo: "2012" },
+      { id: "tt0118661", type: "movie", name: "The Avengers", releaseInfo: "1998" },
+      { id: "tt2395427", type: "movie", name: "Avengers: Age of Ultron", releaseInfo: "2015" },
+      { id: "tt4154796", type: "movie", name: "Avengers: Endgame", releaseInfo: "2019" },
+    ],
+  });
+  try {
+    await h.scan.start();
+    await waitFor(() => h.scan.snapshot().status === "completed");
+    assert.equal(h.scan.snapshot().matched, 0, "100% of the name is not 100% of the identity");
+    const proposal = h.store.suggestions.Avengers!;
+    assert.equal(proposal.id, "tt0848228");
+    assert.equal(proposal.score, 100);
+    assert.equal(proposal.reason, "year");
+  } finally { await h.close(); }
+});
+
+test("a poster the candidate carried travels with the proposal", async () => {
+  const h = await harness({
+    units: async () => [movie("Flashdance (1983)")],
+    search: async () => [{ id: "tt0085549", type: "movie", name: "Flashdance", releaseInfo: "1985", poster: "https://art/a.jpg" }],
+  });
+  try {
+    await h.scan.start();
+    await waitFor(() => h.scan.snapshot().status === "completed");
+    assert.equal(h.scan.snapshot().matched, 0, "a year two off is a proposal, not a binding");
+    assert.equal(h.store.suggestions["Flashdance (1983)"]?.poster, "https://art/a.jpg");
+  } finally { await h.close(); }
+});
+
+test("a wrong kind or a year off by more than two is never auto-bound", async () => {
+  const wrongKind = await harness({
+    units: async () => [series("Foo")],
+    search: async () => [hit("Foo", "tt-wrong")],
+  });
+  try {
+    await wrongKind.scan.start();
+    await waitFor(() => wrongKind.scan.snapshot().status === "completed");
+    assert.equal(wrongKind.scan.snapshot().matched, 0, "a movie row does not name a series");
+    assert.equal(wrongKind.store.meta.Foo, undefined);
+  } finally { await wrongKind.close(); }
+
+  const wrongYear = await harness({
+    units: async () => [movie("Flashdance (1983)")],
+    search: async () => [{ id: "tt-wrong", type: "movie", name: "Flashdance", releaseInfo: "2011" }],
+  });
+  try {
+    await wrongYear.scan.start();
+    await waitFor(() => wrongYear.scan.snapshot().status === "completed");
+    assert.equal(wrongYear.scan.snapshot().matched, 0);
+    assert.equal(wrongYear.store.meta["Flashdance (1983)"], undefined);
+  } finally { await wrongYear.close(); }
+});
+
+test("a candidate that resolves to no metadata record is not bound", async () => {
+  const h = await harness({
+    units: async () => [movie("Foo")],
+    search: async (query) => [hit(query, "tt-ghost")],
+    metadata: async () => null,
+  });
+  try {
+    await h.scan.start();
+    await waitFor(() => h.scan.snapshot().status === "completed");
+    assert.equal(h.scan.snapshot().matched, 0);
+    assert.equal(h.store.meta.Foo, undefined);
+    assert.deepEqual(h.posters, []);
+  } finally { await h.close(); }
+});
+
+test("a recheck proposes a correction without touching the binding it would replace", async () => {
+  const h = await harness({
+    units: async () => [movie("lib_aaaaaaaa/Flashdance")],
+    search: async (query) => [hit(query, "tt-new")],
+  });
+  try {
+    h.store.meta["lib_aaaaaaaa/Flashdance"] = { type: "movie", id: "tt-old", source: "scan", locked: false, name: "Flashdance", year: "1983" };
+    await h.scan.start({ libraryId: "lib_aaaaaaaa", recheckScanBindings: true });
+    await waitFor(() => h.scan.snapshot().status === "completed");
+    assert.equal(h.scan.snapshot().recheck, true);
+    assert.equal(h.scan.snapshot().matched, 0, "a recheck binds nothing on its own");
+    assert.equal(h.store.meta["lib_aaaaaaaa/Flashdance"]?.id, "tt-old", "the old binding is still the binding");
+    const proposal = h.store.suggestions["lib_aaaaaaaa/Flashdance"]!;
+    assert.equal(proposal.id, "tt-new");
+    assert.equal(proposal.reason, "correction");
+    assert.equal(proposal.replacesId, "tt-old");
+    assert.equal(proposal.replacesName, "Flashdance");
+    assert.equal(proposal.replacesYear, 1983);
+  } finally { await h.close(); }
+});
+
+test("a recheck interrupted by restart resumes as a recheck", async () => {
+  const key = "lib_aaaaaaaa/Flashdance";
+  const h = await harness({
+    units: async () => [movie(key)],
+    search: async (query) => [hit(query, "tt-new")],
+  });
+  try {
+    h.store.meta[key] = { type: "movie", id: "tt-old", source: "scan", locked: false, name: "Flashdance", year: "1983" };
+    await writeFile(path.join(h.dataDir, "library-scan.json"), JSON.stringify({
+      status: "running", recheck: true, libraryId: "lib_aaaaaaaa", total: 1, done: 0,
+      matched: 0, skipped: 0, failed: 0, remaining: [key], current: key,
+    }));
+    await h.scan.load();
+    await waitFor(() => h.scan.snapshot().status === "completed");
+    assert.equal(h.store.meta[key]?.id, "tt-old");
+    assert.equal(h.store.suggestions[key]?.replacesId, "tt-old");
+    assert.equal(h.store.suggestions[key]?.id, "tt-new");
+  } finally { await h.close(); }
+});
+
+test("a recheck leaves user, download, locked and ignored bindings alone", async () => {
+  const h = await harness({
+    units: async () => [movie("lib_aaaaaaaa/Film")],
+    search: async (query) => [hit(query, "tt-new")],
+  });
+  try {
+    for (const [source, locked] of [["user", true], ["download", true], ["scan", true]] as const) {
+      h.store.meta["lib_aaaaaaaa/Film"] = { type: "movie", id: "tt-kept", source, locked };
+      h.store.suggestions = {};
+      await h.scan.start({ libraryId: "lib_aaaaaaaa", recheckScanBindings: true });
+      await waitFor(() => h.scan.snapshot().status === "completed" && h.scan.snapshot().done >= 0);
+      assert.equal(h.scan.snapshot().total, 0, `${source} is not rechecked`);
+      assert.equal(h.scan.snapshot().done, 0);
+      assert.equal(h.store.meta["lib_aaaaaaaa/Film"]?.id, "tt-kept");
+      assert.deepEqual(h.store.suggestions, {});
+    }
+  } finally { await h.close(); }
+});
+
+test("a recheck that finds the same title changes nothing", async () => {
+  const h = await harness({
+    units: async () => [movie("lib_aaaaaaaa/Flashdance")],
+    search: async (query) => [hit(query, "tt-same")],
+  });
+  try {
+    h.store.meta["lib_aaaaaaaa/Flashdance"] = { type: "movie", id: "tt-same", source: "scan", locked: false };
+    h.store.suggestions["lib_aaaaaaaa/Flashdance"] = {
+      type: "movie", id: "tt-old-proposal", name: "Wrong old result", score: 92,
+      reason: "correction", replacesId: "tt-same",
+    };
+    await h.scan.start({ libraryId: "lib_aaaaaaaa", recheckScanBindings: true });
+    await waitFor(() => h.scan.snapshot().status === "completed");
+    assert.equal(h.store.meta["lib_aaaaaaaa/Flashdance"]?.id, "tt-same");
+    assert.equal(h.store.suggestions["lib_aaaaaaaa/Flashdance"], undefined, "a fresh confirmation of the current match removes its stale correction");
+  } finally { await h.close(); }
+});
+
+test("a recheck without a library rechecks nothing at all", async () => {
+  const h = await harness({ units: async () => [movie("lib_aaaaaaaa/Flashdance")] });
+  try {
+    h.store.meta["lib_aaaaaaaa/Flashdance"] = { type: "movie", id: "tt-old", source: "scan", locked: false };
+    const state = await h.scan.start({ recheckScanBindings: true });
+    assert.equal(state.status, "idle");
+    assert.deepEqual(h.searches, []);
+  } finally { await h.close(); }
+});
+
+test("a plain scan walks past an automatic binding without proposing anything", async () => {
+  const h = await harness({ units: async () => [movie("lib_aaaaaaaa/Flashdance")] });
+  try {
+    h.store.meta["lib_aaaaaaaa/Flashdance"] = { type: "movie", id: "tt-old", source: "scan", locked: false };
+    await h.scan.start({ libraryId: "lib_aaaaaaaa" });
+    await waitFor(() => h.scan.snapshot().status === "completed");
+    assert.equal(h.scan.snapshot().total, 0);
+    assert.deepEqual(h.searches, []);
+    assert.deepEqual(h.store.suggestions, {});
   } finally { await h.close(); }
 });

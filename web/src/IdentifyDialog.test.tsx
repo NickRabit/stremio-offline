@@ -59,9 +59,9 @@ describe("IdentifyDialog", () => {
   it("prefills series kind and searches", async () => {
     fetchMock.mockImplementation((url: string) => {
       if (String(url).includes("/api/library/identity")) return Promise.resolve(json(identity));
-      if (String(url).includes("/api/search")) return Promise.resolve(json({
-        items: [{ id: "tt0111958", type: "series", name: "Father Ted", releaseInfo: "1995" }],
-        hasMore: false, cursor: "", sources: 1,
+      if (String(url).includes("/api/library/search")) return Promise.resolve(json({
+        items: [{ id: "tt0111958", type: "series", name: "Father Ted", releaseInfo: "1995", source: "cinemeta" }],
+        total: 1,
       }));
       return Promise.resolve(json({}));
     });
@@ -70,7 +70,7 @@ describe("IdentifyDialog", () => {
     expect(host.querySelector("input")?.value).toBe("Father Ted");
     expect(host.textContent).toContain("Series");
     expect(host.textContent).toContain("Father Ted");
-    const searchCall = fetchMock.mock.calls.find((call) => String(call[0]).includes("/api/search"));
+    const searchCall = fetchMock.mock.calls.find((call) => String(call[0]).includes("/api/library/search"));
     expect(String(searchCall?.[0])).toContain("type=series");
   });
 
@@ -78,9 +78,9 @@ describe("IdentifyDialog", () => {
     const onApplied = vi.fn();
     fetchMock.mockImplementation((url: string, init?: RequestInit) => {
       if (String(url).includes("/api/library/identity")) return Promise.resolve(json(identity));
-      if (String(url).includes("/api/search")) return Promise.resolve(json({
-        items: [{ id: "tt0111958", type: "series", name: "Father Ted", releaseInfo: "1995" }],
-        hasMore: false, cursor: "", sources: 1,
+      if (String(url).includes("/api/library/search")) return Promise.resolve(json({
+        items: [{ id: "tt0111958", type: "series", name: "Father Ted", releaseInfo: "1995", source: "cinemeta" }],
+        total: 1,
       }));
       if (String(url).includes("/api/library/match")) return Promise.resolve(json({ key: "Father Ted", type: "series", id: "tt0111958" }));
       return Promise.resolve(json({}));
@@ -101,9 +101,9 @@ describe("IdentifyDialog", () => {
     const onApplied = vi.fn();
     fetchMock.mockImplementation((url: string) => {
       if (String(url).includes("/api/library/identity")) return Promise.resolve(json(episodeIdentity));
-      if (String(url).includes("/api/search")) return Promise.resolve(json({
-        items: [{ id: "tt0111958", type: "series", name: "Father Ted", releaseInfo: "1995" }],
-        hasMore: false, cursor: "", sources: 1,
+      if (String(url).includes("/api/library/search")) return Promise.resolve(json({
+        items: [{ id: "tt0111958", type: "series", name: "Father Ted", releaseInfo: "1995", source: "cinemeta" }],
+        total: 1,
       }));
       if (String(url).includes("/api/meta/")) return Promise.resolve(json(seriesMeta));
       if (String(url).includes("/api/library/match")) return Promise.resolve(json({ key: "Father Ted/dil.mkv", type: "series", id: "tt0111958" }));
@@ -136,7 +136,7 @@ describe("IdentifyDialog", () => {
   it("shows the locked hint when the title was unmatched", async () => {
     fetchMock.mockImplementation((url: string) => {
       if (String(url).includes("/api/library/identity")) return Promise.resolve(json({ ...identity, match: "rejected" }));
-      if (String(url).includes("/api/search")) return Promise.resolve(json({ items: [], hasMore: false, cursor: "", sources: 1 }));
+      if (String(url).includes("/api/library/search")) return Promise.resolve(json({ items: [], total: 0 }));
       return Promise.resolve(json({}));
     });
     await act(async () => { root.render(<IdentifyDialog path="Father Ted" onClose={() => undefined} onApplied={() => undefined}/>); });
@@ -148,9 +148,9 @@ describe("IdentifyDialog", () => {
     const onApplied = vi.fn();
     fetchMock.mockImplementation((url: string) => {
       if (String(url).includes("/api/library/identity")) return Promise.resolve(json(identity));
-      if (String(url).includes("/api/search")) return Promise.resolve(json({
-        items: [{ id: "tt0111958", type: "series", name: "Father Ted", releaseInfo: "1995" }],
-        hasMore: false, cursor: "", sources: 1,
+      if (String(url).includes("/api/library/search")) return Promise.resolve(json({
+        items: [{ id: "tt0111958", type: "series", name: "Father Ted", releaseInfo: "1995", source: "cinemeta" }],
+        total: 1,
       }));
       if (String(url).includes("/api/library/ops")) return Promise.resolve(json({ id: "job-1" }, 202));
       return Promise.resolve(json({}));
@@ -172,9 +172,9 @@ describe("IdentifyDialog", () => {
 it("keeps the head and the action outside the one scrolling region", async () => {
   fetchMock.mockImplementation((url: string) => {
     if (String(url).includes("/api/library/identity")) return Promise.resolve(json(identity));
-    if (String(url).includes("/api/search")) return Promise.resolve(json({
-      items: [{ id: "tt0111958", type: "series", name: "Father Ted", releaseInfo: "1995" }],
-      hasMore: false, cursor: "", sources: 1,
+    if (String(url).includes("/api/library/search")) return Promise.resolve(json({
+      items: [{ id: "tt0111958", type: "series", name: "Father Ted", releaseInfo: "1995", source: "cinemeta" }],
+      total: 1,
     }));
     return Promise.resolve(json({}));
   });
@@ -204,7 +204,7 @@ it("sizes the overlay to the part of the screen the keyboard leaves", async () =
   };
   vi.stubGlobal("visualViewport", viewport);
   fetchMock.mockImplementation((url: string) =>
-    Promise.resolve(json(String(url).includes("/api/library/identity") ? identity : { items: [], hasMore: false, cursor: "", sources: 1 })));
+    Promise.resolve(json(String(url).includes("/api/library/identity") ? identity : { items: [], total: 0 })));
   await act(async () => { root.render(<IdentifyDialog path="Father Ted" onClose={() => undefined} onApplied={() => undefined}/>); });
 
   const overlay = host.querySelector<HTMLElement>(".identify-overlay")!;
@@ -219,7 +219,7 @@ it("sizes the overlay to the part of the screen the keyboard leaves", async () =
 /** The keyboard hides the very results the search is about to load. */
 it("drops focus when the search is submitted", async () => {
   fetchMock.mockImplementation((url: string) =>
-    Promise.resolve(json(String(url).includes("/api/library/identity") ? identity : { items: [], hasMore: false, cursor: "", sources: 1 })));
+    Promise.resolve(json(String(url).includes("/api/library/identity") ? identity : { items: [], total: 0 })));
   await act(async () => { root.render(<IdentifyDialog path="Father Ted" onClose={() => undefined} onApplied={() => undefined}/>); });
   const input = host.querySelector<HTMLInputElement>(".dialog-body input")!;
   input.focus();
@@ -227,4 +227,92 @@ it("drops focus when the search is submitted", async () => {
   const form = host.querySelector<HTMLFormElement>("form")!;
   await act(async () => { form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
   expect(document.activeElement).not.toBe(input);
+});
+
+it("shows the trusted result promptly, names its source and selects nothing on its own", async () => {
+  fetchMock.mockImplementation((url: string) => {
+    if (String(url).includes("/api/library/identity")) return Promise.resolve(json({ ...identity, suggestion: undefined }));
+    if (String(url).includes("/api/library/search")) return Promise.resolve(json({
+      items: [{ id: "tmdb:1396", type: "series", name: "Father Ted", releaseInfo: "1995", source: "tmdb" }],
+      total: 1,
+    }));
+    return Promise.resolve(json({}));
+  });
+  await act(async () => { root.render(<IdentifyDialog path="Father Ted" onClose={() => undefined} onApplied={() => undefined}/>); });
+  await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+  const row = host.querySelector(".identify-results button")!;
+  expect(row.textContent).toContain("Father Ted");
+  expect(row.textContent).toContain("TMDB"); // the row says which provider offered it
+  expect(host.querySelector(".identify-results button.selected")).toBeNull();
+  const apply = [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("Use this title")) as HTMLButtonElement;
+  expect(apply.disabled).toBe(true); // a listed title is not a chosen one
+});
+
+it("widens to the catalogue addons only when that is asked for", async () => {
+  fetchMock.mockImplementation((url: string) => {
+    if (String(url).includes("/api/library/identity")) return Promise.resolve(json({ ...identity, suggestion: undefined }));
+    if (String(url).includes("/api/library/search")) return Promise.resolve(json({
+      items: [{ id: "tt0111958", type: "series", name: "Father Ted", releaseInfo: "1995", source: "cinemeta" }],
+      total: 1,
+    }));
+    if (String(url).includes("/api/search")) return Promise.resolve(json({
+      items: [{ id: "kitsu:1", type: "series", name: "Father Ted", releaseInfo: "1995" }],
+      hasMore: false, cursor: "", sources: 1,
+    }));
+    return Promise.resolve(json({}));
+  });
+  await act(async () => { root.render(<IdentifyDialog path="Father Ted" onClose={() => undefined} onApplied={() => undefined}/>); });
+  await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+  expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("/api/search"))).toBe(false);
+
+  const wider = [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("Search other addons"))!;
+  await act(async () => { wider.click(); });
+  await act(async () => { await Promise.resolve(); });
+
+  const call = fetchMock.mock.calls.find((entry) => String(entry[0]).includes("/api/search"));
+  expect(String(call?.[0])).toContain("query=Father+Ted");
+  expect(host.textContent).toContain("Father Ted");
+  expect(host.textContent).toContain("Addon");
+});
+
+it("searches with the title, year and type the user entered", async () => {
+  fetchMock.mockImplementation((url: string) => {
+    if (String(url).includes("/api/library/identity")) return Promise.resolve(json(identity));
+    if (String(url).includes("/api/library/search")) return Promise.resolve(json({ items: [], total: 0 }));
+    return Promise.resolve(json({}));
+  });
+  await act(async () => { root.render(<IdentifyDialog path="Father Ted" onClose={() => undefined} onApplied={() => undefined}/>); });
+  await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+  const inputs = [...host.querySelectorAll<HTMLInputElement>(".dialog-body input")];
+  const yearInput = inputs.find((input) => input.inputMode === "numeric")!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(yearInput, "1996");
+    yearInput.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  const form = host.querySelector<HTMLFormElement>("form")!;
+  await act(async () => { form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
+  await act(async () => { await Promise.resolve(); });
+
+  const calls = fetchMock.mock.calls.filter((entry) => String(entry[0]).includes("/api/library/search"));
+  expect(String(calls.at(-1)?.[0])).toContain("year=1996");
+  expect(String(calls.at(-1)?.[0])).toContain("type=series");
+});
+
+it("offers the addon search even when the trusted providers return no rows", async () => {
+  fetchMock.mockImplementation((url: string) => {
+    if (String(url).includes("/api/library/identity")) return Promise.resolve(json(identity));
+    if (String(url).includes("/api/library/search")) return Promise.resolve(json({ items: [], total: 0 }));
+    if (String(url).includes("/api/search")) return Promise.resolve(json({ items: [], hasMore: false, cursor: "", sources: 0 }));
+    return Promise.resolve(json({}));
+  });
+  await act(async () => { root.render(<IdentifyDialog path="Father Ted" onClose={() => undefined} onApplied={() => undefined}/>); });
+  await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+  const wider = [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("Search other addons"));
+  expect(wider).toBeTruthy();
+  await act(async () => { wider!.click(); });
+  await act(async () => { await Promise.resolve(); });
+  expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("/api/search"))).toBe(true);
 });

@@ -42,6 +42,10 @@ The single set of rules for any coding agent working in this repository.
 
 ## After implementing
 
+### Visual verification
+
+- Defer UX and visual tests and screenshot or preview generation until implementation and functional checks are stable; run them once at the end of the task.
+
 Deploy to the local Docker setup and verify the container comes up:
 
 ```bash

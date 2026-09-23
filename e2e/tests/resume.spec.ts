@@ -90,7 +90,7 @@ test("a library kept out of Continue watching hides its rows and keeps their pos
  *  existed has nothing to be hidden by, so it stays until it is played again. */
 test("an addon kept out of Continue watching hides its titles and keeps their positions", async ({ page, request }) => {
   const [addon] = (await (await request.get("/api/addons")).json())
-    .filter((entry: { manifest: { id: string } }) => entry.manifest.id === "cz.stremio.offline.e2e");
+    .filter((entry: { manifest: { id: string } }) => entry.manifest.id === "com.linvo.cinemeta");
   const card = () => page.locator(".addon-card", { has: page.getByRole("heading", { name: "E2E doplněk" }) });
   const tile = (key: string) => page.locator(`.poster-card[data-catalog-key="${key}"]`);
   const dialog = () => page.getByRole("dialog", { name: "Upravit doplněk" });

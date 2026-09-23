@@ -159,7 +159,7 @@ test("a moved file keeps its own title instead of inheriting the destination's",
   await title.fill("Zkušební film");
   // The fixture catalogue matches on the name alone, so the year must not ride along.
   await identify.getByLabel("Rok").fill("");
-  await identify.getByRole("button", { name: "Hledat" }).click();
+  await identify.getByRole("button", { name: "Hledat", exact: true }).click();
   await identify.getByRole("button", { name: /Zkušební film/ }).click();
   await identify.getByRole("button", { name: "Použít tento titul" }).click();
   await expect(identify).toHaveCount(0);

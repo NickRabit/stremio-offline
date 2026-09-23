@@ -109,6 +109,17 @@ test.describe("layout invariants", () => {
     { view: "Doplňky", open: "Upravit doplněk", card: ".addon-edit-card" },
   ] as const) {
     test(`removal options stay inside the ${dialog.open} dialog`, async ({ page }) => {
+      if (dialog.open === "Upravit doplněk") {
+        await page.route("**/api/addons", async (route) => {
+          const response = await route.fetch();
+          const addons = await response.json();
+          const [first, ...rest] = addons;
+          return route.fulfill({ response, json: [
+            { ...first, essential: false, manifest: { ...first.manifest, id: "e2e.removable" } },
+            ...rest,
+          ] });
+        });
+      }
       await openView(page, dialog.view);
       await page.getByRole("button", { name: dialog.open }).first().click();
       const card = page.locator(dialog.card);

@@ -182,13 +182,15 @@ test("the identify dialog stays inside the screen", async ({ page }) => {
       match: "matched", bound: { type: "movie", id: "tt1", name: "Cesta za obzor" },
     },
   }));
-  await page.route("**/api/search?*", (route) => route.fulfill({
+  // The dialog's own search is the trusted one; the wider catalogue search is a separate,
+  // explicit action and is not what this test opens.
+  await page.route("**/api/library/search?*", (route) => route.fulfill({
     json: {
       items: [
-        { id: "tt1", type: "movie", name: "Cesta za obzor", releaseInfo: "2024", poster: poster("#936347") },
-        { id: "tt2", type: "movie", name: "Cesta.za.obzor.2024.BluRay.1080p.DTS-HD.MA.5.1.x264-CHD.mkv", releaseInfo: "2024" },
+        { id: "tt1", type: "movie", name: "Cesta za obzor", releaseInfo: "2024", poster: poster("#936347"), source: "cinemeta" },
+        { id: "tt2", type: "movie", name: "Cesta.za.obzor.2024.BluRay.1080p.DTS-HD.MA.5.1.x264-CHD.mkv", releaseInfo: "2024", source: "cinemeta" },
       ],
-      hasMore: false, cursor: "", sources: 1,
+      total: 2,
     },
   }));
   await page.goto("/");
