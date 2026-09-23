@@ -4,7 +4,7 @@ import type { LibraryView } from "./types";
 
 const library = (id: string, name: string): LibraryView => ({
   id, name, type: "mixed", root: `/downloads/${name}`, enabled: true, order: 0,
-  addedAt: "2026-09-01T00:00:00.000Z", writeArtwork: false, unreachable: false, readOnly: false,
+  addedAt: "2026-09-01T00:00:00.000Z", writeArtwork: false, autoScanMetadata: true, unreachable: false, readOnly: false,
   defaultMovie: false, defaultSeries: false, titles: 0, files: 0, bytes: 0,
 });
 

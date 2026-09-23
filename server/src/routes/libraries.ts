@@ -4,7 +4,7 @@ import { constants } from "node:fs";
 import { access, mkdir, readdir, realpath, rm, stat } from "node:fs/promises";
 import { artworks } from "../artwork-cache.js";
 import { AppError } from "../errors.js";
-import { activeDeparted, carveOuts, DEPARTED_MAX, departedIdFor, isInside, libraryPath, newLibraryId, parseLibraryPath, posixBase, toPosix, visibleLibraries, type LibraryRecord, type RootGrant } from "../libraries.js";
+import { activeDeparted, automaticMetadataEnabled, carveOuts, DEPARTED_MAX, departedIdFor, isInside, libraryPath, newLibraryId, parseLibraryPath, posixBase, toPosix, visibleLibraries, type LibraryRecord, type RootGrant } from "../libraries.js";
 import { asLibraryType, checkLibraryRemoval, checkLibraryRoot, checkRerootItems, checkRerootPaths, libraryFlag } from "../library-admin.js";
 import { grantingRoot, insideGrant } from "../library-grants.js";
 import { listVideos, type WalkBudget } from "../library.js";
@@ -21,6 +21,9 @@ import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
 export interface LibrariesDeps extends RouteContext {
   grantRows(): Promise<Array<{ path: string; source: RootGrant["source"]; grantedAt: string; writable: boolean }>>;
   healthOf(library: LibraryRecord): LibraryHealth;
+  /** Drops the automatic scanner's fingerprint for one library, so its next eligible check
+   *  runs even when its files did not change. */
+  invalidateAutoScan(libraryId: string): void;
   invalidateLibrary(): void;
   libraryGrants(): RootGrant[];
   libraryStats(): Promise<Map<string, { titles: number; files: number; bytes: number }>>;
@@ -33,7 +36,7 @@ export interface LibrariesDeps extends RouteContext {
 }
 
 export function registerLibrariesRoutes(app: express.Application, deps: LibrariesDeps): void {
-  const { store, currentUser, grantRows, healthOf, invalidateLibrary, libraryGrants, libraryStats, libraryView, progressOf, refreshLibraryHealth, libraryProbe, metaStore, libraryOps, stopContentAccess } = deps;
+  const { store, currentUser, grantRows, healthOf, invalidateAutoScan, invalidateLibrary, libraryGrants, libraryStats, libraryView, progressOf, refreshLibraryHealth, libraryProbe, metaStore, libraryOps, stopContentAccess } = deps;
 
   /** The same check the module makes, raised as the failure the interface renders. */
   async function requireLibraryRoot(value: unknown, opts: { create?: boolean; exceptId?: string } = {}): Promise<string> {
@@ -72,6 +75,9 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
     if (!name) throw new AppError("Give the library a name.", "err.libraryNameRequired");
     const type = asLibraryType(req.body?.type);
     if (!type) throw new AppError("Unknown library type.", "err.libraryTypeUnknown");
+    if (req.body?.autoScanMetadata !== undefined && typeof req.body.autoScanMetadata !== "boolean") {
+      throw new AppError("The automatic metadata switch has to be true or false.", "err.invalidRequest", 400);
+    }
     const root = await requireLibraryRoot(req.body?.root, { create: req.body?.create === true });
     // A fresh answer for the root as it is now: a deleted library's cached verdict must not
     // decide whether the new one is writable.
@@ -90,6 +96,8 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
       // Off unless asked for: a new library points at somebody's existing tree as often as
       // not, and writing poster.jpg into it is the one thing that cannot be taken back.
       writeArtwork: req.body?.writeArtwork === true && !health.readOnly,
+      // On unless the request says otherwise, which is also what an absent field means.
+      autoScanMetadata: req.body?.autoScanMetadata !== false,
     };
     // Probing the folder takes long enough for the gate's answer to go stale.
     await store.update((state) => {
@@ -101,6 +109,9 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
     // whichever writer happens to come first.
     await mkdir(artworks.dirOf(library.id), { recursive: true }).catch(() => undefined);
     invalidateLibrary();
+    // A fresh baseline for a new or a re-added id: whatever an earlier run remembered about
+    // this folder must not decide that its first automatic check has nothing to do.
+    invalidateAutoScan(library.id);
     await refreshLibraryHealth();
     if (resumedId) log("INFO", "Library added again, it keeps what it remembered", { library: library.id, root: library.root, type });
     else log("INFO", "Library created", { library: library.id, root: library.root, type });
@@ -241,6 +252,12 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
       patch.type = type;
     }
     if (req.body?.enabled !== undefined) patch.enabled = req.body.enabled === true;
+    if (req.body?.autoScanMetadata !== undefined) {
+      if (typeof req.body.autoScanMetadata !== "boolean") {
+        throw new AppError("The automatic metadata switch has to be true or false.", "err.invalidRequest", 400);
+      }
+      patch.autoScanMetadata = req.body.autoScanMetadata;
+    }
     if (req.body?.mosaic !== undefined) patch.mosaic = req.body.mosaic !== false;
     if (req.body?.showInContinueWatching !== undefined) patch.showInContinueWatching = req.body.showInContinueWatching !== false;
     if (req.body?.order !== undefined && Number.isFinite(Number(req.body.order))) patch.order = Number(req.body.order);
@@ -312,6 +329,11 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
     });
     await sweepLibraryLoss(target, record);
     invalidateLibrary();
+    // Only a real change to either switch drops the fingerprint: re-enabling a library whose
+    // files never moved must still be walked, and a rename must not buy a run of its own.
+    if (automaticMetadataEnabled(target) !== automaticMetadataEnabled(record) || target.enabled !== record.enabled) {
+      invalidateAutoScan(record.id);
+    }
     await refreshLibraryHealth();
     const stats = await libraryStats();
     log("INFO", "Library updated", { library: record.id, root: record.root, type: record.type, enabled: record.enabled });

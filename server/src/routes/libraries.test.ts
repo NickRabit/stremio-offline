@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
+import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { test } from "node:test";
 import express from "express";
 import { messageKeyOf } from "../errors.js";
@@ -21,6 +24,7 @@ interface Harness {
   disable: (id: string) => void;
   viewed: Array<{ id: string; health: LibraryHealth; stats: { titles: number; files: number; bytes: number }; admin: boolean }>;
   enqueued: unknown[];
+  invalidated: string[];
   stored: () => LibraryRecord[];
   userGrants: () => RootGrant[];
   allGrants: () => RootGrant[];
@@ -41,13 +45,18 @@ const stats = new Map([["alpha", { titles: 3, files: 4, bytes: 5 }]]);
 
 /** The routes take everything they need from the context, so the app here is a real express
  *  instance over fake collaborators that record what they were asked to do. */
-const mount = async (records: LibraryRecord[] = [library("alpha", 0)], env: RootGrant[] = []): Promise<Harness> => {
+const mount = async (
+  records: LibraryRecord[] = [library("alpha", 0)],
+  env: RootGrant[] = [],
+  departed: Array<{ id: string; root: string; removedAt: string }> = [],
+): Promise<Harness> => {
   let sessionReads: number | undefined;
   // `users` lives in the state, not only behind `store.users()`: a mutator reads the state,
   // and the write-time role check is one of the things that does.
-  const state = { libraries: records, users: [admin, ordinary], grants: [] as RootGrant[], departed: [] as Array<{ id: string; root: string; removedAt: string }> };
+  const state = { libraries: records, users: [admin, ordinary], grants: [] as RootGrant[], departed };
   const viewed: Harness["viewed"] = [];
   const enqueued: unknown[] = [];
+  const invalidated: string[] = [];
   const store = {
     libraries: () => state.libraries,
     users: () => state.users,
@@ -70,6 +79,7 @@ const mount = async (records: LibraryRecord[] = [library("alpha", 0)], env: Root
     stopContentAccess: async () => undefined,
     grantRows: async () => mergeGrants(env, state.grants).map((grant) => ({ ...grant, writable: true })),
     healthOf: (record) => ({ unreachable: record.id === "alpha", readOnly: record.id === "beta", realRoot: record.root, caseInsensitive: false }),
+    invalidateAutoScan: (libraryId) => { invalidated.push(libraryId); },
     invalidateLibrary: () => undefined,
     libraryGrants: () => mergeGrants(env, state.grants),
     libraryStats: async () => stats,
@@ -101,6 +111,7 @@ const mount = async (records: LibraryRecord[] = [library("alpha", 0)], env: Root
     base: `http://127.0.0.1:${port}`,
     viewed,
     enqueued,
+    invalidated,
     stored: () => state.libraries,
     userGrants: () => state.grants,
     loseSession: (after: number) => { sessionReads = after; },
@@ -223,6 +234,96 @@ test("DELETE /api/libraries/:id refuses to remove the last library", async (t) =
   assert.equal(response.status, 409);
   assert.equal((await failure(response)).messageKey, "err.libraryLast");
   assert.deepEqual(harness.stored().map((record) => record.id), ["only"]);
+});
+
+/** A root the picker would accept: inside the grant, and a real folder. */
+const grantedRoot = async (name: string) => {
+  const root = await mkdtemp(path.join(tmpdir(), `libraries-${name}-`));
+  const folders = [path.join(root, "films"), path.join(root, "shows")];
+  for (const folder of folders) await mkdir(folder);
+  return { root, films: folders[0]!, shows: folders[1]! };
+};
+
+test("POST /api/libraries persists the automatic metadata switch and hands the new id over", async (t) => {
+  const { root, films, shows } = await grantedRoot("create");
+  const harness = await mount([library("alpha", 0)], [{ path: root, source: "env", grantedAt: "2024-01-01T00:00:00.000Z" }]);
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const off = await api(harness.base, "/api/libraries", { method: "POST", body: { name: "Films", type: "movie", root: films, autoScanMetadata: false } });
+  assert.equal(off.status, 201);
+  const created = harness.stored().at(-1)!;
+  assert.equal(created.autoScanMetadata, false);
+  assert.deepEqual(harness.invalidated, [created.id], "a fresh library gets a fresh baseline");
+
+  const omitted = await api(harness.base, "/api/libraries", { method: "POST", body: { name: "Shows", type: "series", root: shows } });
+  assert.equal(omitted.status, 201);
+  const second = harness.stored().at(-1)!;
+  assert.equal(second.autoScanMetadata, true, "a request that omits the switch means on");
+  assert.deepEqual(harness.invalidated, [created.id, second.id]);
+});
+
+test("POST /api/libraries hands a re-added folder's remembered id to the scanner", async (t) => {
+  const { root, films } = await grantedRoot("resume");
+  const real = await realpath(films);
+  const harness = await mount(
+    [library("alpha", 0)],
+    [{ path: root, source: "env", grantedAt: "2024-01-01T00:00:00.000Z" }],
+    [{ id: "lib_deadbeef", root: real, removedAt: new Date().toISOString() }],
+  );
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const response = await api(harness.base, "/api/libraries", { method: "POST", body: { name: "Back", type: "mixed", root: films } });
+  assert.equal(response.status, 201);
+  assert.equal(harness.stored().at(-1)!.id, "lib_deadbeef", "the folder takes its old id back");
+  assert.deepEqual(harness.invalidated, ["lib_deadbeef"]);
+});
+
+test("PATCH /api/libraries/:id persists the automatic metadata switch and invalidates it when it moves", async (t) => {
+  const harness = await mount([library("alpha", 0)]);
+  t.after(harness.close);
+
+  const off = await api(harness.base, "/api/libraries/alpha", { method: "PATCH", body: { autoScanMetadata: false } });
+  assert.equal(off.status, 200);
+  assert.equal(harness.stored()[0]!.autoScanMetadata, false);
+  assert.deepEqual(harness.invalidated, ["alpha"]);
+
+  const renamed = await api(harness.base, "/api/libraries/alpha", { method: "PATCH", body: { name: "Renamed" } });
+  assert.equal(renamed.status, 200);
+  assert.equal(harness.stored()[0]!.autoScanMetadata, false, "a patch that does not mention the switch leaves it alone");
+  assert.deepEqual(harness.invalidated, ["alpha"], "and does not buy the library a run of its own");
+
+  const on = await api(harness.base, "/api/libraries/alpha", { method: "PATCH", body: { autoScanMetadata: true } });
+  assert.equal(on.status, 200);
+  assert.equal(harness.stored()[0]!.autoScanMetadata, true);
+  assert.deepEqual(harness.invalidated, ["alpha", "alpha"], "switching back on gives the library a fresh baseline");
+
+  const disabled = await api(harness.base, "/api/libraries/alpha", { method: "PATCH", body: { enabled: false } });
+  assert.equal(disabled.status, 200);
+  assert.deepEqual(harness.invalidated, ["alpha", "alpha", "alpha"]);
+});
+
+test("PATCH /api/libraries/:id leaves an absent switch absent, which reads as on", async (t) => {
+  const harness = await mount([library("alpha", 0)]);
+  t.after(harness.close);
+  const response = await api(harness.base, "/api/libraries/alpha", { method: "PATCH", body: { name: "Renamed" } });
+  assert.equal(response.status, 200);
+  assert.equal(harness.stored()[0]!.autoScanMetadata, undefined, "a record written before the switch keeps no field");
+  assert.deepEqual(harness.invalidated, []);
+});
+
+test("a non-boolean automatic metadata switch is refused on creation and on an edit", async (t) => {
+  const harness = await mount([library("alpha", 0)]);
+  t.after(harness.close);
+
+  const created = await api(harness.base, "/api/libraries", { method: "POST", body: { name: "Films", type: "movie", root: "/media/films", autoScanMetadata: "no" } });
+  assert.equal(created.status, 400);
+  assert.equal((await failure(created)).messageKey, "err.invalidRequest");
+  assert.deepEqual(harness.invalidated, [], "a refused request invalidates nothing");
+
+  const patched = await api(harness.base, "/api/libraries/alpha", { method: "PATCH", body: { autoScanMetadata: 1 } });
+  assert.equal(patched.status, 400);
+  assert.equal((await failure(patched)).messageKey, "err.invalidRequest");
+  assert.equal(harness.stored()[0]!.autoScanMetadata, undefined);
 });
 
 test("POST /api/libraries/grants refuses a relative path", async (t) => {

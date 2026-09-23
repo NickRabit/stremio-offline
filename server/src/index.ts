@@ -42,7 +42,7 @@ import type { MediaInfo } from "./naming.js";
 import { defaultDownloadSettings } from "./naming.js";
 import { AppError, messageKeyOf } from "./errors.js";
 import { accessLost, contentOf, Revocations, type AccessClaim, type AccessNeed, type ActiveTransfer, type StopContentOptions } from "./revocation.js";
-import { carveOuts, queuedArtworkKey, defaultLibrary, isInside, libraryFor, libraryPath, libraryVisible, parseLibraryPath, playingUnder, posixBase, posixDir, posixJoin, realAncestor, relativeWithin, resolveLibraryPath, toFs, toPosix, visibleLibraries, type LibraryRecord, type LibraryType, type ResolvedPath, type RootGrant, type Viewer } from "./libraries.js";
+import { automaticMetadataEnabled, carveOuts, queuedArtworkKey, defaultLibrary, isInside, libraryFor, libraryPath, libraryVisible, parseLibraryPath, playingUnder, posixBase, posixDir, posixJoin, realAncestor, relativeWithin, resolveLibraryPath, toFs, toPosix, visibleLibraries, type LibraryRecord, type LibraryType, type ResolvedPath, type RootGrant, type Viewer } from "./libraries.js";
 import { envGrants, grantView, mergeGrants } from "./library-grants.js";
 import { migrateStateFile } from "./library-migrate.js";
 import { LibraryMetaStore } from "./library-meta-store.js";
@@ -1013,6 +1013,7 @@ const libraryView = (library: LibraryRecord, health: LibraryHealth, stats: { tit
   writeArtwork: library.writeArtwork,
   mosaic: library.mosaic !== false,
   showInContinueWatching: library.showInContinueWatching !== false,
+  autoScanMetadata: automaticMetadataEnabled(library),
   visibleTo: library.visibleTo ?? [],
   unreachable: health.unreachable, readOnly: health.readOnly,
   defaultMovie: store.settings().defaultMovieLibrary === library.id,
@@ -1788,6 +1789,12 @@ const libraryScan = new LibraryScan({
   // libraries the interface touched since the last run pay for it.
   browsed: () => new Set(browsedLibraries),
   metaTtlMs: metaTtlMs(),
+  // A library with its automatic lookup switched off stays out of the walk the scanner
+  // takes: no catalogue search, no refresh, and no fingerprint that could look like news.
+  automaticLibraryEnabled: (libraryId) => {
+    const library = libraryFor(store.libraries(), libraryId);
+    return library ? automaticMetadataEnabled(library) : false;
+  },
   searchAll, metadata,
   addons: () => store.addons(),
   libraryMeta: () => metaStore.qualifiedMeta(),
@@ -1826,10 +1833,13 @@ const libraryAutoScan = new LibraryAutoScan({
   // an unplugged disk must not read as a tree that lost every file.
   libraries: async () => {
     await refreshLibraryHealth();
-    return walkableLibraries().map((library) => ({ id: library.id, files: () => libraryFilesIn(library) }));
+    return walkableLibraries()
+      .filter(automaticMetadataEnabled)
+      .map((library) => ({ id: library.id, files: () => libraryFilesIn(library) }));
   },
   status: () => libraryScan.snapshot(),
-  start: (libraryId?: string) => libraryScan.start(libraryId ? { libraryId } : {}),
+  // Scoped to what changed: an automatic run never widens to a library nobody touched.
+  start: (libraryIds: string[]) => libraryScan.start({ automatic: true, libraryIds }),
   busy: () => playbackBusy() || libraryOpsWriting || (store.settings().libraryScanPauseOnDownload && queue.list().some((job) => job.status === "checking" || job.status === "downloading")),
   watch: (onChange) => {
     const watches = walkableLibraries().map((library) => watchLibrary(library.root, () => { invalidateLibrary(); onChange(); }));
@@ -2086,7 +2096,7 @@ const libraryOps = new LibraryOps({
 });
 await libraryOps.load();
 
-registerLibrariesRoutes(app, { ...routeContext, grantRows, healthOf, invalidateLibrary, libraryGrants, libraryStats, libraryView, progressOf, refreshLibraryHealth, libraryProbe, metaStore, libraryOps });
+registerLibrariesRoutes(app, { ...routeContext, grantRows, healthOf, invalidateAutoScan: (libraryId) => libraryAutoScan.invalidate(libraryId), invalidateLibrary, libraryGrants, libraryStats, libraryView, progressOf, refreshLibraryHealth, libraryProbe, metaStore, libraryOps });
 
 registerCurateRoutes(app, { ...routeContext, invalidateLibrary, libraryAutoScan, libraryFiles, libraryOps, libraryPathBusy, libraryScan, libraryTarget, libraryUnits, matchLibraryItem, metaStore, ownRecord, ownerOf, prefsOf, refreshLibraryHealth, scheduleMetaBackfill, wirePath });
 

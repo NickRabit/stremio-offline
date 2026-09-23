@@ -33,9 +33,13 @@ Library view. The picker walks the folders this install is allowed to read.
 - **Estimate.** Before anything is written, the picker counts the titles and
   files the scan would look at, and how many of them are already identified.
   A huge folder stops counting early and says so.
-- **Scan metadata now** is on by default: the new library is matched against
-  your catalogues straight away. Untick it and the scan waits until the next
-  automatic run, or until you press **Scan this library** in its row.
+- **Automatically look up metadata** is on by default. Turn it off for a library
+  whose titles are not in your catalogues; scheduled scans then skip it. You can
+  still run **Scan this library** or find metadata for one item manually.
+- **Scan metadata now** is a separate, one-time choice and is on by default:
+  the new library is matched against your catalogues straight away. Untick it
+  and the scan waits for an automatic run only when automatic lookup is enabled
+  for that library; otherwise it waits for a manual scan.
 
 Where a download lands is a property of the addon that offered the stream: each
 stream addon sets a library and a subfolder for films and for series, and the
@@ -54,6 +58,7 @@ the counts, plus:
 | --- | --- |
 | Type | Change it at any time. A `mixed` library that becomes typed is re-read at the next scan, and titles that no longer fit keep their match but are flagged. |
 | Enabled | A switched-off library keeps its place, its metadata and its row. It is skipped by the scan, and it does not open. |
+| Automatically look up metadata | Whether startup, periodic and filesystem-triggered scans search this library. Off skips automatic lookups and metadata refreshes; manual scans and item identification still work. The instance-wide automatic scan setting and `LIBRARY_AUTO_SCAN=0` also apply. |
 | Default for movies / Default for series | Where that kind lands when a save rule says *Default*. One library holds each kind, so switching it on here takes it from whoever had it, and switching it off leaves the kind to the fallback: the first enabled library of that type, then the first `mixed` one. The switch is locked on a library the kind cannot land in, and a type change that narrows the library out of a kind gives that default up. |
 | Write artwork next to the media | Where a poster or thumbnail we generate goes: beside the video, or under `DATA_PATH/artwork/<library id>/`. Off by default — a new library often points at a tree somebody else keeps, and a `poster.jpg` written into it cannot be taken back. Turn it on per library, for instance so a media server scanning the same folder finds the posters. Forced off and locked where the root cannot be written. A `poster.jpg` that is already in the folder is never touched or overwritten. |
 | Rename | The name in the app. Nothing on disk moves. |

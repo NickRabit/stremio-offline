@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { defaultInstanceSettings, defaultPrefs, publicSettings, Store } from "./store.js";
+import { automaticMetadataEnabled } from "./libraries.js";
 import type { AddonRecord } from "./types.js";
 import { PERSONAL_SETTINGS } from "./users.js";
 import { verifyPassword } from "./auth.js";
@@ -33,6 +34,23 @@ test("an old addon state migrates to the default save rules", async () => {
     assert.equal(store.settings().realDebridToken, "");
     assert.equal(store.prefs(undefined).downloadTitleLanguage, "ui");
     assert.equal(store.addons()[0].globalSearch, true);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("a library record written before the automatic switch still reads as on after a reload", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-store-"));
+  try {
+    await writeFile(path.join(directory, "state.json"), JSON.stringify({
+      addons: [], defaultsInstalled: true, settings: {},
+      libraries: [{
+        id: "lib_ab12cd34", name: "Filmy", type: "movie", root: path.join(directory, "media"),
+        enabled: true, order: 0, addedAt: "2026-01-01T00:00:00.000Z", writeArtwork: false,
+      }],
+    }));
+    const store = new Store(directory);
+    await store.load();
+    assert.equal(store.libraries()[0]!.autoScanMetadata, undefined, "the load does not invent the field");
+    assert.equal(automaticMetadataEnabled(store.libraries()[0]!), true, "and an absent switch means on");
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 

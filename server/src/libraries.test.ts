@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { activeDeparted, carveOuts, defaultLibrary, DEPARTED_MAX, departedIdFor, libraryFor, libraryPath, libraryVisible, parseLibraryPath, playingUnder, relativeWithin, resolveLibraryPath, sameFile, showsInContinueWatching, toFs, toPosix, visibleLibraries, type DepartedLibrary, type LibraryRecord, queuedArtworkKey } from "./libraries.js";
+import { activeDeparted, automaticMetadataEnabled, carveOuts, defaultLibrary, DEPARTED_MAX, departedIdFor, libraryFor, libraryPath, libraryVisible, parseLibraryPath, playingUnder, relativeWithin, resolveLibraryPath, sameFile, showsInContinueWatching, toFs, toPosix, visibleLibraries, type DepartedLibrary, type LibraryRecord, queuedArtworkKey } from "./libraries.js";
 
 const library = (over: Partial<LibraryRecord> = {}): LibraryRecord => ({
   id: "lib_ab12cd34", name: "Filmy", type: "movie", root: "/media/filmy", enabled: true,
@@ -40,6 +40,14 @@ test("a library is in Continue watching unless it was turned off", () => {
   assert.equal(showsInContinueWatching("lib_ab12cd34/Show/01.mkv", [library({ showInContinueWatching: true })]), true, "turning it back on brings the stored rows with it");
   assert.equal(showsInContinueWatching("Show/01.mkv", [off]), true, "a path no library claims belongs to no switch");
   assert.equal(showsInContinueWatching("lib_11111111/Show/01.mkv", [off]), true, "a library that is gone hides nothing");
+});
+
+test("automatic metadata lookup is on unless the record says it is off", () => {
+  // The first two are the same thing as far as every reader is concerned: an install that
+  // predates the switch has no field, and one that was saved with the switch on carries true.
+  assert.equal(automaticMetadataEnabled(library()), true, "an absent field means on");
+  assert.equal(automaticMetadataEnabled(library({ autoScanMetadata: true })), true);
+  assert.equal(automaticMetadataEnabled(library({ autoScanMetadata: false })), false, "only an explicit false opts out");
 });
 
 test("an administrator sees every library, whatever its list says", () => {

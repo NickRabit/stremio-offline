@@ -30,7 +30,7 @@ afterEach(() => {
 
 const library = (over: Partial<LibraryView> = {}): LibraryView => ({
   id: "lib_ab12cd34", name: "Films", type: "movie", root: "/downloads/Films",
-  enabled: true, order: 0, addedAt: "2026-09-01T00:00:00.000Z", writeArtwork: true,
+  enabled: true, order: 0, addedAt: "2026-09-01T00:00:00.000Z", writeArtwork: true, autoScanMetadata: true,
   unreachable: false, readOnly: false, defaultMovie: true, defaultSeries: false,
   titles: 12, files: 27, bytes: 48_500_000_000, ...over,
 });
@@ -80,11 +80,15 @@ const fillIn = async (scope: ParentNode, label: string, value: string) => {
 };
 
 /** Opens the picker and walks into the granted folder, which is where a library is added. */
-const openPicker = async (posted: Record<string, unknown>[], enter = true) => {
+const openPicker = async (posted: Record<string, unknown>[], enter = true, scans: Record<string, unknown>[] = []) => {
   fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
     if (url === "/api/libraries" && init?.method === "POST") {
       posted.push(JSON.parse(String(init.body)));
       return json(library(), 201);
+    }
+    if (url === "/api/library/scan" && init?.method === "POST") {
+      scans.push(JSON.parse(String(init.body)));
+      return json({ status: "running" });
     }
     if (url === "/api/libraries") return json([]);
     if (url === "/api/libraries/grants") return json([granted]);
@@ -122,7 +126,7 @@ it("the picker can name a folder that does not exist yet, and the create request
   expect(host.querySelector<HTMLInputElement>('input[aria-label="Name"]')?.value, "the library takes the folder's name").toBe("Films");
 
   await clickIn(picker(), "Add library");
-  expect(posted).toEqual([{ name: "Films", type: "mixed", root: "/downloads/Films", create: true }]);
+  expect(posted).toEqual([{ name: "Films", type: "mixed", root: "/downloads/Films", autoScanMetadata: true, create: true }]);
 });
 
 it("a folder that is already there is used as it is", async () => {
@@ -133,7 +137,7 @@ it("a folder that is already there is used as it is", async () => {
   await fillIn(picker(), "Name", "Downloads");
   await clickIn(picker(), "Add library");
 
-  expect(posted, "nothing is created when the folder exists").toEqual([{ name: "Downloads", type: "mixed", root: "/downloads" }]);
+  expect(posted, "nothing is created when the folder exists").toEqual([{ name: "Downloads", type: "mixed", root: "/downloads", autoScanMetadata: true }]);
 });
 
 it("shows library details before the folder browser and keeps manual grants secondary", async () => {
@@ -165,7 +169,24 @@ it("a granted root is selectable from the list, without opening it first", async
   await fillIn(picker(), "Name", "Downloads");
   await clickIn(picker(), "Add library");
 
-  expect(posted).toEqual([{ name: "Downloads", type: "mixed", root: "/downloads" }]);
+  expect(posted).toEqual([{ name: "Downloads", type: "mixed", root: "/downloads", autoScanMetadata: true }]);
+});
+
+it("keeps automatic lookup separate from the immediate metadata scan", async () => {
+  const posted: Record<string, unknown>[] = [];
+  const scans: Record<string, unknown>[] = [];
+  await openPicker(posted, true, scans);
+  await clickIn(picker(), "Use this folder");
+  await fillIn(picker(), "Name", "Downloads");
+
+  const automatic = picker().querySelector<HTMLInputElement>(".library-auto-scan-setting input")!;
+  await act(async () => { automatic.click(); await Promise.resolve(); });
+  expect(automatic.checked).toBe(false);
+  expect(picker().querySelector<HTMLInputElement>(".library-picker-selection > .library-scan-now input")?.checked).toBe(true);
+
+  await clickIn(picker(), "Add library");
+  expect(posted[0]).toMatchObject({ autoScanMetadata: false });
+  expect(scans).toEqual([{ libraryId: "lib_ab12cd34" }]);
 });
 
 /** Re-rooting used to hide the create control, so a library could only be moved into a
@@ -270,6 +291,25 @@ it("the mosaic of covers can be turned off in the library dialog", async () => {
   await clickIn(host, "Save changes");
 
   expect(patched).toEqual([{ mosaic: false }]);
+});
+
+it("saves the per-library automatic metadata setting", async () => {
+  const patched: Record<string, unknown>[] = [];
+  fetchMock.mockImplementation(async (_url: string, init?: RequestInit) => {
+    if (init?.method === "PATCH") { patched.push(JSON.parse(String(init.body))); return json(library({ autoScanMetadata: false })); }
+    return json([library()]);
+  });
+  await act(async () => { root.render(<LibraryManager onError={vi.fn()} onNotify={vi.fn()}/>); });
+  await act(async () => { await Promise.resolve(); });
+
+  await openEditor();
+  const box = [...host.querySelectorAll<HTMLInputElement>("input[type=checkbox]")]
+    .find((input) => input.closest("label")?.textContent?.includes("Automatically look up metadata"))!;
+  expect(box.checked, "legacy and new libraries default to automatic lookup").toBe(true);
+  await act(async () => { box.click(); await Promise.resolve(); });
+  await clickIn(host, "Save changes");
+
+  expect(patched).toEqual([{ autoScanMetadata: false }]);
 });
 
 it("can keep a library out of Continue watching from the library dialog", async () => {

@@ -26,6 +26,8 @@ export interface LibraryRecord {
   mosaic?: boolean;
   /** Off keeps playback position but leaves this library out of Continue watching. Absent means on. */
   showInContinueWatching?: boolean;
+  /** Off keeps this library out of the automatic scans, startup to watch. Absent means on. */
+  autoScanMetadata?: boolean;
   /** The root could not be reached at the last check. Metadata and artwork stay. */
   unreachable?: boolean;
   /** The users who may see this library. Absent or empty means administrators
@@ -45,6 +47,10 @@ export const libraryVisible = (library: LibraryRecord, viewer: Viewer): boolean 
 
 export const visibleLibraries = (libraries: LibraryRecord[], viewer: Viewer): LibraryRecord[] =>
   libraries.filter((library) => libraryVisible(library, viewer));
+
+/** May an automatic scan look up catalogue metadata here? Only an explicit off opts out,
+ *  so a record written before the switch keeps taking part. */
+export const automaticMetadataEnabled = (library: LibraryRecord): boolean => library.autoScanMetadata !== false;
 
 /** A library that was removed without forgetting. Its id is kept so that adding the same
  *  folder again picks up its match history, its artwork and its favourite and resume rows

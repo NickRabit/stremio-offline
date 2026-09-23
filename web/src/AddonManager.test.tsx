@@ -38,7 +38,7 @@ const addon = (over: Partial<Addon> = {}): Addon => ({
 
 const library: LibraryView = {
   id: "lib_1", name: "Films", type: "movie", root: "/downloads/Films", enabled: true, order: 0,
-  addedAt: "2026-09-01T00:00:00.000Z", writeArtwork: true, unreachable: false, readOnly: false,
+  addedAt: "2026-09-01T00:00:00.000Z", writeArtwork: true, autoScanMetadata: true, unreachable: false, readOnly: false,
   defaultMovie: true, defaultSeries: false, titles: 1, files: 1, bytes: 1,
 };
 

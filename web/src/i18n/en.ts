@@ -461,6 +461,8 @@ export const en = {
   "library.presentationHeading": "Artwork and presentation",
   "library.actionsHeading": "Actions",
   "library.writeArtwork": "Write artwork next to the media",
+  "library.autoScanMetadata": "Automatically look up metadata",
+  "library.autoScanMetadataHint": "Scheduled scans skip this library when off. You can still scan it or identify an item manually.",
   "library.libraryCounts": "{titles} titles · {files} files · {size}",
   "library.scanThis": "Scan this library",
   "library.scanStarted": "Scan started.",

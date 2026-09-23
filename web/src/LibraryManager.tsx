@@ -142,6 +142,7 @@ function LibraryEditDialog({ library, libraryCount, onClose, onSave, onScan, onR
   useI18n();
   const [draft, setDraft] = useState(() => ({
     name: library.name, type: library.type, enabled: library.enabled, writeArtwork: library.writeArtwork,
+    autoScanMetadata: library.autoScanMetadata !== false,
     mosaic: library.mosaic !== false, showInContinueWatching: library.showInContinueWatching !== false,
     defaultMovie: library.defaultMovie, defaultSeries: library.defaultSeries,
   }));
@@ -149,6 +150,7 @@ function LibraryEditDialog({ library, libraryCount, onClose, onSave, onScan, onR
   const serves = (kind: "movie" | "series") => draft.type === kind || draft.type === "mixed";
   const dirty = draft.name.trim() !== library.name || draft.type !== library.type || draft.enabled !== library.enabled
     || draft.writeArtwork !== library.writeArtwork || draft.mosaic !== (library.mosaic !== false)
+    || draft.autoScanMetadata !== (library.autoScanMetadata !== false)
     || draft.showInContinueWatching !== (library.showInContinueWatching !== false)
     || draft.defaultMovie !== library.defaultMovie || draft.defaultSeries !== library.defaultSeries;
   useEffect(() => {
@@ -171,13 +173,14 @@ function LibraryEditDialog({ library, libraryCount, onClose, onSave, onScan, onR
     if (draft.type !== library.type) patch.type = draft.type;
     if (draft.enabled !== library.enabled) patch.enabled = draft.enabled;
     if (draft.writeArtwork !== library.writeArtwork) patch.writeArtwork = draft.writeArtwork;
+    if (draft.autoScanMetadata !== (library.autoScanMetadata !== false)) patch.autoScanMetadata = draft.autoScanMetadata;
     if (draft.mosaic !== (library.mosaic !== false)) patch.mosaic = draft.mosaic;
     if (draft.showInContinueWatching !== (library.showInContinueWatching !== false)) patch.showInContinueWatching = draft.showInContinueWatching;
     if (draft.defaultMovie !== library.defaultMovie) patch.defaultMovie = draft.defaultMovie;
     if (draft.defaultSeries !== library.defaultSeries) patch.defaultSeries = draft.defaultSeries;
     await run(() => onSave(patch));
   };
-  const toggle = (key: "enabled" | "writeArtwork" | "mosaic" | "showInContinueWatching" | "defaultMovie" | "defaultSeries", label: string, disabled = false, title?: string) =>
+  const toggle = (key: "enabled" | "writeArtwork" | "autoScanMetadata" | "mosaic" | "showInContinueWatching" | "defaultMovie" | "defaultSeries", label: string, disabled = false, title?: string) =>
     <label className="library-check" title={title}>
       <span className="switch"><input type="checkbox" checked={draft[key]} disabled={busy || disabled}
         onChange={(event) => update({ [key]: event.target.checked } as Partial<typeof draft>)}/><span/></span>
@@ -220,6 +223,10 @@ function LibraryEditDialog({ library, libraryCount, onClose, onSave, onScan, onR
         </section>
         <section className="library-edit-section">
           <div className="library-picker-section-head"><h3>{t("library.actionsHeading")}</h3></div>
+          <div className="library-edit-controls">
+            {toggle("autoScanMetadata", t("library.autoScanMetadata"))}
+            <p className="identify-hint">{t("library.autoScanMetadataHint")}</p>
+          </div>
           <button type="button" className="library-admin-scan" disabled={busy} onClick={() => void run(onScan)}><Sparkles/> {t("library.scanThis")}</button>
           <details className="library-admin-danger">
             <summary><Trash2/> {t("library.removeOptions")}</summary>
@@ -257,6 +264,7 @@ function RootPicker({ reroot, onClose, onDone, onError, onLibrariesChanged }:
   const [pendingCreate, setPendingCreate] = useState(false);
   const [estimate, setEstimate] = useState<LibraryEstimate | null>(null);
   const [scanNow, setScanNow] = useState(true);
+  const [autoScanMetadata, setAutoScanMetadata] = useState(true);
   // Pointing at a folder and moving the tree into it are two different intentions with the
   // same destination, so they are one choice rather than two buttons that look alike.
   const [carryContent, setCarryContent] = useState(false);
@@ -323,7 +331,7 @@ function RootPicker({ reroot, onClose, onDone, onError, onLibrariesChanged }:
       }
       const library = reroot
         ? await api.updateLibrary(reroot.id, { root: selected, ...(pendingCreate ? { create: true } : {}) })
-        : await api.createLibrary({ name: name.trim(), type, root: selected, ...(pendingCreate ? { create: true } : {}) });
+        : await api.createLibrary({ name: name.trim(), type, root: selected, autoScanMetadata, ...(pendingCreate ? { create: true } : {}) });
       if (scanNow) await api.startLibraryScan({ libraryId: library.id });
       onDone(t(reroot ? "library.rerooted" : "library.created"));
     } catch (value) { setError(describeError(value)); setBusy(false); }
@@ -454,6 +462,13 @@ function RootPicker({ reroot, onClose, onDone, onError, onLibrariesChanged }:
             {estimate.identified ? ` · ${t("library.estimateIdentified", { count: estimate.identified })}` : ""}
             {estimate.truncated ? ` · ${t("library.estimateTruncated")}` : ""}
           </p>}
+          {selected && !reroot && <div className="library-auto-scan-setting">
+            <label className="library-scan-now">
+              <span className="switch"><input type="checkbox" checked={autoScanMetadata} onChange={(event) => setAutoScanMetadata(event.target.checked)}/><span/></span>
+              <span>{t("library.autoScanMetadata")}</span>
+            </label>
+            <p>{t("library.autoScanMetadataHint")}</p>
+          </div>}
           {selected && !(reroot && carryContent) && <label className="library-scan-now">
             <span className="switch"><input type="checkbox" checked={scanNow} onChange={(event) => setScanNow(event.target.checked)}/><span/></span>
             <span>{t("library.scanNow")}</span></label>}

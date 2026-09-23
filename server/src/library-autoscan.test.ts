@@ -12,7 +12,7 @@ const harness = (overrides: Partial<LibraryAutoScanOpts> = {}) => {
     libraries: [{ id: "lib_aaaaaaaa", files: [file("lib_aaaaaaaa/Foo/a.mkv")] }],
     present: true,
     status: idle(), enabled: true, busy: false,
-    starts: 0, scanned: [] as Array<string | undefined>,
+    starts: 0, scanned: [] as string[][],
   };
   const auto = new LibraryAutoScan({
     enabled: () => state.enabled,
@@ -20,7 +20,7 @@ const harness = (overrides: Partial<LibraryAutoScanOpts> = {}) => {
       ? state.libraries.map((library) => ({ id: library.id, files: async () => library.files }))
       : []),
     status: () => state.status,
-    start: async (libraryId) => { state.starts += 1; state.scanned.push(libraryId); return { ...idle(), status: "running" }; },
+    start: async (libraryIds) => { state.starts += 1; state.scanned.push(libraryIds); return { ...idle(), status: "running" }; },
     busy: () => state.busy,
     ...overrides,
   });
@@ -70,12 +70,39 @@ test("only the library that moved is scanned", async () => {
     { id: "lib_bbbbbbbb", files: [file("lib_bbbbbbbb/Show/01.mkv")] },
   ];
   await auto.check("startup");
-  assert.deepEqual(state.scanned, [undefined], "the first check has no baseline for either library");
+  assert.deepEqual(state.scanned, [["lib_aaaaaaaa", "lib_bbbbbbbb"]], "the first check has no baseline for either library");
 
   state.libraries[1]!.files = [...state.libraries[1]!.files, file("lib_bbbbbbbb/Show/02.mkv")];
   assert.equal(await auto.check("interval"), true);
-  assert.deepEqual(state.scanned, [undefined, "lib_bbbbbbbb"]);
+  assert.deepEqual(state.scanned, [["lib_aaaaaaaa", "lib_bbbbbbbb"], ["lib_bbbbbbbb"]]);
   assert.equal(await auto.check("interval"), false, "the other library did not move");
+});
+
+test("two changes are handed over together, never widened to a full run", async () => {
+  const { auto, state } = harness();
+  state.libraries = [
+    { id: "lib_aaaaaaaa", files: [file("lib_aaaaaaaa/Foo/a.mkv")] },
+    { id: "lib_bbbbbbbb", files: [file("lib_bbbbbbbb/Show/01.mkv")] },
+  ];
+  await auto.check("startup");
+
+  state.libraries[0]!.files = [...state.libraries[0]!.files, file("lib_aaaaaaaa/Bar/b.mkv")];
+  state.libraries[1]!.files = [...state.libraries[1]!.files, file("lib_bbbbbbbb/Show/02.mkv")];
+  assert.equal(await auto.check("interval"), true);
+  assert.deepEqual(state.scanned.at(-1), ["lib_aaaaaaaa", "lib_bbbbbbbb"], "both moved libraries are named");
+  assert.equal(await auto.check("interval"), false, "and nothing repeats");
+});
+
+test("forgetting a library makes the next check treat it as newly eligible", async () => {
+  const { auto, state } = harness();
+  await auto.check("startup");
+  assert.equal(state.starts, 1);
+
+  assert.equal(await auto.check("interval"), false, "an unchanged tree on its own starts nothing");
+  auto.invalidate("lib_aaaaaaaa");
+  assert.equal(await auto.check("interval"), true, "a forgotten fingerprint is checked though the files did not move");
+  assert.deepEqual(state.scanned.at(-1), ["lib_aaaaaaaa"]);
+  assert.equal(await auto.check("interval"), false, "and it is remembered again");
 });
 
 test("a library that is not in the list right now keeps its fingerprint", async () => {
