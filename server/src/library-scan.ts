@@ -34,6 +34,10 @@ export interface ScanState {
   /** Set when the run covers one library. The id is segment zero of every key, so this
    *  is the same prefix filter a single item uses, one level up. */
   libraryId?: string;
+  /** Set when the run was started by the automatic scanner rather than a person. */
+  automatic?: boolean;
+  /** The libraries an automatic run is confined to. Persisted so a resume keeps its scope. */
+  libraryIds?: string[];
 }
 
 export interface LibraryScanOpts {
@@ -59,6 +63,9 @@ export interface LibraryScanOpts {
   busy: () => ScanPauseReason | undefined;
   /** A key is qualified, so the scan cannot build a path from one root: the host resolves it. */
   pathExists: (key: string) => Promise<boolean>;
+  /** Whether an automatic run may still look up metadata for this library. Asked before
+   *  each queued item, so a switch thrown mid-run keeps the rest of its queue out. */
+  automaticLibraryEnabled: (libraryId: string) => boolean;
   /** Libraries the interface touched since the last run. Only those pay for the
    *  metadata refresh: a two-thousand-title archive nobody looks at does not. */
   browsed?: () => ReadonlySet<string>;
@@ -151,7 +158,15 @@ export class LibraryScan {
    *  catalogues about every unbound title again. */
   /** `force` throws away the memory of earlier fruitless searches; `path` narrows the
    *  run to one item, which the interface uses for "find metadata" on a single title. */
-  async start({ force = false, path: scope = "", libraryId }: { force?: boolean; path?: string; libraryId?: string } = {}): Promise<ScanState> {
+  async start({ force = false, path: scope = "", libraryId, automatic = false, libraryIds = [] }: {
+    force?: boolean; path?: string; libraryId?: string; automatic?: boolean; libraryIds?: string[];
+  } = {}): Promise<ScanState> {
+    // An automatic call always names the libraries that changed. An empty list is a caller
+    // mistake, and reading it as "every library" is the one thing it must never mean.
+    if (automatic && !libraryIds.length) {
+      log("WARN", "An automatic library scan named no library, so nothing was scanned");
+      return this.snapshot();
+    }
     if (this.state.status === "running" || this.state.status === "paused") return this.snapshot();
     const units = await this.opts.units();
     this.units = new Map(units.map((unit) => [unit.key, unit]));
@@ -160,7 +175,9 @@ export class LibraryScan {
     const browsed = this.opts.browsed?.() ?? new Set<string>();
     const records = this.opts.libraryMeta();
     const suggestions = this.opts.librarySuggestions();
+    const automaticIds = new Set(libraryIds);
     const inRun = (unit: TitleUnit) => {
+      if (automatic && !automaticIds.has(parseLibraryPath(unit.key)?.libraryId ?? "")) return false;
       if (libraryId && !isPathWithin(unit.key, libraryId)) return false;
       if (!scope) return true;
       return isPathWithin(unit.key, scope) || isPathWithin(scope, unit.key);
@@ -203,9 +220,10 @@ export class LibraryScan {
       current: pending[0],
       ...(scope ? { scope } : {}),
       ...(libraryId ? { libraryId } : {}),
+      ...(automatic ? { automatic: true, libraryIds: [...libraryIds] } : {}),
     };
     await this.save();
-    log("INFO", "Library scan started", { total: pending.length, titles: units.length, force, refresh: refreshing.length, ...(scope ? { path: scope } : {}), ...(libraryId ? { libraryId } : {}) });
+    log("INFO", "Library scan started", { total: pending.length, titles: units.length, force, refresh: refreshing.length, ...(scope ? { path: scope } : {}), ...(libraryId ? { libraryId } : {}), ...(automatic ? { automatic: true, libraries: libraryIds } : {}) });
     this.schedulePump();
     return this.snapshot();
   }
@@ -275,6 +293,12 @@ export class LibraryScan {
   private async processUnit(key: string) {
     let addonCall = false;
     try {
+      // The library may have been switched off while this run was queued, or while the
+      // server was down. Its item is dropped without a catalogue call; the run moves on.
+      if (this.state.automatic && !this.opts.automaticLibraryEnabled(parseLibraryPath(key)?.libraryId ?? "")) {
+        await this.finishUnit("skipped");
+        return;
+      }
       const unit = this.units.get(key);
       if (!unit || !await this.pathExists(key)) { await this.finishUnit("skipped"); return; }
       const refresh = this.refreshing.has(key);

@@ -54,6 +54,7 @@ const harness = async (overrides: Partial<LibraryScanOpts> = {}) => {
     deleteGeneratedArt: async (key) => { deleted.push(key); },
     busy: () => busy,
     pathExists: async () => true,
+    automaticLibraryEnabled: () => true,
     gapMs: 0,
     wakeMs: 20,
     ...overrides,
@@ -390,5 +391,104 @@ test("a scan for one file covers the title unit that holds it", async () => {
     await h.scan.start({ path: path.join("Foo", "a.mkv") });
     await waitFor(() => h.scan.snapshot().status === "completed");
     assert.deepEqual(searches, ["Foo"]);
+  } finally { await h.close(); }
+});
+
+test("an automatic run asks only about the libraries it was given", async () => {
+  const queries: string[] = [];
+  const h = await harness({
+    units: async () => [
+      movie("lib_aaaaaaaa/Alpha"),
+      series("lib_cccccccc/Omega"),
+      movie("lib_cccccccc/Other"),
+    ],
+    browsed: () => new Set(["lib_aaaaaaaa", "lib_cccccccc"]),
+    metaTtlMs: TTL,
+    searchAll: async (_addons, query) => { queries.push(query); return { items: [hit(query, `tt-${query}`)] }; },
+  });
+  const before = stale();
+  const bound = h.store.meta["lib_cccccccc/Omega"] = {
+    type: "series", id: "tt-cccc", source: "user", locked: true, name: "Omega", matchedAt: before, refreshedAt: before,
+  };
+  try {
+    await h.scan.start({ automatic: true, libraryIds: ["lib_aaaaaaaa"] });
+    await waitFor(() => h.scan.snapshot().status === "completed");
+    assert.deepEqual(queries, ["Alpha"], "the library outside the ids is never searched");
+    assert.deepEqual(h.metas, ["tt-Alpha"], "and its follow-up metadata is asked only for what is in scope");
+    assert.equal(bound.name, "Omega", "the opted-out library's bound title was not refreshed");
+    assert.equal(bound.refreshedAt, before);
+    assert.equal(h.store.meta["lib_cccccccc/Other"], undefined, "and its unbound title was not looked up");
+
+    // The same titles do get their turn once the run names that library: the filter is
+    // what kept them out above, not the absence of anything to do.
+    await h.scan.start({ automatic: true, libraryIds: ["lib_cccccccc"] });
+    await waitFor(() => h.scan.snapshot().status === "completed" && h.scan.snapshot().done === 2);
+    assert.ok(h.metas.includes("tt-cccc"), "a bound, browsed title due for a refresh is re-read when its library is in scope");
+    assert.deepEqual(queries, ["Alpha", "Other"]);
+  } finally { await h.close(); }
+});
+
+test("an automatic run with no ids scans nothing rather than the whole install", async () => {
+  const h = await harness({ units: async () => [movie("lib_aaaaaaaa/Alpha")] });
+  try {
+    const state = await h.scan.start({ automatic: true, libraryIds: [] });
+    assert.equal(state.status, "idle");
+    assert.deepEqual(h.searches, []);
+    assert.deepEqual(h.metas, []);
+  } finally { await h.close(); }
+});
+
+test("a resumed automatic run skips a library switched off while the server was down", async () => {
+  const h = await harness({
+    units: async () => [movie("lib_aaaaaaaa/Alpha"), movie("lib_bbbbbbbb/Omega")],
+    automaticLibraryEnabled: (libraryId) => libraryId !== "lib_bbbbbbbb",
+  });
+  try {
+    await writeFile(path.join(h.dataDir, "library-scan.json"), JSON.stringify({
+      status: "running", automatic: true, libraryIds: ["lib_aaaaaaaa", "lib_bbbbbbbb"],
+      total: 2, done: 0, matched: 0, skipped: 0, failed: 0,
+      remaining: ["lib_aaaaaaaa/Alpha", "lib_bbbbbbbb/Omega"], current: "lib_aaaaaaaa/Alpha",
+    }));
+    await h.scan.load();
+    await waitFor(() => h.scan.snapshot().status === "completed");
+    assert.deepEqual(h.searches, ["Alpha"], "the queued item of the opted-out library is finished without a search");
+    assert.equal(h.metas.length, 1, "one follow-up metadata call, for the library still in scope");
+    assert.equal(h.scan.snapshot().skipped, 1);
+    assert.equal(h.store.meta["lib_bbbbbbbb/Omega"], undefined);
+  } finally { await h.close(); }
+});
+
+test("a manual run still searches a library whose automatic lookup is switched off", async () => {
+  const h = await harness({
+    units: async () => [movie("lib_aaaaaaaa/Alpha")],
+    automaticLibraryEnabled: () => false,
+  });
+  try {
+    await h.scan.start();
+    await waitFor(() => h.scan.snapshot().status === "completed");
+    assert.deepEqual(h.searches, ["Alpha"]);
+    assert.equal(h.scan.snapshot().matched, 1);
+  } finally { await h.close(); }
+});
+
+test("a library switched off mid-run finishes the item in flight and starts no other", async () => {
+  let eligible = true;
+  const queries: string[] = [];
+  const h = await harness({
+    units: async () => [movie("lib_aaaaaaaa/Alpha"), movie("lib_aaaaaaaa/Beta")],
+    automaticLibraryEnabled: () => eligible,
+    searchAll: async (_addons, query) => {
+      queries.push(query);
+      if (query === "Alpha") eligible = false;
+      return { items: [hit(query, `tt-${query}`)] };
+    },
+  });
+  try {
+    await h.scan.start({ automatic: true, libraryIds: ["lib_aaaaaaaa"] });
+    await waitFor(() => h.scan.snapshot().status === "completed");
+    assert.deepEqual(queries, ["Alpha"], "the item already being processed finished, the next was never asked");
+    assert.deepEqual(h.metas, ["tt-Alpha"], "including the follow-up metadata request of the item in flight");
+    assert.equal(h.scan.snapshot().skipped, 1, "the queued item that was dropped is counted as skipped");
+    assert.equal(h.store.meta["lib_aaaaaaaa/Beta"], undefined);
   } finally { await h.close(); }
 });

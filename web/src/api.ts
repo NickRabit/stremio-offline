@@ -142,9 +142,9 @@ export const api = {
     request<BrowseResult>(`/api/library/favorites?${q({ skip: options.skip || undefined, limit: options.limit ?? 60, sort: options.sort || undefined, order: options.order || undefined, seed: options.seed || undefined })}`),
   /** The configured libraries. `root` is withheld in restricted mode. */
   libraries: () => request<LibraryView[]>("/api/libraries"),
-  createLibrary: (body: { name: string; type: LibraryType; root: string; create?: boolean; writeArtwork?: boolean }) =>
+  createLibrary: (body: { name: string; type: LibraryType; root: string; create?: boolean; writeArtwork?: boolean; autoScanMetadata?: boolean }) =>
     request<LibraryView>("/api/libraries", { method: "POST", body: JSON.stringify(body) }),
-  updateLibrary: (id: string, patch: { name?: string; type?: LibraryType; enabled?: boolean; order?: number; writeArtwork?: boolean; mosaic?: boolean; showInContinueWatching?: boolean; defaultMovie?: boolean; defaultSeries?: boolean; visibleTo?: string[]; root?: string; create?: boolean }) =>
+  updateLibrary: (id: string, patch: { name?: string; type?: LibraryType; enabled?: boolean; order?: number; writeArtwork?: boolean; autoScanMetadata?: boolean; mosaic?: boolean; showInContinueWatching?: boolean; defaultMovie?: boolean; defaultSeries?: boolean; visibleTo?: string[]; root?: string; create?: boolean }) =>
     request<LibraryView>(`/api/libraries/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(patch) }),
   /** Re-rooting that carries the content over. Queued, so it answers with the job id and
    *  the library only follows once every item is across. */

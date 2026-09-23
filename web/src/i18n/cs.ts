@@ -457,6 +457,8 @@ export const cs: Catalog = {
   "library.presentationHeading": "Obrázky a zobrazení",
   "library.actionsHeading": "Akce",
   "library.writeArtwork": "Zapisovat plakáty vedle médií",
+  "library.autoScanMetadata": "Automaticky dohledávat metadata",
+  "library.autoScanMetadataHint": "Při vypnutí naplánované skeny tuto knihovnu vynechají. Knihovnu i jednotlivé položky můžete prohledat ručně.",
   "library.libraryCounts": "{titles} titulů · {files} souborů · {size}",
   "library.scanThis": "Prohledat tuto knihovnu",
   "library.scanStarted": "Prohledávání spuštěno.",

@@ -85,6 +85,7 @@ const mount = async (options: { libraries?: LibraryRecord[]; records?: Record<st
     deleteGeneratedArt: async () => undefined,
     busy: () => "playback",
     pathExists: async () => true,
+    automaticLibraryEnabled: () => true,
     gapMs: 5,
     wakeMs: 20,
   });

@@ -101,7 +101,7 @@ it("keeps the dialog open and says why when the queue refuses the item", async (
 
 const library = (id: string, name: string, type: LibraryType, extra: Partial<LibraryView> = {}): LibraryView => ({
   id, name, type, root: `/media/${name}`, enabled: true, order: 0, addedAt: "2026-01-01T00:00:00.000Z",
-  writeArtwork: true, unreachable: false, readOnly: false, defaultMovie: false, defaultSeries: false,
+  writeArtwork: true, autoScanMetadata: true, unreachable: false, readOnly: false, defaultMovie: false, defaultSeries: false,
   titles: 0, files: 0, bytes: 0, ...extra,
 });
 

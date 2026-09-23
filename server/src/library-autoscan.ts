@@ -10,11 +10,13 @@ export interface AutoScanLibrary { id: string; files: () => Promise<FoundFile[]>
 
 export interface LibraryAutoScanOpts {
   enabled: () => boolean;
-  /** The libraries to check, one fingerprint each. */
+  /** The libraries eligible for an automatic scan, one fingerprint each. A library whose
+   *  automatic lookup is switched off is left out, so its absence is never a change. */
   libraries: () => Promise<AutoScanLibrary[]>;
   status: () => ScanState;
-  /** No argument scans every library; an id narrows the run to the one that moved. */
-  start: (libraryId?: string) => Promise<ScanState>;
+  /** The libraries that changed, never empty: an automatic run never widens to the whole
+   *  install, so a library nobody touched is neither walked nor searched. */
+  start: (libraryIds: string[]) => Promise<ScanState>;
   /** Playback or a running download; the scan would only pause itself anyway. */
   busy: () => boolean;
   watch?: (onChange: () => void) => { active: boolean; close(): void };
@@ -67,6 +69,12 @@ export class LibraryAutoScan {
     }
   }
 
+  /** Forget what a library looked like, so the next eligible check runs even when its files
+   *  never changed while its automatic lookup was off. */
+  invalidate(libraryId: string) {
+    this.fingerprints.delete(libraryId);
+  }
+
   isWatching() { return Boolean(this.watching?.active); }
 
   async check(reason: AutoScanReason): Promise<boolean> {
@@ -89,8 +97,7 @@ export class LibraryAutoScan {
         if (this.fingerprints.get(library.id) !== stamp) changed.push(library.id);
       }
       if (!changed.length) return false;
-      // One library moved, so only that one is scanned; two or more is a whole-library run.
-      const state = await this.opts.start(changed.length === 1 ? changed[0] : undefined);
+      const state = await this.opts.start(changed);
       // Recorded only once the scan is under way, so a start that failed on a
       // sleeping addon is tried again at the next check.
       for (const [id, stamp] of stamps) this.fingerprints.set(id, stamp);

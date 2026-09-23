@@ -43,7 +43,7 @@ test("a granted root is added, previewed and revoked without losing what it reme
   const created = await request.post("/api/libraries", { data: { name: "Granted", type: "movie", root: grantedRoot } });
   expect(created.status()).toBe(201);
   const library = await created.json();
-  expect(library).toMatchObject({ name: "Granted", type: "movie", readOnly: false, unreachable: false });
+  expect(library).toMatchObject({ name: "Granted", type: "movie", autoScanMetadata: true, readOnly: false, unreachable: false });
 
   const listed = await (await request.get("/api/libraries")).json();
   expect(listed.map((entry: { id: string }) => entry.id)).toContain(library.id);
@@ -104,13 +104,20 @@ test("a granted root is added, previewed and revoked without losing what it reme
   await creator.getByRole("button", { name: "Nová složka" }).click();
   await expect(creator).toContainText("Složka ještě neexistuje.");
   await expect(creator.locator('input[aria-label="Název"]')).toHaveValue("Nové filmy");
+  const automaticLookup = creator.getByRole("checkbox", { name: "Automaticky dohledávat metadata" });
+  const scanNow = creator.getByRole("checkbox", { name: "Prohledat metadata teď" });
+  await expect(automaticLookup).toBeChecked();
+  await expect(scanNow).toBeChecked();
+  await creator.locator(".library-auto-scan-setting label").click();
+  await expect(automaticLookup).not.toBeChecked();
+  await expect(scanNow, "disabling scheduled lookups leaves the explicit first scan on").toBeChecked();
   await creator.getByRole("button", { name: "Přidat knihovnu" }).click();
   await expect(creator).toHaveCount(0);
   expect((await stat(added)).isDirectory(), "the grant makes the folder creatable").toBe(true);
 
   const withFolder = await (await request.get("/api/libraries")).json();
   const made = withFolder.find((entry: { root: string }) => entry.root === added);
-  expect(made).toMatchObject({ name: "Nové filmy", type: "mixed" });
+  expect(made).toMatchObject({ name: "Nové filmy", type: "mixed", autoScanMetadata: false });
   await request.delete(`/api/libraries/${made.id}?forget=1`);
   await rm(added, { recursive: true, force: true });
   await tools.getByRole("button", { name: "Zavřít" }).click();
@@ -123,11 +130,17 @@ test("a granted root is added, previewed and revoked without losing what it reme
   const grantedRow = manager.locator(".library-admin-row", { hasText: "Granted" });
   await grantedRow.getByRole("button", { name: "Upravit knihovnu" }).click();
   const editor = page.getByRole("dialog", { name: "Upravit knihovnu" });
+  const editorAutomaticLookup = editor.getByRole("checkbox", { name: "Automaticky dohledávat metadata" });
+  await expect(editorAutomaticLookup).toBeChecked();
+  await editor.locator("label.library-check", { hasText: "Automaticky dohledávat metadata" }).click();
+  await expect(editorAutomaticLookup).not.toBeChecked();
   await editor.getByLabel("Název").fill("Přejmenovaná");
   await editor.getByRole("button", { name: "Uložit změny" }).click();
   await expect(editor).toHaveCount(0);
   await expect(manager.locator(".library-admin-row", { hasText: "Přejmenovaná" })).toBeVisible();
   await expect(manager.locator(".library-admin-row", { hasText: "Přejmenovaná" })).toContainText("Filmy");
+  expect((await (await request.get("/api/libraries")).json()).find((entry: { id: string }) => entry.id === library.id))
+    .toMatchObject({ autoScanMetadata: false });
 
   // Revoking disables the library under it; the media, the metadata file and the artwork
   // directory stay, so granting the root again brings it back.

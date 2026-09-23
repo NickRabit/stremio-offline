@@ -48,7 +48,11 @@ tree again. A single item can be matched from its three-dot menu with **Find
 metadata**.
 
 The scan runs **on its own** too (`LIBRARY_AUTO_SCAN`, both in Settings and in
-the environment):
+the environment), for each enabled library whose **Automatically look up
+metadata** switch is on. Turn that switch off when the catalogue addons will
+not find the library's titles. Manual scans and **Find metadata** still work.
+The instance-wide switch in Settings or `LIBRARY_AUTO_SCAN=0` can disable all
+automatic scans:
 
 - every six hours, plus one check two minutes after start-up, it compares the
   tree against the last one it acted on — file count, total size and newest
