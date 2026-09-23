@@ -1,15 +1,16 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { SearchResult } from "./addons.js";
 import { log } from "./logger.js";
 import {
   autoAccept, cacheFieldsFromMeta, episodesFromMeta, knownTitleOf, lookupSkipped, needsRefresh, pickSuggestion, scanMiss,
-  scannedRecently, scanSkipReason, scoreHit, yearFromMeta,
+  scannedRecently, scanSkipReason, scoreHit, viewMeta, yearFromMeta,
   type LibraryEpisodeRecord, type LibraryMetaRecord, type LibrarySuggestion, type TitleUnit,
 } from "./library-match.js";
+import type { LibraryCandidate, LibraryCandidateSource } from "./library-candidates.js";
 import { parseMediaPath } from "./library-parse.js";
 import { parseLibraryPath } from "./libraries.js";
 import { isPathWithin, type FoundFile } from "./library.js";
+import type { MediaInfo } from "./naming.js";
 import type { AddonRecord, MetaItem } from "./types.js";
 
 export type ScanStatus = "idle" | "running" | "paused" | "completed" | "failed";
@@ -38,6 +39,8 @@ export interface ScanState {
   automatic?: boolean;
   /** The libraries an automatic run is confined to. Persisted so a resume keeps its scope. */
   libraryIds?: string[];
+  /** Set when the run rechecks existing automatic bindings instead of looking for new ones. */
+  recheck?: boolean;
 }
 
 export interface LibraryScanOpts {
@@ -45,9 +48,12 @@ export interface LibraryScanOpts {
   /** The walk is the host's: it spans libraries and knows each one's type, so the
    *  scan asks for units instead of building them from a single root. */
   units: () => Promise<TitleUnit[]>;
-  searchAll: (addons: AddonRecord[], query: string, type?: string) => Promise<Pick<SearchResult, "items">>;
+  /** The trusted providers only: TMDB when it is configured, then the installed Cinemeta. */
+  candidates: LibraryCandidateSource;
   metadata: (addons: AddonRecord[], type: string, id: string) => Promise<MetaItem | null>;
   addons: () => AddonRecord[];
+  /** The language the interface reads, which TMDB is asked in. */
+  language?: () => string;
   libraryMeta: () => Record<string, LibraryMetaRecord>;
   librarySuggestions: () => Record<string, LibrarySuggestion>;
   updateMeta: (mutator: (
@@ -56,6 +62,8 @@ export interface LibraryScanOpts {
     episodes: Record<string, LibraryEpisodeRecord>,
   ) => void) => Promise<void>;
   savePoster: (key: string, url: string | undefined, backdrop?: string) => void;
+  /** Alternate artwork of a title whose selected metadata carried a gallery. */
+  saveGallery?: (key: string, pictures: NonNullable<MediaInfo["gallery"]>) => void;
   /** Fills a missing wide variant of an entry the run walks. The host queues it like any other
    *  artwork job, so a rescan backfills the library without waiting for a browse. */
   fillWideArtwork?: (key: string) => void;
@@ -71,6 +79,9 @@ export interface LibraryScanOpts {
   browsed?: () => ReadonlySet<string>;
   /** Age at which a bound series is re-fetched; `0` switches the pass off. */
   metaTtlMs?: number;
+  /** Runs after a run reaches "completed", while its result is still the current one.
+   *  The host uses it to reconcile the saved proposals against the tree the run walked. */
+  onCompleted?: () => void | Promise<void>;
   gapMs?: number;
   wakeMs?: number;
 }
@@ -102,6 +113,13 @@ function idForPrefix(raw: string, prefixes: string[], needle: string): string | 
   return prefix.endsWith(":") ? `${prefix}${raw}` : `${prefix}:${raw}`;
 }
 
+/** A binding a recheck may revisit: one the scan itself made, unlocked, and not an item
+ *  somebody told the scanner to leave alone. */
+function recheckable(record?: LibraryMetaRecord): boolean {
+  const viewed = viewMeta(record);
+  return Boolean(viewed?.id) && viewed!.source === "scan" && viewed!.locked === false && record?.skipLookup !== true;
+}
+
 export class LibraryScan {
   private state: ScanState = idle();
   private units = new Map<string, TitleUnit>();
@@ -109,6 +127,8 @@ export class LibraryScan {
   private eagerWide: string[] = [];
   /** Keys whose turn re-reads an existing binding instead of looking for a match. */
   private readonly refreshing = new Set<string>();
+  /** Keys whose turn re-reads an automatic binding and may propose a correction. */
+  private readonly rechecking = new Set<string>();
   private readonly stateFile: string;
   private readonly gapMs: number;
   private readonly wakeMs: number;
@@ -120,7 +140,9 @@ export class LibraryScan {
 
   constructor(private readonly opts: LibraryScanOpts) {
     this.stateFile = path.join(opts.dataDir, "library-scan.json");
-    this.gapMs = opts.gapMs ?? 3_000;
+    // No blanket pause: the trusted providers answer one request at a time, and TMDB's own
+    // Retry-After is what paces a refused scan. `LIBRARY_SCAN_GAP_MS` still overrides it.
+    this.gapMs = opts.gapMs ?? 0;
     this.wakeMs = opts.wakeMs ?? 15_000;
     this.metaTtlMs = opts.metaTtlMs ?? 14 * 24 * 60 * 60_000;
     this.pathExists = opts.pathExists;
@@ -141,6 +163,11 @@ export class LibraryScan {
     }
     if (this.state.status === "running" || this.state.status === "paused") {
       await this.refreshUnits();
+      this.rechecking.clear();
+      if (this.state.recheck) {
+        const records = this.opts.libraryMeta();
+        for (const key of this.state.remaining) if (recheckable(records[key])) this.rechecking.add(key);
+      }
       // An upgrade qualifies the unit keys, and a run that was interrupted before it would
       // resume against keys the walk no longer produces: every entry would miss and the
       // interface would watch a whole library being skipped. Nothing to resume, start over.
@@ -158,8 +185,8 @@ export class LibraryScan {
    *  catalogues about every unbound title again. */
   /** `force` throws away the memory of earlier fruitless searches; `path` narrows the
    *  run to one item, which the interface uses for "find metadata" on a single title. */
-  async start({ force = false, path: scope = "", libraryId, automatic = false, libraryIds = [] }: {
-    force?: boolean; path?: string; libraryId?: string; automatic?: boolean; libraryIds?: string[];
+  async start({ force = false, path: scope = "", libraryId, automatic = false, libraryIds = [], recheckScanBindings = false }: {
+    force?: boolean; path?: string; libraryId?: string; automatic?: boolean; libraryIds?: string[]; recheckScanBindings?: boolean;
   } = {}): Promise<ScanState> {
     // An automatic call always names the libraries that changed. An empty list is a caller
     // mistake, and reading it as "every library" is the one thing it must never mean.
@@ -167,10 +194,18 @@ export class LibraryScan {
       log("WARN", "An automatic library scan named no library, so nothing was scanned");
       return this.snapshot();
     }
+    // A recheck is about one library's existing bindings; without a library to scope it to
+    // it would either mean every library or nothing, and neither is what was asked for.
+    const recheck = recheckScanBindings && Boolean(libraryId);
+    if (recheckScanBindings && !libraryId) {
+      log("WARN", "An automatic-match recheck named no library, so nothing was rechecked");
+      return this.snapshot();
+    }
     if (this.state.status === "running" || this.state.status === "paused") return this.snapshot();
     const units = await this.opts.units();
     this.units = new Map(units.map((unit) => [unit.key, unit]));
     this.refreshing.clear();
+    this.rechecking.clear();
     this.cancelled = false;
     const browsed = this.opts.browsed?.() ?? new Set<string>();
     const records = this.opts.libraryMeta();
@@ -190,10 +225,12 @@ export class LibraryScan {
     // Asking for one item is a deliberate act, so it ignores the searched-in-vain memory.
     const again = force || Boolean(scope);
     const queued = wanted.filter((unit) => {
-      if (lookupSkipped(unit.key, records) || scanSkipReason(records[unit.key]) || knownTitleOf(unit.key, records)?.id) return false;
+      if (lookupSkipped(unit.key, records)) return false;
+      if (recheck) return recheckable(records[unit.key]);
+      if (scanSkipReason(records[unit.key]) || knownTitleOf(unit.key, records)?.id) return false;
       return again || !scannedRecently(suggestions[unit.key]);
     });
-    const refreshing = this.metaTtlMs > 0 && !scope
+    const refreshing = this.metaTtlMs > 0 && !scope && !recheck
       ? wanted.filter((unit) => {
         // The binding has to sit on the item itself: an inherited one belongs to the
         // folder above, which is refreshed on its own turn when it holds videos.
@@ -209,7 +246,10 @@ export class LibraryScan {
       this.refreshing.add(unit.key);
       pending.push(unit.key);
     }
-    if (again) await this.opts.updateMeta((_meta, current) => { for (const unit of wanted) delete current[unit.key]; });
+    if (recheck) for (const unit of queued) this.rechecking.add(unit.key);
+    // A recheck keeps the binding and the suggestion it already has: what it adds is a
+    // correction beside them, never a proposal that replaced them before anybody looked.
+    if (again && !recheck) await this.opts.updateMeta((_meta, current) => { for (const unit of wanted) delete current[unit.key]; });
     this.state = {
       status: "running",
       startedAt: nowIso(),
@@ -221,9 +261,10 @@ export class LibraryScan {
       ...(scope ? { scope } : {}),
       ...(libraryId ? { libraryId } : {}),
       ...(automatic ? { automatic: true, libraryIds: [...libraryIds] } : {}),
+      ...(recheck ? { recheck: true } : {}),
     };
     await this.save();
-    log("INFO", "Library scan started", { total: pending.length, titles: units.length, force, refresh: refreshing.length, ...(scope ? { path: scope } : {}), ...(libraryId ? { libraryId } : {}), ...(automatic ? { automatic: true, libraries: libraryIds } : {}) });
+    log("INFO", "Library scan started", { total: pending.length, titles: units.length, force, refresh: refreshing.length, ...(scope ? { path: scope } : {}), ...(libraryId ? { libraryId } : {}), ...(automatic ? { automatic: true, libraries: libraryIds } : {}), ...(recheck ? { recheck: true } : {}) });
     this.schedulePump();
     return this.snapshot();
   }
@@ -276,6 +317,8 @@ export class LibraryScan {
           delete this.state.current;
           await this.save();
           log("INFO", "Library scan completed", { matched: this.state.matched, skipped: this.state.skipped, failed: this.state.failed });
+          try { await this.opts.onCompleted?.(); }
+          catch (error) { log("WARN", "The library scan could not reconcile its proposals", { reason: error instanceof Error ? error.message : String(error) }); }
           return;
         }
         this.state.current = key;
@@ -302,16 +345,19 @@ export class LibraryScan {
       const unit = this.units.get(key);
       if (!unit || !await this.pathExists(key)) { await this.finishUnit("skipped"); return; }
       const refresh = this.refreshing.has(key);
+      const recheck = this.rechecking.has(key);
       const records = this.opts.libraryMeta();
       const bound = records[key];
       // A refresh is the one turn allowed to ask about a binding that already exists.
-      if (!refresh && (lookupSkipped(key, records) || scanSkipReason(records[key]) || knownTitleOf(key, records)?.id)) { await this.finishUnit("skipped"); return; }
+      if (!refresh && !recheck && (lookupSkipped(key, records) || scanSkipReason(records[key]) || knownTitleOf(key, records)?.id)) { await this.finishUnit("skipped"); return; }
 
       const parsed = parseMediaPath(key);
       if (this.opts.busy()) { delete this.state.current; return; }
       this.refreshing.delete(key);
+      this.rechecking.delete(key);
 
       if (refresh && bound?.id) { addonCall = true; await this.refreshBinding(key, bound); return; }
+      if (recheck && bound?.id) { addonCall = true; await this.recheckBinding(key, unit, bound, parsed); return; }
 
       const identified = await this.identify(unit, parsed);
       addonCall = identified.called;
@@ -320,8 +366,17 @@ export class LibraryScan {
         const item = identified.accept.item;
         const meta = await this.opts.metadata(this.opts.addons(), item.type, item.id);
         addonCall = true;
-        const fields = cacheFieldsFromMeta(meta ?? item);
-        const episodeRows = episodesFromMeta(meta ?? item);
+        // A trusted candidate still has to resolve to a real record. A TMDB search hit is a
+        // name and a picture, not a title the catalogue can describe, and binding it would
+        // be exactly the "looks right" match this pass exists to stop making.
+        if (identified.accept.fromSearch && !meta) {
+          log("DEBUG", "The chosen candidate resolved to no metadata record", { key, id: item.id });
+          await this.rememberSuggestion(key, unit, identified.suggestion);
+          return;
+        }
+        const record = meta ?? item;
+        const fields = cacheFieldsFromMeta(record);
+        const episodeRows = episodesFromMeta(record);
         let wrote = false;
         await this.opts.updateMeta((metaMap, suggestions, episodes) => {
           const known = metaMap[key];
@@ -338,7 +393,13 @@ export class LibraryScan {
         if (!wrote) { await this.finishUnit("skipped"); return; }
         if (!this.opts.busy()) {
           await this.opts.deleteGeneratedArt(key);
-          this.opts.savePoster(key, (meta ?? item).poster, (meta ?? item).background);
+          this.opts.savePoster(key, record.poster, record.background);
+          // Alternate artwork is one request about the title just bound, never about a
+          // candidate that was merely searched for.
+          const gallery = identified.accept.candidate
+            ? await this.opts.candidates.galleryOf(identified.accept.candidate, unit.kind, this.language())
+            : [];
+          if (gallery.length) this.opts.saveGallery?.(key, gallery);
         }
         log("INFO", "Library title matched", { key, type: item.type, id: item.id, source: "scan" });
         await this.finishUnit("matched");
@@ -347,11 +408,7 @@ export class LibraryScan {
 
       // Either way the unit is remembered as searched, so a later scan can walk
       // past it instead of asking the catalogues the same question again.
-      const outcome = identified.suggestion
-        ? { ...identified.suggestion, scannedAt: nowIso() }
-        : scanMiss(unit.kind);
-      await this.opts.updateMeta((_metaMap, suggestions) => { suggestions[key] = outcome; });
-      await this.finishUnit("skipped");
+      await this.rememberSuggestion(key, unit, identified.suggestion);
     } catch (error) {
       this.state.error = error instanceof Error ? error.message : String(error);
       log("WARN", "Library scan unit failed", { key, reason: this.state.error });
@@ -368,6 +425,66 @@ export class LibraryScan {
     this.state.remaining = this.state.remaining.filter((item) => item !== key);
     delete this.state.current;
     return this.save();
+  }
+
+  /** Remembers what a unit's search came to, so a later scan walks past it. */
+  private async rememberSuggestion(key: string, unit: TitleUnit, suggestion: LibrarySuggestion | undefined) {
+    const outcome = suggestion ? { ...suggestion, scannedAt: nowIso() } : scanMiss(unit.kind);
+    await this.opts.updateMeta((_metaMap, suggestions) => { suggestions[key] = outcome; });
+    await this.finishUnit("skipped");
+  }
+
+  private language(): string { return this.opts.language?.() ?? "en"; }
+
+  /** A provider that breaks is a title nobody could identify yet, not a run that failed. */
+  private async searchTrusted(unit: TitleUnit, parsed: ReturnType<typeof parseMediaPath>): Promise<LibraryCandidate[]> {
+    try {
+      return await this.opts.candidates.searchLibraryCandidates(parsed.query, unit.kind, parsed.year, this.language());
+    } catch (error) {
+      log("WARN", "The trusted title search failed", { key: unit.key, reason: error instanceof Error ? error.message : String(error) });
+      return [];
+    }
+  }
+
+  /** One title's second look: ask the trusted providers again and, when they now name a
+   *  different title the scan would accept on its own, offer that as a correction. The
+   *  binding stays exactly as it was until somebody confirms the proposal, and a provider
+   *  that fails changes nothing at all. */
+  private async recheckBinding(key: string, unit: TitleUnit, bound: LibraryMetaRecord, parsed: ReturnType<typeof parseMediaPath>) {
+    const found = await this.searchTrusted(unit, parsed);
+    const hits = found.filter((candidate) => candidate.item.name).map((candidate) => scoreHit(parsed, candidate.item, unit.kind));
+    const accepted = autoAccept(hits);
+    const candidate = accepted ? found.find((entry) => entry.item.id === accepted.item.id) : undefined;
+    const chosen = candidate ? await this.opts.candidates.resolveSelected(candidate, unit.kind, this.language()) : undefined;
+    if (!accepted || !chosen) {
+      log("DEBUG", "An automatic binding survived its recheck", { key, id: bound.id, proposed: chosen?.id });
+      await this.finishUnit("skipped");
+      return;
+    }
+    if (chosen.id === bound.id) {
+      await this.opts.updateMeta((metaMap, suggestions) => {
+        if (metaMap[key]?.id === bound.id && suggestions[key]?.replacesId === bound.id) delete suggestions[key];
+      });
+      log("DEBUG", "An automatic binding survived its recheck", { key, id: bound.id, proposed: chosen.id });
+      await this.finishUnit("skipped");
+      return;
+    }
+    const year = yearFromMeta(chosen);
+    const previousYear = Number(bound.year);
+    await this.opts.updateMeta((metaMap, suggestions) => {
+      // The binding may have been replaced or unmatchd while the search was in flight.
+      if (metaMap[key]?.id !== bound.id) return;
+      suggestions[key] = {
+        type: chosen.type, id: chosen.id, name: chosen.name, score: accepted.score,
+        titleSimilarity: Math.round(accepted.titleSimilarity * 100), reason: "correction",
+        scannedAt: nowIso(), replacesId: bound.id, ...(year != null ? { year } : {}),
+        ...(chosen.poster ? { poster: chosen.poster } : {}),
+        ...(bound.name ? { replacesName: bound.name } : {}),
+        ...(Number.isFinite(previousYear) ? { replacesYear: previousYear } : {}),
+      };
+    });
+    log("INFO", "The recheck proposed a correction", { key, from: bound.id, to: chosen.id });
+    await this.finishUnit("skipped");
   }
 
   /** A refresh is one exact metadata call about the id the binding already has: no search
@@ -396,13 +513,17 @@ export class LibraryScan {
     await this.finishUnit("skipped");
   }
 
-  private async identify(unit: TitleUnit, parsed: ReturnType<typeof parseMediaPath>) {
+  private async identify(unit: TitleUnit, parsed: ReturnType<typeof parseMediaPath>): Promise<{
+    called: boolean;
+    accept?: { item: MetaItem; candidate?: LibraryCandidate; fromSearch: boolean };
+    suggestion?: LibrarySuggestion;
+  }> {
     const addons = this.opts.addons();
     const imdb = parsed.providerHints?.imdb;
     if (imdb) {
       const meta = await this.opts.metadata(addons, unit.kind, imdb)
         ?? await this.opts.metadata(addons, unit.kind === "movie" ? "series" : "movie", imdb);
-      return { called: true, accept: meta ? { item: { ...meta, type: meta.type || unit.kind }, score: 100, titleSimilarity: 1, autoEligible: true } : undefined };
+      return { called: true, accept: meta ? { item: { ...meta, type: meta.type || unit.kind }, fromSearch: false } : undefined };
     }
     const prefixes = addonPrefixes(addons);
     const tmdbId = parsed.providerHints?.tmdb ? idForPrefix(parsed.providerHints.tmdb, prefixes, "tmdb") : undefined;
@@ -410,16 +531,22 @@ export class LibraryScan {
     const prefixed = tmdbId ?? tvdbId;
     if (prefixed) {
       const meta = await this.opts.metadata(addons, unit.kind, prefixed);
-      if (meta) return { called: true, accept: { item: { ...meta, type: meta.type || unit.kind }, score: 100, titleSimilarity: 1, autoEligible: true } };
+      if (meta) return { called: true, accept: { item: { ...meta, type: meta.type || unit.kind }, fromSearch: false } };
     }
-    // Global-search opt-outs do not affect library matching.
-    const found = await this.opts.searchAll(addons, parsed.query, unit.kind);
-    const hits = found.items.filter((item) => item.name).map((item) => scoreHit(parsed, item, unit.kind));
-    const accept = autoAccept(hits);
+    // Only the trusted providers are asked. Arbitrary catalogue addons, including ones
+    // opted out of the global search, are what bound "Flashdance" to the wrong row.
+    const found = await this.searchTrusted(unit, parsed);
+    const byId = new Map(found.map((candidate) => [candidate.item.id, candidate]));
+    const hits = found.filter((candidate) => candidate.item.name).map((candidate) => scoreHit(parsed, candidate.item, unit.kind));
+    const accepted = autoAccept(hits);
     const suggestion = pickSuggestion(hits);
+    const candidate = accepted ? byId.get(accepted.item.id) : undefined;
+    // The identity that gets bound is the resolved one: an IMDb id whenever the provider has
+    // one, so the same title can be looked up by every addon that speaks it.
+    const item = candidate ? await this.opts.candidates.resolveSelected(candidate, unit.kind, this.language()) : accepted?.item;
     // Why a title stayed unmatched is the question the scan gets asked most, and the scores
     // that decided it are gone the moment this returns. Debug level: one line per title.
-    if (!accept) log("DEBUG", "No match was accepted for the title", {
+    if (!accepted || !item) log("DEBUG", "No match was accepted for the title", {
       query: parsed.query, kind: unit.kind, hits: hits.length,
       best: hits.length
         ? [...hits].sort((a, b) => b.score - a.score).slice(0, 3)
@@ -427,7 +554,7 @@ export class LibraryScan {
         : undefined,
       suggested: suggestion?.name,
     });
-    return { called: true, accept, suggestion };
+    return { called: true, accept: accepted && item ? { item, candidate, fromSearch: true } : undefined, suggestion };
   }
 
   private save() {

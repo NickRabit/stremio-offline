@@ -41,7 +41,10 @@ export const SERIES = {
 };
 
 const MANIFEST = {
-  id: "cz.stremio.offline.e2e",
+  // The library may bind a title automatically only from Cinemeta or from TMDB, and the
+  // test stack has no TMDB key. The fixture names itself as Cinemeta so the scan and the
+  // identity search have a trusted provider to ask, exactly as a real install would.
+  id: "com.linvo.cinemeta",
   version: "1.0.0",
   name: "E2E doplněk",
   description: "Zkušební doplněk pro automatické testy.",

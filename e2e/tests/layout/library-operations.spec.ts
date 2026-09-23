@@ -91,7 +91,8 @@ test("every library the move dialog offers is drawn inside the row", async ({ pa
  *  that queue is empty: the filter would list nothing and say nothing about why. */
 test("the filter for unconfirmed titles appears only while something is waiting", async ({ page }) => {
   let waiting = 0;
-  await page.route("**/api/library/suggestions", (route) => route.fulfill({
+  // The dialog asks for one library when one is configured, so the route matches the query too.
+  await page.route("**/api/library/suggestions*", (route) => route.fulfill({
     json: { items: [], total: waiting },
   }));
   const asked: string[] = [];

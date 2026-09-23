@@ -4,7 +4,8 @@ import { test } from "node:test";
 import {
   autoAccept, browseMeta, cacheFieldsFromMeta, clipText, dropKeyed, episodeKey, episodeNumberOf, episodesFromMeta, isExtraName,
   knownTitleOf, lookupSkipped, mosaicSkipped, matchKeyFor, pendingSuggestionKeys, pinInherited, matchStatus, needsBackfill, needsEpisodes, needsRefresh, pickSuggestion, remapKeyed, scanMiss,
-  scannedRecently, scanSkipReason, scoreHit, suggestionFor, titleUnits, unmatchAt, viewMeta,
+  scannedRecently, scanSkipReason, scoreHit, staleSuggestionKeys, suggestionFor, titleUnits, unmatchAt, viewMeta,
+  type LibrarySuggestion, type TitleUnit,
 } from "./library-match.js";
 import { parseMediaPath } from "./library-parse.js";
 import type { FoundFile } from "./library.js";
@@ -489,4 +490,93 @@ test("browse meta says how many pictures a title's gallery holds, and nothing wh
   // pictures are stored under the key that owns them.
   const folder = { Movies: { type: "movie", id: "tt1", source: "download" as const, gallery: [{ kind: "logo" as const, shape: "wide" as const }] } };
   assert.equal(browseMeta("Movies/one.mkv", "one", folder).gallery, undefined);
+});
+
+/** A hit built by hand, for the branches no amount of real title text reaches. */
+const rawHit = (id: string, name: string, score: number, titleSimilarity = 1, autoEligible = true, yearDelta?: number) =>
+  ({ item: { id, type: "movie", name } as MetaItem, score, titleSimilarity, autoEligible, ...(yearDelta != null ? { yearDelta } : {}) });
+
+test("a proposal says why a high score still wants a look", () => {
+  // The Avengers: one exact name, several years, none of them in the file name. 100% is the
+  // name and only the name, so the year is what the person is asked to check.
+  const parsed = parseMediaPath("Avengers");
+  const avengers = scoreHit(parsed, meta("The Avengers", 2012, "movie", "tt0848228"), "movie");
+  const ultron = scoreHit(parsed, meta("Avengers: Age of Ultron", 2015, "movie", "tt2395427"), "movie");
+  assert.equal(avengers.score, 100);
+  const proposal = pickSuggestion([avengers, ultron]);
+  assert.equal(proposal?.id, "tt0848228");
+  assert.equal(proposal?.reason, "year");
+
+  const ambiguous = pickSuggestion([rawHit("tt1", "Avengers", 100), rawHit("tt2", "Avengers Assemble", 96, 0.95)]);
+  assert.equal(ambiguous?.reason, "ambiguous");
+
+  const settled = parseMediaPath("Practical Magic (1998)");
+  const exact = scoreHit(settled, meta("Practical Magic", 1998, "movie", "tt0120794"), "movie");
+  assert.equal(pickSuggestion([exact])?.reason, undefined, "nothing to explain when the year agrees");
+});
+
+test("the displayed title similarity is independent of the year-adjusted ranking score", () => {
+  const parsed = parseMediaPath("Heat (1996)");
+  const oneYearOff = scoreHit(parsed, meta("Heat", 1995, "movie", "tt0113277"), "movie");
+  const proposal = pickSuggestion([oneYearOff]);
+  assert.equal(proposal?.score, 90, "the existing ranking still applies its year penalty");
+  assert.equal(proposal?.titleSimilarity, 100, "the UI can report the name-only percentage accurately");
+});
+
+test("a proposal carries the candidate's own poster and nothing when it has none", () => {
+  const parsed = parseMediaPath("Flashdance (1983)");
+  const withPoster = scoreHit(parsed, { id: "tt0085549", type: "movie", name: "Flashdance", releaseInfo: "1983", poster: "https://art/f.jpg" }, "movie");
+  assert.equal(pickSuggestion([withPoster])?.poster, "https://art/f.jpg");
+  const without = scoreHit(parsed, meta("Flashdance", 1983, "movie", "tt0085549"), "movie");
+  assert.equal("poster" in (pickSuggestion([without]) ?? {}), false);
+});
+
+test("a wrong-type or strongly conflicting-year candidate is not offered as a safe match", () => {
+  const parsed = parseMediaPath("Brave (2012)");
+  const wrong = scoreHit(parsed, meta("Brave", 2012, "movie", "tt1217209"), "series");
+  assert.equal(pickSuggestion([wrong]), undefined);
+  const farOff = scoreHit(parsed, meta("Brave", 1930, "movie", "tt0000001"), "movie");
+  assert.equal(farOff.autoEligible, false);
+  assert.equal(pickSuggestion([farOff]), undefined);
+});
+
+test("a correction of an unlocked automatic binding is a pending key, an ordinary one is not", () => {
+  const records = {
+    "Films/Ronin": { type: "movie", id: "tt0122690", source: "scan" as const, locked: false },
+    "Films/User": { type: "movie", id: "tt-user", source: "user" as const },
+    "Films/Locked": { type: "movie", id: "tt-locked", source: "scan" as const, locked: true },
+    "Films/Heat": { type: "movie", id: "tt0113277", source: "scan" as const, locked: false },
+  };
+  const suggestions = {
+    "Films/Ronin": { type: "movie", id: "tt1111111", name: "Ronin", score: 95, reason: "correction" as const, replacesId: "tt0122690", replacesName: "Ronin (old)" },
+    "Films/User": { type: "movie", id: "tt2", name: "User pick", score: 90, reason: "correction" as const, replacesId: "tt-user" },
+    "Films/Locked": { type: "movie", id: "tt3", name: "Locked pick", score: 90, reason: "correction" as const, replacesId: "tt-locked" },
+    "Films/Heat": { type: "movie", id: "tt0113277", name: "Heat", score: 92 },
+  };
+
+  assert.deepEqual(pendingSuggestionKeys(records, suggestions), ["Films/Ronin"]);
+});
+
+test("a finished scan drops the proposals whose title unit is gone, and only those", () => {
+  const units: TitleUnit[] = [
+    { key: "lib_aaaaaaaa/Films/Ronin", kind: "movie", relative: "Films/Ronin", sampleFiles: [] },
+    { key: "lib_aaaaaaaa/Shows/Ted", kind: "series", relative: "Shows/Ted", sampleFiles: [] },
+  ];
+  const suggestions: Record<string, LibrarySuggestion> = {
+    "lib_aaaaaaaa/Films/Ronin": { type: "movie", id: "tt0122690", name: "Ronin", score: 88 },
+    "lib_aaaaaaaa/Films/Removed": { type: "movie", id: "tt999", name: "Removed", score: 99 },
+    "lib_aaaaaaaa/Shows/Ted/01.mkv": { type: "series", id: "tt0111958", name: "Father Ted", score: 91 },
+    // A library that is away keeps everything it remembers.
+    "lib_bbbbbbbb/Films/Gone": { type: "movie", id: "tt1", name: "Gone", score: 90 },
+  };
+
+  assert.deepEqual(
+    staleSuggestionKeys(suggestions, units, new Set(["lib_aaaaaaaa"])),
+    ["lib_aaaaaaaa/Films/Removed"],
+  );
+  assert.deepEqual(
+    staleSuggestionKeys(suggestions, [], new Set(["lib_aaaaaaaa", "lib_bbbbbbbb"])).sort(),
+    ["lib_aaaaaaaa/Films/Removed", "lib_aaaaaaaa/Films/Ronin", "lib_aaaaaaaa/Shows/Ted/01.mkv", "lib_bbbbbbbb/Films/Gone"],
+    "the scan speaks about a library it can reach, and about nothing else",
+  );
 });

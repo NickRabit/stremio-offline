@@ -1,5 +1,5 @@
 import { serverText, t } from "./i18n";
-import type { StatsActivityPage, ActiveStream, Diagnostics, BuildInfo, AuthStatus, StatsSummary, Addon, AddonDownloadSettings, Capabilities, Catalog, Download, DownloadSelection, DownloadSnapshot, Inspection, BrowseResult, IdentityPreview, LibraryFolder, LibraryOp, LibraryOpsState, ProgressEntry, UserViews, WatchlistEntry, GrantBrowse, LibraryEstimate, LibraryGrant, LibrarySummary, LibraryType, LibraryView, Meta, PlaybackSession, ScanState, SearchResult, SearchableCatalog, SiteLink, SuggestionRow, Session, Settings, SettingsBackup, SettingsPatch, SettingsView, Stream, Subtitle, Trailer, UserAccount, UserPermissions, UserRole } from "./types";
+import type { StatsActivityPage, ActiveStream, Diagnostics, BuildInfo, AuthStatus, StatsSummary, Addon, AddonDownloadSettings, Capabilities, Catalog, Download, DownloadSelection, DownloadSnapshot, Inspection, BrowseResult, IdentityPreview, LibraryFolder, LibraryMatchResult, LibraryOp, LibraryOpsState, ProgressEntry, UserViews, WatchlistEntry, GrantBrowse, LibraryEstimate, LibraryGrant, LibrarySummary, LibraryType, LibraryView, Meta, PlaybackSession, ScanState, SearchResult, SearchableCatalog, SiteLink, SuggestionRow, Session, Settings, SettingsBackup, SettingsPatch, SettingsView, Stream, Subtitle, Trailer, UserAccount, UserPermissions, UserRole } from "./types";
 
 /** The status code has to reach the top, or a sign-out is indistinguishable from an ordinary error. */
 export class ApiError extends Error {
@@ -114,12 +114,15 @@ export const api = {
   startLibraryOp: (operation: LibraryOp) => request<{ id: string }>("/api/library/ops", { method: "POST", body: JSON.stringify(operation) }),
   cancelLibraryOp: (id: string) => request<void>(`/api/library/ops/${encodeURIComponent(id)}`, { method: "DELETE" }),
   libraryIdentity: (path: string) => request<IdentityPreview>(`/api/library/identity?${q({ path })}`),
-  matchLibraryItem: (body: { path?: string; key?: string; id?: string; type?: string; scope?: "unit" | "file"; season?: number; episode?: number; skipLookup?: boolean; skipMosaic?: boolean }) =>
+  matchLibraryItem: (body: { path?: string; key?: string; id?: string; type?: string; scope?: "unit" | "file"; season?: number; episode?: number; skipLookup?: boolean; skipMosaic?: boolean; replacesId?: string }) =>
     request<{ key: string; type: string; id: string | null }>("/api/library/match", { method: "POST", body: JSON.stringify(body) }),
-  librarySuggestions: () => request<{ items: SuggestionRow[]; total: number }>("/api/library/suggestions"),
+  librarySuggestions: (libraryId?: string) => request<{ items: SuggestionRow[]; total: number }>(`/api/library/suggestions${libraryId ? `?${q({ libraryId })}` : ""}`),
+  /** The trusted identity search: TMDB first, Cinemeta as the fallback, nothing else. */
+  librarySearch: (options: { path?: string; query: string; type?: string; year?: number }) =>
+    request<{ items: LibraryMatchResult[]; total: number }>(`/api/library/search?${q({ path: options.path || undefined, query: options.query, type: options.type || undefined, year: options.year })}`),
   dismissLibrarySuggestion: (key: string) => request<void>(`/api/library/suggestion?${q({ key })}`, { method: "DELETE" }),
   libraryScan: () => request<ScanState>("/api/library/scan"),
-  startLibraryScan: (body: { force?: boolean; path?: string; libraryId?: string } = {}) =>
+  startLibraryScan: (body: { force?: boolean; path?: string; libraryId?: string; recheckScanBindings?: boolean } = {}) =>
     request<ScanState>("/api/library/scan", { method: "POST", body: JSON.stringify(body) }),
   stopLibraryScan: () => request<void>("/api/library/scan/stop", { method: "POST" }),
   watchlist: () => request<WatchlistEntry[]>("/api/watchlist"),

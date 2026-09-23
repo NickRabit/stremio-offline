@@ -173,7 +173,19 @@ export interface LibrarySummary {
 }
 export interface LibraryPage extends LibrarySummary { files: LibraryFile[]; total: number }
 export type LibraryMatch = "unmatched" | "matched" | "suggested" | "rejected";
-export interface MatchSuggestion { type: string; id: string; name: string; year?: number; score: number }
+/** Why a proposal wants a second look before it is confirmed. */
+export type SuggestionReason = "ambiguous" | "year" | "correction";
+export interface MatchSuggestion {
+  type: string; id: string; name: string; year?: number; score: number;
+  /** Name-only similarity as a percentage; absent on suggestions saved by older versions. */
+  titleSimilarity?: number;
+  /** Why a high score still wants a look. Absent when nothing needs explaining. */
+  reason?: SuggestionReason;
+  /** The proposed candidate's own poster, already through the server's image proxy. */
+  poster?: string;
+  /** Set on a correction: the automatic binding this proposal would replace. */
+  replacesId?: string; replacesName?: string; replacesYear?: number;
+}
 export interface BrowseMeta {
   /** How many pictures the title's stored gallery holds; absent where it holds none. */
   gallery?: number;
@@ -222,13 +234,28 @@ export interface IdentityPreview {
   bound?: { type: string; id: string; name?: string; season?: number; episode?: number };
   suggestion?: MatchSuggestion;
 }
-export interface SuggestionRow { key: string; label: string; suggestion: MatchSuggestion }
+/** One row of the "Suggested matches" dialog. The library name and the relative path are
+ *  absent only on an answer from a server that predates them. */
+export interface SuggestionRow {
+  key: string;
+  label: string;
+  libraryId?: string;
+  library?: string;
+  path?: string;
+  suggestion: MatchSuggestion;
+}
+/** One row of the trusted manual search. `source` names the provider that offered it. */
+export interface LibraryMatchResult {
+  id: string; type: string; name: string; source: "tmdb" | "cinemeta"; releaseInfo?: string; poster?: string;
+}
 export interface ScanState {
   status: "idle" | "running" | "paused" | "completed" | "failed";
   pauseReason?: "playback" | "download" | "breaker" | "operation";
   startedAt?: string; finishedAt?: string; updatedAt?: string;
   total: number; done: number; matched: number; skipped: number; failed: number;
   current?: string; remaining: string[]; error?: string;
+  /** Set when the run rechecks existing automatic bindings instead of looking for new ones. */
+  recheck?: boolean;
 }
 export type LibraryOp =
   | { op: "move" | "copy"; items: string[]; target: string; confirmTypeMismatch?: boolean }

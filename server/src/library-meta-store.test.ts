@@ -207,3 +207,39 @@ test("a broken file is skipped instead of failing the boot", async () => {
     assert.deepEqual(Object.keys(store.qualifiedMeta()), ["lib_a/One.mkv"]);
   });
 });
+
+test("a suggestion written before the review fields existed still loads and round-trips", async () => {
+  await withStore(async (store, dataDir) => {
+    await seed(dataDir, "lib_a", {}, {
+      // The shape an older install has on disk: nothing but the score and the title.
+      "Films/Heat": { type: "movie", id: "tt0113277", name: "Heat", year: 1995, score: 91, scannedAt: "2026-01-01T00:00:00.000Z" },
+      "Films/Ronin": { type: "movie", id: "", name: "", score: 0 },
+    });
+    await store.load();
+    assert.deepEqual(store.qualifiedSuggestions()["lib_a/Films/Heat"], {
+      type: "movie", id: "tt0113277", name: "Heat", year: 1995, score: 91, scannedAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.equal("reason" in store.qualifiedSuggestions()["lib_a/Films/Heat"]!, false, "no reason is invented for an old row");
+    await store.flush();
+    const written = JSON.parse(await readFile(libraryFile(dataDir, "lib_a"), "utf8")).suggestions;
+    assert.equal(written["Films/Heat"].name, "Heat");
+    assert.equal("reason" in written["Films/Heat"], false);
+  });
+});
+
+test("a qualified write keeps a correction proposal's review fields", async () => {
+  await withStore(async (store, dataDir) => {
+    await store.load();
+    await store.updateQualified((_meta, suggestions) => {
+      suggestions["lib_aaaaaaaa/Films/Flashdance"] = {
+        type: "movie", id: "tt0085549", name: "Flashdance", score: 100, reason: "correction",
+        replacesId: "tt-old", replacesName: "Flashdance", poster: "https://art/f.jpg",
+      };
+    });
+    await store.flush();
+    assert.deepEqual(store.qualifiedSuggestions()["lib_aaaaaaaa/Films/Flashdance"], {
+      type: "movie", id: "tt0085549", name: "Flashdance", score: 100, reason: "correction",
+      replacesId: "tt-old", replacesName: "Flashdance", poster: "https://art/f.jpg",
+    });
+  });
+});

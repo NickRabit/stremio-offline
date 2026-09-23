@@ -47,6 +47,40 @@ restarts, the NAS goes down — resumes where it stopped rather than starting th
 tree again. A single item can be matched from its three-dot menu with **Find
 metadata**.
 
+### Where the answers come from
+
+Only trusted providers may name a title on their own, and they are asked one at
+a time rather than every catalogue addon at once:
+
+1. **TMDB**, when an API key is configured. A title search runs first; its
+   request has a five-second deadline, and a `429` is honoured through its
+   `Retry-After` instead of being retried for every title in the tree.
+2. **Cinemeta**, when TMDB has no key, fails, or answers with nothing that
+   scores like the file's name.
+
+No other catalogue addon — including one with its global search switched off —
+can create an automatic match. That is what bound a file to a same-named row
+from an unrelated catalogue. The general catalogue search is still there for a
+person: **Identify…** offers **Search other addons** as a second, explicit step.
+
+A name is not an identity. A candidate is bound automatically only when it is
+unique, its year is within two years of the year in the file name (and a missing
+year is never read as agreement), its type matches, and the provider still
+returns a metadata record for it. If a TMDB result wins the search, the scan
+resolves `/movie/{id}/external_ids` or `/tv/{id}/external_ids` and binds the
+IMDb id when TMDB has one, so every addon that speaks IMDb can be asked about
+the title afterwards. When it has none, the `tmdb:` id is kept as before.
+
+### Rechecking automatic matches
+
+**Library tools → Recheck automatic matches** looks at one library's titles the
+scan bound on its own — the ones that are unlocked and carry `source: "scan"`.
+It never rewrites them silently: a title that now reads differently comes back
+as a correction in the suggestions list, showing the current binding beside the
+proposed one. Confirming it updates the binding and its artwork; dismissing it
+keeps what was there. Bindings a person or a download made, locked records and
+items excluded from matching are never touched.
+
 The scan runs **on its own** too (`LIBRARY_AUTO_SCAN`, both in Settings and in
 the environment), for each enabled library whose **Automatically look up
 metadata** switch is on. Turn that switch off when the catalogue addons will
@@ -73,8 +107,16 @@ item ignores that memory; a full rescan can be forced.
 
 The scan binds only at high confidence. A plausible but uncertain hit is offered
 instead: a banner above the grid counts the waiting titles, and **Review** opens
-the list with **Confirm**, **Identify** and **Dismiss** on each row. The same
-suggestion appears on the tile's own menu, and the toolbar carries an
+the list with **Confirm**, **Identify** and **Dismiss** on each row. Every row
+names the library and the folder inside it, carries a portrait thumbnail of the
+candidate the row is about — its own poster, never the local file's artwork —
+and says what the number beside it means: it is title-name similarity, not
+overall certainty. A name that matches 100% still shows why it wants a look
+(more than one title may match, the release year is missing or wrong, or a
+different binding is already there), and a correction shows both identities.
+A proposal is only listed while its file is still in the tree and its library is
+reachable; an unplugged disk hides its rows from the count without losing them.
+The same suggestion appears on the tile's own menu, and the toolbar carries an
 **Awaiting confirmation only** filter beside the favourites one while the banner
 has something to count. It narrows the listing to the titles the scan is still
 asking about, at any depth below the folder you are in. The filter is not
@@ -89,12 +131,24 @@ file:
 | matched | **Fix match…** and **Unmatch** |
 | unmatched, or waiting as a suggestion | **Identify…** |
 
-**Identify** searches the catalogues with the name and year filled in from the
-path, and lets you pick the title, the type — film or series — and, for an
+**Identify** searches the trusted providers with the name and year filled in from
+the path, and lets you pick the title, the type — film or series — and, for an
 episode file, which episode it holds so its own name and plot are shown. The
 choice is locked: a later scan leaves it alone. **Unmatch** records that the
 title has no catalogue identity and stops the scan from suggesting one again;
 **Identify** reverses it.
+
+### Artwork
+
+Binding a title asks TMDB for its detail with artwork on, and saves its
+`poster_path` as the portrait variant and `backdrop_path` as the landscape one.
+A separate, bounded gallery request (`/movie/{id}/images` or `/tv/{id}/images`,
+in the interface language plus `en` and `null`) fills the alternate posters,
+backdrops and logos — at most eighteen, deduplicated. Neither request is made
+while searching: only a title that was chosen pays for them. Where TMDB has no
+picture the catalogue's artwork is used, and where neither has one the existing
+frame generation runs. Artwork that is already saved is replaced only when the
+artwork is regenerated explicitly or a correction is confirmed.
 
 ## Where the matches live
 
@@ -108,10 +162,11 @@ All of it sits under `DATA_PATH`, so copying that folder keeps the work. The
 settings backup does **not** carry it — see
 [Addons and downloads](downloads.md#backing-up-the-configuration).
 
-Cinemeta names every title the library matches against, so it is treated as
-essential: it cannot be removed, switched off, or demoted to a stream-only
-addon. Any other catalogue addon that declares metadata is used as well, and
-stays fully removable.
+Cinemeta names every title the library matches against when TMDB cannot, so it
+is treated as essential: it cannot be removed, switched off, or demoted to a
+stream-only addon. Any other catalogue addon that declares metadata is used as
+well for browsing and for an explicit search, and stays fully removable — but it
+is never evidence for an automatic binding.
 
 ## Related
 

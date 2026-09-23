@@ -16,7 +16,17 @@ export interface TmdbConfig {
 
 const TMDB_API = "https://api.themoviedb.org/3";
 const TIMEOUT_MS = 12_000;
+/** A title search sits between the user and the result list, so it gets a shorter deadline
+ *  than a detail lookup whose answer nobody is waiting on. */
+const SEARCH_TIMEOUT_MS = 5_000;
 const ID_CACHE_LIMIT = 500;
+
+/** How many pictures a stored gallery may hold. The artwork store owns the same cap. */
+export const TMDB_GALLERY_LIMIT = 18;
+/** Per kind, so one kind of picture cannot crowd the others out of the gallery. */
+const GALLERY_PER_KIND = { poster: 8, background: 6, logo: 4 } as const;
+
+const IMDB_ID = /^tt\d{5,}$/;
 
 /** The sizes TMDB serves. `original` is the full file -- for a hero it is three to eight
  *  times the bytes of w1280 and buys nothing at the widths this interface renders. */
@@ -33,7 +43,19 @@ const idCache = new Map<string, number | null>();
 /** Test seam only: forgets the imdb -> tmdb id map. */
 export function clearTmdbCache(): void { idCache.clear(); }
 
-const reasonOf = (error: unknown) => error instanceof Error ? error.message : String(error);
+/** A refused title search turns into a wait rather than a retry per title: the scan
+ *  asks about hundreds of them, and a 429 answered hundreds of times is what got it
+ *  rate-limited in the first place. */
+const SEARCH_PAUSE_MAX_MS = 60_000;
+let searchPausedUntil = 0;
+
+/** Test seam only: forgets the Retry-After wait a 429 asked for. */
+export function clearTmdbSearchPause(): void { searchPausedUntil = 0; }
+
+const reasonOf = (error: unknown, secret?: string) => {
+  const reason = error instanceof Error ? error.message : String(error);
+  return secret ? reason.split(secret).join("[redacted]") : reason;
+};
 
 const tmdbUrl = (path: string, params: Record<string, string>) => {
   const url = new URL(`${TMDB_API}${path}`);
@@ -41,8 +63,184 @@ const tmdbUrl = (path: string, params: Record<string, string>) => {
   return url.toString();
 };
 
-const request = (path: string, params: Record<string, string>, fetchImpl: FetchLike) =>
-  fetchImpl(tmdbUrl(path, params), { signal: AbortSignal.timeout(TIMEOUT_MS) });
+const request = (path: string, params: Record<string, string>, fetchImpl: FetchLike, timeoutMs = TIMEOUT_MS) =>
+  fetchImpl(tmdbUrl(path, params), { signal: AbortSignal.timeout(timeoutMs) });
+
+/** The seconds TMDB asks the caller to wait, when a refusal carries a `Retry-After`. */
+export function tmdbRetryAfterMs(response: Response): number {
+  const header = response.headers.get("retry-after");
+  if (!header) return 0;
+  const seconds = Number(header);
+  if (Number.isFinite(seconds) && seconds > 0) return Math.round(seconds * 1000);
+  const at = Date.parse(header);
+  return Number.isFinite(at) ? Math.max(0, at - Date.now()) : 0;
+}
+
+interface TmdbSearchRow {
+  id?: number;
+  title?: string; name?: string;
+  original_title?: string; original_name?: string;
+  release_date?: string; first_air_date?: string;
+  poster_path?: string | null; backdrop_path?: string | null;
+}
+
+interface TmdbSearchResponse { results?: TmdbSearchRow[] }
+
+interface TmdbExternalIds { imdb_id?: string | null }
+
+interface TmdbImageRow { file_path?: string | null; iso_639_1?: string | null; vote_average?: number }
+interface TmdbImages { posters?: TmdbImageRow[]; backdrops?: TmdbImageRow[]; logos?: TmdbImageRow[] }
+
+/** A picture of a chosen title, ready for the artwork store. */
+export interface TmdbGalleryPicture { url: string; kind: "poster" | "background" | "logo" }
+
+const mediaType = (type: "movie" | "series") => (type === "movie" ? "movie" : "tv");
+
+const releaseYear = (value?: string): string | undefined => {
+  const raw = String(value ?? "").slice(0, 4);
+  return /^(19|20)\d{2}$/.test(raw) ? raw : undefined;
+};
+
+/** Title search against TMDB. A failed or refused request is an empty list, never a throw:
+ *  the caller falls back to the next provider. */
+export async function tmdbSearch(
+  type: "movie" | "series",
+  query: string,
+  config: TmdbConfig,
+  fetchImpl: FetchLike = guardedFetch,
+): Promise<MetaItem[]> {
+  const trimmed = query.trim();
+  if (!trimmed || (type !== "movie" && type !== "series")) return [];
+  if (Date.now() < searchPausedUntil) return [];
+  let response: Response;
+  try {
+    response = await request(`/search/${mediaType(type)}`, {
+      api_key: config.apiKey,
+      language: config.language,
+      query: trimmed,
+      page: "1",
+      include_adult: "false",
+    }, fetchImpl, SEARCH_TIMEOUT_MS);
+  } catch (error) {
+    log("WARN", "TMDB search failed", { operation: "search", type, reason: reasonOf(error, config.apiKey) });
+    return [];
+  }
+  if (!response.ok) {
+    if (response.status === 429 || response.status === 503) {
+      const asked = tmdbRetryAfterMs(response);
+      if (asked > 0) searchPausedUntil = Date.now() + Math.min(asked, SEARCH_PAUSE_MAX_MS);
+    }
+    log("WARN", "TMDB search failed", { operation: "search", type, status: response.status, retryAfterMs: tmdbRetryAfterMs(response) });
+    return [];
+  }
+  let body: TmdbSearchResponse;
+  try { body = await response.json() as TmdbSearchResponse; }
+  catch (error) {
+    log("WARN", "TMDB answered with malformed JSON", { operation: "search", type, reason: reasonOf(error, config.apiKey) });
+    return [];
+  }
+  return (body.results ?? []).flatMap((row) => {
+    const id = typeof row.id === "number" ? row.id : undefined;
+    const name = mediaType(type) === "movie" ? row.title || row.original_title : row.name || row.original_name;
+    if (id == null || !name) return [];
+    const year = releaseYear(mediaType(type) === "movie" ? row.release_date : row.first_air_date);
+    const original = mediaType(type) === "movie" ? row.original_title : row.original_name;
+    return [{
+      id: `tmdb:${id}`,
+      type,
+      name,
+      ...(original && original !== name ? { originalTitle: original } : {}),
+      ...(year ? { releaseInfo: year } : {}),
+      ...artworkOf({ poster_path: row.poster_path, backdrop_path: row.backdrop_path }),
+    }];
+  });
+}
+
+/** The IMDb id behind a TMDB id, when TMDB has one. A refusal, a timeout or an id that is
+ *  not an IMDb id answers null rather than a guess. */
+export async function tmdbExternalId(
+  type: "movie" | "series",
+  tmdbId: number,
+  config: TmdbConfig,
+  fetchImpl: FetchLike = guardedFetch,
+): Promise<string | null> {
+  if (type !== "movie" && type !== "series") return null;
+  if (!Number.isInteger(tmdbId) || tmdbId <= 0) return null;
+  let response: Response;
+  try {
+    response = await request(`/${mediaType(type)}/${tmdbId}/external_ids`, { api_key: config.apiKey, language: config.language }, fetchImpl);
+  } catch (error) {
+    log("WARN", "TMDB external id lookup failed", { operation: "external_ids", type, reason: reasonOf(error, config.apiKey) });
+    return null;
+  }
+  if (!response.ok) {
+    log("WARN", "TMDB external id lookup failed", { operation: "external_ids", type, status: response.status, retryAfterMs: tmdbRetryAfterMs(response) });
+    return null;
+  }
+  let body: TmdbExternalIds;
+  try { body = await response.json() as TmdbExternalIds; }
+  catch (error) {
+    log("WARN", "TMDB answered with malformed JSON", { operation: "external_ids", type, reason: reasonOf(error, config.apiKey) });
+    return null;
+  }
+  return typeof body.imdb_id === "string" && IMDB_ID.test(body.imdb_id) ? body.imdb_id : null;
+}
+
+/** Alternate artwork of one chosen title, deduplicated and bounded. Only called once a
+ *  binding has been picked: a per-candidate request would multiply the search cost. */
+export async function tmdbGallery(
+  type: "movie" | "series",
+  id: string,
+  config: TmdbConfig,
+  fetchImpl: FetchLike = guardedFetch,
+): Promise<TmdbGalleryPicture[]> {
+  if (type !== "movie" && type !== "series") return [];
+  const tmdbId = await resolveId(type, id, config, fetchImpl);
+  if (tmdbId == null) return [];
+  const language = normalizeLanguage(config.language);
+  const include = [...new Set([...(language ? [language] : []), "en", "null"])].join(",");
+  let response: Response;
+  try {
+    response = await request(`/${mediaType(type)}/${tmdbId}/images`, { api_key: config.apiKey, include_image_language: include }, fetchImpl);
+  } catch (error) {
+    log("WARN", "TMDB images lookup failed", { operation: "images", type, reason: reasonOf(error, config.apiKey) });
+    return [];
+  }
+  if (!response.ok) {
+    log("WARN", "TMDB images lookup failed", { operation: "images", type, status: response.status, retryAfterMs: tmdbRetryAfterMs(response) });
+    return [];
+  }
+  let body: TmdbImages;
+  try { body = await response.json() as TmdbImages; }
+  catch (error) {
+    log("WARN", "TMDB answered with malformed JSON", { operation: "images", type, reason: reasonOf(error, config.apiKey) });
+    return [];
+  }
+  const rank = (row: TmdbImageRow) => {
+    const iso = normalizeLanguage(row.iso_639_1 ?? undefined);
+    const languageRank = iso === language ? 2 : iso === "en" ? 1 : 0;
+    return languageRank * 1000 + (Number.isFinite(row.vote_average) ? Number(row.vote_average) : 0);
+  };
+  const seen = new Set<string>();
+  const out: TmdbGalleryPicture[] = [];
+  const take = (rows: TmdbImageRow[] | undefined, kind: TmdbGalleryPicture["kind"], size: TmdbImageSize) => {
+    let taken = 0;
+    for (const row of [...(rows ?? [])].sort((a, b) => rank(b) - rank(a))) {
+      if (taken >= GALLERY_PER_KIND[kind] || out.length >= TMDB_GALLERY_LIMIT) return;
+      const path = row.file_path;
+      if (!path || seen.has(path)) continue;
+      const url = tmdbImage(path, size);
+      if (!url) continue;
+      seen.add(path);
+      out.push({ url, kind });
+      taken += 1;
+    }
+  };
+  take(body.posters, "poster", "w500");
+  take(body.backdrops, "background", "w1280");
+  take(body.logos, "logo", "w500");
+  return out;
+}
 
 interface TmdbDetail {
   title?: string; original_title?: string;
@@ -78,7 +276,7 @@ async function resolveId(type: string, id: string, config: TmdbConfig, fetchImpl
   try {
     response = await request(`/find/${encodeURIComponent(id)}`, { api_key: config.apiKey, language: config.language, external_source: "imdb_id" }, fetchImpl);
   } catch (error) {
-    log("WARN", "TMDB id lookup failed", { operation: "find", type, id, reason: reasonOf(error) });
+    log("WARN", "TMDB id lookup failed", { operation: "find", type, id, reason: reasonOf(error, config.apiKey) });
     return null;
   }
   if (!response.ok) {
@@ -89,7 +287,7 @@ async function resolveId(type: string, id: string, config: TmdbConfig, fetchImpl
   let body: TmdbFind;
   try { body = await response.json() as TmdbFind; }
   catch (error) {
-    log("WARN", "TMDB answered with malformed JSON", { operation: "find", type, id, reason: reasonOf(error) });
+    log("WARN", "TMDB answered with malformed JSON", { operation: "find", type, id, reason: reasonOf(error, config.apiKey) });
     return null;
   }
 
@@ -110,7 +308,7 @@ export async function tmdbTrailer(type: "movie" | "series", id: string, config: 
   try {
     response = await request(`/${type === "movie" ? "movie" : "tv"}/${tmdbId}/videos`, { api_key: config.apiKey, language: config.language }, fetchImpl);
   } catch (error) {
-    log("WARN", "TMDB trailer lookup failed", { operation: "videos", type, id, reason: reasonOf(error) });
+    log("WARN", "TMDB trailer lookup failed", { operation: "videos", type, id, reason: reasonOf(error, config.apiKey) });
     return null;
   }
   if (!response.ok) {
@@ -120,7 +318,7 @@ export async function tmdbTrailer(type: "movie" | "series", id: string, config: 
   let body: TmdbVideos;
   try { body = await response.json() as TmdbVideos; }
   catch (error) {
-    log("WARN", "TMDB answered with malformed JSON", { operation: "videos", type, id, reason: reasonOf(error) });
+    log("WARN", "TMDB answered with malformed JSON", { operation: "videos", type, id, reason: reasonOf(error, config.apiKey) });
     return null;
   }
   const language = normalizeLanguage(config.language);
@@ -167,7 +365,7 @@ export async function tmdbMeta(type: string, id: string, config: TmdbConfig, fet
   try {
     response = await request(`/${type === "movie" ? "movie" : "tv"}/${tmdbId}`, { api_key: config.apiKey, language: config.language }, fetchImpl);
   } catch (error) {
-    log("WARN", "TMDB request failed", { operation: "meta", type, id, reason: reasonOf(error) });
+    log("WARN", "TMDB request failed", { operation: "meta", type, id, reason: reasonOf(error, config.apiKey) });
     return null;
   }
   if (response.status === 401) {
@@ -181,7 +379,7 @@ export async function tmdbMeta(type: string, id: string, config: TmdbConfig, fet
 
   try { return toMetaItem(type, id, await response.json() as TmdbDetail, config); }
   catch (error) {
-    log("WARN", "TMDB answered with malformed JSON", { operation: "meta", type, id, reason: reasonOf(error) });
+    log("WARN", "TMDB answered with malformed JSON", { operation: "meta", type, id, reason: reasonOf(error, config.apiKey) });
     return null;
   }
 }

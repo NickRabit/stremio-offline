@@ -25,11 +25,12 @@ import { Store, type State, type UserPrefs, type WatchlistEntry, type StoredProg
 import { emptyUserData, findUserById, forEachUserData, type UserData, type UserRecord } from "./users.js";
 import type { ProgressSeries } from "./progress-series.js";
 import { advanceTorrent } from "./debrid.js";
-import { tmdbMeta } from "./tmdb.js";
+import { tmdbGallery, tmdbMeta, type TmdbConfig } from "./tmdb.js";
+import { createLibraryCandidates } from "./library-candidates.js";
 import { ExternalIdStore } from "./external-ids.js";
 import { currentLevel, flushLog, initLogger, log, parseLevel, startLogMaintenance, setLevel } from "./logger.js";
 import { browseDirectory, describePath, emptiedFolders, entryDirectory, holdsLibraryRoot, isPathWithin, isVideo, listVideos, moveDestination, orphanedCatalogKeys, pageFiles, remapPath, scanLibrary, summarize, type FoundFile, type LibraryEntry } from "./library.js";
-import { browseMeta, cacheFieldsFromMeta, episodeKey, episodeNumberOf, episodesFromMeta, dropKeyed, knownTitleEntry, knownTitleOf, matchKeyFor, mosaicSkipped, needsBackfill, needsEpisodes, titleUnits, unmatchAt, type GalleryEntry, type LibraryMetaRecord, type TitleKind, type TitleUnit } from "./library-match.js";
+import { browseMeta, cacheFieldsFromMeta, episodeKey, episodeNumberOf, episodesFromMeta, dropKeyed, knownTitleEntry, knownTitleOf, matchKeyFor, mosaicSkipped, needsBackfill, needsEpisodes, staleSuggestionKeys, titleUnits, unmatchAt, type GalleryEntry, type LibraryMetaRecord, type TitleKind, type TitleUnit } from "./library-match.js";
 import { LibraryScan } from "./library-scan.js";
 import { createLibraryProbe, type LibraryHealth } from "./library-probe.js";
 import { LibraryAutoScan } from "./library-autoscan.js";
@@ -595,6 +596,17 @@ registerAddonsRoutes(app, { ...routeContext, storeRefreshed, publicAddonView });
 const tmdbProvider = (language: string): MetaProvider | undefined => {
   const apiKey = store.settings().tmdbApiKey;
   return apiKey ? (type, id) => tmdbMeta(type, id, { apiKey, language }) : undefined;
+};
+/** The detail behind a binding: the same lookup, asking for the pictures as well. Only a
+ *  title somebody just bound is read this way; the browsing paths leave the artwork to the
+ *  catalogue so a tile does not change its face when TMDB happens to know the title. */
+const tmdbArtworkProvider = (language: string): MetaProvider | undefined => {
+  const apiKey = store.settings().tmdbApiKey;
+  return apiKey ? (type, id) => tmdbMeta(type, id, { apiKey, language, artwork: true }) : undefined;
+};
+const tmdbConfigOf = (language: string): TmdbConfig | undefined => {
+  const apiKey = store.settings().tmdbApiKey;
+  return apiKey ? { apiKey, language } : undefined;
 };
 /** The viewer's own correction for subtitles that run ahead of the picture or behind it. */
 const SUBTITLE_DELAY_LIMIT_S = 30;
@@ -1209,6 +1221,10 @@ const attachBrowseMeta = <T extends { path: string; kind: string; name?: string;
   const key = libraryKey(item.path);
   const label = item.kind === "folder" ? String(item.name ?? "") : String(item.label ?? "");
   const extra = browseMeta(key, label, records, metaStore.qualifiedSuggestions(), episodes);
+  const suggestion = extra.suggestion;
+  const safeExtra = suggestion?.poster
+    ? { ...extra, suggestion: { ...suggestion, poster: images.proxied(suggestion.poster) } }
+    : extra;
   const known = knownTitleOf(key, records);
   const numbers = item.kind === "file" ? episodeNumberOf(key, ownRecord(key, records)) : undefined;
   // Only a key can answer with a better language; without one every record stays wanted as it is.
@@ -1218,7 +1234,7 @@ const attachBrowseMeta = <T extends { path: string; kind: string; name?: string;
   // The move dialog offers only the libraries that take what it is about to hand them,
   // and a row without a binding has no kind to compare -- the server stays the backstop.
   const titled = known && (known.type === "movie" || known.type === "series") ? { titleType: known.type } : {};
-  return { item: { ...item, ...extra, ...titled }, backfill };
+  return { item: { ...item, ...safeExtra, ...titled }, backfill };
 };
 
 /** An episode gets its own still. Falling back to the series poster would paint
@@ -1780,6 +1796,26 @@ const libraryPathBusy = async (keys: string[]): Promise<string | undefined> => {
 };
 
 registerContentRoutes(app, { ...routeContext, attachBrowseMeta, carveOutsOf, dataOf, deleteLibraryItem, fileExists, galleryArtwork, galleryOf, healthOf, invalidateLibrary, libraryEntries, libraryKey, libraryPathBusy, libraryRootBrowse, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, metaStore, prefsOf, progressOf, relativeKeyIn, relocateLibraryPath, scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites });
+/** The one search and resolution service behind both the scan and the manual identity
+ *  search, so the row somebody picks by hand is the row the scanner would have picked. */
+const libraryCandidates = createLibraryCandidates({
+  tmdb: () => tmdbConfigOf(prefsOf().uiLanguage),
+  addons: () => store.addons(),
+});
+/** A finished scan of a library that is here now is the moment its proposals can be
+ *  reconciled: a suggestion whose title unit is gone describes nothing, and leaving it
+ *  would keep a count alive for a file nobody has. A library that is away keeps its rows
+ *  untouched -- an unplugged disk must never read as a library that lost everything. */
+const pruneStaleSuggestions = async () => {
+  await refreshLibraryHealth();
+  const units = await libraryUnits();
+  const here = new Set(store.libraries()
+    .filter((library) => library.enabled && !libraryHealth.get(library.id)?.unreachable)
+    .map((library) => library.id));
+  await metaStore.updateQualified((_meta, suggestions) => {
+    for (const key of staleSuggestionKeys(suggestions, units, here)) delete suggestions[key];
+  });
+};
 const libraryScan = new LibraryScan({
   dataDir: DATA_DIR,
   // The scan works on keys, so the walk it injects is the qualified one.
@@ -1789,13 +1825,18 @@ const libraryScan = new LibraryScan({
   // libraries the interface touched since the last run pay for it.
   browsed: () => new Set(browsedLibraries),
   metaTtlMs: metaTtlMs(),
+  onCompleted: () => pruneStaleSuggestions(),
   // A library with its automatic lookup switched off stays out of the walk the scanner
   // takes: no catalogue search, no refresh, and no fingerprint that could look like news.
   automaticLibraryEnabled: (libraryId) => {
     const library = libraryFor(store.libraries(), libraryId);
     return library ? automaticMetadataEnabled(library) : false;
   },
-  searchAll, metadata,
+  candidates: libraryCandidates,
+  // The scan's own lookups ask for the artwork as well: it is the pass that binds a title,
+  // and the pictures it saves are the ones a tile shows from then on.
+  metadata: (addons, type, id) => metadata(addons, type, id, prefsOf().uiLanguage, tmdbArtworkProvider(prefsOf().uiLanguage)),
+  language: () => prefsOf().uiLanguage,
   addons: () => store.addons(),
   libraryMeta: () => metaStore.qualifiedMeta(),
   librarySuggestions: () => metaStore.qualifiedSuggestions(),
@@ -1805,6 +1846,7 @@ const libraryScan = new LibraryScan({
     invalidateLibrary();
   },
   savePoster: (key, url, backdrop) => saveCatalogPoster(key, url, undefined, backdrop),
+  saveGallery: (key, pictures) => saveCatalogGallery(key, pictures),
   // The scan walks every entry anyway, so a missing wide variant is filled from here as well:
   // "scan again" backfills the library instead of leaving it to the first landscape browse.
   fillWideArtwork: (key) => {
@@ -1820,7 +1862,8 @@ const libraryScan = new LibraryScan({
     if (outbound.diagnostics().some((row) => row.state === "open" && searchHosts.has(row.host))) return "breaker";
     return undefined;
   },
-  gapMs: Number.isFinite(scanGapMs) ? scanGapMs : 3_000,
+  // Off unless the deployment asked for pacing; TMDB's own Retry-After is the backoff.
+  gapMs: Number.isFinite(scanGapMs) ? scanGapMs : 0,
 });
 
 const autoScanIntervalMs = Number(process.env.LIBRARY_AUTO_SCAN_INTERVAL_MS);
@@ -1904,7 +1947,7 @@ if (autoScanAllowed) libraryAutoScan.start();
 // record is filled in -- anything newer is already in it.
 await stats.seed(queue.history().map(statEvent));
 
-type LibraryMatchRequest = { path?: unknown; key?: unknown; id?: unknown; type?: unknown; scope?: unknown; season?: unknown; episode?: unknown; skipLookup?: unknown; skipMosaic?: unknown };
+type LibraryMatchRequest = { path?: unknown; key?: unknown; id?: unknown; type?: unknown; scope?: unknown; season?: unknown; episode?: unknown; skipLookup?: unknown; skipMosaic?: unknown; replacesId?: unknown };
 
 /** A library job matches with no request in hand, so the language of the one account is
  *  the one to bind the metadata in; the dialog passes the caller's own. */
@@ -1953,6 +1996,7 @@ const matchLibraryItem = async (body: LibraryMatchRequest, language = prefsOf().
   }
   const id = String(body.id ?? "");
   const type = String(body.type ?? "movie");
+  const kind: TitleKind = type === "series" ? "series" : "movie";
   const number = (value: unknown) => {
     const parsed = Number(value);
     return value === undefined || value === null || value === "" || !Number.isFinite(parsed) ? undefined : parsed;
@@ -1961,20 +2005,28 @@ const matchLibraryItem = async (body: LibraryMatchRequest, language = prefsOf().
   const season = number(body.season);
   // "file" binds the one video the user clicked, "unit" the whole title it belongs to.
   const bindKey = body.scope === "file" ? requestKey : unitKey;
-  const meta = id ? await cachedMeta(type, id, language) : null;
+  // The identity that gets written down is the resolved one: a TMDB row becomes the IMDb id
+  // the rest of the app speaks whenever TMDB has one, and keeps its TMDB id when it does not.
+  const chosen = id.startsWith("tmdb:") ? await libraryCandidates.resolveSelected({ item: { id, type, name: "" }, provider: "tmdb" }, kind, language) : undefined;
+  const boundId = chosen?.id ?? id;
+  // A confirmation that names an item the tree no longer holds is a stale dialog, not a match.
+  if (id && !files.some((file) => file.relative === requestKey || isPathWithin(file.relative, requestKey))) {
+    throw new AppError("That title is no longer in the library.", "err.titleGone", 409);
+  }
+  const meta = boundId ? await cachedMeta(type, boundId, language) : null;
   const fields = cacheFieldsFromMeta(meta);
   const episodeRows = episodesFromMeta(meta);
   const at = new Date().toISOString();
   const episodeRow = type === "series" && episode != null
-    ? episodeRows[episodeKey(type, id, season ?? 1, episode)] : undefined;
+    ? episodeRows[episodeKey(type, boundId, season ?? 1, episode)] : undefined;
   const target = parseLibraryPath(bindKey);
   if (target) await metaStore.update(target.libraryId, (file, episodes) => {
     const request = relativeKeyIn(target.libraryId, requestKey);
     const unit = relativeKeyIn(target.libraryId, unitKey);
-    if (!id) file.meta = unmatchAt(file.meta, request ?? target.relative);
+    if (!boundId) file.meta = unmatchAt(file.meta, request ?? target.relative);
     else {
       file.meta[target.relative] = {
-        type, id, source: "user", locked: true, skipLookup: false,
+        type, id: boundId, source: "user", locked: true, skipLookup: false,
         matchedAt: at, backfilledAt: at,
         ...fields,
         ...(type === "series" && episode != null ? { season: season ?? 1, episode } : {}),
@@ -1987,9 +2039,18 @@ const matchLibraryItem = async (body: LibraryMatchRequest, language = prefsOf().
   invalidateLibrary();
   await clearGeneratedArt(bindKey);
   if (requestKey !== bindKey) await clearGeneratedArt(requestKey);
-  if (id) saveCatalogPoster(bindKey, episodeRow?.thumbnail ?? meta?.poster, undefined, meta?.background);
-  log("INFO", "Library title matched", { key: bindKey, type, id: id || null, source: "user", ...(episode != null ? { season: season ?? 1, episode } : {}) });
-  return { key: wirePath(bindKey), type, id: id || null };
+  if (id) {
+    const artworkId = id.startsWith("tmdb:") ? id : boundId;
+    // TMDB's own portrait and landscape win where it has them; the catalogue fills in when
+    // it does not. The gallery is a separate, bounded request about this one title.
+    const artwork = await tmdbArtworkProvider(language)?.(type, artworkId).catch(() => null);
+    saveCatalogPoster(bindKey, episodeRow?.thumbnail ?? artwork?.poster ?? meta?.poster, undefined, artwork?.background ?? meta?.background);
+    const config = tmdbConfigOf(language);
+    const gallery = config ? await tmdbGallery(kind, artworkId, config).catch(() => []) : [];
+    if (gallery.length) saveCatalogGallery(bindKey, gallery);
+  }
+  log("INFO", "Library title matched", { key: bindKey, type, id: boundId || null, source: "user", ...(episode != null ? { season: season ?? 1, episode } : {}) });
+  return { key: wirePath(bindKey), type, id: boundId || null };
 };
 
 /** Whether a session is reading a file under this folder. A playing stream's url carries
@@ -2098,7 +2159,7 @@ await libraryOps.load();
 
 registerLibrariesRoutes(app, { ...routeContext, grantRows, healthOf, invalidateAutoScan: (libraryId) => libraryAutoScan.invalidate(libraryId), invalidateLibrary, libraryGrants, libraryStats, libraryView, progressOf, refreshLibraryHealth, libraryProbe, metaStore, libraryOps });
 
-registerCurateRoutes(app, { ...routeContext, invalidateLibrary, libraryAutoScan, libraryFiles, libraryOps, libraryPathBusy, libraryScan, libraryTarget, libraryUnits, matchLibraryItem, metaStore, ownRecord, ownerOf, prefsOf, refreshLibraryHealth, scheduleMetaBackfill, wirePath });
+registerCurateRoutes(app, { ...routeContext, candidates: libraryCandidates, invalidateLibrary, libraryAutoScan, libraryFiles, libraryOps, libraryPathBusy, libraryScan, libraryTarget, libraryUnits, matchLibraryItem, metaStore, ownRecord, ownerOf, prefsOf, proxyImage: (url) => images.proxied(url), refreshLibraryHealth, scheduleMetaBackfill, wirePath });
 
 registerDeviceRoutes(app, { ...routeContext, stats, countBytes, deviceDownloadTickets, DEVICE_TICKET_TTL, httpSourceOf, libraryTarget, mediaSource, ownerOf, pruneDeviceDownloadTickets, statMeta, trackMedia });
 registerDownloadRoutes(app, { ...routeContext, queue, jobView, sourceOf, mediaSource, posterOf, rememberTitle, titleKey, saveCatalogPoster, libraryKey, cachedMeta, prefsOf });

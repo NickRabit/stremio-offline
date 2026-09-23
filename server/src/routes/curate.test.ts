@@ -12,7 +12,9 @@ import { messageKeyOf } from "../errors.js";
 import { relativeWithin, resolveLibraryPath, type LibraryRecord } from "../libraries.js";
 import { isPathWithin } from "../library.js";
 import type { LibraryAutoScan } from "../library-autoscan.js";
+import type { LibraryCandidateSource } from "../library-candidates.js";
 import type { LibraryMetaRecord, LibrarySuggestion } from "../library-match.js";
+import type { TitleUnit } from "../library-match.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import type { LibraryOp, LibraryOps } from "../library-ops.js";
 import { LibraryScan } from "../library-scan.js";
@@ -66,7 +68,14 @@ const ADA = "usr_00000001";
 // A real list, so the write-time role check has something to read.
 const users: UserRecord[] = [{ id: ADA, username: "ada", role: "admin", secret: "ada-secret" } as UserRecord];
 
-const mount = async (options: { libraries?: LibraryRecord[]; records?: Record<string, LibraryMetaRecord>; suggestions?: Record<string, LibrarySuggestion>; activeItems?: () => string[] } = {}): Promise<Harness> => {
+const mount = async (options: {
+  libraries?: LibraryRecord[];
+  records?: Record<string, LibraryMetaRecord>;
+  suggestions?: Record<string, LibrarySuggestion>;
+  units?: TitleUnit[];
+  searches?: Array<{ query: string; kind: string; year: number | undefined }>;
+  activeItems?: () => string[];
+} = {}): Promise<Harness> => {
   const libraries = options.libraries ?? [library("lib_00000001", "/media/films")];
   const activeItems = options.activeItems ?? (() => []);
   const calls: Calls = { cancelled: [], enqueued: [], invalidated: 0, matched: [], remembered: 0, unitWalks: 0 };
@@ -75,7 +84,7 @@ const mount = async (options: { libraries?: LibraryRecord[]; records?: Record<st
   const scan = new LibraryScan({
     dataDir,
     units: async () => { calls.unitWalks += 1; return []; },
-    searchAll: async () => ({ items: [] }),
+    candidates: { searchLibraryCandidates: async () => [], resolveSelected: async (candidate) => candidate.item, galleryOf: async () => [] },
     metadata: async () => null,
     addons: () => [],
     libraryMeta: () => ({}),
@@ -89,7 +98,20 @@ const mount = async (options: { libraries?: LibraryRecord[]; records?: Record<st
     gapMs: 5,
     wakeMs: 20,
   });
+  // What the manual identity search reads: the trusted providers, with the calls recorded
+  // so a test can see which of them was asked.
+  const proxied = new Map<string, string>();
+  const candidates: LibraryCandidateSource & { seen: Array<{ query: string; kind: string; year: number | undefined }> } = {
+    seen: options.searches ?? [],
+    searchLibraryCandidates: async (query, kind, year) => {
+      candidates.seen.push({ query, kind, year });
+      return [];
+    },
+    resolveSelected: async (candidate) => candidate.item,
+    galleryOf: async () => [],
+  };
   const deps: CurateDeps = {
+    candidates,
     store: { libraries: () => libraries, users: () => users, settings: () => ({ tmdbApiKey: undefined }) } as unknown as Store,
     needsSetup: () => false,
     currentSession: () => undefined,
@@ -122,7 +144,7 @@ const mount = async (options: { libraries?: LibraryRecord[]; records?: Record<st
     },
     libraryScan: scan,
     libraryTarget: async (value: string) => (await resolveLibraryPath(libraries, value))?.absolute ?? value,
-    libraryUnits: async () => [],
+    libraryUnits: async () => options.units ?? [],
     matchLibraryItem: async (body, language) => {
       calls.matched.push({ body: body as Record<string, unknown>, language });
       return { key: "Films/Heat.mkv", type: "movie", id: "tt1" };
@@ -135,6 +157,14 @@ const mount = async (options: { libraries?: LibraryRecord[]; records?: Record<st
     ownRecord: () => undefined,
     ownerOf: (): ResourceOwner => ({ userId: "usr_00000001", sid: "sid-1", expiresAt: Date.now() + 60_000 }),
     prefsOf: (req) => (req ? callerPrefs : instancePrefs),
+    proxyImage: (url) => {
+      if (!url) return undefined;
+      const known = proxied.get(url);
+      if (known) return known;
+      const id = `img_${proxied.size + 1}`;
+      proxied.set(url, id);
+      return id;
+    },
     refreshLibraryHealth: async () => new Map(),
     scheduleMetaBackfill: () => false,
     wirePath: (key) => (libraries.length === 1 ? relativeWithin(libraries[0]!.id, key) : key),
@@ -256,6 +286,12 @@ test("GET /api/library/suggestions answers only what is neither bound nor skippe
       "lib_00000001/Films/Thief": { type: "movie", id: "tt8", source: "scan" },
       "lib_00000001/Films/Kaly": { type: "movie", id: "", source: "user", skipLookup: true },
     },
+    units: [
+      { key: "lib_00000001/Films/Heat", kind: "movie", relative: "Films/Heat", sampleFiles: ["Films/Heat/Heat.mkv"] },
+      { key: "lib_00000001/Films/Ronin", kind: "movie", relative: "Films/Ronin", sampleFiles: ["Films/Ronin/Ronin.mkv"] },
+      { key: "lib_00000001/Films/Thief", kind: "movie", relative: "Films/Thief", sampleFiles: ["Films/Thief/Thief.mkv"] },
+      { key: "lib_00000001/Films/Kaly", kind: "movie", relative: "Films/Kaly", sampleFiles: ["Films/Kaly/Kaly.mkv"] },
+    ],
     suggestions: {
       "lib_00000001/Films/Heat": { type: "movie", id: "tt1", name: "Heat", score: 80 },
       "lib_00000001/Films/Ronin": { type: "movie", id: "tt2", name: "Ronin", score: 95 },
@@ -269,8 +305,11 @@ test("GET /api/library/suggestions answers only what is neither bound nor skippe
   const response = await api(harness.base, "/api/library/suggestions");
 
   assert.equal(response.status, 200);
-  const body = await response.json() as { items: Array<{ key: string; label: string }>; total: number };
-  assert.deepEqual(body.items.map((item) => [item.key, item.label]), [["Films/Ronin", "Ronin"], ["Films/Heat", "Heat"]]);
+  const body = await response.json() as { items: Array<{ key: string; label: string; libraryId: string; library: string; path: string }>; total: number };
+  assert.deepEqual(body.items.map((item) => [item.key, item.label, item.library, item.path]), [
+    ["Films/Ronin", "Ronin", "Library lib_00000001", "Films/Ronin"],
+    ["Films/Heat", "Heat", "Library lib_00000001", "Films/Heat"],
+  ]);
   assert.equal(body.total, 2);
 });
 
@@ -332,7 +371,9 @@ test("GET next and previous step through one folder from the one registration", 
 });
 
 test("POST /api/library/match binds the metadata in the caller's own language", async (t) => {
-  const harness = await mount();
+  const harness = await mount({
+    units: [{ key: "lib_00000001/Films/Heat.mkv", kind: "movie", relative: "Films/Heat.mkv", sampleFiles: ["Films/Heat.mkv"] }],
+  });
   t.after(harness.close);
 
   const response = await api(harness.base, "/api/library/match", { method: "POST", body: { path: "Films/Heat.mkv", type: "movie", id: "tt0113277" } });
@@ -344,21 +385,62 @@ test("POST /api/library/match binds the metadata in the caller's own language", 
   ]);
 });
 
-test("GET /api/library/identity describes the clicked file", async (t) => {
+test("POST /api/library/match refuses a confirmation for an item the library no longer holds", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+
+  const response = await api(harness.base, "/api/library/match", { method: "POST", body: { path: "Films/Heat.mkv", type: "movie", id: "tt0113277" } });
+
+  assert.equal(response.status, 409);
+  assert.equal((await response.json() as { messageKey?: string }).messageKey, "err.titleGone");
+  assert.deepEqual(harness.calls.matched, [], "nothing reaches the binding");
+
+  // An unmatch carries no id, so a path that is already gone can still be released.
+  const released = await api(harness.base, "/api/library/match", { method: "POST", body: { path: "Films/Heat.mkv", type: "movie", id: "" } });
+  assert.equal(released.status, 200);
+});
+
+test("GET /api/library/identity describes the clicked file and proxies its suggested poster", async (t) => {
   const root = await makeRoot("stremio-curate-identity-");
   await put(root, "Films/Heat.mkv");
-  const harness = await mount({ libraries: [library("lib_00000001", root)] });
+  const harness = await mount({
+    libraries: [library("lib_00000001", root)],
+    suggestions: {
+      "lib_00000001/Films": { type: "movie", id: "tt0111161", name: "The Shawshank Redemption", score: 92, poster: "https://image.tmdb.org/t/p/w500/poster.jpg" },
+    },
+  });
   t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
 
   const response = await api(harness.base, `/api/library/identity?path=${encodeURIComponent("Films/Heat.mkv")}`);
 
   assert.equal(response.status, 200);
-  const body = await response.json() as { path: string; key: string; file: boolean; label: string; kind: string; match: string; parsed: { title: string } };
+  const body = await response.json() as { path: string; key: string; file: boolean; label: string; kind: string; match: string; parsed: { title: string }; suggestion?: { poster?: string } };
   // The parse names the folder a file sits in, which for a film folder is the film.
   assert.deepEqual(
     [body.path, body.key, body.file, body.label, body.kind, body.match, body.parsed.title],
-    ["Films/Heat.mkv", "Films/Heat.mkv", true, "Heat.mkv", "movie", "unmatched", "Films"],
+    ["Films/Heat.mkv", "Films/Heat.mkv", true, "Heat.mkv", "movie", "suggested", "Films"],
   );
+  assert.equal(body.suggestion?.poster, "img_1", "identity responses must not expose an upstream image URL");
+});
+
+test("POST /api/library/match refuses a correction when the current binding has changed", async (t) => {
+  const root = await makeRoot("stremio-curate-stale-correction-");
+  await put(root, "Films/Heat.mkv");
+  const key = "lib_00000001/Films/Heat.mkv";
+  const harness = await mount({
+    libraries: [library("lib_00000001", root)],
+    units: [{ key, kind: "movie", relative: "Films/Heat.mkv", sampleFiles: ["Films/Heat.mkv"] }],
+    records: { [key]: { type: "movie", id: "tt-user-choice", source: "user", locked: true } },
+    suggestions: { [key]: { type: "movie", id: "tt-proposed", name: "Heat", score: 95, replacesId: "tt-old-scan" } },
+  });
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const response = await api(harness.base, "/api/library/match", {
+    method: "POST", body: { path: "Films/Heat.mkv", type: "movie", id: "tt-proposed", replacesId: "tt-old-scan" },
+  });
+  assert.equal(response.status, 409);
+  assert.equal((await response.json() as { messageKey?: string }).messageKey, "err.suggestionStale");
+  assert.deepEqual(harness.calls.matched, []);
 });
 
 test("POST /api/library/source hands the file and its sidecars to the media resources", async (t) => {
@@ -382,4 +464,127 @@ test("POST /api/library/source hands the file and its sidecars to the media reso
 
   const missing = await api(harness.base, "/api/library/source", { method: "POST", body: { path: "Films/Missing.mkv" } });
   assert.equal(missing.status, 404);
+});
+
+test("GET /api/library/suggestions scopes to one library and proxies the candidate poster", async (t) => {
+  const harness = await mount({
+    libraries: [library("lib_00000001", "/media/films"), library("lib_00000002", "/media/series", 1)],
+    units: [
+      { key: "lib_00000001/Films/Ronin", kind: "movie", relative: "Films/Ronin", sampleFiles: ["Films/Ronin/Ronin.mkv"] },
+      { key: "lib_00000002/Shows/Ted", kind: "series", relative: "Shows/Ted", sampleFiles: ["Shows/Ted/01.mkv"] },
+    ],
+    suggestions: {
+      "lib_00000001/Films/Ronin": { type: "movie", id: "tt0122690", name: "Ronin", score: 88, poster: "https://image.tmdb.org/t/p/w500/r.jpg" },
+      "lib_00000002/Shows/Ted": { type: "series", id: "tt0111958", name: "Father Ted", score: 91, poster: "https://image.tmdb.org/t/p/w500/t.jpg" },
+    },
+  });
+  t.after(harness.close);
+
+  const all = await (await api(harness.base, "/api/library/suggestions")).json() as {
+    items: Array<{ key: string; libraryId: string; library: string; path: string; suggestion: { poster?: string } }>;
+    total: number;
+  };
+  assert.deepEqual(all.items.map((item) => [item.libraryId, item.library, item.path]), [
+    ["lib_00000002", "Library lib_00000002", "Shows/Ted"],
+    ["lib_00000001", "Library lib_00000001", "Films/Ronin"],
+  ]);
+  assert.equal(all.total, 2, "the root shows every reachable library");
+  assert.match(all.items[0]!.suggestion.poster ?? "", /^img_/, "the picture goes through the proxy");
+  assert.equal(JSON.stringify(all).includes("image.tmdb.org"), false);
+
+  const one = await (await api(harness.base, "/api/library/suggestions?libraryId=lib_00000001")).json() as { items: Array<{ libraryId: string }>; total: number };
+  assert.deepEqual(one.items.map((item) => item.libraryId), ["lib_00000001"]);
+  assert.equal(one.total, 1);
+});
+
+test("GET /api/library/suggestions drops a proposal whose title unit is gone", async (t) => {
+  const harness = await mount({
+    units: [{ key: "lib_00000001/Films/Ronin", kind: "movie", relative: "Films/Ronin", sampleFiles: ["Films/Ronin/Ronin.mkv"] }],
+    suggestions: {
+      "lib_00000001/Films/Ronin": { type: "movie", id: "tt0122690", name: "Ronin", score: 88 },
+      "lib_00000001/Films/Removed": { type: "movie", id: "tt999", name: "Removed", score: 99 },
+    },
+  });
+  t.after(harness.close);
+
+  const body = await (await api(harness.base, "/api/library/suggestions")).json() as { items: Array<{ key: string }>; total: number };
+  assert.deepEqual(body.items.map((item) => item.key), ["Films/Ronin"]);
+  assert.equal(body.total, 1, "the count is what the list shows");
+});
+
+test("GET /api/library/suggestions hides an unavailable library without losing its rows", async (t) => {
+  const away = library("lib_00000002", "/media/series", 1);
+  away.unreachable = true;
+  const harness = await mount({
+    libraries: [library("lib_00000001", "/media/films"), away],
+    units: [
+      { key: "lib_00000001/Films/Ronin", kind: "movie", relative: "Films/Ronin", sampleFiles: ["Films/Ronin/Ronin.mkv"] },
+      { key: "lib_00000002/Shows/Ted", kind: "series", relative: "Shows/Ted", sampleFiles: ["Shows/Ted/01.mkv"] },
+    ],
+    suggestions: {
+      "lib_00000001/Films/Ronin": { type: "movie", id: "tt0122690", name: "Ronin", score: 88 },
+      "lib_00000002/Shows/Ted": { type: "series", id: "tt0111958", name: "Father Ted", score: 91 },
+    },
+  });
+  t.after(harness.close);
+
+  const body = await (await api(harness.base, "/api/library/suggestions")).json() as { items: Array<{ libraryId: string }>; total: number };
+  assert.deepEqual(body.items.map((item) => item.libraryId), ["lib_00000001"], "an unplugged disk is not a mass deletion");
+  assert.equal(body.total, 1);
+});
+
+test("GET /api/library/suggestions shows a correction beside the binding it would replace", async (t) => {
+  const harness = await mount({
+    records: { "lib_00000001/Films/Flashdance": { type: "movie", id: "tt-old", source: "scan", locked: false, name: "Flashdance" } },
+    units: [{ key: "lib_00000001/Films/Flashdance", kind: "movie", relative: "Films/Flashdance", sampleFiles: ["Films/Flashdance/a.mkv"] }],
+    suggestions: {
+      "lib_00000001/Films/Flashdance": {
+        type: "movie", id: "tt0085549", name: "Flashdance", year: 1983, score: 100, reason: "correction",
+        replacesId: "tt-old", replacesName: "Flashdance (wrong row)",
+      },
+    },
+  });
+  t.after(harness.close);
+
+  const body = await (await api(harness.base, "/api/library/suggestions")).json() as {
+    items: Array<{ suggestion: { reason?: string; replacesId?: string; replacesName?: string } }>; total: number;
+  };
+  assert.equal(body.total, 1, "a correction of an unlocked scan binding is a pending proposal");
+  assert.equal(body.items[0]!.suggestion.reason, "correction");
+  assert.equal(body.items[0]!.suggestion.replacesId, "tt-old");
+});
+
+test("GET /api/library/search asks the trusted providers for the entered title", async (t) => {
+  const seen: Array<{ query: string; kind: string; year: number | undefined }> = [];
+  const harness = await mount({
+    units: [{ key: "lib_00000001/Films/Heat", kind: "movie", relative: "Films/Heat", sampleFiles: ["Films/Heat/a.mkv"] }],
+    searches: seen,
+  });
+  t.after(harness.close);
+
+  const response = await api(harness.base, `/api/library/search?${new URLSearchParams({ path: "Films/Heat", query: "Heat", type: "movie", year: "1995" })}`);
+  assert.equal(response.status, 200);
+  const body = await response.json() as { items: unknown[]; total: number };
+  assert.deepEqual(body, { items: [], total: 0 });
+  assert.deepEqual(seen, [{ query: "Heat", kind: "movie", year: 1995 }]);
+
+  const empty = await api(harness.base, "/api/library/search?query=");
+  assert.equal(empty.status, 200);
+  assert.equal(seen.length, 1, "an empty query reaches no provider");
+});
+
+test("POST /api/library/scan only rechecks automatic matches for a named library", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+
+  const refused = await api(harness.base, "/api/library/scan", { method: "POST", body: { recheckScanBindings: true } });
+  assert.equal(refused.status, 400);
+  assert.equal((await refused.json() as { messageKey?: string }).messageKey, "err.recheckNeedsLibrary");
+
+  const unknown = await api(harness.base, "/api/library/scan", { method: "POST", body: { recheckScanBindings: true, libraryId: "lib_99999999" } });
+  assert.equal(unknown.status, 400);
+
+  const accepted = await api(harness.base, "/api/library/scan", { method: "POST", body: { recheckScanBindings: true, libraryId: "lib_00000001" } });
+  assert.equal(accepted.status, 200);
+  assert.equal((await accepted.json() as { recheck?: boolean }).recheck, true);
 });

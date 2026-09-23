@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import { AppError } from "./errors.js";
-import { clearTmdbCache, tmdbImage, tmdbMeta, tmdbTrailer, verifyTmdbKey, type TmdbConfig } from "./tmdb.js";
+import { flushLog, initLogger } from "./logger.js";
+import { clearTmdbCache, clearTmdbSearchPause, tmdbExternalId, tmdbGallery, tmdbImage, tmdbMeta, tmdbSearch, tmdbTrailer, verifyTmdbKey, type TmdbConfig } from "./tmdb.js";
 import type { FetchLike } from "./debrid.js";
 
 const json = (body: unknown, status = 200) =>
@@ -207,4 +211,142 @@ test("verifyTmdbKey accepts a good key and rejects a refused one", async () => {
     verifyTmdbKey("bad-key", async () => json({ status_message: "Invalid API key" }, 401)),
     (error: unknown) => error instanceof AppError && error.messageKey === "err.tmdbKeyRejected",
   );
+});
+
+const searchRow = (over: Record<string, unknown> = {}) => ({
+  id: 31410, title: "Návrat do budoucnosti", original_title: "Back to the Future",
+  release_date: "1985-07-03", poster_path: "/back.jpg", backdrop_path: "/backdrop.jpg", ...over,
+});
+
+test("a title search maps a movie page and keeps the original name and year", async () => {
+  clearTmdbCache();
+  const calls: string[] = [];
+  const result = await tmdbSearch("movie", "Navrat do budoucnosti", config, async (url) => {
+    calls.push(url);
+    return json({ results: [searchRow(), { id: 12, title: "" }, searchRow({ id: 99, title: "Bez roku", release_date: "" })] });
+  });
+
+  assert.equal(calls.length, 1);
+  assert.match(calls[0]!, /\/search\/movie\?/);
+  assert.match(calls[0]!, /include_adult=false/);
+  assert.match(calls[0]!, /page=1/);
+  assert.match(calls[0]!, /language=cs/);
+  assert.equal(result.length, 2, "a row without a name is dropped");
+  assert.deepEqual(result[0], {
+    id: "tmdb:31410", type: "movie", name: "Návrat do budoucnosti", originalTitle: "Back to the Future",
+    releaseInfo: "1985", poster: "https://image.tmdb.org/t/p/w500/back.jpg",
+    background: "https://image.tmdb.org/t/p/w1280/backdrop.jpg",
+  });
+  assert.equal("releaseInfo" in result[1]!, false, "a missing release date is not invented");
+});
+
+test("a title search reads the tv endpoint and the series name", async () => {
+  clearTmdbCache();
+  const calls: string[] = [];
+  const result = await tmdbSearch("series", "Pernikovy tata", config, async (url) => {
+    calls.push(url);
+    return json({ results: [{ id: 1396, name: "Perníkový táta", original_name: "Breaking Bad", first_air_date: "2008-01-20" }] });
+  });
+
+  assert.match(calls[0]!, /\/search\/tv\?/);
+  assert.deepEqual(result, [{
+    id: "tmdb:1396", type: "series", name: "Perníkový táta", originalTitle: "Breaking Bad", releaseInfo: "2008",
+  }]);
+});
+
+test("a search that times out, is refused or answers rubbish is an empty list", async () => {
+  clearTmdbCache();
+  clearTmdbSearchPause();
+  const timeout = Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" });
+  assert.deepEqual(await tmdbSearch("movie", "Anything", config, async () => { throw timeout; }), []);
+  assert.deepEqual(await tmdbSearch("movie", "Anything", config, async () => json({ results: [] }, 401)), []);
+  assert.deepEqual(await tmdbSearch("movie", "Anything", config, async () => new Response("<html>", { headers: { "content-type": "application/json" } })), []);
+  assert.deepEqual(await tmdbSearch("movie", "   ", config, async () => json({ results: [searchRow()] })), []);
+});
+
+test("a 429 with Retry-After stops asking for the next title instead of retrying each one", async () => {
+  clearTmdbCache();
+  clearTmdbSearchPause();
+  let calls = 0;
+  const fetchImpl: FetchLike = async () => {
+    calls += 1;
+    return new Response(JSON.stringify({ status_message: "rate limited" }), {
+      status: 429, headers: { "content-type": "application/json", "retry-after": "30" },
+    });
+  };
+  assert.deepEqual(await tmdbSearch("movie", "First", config, fetchImpl), []);
+  assert.deepEqual(await tmdbSearch("movie", "Second", config, fetchImpl), []);
+  assert.deepEqual(await tmdbSearch("movie", "Third", config, fetchImpl), []);
+  assert.equal(calls, 1, "the wait the provider asked for is honoured, not retried per title");
+  clearTmdbSearchPause();
+  assert.deepEqual(await tmdbSearch("movie", "Fourth", config, async () => json({ results: [searchRow()] })).then((rows) => rows.length), 1);
+});
+
+test("an external id lookup answers the IMDb id, or nothing when there is none", async () => {
+  clearTmdbCache();
+  const calls: string[] = [];
+  const withId = await tmdbExternalId("movie", 31410, config, async (url) => {
+    calls.push(url);
+    return json({ id: 31410, imdb_id: "tt0090257" });
+  });
+  assert.match(calls[0]!, /\/movie\/31410\/external_ids\?/);
+  assert.equal(withId, "tt0090257");
+
+  assert.equal(await tmdbExternalId("series", 1396, config, async () => json({ id: 1396, imdb_id: null })), null);
+  assert.equal(await tmdbExternalId("series", 1396, config, async () => json({ id: 1396, imdb_id: "nm0001" })), null, "a non-IMDb id is not used");
+  assert.equal(await tmdbExternalId("movie", 0, config, async () => json({ imdb_id: "tt1" })), null);
+  assert.equal(await tmdbExternalId("movie", 31410, config, async () => json({}, 500)), null);
+});
+
+test("a gallery request is bounded, deduplicated and prefers the interface language", async () => {
+  clearTmdbCache();
+  const posters = Array.from({ length: 12 }, (_, index) => ({ file_path: `/p${index}.jpg`, iso_639_1: index === 0 ? "cs" : "en", vote_average: 12 - index }));
+  posters.push({ file_path: "/p0.jpg", iso_639_1: "en", vote_average: 1 });
+  const backdrops = Array.from({ length: 9 }, (_, index) => ({ file_path: `/b${index}.jpg`, iso_639_1: "xx", vote_average: 9 - index }));
+  const logos = Array.from({ length: 6 }, (_, index) => ({ file_path: `/l${index}.jpg`, iso_639_1: "en" }));
+  const calls: string[] = [];
+  const result = await tmdbGallery("movie", "tt0090257", config, async (url) => {
+    calls.push(url);
+    return url.includes("/find/") ? json(findMovie) : json({ posters, backdrops, logos });
+  });
+
+  assert.match(calls[1]!, /\/movie\/31410\/images\?/);
+  assert.match(calls[1]!, /include_image_language=cs%2Cen%2Cnull|include_image_language=cs,en,null/);
+  assert.ok(result.length <= 18, "the gallery is bounded");
+  assert.equal(result[0]!.url, "https://image.tmdb.org/t/p/w500/p0.jpg", "the interface language is offered first");
+  assert.equal(result.filter((picture) => picture.kind === "poster").length, 8);
+  assert.equal(result.filter((picture) => picture.kind === "background").length, 6);
+  assert.equal(result.filter((picture) => picture.kind === "logo").length, 4);
+  assert.equal(new Set(result.map((picture) => picture.url)).size, result.length, "one picture appears once");
+  assert.equal(result.some((picture) => picture.url.endsWith("/p0.jpg") && picture.kind === "poster"), true);
+});
+
+test("a gallery request that fails leaves the title without a gallery rather than without a match", async () => {
+  clearTmdbCache();
+  assert.deepEqual(await tmdbGallery("movie", "tmdb:31410", config, async () => json({}, 500)), []);
+  assert.deepEqual(await tmdbGallery("series", "tmdb:1396", config, async () => { throw new Error("offline"); }), []);
+});
+
+test("neither the log nor the answered metadata carries the API key", async () => {
+  clearTmdbCache();
+  clearTmdbSearchPause();
+  const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-tmdb-"));
+  const previous = process.env.LOG_STDOUT;
+  process.env.LOG_STDOUT = "0";
+  try {
+    await initLogger(directory);
+    const refused: FetchLike = async (url) => { throw new Error(`Request failed: ${String(url)}`); };
+    assert.deepEqual(await tmdbSearch("movie", "Anything", { apiKey: "secret-key-42", language: "cs" }, refused), []);
+    assert.equal(await tmdbExternalId("movie", 1, { apiKey: "secret-key-42", language: "cs" }, refused), null);
+    const meta = await tmdbMeta("movie", "tmdb:1", { apiKey: "secret-key-42", language: "cs" }, refused);
+    assert.equal(meta, null);
+    await flushLog();
+    const { readFile } = await import("node:fs/promises");
+    const text = await readFile(path.join(directory, "app.log"), "utf8").catch(() => "");
+    assert.equal(text.includes("secret-key-42"), false);
+    assert.equal(JSON.stringify(meta).includes("secret-key-42"), false);
+  } finally {
+    if (previous === undefined) delete process.env.LOG_STDOUT; else process.env.LOG_STDOUT = previous;
+    await rm(directory, { recursive: true, force: true });
+  }
 });
