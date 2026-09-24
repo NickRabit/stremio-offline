@@ -55,10 +55,15 @@ being reopened, not as a changelog.
 - Restricted / demo mode (`RESTRICTED_MODE=1`), English documentation, the
   community files, the GHCR image and the build and release workflows.
 - **Desktop shell**: a separate window that opens an existing server, after a
-  main-process status check, with its own connection screen, a session per
-  origin, a refused public HTTP request and links that leave for the system
-  browser. Delivered by [PR #211](https://github.com/NickRabit/stremio-offline/pull/211);
-  the shell is not packaged yet.
+  main-process status check, with its own connection screen, named server
+  profiles, a session per origin, a refused public HTTP request and links that
+  leave for the system browser. An arm64 packaging prototype builds a macOS
+  `.dmg`/`.zip`, and **Save to this device** hands a download to the native
+  dialog. Delivered by [PR #211](https://github.com/NickRabit/stremio-offline/pull/211),
+  [PR #221](https://github.com/NickRabit/stremio-offline/pull/221),
+  [PR #222](https://github.com/NickRabit/stremio-offline/pull/222) and
+  [PR #223](https://github.com/NickRabit/stremio-offline/pull/223); it stays an
+  unsigned, unnotarized prototype, not a distribution.
 
 ## Next (daily friction)
 
@@ -97,11 +102,13 @@ catalogs, and an optional rank-by-title-match.
 
 ### Desktop
 
-PR #211 delivered the initial remote desktop shell. Named remote profiles are
-now managed from the local connection screen. Remaining Phase 1 work is a
-distributable remote client with installers, signing, notarization, auto-update
-and clean-install verification. Phase 2, starting the local backend from the
-shell, follows that release work.
+The remote desktop shell ships with named server profiles and a macOS arm64
+packaging prototype (`.dmg`/`.zip`) with the native save-to-device handoff;
+[desktop/README.md](../desktop/README.md) records how it stands and what it
+deliberately leaves out. What is still outstanding for a distributable remote
+client is signing, notarization, update delivery and clean-install verification.
+Phase 2, starting and managing the local backend from the shell, follows that
+release work.
 
 ## Engineering health
 
