@@ -426,9 +426,9 @@ test("GET /api/library/identity describes the clicked file and proxies its sugge
   // No unit covers the file here, so it stands for itself and the parse reads its own name.
   assert.deepEqual(
     [body.path, body.key, body.file, body.label, body.kind, body.match, body.parsed.title],
-    ["Films/Heat.mkv", "Films/Heat.mkv", true, "Heat.mkv", "movie", "suggested", "Heat"],
+    ["Films/Heat.mkv", "Films/Heat.mkv", true, "Heat.mkv", "movie", "unmatched", "Heat"],
   );
-  assert.equal(body.suggestion?.poster, "img_1", "identity responses must not expose an upstream image URL");
+  assert.equal(body.suggestion, undefined, "a loose file does not inherit a collection suggestion");
 });
 
 test("GET /api/library/identity reads a loose film in a collection from its own file name", async (t) => {

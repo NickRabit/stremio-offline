@@ -7,7 +7,7 @@ import { normalizeLanguage } from "../language.js";
 import { libraryFor, parseLibraryPath, posixBase, resolveLibraryPath, type Viewer } from "../libraries.js";
 import type { LibraryAutoScan } from "../library-autoscan.js";
 import type { LibraryCandidateSource } from "../library-candidates.js";
-import { episodeNumberOf, knownTitleOf, matchStatus, needsBackfill, parseUnit, pendingSuggestionKeys, scanMiss, suggestionFor, unitFor, type LibraryMetaRecord, type TitleUnit } from "../library-match.js";
+import { episodeNumberOf, knownTitleForUnit, knownTitleOf, lookupSkipped, needsBackfill, parseUnit, pendingSuggestionKeys, scanMiss, suggestionFor, suggestionForUnit, unitFor, type LibraryMetaRecord, type TitleUnit } from "../library-match.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import type { LibraryOp, LibraryOps } from "../library-ops.js";
 import { parseMediaPath } from "../library-parse.js";
@@ -62,11 +62,11 @@ export function registerCurateRoutes(app: express.Application, deps: CurateDeps)
     const unitKey = unit?.key ?? resolved.key;
     const records = metaStore.qualifiedMeta();
     const suggestions = metaStore.qualifiedSuggestions();
-    const known = knownTitleOf(resolved.key, records);
+    const known = knownTitleForUnit(unit, records);
     const language = prefsOf(req).uiLanguage;
     const wantedLanguage = store.settings().tmdbApiKey ? language : undefined;
     if (needsBackfill(known, undefined, wantedLanguage)) scheduleMetaBackfill(known!.type, known!.id, language);
-    const suggestion = suggestionFor(unitKey, suggestions);
+    const suggestion = suggestionForUnit(unit, suggestions);
     const isFile = isVideo(posixBase(resolved.key));
     const numbers = episodeNumberOf(resolved.key, ownRecord(resolved.key, records));
     const bound = known ? { type: known.type, id: known.id, name: known.name, season: known.season, episode: known.episode } : undefined;
@@ -81,7 +81,7 @@ export function registerCurateRoutes(app: express.Application, deps: CurateDeps)
       // No unit covers a path nothing matched (a folder holding only extras, say): the file
       // stands for itself and is read from its own name, never from the folder above it.
       parsed: { ...(unit ? parseUnit(unit) : parseMediaPath(posixBase(unitKey))), ...(numbers ? { season: numbers.season, episode: numbers.episode } : {}) },
-      match: matchStatus(resolved.key, records, suggestions),
+      match: known?.id ? "matched" : lookupSkipped(unitKey, records) ? "rejected" : suggestion ? "suggested" : "unmatched",
       ...(bound?.id ? { bound } : {}),
       ...(suggestion ? { suggestion: suggestionView(suggestion) } : {}),
     });

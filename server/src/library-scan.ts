@@ -2,7 +2,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { log } from "./logger.js";
 import {
-  autoAccept, cacheFieldsFromMeta, episodesFromMeta, knownTitleOf, lookupSkipped, needsRefresh, pickSuggestion, scanMiss,
+  autoAccept, cacheFieldsFromMeta, episodesFromMeta, knownTitleForUnit, lookupSkipped, needsRefresh, pickSuggestion, scanMiss,
   scannedRecently, scanSkipReason, scoreHit, viewMeta, yearFromMeta, MATCH_RULE_VERSION, needsReevaluation, parseUnit,
   type LibraryEpisodeRecord, type LibraryMetaRecord, type LibrarySuggestion, type SuggestionReason, type TitleKind, type TitleUnit,
 } from "./library-match.js";
@@ -197,7 +197,7 @@ export class LibraryScan {
     const records = this.opts.libraryMeta();
     return Object.entries(this.opts.librarySuggestions()).some(([key, suggestion]) =>
       needsReevaluation(suggestion)
-      && !lookupSkipped(key, records) && !scanSkipReason(records[key]) && !knownTitleOf(key, records)?.id);
+      && !lookupSkipped(key, records) && !scanSkipReason(records[key]) && !knownTitleForUnit(key, records)?.id);
   }
 
   async load() {
@@ -277,7 +277,7 @@ export class LibraryScan {
     const queued = wanted.filter((unit) => {
       if (lookupSkipped(unit.key, records)) return false;
       if (recheck) return recheckable(records[unit.key]);
-      if (scanSkipReason(records[unit.key]) || knownTitleOf(unit.key, records)?.id) return false;
+      if (scanSkipReason(records[unit.key]) || knownTitleForUnit(unit, records)?.id) return false;
       // A row the current rules have not seen is reconsidered once, so a rule change
       // does not need a full rescan on every startup.
       return again || !scannedRecently(suggestions[unit.key]) || needsReevaluation(suggestions[unit.key]);
@@ -409,7 +409,7 @@ export class LibraryScan {
       const records = this.opts.libraryMeta();
       const bound = records[key];
       // A refresh is the one turn allowed to ask about a binding that already exists.
-      if (!refresh && !recheck && (lookupSkipped(key, records) || scanSkipReason(records[key]) || knownTitleOf(key, records)?.id)) {
+      if (!refresh && !recheck && (lookupSkipped(key, records) || scanSkipReason(records[key]) || knownTitleForUnit(key, records)?.id)) {
         this.note("excluded", key, { kind: unit.kind });
         await this.finishUnit("skipped");
         return;
@@ -446,7 +446,7 @@ export class LibraryScan {
         let wrote = false;
         await this.opts.updateMeta((metaMap, suggestions, episodes) => {
           const known = metaMap[key];
-          if (lookupSkipped(key, metaMap) || scanSkipReason(metaMap[key]) || knownTitleOf(key, metaMap)?.id) return;
+          if (lookupSkipped(key, metaMap) || scanSkipReason(metaMap[key]) || knownTitleForUnit(key, metaMap)?.id) return;
           metaMap[key] = {
             ...known,
             type: item.type, id: item.id, source: "scan", locked: false,

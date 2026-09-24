@@ -82,7 +82,7 @@ const mount = async (libraries: LibraryRecord[], entries: LibraryEntry[] = [], a
     stopUserSessions: async () => undefined,
     requireAccess: () => undefined,
     stopContentAccess: async () => undefined,
-    attachBrowseMeta: (item) => ({ item, backfill: false }),
+    attachBrowseMeta: async (item) => ({ item, backfill: false }),
     carveOutsOf: () => new Set(),
     dataOf: () => ({ ...emptyUserData(), favorites: state.favorites ?? [] }),
     deleteLibraryItem: async (relative) => { calls.deleted.push(relative); },

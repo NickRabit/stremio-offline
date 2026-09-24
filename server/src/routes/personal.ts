@@ -20,7 +20,7 @@ import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
 /** The shape of the personal maps, pinned beside the endpoints that read and write them. */
 
 export interface PersonalDeps extends RouteContext {
-  attachBrowseMeta<T extends { path: string; kind: string; name?: string; label?: string }>(item: T, language: string): { item: T; backfill: boolean };
+  attachBrowseMeta<T extends { path: string; kind: string; name?: string; label?: string }>(item: T, language: string): Promise<{ item: T; backfill: boolean }>;
   cachedMeta(type: string, id: string, language?: string, viewer?: Viewer): Promise<MetaItem | null>;
   dataOf(req: express.Request): UserData;
   describeLibraryPath(key: string): Promise<BrowseItem | undefined>;
@@ -291,7 +291,7 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
       if (!art) scheduleFileArtwork(key);
       const wide = await locateFileArtwork(key, "wide");
       if (!wide) scheduleFileArtwork(key, "wide");
-      const { item: withMeta, backfill } = attachBrowseMeta(item, prefsOf(req).uiLanguage);
+      const { item: withMeta, backfill } = await attachBrowseMeta(item, prefsOf(req).uiLanguage);
       return { ...withMeta, poster: await thumbUrl("path", item.path, art), wide: await thumbUrl("path", item.path, wide, "wide"), backfill };
     }));
     res.json({ path: ":resume", items: page.map(({ backfill: _backfill, seriesKey: _seriesKey, ...item }) => item), total: ordered.length, pending: page.some((item) => !item.poster || !item.wide || item.backfill) });
@@ -324,7 +324,7 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
       if (!wide) (item.kind === "folder" ? scheduleFolderArtwork : scheduleFileArtwork)(key, "wide");
       const poster = await thumbUrl(item.kind === "folder" ? "dir" : "path", item.path, art);
       const wideUrl = await thumbUrl(item.kind === "folder" ? "dir" : "path", item.path, wide, "wide");
-      const { item: withMeta, backfill } = attachBrowseMeta(item, prefsOf(req).uiLanguage);
+      const { item: withMeta, backfill } = await attachBrowseMeta(item, prefsOf(req).uiLanguage);
       return { ...withMeta, favorite: true, poster, wide: wideUrl, backfill };
     }));
     res.json({ path: ":favorites", items: page.map(({ backfill: _backfill, ...item }) => item), total: ordered.length, pending: page.some((item) => !item.poster || !item.wide || item.backfill) });

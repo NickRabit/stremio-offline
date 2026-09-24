@@ -429,6 +429,19 @@ export function knownTitleOf(relative: string, records: Record<string, LibraryMe
   return knownTitleEntry(relative, records)?.record;
 }
 
+/** A loose movie in a collection owns its identity; it must not inherit the collection's binding. */
+export function knownTitleForUnit(unit: TitleUnit | string | undefined, records: Record<string, LibraryMetaRecord>): LibraryMetaRecord | undefined {
+  const key = typeof unit === "string" ? unit : unit?.key;
+  if (!key) return undefined;
+  if (isVideo(posixBase(key))) {
+    if (records[key]?.id) return records[key];
+    const inherited = knownTitleEntry(key, records);
+    if (!inherited || normalizeTitle(parseMediaPath(posixBase(key)).title) !== normalizeTitle(parseMediaPath(posixBase(inherited.key)).title)) return undefined;
+    return inherited.record;
+  }
+  return knownTitleOf(key, records);
+}
+
 /** Clear the binding on this path only. A path that still inherits one from a matched
  *  folder gets a sentinel, so siblings keep the parent while this one comes loose. */
 export function unmatchAt(records: Record<string, LibraryMetaRecord>, relative: string): Record<string, LibraryMetaRecord> {
@@ -452,6 +465,17 @@ export function suggestionFor(relative: string, suggestions: Record<string, Libr
     if (found?.id) return found;
   }
   return undefined;
+}
+
+export function suggestionForUnit(unit: TitleUnit | undefined, suggestions: Record<string, LibrarySuggestion>): LibrarySuggestion | undefined {
+  if (!unit) return undefined;
+  if (isVideo(posixBase(unit.key))) {
+    if (suggestions[unit.key]?.id) return suggestions[unit.key];
+    const parent = unit.key.slice(0, unit.key.lastIndexOf("/"));
+    if (normalizeTitle(parseMediaPath(posixBase(unit.key)).title) !== normalizeTitle(parseMediaPath(posixBase(parent)).title)) return undefined;
+    return suggestions[parent]?.id ? suggestions[parent] : undefined;
+  }
+  return suggestionFor(unit.key, suggestions);
 }
 
 export function matchStatus(
@@ -612,8 +636,14 @@ export function browseMeta(
   records: Record<string, LibraryMetaRecord>,
   suggestions: Record<string, LibrarySuggestion> = {},
   episodes: Record<string, LibraryEpisodeRecord> = {},
+  unit?: TitleUnit,
+  mosaicFolder = false,
 ): BrowseMetaView {
-  const match = matchStatus(relative, records, suggestions);
+  const knownForRow = knownTitleForUnit(unit, records);
+  const proposedForRow = suggestionForUnit(unit, suggestions);
+  const match = mosaicFolder ? "unmatched" : unit
+    ? knownForRow?.id ? "matched" : lookupSkipped(unit.key, records) ? "rejected" : proposedForRow ? "suggested" : "unmatched"
+    : matchStatus(relative, records, suggestions);
   const skipLookup = Boolean(records[relative]?.skipLookup);
   const skipMosaic = Boolean(records[relative]?.skipMosaic);
   // How many pictures the row can show, so a tile offers the button only where there is
@@ -621,11 +651,13 @@ export function browseMeta(
   const gallery = records[relative]?.gallery?.length;
   const base: BrowseMetaView = { match, ...(skipLookup ? { skipLookup } : {}), ...(skipMosaic ? { skipMosaic } : {}), ...(gallery ? { gallery } : {}) };
   if (match === "suggested") {
-    const suggestion = suggestionFor(relative, suggestions);
+    const suggestion = unit ? proposedForRow : suggestionFor(relative, suggestions);
     return suggestion ? { ...base, suggestion } : base;
   }
   if (match !== "matched") return base;
-  const entry = knownTitleEntry(relative, records);
+  const entry = mosaicFolder ? undefined : unit
+    ? knownForRow ? { key: unit.key, record: knownForRow } : undefined
+    : knownTitleEntry(relative, records);
   if (!entry) return base;
   const known = entry.record;
   const named = (value?: string) => (value && normalizeTitle(value) !== normalizeTitle(label) ? value : undefined);
@@ -882,8 +914,8 @@ export function folderMosaicUnits(
   for (const unit of units) {
     if (unit.kind !== "movie" || !isPathWithin(unit.key, folderKey)) continue;
     if (mosaicSkipped(unit.key, records)) continue;
-    const record = knownTitleOf(unit.key, records);
-    const suggestion = suggestionFor(unit.key, suggestions);
+    const record = knownTitleForUnit(unit, records);
+    const suggestion = suggestionForUnit(unit, suggestions);
     const id = record?.id ?? suggestion?.id;
     const identity = id ? `${record?.type ?? suggestion?.type ?? "movie"}:${id}` : `path:${unit.key}`;
     if (seen.has(identity)) continue;

@@ -3,7 +3,7 @@ import path from "node:path";
 import { test } from "node:test";
 import {
   autoAccept, browseMeta, cacheFieldsFromMeta, clipText, dropKeyed, episodeKey, episodeNumberOf, episodesFromMeta, isExtraName,
-  folderMosaicUnits, knownTitleOf, lookupSkipped, mosaicSkipped, matchKeyFor, mosaicIdentities, needsReevaluation, parseUnit, pendingSuggestionKeys, pinInherited, matchStatus, needsBackfill, needsEpisodes, needsRefresh, pickSuggestion, remapKeyed, scanMiss, unitFor,
+  folderMosaicUnits, knownTitleOf, knownTitleForUnit, lookupSkipped, mosaicSkipped, matchKeyFor, mosaicIdentities, needsReevaluation, parseUnit, pendingSuggestionKeys, pinInherited, matchStatus, needsBackfill, needsEpisodes, needsRefresh, pickSuggestion, remapKeyed, scanMiss, unitFor,
   scannedRecently, scanSkipReason, scoreHit, staleSuggestionKeys, suggestionFor, titleUnits, unmatchAt, viewMeta,
   MATCH_RULE_VERSION, type LibrarySuggestion, type TitleUnit,
 } from "./library-match.js";
@@ -810,4 +810,28 @@ test("a folder mosaic names each distinct film once, honours the exclusion flag,
 
   const hidden = { ...records, "lib_00000001/Collection/Ronin (1998).mkv": { type: "movie", id: "tt-ronin", source: "scan" as const, skipMosaic: true } };
   assert.equal(folderMosaicUnits(units, "lib_00000001/Collection", hidden, {}, 5).length, 1, "a film kept out of the mosaic is left out");
+});
+
+test("a collection binding does not replace identities of loose movies inside it", () => {
+  const files = [
+    "lib/Whisper Man/Whisper Man.mkv",
+    "lib/Whisper Man/Whisper Man 1080p.mkv",
+    "lib/Whisper Man/Harry Potter and the Sorcerer's Stone.mp4",
+  ].map(file);
+  const units = titleUnits(files);
+  const records = {
+    "lib/Whisper Man": { type: "movie", id: "tt-whisper", source: "scan" as const },
+  };
+  const harry = units.find((unit) => unit.key.endsWith("Harry Potter and the Sorcerer's Stone.mp4"))!;
+  const whisper = units.find((unit) => parseUnit(unit).title === "Whisper Man")!;
+  assert.equal(knownTitleForUnit(whisper, records)?.id, "tt-whisper", "a title-named folder retains its binding for same-title copies");
+  assert.equal(knownTitleForUnit(harry, records)?.id, undefined, "a differently named loose file does not inherit the collection binding");
+  assert.equal(browseMeta(harry.key, "Harry Potter", records, {}, {}, harry).match, "unmatched",
+    "a file row shows its own matching state instead of the collection's metadata");
+  const folder = browseMeta("lib/Whisper Man", "Whisper Man", records, {}, {}, undefined, true);
+  assert.equal(folder.match, "unmatched", "a mosaic folder does not present its stale parent binding as the collection's identity");
+  assert.equal(folder.description, undefined);
+  const posters = folderMosaicUnits(units, "lib/Whisper Man", records);
+  assert.deepEqual(posters.map((unit) => knownTitleForUnit(unit, records)?.id ?? unit.key), ["tt-whisper", harry.key],
+    "alternate encodes collapse to one poster while the distinct unmatched film remains its own tile");
 });

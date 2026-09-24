@@ -30,7 +30,7 @@ import { createLibraryCandidates } from "./library-candidates.js";
 import { ExternalIdStore } from "./external-ids.js";
 import { currentLevel, flushLog, initLogger, log, parseLevel, startLogMaintenance, setLevel } from "./logger.js";
 import { browseDirectory, describePath, emptiedFolders, entryDirectory, holdsLibraryRoot, isPathWithin, isVideo, listVideos, moveDestination, orphanedCatalogKeys, pageFiles, remapPath, scanLibrary, summarize, type FoundFile, type LibraryEntry } from "./library.js";
-import { browseMeta, cacheFieldsFromMeta, episodeKey, episodeNumberOf, episodesFromMeta, dropKeyed, knownTitleEntry, knownTitleOf, matchKeyFor, mosaicIdentities, mosaicSkipped, needsBackfill, needsEpisodes, staleSuggestionKeys, titleUnits, unmatchAt, type GalleryEntry, type LibraryMetaRecord, type TitleKind, type TitleUnit } from "./library-match.js";
+import { browseMeta, cacheFieldsFromMeta, episodeKey, episodeNumberOf, episodesFromMeta, dropKeyed, folderMosaicUnits, knownTitleEntry, knownTitleOf, knownTitleForUnit, matchKeyFor, mosaicIdentities, mosaicSkipped, needsBackfill, needsEpisodes, staleSuggestionKeys, titleUnits, unitFor, unmatchAt, type GalleryEntry, type LibraryMetaRecord, type TitleKind, type TitleUnit } from "./library-match.js";
 import { LibraryScan } from "./library-scan.js";
 import { createLibraryProbe, type LibraryHealth } from "./library-probe.js";
 import { LibraryAutoScan } from "./library-autoscan.js";
@@ -791,6 +791,7 @@ const libraryEntries = async () => {
   if (libraryCache && Date.now() - libraryCache.at < 30_000) return libraryCache.entries;
   const known = metaStore.qualifiedMeta();
   const entries: LibraryEntry[] = [];
+  const units = await libraryUnits();
   for (const library of walkableLibraries()) {
     for (const entry of await scanLibrary(library.root, carveOutsOf(library))) {
       const key = libraryPath(library.id, entry.key);
@@ -798,7 +799,8 @@ const libraryEntries = async () => {
         ...entry, key,
         files: entry.files.map((file) => ({ ...file, path: libraryPath(library.id, file.path) })),
       };
-      const record = knownTitleOf(key, known);
+      const unit = unitFor(key, units);
+      const record = entry.kind === "collection" ? undefined : knownTitleForUnit(unit, known);
       if (record) {
         qualified.meta = {
           type: record.type, id: record.id, name: record.name,
@@ -1073,7 +1075,9 @@ const describeLibraryPath = async (key: string) => {
  *  one keeps its own slot. */
 async function locateFileArtwork(key: string, shape: ArtShape = "poster") {
   const media = path.join(posixDir(mediaPath(key)), episodeArtName(posixBase(key)));
-  const cover = knownTitleEntry(key, metaStore.qualifiedMeta());
+  const unit = unitFor(key, await libraryUnits());
+  const record = knownTitleForUnit(unit, metaStore.qualifiedMeta());
+  const cover = record && unit ? { key: unit.key, record } : undefined;
   // A still and a frame grab are landscape, so they serve the wide shape as they are. A film's
   // is the catalogue poster instead: handing that out as the backdrop drew a portrait picture
   // in a landscape frame and told the scheduler a backdrop was already there, so none was
@@ -1159,16 +1163,18 @@ const besideMediaTarget = (key: string, shape: ArtShape) =>
 /** Whether a file's backdrop may be dropped next to the media. The backdrop of a folder is a
  *  title's picture only where the folder is the film's own -- the same gate the poster goes
  *  through -- so an episode keeps its wide variant in the store, where it is looked up again. */
-const wideBesideMedia = (key: string) => {
+const wideBesideMedia = async (key: string) => {
   if (!artworkBesideMediaFor(key)) return false;
   if (!isFileKey(key)) return true;
-  const cover = knownTitleEntry(key, metaStore.qualifiedMeta());
+  const unit = unitFor(key, await libraryUnits());
+  const record = knownTitleForUnit(unit, metaStore.qualifiedMeta());
+  const cover = record && unit ? { key: unit.key, record } : undefined;
   return fileMayUseFolderArtwork(key, cover?.record.type, cover?.key);
 };
 /** Where one variant of an item's artwork is written: next to the media where the library allows
  *  it, in the generated store otherwise, and nowhere where the store cannot place it. */
-const artworkTarget = (key: string, shape: ArtShape) =>
-  (shape === "wide" ? wideBesideMedia(key) : artworkBesideMediaFor(key)) ? besideMediaTarget(key, shape) : hashedArt(key, shape);
+const artworkTarget = async (key: string, shape: ArtShape) =>
+  (shape === "wide" ? await wideBesideMedia(key) : artworkBesideMediaFor(key)) ? besideMediaTarget(key, shape) : hashedArt(key, shape);
 /** The queue key of one shape's job for an item. The two shapes never share a key, so a
  *  backdrop is queued while the poster job for the same item is still running. */
 const artworkQueueKey = (key: string, shape: ArtShape) =>
@@ -1190,7 +1196,7 @@ const writeCatalogArt = async (key: string, taken: PictureOutcome | undefined, s
     return false;
   }
   for (const file of generatedArtFiles(key, shape)) await removeArtwork(file);
-  const target = artworkTarget(key, shape);
+  const target = await artworkTarget(key, shape);
   if (!target) return false;
   await mkdir(path.dirname(target), { recursive: true });
   return shape === "wide"
@@ -1223,17 +1229,21 @@ const clearGeneratedArt = async (key: string) => {
   }
 };
 
-const attachBrowseMeta = <T extends { path: string; kind: string; name?: string; label?: string }>(item: T, language: string) => {
+const attachBrowseMeta = async <T extends { path: string; kind: string; name?: string; label?: string }>(item: T, language: string) => {
   const records = metaStore.qualifiedMeta();
   const episodes = metaStore.episodes();
   const key = libraryKey(item.path);
   const label = item.kind === "folder" ? String(item.name ?? "") : String(item.label ?? "");
-  const extra = browseMeta(key, label, records, metaStore.qualifiedSuggestions(), episodes);
+  const units = await libraryUnits();
+  const unit = unitFor(key, units);
+  const suggestions = metaStore.qualifiedSuggestions();
+  const mosaicFolder = item.kind === "folder" && !unit && folderMosaicUnits(units, key, records, suggestions).length > 1;
+  const extra = browseMeta(key, label, records, suggestions, episodes, unit, mosaicFolder);
   const suggestion = extra.suggestion;
   const safeExtra = suggestion?.poster
     ? { ...extra, suggestion: { ...suggestion, poster: images.proxied(suggestion.poster) } }
     : extra;
-  const known = knownTitleOf(key, records);
+  const known = item.kind === "folder" && !unit ? undefined : knownTitleForUnit(unit, records);
   const numbers = item.kind === "file" ? episodeNumberOf(key, ownRecord(key, records)) : undefined;
   // Only a key can answer with a better language; without one every record stays wanted as it is.
   const wantedLanguage = store.settings().tmdbApiKey ? language : undefined;
@@ -1314,7 +1324,7 @@ function scheduleFileArtwork(key: string, shape: ArtShape = "poster") {
     if (shape === "wide") rememberBackdropAttempt(queueKey);
     const source = await realpath(mediaPath(key)).catch(() => undefined);
     if (!source) return;
-    const target = artworkTarget(key, shape);
+    const target = await artworkTarget(key, shape);
     if (!target) return;
     await mkdir(path.dirname(target), { recursive: true });
     if (shape === "wide") {
@@ -1358,7 +1368,7 @@ function scheduleFolderArtwork(key: string, shape: ArtShape = "poster") {
     if (await locateFolderArtwork(key, shape)) return;
     // The attempt starts here: one that finds nothing is not repeated on the next browse.
     if (shape === "wide") rememberBackdropAttempt(queueKey);
-    const target = artworkTarget(key, shape);
+    const target = await artworkTarget(key, shape);
     if (!target) return;
     await mkdir(path.dirname(target), { recursive: true });
     if (shape === "wide") {

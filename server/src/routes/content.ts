@@ -19,7 +19,7 @@ import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
 
 /** Browsing a library and the file operations under it. */
 export interface ContentDeps extends RouteContext {
-  attachBrowseMeta<T extends { path: string; kind: string; name?: string; label?: string }>(item: T, language: string): { item: T; backfill: boolean };
+  attachBrowseMeta<T extends { path: string; kind: string; name?: string; label?: string }>(item: T, language: string): Promise<{ item: T; backfill: boolean }>;
   carveOutsOf(library: LibraryRecord): Set<string>;
   dataOf(req: express.Request): UserData;
   deleteLibraryItem(relative: string): Promise<void>;
@@ -140,7 +140,7 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
       const key = inLibrary(item.path);
       const path = wirePath(key);
       if (item.kind === "folder") {
-        const { item: withMeta, backfill } = attachBrowseMeta({ ...item, path }, prefsOf(req).uiLanguage);
+        const { item: withMeta, backfill } = await attachBrowseMeta({ ...item, path }, prefsOf(req).uiLanguage);
         // A collection stands for several films: it shows their posters rather than a folder
         // frame of its own, and no frame is scheduled for it.
         const posters = await folderPosters(key, library, units);
@@ -160,7 +160,7 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
       const wide = await locateFileArtwork(key, "wide");
       if (!wide) scheduleFileArtwork(key, "wide");
       const watched = progressOf(data)[`file:${key}`];
-      const { item: withMeta, backfill } = attachBrowseMeta({ ...item, path }, prefsOf(req).uiLanguage);
+      const { item: withMeta, backfill } = await attachBrowseMeta({ ...item, path }, prefsOf(req).uiLanguage);
       return {
         ...withMeta,
         path,
