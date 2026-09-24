@@ -1,6 +1,6 @@
 import { isPathWithin, isVideo, numberedEpisode, parseSeason, remapPath, type FoundFile } from "./library.js";
 import { parseLibraryPath, posixBase, type LibraryType } from "./libraries.js";
-import { parseMediaPath, type ParsedMedia } from "./library-parse.js";
+import { parseMediaPath, partSignature, stripPartMarkers, type ParsedMedia } from "./library-parse.js";
 import type { MetaItem } from "./types.js";
 
 export type TitleKind = "movie" | "series";
@@ -18,6 +18,9 @@ export interface ScoredHit {
   titleSimilarity: number;
   yearDelta?: number;
   autoEligible: boolean;
+  /** The file and the candidate disagree about a sequel/part marker, so this is a
+   *  different film rather than a different cut of the same one. */
+  partConflict?: boolean;
 }
 
 /** A scan result for one title unit. An entry without an id is the memory of a
@@ -34,6 +37,9 @@ export interface LibrarySuggestion {
   /** Why a high score still wants a look. Absent when nothing about the match is
    *  worth explaining. */
   reason?: SuggestionReason;
+  /** The competing candidates a person needs to tell apart. Bounded: only the identity,
+   *  a name and the two scores, never a provider payload or an image address. */
+  alternatives?: SuggestionAlternative[];
   /** The candidate's own poster, as the provider gave it. The route proxies it before
    *  the browser ever sees the address. */
   poster?: string;
@@ -41,10 +47,25 @@ export interface LibrarySuggestion {
   replacesId?: string;
   replacesName?: string;
   replacesYear?: number;
+  /** The matching rules that produced this row. A row written by older rules is
+   *  reconsidered once instead of on every startup. */
+  rule?: number;
+  /** Set when a person dismissed the proposal: the rules stop asking about it. */
+  dismissed?: boolean;
 }
 
 /** The short explanation a proposal carries when a high score is not the whole story. */
-export type SuggestionReason = "ambiguous" | "year" | "correction";
+export type SuggestionReason = "ambiguous" | "year" | "part" | "correction";
+
+/** One competing candidate of a proposal, just enough for a person to tell them apart. */
+export interface SuggestionAlternative {
+  type: string;
+  id: string;
+  name: string;
+  year?: number;
+  score: number;
+  titleSimilarity: number;
+}
 
 export interface LibraryMetaRecord {
   type: string;
@@ -53,6 +74,10 @@ export interface LibraryMetaRecord {
   locked?: boolean;
   skipLookup?: boolean;
   skipMosaic?: boolean;
+  /** A binding this path deliberately does not take, while the folders above keep theirs.
+   *  Only `unmatchAt` writes it; a row without an identity that carries no flag at all
+   *  predates the marker and means the same. */
+  unmatched?: boolean;
   name?: string;
   year?: string;
   description?: string;
@@ -100,8 +125,11 @@ export interface ViewedMeta {
   locked: boolean;
 }
 
-const EXTRA_TOKENS = new Set(["trailer", "sample", "extra", "bonus"]);
+const EXTRA_TOKENS = new Set(["trailer", "sample", "extra", "bonus", "deleted", "featurette"]);
 const ARTICLES = /^(the|a|an)\s+/;
+/** The matching rules that wrote a suggestion or a remembered miss. Bumped whenever a
+ *  decision changes meaning, so old rows are reconsidered exactly once. */
+export const MATCH_RULE_VERSION = 5;
 
 export function levenshtein(a: string, b: string): number {
   if (a === b) return 0;
@@ -152,15 +180,63 @@ export function yearFromMeta(item: MetaItem): number | undefined {
   return Number(raw);
 }
 
-export function scoreHit(parsed: ParsedMedia, item: MetaItem, expectedKind?: TitleKind): ScoredHit {
-  if (!item.name) return { item, score: 0, titleSimilarity: 0, autoEligible: false };
-  const left = normalizeTitle(parsed.query || parsed.title);
-  const right = normalizeTitle(item.name);
+/** Every name a candidate is known by: the localized one and the original the provider
+ *  kept beside it. A Czech file and an English catalogue entry still meet here. */
+export function candidateTitles(item: MetaItem): string[] {
+  const titles = [item.name, typeof item.originalTitle === "string" ? item.originalTitle : undefined]
+    .filter((value): value is string => Boolean(value && value.trim()));
+  return titles.length ? titles : [""];
+}
+
+/** The candidate title that reads closest to the file's own words. */
+export function bestCandidateTitle(left: string, item: MetaItem): string {
+  let best = candidateTitles(item)[0]!;
+  let bestScore = -1;
+  for (const candidate of candidateTitles(item)) {
+    const score = titleSimilarityOf(normalizeTitle(left), normalizeTitle(candidate));
+    if (score > bestScore) { bestScore = score; best = candidate; }
+  }
+  return best;
+}
+
+function titleSimilarityOf(left: string, right: string): number {
   const maxLen = Math.max(left.length, right.length);
   const edit = maxLen === 0 ? 1 : 1 - levenshtein(left, right) / maxLen;
-  const titleSimilarity = 0.7 * dice(tokensOf(left), tokensOf(right)) + 0.3 * edit;
+  return 0.7 * dice(tokensOf(left), tokensOf(right)) + 0.3 * edit;
+}
+
+/** Whether one normalized title appears whole inside the other. A shared word is not
+ *  evidence -- "WALL-E" and "Eton Wall Game" share one -- a shared phrase is. */
+function phraseEvidence(left: string, right: string): boolean {
+  if (!left || !right) return false;
+  if (left === right) return true;
+  const haystack = ` ${left} `;
+  const needle = ` ${right} `;
+  return haystack.includes(needle) || needle.includes(haystack);
+}
+
+/** A title with its part markers removed, so "Second Film Part 1" and "Part 2", or "Rocky 3"
+ *  and "Rocky III", compare as the same film and only the marker tells them apart. */
+function matchTitle(value: string): string {
+  const normalized = normalizeTitle(value);
+  return stripPartMarkers(normalized) || normalized;
+}
+
+export function scoreHit(parsed: ParsedMedia, item: MetaItem, expectedKind?: TitleKind): ScoredHit {
+  if (!item.name) return { item, score: 0, titleSimilarity: 0, autoEligible: false };
+  const left = matchTitle(parsed.query || parsed.title);
+  let titleSimilarity = 0;
+  let evidence = false;
+  for (const candidate of candidateTitles(item)) {
+    const right = matchTitle(candidate);
+    titleSimilarity = Math.max(titleSimilarity, titleSimilarityOf(left, right));
+    if (phraseEvidence(left, right)) evidence = true;
+  }
   let score = 100 - Math.round((1 - titleSimilarity) * 50);
   let autoEligible = true;
+  // A candidate that shares no phrase with the file is not evidence of anything: the
+  // name-only score it would carry is noise, and offering it teaches distrust.
+  if (!evidence) score = Math.min(score, SUGGESTION_MIN_SCORE - 1);
   const parsedYear = parsed.year;
   const itemYear = yearFromMeta(item);
   let yearDelta: number | undefined;
@@ -178,8 +254,18 @@ export function scoreHit(parsed: ParsedMedia, item: MetaItem, expectedKind?: Tit
     score -= 25;
     autoEligible = false;
   }
+  // The part marker is read from the file's whole title, not the search query: a suffix such
+  // as "Nymfomanka - část 2" is dropped from a bilingual query, and losing it there would
+  // hide exactly the disagreement this check exists to catch.
+  const partConflict = titlePartConflict(parsed.title, bestCandidateTitle(parsed.title, item));
+  if (partConflict) autoEligible = false;
   score = Math.max(0, Math.min(100, score));
-  return { item, score, titleSimilarity, yearDelta, autoEligible };
+  return { item, score, titleSimilarity, yearDelta, autoEligible, ...(partConflict ? { partConflict: true } : {}) };
+}
+
+/** The file and the candidate disagree about which part of a franchise this is. */
+export function titlePartConflict(fileTitle: string, candidateTitle: string): boolean {
+  return partSignature(fileTitle, true) !== partSignature(candidateTitle, true);
 }
 
 export function autoAccept(hits: ScoredHit[], nowYear = new Date().getFullYear()): ScoredHit | undefined {
@@ -189,6 +275,7 @@ export function autoAccept(hits: ScoredHit[], nowYear = new Date().getFullYear()
   });
   const top = ranked[0];
   if (!top || top.score < 85 || top.titleSimilarity < 0.90) return undefined;
+  if (top.partConflict) return undefined;
   const close = ranked.filter((hit) => top.score - hit.score < 15 && hit.titleSimilarity >= 0.90);
   const topName = normalizeTitle(top.item.name);
   if (close.some((hit) => normalizeTitle(hit.item.name) !== topName)) return undefined;
@@ -201,27 +288,59 @@ export function autoAccept(hits: ScoredHit[], nowYear = new Date().getFullYear()
 /** Below this the best hit is noise -- offering it would only teach the user to distrust the list. */
 export const SUGGESTION_MIN_SCORE = 60;
 
-/** More than one distinct identity is close enough to be the one the file means. */
-function ambiguousHits(ranked: ScoredHit[]): boolean {
+/** A title and a distinct identity of its own that the file could equally mean. Either a
+ *  close-scoring namesake or the same title with a different year -- two remakes of one name
+ *  are as ambiguous to a nameless file as two different titles. */
+function competingHits(ranked: ScoredHit[]): ScoredHit[] {
   const top = ranked[0];
-  if (!top) return false;
+  if (!top) return [];
   const topName = normalizeTitle(top.item.name);
-  return ranked.some((hit) =>
-    hit !== top && top.score - hit.score < 15 && hit.titleSimilarity >= 0.90 && normalizeTitle(hit.item.name) !== topName);
+  return ranked.filter((hit) => {
+    if (hit === top || hit.item.id === top.item.id) return false;
+    const namesake = normalizeTitle(hit.item.name) === topName && yearFromMeta(hit.item) !== yearFromMeta(top.item);
+    return namesake || (top.score - hit.score < 15 && hit.titleSimilarity >= 0.90);
+  });
+}
+
+/** The other candidates a person needs to tell this one apart from. Bounded in size and
+ *  in content: identity, name and scores only, never a provider payload or an image URL. */
+function alternativesOf(ranked: ScoredHit[], top: ScoredHit, minScore: number, limit = 3): SuggestionAlternative[] {
+  const seen = new Set<string>([`${top.item.type}:${top.item.id}`]);
+  const out: SuggestionAlternative[] = [];
+  for (const hit of ranked) {
+    if (out.length >= limit) break;
+    if (hit === top || hit.score < minScore || !hit.item.name) continue;
+    const key = `${hit.item.type}:${hit.item.id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const year = yearFromMeta(hit.item);
+    out.push({
+      type: hit.item.type, id: hit.item.id, name: hit.item.name,
+      score: hit.score, titleSimilarity: Math.round(hit.titleSimilarity * 100),
+      ...(year != null ? { year } : {}),
+    });
+  }
+  return out;
 }
 
 export function pickSuggestion(hits: ScoredHit[], minScore = SUGGESTION_MIN_SCORE): LibrarySuggestion | undefined {
   // A wrong type or a year off by more than two is not a safe match and is not offered as
   // if it were: the proposal list is where a person decides, and a bad row wastes that.
-  const ranked = hits.filter((hit) => hit.autoEligible).sort((a, b) => b.score - a.score);
+  // A part conflict is the exception: it is worth a person's look, just never a binding.
+  const ranked = hits.filter((hit) => hit.autoEligible || hit.partConflict).sort((a, b) => b.score - a.score);
   const top = ranked[0];
   if (!top || top.score < minScore) return undefined;
   const year = yearFromMeta(top.item);
   // The number beside a proposal is title-name similarity, so everything that is not in
   // that number gets said out loud instead of hiding behind 100%.
-  const reason: SuggestionReason | undefined = ambiguousHits(ranked)
+  const reason: SuggestionReason | undefined = competingHits(ranked).length
     ? "ambiguous"
-    : ranked.some((hit) => hit.yearDelta == null || hit.yearDelta > 0) ? "year" : undefined;
+    : top.partConflict
+      ? "part"
+      // Only a year the file actually states can disagree: a missing file year is not a
+      // conflict, it is just a title whose release the file never wrote down.
+      : ranked.some((hit) => (hit.yearDelta ?? 0) > 0) ? "year" : undefined;
+  const alternatives = alternativesOf(ranked, top, minScore);
   const poster = typeof top.item.poster === "string" && top.item.poster ? top.item.poster : undefined;
   return {
     type: top.item.type,
@@ -229,15 +348,25 @@ export function pickSuggestion(hits: ScoredHit[], minScore = SUGGESTION_MIN_SCOR
     name: top.item.name,
     score: top.score,
     titleSimilarity: Math.round(top.titleSimilarity * 100),
+    rule: MATCH_RULE_VERSION,
     ...(year != null ? { year } : {}),
     ...(reason ? { reason } : {}),
+    ...(alternatives.length ? { alternatives } : {}),
     ...(poster ? { poster } : {}),
   };
 }
 
-/** Remembers that the unit was searched for and nothing usable came back. */
-export const scanMiss = (kind: TitleKind, at = new Date().toISOString()): LibrarySuggestion =>
-  ({ type: kind, id: "", name: "", score: 0, scannedAt: at });
+/** Remembers that the unit was searched for and nothing usable came back. A dismissal is
+ *  the same memory plus a mark, so a later rule change does not undo the person's answer. */
+export const scanMiss = (kind: TitleKind, at = new Date().toISOString(), dismissed = false): LibrarySuggestion =>
+  ({ type: kind, id: "", name: "", score: 0, scannedAt: at, rule: MATCH_RULE_VERSION, ...(dismissed ? { dismissed: true } : {}) });
+
+/** Whether a remembered row was written by rules that no longer apply. A row somebody
+ *  dismissed is never stale: the decision was theirs, not the rules'. */
+export function needsReevaluation(suggestion: LibrarySuggestion | undefined): boolean {
+  if (!suggestion || suggestion.dismissed) return false;
+  return suggestion.rule !== MATCH_RULE_VERSION;
+}
 
 export const SCAN_MEMORY_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -285,7 +414,18 @@ const EPISODE_DESCRIPTION_MAX = 600;
 const MAX_EPISODES = 1000;
 const BACKFILL_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
-/** The binding that covers this path, together with the path it is stored at. */
+/** Whether the row takes the folders' binding away from one path instead of standing for an
+ *  identity of its own. A flag beside no identity is an exclusion -- the path is kept out of
+ *  matching or the mosaic but keeps the title it is shown under -- while a row like that
+ *  without any flag is a binding deliberately dropped. */
+function isUnmatched(record: LibraryMetaRecord | undefined): boolean {
+  if (!record || record.id) return false;
+  if (record.unmatched === true) return true;
+  return !record.skipLookup && !record.skipMosaic;
+}
+
+/** The binding that covers this path, together with the path it is stored at. An exclusion
+ *  is passed over, so the row below it still answers with the identity it inherited. */
 export function knownTitleEntry(
   relative: string,
   records: Record<string, LibraryMetaRecord>,
@@ -295,7 +435,8 @@ export function knownTitleEntry(
     const key = parts.slice(0, depth).join("/");
     const found = records[key];
     if (!found) continue;
-    return viewMeta(found)?.id ? { key, record: found } : undefined;
+    if (found.id) return { key, record: found };
+    if (isUnmatched(found)) return undefined;
   }
   return undefined;
 }
@@ -304,18 +445,101 @@ export function knownTitleOf(relative: string, records: Record<string, LibraryMe
   return knownTitleEntry(relative, records)?.record;
 }
 
+/** The binding of a unit, with the key it is stored at. A caller holding a concrete file of
+ *  the unit passes it as `file`: what that file says about itself beats what the folder unit
+ *  says, and an unmatch on the file keeps the folder's binding away from it. A file kept out
+ *  of matching or the mosaic is not one of those: the exclusion is respected, the identity
+ *  is still the unit's, and the key that supplied it stays the unit's, so the row keeps the
+ *  folder's picture. Files that say nothing about themselves keep the unit's binding too, so
+ *  siblings and same-title copies stay covered. A loose movie in a collection is its own
+ *  unit and owns its identity already: it must not inherit the collection folder's binding. */
+export function knownEntryForUnit(
+  unit: TitleUnit | string | undefined,
+  records: Record<string, LibraryMetaRecord>,
+  file?: string,
+): { key: string; record: LibraryMetaRecord } | undefined {
+  const unitKey = typeof unit === "string" ? unit : unit?.key;
+  if (!unitKey) return undefined;
+  const path = file && file !== unitKey ? file : unitKey;
+  if (path !== unitKey) {
+    const own = records[path];
+    if (own?.id) return { key: path, record: own };
+    if (own && isUnmatched(own)) return undefined;
+    if (!isVideo(posixBase(path))) return knownTitleEntry(path, records);
+    return knownTitleEntry(unitKey, records);
+  }
+  if (isVideo(posixBase(path))) {
+    if (records[path]?.id) return { key: path, record: records[path]! };
+    const inherited = knownTitleEntry(path, records);
+    if (!inherited || normalizeTitle(parseMediaPath(posixBase(path)).title) !== normalizeTitle(parseMediaPath(posixBase(inherited.key)).title)) return undefined;
+    return inherited;
+  }
+  return knownTitleEntry(path, records);
+}
+
+export function knownTitleForUnit(
+  unit: TitleUnit | string | undefined,
+  records: Record<string, LibraryMetaRecord>,
+  file?: string,
+): LibraryMetaRecord | undefined {
+  return knownEntryForUnit(unit, records, file)?.record;
+}
+
 /** Clear the binding on this path only. A path that still inherits one from a matched
- *  folder gets a sentinel, so siblings keep the parent while this one comes loose. */
+ *  folder gets a sentinel, so siblings keep the parent while this one comes loose. The
+ *  marker is what tells that sentinel from a row that only carries a flag. */
 export function unmatchAt(records: Record<string, LibraryMetaRecord>, relative: string): Record<string, LibraryMetaRecord> {
   const next = { ...records };
   const previous = next[relative];
   delete next[relative];
   const inherited = knownTitleOf(relative, next);
   if (inherited?.id) {
-    next[relative] = { type: inherited.type, id: "", source: "user", ...(previous?.skipLookup ? { skipLookup: true } : {}) };
+    next[relative] = {
+      type: inherited.type, id: "", source: "user", unmatched: true,
+      ...(previous?.skipLookup ? { skipLookup: true } : {}),
+      ...(previous?.skipMosaic ? { skipMosaic: true } : {}),
+    };
   } else if (previous?.skipLookup) {
-    next[relative] = { type: previous.type, id: "", source: previous.source ?? "user", skipLookup: true };
+    next[relative] = { type: previous.type, id: "", source: previous.source ?? "user", skipLookup: true, unmatched: true };
   }
+  return next;
+}
+
+/** Turns one path's "keep out of matching" or "keep out of the mosaic" flag on and off. A
+ *  flag says nothing about which film a path is, so a row written for one leaves an inherited
+ *  binding where it is -- the row is an exclusion, not an identity of its own -- and an
+ *  unmatch keeps its marker, which no flag turns back into a binding. */
+export function withSkipFlag(
+  records: Record<string, LibraryMetaRecord>,
+  relative: string,
+  name: "skipLookup" | "skipMosaic",
+  value: boolean,
+): Record<string, LibraryMetaRecord> {
+  const next = { ...records };
+  const current = next[relative];
+  if (value) {
+    const record: LibraryMetaRecord = {
+      type: current?.type ?? "movie",
+      id: current?.id ?? "",
+      source: current?.source ?? "user",
+      ...(current?.locked != null ? { locked: current.locked } : {}),
+      ...(current && isUnmatched(current) ? { unmatched: true } : {}),
+      ...(current?.name ? { name: current.name } : {}),
+      ...(current?.year ? { year: current.year } : {}),
+      ...(current?.description ? { description: current.description } : {}),
+      ...(current?.matchedAt ? { matchedAt: current.matchedAt } : {}),
+      ...(current?.skipLookup ? { skipLookup: true } : {}),
+      ...(current?.skipMosaic ? { skipMosaic: true } : {}),
+    };
+    if (name === "skipLookup") record.skipLookup = true; else record.skipMosaic = true;
+    next[relative] = record;
+    return next;
+  }
+  if (!current) return next;
+  const kept: LibraryMetaRecord = { ...current };
+  if (name === "skipLookup") delete kept.skipLookup; else delete kept.skipMosaic;
+  if (kept.id || kept.skipLookup || kept.skipMosaic || kept.unmatched || isUnmatched(current)) next[relative] = kept;
+  else delete next[relative];
   return next;
 }
 
@@ -327,6 +551,30 @@ export function suggestionFor(relative: string, suggestions: Record<string, Libr
     if (found?.id) return found;
   }
   return undefined;
+}
+
+/** The proposal covering a unit, and for a caller holding one concrete file of the unit that
+ *  file's own proposal first: the same precedence a binding has over the folder unit. */
+export function suggestionForUnit(
+  unit: TitleUnit | undefined,
+  suggestions: Record<string, LibrarySuggestion>,
+  file?: string,
+): LibrarySuggestion | undefined {
+  const unitKey = unit?.key;
+  if (!unitKey) return undefined;
+  const path = file && file !== unitKey ? file : unitKey;
+  if (path !== unitKey) {
+    if (suggestions[path]?.id) return suggestions[path];
+    if (!isVideo(posixBase(path))) return suggestionFor(path, suggestions);
+    return suggestionFor(unitKey, suggestions);
+  }
+  if (isVideo(posixBase(path))) {
+    if (suggestions[path]?.id) return suggestions[path];
+    const parent = path.slice(0, path.lastIndexOf("/"));
+    if (normalizeTitle(parseMediaPath(posixBase(path)).title) !== normalizeTitle(parseMediaPath(posixBase(parent)).title)) return undefined;
+    return suggestions[parent]?.id ? suggestions[parent] : undefined;
+  }
+  return suggestionFor(path, suggestions);
 }
 
 export function matchStatus(
@@ -487,8 +735,19 @@ export function browseMeta(
   records: Record<string, LibraryMetaRecord>,
   suggestions: Record<string, LibrarySuggestion> = {},
   episodes: Record<string, LibraryEpisodeRecord> = {},
+  unit?: TitleUnit,
+  mosaicFolder = false,
 ): BrowseMetaView {
-  const match = matchStatus(relative, records, suggestions);
+  // A row that is one file of its unit answers with what that file says about itself first.
+  const file = isVideo(posixBase(relative)) ? relative : undefined;
+  const knownEntry = knownEntryForUnit(unit, records, file);
+  const knownForRow = knownEntry?.record;
+  const proposedForRow = suggestionForUnit(unit, suggestions, file);
+  // The title the row inherited wins over its own exclusion, and the exclusion is read from
+  // the row's own path: a file kept out of matching is still the film the folder names.
+  const match = mosaicFolder ? "unmatched" : unit
+    ? knownForRow?.id ? "matched" : lookupSkipped(relative, records) ? "rejected" : proposedForRow ? "suggested" : "unmatched"
+    : matchStatus(relative, records, suggestions);
   const skipLookup = Boolean(records[relative]?.skipLookup);
   const skipMosaic = Boolean(records[relative]?.skipMosaic);
   // How many pictures the row can show, so a tile offers the button only where there is
@@ -496,11 +755,11 @@ export function browseMeta(
   const gallery = records[relative]?.gallery?.length;
   const base: BrowseMetaView = { match, ...(skipLookup ? { skipLookup } : {}), ...(skipMosaic ? { skipMosaic } : {}), ...(gallery ? { gallery } : {}) };
   if (match === "suggested") {
-    const suggestion = suggestionFor(relative, suggestions);
+    const suggestion = unit ? proposedForRow : suggestionFor(relative, suggestions);
     return suggestion ? { ...base, suggestion } : base;
   }
   if (match !== "matched") return base;
-  const entry = knownTitleEntry(relative, records);
+  const entry = mosaicFolder ? undefined : unit ? knownEntry : knownTitleEntry(relative, records);
   if (!entry) return base;
   const known = entry.record;
   const named = (value?: string) => (value && normalizeTitle(value) !== normalizeTitle(label) ? value : undefined);
@@ -556,18 +815,28 @@ export function pinInherited(
 
   const nextMeta = { ...meta };
   const bound = knownTitleEntry(relative, meta);
-  if (bound && !stillCovers(bound.key)) nextMeta[relative] = { ...bound.record };
+  if (bound && !stillCovers(bound.key)) {
+    // Whatever the item itself kept out of matching or the mosaic travels with it.
+    const own = meta[relative];
+    nextMeta[relative] = {
+      ...bound.record,
+      ...(own?.skipLookup ? { skipLookup: true } : {}),
+      ...(own?.skipMosaic ? { skipMosaic: true } : {}),
+    };
+  }
   // Catalogue lookup switched off on a folder is a decision about the item too.
   const ignored = coveringKey(meta, relative, (record) => Boolean(record.skipLookup));
   if (ignored && !stillCovers(ignored)) {
-    const own = nextMeta[relative] ?? meta[relative] ?? { type: meta[ignored]!.type, id: "", source: "user" as const };
-    nextMeta[relative] = { ...own, skipLookup: true };
+    const previous = meta[relative];
+    const own = nextMeta[relative] ?? previous ?? { type: meta[ignored]!.type, id: "", source: "user" as const };
+    nextMeta[relative] = { ...own, ...(previous && isUnmatched(previous) ? { unmatched: true } : {}), skipLookup: true };
   }
   // So is being kept out of the mosaic.
   const hidden = coveringKey(meta, relative, (record) => Boolean(record.skipMosaic));
   if (hidden && !stillCovers(hidden)) {
-    const own = nextMeta[relative] ?? meta[relative] ?? { type: meta[hidden]!.type, id: "", source: "user" as const };
-    nextMeta[relative] = { ...own, skipMosaic: true };
+    const previous = meta[relative];
+    const own = nextMeta[relative] ?? previous ?? { type: meta[hidden]!.type, id: "", source: "user" as const };
+    nextMeta[relative] = { ...own, ...(previous && isUnmatched(previous) ? { unmatched: true } : {}), skipMosaic: true };
   }
 
   const nextSuggestions = { ...suggestions };
@@ -599,8 +868,17 @@ export function isExtraName(filename: string): boolean {
   return title.split(/[\s-]+/).filter(Boolean).some((token) => EXTRA_TOKENS.has(token));
 }
 
+/** The identity one film keeps across its encodes, its CD halves and its single file. A
+ *  physical segment is dropped, because the halves belong to one identity, and the
+ *  installment is written the canonical way the matcher compares titles, so "Saw 3",
+ *  "Saw III" and "Saw III CD1" are one film while "Saw" and "Saw IV" are their own. */
 function comparableTitle(filename: string): string {
-  return normalizeTitle(parseMediaPath(filename).title).replace(/\s+\d+$/, "").trim();
+  // "Obsession (2)" is a second encode of one film, so the parenthesised copy number goes.
+  const title = parseMediaPath(filename).title.replace(/\(\s*\d{1,3}\s*\)\s*$/, "");
+  const normalized = normalizeTitle(title);
+  const base = stripPartMarkers(normalized) || normalized;
+  const part = partSignature(title, true);
+  return part ? `${base} ${part}` : base;
 }
 
 interface DirIndex {
@@ -649,15 +927,13 @@ function uniqueNonExtraTitles(videos: FoundFile[]): Set<string> {
   return titles;
 }
 
-function isCollection(index: DirIndex, dir: string): boolean {
-  return uniqueNonExtraTitles(index.videos.get(dir) ?? []).size >= 2;
-}
-
 function emit(out: TitleUnit[], key: string, kind: TitleKind, samples: string[]) {
   out.push({ key, kind, relative: key, sampleFiles: samples });
 }
 
-function classifyVideosOnly(index: DirIndex, dir: string, videos: FoundFile[], out: TitleUnit[]) {
+/** A folder of loose files: one film when its non-extra files reduce to one identity,
+ *  otherwise one unit per distinct film so every identity is exposed on its own name. */
+function classifyVideosOnly(dir: string, videos: FoundFile[], out: TitleUnit[]) {
   const nonExtra = videos.filter((file) => !isExtraName(posixBase(file.relative)));
   if (!nonExtra.length) return;
   const tagged = videos.filter((file) => isTaggedEpisode(posixBase(file.relative)));
@@ -665,8 +941,23 @@ function classifyVideosOnly(index: DirIndex, dir: string, videos: FoundFile[], o
     emit(out, dir, "series", videos.map((file) => file.relative));
     return;
   }
-  if (nonExtra.length === 1 || uniqueNonExtraTitles(videos).size === 1) {
+  if (uniqueNonExtraTitles(videos).size === 1) {
+    // Alternate encodes, CD1/CD2 halves and extras share the one identity of the folder.
     emit(out, dir, "movie", videos.map((file) => file.relative));
+    return;
+  }
+  // Several films in one folder: each is its own unit under its own file name, and an
+  // extra joins the film it names rather than standing on its own.
+  const groups = new Map<string, FoundFile[]>();
+  for (const file of videos) {
+    const key = comparableTitle(posixBase(file.relative));
+    if (!key) continue;
+    (groups.get(key) ?? groups.set(key, []).get(key)!).push(file);
+  }
+  for (const group of groups.values()) {
+    if (!group.some((file) => !isExtraName(posixBase(file.relative)))) continue;
+    const samples = group.map((file) => file.relative).sort();
+    emit(out, samples[0]!, "movie", samples);
   }
 }
 
@@ -677,12 +968,11 @@ function classifyFolder(index: DirIndex, dir: string, out: TitleUnit[]) {
     emit(out, dir, "series", filesUnder(index, dir));
     return;
   }
-  if (isCollection(index, dir)) return;
   if (children.length) {
     walkContainer(index, dir, out);
     return;
   }
-  classifyVideosOnly(index, dir, videos, out);
+  classifyVideosOnly(dir, videos, out);
 }
 
 function walkContainer(index: DirIndex, dir: string, out: TitleUnit[]) {
@@ -702,24 +992,70 @@ export function titleUnits(files: FoundFile[], type: LibraryType = "mixed"): Tit
   return out.map((unit) => ({ ...unit, kind: type }));
 }
 
-export function matchKeyFor(relative: string, files: FoundFile[]): string {
-  const units = titleUnits(files);
-  const covering = units.filter((unit) => relative === unit.key || isPathWithin(relative, unit.key));
-  if (covering.length) return covering.sort((a, b) => b.key.length - a.key.length)[0]!.key;
+/** The unit a path belongs to: the one it is a sample file of, then the narrowest unit that
+ *  covers it. Every sample file of a unit answers with that unit, so an alternate encode or
+ *  a CD half is identified with the film it belongs to rather than on its own path. */
+export function unitFor(relative: string, units: TitleUnit[]): TitleUnit | undefined {
+  const sampled = units.find((unit) => unit.key === relative || unit.sampleFiles.includes(relative));
+  if (sampled) return sampled;
+  const covering = units.filter((unit) => isPathWithin(relative, unit.key));
+  return covering.sort((a, b) => b.key.length - a.key.length)[0];
+}
 
-  if (isVideo(relative)) {
-    const parent = parentOf(relative);
-    if (!parent) return relative;
-    const siblings = files.filter((file) => parentOf(file.relative) === parent);
-    const nested = files.filter((file) => file.relative.startsWith(`${parent}/`) && parentOf(file.relative) !== parent);
-    if (nested.length) {
-      const sameFolder = files.filter((file) => parentOf(file.relative) === parent);
-      if (sameFolder.length === 1 || uniqueNonExtraTitles(sameFolder).size <= 1) return parent;
-      return relative;
-    }
-    if (isCollection({ videos: new Map([[parent, siblings]]), children: new Map(), all: siblings }, parent)) return relative;
-    if (siblings.length) return parent;
-    return relative;
+export function matchKeyFor(relative: string, files: FoundFile[], units = titleUnits(files)): string {
+  // Nothing covers it: the file stands for itself.
+  return unitFor(relative, units)?.key ?? relative;
+}
+
+/** How a unit is searched for: a unit keyed by a video file is read from that file's own
+ *  name, so a loose film inside a collection is not searched as the collection folder; a
+ *  folder unit is read from the folder's name. The file extension goes with the name. */
+export function parseUnit(unit: TitleUnit): ParsedMedia {
+  return parseMediaPath(posixBase(unit.key));
+}
+
+/** The distinct movie identities a folder stands for, one representative unit each, bounded.
+ *  Two encodes or two folders that resolved to the same catalogue title collapse to one; a
+ *  unit excluded from the mosaic is left out; a unit with no binding stays its own identity.
+ *  A folder holding one film or a series contributes nothing, so it keeps its own poster. */
+export function folderMosaicUnits(
+  units: TitleUnit[],
+  folderKey: string,
+  records: Record<string, LibraryMetaRecord>,
+  suggestions: Record<string, LibrarySuggestion> = {},
+  limit = 5,
+): TitleUnit[] {
+  const seen = new Set<string>();
+  const out: TitleUnit[] = [];
+  for (const unit of units) {
+    if (unit.kind !== "movie" || !isPathWithin(unit.key, folderKey)) continue;
+    if (mosaicSkipped(unit.key, records)) continue;
+    const record = knownTitleForUnit(unit, records);
+    const suggestion = suggestionForUnit(unit, suggestions);
+    const id = record?.id ?? suggestion?.id;
+    const identity = id ? `${record?.type ?? suggestion?.type ?? "movie"}:${id}` : `path:${unit.key}`;
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    out.push(unit);
+    if (out.length >= limit) break;
   }
-  return relative;
+  return out;
+}
+
+/** One poster per distinct film for a collection mosaic, in the order the caller ranked
+ *  them and bounded. Two encodes or two folders that resolved to the same catalogue title
+ *  contribute one picture, and an unbound folder stands for itself. */
+export function mosaicIdentities<T extends { key: string; meta?: { type: string; id: string } }>(
+  entries: T[], limit = 5,
+): T[] {
+  const seen = new Set<string>();
+  const out: T[] = [];
+  for (const entry of entries) {
+    const identity = entry.meta?.id ? `${entry.meta.type}:${entry.meta.id}` : `path:${entry.key}`;
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    out.push(entry);
+    if (out.length >= limit) break;
+  }
+  return out;
 }

@@ -2,12 +2,12 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { log } from "./logger.js";
 import {
-  autoAccept, cacheFieldsFromMeta, episodesFromMeta, knownTitleOf, lookupSkipped, needsRefresh, pickSuggestion, scanMiss,
-  scannedRecently, scanSkipReason, scoreHit, viewMeta, yearFromMeta,
-  type LibraryEpisodeRecord, type LibraryMetaRecord, type LibrarySuggestion, type TitleUnit,
+  autoAccept, cacheFieldsFromMeta, episodesFromMeta, knownTitleForUnit, lookupSkipped, needsRefresh, pickSuggestion, scanMiss,
+  scannedRecently, scanSkipReason, scoreHit, viewMeta, yearFromMeta, MATCH_RULE_VERSION, needsReevaluation, parseUnit,
+  type LibraryEpisodeRecord, type LibraryMetaRecord, type LibrarySuggestion, type SuggestionReason, type TitleKind, type TitleUnit,
 } from "./library-match.js";
 import type { LibraryCandidate, LibraryCandidateSource } from "./library-candidates.js";
-import { parseMediaPath } from "./library-parse.js";
+import type { ParsedMedia } from "./library-parse.js";
 import { parseLibraryPath } from "./libraries.js";
 import { isPathWithin, type FoundFile } from "./library.js";
 import type { MediaInfo } from "./naming.js";
@@ -41,7 +41,39 @@ export interface ScanState {
   libraryIds?: string[];
   /** Set when the run rechecks existing automatic bindings instead of looking for new ones. */
   recheck?: boolean;
+  /** What the run decided, split the way the review list reads it. */
+  accepted?: number;
+  proposed?: number;
+  missed?: number;
+  excluded?: number;
+  /** The matching rules this run applied. Kept with the run for diagnostics; whether the
+   *  remembered rows still owe a pass is read from the rows themselves. */
+  ruleVersion?: number;
+  /** A bounded trail of what the run decided and why, newest last. No credentials. */
+  diagnostics?: ScanDiagnostic[];
 }
+
+/** One structured line of what the scan did with one identity unit. */
+export interface ScanDiagnostic {
+  unit: string;
+  kind: TitleKind;
+  decision: "accepted" | "proposed" | "missed" | "excluded" | "failed";
+  query: string;
+  querySource: "provider-hint" | "search";
+  provider?: string;
+  candidateId?: string;
+  candidateName?: string;
+  titleSimilarity?: number;
+  yearDelta?: number;
+  partConflict?: boolean;
+  alternatives?: Array<{ id: string; name: string; score: number }>;
+  reason?: SuggestionReason;
+  at: string;
+}
+
+/** The diagnostics a run keeps before the oldest is dropped. Bounded so the state file
+ *  cannot grow with the library. */
+const DIAGNOSTIC_LIMIT = 50;
 
 export interface LibraryScanOpts {
   dataDir: string;
@@ -148,7 +180,13 @@ export class LibraryScan {
     this.pathExists = opts.pathExists;
   }
 
-  snapshot(): ScanState { return { ...this.state, remaining: [...this.state.remaining] }; }
+  snapshot(): ScanState {
+    return {
+      ...this.state,
+      remaining: [...this.state.remaining],
+      ...(this.state.diagnostics ? { diagnostics: [...this.state.diagnostics] } : {}),
+    };
+  }
 
   async load() {
     await mkdir(path.dirname(this.stateFile), { recursive: true });
@@ -218,17 +256,15 @@ export class LibraryScan {
       return isPathWithin(unit.key, scope) || isPathWithin(scope, unit.key);
     };
     const wanted = units.filter(inRun);
-    // Every entry in the run is walked for its metadata anyway, so its missing wide variant is
-    // asked for here too -- once the run may work, so a scan started during playback is not
-    // left without it. One artwork job at a time, and a title without a backdrop is throttled.
-    this.eagerWide = wanted.map((unit) => unit.key);
     // Asking for one item is a deliberate act, so it ignores the searched-in-vain memory.
     const again = force || Boolean(scope);
     const queued = wanted.filter((unit) => {
       if (lookupSkipped(unit.key, records)) return false;
       if (recheck) return recheckable(records[unit.key]);
-      if (scanSkipReason(records[unit.key]) || knownTitleOf(unit.key, records)?.id) return false;
-      return again || !scannedRecently(suggestions[unit.key]);
+      if (scanSkipReason(records[unit.key]) || knownTitleForUnit(unit, records)?.id) return false;
+      // A row the current rules have not seen is reconsidered once, so a rule change
+      // does not need a full rescan on every startup.
+      return again || !scannedRecently(suggestions[unit.key]) || needsReevaluation(suggestions[unit.key]);
     });
     const refreshing = this.metaTtlMs > 0 && !scope && !recheck
       ? wanted.filter((unit) => {
@@ -246,6 +282,9 @@ export class LibraryScan {
       this.refreshing.add(unit.key);
       pending.push(unit.key);
     }
+    // Only fill wide art for titles this run will actually search or refresh. A rule upgrade
+    // must not queue artwork across an entire library just because it walks the tree.
+    this.eagerWide = pending.slice();
     if (recheck) for (const unit of queued) this.rechecking.add(unit.key);
     // A recheck keeps the binding and the suggestion it already has: what it adds is a
     // correction beside them, never a proposal that replaced them before anybody looked.
@@ -256,6 +295,9 @@ export class LibraryScan {
       updatedAt: nowIso(),
       total: queued.length,
       done: 0, matched: 0, skipped: 0, failed: 0,
+      accepted: 0, proposed: 0, missed: 0, excluded: 0,
+      ruleVersion: MATCH_RULE_VERSION,
+      diagnostics: [],
       remaining: pending,
       current: pending[0],
       ...(scope ? { scope } : {}),
@@ -339,19 +381,30 @@ export class LibraryScan {
       // The library may have been switched off while this run was queued, or while the
       // server was down. Its item is dropped without a catalogue call; the run moves on.
       if (this.state.automatic && !this.opts.automaticLibraryEnabled(parseLibraryPath(key)?.libraryId ?? "")) {
+        this.note("excluded", key, { kind: this.units.get(key)?.kind ?? "movie" });
         await this.finishUnit("skipped");
         return;
       }
       const unit = this.units.get(key);
-      if (!unit || !await this.pathExists(key)) { await this.finishUnit("skipped"); return; }
+      if (!unit || !await this.pathExists(key)) {
+        this.note("excluded", key, { kind: unit?.kind ?? "movie" });
+        await this.finishUnit("skipped");
+        return;
+      }
       const refresh = this.refreshing.has(key);
       const recheck = this.rechecking.has(key);
       const records = this.opts.libraryMeta();
       const bound = records[key];
       // A refresh is the one turn allowed to ask about a binding that already exists.
-      if (!refresh && !recheck && (lookupSkipped(key, records) || scanSkipReason(records[key]) || knownTitleOf(key, records)?.id)) { await this.finishUnit("skipped"); return; }
+      if (!refresh && !recheck && (lookupSkipped(key, records) || scanSkipReason(records[key]) || knownTitleForUnit(key, records)?.id)) {
+        this.note("excluded", key, { kind: unit.kind });
+        await this.finishUnit("skipped");
+        return;
+      }
 
-      const parsed = parseMediaPath(key);
+      // The query comes from the unit's own identity, not from the key's parent folder: a
+      // loose film inside a collection is searched as the film, not as the collection.
+      const parsed = parseUnit(unit);
       if (this.opts.busy()) { delete this.state.current; return; }
       this.refreshing.delete(key);
       this.rechecking.delete(key);
@@ -380,7 +433,7 @@ export class LibraryScan {
         let wrote = false;
         await this.opts.updateMeta((metaMap, suggestions, episodes) => {
           const known = metaMap[key];
-          if (lookupSkipped(key, metaMap) || scanSkipReason(metaMap[key]) || knownTitleOf(key, metaMap)?.id) return;
+          if (lookupSkipped(key, metaMap) || scanSkipReason(metaMap[key]) || knownTitleForUnit(key, metaMap)?.id) return;
           metaMap[key] = {
             ...known,
             type: item.type, id: item.id, source: "scan", locked: false,
@@ -390,7 +443,11 @@ export class LibraryScan {
           delete suggestions[key];
           wrote = true;
         });
-        if (!wrote) { await this.finishUnit("skipped"); return; }
+        if (!wrote) {
+          this.note("excluded", key, { kind: unit.kind });
+          await this.finishUnit("skipped");
+          return;
+        }
         if (!this.opts.busy()) {
           await this.opts.deleteGeneratedArt(key);
           this.opts.savePoster(key, record.poster, record.background);
@@ -402,16 +459,18 @@ export class LibraryScan {
           if (gallery.length) this.opts.saveGallery?.(key, gallery);
         }
         log("INFO", "Library title matched", { key, type: item.type, id: item.id, source: "scan" });
+        this.note("accepted", key, { kind: unit.kind, ...identified.diagnostic, candidateId: item.id });
         await this.finishUnit("matched");
         return;
       }
 
       // Either way the unit is remembered as searched, so a later scan can walk
       // past it instead of asking the catalogues the same question again.
-      await this.rememberSuggestion(key, unit, identified.suggestion);
+      await this.rememberSuggestion(key, unit, identified.suggestion, identified.diagnostic);
     } catch (error) {
       this.state.error = error instanceof Error ? error.message : String(error);
       log("WARN", "Library scan unit failed", { key, reason: this.state.error });
+      this.note("failed", key, { kind: this.units.get(key)?.kind ?? "movie" });
       await this.finishUnit("failed");
     } finally {
       if (addonCall && this.gapMs) await sleep(this.gapMs);
@@ -427,17 +486,37 @@ export class LibraryScan {
     return this.save();
   }
 
+  /** One structured line of what happened to a unit, kept bounded and counted. */
+  private note(decision: ScanDiagnostic["decision"], key: string, fields: Partial<ScanDiagnostic> = {}) {
+    const diagnostic: ScanDiagnostic = {
+      ...fields,
+      unit: key, kind: fields.kind ?? "movie", decision,
+      query: fields.query ?? "", querySource: fields.querySource ?? "search",
+      at: nowIso(),
+    };
+    const list = this.state.diagnostics ?? (this.state.diagnostics = []);
+    list.push(diagnostic);
+    if (list.length > DIAGNOSTIC_LIMIT) list.splice(0, list.length - DIAGNOSTIC_LIMIT);
+    if (decision === "accepted") this.state.accepted = (this.state.accepted ?? 0) + 1;
+    else if (decision === "proposed") this.state.proposed = (this.state.proposed ?? 0) + 1;
+    else if (decision === "missed") this.state.missed = (this.state.missed ?? 0) + 1;
+    else if (decision === "excluded") this.state.excluded = (this.state.excluded ?? 0) + 1;
+    log("DEBUG", "Library match decision", { ...diagnostic });
+  }
+
   /** Remembers what a unit's search came to, so a later scan walks past it. */
-  private async rememberSuggestion(key: string, unit: TitleUnit, suggestion: LibrarySuggestion | undefined) {
+  private async rememberSuggestion(key: string, unit: TitleUnit, suggestion: LibrarySuggestion | undefined, diagnostic?: Partial<ScanDiagnostic>) {
     const outcome = suggestion ? { ...suggestion, scannedAt: nowIso() } : scanMiss(unit.kind);
     await this.opts.updateMeta((_metaMap, suggestions) => { suggestions[key] = outcome; });
+    if (suggestion) this.note("proposed", key, { kind: unit.kind, ...diagnostic, reason: suggestion.reason });
+    else this.note("missed", key, { kind: unit.kind, ...diagnostic });
     await this.finishUnit("skipped");
   }
 
   private language(): string { return this.opts.language?.() ?? "en"; }
 
   /** A provider that breaks is a title nobody could identify yet, not a run that failed. */
-  private async searchTrusted(unit: TitleUnit, parsed: ReturnType<typeof parseMediaPath>): Promise<LibraryCandidate[]> {
+  private async searchTrusted(unit: TitleUnit, parsed: ParsedMedia): Promise<LibraryCandidate[]> {
     try {
       return await this.opts.candidates.searchLibraryCandidates(parsed.query, unit.kind, parsed.year, this.language());
     } catch (error) {
@@ -450,7 +529,7 @@ export class LibraryScan {
    *  different title the scan would accept on its own, offer that as a correction. The
    *  binding stays exactly as it was until somebody confirms the proposal, and a provider
    *  that fails changes nothing at all. */
-  private async recheckBinding(key: string, unit: TitleUnit, bound: LibraryMetaRecord, parsed: ReturnType<typeof parseMediaPath>) {
+  private async recheckBinding(key: string, unit: TitleUnit, bound: LibraryMetaRecord, parsed: ParsedMedia) {
     const found = await this.searchTrusted(unit, parsed);
     const hits = found.filter((candidate) => candidate.item.name).map((candidate) => scoreHit(parsed, candidate.item, unit.kind));
     const accepted = autoAccept(hits);
@@ -513,17 +592,22 @@ export class LibraryScan {
     await this.finishUnit("skipped");
   }
 
-  private async identify(unit: TitleUnit, parsed: ReturnType<typeof parseMediaPath>): Promise<{
+  private async identify(unit: TitleUnit, parsed: ParsedMedia): Promise<{
     called: boolean;
     accept?: { item: MetaItem; candidate?: LibraryCandidate; fromSearch: boolean };
     suggestion?: LibrarySuggestion;
+    diagnostic?: Partial<ScanDiagnostic>;
   }> {
     const addons = this.opts.addons();
     const imdb = parsed.providerHints?.imdb;
     if (imdb) {
       const meta = await this.opts.metadata(addons, unit.kind, imdb)
         ?? await this.opts.metadata(addons, unit.kind === "movie" ? "series" : "movie", imdb);
-      return { called: true, accept: meta ? { item: { ...meta, type: meta.type || unit.kind }, fromSearch: false } : undefined };
+      return {
+        called: true,
+        accept: meta ? { item: { ...meta, type: meta.type || unit.kind }, fromSearch: false } : undefined,
+        diagnostic: { query: imdb, querySource: "provider-hint", candidateId: meta?.id ?? imdb, titleSimilarity: 100 },
+      };
     }
     const prefixes = addonPrefixes(addons);
     const tmdbId = parsed.providerHints?.tmdb ? idForPrefix(parsed.providerHints.tmdb, prefixes, "tmdb") : undefined;
@@ -531,7 +615,11 @@ export class LibraryScan {
     const prefixed = tmdbId ?? tvdbId;
     if (prefixed) {
       const meta = await this.opts.metadata(addons, unit.kind, prefixed);
-      if (meta) return { called: true, accept: { item: { ...meta, type: meta.type || unit.kind }, fromSearch: false } };
+      if (meta) return {
+        called: true,
+        accept: { item: { ...meta, type: meta.type || unit.kind }, fromSearch: false },
+        diagnostic: { query: prefixed, querySource: "provider-hint", candidateId: meta.id, titleSimilarity: 100 },
+      };
     }
     // Only the trusted providers are asked. Arbitrary catalogue addons, including ones
     // opted out of the global search, are what bound "Flashdance" to the wrong row.
@@ -541,6 +629,22 @@ export class LibraryScan {
     const accepted = autoAccept(hits);
     const suggestion = pickSuggestion(hits);
     const candidate = accepted ? byId.get(accepted.item.id) : undefined;
+    const best = [...hits].sort((a, b) => b.score - a.score)[0];
+    const bestProvider = best ? byId.get(best.item.id)?.provider : undefined;
+    const diagnostic: Partial<ScanDiagnostic> = {
+      query: parsed.query, querySource: "search",
+      ...(candidate?.provider ?? bestProvider ? { provider: candidate?.provider ?? bestProvider } : {}),
+      ...(best ? {
+        candidateId: best.item.id, candidateName: best.item.name,
+        titleSimilarity: Math.round(best.titleSimilarity * 100),
+        ...(best.yearDelta != null ? { yearDelta: best.yearDelta } : {}),
+        ...(best.partConflict ? { partConflict: true } : {}),
+      } : {}),
+      ...(suggestion?.alternatives?.length
+        ? { alternatives: suggestion.alternatives.map((hit) => ({ id: hit.id, name: hit.name, score: hit.score })) }
+        : {}),
+      ...(suggestion?.reason ? { reason: suggestion.reason } : {}),
+    };
     // The identity that gets bound is the resolved one: an IMDb id whenever the provider has
     // one, so the same title can be looked up by every addon that speaks it.
     const item = candidate ? await this.opts.candidates.resolveSelected(candidate, unit.kind, this.language()) : accepted?.item;
@@ -554,7 +658,7 @@ export class LibraryScan {
         : undefined,
       suggested: suggestion?.name,
     });
-    return { called: true, accept: accepted && item ? { item, candidate, fromSearch: true } : undefined, suggestion };
+    return { called: true, accept: accepted && item ? { item, candidate, fromSearch: true } : undefined, suggestion, diagnostic };
   }
 
   private save() {

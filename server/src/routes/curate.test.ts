@@ -75,6 +75,7 @@ const mount = async (options: {
   units?: TitleUnit[];
   searches?: Array<{ query: string; kind: string; year: number | undefined }>;
   activeItems?: () => string[];
+  onMetaUpdate?: (file: { suggestions: Record<string, LibrarySuggestion> }) => void;
 } = {}): Promise<Harness> => {
   const libraries = options.libraries ?? [library("lib_00000001", "/media/films")];
   const activeItems = options.activeItems ?? (() => []);
@@ -124,7 +125,6 @@ const mount = async (options: {
     stopContentAccess: async () => undefined,
     invalidateLibrary: () => { calls.invalidated += 1; },
     libraryAutoScan: { remember: async () => { calls.remembered += 1; } } as unknown as LibraryAutoScan,
-    libraryFiles: async () => [],
     libraryOps: {
       cancel: async (id: string) => { calls.cancelled.push(id); return pendingOps.delete(id); },
       enqueue: async (operation: LibraryOp) => { calls.enqueued.push(operation); return { id: "job_new" }; },
@@ -152,7 +152,15 @@ const mount = async (options: {
     metaStore: {
       qualifiedMeta: () => options.records ?? {},
       qualifiedSuggestions: () => options.suggestions ?? {},
-      update: async () => undefined,
+      update: async (libraryId: string, mutator: (file: { meta: Record<string, LibraryMetaRecord>; suggestions: Record<string, LibrarySuggestion> }) => void) => {
+        const prefix = `${libraryId}/`;
+        const relative = Object.fromEntries(Object.entries(options.suggestions ?? {})
+          .filter(([key]) => key.startsWith(prefix))
+          .map(([key, value]) => [key.slice(prefix.length), value]));
+        const file = { meta: {}, suggestions: relative };
+        mutator(file);
+        options.onMetaUpdate?.(file);
+      },
     } as unknown as LibraryMetaStore,
     ownRecord: () => undefined,
     ownerOf: (): ResourceOwner => ({ userId: "usr_00000001", sid: "sid-1", expiresAt: Date.now() + 60_000 }),
@@ -415,12 +423,96 @@ test("GET /api/library/identity describes the clicked file and proxies its sugge
 
   assert.equal(response.status, 200);
   const body = await response.json() as { path: string; key: string; file: boolean; label: string; kind: string; match: string; parsed: { title: string }; suggestion?: { poster?: string } };
-  // The parse names the folder a file sits in, which for a film folder is the film.
+  // No unit covers the file here, so it stands for itself and the parse reads its own name.
   assert.deepEqual(
     [body.path, body.key, body.file, body.label, body.kind, body.match, body.parsed.title],
-    ["Films/Heat.mkv", "Films/Heat.mkv", true, "Heat.mkv", "movie", "suggested", "Films"],
+    ["Films/Heat.mkv", "Films/Heat.mkv", true, "Heat.mkv", "movie", "unmatched", "Heat"],
   );
-  assert.equal(body.suggestion?.poster, "img_1", "identity responses must not expose an upstream image URL");
+  assert.equal(body.suggestion, undefined, "a loose file does not inherit a collection suggestion");
+});
+
+test("GET /api/library/identity reads a loose film in a collection from its own file name", async (t) => {
+  const root = await makeRoot("stremio-curate-collection-");
+  await put(root, "Collection/Heat (1995).mkv");
+  const key = "lib_00000001/Collection/Heat (1995).mkv";
+  const harness = await mount({
+    libraries: [library("lib_00000001", root)],
+    // The walk exposes the film as its own unit inside the collection folder.
+    units: [{ key, kind: "movie", relative: "Collection/Heat (1995).mkv", sampleFiles: [key] }],
+  });
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const response = await api(harness.base, `/api/library/identity?path=${encodeURIComponent("Collection/Heat (1995).mkv")}`);
+
+  assert.equal(response.status, 200);
+  const body = await response.json() as { key: string; kind: string; parsed: { title: string; query: string; year?: number } };
+  assert.equal(body.key, "Collection/Heat (1995).mkv");
+  assert.equal(body.kind, "movie");
+  assert.deepEqual(body.parsed, { title: "Heat", query: "Heat", year: 1995 }, "the search must name the film, not the collection folder");
+});
+
+test("GET /api/library/identity lets one file's binding beat the folder unit's", async (t) => {
+  const root = await makeRoot("stremio-curate-child-binding-");
+  await put(root, "Heat/Heat.mkv");
+  await put(root, "Heat/Heat (2).mkv");
+  const folder = "lib_00000001/Heat";
+  const child = "lib_00000001/Heat/Heat.mkv";
+  const harness = await mount({
+    libraries: [library("lib_00000001", root)],
+    units: [{ key: folder, kind: "movie", relative: "Heat", sampleFiles: ["Heat/Heat.mkv", "Heat/Heat (2).mkv"] }],
+    records: {
+      [folder]: { type: "movie", id: "tt-heat", source: "user", locked: true, name: "Heat", year: "1995" },
+      [child]: { type: "movie", id: "tt-ronin", source: "user", locked: true, name: "Ronin", year: "1998" },
+    },
+    suggestions: { [folder]: { type: "movie", id: "tt-suggested-heat", name: "Heat", score: 92 } },
+  });
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const clicked = await api(harness.base, `/api/library/identity?path=${encodeURIComponent("Heat/Heat.mkv")}`);
+  assert.equal(clicked.status, 200);
+  const body = await clicked.json() as { key: string; match: string; bound?: { id: string }; suggestion?: { id: string } };
+  assert.equal(body.key, "Heat", "the dialog still speaks about the unit it would rewrite");
+  assert.equal(body.match, "matched");
+  assert.equal(body.bound?.id, "tt-ronin", "the file's own binding answers, not the folder's");
+  assert.equal(body.suggestion?.id, "tt-suggested-heat", "with no proposal of its own the file falls back to the unit's");
+
+  const sibling = await api(harness.base, `/api/library/identity?path=${encodeURIComponent("Heat/Heat (2).mkv")}`);
+  const other = await sibling.json() as { match: string; bound?: { id: string } };
+  assert.equal(other.match, "matched");
+  assert.equal(other.bound?.id, "tt-heat", "the sibling keeps the folder's binding");
+});
+
+test("GET /api/library/identity reads an exclusion from the row's own path", async (t) => {
+  const root = await makeRoot("stremio-curate-child-flag-");
+  await put(root, "Heat/Heat.mkv");
+  await put(root, "Heat/Heat (2).mkv");
+  await put(root, "Kaly.mkv");
+  const folder = "lib_00000001/Heat";
+  const harness = await mount({
+    libraries: [library("lib_00000001", root)],
+    units: [
+      { key: folder, kind: "movie", relative: "Heat", sampleFiles: ["Heat/Heat.mkv", "Heat/Heat (2).mkv"] },
+      { key: "lib_00000001/Kaly.mkv", kind: "movie", relative: "Kaly.mkv", sampleFiles: ["Kaly.mkv"] },
+    ],
+    records: {
+      [folder]: { type: "movie", id: "tt-heat", source: "user", locked: true, name: "Heat", year: "1995" },
+      "lib_00000001/Heat/Heat.mkv": { type: "movie", id: "", source: "user", skipLookup: true },
+      "lib_00000001/Kaly.mkv": { type: "movie", id: "", source: "user", skipLookup: true },
+    },
+  });
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const flagged = await api(harness.base, `/api/library/identity?path=${encodeURIComponent("Heat/Heat.mkv")}`);
+  const inherited = await flagged.json() as { match: string; bound?: { id: string; name?: string } };
+  assert.equal(inherited.match, "matched", "the title the folder gave the file outranks the exclusion");
+  assert.equal(inherited.bound?.id, "tt-heat");
+  assert.equal(inherited.bound?.name, "Heat");
+
+  // Nothing above it, so the row's own exclusion is all there is to read.
+  const alone = await api(harness.base, `/api/library/identity?path=${encodeURIComponent("Kaly.mkv")}`);
+  const excluded = await alone.json() as { match: string; bound?: unknown };
+  assert.equal(excluded.match, "rejected");
+  assert.equal(excluded.bound, undefined);
 });
 
 test("POST /api/library/match refuses a correction when the current binding has changed", async (t) => {
@@ -587,4 +679,43 @@ test("POST /api/library/scan only rechecks automatic matches for a named library
   const accepted = await api(harness.base, "/api/library/scan", { method: "POST", body: { recheckScanBindings: true, libraryId: "lib_00000001" } });
   assert.equal(accepted.status, 200);
   assert.equal((await accepted.json() as { recheck?: boolean }).recheck, true);
+});
+
+test("a proposal carries its competing candidates and a review reason, without an image address", async (t) => {
+  const harness = await mount({
+    units: [{ key: "lib_00000001/Films/Heat", kind: "movie", relative: "Films/Heat", sampleFiles: ["Films/Heat/Heat.mkv"] }],
+    suggestions: {
+      "lib_00000001/Films/Heat": {
+        type: "movie", id: "tt0113277", name: "Heat", year: 1995, score: 100, titleSimilarity: 100, reason: "part",
+        alternatives: [
+          { type: "movie", id: "tt2", name: "Heat Part 2", year: 1997, score: 96, titleSimilarity: 94 },
+        ],
+      },
+    },
+  });
+  t.after(harness.close);
+
+  const body = await (await api(harness.base, "/api/library/suggestions")).json() as {
+    items: Array<{ suggestion: { reason?: string; titleSimilarity?: number; alternatives?: Array<{ id: string; name: string }> } }>;
+  };
+  assert.equal(body.items[0]!.suggestion.reason, "part");
+  assert.deepEqual(body.items[0]!.suggestion.alternatives?.map((item) => item.id), ["tt2"]);
+  assert.equal(JSON.stringify(body).includes("image.tmdb.org"), false);
+  assert.equal(JSON.stringify(body).includes("poster"), false);
+});
+
+test("dismissing a suggestion records a decision the rules will not undo", async (t) => {
+  let updated: { suggestions: Record<string, { dismissed?: boolean; id: string }> } | undefined;
+  const harness = await mount({
+    units: [{ key: "lib_00000001/Films/Heat", kind: "movie", relative: "Films/Heat", sampleFiles: ["Films/Heat/Heat.mkv"] }],
+    suggestions: { "lib_00000001/Films/Heat": { type: "movie", id: "tt0113277", name: "Heat", score: 92 } },
+    onMetaUpdate: (file) => { updated = file; },
+  });
+  t.after(harness.close);
+
+  const response = await api(harness.base, `/api/library/suggestion?key=${encodeURIComponent("Films/Heat")}`, { method: "DELETE" });
+  assert.equal(response.status, 204);
+  assert.equal(updated?.suggestions["Films/Heat"]?.dismissed, true);
+  assert.equal(updated?.suggestions["Films/Heat"]?.id, "", "the binding is cleared, keeping only the memory");
+  assert.equal(harness.calls.invalidated, 1);
 });

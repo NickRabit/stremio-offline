@@ -51,6 +51,51 @@ const X_EPISODE = /\b(\d{1,2})x(\d{1,4})\b/i;
 const CHANNEL = /\b[57]\.1\b/gi;
 const RELEASE_GROUP = /-[A-Za-z0-9]{2,15}$/;
 
+/** Physical segments of one film: "CD1", "Disc 2". Two of them are still one film. */
+const SEGMENT_WORDS = ["cd", "disc", "disk"];
+/** Installments of a series: "Part 2", "Vol 1", the Czech `část`/`díl` in both spellings.
+ *  Two of them are two films. */
+const INSTALLMENT_WORDS = ["part", "pt", "vol", "volume", "chap", "chapter", "ch", "část", "části", "cast", "díl", "dílu", "dil"];
+const MARKERS = [...SEGMENT_WORDS, ...INSTALLMENT_WORDS].sort((a, b) => b.length - a.length);
+/** One token, e.g. "cd1", "part2". Group one is the word, group two its number. */
+const MARKER_FUSED = new RegExp(`^(${MARKERS.join("|")})([0-9]{1,2}|[ivx]{1,4})$`, "i");
+/** A fused token split apart by punctuation, e.g. "cd" then "1". */
+const MARKER_WORD_ONLY = new RegExp(`^(?:${MARKERS.join("|")})$`, "i");
+const ROMAN_VALUE: Record<string, number> = { i: 1, ii: 2, iii: 3, iv: 4, v: 5, vi: 6, vii: 7, viii: 8, ix: 9, x: 10 };
+const BARE_NUMBER = /^([0-9]{1,2})$/;
+/** "Obsession (2)" is a second encode of one film, not a part. */
+const PAREN_TAIL = /\s*\(\s*[0-9]{1,3}\s*\)\s*$/;
+
+type MarkerKind = "segment" | "installment";
+
+interface PartMarker {
+  kind: MarkerKind;
+  number: number;
+  /** The token span the marker covers, so a filter can drop exactly its words. */
+  from: number;
+  to: number;
+}
+
+/** Release and edition words may trail a title without changing which film it is, so a part
+ *  number in front of them is still the final marker of the title. Longest phrase first. */
+const EDITION_PHRASES = [
+  "directors s cut", "director s cut", "directors cut", "director cut", "final cut",
+  "imax", "dc", "edition", "extended", "remastered", "remaster", "unrated", "theatrical",
+  "proper", "repack", "redux", "special",
+].sort((a, b) => b.length - a.length);
+const TRAILING_EDITION = new RegExp(`\\s+(?:${EDITION_PHRASES.join("|")})\\s*$`, "i");
+
+/** A title with the release/edition words at its end removed. They say how a copy was made,
+ *  not which film it is, so "Saw III IMAX" and "Saw III" have to compare as the same film. */
+function dropTrailingEditions(value: string): string {
+  let next = value;
+  for (;;) {
+    const stripped = next.replace(TRAILING_EDITION, "");
+    if (stripped === next) return next;
+    next = stripped;
+  }
+}
+
 const phrasePattern = (phrase: string) =>
   new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/ /g, "[\\s._]+"), "gi");
 
@@ -196,8 +241,108 @@ function bilingualQuery(title: string): string {
   return title;
 }
 
-export function parseMediaPath(relative: string): ParsedMedia {
-  const original = subjectName(relative);
+const romanPart = (token: string): number | undefined => ROMAN_VALUE[token.toLowerCase()];
+
+const markerKind = (word: string): MarkerKind => (SEGMENT_WORDS.includes(word.toLowerCase()) ? "segment" : "installment");
+const markerNumber = (token: string): number | undefined =>
+  /^\d{1,2}$/.test(token) ? Number(token) : romanPart(token);
+
+/** The words of one title, lowercased, with the trailing edition wording removed. */
+function markerTokens(value: string): string[] {
+  const collapsed = collapse(value.replace(PAREN_TAIL, " ").replace(/['’]/g, " ")).toLowerCase();
+  return dropTrailingEditions(collapsed).split(" ").filter(Boolean);
+}
+
+/** The markers of one title. An explicit one ("Part 2", "CD1") counts anywhere; the last
+ *  word that is not one of them ends the title-as-number, so a physical segment behind it
+ *  ("Saw III CD1") does not hide the installment it names. A Roman numeral ends an
+ *  installment either way; a plain number ("Toy Story 2") only when the caller asked for
+ *  it, because "Obsession (2)" is a second encode of one film while "Toy Story 2" is
+ *  another film. */
+function partMarkers(tokens: string[], bare: boolean): PartMarker[] {
+  const found: PartMarker[] = [];
+  const taken = new Set<number>();
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index]!;
+    const fused = MARKER_FUSED.exec(token);
+    if (fused) {
+      const number = markerNumber(fused[2]!);
+      if (number != null) {
+        found.push({ kind: markerKind(fused[1]!), number, from: index, to: index });
+        taken.add(index);
+        continue;
+      }
+    }
+    if (MARKER_WORD_ONLY.test(token)) {
+      const next = tokens[index + 1];
+      const number = next == null ? undefined : markerNumber(next);
+      if (number != null) {
+        found.push({ kind: markerKind(token), number, from: index, to: index + 1 });
+        taken.add(index); taken.add(index + 1);
+        index += 1;
+        continue;
+      }
+    }
+  }
+  // An installment already spelled out ("Vol 1", "část 2") is the title's own; whatever
+  // trails it belongs to that same marker and is no second one.
+  if (found.some((marker) => marker.kind === "installment")) return found;
+  const last = lastFreeIndex(tokens, taken);
+  if (last != null) {
+    const roman = romanPart(tokens[last]!);
+    if (roman != null) found.push({ kind: "installment", number: roman, from: last, to: last });
+    else if (bare && tokens.length > 1) {
+      const bareMatch = BARE_NUMBER.exec(tokens[last]!);
+      const number = bareMatch ? Number(bareMatch[1]) : NaN;
+      if (number >= 1 && number <= 29) found.push({ kind: "installment", number, from: last, to: last });
+    }
+  }
+  return found;
+}
+
+/** The last token that is not part of a marker already found, or nothing when every token is. */
+function lastFreeIndex(tokens: string[], taken: Set<number>): number | undefined {
+  for (let index = tokens.length - 1; index >= 0; index -= 1) if (!taken.has(index)) return index;
+  return undefined;
+}
+
+/** The installment marker of one title, as a canonical string, or "". Arabic and Roman
+ *  spellings of one number produce the same string, and a physical segment ("CD2") is no
+ *  installment at all. */
+export function partSignature(value: string | undefined, bare = false): string {
+  return partMarkers(markerTokens(String(value ?? "")), bare)
+    .filter((marker) => marker.kind === "installment")
+    .map((marker) => `part:${marker.number}`)
+    .join("+");
+}
+
+/** The words of one title with the markers a filter accepts left out. */
+function stripMarkers(normalized: string, accept: (kind: MarkerKind) => boolean, bareNumeral: boolean): string {
+  const tokens = markerTokens(normalized);
+  const dropped = new Set<number>();
+  for (const marker of partMarkers(tokens, bareNumeral)) {
+    if (!accept(marker.kind)) continue;
+    for (let index = marker.from; index <= marker.to; index += 1) dropped.add(index);
+  }
+  return tokens.filter((_token, index) => !dropped.has(index)).join(" ");
+}
+
+/** Drops the part, volume and segment tokens from a normalized title, so the halves of a
+ *  multipart film and the installments of one name compare on the film's own words. */
+export function stripPartMarkers(normalized: string): string {
+  return stripMarkers(normalized, () => true, true);
+}
+
+/** Drops only the physical-segment tokens, so the halves of one film compare equal while
+ *  two installments ("Part 1" and "Part 2") keep their own names. */
+export function stripSegmentMarkers(normalized: string): string {
+  return stripMarkers(normalized, (kind) => kind === "segment", false);
+}
+
+/** One file or folder name, parsed on its own. Unlike `parseMediaPath` it does not reach for
+ *  a parent folder: a name that a caller already knows is the subject is read as it stands. */
+export function parseMediaName(name: string): ParsedMedia {
+  const original = name;
   const releaseGroup = original.match(RELEASE_GROUP)?.[0].slice(1);
   const { rest: withoutHints, hints } = extractHints(original);
 
@@ -256,4 +401,8 @@ export function parseMediaPath(relative: string): ParsedMedia {
   if (episode != null) result.episode = episode;
   if (hints.imdb || hints.tmdb || hints.tvdb) result.providerHints = hints;
   return result;
+}
+
+export function parseMediaPath(relative: string): ParsedMedia {
+  return parseMediaName(subjectName(relative));
 }

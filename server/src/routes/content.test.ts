@@ -43,6 +43,9 @@ interface LibraryState {
   records?: Record<string, LibraryMetaRecord>;
   suggestions?: Record<string, LibrarySuggestion>;
   favorites?: string[];
+  units?: import("../library-match.js").TitleUnit[];
+  /** A fake catalogue picture per key, so a test can see where a mosaic reads its posters. */
+  artwork?: (key: string) => string | undefined;
 }
 
 const library = (id: string, root: string, order = 0, visibleTo?: string[]): LibraryRecord => ({
@@ -79,7 +82,7 @@ const mount = async (libraries: LibraryRecord[], entries: LibraryEntry[] = [], a
     stopUserSessions: async () => undefined,
     requireAccess: () => undefined,
     stopContentAccess: async () => undefined,
-    attachBrowseMeta: (item) => ({ item, backfill: false }),
+    attachBrowseMeta: async (item) => ({ item, backfill: false }),
     carveOutsOf: () => new Set(),
     dataOf: () => ({ ...emptyUserData(), favorites: state.favorites ?? [] }),
     deleteLibraryItem: async (relative) => { calls.deleted.push(relative); },
@@ -111,10 +114,11 @@ const mount = async (libraries: LibraryRecord[], entries: LibraryEntry[] = [], a
       const visible = visibleLibraries(libraries, viewer);
       return { path: "", items: visible.map((record) => ({ kind: "library", libraryId: record.id, name: record.name })), total: visible.length, pending: false };
     },
+    libraryUnits: async () => state.units ?? [],
     locateArtwork: async (entry) => { calls.artworkAsked.push(entry.key); return undefined; },
-    locateFileArtwork: async (key) => { calls.thumbAsked.push(key); return undefined; },
-    locateFolderArtwork: async (key) => { calls.thumbAsked.push(key); return undefined; },
-    locateFolderArtworkPair: async () => ({ poster: undefined, wide: undefined }),
+    locateFileArtwork: async (key) => { calls.thumbAsked.push(key); return state.artwork?.(key); },
+    locateFolderArtwork: async (key) => { calls.thumbAsked.push(key); return state.artwork?.(key); },
+    locateFolderArtworkPair: async (key) => ({ poster: state.artwork?.(key), wide: state.artwork?.(key) }),
     markBrowsed: (record) => { calls.browsed.push(record.id); },
     metaStore: {
       qualifiedMeta: () => state.records ?? {},
@@ -127,7 +131,7 @@ const mount = async (libraries: LibraryRecord[], entries: LibraryEntry[] = [], a
     scheduleFileArtwork: () => undefined,
     scheduleFolderArtwork: () => undefined,
     sweepArtwork: async () => undefined,
-    thumbUrl: async () => undefined,
+    thumbUrl: async (param, value, art) => (art ? `${param}:${value}` : undefined),
     transferLibraryItem: async (relative, folder, copy, _progress, confirmTypeMismatch) => {
       calls.transfers.push({ relative, folder, copy, confirmTypeMismatch });
       return `library/${relative}`;
@@ -267,6 +271,97 @@ test("GET /api/library/browse marks the library it read as browsed", async (t) =
 
   assert.equal(response.status, 200);
   assert.deepEqual(harness.calls.browsed, ["lib_00000001"]);
+});
+
+test("GET /api/library/browse gives a collection folder a mosaic of its distinct films", async (t) => {
+  const root = await makeRoot();
+  await put(root, "Collection/Heat (1995).mkv");
+  await put(root, "Collection/Heat (1995) 1080p.mkv");
+  await put(root, "Collection/Ronin (1998).mkv");
+  await put(root, "Solo/Solo (2018).mkv");
+  const heat = "lib_00000001/Collection/Heat (1995).mkv";
+  const heatEncode = "lib_00000001/Collection/Heat (1995) 1080p.mkv";
+  const ronin = "lib_00000001/Collection/Ronin (1998).mkv";
+  const harness = await mount([library("lib_00000001", root)], [], () => [], {
+    units: [
+      { key: heat, kind: "movie", relative: "Collection/Heat (1995).mkv", sampleFiles: [heat, heatEncode] },
+      { key: ronin, kind: "movie", relative: "Collection/Ronin (1998).mkv", sampleFiles: [ronin] },
+      { key: "lib_00000001/Solo", kind: "movie", relative: "Solo", sampleFiles: ["Solo/Solo (2018).mkv"] },
+    ],
+    records: {
+      [heat]: { type: "movie", id: "tt-heat", source: "scan" },
+      [heatEncode]: { type: "movie", id: "tt-heat", source: "scan" },
+      [ronin]: { type: "movie", id: "tt-ronin", source: "scan" },
+      "lib_00000001/Solo": { type: "movie", id: "tt-solo", source: "scan" },
+    },
+    artwork: (key) => key.endsWith("Heat (1995).mkv") ? "heat.jpg" : key.endsWith("Ronin (1998).mkv") ? "ronin.jpg" : key.endsWith("Solo") ? "solo.jpg" : undefined,
+  });
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const body = await (await api(harness.base, "/api/library/browse")).json() as {
+    items: Array<{ path: string; kind: string; posters?: string[]; poster?: string }>; pending: boolean;
+  };
+  const collection = body.items.find((item) => item.path === "Collection")!;
+  assert.equal(collection.kind, "folder");
+  assert.deepEqual(collection.posters, ["path:Collection/Heat (1995).mkv", "path:Collection/Ronin (1998).mkv"],
+    "one catalogue picture per distinct film, deduplicated by identity");
+  assert.equal(collection.poster, undefined, "the collection shows the mosaic instead of a folder frame");
+  const solo = body.items.find((item) => item.path === "Solo")!;
+  assert.equal(solo.posters, undefined, "a folder holding one film keeps its own poster");
+  assert.equal(solo.poster, "dir:Solo");
+  assert.equal(body.pending, false, "a mosaic is not a missing poster and does not keep the page asking");
+});
+
+test("a folder mosaic obeys the flags and leaves a series alone", async (t) => {
+  const root = await makeRoot();
+  await put(root, "Collection/Heat (1995).mkv");
+  await put(root, "Collection/Ronin (1998).mkv");
+  await put(root, "Show/Season 1/Show S01E01.mkv");
+  const heat = "lib_00000001/Collection/Heat (1995).mkv";
+  const ronin = "lib_00000001/Collection/Ronin (1998).mkv";
+  const state: LibraryState = {
+    units: [
+      { key: heat, kind: "movie", relative: "Collection/Heat (1995).mkv", sampleFiles: [heat] },
+      { key: ronin, kind: "movie", relative: "Collection/Ronin (1998).mkv", sampleFiles: [ronin] },
+      { key: "lib_00000001/Show", kind: "series", relative: "Show", sampleFiles: ["Show/Season 1/Show S01E01.mkv"] },
+    ],
+    records: {
+      [heat]: { type: "movie", id: "tt-heat", source: "scan" },
+      [ronin]: { type: "movie", id: "tt-ronin", source: "scan", skipMosaic: true },
+      "lib_00000001/Show": { type: "series", id: "tt-show", source: "scan" },
+    },
+    artwork: (key) => key.endsWith("Heat (1995).mkv") ? "heat.jpg" : key.endsWith("Ronin (1998).mkv") ? "ronin.jpg" : undefined,
+  };
+  const harness = await mount([library("lib_00000001", root)], [], () => [], state);
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const body = await (await api(harness.base, "/api/library/browse")).json() as { items: Array<{ path: string; posters?: string[] }> };
+  // One of the two films is kept out of the mosaic, so the folder no longer has two to show.
+  assert.equal(body.items.find((item) => item.path === "Collection")?.posters, undefined);
+  assert.equal(body.items.find((item) => item.path === "Show")?.posters, undefined, "a series is never a poster mosaic");
+});
+
+test("a library with its mosaic switched off gets no folder collage", async (t) => {
+  const root = await makeRoot();
+  await put(root, "Collection/Heat (1995).mkv");
+  await put(root, "Collection/Ronin (1998).mkv");
+  const heat = "lib_00000001/Collection/Heat (1995).mkv";
+  const ronin = "lib_00000001/Collection/Ronin (1998).mkv";
+  const harness = await mount([{ ...library("lib_00000001", root), mosaic: false }], [], () => [], {
+    units: [
+      { key: heat, kind: "movie", relative: "Collection/Heat (1995).mkv", sampleFiles: [heat] },
+      { key: ronin, kind: "movie", relative: "Collection/Ronin (1998).mkv", sampleFiles: [ronin] },
+    ],
+    records: {
+      [heat]: { type: "movie", id: "tt-heat", source: "scan" },
+      [ronin]: { type: "movie", id: "tt-ronin", source: "scan" },
+    },
+    artwork: (key) => (key.includes("Heat") ? "heat.jpg" : "ronin.jpg"),
+  });
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const body = await (await api(harness.base, "/api/library/browse")).json() as { items: Array<{ path: string; posters?: string[] }> };
+  assert.equal(body.items.find((item) => item.path === "Collection")?.posters, undefined);
 });
 
 test("GET /api/library/browse lists only the unconfirmed rows when asked to", async (t) => {

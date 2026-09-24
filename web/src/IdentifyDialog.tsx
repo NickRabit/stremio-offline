@@ -17,6 +17,9 @@ interface Row { id: string; type: string; name: string; releaseInfo?: string; po
 const sourceLabel = (source: RowSource): string =>
   source === "tmdb" ? t("library.matchSourceTmdb") : source === "cinemeta" ? t("library.matchSourceCinemeta") : t("library.matchSourceAddon");
 
+/** `onClose` reports a cancellation and leaves the caller's workflow exactly where it was;
+ *  `onApplied` reports that a title was written and the caller may refresh. A parent that
+ *  opened this dialog above another one keeps that other one mounted on either answer. */
 export function IdentifyDialog({ path, paths, onClose, onApplied }: { path: string; paths?: string[]; onClose: () => void; onApplied: (id?: string) => void }) {
   useI18n();
   const overlay = useRef<HTMLDivElement>(null);

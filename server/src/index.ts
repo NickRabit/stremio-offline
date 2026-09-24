@@ -30,7 +30,7 @@ import { createLibraryCandidates } from "./library-candidates.js";
 import { ExternalIdStore } from "./external-ids.js";
 import { currentLevel, flushLog, initLogger, log, parseLevel, startLogMaintenance, setLevel } from "./logger.js";
 import { browseDirectory, describePath, emptiedFolders, entryDirectory, holdsLibraryRoot, isPathWithin, isVideo, listVideos, moveDestination, orphanedCatalogKeys, pageFiles, remapPath, scanLibrary, summarize, type FoundFile, type LibraryEntry } from "./library.js";
-import { browseMeta, cacheFieldsFromMeta, episodeKey, episodeNumberOf, episodesFromMeta, dropKeyed, knownTitleEntry, knownTitleOf, matchKeyFor, mosaicSkipped, needsBackfill, needsEpisodes, staleSuggestionKeys, titleUnits, unmatchAt, type GalleryEntry, type LibraryMetaRecord, type TitleKind, type TitleUnit } from "./library-match.js";
+import { browseMeta, cacheFieldsFromMeta, episodeKey, episodeNumberOf, episodesFromMeta, dropKeyed, folderMosaicUnits, knownEntryForUnit, knownTitleEntry, knownTitleOf, knownTitleForUnit, matchKeyFor, mosaicIdentities, mosaicSkipped, needsBackfill, needsEpisodes, staleSuggestionKeys, titleUnits, unitFor, unmatchAt, withSkipFlag, type GalleryEntry, type LibraryMetaRecord, type TitleKind, type TitleUnit } from "./library-match.js";
 import { LibraryScan } from "./library-scan.js";
 import { createLibraryProbe, type LibraryHealth } from "./library-probe.js";
 import { LibraryAutoScan } from "./library-autoscan.js";
@@ -791,6 +791,7 @@ const libraryEntries = async () => {
   if (libraryCache && Date.now() - libraryCache.at < 30_000) return libraryCache.entries;
   const known = metaStore.qualifiedMeta();
   const entries: LibraryEntry[] = [];
+  const units = await libraryUnits();
   for (const library of walkableLibraries()) {
     for (const entry of await scanLibrary(library.root, carveOutsOf(library))) {
       const key = libraryPath(library.id, entry.key);
@@ -798,7 +799,9 @@ const libraryEntries = async () => {
         ...entry, key,
         files: entry.files.map((file) => ({ ...file, path: libraryPath(library.id, file.path) })),
       };
-      const record = knownTitleOf(key, known);
+      const unit = unitFor(key, units);
+      // A single-file title answers with its own binding before the unit's, like a browse row.
+      const record = entry.kind === "collection" ? undefined : knownTitleForUnit(unit, known, isVideo(posixBase(key)) ? key : undefined);
       if (record) {
         qualified.meta = {
           type: record.type, id: record.id, name: record.name,
@@ -834,14 +837,22 @@ const libraryRootBrowse = async (viewer: Viewer) => {
     const previewEntries = entries.filter((entry) => parseLibraryPath(entry.key)?.libraryId === library.id);
     if (library.mosaic !== false) {
       const records = metaStore.meta(library.id);
-      for (const entry of previewEntries) {
+      const visible = previewEntries.filter((entry) => {
         const relative = relativeKeyIn(library.id, entry.key);
-        if (relative === undefined || mosaicSkipped(relative, records)) continue;
+        return relative !== undefined && !mosaicSkipped(relative, records);
+      });
+      // One picture per distinct film: two encodes or two folders that resolved to the same
+      // catalogue title contribute one poster. Deduplicating before the artwork lookups keeps
+      // a large collection from paying for the same picture twice.
+      const distinct = mosaicIdentities(visible.map((entry) => ({ key: entry.key, meta: entry.meta })), 5);
+      for (const source of distinct) {
+        const entry = visible.find((candidate) => candidate.key === source.key)!;
         const art = await locateArtwork(entry);
-        if (!art) { scheduleArtwork(entry); pending = true; }
+        // Only a bound title has catalogue artwork to wait for. An unbound folder is shown as
+        // it is rather than paying for a video frame the mosaic never asked to generate.
+        if (!art && entry.meta?.id) { scheduleArtwork(entry); pending = true; }
         const poster = await thumbUrl("key", wirePath(entry.key), art);
         if (poster) posters.add(poster);
-        if (posters.size === 5) break;
       }
     }
     return {
@@ -1065,7 +1076,10 @@ const describeLibraryPath = async (key: string) => {
  *  one keeps its own slot. */
 async function locateFileArtwork(key: string, shape: ArtShape = "poster") {
   const media = path.join(posixDir(mediaPath(key)), episodeArtName(posixBase(key)));
-  const cover = knownTitleEntry(key, metaStore.qualifiedMeta());
+  const unit = unitFor(key, await libraryUnits());
+  // The key that supplied the file's binding, not the folder's: a file the user bound on its
+  // own path keeps that key, so the folder's picture is not mistaken for its own.
+  const cover = knownEntryForUnit(unit, metaStore.qualifiedMeta(), key);
   // A still and a frame grab are landscape, so they serve the wide shape as they are. A film's
   // is the catalogue poster instead: handing that out as the backdrop drew a portrait picture
   // in a landscape frame and told the scheduler a backdrop was already there, so none was
@@ -1151,16 +1165,17 @@ const besideMediaTarget = (key: string, shape: ArtShape) =>
 /** Whether a file's backdrop may be dropped next to the media. The backdrop of a folder is a
  *  title's picture only where the folder is the film's own -- the same gate the poster goes
  *  through -- so an episode keeps its wide variant in the store, where it is looked up again. */
-const wideBesideMedia = (key: string) => {
+const wideBesideMedia = async (key: string) => {
   if (!artworkBesideMediaFor(key)) return false;
   if (!isFileKey(key)) return true;
-  const cover = knownTitleEntry(key, metaStore.qualifiedMeta());
+  const unit = unitFor(key, await libraryUnits());
+  const cover = knownEntryForUnit(unit, metaStore.qualifiedMeta(), key);
   return fileMayUseFolderArtwork(key, cover?.record.type, cover?.key);
 };
 /** Where one variant of an item's artwork is written: next to the media where the library allows
  *  it, in the generated store otherwise, and nowhere where the store cannot place it. */
-const artworkTarget = (key: string, shape: ArtShape) =>
-  (shape === "wide" ? wideBesideMedia(key) : artworkBesideMediaFor(key)) ? besideMediaTarget(key, shape) : hashedArt(key, shape);
+const artworkTarget = async (key: string, shape: ArtShape) =>
+  (shape === "wide" ? await wideBesideMedia(key) : artworkBesideMediaFor(key)) ? besideMediaTarget(key, shape) : hashedArt(key, shape);
 /** The queue key of one shape's job for an item. The two shapes never share a key, so a
  *  backdrop is queued while the poster job for the same item is still running. */
 const artworkQueueKey = (key: string, shape: ArtShape) =>
@@ -1182,7 +1197,7 @@ const writeCatalogArt = async (key: string, taken: PictureOutcome | undefined, s
     return false;
   }
   for (const file of generatedArtFiles(key, shape)) await removeArtwork(file);
-  const target = artworkTarget(key, shape);
+  const target = await artworkTarget(key, shape);
   if (!target) return false;
   await mkdir(path.dirname(target), { recursive: true });
   return shape === "wide"
@@ -1215,17 +1230,21 @@ const clearGeneratedArt = async (key: string) => {
   }
 };
 
-const attachBrowseMeta = <T extends { path: string; kind: string; name?: string; label?: string }>(item: T, language: string) => {
+const attachBrowseMeta = async <T extends { path: string; kind: string; name?: string; label?: string }>(item: T, language: string) => {
   const records = metaStore.qualifiedMeta();
   const episodes = metaStore.episodes();
   const key = libraryKey(item.path);
   const label = item.kind === "folder" ? String(item.name ?? "") : String(item.label ?? "");
-  const extra = browseMeta(key, label, records, metaStore.qualifiedSuggestions(), episodes);
+  const units = await libraryUnits();
+  const unit = unitFor(key, units);
+  const suggestions = metaStore.qualifiedSuggestions();
+  const mosaicFolder = item.kind === "folder" && !unit && folderMosaicUnits(units, key, records, suggestions).length > 1;
+  const extra = browseMeta(key, label, records, suggestions, episodes, unit, mosaicFolder);
   const suggestion = extra.suggestion;
   const safeExtra = suggestion?.poster
     ? { ...extra, suggestion: { ...suggestion, poster: images.proxied(suggestion.poster) } }
     : extra;
-  const known = knownTitleOf(key, records);
+  const known = item.kind === "folder" && !unit ? undefined : knownTitleForUnit(unit, records, item.kind === "file" ? key : undefined);
   const numbers = item.kind === "file" ? episodeNumberOf(key, ownRecord(key, records)) : undefined;
   // Only a key can answer with a better language; without one every record stays wanted as it is.
   const wantedLanguage = store.settings().tmdbApiKey ? language : undefined;
@@ -1306,7 +1325,7 @@ function scheduleFileArtwork(key: string, shape: ArtShape = "poster") {
     if (shape === "wide") rememberBackdropAttempt(queueKey);
     const source = await realpath(mediaPath(key)).catch(() => undefined);
     if (!source) return;
-    const target = artworkTarget(key, shape);
+    const target = await artworkTarget(key, shape);
     if (!target) return;
     await mkdir(path.dirname(target), { recursive: true });
     if (shape === "wide") {
@@ -1350,7 +1369,7 @@ function scheduleFolderArtwork(key: string, shape: ArtShape = "poster") {
     if (await locateFolderArtwork(key, shape)) return;
     // The attempt starts here: one that finds nothing is not repeated on the next browse.
     if (shape === "wide") rememberBackdropAttempt(queueKey);
-    const target = artworkTarget(key, shape);
+    const target = await artworkTarget(key, shape);
     if (!target) return;
     await mkdir(path.dirname(target), { recursive: true });
     if (shape === "wide") {
@@ -1795,7 +1814,7 @@ const libraryPathBusy = async (keys: string[]): Promise<string | undefined> => {
   return undefined;
 };
 
-registerContentRoutes(app, { ...routeContext, attachBrowseMeta, carveOutsOf, dataOf, deleteLibraryItem, fileExists, galleryArtwork, galleryOf, healthOf, invalidateLibrary, libraryEntries, libraryKey, libraryPathBusy, libraryRootBrowse, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, metaStore, prefsOf, progressOf, relativeKeyIn, relocateLibraryPath, scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites });
+registerContentRoutes(app, { ...routeContext, attachBrowseMeta, carveOutsOf, dataOf, deleteLibraryItem, fileExists, galleryArtwork, galleryOf, healthOf, invalidateLibrary, libraryEntries, libraryKey, libraryPathBusy, libraryRootBrowse, libraryUnits, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, metaStore, prefsOf, progressOf, relativeKeyIn, relocateLibraryPath, scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites });
 /** The one search and resolution service behind both the scan and the manual identity
  *  search, so the row somebody picks by hand is the row the scanner would have picked. */
 const libraryCandidates = createLibraryCandidates({
@@ -1941,7 +1960,9 @@ queue.setDebrid({
 await stats.load();
 await queue.load();
 await libraryScan.load();
-if (autoScanAllowed) libraryAutoScan.start();
+if (autoScanAllowed) {
+  libraryAutoScan.start();
+}
 // History comes from the queue so the statistics do not start empty; finished jobs can
 // be deleted, though, so from now on a record of our own is kept. Only what predates that
 // record is filled in -- anything newer is already in it.
@@ -1964,28 +1985,7 @@ const matchLibraryItem = async (body: LibraryMatchRequest, language = prefsOf().
   if (flag && body.id === undefined) {
     const target = parseLibraryPath(requestKey);
     if (target) await metaStore.update(target.libraryId, (file) => {
-      const current = file.meta[target.relative];
-      if (flag.value) {
-        const record: LibraryMetaRecord = {
-          type: current?.type ?? "movie",
-          id: current?.id ?? "",
-          source: current?.source ?? "user",
-          ...(current?.locked != null ? { locked: current.locked } : {}),
-          ...(current?.name ? { name: current.name } : {}),
-          ...(current?.year ? { year: current.year } : {}),
-          ...(current?.description ? { description: current.description } : {}),
-          ...(current?.matchedAt ? { matchedAt: current.matchedAt } : {}),
-          ...(current?.skipLookup ? { skipLookup: true } : {}),
-          ...(current?.skipMosaic ? { skipMosaic: true } : {}),
-        };
-        if (flag.name === "skipLookup") record.skipLookup = true; else record.skipMosaic = true;
-        file.meta[target.relative] = record;
-      } else if (current) {
-        const kept: LibraryMetaRecord = { ...current };
-        if (flag.name === "skipLookup") delete kept.skipLookup; else delete kept.skipMosaic;
-        if (kept.id || kept.skipLookup || kept.skipMosaic) file.meta[target.relative] = kept;
-        else delete file.meta[target.relative];
-      }
+      file.meta = withSkipFlag(file.meta, target.relative, flag.name, flag.value);
     });
     invalidateLibrary();
     const what = flag.name === "skipLookup" ? "matching" : "the mosaic";
@@ -2159,7 +2159,7 @@ await libraryOps.load();
 
 registerLibrariesRoutes(app, { ...routeContext, grantRows, healthOf, invalidateAutoScan: (libraryId) => libraryAutoScan.invalidate(libraryId), invalidateLibrary, libraryGrants, libraryStats, libraryView, progressOf, refreshLibraryHealth, libraryProbe, metaStore, libraryOps });
 
-registerCurateRoutes(app, { ...routeContext, candidates: libraryCandidates, invalidateLibrary, libraryAutoScan, libraryFiles, libraryOps, libraryPathBusy, libraryScan, libraryTarget, libraryUnits, matchLibraryItem, metaStore, ownRecord, ownerOf, prefsOf, proxyImage: (url) => images.proxied(url), refreshLibraryHealth, scheduleMetaBackfill, wirePath });
+registerCurateRoutes(app, { ...routeContext, candidates: libraryCandidates, invalidateLibrary, libraryAutoScan, libraryOps, libraryPathBusy, libraryScan, libraryTarget, libraryUnits, matchLibraryItem, metaStore, ownRecord, ownerOf, prefsOf, proxyImage: (url) => images.proxied(url), refreshLibraryHealth, scheduleMetaBackfill, wirePath });
 
 registerDeviceRoutes(app, { ...routeContext, stats, countBytes, deviceDownloadTickets, DEVICE_TICKET_TTL, httpSourceOf, libraryTarget, mediaSource, ownerOf, pruneDeviceDownloadTickets, statMeta, trackMedia });
 registerDownloadRoutes(app, { ...routeContext, queue, jobView, sourceOf, mediaSource, posterOf, rememberTitle, titleKey, saveCatalogPoster, libraryKey, cachedMeta, prefsOf });

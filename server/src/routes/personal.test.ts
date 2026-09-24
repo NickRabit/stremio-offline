@@ -62,7 +62,7 @@ const mount = async (libraries: LibraryRecord[] = []): Promise<Harness> => {
     stopUserSessions: async () => undefined,
     requireAccess: () => undefined,
     stopContentAccess: async () => undefined,
-    attachBrowseMeta: (item) => ({ item, backfill: false }),
+    attachBrowseMeta: async (item) => ({ item, backfill: false }),
     cachedMeta: async (type, id, language, viewer) => { metaLookups.push({ type, id, viewer: viewer?.id }); return metaAnswer; },
     dataOf: (req) => {
       const id = userOf(req);

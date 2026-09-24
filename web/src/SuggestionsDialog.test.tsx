@@ -159,4 +159,99 @@ describe("SuggestionsDialog review context", () => {
     const actions = [...host.querySelectorAll(".suggestion-actions button")];
     expect(actions).toHaveLength(0);
   });
+
+  it("shows a part-conflict reason and the competing candidates beside the proposal", async () => {
+    await render({
+      items: [{
+        key: "Twilight", label: "Twilight", library: "Films", path: "Twilight",
+        suggestion: {
+          type: "movie", id: "tt1099212", name: "Twilight", year: 2008, score: 100, titleSimilarity: 100, reason: "part",
+          alternatives: [
+            { type: "movie", id: "tt1324999", name: "The Twilight Saga: Breaking Dawn", year: 2011, score: 84, titleSimilarity: 78 },
+          ],
+        },
+      }],
+      total: 1,
+    });
+    expect(host.textContent).toContain("part or sequel");
+    expect(host.textContent).toContain("Other candidates:");
+    expect(host.textContent).toContain("The Twilight Saga: Breaking Dawn (2011) · title similarity 78%");
+  });
+
+  it("lets only the topmost dialog handle Escape and the backdrop", async () => {
+    const onClose = vi.fn();
+    fetchMock.mockImplementation((url: string) => {
+      if (String(url).includes("/api/library/suggestions")) return Promise.resolve(json(rows));
+      return Promise.resolve(json({}));
+    });
+    await act(async () => {
+      root.render(<SuggestionsDialog identifyPath="Father Ted" onClose={onClose} onChanged={() => undefined} onIdentify={() => undefined}/>);
+    });
+    await act(async () => { await Promise.resolve(); });
+    // The identify dialog sits above this one: its own handler closes it, not this.
+    await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })); });
+    expect(onClose).not.toHaveBeenCalled();
+    const overlay = host.querySelector(".identify-overlay")!;
+    await act(async () => { overlay.dispatchEvent(new MouseEvent("click", { bubbles: true })); });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(host.textContent).toContain("Father Ted");
+  });
+
+  it("removes only the applied row and keeps the rest of the list", async () => {
+    const onChanged = vi.fn();
+    fetchMock.mockImplementation((url: string) => {
+      if (String(url).includes("/api/library/suggestions")) return Promise.resolve(json({
+        items: [
+          { key: "Heat", label: "Heat", suggestion: { type: "movie", id: "tt0113277", name: "Heat", score: 92 } },
+          { key: "Ronin", label: "Ronin", suggestion: { type: "movie", id: "tt0122690", name: "Ronin", score: 88 } },
+        ],
+        total: 2,
+      }));
+      return Promise.resolve(json({}));
+    });
+    await act(async () => { root.render(<SuggestionsDialog onClose={() => undefined} onChanged={onChanged} onIdentify={() => undefined}/>); });
+    await act(async () => { await Promise.resolve(); });
+    expect(host.textContent).toContain("Heat");
+    expect(host.textContent).toContain("Ronin");
+    await act(async () => { root.render(<SuggestionsDialog appliedKey="Heat" onClose={() => undefined} onChanged={onChanged} onIdentify={() => undefined}/>); });
+    await act(async () => { await Promise.resolve(); });
+    expect(host.textContent).toContain("Ronin");
+    expect(host.textContent).not.toContain("Heat");
+    expect(onChanged).toHaveBeenCalled();
+  });
+
+  it("takes an applied row out once, even while the parent keeps re-rendering", async () => {
+    const first = vi.fn();
+    const second = vi.fn();
+    let suggestionLoads = 0;
+    fetchMock.mockImplementation((url: string) => {
+      if (String(url).includes("/api/library/suggestions")) {
+        suggestionLoads += 1;
+        return Promise.resolve(json({
+          items: [
+            { key: "Heat", label: "Heat", suggestion: { type: "movie", id: "tt0113277", name: "Heat", score: 92 } },
+            { key: "Ronin", label: "Ronin", suggestion: { type: "movie", id: "tt0122690", name: "Ronin", score: 88 } },
+          ],
+          total: 2,
+        }));
+      }
+      return Promise.resolve(json({}));
+    });
+    await act(async () => { root.render(<SuggestionsDialog onClose={() => undefined} onChanged={() => undefined} onIdentify={() => undefined}/>); });
+    await act(async () => { await Promise.resolve(); });
+    const list = host.querySelector(".suggestion-list")!;
+
+    await act(async () => { root.render(<SuggestionsDialog appliedKey="Heat" onClose={() => undefined} onChanged={first} onIdentify={() => undefined}/>); });
+    await act(async () => { await Promise.resolve(); });
+    // The parent re-renders with the same answer but a fresh callback, as an inline one does.
+    await act(async () => { root.render(<SuggestionsDialog appliedKey="Heat" onClose={() => undefined} onChanged={second} onIdentify={() => undefined}/>); });
+    await act(async () => { await Promise.resolve(); });
+
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).not.toHaveBeenCalled();
+    expect(suggestionLoads).toBe(1);
+    expect(host.querySelector(".suggestion-list")).toBe(list);
+    expect(host.textContent).toContain("Ronin");
+    expect(host.textContent).not.toContain("Heat");
+  });
 });

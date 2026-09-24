@@ -53,6 +53,9 @@ export interface MetaItem {
   id: string;
   type: string;
   name: string;
+  /** The title in its original language, when the provider keeps one beside the localized
+   *  name. Matching reads both, so a localized file still meets an English catalogue row. */
+  originalTitle?: string;
   poster?: string;
   background?: string;
   description?: string;

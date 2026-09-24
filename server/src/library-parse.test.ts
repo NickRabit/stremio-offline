@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { parseMediaPath } from "./library-parse.js";
+import { parseMediaPath, partSignature, stripPartMarkers, stripSegmentMarkers } from "./library-parse.js";
 
 const parsed = (relative: string) => {
   const result = parseMediaPath(relative);
@@ -89,4 +89,42 @@ test("a folder that only looks like a library id still counts as a parent", () =
 
 test("a library root folder keeps its own name", () => {
   assert.equal(parseMediaPath("lib_00000001/Heat (1995)").title, "Heat");
+});
+
+test("a part signature canonicalises the number, ignores tags and leaves segments alone", () => {
+  assert.equal(partSignature("Saw 3", true), partSignature("Saw III", true), "Arabic and Roman spellings are one installment");
+  assert.equal(partSignature("Rocky III", true), "part:3");
+  assert.notEqual(partSignature("Saw III", true), partSignature("Saw IV", true), "another installment is another part");
+  assert.equal(partSignature("Saw III IMAX", true), "part:3", "a release tag is not a part");
+  assert.equal(partSignature("Saw III Director's Cut", true), "part:3", "an apostrophe in the tag does not hide the number");
+  assert.equal(partSignature("Saw III Extended Edition", true), "part:3");
+  assert.equal(partSignature("Nymfomanka - část 1"), "part:1");
+  assert.equal(partSignature("Nymfomanka CD2"), "", "a CD half is a segment of one film, not an installment");
+  assert.equal(partSignature("Blade Runner 2049", true), "", "a year-sized number is not an installment");
+});
+
+test("segment markers collapse while installment markers survive", () => {
+  assert.equal(stripSegmentMarkers("dmd twilight cd2"), "dmd twilight", "the CD halves of one film are one name");
+  assert.equal(stripSegmentMarkers("godfather part ii"), "godfather part ii", "an installment is no segment");
+  assert.equal(stripSegmentMarkers("kill bill vol 2"), "kill bill vol 2");
+});
+
+test("a physical segment behind the installment numeral does not hide the installment", () => {
+  assert.equal(partSignature("Saw III CD1", true), "part:3", "the first CD of part three is part three");
+  assert.equal(partSignature("Saw 3 CD1", true), "part:3", "the Arabic spelling reads the same way");
+  assert.equal(partSignature("Apollo 13 CD1", true), "part:13", "and so does a bare number in front of a segment");
+  assert.equal(partSignature("Saw III Disc 2", true), "part:3");
+  assert.equal(partSignature("Saw III CD1", true), partSignature("Saw III", true), "the split copy is the same installment as the whole one");
+  assert.equal(partSignature("Rocky V Disc 1", true), "part:5");
+  assert.equal(partSignature("Saw III CD1", false), "part:3", "a Roman numeral needs no bare-numeral permission");
+  assert.equal(partSignature("Blade Runner 2049 Disc 1", true), "", "a year-sized number is no installment, segment or not");
+  assert.equal(partSignature("Saw CD1", true), "", "a segment alone names no installment");
+  assert.equal(partSignature("I Am Legend CD1", true), "", "a Roman-looking word is not the title's trailing numeral");
+  assert.equal(partSignature("Kill Bill Vol 1 CD1", true), "part:1", "a spelled-out installment is the title's own");
+});
+
+test("the words a matcher drops carry the installment a segment left behind", () => {
+  assert.equal(stripPartMarkers("saw iii cd1"), "saw", "scoring compares the film's own words");
+  assert.equal(stripPartMarkers("apollo 13 cd1"), "apollo", "the bare number after the title goes with it");
+  assert.equal(stripSegmentMarkers("saw iii cd1"), "saw iii", "only the physical half is a segment");
 });
