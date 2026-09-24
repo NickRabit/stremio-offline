@@ -1,12 +1,29 @@
 import { app, BaseWindow, ipcMain, session, shell as electronShell, WebContentsView, type IpcMainEvent, type IpcMainInvokeEvent } from "electron";
+import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { readSavedOrigin, writeSavedOrigin } from "./connection-file.js";
+import {
+  addProfile,
+  findProfile,
+  normalizeProfileName,
+  normalizeProfileOrigin,
+  readProfiles,
+  removeProfile,
+  selectProfile,
+  updateProfile,
+  writeProfiles,
+  type ProfileStore,
+  type ServerProfile,
+} from "./connection-file.js";
 import { catalogue } from "./i18n.js";
 import { layout, type LayoutMode } from "./layout.js";
 import { externalBrowserUrl, httpAllowedHost, parseServerOrigin, partitionForOrigin, type ServerOrigin } from "./origin.js";
 import { fetchStatus, type ProbeFailure, type ProbeResult } from "./status.js";
 
 type MessageKey = keyof ReturnType<typeof catalogue>;
+
+type ProfileResult =
+  | { ok: true; profiles: ServerProfile[]; selectedProfileId: string | null }
+  | { ok: false; reason: "invalid-name" | "invalid-data" | "save-failed" };
 
 // The player asks for fullscreen. Copy on an HTTPS server uses the sanitized clipboard write.
 const ALLOWED_PERMISSIONS = new Set<string>(["fullscreen", "clipboard-sanitized-write"]);
@@ -52,6 +69,7 @@ let connected: ServerOrigin | null = null;
 let mode: LayoutMode = "connect";
 let loadFailure: ProbeFailure | null = null;
 const preparedPartitions = new Set<string>();
+let profileStore: ProfileStore = { profiles: [], selectedProfileId: null };
 
 const windowTitle = () => catalogue(app.getLocale())["connect.title"];
 
@@ -224,26 +242,73 @@ const createShell = () => {
 
 const fromConnection = (event: IpcMainInvokeEvent | IpcMainEvent) => event.sender === shell?.connection.webContents;
 
+const persistProfiles = async (next: ProfileStore): Promise<ProfileResult> => {
+  try {
+    await writeProfiles(app.getPath("userData"), next);
+  } catch {
+    // The in-memory store only moves once the file holds the same thing.
+    return { ok: false, reason: "save-failed" };
+  }
+  profileStore = next;
+  return { ok: true, profiles: next.profiles, selectedProfileId: next.selectedProfileId };
+};
+
+const profileInputOf = (value: unknown) => {
+  const record = typeof value === "object" && value !== null ? value as Record<string, unknown> : {};
+  return {
+    id: typeof record.id === "string" && record.id.length > 0 ? record.id : null,
+    name: record.name,
+    origin: record.origin,
+  };
+};
+
+const profileIdOf = (value: unknown) => typeof value === "string" && value.length > 0 ? value : null;
+
 const registerHandlers = () => {
   ipcMain.handle("desktop:bootstrap", async (event) => {
     if (!fromConnection(event)) throw new Error("desktop: unexpected sender");
-    return { strings: catalogue(app.getLocale()), savedOrigin: await readSavedOrigin(app.getPath("userData")) };
+    return { strings: catalogue(app.getLocale()), profiles: profileStore.profiles, selectedProfileId: profileStore.selectedProfileId };
   });
 
-  ipcMain.handle("desktop:probe", async (event, origin: string): Promise<ProbeResult> => {
+  ipcMain.handle("desktop:save-profile", async (event, input: unknown): Promise<ProfileResult> => {
     if (!fromConnection(event)) throw new Error("desktop: unexpected sender");
-    return fetchStatus(origin);
+    const { id, name, origin } = profileInputOf(input);
+    const cleanName = normalizeProfileName(name);
+    if (cleanName === null) return { ok: false, reason: "invalid-name" };
+    const cleanOrigin = normalizeProfileOrigin(origin);
+    if (cleanOrigin === null) return { ok: false, reason: "invalid-data" };
+    const next = id === null
+      ? addProfile(profileStore, randomUUID(), { name: cleanName, origin: cleanOrigin })
+      : updateProfile(profileStore, id, { name: cleanName, origin: cleanOrigin });
+    if (!next) return { ok: false, reason: "invalid-data" };
+    return persistProfiles(next);
   });
 
-  ipcMain.handle("desktop:open", async (event, origin: string): Promise<ProbeResult> => {
+  ipcMain.handle("desktop:delete-profile", async (event, input: unknown): Promise<ProfileResult> => {
     if (!fromConnection(event)) throw new Error("desktop: unexpected sender");
-    const result = await fetchStatus(origin);
+    const id = profileIdOf(input);
+    if (id === null || !findProfile(profileStore, id)) return { ok: false, reason: "invalid-data" };
+    return persistProfiles(removeProfile(profileStore, id));
+  });
+
+  ipcMain.handle("desktop:select-profile", async (event, input: unknown): Promise<ProfileResult> => {
+    if (!fromConnection(event)) throw new Error("desktop: unexpected sender");
+    const next = selectProfile(profileStore, profileIdOf(input));
+    if (!next) return { ok: false, reason: "invalid-data" };
+    return persistProfiles(next);
+  });
+
+  ipcMain.handle("desktop:connect", async (event, input: unknown): Promise<ProbeResult> => {
+    if (!fromConnection(event)) throw new Error("desktop: unexpected sender");
+    const profile = findProfile(profileStore, profileIdOf(input));
+    // The renderer names a profile; the origin it connects to is the saved, validated one.
+    const server = profile ? parseServerOrigin(profile.origin) : null;
+    if (!profile || !server) return { ok: false, reason: "invalid" };
+    const result = await fetchStatus(server.origin);
     if (!result.ok) return result;
-    const server = parseServerOrigin(origin);
-    if (!server) return { ok: false, reason: "invalid" };
+    await persistProfiles({ ...profileStore, selectedProfileId: profile.id });
     const remote = mountRemote(server);
     if (!remote) return { ok: false, reason: "unreachable" };
-    await writeSavedOrigin(app.getPath("userData"), server.origin);
     loadFailure = null;
     connected = server;
     try {
@@ -279,7 +344,8 @@ app.on("activate", () => {
   if (!shell) createShell();
 });
 
-void app.whenReady().then(() => {
+void app.whenReady().then(async () => {
+  profileStore = await readProfiles(app.getPath("userData"));
   registerHandlers();
   createShell();
 });
