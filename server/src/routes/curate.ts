@@ -7,13 +7,13 @@ import { normalizeLanguage } from "../language.js";
 import { libraryFor, parseLibraryPath, posixBase, resolveLibraryPath, type Viewer } from "../libraries.js";
 import type { LibraryAutoScan } from "../library-autoscan.js";
 import type { LibraryCandidateSource } from "../library-candidates.js";
-import { episodeNumberOf, knownTitleOf, matchKeyFor, matchStatus, needsBackfill, pendingSuggestionKeys, scanMiss, suggestionFor, type LibraryMetaRecord, type TitleUnit } from "../library-match.js";
+import { episodeNumberOf, knownTitleOf, matchStatus, needsBackfill, parseUnit, pendingSuggestionKeys, scanMiss, suggestionFor, unitFor, type LibraryMetaRecord, type TitleUnit } from "../library-match.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import type { LibraryOp, LibraryOps } from "../library-ops.js";
 import { parseMediaPath } from "../library-parse.js";
 import type { LibraryHealth } from "../library-probe.js";
 import type { LibraryScan } from "../library-scan.js";
-import { isPathWithin, isVideo, type FoundFile } from "../library.js";
+import { isPathWithin, isVideo } from "../library.js";
 import { mediaResources, ResourceError, type ResourceOwner } from "../media-resources.js";
 import { nextVideoFile } from "../next-file.js";
 import type { UserPrefs } from "../store.js";
@@ -28,7 +28,6 @@ export interface CurateDeps extends RouteContext {
   candidates: LibraryCandidateSource;
   invalidateLibrary(): void;
   libraryAutoScan: LibraryAutoScan;
-  libraryFiles(): Promise<FoundFile[]>;
   libraryOps: LibraryOps;
   libraryPathBusy(keys: string[]): Promise<string | undefined>;
   libraryScan: LibraryScan;
@@ -47,7 +46,7 @@ export interface CurateDeps extends RouteContext {
 }
 
 export function registerCurateRoutes(app: express.Application, deps: CurateDeps): void {
-  const { candidates, store, currentUser, invalidateLibrary, libraryAutoScan, libraryFiles, libraryOps, libraryPathBusy, libraryScan, libraryTarget, libraryUnits, matchLibraryItem, metaStore, ownRecord, ownerOf, prefsOf, proxyImage, refreshLibraryHealth, requireAccess, scheduleMetaBackfill, wirePath } = deps;
+  const { candidates, store, currentUser, invalidateLibrary, libraryAutoScan, libraryOps, libraryPathBusy, libraryScan, libraryTarget, libraryUnits, matchLibraryItem, metaStore, ownRecord, ownerOf, prefsOf, proxyImage, refreshLibraryHealth, requireAccess, scheduleMetaBackfill, wirePath } = deps;
   const suggestionView = (suggestion: NonNullable<ReturnType<typeof suggestionFor>>) => ({
     ...suggestion,
     ...(suggestion.poster ? { poster: proxyImage(suggestion.poster) } : {}),
@@ -57,9 +56,10 @@ export function registerCurateRoutes(app: express.Application, deps: CurateDeps)
     const relative = String(req.query.path ?? "").trim();
     const resolved = relative ? await resolveLibraryPath(store.libraries(), relative) : undefined;
     if (!resolved) throw new AppError("Invalid path.", "err.invalidPath");
-    const files = await libraryFiles();
-    const unitKey = matchKeyFor(resolved.key, files);
-    const unit = (await libraryUnits()).find((item) => item.key === unitKey);
+    // The unit the clicked row belongs to, and the title that unit is read as: a folder named
+    // for a film keeps the folder title, a loose film in a collection keeps its own name.
+    const unit = unitFor(resolved.key, await libraryUnits());
+    const unitKey = unit?.key ?? resolved.key;
     const records = metaStore.qualifiedMeta();
     const suggestions = metaStore.qualifiedSuggestions();
     const known = knownTitleOf(resolved.key, records);
@@ -78,7 +78,9 @@ export function registerCurateRoutes(app: express.Application, deps: CurateDeps)
       file: isFile,
       label: posixBase(relative),
       kind: unit?.kind ?? (isFile && numbers ? "series" : "movie"),
-      parsed: { ...parseMediaPath(unitKey), ...(numbers ? { season: numbers.season, episode: numbers.episode } : {}) },
+      // No unit covers a path nothing matched (a folder holding only extras, say): the file
+      // stands for itself and is read from its own name, never from the folder above it.
+      parsed: { ...(unit ? parseUnit(unit) : parseMediaPath(posixBase(unitKey))), ...(numbers ? { season: numbers.season, episode: numbers.episode } : {}) },
       match: matchStatus(resolved.key, records, suggestions),
       ...(bound?.id ? { bound } : {}),
       ...(suggestion ? { suggestion: suggestionView(suggestion) } : {}),
@@ -224,8 +226,9 @@ export function registerCurateRoutes(app: express.Application, deps: CurateDeps)
     assertStillAdmin(store.users(), actor);
     if (target) await metaStore.update(target.libraryId, (file) => {
       const previous = file.suggestions[target.relative];
-      // Kept as the memory of a searched unit, so the next scan walks past it.
-      file.suggestions[target.relative] = scanMiss(previous?.type === "series" ? "series" : "movie");
+      // Kept as the memory of a searched unit, so the next scan walks past it -- and marked
+      // as a person's decision, so a later rule change does not undo it.
+      file.suggestions[target.relative] = scanMiss(previous?.type === "series" ? "series" : "movie", undefined, true);
     });
     invalidateLibrary();
     res.status(204).end();

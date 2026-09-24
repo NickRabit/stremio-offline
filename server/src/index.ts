@@ -30,7 +30,7 @@ import { createLibraryCandidates } from "./library-candidates.js";
 import { ExternalIdStore } from "./external-ids.js";
 import { currentLevel, flushLog, initLogger, log, parseLevel, startLogMaintenance, setLevel } from "./logger.js";
 import { browseDirectory, describePath, emptiedFolders, entryDirectory, holdsLibraryRoot, isPathWithin, isVideo, listVideos, moveDestination, orphanedCatalogKeys, pageFiles, remapPath, scanLibrary, summarize, type FoundFile, type LibraryEntry } from "./library.js";
-import { browseMeta, cacheFieldsFromMeta, episodeKey, episodeNumberOf, episodesFromMeta, dropKeyed, knownTitleEntry, knownTitleOf, matchKeyFor, mosaicSkipped, needsBackfill, needsEpisodes, staleSuggestionKeys, titleUnits, unmatchAt, type GalleryEntry, type LibraryMetaRecord, type TitleKind, type TitleUnit } from "./library-match.js";
+import { browseMeta, cacheFieldsFromMeta, episodeKey, episodeNumberOf, episodesFromMeta, dropKeyed, knownTitleEntry, knownTitleOf, matchKeyFor, mosaicIdentities, mosaicSkipped, needsBackfill, needsEpisodes, staleSuggestionKeys, titleUnits, unmatchAt, type GalleryEntry, type LibraryMetaRecord, type TitleKind, type TitleUnit } from "./library-match.js";
 import { LibraryScan } from "./library-scan.js";
 import { createLibraryProbe, type LibraryHealth } from "./library-probe.js";
 import { LibraryAutoScan } from "./library-autoscan.js";
@@ -834,14 +834,22 @@ const libraryRootBrowse = async (viewer: Viewer) => {
     const previewEntries = entries.filter((entry) => parseLibraryPath(entry.key)?.libraryId === library.id);
     if (library.mosaic !== false) {
       const records = metaStore.meta(library.id);
-      for (const entry of previewEntries) {
+      const visible = previewEntries.filter((entry) => {
         const relative = relativeKeyIn(library.id, entry.key);
-        if (relative === undefined || mosaicSkipped(relative, records)) continue;
+        return relative !== undefined && !mosaicSkipped(relative, records);
+      });
+      // One picture per distinct film: two encodes or two folders that resolved to the same
+      // catalogue title contribute one poster. Deduplicating before the artwork lookups keeps
+      // a large collection from paying for the same picture twice.
+      const distinct = mosaicIdentities(visible.map((entry) => ({ key: entry.key, meta: entry.meta })), 5);
+      for (const source of distinct) {
+        const entry = visible.find((candidate) => candidate.key === source.key)!;
         const art = await locateArtwork(entry);
-        if (!art) { scheduleArtwork(entry); pending = true; }
+        // Only a bound title has catalogue artwork to wait for. An unbound folder is shown as
+        // it is rather than paying for a video frame the mosaic never asked to generate.
+        if (!art && entry.meta?.id) { scheduleArtwork(entry); pending = true; }
         const poster = await thumbUrl("key", wirePath(entry.key), art);
         if (poster) posters.add(poster);
-        if (posters.size === 5) break;
       }
     }
     return {
@@ -1795,7 +1803,7 @@ const libraryPathBusy = async (keys: string[]): Promise<string | undefined> => {
   return undefined;
 };
 
-registerContentRoutes(app, { ...routeContext, attachBrowseMeta, carveOutsOf, dataOf, deleteLibraryItem, fileExists, galleryArtwork, galleryOf, healthOf, invalidateLibrary, libraryEntries, libraryKey, libraryPathBusy, libraryRootBrowse, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, metaStore, prefsOf, progressOf, relativeKeyIn, relocateLibraryPath, scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites });
+registerContentRoutes(app, { ...routeContext, attachBrowseMeta, carveOutsOf, dataOf, deleteLibraryItem, fileExists, galleryArtwork, galleryOf, healthOf, invalidateLibrary, libraryEntries, libraryKey, libraryPathBusy, libraryRootBrowse, libraryUnits, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, metaStore, prefsOf, progressOf, relativeKeyIn, relocateLibraryPath, scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites });
 /** The one search and resolution service behind both the scan and the manual identity
  *  search, so the row somebody picks by hand is the row the scanner would have picked. */
 const libraryCandidates = createLibraryCandidates({
@@ -1941,7 +1949,13 @@ queue.setDebrid({
 await stats.load();
 await queue.load();
 await libraryScan.load();
-if (autoScanAllowed) libraryAutoScan.start();
+if (autoScanAllowed) {
+  libraryAutoScan.start();
+  // The rules that wrote the remembered proposals and misses may have changed under an
+  // upgrade. One bounded pass reconsiders exactly those rows instead of every title, and
+  // the rows themselves keep asking until a pass reaches the library they belong to.
+  if (libraryScan.pendingRuleRun()) void libraryAutoScan.check("rules");
+}
 // History comes from the queue so the statistics do not start empty; finished jobs can
 // be deleted, though, so from now on a record of our own is kept. Only what predates that
 // record is filled in -- anything newer is already in it.
@@ -2159,7 +2173,7 @@ await libraryOps.load();
 
 registerLibrariesRoutes(app, { ...routeContext, grantRows, healthOf, invalidateAutoScan: (libraryId) => libraryAutoScan.invalidate(libraryId), invalidateLibrary, libraryGrants, libraryStats, libraryView, progressOf, refreshLibraryHealth, libraryProbe, metaStore, libraryOps });
 
-registerCurateRoutes(app, { ...routeContext, candidates: libraryCandidates, invalidateLibrary, libraryAutoScan, libraryFiles, libraryOps, libraryPathBusy, libraryScan, libraryTarget, libraryUnits, matchLibraryItem, metaStore, ownRecord, ownerOf, prefsOf, proxyImage: (url) => images.proxied(url), refreshLibraryHealth, scheduleMetaBackfill, wirePath });
+registerCurateRoutes(app, { ...routeContext, candidates: libraryCandidates, invalidateLibrary, libraryAutoScan, libraryOps, libraryPathBusy, libraryScan, libraryTarget, libraryUnits, matchLibraryItem, metaStore, ownRecord, ownerOf, prefsOf, proxyImage: (url) => images.proxied(url), refreshLibraryHealth, scheduleMetaBackfill, wirePath });
 
 registerDeviceRoutes(app, { ...routeContext, stats, countBytes, deviceDownloadTickets, DEVICE_TICKET_TTL, httpSourceOf, libraryTarget, mediaSource, ownerOf, pruneDeviceDownloadTickets, statMeta, trackMedia });
 registerDownloadRoutes(app, { ...routeContext, queue, jobView, sourceOf, mediaSource, posterOf, rememberTitle, titleKey, saveCatalogPoster, libraryKey, cachedMeta, prefsOf });

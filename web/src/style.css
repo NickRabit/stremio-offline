@@ -675,6 +675,9 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .suggestion-copy strong{display:block;font-size:12px;overflow-wrap:anywhere}
 .suggestion-copy small{display:block;font-size:11px;color:var(--muted);margin-top:3px;overflow-wrap:anywhere}
 .suggestion-copy .suggestion-review{color:var(--text)}
+.suggestion-alternatives{margin-top:5px;font-size:11px;color:var(--muted)}
+.suggestion-alternatives ul{margin:3px 0 0;padding-left:16px;display:grid;gap:2px}
+.suggestion-alternatives li{overflow-wrap:anywhere}
 .suggestion-actions{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:6px}
 .suggestion-actions button{padding:6px 10px;font-size:11px}
 .identify-wider{justify-self:start;font-size:11px;padding:6px 10px}

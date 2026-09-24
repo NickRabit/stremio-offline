@@ -3,11 +3,11 @@ import path from "node:path";
 import { test } from "node:test";
 import {
   autoAccept, browseMeta, cacheFieldsFromMeta, clipText, dropKeyed, episodeKey, episodeNumberOf, episodesFromMeta, isExtraName,
-  knownTitleOf, lookupSkipped, mosaicSkipped, matchKeyFor, pendingSuggestionKeys, pinInherited, matchStatus, needsBackfill, needsEpisodes, needsRefresh, pickSuggestion, remapKeyed, scanMiss,
+  folderMosaicUnits, knownTitleOf, lookupSkipped, mosaicSkipped, matchKeyFor, mosaicIdentities, needsReevaluation, parseUnit, pendingSuggestionKeys, pinInherited, matchStatus, needsBackfill, needsEpisodes, needsRefresh, pickSuggestion, remapKeyed, scanMiss, unitFor,
   scannedRecently, scanSkipReason, scoreHit, staleSuggestionKeys, suggestionFor, titleUnits, unmatchAt, viewMeta,
-  type LibrarySuggestion, type TitleUnit,
+  MATCH_RULE_VERSION, type LibrarySuggestion, type TitleUnit,
 } from "./library-match.js";
-import { parseMediaPath } from "./library-parse.js";
+import { parseMediaPath, partSignature } from "./library-parse.js";
 import type { FoundFile } from "./library.js";
 import type { MetaItem } from "./types.js";
 
@@ -28,8 +28,53 @@ test("movie folder, season series, and an unrelated collection", () => {
   );
   assert.deepEqual(
     keys(["xxx/one.mp4", "xxx/two.mp4", "xxx/I Prefer Anal/I Prefer Anal.mp4"]),
-    [],
+    ["movie:xxx/I Prefer Anal", "movie:xxx/one.mp4", "movie:xxx/two.mp4"],
+    "a folder of unrelated films exposes each identity on its own file name",
   );
+});
+
+test("a multipart film and its extra are one identity, not three films", () => {
+  const twilight = [
+    "Twilight Saga/Twilight/dmd-twilight-cd1.mkv",
+    "Twilight Saga/Twilight/dmd-twilight-cd2.mkv",
+    "Twilight Saga/Twilight/Twilight.2009.Deleted.Scene.mkv",
+  ];
+  const units = titleUnits(twilight.map(file));
+  assert.deepEqual(units.map((unit) => `${unit.kind}:${unit.key}`), ["movie:Twilight Saga/Twilight"]);
+  assert.equal(units[0]!.sampleFiles.length, 3, "the extra stays with the film it belongs to");
+
+  // Adding or removing another part leaves the one identity alone.
+  const withEncode = [...twilight, "Twilight Saga/Twilight/dmd-twilight-cd3.mkv"];
+  assert.deepEqual(titleUnits(withEncode.map(file)).map((unit) => unit.key), ["Twilight Saga/Twilight"]);
+  const withoutEncode = twilight.filter((name) => !name.includes("cd2"));
+  assert.deepEqual(titleUnits(withoutEncode.map(file)).map((unit) => unit.key), ["Twilight Saga/Twilight"]);
+});
+
+test("independent films, encodes and parts in one folder keep one identity each", () => {
+  const files = [
+    "Dump/First Movie (2001).mkv",
+    "Dump/First Movie (2001) 1080p.mkv",
+    "Dump/Second Film Part 1.mkv",
+    "Dump/Second Film Part 2.mkv",
+    "Dump/Third.Film.2010.Extended.mkv",
+  ].map(file);
+  const units = titleUnits(files);
+  assert.equal(units.length, 3, "three distinct films, not five files");
+  const first = units.find((unit) => unit.sampleFiles.some((name) => name.includes("First Movie")));
+  assert.equal(first?.sampleFiles.length, 2, "the two encodes are one film");
+  const second = units.find((unit) => unit.key.startsWith("Dump/Second"));
+  assert.equal(second?.sampleFiles.length, 2, "the two parts are one film");
+  assert.ok(units.find((unit) => unit.sampleFiles.some((name) => name.includes("Third.Film"))));
+});
+
+test("a series stays grouped by series, season and episode", () => {
+  const files = [
+    "Show/Season 1/Show S01E01.mkv",
+    "Show/Season 1/Show S01E02.mkv",
+    "Show/Season 2/Show S02E01.mkv",
+  ].map(file);
+  assert.deepEqual(titleUnits(files).map((unit) => `${unit.kind}:${unit.key}`), ["series:Show"]);
+  assert.equal(titleUnits(files)[0]!.sampleFiles.length, 3);
 });
 
 test("a typed library keeps the boundaries and changes only the kind", () => {
@@ -106,6 +151,38 @@ test("matchKeyFor walks from an episode to the show and from a collection child 
   const dump = ["xxx/one.mp4", "xxx/two.mp4", "xxx/I Prefer Anal/I Prefer Anal.mp4"].map(file);
   assert.equal(matchKeyFor("xxx/one.mp4", dump), "xxx/one.mp4");
   assert.equal(matchKeyFor(path.join("xxx", "I Prefer Anal", "I Prefer Anal.mp4"), dump), path.join("xxx", "I Prefer Anal"));
+});
+
+test("a unit is searched by its own name: the film for a loose file, the folder for an encode set", () => {
+  // An independent film sitting in a collection folder is searched as the film, not as the
+  // folder that happens to hold it.
+  const dump = ["Collection/Heat (1995).mkv", "Collection/Ronin (1998).mkv"].map(file);
+  const units = titleUnits(dump);
+  const heat = units.find((unit) => unit.key.includes("Heat"))!;
+  assert.equal(heat.key, "Collection/Heat (1995).mkv");
+  assert.deepEqual(parseUnit(heat), { title: "Heat", query: "Heat", year: 1995 });
+  // A folder named for a film keeps the folder title even when the files inside are encodes.
+  const encoded = [
+    "Practical Magic (1998)/Practical.Magic.1080p.mkv",
+    "Practical Magic (1998)/Practical.Magic.1080p (2).mkv",
+  ].map(file);
+  const [folderUnit] = titleUnits(encoded);
+  assert.equal(folderUnit!.key, "Practical Magic (1998)");
+  assert.deepEqual(parseUnit(folderUnit!), { title: "Practical Magic", query: "Practical Magic", year: 1998 });
+});
+
+test("every sample file of a unit resolves to that unit, not to its own path", () => {
+  const files = [
+    "Twilight Saga/Twilight/dmd-twilight-cd1.mkv",
+    "Twilight Saga/Twilight/dmd-twilight-cd2.mkv",
+    "Twilight Saga/Twilight/Twilight.2009.Deleted.Scene.mkv",
+  ].map(file);
+  const units = titleUnits(files);
+  assert.equal(units.length, 1);
+  const [unit] = units;
+  assert.equal(unitFor(unit!.sampleFiles[0]!, units)?.key, unit!.key);
+  assert.equal(matchKeyFor(unit!.sampleFiles[1]!, files), unit!.key, "an alternate part resolves to the film");
+  assert.equal(matchKeyFor(unit!.sampleFiles[2]!, files), unit!.key, "the extra resolves to the film too");
 });
 
 test("a unique year-and-title hit auto-accepts; close years do not", () => {
@@ -497,15 +574,15 @@ const rawHit = (id: string, name: string, score: number, titleSimilarity = 1, au
   ({ item: { id, type: "movie", name } as MetaItem, score, titleSimilarity, autoEligible, ...(yearDelta != null ? { yearDelta } : {}) });
 
 test("a proposal says why a high score still wants a look", () => {
-  // The Avengers: one exact name, several years, none of them in the file name. 100% is the
-  // name and only the name, so the year is what the person is asked to check.
+  // The Avengers: one exact name and a sequel the score already separates. The file names no
+  // year, so there is no year to check and nothing else to explain.
   const parsed = parseMediaPath("Avengers");
   const avengers = scoreHit(parsed, meta("The Avengers", 2012, "movie", "tt0848228"), "movie");
   const ultron = scoreHit(parsed, meta("Avengers: Age of Ultron", 2015, "movie", "tt2395427"), "movie");
   assert.equal(avengers.score, 100);
   const proposal = pickSuggestion([avengers, ultron]);
   assert.equal(proposal?.id, "tt0848228");
-  assert.equal(proposal?.reason, "year");
+  assert.equal(proposal?.reason, undefined, "a missing file year is not a year to check");
 
   const ambiguous = pickSuggestion([rawHit("tt1", "Avengers", 100), rawHit("tt2", "Avengers Assemble", 96, 0.95)]);
   assert.equal(ambiguous?.reason, "ambiguous");
@@ -513,6 +590,11 @@ test("a proposal says why a high score still wants a look", () => {
   const settled = parseMediaPath("Practical Magic (1998)");
   const exact = scoreHit(settled, meta("Practical Magic", 1998, "movie", "tt0120794"), "movie");
   assert.equal(pickSuggestion([exact])?.reason, undefined, "nothing to explain when the year agrees");
+
+  // A year the file states and the candidate disagrees with is the one real year conflict.
+  const offByOne = parseMediaPath("Heat (1996)");
+  const previous = scoreHit(offByOne, meta("Heat", 1995, "movie", "tt0113277"), "movie");
+  assert.equal(pickSuggestion([previous])?.reason, "year");
 });
 
 test("the displayed title similarity is independent of the year-adjusted ranking score", () => {
@@ -579,4 +661,153 @@ test("a finished scan drops the proposals whose title unit is gone, and only tho
     ["lib_aaaaaaaa/Films/Removed", "lib_aaaaaaaa/Films/Ronin", "lib_aaaaaaaa/Shows/Ted/01.mkv", "lib_bbbbbbbb/Films/Gone"],
     "the scan speaks about a library it can reach, and about nothing else",
   );
+});
+
+test("a candidate is judged on its original title as well as its localized one", () => {
+  const czech = parseMediaPath("Sirotcinec");
+  const localized = scoreHit(czech, { id: "tt1", type: "movie", name: "The Orphanage", originalTitle: "El Orfanato" }, "movie");
+  const original = scoreHit(czech, { id: "tt2", type: "movie", name: "Sedm statečných", originalTitle: "Sirotčinec" }, "movie");
+  assert.ok(localized.score < 60, "no phrase in common is no evidence, so the row is not even a proposal");
+  assert.equal(pickSuggestion([localized]), undefined);
+  assert.ok(original.titleSimilarity >= 0.9, "the original title carries the match");
+  assert.equal(autoAccept([original])?.item.id, "tt2");
+});
+
+test("a token coincidence is not title evidence", () => {
+  const wallE = parseMediaPath("WALL-E");
+  const wallGame = scoreHit(wallE, meta("Eton Wall Game", 2017, "movie", "tt1"), "movie");
+  assert.ok(wallGame.score < 60, "a shared word is not title evidence");
+  assert.equal(pickSuggestion([wallGame]), undefined, "WALL-E is not Eton Wall Game");
+  const real = scoreHit(wallE, meta("WALL-E", 2008, "movie", "tt0910970"), "movie");
+  assert.equal(autoAccept([real])?.item.id, "tt0910970");
+
+  const orphanage = parseMediaPath("Sirotčinec");
+  assert.equal(pickSuggestion([scoreHit(orphanage, meta("Semi-Pro", 2008, "movie", "tt2"), "movie")]), undefined);
+});
+
+test("sequel and part markers are evidence, and a conflict is never auto-accepted", () => {
+  const partOne = parseMediaPath("Second Film Part 1");
+  const partTwo = scoreHit(partOne, meta("Second Film Part 2", 2004, "movie", "tt2"), "movie");
+  assert.equal(partTwo.partConflict, true);
+  assert.equal(partTwo.autoEligible, false);
+  assert.equal(autoAccept([partTwo]), undefined, "a different part is a different film");
+  assert.equal(pickSuggestion([partTwo])?.reason, "part");
+
+  const whole = parseMediaPath("Second Film");
+  const sequel = scoreHit(whole, meta("Second Film 2", 2006, "movie", "tt3"), "movie");
+  assert.equal(sequel.partConflict, true);
+  const first = scoreHit(whole, meta("Second Film", 2004, "movie", "tt1"), "movie");
+  assert.equal(first.partConflict, undefined);
+  assert.equal(autoAccept([first, sequel])?.item.id, "tt1");
+});
+
+test("a missing year on both sides leans on the name alone", () => {
+  const parsed = parseMediaPath("Some Obscure Film");
+  const hit = scoreHit(parsed, { id: "tt9", type: "movie", name: "Some Obscure Film" }, "movie");
+  assert.equal(hit.yearDelta, undefined);
+  assert.equal(hit.score, 100);
+  assert.equal(autoAccept([hit])?.item.id, "tt9");
+});
+
+test("a Czech part marker is read, and two parts stay two films", () => {
+  assert.notEqual(partSignature("Nymfomanka - část 1"), "", "the Czech word for a part is a part marker");
+  assert.equal(partSignature("Nymfomanka díl 3"), partSignature("Nymfomanka cast 3"), "the plain spelling counts too");
+  assert.notEqual(partSignature("Nymfomanka - část 1"), partSignature("Nymfomanka, část II"), "the two halves carry different markers");
+
+  const first = parseMediaPath("Nymfomanka - část 1");
+  const second = scoreHit(first, meta("Nymfomanka, část II.", 2009, "movie", "tt-part-2"), "movie");
+  assert.equal(second.partConflict, true, "the two halves are not one film");
+  assert.equal(second.autoEligible, false);
+  assert.equal(autoAccept([second]), undefined);
+  assert.equal(pickSuggestion([second])?.reason, "part");
+});
+
+test("same-title remakes stay a proposal: their ambiguity names them, a lone exact title says nothing", () => {
+  // The Dictator, 1940 and 2012, and the file never wrote a year down.
+  const parsed = parseMediaPath("Diktátor");
+  const hits = [
+    scoreHit(parsed, meta("Diktátor", 1940, "movie", "tt-old"), "movie"),
+    scoreHit(parsed, meta("Diktátor", 2012, "movie", "tt-new"), "movie"),
+  ];
+  assert.equal(autoAccept(hits, 2026), undefined, "two same-name remakes are not bound on their own");
+  const proposal = pickSuggestion(hits);
+  assert.equal(proposal?.reason, "ambiguous", "the missing year is not itself the reason");
+  assert.equal(proposal?.titleSimilarity, 100, "the number beside the row stays name-only");
+  const named = [proposal?.id, ...(proposal?.alternatives ?? []).map((item) => item.id)].sort();
+  assert.deepEqual(named, ["tt-new", "tt-old"], "both remakes are named");
+
+  // A lone exact title with no year on either side is not a review item at all.
+  const lone = parseMediaPath("Some Obscure Film");
+  const only = scoreHit(lone, { id: "tt9", type: "movie", name: "Some Obscure Film" }, "movie");
+  assert.equal(pickSuggestion([only])?.reason, undefined);
+  assert.equal(pickSuggestion([only])?.id, "tt9");
+});
+
+test("an ambiguous proposal carries its competing candidates, bounded and without payloads", () => {
+  const parsed = parseMediaPath("Avengers");
+  const hits = [
+    scoreHit(parsed, meta("The Avengers", 2012, "movie", "tt0848228"), "movie"),
+    scoreHit(parsed, meta("Avengers: Age of Ultron", 2015, "movie", "tt2395427"), "movie"),
+    scoreHit(parsed, meta("Avengers: Endgame", 2019, "movie", "tt4154796"), "movie"),
+  ];
+  const proposal = pickSuggestion(hits)!;
+  assert.ok(proposal.alternatives?.length, "the competing identities are named");
+  const allowed = new Set(["type", "id", "name", "year", "score", "titleSimilarity"]);
+  for (const alternative of proposal.alternatives ?? []) {
+    for (const key of Object.keys(alternative)) {
+      assert.ok(allowed.has(key), `${key} is not part of a bounded alternative`);
+    }
+    assert.equal("poster" in alternative, false, "no image address is persisted");
+  }
+  assert.ok((proposal.alternatives?.length ?? 0) <= 3, "the list stays bounded");
+});
+
+test("a suggestion carries the rule version and a stale one asks to be re-evaluated", () => {
+  const parsed = parseMediaPath("Practical Magic (1998)");
+  const proposal = pickSuggestion([scoreHit(parsed, meta("Practical Magic", 1998, "movie", "tt0120794"), "movie")])!;
+  assert.equal(proposal.rule, MATCH_RULE_VERSION);
+  assert.equal(needsReevaluation(proposal), false);
+  assert.equal(needsReevaluation({ ...proposal, rule: MATCH_RULE_VERSION - 1 }), true);
+  assert.equal(needsReevaluation({ ...proposal, rule: undefined }), true, "a row from before the field existed is stale");
+  assert.equal(needsReevaluation(scanMiss("movie")), false, "a fresh miss is current");
+  assert.equal(needsReevaluation({ ...scanMiss("movie"), rule: MATCH_RULE_VERSION - 1 }), true);
+  assert.equal(needsReevaluation(scanMiss("movie", undefined, true)), false, "a dismissal is never stale");
+  assert.equal(needsReevaluation(undefined), false);
+});
+
+test("a collection mosaic shows one poster per distinct film identity", () => {
+  const entries = [
+    { key: "lib/Films/A", meta: { type: "movie", id: "tt1" } },
+    { key: "lib/Films/A-copy", meta: { type: "movie", id: "tt1" } },
+    { key: "lib/Films/B", meta: { type: "movie", id: "tt2" } },
+    { key: "lib/Films/Loose", meta: undefined },
+    { key: "lib/Films/Loose" },
+    { key: "lib/Films/C", meta: { type: "movie", id: "tt3" } },
+    { key: "lib/Films/D", meta: { type: "movie", id: "tt4" } },
+  ];
+  assert.deepEqual(mosaicIdentities(entries, 5).map((entry) => entry.key), [
+    "lib/Films/A", "lib/Films/B", "lib/Films/Loose", "lib/Films/C", "lib/Films/D",
+  ]);
+});
+
+test("a folder mosaic names each distinct film once, honours the exclusion flag, and skips a series", () => {
+  const files = [
+    "lib_00000001/Collection/Heat (1995).mkv",
+    "lib_00000001/Collection/Heat (1995) 1080p.mkv",
+    "lib_00000001/Collection/Ronin (1998).mkv",
+    "lib_00000001/Series/Season 1/Show S01E01.mkv",
+  ].map(file);
+  const units = titleUnits(files);
+  const records = {
+    "lib_00000001/Collection/Heat (1995).mkv": { type: "movie", id: "tt-heat", source: "scan" as const },
+    "lib_00000001/Collection/Heat (1995) 1080p.mkv": { type: "movie", id: "tt-heat", source: "scan" as const },
+    "lib_00000001/Collection/Ronin (1998).mkv": { type: "movie", id: "tt-ronin", source: "scan" as const },
+  };
+  const collection = folderMosaicUnits(units, "lib_00000001/Collection", records, {}, 5);
+  assert.equal(collection.length, 2, "the two encodes of Heat are one identity, Ronin is the other");
+  assert.deepEqual(collection.map((unit) => records[unit.key as keyof typeof records]?.id).sort(), ["tt-heat", "tt-ronin"]);
+  assert.deepEqual(folderMosaicUnits(units, "lib_00000001/Series", records, {}, 5), [], "a series is not a movie mosaic");
+
+  const hidden = { ...records, "lib_00000001/Collection/Ronin (1998).mkv": { type: "movie", id: "tt-ronin", source: "scan" as const, skipMosaic: true } };
+  assert.equal(folderMosaicUnits(units, "lib_00000001/Collection", hidden, {}, 5).length, 1, "a film kept out of the mosaic is left out");
 });

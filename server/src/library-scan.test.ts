@@ -5,7 +5,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { LibraryScan, type LibraryScanOpts, type ScanPauseReason } from "./library-scan.js";
 import type { LibraryCandidate, LibraryCandidateSource } from "./library-candidates.js";
-import type { LibraryEpisodeRecord, LibraryMetaRecord, LibrarySuggestion, TitleUnit } from "./library-match.js";
+import { MATCH_RULE_VERSION, type LibraryEpisodeRecord, type LibraryMetaRecord, type LibrarySuggestion, type TitleUnit } from "./library-match.js";
 import type { MetaItem } from "./types.js";
 
 const movie = (key: string): TitleUnit => ({ key, kind: "movie", relative: key, sampleFiles: [`${key}/a.mkv`] });
@@ -543,7 +543,7 @@ test("a provider that answers nothing leaves the title unbound and does not fail
   } finally { await h.close(); }
 });
 
-test("a 100% name match with several years stays a proposal with a reason", async () => {
+test("a 100% name match with two same-name remakes stays an ambiguous proposal", async () => {
   const h = await harness({
     units: async () => [movie("Avengers")],
     search: async () => [
@@ -560,7 +560,7 @@ test("a 100% name match with several years stays a proposal with a reason", asyn
     const proposal = h.store.suggestions.Avengers!;
     assert.equal(proposal.id, "tt0848228");
     assert.equal(proposal.score, 100);
-    assert.equal(proposal.reason, "year");
+    assert.equal(proposal.reason, "ambiguous");
   } finally { await h.close(); }
 });
 
@@ -713,5 +713,185 @@ test("a plain scan walks past an automatic binding without proposing anything", 
     assert.equal(h.scan.snapshot().total, 0);
     assert.deepEqual(h.searches, []);
     assert.deepEqual(h.store.suggestions, {});
+  } finally { await h.close(); }
+});
+
+test("the run summarizes accepted, proposed, missed and excluded units", async () => {
+  const h = await harness({
+    units: async () => [movie("Accept Me"), movie("Ambiguous"), movie("Nothing"), movie("Gone"), movie("Broken")],
+    pathExists: async (key) => {
+      if (key === "Gone") return false;
+      if (key === "Broken") throw new Error("the disk went away");
+      return true;
+    },
+    search: async (query) => {
+      if (query === "Accept Me") return [{ id: "tt-a", type: "movie", name: "Accept Me", releaseInfo: "2020" }];
+      if (query === "Ambiguous") return [
+        { id: "tt-x", type: "movie", name: "Ambiguous", releaseInfo: "2020" },
+        { id: "tt-y", type: "movie", name: "Ambiguous", releaseInfo: "1990" },
+      ];
+      return [];
+    },
+  });
+  try {
+    await h.scan.start();
+    await waitFor(() => h.scan.snapshot().status === "completed");
+    const state = h.scan.snapshot();
+    assert.equal(state.accepted, 1, "one title was bound");
+    assert.equal(state.proposed, 1, "one title is waiting for a person");
+    assert.equal(state.missed, 1, "one search found nothing");
+    assert.equal(state.excluded, 1, "one queued unit was skipped");
+    assert.equal(state.failed, 1, "a provider that broke is a failed unit, not a failed run");
+    assert.equal(state.ruleVersion, MATCH_RULE_VERSION);
+    assert.equal(state.matched, 1);
+    assert.equal(state.skipped, 3, "proposed, missed and excluded all leave the binding alone");
+  } finally { await h.close(); }
+});
+
+test("a diagnostic names the unit, provider, score and decision, and carries no secret", async () => {
+  const h = await harness({
+    units: async () => [movie("Ambiguous")],
+    search: async () => [
+      { id: "tt-x", type: "movie", name: "Ambiguous", releaseInfo: "2020" },
+      { id: "tt-y", type: "movie", name: "Ambiguous", releaseInfo: "1990" },
+    ],
+  });
+  try {
+    await h.scan.start();
+    await waitFor(() => h.scan.snapshot().status === "completed");
+    const [diagnostic] = h.scan.snapshot().diagnostics ?? [];
+    assert.ok(diagnostic, "the run kept a diagnostic line");
+    assert.equal(diagnostic!.unit, "Ambiguous");
+    assert.equal(diagnostic!.decision, "proposed");
+    assert.equal(diagnostic!.querySource, "search");
+    assert.equal(diagnostic!.candidateId, "tt-x");
+    assert.equal(diagnostic!.titleSimilarity, 100);
+    assert.equal(diagnostic!.provider, "cinemeta");
+    assert.ok((diagnostic!.alternatives?.length ?? 0) >= 1, "the alternatives are named");
+    assert.equal(JSON.stringify(diagnostic).includes("apiKey"), false);
+    assert.equal(JSON.stringify(diagnostic).includes("token"), false);
+  } finally { await h.close(); }
+});
+
+test("a row written by older rules is reconsidered exactly once", async () => {
+  const h = await harness({
+    units: async () => [movie("Foo")],
+    search: async () => [],
+  });
+  try {
+    h.store.suggestions.Foo = { type: "movie", id: "", name: "", score: 0, scannedAt: new Date().toISOString(), rule: MATCH_RULE_VERSION - 1 };
+    await h.scan.start();
+    await waitFor(() => h.scan.snapshot().status === "completed");
+    assert.deepEqual(h.searches, ["Foo"], "a stale remembered miss is searched again");
+    assert.equal(h.store.suggestions.Foo?.rule, MATCH_RULE_VERSION);
+    await h.scan.start();
+    await waitFor(() => h.scan.snapshot().status === "completed" && h.scan.snapshot().total === 0);
+    assert.deepEqual(h.searches, ["Foo"], "and not on every later startup");
+  } finally { await h.close(); }
+});
+
+test("a dismissal survives a rule change and is never reconsidered", async () => {
+  const h = await harness({
+    units: async () => [movie("Foo")],
+    search: async () => [],
+  });
+  try {
+    h.store.suggestions.Foo = {
+      type: "movie", id: "", name: "", score: 0, scannedAt: new Date().toISOString(),
+      dismissed: true, rule: MATCH_RULE_VERSION - 1,
+    };
+    await h.scan.start();
+    await waitFor(() => h.scan.snapshot().status === "completed" && h.scan.snapshot().total === 0);
+    assert.deepEqual(h.searches, [], "a person's dismissal outranks a rule change");
+  } finally { await h.close(); }
+});
+
+test("an existing explicit or locked binding is never touched by a reconsideration", async () => {
+  const h = await harness({
+    units: async () => [movie("Foo"), movie("Bar")],
+    search: async () => [{ id: "tt-new", type: "movie", name: "Foo", releaseInfo: "2020" }],
+  });
+  try {
+    h.store.meta.Foo = { type: "movie", id: "tt-user", source: "user", locked: true };
+    h.store.meta.Bar = { type: "movie", id: "tt-locked", source: "scan", locked: true };
+    h.store.suggestions.Foo = { type: "movie", id: "", name: "", score: 0, rule: MATCH_RULE_VERSION - 1 };
+    h.store.suggestions.Bar = { type: "movie", id: "tt-old", name: "Old", score: 90, rule: MATCH_RULE_VERSION - 1 };
+    await h.scan.start();
+    await waitFor(() => h.scan.snapshot().status === "completed");
+    assert.equal(h.store.meta.Foo?.id, "tt-user");
+    assert.equal(h.store.meta.Bar?.id, "tt-locked");
+    assert.deepEqual(h.searches, []);
+  } finally { await h.close(); }
+});
+
+test("an interrupted rules pass does not lose the reminder: the stale rows still ask", async () => {
+  const h = await harness({
+    units: async () => [movie("Foo")],
+    search: async () => [],
+  });
+  try {
+    // A run wrote the current rule version before it was interrupted: its own row was never
+    // reconsidered, so the row -- not the state file -- is what has to keep asking.
+    h.store.suggestions.Foo = { type: "movie", id: "", name: "", score: 0, scannedAt: stale(), rule: MATCH_RULE_VERSION - 1 };
+    await writeFile(path.join(h.dataDir, "library-scan.json"), JSON.stringify({
+      status: "completed", total: 0, done: 0, matched: 0, skipped: 0, failed: 0, remaining: [], ruleVersion: MATCH_RULE_VERSION,
+    }));
+    await h.scan.load();
+    assert.equal(h.scan.pendingRuleRun(), true, "the stale row still asks for a pass");
+    await h.scan.start();
+    await waitFor(() => h.scan.snapshot().status === "completed");
+    assert.deepEqual(h.searches, ["Foo"], "the stale row is searched again");
+    assert.equal(h.store.suggestions.Foo?.rule, MATCH_RULE_VERSION);
+    assert.equal(h.scan.pendingRuleRun(), false, "and the reminder is gone once the row is current");
+  } finally { await h.close(); }
+});
+
+test("a scan started by hand reconsiders stale rows even with no automatic pass", async () => {
+  const h = await harness({
+    units: async () => [movie("Foo")],
+    search: async () => [],
+  });
+  try {
+    // Automatic scanning is off in this deployment, so nobody queued a rules pass on startup.
+    h.store.suggestions.Foo = { type: "movie", id: "", name: "", score: 0, scannedAt: stale(), rule: MATCH_RULE_VERSION - 1 };
+    assert.equal(h.scan.pendingRuleRun(), true);
+    await h.scan.start();
+    await waitFor(() => h.scan.snapshot().status === "completed");
+    assert.deepEqual(h.searches, ["Foo"], "the explicit scan picks the stale row up on its own");
+    assert.equal(h.scan.pendingRuleRun(), false);
+  } finally { await h.close(); }
+});
+
+test("a stale row the scan may not touch does not keep asking for a pass", async () => {
+  const h = await harness({
+    units: async () => [movie("Foo"), movie("Bar")],
+    search: async () => [],
+  });
+  try {
+    // Bar is bound by a person, Foo is excluded from matching: neither may be reconsidered,
+    // so their stale rows must not make every startup queue a pass.
+    h.store.meta.Bar = { type: "movie", id: "tt-bar", source: "user", locked: true };
+    h.store.suggestions.Bar = { type: "movie", id: "tt-old", name: "Old", score: 90, rule: MATCH_RULE_VERSION - 1 };
+    h.store.meta.Foo = { type: "movie", id: "", source: "user", locked: true, skipLookup: true };
+    h.store.suggestions.Foo = { type: "movie", id: "", name: "", score: 0, rule: MATCH_RULE_VERSION - 1 };
+    assert.equal(h.scan.pendingRuleRun(), false);
+    assert.equal(h.scan.pendingRuleRun(), false, "and it keeps saying no");
+  } finally { await h.close(); }
+});
+
+test("a loose film in a collection is searched as the film; a film folder as the folder", async () => {
+  const h = await harness({
+    units: async () => [
+      { key: "Collection/Heat (1995).mkv", kind: "movie", relative: "Collection/Heat (1995).mkv", sampleFiles: ["Collection/Heat (1995).mkv"] },
+      { key: "Practical Magic (1998)", kind: "movie", relative: "Practical Magic (1998)", sampleFiles: ["Practical Magic (1998)/a.mkv", "Practical Magic (1998)/b.mkv"] },
+    ],
+    search: async (query) => [{ id: `tt-${query}`, type: "movie", name: query }],
+  });
+  try {
+    await h.scan.start();
+    await waitFor(() => h.scan.snapshot().status === "completed");
+    assert.deepEqual(h.searches, ["Heat", "Practical Magic"], "the film's own name, and the folder's title for an encode set");
+    assert.equal(h.store.meta["Collection/Heat (1995).mkv"]?.id, "tt-Heat", "the binding lands on the unit key");
+    assert.equal(h.store.meta["Practical Magic (1998)"]?.id, "tt-Practical Magic");
   } finally { await h.close(); }
 });

@@ -11,7 +11,7 @@ import { IdentifyDialog } from "./IdentifyDialog";
 import { AddonManager } from "./AddonManager";
 import { LibraryManager, LibraryManagerDialog, libraryTypeLabel } from "./LibraryManager";
 import { UserManager } from "./UserManager";
-import { TileArt } from "./TileArt";
+import { PosterMosaic, TileArt } from "./TileArt";
 import { MoveDialog } from "./MoveDialog";
 import { SuggestionsDialog } from "./SuggestionsDialog";
 import { SeriesDownloadDialog } from "./SeriesDownloadDialog";
@@ -223,6 +223,10 @@ export function App() {
   const [libraryOps, setLibraryOps] = useState<LibraryOpsState[]>([]);
   const [bulkIdentifyPaths, setBulkIdentifyPaths] = useState<string[] | null>(null);
   const [suggestionsOpen, setSuggestionsOpen] = useState(false);
+  // Identification opened from the suggestion list sits above it rather than replacing it:
+  // the list keeps its rows, its scroll position and its filter while the dialog is open.
+  const [identifyFrom, setIdentifyFrom] = useState<string | null>(null);
+  const [appliedSuggestion, setAppliedSuggestion] = useState<string | null>(null);
   const [libraryManagerOpen, setLibraryManagerOpen] = useState(false);
   const [suggestionCount, setSuggestionCount] = useState(0);
   const [libraryScan, setLibraryScan] = useState<ScanState | null>(null);
@@ -562,7 +566,7 @@ export function App() {
   const descriptionLine = (item: TreeItem) => item.description
     ? (item.catalogName ? `${item.catalogName} · ${item.description}` : item.description)
     : item.match === "suggested" && item.suggestion
-      ? t("library.suggestionLine", { name: item.suggestion.name, score: item.suggestion.score })
+      ? t("library.suggestionLine", { name: item.suggestion.name, score: item.suggestion.titleSimilarity ?? item.suggestion.score })
       : item.catalogName;
   const [localStream, setLocalStream] = useState<Stream | null>(null); const [localTitle, setLocalTitle] = useState("");
   const [streamAddon, setStreamAddon] = useState(""); const [streamLanguage, setStreamLanguage] = useState(""); const [streamSort, setStreamSort] = useState<StreamSort>("recommended");
@@ -2024,7 +2028,9 @@ export function App() {
                   </article>
                 : item.kind === "folder"
                 ? <article className={`browse-item folder${browseFocus === item.path ? " focused" : ""}${selectedPaths.has(item.path) ? " selected" : ""}`} key={item.path} data-path={item.path} aria-current={browseFocus === item.path ? "true" : undefined}><button className="library-open" onClick={() => { if (selectionMode) { toggleSelection(item.path); return; } setBrowseQuery(""); setFromFavorites(browsePath === ":favorites" || fromFavorites); setBrowsePath(item.path); }}>
-                    <span className="browse-art"><TileArt shape={settings.libraryTileShape} poster={item.poster} wide={item.wide} fallback={<FolderOpen/>}/><i className="browse-badge">{item.fileCount}</i>{item.favorite && <i className="fav-mark"><Star/></i>}</span>
+                    <span className="browse-art">{(item.posters?.length ?? 0) > 1
+                      ? <PosterMosaic posters={item.posters ?? []} label={t("library.mosaicAlt", { count: item.posters?.length ?? 0 })}/>
+                      : <TileArt shape={settings.libraryTileShape} poster={item.poster} wide={item.wide} fallback={<FolderOpen/>}/>}<i className="browse-badge">{item.fileCount}</i>{item.favorite && <i className="fav-mark"><Star/></i>}</span>
                     <span className="library-copy"><strong>{item.name}</strong><small>{folderMeta(item)}</small>{descriptionLine(item) && <small className="library-desc" title={descriptionLine(item)}>{descriptionLine(item)}</small>}</span><span className="library-action"><FolderOpen/> {t("library.openFolder")} <ChevronRight/></span></button>
                     {selectionMode && <button className="browse-select" aria-label={t("library.selectItem", { name: item.name })} aria-pressed={selectedPaths.has(item.path)} onClick={(event) => { event.stopPropagation(); toggleSelection(item.path); }}>{selectedPaths.has(item.path) && <Check/>}</button>}
                     {!selectionMode && (item.gallery ?? 0) > 0 && <button className="browse-gallery" aria-label={t("gallery.openStored", { name: item.name })} title={t("gallery.openStored", { name: item.name })} onClick={(event) => { event.stopPropagation(); void openStoredGallery(item.path); }}><Images/></button>}
@@ -2108,9 +2114,14 @@ export function App() {
       onClose={() => setBulkIdentifyPaths(null)} onApplied={(id) => { setBulkIdentifyPaths(null); leaveSelection(); if (id) void trackQueuedOp(id); }}/>}
     {suggestionsOpen && <SuggestionsDialog
       {...(currentLibraryId ? { libraryId: currentLibraryId } : {})}
-      onClose={() => setSuggestionsOpen(false)}
+      identifyPath={identifyFrom}
+      appliedKey={appliedSuggestion}
+      onClose={() => { setSuggestionsOpen(false); setIdentifyFrom(null); setAppliedSuggestion(null); }}
       onChanged={() => { void loadSuggestionCount(); void loadBrowse(browsePath); }}
-      onIdentify={(target) => { setSuggestionsOpen(false); setIdentifyPath(target); }}/>}
+      onIdentify={setIdentifyFrom}/>}
+    {identifyFrom && <IdentifyDialog path={identifyFrom}
+      onClose={() => setIdentifyFrom(null)}
+      onApplied={() => { setAppliedSuggestion(identifyFrom); setIdentifyFrom(null); void loadBrowse(browsePath); }}/>}
     {bulkDownload && <SeriesDownloadDialog type={bulkDownload.type} label={bulkDownload.label} episodes={bulkDownload.episodes} audioLanguage={settings.audioLanguage} subtitleLanguage={settings.subtitleLanguage} languages={languages} onClose={() => setBulkDownload(null)} onSubmit={submitBulkDownload}/>}
     {galleryIndex !== null && shownGallery[galleryIndex] && <MediaGallery images={shownGallery} index={galleryIndex} onIndex={setGalleryIndex} onClose={closeGallery}/>}
     {(message || error) && <div className={`toast ${error ? "error" : ""}`}>{error || message}<button onClick={() => {setError("");setMessage("");}}><X/></button></div>}

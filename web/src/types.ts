@@ -174,13 +174,20 @@ export interface LibrarySummary {
 export interface LibraryPage extends LibrarySummary { files: LibraryFile[]; total: number }
 export type LibraryMatch = "unmatched" | "matched" | "suggested" | "rejected";
 /** Why a proposal wants a second look before it is confirmed. */
-export type SuggestionReason = "ambiguous" | "year" | "correction";
+export type SuggestionReason = "ambiguous" | "year" | "part" | "correction";
+/** One competing candidate of a proposal: enough to tell the rows apart, and never a
+ *  provider payload or an image address. */
+export interface SuggestionAlternative {
+  type: string; id: string; name: string; year?: number; score: number; titleSimilarity: number;
+}
 export interface MatchSuggestion {
   type: string; id: string; name: string; year?: number; score: number;
   /** Name-only similarity as a percentage; absent on suggestions saved by older versions. */
   titleSimilarity?: number;
   /** Why a high score still wants a look. Absent when nothing needs explaining. */
   reason?: SuggestionReason;
+  /** The competing candidates behind an ambiguous or part-conflicted proposal. */
+  alternatives?: SuggestionAlternative[];
   /** The proposed candidate's own poster, already through the server's image proxy. */
   poster?: string;
   /** Set on a correction: the automatic binding this proposal would replace. */
@@ -194,7 +201,12 @@ export interface BrowseMeta {
    *  move dialog then offers every library rather than refusing on a guess. */
   titleType?: "movie" | "series";
 }
-export interface BrowseFolder extends BrowseMeta { path: string; name: string; fileCount: number; size: number; poster?: string; wide?: string }
+export interface BrowseFolder extends BrowseMeta {
+  path: string; name: string; fileCount: number; size: number; poster?: string; wide?: string;
+  /** The distinct films this folder holds, when it is a collection of more than one: a poster
+   *  mosaic instead of the folder's own picture. Absent on a folder that is one title. */
+  posters?: string[];
+}
 export interface BrowseFile extends LibraryFile, BrowseMeta {
   poster?: string; wide?: string; progress?: { position: number; duration: number };
   /** The show this episode belongs to, on a Continue watching row only. */

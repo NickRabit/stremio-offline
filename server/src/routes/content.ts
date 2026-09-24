@@ -3,11 +3,11 @@ import path from "node:path";
 import { mkdir, rename, stat } from "node:fs/promises";
 import { artworks } from "../artwork-cache.js";
 import type { ArtShape } from "../artwork.js";
-import { pendingSuggestionKeys, type GalleryEntry, type LibraryMetaRecord, type LibrarySuggestion } from "../library-match.js";
+import { folderMosaicUnits, pendingSuggestionKeys, type GalleryEntry, type LibraryMetaRecord, type LibrarySuggestion, type TitleUnit } from "../library-match.js";
 import { AppError } from "../errors.js";
 import { assertStillAdmin } from "../roles.js";
-import { libraryFor, libraryPath, libraryVisible, parseLibraryPath, posixDir, posixJoin, resolveLibraryPath, sameFile, visibleLibraries, type LibraryRecord, type Viewer } from "../libraries.js";
-import { browseDirectory, holdsLibraryRoot, listFolders, type LibraryEntry } from "../library.js";
+import { libraryFor, libraryPath, libraryVisible, parseLibraryPath, posixBase, posixDir, posixJoin, resolveLibraryPath, sameFile, visibleLibraries, type LibraryRecord, type Viewer } from "../libraries.js";
+import { browseDirectory, holdsLibraryRoot, isVideo, listFolders, type LibraryEntry } from "../library.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import type { LibraryHealth } from "../library-probe.js";
 import type { TransferProgress } from "../library-transfer.js";
@@ -34,6 +34,8 @@ export interface ContentDeps extends RouteContext {
   libraryKey(value: string): string;
   libraryPathBusy(keys: string[]): Promise<string | undefined>;
   libraryRootBrowse(viewer: Viewer): Promise<{ path: string; items: unknown[]; total: number; pending: boolean }>;
+  /** Every title unit of every library, the walk the browse folder mosaic groups. */
+  libraryUnits(): Promise<TitleUnit[]>;
   locateArtwork(entry: LibraryEntry, shape?: ArtShape): Promise<string | undefined>;
   locateFileArtwork(key: string, shape?: ArtShape): Promise<string | undefined>;
   locateFolderArtwork(key: string, shape?: ArtShape): Promise<string | undefined>;
@@ -54,7 +56,25 @@ export interface ContentDeps extends RouteContext {
 }
 
 export function registerContentRoutes(app: express.Application, deps: ContentDeps): void {
-  const { store, currentUser, attachBrowseMeta, carveOutsOf, dataOf, deleteLibraryItem, fileExists, galleryArtwork, galleryOf, healthOf, invalidateLibrary, libraryEntries, libraryKey, libraryPathBusy, libraryRootBrowse, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, metaStore, prefsOf, progressOf, relativeKeyIn, relocateLibraryPath, scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites } = deps;
+  const { store, currentUser, attachBrowseMeta, carveOutsOf, dataOf, deleteLibraryItem, fileExists, galleryArtwork, galleryOf, healthOf, invalidateLibrary, libraryEntries, libraryKey, libraryPathBusy, libraryRootBrowse, libraryUnits, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, metaStore, prefsOf, progressOf, relativeKeyIn, relocateLibraryPath, scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites } = deps;
+
+  /** The distinct films a folder holds, one catalogue picture each, bounded and deduplicated
+   *  by identity. A folder that is one film or a series answers with nothing, so it keeps the
+   *  single poster it has always had. Only artwork already on disk is used: grouping films
+   *  into a mosaic never pays for a video frame of its own. */
+  const folderPosters = async (folderKey: string, library: LibraryRecord, units: TitleUnit[]): Promise<string[]> => {
+    if (library.mosaic === false) return [];
+    const distinct = folderMosaicUnits(units, folderKey, metaStore.qualifiedMeta(), metaStore.qualifiedSuggestions(), 5);
+    if (distinct.length < 2) return [];
+    const posters: string[] = [];
+    for (const unit of distinct) {
+      const file = isVideo(posixBase(unit.key));
+      const art = file ? await locateFileArtwork(unit.key) : await locateFolderArtwork(unit.key);
+      const poster = await thumbUrl(file ? "path" : "dir", wirePath(unit.key), art);
+      if (poster) posters.push(poster);
+    }
+    return posters.length > 1 ? posters : [];
+  };
 
   /** The relative paths a pending suggestion covers: its own row, plus every folder above
    *  it, so a folder holding an unconfirmed title is listed too. */
@@ -114,15 +134,20 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     const result = await browseDirectory(library.root, resolved?.relative ?? "", String(req.query.query ?? ""),
       Math.max(0, Number(req.query.skip) || 0), limit, sort, req.query.order === "desc", String(req.query.seed ?? ""), onlyPaths,
       carveOutsOf(library));
+    const units = result.items.some((item) => item.kind === "folder") ? await libraryUnits() : [];
     // Missing thumbnails are produced in the background; the client asks for the page again shortly.
     const items = await Promise.all(result.items.map(async (item) => {
       const key = inLibrary(item.path);
       const path = wirePath(key);
       if (item.kind === "folder") {
+        const { item: withMeta, backfill } = attachBrowseMeta({ ...item, path }, prefsOf(req).uiLanguage);
+        // A collection stands for several films: it shows their posters rather than a folder
+        // frame of its own, and no frame is scheduled for it.
+        const posters = await folderPosters(key, library, units);
+        if (posters.length > 1) return { ...withMeta, path, posters, poster: undefined, wide: undefined, backfill };
         const { poster: art, wide } = await locateFolderArtworkPair(key);
         if (!art) scheduleFolderArtwork(key);
         if (!wide) scheduleFolderArtwork(key, "wide");
-        const { item: withMeta, backfill } = attachBrowseMeta({ ...item, path }, prefsOf(req).uiLanguage);
         return {
           ...withMeta, path,
           poster: await thumbUrl("dir", path, art),
@@ -146,7 +171,12 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
       };
     }));
     const marked = withFavorites(items, data);
-    res.json({ ...result, path: wirePath(inLibrary(result.path)), items: marked.map(({ backfill: _backfill, ...item }) => item), pending: marked.some((item) => !item.poster || !item.wide || item.backfill) });
+    const collage = (item: { kind: string; posters?: string[] }) => item.kind === "folder" && (item.posters?.length ?? 0) > 1;
+    res.json({
+      ...result, path: wirePath(inLibrary(result.path)),
+      items: marked.map(({ backfill: _backfill, ...item }) => item),
+      pending: marked.some((item) => (collage(item) ? Boolean(item.backfill) : !item.poster || !item.wide || item.backfill)),
+    });
   }));
 
   app.delete("/api/library/item", asyncRoute(async (req, res) => {

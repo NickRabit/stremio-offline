@@ -316,3 +316,17 @@ it("offers the addon search even when the trusted providers return no rows", asy
   await act(async () => { await Promise.resolve(); });
   expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("/api/search"))).toBe(true);
 });
+
+it("cancelling reports a cancel and never the applied callback", async () => {
+  const onClose = vi.fn();
+  const onApplied = vi.fn();
+  fetchMock.mockImplementation((url: string) =>
+    Promise.resolve(json(String(url).includes("/api/library/identity") ? identity : { items: [], total: 0 })));
+  await act(async () => { root.render(<IdentifyDialog path="Father Ted" onClose={onClose} onApplied={onApplied}/>); });
+  await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+  await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })); });
+  expect(onClose).toHaveBeenCalledTimes(1);
+  expect(onApplied).not.toHaveBeenCalled();
+  expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("/api/library/match"))).toBe(false);
+});

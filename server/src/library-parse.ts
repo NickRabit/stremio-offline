@@ -38,6 +38,9 @@ export interface ParsedMedia {
   year?: number;
   season?: number;
   episode?: number;
+  /** An explicit part/volume marker ("Part 2", "CD1"), or a bare trailing number when
+   *  `part` is read with `bare` set. `1` for the first half of a multipart film. */
+  part?: number;
   providerHints?: { imdb?: string; tmdb?: string; tvdb?: string };
 }
 
@@ -50,6 +53,21 @@ const TAGGED_EPISODE = /\bS(\d{1,3})E(\d{1,4})\b/i;
 const X_EPISODE = /\b(\d{1,2})x(\d{1,4})\b/i;
 const CHANNEL = /\b[57]\.1\b/gi;
 const RELEASE_GROUP = /-[A-Za-z0-9]{2,15}$/;
+
+/** Words that turn the number after them into a part marker rather than a title word.
+ *  The Czech `část`/`díl` count the same way, in both their diacritic and plain spellings. */
+const PART_WORD = "(?:part|pt|cd|disc|disk|vol|volume|chap|chapter|ch|část|části|cast|díl|dílu|dil)";
+/** One token, e.g. "cd1", "part2". */
+const PART_FUSED = new RegExp(`^${PART_WORD}([0-9]{1,2}|[ivx]{1,4})$`, "i");
+/** A fused token split apart by punctuation, e.g. "cd" then "1". */
+const PART_WORD_ONLY = new RegExp(`^${PART_WORD}$`, "i");
+/** What may follow a part word: a plain number or a Roman numeral. */
+const PART_NUMBER = /^(?:[0-9]{1,2}|[ivx]{1,4})$/i;
+const ROMAN = /^[ivx]{1,4}$/i;
+const ROMAN_VALUE: Record<string, number> = { i: 1, ii: 2, iii: 3, iv: 4, v: 5, vi: 6, vii: 7, viii: 8, ix: 9, x: 10 };
+const BARE_NUMBER = /^([0-9]{1,2})$/;
+/** "Obsession (2)" is a second encode of one film, not a part. */
+const PAREN_TAIL = /\s*\(\s*[0-9]{1,3}\s*\)\s*$/;
 
 const phrasePattern = (phrase: string) =>
   new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/ /g, "[\\s._]+"), "gi");
@@ -196,8 +214,64 @@ function bilingualQuery(title: string): string {
   return title;
 }
 
-export function parseMediaPath(relative: string): ParsedMedia {
-  const original = subjectName(relative);
+const romanPart = (token: string): number | undefined => ROMAN_VALUE[token.toLowerCase()];
+
+/** The part/volume marker of one title, as a canonical string, or "". Explicit markers
+ *  ("Part 2", "CD1") always count; a bare trailing number ("Toy Story 2") counts only when
+ *  the caller asked for it, because "Obsession (2)" is a second encode of one film while
+ *  "Toy Story 2" is another film. */
+export function partSignature(value: string | undefined, bare = false): string {
+  const tokens = collapse(String(value ?? "").replace(PAREN_TAIL, " ")).toLowerCase().split(" ").filter(Boolean);
+  const found: string[] = [];
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index]!;
+    const fused = PART_FUSED.exec(token);
+    if (fused) {
+      const number = /^\d+$/.test(fused[1]!) ? Number(fused[1]) : romanPart(fused[1]!);
+      if (number != null) { found.push(`${PART_WORD}:${number}`); continue; }
+    }
+    if (PART_WORD_ONLY.test(token)) {
+      const next = tokens[index + 1];
+      const number = next == null ? undefined : /^\d{1,2}$/.test(next) ? Number(next) : romanPart(next);
+      if (number != null) { found.push(`${PART_WORD}:${number}`); index += 1; continue; }
+    }
+    if (index === tokens.length - 1 && ROMAN.test(token)) {
+      const number = romanPart(token);
+      if (number != null) found.push(`roman:${number}`);
+    }
+  }
+  if (!found.length && bare && tokens.length > 1) {
+    const last = tokens[tokens.length - 1]!;
+    const bareMatch = BARE_NUMBER.exec(last);
+    if (bareMatch) {
+      const number = Number(bareMatch[1]);
+      if (number >= 1 && number <= 29) found.push(`bare:${number}`);
+    }
+  }
+  return found.join("+");
+}
+
+/** Drops the explicit part/volume tokens from a normalized title, so the halves of a
+ *  multipart film compare equal. A bare trailing number is left alone on purpose. */
+export function stripPartMarkers(normalized: string): string {
+  const tokens = normalized.split(" ").filter(Boolean);
+  const kept: string[] = [];
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index]!;
+    if (PART_FUSED.test(token) || (PART_WORD_ONLY.test(token) && tokens[index + 1] != null && PART_NUMBER.test(tokens[index + 1]!))) {
+      if (PART_WORD_ONLY.test(token)) index += 1;
+      continue;
+    }
+    if (index === tokens.length - 1 && ROMAN.test(token)) continue;
+    kept.push(token);
+  }
+  return kept.join(" ");
+}
+
+/** One file or folder name, parsed on its own. Unlike `parseMediaPath` it does not reach for
+ *  a parent folder: a name that a caller already knows is the subject is read as it stands. */
+export function parseMediaName(name: string): ParsedMedia {
+  const original = name;
   const releaseGroup = original.match(RELEASE_GROUP)?.[0].slice(1);
   const { rest: withoutHints, hints } = extractHints(original);
 
@@ -249,11 +323,18 @@ export function parseMediaPath(relative: string): ParsedMedia {
     });
   }
   title = collapse(title);
+  const part = partSignature(title);
   const query = bilingualQuery(title);
   const result: ParsedMedia = { title, query };
   if (year != null) result.year = year;
   if (season != null) result.season = season;
   if (episode != null) result.episode = episode;
+  const partNumber = /:(\d+)$/.exec(part);
+  if (partNumber) result.part = Number(partNumber[1]);
   if (hints.imdb || hints.tmdb || hints.tvdb) result.providerHints = hints;
   return result;
+}
+
+export function parseMediaPath(relative: string): ParsedMedia {
+  return parseMediaName(subjectName(relative));
 }

@@ -149,3 +149,25 @@ test("an empty query is answered without reaching any provider", async () => {
   assert.deepEqual(calls.tmdb, []);
   assert.deepEqual(calls.cinemeta, []);
 });
+
+test("a candidate keeps its original title so a localized file can meet it", async () => {
+  const { candidates } = service({
+    tmdb: config,
+    tmdbItems: () => [meta({ id: "tmdb:9", name: "Sedm statečných", originalTitle: "Sirotčinec" })],
+  });
+  const found = await candidates.searchLibraryCandidates("Sirotčinec", "movie", undefined, "cs");
+  assert.equal(found.length, 1);
+  assert.equal(found[0]!.item.originalTitle, "Sirotčinec");
+});
+
+test("a TMDB hit with no title evidence falls through to the trusted Cinemeta", async () => {
+  const { candidates, calls } = service({
+    tmdb: config,
+    // WALL-E shares a word with this title and nothing else; it is not evidence.
+    tmdbItems: () => [meta({ id: "tmdb:1", name: "Eton Wall Game", releaseInfo: "2017" })],
+    cinemetaItems: () => [meta({ id: "tt0910970", name: "WALL-E", releaseInfo: "2008" })],
+  });
+  const found = await candidates.searchLibraryCandidates("WALL-E", "movie", undefined, "en");
+  assert.deepEqual(found.map((entry) => [entry.provider, entry.item.id]), [["cinemeta", "tt0910970"]]);
+  assert.deepEqual(calls.cinemeta, ["WALL-E"], "the weak TMDB row permits the trusted fallback");
+});
