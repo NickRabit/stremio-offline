@@ -1,20 +1,57 @@
 {
   "name": "@stremio-offline/desktop",
   "private": true,
-  "version": "0.4.70",
+  "version": "0.4.71",
+  "description": "Desktop client for connecting to Stremio Offline servers",
+  "author": "Stremio Offline contributors",
   "license": "MIT",
   "type": "module",
   "main": "dist/main.js",
   "scripts": {
+    "build": "tsc -p tsconfig.json",
     "dev": "tsc -p tsconfig.json && electron .",
     "start": "electron .",
     "test": "tsx --test src/*.test.ts",
-    "spike:utility": "electron spike/run.mjs"
+    "spike:utility": "electron spike/run.mjs",
+    "package:mac:arm64": "npm run build && electron-builder --mac --arm64 --publish never"
   },
   "devDependencies": {
     "@types/node": "22.15.30",
     "electron": "44.4.3",
+    "electron-builder": "26.15.3",
     "tsx": "4.20.3",
     "typescript": "5.8.3"
+  },
+  "build": {
+    "appId": "com.stremiooffline.desktop",
+    "productName": "Stremio Offline",
+    "npmRebuild": false,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*.js",
+      "static/connection.html",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.video",
+      "identity": null,
+      "artifactName": "Stremio-Offline-${version}-${arch}.${ext}",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ]
+    }
   }
 }
