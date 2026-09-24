@@ -17,20 +17,18 @@ release — see [Limits](#limits) before sharing anything built here.
 
 ## Build locally
 
-Run everything from the repository root so the npm workspace and its lockfile
-are used as-is:
+Run the packaging script from the repository root so the npm workspace and its
+lockfile are used as-is:
 
 ```bash
 npm ci
-npm run build -w desktop
 npm run test -w desktop
 npm run package:mac:arm64 -w desktop
 ```
 
-`package:mac:arm64` rebuilds the TypeScript (`dist/main.js`, the modules it
-imports, and `dist/preload.js`) before it runs electron-builder for the `arm64`
-target, so the standalone `npm run build -w desktop` above only exists to check
-compilation on its own.
+`package:mac:arm64` builds the TypeScript (`dist/main.js`, the modules it
+imports, and `dist/preload.js`) and then runs electron-builder for the `arm64`
+target. CI uses this same script.
 
 ## Artifacts
 
