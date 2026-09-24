@@ -1,5 +1,6 @@
 import { app, BaseWindow, ipcMain, session, shell as electronShell, WebContentsView, type IpcMainEvent, type IpcMainInvokeEvent } from "electron";
 import { randomUUID } from "node:crypto";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   addProfile,
@@ -14,6 +15,7 @@ import {
   type ProfileStore,
   type ServerProfile,
 } from "./connection-file.js";
+import { downloadProgressPercent, isDeviceTicketDownload } from "./downloads.js";
 import { catalogue } from "./i18n.js";
 import { layout, type LayoutMode } from "./layout.js";
 import { externalBrowserUrl, httpAllowedHost, parseServerOrigin, partitionForOrigin, type ServerOrigin } from "./origin.js";
@@ -29,6 +31,7 @@ type ProfileResult =
 // The player asks for fullscreen. Copy on an HTTPS server uses the sanitized clipboard write.
 const ALLOWED_PERMISSIONS = new Set<string>(["fullscreen", "clipboard-sanitized-write"]);
 const ABORTED = -3;
+const DOWNLOAD_NOTICE_INTERVAL = 500;
 
 const CONNECTION_PAGE = fileURLToPath(new URL("../static/connection.html", import.meta.url));
 const CONNECTION_PRELOAD = fileURLToPath(new URL("./preload.js", import.meta.url));
@@ -89,6 +92,13 @@ const notifyConnection = (key: MessageKey) => {
   const current = shell;
   if (!current) return;
   void current.connection.webContents.executeJavaScript(`window.desktopNotice?.(${JSON.stringify(key)})`).catch(() => {});
+};
+
+/** A download notice arrives as finished text, because it carries a percentage the shell formats. */
+const notifyDownload = (text: string) => {
+  const current = shell;
+  if (!current) return;
+  void current.connection.webContents.executeJavaScript(`window.desktopDownloadNotice?.(${JSON.stringify(text)})`).catch(() => {});
 };
 
 const originOf = (url: string) => {
@@ -169,7 +179,7 @@ const refusePublicHttp = (rawUrl: string, resourceType: string) => {
   failConnection("insecure-transport");
 };
 
-const preparePartition = (partition: string) => {
+const preparePartition = (partition: string, serverOrigin: string) => {
   if (preparedPartitions.has(partition)) return;
   preparedPartitions.add(partition);
   const ses = session.fromPartition(partition);
@@ -181,6 +191,51 @@ const preparePartition = (partition: string) => {
     const cancel = httpRequestBlocked(details.url);
     callback({ cancel });
     if (cancel) refusePublicHttp(details.url, details.resourceType);
+  });
+  const activeDownloads = new Map<object, string>();
+  const updateActiveDownload = (item: object, text: string) => {
+    activeDownloads.delete(item);
+    activeDownloads.set(item, text);
+  };
+  // Only a ticket this server's own page downloaded stays local. Everything else keeps Electron's
+  // routine: the download is not prevented, renamed or given a save path.
+  ses.on("will-download", (_event, item, contents) => {
+    if (!isDeviceTicketDownload(item.getURL(), item.getInitiatorOrigin(), serverOrigin)) return;
+    const current = shell;
+    if (!current?.remote || current.remotePartition !== partition || current.remote.webContents !== contents) return;
+    const strings = catalogue(app.getLocale());
+    const name = path.basename(item.getFilename());
+    item.setSaveDialogOptions({ title: strings["download.saveTitle"], defaultPath: name.length > 0 ? name : "video" });
+    const showLatestActiveDownload = () => {
+      const latest = Array.from(activeDownloads.values()).at(-1);
+      const active = shell;
+      if (latest && active?.remote?.webContents === contents && active.remotePartition === partition) notifyDownload(latest);
+    };
+    updateActiveDownload(item, strings["download.saving"]);
+    showLatestActiveDownload();
+    let lastPercent: number | null = null;
+    let lastNoticeAt = Date.now();
+    item.on("updated", (_updated, state) => {
+      if (state !== "progressing") return;
+      const now = Date.now();
+      if (now - lastNoticeAt < DOWNLOAD_NOTICE_INTERVAL) return;
+      const percent = downloadProgressPercent(item.getReceivedBytes(), item.getTotalBytes());
+      if (percent === lastPercent) return;
+      lastNoticeAt = now;
+      lastPercent = percent;
+      updateActiveDownload(item, percent === null ? strings["download.saving"] : strings["download.progress"].replace("{percent}", String(percent)));
+      showLatestActiveDownload();
+    });
+    item.once("done", (_done, state) => {
+      activeDownloads.delete(item);
+      if (activeDownloads.size > 0) showLatestActiveDownload();
+      else {
+        const active = shell;
+        if (active?.remote?.webContents === contents && active.remotePartition === partition) {
+          notifyDownload(state === "completed" ? strings["download.completed"] : state === "cancelled" ? strings["download.cancelled"] : strings["download.interrupted"]);
+        }
+      }
+    });
   });
 };
 
@@ -211,7 +266,7 @@ const mountRemote = (server: ServerOrigin): WebContentsView | null => {
   const partition = partitionForOrigin(server.origin);
   if (current.remote && current.remotePartition === partition) return current.remote;
   destroyRemote();
-  preparePartition(partition);
+  preparePartition(partition, server.origin);
   const remote = new WebContentsView({
     webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true, partition },
   });

@@ -5,9 +5,27 @@ Offline server. It keeps all remote-server behaviour: it renders the connection
 page locally and points a second view at the server origin you configure, exactly
 as running the workspace from source does. Packaging changes nothing about that.
 
-This README covers the packaging prototype only. It produces a macOS arm64
-`.dmg` and `.zip` from the compiled shell. It is deliberately not a public
-release — see [Limits](#limits) before sharing anything built here.
+The packaging sections below cover the packaging prototype only. It produces a
+macOS arm64 `.dmg` and `.zip` from the compiled shell. It is deliberately not a
+public release — see [Limits](#limits) before sharing anything built here.
+
+## Saving to this device
+
+**Save to this device** mints a short-lived ticket on the server and hands that
+same-origin URL to Electron, so the media bytes never pass through the shell.
+For such a ticket the shell keeps Electron's **native Save dialog** and only
+sets its title and a safe suggested filename; it never picks a save path,
+never suppresses the dialog and never downloads the file itself. Progress and
+the result are shown in the 48 px bar above the server page.
+
+- A percentage is shown only when the server reports a positive total size. An
+  unknown size — a playlist being assembled, for example — stays a plain
+  "saving".
+- The save is **not resumable and not a background download**. Closing the
+  window, losing the connection to the server, or cancelling the dialog ends
+  it; an interrupted save has to be started again from the server UI.
+- Logs, settings exports, addon manifests, `blob:` links and every other
+  download keep Electron's own behaviour instead.
 
 ## Requirements
 
