@@ -1,4 +1,4 @@
-import { app, BaseWindow, ipcMain, session, shell as electronShell, WebContentsView, type IpcMainEvent, type IpcMainInvokeEvent } from "electron";
+import { app, BaseWindow, ipcMain, session, shell as electronShell, utilityProcess, WebContentsView, type IpcMainEvent, type IpcMainInvokeEvent } from "electron";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,6 +18,7 @@ import {
 import { downloadProgressPercent, isDeviceTicketDownload } from "./downloads.js";
 import { catalogue } from "./i18n.js";
 import { layout, type LayoutMode } from "./layout.js";
+import { LOCAL_PARTITION, LocalBackend, type LocalBackendConnection } from "./local-backend.js";
 import { externalBrowserUrl, httpAllowedHost, parseServerOrigin, partitionForOrigin, type ServerOrigin } from "./origin.js";
 import { SerialQueue } from "./serial-queue.js";
 import { fetchStatus, type ProbeFailure, type ProbeResult } from "./status.js";
@@ -28,6 +29,10 @@ type ProfileResult =
   | { ok: true; profiles: ServerProfile[]; selectedProfileId: string | null }
   | { ok: false; reason: "invalid-name" | "invalid-data" | "save-failed" };
 
+type LocalConnectResult =
+  | { ok: true; version: string; restricted: boolean; secure: boolean }
+  | { ok: false; reason: "startup" };
+
 // The player asks for fullscreen. Copy on an HTTPS server uses the sanitized clipboard write.
 const ALLOWED_PERMISSIONS = new Set<string>(["fullscreen", "clipboard-sanitized-write"]);
 const ABORTED = -3;
@@ -35,6 +40,10 @@ const DOWNLOAD_NOTICE_INTERVAL = 500;
 
 const CONNECTION_PAGE = fileURLToPath(new URL("../static/connection.html", import.meta.url));
 const CONNECTION_PRELOAD = fileURLToPath(new URL("./preload.js", import.meta.url));
+/** The staged runtime keeps the server's `../../web` layout: `runtime/server/dist` and `runtime/web`. */
+const LOCAL_BACKEND_ENTRY = fileURLToPath(new URL("../runtime/server/dist/index.js", import.meta.url));
+/** CI starts the packaged app with this flag instead of a window: start, probe, stop, exit. */
+const SMOKE_LOCAL_BACKEND = "--smoke-local-backend";
 
 const CAPABILITIES = `() => {
   const supports = (type) => {
@@ -72,6 +81,8 @@ let shell: Shell | null = null;
 let connected: ServerOrigin | null = null;
 let mode: LayoutMode = "connect";
 let loadFailure: ProbeFailure | null = null;
+let localBackend: LocalBackend | null = null;
+let localConnection: LocalBackendConnection | null = null;
 const preparedPartitions = new Set<string>();
 let profileStore: ProfileStore = { profiles: [], selectedProfileId: null };
 
@@ -179,7 +190,9 @@ const refusePublicHttp = (rawUrl: string, resourceType: string) => {
   failConnection("insecure-transport");
 };
 
-const preparePartition = (partition: string, serverOrigin: string) => {
+/** The origin the ticket check compares against is read at download time: the local server may
+ *  come back on another port while its partition stays the same. */
+const preparePartition = (partition: string, serverOrigin: () => string | null) => {
   if (preparedPartitions.has(partition)) return;
   preparedPartitions.add(partition);
   const ses = session.fromPartition(partition);
@@ -200,7 +213,8 @@ const preparePartition = (partition: string, serverOrigin: string) => {
   // Only a ticket this server's own page downloaded stays local. Everything else keeps Electron's
   // routine: the download is not prevented, renamed or given a save path.
   ses.on("will-download", (_event, item, contents) => {
-    if (!isDeviceTicketDownload(item.getURL(), item.getInitiatorOrigin(), serverOrigin)) return;
+    const expectedOrigin = serverOrigin();
+    if (expectedOrigin === null || !isDeviceTicketDownload(item.getURL(), item.getInitiatorOrigin(), expectedOrigin)) return;
     const current = shell;
     if (!current?.remote || current.remotePartition !== partition || current.remote.webContents !== contents) return;
     const strings = catalogue(app.getLocale());
@@ -260,13 +274,12 @@ const wireRemote = (remote: WebContentsView) => {
   });
 };
 
-const mountRemote = (server: ServerOrigin): WebContentsView | null => {
+const mountRemote = (partition: string, serverOrigin: () => string | null): WebContentsView | null => {
   const current = shell;
   if (!current) return null;
-  const partition = partitionForOrigin(server.origin);
   if (current.remote && current.remotePartition === partition) return current.remote;
   destroyRemote();
-  preparePartition(partition, server.origin);
+  preparePartition(partition, serverOrigin);
   const remote = new WebContentsView({
     webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true, partition },
   });
@@ -346,7 +359,7 @@ const connectProfile = (id: string | null): Promise<ProbeResult> =>
     const result = await fetchStatus(server.origin);
     if (!result.ok) return result;
     await persistProfiles({ ...profileStore, selectedProfileId: profile.id });
-    const remote = mountRemote(server);
+    const remote = mountRemote(partitionForOrigin(server.origin), () => server.origin);
     if (!remote) return { ok: false, reason: "unreachable" };
     loadFailure = null;
     connected = server;
@@ -364,7 +377,70 @@ const connectProfile = (id: string | null): Promise<ProbeResult> =>
     if (!connected) return { ok: false, reason: loadFailure ?? "unreachable" };
     shell?.window.setTitle(server.origin);
     applyMode("remote");
+    // A remote profile that answered takes over from the local backend for good.
+    await closeLocalBackend();
     return result;
+  });
+
+/** The live local origin, or null when nothing local is running. Never a saved profile. */
+const localOrigin = (): string | null => localConnection?.server.origin ?? null;
+
+const failLocalConnection = () => {
+  localConnection = null;
+  const wasConnected = connected !== null;
+  connected = null;
+  loadFailure = null;
+  if (mode !== "connect") {
+    applyMode("connect");
+    shell?.window.setTitle(windowTitle());
+    notifyConnection("connect.localFailed");
+  }
+  if (wasConnected) blankRemote();
+};
+
+const closeLocalBackend = async (): Promise<void> => {
+  localConnection = null;
+  const backend = localBackend;
+  if (!backend) return;
+  await backend.stop().catch(() => {});
+};
+
+const connectLocal = (): Promise<LocalConnectResult> =>
+  queue.run(async (): Promise<LocalConnectResult> => {
+    const backend = localBackend;
+    if (!backend) return { ok: false, reason: "startup" };
+    let connection: LocalBackendConnection;
+    try {
+      connection = await backend.start();
+    } catch (error) {
+      console.warn("local backend: " + (error instanceof Error ? error.message : String(error)));
+      // Nothing was mounted and nothing was given up, so the shell stays where it is.
+      return { ok: false, reason: "startup" };
+    }
+    localConnection = connection;
+    const remote = mountRemote(LOCAL_PARTITION, localOrigin);
+    if (!remote) {
+      await closeLocalBackend();
+      failLocalConnection();
+      return { ok: false, reason: "startup" };
+    }
+    loadFailure = null;
+    connected = connection.server;
+    try {
+      await remote.webContents.loadURL(connection.server.origin + "/");
+    } catch {
+      console.warn("local backend: the local page did not load (" + (loadFailure ?? "unreachable") + ")");
+      await closeLocalBackend();
+      failLocalConnection();
+      return { ok: false, reason: "startup" };
+    }
+    if (!connected) {
+      await closeLocalBackend();
+      return { ok: false, reason: "startup" };
+    }
+    shell?.window.setTitle(connection.server.origin);
+    applyMode("remote");
+    return { ok: true, ...connection.status };
   });
 
 const registerHandlers = () => {
@@ -394,10 +470,16 @@ const registerHandlers = () => {
     return connectProfile(profileIdOf(input));
   });
 
+  ipcMain.handle("desktop:connect-local", async (event): Promise<LocalConnectResult> => {
+    if (!fromConnection(event)) throw new Error("desktop: unexpected sender");
+    return connectLocal();
+  });
+
   ipcMain.handle("desktop:disconnect", async (event) => {
     if (!fromConnection(event)) throw new Error("desktop: unexpected sender");
     connected = null;
     loadFailure = null;
+    await closeLocalBackend();
     destroyRemote();
     applyMode("connect");
     shell?.window.setTitle(windowTitle());
@@ -406,12 +488,67 @@ const registerHandlers = () => {
 
 app.on("window-all-closed", () => app.quit());
 
-app.on("activate", () => {
-  if (!shell) createShell();
+const createLocalBackend = (): LocalBackend => new LocalBackend({
+  entry: LOCAL_BACKEND_ENTRY,
+  userDataDir: app.getPath("userData"),
+  fork: (entry, options) => utilityProcess.fork(entry, [], options),
+  probeStatus: fetchStatus,
+  onUnexpectedExit: () => failLocalConnection(),
+  log: (line) => console.warn("local backend: " + line),
 });
 
-void app.whenReady().then(async () => {
-  profileStore = await readProfiles(app.getPath("userData"));
-  registerHandlers();
-  createShell();
-});
+/** The packaged smoke: start the managed backend, let it answer its status, stop it, exit. */
+const runLocalBackendSmoke = async () => {
+  const backend = createLocalBackend();
+  try {
+    const connection = await backend.start();
+    process.stdout.write(`local-backend-smoke: ready ${connection.server.origin} api/status ${connection.status.version}\n`);
+    await backend.stop();
+    process.stdout.write("local-backend-smoke: stopped\n");
+    app.exit(0);
+  } catch (error) {
+    process.stdout.write(`local-backend-smoke: failed ${error instanceof Error ? error.message : String(error)}\n`);
+    await backend.stop().catch(() => {});
+    app.exit(1);
+  }
+};
+
+if (process.argv.includes(SMOKE_LOCAL_BACKEND)) {
+  // The smoke gets its own instance directory, so it neither needs the single-instance lock
+  // nor touches the data of an install that happens to be running.
+  app.setPath("userData", path.join(app.getPath("temp"), `stremio-offline-smoke-${randomUUID()}`));
+  void app.whenReady().then(runLocalBackendSmoke);
+} else if (app.requestSingleInstanceLock()) {
+  // A second launch must not start a second backend against the same instance directory.
+  app.on("second-instance", () => {
+    const current = shell;
+    if (!current) return;
+    if (current.window.isMinimized()) current.window.restore();
+    current.window.focus();
+  });
+
+  app.on("activate", () => {
+    if (!shell) createShell();
+  });
+
+  let backendShutdownComplete = false;
+  let backendShutdown: Promise<void> | null = null;
+  app.on("before-quit", (event) => {
+    if (backendShutdownComplete) return;
+    event.preventDefault();
+    if (backendShutdown) return;
+    backendShutdown = closeLocalBackend().finally(() => {
+      backendShutdownComplete = true;
+      app.quit();
+    });
+  });
+
+  void app.whenReady().then(async () => {
+    profileStore = await readProfiles(app.getPath("userData"));
+    localBackend = createLocalBackend();
+    registerHandlers();
+    createShell();
+  });
+} else {
+  app.quit();
+}

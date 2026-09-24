@@ -1,6 +1,9 @@
 node_modules/
 dist/
 desktop/release/
+# The built server and web output staged for the desktop package by
+# `desktop/scripts/stage-local-backend.mjs`.
+desktop/runtime/
 data/
 downloads/
 datacenter/

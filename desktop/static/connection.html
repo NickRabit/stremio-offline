@@ -12,7 +12,7 @@
     button { padding: 8px 14px; border: 1px solid #3a3a44; border-radius: 6px; background: #232331; color: inherit; font: inherit; cursor: pointer; }
     button:disabled { opacity: 0.5; cursor: default; }
     #form { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
-    #actions { display: flex; gap: 8px; }
+    #actions, #local-actions { display: flex; gap: 8px; }
     #hint { margin: 0; font-size: 12px; opacity: 0.6; }
     #message { margin: 0; }
     body.connected main { flex-direction: row; align-items: center; gap: 12px; height: 48px; padding: 0 14px; }
@@ -35,6 +35,9 @@
         <button id="save" type="button" data-i18n="connect.profileSave"></button>
         <button id="remove" type="button" data-i18n="connect.profileRemove"></button>
         <button id="connect" type="button" data-i18n="connect.connect"></button>
+      </div>
+      <div id="local-actions">
+        <button id="local" type="button" data-i18n="connect.local"></button>
       </div>
     </div>
     <button id="disconnect" type="button" data-i18n="connect.disconnect" hidden></button>

@@ -13,6 +13,9 @@ type MessageKey =
   | "connect.profileInvalidData"
   | "connect.profileSaveFailed"
   | "connect.connect"
+  | "connect.local"
+  | "connect.localStarting"
+  | "connect.localFailed"
   | "connect.disconnect"
   | "connect.probing"
   | "connect.unreachable"
@@ -52,6 +55,10 @@ type ProfileResult =
   | ({ ok: true } & ProfileState)
   | { ok: false; reason: "invalid-name" | "invalid-data" | "save-failed" };
 
+type LocalConnectResult =
+  | { ok: true; version: string; restricted: boolean; secure: boolean }
+  | { ok: false; reason: "startup" };
+
 interface DesktopBridge {
   bootstrap(): Promise<{ strings: Catalogue } & ProfileState>;
   strings: Catalogue;
@@ -61,6 +68,7 @@ interface DesktopBridge {
   deleteProfile(id: string): Promise<ProfileResult>;
   selectProfile(id: string | null): Promise<ProfileResult>;
   connect(id: string): Promise<ProbeResult>;
+  connectLocal(): Promise<LocalConnectResult>;
   disconnect(): Promise<void>;
 }
 
@@ -89,6 +97,7 @@ interface Window {
   const saveButton = document.getElementById("save") as HTMLButtonElement;
   const removeButton = document.getElementById("remove") as HTMLButtonElement;
   const connectButton = document.getElementById("connect") as HTMLButtonElement;
+  const localButton = document.getElementById("local") as HTMLButtonElement;
   const disconnectButton = document.getElementById("disconnect") as HTMLButtonElement;
 
   let strings: Catalogue | null = null;
@@ -121,6 +130,7 @@ interface Window {
     address.disabled = busy;
     saveButton.disabled = busy;
     connectButton.disabled = busy;
+    localButton.disabled = busy;
     removeButton.disabled = busy || selectedId === null;
   };
 
@@ -172,6 +182,14 @@ interface Window {
   const failureMessage = (reason: "invalid-name" | "invalid-data" | "save-failed"): MessageKey => {
     if (reason === "invalid-name") return "connect.profileInvalidName";
     return reason === "save-failed" ? "connect.profileSaveFailed" : "connect.profileInvalidData";
+  };
+
+  const showConnectedServer = (catalogue: Catalogue, result: { version: string; restricted: boolean; secure: boolean }) => {
+    showConnected();
+    const extra: string[] = [];
+    if (result.restricted) extra.push(catalogue["connect.restricted"]);
+    if (result.secure) extra.push(catalogue["connect.secure"]);
+    show(catalogue["connect.version"].replace("{version}", result.version), extra);
   };
 
   const saveForm = (): Promise<string | null> => {
@@ -260,11 +278,22 @@ interface Window {
         show(catalogue[failureKeys[result.reason]]);
         return;
       }
-      showConnected();
-      const extra: string[] = [];
-      if (result.restricted) extra.push(catalogue["connect.restricted"]);
-      if (result.secure) extra.push(catalogue["connect.secure"]);
-      show(catalogue["connect.version"].replace("{version}", result.version), extra);
+      showConnectedServer(catalogue, result);
+    });
+  });
+
+  localButton.addEventListener("click", () => {
+    void runAction(async () => {
+      const catalogue = strings;
+      if (!catalogue) return;
+      show(catalogue["connect.localStarting"]);
+      const result = await window.desktop.connectLocal();
+      if (!result.ok) {
+        showForm();
+        show(catalogue["connect.localFailed"]);
+        return;
+      }
+      showConnectedServer(catalogue, result);
     });
   });
 
