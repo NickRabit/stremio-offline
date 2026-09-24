@@ -58,8 +58,12 @@ being reopened, not as a changelog.
   main-process status check, with its own connection screen, named server
   profiles, a session per origin, a refused public HTTP request and links that
   leave for the system browser. An arm64 packaging prototype builds a macOS
-  `.dmg`/`.zip`, and **Save to this device** hands a download to the native
-  dialog. Delivered by [PR #211](https://github.com/NickRabit/stremio-offline/pull/211),
+  `.dmg`/`.zip` with the reviewed Electron Fuse V1 hardening applied at package
+  time — Node-as-Node, Node option injection, inspector switches and asar
+  shadowing are off, asar integrity validation is on, and the packaging
+  workflow reads the fuses back from the built `.app`. **Save to this device**
+  hands a download to the native dialog. Delivered by
+  [PR #211](https://github.com/NickRabit/stremio-offline/pull/211),
   [PR #221](https://github.com/NickRabit/stremio-offline/pull/221),
   [PR #222](https://github.com/NickRabit/stremio-offline/pull/222) and
   [PR #223](https://github.com/NickRabit/stremio-offline/pull/223); it stays an
@@ -103,12 +107,14 @@ catalogs, and an optional rank-by-title-match.
 ### Desktop
 
 The remote desktop shell ships with named server profiles and a macOS arm64
-packaging prototype (`.dmg`/`.zip`) with the native save-to-device handoff;
+packaging prototype (`.dmg`/`.zip`) with the native save-to-device handoff and
+the reviewed Electron Fuse V1 hardening applied at package time;
 [desktop/README.md](../desktop/README.md) records how it stands and what it
 deliberately leaves out. What is still outstanding for a distributable remote
-client is signing, notarization, update delivery and clean-install verification.
-Phase 2, starting and managing the local backend from the shell, follows that
-release work.
+client is signing, notarization, update delivery and clean-install verification,
+and the cookie-encryption fuse stays off until there is a stable signing
+identity to tie the macOS keychain key to. Phase 2, starting and managing the
+local backend from the shell, follows that release work.
 
 ## Engineering health
 
