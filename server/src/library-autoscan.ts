@@ -2,7 +2,7 @@ import { libraryFingerprint, type FoundFile } from "./library.js";
 import { log } from "./logger.js";
 import type { ScanState } from "./library-scan.js";
 
-export type AutoScanReason = "startup" | "interval" | "watch" | "rules";
+export type AutoScanReason = "startup" | "interval" | "watch";
 
 /** One library the check may walk. A root that is unreachable is left out of the
  *  list entirely, so its absence never reads as a mass deletion. */
@@ -92,9 +92,6 @@ export class LibraryAutoScan {
       for (const library of libraries) {
         const stamp = libraryFingerprint(await library.files());
         stamps.set(library.id, stamp);
-        // A rule change re-examines the rows the old rules left behind, in every library
-        // that can be reached; the scan itself then queues only the stale units.
-        if (reason === "rules") { changed.push(library.id); continue; }
         // The first check after a restart has no baseline: files may have been copied
         // in while the server was down, and a scan with nothing new to do is free.
         if (this.fingerprints.get(library.id) !== stamp) changed.push(library.id);

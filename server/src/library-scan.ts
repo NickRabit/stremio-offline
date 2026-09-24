@@ -188,18 +188,6 @@ export class LibraryScan {
     };
   }
 
-  /** Whether the current rules still owe a pass: a remembered proposal or miss they did not
-   *  write, minus the rows a person settled. Read from the rows themselves rather than a
-   *  consumed flag, so an interrupted run -- or one that reached no library at all -- cannot
-   *  lose the reminder, and a library that is away is reconsidered when it comes back. A row
-   *  the scan may not touch anyway (bound, excluded, its lookup switched off) does not ask. */
-  pendingRuleRun(): boolean {
-    const records = this.opts.libraryMeta();
-    return Object.entries(this.opts.librarySuggestions()).some(([key, suggestion]) =>
-      needsReevaluation(suggestion)
-      && !lookupSkipped(key, records) && !scanSkipReason(records[key]) && !knownTitleForUnit(key, records)?.id);
-  }
-
   async load() {
     await mkdir(path.dirname(this.stateFile), { recursive: true });
     try {
@@ -268,10 +256,6 @@ export class LibraryScan {
       return isPathWithin(unit.key, scope) || isPathWithin(scope, unit.key);
     };
     const wanted = units.filter(inRun);
-    // Every entry in the run is walked for its metadata anyway, so its missing wide variant is
-    // asked for here too -- once the run may work, so a scan started during playback is not
-    // left without it. One artwork job at a time, and a title without a backdrop is throttled.
-    this.eagerWide = wanted.map((unit) => unit.key);
     // Asking for one item is a deliberate act, so it ignores the searched-in-vain memory.
     const again = force || Boolean(scope);
     const queued = wanted.filter((unit) => {
@@ -298,6 +282,9 @@ export class LibraryScan {
       this.refreshing.add(unit.key);
       pending.push(unit.key);
     }
+    // Only fill wide art for titles this run will actually search or refresh. A rule upgrade
+    // must not queue artwork across an entire library just because it walks the tree.
+    this.eagerWide = pending.slice();
     if (recheck) for (const unit of queued) this.rechecking.add(unit.key);
     // A recheck keeps the binding and the suggestion it already has: what it adds is a
     // correction beside them, never a proposal that replaced them before anybody looked.

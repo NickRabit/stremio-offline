@@ -1961,10 +1961,6 @@ await queue.load();
 await libraryScan.load();
 if (autoScanAllowed) {
   libraryAutoScan.start();
-  // The rules that wrote the remembered proposals and misses may have changed under an
-  // upgrade. One bounded pass reconsiders exactly those rows instead of every title, and
-  // the rows themselves keep asking until a pass reaches the library they belong to.
-  if (libraryScan.pendingRuleRun()) void libraryAutoScan.check("rules");
 }
 // History comes from the queue so the statistics do not start empty; finished jobs can
 // be deleted, though, so from now on a record of our own is kept. Only what predates that

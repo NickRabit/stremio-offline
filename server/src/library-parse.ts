@@ -38,9 +38,6 @@ export interface ParsedMedia {
   year?: number;
   season?: number;
   episode?: number;
-  /** An explicit part/volume marker ("Part 2", "CD1"), or a bare trailing number when
-   *  `part` is read with `bare` set. `1` for the first half of a multipart film. */
-  part?: number;
   providerHints?: { imdb?: string; tmdb?: string; tvdb?: string };
 }
 
@@ -228,16 +225,16 @@ export function partSignature(value: string | undefined, bare = false): string {
     const fused = PART_FUSED.exec(token);
     if (fused) {
       const number = /^\d+$/.test(fused[1]!) ? Number(fused[1]) : romanPart(fused[1]!);
-      if (number != null) { found.push(`${PART_WORD}:${number}`); continue; }
+      if (number != null) { found.push(`part:${number}`); continue; }
     }
     if (PART_WORD_ONLY.test(token)) {
       const next = tokens[index + 1];
       const number = next == null ? undefined : /^\d{1,2}$/.test(next) ? Number(next) : romanPart(next);
-      if (number != null) { found.push(`${PART_WORD}:${number}`); index += 1; continue; }
+      if (number != null) { found.push(`part:${number}`); index += 1; continue; }
     }
     if (index === tokens.length - 1 && ROMAN.test(token)) {
       const number = romanPart(token);
-      if (number != null) found.push(`roman:${number}`);
+      if (number != null) found.push(`part:${number}`);
     }
   }
   if (!found.length && bare && tokens.length > 1) {
@@ -245,7 +242,7 @@ export function partSignature(value: string | undefined, bare = false): string {
     const bareMatch = BARE_NUMBER.exec(last);
     if (bareMatch) {
       const number = Number(bareMatch[1]);
-      if (number >= 1 && number <= 29) found.push(`bare:${number}`);
+      if (number >= 1 && number <= 29) found.push(`part:${number}`);
     }
   }
   return found.join("+");
@@ -323,14 +320,11 @@ export function parseMediaName(name: string): ParsedMedia {
     });
   }
   title = collapse(title);
-  const part = partSignature(title);
   const query = bilingualQuery(title);
   const result: ParsedMedia = { title, query };
   if (year != null) result.year = year;
   if (season != null) result.season = season;
   if (episode != null) result.episode = episode;
-  const partNumber = /:(\d+)$/.exec(part);
-  if (partNumber) result.part = Number(partNumber[1]);
   if (hints.imdb || hints.tmdb || hints.tvdb) result.providerHints = hints;
   return result;
 }

@@ -35,6 +35,16 @@ test("the first check after a restart scans, an unchanged tree then does not", a
   assert.equal(state.starts, 1);
 });
 
+test("automatic startup work waits for the configured delay", async () => {
+  const { auto, state } = harness({ startupDelayMs: 30 });
+  try {
+    auto.start();
+    assert.equal(state.starts, 0, "starting the watcher does not immediately scan the libraries");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(state.starts, 1, "the startup check runs after the delay");
+  } finally { auto.stop(); }
+});
+
 test("a copied file changes the fingerprint and starts a scan", async () => {
   const { auto, state } = harness();
   await auto.check("startup");

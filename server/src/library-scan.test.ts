@@ -100,14 +100,14 @@ test("a unique title auto-accepts, deletes hashed art and saves both catalog var
   } finally { await h.close(); }
 });
 
-test("the run asks for the wide variant of every entry it walks, bound or not", async () => {
+test("the run asks for the wide variant only for entries it will reconsider", async () => {
   const h = await harness({ units: async () => [movie("Foo"), movie("Bar")] });
   try {
     h.store.meta.Bar = { type: "movie", id: "tt9", source: "scan" };
     await h.scan.start();
     await waitFor(() => h.scan.snapshot().status === "completed");
     assert.equal(h.scan.snapshot().matched, 1, "only the unbound title is matched again");
-    assert.deepEqual([...h.backdrops].sort(), ["Bar", "Foo"]);
+    assert.deepEqual([...h.backdrops].sort(), ["Foo"]);
   } finally { await h.close(); }
 });
 
@@ -824,7 +824,7 @@ test("an existing explicit or locked binding is never touched by a reconsiderati
   } finally { await h.close(); }
 });
 
-test("an interrupted rules pass does not lose the reminder: the stale rows still ask", async () => {
+test("an interrupted scan still picks stale rows up on its next run", async () => {
   const h = await harness({
     units: async () => [movie("Foo")],
     search: async () => [],
@@ -837,12 +837,10 @@ test("an interrupted rules pass does not lose the reminder: the stale rows still
       status: "completed", total: 0, done: 0, matched: 0, skipped: 0, failed: 0, remaining: [], ruleVersion: MATCH_RULE_VERSION,
     }));
     await h.scan.load();
-    assert.equal(h.scan.pendingRuleRun(), true, "the stale row still asks for a pass");
     await h.scan.start();
     await waitFor(() => h.scan.snapshot().status === "completed");
     assert.deepEqual(h.searches, ["Foo"], "the stale row is searched again");
     assert.equal(h.store.suggestions.Foo?.rule, MATCH_RULE_VERSION);
-    assert.equal(h.scan.pendingRuleRun(), false, "and the reminder is gone once the row is current");
   } finally { await h.close(); }
 });
 
@@ -852,30 +850,26 @@ test("a scan started by hand reconsiders stale rows even with no automatic pass"
     search: async () => [],
   });
   try {
-    // Automatic scanning is off in this deployment, so nobody queued a rules pass on startup.
     h.store.suggestions.Foo = { type: "movie", id: "", name: "", score: 0, scannedAt: stale(), rule: MATCH_RULE_VERSION - 1 };
-    assert.equal(h.scan.pendingRuleRun(), true);
     await h.scan.start();
     await waitFor(() => h.scan.snapshot().status === "completed");
     assert.deepEqual(h.searches, ["Foo"], "the explicit scan picks the stale row up on its own");
-    assert.equal(h.scan.pendingRuleRun(), false);
   } finally { await h.close(); }
 });
 
-test("a stale row the scan may not touch does not keep asking for a pass", async () => {
+test("a scan does not enqueue artwork for current misses it does not reconsider", async () => {
   const h = await harness({
     units: async () => [movie("Foo"), movie("Bar")],
     search: async () => [],
   });
   try {
-    // Bar is bound by a person, Foo is excluded from matching: neither may be reconsidered,
-    // so their stale rows must not make every startup queue a pass.
-    h.store.meta.Bar = { type: "movie", id: "tt-bar", source: "user", locked: true };
-    h.store.suggestions.Bar = { type: "movie", id: "tt-old", name: "Old", score: 90, rule: MATCH_RULE_VERSION - 1 };
-    h.store.meta.Foo = { type: "movie", id: "", source: "user", locked: true, skipLookup: true };
-    h.store.suggestions.Foo = { type: "movie", id: "", name: "", score: 0, rule: MATCH_RULE_VERSION - 1 };
-    assert.equal(h.scan.pendingRuleRun(), false);
-    assert.equal(h.scan.pendingRuleRun(), false, "and it keeps saying no");
+    const currentMiss = { type: "movie", id: "", name: "", score: 0, scannedAt: new Date().toISOString(), rule: MATCH_RULE_VERSION };
+    h.store.suggestions.Foo = { ...currentMiss };
+    h.store.suggestions.Bar = { ...currentMiss };
+    await h.scan.start();
+    await waitFor(() => h.scan.snapshot().status === "completed");
+    assert.equal(h.scan.snapshot().total, 0);
+    assert.deepEqual(h.backdrops, [], "walking the tree alone does not queue wide artwork for every unit");
   } finally { await h.close(); }
 });
 

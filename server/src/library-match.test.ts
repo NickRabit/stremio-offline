@@ -692,6 +692,9 @@ test("sequel and part markers are evidence, and a conflict is never auto-accepte
   assert.equal(partTwo.autoEligible, false);
   assert.equal(autoAccept([partTwo]), undefined, "a different part is a different film");
   assert.equal(pickSuggestion([partTwo])?.reason, "part");
+  const rockyThree = scoreHit(parseMediaPath("Rocky 3"), meta("Rocky III", 1976, "movie", "tt-rocky-3"), "movie");
+  assert.equal(rockyThree.partConflict, undefined, "Arabic and Roman numerals identify the same installment");
+  assert.equal(partSignature("Saw 3", true), partSignature("Saw III", true));
 
   const whole = parseMediaPath("Second Film");
   const sequel = scoreHit(whole, meta("Second Film 2", 2006, "movie", "tt3"), "movie");
