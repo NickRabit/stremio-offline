@@ -1,7 +1,7 @@
 export const en = {
   "connect.title": "Connect to a server",
   "connect.address": "Server address",
-  "connect.addressHint": "Origin only, for example http://192.168.1.20:8090",
+  "connect.addressHint": "Origin only, for example http://localhost:8090 or http://192.168.1.20:8090",
   "connect.profiles": "Saved servers",
   "connect.profileNew": "New server",
   "connect.profileName": "Name",
@@ -33,7 +33,7 @@ export const en = {
 export const cs: typeof en = {
   "connect.title": "Připojení k serveru",
   "connect.address": "Adresa serveru",
-  "connect.addressHint": "Jen původ, například http://192.168.1.20:8090",
+  "connect.addressHint": "Jen původ, například http://localhost:8090 nebo http://192.168.1.20:8090",
   "connect.profiles": "Uložené servery",
   "connect.profileNew": "Nový server",
   "connect.profileName": "Název",

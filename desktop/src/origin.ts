@@ -42,13 +42,13 @@ const isPrivateAddress = (name: string): boolean => {
   return false;
 };
 
-/** Plain HTTP is only a private address written in the URL. A name is refused: the lookup is not the address the socket later uses. */
+/** Plain HTTP is only `localhost` or a private address written in the URL. Every other name is refused: the lookup is not the address the socket later uses. */
 export function httpAllowedHost(host: string): boolean {
   let name = host;
   if (name.startsWith("[") && name.endsWith("]")) name = name.slice(1, -1);
   if (name.endsWith(".")) name = name.slice(0, -1);
   name = name.toLowerCase();
-  return isPrivateAddress(name);
+  return name === "localhost" || isPrivateAddress(name);
 }
 
 export function httpAllowed(server: ServerOrigin): boolean {
