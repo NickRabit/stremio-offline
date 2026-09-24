@@ -22,6 +22,12 @@ export const en = {
   "connect.version": "Server version {version}",
   "connect.restricted": "Restricted mode is on.",
   "connect.secure": "Secure mode is on.",
+  "download.saveTitle": "Save to this device",
+  "download.saving": "Saving to this device…",
+  "download.progress": "Saving to this device… {percent} %",
+  "download.completed": "Saved to this device.",
+  "download.cancelled": "Saving to this device was cancelled.",
+  "download.interrupted": "Saving to this device was interrupted. Start it again from the server.",
 };
 
 export const cs: typeof en = {
@@ -48,6 +54,12 @@ export const cs: typeof en = {
   "connect.version": "Verze serveru {version}",
   "connect.restricted": "Omezený režim je zapnutý.",
   "connect.secure": "Zabezpečený režim je zapnutý.",
+  "download.saveTitle": "Uložit do tohoto zařízení",
+  "download.saving": "Ukládám do tohoto zařízení…",
+  "download.progress": "Ukládám do tohoto zařízení… {percent} %",
+  "download.completed": "Uloženo do tohoto zařízení.",
+  "download.cancelled": "Ukládání do tohoto zařízení bylo zrušeno.",
+  "download.interrupted": "Ukládání do tohoto zařízení bylo přerušeno. Spusťte ho znovu v rozhraní serveru.",
 };
 
 export function catalogue(locale: string): typeof en {

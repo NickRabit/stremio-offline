@@ -21,7 +21,13 @@ type MessageKey =
   | "connect.notStatus"
   | "connect.version"
   | "connect.restricted"
-  | "connect.secure";
+  | "connect.secure"
+  | "download.saveTitle"
+  | "download.saving"
+  | "download.progress"
+  | "download.completed"
+  | "download.cancelled"
+  | "download.interrupted";
 
 type Catalogue = Record<MessageKey, string>;
 
@@ -61,6 +67,7 @@ interface DesktopBridge {
 interface Window {
   desktop: DesktopBridge;
   desktopNotice?: (key: MessageKey) => void;
+  desktopDownloadNotice?: (text: string) => void;
   desktopProfileForm: {
     formHasUnsavedEdits(draft: { name: string; origin: string }, snapshot: { name: string; origin: string } | null): boolean;
   };
@@ -190,6 +197,11 @@ interface Window {
   window.desktopNotice = (key) => {
     showForm();
     if (strings) show(strings[key]);
+  };
+
+  /** The shell sends a finished sentence, because the percentage is formatted there. */
+  window.desktopDownloadNotice = (text) => {
+    if (typeof text === "string") show(text);
   };
 
   profileSelect.addEventListener("change", () => {
