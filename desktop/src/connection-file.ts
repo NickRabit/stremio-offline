@@ -135,7 +135,6 @@ export async function writeProfiles(dir: string, store: ProfileStore): Promise<v
     throw new Error("Invalid selected profile");
   }
   await mkdir(dir, { recursive: true });
-  // Only the three profile fields leave the process: the file never carries a credential.
   const body = JSON.stringify({ profiles, selectedProfileId: store.selectedProfileId }) + "\n";
   const temporary = path.join(dir, `${TMP_FILE}.${randomUUID()}`);
   try {

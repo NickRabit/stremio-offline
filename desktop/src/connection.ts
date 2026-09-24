@@ -7,6 +7,8 @@ type MessageKey =
   | "connect.profileName"
   | "connect.profileSave"
   | "connect.profileRemove"
+  | "connect.profileOption"
+  | "connect.profileDiscard"
   | "connect.profileInvalidName"
   | "connect.profileInvalidData"
   | "connect.profileSaveFailed"
@@ -59,6 +61,9 @@ interface DesktopBridge {
 interface Window {
   desktop: DesktopBridge;
   desktopNotice?: (key: MessageKey) => void;
+  desktopProfileForm: {
+    formHasUnsavedEdits(draft: { name: string; origin: string }, snapshot: { name: string; origin: string } | null): boolean;
+  };
 }
 
 // The page loads this file as a classic script, so the code stays out of the global scope.
@@ -82,6 +87,9 @@ interface Window {
   let strings: Catalogue | null = null;
   let profiles: ServerProfile[] = [];
   let selectedId: string | null = null;
+  let busy = false;
+  let actionToken = 0;
+  let saving: Promise<string | null> | null = null;
 
   const show = (text: string, extra: string[] = []) => {
     message.replaceChildren(text);
@@ -100,6 +108,15 @@ interface Window {
     disconnectButton.hidden = false;
   };
 
+  const syncControls = () => {
+    profileSelect.disabled = busy;
+    nameInput.disabled = busy;
+    address.disabled = busy;
+    saveButton.disabled = busy;
+    connectButton.disabled = busy;
+    removeButton.disabled = busy || selectedId === null;
+  };
+
   const renderProfiles = () => {
     const catalogue = strings;
     if (!catalogue) return;
@@ -111,7 +128,7 @@ interface Window {
     for (const profile of profiles) {
       const option = document.createElement("option");
       option.value = profile.id;
-      option.textContent = profile.name;
+      option.textContent = catalogue["connect.profileOption"].replace("{name}", profile.name).replace("{origin}", profile.origin);
       options.push(option);
     }
     profileSelect.replaceChildren(...options);
@@ -125,7 +142,24 @@ interface Window {
     const profile = profiles.find((entry) => entry.id === selectedId) ?? null;
     nameInput.value = profile?.name ?? "";
     address.value = profile?.origin ?? "";
-    removeButton.disabled = profile === null;
+    syncControls();
+  };
+
+  const applyIfCurrent = (token: number, state: ProfileState) => {
+    if (token === actionToken) applyState(state);
+  };
+
+  const runAction = async (action: (token: number) => Promise<void>) => {
+    if (busy) return;
+    const token = ++actionToken;
+    busy = true;
+    syncControls();
+    try {
+      await action(token);
+    } finally {
+      busy = false;
+      syncControls();
+    }
   };
 
   const failureMessage = (reason: "invalid-name" | "invalid-data" | "save-failed"): MessageKey => {
@@ -133,17 +167,24 @@ interface Window {
     return reason === "save-failed" ? "connect.profileSaveFailed" : "connect.profileInvalidData";
   };
 
-  // Save first so the connect call only ever names a profile the main process already holds.
-  const saveForm = async (): Promise<string | null> => {
+  const saveForm = (): Promise<string | null> => {
+    if (saving) return saving;
     const catalogue = strings;
-    if (!catalogue) return null;
-    const result = await window.desktop.saveProfile({ id: selectedId, name: nameInput.value, origin: address.value });
-    if (!result.ok) {
-      show(catalogue[failureMessage(result.reason)]);
-      return null;
-    }
-    applyState(result);
-    return result.selectedProfileId;
+    if (!catalogue) return Promise.resolve(null);
+    saving = (async () => {
+      try {
+        const result = await window.desktop.saveProfile({ id: selectedId, name: nameInput.value, origin: address.value });
+        if (!result.ok) {
+          show(catalogue[failureMessage(result.reason)]);
+          return null;
+        }
+        applyState(result);
+        return result.selectedProfileId;
+      } finally {
+        saving = null;
+      }
+    })();
+    return saving;
   };
 
   window.desktopNotice = (key) => {
@@ -151,63 +192,75 @@ interface Window {
     if (strings) show(strings[key]);
   };
 
-  profileSelect.addEventListener("change", async () => {
-    const catalogue = strings;
-    if (!catalogue) return;
-    const result = await window.desktop.selectProfile(profileSelect.value === "" ? null : profileSelect.value);
-    if (!result.ok) {
-      profileSelect.value = selectedId ?? "";
-      show(catalogue[failureMessage(result.reason)]);
-      return;
-    }
-    applyState(result);
-    clear();
+  profileSelect.addEventListener("change", () => {
+    void runAction(async (token) => {
+      const catalogue = strings;
+      if (!catalogue) return;
+      const requested = profileSelect.value === "" ? null : profileSelect.value;
+      const current = profiles.find((profile) => profile.id === selectedId) ?? null;
+      const draft = { name: nameInput.value, origin: address.value };
+      if (window.desktopProfileForm.formHasUnsavedEdits(draft, current) && !window.confirm(catalogue["connect.profileDiscard"])) {
+        profileSelect.value = selectedId ?? "";
+        return;
+      }
+      const result = await window.desktop.selectProfile(requested);
+      if (!result.ok) {
+        profileSelect.value = selectedId ?? "";
+        show(catalogue[failureMessage(result.reason)]);
+        return;
+      }
+      applyIfCurrent(token, result);
+      clear();
+    });
   });
 
-  saveButton.addEventListener("click", async () => {
-    if (await saveForm() === null) return;
-    clear();
+  saveButton.addEventListener("click", () => {
+    void runAction(async () => {
+      if (await saveForm() === null) return;
+      clear();
+    });
   });
 
-  removeButton.addEventListener("click", async () => {
-    const catalogue = strings;
-    if (!catalogue || selectedId === null) return;
-    const result = await window.desktop.deleteProfile(selectedId);
-    if (!result.ok) {
-      show(catalogue[failureMessage(result.reason)]);
-      return;
-    }
-    applyState(result);
-    clear();
+  removeButton.addEventListener("click", () => {
+    void runAction(async (token) => {
+      const catalogue = strings;
+      if (!catalogue || selectedId === null) return;
+      const result = await window.desktop.deleteProfile(selectedId);
+      if (!result.ok) {
+        show(catalogue[failureMessage(result.reason)]);
+        return;
+      }
+      applyIfCurrent(token, result);
+      clear();
+    });
   });
 
-  connectButton.addEventListener("click", async () => {
-    const catalogue = strings;
-    if (!catalogue) return;
-    show(catalogue["connect.probing"]);
-    connectButton.disabled = true;
-    const profileId = await saveForm();
-    if (profileId === null) {
-      connectButton.disabled = false;
-      return;
-    }
-    const result = await window.desktop.connect(profileId);
-    connectButton.disabled = false;
-    if (!result.ok) {
+  connectButton.addEventListener("click", () => {
+    void runAction(async () => {
+      const catalogue = strings;
+      if (!catalogue) return;
+      show(catalogue["connect.probing"]);
+      const profileId = await saveForm();
+      if (profileId === null) return;
+      const result = await window.desktop.connect(profileId);
+      if (!result.ok) {
+        showForm();
+        show(catalogue[failureKeys[result.reason]]);
+        return;
+      }
+      showConnected();
+      const extra: string[] = [];
+      if (result.restricted) extra.push(catalogue["connect.restricted"]);
+      if (result.secure) extra.push(catalogue["connect.secure"]);
+      show(catalogue["connect.version"].replace("{version}", result.version), extra);
+    });
+  });
+
+  disconnectButton.addEventListener("click", () => {
+    void runAction(async () => {
+      await window.desktop.disconnect();
       showForm();
-      show(catalogue[failureKeys[result.reason]]);
-      return;
-    }
-    showConnected();
-    const extra: string[] = [];
-    if (result.restricted) extra.push(catalogue["connect.restricted"]);
-    if (result.secure) extra.push(catalogue["connect.secure"]);
-    show(catalogue["connect.version"].replace("{version}", result.version), extra);
-  });
-
-  disconnectButton.addEventListener("click", async () => {
-    await window.desktop.disconnect();
-    showForm();
+    });
   });
 
   const start = async () => {
