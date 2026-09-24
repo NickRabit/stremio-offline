@@ -51,20 +51,50 @@ const X_EPISODE = /\b(\d{1,2})x(\d{1,4})\b/i;
 const CHANNEL = /\b[57]\.1\b/gi;
 const RELEASE_GROUP = /-[A-Za-z0-9]{2,15}$/;
 
-/** Words that turn the number after them into a part marker rather than a title word.
- *  The Czech `část`/`díl` count the same way, in both their diacritic and plain spellings. */
-const PART_WORD = "(?:part|pt|cd|disc|disk|vol|volume|chap|chapter|ch|část|části|cast|díl|dílu|dil)";
-/** One token, e.g. "cd1", "part2". */
-const PART_FUSED = new RegExp(`^${PART_WORD}([0-9]{1,2}|[ivx]{1,4})$`, "i");
+/** Physical segments of one film: "CD1", "Disc 2". Two of them are still one film. */
+const SEGMENT_WORDS = ["cd", "disc", "disk"];
+/** Installments of a series: "Part 2", "Vol 1", the Czech `část`/`díl` in both spellings.
+ *  Two of them are two films. */
+const INSTALLMENT_WORDS = ["part", "pt", "vol", "volume", "chap", "chapter", "ch", "část", "části", "cast", "díl", "dílu", "dil"];
+const MARKERS = [...SEGMENT_WORDS, ...INSTALLMENT_WORDS].sort((a, b) => b.length - a.length);
+/** One token, e.g. "cd1", "part2". Group one is the word, group two its number. */
+const MARKER_FUSED = new RegExp(`^(${MARKERS.join("|")})([0-9]{1,2}|[ivx]{1,4})$`, "i");
 /** A fused token split apart by punctuation, e.g. "cd" then "1". */
-const PART_WORD_ONLY = new RegExp(`^${PART_WORD}$`, "i");
-/** What may follow a part word: a plain number or a Roman numeral. */
+const MARKER_WORD_ONLY = new RegExp(`^(?:${MARKERS.join("|")})$`, "i");
+/** What may follow a marker word: a plain number or a Roman numeral. */
 const PART_NUMBER = /^(?:[0-9]{1,2}|[ivx]{1,4})$/i;
 const ROMAN = /^[ivx]{1,4}$/i;
 const ROMAN_VALUE: Record<string, number> = { i: 1, ii: 2, iii: 3, iv: 4, v: 5, vi: 6, vii: 7, viii: 8, ix: 9, x: 10 };
 const BARE_NUMBER = /^([0-9]{1,2})$/;
 /** "Obsession (2)" is a second encode of one film, not a part. */
 const PAREN_TAIL = /\s*\(\s*[0-9]{1,3}\s*\)\s*$/;
+
+type MarkerKind = "segment" | "installment";
+
+interface PartMarker {
+  kind: MarkerKind;
+  number: number;
+}
+
+/** Release and edition words may trail a title without changing which film it is, so a part
+ *  number in front of them is still the final marker of the title. Longest phrase first. */
+const EDITION_PHRASES = [
+  "directors s cut", "director s cut", "directors cut", "director cut", "final cut",
+  "imax", "dc", "edition", "extended", "remastered", "remaster", "unrated", "theatrical",
+  "proper", "repack", "redux", "special",
+].sort((a, b) => b.length - a.length);
+const TRAILING_EDITION = new RegExp(`\\s+(?:${EDITION_PHRASES.join("|")})\\s*$`, "i");
+
+/** A title with the release/edition words at its end removed. They say how a copy was made,
+ *  not which film it is, so "Saw III IMAX" and "Saw III" have to compare as the same film. */
+function dropTrailingEditions(value: string): string {
+  let next = value;
+  for (;;) {
+    const stripped = next.replace(TRAILING_EDITION, "");
+    if (stripped === next) return next;
+    next = stripped;
+  }
+}
 
 const phrasePattern = (phrase: string) =>
   new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/ /g, "[\\s._]+"), "gi");
@@ -213,28 +243,38 @@ function bilingualQuery(title: string): string {
 
 const romanPart = (token: string): number | undefined => ROMAN_VALUE[token.toLowerCase()];
 
-/** The part/volume marker of one title, as a canonical string, or "". Explicit markers
- *  ("Part 2", "CD1") always count; a bare trailing number ("Toy Story 2") counts only when
+const markerKind = (word: string): MarkerKind => (SEGMENT_WORDS.includes(word.toLowerCase()) ? "segment" : "installment");
+const markerNumber = (token: string): number | undefined =>
+  /^\d{1,2}$/.test(token) ? Number(token) : romanPart(token);
+
+/** The words of one title, lowercased, with the trailing edition wording removed. */
+function markerTokens(value: string): string[] {
+  const collapsed = collapse(value.replace(PAREN_TAIL, " ").replace(/['’]/g, " ")).toLowerCase();
+  return dropTrailingEditions(collapsed).split(" ").filter(Boolean);
+}
+
+/** The markers of one title. An explicit one ("Part 2", "CD1") always counts; a lone
+ *  trailing Roman numeral counts too, and a lone trailing number ("Toy Story 2") only when
  *  the caller asked for it, because "Obsession (2)" is a second encode of one film while
  *  "Toy Story 2" is another film. */
-export function partSignature(value: string | undefined, bare = false): string {
-  const tokens = collapse(String(value ?? "").replace(PAREN_TAIL, " ")).toLowerCase().split(" ").filter(Boolean);
-  const found: string[] = [];
+function partMarkers(value: string, bare: boolean): PartMarker[] {
+  const tokens = markerTokens(value);
+  const found: PartMarker[] = [];
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index]!;
-    const fused = PART_FUSED.exec(token);
+    const fused = MARKER_FUSED.exec(token);
     if (fused) {
-      const number = /^\d+$/.test(fused[1]!) ? Number(fused[1]) : romanPart(fused[1]!);
-      if (number != null) { found.push(`part:${number}`); continue; }
+      const number = markerNumber(fused[2]!);
+      if (number != null) { found.push({ kind: markerKind(fused[1]!), number }); continue; }
     }
-    if (PART_WORD_ONLY.test(token)) {
+    if (MARKER_WORD_ONLY.test(token)) {
       const next = tokens[index + 1];
-      const number = next == null ? undefined : /^\d{1,2}$/.test(next) ? Number(next) : romanPart(next);
-      if (number != null) { found.push(`part:${number}`); index += 1; continue; }
+      const number = next == null ? undefined : markerNumber(next);
+      if (number != null) { found.push({ kind: markerKind(token), number }); index += 1; continue; }
     }
     if (index === tokens.length - 1 && ROMAN.test(token)) {
       const number = romanPart(token);
-      if (number != null) found.push(`part:${number}`);
+      if (number != null) found.push({ kind: "installment", number });
     }
   }
   if (!found.length && bare && tokens.length > 1) {
@@ -242,27 +282,64 @@ export function partSignature(value: string | undefined, bare = false): string {
     const bareMatch = BARE_NUMBER.exec(last);
     if (bareMatch) {
       const number = Number(bareMatch[1]);
-      if (number >= 1 && number <= 29) found.push(`part:${number}`);
+      if (number >= 1 && number <= 29) found.push({ kind: "installment", number });
     }
   }
-  return found.join("+");
+  return found;
 }
 
-/** Drops the explicit part/volume tokens from a normalized title, so the halves of a
- *  multipart film compare equal. A bare trailing number is left alone on purpose. */
-export function stripPartMarkers(normalized: string): string {
-  const tokens = normalized.split(" ").filter(Boolean);
-  const kept: string[] = [];
+/** The installment marker of one title, as a canonical string, or "". Arabic and Roman
+ *  spellings of one number produce the same string, and a physical segment ("CD2") is no
+ *  installment at all. */
+export function partSignature(value: string | undefined, bare = false): string {
+  return partMarkers(String(value ?? ""), bare)
+    .filter((marker) => marker.kind === "installment")
+    .map((marker) => `part:${marker.number}`)
+    .join("+");
+}
+
+/** The indexes of the tokens a title drops: the markers a filter accepts, and a final
+ *  installment written as a bare number when the caller asked for one. */
+function droppedMarkers(tokens: string[], accept: (kind: MarkerKind) => boolean, bareNumeral: boolean): Set<number> {
+  const dropped = new Set<number>();
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index]!;
-    if (PART_FUSED.test(token) || (PART_WORD_ONLY.test(token) && tokens[index + 1] != null && PART_NUMBER.test(tokens[index + 1]!))) {
-      if (PART_WORD_ONLY.test(token)) index += 1;
+    const fused = MARKER_FUSED.exec(token);
+    if (fused) {
+      if (accept(markerKind(fused[1]!))) dropped.add(index);
       continue;
     }
-    if (index === tokens.length - 1 && ROMAN.test(token)) continue;
-    kept.push(token);
+    if (MARKER_WORD_ONLY.test(token) && accept(markerKind(token))) {
+      const next = tokens[index + 1];
+      if (next != null && PART_NUMBER.test(next)) { dropped.add(index); dropped.add(index + 1); index += 1; }
+    }
   }
-  return kept.join(" ");
+  if (!bareNumeral || tokens.length < 2) return dropped;
+  const lastIndex = tokens.length - 1;
+  if (dropped.has(lastIndex)) return dropped;
+  const last = tokens[lastIndex]!;
+  const bare = BARE_NUMBER.exec(last);
+  if (ROMAN.test(last) || (bare != null && Number(bare[1]) >= 1 && Number(bare[1]) <= 29)) dropped.add(lastIndex);
+  return dropped;
+}
+
+/** The words of one title with the markers a filter accepts left out. */
+function stripMarkers(normalized: string, accept: (kind: MarkerKind) => boolean, bareNumeral: boolean): string {
+  const tokens = markerTokens(normalized);
+  const dropped = droppedMarkers(tokens, accept, bareNumeral);
+  return tokens.filter((_token, index) => !dropped.has(index)).join(" ");
+}
+
+/** Drops the part, volume and segment tokens from a normalized title, so the halves of a
+ *  multipart film and the installments of one name compare on the film's own words. */
+export function stripPartMarkers(normalized: string): string {
+  return stripMarkers(normalized, () => true, true);
+}
+
+/** Drops only the physical-segment tokens, so the halves of one film compare equal while
+ *  two installments ("Part 1" and "Part 2") keep their own names. */
+export function stripSegmentMarkers(normalized: string): string {
+  return stripMarkers(normalized, (kind) => kind === "segment", false);
 }
 
 /** One file or folder name, parsed on its own. Unlike `parseMediaPath` it does not reach for

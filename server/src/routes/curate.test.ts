@@ -451,6 +451,37 @@ test("GET /api/library/identity reads a loose film in a collection from its own 
   assert.deepEqual(body.parsed, { title: "Heat", query: "Heat", year: 1995 }, "the search must name the film, not the collection folder");
 });
 
+test("GET /api/library/identity lets one file's binding beat the folder unit's", async (t) => {
+  const root = await makeRoot("stremio-curate-child-binding-");
+  await put(root, "Heat/Heat.mkv");
+  await put(root, "Heat/Heat (2).mkv");
+  const folder = "lib_00000001/Heat";
+  const child = "lib_00000001/Heat/Heat.mkv";
+  const harness = await mount({
+    libraries: [library("lib_00000001", root)],
+    units: [{ key: folder, kind: "movie", relative: "Heat", sampleFiles: ["Heat/Heat.mkv", "Heat/Heat (2).mkv"] }],
+    records: {
+      [folder]: { type: "movie", id: "tt-heat", source: "user", locked: true, name: "Heat", year: "1995" },
+      [child]: { type: "movie", id: "tt-ronin", source: "user", locked: true, name: "Ronin", year: "1998" },
+    },
+    suggestions: { [folder]: { type: "movie", id: "tt-suggested-heat", name: "Heat", score: 92 } },
+  });
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const clicked = await api(harness.base, `/api/library/identity?path=${encodeURIComponent("Heat/Heat.mkv")}`);
+  assert.equal(clicked.status, 200);
+  const body = await clicked.json() as { key: string; match: string; bound?: { id: string }; suggestion?: { id: string } };
+  assert.equal(body.key, "Heat", "the dialog still speaks about the unit it would rewrite");
+  assert.equal(body.match, "matched");
+  assert.equal(body.bound?.id, "tt-ronin", "the file's own binding answers, not the folder's");
+  assert.equal(body.suggestion?.id, "tt-suggested-heat", "with no proposal of its own the file falls back to the unit's");
+
+  const sibling = await api(harness.base, `/api/library/identity?path=${encodeURIComponent("Heat/Heat (2).mkv")}`);
+  const other = await sibling.json() as { match: string; bound?: { id: string } };
+  assert.equal(other.match, "matched");
+  assert.equal(other.bound?.id, "tt-heat", "the sibling keeps the folder's binding");
+});
+
 test("POST /api/library/match refuses a correction when the current binding has changed", async (t) => {
   const root = await makeRoot("stremio-curate-stale-correction-");
   await put(root, "Films/Heat.mkv");

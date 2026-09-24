@@ -30,7 +30,7 @@ import { createLibraryCandidates } from "./library-candidates.js";
 import { ExternalIdStore } from "./external-ids.js";
 import { currentLevel, flushLog, initLogger, log, parseLevel, startLogMaintenance, setLevel } from "./logger.js";
 import { browseDirectory, describePath, emptiedFolders, entryDirectory, holdsLibraryRoot, isPathWithin, isVideo, listVideos, moveDestination, orphanedCatalogKeys, pageFiles, remapPath, scanLibrary, summarize, type FoundFile, type LibraryEntry } from "./library.js";
-import { browseMeta, cacheFieldsFromMeta, episodeKey, episodeNumberOf, episodesFromMeta, dropKeyed, folderMosaicUnits, knownTitleEntry, knownTitleOf, knownTitleForUnit, matchKeyFor, mosaicIdentities, mosaicSkipped, needsBackfill, needsEpisodes, staleSuggestionKeys, titleUnits, unitFor, unmatchAt, type GalleryEntry, type LibraryMetaRecord, type TitleKind, type TitleUnit } from "./library-match.js";
+import { browseMeta, cacheFieldsFromMeta, episodeKey, episodeNumberOf, episodesFromMeta, dropKeyed, folderMosaicUnits, knownEntryForUnit, knownTitleEntry, knownTitleOf, knownTitleForUnit, matchKeyFor, mosaicIdentities, mosaicSkipped, needsBackfill, needsEpisodes, staleSuggestionKeys, titleUnits, unitFor, unmatchAt, type GalleryEntry, type LibraryMetaRecord, type TitleKind, type TitleUnit } from "./library-match.js";
 import { LibraryScan } from "./library-scan.js";
 import { createLibraryProbe, type LibraryHealth } from "./library-probe.js";
 import { LibraryAutoScan } from "./library-autoscan.js";
@@ -800,7 +800,8 @@ const libraryEntries = async () => {
         files: entry.files.map((file) => ({ ...file, path: libraryPath(library.id, file.path) })),
       };
       const unit = unitFor(key, units);
-      const record = entry.kind === "collection" ? undefined : knownTitleForUnit(unit, known);
+      // A single-file title answers with its own binding before the unit's, like a browse row.
+      const record = entry.kind === "collection" ? undefined : knownTitleForUnit(unit, known, isVideo(posixBase(key)) ? key : undefined);
       if (record) {
         qualified.meta = {
           type: record.type, id: record.id, name: record.name,
@@ -1076,8 +1077,9 @@ const describeLibraryPath = async (key: string) => {
 async function locateFileArtwork(key: string, shape: ArtShape = "poster") {
   const media = path.join(posixDir(mediaPath(key)), episodeArtName(posixBase(key)));
   const unit = unitFor(key, await libraryUnits());
-  const record = knownTitleForUnit(unit, metaStore.qualifiedMeta());
-  const cover = record && unit ? { key: unit.key, record } : undefined;
+  // The key that supplied the file's binding, not the folder's: a file the user bound on its
+  // own path keeps that key, so the folder's picture is not mistaken for its own.
+  const cover = knownEntryForUnit(unit, metaStore.qualifiedMeta(), key);
   // A still and a frame grab are landscape, so they serve the wide shape as they are. A film's
   // is the catalogue poster instead: handing that out as the backdrop drew a portrait picture
   // in a landscape frame and told the scheduler a backdrop was already there, so none was
@@ -1167,8 +1169,7 @@ const wideBesideMedia = async (key: string) => {
   if (!artworkBesideMediaFor(key)) return false;
   if (!isFileKey(key)) return true;
   const unit = unitFor(key, await libraryUnits());
-  const record = knownTitleForUnit(unit, metaStore.qualifiedMeta());
-  const cover = record && unit ? { key: unit.key, record } : undefined;
+  const cover = knownEntryForUnit(unit, metaStore.qualifiedMeta(), key);
   return fileMayUseFolderArtwork(key, cover?.record.type, cover?.key);
 };
 /** Where one variant of an item's artwork is written: next to the media where the library allows
@@ -1243,7 +1244,7 @@ const attachBrowseMeta = async <T extends { path: string; kind: string; name?: s
   const safeExtra = suggestion?.poster
     ? { ...extra, suggestion: { ...suggestion, poster: images.proxied(suggestion.poster) } }
     : extra;
-  const known = item.kind === "folder" && !unit ? undefined : knownTitleForUnit(unit, records);
+  const known = item.kind === "folder" && !unit ? undefined : knownTitleForUnit(unit, records, item.kind === "file" ? key : undefined);
   const numbers = item.kind === "file" ? episodeNumberOf(key, ownRecord(key, records)) : undefined;
   // Only a key can answer with a better language; without one every record stays wanted as it is.
   const wantedLanguage = store.settings().tmdbApiKey ? language : undefined;

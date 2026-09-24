@@ -7,7 +7,7 @@ import { normalizeLanguage } from "../language.js";
 import { libraryFor, parseLibraryPath, posixBase, resolveLibraryPath, type Viewer } from "../libraries.js";
 import type { LibraryAutoScan } from "../library-autoscan.js";
 import type { LibraryCandidateSource } from "../library-candidates.js";
-import { episodeNumberOf, knownTitleForUnit, knownTitleOf, lookupSkipped, needsBackfill, parseUnit, pendingSuggestionKeys, scanMiss, suggestionFor, suggestionForUnit, unitFor, type LibraryMetaRecord, type TitleUnit } from "../library-match.js";
+import { episodeNumberOf, knownEntryForUnit, knownTitleOf, lookupSkipped, needsBackfill, parseUnit, pendingSuggestionKeys, scanMiss, suggestionFor, suggestionForUnit, unitFor, type LibraryMetaRecord, type TitleUnit } from "../library-match.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import type { LibraryOp, LibraryOps } from "../library-ops.js";
 import { parseMediaPath } from "../library-parse.js";
@@ -62,11 +62,13 @@ export function registerCurateRoutes(app: express.Application, deps: CurateDeps)
     const unitKey = unit?.key ?? resolved.key;
     const records = metaStore.qualifiedMeta();
     const suggestions = metaStore.qualifiedSuggestions();
-    const known = knownTitleForUnit(unit, records);
+    // The clicked file's own binding beats the folder unit's, and its own proposal too: the
+    // dialog is about what the user pointed at, not about what the folder happens to hold.
+    const known = knownEntryForUnit(unit, records, resolved.key)?.record;
     const language = prefsOf(req).uiLanguage;
     const wantedLanguage = store.settings().tmdbApiKey ? language : undefined;
     if (needsBackfill(known, undefined, wantedLanguage)) scheduleMetaBackfill(known!.type, known!.id, language);
-    const suggestion = suggestionForUnit(unit, suggestions);
+    const suggestion = suggestionForUnit(unit, suggestions, resolved.key);
     const isFile = isVideo(posixBase(resolved.key));
     const numbers = episodeNumberOf(resolved.key, ownRecord(resolved.key, records));
     const bound = known ? { type: known.type, id: known.id, name: known.name, season: known.season, episode: known.episode } : undefined;

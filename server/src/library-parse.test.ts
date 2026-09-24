@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { parseMediaPath } from "./library-parse.js";
+import { parseMediaPath, partSignature, stripSegmentMarkers } from "./library-parse.js";
 
 const parsed = (relative: string) => {
   const result = parseMediaPath(relative);
@@ -89,4 +89,22 @@ test("a folder that only looks like a library id still counts as a parent", () =
 
 test("a library root folder keeps its own name", () => {
   assert.equal(parseMediaPath("lib_00000001/Heat (1995)").title, "Heat");
+});
+
+test("a part signature canonicalises the number, ignores tags and leaves segments alone", () => {
+  assert.equal(partSignature("Saw 3", true), partSignature("Saw III", true), "Arabic and Roman spellings are one installment");
+  assert.equal(partSignature("Rocky III", true), "part:3");
+  assert.notEqual(partSignature("Saw III", true), partSignature("Saw IV", true), "another installment is another part");
+  assert.equal(partSignature("Saw III IMAX", true), "part:3", "a release tag is not a part");
+  assert.equal(partSignature("Saw III Director's Cut", true), "part:3", "an apostrophe in the tag does not hide the number");
+  assert.equal(partSignature("Saw III Extended Edition", true), "part:3");
+  assert.equal(partSignature("Nymfomanka - část 1"), "part:1");
+  assert.equal(partSignature("Nymfomanka CD2"), "", "a CD half is a segment of one film, not an installment");
+  assert.equal(partSignature("Blade Runner 2049", true), "", "a year-sized number is not an installment");
+});
+
+test("segment markers collapse while installment markers survive", () => {
+  assert.equal(stripSegmentMarkers("dmd twilight cd2"), "dmd twilight", "the CD halves of one film are one name");
+  assert.equal(stripSegmentMarkers("godfather part ii"), "godfather part ii", "an installment is no segment");
+  assert.equal(stripSegmentMarkers("kill bill vol 2"), "kill bill vol 2");
 });

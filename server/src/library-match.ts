@@ -1,6 +1,6 @@
 import { isPathWithin, isVideo, numberedEpisode, parseSeason, remapPath, type FoundFile } from "./library.js";
 import { parseLibraryPath, posixBase, type LibraryType } from "./libraries.js";
-import { parseMediaPath, partSignature, stripPartMarkers, type ParsedMedia } from "./library-parse.js";
+import { parseMediaPath, partSignature, stripPartMarkers, stripSegmentMarkers, type ParsedMedia } from "./library-parse.js";
 import type { MetaItem } from "./types.js";
 
 export type TitleKind = "movie" | "series";
@@ -125,7 +125,7 @@ const EXTRA_TOKENS = new Set(["trailer", "sample", "extra", "bonus", "deleted", 
 const ARTICLES = /^(the|a|an)\s+/;
 /** The matching rules that wrote a suggestion or a remembered miss. Bumped whenever a
  *  decision changes meaning, so old rows are reconsidered exactly once. */
-export const MATCH_RULE_VERSION = 3;
+export const MATCH_RULE_VERSION = 4;
 
 export function levenshtein(a: string, b: string): number {
   if (a === b) return 0;
@@ -211,8 +211,8 @@ function phraseEvidence(left: string, right: string): boolean {
   return haystack.includes(needle) || needle.includes(haystack);
 }
 
-/** A title with its part markers removed, so "Second Film Part 1" and "Part 2" compare as
- *  the same film and only the marker tells them apart. */
+/** A title with its part markers removed, so "Second Film Part 1" and "Part 2", or "Rocky 3"
+ *  and "Rocky III", compare as the same film and only the marker tells them apart. */
 function matchTitle(value: string): string {
   const normalized = normalizeTitle(value);
   return stripPartMarkers(normalized) || normalized;
@@ -429,17 +429,41 @@ export function knownTitleOf(relative: string, records: Record<string, LibraryMe
   return knownTitleEntry(relative, records)?.record;
 }
 
-/** A loose movie in a collection owns its identity; it must not inherit the collection's binding. */
-export function knownTitleForUnit(unit: TitleUnit | string | undefined, records: Record<string, LibraryMetaRecord>): LibraryMetaRecord | undefined {
-  const key = typeof unit === "string" ? unit : unit?.key;
-  if (!key) return undefined;
-  if (isVideo(posixBase(key))) {
-    if (records[key]?.id) return records[key];
-    const inherited = knownTitleEntry(key, records);
-    if (!inherited || normalizeTitle(parseMediaPath(posixBase(key)).title) !== normalizeTitle(parseMediaPath(posixBase(inherited.key)).title)) return undefined;
-    return inherited.record;
+/** The binding of a unit, with the key it is stored at. A caller holding a concrete file of
+ *  the unit passes it as `file`: what that file says about itself beats what the folder unit
+ *  says, and a sentinel on the file keeps the folder's binding away from it. Files that say
+ *  nothing about themselves keep the unit's binding, so siblings and same-title copies stay
+ *  covered. A loose movie in a collection is its own unit and owns its identity already: it
+ *  must not inherit the collection folder's binding. */
+export function knownEntryForUnit(
+  unit: TitleUnit | string | undefined,
+  records: Record<string, LibraryMetaRecord>,
+  file?: string,
+): { key: string; record: LibraryMetaRecord } | undefined {
+  const unitKey = typeof unit === "string" ? unit : unit?.key;
+  if (!unitKey) return undefined;
+  const path = file && file !== unitKey ? file : unitKey;
+  if (path !== unitKey) {
+    const own = records[path];
+    if (own) return own.id ? { key: path, record: own } : undefined;
+    if (!isVideo(posixBase(path))) return knownTitleEntry(path, records);
+    return knownTitleEntry(unitKey, records);
   }
-  return knownTitleOf(key, records);
+  if (isVideo(posixBase(path))) {
+    if (records[path]?.id) return { key: path, record: records[path]! };
+    const inherited = knownTitleEntry(path, records);
+    if (!inherited || normalizeTitle(parseMediaPath(posixBase(path)).title) !== normalizeTitle(parseMediaPath(posixBase(inherited.key)).title)) return undefined;
+    return inherited;
+  }
+  return knownTitleEntry(path, records);
+}
+
+export function knownTitleForUnit(
+  unit: TitleUnit | string | undefined,
+  records: Record<string, LibraryMetaRecord>,
+  file?: string,
+): LibraryMetaRecord | undefined {
+  return knownEntryForUnit(unit, records, file)?.record;
 }
 
 /** Clear the binding on this path only. A path that still inherits one from a matched
@@ -467,15 +491,28 @@ export function suggestionFor(relative: string, suggestions: Record<string, Libr
   return undefined;
 }
 
-export function suggestionForUnit(unit: TitleUnit | undefined, suggestions: Record<string, LibrarySuggestion>): LibrarySuggestion | undefined {
-  if (!unit) return undefined;
-  if (isVideo(posixBase(unit.key))) {
-    if (suggestions[unit.key]?.id) return suggestions[unit.key];
-    const parent = unit.key.slice(0, unit.key.lastIndexOf("/"));
-    if (normalizeTitle(parseMediaPath(posixBase(unit.key)).title) !== normalizeTitle(parseMediaPath(posixBase(parent)).title)) return undefined;
+/** The proposal covering a unit, and for a caller holding one concrete file of the unit that
+ *  file's own proposal first: the same precedence a binding has over the folder unit. */
+export function suggestionForUnit(
+  unit: TitleUnit | undefined,
+  suggestions: Record<string, LibrarySuggestion>,
+  file?: string,
+): LibrarySuggestion | undefined {
+  const unitKey = unit?.key;
+  if (!unitKey) return undefined;
+  const path = file && file !== unitKey ? file : unitKey;
+  if (path !== unitKey) {
+    if (suggestions[path]?.id) return suggestions[path];
+    if (!isVideo(posixBase(path))) return suggestionFor(path, suggestions);
+    return suggestionFor(unitKey, suggestions);
+  }
+  if (isVideo(posixBase(path))) {
+    if (suggestions[path]?.id) return suggestions[path];
+    const parent = path.slice(0, path.lastIndexOf("/"));
+    if (normalizeTitle(parseMediaPath(posixBase(path)).title) !== normalizeTitle(parseMediaPath(posixBase(parent)).title)) return undefined;
     return suggestions[parent]?.id ? suggestions[parent] : undefined;
   }
-  return suggestionFor(unit.key, suggestions);
+  return suggestionFor(path, suggestions);
 }
 
 export function matchStatus(
@@ -639,8 +676,11 @@ export function browseMeta(
   unit?: TitleUnit,
   mosaicFolder = false,
 ): BrowseMetaView {
-  const knownForRow = knownTitleForUnit(unit, records);
-  const proposedForRow = suggestionForUnit(unit, suggestions);
+  // A row that is one file of its unit answers with what that file says about itself first.
+  const file = isVideo(posixBase(relative)) ? relative : undefined;
+  const knownEntry = knownEntryForUnit(unit, records, file);
+  const knownForRow = knownEntry?.record;
+  const proposedForRow = suggestionForUnit(unit, suggestions, file);
   const match = mosaicFolder ? "unmatched" : unit
     ? knownForRow?.id ? "matched" : lookupSkipped(unit.key, records) ? "rejected" : proposedForRow ? "suggested" : "unmatched"
     : matchStatus(relative, records, suggestions);
@@ -655,9 +695,7 @@ export function browseMeta(
     return suggestion ? { ...base, suggestion } : base;
   }
   if (match !== "matched") return base;
-  const entry = mosaicFolder ? undefined : unit
-    ? knownForRow ? { key: unit.key, record: knownForRow } : undefined
-    : knownTitleEntry(relative, records);
+  const entry = mosaicFolder ? undefined : unit ? knownEntry : knownTitleEntry(relative, records);
   if (!entry) return base;
   const known = entry.record;
   const named = (value?: string) => (value && normalizeTitle(value) !== normalizeTitle(label) ? value : undefined);
@@ -757,12 +795,13 @@ export function isExtraName(filename: string): boolean {
 }
 
 /** The words that identify one film regardless of which encode, CD half or single file
- *  carries it. A part marker is dropped, because the halves belong to one identity. */
+ *  carries it. A segment marker is dropped, because the halves belong to one identity; an
+ *  installment marker is kept, because "Godfather" and "Godfather Part II" are two films. */
 function comparableTitle(filename: string): string {
   // "Obsession (2)" is a second encode of one film, so the parenthesised copy number goes.
   const title = parseMediaPath(filename).title.replace(/\(\s*\d{1,3}\s*\)\s*$/, "");
   const normalized = normalizeTitle(title);
-  return stripPartMarkers(normalized) || normalized;
+  return stripSegmentMarkers(normalized) || normalized;
 }
 
 interface DirIndex {

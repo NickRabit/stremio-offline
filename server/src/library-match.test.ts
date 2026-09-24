@@ -3,9 +3,9 @@ import path from "node:path";
 import { test } from "node:test";
 import {
   autoAccept, browseMeta, cacheFieldsFromMeta, clipText, dropKeyed, episodeKey, episodeNumberOf, episodesFromMeta, isExtraName,
-  folderMosaicUnits, knownTitleOf, knownTitleForUnit, lookupSkipped, mosaicSkipped, matchKeyFor, mosaicIdentities, needsReevaluation, parseUnit, pendingSuggestionKeys, pinInherited, matchStatus, needsBackfill, needsEpisodes, needsRefresh, pickSuggestion, remapKeyed, scanMiss, unitFor,
-  scannedRecently, scanSkipReason, scoreHit, staleSuggestionKeys, suggestionFor, titleUnits, unmatchAt, viewMeta,
-  MATCH_RULE_VERSION, type LibrarySuggestion, type TitleUnit,
+  folderMosaicUnits, knownEntryForUnit, knownTitleOf, knownTitleForUnit, lookupSkipped, mosaicSkipped, matchKeyFor, mosaicIdentities, needsReevaluation, parseUnit, pendingSuggestionKeys, pinInherited, matchStatus, needsBackfill, needsEpisodes, needsRefresh, pickSuggestion, remapKeyed, scanMiss, unitFor,
+  scannedRecently, scanSkipReason, scoreHit, staleSuggestionKeys, suggestionFor, suggestionForUnit, titleUnits, unmatchAt, viewMeta,
+  MATCH_RULE_VERSION, type LibraryMetaRecord, type LibrarySuggestion, type TitleUnit,
 } from "./library-match.js";
 import { parseMediaPath, partSignature } from "./library-parse.js";
 import type { FoundFile } from "./library.js";
@@ -50,7 +50,7 @@ test("a multipart film and its extra are one identity, not three films", () => {
   assert.deepEqual(titleUnits(withoutEncode.map(file)).map((unit) => unit.key), ["Twilight Saga/Twilight"]);
 });
 
-test("independent films, encodes and parts in one folder keep one identity each", () => {
+test("independent films, encodes and installments in one folder keep one identity each", () => {
   const files = [
     "Dump/First Movie (2001).mkv",
     "Dump/First Movie (2001) 1080p.mkv",
@@ -59,12 +59,29 @@ test("independent films, encodes and parts in one folder keep one identity each"
     "Dump/Third.Film.2010.Extended.mkv",
   ].map(file);
   const units = titleUnits(files);
-  assert.equal(units.length, 3, "three distinct films, not five files");
+  assert.equal(units.length, 4, "the encodes are one film while the two installments are two");
   const first = units.find((unit) => unit.sampleFiles.some((name) => name.includes("First Movie")));
   assert.equal(first?.sampleFiles.length, 2, "the two encodes are one film");
-  const second = units.find((unit) => unit.key.startsWith("Dump/Second"));
-  assert.equal(second?.sampleFiles.length, 2, "the two parts are one film");
+  assert.deepEqual(
+    units.filter((unit) => unit.key.startsWith("Dump/Second")).map((unit) => unit.key).sort(),
+    ["Dump/Second Film Part 1.mkv", "Dump/Second Film Part 2.mkv"],
+    "an installment is a film of its own, never merged into the one before it",
+  );
   assert.ok(units.find((unit) => unit.sampleFiles.some((name) => name.includes("Third.Film"))));
+});
+
+test("sequel markers split a folder into films, physical segments and copies do not", () => {
+  const unitsFor = (names: string[]) => titleUnits(names.map((name) => file(`Shelf/${name}`))).map((unit) => unit.key).sort();
+  assert.deepEqual(unitsFor(["Godfather.mkv", "Godfather Part II.mkv"]), [
+    "Shelf/Godfather Part II.mkv", "Shelf/Godfather.mkv",
+  ], "a spelled-out installment is another film");
+  assert.deepEqual(unitsFor(["Saw.mkv", "Saw III.mkv"]), [
+    "Shelf/Saw III.mkv", "Shelf/Saw.mkv",
+  ], "a Roman installment suffix is another film");
+  assert.deepEqual(unitsFor(["Kill Bill Vol 1.mkv", "Kill Bill Vol 2.mkv"]), [
+    "Shelf/Kill Bill Vol 1.mkv", "Shelf/Kill Bill Vol 2.mkv",
+  ], "the two volumes are two films");
+  assert.deepEqual(unitsFor(["Ronin.mkv", "Ronin 1080p.mkv"]), ["Shelf"], "an encode of one film stays one film");
 });
 
 test("a series stays grouped by series, season and episode", () => {
@@ -837,4 +854,76 @@ test("a collection binding does not replace identities of loose movies inside it
   const posters = folderMosaicUnits(units, "lib/Whisper Man", records);
   assert.deepEqual(posters.map((unit) => knownTitleForUnit(unit, records)?.id ?? unit.key), ["tt-whisper", harry.key],
     "alternate encodes collapse to one poster while the distinct unmatched film remains its own tile");
+});
+
+test("a file in a folder unit answers with its own binding, its own proposal and its own key", () => {
+  const files = ["Heat/Heat.mkv", "Heat/Heat (2).mkv"].map(file);
+  const [unit] = titleUnits(files);
+  assert.equal(unit!.key, "Heat", "the two encodes are one unit at the folder");
+  const child: LibraryMetaRecord = { type: "movie", id: "tt-ronin", source: "user", name: "Ronin", year: "1998" };
+  const records: Record<string, LibraryMetaRecord> = {
+    Heat: { type: "movie", id: "tt-heat", source: "user", name: "Heat", year: "1995" },
+    "Heat/Heat.mkv": child,
+  };
+
+  assert.deepEqual(knownEntryForUnit(unit, records, "Heat/Heat.mkv"), { key: "Heat/Heat.mkv", record: child },
+    "the key that supplied the file's binding is kept, not swapped for the folder's");
+  assert.equal(knownTitleForUnit(unit, records, "Heat/Heat (2).mkv")?.id, "tt-heat", "a sibling still inherits the folder");
+
+  const row = browseMeta("Heat/Heat.mkv", "Heat.mkv", records, {}, {}, unit);
+  assert.equal(row.match, "matched");
+  assert.equal(row.catalogName, "Ronin", "the file's own binding describes the row");
+  assert.equal(row.year, "1998");
+  assert.equal(browseMeta("Heat/Heat (2).mkv", "Heat (2).mkv", records, {}, {}, unit).year, "1995", "the sibling stays Heat");
+
+  // A sentinel on one file keeps the folder's binding away from that file alone.
+  const unmatched: Record<string, LibraryMetaRecord> = {
+    ...records,
+    "Heat/Heat.mkv": { type: "movie", id: "", source: "user" },
+  };
+  assert.equal(knownEntryForUnit(unit, unmatched, "Heat/Heat.mkv"), undefined, "an unmatched file stays unmatched");
+  assert.equal(knownTitleForUnit(unit, unmatched, "Heat/Heat (2).mkv")?.id, "tt-heat", "and only that file comes loose");
+  assert.equal(browseMeta("Heat/Heat.mkv", "Heat.mkv", unmatched, {}, {}, unit).match, "unmatched");
+});
+
+test("a file's own proposal beats the folder unit's, and its absence falls back to the folder", () => {
+  const files = ["Heat/Heat.mkv", "Heat/Heat (2).mkv"].map(file);
+  const [unit] = titleUnits(files);
+  const suggestions = {
+    Heat: { type: "movie", id: "tt-folder", name: "Heat", score: 90 },
+    "Heat/Heat.mkv": { type: "movie", id: "tt-child", name: "Ronin", score: 88 },
+  };
+  assert.equal(suggestionForUnit(unit, suggestions, "Heat/Heat.mkv")?.id, "tt-child", "the file's own proposal comes first");
+  assert.equal(suggestionForUnit(unit, suggestions, "Heat/Heat (2).mkv")?.id, "tt-folder", "a sibling keeps the unit's proposal");
+  assert.equal(suggestionForUnit(unit, suggestions)?.id, "tt-folder", "a caller without a concrete file reads the unit");
+  assert.equal(browseMeta("Heat/Heat.mkv", "Heat.mkv", {}, suggestions, {}, unit).suggestion?.id, "tt-child");
+});
+
+test("Arabic and Roman spellings of one installment are one name, different ones a conflict", () => {
+  const rocky = scoreHit(parseMediaPath("Rocky 3"), meta("Rocky III", 1976, "movie", "tt-rocky-3"), "movie");
+  assert.equal(rocky.partConflict, undefined, "the same installment in two spellings is no conflict");
+  assert.equal(rocky.titleSimilarity, 1, "and it does not cost name similarity");
+  assert.equal(autoAccept([rocky])?.item.id, "tt-rocky-3");
+
+  const saw = scoreHit(parseMediaPath("Saw 3"), meta("Saw III", 2006, "movie", "tt-saw-3"), "movie");
+  assert.equal(saw.titleSimilarity, 1);
+  assert.equal(pickSuggestion([saw])?.id, "tt-saw-3");
+  assert.equal(pickSuggestion([saw])?.reason, undefined, "an agreeing installment has nothing to explain");
+
+  const next = scoreHit(parseMediaPath("Saw 3"), meta("Saw IV", 2007, "movie", "tt-saw-4"), "movie");
+  assert.equal(next.partConflict, true, "another installment is another film");
+  assert.equal(next.autoEligible, false);
+  assert.equal(pickSuggestion([next])?.reason, "part");
+});
+
+test("a release or edition tag behind the installment number is not a part conflict", () => {
+  const imax = parseMediaPath("Saw III IMAX.mkv");
+  const hit = scoreHit(imax, meta("Saw III", 2006, "movie", "tt-saw-3"), "movie");
+  assert.equal(hit.partConflict, undefined, "IMAX says how the copy was made, not which film it is");
+  assert.equal(hit.titleSimilarity, 1, "the tag does not push the two names apart");
+  assert.equal(autoAccept([hit])?.item.id, "tt-saw-3");
+
+  const cut = scoreHit(parseMediaPath("Saw III Director's Cut.mkv"), meta("Saw III", 2006, "movie", "tt-saw-3"), "movie");
+  assert.equal(cut.partConflict, undefined, "an apostrophe in the tag does not invent a part either");
+  assert.equal(cut.titleSimilarity, 1);
 });
