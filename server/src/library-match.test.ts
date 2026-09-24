@@ -4,10 +4,12 @@ import { test } from "node:test";
 import {
   autoAccept, browseMeta, cacheFieldsFromMeta, clipText, dropKeyed, episodeKey, episodeNumberOf, episodesFromMeta, isExtraName,
   folderMosaicUnits, knownEntryForUnit, knownTitleOf, knownTitleForUnit, lookupSkipped, mosaicSkipped, matchKeyFor, mosaicIdentities, needsReevaluation, parseUnit, pendingSuggestionKeys, pinInherited, matchStatus, needsBackfill, needsEpisodes, needsRefresh, pickSuggestion, remapKeyed, scanMiss, unitFor,
-  scannedRecently, scanSkipReason, scoreHit, staleSuggestionKeys, suggestionFor, suggestionForUnit, titleUnits, unmatchAt, viewMeta,
+  scannedRecently, scanSkipReason, scoreHit, staleSuggestionKeys, suggestionFor, suggestionForUnit, titlePartConflict, titleUnits, unmatchAt, viewMeta, withSkipFlag,
   MATCH_RULE_VERSION, type LibraryMetaRecord, type LibrarySuggestion, type TitleUnit,
 } from "./library-match.js";
+import { fileMayUseFolderArtwork } from "./artwork.js";
 import { parseMediaPath, partSignature } from "./library-parse.js";
+import { posixBase } from "./libraries.js";
 import type { FoundFile } from "./library.js";
 import type { MetaItem } from "./types.js";
 
@@ -926,4 +928,142 @@ test("a release or edition tag behind the installment number is not a part confl
   const cut = scoreHit(parseMediaPath("Saw III Director's Cut.mkv"), meta("Saw III", 2006, "movie", "tt-saw-3"), "movie");
   assert.equal(cut.partConflict, undefined, "an apostrophe in the tag does not invent a part either");
   assert.equal(cut.titleSimilarity, 1);
+});
+
+test("a CD half of a named installment is the film, not a conflict", () => {
+  const hit = scoreHit(parseMediaPath("Saw III CD1.mkv"), meta("Saw III", 2006, "movie", "tt-saw-3"), "movie");
+  assert.equal(hit.partConflict, undefined, "the first half of part three is part three");
+  assert.equal(hit.titleSimilarity, 1, "the half costs the name nothing");
+  assert.equal(autoAccept([hit])?.item.id, "tt-saw-3");
+
+  const apollo = scoreHit(parseMediaPath("Apollo 13 CD1.mkv"), meta("Apollo 13", 1995, "movie", "tt-apollo"), "movie");
+  assert.equal(apollo.partConflict, undefined);
+  assert.equal(apollo.titleSimilarity, 1, "the number before the segment is the title's, not a second installment");
+  assert.equal(titlePartConflict("Saw III CD1", "Saw III"), false);
+  assert.equal(titlePartConflict("Saw III CD1", "Saw IV"), true, "but the next installment is still another film");
+});
+
+test("one installment written two ways is one film in a folder, and a different one is not", () => {
+  const unitsFor = (names: string[]) => titleUnits(names.map((name) => file(`Shelf/${name}`))).map((unit) => unit.key).sort();
+
+  assert.deepEqual(unitsFor(["Saw 3.mkv", "Saw III.mkv"]), ["Shelf"], "the two spellings of one installment are one film");
+  assert.deepEqual(unitsFor(["Rocky 3.mkv", "Rocky III.mkv"]), ["Shelf"]);
+  assert.deepEqual(unitsFor(["Saw Part 3.mkv", "Saw 3.mkv"]), ["Shelf"], "a spelled-out marker and the bare number agree");
+  assert.deepEqual(unitsFor(["Saw III CD1.mkv", "Saw 3 CD2.mkv"]), ["Shelf"], "the CD halves of one installment stay one film");
+  assert.deepEqual(unitsFor(["Saw III.mkv", "Saw 3 1080p.mkv"]), ["Shelf"], "an encode of the same installment is no second film");
+
+  assert.deepEqual(unitsFor(["Saw.mkv", "Saw III.mkv"]), ["Shelf/Saw III.mkv", "Shelf/Saw.mkv"], "the bare title is a film of its own");
+  assert.deepEqual(unitsFor(["Saw III.mkv", "Saw IV.mkv"]), ["Shelf/Saw III.mkv", "Shelf/Saw IV.mkv"], "installment three is not installment four");
+  assert.deepEqual(unitsFor(["Godfather.mkv", "Godfather Part II.mkv"]), ["Shelf/Godfather Part II.mkv", "Shelf/Godfather.mkv"], "a spelled-out sequel is another film");
+});
+
+test("a file kept out of matching or the mosaic keeps the title its folder gave it", () => {
+  const files = ["Heat/Heat.mkv", "Heat/Heat (2).mkv"].map(file);
+  const [unit] = titleUnits(files);
+  const records: Record<string, LibraryMetaRecord> = {
+    Heat: { type: "movie", id: "tt-heat", source: "user", locked: true, name: "Heat", year: "1995", description: "A crew." },
+    "Heat/Heat.mkv": { type: "movie", id: "", source: "user", skipLookup: true },
+    "Heat/Heat (2).mkv": { type: "movie", id: "", source: "user", skipMosaic: true },
+  };
+
+  for (const child of ["Heat/Heat.mkv", "Heat/Heat (2).mkv"]) {
+    const entry = knownEntryForUnit(unit, records, child);
+    assert.equal(entry?.key, "Heat", "the folder is still the key that names the file");
+    assert.equal(entry?.record.id, "tt-heat");
+    assert.equal(fileMayUseFolderArtwork(child, entry?.record.type, entry?.key), true, "so the folder's picture still fits it");
+    const row = browseMeta(child, posixBase(child), records, {}, {}, unit);
+    assert.equal(row.match, "matched", "an exclusion is not an unmatch");
+    assert.equal(row.year, "1995");
+    assert.equal(row.catalogName, "Heat");
+  }
+  assert.equal(browseMeta("Heat/Heat.mkv", "Heat.mkv", records, {}, {}, unit).skipLookup, true, "the row still says it is kept out of matching");
+  assert.equal(browseMeta("Heat/Heat (2).mkv", "Heat (2).mkv", records, {}, {}, unit).skipMosaic, true);
+  assert.equal(lookupSkipped("Heat/Heat.mkv", records), true);
+  assert.equal(mosaicSkipped("Heat/Heat (2).mkv", records), true);
+  assert.equal(lookupSkipped("Heat", records), false, "the folder itself is not excluded");
+});
+
+test("a flagged episode of a series keeps its series, its episode and its exclusion", () => {
+  const episode = path.join("Ted", "Serie 1", "02 - Nazev.mkv");
+  const records: Record<string, LibraryMetaRecord> = {
+    Ted: { type: "series", id: "tt1", name: "Father Ted", year: "1995", description: "A priest." },
+    [episode]: { type: "series", id: "", source: "user", skipMosaic: true },
+  };
+  const unit: TitleUnit = { key: "Ted", kind: "series", relative: "Ted", sampleFiles: [episode] };
+  const episodes = episodesFromMeta(seriesMeta());
+
+  const view = browseMeta(episode, "02 - Nazev.mkv", records, {}, episodes, unit);
+  assert.equal(view.match, "matched");
+  assert.deepEqual([view.season, view.episode], [1, 2], "the episode chips stay");
+  assert.equal(view.description, "A visitor.");
+  assert.equal(view.catalogName, "Entertaining Father");
+  assert.equal(view.skipMosaic, true);
+
+  const unmatched = browseMeta(episode, "02 - Nazev.mkv", unmatchAt(records, episode), {}, episodes, unit);
+  assert.equal(unmatched.match, "unmatched", "an unmatch still comes loose from the series");
+});
+
+test("a flag on a child leaves the binding where it lives, and never releases an unmatch", () => {
+  const [unit] = titleUnits([file("Heat/Heat.mkv")]);
+  const records: Record<string, LibraryMetaRecord> = {
+    Heat: { type: "movie", id: "tt-heat", source: "user", locked: true, name: "Heat", year: "1995" },
+  };
+
+  const flagged = withSkipFlag(records, "Heat/Heat.mkv", "skipLookup", true);
+  assert.deepEqual(flagged["Heat/Heat.mkv"], { type: "movie", id: "", source: "user", skipLookup: true },
+    "the flag says nothing about which film the file is, so the row carries no identity of its own");
+  assert.equal(knownTitleForUnit(unit, flagged, "Heat/Heat.mkv")?.id, "tt-heat", "and the folder still names it");
+  assert.equal(browseMeta("Heat/Heat.mkv", "Heat.mkv", flagged, {}, {}, unit).match, "matched");
+  assert.deepEqual(withSkipFlag(flagged, "Heat/Heat.mkv", "skipLookup", false), records, "taking the flag off leaves the row as it was");
+
+  const sentinel = unmatchAt(records, "Heat/Heat.mkv");
+  assert.equal(sentinel["Heat/Heat.mkv"]?.unmatched, true, "an unmatch says so out loud");
+  assert.equal(knownEntryForUnit(unit, sentinel, "Heat/Heat.mkv"), undefined, "and only the marker takes the binding away");
+  const flaggedSentinel = withSkipFlag(sentinel, "Heat/Heat.mkv", "skipMosaic", true);
+  assert.equal(flaggedSentinel["Heat/Heat.mkv"]?.unmatched, true, "a flag on an unmatched file keeps it unmatched");
+  assert.equal(flaggedSentinel["Heat/Heat.mkv"]?.skipMosaic, true);
+  assert.equal(knownEntryForUnit(unit, flaggedSentinel, "Heat/Heat.mkv"), undefined);
+  const cleared = withSkipFlag(flaggedSentinel, "Heat/Heat.mkv", "skipMosaic", false);
+  assert.equal(cleared["Heat/Heat.mkv"]?.unmatched, true, "and taking the flag off does not release it");
+  assert.equal(knownTitleForUnit(unit, cleared, "Heat/Heat.mkv"), undefined);
+});
+
+test("adding a flag to a legacy unmatch sentinel keeps it from inheriting", () => {
+  const unit: TitleUnit = { key: "Heat", kind: "movie", relative: "Heat", sampleFiles: ["Heat/Heat.mkv"] };
+  const records: Record<string, LibraryMetaRecord> = {
+    Heat: { type: "movie", id: "tt-heat", source: "user", name: "Heat" },
+    "Heat/Heat.mkv": { type: "movie", id: "", source: "user" },
+  };
+
+  const flagged = withSkipFlag(records, "Heat/Heat.mkv", "skipLookup", true);
+  assert.equal(flagged["Heat/Heat.mkv"]?.unmatched, true);
+  assert.equal(knownTitleForUnit(unit, flagged, "Heat/Heat.mkv"), undefined);
+
+  const moved = pinInherited({
+    Destination: { type: "movie", id: "tt-destination", source: "user" },
+    Movies: { type: "movie", id: "", source: "user", skipLookup: true },
+    "Movies/Film.mkv": { type: "movie", id: "", source: "user" },
+  }, {}, "Movies/Film.mkv", "Destination/Film.mkv");
+  assert.equal(moved.meta["Movies/Film.mkv"]?.unmatched, true, "pinning a legacy sentinel keeps its meaning");
+  assert.equal(knownTitleOf("Destination/Film.mkv", {
+    Destination: { type: "movie", id: "tt-destination", source: "user" },
+    "Destination/Film.mkv": moved.meta["Movies/Film.mkv"]!,
+  }), undefined, "the next folder cannot claim the moved file");
+});
+
+test("clearing a flag preserves a legacy unmatch sentinel but removes a legacy exclusion", () => {
+  const unit: TitleUnit = { key: "Heat", kind: "movie", relative: "Heat", sampleFiles: ["Heat/Heat.mkv"] };
+  const records: Record<string, LibraryMetaRecord> = {
+    Heat: { type: "movie", id: "tt-heat", source: "user" },
+    "Heat/Heat.mkv": { type: "movie", id: "", source: "user" },
+  };
+
+  const unmatched = withSkipFlag(records, "Heat/Heat.mkv", "skipLookup", false);
+  assert.ok(unmatched["Heat/Heat.mkv"], "a legacy sentinel remains stored even when this flag was never present");
+  assert.equal(knownTitleForUnit(unit, unmatched, "Heat/Heat.mkv"), undefined);
+
+  const exclusion = { ...records, "Heat/Heat.mkv": { type: "movie" as const, id: "", source: "user" as const, skipLookup: true } };
+  const included = withSkipFlag(exclusion, "Heat/Heat.mkv", "skipLookup", false);
+  assert.equal(included["Heat/Heat.mkv"], undefined, "a flag-only record is removed when its last flag is cleared");
+  assert.equal(knownTitleForUnit(unit, included, "Heat/Heat.mkv")?.id, "tt-heat", "the cleared exclusion still inherits the folder");
 });

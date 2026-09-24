@@ -61,9 +61,6 @@ const MARKERS = [...SEGMENT_WORDS, ...INSTALLMENT_WORDS].sort((a, b) => b.length
 const MARKER_FUSED = new RegExp(`^(${MARKERS.join("|")})([0-9]{1,2}|[ivx]{1,4})$`, "i");
 /** A fused token split apart by punctuation, e.g. "cd" then "1". */
 const MARKER_WORD_ONLY = new RegExp(`^(?:${MARKERS.join("|")})$`, "i");
-/** What may follow a marker word: a plain number or a Roman numeral. */
-const PART_NUMBER = /^(?:[0-9]{1,2}|[ivx]{1,4})$/i;
-const ROMAN = /^[ivx]{1,4}$/i;
 const ROMAN_VALUE: Record<string, number> = { i: 1, ii: 2, iii: 3, iv: 4, v: 5, vi: 6, vii: 7, viii: 8, ix: 9, x: 10 };
 const BARE_NUMBER = /^([0-9]{1,2})$/;
 /** "Obsession (2)" is a second encode of one film, not a part. */
@@ -74,6 +71,9 @@ type MarkerKind = "segment" | "installment";
 interface PartMarker {
   kind: MarkerKind;
   number: number;
+  /** The token span the marker covers, so a filter can drop exactly its words. */
+  from: number;
+  to: number;
 }
 
 /** Release and edition words may trail a title without changing which film it is, so a part
@@ -253,80 +253,77 @@ function markerTokens(value: string): string[] {
   return dropTrailingEditions(collapsed).split(" ").filter(Boolean);
 }
 
-/** The markers of one title. An explicit one ("Part 2", "CD1") always counts; a lone
- *  trailing Roman numeral counts too, and a lone trailing number ("Toy Story 2") only when
- *  the caller asked for it, because "Obsession (2)" is a second encode of one film while
- *  "Toy Story 2" is another film. */
-function partMarkers(value: string, bare: boolean): PartMarker[] {
-  const tokens = markerTokens(value);
+/** The markers of one title. An explicit one ("Part 2", "CD1") counts anywhere; the last
+ *  word that is not one of them ends the title-as-number, so a physical segment behind it
+ *  ("Saw III CD1") does not hide the installment it names. A Roman numeral ends an
+ *  installment either way; a plain number ("Toy Story 2") only when the caller asked for
+ *  it, because "Obsession (2)" is a second encode of one film while "Toy Story 2" is
+ *  another film. */
+function partMarkers(tokens: string[], bare: boolean): PartMarker[] {
   const found: PartMarker[] = [];
+  const taken = new Set<number>();
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index]!;
     const fused = MARKER_FUSED.exec(token);
     if (fused) {
       const number = markerNumber(fused[2]!);
-      if (number != null) { found.push({ kind: markerKind(fused[1]!), number }); continue; }
+      if (number != null) {
+        found.push({ kind: markerKind(fused[1]!), number, from: index, to: index });
+        taken.add(index);
+        continue;
+      }
     }
     if (MARKER_WORD_ONLY.test(token)) {
       const next = tokens[index + 1];
       const number = next == null ? undefined : markerNumber(next);
-      if (number != null) { found.push({ kind: markerKind(token), number }); index += 1; continue; }
-    }
-    if (index === tokens.length - 1 && ROMAN.test(token)) {
-      const number = romanPart(token);
-      if (number != null) found.push({ kind: "installment", number });
+      if (number != null) {
+        found.push({ kind: markerKind(token), number, from: index, to: index + 1 });
+        taken.add(index); taken.add(index + 1);
+        index += 1;
+        continue;
+      }
     }
   }
-  if (!found.length && bare && tokens.length > 1) {
-    const last = tokens[tokens.length - 1]!;
-    const bareMatch = BARE_NUMBER.exec(last);
-    if (bareMatch) {
-      const number = Number(bareMatch[1]);
-      if (number >= 1 && number <= 29) found.push({ kind: "installment", number });
+  // An installment already spelled out ("Vol 1", "část 2") is the title's own; whatever
+  // trails it belongs to that same marker and is no second one.
+  if (found.some((marker) => marker.kind === "installment")) return found;
+  const last = lastFreeIndex(tokens, taken);
+  if (last != null) {
+    const roman = romanPart(tokens[last]!);
+    if (roman != null) found.push({ kind: "installment", number: roman, from: last, to: last });
+    else if (bare && tokens.length > 1) {
+      const bareMatch = BARE_NUMBER.exec(tokens[last]!);
+      const number = bareMatch ? Number(bareMatch[1]) : NaN;
+      if (number >= 1 && number <= 29) found.push({ kind: "installment", number, from: last, to: last });
     }
   }
   return found;
+}
+
+/** The last token that is not part of a marker already found, or nothing when every token is. */
+function lastFreeIndex(tokens: string[], taken: Set<number>): number | undefined {
+  for (let index = tokens.length - 1; index >= 0; index -= 1) if (!taken.has(index)) return index;
+  return undefined;
 }
 
 /** The installment marker of one title, as a canonical string, or "". Arabic and Roman
  *  spellings of one number produce the same string, and a physical segment ("CD2") is no
  *  installment at all. */
 export function partSignature(value: string | undefined, bare = false): string {
-  return partMarkers(String(value ?? ""), bare)
+  return partMarkers(markerTokens(String(value ?? "")), bare)
     .filter((marker) => marker.kind === "installment")
     .map((marker) => `part:${marker.number}`)
     .join("+");
 }
 
-/** The indexes of the tokens a title drops: the markers a filter accepts, and a final
- *  installment written as a bare number when the caller asked for one. */
-function droppedMarkers(tokens: string[], accept: (kind: MarkerKind) => boolean, bareNumeral: boolean): Set<number> {
-  const dropped = new Set<number>();
-  for (let index = 0; index < tokens.length; index += 1) {
-    const token = tokens[index]!;
-    const fused = MARKER_FUSED.exec(token);
-    if (fused) {
-      if (accept(markerKind(fused[1]!))) dropped.add(index);
-      continue;
-    }
-    if (MARKER_WORD_ONLY.test(token) && accept(markerKind(token))) {
-      const next = tokens[index + 1];
-      if (next != null && PART_NUMBER.test(next)) { dropped.add(index); dropped.add(index + 1); index += 1; }
-    }
-  }
-  if (!bareNumeral || tokens.length < 2) return dropped;
-  const lastIndex = tokens.length - 1;
-  if (dropped.has(lastIndex)) return dropped;
-  const last = tokens[lastIndex]!;
-  const bare = BARE_NUMBER.exec(last);
-  if (ROMAN.test(last) || (bare != null && Number(bare[1]) >= 1 && Number(bare[1]) <= 29)) dropped.add(lastIndex);
-  return dropped;
-}
-
 /** The words of one title with the markers a filter accepts left out. */
 function stripMarkers(normalized: string, accept: (kind: MarkerKind) => boolean, bareNumeral: boolean): string {
   const tokens = markerTokens(normalized);
-  const dropped = droppedMarkers(tokens, accept, bareNumeral);
+  const dropped = new Set<number>();
+  for (const marker of partMarkers(tokens, bareNumeral)) {
+    if (!accept(marker.kind)) continue;
+    for (let index = marker.from; index <= marker.to; index += 1) dropped.add(index);
+  }
   return tokens.filter((_token, index) => !dropped.has(index)).join(" ");
 }
 

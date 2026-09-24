@@ -482,6 +482,39 @@ test("GET /api/library/identity lets one file's binding beat the folder unit's",
   assert.equal(other.bound?.id, "tt-heat", "the sibling keeps the folder's binding");
 });
 
+test("GET /api/library/identity reads an exclusion from the row's own path", async (t) => {
+  const root = await makeRoot("stremio-curate-child-flag-");
+  await put(root, "Heat/Heat.mkv");
+  await put(root, "Heat/Heat (2).mkv");
+  await put(root, "Kaly.mkv");
+  const folder = "lib_00000001/Heat";
+  const harness = await mount({
+    libraries: [library("lib_00000001", root)],
+    units: [
+      { key: folder, kind: "movie", relative: "Heat", sampleFiles: ["Heat/Heat.mkv", "Heat/Heat (2).mkv"] },
+      { key: "lib_00000001/Kaly.mkv", kind: "movie", relative: "Kaly.mkv", sampleFiles: ["Kaly.mkv"] },
+    ],
+    records: {
+      [folder]: { type: "movie", id: "tt-heat", source: "user", locked: true, name: "Heat", year: "1995" },
+      "lib_00000001/Heat/Heat.mkv": { type: "movie", id: "", source: "user", skipLookup: true },
+      "lib_00000001/Kaly.mkv": { type: "movie", id: "", source: "user", skipLookup: true },
+    },
+  });
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const flagged = await api(harness.base, `/api/library/identity?path=${encodeURIComponent("Heat/Heat.mkv")}`);
+  const inherited = await flagged.json() as { match: string; bound?: { id: string; name?: string } };
+  assert.equal(inherited.match, "matched", "the title the folder gave the file outranks the exclusion");
+  assert.equal(inherited.bound?.id, "tt-heat");
+  assert.equal(inherited.bound?.name, "Heat");
+
+  // Nothing above it, so the row's own exclusion is all there is to read.
+  const alone = await api(harness.base, `/api/library/identity?path=${encodeURIComponent("Kaly.mkv")}`);
+  const excluded = await alone.json() as { match: string; bound?: unknown };
+  assert.equal(excluded.match, "rejected");
+  assert.equal(excluded.bound, undefined);
+});
+
 test("POST /api/library/match refuses a correction when the current binding has changed", async (t) => {
   const root = await makeRoot("stremio-curate-stale-correction-");
   await put(root, "Films/Heat.mkv");

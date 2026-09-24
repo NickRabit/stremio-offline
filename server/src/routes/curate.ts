@@ -83,7 +83,9 @@ export function registerCurateRoutes(app: express.Application, deps: CurateDeps)
       // No unit covers a path nothing matched (a folder holding only extras, say): the file
       // stands for itself and is read from its own name, never from the folder above it.
       parsed: { ...(unit ? parseUnit(unit) : parseMediaPath(posixBase(unitKey))), ...(numbers ? { season: numbers.season, episode: numbers.episode } : {}) },
-      match: known?.id ? "matched" : lookupSkipped(unitKey, records) ? "rejected" : suggestion ? "suggested" : "unmatched",
+      // The identity the clicked row inherited outranks its own exclusion, which is read from
+      // the row's own path: a file the user kept out of matching is still the film's own row.
+      match: known?.id ? "matched" : lookupSkipped(resolved.key, records) ? "rejected" : suggestion ? "suggested" : "unmatched",
       ...(bound?.id ? { bound } : {}),
       ...(suggestion ? { suggestion: suggestionView(suggestion) } : {}),
     });

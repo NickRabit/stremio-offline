@@ -1,6 +1,6 @@
 import { isPathWithin, isVideo, numberedEpisode, parseSeason, remapPath, type FoundFile } from "./library.js";
 import { parseLibraryPath, posixBase, type LibraryType } from "./libraries.js";
-import { parseMediaPath, partSignature, stripPartMarkers, stripSegmentMarkers, type ParsedMedia } from "./library-parse.js";
+import { parseMediaPath, partSignature, stripPartMarkers, type ParsedMedia } from "./library-parse.js";
 import type { MetaItem } from "./types.js";
 
 export type TitleKind = "movie" | "series";
@@ -74,6 +74,10 @@ export interface LibraryMetaRecord {
   locked?: boolean;
   skipLookup?: boolean;
   skipMosaic?: boolean;
+  /** A binding this path deliberately does not take, while the folders above keep theirs.
+   *  Only `unmatchAt` writes it; a row without an identity that carries no flag at all
+   *  predates the marker and means the same. */
+  unmatched?: boolean;
   name?: string;
   year?: string;
   description?: string;
@@ -125,7 +129,7 @@ const EXTRA_TOKENS = new Set(["trailer", "sample", "extra", "bonus", "deleted", 
 const ARTICLES = /^(the|a|an)\s+/;
 /** The matching rules that wrote a suggestion or a remembered miss. Bumped whenever a
  *  decision changes meaning, so old rows are reconsidered exactly once. */
-export const MATCH_RULE_VERSION = 4;
+export const MATCH_RULE_VERSION = 5;
 
 export function levenshtein(a: string, b: string): number {
   if (a === b) return 0;
@@ -410,7 +414,18 @@ const EPISODE_DESCRIPTION_MAX = 600;
 const MAX_EPISODES = 1000;
 const BACKFILL_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
-/** The binding that covers this path, together with the path it is stored at. */
+/** Whether the row takes the folders' binding away from one path instead of standing for an
+ *  identity of its own. A flag beside no identity is an exclusion -- the path is kept out of
+ *  matching or the mosaic but keeps the title it is shown under -- while a row like that
+ *  without any flag is a binding deliberately dropped. */
+function isUnmatched(record: LibraryMetaRecord | undefined): boolean {
+  if (!record || record.id) return false;
+  if (record.unmatched === true) return true;
+  return !record.skipLookup && !record.skipMosaic;
+}
+
+/** The binding that covers this path, together with the path it is stored at. An exclusion
+ *  is passed over, so the row below it still answers with the identity it inherited. */
 export function knownTitleEntry(
   relative: string,
   records: Record<string, LibraryMetaRecord>,
@@ -420,7 +435,8 @@ export function knownTitleEntry(
     const key = parts.slice(0, depth).join("/");
     const found = records[key];
     if (!found) continue;
-    return viewMeta(found)?.id ? { key, record: found } : undefined;
+    if (found.id) return { key, record: found };
+    if (isUnmatched(found)) return undefined;
   }
   return undefined;
 }
@@ -431,10 +447,12 @@ export function knownTitleOf(relative: string, records: Record<string, LibraryMe
 
 /** The binding of a unit, with the key it is stored at. A caller holding a concrete file of
  *  the unit passes it as `file`: what that file says about itself beats what the folder unit
- *  says, and a sentinel on the file keeps the folder's binding away from it. Files that say
- *  nothing about themselves keep the unit's binding, so siblings and same-title copies stay
- *  covered. A loose movie in a collection is its own unit and owns its identity already: it
- *  must not inherit the collection folder's binding. */
+ *  says, and an unmatch on the file keeps the folder's binding away from it. A file kept out
+ *  of matching or the mosaic is not one of those: the exclusion is respected, the identity
+ *  is still the unit's, and the key that supplied it stays the unit's, so the row keeps the
+ *  folder's picture. Files that say nothing about themselves keep the unit's binding too, so
+ *  siblings and same-title copies stay covered. A loose movie in a collection is its own
+ *  unit and owns its identity already: it must not inherit the collection folder's binding. */
 export function knownEntryForUnit(
   unit: TitleUnit | string | undefined,
   records: Record<string, LibraryMetaRecord>,
@@ -445,7 +463,8 @@ export function knownEntryForUnit(
   const path = file && file !== unitKey ? file : unitKey;
   if (path !== unitKey) {
     const own = records[path];
-    if (own) return own.id ? { key: path, record: own } : undefined;
+    if (own?.id) return { key: path, record: own };
+    if (own && isUnmatched(own)) return undefined;
     if (!isVideo(posixBase(path))) return knownTitleEntry(path, records);
     return knownTitleEntry(unitKey, records);
   }
@@ -467,17 +486,60 @@ export function knownTitleForUnit(
 }
 
 /** Clear the binding on this path only. A path that still inherits one from a matched
- *  folder gets a sentinel, so siblings keep the parent while this one comes loose. */
+ *  folder gets a sentinel, so siblings keep the parent while this one comes loose. The
+ *  marker is what tells that sentinel from a row that only carries a flag. */
 export function unmatchAt(records: Record<string, LibraryMetaRecord>, relative: string): Record<string, LibraryMetaRecord> {
   const next = { ...records };
   const previous = next[relative];
   delete next[relative];
   const inherited = knownTitleOf(relative, next);
   if (inherited?.id) {
-    next[relative] = { type: inherited.type, id: "", source: "user", ...(previous?.skipLookup ? { skipLookup: true } : {}) };
+    next[relative] = {
+      type: inherited.type, id: "", source: "user", unmatched: true,
+      ...(previous?.skipLookup ? { skipLookup: true } : {}),
+      ...(previous?.skipMosaic ? { skipMosaic: true } : {}),
+    };
   } else if (previous?.skipLookup) {
-    next[relative] = { type: previous.type, id: "", source: previous.source ?? "user", skipLookup: true };
+    next[relative] = { type: previous.type, id: "", source: previous.source ?? "user", skipLookup: true, unmatched: true };
   }
+  return next;
+}
+
+/** Turns one path's "keep out of matching" or "keep out of the mosaic" flag on and off. A
+ *  flag says nothing about which film a path is, so a row written for one leaves an inherited
+ *  binding where it is -- the row is an exclusion, not an identity of its own -- and an
+ *  unmatch keeps its marker, which no flag turns back into a binding. */
+export function withSkipFlag(
+  records: Record<string, LibraryMetaRecord>,
+  relative: string,
+  name: "skipLookup" | "skipMosaic",
+  value: boolean,
+): Record<string, LibraryMetaRecord> {
+  const next = { ...records };
+  const current = next[relative];
+  if (value) {
+    const record: LibraryMetaRecord = {
+      type: current?.type ?? "movie",
+      id: current?.id ?? "",
+      source: current?.source ?? "user",
+      ...(current?.locked != null ? { locked: current.locked } : {}),
+      ...(current && isUnmatched(current) ? { unmatched: true } : {}),
+      ...(current?.name ? { name: current.name } : {}),
+      ...(current?.year ? { year: current.year } : {}),
+      ...(current?.description ? { description: current.description } : {}),
+      ...(current?.matchedAt ? { matchedAt: current.matchedAt } : {}),
+      ...(current?.skipLookup ? { skipLookup: true } : {}),
+      ...(current?.skipMosaic ? { skipMosaic: true } : {}),
+    };
+    if (name === "skipLookup") record.skipLookup = true; else record.skipMosaic = true;
+    next[relative] = record;
+    return next;
+  }
+  if (!current) return next;
+  const kept: LibraryMetaRecord = { ...current };
+  if (name === "skipLookup") delete kept.skipLookup; else delete kept.skipMosaic;
+  if (kept.id || kept.skipLookup || kept.skipMosaic || kept.unmatched || isUnmatched(current)) next[relative] = kept;
+  else delete next[relative];
   return next;
 }
 
@@ -681,8 +743,10 @@ export function browseMeta(
   const knownEntry = knownEntryForUnit(unit, records, file);
   const knownForRow = knownEntry?.record;
   const proposedForRow = suggestionForUnit(unit, suggestions, file);
+  // The title the row inherited wins over its own exclusion, and the exclusion is read from
+  // the row's own path: a file kept out of matching is still the film the folder names.
   const match = mosaicFolder ? "unmatched" : unit
-    ? knownForRow?.id ? "matched" : lookupSkipped(unit.key, records) ? "rejected" : proposedForRow ? "suggested" : "unmatched"
+    ? knownForRow?.id ? "matched" : lookupSkipped(relative, records) ? "rejected" : proposedForRow ? "suggested" : "unmatched"
     : matchStatus(relative, records, suggestions);
   const skipLookup = Boolean(records[relative]?.skipLookup);
   const skipMosaic = Boolean(records[relative]?.skipMosaic);
@@ -751,18 +815,28 @@ export function pinInherited(
 
   const nextMeta = { ...meta };
   const bound = knownTitleEntry(relative, meta);
-  if (bound && !stillCovers(bound.key)) nextMeta[relative] = { ...bound.record };
+  if (bound && !stillCovers(bound.key)) {
+    // Whatever the item itself kept out of matching or the mosaic travels with it.
+    const own = meta[relative];
+    nextMeta[relative] = {
+      ...bound.record,
+      ...(own?.skipLookup ? { skipLookup: true } : {}),
+      ...(own?.skipMosaic ? { skipMosaic: true } : {}),
+    };
+  }
   // Catalogue lookup switched off on a folder is a decision about the item too.
   const ignored = coveringKey(meta, relative, (record) => Boolean(record.skipLookup));
   if (ignored && !stillCovers(ignored)) {
-    const own = nextMeta[relative] ?? meta[relative] ?? { type: meta[ignored]!.type, id: "", source: "user" as const };
-    nextMeta[relative] = { ...own, skipLookup: true };
+    const previous = meta[relative];
+    const own = nextMeta[relative] ?? previous ?? { type: meta[ignored]!.type, id: "", source: "user" as const };
+    nextMeta[relative] = { ...own, ...(previous && isUnmatched(previous) ? { unmatched: true } : {}), skipLookup: true };
   }
   // So is being kept out of the mosaic.
   const hidden = coveringKey(meta, relative, (record) => Boolean(record.skipMosaic));
   if (hidden && !stillCovers(hidden)) {
-    const own = nextMeta[relative] ?? meta[relative] ?? { type: meta[hidden]!.type, id: "", source: "user" as const };
-    nextMeta[relative] = { ...own, skipMosaic: true };
+    const previous = meta[relative];
+    const own = nextMeta[relative] ?? previous ?? { type: meta[hidden]!.type, id: "", source: "user" as const };
+    nextMeta[relative] = { ...own, ...(previous && isUnmatched(previous) ? { unmatched: true } : {}), skipMosaic: true };
   }
 
   const nextSuggestions = { ...suggestions };
@@ -794,14 +868,17 @@ export function isExtraName(filename: string): boolean {
   return title.split(/[\s-]+/).filter(Boolean).some((token) => EXTRA_TOKENS.has(token));
 }
 
-/** The words that identify one film regardless of which encode, CD half or single file
- *  carries it. A segment marker is dropped, because the halves belong to one identity; an
- *  installment marker is kept, because "Godfather" and "Godfather Part II" are two films. */
+/** The identity one film keeps across its encodes, its CD halves and its single file. A
+ *  physical segment is dropped, because the halves belong to one identity, and the
+ *  installment is written the canonical way the matcher compares titles, so "Saw 3",
+ *  "Saw III" and "Saw III CD1" are one film while "Saw" and "Saw IV" are their own. */
 function comparableTitle(filename: string): string {
   // "Obsession (2)" is a second encode of one film, so the parenthesised copy number goes.
   const title = parseMediaPath(filename).title.replace(/\(\s*\d{1,3}\s*\)\s*$/, "");
   const normalized = normalizeTitle(title);
-  return stripSegmentMarkers(normalized) || normalized;
+  const base = stripPartMarkers(normalized) || normalized;
+  const part = partSignature(title, true);
+  return part ? `${base} ${part}` : base;
 }
 
 interface DirIndex {

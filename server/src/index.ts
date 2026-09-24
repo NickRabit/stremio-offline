@@ -30,7 +30,7 @@ import { createLibraryCandidates } from "./library-candidates.js";
 import { ExternalIdStore } from "./external-ids.js";
 import { currentLevel, flushLog, initLogger, log, parseLevel, startLogMaintenance, setLevel } from "./logger.js";
 import { browseDirectory, describePath, emptiedFolders, entryDirectory, holdsLibraryRoot, isPathWithin, isVideo, listVideos, moveDestination, orphanedCatalogKeys, pageFiles, remapPath, scanLibrary, summarize, type FoundFile, type LibraryEntry } from "./library.js";
-import { browseMeta, cacheFieldsFromMeta, episodeKey, episodeNumberOf, episodesFromMeta, dropKeyed, folderMosaicUnits, knownEntryForUnit, knownTitleEntry, knownTitleOf, knownTitleForUnit, matchKeyFor, mosaicIdentities, mosaicSkipped, needsBackfill, needsEpisodes, staleSuggestionKeys, titleUnits, unitFor, unmatchAt, type GalleryEntry, type LibraryMetaRecord, type TitleKind, type TitleUnit } from "./library-match.js";
+import { browseMeta, cacheFieldsFromMeta, episodeKey, episodeNumberOf, episodesFromMeta, dropKeyed, folderMosaicUnits, knownEntryForUnit, knownTitleEntry, knownTitleOf, knownTitleForUnit, matchKeyFor, mosaicIdentities, mosaicSkipped, needsBackfill, needsEpisodes, staleSuggestionKeys, titleUnits, unitFor, unmatchAt, withSkipFlag, type GalleryEntry, type LibraryMetaRecord, type TitleKind, type TitleUnit } from "./library-match.js";
 import { LibraryScan } from "./library-scan.js";
 import { createLibraryProbe, type LibraryHealth } from "./library-probe.js";
 import { LibraryAutoScan } from "./library-autoscan.js";
@@ -1985,28 +1985,7 @@ const matchLibraryItem = async (body: LibraryMatchRequest, language = prefsOf().
   if (flag && body.id === undefined) {
     const target = parseLibraryPath(requestKey);
     if (target) await metaStore.update(target.libraryId, (file) => {
-      const current = file.meta[target.relative];
-      if (flag.value) {
-        const record: LibraryMetaRecord = {
-          type: current?.type ?? "movie",
-          id: current?.id ?? "",
-          source: current?.source ?? "user",
-          ...(current?.locked != null ? { locked: current.locked } : {}),
-          ...(current?.name ? { name: current.name } : {}),
-          ...(current?.year ? { year: current.year } : {}),
-          ...(current?.description ? { description: current.description } : {}),
-          ...(current?.matchedAt ? { matchedAt: current.matchedAt } : {}),
-          ...(current?.skipLookup ? { skipLookup: true } : {}),
-          ...(current?.skipMosaic ? { skipMosaic: true } : {}),
-        };
-        if (flag.name === "skipLookup") record.skipLookup = true; else record.skipMosaic = true;
-        file.meta[target.relative] = record;
-      } else if (current) {
-        const kept: LibraryMetaRecord = { ...current };
-        if (flag.name === "skipLookup") delete kept.skipLookup; else delete kept.skipMosaic;
-        if (kept.id || kept.skipLookup || kept.skipMosaic) file.meta[target.relative] = kept;
-        else delete file.meta[target.relative];
-      }
+      file.meta = withSkipFlag(file.meta, target.relative, flag.name, flag.value);
     });
     invalidateLibrary();
     const what = flag.name === "skipLookup" ? "matching" : "the mosaic";
