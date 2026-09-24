@@ -54,6 +54,11 @@ being reopened, not as a changelog.
   cached artwork sized for a tile.
 - Restricted / demo mode (`RESTRICTED_MODE=1`), English documentation, the
   community files, the GHCR image and the build and release workflows.
+- **Desktop shell**: a separate window that opens an existing server, after a
+  main-process status check, with its own connection screen, a session per
+  origin, a refused public HTTP request and links that leave for the system
+  browser. Delivered by [PR #211](https://github.com/NickRabit/stremio-offline/pull/211);
+  the shell is not packaged yet.
 
 ## Next (daily friction)
 
@@ -89,6 +94,14 @@ the browser is later.
 
 Live input (~400 ms debounce), recent queries, suggestions from already loaded
 catalogs, and an optional rank-by-title-match.
+
+### Desktop
+
+PR #211 delivered the initial remote desktop shell. Named remote profiles are
+now managed from the local connection screen. Remaining Phase 1 work is a
+distributable remote client with installers, signing, notarization, auto-update
+and clean-install verification. Phase 2, starting the local backend from the
+shell, follows that release work.
 
 ## Engineering health
 

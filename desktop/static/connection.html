@@ -8,9 +8,11 @@
     main { display: flex; flex-direction: column; gap: 10px; padding: 32px; box-sizing: border-box; }
     h1 { margin: 0; font-size: 18px; }
     label { font-size: 12px; opacity: 0.7; }
-    input { width: 360px; padding: 8px; border: 1px solid #3a3a44; border-radius: 6px; background: #191920; color: inherit; font: inherit; }
+    input, select { width: 360px; padding: 8px; border: 1px solid #3a3a44; border-radius: 6px; background: #191920; color: inherit; font: inherit; }
     button { padding: 8px 14px; border: 1px solid #3a3a44; border-radius: 6px; background: #232331; color: inherit; font: inherit; cursor: pointer; }
+    button:disabled { opacity: 0.5; cursor: default; }
     #form { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+    #actions { display: flex; gap: 8px; }
     #hint { margin: 0; font-size: 12px; opacity: 0.6; }
     #message { margin: 0; }
     body.connected main { flex-direction: row; align-items: center; gap: 12px; height: 48px; padding: 0 14px; }
@@ -22,14 +24,23 @@
   <main>
     <h1 data-i18n="connect.title"></h1>
     <div id="form">
+      <label for="profiles" data-i18n="connect.profiles"></label>
+      <select id="profiles"></select>
+      <label for="profileName" data-i18n="connect.profileName"></label>
+      <input id="profileName" type="text" maxlength="80" autocomplete="off" spellcheck="false" />
       <label for="origin" data-i18n="connect.address"></label>
       <input id="origin" type="url" autocomplete="off" spellcheck="false" />
       <p id="hint" data-i18n="connect.addressHint"></p>
-      <button id="connect" type="button" data-i18n="connect.connect"></button>
+      <div id="actions">
+        <button id="save" type="button" data-i18n="connect.profileSave"></button>
+        <button id="remove" type="button" data-i18n="connect.profileRemove"></button>
+        <button id="connect" type="button" data-i18n="connect.connect"></button>
+      </div>
     </div>
     <button id="disconnect" type="button" data-i18n="connect.disconnect" hidden></button>
     <p id="message" role="status"></p>
   </main>
+  <script src="../dist/profile-form.js"></script>
   <script src="../dist/connection.js"></script>
 </body>
 </html>

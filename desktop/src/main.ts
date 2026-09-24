@@ -1,12 +1,30 @@
 import { app, BaseWindow, ipcMain, session, shell as electronShell, WebContentsView, type IpcMainEvent, type IpcMainInvokeEvent } from "electron";
+import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { readSavedOrigin, writeSavedOrigin } from "./connection-file.js";
+import {
+  addProfile,
+  findProfile,
+  normalizeProfileName,
+  normalizeProfileOrigin,
+  readProfiles,
+  removeProfile,
+  selectProfile,
+  updateProfile,
+  writeProfiles,
+  type ProfileStore,
+  type ServerProfile,
+} from "./connection-file.js";
 import { catalogue } from "./i18n.js";
 import { layout, type LayoutMode } from "./layout.js";
 import { externalBrowserUrl, httpAllowedHost, parseServerOrigin, partitionForOrigin, type ServerOrigin } from "./origin.js";
+import { SerialQueue } from "./serial-queue.js";
 import { fetchStatus, type ProbeFailure, type ProbeResult } from "./status.js";
 
 type MessageKey = keyof ReturnType<typeof catalogue>;
+
+type ProfileResult =
+  | { ok: true; profiles: ServerProfile[]; selectedProfileId: string | null }
+  | { ok: false; reason: "invalid-name" | "invalid-data" | "save-failed" };
 
 // The player asks for fullscreen. Copy on an HTTPS server uses the sanitized clipboard write.
 const ALLOWED_PERMISSIONS = new Set<string>(["fullscreen", "clipboard-sanitized-write"]);
@@ -52,6 +70,7 @@ let connected: ServerOrigin | null = null;
 let mode: LayoutMode = "connect";
 let loadFailure: ProbeFailure | null = null;
 const preparedPartitions = new Set<string>();
+let profileStore: ProfileStore = { profiles: [], selectedProfileId: null };
 
 const windowTitle = () => catalogue(app.getLocale())["connect.title"];
 
@@ -224,26 +243,56 @@ const createShell = () => {
 
 const fromConnection = (event: IpcMainInvokeEvent | IpcMainEvent) => event.sender === shell?.connection.webContents;
 
-const registerHandlers = () => {
-  ipcMain.handle("desktop:bootstrap", async (event) => {
-    if (!fromConnection(event)) throw new Error("desktop: unexpected sender");
-    return { strings: catalogue(app.getLocale()), savedOrigin: await readSavedOrigin(app.getPath("userData")) };
+const queue = new SerialQueue();
+
+const persistProfiles = async (next: ProfileStore): Promise<ProfileResult> => {
+  try {
+    await writeProfiles(app.getPath("userData"), next);
+  } catch {
+    return { ok: false, reason: "save-failed" };
+  }
+  profileStore = next;
+  return { ok: true, profiles: next.profiles, selectedProfileId: next.selectedProfileId };
+};
+
+const profileIdOf = (value: unknown) => typeof value === "string" && value.length > 0 ? value : null;
+
+const saveProfile = (input: { id: string | null; name: unknown; origin: unknown }): Promise<ProfileResult> =>
+  queue.run(async (): Promise<ProfileResult> => {
+    const name = normalizeProfileName(input.name);
+    if (name === null) return { ok: false, reason: "invalid-name" };
+    const origin = normalizeProfileOrigin(input.origin);
+    if (origin === null) return { ok: false, reason: "invalid-data" };
+    const next = input.id === null
+      ? addProfile(profileStore, randomUUID(), { name, origin })
+      : updateProfile(profileStore, input.id, { name, origin });
+    if (!next) return { ok: false, reason: "invalid-data" };
+    return persistProfiles(next);
   });
 
-  ipcMain.handle("desktop:probe", async (event, origin: string): Promise<ProbeResult> => {
-    if (!fromConnection(event)) throw new Error("desktop: unexpected sender");
-    return fetchStatus(origin);
+const deleteProfile = (id: string | null): Promise<ProfileResult> =>
+  queue.run(async (): Promise<ProfileResult> => {
+    if (id === null || !findProfile(profileStore, id)) return { ok: false, reason: "invalid-data" };
+    return persistProfiles(removeProfile(profileStore, id));
   });
 
-  ipcMain.handle("desktop:open", async (event, origin: string): Promise<ProbeResult> => {
-    if (!fromConnection(event)) throw new Error("desktop: unexpected sender");
-    const result = await fetchStatus(origin);
+const selectSavedProfile = (id: string | null): Promise<ProfileResult> =>
+  queue.run(async (): Promise<ProfileResult> => {
+    const next = selectProfile(profileStore, id);
+    if (!next) return { ok: false, reason: "invalid-data" };
+    return persistProfiles(next);
+  });
+
+const connectProfile = (id: string | null): Promise<ProbeResult> =>
+  queue.run(async (): Promise<ProbeResult> => {
+    const profile = findProfile(profileStore, id);
+    const server = profile ? parseServerOrigin(profile.origin) : null;
+    if (!profile || !server) return { ok: false, reason: "invalid" };
+    const result = await fetchStatus(server.origin);
     if (!result.ok) return result;
-    const server = parseServerOrigin(origin);
-    if (!server) return { ok: false, reason: "invalid" };
+    await persistProfiles({ ...profileStore, selectedProfileId: profile.id });
     const remote = mountRemote(server);
     if (!remote) return { ok: false, reason: "unreachable" };
-    await writeSavedOrigin(app.getPath("userData"), server.origin);
     loadFailure = null;
     connected = server;
     try {
@@ -263,6 +312,33 @@ const registerHandlers = () => {
     return result;
   });
 
+const registerHandlers = () => {
+  ipcMain.handle("desktop:bootstrap", async (event) => {
+    if (!fromConnection(event)) throw new Error("desktop: unexpected sender");
+    return { strings: catalogue(app.getLocale()), profiles: profileStore.profiles, selectedProfileId: profileStore.selectedProfileId };
+  });
+
+  ipcMain.handle("desktop:save-profile", async (event, input: unknown): Promise<ProfileResult> => {
+    if (!fromConnection(event)) throw new Error("desktop: unexpected sender");
+    const record = typeof input === "object" && input !== null ? input as Record<string, unknown> : {};
+    return saveProfile({ id: profileIdOf(record.id), name: record.name, origin: record.origin });
+  });
+
+  ipcMain.handle("desktop:delete-profile", async (event, input: unknown): Promise<ProfileResult> => {
+    if (!fromConnection(event)) throw new Error("desktop: unexpected sender");
+    return deleteProfile(profileIdOf(input));
+  });
+
+  ipcMain.handle("desktop:select-profile", async (event, input: unknown): Promise<ProfileResult> => {
+    if (!fromConnection(event)) throw new Error("desktop: unexpected sender");
+    return selectSavedProfile(profileIdOf(input));
+  });
+
+  ipcMain.handle("desktop:connect", async (event, input: unknown): Promise<ProbeResult> => {
+    if (!fromConnection(event)) throw new Error("desktop: unexpected sender");
+    return connectProfile(profileIdOf(input));
+  });
+
   ipcMain.handle("desktop:disconnect", async (event) => {
     if (!fromConnection(event)) throw new Error("desktop: unexpected sender");
     connected = null;
@@ -279,7 +355,8 @@ app.on("activate", () => {
   if (!shell) createShell();
 });
 
-void app.whenReady().then(() => {
+void app.whenReady().then(async () => {
+  profileStore = await readProfiles(app.getPath("userData"));
   registerHandlers();
   createShell();
 });
