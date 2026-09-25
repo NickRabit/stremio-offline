@@ -161,7 +161,8 @@ export function normalizeTitle(value: string | undefined): string {
     .normalize("NFD")
     .replace(/\p{M}/gu, "")
     .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, " ")
+    // Every script keeps its own letters: "नरसिंहा Avatar" is not the name "Avatar".
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
     .replace(ARTICLES, "")
     .replace(/\s+/g, " ")
     .trim();
@@ -183,6 +184,19 @@ export function yearFromMeta(item: MetaItem): number | undefined {
   const raw = String(item.releaseInfo ?? item.year ?? "").slice(0, 4);
   if (!/^(19|20)\d{2}$/.test(raw)) return undefined;
   return Number(raw);
+}
+
+/** How many people know the candidate, when the provider says. Nobody knows it otherwise. */
+function votesOf(item: MetaItem): number {
+  const count = item.voteCount;
+  return typeof count === "number" && Number.isFinite(count) ? count : 0;
+}
+
+/** A candidate nobody could have watched yet: the file in front of the user is not it. */
+function releasedInFuture(item: MetaItem, now = Date.now()): boolean {
+  const released = item.released;
+  if (typeof released !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(released)) return false;
+  return released > new Date(now).toISOString().slice(0, 10);
 }
 
 /** Every name a candidate is known by: the localized one and the original the provider
@@ -267,6 +281,7 @@ export function scoreHit(parsed: ParsedMedia, item: MetaItem, expectedKind?: Tit
     score -= 25;
     autoEligible = false;
   }
+  if (releasedInFuture(item)) autoEligible = false;
   // The part marker is read from the file's whole title, not the search query: a suffix such
   // as "Nymfomanka - část 2" is dropped from a bilingual query, and losing it there would
   // hide exactly the disagreement this check exists to catch. The candidate's own part is the
@@ -277,8 +292,6 @@ export function scoreHit(parsed: ParsedMedia, item: MetaItem, expectedKind?: Tit
   return {
     item, score, titleSimilarity, yearDelta, autoEligible,
     ...(partConflict ? { partConflict: true } : {}),
-    // Half of a spaced split is weaker evidence than a whole name: it may be proposed, but
-    // never binds without a person's confirmation.
     ...(bestSide ? { sideMatch: true } : {}),
   };
 }
@@ -296,7 +309,8 @@ function statesPart(fileTitle: string, part: string): boolean {
   const wanted = new Set([String(number)]);
   const roman = ROMAN_SPELLING[number];
   if (roman) wanted.add(roman);
-  return fileTitle.toLowerCase().split(/[^a-z0-9]+/).some((token) => wanted.has(token));
+  // "Jackass 3D" writes part three as the number the 3D copy is named after.
+  return fileTitle.toLowerCase().split(/[^a-z0-9]+/).some((token) => wanted.has(token) || wanted.has(token.replace(/d$/, "")));
 }
 
 /** The part a candidate states: the first non-empty signature among its names. */
@@ -321,21 +335,26 @@ export function titlePartConflict(fileTitle: string, candidateTitle: string): bo
   return partConflictBetween(fileTitle, partSignature(candidateTitle, true));
 }
 
+/** How well known a namesake has to be before it wins without a person's word, and by how
+ *  much it has to beat the other name of the same title. */
+const NAMESAKE_MIN_VOTES = 50;
+const NAMESAKE_DOMINANCE = 10;
+
+/** `nowYear` stays for callers that pass it: which film is newer no longer decides anything. */
 export function autoAccept(hits: ScoredHit[], nowYear = new Date().getFullYear()): ScoredHit | undefined {
-  const ranked = hits.filter((hit) => hit.autoEligible).sort((a, b) => {
-    if (b.score !== a.score) return b.score - a.score;
-    return (yearFromMeta(b.item) ?? 0) - (yearFromMeta(a.item) ?? 0);
-  });
+  const ranked = hits.filter((hit) => hit.autoEligible).sort((a, b) =>
+    b.score - a.score || votesOf(b.item) - votesOf(a.item));
   const top = ranked[0];
   if (!top || top.score < AUTO_ACCEPT_MIN_SCORE || top.titleSimilarity < 0.90) return undefined;
   if (top.partConflict || top.sideMatch) return undefined;
   const close = ranked.filter((hit) => top.score - hit.score < 15 && hit.titleSimilarity >= 0.90);
-  const topName = normalizeTitle(top.item.name);
-  if (close.some((hit) => normalizeTitle(hit.item.name) !== topName)) return undefined;
-  const years = close.map((hit) => yearFromMeta(hit.item)).filter((year): year is number => year != null);
-  const distinct = new Set(years);
-  if (distinct.size <= 1) return top;
-  return Math.max(...years) >= nowYear - 2 ? top : undefined;
+  const rivals = close.filter((hit) => hit.item.id !== top.item.id);
+  if (!rivals.length) return top;
+  // Two namesakes are told apart by how many people know them, never by which one is newer:
+  // the title the file means is the one with an audience, the other ten times smaller.
+  const votes = votesOf(top.item);
+  const rivalVotes = Math.max(...rivals.map((hit) => votesOf(hit.item)));
+  return votes >= NAMESAKE_MIN_VOTES && votes >= NAMESAKE_DOMINANCE * rivalVotes ? top : undefined;
 }
 
 /** Below this the best hit is noise -- offering it would only teach the user to distrust the list. */
@@ -380,9 +399,13 @@ export function pickSuggestion(hits: ScoredHit[], minScore = SUGGESTION_MIN_SCOR
   // A wrong type or a year off by more than two is not a safe match and is not offered as
   // if it were: the proposal list is where a person decides, and a bad row wastes that.
   // A part conflict is the exception: it is worth a person's look, just never a binding.
-  // On a tie the whole name beats a half of it.
-  const ranked = hits.filter((hit) => hit.autoEligible || hit.partConflict)
-    .sort((a, b) => b.score - a.score || Number(Boolean(a.sideMatch)) - Number(Boolean(b.sideMatch)));
+  // On a tie the whole name beats a half of it, and among equals the better known one wins.
+  // A half of the name or a sequel that disagrees is not a binding, but it is still worth a
+  // person's look; so is a title that is not out yet, which the scan would otherwise forget
+  // as a miss for a month.
+  const ranked = hits.filter((hit) => hit.autoEligible || hit.partConflict || releasedInFuture(hit.item))
+    .sort((a, b) =>
+      b.score - a.score || Number(Boolean(a.sideMatch)) - Number(Boolean(b.sideMatch)) || votesOf(b.item) - votesOf(a.item));
   const top = ranked[0];
   if (!top || top.score < minScore) return undefined;
   const year = yearFromMeta(top.item);
@@ -1091,7 +1114,11 @@ export function parseUnit(unit: TitleUnit): ParsedMedia {
   const file = parseMediaName(posixBase(sample).replace(/\.[^.]+$/, ""));
   const result: ParsedMedia = { ...parsed };
   if (parsed.year == null && file.year != null) result.year = file.year;
-  if (file.title && normalizeTitle(file.title) !== normalizeTitle(parsed.title)) result.fileTitle = file.title;
+  // A release group's folder name is not a title the film carries, and a name too short to
+  // be one ("Up") would only add noise to the search.
+  const stem = posixBase(sample).replace(/\.[^.]+$/, "");
+  if (file.title && normalizeTitle(file.title).length >= 3 && !isPackagingFolderName(stem)
+    && normalizeTitle(file.title) !== normalizeTitle(parsed.title)) result.fileTitle = file.title;
   return result;
 }
 

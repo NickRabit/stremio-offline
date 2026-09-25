@@ -17,26 +17,34 @@ const meta = (over: Partial<MetaItem> & { id: string; name: string }): MetaItem 
 
 const config: TmdbConfig = { apiKey: "key", language: "en" };
 
-interface Calls { tmdb: string[]; cinemeta: string[]; external: number[]; gallery: string[]; logs: Array<{ level: string; message: string; fields: Record<string, unknown> }> }
+interface Calls {
+  tmdb: string[];
+  tmdbYears: Array<number | undefined>;
+  cinemeta: string[];
+  external: number[];
+  gallery: string[];
+  logs: Array<{ level: string; message: string; fields: Record<string, unknown> }>;
+}
 
 const service = (options: {
   tmdb?: TmdbConfig | undefined;
   addons?: AddonRecord[];
-  tmdbItems?: (query: string) => MetaItem[];
+  tmdbItems?: (query: string, year?: number) => MetaItem[];
   cinemetaItems?: (query: string, kind: string) => MetaItem[];
   externalId?: string | null | ((kind: string, id: number) => string | null);
   gallery?: Array<{ url: string; kind: "poster" | "background" | "logo" }>;
   throwTmdb?: boolean;
   throwCinemeta?: boolean;
 } = {}) => {
-  const calls: Calls = { tmdb: [], cinemeta: [], external: [], gallery: [], logs: [] };
+  const calls: Calls = { tmdb: [], tmdbYears: [], cinemeta: [], external: [], gallery: [], logs: [] };
   const candidates = new LibraryCandidates({
     tmdb: () => options.tmdb,
     addons: () => options.addons ?? [cinemeta, pornhub],
-    searchTmdb: async (_kind, query, _config: TmdbConfig) => {
+    searchTmdb: async (_kind, query, _config: TmdbConfig, year?: number) => {
       calls.tmdb.push(query);
+      calls.tmdbYears.push(year);
       if (options.throwTmdb) throw new Error("TMDB is down");
-      return options.tmdbItems?.(query) ?? [];
+      return options.tmdbItems?.(query, year) ?? [];
     },
     searchCinemeta: async (_addons, query, kind) => {
       calls.cinemeta.push(query);
@@ -185,6 +193,39 @@ test("a first query that already names the title well is not asked again", async
   });
   const found = await candidates.searchLibraryCandidates("Alita - Bojový Anděl", "movie", undefined, "en");
   assert.deepEqual(calls.tmdb, ["Alita"], "a confident first answer needs no second question");
+  assert.deepEqual(found.map((entry) => entry.item.id), ["tmdb:1"]);
+});
+
+test("a year the file states narrows the search, and is dropped when it names nothing", async () => {
+  const { candidates, calls } = service({
+    tmdb: config,
+    // The year the folder wrote down leads nowhere; the name without it finds the film.
+    tmdbItems: (_query, year) => (year == null ? [meta({ id: "tmdb:1", name: "Flashdance", releaseInfo: "1983" })] : []),
+  });
+  const found = await candidates.searchLibraryCandidates("Flashdance", "movie", 1983, "en");
+  assert.deepEqual(calls.tmdb, ["Flashdance", "Flashdance"], "the same question is asked again without the year");
+  assert.deepEqual(calls.tmdbYears, [1983, undefined]);
+  assert.deepEqual(found.map((entry) => entry.item.id), ["tmdb:1"]);
+});
+
+test("a year-scoped answer that names the title well is not asked again", async () => {
+  const { candidates, calls } = service({
+    tmdb: config,
+    tmdbItems: (_query, year) => (year === 1983 ? [meta({ id: "tmdb:1", name: "Flashdance", releaseInfo: "1983" })] : []),
+  });
+  const found = await candidates.searchLibraryCandidates("Flashdance", "movie", 1983, "en");
+  assert.deepEqual(calls.tmdb, ["Flashdance"], "a confident answer with the year needs no second question");
+  assert.deepEqual(calls.tmdbYears, [1983]);
+  assert.deepEqual(found.map((entry) => entry.item.id), ["tmdb:1"]);
+});
+
+test("a name the caller kept beside the title is searched after the title's own forms", async () => {
+  const { candidates, calls } = service({
+    tmdb: config,
+    tmdbItems: (query) => (query === "Sherlock Holmes" ? [meta({ id: "tmdb:1", name: "Sherlock Holmes", releaseInfo: "2009" })] : []),
+  });
+  const found = await candidates.searchLibraryCandidates("Sherlock Holomes", "movie", undefined, "en", ["Sherlock Holmes"]);
+  assert.deepEqual(calls.tmdb, ["Sherlock Holomes", "Sherlock Holmes"], "the file's own name is the last question asked");
   assert.deepEqual(found.map((entry) => entry.item.id), ["tmdb:1"]);
 });
 

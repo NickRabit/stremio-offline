@@ -55,6 +55,12 @@ test("a dotted year next to 1080p is a year, digits inside 1080p are not", () =>
   assert.equal(parseMediaPath("Show.2160p.mkv").year, undefined);
 });
 
+test("the web of a release is a tag, the Web of a name is a name", () => {
+  assert.equal(parseMediaName("Charlotte's Web").title, "Charlotte's Web");
+  assert.equal(parseMediaName("Charlotte's Web 2006 1080p WEB-DL x264").title, "Charlotte's Web");
+  assert.equal(parseMediaName("Charlotte's.Web.2006.WEBRip.x264").title, "Charlotte's Web");
+});
+
 test("digits glued to SxxExx are not a year", () => {
   const result = parseMediaPath("Show.S2020E01.mkv");
   assert.equal(result.year, undefined);

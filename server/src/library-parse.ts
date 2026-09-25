@@ -5,7 +5,7 @@ export const QUALITY_TOKENS = [
   "2160p", "1080p", "720p", "576p", "480p", "4k", "uhd",
   "hdr", "hdr10", "hdr10+", "hdrplus", "dv",
   "web-dl", "webrip", "hdtv", "bdrip", "bluray", "blu-ray", "remux",
-  "hdrip", "brrip", "web", "dvdrip", "dvdscr",
+  "hdrip", "brrip", "dvdrip", "dvdscr",
   "proper", "repack", "unrated", "extended", "theatrical", "remastered",
   "czdab", "dabing", "cztit", "titulky", "tit", "cz", "eng", "sk",
   "ac3", "eac3", "ddp", "dts", "dtshd", "truehd", "atmos", "aac", "mp3", "flac", "opus",
@@ -356,7 +356,7 @@ function variantKey(value: string): string {
     .normalize("NFD")
     .replace(/\p{M}/gu, "")
     .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
 }

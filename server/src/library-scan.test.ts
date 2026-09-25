@@ -24,7 +24,7 @@ const waitFor = async (pred: () => boolean | Promise<boolean>, ms = 2_000) => {
 };
 
 /** The trusted search the scan is handed: only these candidates can ever be bound. */
-type Search = (query: string, kind: "movie" | "series", year: number | undefined) => Promise<MetaItem[]>;
+type Search = (query: string, kind: "movie" | "series", year: number | undefined, extra?: string[]) => Promise<MetaItem[]>;
 
 const harness = async (overrides: Partial<LibraryScanOpts> & { search?: Search; gallery?: (candidate: LibraryCandidate) => Promise<Array<{ url: string; kind: "poster" | "background" | "logo" }>> } = {}) => {
   const dataDir = await mkdtemp(path.join(tmpdir(), "stremio-scan-"));
@@ -38,15 +38,17 @@ const harness = async (overrides: Partial<LibraryScanOpts> & { search?: Search; 
   const backdrops: string[] = [];
   const deleted: string[] = [];
   const searches: string[] = [];
+  const extraSearches: string[][] = [];
   const metas: string[] = [];
   const frames: string[] = [];
   const galleries: Array<{ key: string; pictures: Array<{ url: string; kind: string }> }> = [];
   let busy: ScanPauseReason | undefined;
   const search: Search = overrides.search ?? (async (query) => [hit(query)]);
   const candidates: LibraryCandidateSource = {
-    searchLibraryCandidates: async (query, kind, year) => {
+    searchLibraryCandidates: async (query, kind, year, _language, extra) => {
       searches.push(query);
-      return (await search(query, kind, year)).map((item) => ({ item, provider: "cinemeta" as const }));
+      extraSearches.push(extra ?? []);
+      return (await search(query, kind, year, extra)).map((item) => ({ item, provider: "cinemeta" as const }));
     },
     resolveSelected: async (candidate) => candidate.item,
     galleryOf: async (candidate) => (overrides.gallery ? overrides.gallery(candidate) : []),
@@ -78,7 +80,7 @@ const harness = async (overrides: Partial<LibraryScanOpts> & { search?: Search; 
     metadata: async (addons, type, id) => { metas.push(id); return opts.metadata(addons, type, id); },
   });
   return {
-    dataDir, scan, store, posters, posterBackdrops, backdrops, deleted, searches, metas, frames, galleries,
+    dataDir, scan, store, posters, posterBackdrops, backdrops, deleted, searches, extraSearches, metas, frames, galleries,
     setBusy: (value: ScanPauseReason | undefined) => { busy = value; },
     close: async () => { await scan.stop(); await rm(dataDir, { recursive: true, force: true }); },
   };
@@ -896,5 +898,28 @@ test("a bilingual unit is searched by its whole title, not the shortened query",
     await h.scan.start();
     await waitFor(() => h.scan.snapshot().status === "completed");
     assert.deepEqual(h.searches, ["Jižanská pohostinnost-Southern Comfort"], "the search service gets the whole title and tries every form of it");
+  } finally { await h.close(); }
+});
+
+test("a folder whose film is named differently is searched by the film's own name too", async () => {
+  const h = await harness({
+    units: async () => [{
+      key: "Sherlock Holomes",
+      kind: "movie",
+      relative: "Sherlock Holomes",
+      sampleFiles: ["Sherlock Holomes/Sherlock Holmes.mp4"],
+    }],
+    search: async (query, _kind, _year, extra) => {
+      const asked = [query, ...(extra ?? [])];
+      return asked.includes("Sherlock Holmes") ? [{ id: "tt-sherlock", type: "movie", name: "Sherlock Holmes" }] : [];
+    },
+  });
+  try {
+    await h.scan.start();
+    await waitFor(() => h.scan.snapshot().status === "completed");
+    assert.deepEqual(h.searches, ["Sherlock Holomes"], "the unit is searched as the folder names it");
+    assert.deepEqual(h.extraSearches, [["Sherlock Holmes"]], "and the film inside it beside that name");
+    assert.equal(h.store.meta["Sherlock Holomes"], undefined, "a name only half of the folder matches does not bind on its own");
+    assert.equal(h.store.suggestions["Sherlock Holomes"]?.id, "tt-sherlock", "but the film the file names is proposed");
   } finally { await h.close(); }
 });
