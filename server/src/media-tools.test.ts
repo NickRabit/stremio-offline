@@ -48,7 +48,8 @@ test("no process in the server is started by a bare ffmpeg or ffprobe name", asy
   const root = path.dirname(fileURLToPath(import.meta.url));
   const files = (await readdir(root, { recursive: true }))
     .filter((file) => file.endsWith(".ts") && !file.endsWith(".test.ts") && file !== "media-tools.ts");
-  const bare = /\b(?:spawn|execFile\)?|run)\(\s*["'`]ff(?:mpeg|probe)["'`]/;
+  assert.ok(files.length > 10, "the scan reads the TypeScript sources");
+  const bare = /\b(?:(?:spawn|execFile|exec)(?:Sync)?\)?|run)\(\s*["'`]ff(?:mpeg|probe)(?:\.exe)?[\s"'`]/;
   const offenders = [];
   for (const file of files) if (bare.test(await readFile(path.join(root, file), "utf8"))) offenders.push(file);
   assert.deepEqual(offenders, [], "start them through ffmpegPath() or ffprobePath()");
