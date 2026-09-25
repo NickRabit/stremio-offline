@@ -138,6 +138,22 @@ test("a number in front of a subtitle is the part the whole name states", () => 
   assert.equal(partSignature("Doba ledová 4: Země v pohybu", false), "", "a bare number still needs the caller's leave");
 });
 
+test("a scene name glued with hyphens is read field by field", () => {
+  const name = (value: string) => {
+    const result = parseMediaName(value);
+    return { title: result.title, year: result.year };
+  };
+  assert.deepEqual(name("REZISTENCE-2015-HDRip-2.0-CZ-titulky - 2.dil"), { title: "REZISTENCE - 2 dil", year: 2015 });
+  assert.deepEqual(name("Allegiant.2016.BRRip.XviD.CZtit - 3.dil"), { title: "Allegiant - 3 dil", year: 2016 });
+  assert.deepEqual(name("The-Interview-(2014)-TIT"), { title: "The Interview", year: 2014 });
+  assert.deepEqual(name("Sirotčinec-slečny-Peregrinové-pro-podivné-děti-(2016)-CZ-titulky"), {
+    title: "Sirotčinec slečny Peregrinové pro podivné děti", year: 2016,
+  });
+  assert.deepEqual(name("Spider-Man"), { title: "Spider-Man", year: undefined }, "one hyphen with no year or quality is the word's own");
+  assert.deepEqual(name("WALL-E"), { title: "WALL-E", year: undefined });
+  assert.deepEqual(name("K-pop - Lovkyně démonů"), { title: "K-pop - Lovkyně démonů", year: undefined });
+});
+
 test("a name is compared and searched in every form worth trying", () => {
   assert.deepEqual(titleVariants(parseMediaName("Alita - Bojový Anděl")), [
     { text: "Alita", side: false },

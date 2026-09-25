@@ -8,7 +8,7 @@ import {
   MATCH_RULE_VERSION, type LibraryMetaRecord, type LibrarySuggestion, type TitleUnit,
 } from "./library-match.js";
 import { fileMayUseFolderArtwork } from "./artwork.js";
-import { parseMediaPath, partSignature } from "./library-parse.js";
+import { parseMediaPath, partSignature, titleVariants } from "./library-parse.js";
 import { posixBase } from "./libraries.js";
 import type { FoundFile } from "./library.js";
 import type { MetaItem } from "./types.js";
@@ -168,7 +168,7 @@ test("a release-group folder under a named folder does not become the title", ()
   const units = titleUnits(["lib_a/Ice Age 4/REFF/REFF.avi"].map(file));
   assert.deepEqual(units.map((unit) => `${unit.kind}:${unit.key}`), ["movie:lib_a/Ice Age 4"]);
   assert.deepEqual(units[0]!.sampleFiles, ["lib_a/Ice Age 4/REFF/REFF.avi"]);
-  assert.deepEqual(parseUnit(units[0]!), { title: "Ice Age 4", query: "Ice Age 4" });
+  assert.deepEqual(parseUnit(units[0]!), { title: "Ice Age 4", query: "Ice Age 4", fileTitle: "REFF" });
 });
 
 test("a package folder is re-keyed only where a person's name sits above it", () => {
@@ -216,6 +216,42 @@ test("a unit is searched by its own name: the film for a loose file, the folder 
   const [folderUnit] = titleUnits(encoded);
   assert.equal(folderUnit!.key, "Practical Magic (1998)");
   assert.deepEqual(parseUnit(folderUnit!), { title: "Practical Magic", query: "Practical Magic", year: 1998 });
+});
+
+test("a folder's single film supplies the year and the name the folder lacks", () => {
+  const only = (files: string[]) => titleUnits(files.map(file))[0]!;
+  assert.deepEqual(parseUnit(only(["Sherlock Holomes/Sherlock Holmes 2009 720p BRRip.mp4"])), {
+    title: "Sherlock Holomes", query: "Sherlock Holomes", year: 2009, fileTitle: "Sherlock Holmes",
+  });
+  assert.deepEqual(parseUnit(only(["Hanební parchanti/Hanebný pancharti.mkv"])), {
+    title: "Hanební parchanti", query: "Hanební parchanti", fileTitle: "Hanebný pancharti",
+  });
+  assert.deepEqual(parseUnit(only(["Diktátor/The.Dictator.2012.UNRATED.avi"])), {
+    title: "Diktátor", query: "Diktátor", year: 2012, fileTitle: "The Dictator",
+  });
+  const prince = parseUnit(only(["Malý princ/Malý-princ-[Little-Prince]-(2015)-CZ-dabing.avi"]));
+  assert.equal(prince.year, 2015);
+  assert.equal(prince.fileTitle, "Malý princ [Little Prince]");
+  assert.deepEqual(parseUnit(only(["Nevinnost/Nevinnost (2011) Cz.avi"])), {
+    title: "Nevinnost", query: "Nevinnost", year: 2011,
+  }, "a file whose name says the same thing adds nothing");
+  assert.deepEqual(
+    titleVariants(parseUnit(only(["Sherlock Holomes/Sherlock Holmes 2009 720p BRRip.mp4"]))).map((variant) => variant.text),
+    ["Sherlock Holomes", "Sherlock Holmes"],
+    "the film's own name is the last, weakest form of it",
+  );
+});
+
+test("a series unit, a multi-film folder and an encode set read as they always did", () => {
+  const seriesUnit = titleUnits([file("Show/Show.S01E01.mkv")], "series")[0]!;
+  assert.deepEqual(parseUnit(seriesUnit), { title: "Show", query: "Show" });
+  // Two loose films in one folder are two file-keyed units, each read from its own name.
+  const two = titleUnits(["Film/a.mp4", "Film/b.mp4"].map(file));
+  assert.deepEqual(two.map((unit) => unit.key), ["Film/a.mp4", "Film/b.mp4"]);
+  assert.deepEqual(two.map((unit) => parseUnit(unit).title), ["a", "b"]);
+  // An encode set keeps the folder's own name: there is no single film to add to it.
+  const encodes = titleUnits(["Movie/Movie.mkv", "Movie/Movie 1080p.mkv"].map(file));
+  assert.deepEqual(parseUnit(encodes[0]!), { title: "Movie", query: "Movie" });
 });
 
 test("every sample file of a unit resolves to that unit, not to its own path", () => {
@@ -732,6 +768,15 @@ test("a token coincidence is not title evidence", () => {
   assert.equal(pickSuggestion([scoreHit(orphanage, meta("Semi-Pro", 2008, "movie", "tt2"), "movie")]), undefined);
 });
 
+test("a name written with and without its space is the same words", () => {
+  const spaced = parseMediaPath("Amazing Spiderman");
+  const film = scoreHit(spaced, meta("The Amazing Spider-Man", 2012, "movie", "tt-spider"), "movie");
+  assert.equal(film.titleSimilarity, 1, "one space does not make two names");
+  assert.equal(autoAccept([film])?.item.id, "tt-spider");
+  const sequel = scoreHit(spaced, meta("The Amazing Spider-Man 2", 2014, "movie", "tt-spider-2"), "movie");
+  assert.equal(sequel.partConflict, true, "the sequel is a different film, not another spelling");
+});
+
 test("sequel and part markers are evidence, and a conflict is never auto-accepted", () => {
   const partOne = parseMediaPath("Second Film Part 1");
   const partTwo = scoreHit(partOne, meta("Second Film Part 2", 2004, "movie", "tt2"), "movie");
@@ -770,6 +815,41 @@ test("a localized name that states the part is agreement, not a conflict", () =>
     "movie",
   );
   assert.equal(hit.partConflict, undefined, "one name that states part four is enough to agree");
+});
+
+test("a part a candidate's localized name states is agreement even when the file writes no marker", () => {
+  const hotel3 = scoreHit(
+    parseMediaPath("Hotel Transylvania 3 Summer Vacation"),
+    { id: "tt-ht3", type: "movie", name: "Hotel Transylvánie 3: Příšerózní dovolená", originalTitle: "Hotel Transylvania 3: Summer Vacation", releaseInfo: "2018" },
+    "movie",
+  );
+  assert.equal(hotel3.partConflict, undefined, "the file names part three without a marker");
+  assert.equal(autoAccept([hotel3])?.item.id, "tt-ht3");
+
+  const hotel4 = scoreHit(
+    parseMediaPath("Hotel Transylvania 4 Transformania"),
+    { id: "tt-ht4", type: "movie", name: "Hotel Transylvánie 4: Transformánie", originalTitle: "Hotel Transylvania: Transformania", releaseInfo: "2022" },
+    "movie",
+  );
+  assert.equal(hotel4.partConflict, undefined, "the localized name states part four, the original does not");
+});
+
+test("a candidate that states a part the file itself does not is a conflict", () => {
+  const sequel = scoreHit(
+    parseMediaPath("Alvin a Chipmunkove"),
+    { id: "tt-alvin-2", type: "movie", name: "Alvin a Chipmunkové 2", originalTitle: "Alvin and the Chipmunks: The Squeakquel", releaseInfo: "2009" },
+    "movie",
+  );
+  assert.equal(sequel.partConflict, true, "the file names no part, the candidate is the sequel");
+  assert.equal(sequel.autoEligible, false);
+
+  const nuts = scoreHit(
+    parseMediaPath("Ice Age 4"),
+    { id: "tt-nuts", type: "movie", name: "Ice Age: No Time for Nuts 4-D", originalTitle: "Ice Age: No Time for Nuts 4-D" },
+    "movie",
+  );
+  assert.equal(nuts.partConflict, true, "a number welded into a word is not the part the file states");
+  assert.equal(nuts.autoEligible, false);
 });
 
 test("a half of a spaced name may identify, but never binds on its own", () => {

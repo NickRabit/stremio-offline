@@ -5,9 +5,9 @@ export const QUALITY_TOKENS = [
   "2160p", "1080p", "720p", "576p", "480p", "4k", "uhd",
   "hdr", "hdr10", "hdr10+", "hdrplus", "dv",
   "web-dl", "webrip", "hdtv", "bdrip", "bluray", "blu-ray", "remux",
-  "dvdrip", "dvdscr",
+  "hdrip", "brrip", "web", "dvdrip", "dvdscr",
   "proper", "repack", "unrated", "extended", "theatrical", "remastered",
-  "czdab", "dabing",
+  "czdab", "dabing", "cztit", "titulky", "tit", "cz", "eng", "sk",
   "ac3", "eac3", "ddp", "dts", "dtshd", "truehd", "atmos", "aac", "mp3", "flac", "opus",
   "x264", "x265", "h264", "h265", "hevc", "avc", "xvid", "divx",
   "10bit", "8bit", "hires",
@@ -38,6 +38,8 @@ export interface ParsedMedia {
   year?: number;
   season?: number;
   episode?: number;
+  /** The name of the unit's single film when it differs from the folder it sits in. */
+  fileTitle?: string;
   providerHints?: { imdb?: string; tmdb?: string; tvdb?: string };
 }
 
@@ -48,7 +50,7 @@ const YEAR_TOKEN = /^(19|20)\d{2}$/;
 const PAREN_YEAR = /\((19|20)\d{2}\)/;
 const TAGGED_EPISODE = /\bS(\d{1,3})E(\d{1,4})\b/i;
 const X_EPISODE = /\b(\d{1,2})x(\d{1,4})\b/i;
-const CHANNEL = /\b[57]\.1\b/gi;
+const CHANNEL = /\b(?:[57]\.1|2\.0)\b/gi;
 const RELEASE_GROUP = /-[A-Za-z0-9]{2,15}$/;
 
 /** Physical segments of one film: "CD1", "Disc 2". Two of them are still one film. */
@@ -158,6 +160,19 @@ function isYearPart(part: string): boolean {
   if (QUALITY.has(part.toLowerCase())) return false;
   if (/^s\d/i.test(part) || /e\d+$/i.test(part)) return false;
   return true;
+}
+
+/** A run glued with hyphens is a scene name ("REZISTENCE-2015-HDRip") when it carries at
+ *  least two of them, or one of its pieces is a year or a quality; a single hyphen with
+ *  neither is the word's own ("Spider-Man", "WALL-E", "K-pop"). */
+const HYPHEN_RUN = /\S*-\S*/g;
+
+function splitHyphenRuns(source: string): string {
+  return source.replace(HYPHEN_RUN, (run) => {
+    const pieces = run.split("-");
+    if (pieces.length - 1 < 2 && !pieces.some((piece) => isYearPart(piece) || QUALITY.has(piece.toLowerCase()))) return run;
+    return pieces.join(" ");
+  });
 }
 
 function takeYear(source: string): { year?: number; rest: string } {
@@ -351,7 +366,7 @@ export function titleVariants(parsed: ParsedMedia): TitleVariant[] {
   const seen = new Set<string>();
   const add = (text: string, side: boolean) => {
     const value = text.trim();
-    if (!value || out.length >= 4) return;
+    if (!value || out.length >= 5) return;
     const key = variantKey(value);
     if (!key || seen.has(key)) return;
     seen.add(key);
@@ -366,6 +381,9 @@ export function titleVariants(parsed: ParsedMedia): TitleVariant[] {
     if (/^\d+$/.test(normalized)) continue;
     add(side, true);
   }
+  // A name the single film inside a folder carries is weaker evidence than the folder a
+  // person named: it may be proposed, never bound on its own.
+  add(parsed.fileTitle ?? "", true);
   return out;
 }
 
@@ -411,7 +429,7 @@ export function parseMediaName(name: string): ParsedMedia {
   const { rest: withoutHints, hints } = extractHints(original);
 
   let year: number | undefined;
-  const firstYear = takeYear(withoutHints);
+  const firstYear = takeYear(splitHyphenRuns(withoutHints));
   year = firstYear.year;
   let working = firstYear.rest;
 

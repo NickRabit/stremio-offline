@@ -1,6 +1,6 @@
 import { isPathWithin, isVideo, numberedEpisode, parseSeason, remapPath, type FoundFile } from "./library.js";
 import { LIBRARY_ID, parseLibraryPath, posixBase, type LibraryType } from "./libraries.js";
-import { isPackagingFolderName, parseMediaPath, partSignature, stripPartMarkers, titleVariants, type ParsedMedia } from "./library-parse.js";
+import { isPackagingFolderName, parseMediaName, parseMediaPath, partSignature, stripPartMarkers, titleVariants, type ParsedMedia } from "./library-parse.js";
 import type { MetaItem } from "./types.js";
 
 export type TitleKind = "movie" | "series";
@@ -207,7 +207,10 @@ export function bestCandidateTitle(left: string, item: MetaItem): string {
 function titleSimilarityOf(left: string, right: string): number {
   const maxLen = Math.max(left.length, right.length);
   const edit = maxLen === 0 ? 1 : 1 - levenshtein(left, right) / maxLen;
-  return 0.7 * dice(tokensOf(left), tokensOf(right)) + 0.3 * edit;
+  const similarity = 0.7 * dice(tokensOf(left), tokensOf(right)) + 0.3 * edit;
+  // "Spiderman" and "Spider-Man" are the one name written with and without a space.
+  if (similarity < 1 && left.replace(/\s+/g, "") === right.replace(/\s+/g, "")) return 1;
+  return similarity;
 }
 
 /** Whether one normalized title appears whole inside the other. A shared word is not
@@ -215,6 +218,7 @@ function titleSimilarityOf(left: string, right: string): number {
 function phraseEvidence(left: string, right: string): boolean {
   if (!left || !right) return false;
   if (left === right) return true;
+  if (left.replace(/\s+/g, "") === right.replace(/\s+/g, "")) return true;
   const haystack = ` ${left} `;
   const needle = ` ${right} `;
   return haystack.includes(needle) || needle.includes(haystack);
@@ -265,9 +269,9 @@ export function scoreHit(parsed: ParsedMedia, item: MetaItem, expectedKind?: Tit
   }
   // The part marker is read from the file's whole title, not the search query: a suffix such
   // as "Nymfomanka - část 2" is dropped from a bilingual query, and losing it there would
-  // hide exactly the disagreement this check exists to catch. One name that states the part
-  // is enough agreement -- a localized name and the original need not both spell it out.
-  const partConflict = candidateTitles(item).every((name) => titlePartConflict(parsed.title, name));
+  // hide exactly the disagreement this check exists to catch. The candidate's own part is the
+  // first its names state, so a localized name that spells it out is enough to agree.
+  const partConflict = partConflictBetween(parsed.title, candidatePart(item));
   if (partConflict) autoEligible = false;
   score = Math.max(0, Math.min(100, score));
   return {
@@ -279,9 +283,42 @@ export function scoreHit(parsed: ParsedMedia, item: MetaItem, expectedKind?: Tit
   };
 }
 
+const ROMAN_SPELLING: Record<number, string> = {
+  1: "i", 2: "ii", 3: "iii", 4: "iv", 5: "v", 6: "vi", 7: "vii", 8: "viii", 9: "ix", 10: "x",
+};
+
+/** Whether the file's own name states the number a candidate's `part:N` names, in either
+ *  spelling. "Hotel Transylvania 3 Summer Vacation" writes the part without a marker. */
+function statesPart(fileTitle: string, part: string): boolean {
+  const match = /^part:(\d+)$/.exec(part);
+  if (!match) return false;
+  const number = Number(match[1]);
+  const wanted = new Set([String(number)]);
+  const roman = ROMAN_SPELLING[number];
+  if (roman) wanted.add(roman);
+  return fileTitle.toLowerCase().split(/[^a-z0-9]+/).some((token) => wanted.has(token));
+}
+
+/** The part a candidate states: the first non-empty signature among its names. */
+function candidatePart(item: MetaItem): string {
+  for (const name of candidateTitles(item)) {
+    const part = partSignature(name, true);
+    if (part) return part;
+  }
+  return "";
+}
+
+function partConflictBetween(fileTitle: string, candPart: string): boolean {
+  const filePart = partSignature(fileTitle, true);
+  if (filePart === candPart) return false;
+  // A file that writes the number down without a marker still names the part.
+  if (filePart === "" && statesPart(fileTitle, candPart)) return false;
+  return true;
+}
+
 /** The file and the candidate disagree about which part of a franchise this is. */
 export function titlePartConflict(fileTitle: string, candidateTitle: string): boolean {
-  return partSignature(fileTitle, true) !== partSignature(candidateTitle, true);
+  return partConflictBetween(fileTitle, partSignature(candidateTitle, true));
 }
 
 export function autoAccept(hits: ScoredHit[], nowYear = new Date().getFullYear()): ScoredHit | undefined {
@@ -1042,9 +1079,20 @@ export function matchKeyFor(relative: string, files: FoundFile[], units = titleU
 
 /** How a unit is searched for: a unit keyed by a video file is read from that file's own
  *  name, so a loose film inside a collection is not searched as the collection folder; a
- *  folder unit is read from the folder's name. The file extension goes with the name. */
+ *  folder unit is read from the folder's name. The file extension goes with the name.
+ *  A folder holding exactly one film adds what that film's own name states and the folder
+ *  does not -- its year, or a title the folder misspells. */
 export function parseUnit(unit: TitleUnit): ParsedMedia {
-  return parseMediaPath(posixBase(unit.key));
+  const parsed = parseMediaPath(posixBase(unit.key));
+  if (unit.kind !== "movie" || isVideo(posixBase(unit.key))) return parsed;
+  if (unit.sampleFiles.length !== 1) return parsed;
+  const sample = unit.sampleFiles[0]!;
+  if (isExtraName(posixBase(sample))) return parsed;
+  const file = parseMediaName(posixBase(sample).replace(/\.[^.]+$/, ""));
+  const result: ParsedMedia = { ...parsed };
+  if (parsed.year == null && file.year != null) result.year = file.year;
+  if (file.title && normalizeTitle(file.title) !== normalizeTitle(parsed.title)) result.fileTitle = file.title;
+  return result;
 }
 
 /** The distinct movie identities a folder stands for, one representative unit each, bounded.
