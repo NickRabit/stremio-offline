@@ -11,7 +11,7 @@ import { defaultDownloadSettings, joinTarget, streamExtension, targetPath, type 
 import type { DownloadTargetSettings } from "./types.js";
 import { safeFetch } from "./security.js";
 import { log } from "./logger.js";
-import { ffmpegPath } from "./media-tools.js";
+import { ffmpegPath, trackMedia } from "./media-tools.js";
 import { retryAfterMs } from "./outbound.js";
 import {
   classifyFailure, expectedSize, HttpSourceError, IncompleteDownloadError, parseContentRange,
@@ -1141,7 +1141,7 @@ export class DownloadQueue {
     ];
 
     log("INFO", "Assembling a playlist", { id: job.id, target: job.target });
-    const child = spawn(ffmpegPath(), args, { stdio: ["ignore", "ignore", "pipe"] });
+    const child = trackMedia(spawn(ffmpegPath(), args, { stdio: ["ignore", "ignore", "pipe"] }));
 
     let stderr = "";
     child.stderr?.on("data", (chunk) => { stderr = `${stderr}${String(chunk)}`.slice(-4000); });

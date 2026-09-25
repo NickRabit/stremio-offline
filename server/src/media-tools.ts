@@ -1,3 +1,5 @@
+import type { ChildProcess } from "node:child_process";
+
 /** The executable named by the variable, or the bare name that `PATH` resolves. Read per call,
  *  so a test or a container can set the variable after the module was imported. */
 const executable = (env: NodeJS.ProcessEnv, variable: string, fallback: string) => {
@@ -13,4 +15,23 @@ export function ffmpegPath(env: NodeJS.ProcessEnv = process.env): string {
 /** The same for ffprobe and FFPROBE_PATH. */
 export function ffprobePath(env: NodeJS.ProcessEnv = process.env): string {
   return executable(env, "FFPROBE_PATH", "ffprobe");
+}
+
+const running = new Set<ChildProcess>();
+
+/** A long-lived FFmpeg the shutdown has to take down with it. Nothing ends a child when its parent
+ *  exits, so without this a conversion outlived the desktop's local backend by minutes. */
+export function trackMedia<T extends ChildProcess>(child: T): T {
+  if (child.exitCode !== null || child.signalCode !== null) return child;
+  running.add(child);
+  child.once("exit", () => running.delete(child));
+  return child;
+}
+
+/** Kills every tracked FFmpeg and answers how many were still running. */
+export function killRunningMedia(): number {
+  const count = running.size;
+  for (const child of running) child.kill("SIGKILL");
+  running.clear();
+  return count;
 }

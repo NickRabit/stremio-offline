@@ -11,7 +11,7 @@ import { PlayerSidecars } from "./player-sidecars.js";
 import { INTERNAL_TOKEN } from "./auth.js";
 import { log } from "./logger.js";
 import { pickByLanguage } from "./language.js";
-import { ffmpegPath } from "./media-tools.js";
+import { ffmpegPath, trackMedia } from "./media-tools.js";
 import { playlistArgs, probe, type MediaInfo, type Track } from "./probe.js";
 import { safeFetch } from "./security.js";
 import type { StreamItem } from "./types.js";
@@ -835,7 +835,7 @@ export class PlaybackManager {
       id: session.id, generation: session.generation, mode: session.mode, hardware,
       offset: Math.round(offset), args: args.join(" "),
     });
-    const child = spawn(ffmpegPath(), args, { stdio: ["ignore", "ignore", "pipe"] });
+    const child = trackMedia(spawn(ffmpegPath(), args, { stdio: ["ignore", "ignore", "pipe"] }));
     session.process = child; session.hardware = hardware; session.error = undefined;
     const generation = session.generation;
     let stderr = ""; let finished = false; let exitCode: number | null = null; let handedToClient = false;

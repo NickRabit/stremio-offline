@@ -54,3 +54,15 @@ test("no process in the server is started by a bare ffmpeg or ffprobe name", asy
   for (const file of files) if (bare.test(await readFile(path.join(root, file), "utf8"))) offenders.push(file);
   assert.deepEqual(offenders, [], "start them through ffmpegPath() or ffprobePath()");
 });
+
+test("a tracked FFmpeg is killed at shutdown, and one that already ended is forgotten", async () => {
+  const { spawn } = await import("node:child_process");
+  const { killRunningMedia, trackMedia } = await import("./media-tools.js");
+  const done = trackMedia(spawn(process.execPath, ["-e", ""]));
+  await new Promise((resolve) => done.once("exit", resolve));
+  const running = trackMedia(spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"]));
+  const exited = new Promise((resolve) => running.once("exit", (_code, signal) => resolve(signal)));
+  assert.equal(killRunningMedia(), 1);
+  assert.equal(await exited, "SIGKILL");
+  assert.equal(killRunningMedia(), 0);
+});

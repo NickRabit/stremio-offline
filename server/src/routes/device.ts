@@ -133,14 +133,14 @@ export function registerDeviceRoutes(app: express.Application, deps: DeviceDeps)
     // the front (+faststart) and calls for a fragmented file instead.
     if (isPlaylist(stream.url!)) {
       const { spawn } = await import("node:child_process");
-      const { ffmpegPath } = await import("../media-tools.js");
+      const { ffmpegPath, trackMedia } = await import("../media-tools.js");
       const { playlistArgs } = await import("../probe.js");
       const headerLines = Object.entries(headers)
         .filter(([name]) => name.toLowerCase() !== "range")
         .map(([name, value]) => `${name}: ${value}\r\n`)
         .join("");
 
-      const child = spawn(ffmpegPath(), [
+      const child = trackMedia(spawn(ffmpegPath(), [
         "-hide_banner", "-loglevel", "error", "-nostdin",
         "-protocol_whitelist", "file,http,https,tcp,tls,crypto",
         ...(await playlistArgs("ffmpeg")),
@@ -151,7 +151,7 @@ export function registerDeviceRoutes(app: express.Application, deps: DeviceDeps)
         "-bsf:a", "aac_adtstoasc",
         "-movflags", "frag_keyframe+empty_moov+default_base_moof",
         "-f", "mp4", "pipe:1",
-      ], { stdio: ["ignore", "pipe", "pipe"] });
+      ], { stdio: ["ignore", "pipe", "pipe"] }));
 
       let stderr = "";
       child.stderr?.on("data", (chunk) => { stderr = `${stderr}${String(chunk)}`.slice(-2000); });

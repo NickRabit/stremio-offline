@@ -32,6 +32,7 @@ import { currentLevel, flushLog, initLogger, log, parseLevel, startLogMaintenanc
 import { resolveListenTarget, startServer } from "./server-start.js";
 import { loopbackHostCheck } from "./host-check.js";
 import { InFlight } from "./in-flight.js";
+import { killRunningMedia } from "./media-tools.js";
 import { browseDirectory, describePath, emptiedFolders, entryDirectory, holdsLibraryRoot, isPathWithin, isVideo, listVideos, moveDestination, orphanedCatalogKeys, pageFiles, remapPath, scanLibrary, summarize, type FoundFile, type LibraryEntry } from "./library.js";
 import { browseMeta, cacheFieldsFromMeta, episodeKey, episodeNumberOf, episodesFromMeta, dropKeyed, folderMosaicUnits, knownEntryForUnit, knownTitleEntry, knownTitleOf, knownTitleForUnit, matchKeyFor, mosaicIdentities, mosaicSkipped, needsBackfill, needsEpisodes, staleSuggestionKeys, titleUnits, unitFor, unmatchAt, withSkipFlag, type GalleryEntry, type LibraryMetaRecord, type TitleKind, type TitleUnit } from "./library-match.js";
 import { LibraryScan } from "./library-scan.js";
@@ -2274,6 +2275,9 @@ const shutDown = async (signal: NodeJS.Signals) => {
   log("INFO", "Shutting down", { signal });
   const deadline = Date.now() + SHUTDOWN_DRAIN_MS;
   await inFlight.drained(SHUTDOWN_QUIET_MS, SHUTDOWN_DRAIN_MS);
+  // A conversion or an assembly nobody is reading any more would run on without its parent.
+  const killed = killRunningMedia();
+  if (killed) log("INFO", "Stopped FFmpeg processes still running at shutdown", { count: killed });
   await Promise.allSettled([store.flush(), stats.activity.flush(), images.flush(), artworks.flush(), metaStore.flush(), libraryOps.flush()]);
   // The listener stays open, so a request accepted while those were written queues its save
   // after the flush above.
