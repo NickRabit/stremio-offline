@@ -30,6 +30,7 @@ import { createLibraryCandidates } from "./library-candidates.js";
 import { ExternalIdStore } from "./external-ids.js";
 import { currentLevel, flushLog, initLogger, log, parseLevel, startLogMaintenance, setLevel } from "./logger.js";
 import { resolveListenTarget, startServer } from "./server-start.js";
+import { loopbackHostCheck } from "./host-check.js";
 import { browseDirectory, describePath, emptiedFolders, entryDirectory, holdsLibraryRoot, isPathWithin, isVideo, listVideos, moveDestination, orphanedCatalogKeys, pageFiles, remapPath, scanLibrary, summarize, type FoundFile, type LibraryEntry } from "./library.js";
 import { browseMeta, cacheFieldsFromMeta, episodeKey, episodeNumberOf, episodesFromMeta, dropKeyed, folderMosaicUnits, knownEntryForUnit, knownTitleEntry, knownTitleOf, knownTitleForUnit, matchKeyFor, mosaicIdentities, mosaicSkipped, needsBackfill, needsEpisodes, staleSuggestionKeys, titleUnits, unitFor, unmatchAt, withSkipFlag, type GalleryEntry, type LibraryMetaRecord, type TitleKind, type TitleUnit } from "./library-match.js";
 import { LibraryScan } from "./library-scan.js";
@@ -431,6 +432,7 @@ const requireAccess = (req: express.Request, need: AccessNeed = {}): void => {
   throw loss === "session" ? new ResourceError(401, "AUTH_REQUIRED") : new ResourceError(404, "RESOURCE_NOT_FOUND");
 };
 
+app.use(loopbackHostCheck());
 app.use(securityHeaders());
 app.use(express.json({ limit: "256kb" }));
 
