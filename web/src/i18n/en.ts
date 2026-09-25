@@ -500,6 +500,7 @@ export const en = {
   "library.grantExplanation": "If the folder is outside the listed locations, enter its absolute path to allow access.",
   "library.selectedFolder": "Selected folder",
   "library.grantFolder": "Grant this folder",
+  "library.pickOnComputer": "Choose a folder on this computer…",
   "library.grantHint": "Absolute path, e.g. /libraries/archive",
   "library.useThisFolder": "Use this folder",
   "library.selectFolder": "Select {name}",

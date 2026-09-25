@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ArrowDown, ArrowUp, Check, ChevronRight, CornerLeftUp, FolderOpen, FolderPlus, HardDrive, Plus, RefreshCw, Search, SlidersHorizontal, Sparkles, Trash2, X } from "lucide-react";
 import { api, describeError } from "./api";
+import { desktopBridge } from "./desktop-bridge";
 import { t, useI18n } from "./i18n";
 import { bytes, SettingControl, SettingsSectionHead } from "./settings-ui";
 import type { GrantBrowse, LibraryEstimate, LibraryGrant, LibraryType, LibraryView } from "./types";
@@ -304,9 +305,7 @@ function RootPicker({ reroot, onClose, onDone, onError, onLibrariesChanged }:
     setSelected(`${browse.path.replace(/\/+$/, "")}/${name}`);
   };
 
-  const grant = async () => {
-    const wanted = manual.trim();
-    if (!wanted) return;
+  const grantAndSelect = async (wanted: string) => {
     setBusy(true);
     try {
       await api.grantLibraryRoot(wanted);
@@ -315,6 +314,20 @@ function RootPicker({ reroot, onClose, onDone, onError, onLibrariesChanged }:
       await load(wanted);
     } catch (value) { setError(describeError(value)); }
     finally { setBusy(false); }
+  };
+  const grant = async () => {
+    const wanted = manual.trim();
+    if (wanted) await grantAndSelect(wanted);
+  };
+  const desktop = desktopBridge();
+  /** The desktop app's own backend: the system dialog reaches any folder the person can open, and
+   *  choosing one is the same grant as typing its path. */
+  const pickOnComputer = async () => {
+    if (!desktop) return;
+    let chosen: string | null;
+    try { chosen = await desktop.pickFolder(); }
+    catch (value) { setError(describeError(value)); return; }
+    if (chosen) await grantAndSelect(chosen);
   };
 
   const apply = async () => {
@@ -426,6 +439,9 @@ function RootPicker({ reroot, onClose, onDone, onError, onLibrariesChanged }:
             onChange={(event) => setNewFolder(event.target.value)}/>
           <button type="button" onClick={createFolder} disabled={busy || !newFolder.trim()}><FolderPlus/> {t("library.newFolder")}</button>
         </div>}
+        {desktop && <button type="button" className="library-picker-use" onClick={() => void pickOnComputer()} disabled={busy}>
+          <HardDrive/> {t("library.pickOnComputer")}
+        </button>}
         <details className="library-picker-advanced">
           <summary>{t("library.folderNotListed")}</summary>
           <p>{t("library.grantExplanation")}</p>

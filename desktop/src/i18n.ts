@@ -31,6 +31,7 @@ export const en = {
   "download.completed": "Saved to this device.",
   "download.cancelled": "Saving to this device was cancelled.",
   "download.interrupted": "Saving to this device was interrupted. Start it again from the server.",
+  "folder.pickTitle": "Choose a library folder",
 };
 
 export const cs: typeof en = {
@@ -66,6 +67,7 @@ export const cs: typeof en = {
   "download.completed": "Uloženo do tohoto zařízení.",
   "download.cancelled": "Ukládání do tohoto zařízení bylo zrušeno.",
   "download.interrupted": "Ukládání do tohoto zařízení bylo přerušeno. Spusťte ho znovu v rozhraní serveru.",
+  "folder.pickTitle": "Vyberte složku knihovny",
 };
 
 export function catalogue(locale: string): typeof en {

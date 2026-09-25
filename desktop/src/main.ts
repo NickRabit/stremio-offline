@@ -1,4 +1,4 @@
-import { app, BaseWindow, ipcMain, session, shell as electronShell, utilityProcess, WebContentsView, type IpcMainEvent, type IpcMainInvokeEvent } from "electron";
+import { app, BaseWindow, dialog, ipcMain, session, shell as electronShell, utilityProcess, WebContentsView, type IpcMainEvent, type IpcMainInvokeEvent } from "electron";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -42,6 +42,7 @@ const RETIRE_TIMEOUT_MS = 1_500;
 
 const CONNECTION_PAGE = fileURLToPath(new URL("../static/connection.html", import.meta.url));
 const CONNECTION_PRELOAD = fileURLToPath(new URL("./preload.js", import.meta.url));
+const LOCAL_PRELOAD = fileURLToPath(new URL("./local-preload.js", import.meta.url));
 /** The staged runtime keeps the server's `../../web` layout: `runtime/server/dist` and `runtime/web`. */
 const LOCAL_BACKEND_ENTRY = fileURLToPath(new URL("../runtime/server/dist/index.js", import.meta.url));
 /** CI starts the packaged app with this flag instead of a window: start, probe, stop, exit. */
@@ -301,14 +302,14 @@ const wireRemote = (remote: WebContentsView) => {
   });
 };
 
-const mountRemote = (partition: string, serverOrigin: () => string | null): WebContentsView | null => {
+const mountRemote = (partition: string, serverOrigin: () => string | null, preload?: string): WebContentsView | null => {
   const current = shell;
   if (!current) return null;
   if (current.remote && current.remotePartition === partition) return current.remote;
   destroyRemote();
   preparePartition(partition, serverOrigin);
   const remote = new WebContentsView({
-    webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true, partition },
+    webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true, partition, ...(preload ? { preload } : {}) },
   });
   wireRemote(remote);
   // Under the connection bar, which is already the top child.
@@ -455,7 +456,7 @@ const connectLocal = (): Promise<LocalConnectResult> =>
     }
     localConnection = connection;
     if (shell?.remotePartition !== LOCAL_PARTITION) await retireRemote();
-    const remote = mountRemote(LOCAL_PARTITION, localOrigin);
+    const remote = mountRemote(LOCAL_PARTITION, localOrigin, LOCAL_PRELOAD);
     if (!remote) {
       await closeLocalBackend();
       failLocalConnection();
@@ -510,6 +511,22 @@ const registerHandlers = () => {
   ipcMain.handle("desktop:connect-local", async (event): Promise<LocalConnectResult> => {
     if (!fromConnection(event)) throw new Error("desktop: unexpected sender");
     return connectLocal();
+  });
+
+  // Only the top frame of the page the local backend serves, while it is the page on screen.
+  ipcMain.handle("desktop:pick-folder", async (event): Promise<string | null> => {
+    const current = shell;
+    const origin = localOrigin();
+    const frame = event.senderFrame;
+    if (!current?.remote || current.remotePartition !== LOCAL_PARTITION || event.sender !== current.remote.webContents
+      || !frame || frame.parent !== null || origin === null || originOf(frame.url) !== origin) {
+      throw new Error("desktop: unexpected sender");
+    }
+    const result = await dialog.showOpenDialog(current.window, {
+      title: catalogue(app.getLocale())["folder.pickTitle"],
+      properties: ["openDirectory", "createDirectory"],
+    });
+    return result.canceled ? null : result.filePaths[0] ?? null;
   });
 
   ipcMain.handle("desktop:disconnect", async (event) => {
