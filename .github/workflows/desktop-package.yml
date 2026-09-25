@@ -2,7 +2,10 @@ name: Desktop package
 
 # Packages the macOS arm64 prototype from the desktop workspace. This is a
 # packaging check, not a release: the artifacts have no Developer ID identity,
-# are not notarized and are only uploaded to the workflow run. See desktop/README.md.
+# are not notarized and are only uploaded to the workflow run. It stays
+# credentials-free on purpose; the signed, notarized release path is the manual
+# "Desktop release" workflow (.github/workflows/desktop-release.yml). See
+# desktop/README.md.
 on:
   pull_request:
     paths:
@@ -12,6 +15,7 @@ on:
       - "package.json"
       - "package-lock.json"
       - ".github/workflows/desktop-package.yml"
+      - ".github/workflows/desktop-release.yml"
   workflow_dispatch:
 
 permissions:
@@ -23,7 +27,8 @@ jobs:
     # natively and can be handed to hdiutil for the DMG.
     runs-on: macos-14
     env:
-      # The prototype has no Developer ID signing identity.
+      # Discovery is off, so this check is always unsigned and never needs an
+      # Apple certificate or notarization credentials.
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
     steps:
       - uses: actions/checkout@v4

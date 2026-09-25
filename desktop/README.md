@@ -108,13 +108,14 @@ workspaces are not packaged.
 ## Runtime hardening
 
 The bundle is hardened at package time with Electron's Fuse V1 switches
-(`build.electronFuses` in `desktop/package.json`). The shell connects to a
-configured server, so it has no use for Electron's Node-as-Node mode, Node
-runtime option injection or the inspector CLI switches:
+(`build.electronFuses` in `desktop/package.json`). The shell connects to
+configured servers or starts its bundled backend as an Electron Utility
+Process, so it has no use for Electron's Node-as-Node mode, Node runtime option
+injection or the inspector CLI switches:
 
 | Fuse | State | Why |
 | --- | --- | --- |
-| `runAsNode` | off | `ELECTRON_RUN_AS_NODE` is not used. A future local backend has to be a Utility Process, not a forked Node process. |
+| `runAsNode` | off | `ELECTRON_RUN_AS_NODE` is not used. The local backend runs as an Electron Utility Process, not a forked Node process. |
 | `enableNodeOptionsEnvironmentVariable` | off | `NODE_OPTIONS` and `NODE_EXTRA_CA_CERTS` are not needed by a shipped shell. |
 | `enableNodeCliInspectArguments` | off | `--inspect` and `SIGUSR1` must not open an inspector in a shipped build. |
 | `enableEmbeddedAsarIntegrityValidation` | on | `app.asar` is checked against the hash signed into the bundle. |
@@ -127,17 +128,17 @@ Flipping the fuses rewrites the Electron Framework binary, which invalidates the
 linker's ad-hoc signature it shipped with, and Apple Silicon refuses to run a
 binary whose signature no longer matches. The config therefore also sets
 `resetAdHocDarwinSignature`, so the bundle is re-signed ad-hoc as the last step
-of the flip. That is still not a Developer ID signature and notarization is
-still missing — see [Limits](#limits).
+of the flip. The unsigned pull-request package stops there; the manual release
+workflow applies Developer ID signing and notarization afterwards — see
+[Signed release (manual)](#signed-release-manual).
 
 `enableCookieEncryption` stays off for now. On macOS Electron encrypts the
-cookie store with an OS key that is tied to the app's signing identity, and the
-prototype still has no stable Developer ID: the bundle is only ad-hoc signed,
-so that identity can change from build to build. Turning the fuse on under a
-changing identity would make the persistent profile's cookies unreadable and
-log the user out, and it is a one-way transition for an existing store. Revisit
-it once stable signing exists and cookie persistence across an upgrade has been
-tested.
+cookie store with an OS key that is tied to the app's signing identity. The
+manual release workflow has not yet produced a signed build that has been
+tested across upgrades. Turning the fuse on before confirming that behavior
+could make the persistent profile's cookies unreadable and log the user out,
+and it is a one-way transition for an existing store. Revisit it after a signed
+release has been tested across an upgrade.
 
 `npm run verify:fuses` reads the fuses back out of the packaged `.app`
 (`desktop/scripts/verify-fuses.mjs`). It fails when a reviewed fuse is missing
@@ -157,17 +158,77 @@ smoke-tests the packaged app's local backend and checks the fuses before
 uploading the DMG and ZIP as separate artifacts kept for seven days. It does
 not publish a GitHub Release and does not touch the server image flow.
 
+## Signed release (manual)
+
+`.github/workflows/desktop-release.yml` (**Desktop release**) is the only path
+that produces a signed, notarized build, and only a maintainer runs it. It is
+kept out of the pull-request check so packaging on a pull request stays unsigned
+and needs no Apple credentials. It is dispatched by hand and refuses to run
+anywhere but `main`:
+
+1. Cut the normal tagged release first with
+   `git tag vX.Y.Z && git push origin vX.Y.Z`, which the **Release** workflow
+   turns into a GitHub Release.
+2. In **Actions → Desktop release → Run workflow**, pick the `main` branch and
+   enter the tag, for example `v0.4.75`.
+
+Before it packages anything the job checks that the tag matches
+`vMAJOR.MINOR.PATCH`, exists, points to a commit reachable from `origin/main`,
+agrees with the version in `desktop/package.json`, and already has a GitHub
+Release to attach to. It then signs with the Developer ID certificate and
+notarizes with an App Store Connect API key, and it fails before packaging if
+any required secret is missing.
+
+### Required repository secrets
+
+Set these under **Settings → Secrets and variables → Actions → Repository
+secrets**. They are read only by the macOS packaging job, are never printed, and
+the decoded API key file is deleted even if packaging fails.
+
+| Secret | Value |
+| --- | --- |
+| `MACOS_CERTIFICATE_P12_BASE64` | A **Developer ID Application** `.p12` (certificate and private key), base64-encoded. |
+| `MACOS_CERTIFICATE_PASSWORD` | The password chosen when exporting that `.p12`. |
+| `APPLE_API_KEY_P8_BASE64` | An App Store Connect team API key `.p8`, base64-encoded. |
+| `APPLE_API_KEY_ID` | The key ID of that API key. |
+| `APPLE_API_ISSUER` | The App Store Connect issuer ID. |
+
+Only Developer ID signing and App Store Connect API-key authentication are
+used; Apple ID app-specific-password authentication is deliberately not
+supported. To produce the values:
+
+- In the Apple Developer portal create a **Developer ID Application**
+  certificate, install it into the login keychain, then in **Keychain Access**
+  export the certificate *and* its private key as a `.p12` and base64-encode the
+  file, for example `base64 -i DeveloperID.p12 -o certificate.p12.base64`.
+- In **App Store Connect → Users and Access → Integrations → App Store Connect
+  API**, create a team key with **App Manager** access, download the `.p8` once
+  and base64-encode it, for example
+  `base64 -i AuthKey_XXXXXXXXXX.p8 -o apikey.p8.base64`. Note the key ID and the
+  issuer ID shown on that page.
+
+After packaging the job runs `codesign --verify --deep --strict --verbose=2`,
+Gatekeeper assessment with `spctl --assess --type execute`, and `xcrun stapler
+validate` against the built `.app`, plus the same `npm run verify:fuses -w
+desktop` fuse read-back as the pull-request check. Only the DMG and ZIP are
+uploaded, to the existing release, and the upload fails rather than replacing an
+asset that already has that name.
+
 ## Limits
 
 This prototype exists to prove the packaging step, not to hand out an installer.
-It is **not** a signed, notarized, auto-updating release:
+The **Desktop package** artifact is **not** a signed, notarized, auto-updating
+release:
 
-- **No Developer ID signing and no notarization.** There is no stable signing
-  identity and no notarization ticket. The bundle is only re-signed ad-hoc, so
-  macOS Gatekeeper may still refuse the first launch. A user who wants to try
-  one has to approve it explicitly, for example with **System Settings →
-  Privacy & Security → Open Anyway**, or by right-clicking the app and choosing
-  **Open**. Do not describe a build as Gatekeeper-ready.
+- **The pull-request package has no Developer ID signing and no
+  notarization.** The bundle is only re-signed ad-hoc, so macOS Gatekeeper may
+  still refuse the first launch. A user who wants to try one has to approve it
+  explicitly, for example with **System Settings → Privacy & Security → Open
+  Anyway**, or by right-clicking the app and choosing **Open**. Do not describe
+  a build as Gatekeeper-ready. The manual **Desktop release** workflow signs and
+  notarizes a tagged build, but it has not been run yet against real
+  credentials and no signed release exists — see [Signed release
+  (manual)](#signed-release-manual).
 - **No automatic updates.** Nothing checks for or installs a newer version.
 - **arm64 only.** There is no Intel or universal build, and no promise to add
   one here.
@@ -176,9 +237,11 @@ It is **not** a signed, notarized, auto-updating release:
 - **No data migration.** The local backend starts with an empty instance
   directory; pointing it at an existing Docker or NAS install is not part of
   this prototype.
-- **No clean-install verification or support promise.** The package has not been
+- **No clean-install verification or support promise.** Neither the workflow nor
+  a signed build has been exercised end to end, the package has not been
   verified from a clean install, and it is not a supported distribution.
 
-Signing, notarization, update delivery, clean-install testing and support
-documentation are the next desktop distribution milestone; see
+Workflow support for signing and notarization exists, but an actual signed
+release, update delivery, clean-install testing and support documentation are
+still outstanding; see
 [docs/roadmap.md](../docs/roadmap.md).

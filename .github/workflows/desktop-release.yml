@@ -1,0 +1,150 @@
+name: Desktop release
+
+# Signs, notarizes and attaches the macOS arm64 desktop app to an existing
+# GitHub Release. It is manual on purpose: a maintainer dispatches it from main
+# after the tag and its release already exist, using the Developer ID
+# certificate and App Store Connect API key repository secrets. Pull request
+# packaging stays unsigned in "Desktop package" and needs no Apple
+# credentials. See desktop/README.md.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to sign and attach artifacts to (vMAJOR.MINOR.PATCH)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    # The credential-bearing job runs only from main; a dispatch from any other
+    # ref is skipped rather than packing with Apple secrets.
+    if: github.ref == 'refs/heads/main'
+    # macos-14 is an Apple Silicon runner, so arm64 is built natively and
+    # notarytool/stapler run against the artifact in place.
+    runs-on: macos-14
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      # Validate the tag before the job checks it out or builds from it: it has
+      # to exist, point into main's history, agree with desktop/package.json and
+      # already have a GitHub Release whose assets this job attaches to.
+      - name: Validate release tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::input tag must match vMAJOR.MINOR.PATCH"
+            exit 1
+          fi
+
+          git fetch --force --tags origin
+          git fetch --force origin main:refs/remotes/origin/main
+
+          if ! tag_commit="$(git rev-parse --verify --quiet "refs/tags/$TAG^{commit}")"; then
+            echo "::error::tag '$TAG' does not exist"
+            exit 1
+          fi
+
+          if ! git merge-base --is-ancestor "$tag_commit" origin/main; then
+            echo "::error::tag '$TAG' ($tag_commit) is not an ancestor of origin/main"
+            exit 1
+          fi
+
+          tag_version="${TAG#v}"
+          manifest_version="$(git show "$TAG:desktop/package.json" | node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(0, "utf8")).version)')"
+          if [[ "$tag_version" != "$manifest_version" ]]; then
+            echo "::error::tag '$TAG' does not match desktop/package.json version '$manifest_version'"
+            exit 1
+          fi
+
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::error::no GitHub Release for '$TAG' yet; create the tagged release first"
+            exit 1
+          fi
+
+      # Fail before packaging when any credential is missing, so the build never
+      # starts and then dies at the notarization step.
+      - name: Require signing and notarization secrets
+        env:
+          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          set -euo pipefail
+          missing=()
+          for name in MACOS_CERTIFICATE_P12_BASE64 MACOS_CERTIFICATE_PASSWORD APPLE_API_KEY_P8_BASE64 APPLE_API_KEY_ID APPLE_API_ISSUER; do
+            if [ -z "${!name:-}" ]; then
+              missing+=("$name")
+            fi
+          done
+          if [ "${#missing[@]}" -ne 0 ]; then
+            echo "::error::missing required repository secrets: ${missing[*]}"
+            exit 1
+          fi
+
+      - name: Check out the release tag
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          git checkout --force "$TAG"
+
+      - run: npm ci
+
+      # The certificate goes to electron-builder through CSC_LINK (base64, which
+      # it decodes itself) and CSC_KEY_PASSWORD. Hardened runtime, Developer ID
+      # signing and @electron/notarize (submit, wait, staple) are configured in
+      # desktop/package.json; notarization activates from the APPLE_API_* vars.
+      - name: Package, sign and notarize
+        env:
+          CSC_LINK: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          CSC_KEY_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          set -euo pipefail
+          key_path="$RUNNER_TEMP/apple_api_key.p8"
+          trap 'rm -f "$key_path"' EXIT
+          APPLE_API_KEY_PATH="$key_path" node -e 'const fs = require("node:fs"); fs.writeFileSync(process.env.APPLE_API_KEY_PATH, Buffer.from(process.env.APPLE_API_KEY_P8_BASE64, "base64"), { mode: 0o600 });'
+          export APPLE_API_KEY="$key_path"
+          npm run package:mac:arm64 -w desktop
+
+      - name: Verify code signature
+        run: codesign --verify --deep --strict --verbose=2 "desktop/release/mac-arm64/Stremio Offline.app"
+
+      - name: Verify Gatekeeper assessment
+        run: spctl --assess --type execute --verbose=4 "desktop/release/mac-arm64/Stremio Offline.app"
+
+      - name: Verify notarization ticket
+        run: xcrun stapler validate "desktop/release/mac-arm64/Stremio Offline.app"
+
+      # The signed build must carry the same reviewed Fuse V1 wire as the
+      # unsigned package; read it back before anything is attached.
+      - run: npm run verify:fuses -w desktop
+
+      # Attach only the DMG and ZIP to the existing release. `gh release upload`
+      # fails when an asset of the same name is already present, so an existing
+      # artifact is never replaced.
+      - name: Attach artifacts to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: gh release upload "$TAG" desktop/release/*.dmg desktop/release/*.zip
