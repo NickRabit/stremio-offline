@@ -20,6 +20,7 @@ import { catalogue } from "./i18n.js";
 import { layout, type LayoutMode } from "./layout.js";
 import { LOCAL_PARTITION, LocalBackend, type LocalBackendConnection } from "./local-backend.js";
 import { externalBrowserUrl, httpAllowedHost, parseServerOrigin, partitionForOrigin, type ServerOrigin } from "./origin.js";
+import { localPageSent } from "./bridge-sender.js";
 import { SerialQueue } from "./serial-queue.js";
 import { fetchStatus, type ProbeFailure, type ProbeResult } from "./status.js";
 
@@ -516,12 +517,13 @@ const registerHandlers = () => {
   // Only the top frame of the page the local backend serves, while it is the page on screen.
   ipcMain.handle("desktop:pick-folder", async (event): Promise<string | null> => {
     const current = shell;
-    const origin = localOrigin();
     const frame = event.senderFrame;
-    if (!current?.remote || current.remotePartition !== LOCAL_PARTITION || event.sender !== current.remote.webContents
-      || !frame || frame.parent !== null || origin === null || originOf(frame.url) !== origin) {
-      throw new Error("desktop: unexpected sender");
-    }
+    if (!current || !localPageSent({
+      currentView: current.remote !== null && event.sender === current.remote.webContents,
+      partition: current.remotePartition,
+      frame: frame ? { url: frame.url, top: frame.parent === null } : null,
+      localOrigin: localOrigin(),
+    })) throw new Error("desktop: unexpected sender");
     const result = await dialog.showOpenDialog(current.window, {
       title: catalogue(app.getLocale())["folder.pickTitle"],
       properties: ["openDirectory", "createDirectory"],
