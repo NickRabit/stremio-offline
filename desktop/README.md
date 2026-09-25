@@ -30,7 +30,10 @@ local option is a second way into the same shell.
 
 **FFmpeg is not bundled.** Direct play and every server feature that does not
 need it work as they do on a server; remux and transcode need an `ffmpeg`
-executable that the local backend process can find on its `PATH`.
+executable that the local backend process can find. It looks on the `PATH` it
+inherits and, on macOS, also in `/opt/homebrew/bin` and `/usr/local/bin`, which
+a launch from the Finder or the Dock does not have on `PATH`. `FFMPEG_PATH` and
+`FFPROBE_PATH` name an executable explicitly when it sits somewhere else.
 
 The packaging sections below cover the packaging prototype only. It produces a
 macOS arm64 `.dmg` and `.zip` from the compiled shell. It is deliberately not a

@@ -4,6 +4,7 @@ import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promise
 import path from "node:path";
 import { promisify } from "node:util";
 import { log } from "./logger.js";
+import { ffmpegPath } from "./media-tools.js";
 import { guardedFetch } from "./outbound.js";
 import { secureMode } from "./secure.js";
 import type { MetaItem } from "./types.js";
@@ -235,7 +236,7 @@ export class ImageProxy {
     const temp = path.join(this.dir, `.resize-${randomUUID()}`);
     try {
       await writeFile(temp, data, { mode: 0o600 });
-      const { stdout } = await promisify(execFile)("ffmpeg", [
+      const { stdout } = await promisify(execFile)(ffmpegPath(), [
         "-hide_banner", "-loglevel", "error", "-nostdin", "-threads", "1", "-i", temp,
         "-vf", "scale='min(640,iw)':-2", "-q:v", "5", "-c:v", "mjpeg", "-f", "image2pipe", "pipe:1",
       ], { encoding: "buffer", timeout: FFMPEG_TIMEOUT_MS, killSignal: "SIGKILL", maxBuffer: MAX_BYTES * 2 });

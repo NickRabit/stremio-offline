@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { detectLanguage, normalizeLanguage } from "./language.js";
 import { log } from "./logger.js";
+import { ffmpegPath, ffprobePath } from "./media-tools.js";
 
 const run = promisify(execFile);
 
@@ -77,10 +78,12 @@ export const playlistArgsFrom = (help: string) => [
 
 const helpCache = new Map<string, Promise<string>>();
 
+const executableFor = (binary: "ffprobe" | "ffmpeg") => binary === "ffprobe" ? ffprobePath() : ffmpegPath();
+
 export async function playlistArgs(binary: "ffprobe" | "ffmpeg") {
   let help = helpCache.get(binary);
   if (!help) {
-    help = run(binary, ["-hide_banner", "-h", "demuxer=hls"], { timeout: 10_000 })
+    help = run(executableFor(binary), ["-hide_banner", "-h", "demuxer=hls"], { timeout: 10_000 })
       .then(({ stdout }) => {
         if (!stdout.includes("extension_picky")) log("INFO", "This FFmpeg has no -extension_picky, playlists with unusual segment endings may not open", { binary });
         return stdout;
@@ -122,7 +125,7 @@ export const looksUnreachable = (stderr: string) => UNREACHABLE.test(stderr);
 
 async function inspect(input: string, limits: string[], timeout: number, stage: string): Promise<Inspection> {
   try {
-    const { stdout } = await run("ffprobe", [
+    const { stdout } = await run(ffprobePath(), [
       "-v", "error", "-print_format", "json",
       ...await playlistArgs("ffprobe"),
       ...limits,

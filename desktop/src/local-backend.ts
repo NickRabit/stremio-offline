@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { statSync } from "node:fs";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseServerOrigin, type ServerOrigin } from "./origin.js";
@@ -13,6 +14,10 @@ export const DOWNLOADS_DIRECTORY = "downloads";
 export const PORT_FILE = "local-backend.json";
 export const READY_TIMEOUT_MS = 30_000;
 export const STOP_TIMEOUT_MS = 5_000;
+/** Where the tools a desktop install needs are installed on macOS. A Finder launch inherits
+ *  `/usr/bin:/bin:/usr/sbin:/sbin`, so neither is on the child's `PATH` by itself. */
+export const MACOS_TOOL_DIRECTORIES = ["/opt/homebrew/bin", "/usr/local/bin"] as const;
+const MACOS_FALLBACK_PATH = "/usr/bin:/bin:/usr/sbin:/sbin";
 
 const SERVICE_NAME = "Stremio Offline backend";
 
@@ -93,14 +98,37 @@ export function readErrorMessage(message: unknown): { code: string | null } | nu
   return { code: typeof record.code === "string" && record.code.length > 0 ? record.code : null };
 }
 
+const isDirectory = (dir: string) => {
+  try { return statSync(dir).isDirectory(); } catch { return false; }
+};
+
+/** An entry as it is compared, without the one trailing slash it may carry. */
+const withoutTrailingSlash = (entry: string) => entry.length > 1 && entry.endsWith("/") ? entry.slice(0, -1) : entry;
+
+/** macOS tools live outside the `PATH` a launch from the Finder inherits. The inherited
+ *  entries stay first, so a Homebrew the user put on `PATH` themselves still wins. */
+const macosPath = (inherited: string | undefined, directoryExists: (dir: string) => boolean) => {
+  const base = inherited ? inherited : MACOS_FALLBACK_PATH;
+  const present = new Set(base.split(":").map(withoutTrailingSlash));
+  const added = MACOS_TOOL_DIRECTORIES.filter((dir) => directoryExists(dir) && !present.has(withoutTrailingSlash(dir)));
+  return added.length ? `${base}:${added.join(":")}` : base;
+};
+
 /** The child's environment, on top of the parent's so `PATH` still finds ffmpeg. */
-export function localBackendEnv(parent: NodeJS.ProcessEnv, userDataDir: string, port: number): NodeJS.ProcessEnv {
+export function localBackendEnv(
+  parent: NodeJS.ProcessEnv,
+  userDataDir: string,
+  port: number,
+  platform: NodeJS.Platform = process.platform,
+  directoryExists: (dir: string) => boolean = isDirectory,
+): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(parent)) if (value !== undefined) env[key] = value;
   env.HOST = LOCAL_HOST;
   env.PORT = String(port);
   env.DATA_DIR = path.join(userDataDir, INSTANCE_DIRECTORY);
   env.DOWNLOAD_DIR = path.join(userDataDir, DOWNLOADS_DIRECTORY);
+  if (platform === "darwin") env.PATH = macosPath(env.PATH, directoryExists);
   return env;
 }
 

@@ -5,6 +5,7 @@ import { mkdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { Transform } from "node:stream";
 import { log } from "./logger.js";
+import { ffmpegPath } from "./media-tools.js";
 import { completeVttBlocks, shiftVtt, vttCoverage } from "./vtt.js";
 
 type Extract = (args: string[], file: string, append: boolean, signal: AbortSignal) => Promise<unknown>;
@@ -31,7 +32,7 @@ const extract: Extract = (args, file, append, signal) => new Promise<void>((reso
   const out = createWriteStream(file, append ? { flags: "a" } : {});
   out.once("error", reject);
   out.once("open", () => {
-    const child = spawn("ffmpeg", args, { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(ffmpegPath(), args, { stdio: ["ignore", "pipe", "pipe"] });
     const cues = append ? child.stdout.pipe(withoutHeader()) : child.stdout;
     cues.pipe(out);
     let stderr = "";
