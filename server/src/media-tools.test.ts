@@ -66,3 +66,13 @@ test("a tracked FFmpeg is killed at shutdown, and one that already ended is forg
   assert.equal(await exited, "SIGKILL");
   assert.equal(killRunningMedia(), 0);
 });
+
+test("once the shutdown killed the running ones, a new FFmpeg is killed as it starts", async () => {
+  const { spawn } = await import("node:child_process");
+  const { killRunningMedia, mediaStopping, trackMedia } = await import("./media-tools.js");
+  killRunningMedia();
+  assert.equal(mediaStopping(), true);
+  const late = trackMedia(spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"]));
+  const signal = await new Promise((resolve) => late.once("exit", (_code, signal) => resolve(signal)));
+  assert.equal(signal, "SIGKILL");
+});
