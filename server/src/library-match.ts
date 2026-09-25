@@ -227,6 +227,11 @@ function titleSimilarityOf(left: string, right: string): number {
   return similarity;
 }
 
+/** Normalised name similarity for callers that compare whole titles, such as episode names. */
+export function titleSimilarity(left: string, right: string): number {
+  return titleSimilarityOf(normalizeTitle(left), normalizeTitle(right));
+}
+
 /** Whether one normalized title appears whole inside the other. A shared word is not
  *  evidence -- "WALL-E" and "Eton Wall Game" share one -- a shared phrase is. */
 function phraseEvidence(left: string, right: string): boolean {
@@ -245,17 +250,38 @@ function matchTitle(value: string): string {
   return stripPartMarkers(normalized) || normalized;
 }
 
+/** A candidate name whose subtitle carries no weight: "Borat Subsequent Moviefilm:
+ *  Delivery of ..." is the film the file names as "Borat Subsequent Moviefilm". Only a
+ *  head of at least two words counts, so "Alita: Battle Angel" is not read as "Alita". */
+function candidateHead(title: string): string | undefined {
+  const head = title.split(":")[0]!.trim();
+  if (head === title) return undefined;
+  return normalizeTitle(head).split(" ").filter(Boolean).length >= 2 ? head : undefined;
+}
+
 export function scoreHit(parsed: ParsedMedia, item: MetaItem, expectedKind?: TitleKind): ScoredHit {
   if (!item.name) return { item, score: 0, titleSimilarity: 0, autoEligible: false };
   let titleSimilarity = 0;
   let evidence = false;
   let bestSide = false;
+  let bestName = "";
+  const rights = candidateTitles(item).flatMap((title) => {
+    const head = candidateHead(title);
+    return head ? [{ text: title, head: false }, { text: head, head: true }] : [{ text: title, head: false }];
+  });
   for (const variant of titleVariants(parsed)) {
     const left = matchTitle(variant.text);
-    for (const candidate of candidateTitles(item)) {
-      const right = matchTitle(candidate);
+    for (const candidate of rights) {
+      const right = matchTitle(candidate.text);
       const similarity = titleSimilarityOf(left, right);
-      if (similarity > titleSimilarity) { titleSimilarity = similarity; bestSide = variant.side; }
+      const side = variant.side || candidate.head;
+      // On a tie the whole name wins: "Toy Story 3" matches the original title and the head of
+      // "Toy Story 3: Příběh hraček" alike, and it is the whole-name match that counts.
+      if (similarity > titleSimilarity || (similarity === titleSimilarity && bestSide && !side)) {
+        titleSimilarity = similarity;
+        bestSide = side;
+        bestName = candidate.text;
+      }
       if (phraseEvidence(left, right)) evidence = true;
     }
   }
@@ -284,9 +310,12 @@ export function scoreHit(parsed: ParsedMedia, item: MetaItem, expectedKind?: Tit
   if (releasedInFuture(item)) autoEligible = false;
   // The part marker is read from the file's whole title, not the search query: a suffix such
   // as "Nymfomanka - část 2" is dropped from a bilingual query, and losing it there would
-  // hide exactly the disagreement this check exists to catch. The candidate's own part is the
-  // first its names state, so a localized name that spells it out is enough to agree.
-  const partConflict = partConflictBetween(parsed.title, candidatePart(item));
+  // hide exactly the disagreement this check exists to catch. The file agrees with a
+  // candidate when it agrees with the first part the candidate's names state ("Doba ledová 4"
+  // beside "Ice Age: Continental Drift") or with the name it matched best ("Trolls Band
+  // Together" beside "Trollové 3").
+  const partConflict = partConflictBetween(parsed.title, candidatePart(item))
+    && partConflictBetween(parsed.title, partSignature(bestName, true));
   if (partConflict) autoEligible = false;
   score = Math.max(0, Math.min(100, score));
   return {
@@ -325,6 +354,8 @@ function candidatePart(item: MetaItem): string {
 function partConflictBetween(fileTitle: string, candPart: string): boolean {
   const filePart = partSignature(fileTitle, true);
   if (filePart === candPart) return false;
+  // The first film is seldom numbered: "Transformers I" is "Transformers".
+  if ((filePart === "part:1" && candPart === "") || (filePart === "" && candPart === "part:1")) return false;
   // A file that writes the number down without a marker still names the part.
   if (filePart === "" && statesPart(fileTitle, candPart)) return false;
   return true;
@@ -341,20 +372,39 @@ const NAMESAKE_MIN_VOTES = 50;
 const NAMESAKE_DOMINANCE = 10;
 
 /** `nowYear` stays for callers that pass it: which film is newer no longer decides anything. */
-export function autoAccept(hits: ScoredHit[], nowYear = new Date().getFullYear()): ScoredHit | undefined {
+export function autoAccept(
+  hits: ScoredHit[],
+  nowYear = new Date().getFullYear(),
+  options: { country?: string } = {},
+): ScoredHit | undefined {
   const ranked = hits.filter((hit) => hit.autoEligible).sort((a, b) =>
-    b.score - a.score || votesOf(b.item) - votesOf(a.item));
+    b.score - a.score || Number(Boolean(a.sideMatch)) - Number(Boolean(b.sideMatch)) || votesOf(b.item) - votesOf(a.item));
   const top = ranked[0];
   if (!top || top.score < AUTO_ACCEPT_MIN_SCORE || top.titleSimilarity < 0.90) return undefined;
   if (top.partConflict || top.sideMatch) return undefined;
   const close = ranked.filter((hit) => top.score - hit.score < 15 && hit.titleSimilarity >= 0.90);
-  const rivals = close.filter((hit) => hit.item.id !== top.item.id);
+  // A rival that only half of a name explains is weaker evidence than the whole-name match on
+  // top, so it does not stand in its way.
+  const rivals = close.filter((hit) => hit.item.id !== top.item.id && !hit.sideMatch && !foreignCountry(hit.item, options.country));
   if (!rivals.length) return top;
   // Two namesakes are told apart by how many people know them, never by which one is newer:
   // the title the file means is the one with an audience, the other ten times smaller.
   const votes = votesOf(top.item);
   const rivalVotes = Math.max(...rivals.map((hit) => votesOf(hit.item)));
   return votes >= NAMESAKE_MIN_VOTES && votes >= NAMESAKE_DOMINANCE * rivalVotes ? top : undefined;
+}
+
+/** A known origin that does not contain the country the file names is another production,
+ *  so it is no rival of this one. An unknown origin proves nothing either way. */
+function foreignCountry(item: MetaItem, country: string | undefined): boolean {
+  if (!country) return false;
+  const origins = item.originCountry;
+  if (!Array.isArray(origins) || !origins.length) return false;
+  const wanted = country.toUpperCase() === "UK" ? "GB" : country.toUpperCase();
+  return !origins.some((origin) => {
+    const code = String(origin).toUpperCase();
+    return (code === "UK" ? "GB" : code) === wanted;
+  });
 }
 
 /** Below this the best hit is noise -- offering it would only teach the user to distrust the list. */
@@ -1009,6 +1059,30 @@ function emit(out: TitleUnit[], key: string, kind: TitleKind, samples: string[])
   out.push({ key, kind, relative: key, sampleFiles: samples });
 }
 
+/** "Navstevnici.01" is an episode of one series; a plain "Toy Story 2" is a film of its own. */
+const LOOSE_EPISODE_TAIL = /[\s._-](?:(\d{2,})|(?:e|ep|dil|díl|epizoda|episode)[\s._-]*\d{1,4})$/i;
+
+function looseEpisodeTitle(filename: string): string | undefined {
+  const stem = filename.replace(/\.[^.]+$/, "");
+  const match = LOOSE_EPISODE_TAIL.exec(stem);
+  if (!match || (match[1] && /^(?:19|20)\d{2}$/.test(match[1]))) return undefined;
+  const title = normalizeTitle(stem.slice(0, match.index));
+  return title || undefined;
+}
+
+function hasSharedLooseEpisodes(videos: FoundFile[]): boolean {
+  const groups = new Map<string, number>();
+  for (const file of videos) {
+    if (isExtraName(posixBase(file.relative))) continue;
+    const title = looseEpisodeTitle(posixBase(file.relative));
+    if (!title) continue;
+    const count = (groups.get(title) ?? 0) + 1;
+    groups.set(title, count);
+    if (count >= 2 && count * 2 > videos.length) return true;
+  }
+  return false;
+}
+
 /** A folder of loose files: one film when its non-extra files reduce to one identity,
  *  otherwise one unit per distinct film so every identity is exposed on its own name. */
 function classifyVideosOnly(dir: string, videos: FoundFile[], out: TitleUnit[]) {
@@ -1016,6 +1090,10 @@ function classifyVideosOnly(dir: string, videos: FoundFile[], out: TitleUnit[]) 
   if (!nonExtra.length) return;
   const tagged = videos.filter((file) => isTaggedEpisode(posixBase(file.relative)));
   if (tagged.length * 2 > videos.length) {
+    emit(out, dir, "series", videos.map((file) => file.relative));
+    return;
+  }
+  if (hasSharedLooseEpisodes(videos)) {
     emit(out, dir, "series", videos.map((file) => file.relative));
     return;
   }

@@ -96,6 +96,19 @@ test("a series stays grouped by series, season and episode", () => {
   assert.equal(titleUnits(files)[0]!.sampleFiles.length, 3);
 });
 
+test("loose numbered episodes are one series, while sequels and disc halves are not", () => {
+  const units = (names: string[]) => titleUnits(names.map((name) => file(`Folder/${name}`))).map((unit) => `${unit.kind}:${unit.key}`).sort();
+  assert.deepEqual(units(["Navstevnici.01.avi", "Navstevnici.02.avi"]), ["series:Folder"],
+    "zero-padded episode numbers sharing one title are one series");
+  assert.deepEqual(units(["Show díl 01.avi", "Show díl 02.avi"]), ["series:Folder"],
+    "an episode word says the same");
+  assert.deepEqual(units(["Toy Story 1.mkv", "Toy Story 2.mkv", "Toy Story 3.mkv"]), [
+    "movie:Folder/Toy Story 1.mkv", "movie:Folder/Toy Story 2.mkv", "movie:Folder/Toy Story 3.mkv",
+  ], "padded sequels are separate films");
+  assert.deepEqual(units(["Film CD1.avi", "Film CD2.avi"]), ["movie:Folder"],
+    "the two halves of one film stay one film");
+});
+
 test("a typed library keeps the boundaries and changes only the kind", () => {
   const files = ["Father Ted/01 serie/01 - Good Luck, Father Ted.mkv", "Interstellar.avi"].map(file);
   assert.deepEqual(
@@ -232,7 +245,7 @@ test("a folder's single film supplies the year and the name the folder lacks", (
   });
   const prince = parseUnit(only(["Malý princ/Malý-princ-[Little-Prince]-(2015)-CZ-dabing.avi"]));
   assert.equal(prince.year, 2015);
-  assert.equal(prince.fileTitle, "Malý princ [Little Prince]");
+  assert.equal(prince.fileTitle, "Malý princ Little-Prince", "brackets are separators now, so their content is part of the name");
   assert.deepEqual(parseUnit(only(["Nevinnost/Nevinnost (2011) Cz.avi"])), {
     title: "Nevinnost", query: "Nevinnost", year: 2011,
   }, "a file whose name says the same thing adds nothing");
@@ -312,6 +325,25 @@ test("a namesake wins only when it is far better known than its rivals", () => {
   const weaker = { id: "tt-weaker", type: "movie", name: "Some Film", voteCount: 40 };
   assert.equal(autoAccept([scoreHit(close, strong, "movie"), scoreHit(close, weaker, "movie")]), undefined,
     "a namesake ten times smaller than the other is not dominant enough");
+});
+
+test("a country tag tells two series of the same name apart", () => {
+  const parsed = parseMediaPath("The Office (US)");
+  const us = { id: "tt-us", type: "series", name: "The Office", releaseInfo: "2005", originCountry: ["US"], voteCount: 3000 };
+  const gb = { id: "tt-gb", type: "series", name: "The Office", releaseInfo: "2001", originCountry: ["GB"], voteCount: 1500 };
+  assert.equal(autoAccept([scoreHit(parsed, us, "series"), scoreHit(parsed, gb, "series")], undefined, { country: parsed.country })?.item.id, "tt-us");
+  assert.equal(autoAccept([scoreHit(parsed, us, "series"), scoreHit(parsed, gb, "series")]), undefined,
+    "without the country the two namesakes stay ambiguous");
+});
+
+test("a candidate's subtitle does not hide a matching head", () => {
+  const parsed = parseMediaPath("Borat Subsequent Moviefilm");
+  const hit = scoreHit(parsed, {
+    id: "tt-borat", type: "movie", name: "Borat Subsequent Moviefilm: Delivery of Prodigious Bribe to American Regime",
+  }, "movie");
+  assert.equal(hit.titleSimilarity, 1);
+  assert.equal(hit.sideMatch, true);
+  assert.equal(autoAccept([hit]), undefined, "a name only the head explains is never bound on its own");
 });
 
 test("a candidate that is not out yet is never bound on its own", () => {

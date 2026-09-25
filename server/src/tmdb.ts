@@ -81,6 +81,7 @@ interface TmdbSearchRow {
   title?: string; name?: string;
   original_title?: string; original_name?: string;
   release_date?: string; first_air_date?: string;
+  origin_country?: unknown;
   vote_count?: number;
   poster_path?: string | null; backdrop_path?: string | null;
 }
@@ -152,12 +153,16 @@ export async function tmdbSearch(
     const date = mediaType(type) === "movie" ? row.release_date : row.first_air_date;
     const year = releaseYear(date);
     const original = mediaType(type) === "movie" ? row.original_title : row.original_name;
+    const originCountry = Array.isArray(row.origin_country)
+      ? row.origin_country.filter((code): code is string => typeof code === "string" && Boolean(code))
+      : [];
     return [{
       id: `tmdb:${id}`,
       type,
       name,
       ...(original && original !== name ? { originalTitle: original } : {}),
       ...(year ? { releaseInfo: year } : {}),
+      ...(originCountry.length ? { originCountry } : {}),
       // How many people know this title, and the day it came out: the matcher tells two
       // namesakes apart by the first, and will not bind one that is not out yet.
       ...(typeof row.vote_count === "number" && Number.isFinite(row.vote_count) ? { voteCount: row.vote_count } : {}),

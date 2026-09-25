@@ -4,10 +4,13 @@ import { log } from "./logger.js";
 import {
   autoAccept, cacheFieldsFromMeta, episodesFromMeta, knownTitleForUnit, lookupSkipped, needsRefresh, pickSuggestion, scanMiss,
   scannedRecently, scanSkipReason, scoreHit, viewMeta, yearFromMeta, MATCH_RULE_VERSION, needsReevaluation, parseUnit,
+  SUGGESTION_MIN_SCORE,
   type LibraryEpisodeRecord, type LibraryMetaRecord, type LibrarySuggestion, type SuggestionReason, type TitleKind, type TitleUnit,
+  type ScoredHit,
 } from "./library-match.js";
 import type { LibraryCandidate, LibraryCandidateSource } from "./library-candidates.js";
 import type { ParsedMedia } from "./library-parse.js";
+import { confirmedByEpisodes, diskEpisodes, episodeEvidence, type CatalogueEpisode, type EpisodeEvidence } from "./library-episodes.js";
 import { parseLibraryPath } from "./libraries.js";
 import { isPathWithin, type FoundFile } from "./library.js";
 import type { MediaInfo } from "./naming.js";
@@ -150,6 +153,19 @@ function idForPrefix(raw: string, prefixes: string[], needle: string): string | 
 function recheckable(record?: LibraryMetaRecord): boolean {
   const viewed = viewMeta(record);
   return Boolean(viewed?.id) && viewed!.source === "scan" && viewed!.locked === false && record?.skipLookup !== true;
+}
+
+function catalogueEpisodes(meta: MetaItem | null | undefined): CatalogueEpisode[] {
+  if (!Array.isArray(meta?.videos)) return [];
+  const out: CatalogueEpisode[] = [];
+  for (const video of meta.videos) {
+    const season = Number(video.season);
+    const episode = Number(video.episode);
+    if (!Number.isFinite(season) || !Number.isFinite(episode)) continue;
+    const name = video.name ?? video.title;
+    out.push({ season, episode, ...(typeof name === "string" && name.trim() ? { name: name.trim() } : {}) });
+  }
+  return out;
 }
 
 export class LibraryScan {
@@ -458,7 +474,10 @@ export class LibraryScan {
             : [];
           if (gallery.length) this.opts.saveGallery?.(key, gallery);
         }
-        log("INFO", "Library title matched", { key, type: item.type, id: item.id, source: "scan" });
+        log("INFO", "Library title matched", {
+          key, type: item.type, id: item.id, source: "scan",
+          ...(identified.accept.evidence ? { evidence: identified.accept.evidence } : {}),
+        });
         this.note("accepted", key, { kind: unit.kind, ...identified.diagnostic, candidateId: item.id });
         await this.finishUnit("matched");
         return;
@@ -536,7 +555,7 @@ export class LibraryScan {
   private async recheckBinding(key: string, unit: TitleUnit, bound: LibraryMetaRecord, parsed: ParsedMedia) {
     const found = await this.searchTrusted(unit, parsed);
     const hits = found.filter((candidate) => candidate.item.name).map((candidate) => scoreHit(parsed, candidate.item, unit.kind));
-    const accepted = autoAccept(hits);
+    const accepted = autoAccept(hits, undefined, { country: parsed.country });
     const candidate = accepted ? found.find((entry) => entry.item.id === accepted.item.id) : undefined;
     const chosen = candidate ? await this.opts.candidates.resolveSelected(candidate, unit.kind, this.language()) : undefined;
     if (!accepted || !chosen) {
@@ -596,9 +615,50 @@ export class LibraryScan {
     await this.finishUnit("skipped");
   }
 
+  /** A namesake series is decided by the episodes on disk: ask the leading candidates for
+   *  their episode lists and let the names the files carry pick the one that fits. */
+  private async confirmByEpisodes(
+    unit: TitleUnit,
+    addons: AddonRecord[],
+    hits: ScoredHit[],
+    byId: Map<string, LibraryCandidate>,
+  ): Promise<{ hit: ScoredHit; candidate: LibraryCandidate; item: MetaItem } | undefined> {
+    const ranked: ScoredHit[] = [];
+    const seen = new Set<string>();
+    for (const hit of [...hits].sort((a, b) => b.score - a.score)) {
+      if (hit.score < SUGGESTION_MIN_SCORE || seen.has(hit.item.id) || !byId.has(hit.item.id)) continue;
+      seen.add(hit.item.id);
+      ranked.push(hit);
+      if (ranked.length >= 3) break;
+    }
+    if (!ranked.length) return undefined;
+
+    const disk = diskEpisodes(unit.sampleFiles);
+    const candidates: LibraryCandidate[] = [];
+    const items: MetaItem[] = [];
+    const evidence: EpisodeEvidence[] = [];
+    for (const hit of ranked) {
+      const candidate = byId.get(hit.item.id)!;
+      let item = candidate.item;
+      let meta: MetaItem | null = null;
+      try {
+        item = await this.opts.candidates.resolveSelected(candidate, "series", this.language());
+        meta = await this.opts.metadata(addons, "series", item.id);
+      } catch {
+        meta = null;
+      }
+      candidates.push(candidate);
+      items.push(item);
+      evidence.push(episodeEvidence(disk, catalogueEpisodes(meta)));
+    }
+    const confirmed = confirmedByEpisodes(evidence);
+    if (confirmed == null) return undefined;
+    return { hit: ranked[confirmed]!, candidate: candidates[confirmed]!, item: items[confirmed]! };
+  }
+
   private async identify(unit: TitleUnit, parsed: ParsedMedia): Promise<{
     called: boolean;
-    accept?: { item: MetaItem; candidate?: LibraryCandidate; fromSearch: boolean };
+    accept?: { item: MetaItem; candidate?: LibraryCandidate; fromSearch: boolean; evidence?: "episodes" };
     suggestion?: LibrarySuggestion;
     diagnostic?: Partial<ScanDiagnostic>;
   }> {
@@ -630,9 +690,17 @@ export class LibraryScan {
     const found = await this.searchTrusted(unit, parsed);
     const byId = new Map(found.map((candidate) => [candidate.item.id, candidate]));
     const hits = found.filter((candidate) => candidate.item.name).map((candidate) => scoreHit(parsed, candidate.item, unit.kind));
-    const accepted = autoAccept(hits);
+    let accepted = autoAccept(hits, undefined, { country: parsed.country });
     const suggestion = pickSuggestion(hits);
-    const candidate = accepted ? byId.get(accepted.item.id) : undefined;
+    let candidate = accepted ? byId.get(accepted.item.id) : undefined;
+    let episodeAccept: { hit: ScoredHit; candidate: LibraryCandidate; item: MetaItem } | undefined;
+    if (!accepted && unit.kind === "series" && suggestion) {
+      episodeAccept = await this.confirmByEpisodes(unit, addons, hits, byId);
+      if (episodeAccept) {
+        accepted = episodeAccept.hit;
+        candidate = episodeAccept.candidate;
+      }
+    }
     const best = [...hits].sort((a, b) => b.score - a.score)[0];
     const bestProvider = best ? byId.get(best.item.id)?.provider : undefined;
     const diagnostic: Partial<ScanDiagnostic> = {
@@ -651,7 +719,8 @@ export class LibraryScan {
     };
     // The identity that gets bound is the resolved one: an IMDb id whenever the provider has
     // one, so the same title can be looked up by every addon that speaks it.
-    const item = candidate ? await this.opts.candidates.resolveSelected(candidate, unit.kind, this.language()) : accepted?.item;
+    const item = episodeAccept?.item
+      ?? (candidate ? await this.opts.candidates.resolveSelected(candidate, unit.kind, this.language()) : accepted?.item);
     // Why a title stayed unmatched is the question the scan gets asked most, and the scores
     // that decided it are gone the moment this returns. Debug level: one line per title.
     if (!accepted || !item) log("DEBUG", "No match was accepted for the title", {
@@ -662,7 +731,14 @@ export class LibraryScan {
         : undefined,
       suggested: suggestion?.name,
     });
-    return { called: true, accept: accepted && item ? { item, candidate, fromSearch: true } : undefined, suggestion, diagnostic };
+    return {
+      called: true,
+      accept: accepted && item
+        ? { item, candidate, fromSearch: true, ...(episodeAccept ? { evidence: "episodes" as const } : {}) }
+        : undefined,
+      suggestion,
+      diagnostic,
+    };
   }
 
   private save() {

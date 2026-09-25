@@ -32,12 +32,16 @@ export interface LibraryEntry {
   meta?: { type: string; id: string; name?: string; poster?: string; background?: string; description?: string; year?: string };
 }
 
+const SEASON_PREFIX = "s(?:eason)?|serie|série|series|sezona|sezóna|řada|rada";
+const SEASON_SUFFIX = "serie|série|series|season|sezona|sezóna|řada|rada";
+
 /** "01 serie", "Season 2", "S03" -- the queue writes the season folder, but hand-copied files differ. */
 export function parseSeason(folder: string): number | null {
-  const match = /^(?:s(?:eason)?|serie|série|series|sezona|sezóna)?[\s._-]*(\d{1,3})(?:\s*(?:serie|série|season|sezona|sezóna))?$/i.exec(folder.trim())
-    ?? /(?:^|\D)s(\d{1,3})(?:\D|$)/i.exec(folder.trim());
-  const value = match ? Number(match[1]) : NaN;
-  return Number.isFinite(value) ? value : null;
+  const name = folder.trim();
+  const match = new RegExp(`^(?:${SEASON_PREFIX})?[\\s._-]*(\\d{1,3})(?:[\\s._-]*(?:${SEASON_SUFFIX}))?$`, "i").exec(name)
+    ?? /(?:^|\D)s(\d{1,3})(?:\D|$)/i.exec(name);
+  const season = match ? Number(match[1]) : NaN;
+  return Number.isFinite(season) ? season : null;
 }
 
 /** "07 - Name", "S01E07 Name", "7." -- the episode number comes first, the rest is the name. */

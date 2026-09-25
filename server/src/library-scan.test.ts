@@ -603,6 +603,85 @@ test("a wrong kind or a year off by more than two is never auto-bound", async ()
   } finally { await wrongYear.close(); }
 });
 
+test("a namesake series is bound when its episodes are the ones on disk", async () => {
+  const blue = {
+    key: "Blue",
+    kind: "series" as const,
+    relative: "Blue",
+    sampleFiles: [
+      "Blue/Season 1/Blue.S01E01.Magic.Xylophone.mkv",
+      "Blue/Season 1/Blue.S01E02.Hospital.mkv",
+    ],
+  };
+  const candidates = [
+    { id: "tt-blue-1", type: "series", name: "Blue", voteCount: 3000 },
+    { id: "tt-blue-2", type: "series", name: "Blue", voteCount: 3000 },
+  ];
+  const h = await harness({
+    units: async () => [blue],
+    search: async () => candidates,
+    metadata: async (_addons, _type, id) => id === "tt-blue-1"
+      ? { id, type: "series", name: "Blue", videos: [
+        { season: 1, episode: 1, name: "Magic Xylophone" },
+        { season: 1, episode: 2, name: "Hospital" },
+      ] }
+      : { id, type: "series", name: "Blue", videos: [
+        { season: 1, episode: 1, name: "Unrelated" },
+        { season: 1, episode: 2, name: "Something Else" },
+      ] },
+  });
+  try {
+    await h.scan.start();
+    await waitFor(() => h.scan.snapshot().status === "completed");
+    assert.equal(h.scan.snapshot().matched, 1);
+    assert.equal(h.store.meta.Blue?.id, "tt-blue-1");
+    assert.equal(h.store.suggestions.Blue, undefined);
+  } finally { await h.close(); }
+});
+
+test("a series proposal stays a proposal when the episode lists cannot be read", async () => {
+  const blue = {
+    key: "Blue",
+    kind: "series" as const,
+    relative: "Blue",
+    sampleFiles: [
+      "Blue/Season 1/Blue.S01E01.Magic.Xylophone.mkv",
+      "Blue/Season 1/Blue.S01E02.Hospital.mkv",
+    ],
+  };
+  const h = await harness({
+    units: async () => [blue],
+    search: async () => [
+      { id: "tt-blue-1", type: "series", name: "Blue", voteCount: 3000 },
+      { id: "tt-blue-2", type: "series", name: "Blue", voteCount: 3000 },
+    ],
+    metadata: async () => null,
+  });
+  try {
+    await h.scan.start();
+    await waitFor(() => h.scan.snapshot().status === "completed");
+    assert.equal(h.scan.snapshot().matched, 0);
+    assert.equal(h.store.meta.Blue, undefined);
+    assert.equal(h.store.suggestions.Blue?.id, "tt-blue-1", "the proposal remains the ranked first candidate");
+  } finally { await h.close(); }
+});
+
+test("episode evidence is never asked for a movie", async () => {
+  const h = await harness({
+    units: async () => [movie("Blue")],
+    search: async () => [
+      { id: "tt-blue-1", type: "movie", name: "Blue", voteCount: 3000 },
+      { id: "tt-blue-2", type: "movie", name: "Blue", voteCount: 3000 },
+    ],
+  });
+  try {
+    await h.scan.start();
+    await waitFor(() => h.scan.snapshot().status === "completed");
+    assert.equal(h.store.suggestions.Blue?.reason, "ambiguous");
+    assert.deepEqual(h.metas, [], "no metadata lookup happens for a movie proposal");
+  } finally { await h.close(); }
+});
+
 test("a candidate that resolves to no metadata record is not bound", async () => {
   const h = await harness({
     units: async () => [movie("Foo")],

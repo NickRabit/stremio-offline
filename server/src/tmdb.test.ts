@@ -255,6 +255,14 @@ test("a title search reads the tv endpoint and the series name", async () => {
   }]);
 });
 
+test("a series row carries its origin countries for the matcher", async () => {
+  clearTmdbCache();
+  const result = await tmdbSearch("series", "The Office", config, async () => json({
+    results: [{ id: 2316, name: "The Office", original_name: "The Office", first_air_date: "2005-03-24", origin_country: ["US"] }],
+  }));
+  assert.deepEqual(result[0]?.originCountry, ["US"]);
+});
+
 test("a search row carries the vote count and the release day the matcher needs", async () => {
   clearTmdbCache();
   const result = await tmdbSearch("movie", "Navrat do budoucnosti", config, async () => json({

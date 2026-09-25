@@ -61,6 +61,12 @@ test("the web of a release is a tag, the Web of a name is a name", () => {
   assert.equal(parseMediaName("Charlotte's.Web.2006.WEBRip.x264").title, "Charlotte's Web");
 });
 
+test("brackets separate fields without losing their content", () => {
+  const result = parseMediaName("Transformers[2007]DvDrip[Eng]-aXXo");
+  assert.equal(result.title, "Transformers");
+  assert.equal(result.year, 2007);
+});
+
 test("digits glued to SxxExx are not a year", () => {
   const result = parseMediaPath("Show.S2020E01.mkv");
   assert.equal(result.year, undefined);
@@ -95,6 +101,15 @@ test("a folder that only looks like a library id still counts as a parent", () =
 
 test("a library root folder keeps its own name", () => {
   assert.equal(parseMediaPath("lib_00000001/Heat (1995)").title, "Heat");
+});
+
+test("a trailing country tag is read as a country, not as part of the name", () => {
+  const office = parseMediaPath("The Office (US)");
+  assert.equal(office.title, "The Office");
+  assert.equal(office.country, "US");
+  assert.equal(parseMediaPath("The Office (UK)").country, "UK");
+  assert.equal(parseMediaPath("Doctor Who (2005)").year, 2005, "a parenthesised year is not a country");
+  assert.equal(parseMediaPath("Doctor Who (2005)").country, undefined);
 });
 
 test("a part signature canonicalises the number, ignores tags and leaves segments alone", () => {

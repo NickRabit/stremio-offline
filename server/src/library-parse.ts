@@ -36,6 +36,8 @@ export interface ParsedMedia {
   title: string;
   query: string;
   year?: number;
+  /** A trailing country tag such as "(US)" or "(UK)". */
+  country?: string;
   season?: number;
   episode?: number;
   /** The name of the unit's single film when it differs from the folder it sits in. */
@@ -48,6 +50,7 @@ const GENRES = new Set(CZECH_GENRE_TOKENS.map((token) => token.toLowerCase()));
 const PHRASES = [...QUALITY_PHRASES].sort((a, b) => b.length - a.length);
 const YEAR_TOKEN = /^(19|20)\d{2}$/;
 const PAREN_YEAR = /\((19|20)\d{2}\)/;
+const COUNTRY_TAG = /\s*\(([A-Z]{2})\)\s*$/;
 const TAGGED_EPISODE = /\bS(\d{1,3})E(\d{1,4})\b/i;
 const X_EPISODE = /\b(\d{1,2})x(\d{1,4})\b/i;
 const CHANNEL = /\b(?:[57]\.1|2\.0)\b/gi;
@@ -427,9 +430,15 @@ export function parseMediaName(name: string): ParsedMedia {
   const original = name;
   const releaseGroup = original.match(RELEASE_GROUP)?.[0].slice(1);
   const { rest: withoutHints, hints } = extractHints(original);
+  // A bracket is punctuation between fields, not part of the title: "[2007]" is a year and
+  // "[Eng]" is a language tag that the quality list drops.
+  const separated = withoutHints.replace(/[\[\]]/g, " ");
+  const countryTag = COUNTRY_TAG.exec(separated);
+  const country = countryTag?.[1];
+  const withoutCountry = countryTag ? separated.slice(0, countryTag.index) : separated;
 
   let year: number | undefined;
-  const firstYear = takeYear(splitHyphenRuns(withoutHints));
+  const firstYear = takeYear(splitHyphenRuns(withoutCountry));
   year = firstYear.year;
   let working = firstYear.rest;
 
@@ -452,7 +461,8 @@ export function parseMediaName(name: string): ParsedMedia {
     const before = tokens.join(" ");
     let joined = stripPhrases(before);
     tokens = dropQualityTokens(joined.split(" ").filter(Boolean));
-    if (releaseGroup && tokens.length > 1 && tokens[tokens.length - 1]!.toLowerCase() === releaseGroup.toLowerCase()) {
+    const trailing = tokens[tokens.length - 1]?.replace(/^[.\s_-]+/, "").toLowerCase();
+    if (releaseGroup && tokens.length > 1 && trailing === releaseGroup.toLowerCase()) {
       tokens = tokens.slice(0, -1);
     }
     if (tokens.join(" ") === before) break;
@@ -479,6 +489,7 @@ export function parseMediaName(name: string): ParsedMedia {
   const query = bilingualQuery(title);
   const result: ParsedMedia = { title, query };
   if (year != null) result.year = year;
+  if (country) result.country = country;
   if (season != null) result.season = season;
   if (episode != null) result.episode = episode;
   if (hints.imdb || hints.tmdb || hints.tvdb) result.providerHints = hints;
