@@ -14,11 +14,11 @@ export const describeError = (error: unknown): string => error instanceof ApiErr
   ? serverText(error.messageKey, error.message, error.vars)
   : error instanceof Error ? error.message : String(error);
 
+export interface ProgressPayload { key: string; position: number; duration: number; title?: string; path?: string; poster?: string; addonKey?: string }
+
 /** Every call gets a deadline. A stalled connection would otherwise be held until the
  * operating system gives up, which takes minutes, and six of those exhaust the browser's
  * per-origin pool -- the app then looks dead on that one device while others are fine. */
-export interface ProgressPayload { key: string; position: number; duration: number; title?: string; path?: string; poster?: string; addonKey?: string }
-
 async function request<T>(url: string, options?: RequestInit & { timeoutMs?: number }): Promise<T> {
   const { timeoutMs = 30_000, ...init } = options ?? {};
   let response: Response;

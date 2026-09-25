@@ -85,6 +85,8 @@ let mode: LayoutMode = "connect";
 let loadFailure: ProbeFailure | null = null;
 let localBackend: LocalBackend | null = null;
 let localConnection: LocalBackendConnection | null = null;
+/** Quitting retires the page itself, so a window closing on the way out does not wait for it again. */
+let quitting = false;
 const preparedPartitions = new Set<string>();
 let profileStore: ProfileStore = { profiles: [], selectedProfileId: null };
 
@@ -331,7 +333,7 @@ const createShell = () => {
   window.on("leave-full-screen", () => applyMode(mode));
   let retired = false;
   window.on("close", (event) => {
-    if (retired || !liveRemote()) return;
+    if (retired || quitting || !liveRemote()) return;
     event.preventDefault();
     retired = true;
     void retireRemote().finally(() => window.close());
@@ -574,6 +576,7 @@ if (process.argv.includes(SMOKE_LOCAL_BACKEND)) {
     if (backendShutdownComplete) return;
     event.preventDefault();
     if (backendShutdown) return;
+    quitting = true;
     backendShutdown = retireRemote().then(closeLocalBackend).finally(() => {
       backendShutdownComplete = true;
       app.quit();

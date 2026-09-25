@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
+import { readdir, readFile } from "node:fs/promises";
+import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { ffmpegPath, ffprobePath } from "./media-tools.js";
 
 test("an unset variable keeps the bare name PATH resolves", () => {
@@ -39,4 +42,14 @@ test("the process environment is the default", (t) => {
   assert.equal(ffmpegPath(), "/tmp/ffmpeg");
   delete process.env.FFMPEG_PATH;
   assert.equal(ffmpegPath(), "ffmpeg");
+});
+
+test("no process in the server is started by a bare ffmpeg or ffprobe name", async () => {
+  const root = path.dirname(fileURLToPath(import.meta.url));
+  const files = (await readdir(root, { recursive: true }))
+    .filter((file) => file.endsWith(".ts") && !file.endsWith(".test.ts") && file !== "media-tools.ts");
+  const bare = /\b(?:spawn|execFile\)?|run)\(\s*["'`]ff(?:mpeg|probe)["'`]/;
+  const offenders = [];
+  for (const file of files) if (bare.test(await readFile(path.join(root, file), "utf8"))) offenders.push(file);
+  assert.deepEqual(offenders, [], "start them through ffmpegPath() or ffprobePath()");
 });
