@@ -110,11 +110,17 @@ The remote desktop shell ships with named server profiles and a macOS arm64
 packaging prototype (`.dmg`/`.zip`) with the native save-to-device handoff and
 the reviewed Electron Fuse V1 hardening applied at package time;
 [desktop/README.md](../desktop/README.md) records how it stands and what it
-deliberately leaves out. What is still outstanding for a distributable remote
-client is signing, notarization, update delivery and clean-install verification,
-and the cookie-encryption fuse stays off until there is a stable signing
-identity to tie the macOS keychain key to. Phase 2, starting and managing the
-local backend from the shell, follows that release work.
+deliberately leaves out. That shell came with
+[PR #211](https://github.com/NickRabit/stremio-offline/pull/211).
+
+The current desktop step is the locally managed backend. The connection screen
+gains a local option that starts the existing server as a managed utility
+process bound to loopback, keeps its state and downloads under the Electron user
+data directory, opens it in the same server view and stops it again on
+disconnect or quit, while the remote profiles keep working. Signing,
+notarization, update delivery and clean-install verification stay outstanding
+for a distributable client, and the cookie-encryption fuse stays off until a
+stable signing identity exists to tie the macOS keychain key to.
 
 ## Engineering health
 

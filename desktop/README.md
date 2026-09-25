@@ -1,9 +1,36 @@
 # Desktop shell — macOS arm64 prototype packaging
 
 The `desktop` workspace is an Electron shell that opens an existing Stremio
-Offline server. It keeps all remote-server behaviour: it renders the connection
-page locally and points a second view at the server origin you configure, exactly
-as running the workspace from source does. Packaging changes nothing about that.
+Offline server, or runs one on this computer. It keeps all remote-server
+behaviour: it renders the connection page locally and points a second view at
+the server origin you configure, exactly as running the workspace from source
+does.
+
+## Running the backend on this computer
+
+**Run on this computer** on the connection screen starts the compiled server as
+a managed Electron utility process. The remote profiles stay as they were; the
+local option is a second way into the same shell.
+
+- The backend binds to `127.0.0.1` only, asks the OS for a free port the first
+  time (`PORT=0`) and is opened at the port it reports back. The port it took
+  last is remembered in `<userData>/local-backend.json`, tried again on the next
+  start to keep the local web origin stable, and given up for a fresh port 0 if
+  something else holds it. The remembered port is not a saved server profile.
+- State lives in `<userData>/instance`, downloads go to `<userData>/downloads`.
+- The local page uses one persistent session partition, so its cookies survive a
+  reconnect even when the port changed.
+- The shell opens the server only after its `/api/status` answers with this
+  app's status, and stops it on **Disconnect**, on a successful connection to a
+  remote profile and when the app quits. If the backend exits on its own, the
+  shell returns to the connection screen with a localized message and the local
+  option starts it again.
+- A second launch of the app focuses the window that is already open instead of
+  starting a second backend against the same instance directory.
+
+**FFmpeg is not bundled.** Direct play and every server feature that does not
+need it work as they do on a server; remux and transcode need an `ffmpeg`
+executable that the local backend process can find on its `PATH`.
 
 The packaging sections below cover the packaging prototype only. It produces a
 macOS arm64 `.dmg` and `.zip` from the compiled shell. It is deliberately not a
@@ -43,12 +70,23 @@ npm ci
 npm run test -w desktop
 npm run package:mac:arm64 -w desktop
 npm run verify:fuses -w desktop
+npm run smoke:packaged -w desktop
 ```
 
 `package:mac:arm64` builds the TypeScript (`dist/main.js`, the modules it
-imports, and `dist/preload.js`) and then runs electron-builder for the `arm64`
-target. `verify:fuses` reads the applied Electron fuses back out of the built
-`.app`. CI runs the same scripts.
+imports, and `dist/preload.js`), builds the root web and server workspaces,
+stages them under `desktop/runtime/` (the server's compiled output, the web
+bundle and the server's production dependencies) and then runs electron-builder
+for the `arm64` target. CI uses this same script, and then
+`npm run smoke:packaged -w desktop`, which starts the packaged app's utility
+backend, waits for its ready message, reads `/api/status` and stops it again.
+`verify:fuses` reads the applied Electron fuses back out of the built `.app`.
+CI runs both post-package checks before uploading artifacts.
+
+The staged tree is what the local backend runs from source as well: after
+`npm run build` and `npm run stage:local-backend -w desktop`,
+`npm run dev -w desktop` opens a window whose local option runs
+`desktop/runtime/server/dist/index.js`.
 
 ## Artifacts
 
@@ -61,10 +99,11 @@ electron-builder writes both artifacts into `desktop/release/`:
 
 The bundle is `Stremio Offline.app` with identifier `com.stremiooffline.desktop`
 and version taken from the workspace manifest. Inside it,
-`Contents/Resources/app.asar` holds only the compiled desktop modules
-(`dist/*.js`), `static/connection.html` and `package.json`. TypeScript sources,
-tests, the spike files, and the root `server` and `web` workspaces are not
-packaged.
+`Contents/Resources/app.asar` holds the compiled desktop modules (`dist/*.js`),
+`static/connection.html`, `package.json` and the staged `runtime/` tree
+(`runtime/server/dist`, `runtime/server/node_modules`, `runtime/web`).
+TypeScript sources, tests, the spike files, and the root `server` and `web`
+workspaces are not packaged.
 
 ## Runtime hardening
 
@@ -109,15 +148,14 @@ review yet, so an unconfigured or newly-added fuse cannot ship unnoticed.
 ## Continuous integration
 
 The **Desktop package** workflow (`.github/workflows/desktop-package.yml`) runs
-on pull requests that touch `desktop/**`, the root `package.json` /
-`package-lock.json`, or the workflow itself, and can also be started by hand
-with **Run workflow**. It runs `npm run build -w desktop` followed by
-`npm run package:mac:arm64 -w desktop` on a `macos-14` runner, then
-`npm run verify:fuses -w desktop` reads the fuses back out of the packaged
-`.app` and fails the job before anything is uploaded if one of them is not set
-as reviewed. The DMG and ZIP are uploaded as separate artifacts kept for seven
-days. It does not publish a GitHub Release and does not touch the server image
-flow.
+on pull requests that touch `desktop/**`, `server/**`, `web/**`, the root
+`package.json` / `package-lock.json`, or the workflow itself, and can also be
+started by hand with **Run workflow**. It runs
+`npm run package:mac:arm64 -w desktop`, which builds the web and server
+workspaces and stages them. It then
+smoke-tests the packaged app's local backend and checks the fuses before
+uploading the DMG and ZIP as separate artifacts kept for seven days. It does
+not publish a GitHub Release and does not touch the server image flow.
 
 ## Limits
 
@@ -133,8 +171,11 @@ It is **not** a signed, notarized, auto-updating release:
 - **No automatic updates.** Nothing checks for or installs a newer version.
 - **arm64 only.** There is no Intel or universal build, and no promise to add
   one here.
-- **No local backend.** The shell still expects a Stremio Offline server that is
-  already running and reachable; starting one from the app is later work.
+- **No bundled FFmpeg and no installer for one.** Remux and transcode need an
+  `ffmpeg` the local backend can run; the app neither ships it nor installs it.
+- **No data migration.** The local backend starts with an empty instance
+  directory; pointing it at an existing Docker or NAS install is not part of
+  this prototype.
 - **No clean-install verification or support promise.** The package has not been
   verified from a clean install, and it is not a supported distribution.
 

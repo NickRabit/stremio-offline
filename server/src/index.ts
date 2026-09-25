@@ -29,6 +29,7 @@ import { tmdbGallery, tmdbMeta, type TmdbConfig } from "./tmdb.js";
 import { createLibraryCandidates } from "./library-candidates.js";
 import { ExternalIdStore } from "./external-ids.js";
 import { currentLevel, flushLog, initLogger, log, parseLevel, startLogMaintenance, setLevel } from "./logger.js";
+import { resolveListenTarget, startServer } from "./server-start.js";
 import { browseDirectory, describePath, emptiedFolders, entryDirectory, holdsLibraryRoot, isPathWithin, isVideo, listVideos, moveDestination, orphanedCatalogKeys, pageFiles, remapPath, scanLibrary, summarize, type FoundFile, type LibraryEntry } from "./library.js";
 import { browseMeta, cacheFieldsFromMeta, episodeKey, episodeNumberOf, episodesFromMeta, dropKeyed, folderMosaicUnits, knownEntryForUnit, knownTitleEntry, knownTitleOf, knownTitleForUnit, matchKeyFor, mosaicIdentities, mosaicSkipped, needsBackfill, needsEpisodes, staleSuggestionKeys, titleUnits, unitFor, unmatchAt, withSkipFlag, type GalleryEntry, type LibraryMetaRecord, type TitleKind, type TitleUnit } from "./library-match.js";
 import { LibraryScan } from "./library-scan.js";
@@ -2225,8 +2226,21 @@ process.on("unhandledRejection", (reason) => {
 process.on("uncaughtException", (error) => {
   log("ERROR", "Unhandled exception, the server keeps running", { reason: error instanceof Error ? error.stack ?? error.message : String(error) });
 });
-const port = Number(process.env.PORT ?? 8080);
-app.listen(port, "0.0.0.0", () => { markServerReady(); log("INFO", "Stremio Offline is listening", { port }); });
+// `HOST` is what the desktop shell narrows to loopback; a plain install keeps the whole
+// interface. The port that comes back is the one the socket took, not the one requested.
+const listenTarget = resolveListenTarget();
+try {
+  const bound = await startServer({ app, ...listenTarget });
+  markServerReady();
+  log("INFO", "Stremio Offline is listening", { port: bound.port, address: bound.address });
+} catch (error) {
+  log("ERROR", "Stremio Offline could not start", {
+    ...listenTarget,
+    reason: error instanceof Error ? error.message : String(error),
+  });
+  // A short grace period, so the failure message reaches the desktop before this process goes.
+  setTimeout(() => process.exit(1), 50);
+}
 for (const signal of ["SIGTERM", "SIGINT"] as const) {
   process.once(signal, () => {
     log("INFO", "Shutting down", { signal });

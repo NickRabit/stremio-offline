@@ -1,7 +1,7 @@
 {
   "name": "@stremio-offline/desktop",
   "private": true,
-  "version": "0.4.74",
+  "version": "0.4.75",
   "description": "Desktop client for connecting to Stremio Offline servers",
   "author": "Stremio Offline contributors",
   "license": "MIT",
@@ -9,12 +9,14 @@
   "main": "dist/main.js",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "dev": "tsc -p tsconfig.json && electron .",
-    "start": "electron .",
+    "dev": "npm run build --prefix .. && npm run build && npm run stage:local-backend && electron .",
+    "start": "npm run dev",
     "test": "tsx --test src/*.test.ts",
     "spike:utility": "electron spike/run.mjs",
     "verify:fuses": "node scripts/verify-fuses.mjs",
-    "package:mac:arm64": "npm run build && electron-builder --mac --arm64 --publish never"
+    "stage:local-backend": "node scripts/stage-local-backend.mjs",
+    "smoke:packaged": "node scripts/smoke-packaged.mjs",
+    "package:mac:arm64": "npm run build --prefix .. && npm run build && npm run stage:local-backend && electron-builder --mac --arm64 --publish never"
   },
   "devDependencies": {
     "@electron/fuses": "1.8.0",
@@ -45,6 +47,7 @@
     "files": [
       "dist/**/*.js",
       "static/connection.html",
+      "runtime/**",
       "package.json"
     ],
     "mac": {

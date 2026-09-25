@@ -7,6 +7,8 @@ on:
   pull_request:
     paths:
       - "desktop/**"
+      - "server/**"
+      - "web/**"
       - "package.json"
       - "package-lock.json"
       - ".github/workflows/desktop-package.yml"
@@ -34,6 +36,9 @@ jobs:
       # Read the fuses back from the packaged .app, so a build with an
       # unconfigured fuse fails here instead of being uploaded.
       - run: npm run verify:fuses -w desktop
+      # The packaged app runs the staged server from inside the archive and proves the
+      # production dependencies came along, before anything is uploaded.
+      - run: npm run smoke:packaged -w desktop
       - uses: actions/upload-artifact@v4
         with:
           name: stremio-offline-macos-arm64-dmg

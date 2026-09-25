@@ -35,6 +35,7 @@
     deleteProfile: (id: string) => ipcRenderer.invoke("desktop:delete-profile", id),
     selectProfile: (id: string | null) => ipcRenderer.invoke("desktop:select-profile", id),
     connect: (id: string) => ipcRenderer.invoke("desktop:connect", id),
+    connectLocal: () => ipcRenderer.invoke("desktop:connect-local"),
     disconnect: () => ipcRenderer.invoke("desktop:disconnect") as Promise<void>,
   });
 })();
