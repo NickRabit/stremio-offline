@@ -1,0 +1,47 @@
+{
+  "images": {
+    "sonarr": "lscr.io/linuxserver/sonarr@sha256:a5c1a5fecbef946927ab90ad68df319ac5fe644057e5fc18cd993f01ac07b2b2",
+    "radarr": "lscr.io/linuxserver/radarr@sha256:adb6c09d6b729ea5e642c99cea35af72702ef476bf4763f153299ac5db9f0b4f"
+  },
+  "versions": {
+    "sonarr": "4.0.20.3014",
+    "radarr": "6.4.4.10685"
+  },
+  "checks": [
+    {
+      "app": "sonarr",
+      "check": "interactive",
+      "importedSize": 723199,
+      "sha256": "3db062f1ab5d312377416d5113c2656d5eb348c9081d3472216999a83f3d565a"
+    },
+    {
+      "app": "radarr",
+      "check": "interactive",
+      "importedSize": 723199,
+      "sha256": "3db062f1ab5d312377416d5113c2656d5eb348c9081d3472216999a83f3d565a"
+    },
+    {
+      "app": "sonarr",
+      "check": "empty-feed, missing-size, invalid-NZB",
+      "passed": true
+    },
+    {
+      "app": "radarr",
+      "check": "empty-feed, missing-size, invalid-NZB",
+      "passed": true
+    },
+    {
+      "app": "sonarr",
+      "check": "automatic-command",
+      "importedSize": 723199,
+      "sha256": "3db062f1ab5d312377416d5113c2656d5eb348c9081d3472216999a83f3d565a"
+    },
+    {
+      "app": "radarr",
+      "check": "automatic-command",
+      "importedSize": 723199,
+      "sha256": "3db062f1ab5d312377416d5113c2656d5eb348c9081d3472216999a83f3d565a"
+    }
+  ],
+  "passed": true
+}

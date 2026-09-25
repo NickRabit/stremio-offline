@@ -1,0 +1,305 @@
+[
+  {
+    "event": "request",
+    "method": "GET",
+    "path": "/sab/api",
+    "query": {
+      "mode": "version",
+      "output": "json"
+    }
+  },
+  {
+    "event": "request",
+    "method": "GET",
+    "path": "/sab/api",
+    "query": {
+      "mode": "get_config",
+      "output": "json"
+    }
+  },
+  {
+    "event": "request",
+    "method": "GET",
+    "path": "/indexer/api",
+    "query": {
+      "t": "caps"
+    }
+  },
+  {
+    "event": "request",
+    "method": "GET",
+    "path": "/indexer/api",
+    "query": {
+      "t": "tvsearch",
+      "cat": "5000",
+      "extended": "1",
+      "offset": "0",
+      "limit": "100"
+    }
+  },
+  {
+    "event": "request",
+    "method": "GET",
+    "path": "/indexer/api",
+    "query": {
+      "t": "movie",
+      "cat": "2000",
+      "extended": "1",
+      "offset": "0",
+      "limit": "100"
+    }
+  },
+  {
+    "event": "request",
+    "method": "GET",
+    "path": "/indexer/api",
+    "query": {
+      "t": "tvsearch",
+      "cat": "5000",
+      "extended": "1",
+      "offset": "0",
+      "limit": "100",
+      "imdbid": "tt0903747",
+      "season": "1",
+      "ep": "1"
+    }
+  },
+  {
+    "event": "request",
+    "method": "GET",
+    "path": "/get",
+    "query": {
+      "id": "episode"
+    }
+  },
+  {
+    "event": "request",
+    "method": "POST",
+    "path": "/sab/api",
+    "query": {
+      "mode": "addfile",
+      "cat": "stremio-tv",
+      "priority": "-100",
+      "output": "json"
+    }
+  },
+  {
+    "event": "upload",
+    "reference": "episode",
+    "jobId": "ARR220-episode-e98ab29a",
+    "filename": "Breaking.Bad.S01E01.720p.WEB-DL.AAC.H264-ARRLAB.nzb"
+  },
+  {
+    "event": "request",
+    "method": "GET",
+    "path": "/indexer/api",
+    "query": {
+      "t": "movie",
+      "cat": "2000",
+      "extended": "1",
+      "offset": "0",
+      "limit": "100",
+      "tmdbid": "10378",
+      "imdbid": "1254207"
+    }
+  },
+  {
+    "event": "request",
+    "method": "GET",
+    "path": "/get",
+    "query": {
+      "id": "movie"
+    }
+  },
+  {
+    "event": "request",
+    "method": "POST",
+    "path": "/sab/api",
+    "query": {
+      "mode": "addfile",
+      "cat": "stremio-movies",
+      "priority": "-100",
+      "output": "json"
+    }
+  },
+  {
+    "event": "upload",
+    "reference": "movie",
+    "jobId": "ARR220-movie-fed29c46",
+    "filename": "Big.Buck.Bunny.2008.720p.WEB-DL.AAC.H264-ARRLAB.nzb"
+  },
+  {
+    "event": "request",
+    "method": "GET",
+    "path": "/addon/stream/series/tt0903747:1:1.json",
+    "query": {}
+  },
+  {
+    "event": "request",
+    "method": "GET",
+    "path": "/fixture.mkv",
+    "query": {}
+  },
+  {
+    "event": "download-completed",
+    "jobId": "ARR220-episode-e98ab29a",
+    "bytes": 723199
+  },
+  {
+    "event": "request",
+    "method": "GET",
+    "path": "/addon/stream/movie/tt1254207.json",
+    "query": {}
+  },
+  {
+    "event": "download-completed",
+    "jobId": "ARR220-movie-fed29c46",
+    "bytes": 723199
+  },
+  {
+    "event": "request",
+    "method": "GET",
+    "path": "/sab/api",
+    "query": {
+      "mode": "queue",
+      "start": "0",
+      "limit": "0",
+      "category": "stremio-tv",
+      "output": "json"
+    }
+  },
+  {
+    "event": "request",
+    "method": "GET",
+    "path": "/sab/api",
+    "query": {
+      "mode": "history",
+      "start": "0",
+      "limit": "60",
+      "category": "stremio-tv",
+      "output": "json"
+    }
+  },
+  {
+    "event": "request",
+    "method": "GET",
+    "path": "/sab/api",
+    "query": {
+      "mode": "history",
+      "name": "delete",
+      "del_files": "1",
+      "value": "ARR220-episode-e98ab29a",
+      "archive": "1",
+      "output": "json"
+    }
+  },
+  {
+    "event": "delete",
+    "jobId": "ARR220-episode-e98ab29a",
+    "del_files": "1",
+    "archive": "1"
+  },
+  {
+    "event": "request",
+    "method": "GET",
+    "path": "/sab/api",
+    "query": {
+      "mode": "queue",
+      "start": "0",
+      "limit": "0",
+      "category": "stremio-movies",
+      "output": "json"
+    }
+  },
+  {
+    "event": "request",
+    "method": "GET",
+    "path": "/sab/api",
+    "query": {
+      "mode": "history",
+      "start": "0",
+      "limit": "60",
+      "category": "stremio-movies",
+      "output": "json"
+    }
+  },
+  {
+    "event": "request",
+    "method": "GET",
+    "path": "/sab/api",
+    "query": {
+      "mode": "history",
+      "name": "delete",
+      "del_files": "1",
+      "value": "ARR220-movie-fed29c46",
+      "archive": "1",
+      "output": "json"
+    }
+  },
+  {
+    "event": "delete",
+    "jobId": "ARR220-movie-fed29c46",
+    "del_files": "1",
+    "archive": "1"
+  },
+  {
+    "event": "upload",
+    "reference": "episode",
+    "jobId": "ARR220-episode-8a8f0155",
+    "filename": "Breaking.Bad.S01E01.720p.WEB-DL.AAC.H264-ARRLAB.nzb"
+  },
+  {
+    "event": "upload",
+    "reference": "movie",
+    "jobId": "ARR220-movie-a4c14e1e",
+    "filename": "Big.Buck.Bunny.2008.720p.WEB-DL.AAC.H264-ARRLAB.nzb"
+  },
+  {
+    "event": "download-completed",
+    "jobId": "ARR220-episode-8a8f0155",
+    "bytes": 723199
+  },
+  {
+    "event": "download-completed",
+    "jobId": "ARR220-movie-a4c14e1e",
+    "bytes": 723199
+  },
+  {
+    "event": "request",
+    "method": "GET",
+    "path": "/sab/api",
+    "query": {
+      "mode": "history",
+      "name": "delete",
+      "del_files": "1",
+      "value": "ARR220-episode-8a8f0155",
+      "archive": "1",
+      "output": "json"
+    }
+  },
+  {
+    "event": "delete",
+    "jobId": "ARR220-episode-8a8f0155",
+    "del_files": "1",
+    "archive": "1"
+  },
+  {
+    "event": "request",
+    "method": "GET",
+    "path": "/sab/api",
+    "query": {
+      "mode": "history",
+      "name": "delete",
+      "del_files": "1",
+      "value": "ARR220-movie-a4c14e1e",
+      "archive": "1",
+      "output": "json"
+    }
+  },
+  {
+    "event": "delete",
+    "jobId": "ARR220-movie-a4c14e1e",
+    "del_files": "1",
+    "archive": "1"
+  }
+]

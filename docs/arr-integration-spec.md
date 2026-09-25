@@ -1,6 +1,9 @@
 # Sonarr/Radarr bridge: research and agent assignment
 
-Status: proposed, not implemented. Research date: 2026-09-24.
+Status: proposed, protocol feasibility demonstrated; product not implemented.
+Research date: 2026-09-24.
+Assignment updated: 2026-09-25. Start with the
+[agent task](arr-integration-agent-task.md).
 Related: [issue #220](https://github.com/NickRabit/stremio-offline/issues/220).
 Repository baseline: `e875b15c3d27622b24bfff25c21298faaf209a5d`.
 
@@ -18,8 +21,12 @@ by this adapter. Do not claim general NZB support or production compatibility
 until real Sonarr and Radarr installations pass the experiment.
 
 This document assigns the experiment first and describes the subsequent MVP.
-It does not authorize treating an unverified protocol sketch as a finished
-feature. No Sonarr/Radarr containers were run during this research.
+It does not authorize treating a protocol demonstration as a finished feature.
+An isolated experiment now demonstrates search, envelope upload, HTTP transfer
+and import in Sonarr 4.0.20.3014 and Radarr 6.4.4.10685. See the
+[experiment report](research/arr-bridge-probe/README.md) and its executable
+probe. The probe substitutes a tiny adapter for the application's real queue;
+authentication, durability and production source matching remain to be built.
 
 ## Findings
 
@@ -46,7 +53,8 @@ The inspected [Sonarr][sonarr-nzb] and [Radarr][radarr-nzb] validators require a
 XML `nzb` root and at least one `file` child. This is evidence that an envelope
 may work, not a stable promise that a minimal fake NZB will always be accepted.
 Use a well-formed, explicitly versioned envelope with an opaque server-issued
-release reference, then prove the complete path in real applications. Reject
+release reference. The experiment preserved this reference through both real
+applications; removing the `file` child failed before upload. Reject
 ordinary NZBs at the adapter; never interpret arbitrary segment IDs as URLs.
 
 ### Existing application seams
@@ -92,6 +100,77 @@ watch list comes from, polling cost, stable first-seen dates and release
 deduplication before promising ongoing automation. Do not close issue #220
 merely because the manual search demonstration succeeds.
 
+### Corrections established by the experiment
+
+- **First-run validation needs results.** Both clients issue a category-only
+  search during indexer validation, even with RSS disabled, and reject an empty
+  response. Prepare a small authenticated recent-results cache by resolving an
+  administrator-selected movie/episode against the enabled addons during
+  setup. Only return genuine, still-selectable sources. If no source exists,
+  show an actionable setup failure; never fabricate a validation release or
+  recommend bypassing client validation. The cache is not a universal RSS feed.
+- **Download URLs become history.** Both applications retain them. Use a
+  release-scoped, short-lived bearer ticket in an envelope URL, never the
+  long-lived integration key or a provider URL. The revised probe successfully
+  fetched envelopes using a ticket without the indexer key. The ticket is still
+  a secret while valid: redact it and keep its privileges narrow.
+- **Release ID and attempt ID differ.** Keep the release GUID stable across
+  searches. Keep the download ID stable only for an accepted attempt and its
+  retries. An explicit re-download after removal needs a new attempt ID;
+  Sonarr treated a reused previously imported ID as already imported and
+  removed the new queue item in the experiment.
+- **Directory names affect parsing.** Sonarr misinterpreted a random job
+  directory name as episode information. Use
+  `completed/<attempt-id>/<sanitized-release-title>/<media-file>` and report the
+  release-title directory as SAB `storage`. The corrected path imported
+  successfully. Sanitize the filename separately from the release metadata.
+- **Missing size is not rejected at XML parsing.** Both clients parsed absent
+  size as zero. This does not establish automatic eligibility under normal
+  quality-size limits: the small generated fixture used zero minimum limits.
+  Do not claim unknown-size support without testing ordinary profiles.
+- **SAB paging has a zero-limit case.** Both clients requested queue `limit=0`,
+  meaning all applicable items, and history `limit=60` in this setup. Returning
+  an empty queue for zero would silently break tracking.
+
+### Proposed internal contract
+
+Implement these as small services rather than exposing browser routes to API
+keys. Names are illustrative; reuse existing abstractions where appropriate.
+
+| Record / boundary | Required fields and invariant |
+| --- | --- |
+| Integration | ID, bound user ID, key hash/version, enabled flag, allowed addon keys, allowed categories, staging-root configuration |
+| Release | Random ID, integration ID, addon/media/video identity, source fingerprint and its evidence, known release attributes, first-seen/expiry times |
+| Envelope | Format version, opaque release reference and integrity binding to integration/category; no raw URL, headers, pathname or arbitrary command |
+| Download attempt | Unique queue job ID, integration ID, category, release ID, accepted metadata snapshot, destination and terminal state |
+| Envelope ticket | Random or authenticated opaque value, release/integration binding, expiry and key version; retrieval cannot enqueue or read another resource |
+
+Suggested initial bounds: five-minute search cache, 24-hour envelope tickets,
+seven-day unclaimed release retention and at most 10,000 unclaimed records per
+integration. Measure these in the real-addon pilot and document any adjustment.
+Never evict a record still needed by an accepted attempt. Keep ticket retrieval
+retryable within its validity; a one-shot GET can break *arr's network retries.
+Check current permissions on both retrieval and upload, even for an otherwise
+valid ticket/envelope. Reject malformed or oversized multipart/XML input and
+disable external entity resolution.
+
+Persist integration/release/category identity with the queue job in the same
+durable write that accepts it. Reconstruct the idempotency index from those
+jobs after restart, rather than relying on an independent mapping file whose
+write can be lost after enqueue. Serialize simultaneous grabs. Never return an
+accepted ID before that write succeeds. A retained attempt may be retried;
+removing history ends that attempt, so later intentional grabs get a new ID.
+Define a brief retry tombstone or explicit re-download operation to distinguish
+a delayed transport retry from a new user request after removal.
+
+Give adapter endpoints their own authentication middleware; do not add them
+to a general unauthenticated `/api` exception. Proposed route split:
+`/api/arr/indexer`, `/api/arr/sab/api`, `/api/arr/envelopes/:ticket`, and normal
+session-authenticated administrator configuration routes. Confirm configured
+base paths and reverse-proxy URL prefixes in the real-client harness. Bind
+generated absolute URLs to configured public origin, not an arbitrary Host
+header. Never permit the adapter's `get_config` to expose general app settings.
+
 ## Assignment to the implementing agent
 
 ### Phase 0: prove compatibility before product work
@@ -100,7 +179,8 @@ merely because the manual search demonstration succeeds.
    `main`; preserve other worktrees and local changes. Record the tested app
    versions and container image digests. Upstream `develop` inspection is not
    evidence about an installed stable release.
-2. Build a disposable integration harness with unmodified Sonarr and Radarr,
+2. Extend the provided disposable protocol probe into an application integration
+   harness with unmodified Sonarr and Radarr,
    a fake Stremio addon, and a valid local video fixture. Use separate ports,
    state directories and Docker project name from the user's live installation.
    The video must be long/large enough to pass their import checks; the tiny
@@ -223,8 +303,10 @@ details. Provide copyable indexer URL, client host/port/base path and category,
 plus concise binding/shared-volume instructions. Name the compatibility mode
 honestly and explain that regular NZBs and torrent files are unsupported. Put
 all UI strings in `web/src/i18n/en.ts` and `cs.ts`; use `AppError` catalogue keys
-for interface errors. Credentials and provider URLs must not enter feeds,
-unrelated API responses, logs, screenshots or test transcripts.
+for interface errors. Long-lived credentials and provider URLs must not enter
+feeds, unrelated API responses, logs, screenshots or test transcripts. A feed's
+envelope link may contain only its narrow expiring ticket; redact that ticket
+from logs and evidence too.
 
 ### Acceptance and delivery
 
@@ -234,6 +316,10 @@ unrelated API responses, logs, screenshots or test transcripts.
 | Automatic search command | Works with the same result contract; no claim of RSS discovery |
 | Expired HTTP link | Refreshes the identical source or reports unavailable; never substitutes another release |
 | Duplicate grab and restart | One durable job, stable ID, resumed transfer and retained history |
+| Re-download after import/removal | New attempt ID with the same stable release identity; no premature cleanup |
+| Initial indexer setup | Genuine permission-filtered result cache passes category-only validation; an empty cache has a clear preparation/retry flow |
+| Staging folder parsing | UUIDs and digit-containing attempt IDs cannot override the intended episode identity |
+| Ticket privacy | Download works without a long-lived key in its URL; expired/revoked tickets cannot retrieve an envelope |
 | Failed source / disk full / revoked rights | Accurate nonterminal or failed state; no false completion |
 | Cleanup | Record-only removal preserves data; deletion stays inside the owned staging directory |
 | Isolation | Foreign key, category/job ID and ordinary NZB cannot access or mutate another job |
@@ -261,10 +347,11 @@ scope is actually delivered.
 ## Sources and limits of the research
 
 Upstream code links below are pinned to commits inspected on the research date.
-The recommendation is an engineering inference from those contracts. It is not
-a completed compatibility certification. The experimental agent must resolve
-the exact response schema, missing-size behavior, source fingerprint policy,
-retention limits and stable-release support through the harness.
+The core protocol path is also backed by the version-pinned experiment linked
+above. It is not a completed product compatibility certification. The
+implementing agent must still resolve failure/retry schemas, ordinary-profile
+handling of missing size, source fingerprint policy and retention behavior,
+then extend the harness to the real application and document supported versions.
 
 [sonarr-provider]: https://github.com/Sonarr/Sonarr/blob/cab419ade8ac7fcab5bf80394ee492abd35d5f5a/src/NzbDrone.Core/Download/DownloadClientProvider.cs
 [radarr-provider]: https://github.com/Radarr/Radarr/blob/c90668a520664ad0c91812cfee57c41928ad2148/src/NzbDrone.Core/Download/DownloadClientProvider.cs
