@@ -162,7 +162,9 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
     const root = path.resolve(raw);
     if (!(await stat(root).catch(() => undefined))?.isDirectory()) throw new AppError("The folder does not exist.", "err.pathMissing");
     // A grant is recorded, never inferred: the request names a folder that is already there.
-    if (!store.grants().some((grant) => path.resolve(grant.path) === root)) {
+    // One a grant already covers gets no second, nested grant: revoking that one later would
+    // switch off the libraries under it while the outer grant still reaches them.
+    if (!await insideGrant(libraryGrants(), root)) {
       await store.update((state) => {
         assertStillAdmin(state.users ?? [], actor);
         state.grants = [...(state.grants ?? []), { path: root, source: "user", grantedAt: new Date().toISOString() }];
