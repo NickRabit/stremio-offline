@@ -1,7 +1,7 @@
 {
   "name": "@stremio-offline/desktop",
   "private": true,
-  "version": "0.4.75",
+  "version": "0.4.76",
   "description": "Desktop client for connecting to Stremio Offline servers",
   "author": "Stremio Offline contributors",
   "license": "MIT",
@@ -52,7 +52,8 @@
     ],
     "mac": {
       "category": "public.app-category.video",
-      "identity": null,
+      "hardenedRuntime": true,
+      "notarize": true,
       "artifactName": "Stremio-Offline-${version}-${arch}.${ext}",
       "target": [
         {
