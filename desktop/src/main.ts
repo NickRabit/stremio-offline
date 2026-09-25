@@ -37,6 +37,8 @@ type LocalConnectResult =
 const ALLOWED_PERMISSIONS = new Set<string>(["fullscreen", "clipboard-sanitized-write"]);
 const ABORTED = -3;
 const DOWNLOAD_NOTICE_INTERVAL = 500;
+/** How long a server page gets to save the position and stop playback before its view goes. */
+const RETIRE_TIMEOUT_MS = 1_500;
 
 const CONNECTION_PAGE = fileURLToPath(new URL("../static/connection.html", import.meta.url));
 const CONNECTION_PRELOAD = fileURLToPath(new URL("./preload.js", import.meta.url));
@@ -153,6 +155,29 @@ const failConnection = (reason: ProbeFailure) => {
     notifyConnection(messageFor(reason));
   }
   if (wasConnected) blankRemote();
+};
+
+/**
+ * Loading a blank page runs the server page's `pagehide`, which saves the playback position and
+ * stops the session with keepalive requests; closing the contents outright gives it no such
+ * chance. Bounded, because a page that never finishes unloading must not hold the shell.
+ */
+const liveRemote = () => {
+  const contents = shell?.remote?.webContents;
+  if (!contents || contents.isDestroyed()) return null;
+  const url = contents.getURL();
+  return url === "" || url === "about:blank" ? null : contents;
+};
+
+const retireRemote = async (): Promise<void> => {
+  const contents = liveRemote();
+  if (!contents) return;
+  let timer: NodeJS.Timeout | undefined;
+  await Promise.race([
+    contents.loadURL("about:blank").catch(() => {}),
+    new Promise<void>((resolve) => { timer = setTimeout(resolve, RETIRE_TIMEOUT_MS); }),
+  ]);
+  clearTimeout(timer);
 };
 
 const destroyRemote = () => {
@@ -304,6 +329,13 @@ const createShell = () => {
   window.on("resize", () => applyMode(mode));
   window.on("enter-full-screen", () => applyMode(mode));
   window.on("leave-full-screen", () => applyMode(mode));
+  let retired = false;
+  window.on("close", (event) => {
+    if (retired || !liveRemote()) return;
+    event.preventDefault();
+    retired = true;
+    void retireRemote().finally(() => window.close());
+  });
   window.on("closed", () => { shell = null; });
   shell = { window, connection, remote: null, remotePartition: null };
   applyMode("connect");
@@ -359,7 +391,9 @@ const connectProfile = (id: string | null): Promise<ProbeResult> =>
     const result = await fetchStatus(server.origin);
     if (!result.ok) return result;
     await persistProfiles({ ...profileStore, selectedProfileId: profile.id });
-    const remote = mountRemote(partitionForOrigin(server.origin), () => server.origin);
+    const partition = partitionForOrigin(server.origin);
+    if (shell?.remotePartition !== partition) await retireRemote();
+    const remote = mountRemote(partition, () => server.origin);
     if (!remote) return { ok: false, reason: "unreachable" };
     loadFailure = null;
     connected = server;
@@ -418,6 +452,7 @@ const connectLocal = (): Promise<LocalConnectResult> =>
       return { ok: false, reason: "startup" };
     }
     localConnection = connection;
+    if (shell?.remotePartition !== LOCAL_PARTITION) await retireRemote();
     const remote = mountRemote(LOCAL_PARTITION, localOrigin);
     if (!remote) {
       await closeLocalBackend();
@@ -477,6 +512,8 @@ const registerHandlers = () => {
 
   ipcMain.handle("desktop:disconnect", async (event) => {
     if (!fromConnection(event)) throw new Error("desktop: unexpected sender");
+    // The page saves its position to its own server, so the local backend outlives the page.
+    await retireRemote();
     connected = null;
     loadFailure = null;
     await closeLocalBackend();
@@ -537,7 +574,7 @@ if (process.argv.includes(SMOKE_LOCAL_BACKEND)) {
     if (backendShutdownComplete) return;
     event.preventDefault();
     if (backendShutdown) return;
-    backendShutdown = closeLocalBackend().finally(() => {
+    backendShutdown = retireRemote().then(closeLocalBackend).finally(() => {
       backendShutdownComplete = true;
       app.quit();
     });

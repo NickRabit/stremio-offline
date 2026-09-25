@@ -17,6 +17,8 @@ export const describeError = (error: unknown): string => error instanceof ApiErr
 /** Every call gets a deadline. A stalled connection would otherwise be held until the
  * operating system gives up, which takes minutes, and six of those exhaust the browser's
  * per-origin pool -- the app then looks dead on that one device while others are fine. */
+export interface ProgressPayload { key: string; position: number; duration: number; title?: string; path?: string; poster?: string; addonKey?: string }
+
 async function request<T>(url: string, options?: RequestInit & { timeoutMs?: number }): Promise<T> {
   const { timeoutMs = 30_000, ...init } = options ?? {};
   let response: Response;
@@ -133,8 +135,11 @@ export const api = {
    *  keepalive request outlives the page that sent it, so the server hears that the film is
    *  over instead of converting and reading the source until it works out nobody is there. */
   stopPlaybackOnUnload: (id: string) => void fetch(`/api/playback/${id}`, { method: "DELETE", keepalive: true }).catch(() => undefined),
+  saveProgressOnUnload: (payload: ProgressPayload) => void fetch("/api/progress", {
+    method: "POST", keepalive: true, headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
+  }).catch(() => undefined),
   progressOf: (key: string) => request<ProgressEntry | null>(`/api/progress/${encodeURIComponent(key)}`),
-  saveProgress: (payload: { key: string; position: number; duration: number; title?: string; path?: string; poster?: string; addonKey?: string }) =>
+  saveProgress: (payload: ProgressPayload) =>
     request<void>("/api/progress", { method: "POST", body: JSON.stringify(payload) }),
   clearProgress: () => request<void>("/api/progress", { method: "DELETE" }),
   forgetProgress: (key: string) => request<void>(`/api/progress/${encodeURIComponent(key)}`, { method: "DELETE" }),
