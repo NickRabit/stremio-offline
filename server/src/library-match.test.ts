@@ -164,6 +164,34 @@ test("grouping folders recurse and leftover files are units", () => {
   assert.equal(matchKeyFor("Webshare/Movies/Title/file.mkv", files), "Webshare/Movies/Title");
 });
 
+test("a release-group folder under a named folder does not become the title", () => {
+  const units = titleUnits(["lib_a/Ice Age 4/REFF/REFF.avi"].map(file));
+  assert.deepEqual(units.map((unit) => `${unit.kind}:${unit.key}`), ["movie:lib_a/Ice Age 4"]);
+  assert.deepEqual(units[0]!.sampleFiles, ["lib_a/Ice Age 4/REFF/REFF.avi"]);
+  assert.deepEqual(parseUnit(units[0]!), { title: "Ice Age 4", query: "Ice Age 4" });
+});
+
+test("a package folder is re-keyed only where a person's name sits above it", () => {
+  // A mixed-case title folder is a name, not a release group.
+  assert.deepEqual(keys(["Sci-fi/Alien/Alien.avi"]), ["movie:Sci-fi/Alien"]);
+  // Two different films inside the same release group stay two units of their own.
+  assert.deepEqual(
+    keys(["Film/REFF/a.avi", "Film/REFF/b.avi"]),
+    ["movie:Film/REFF/a.avi", "movie:Film/REFF/b.avi"],
+  );
+  // A parent with a video of its own keeps every unit it had.
+  assert.deepEqual(
+    keys(["Film/REFF/REFF.avi", "Film/other.avi"]),
+    ["movie:Film/REFF", "movie:Film/other.avi"],
+  );
+  // A release group directly under the library root never re-keys to the root.
+  assert.deepEqual(keys(["lib_00000001/REFF/REFF.avi"]), ["movie:lib_00000001/REFF"]);
+});
+
+test("a season folder is never read as a release group", () => {
+  assert.deepEqual(keys(["Show/S01/Show.S01E01.mkv", "Show/S01/Show.S01E02.mkv"]), ["series:Show"]);
+});
+
 test("matchKeyFor walks from an episode to the show and from a collection child to itself", () => {
   const series = ["Father Ted/01 serie/01 - Good Luck, Father Ted.mkv"].map(file);
   assert.equal(matchKeyFor("Father Ted/01 serie/01 - Good Luck, Father Ted.mkv", series), "Father Ted");
@@ -721,6 +749,47 @@ test("sequel and part markers are evidence, and a conflict is never auto-accepte
   const first = scoreHit(whole, meta("Second Film", 2004, "movie", "tt1"), "movie");
   assert.equal(first.partConflict, undefined);
   assert.equal(autoAccept([first, sequel])?.item.id, "tt1");
+});
+
+test("the whole name is scored, so a localized title meets its own spelling", () => {
+  const hit = scoreHit(
+    parseMediaPath("lib_a/Alita - Bojový Anděl"),
+    { id: "tt-alita", type: "movie", name: "Alita: Bojový anděl", originalTitle: "Alita: Battle Angel", releaseInfo: "2019" },
+    "movie",
+  );
+  assert.ok(hit.titleSimilarity >= 0.95, `expected a near-exact name, got ${hit.titleSimilarity}`);
+  assert.ok(hit.score >= 95, `expected a high score, got ${hit.score}`);
+  assert.equal(hit.autoEligible, true, "the whole title won the comparison, not a weaker half");
+});
+
+test("a localized name that states the part is agreement, not a conflict", () => {
+  assert.equal(partSignature("Doba ledová 4: Země v pohybu", true), "part:4");
+  const hit = scoreHit(
+    parseMediaPath("lib_a/Ice Age 4"),
+    { id: "tt-ice-age-4", type: "movie", name: "Doba ledová 4: Země v pohybu", originalTitle: "Ice Age: Continental Drift", releaseInfo: "2012" },
+    "movie",
+  );
+  assert.equal(hit.partConflict, undefined, "one name that states part four is enough to agree");
+});
+
+test("a half of a spaced name may identify, but never binds on its own", () => {
+  const hit = scoreHit(
+    parseMediaPath("Star Wars - The Empire Strikes Back"),
+    meta("Star Wars", 1977, "movie", "tt0076759"),
+    "movie",
+  );
+  assert.equal(hit.titleSimilarity, 1, "the half matches the candidate exactly");
+  assert.equal(hit.sideMatch, true, "a weaker half of the name is never enough to bind");
+  assert.equal(autoAccept([hit]), undefined);
+  assert.equal(pickSuggestion([hit])?.id, "tt0076759", "but it can still be proposed");
+});
+
+test("a bilingual name whose halves match is proposed, not dropped", () => {
+  const parsed = parseMediaPath("Na hrane zitrka - Edge of Tomorrow");
+  const hit = scoreHit(parsed, { ...meta("Na hraně zítřka", 2014, "movie", "tt1631867"), originalTitle: "Edge of Tomorrow" }, "movie");
+  assert.equal(hit.sideMatch, true);
+  assert.equal(pickSuggestion([hit])?.id, "tt1631867");
+  assert.equal(autoAccept([hit]), undefined);
 });
 
 test("a missing year on both sides leans on the name alone", () => {

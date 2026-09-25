@@ -1,6 +1,6 @@
 import { searchAll } from "./addons.js";
-import { parseMediaPath, type ParsedMedia } from "./library-parse.js";
-import { scoreHit, SUGGESTION_MIN_SCORE, type TitleKind } from "./library-match.js";
+import { parseMediaName, titleVariants, type ParsedMedia } from "./library-parse.js";
+import { AUTO_ACCEPT_MIN_SCORE, scoreHit, SUGGESTION_MIN_SCORE, type TitleKind } from "./library-match.js";
 import { log as serverLog } from "./logger.js";
 import type { MediaInfo } from "./naming.js";
 import { tmdbExternalId, tmdbGallery, tmdbSearch, type TmdbConfig } from "./tmdb.js";
@@ -55,11 +55,6 @@ function dedupe(candidates: LibraryCandidate[]): LibraryCandidate[] {
   });
 }
 
-/** What one provider answered, scored against the title the file names. */
-function scored(parsed: ParsedMedia, candidates: LibraryCandidate[], kind: TitleKind) {
-  return candidates.map((candidate) => ({ candidate, hit: scoreHit(parsed, candidate.item, kind) }));
-}
-
 /** The one search and resolution service behind both the scan and the manual library
  *  search: TMDB first when it is configured, Cinemeta as the fallback, and nothing else. */
 export class LibraryCandidates implements LibraryCandidateSource {
@@ -95,26 +90,48 @@ export class LibraryCandidates implements LibraryCandidateSource {
     }
   }
 
-  /** TMDB first, Cinemeta when TMDB has nothing plausible or is not configured. */
+  /** TMDB first, Cinemeta when TMDB has nothing plausible or is not configured. A title is
+   *  asked about in every form worth searching, but a provider that already named it well
+   *  enough is not asked again. */
   async searchLibraryCandidates(query: string, kind: TitleKind, year: number | undefined, language: string): Promise<LibraryCandidate[]> {
     const trimmed = query.trim();
     if (!trimmed) return [];
-    const parsed: ParsedMedia = { ...parseMediaPath(trimmed), ...(year != null ? { year } : {}) };
+    // The query is a typed title, not a path: a " / " in it is a separator, not a folder.
+    const parsed: ParsedMedia = { ...parseMediaName(trimmed), ...(year != null ? { year } : {}) };
+    const queries = titleVariants(parsed).map((variant) => variant.text);
+    const searchQueries = queries.length ? queries : [trimmed];
+
+    const scoreOf = (candidates: LibraryCandidate[]) =>
+      candidates.reduce((top, candidate) => Math.max(top, scoreHit(parsed, candidate.item, kind).score), 0);
+    const ranked = (candidates: LibraryCandidate[]) =>
+      [...candidates].sort((a, b) => scoreHit(parsed, b.item, kind).score - scoreHit(parsed, a.item, kind).score);
 
     const config = this.tmdbConfig(language);
     if (config) {
-      let items: MetaItem[] = [];
-      try {
-        items = await this.searchTmdbOf(kind, trimmed, config);
-      } catch (error) {
-        this.log("WARN", "The TMDB search failed", { provider: "tmdb", kind, reason: error instanceof Error ? error.message : String(error) });
+      let merged: LibraryCandidate[] = [];
+      let best = 0;
+      for (const text of searchQueries) {
+        try {
+          const items = await this.searchTmdbOf(kind, text, config);
+          merged = dedupe([...merged, ...items.map((item) => ({ item, provider: "tmdb" as const }))]);
+        } catch (error) {
+          this.log("WARN", "The TMDB search failed", { provider: "tmdb", kind, reason: error instanceof Error ? error.message : String(error) });
+        }
+        best = scoreOf(merged);
+        if (best >= AUTO_ACCEPT_MIN_SCORE) break;
       }
-      const candidates = dedupe(items.map((item) => ({ item, provider: "tmdb" as const })));
-      const best = scored(parsed, candidates, kind).reduce((top, entry) => Math.max(top, entry.hit.score), 0);
-      if (best >= SUGGESTION_MIN_SCORE) return candidates;
+      if (best >= SUGGESTION_MIN_SCORE) return ranked(merged);
       this.log("DEBUG", "TMDB offered no plausible candidate, trying Cinemeta", { provider: "tmdb", kind, query: trimmed, best });
     }
-    return dedupe(await this.searchCinemetaOf(trimmed, kind));
+
+    let merged: LibraryCandidate[] = [];
+    let best = 0;
+    for (const text of searchQueries) {
+      merged = dedupe([...merged, ...await this.searchCinemetaOf(text, kind)]);
+      best = scoreOf(merged);
+      if (best >= AUTO_ACCEPT_MIN_SCORE) break;
+    }
+    return ranked(merged);
   }
 
   /** The identity to bind for the chosen candidate: an IMDb id when TMDB has one, the

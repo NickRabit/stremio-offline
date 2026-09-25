@@ -1,4 +1,4 @@
-import { isVideo } from "./library.js";
+import { isVideo, parseSeason } from "./library.js";
 import { LIBRARY_ID } from "./libraries.js";
 
 export const QUALITY_TOKENS = [
@@ -310,10 +310,74 @@ function lastFreeIndex(tokens: string[], taken: Set<number>): number | undefined
  *  spellings of one number produce the same string, and a physical segment ("CD2") is no
  *  installment at all. */
 export function partSignature(value: string | undefined, bare = false): string {
-  return partMarkers(markerTokens(String(value ?? "")), bare)
+  const signature = (source: string) => partMarkers(markerTokens(source), bare)
     .filter((marker) => marker.kind === "installment")
     .map((marker) => `part:${marker.number}`)
     .join("+");
+  const raw = String(value ?? "");
+  const whole = signature(raw);
+  if (whole || !bare) return whole;
+  // A subtitle behind the number ("Doba ledová 4: Země v pohybu") still names the part, but
+  // only the head in front of it may be read that way: a bare number needs the caller's leave.
+  const head = raw.split(SUBTITLE_SEPARATOR)[0]!;
+  if (!head || head === raw) return "";
+  return signature(head);
+}
+
+/** The first separator between a title and its subtitle. */
+const SUBTITLE_SEPARATOR = /\s*:\s*|\s+[-–—]\s+/;
+
+/** Every form of the file's name worth comparing and searching, most trusted first.
+ *  `side` marks a half of a spaced bilingual/subtitle split, which is weaker evidence. */
+export interface TitleVariant { text: string; side: boolean }
+
+const VARIANT_SEPARATOR = new RegExp(
+  [" - ", " / ", " | "].map((separator) => separator.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"),
+);
+
+/** Lowercased, accent-free and punctuation-free, for asking whether two names are the same. */
+function variantKey(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function titleVariants(parsed: ParsedMedia): TitleVariant[] {
+  const out: TitleVariant[] = [];
+  const seen = new Set<string>();
+  const add = (text: string, side: boolean) => {
+    const value = text.trim();
+    if (!value || out.length >= 4) return;
+    const key = variantKey(value);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    out.push({ text: value, side });
+  };
+  add(parsed.query, false);
+  add(parsed.title, false);
+  for (const side of parsed.title.split(VARIANT_SEPARATOR)) {
+    const normalized = variantKey(side);
+    if (normalized.length < 3) continue;
+    if (!stripPartMarkers(normalized)) continue;
+    if (/^\d+$/.test(normalized)) continue;
+    add(side, true);
+  }
+  return out;
+}
+
+const PACKAGING_FOLDER = /^[A-Z0-9]{2,12}$/;
+
+/** A folder name that says who packed a release, not what it is: "REFF", "SPARKS". */
+export function isPackagingFolderName(name: string): boolean {
+  const trimmed = name.trim();
+  if (!PACKAGING_FOLDER.test(trimmed) || !/[A-Z]/.test(trimmed)) return false;
+  if (parseSeason(trimmed) != null) return false;
+  const parsed = parseMediaName(trimmed);
+  return parsed.year == null && parsed.season == null && parsed.episode == null && !parsed.providerHints;
 }
 
 /** The words of one title with the markers a filter accepts left out. */

@@ -1,6 +1,6 @@
 import { isPathWithin, isVideo, numberedEpisode, parseSeason, remapPath, type FoundFile } from "./library.js";
-import { parseLibraryPath, posixBase, type LibraryType } from "./libraries.js";
-import { parseMediaPath, partSignature, stripPartMarkers, type ParsedMedia } from "./library-parse.js";
+import { LIBRARY_ID, parseLibraryPath, posixBase, type LibraryType } from "./libraries.js";
+import { isPackagingFolderName, parseMediaPath, partSignature, stripPartMarkers, titleVariants, type ParsedMedia } from "./library-parse.js";
 import type { MetaItem } from "./types.js";
 
 export type TitleKind = "movie" | "series";
@@ -21,6 +21,8 @@ export interface ScoredHit {
   /** The file and the candidate disagree about a sequel/part marker, so this is a
    *  different film rather than a different cut of the same one. */
   partConflict?: boolean;
+  /** The best name match came from one half of a spaced split, never from the whole name. */
+  sideMatch?: boolean;
 }
 
 /** A scan result for one title unit. An entry without an id is the memory of a
@@ -129,7 +131,10 @@ const EXTRA_TOKENS = new Set(["trailer", "sample", "extra", "bonus", "deleted", 
 const ARTICLES = /^(the|a|an)\s+/;
 /** The matching rules that wrote a suggestion or a remembered miss. Bumped whenever a
  *  decision changes meaning, so old rows are reconsidered exactly once. */
-export const MATCH_RULE_VERSION = 5;
+export const MATCH_RULE_VERSION = 6;
+
+/** The lowest score a single candidate can carry and still be bound without a person's word. */
+export const AUTO_ACCEPT_MIN_SCORE = 85;
 
 export function levenshtein(a: string, b: string): number {
   if (a === b) return 0;
@@ -224,13 +229,17 @@ function matchTitle(value: string): string {
 
 export function scoreHit(parsed: ParsedMedia, item: MetaItem, expectedKind?: TitleKind): ScoredHit {
   if (!item.name) return { item, score: 0, titleSimilarity: 0, autoEligible: false };
-  const left = matchTitle(parsed.query || parsed.title);
   let titleSimilarity = 0;
   let evidence = false;
-  for (const candidate of candidateTitles(item)) {
-    const right = matchTitle(candidate);
-    titleSimilarity = Math.max(titleSimilarity, titleSimilarityOf(left, right));
-    if (phraseEvidence(left, right)) evidence = true;
+  let bestSide = false;
+  for (const variant of titleVariants(parsed)) {
+    const left = matchTitle(variant.text);
+    for (const candidate of candidateTitles(item)) {
+      const right = matchTitle(candidate);
+      const similarity = titleSimilarityOf(left, right);
+      if (similarity > titleSimilarity) { titleSimilarity = similarity; bestSide = variant.side; }
+      if (phraseEvidence(left, right)) evidence = true;
+    }
   }
   let score = 100 - Math.round((1 - titleSimilarity) * 50);
   let autoEligible = true;
@@ -256,11 +265,18 @@ export function scoreHit(parsed: ParsedMedia, item: MetaItem, expectedKind?: Tit
   }
   // The part marker is read from the file's whole title, not the search query: a suffix such
   // as "Nymfomanka - část 2" is dropped from a bilingual query, and losing it there would
-  // hide exactly the disagreement this check exists to catch.
-  const partConflict = titlePartConflict(parsed.title, bestCandidateTitle(parsed.title, item));
+  // hide exactly the disagreement this check exists to catch. One name that states the part
+  // is enough agreement -- a localized name and the original need not both spell it out.
+  const partConflict = candidateTitles(item).every((name) => titlePartConflict(parsed.title, name));
   if (partConflict) autoEligible = false;
   score = Math.max(0, Math.min(100, score));
-  return { item, score, titleSimilarity, yearDelta, autoEligible, ...(partConflict ? { partConflict: true } : {}) };
+  return {
+    item, score, titleSimilarity, yearDelta, autoEligible,
+    ...(partConflict ? { partConflict: true } : {}),
+    // Half of a spaced split is weaker evidence than a whole name: it may be proposed, but
+    // never binds without a person's confirmation.
+    ...(bestSide ? { sideMatch: true } : {}),
+  };
 }
 
 /** The file and the candidate disagree about which part of a franchise this is. */
@@ -274,8 +290,8 @@ export function autoAccept(hits: ScoredHit[], nowYear = new Date().getFullYear()
     return (yearFromMeta(b.item) ?? 0) - (yearFromMeta(a.item) ?? 0);
   });
   const top = ranked[0];
-  if (!top || top.score < 85 || top.titleSimilarity < 0.90) return undefined;
-  if (top.partConflict) return undefined;
+  if (!top || top.score < AUTO_ACCEPT_MIN_SCORE || top.titleSimilarity < 0.90) return undefined;
+  if (top.partConflict || top.sideMatch) return undefined;
   const close = ranked.filter((hit) => top.score - hit.score < 15 && hit.titleSimilarity >= 0.90);
   const topName = normalizeTitle(top.item.name);
   if (close.some((hit) => normalizeTitle(hit.item.name) !== topName)) return undefined;
@@ -327,7 +343,9 @@ export function pickSuggestion(hits: ScoredHit[], minScore = SUGGESTION_MIN_SCOR
   // A wrong type or a year off by more than two is not a safe match and is not offered as
   // if it were: the proposal list is where a person decides, and a bad row wastes that.
   // A part conflict is the exception: it is worth a person's look, just never a binding.
-  const ranked = hits.filter((hit) => hit.autoEligible || hit.partConflict).sort((a, b) => b.score - a.score);
+  // On a tie the whole name beats a half of it.
+  const ranked = hits.filter((hit) => hit.autoEligible || hit.partConflict)
+    .sort((a, b) => b.score - a.score || Number(Boolean(a.sideMatch)) - Number(Boolean(b.sideMatch)));
   const top = ranked[0];
   if (!top || top.score < minScore) return undefined;
   const year = yearFromMeta(top.item);
@@ -964,6 +982,21 @@ function classifyVideosOnly(dir: string, videos: FoundFile[], out: TitleUnit[]) 
 function classifyFolder(index: DirIndex, dir: string, out: TitleUnit[]) {
   const videos = index.videos.get(dir) ?? [];
   const children = [...(index.children.get(dir) ?? [])];
+  // A folder that only holds one packaging folder is named by its parent: the release group
+  // says who packed the file, not what it is, and the parent is the name a person wrote.
+  if (!videos.length && children.length === 1 && dir && !LIBRARY_ID.test(posixBase(dir))) {
+    const child = children[0]!;
+    if (!(index.children.get(child)?.size ?? 0) && isPackagingFolderName(posixBase(child))) {
+      const temp: TitleUnit[] = [];
+      classifyVideosOnly(child, index.videos.get(child) ?? [], temp);
+      if (temp.length === 1 && temp[0]!.key === child) {
+        emit(out, dir, temp[0]!.kind, temp[0]!.sampleFiles);
+      } else {
+        out.push(...temp);
+      }
+      return;
+    }
+  }
   if (children.some((child) => parseSeason(posixBase(child)) != null)) {
     emit(out, dir, "series", filesUnder(index, dir));
     return;

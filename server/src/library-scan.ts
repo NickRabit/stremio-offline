@@ -518,7 +518,8 @@ export class LibraryScan {
   /** A provider that breaks is a title nobody could identify yet, not a run that failed. */
   private async searchTrusted(unit: TitleUnit, parsed: ParsedMedia): Promise<LibraryCandidate[]> {
     try {
-      return await this.opts.candidates.searchLibraryCandidates(parsed.query, unit.kind, parsed.year, this.language());
+      // The whole title, not the shortened query: the service searches every form of it.
+      return await this.opts.candidates.searchLibraryCandidates(parsed.title || parsed.query, unit.kind, parsed.year, this.language());
     } catch (error) {
       log("WARN", "The trusted title search failed", { key: unit.key, reason: error instanceof Error ? error.message : String(error) });
       return [];

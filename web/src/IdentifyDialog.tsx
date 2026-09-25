@@ -74,7 +74,7 @@ export function IdentifyDialog({ path, paths, onClose, onApplied }: { path: stri
       setSeason(loaded.parsed.season != null ? String(loaded.parsed.season) : "");
       setEpisode(loaded.parsed.episode != null ? String(loaded.parsed.episode) : "");
       lastQuery.current = { title: loaded.parsed.title, year: loaded.parsed.year != null ? String(loaded.parsed.year) : "", kind: nextKind };
-      const rows = await searchTrusted(loaded.parsed.query || loaded.parsed.title, nextKind, loaded.parsed.year);
+      const rows = await searchTrusted(loaded.parsed.title || loaded.parsed.query, nextKind, loaded.parsed.year);
       if (cancelled) return;
       setItems(rows);
       setPicked(preselect(rows, loaded.suggestion?.id ?? loaded.bound?.id));

@@ -171,3 +171,41 @@ test("a TMDB hit with no title evidence falls through to the trusted Cinemeta", 
   assert.deepEqual(found.map((entry) => [entry.provider, entry.item.id]), [["cinemeta", "tt0910970"]]);
   assert.deepEqual(calls.cinemeta, ["WALL-E"], "the weak TMDB row permits the trusted fallback");
 });
+
+test("a low-scoring first query asks TMDB again in the title's other forms", async () => {
+  const { candidates, calls } = service({ tmdb: config, tmdbItems: () => [] });
+  await candidates.searchLibraryCandidates("Alita - Bojový Anděl", "movie", undefined, "en");
+  assert.deepEqual(calls.tmdb, ["Alita", "Alita - Bojový Anděl", "Bojový Anděl"], "each useful form is searched in turn");
+});
+
+test("a first query that already names the title well is not asked again", async () => {
+  const { candidates, calls } = service({
+    tmdb: config,
+    tmdbItems: (query) => (query === "Alita" ? [meta({ id: "tmdb:1", name: "Alita - Bojový Anděl" })] : []),
+  });
+  const found = await candidates.searchLibraryCandidates("Alita - Bojový Anděl", "movie", undefined, "en");
+  assert.deepEqual(calls.tmdb, ["Alita"], "a confident first answer needs no second question");
+  assert.deepEqual(found.map((entry) => entry.item.id), ["tmdb:1"]);
+});
+
+test("the candidates come back best-scored first, ties in the provider's order", async () => {
+  const { candidates } = service({
+    tmdb: config,
+    tmdbItems: () => [
+      meta({ id: "tmdb:1", name: "Flashdance", releaseInfo: "2030" }),
+      meta({ id: "tmdb:2", name: "Flashdance", releaseInfo: "1983" }),
+    ],
+  });
+  const found = await candidates.searchLibraryCandidates("Flashdance", "movie", 1983, "en");
+  assert.deepEqual(found.map((entry) => entry.item.id), ["tmdb:2", "tmdb:1"], "the year that agrees ranks first");
+
+  const tied = service({
+    tmdb: config,
+    tmdbItems: () => [
+      meta({ id: "tmdb:a", name: "Flashdance", releaseInfo: "1983" }),
+      meta({ id: "tmdb:b", name: "Flashdance", releaseInfo: "1983" }),
+    ],
+  });
+  const same = await tied.candidates.searchLibraryCandidates("Flashdance", "movie", 1983, "en");
+  assert.deepEqual(same.map((entry) => entry.item.id), ["tmdb:a", "tmdb:b"], "a tie keeps the order the provider gave");
+});

@@ -889,3 +889,12 @@ test("a loose film in a collection is searched as the film; a film folder as the
     assert.equal(h.store.meta["Practical Magic (1998)"]?.id, "tt-Practical Magic");
   } finally { await h.close(); }
 });
+
+test("a bilingual unit is searched by its whole title, not the shortened query", async () => {
+  const h = await harness({ units: async () => [movie("Jižanská pohostinnost-Southern Comfort")] });
+  try {
+    await h.scan.start();
+    await waitFor(() => h.scan.snapshot().status === "completed");
+    assert.deepEqual(h.searches, ["Jižanská pohostinnost-Southern Comfort"], "the search service gets the whole title and tries every form of it");
+  } finally { await h.close(); }
+});
