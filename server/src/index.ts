@@ -31,6 +31,7 @@ import { ExternalIdStore } from "./external-ids.js";
 import { currentLevel, flushLog, initLogger, log, parseLevel, startLogMaintenance, setLevel } from "./logger.js";
 import { resolveListenTarget, startServer } from "./server-start.js";
 import { loopbackHostCheck } from "./host-check.js";
+import { InFlight } from "./in-flight.js";
 import { browseDirectory, describePath, emptiedFolders, entryDirectory, holdsLibraryRoot, isPathWithin, isVideo, listVideos, moveDestination, orphanedCatalogKeys, pageFiles, remapPath, scanLibrary, summarize, type FoundFile, type LibraryEntry } from "./library.js";
 import { browseMeta, cacheFieldsFromMeta, episodeKey, episodeNumberOf, episodesFromMeta, dropKeyed, folderMosaicUnits, knownEntryForUnit, knownTitleEntry, knownTitleOf, knownTitleForUnit, matchKeyFor, mosaicIdentities, mosaicSkipped, needsBackfill, needsEpisodes, staleSuggestionKeys, titleUnits, unitFor, unmatchAt, withSkipFlag, type GalleryEntry, type LibraryMetaRecord, type TitleKind, type TitleUnit } from "./library-match.js";
 import { LibraryScan } from "./library-scan.js";
@@ -432,6 +433,8 @@ const requireAccess = (req: express.Request, need: AccessNeed = {}): void => {
   throw loss === "session" ? new ResourceError(401, "AUTH_REQUIRED") : new ResourceError(404, "RESOURCE_NOT_FOUND");
 };
 
+const inFlight = new InFlight();
+app.use(inFlight.middleware());
 app.use(loopbackHostCheck());
 app.use(securityHeaders());
 app.use(express.json({ limit: "256kb" }));
@@ -2262,9 +2265,16 @@ try {
   // A short grace period, so the failure message reaches the desktop before this process goes.
   setTimeout(() => process.exit(1), 50);
 }
+const SHUTDOWN_QUIET_MS = 250;
+/** Inside the desktop shell's five seconds before it kills, and Docker's ten. */
+const SHUTDOWN_DRAIN_MS = 3_000;
 for (const signal of ["SIGTERM", "SIGINT"] as const) {
   process.once(signal, () => {
     log("INFO", "Shutting down", { signal });
-    void Promise.allSettled([stats.activity.flush(), images.flush(), artworks.flush(), metaStore.flush(), libraryOps.flush()]).then(flushLog).finally(() => process.exit(0));
+    // A request already on its way, such as the position a closing player sends, is answered
+    // and its state written before the process goes. A stream that never ends is cut at the limit.
+    void inFlight.drained(SHUTDOWN_QUIET_MS, SHUTDOWN_DRAIN_MS)
+      .then(() => Promise.allSettled([store.flush(), stats.activity.flush(), images.flush(), artworks.flush(), metaStore.flush(), libraryOps.flush()]))
+      .then(flushLog).finally(() => process.exit(0));
   });
 }
