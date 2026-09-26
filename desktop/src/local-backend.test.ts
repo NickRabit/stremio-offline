@@ -437,3 +437,40 @@ test("without a settings reader the stored file decides the child environment", 
   await started;
   await harness.backend.stop();
 });
+
+test("a running backend is reused while the stored settings match what it was started with", async (t) => {
+  const dir = await tempDir(t);
+  const harness = makeBackend(dir, { readSettings: async () => ({ allowPrivateAddons: true }) });
+  const first = start(harness);
+  const fork = await harness.nextChild();
+  fork.child.emit("message", READY);
+  const connection = await first;
+  assert.equal(await harness.backend.start(), connection);
+  assert.equal(harness.forks.length, 1);
+  assert.equal(fork.child.kills, 0);
+  await harness.backend.stop();
+});
+
+test("a running backend started with other settings is replaced on the next start", async (t) => {
+  const dir = await tempDir(t);
+  let allowPrivateAddons = true;
+  let unexpected = 0;
+  const harness = makeBackend(dir, {
+    readSettings: async () => ({ allowPrivateAddons }),
+    onUnexpectedExit: () => { unexpected += 1; },
+  });
+  const first = start(harness);
+  const firstFork = await harness.nextChild();
+  firstFork.child.emit("message", READY);
+  await first;
+  // Switched off while the form was back but the child lived on: it must not keep the network open.
+  allowPrivateAddons = false;
+  const second = start(harness);
+  const secondFork = await harness.nextChild();
+  assert.equal(firstFork.child.kills, 1);
+  assert.equal("ALLOW_PRIVATE_ADDONS" in secondFork.options.env, false);
+  secondFork.child.emit("message", READY);
+  await second;
+  assert.equal(unexpected, 0, "a replacement is not an unexpected exit");
+  await harness.backend.stop();
+});

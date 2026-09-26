@@ -20,6 +20,8 @@ export const STOP_TIMEOUT_MS = 5_000;
 export const MACOS_TOOL_DIRECTORIES = ["/opt/homebrew/bin", "/usr/local/bin"] as const;
 const MACOS_FALLBACK_PATH = "/usr/bin:/bin:/usr/sbin:/sbin";
 
+const sameSettings = (a: LocalSettings, b: LocalSettings) => a.allowPrivateAddons === b.allowPrivateAddons;
+
 const SERVICE_NAME = "Stremio Offline backend";
 
 export interface BoundAddress {
@@ -227,6 +229,7 @@ export class LocalBackend {
   private tracked: TrackedChild | null = null;
   private connection: LocalBackendConnection | null = null;
   private startPromise: Promise<LocalBackendConnection> | null = null;
+  private launchedWith: LocalSettings | null = null;
   private stopPromise: Promise<void> | null = null;
 
   constructor(options: LocalBackendOptions) {
@@ -238,10 +241,22 @@ export class LocalBackend {
   }
 
   start(): Promise<LocalBackendConnection> {
-    if (this.connection) return Promise.resolve(this.connection);
     if (this.startPromise) return this.startPromise;
-    this.startPromise = this.startBackend().finally(() => { this.startPromise = null; });
+    this.startPromise = this.ensureStarted().finally(() => { this.startPromise = null; });
     return this.startPromise;
+  }
+
+  /** A backend still running from before keeps its environment, so one started with other
+   *  settings than those now stored is replaced: the connection form can come back after a failed
+   *  page load while the child lives on, and a switch turned off there must not stay on. */
+  private async ensureStarted(): Promise<LocalBackendConnection> {
+    if (this.connection) {
+      const wanted = await (this.options.readSettings ?? readLocalSettings)(this.options.userDataDir);
+      if (this.launchedWith && sameSettings(wanted, this.launchedWith)) return this.connection;
+      this.options.log?.("The local settings changed, restarting the local server.");
+      await this.stopTracked();
+    }
+    return this.startBackend();
   }
 
   private async startBackend(): Promise<LocalBackendConnection> {
@@ -287,6 +302,7 @@ export class LocalBackend {
   private async launch(port: number): Promise<LocalBackendConnection> {
     const { options } = this;
     const settings = await (options.readSettings ?? readLocalSettings)(options.userDataDir);
+    this.launchedWith = settings;
     const child = options.fork(options.entry, {
       env: localBackendEnv(process.env, options.userDataDir, port, process.platform, isDirectory, settings),
       cwd: options.userDataDir,
