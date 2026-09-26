@@ -20,8 +20,12 @@ tree — `Webshare`, `Movies`, `Films` — are walked through rather than matche
 Concretely:
 
 - **A series** is a folder with a season folder inside it (`01 serie`,
-  `Season 2`, `S03`), or a folder whose files are mostly named `S01E07`. Its
-  episodes are not matched one by one; the show is the unit.
+  `Season 2`, `S03`, `1. série`, `2. řada`), a folder whose files are mostly
+  named `S01E07`, or a folder of loose numbered episodes (`Show.01.avi`,
+  `Show.02.avi`). Its episodes are not matched one by one; the show is the unit.
+- **A release-group folder** — one all-caps folder such as `REFF` that is the
+  only thing in a title folder — is packaging: `Ice Age 4/REFF/REFF.avi` is the
+  film "Ice Age 4".
 - **A film** is a folder holding one video — or one video plus extras, where an
   extra is a file whose name contains the word `trailer`, `sample`, `extra` or
   `bonus` as a whole word. `Obsession/Obsession.mkv` and
@@ -35,8 +39,12 @@ Concretely:
   one item inside it.
 
 Names are cleaned before the search: quality and release tags come off, a
-trailing year is kept as a search hint, and `SxxExx` is read as a season and
-episode. A folder whose own name carries an episode number (`Show/06 - Title.mkv`
+year is kept as a search hint (also from brackets, `Title[2007]`), scene names
+joined by hyphens (`Title-2015-HDRip-CZ`) are split, a trailing country tag
+(`The Office (US)`) is read as the production's country, and `SxxExx` is read
+as a season and episode. A folder holding one film takes the year from the
+film's file when the folder has none, and the file's own name is searched too,
+so a misspelt folder still finds its film. A folder whose own name carries an episode number (`Show/06 - Title.mkv`
 inside a flat folder) still resolves to the show.
 
 ## The scan
@@ -70,6 +78,36 @@ returns a metadata record for it. If a TMDB result wins the search, the scan
 resolves `/movie/{id}/external_ids` or `/tv/{id}/external_ids` and binds the
 IMDb id when TMDB has one, so every addon that speaks IMDb can be asked about
 the title afterwards. When it has none, the `tmdb:` id is kept as before.
+
+### How a candidate is judged
+
+Every form of the name is compared with every name the candidate has — the
+localized title and the original one. A bilingual folder (`Alita - Bojový
+Anděl`, `Blockers - Kazisuci`) is searched by each half as well; a match that
+only one half explains, or only a candidate's title before its colon, is
+proposed but never bound on its own. When each half matches a different name of
+the same candidate, the match is as good as a whole-name one.
+
+A sequel number must agree: "Ice Age 4" is not "Ice Age", but it is "Doba
+ledová 4: Země v pohybu" whose original title carries no number. The first film
+counts as having no number (`Transformers I` is `Transformers`).
+
+Several titles with the same name are told apart in this order, and the first
+rule that decides wins:
+
+1. **The year** in the file or folder name, sent to TMDB with the search.
+2. **Popularity**: a candidate with at least 50 votes and ten times the votes of
+   every other same-named title is the one people mean. The newest title never
+   wins because it is newest, and a title not yet released is never bound.
+3. **The production country** named in the folder (`(US)`, `(UK)`).
+4. **The episodes on disk**, for a series: the episode lists of the leading
+   candidates are fetched and the one whose episode names match the file names
+   is bound.
+5. **The running time**, for a film with one file: the file is measured with
+   ffprobe (at most 20 seconds) and the only candidate whose runtime fits —
+   allowing for the 4 % PAL speed-up of DVD rips — is bound.
+
+Anything still undecided stays a suggestion for a person to confirm.
 
 ### Rechecking automatic matches
 
