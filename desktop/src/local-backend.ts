@@ -132,6 +132,7 @@ export function localBackendEnv(
   for (const [key, value] of Object.entries(parent)) if (value !== undefined) env[key] = value;
   env.HOST = LOCAL_HOST;
   env.HOST_CHECK = "loopback";
+  env.DESKTOP_LOCAL_BACKEND = "1";
   env.PORT = String(port);
   env.DATA_DIR = path.join(userDataDir, INSTANCE_DIRECTORY);
   env.DOWNLOAD_DIR = path.join(userDataDir, DOWNLOADS_DIRECTORY);

@@ -114,6 +114,7 @@ test("the child runs with the per-user directories and the port it reports is th
   assert.equal(fork.entry, "/app/runtime/server/dist/index.js");
   assert.equal(fork.options.env.HOST, LOCAL_HOST);
   assert.equal(fork.options.env.HOST_CHECK, "loopback");
+  assert.equal(fork.options.env.DESKTOP_LOCAL_BACKEND, "1");
   assert.equal(fork.options.env.PORT, "0");
   assert.equal(fork.options.env.DATA_DIR, path.join(dir, INSTANCE_DIRECTORY));
   assert.equal(fork.options.env.DOWNLOAD_DIR, path.join(dir, "downloads"));

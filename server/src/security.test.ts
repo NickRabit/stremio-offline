@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { publicAddon, publicAddonRestricted, redirectedHeaders, safeFetch, upstreamRequestHeaders } from "./security.js";
+import { privateAddressRefusal, publicAddon, publicAddonRestricted, redirectedHeaders, safeFetch, upstreamRequestHeaders, validateRemoteUrl } from "./security.js";
 import { defaultDownloadSettings } from "./naming.js";
 import type { AddonRecord } from "./types.js";
 
@@ -98,4 +98,22 @@ test("publicAddon still redacts the path but keeps downloadSettings", () => {
   assert.ok(published.downloadSettings);
   assert.equal(published.globalSearch, false);
   assert.equal(published.showInContinueWatching, true);
+});
+
+test("a private address is refused with a translatable message that names the way out", async () => {
+  await assert.rejects(validateRemoteUrl("http://127.0.0.1:7000/manifest.json"), (error: { messageKey?: string; vars?: Record<string, string> }) => {
+    assert.equal(error.messageKey, "err.privateAddon");
+    assert.deepEqual(error.vars, { host: "127.0.0.1", address: "127.0.0.1" });
+    return true;
+  });
+  const server = privateAddressRefusal("nas.local", "192.168.1.20", {});
+  assert.match(server.message, /ALLOW_ADDON_HOSTS=nas\.local/);
+});
+
+test("the desktop app's own backend points at its switch, not at an environment it cannot edit", () => {
+  const desktop = privateAddressRefusal("nas.local", "192.168.1.20", { DESKTOP_LOCAL_BACKEND: "1" });
+  assert.equal(desktop.messageKey, "err.privateAddonDesktop");
+  assert.deepEqual(desktop.vars, { host: "nas.local", address: "192.168.1.20" });
+  assert.doesNotMatch(desktop.message, /ALLOW_/);
+  assert.match(desktop.message, /Allow addons on my home network/);
 });

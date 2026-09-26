@@ -1102,6 +1102,8 @@ export const en = {
   "err.nameTaken": "A file with that name already exists.",
   "err.invalidUrl": "Invalid URL.",
   "err.onlyHttp": "Only HTTP(S) addresses are supported.",
+  "err.privateAddon": "{host} points at {address}, an address on a private network. If this is your own addon, allow it with ALLOW_ADDON_HOSTS={host}, or the whole local network with ALLOW_PRIVATE_ADDONS=1.",
+  "err.privateAddonDesktop": "{host} points at {address}, an address on your local network. To use an addon at home, turn on “Allow addons on my home network” on the connection screen and start the local server again.",
   "err.credentialsInUrl": "The URL must not contain a username or password.",
   "err.subfolderRelative": "The subfolder has to be relative to the library's root.",
   "err.subfolderDepth": "The subfolder can be at most 8 levels deep.",
