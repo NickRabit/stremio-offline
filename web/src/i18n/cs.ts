@@ -1236,6 +1236,8 @@ export const cs: Catalog = {
   "desktop.sectionReset": "Obnovit tento Mac",
   "desktop.sectionResetText": "Začít znovu od úvodní obrazovky.",
   "desktop.resetWhat": "Přesune účty, knihovny, historii a nastavení serveru do Koše. Filmy zůstanou, pokud níže nezaškrtnete jinak.",
+  "desktop.folderReserved": "V této složce jsou vlastní data aplikace nebo celá domovská složka. Vyberte samostatnou složku.",
+  "desktop.resetDownloadsProtected": "Složka pro stahování zůstane: nevytvořila ji aplikace, takže ji obnovení nikdy nepřesune do Koše.",
   "desktop.resetDownloads": "Přesunout do Koše i složku pro stahování",
   "desktop.resetServers": "Zapomenout i uložené servery",
   "desktop.resetButton": "Obnovit tento Mac…",

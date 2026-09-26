@@ -31,6 +31,7 @@ export function previewBridge(search: string): ShellBridge | null {
       downloadDir: "/Users/ondrej/Movies/Stremio Offline",
       suggestedDownloadDir: "/Users/ondrej/Movies/Stremio Offline",
       initialized: query.get("initialized") !== "0",
+      downloadDirOwned: query.get("owned") !== "0",
       running: true,
       addresses: ["http://192.168.1.41:8091", "http://ondrej-macbook-pro.local:8091"],
       ffmpeg: "ffmpeg 9.0.2 + openssl 3.5.8, macOS 12.0, arm64",
@@ -66,7 +67,7 @@ export function previewBridge(search: string): ShellBridge | null {
     dismissToast: () => undefined,
     pickFolder: async () => "/Volumes/Filmy/Stremio",
     prepareDownloadDir: async (dir) => dir.startsWith("/") ? { ok: true, dir } : { ok: false, reason: "not-absolute" },
-    resetLocal: async () => { await wait(500); emit({ ...state, screen: { kind: "welcome" }, chosen: null }); return { ok: true, cancelled: false }; },
+    resetLocal: async () => { await wait(500); emit({ ...state, screen: { kind: "welcome" }, chosen: null }); return { ok: true, cancelled: false, downloadsKept: true }; },
     copyText: (text) => { void navigator.clipboard?.writeText(text).catch(() => undefined); },
   };
 }

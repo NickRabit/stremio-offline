@@ -1241,6 +1241,8 @@ export const en = {
   "desktop.sectionReset": "Reset this Mac",
   "desktop.sectionResetText": "Start again from the welcome screen.",
   "desktop.resetWhat": "Moves the server's accounts, libraries, history and settings to the Trash. The films stay where they are unless you tick the box below.",
+  "desktop.folderReserved": "That folder holds the app's own data or your whole home folder. Choose a folder of its own.",
+  "desktop.resetDownloadsProtected": "The download folder stays: the app did not create it, so a reset never moves it to the Trash.",
   "desktop.resetDownloads": "Also move the download folder to the Trash",
   "desktop.resetServers": "Also forget the saved servers",
   "desktop.resetButton": "Reset this Mac…",

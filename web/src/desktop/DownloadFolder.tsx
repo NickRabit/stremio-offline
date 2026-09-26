@@ -3,8 +3,8 @@ import { FolderOpen, TriangleAlert } from "lucide-react";
 import { t } from "../i18n";
 import type { ShellBridge, ShellState } from "./bridge";
 
-type Failure = "not-absolute" | "not-folder" | "not-writable";
-const FAILURE_TEXT = { "not-absolute": "desktop.folderNotAbsolute", "not-folder": "desktop.folderNotFolder", "not-writable": "desktop.folderNotWritable" } as const;
+type Failure = keyof typeof FAILURE_TEXT;
+const FAILURE_TEXT = { "not-absolute": "desktop.folderNotAbsolute", "not-folder": "desktop.folderNotFolder", "not-writable": "desktop.folderNotWritable", reserved: "desktop.folderReserved" } as const;
 
 /** Makes the chosen folder ready and stores it as the local backend's download folder. */
 export async function adoptDownloadDir(bridge: ShellBridge, state: ShellState, dir: string): Promise<Failure | null> {

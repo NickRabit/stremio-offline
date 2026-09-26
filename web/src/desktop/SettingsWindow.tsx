@@ -207,15 +207,17 @@ function ResetSection({ bridge, state }: { bridge: ShellBridge; state: ShellStat
     setFailed(false);
     try {
       // The main process asks once more in a native dialog; a "no" there changes nothing here.
-      const result = await bridge.resetLocal({ deleteDownloads, forgetServers });
+      const result = await bridge.resetLocal({ deleteDownloads: deleteDownloads && state.local.downloadDirOwned, forgetServers });
       if (!result.ok && !result.cancelled) setFailed(true);
     } finally { setBusy(false); }
   };
   return <section className="settings-section shell-card shell-danger">
     <SettingsSectionHead icon={<RotateCcw/>} title={t("desktop.sectionReset")} text={t("desktop.sectionResetText")}/>
     <p className="shell-step-text">{t("desktop.resetWhat")}</p>
-    <label className="shell-check"><input type="checkbox" checked={deleteDownloads} onChange={(event) => setDeleteDownloads(event.target.checked)}/>
-      <span>{t("desktop.resetDownloads")}<code>{state.local.downloadDir}</code></span></label>
+    {state.local.downloadDirOwned
+      ? <label className="shell-check"><input type="checkbox" checked={deleteDownloads} onChange={(event) => setDeleteDownloads(event.target.checked)}/>
+        <span>{t("desktop.resetDownloads")}<FolderPath dir={state.local.downloadDir}/></span></label>
+      : <p className="shell-step-text">{t("desktop.resetDownloadsProtected")} <FolderPath dir={state.local.downloadDir}/></p>}
     <label className="shell-check"><input type="checkbox" checked={forgetServers} onChange={(event) => setForgetServers(event.target.checked)}/>
       <span>{t("desktop.resetServers")}</span></label>
     {state.local.busy && <p className="shell-probe bad"><TriangleAlert/><span>{t("desktop.resetBusy")}</span></p>}

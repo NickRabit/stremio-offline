@@ -63,6 +63,9 @@ export interface LocalState {
   suggestedDownloadDir: string;
   /** The local backend has an instance directory already; its download folder is then fixed. */
   initialized: boolean;
+  /** The app created the download folder (or found it empty) and it is no system folder, so a
+   *  reset may move it to the Trash. Otherwise it is the user's and never goes. */
+  downloadDirOwned: boolean;
 }
 
 export type ShellLocale = "cs" | "en";
@@ -118,11 +121,11 @@ export interface ShellBridge {
   /** The system folder dialog, opened on the calling window; null when cancelled. */
   pickFolder(defaultPath: string | null): Promise<string | null>;
   /** Creates the folder when missing and checks it can be written to. */
-  prepareDownloadDir(dir: string): Promise<{ ok: true; dir: string } | { ok: false; reason: "not-absolute" | "not-folder" | "not-writable" }>;
+  prepareDownloadDir(dir: string): Promise<{ ok: true; dir: string } | { ok: false; reason: "not-absolute" | "not-folder" | "not-writable" | "reserved" }>;
   /** Asks in a native dialog, then stops the local backend, moves its data (and, when asked, the
    *  download folder) to the Trash, forgets the app's settings (and, when asked, the saved servers)
    *  and shows the welcome screen. `cancelled` when the user said no in the dialog. */
-  resetLocal(options: { deleteDownloads: boolean; forgetServers: boolean }): Promise<{ ok: boolean; cancelled: boolean }>;
+  resetLocal(options: { deleteDownloads: boolean; forgetServers: boolean }): Promise<{ ok: boolean; cancelled: boolean; downloadsKept: boolean }>;
 }
 
 declare global {

@@ -23,7 +23,7 @@ const baseState = (over: Partial<ShellState> = {}): ShellState => ({
   profiles: [{ id: "nas", name: "NAS", origin: "http://192.168.1.20:8090" }],
   local: {
     settings: { allowPrivateAddons: false, publish: false, publishPort: 8091, downloadDir: null }, running: false, addresses: [], ffmpeg: null, busy: false,
-    downloadDir: "/Users/me/Library/Application Support/Stremio Offline/downloads", suggestedDownloadDir: "/Users/me/Movies/Stremio Offline", initialized: true,
+    downloadDir: "/Users/me/Library/Application Support/Stremio Offline/downloads", suggestedDownloadDir: "/Users/me/Movies/Stremio Offline", initialized: true, downloadDirOwned: true,
   },
   toast: null, ...over,
 });
@@ -43,7 +43,7 @@ const makeBridge = (view: ShellView, state: ShellState) => {
     openSettings: vi.fn(), toastAction: vi.fn(), dismissToast: vi.fn(), copyText: vi.fn(),
     pickFolder: vi.fn(async () => "/Volumes/Films"),
     prepareDownloadDir: vi.fn(async (dir: string) => ({ ok: true as const, dir })),
-    resetLocal: vi.fn(async () => ({ ok: true, cancelled: false })),
+    resetLocal: vi.fn(async () => ({ ok: true, cancelled: false, downloadsKept: true })),
   } satisfies ShellBridge;
   return bridge;
 };
@@ -217,4 +217,13 @@ it("reset keeps the films unless asked, and forgets servers only when ticked", a
   await click(servers!);
   await click(button("Reset this Mac…"));
   expect(bridge.resetLocal).toHaveBeenLastCalledWith({ deleteDownloads: true, forgetServers: true });
+});
+
+it("reset offers no Trash for a download folder the app did not create", async () => {
+  const bridge = makeBridge("settings", baseState({ local: { ...baseState().local, downloadDirOwned: false } }));
+  await render(bridge);
+  expect(host.textContent).toContain("a reset never moves it to the Trash");
+  expect(host.querySelectorAll(".shell-check input")).toHaveLength(1);
+  await click(button("Reset this Mac…"));
+  expect(bridge.resetLocal).toHaveBeenLastCalledWith({ deleteDownloads: false, forgetServers: false });
 });
