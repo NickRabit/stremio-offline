@@ -11,7 +11,14 @@ export type Target = { kind: "local" } | { kind: "profile"; id: string };
 
 export interface ServerProfile { id: string; name: string; origin: string }
 
-export interface LocalSettings { allowPrivateAddons: boolean; publish: boolean; publishPort: number }
+export interface LocalSettings {
+  allowPrivateAddons: boolean;
+  publish: boolean;
+  publishPort: number;
+  /** Where the local backend downloads to (its first library). null = the pre-setup default,
+   *  `<userData>/downloads`, which installs from before this setting keep. */
+  downloadDir: string | null;
+}
 
 export type ShellView = "main" | "settings" | "toast";
 
@@ -55,6 +62,12 @@ export interface LocalState {
   ffmpeg: string | null;
   /** Something is playing or downloading through the local backend. */
   busy: boolean;
+  /** The folder downloads go to, as the backend uses it (never null). */
+  downloadDir: string;
+  /** What the setup step proposes: ~/Movies/Stremio Offline. */
+  suggestedDownloadDir: string;
+  /** The local backend has an instance directory already; its download folder is then fixed. */
+  initialized: boolean;
 }
 
 export type ShellLocale = "cs" | "en";
@@ -107,4 +120,12 @@ export interface ShellBridge {
   toastAction(id: number): void;
   dismissToast(id: number): void;
   copyText(text: string): void;
+  /** The system folder dialog, opened on the calling window; null when cancelled. */
+  pickFolder(defaultPath: string | null): Promise<string | null>;
+  /** Creates the folder when missing and checks it can be written to. */
+  prepareDownloadDir(dir: string): Promise<{ ok: true; dir: string } | { ok: false; reason: "not-absolute" | "not-folder" | "not-writable" }>;
+  /** Asks in a native dialog, then stops the local backend, moves its data (and, when asked, the
+   *  download folder) to the Trash, forgets the app's settings (and, when asked, the saved servers)
+   *  and shows the welcome screen. `cancelled` when the user said no in the dialog. */
+  resetLocal(options: { deleteDownloads: boolean; forgetServers: boolean }): Promise<{ ok: boolean; cancelled: boolean }>;
 }
