@@ -420,3 +420,32 @@ it("the manager dialog scrolls its list, not the card", async () => {
   expect(card.querySelector(".identify-head")?.closest(".dialog-body")).toBeNull();
   expect(card.querySelector(".dialog-foot")).toBeNull();
 });
+
+it("in a browser there is no system folder dialog to offer", async () => {
+  await openPicker([], false);
+  expect(picker().textContent).not.toContain("Choose a folder on this computer");
+});
+
+it("in the desktop app a folder chosen in the system dialog is granted and becomes the library", async () => {
+  vi.stubGlobal("stremioDesktop", { version: 1, pickFolder: async () => "/Users/me/Movies" });
+  const posted: Record<string, unknown>[] = [];
+  await openPicker(posted, false);
+
+  await clickIn(picker(), "Choose a folder on this computer…");
+  await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+  const grants = fetchMock.mock.calls.filter(([url, init]) => url === "/api/libraries/grants" && (init as RequestInit | undefined)?.method === "POST");
+  expect(grants.map(([, init]) => JSON.parse(String((init as RequestInit).body)))).toEqual([{ path: "/Users/me/Movies" }]);
+  expect(host.textContent).toContain("/Users/me/Movies");
+
+  await fillIn(picker(), "Name", "Movies");
+  await clickIn(picker(), "Add library");
+  expect(posted).toEqual([{ name: "Movies", type: "mixed", root: "/Users/me/Movies", autoScanMetadata: true }]);
+});
+
+it("cancelling the system dialog grants nothing", async () => {
+  vi.stubGlobal("stremioDesktop", { version: 1, pickFolder: async () => null });
+  await openPicker([], false);
+  await clickIn(picker(), "Choose a folder on this computer…");
+  expect(fetchMock.mock.calls.some(([url, init]) => url === "/api/libraries/grants" && (init as RequestInit | undefined)?.method === "POST")).toBe(false);
+});

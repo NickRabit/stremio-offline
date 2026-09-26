@@ -44,6 +44,20 @@ The packaging sections below cover the packaging prototype only. It produces a
 macOS arm64 `.dmg` and `.zip` from the compiled shell. It is deliberately not a
 public release — see [Limits](#limits) before sharing anything built here.
 
+## Choosing a library folder
+
+In the local mode, **Choose a folder on this computer…** in the new-library
+dialog opens the macOS folder dialog. The chosen folder is granted to the
+local backend and selected, exactly as if its absolute path had been typed under
+"My folder isn't listed". The first read from Desktop, Documents, Downloads or an
+external disk may bring up the system's own access prompt.
+
+This is the one bridge the shell gives a server page: `window.stremioDesktop`
+with `version: 1` and `pickFolder()`. Only the page the local backend serves
+gets it, and the main process answers only that page's top frame while it is the
+page on screen. A remote server's page has no bridge, and the interface offers
+the button only where the bridge is present.
+
 ## Saving to this device
 
 **Save to this device** mints a short-lived ticket on the server and hands that

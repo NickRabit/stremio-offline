@@ -496,6 +496,7 @@ export const cs: Catalog = {
   "library.grantExplanation": "Pokud je složka mimo uvedená umístění, povolte přístup zadáním její absolutní cesty.",
   "library.selectedFolder": "Vybraná složka",
   "library.grantFolder": "Povolit tuto složku",
+  "library.pickOnComputer": "Vybrat složku v tomto počítači…",
   "library.grantHint": "Absolutní cesta, např. /libraries/archive",
   "library.useThisFolder": "Použít tuto složku",
   "library.selectFolder": "Vybrat {name}",

@@ -372,3 +372,25 @@ test("the write-time check runs through the route, and refuses rather than faili
   assert.equal((await failure(response)).messageKey, "err.notAllowed");
   assert.deepEqual(harness.stored()[0]?.visibleTo, undefined, "the edit landed on a role the account no longer had");
 });
+
+test("POST /api/libraries/grants adds no nested grant for a folder a grant already covers", async (t) => {
+  const outer = await mkdtemp(path.join(tmpdir(), "stremio-grant-"));
+  const elsewhere = await mkdtemp(path.join(tmpdir(), "stremio-grant-"));
+  t.after(() => Promise.all([rm(outer, { recursive: true, force: true }), rm(elsewhere, { recursive: true, force: true })]));
+  await mkdir(path.join(outer, "Films", "Kids"), { recursive: true });
+  const env: RootGrant[] = [{ path: outer, source: "env", grantedAt: "2024-01-01T00:00:00.000Z" }];
+  const harness = await mount([], env);
+  t.after(harness.close);
+
+  const nested = await api(harness.base, "/api/libraries/grants", { method: "POST", body: { path: path.join(outer, "Films", "Kids") } });
+  assert.equal(nested.status, 201);
+  assert.deepEqual(harness.userGrants(), [], "the operator's grant already reaches it");
+
+  const outside = await api(harness.base, "/api/libraries/grants", { method: "POST", body: { path: elsewhere } });
+  assert.equal(outside.status, 201);
+  assert.deepEqual(harness.userGrants().map((grant) => grant.path), [path.resolve(elsewhere)]);
+
+  const inside = await api(harness.base, "/api/libraries/grants", { method: "POST", body: { path: elsewhere + "/" } });
+  assert.equal(inside.status, 201);
+  assert.equal(harness.userGrants().length, 1, "asking again for the same folder adds nothing");
+});
