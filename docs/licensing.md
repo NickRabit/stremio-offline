@@ -48,12 +48,28 @@ under [Web interface](#web-interface).
 
 ### Desktop app (macOS)
 
-The desktop app **does not contain FFmpeg**. Remux and transcoding use an
-`ffmpeg` the user has installed (usually `brew install ffmpeg`). We do not
-distribute that copy, so its licence is between the user and whoever provided
-it.
-
 The app contains:
+
+- **FFmpeg 9.0.2 (`ffmpeg`, `ffprobe`)**, under
+  `Contents/Resources/ffmpeg`, built by `desktop/scripts/build-ffmpeg.sh`. The
+  build is made without `--enable-gpl`, so it contains no x264 or other GPL
+  part. H.264 is encoded by VideoToolbox.
+  - It is statically linked with **OpenSSL 3.5.8** (Apache-2.0) for https
+    sources. FFmpeg accepts OpenSSL only with `--enable-version3`, so the
+    binaries are licensed **LGPL-3.0-or-later**.
+  - These sit beside the binaries:
+    - the LGPLv3 and GPLv3 texts, FFmpeg's `LICENSE.md` and OpenSSL's licence;
+    - `FFMPEG-THIRD-PARTY-NOTICES.txt` with the notices of FFmpeg's
+      BSD-licensed files and the IJG credit;
+    - a `BUILDINFO.txt` with the exact versions, source URLs, checksums,
+      configure lines and the repository revision that built them.
+  - **Every release attaches the exact source archives** (`ffmpeg-*.tar.xz`,
+    `openssl-*.tar.gz`) the binaries were built from. The build script in the
+    tagged commit rebuilds them.
+  - FFmpeg stays a separate executable. Setting `FFMPEG_PATH` and
+    `FFPROBE_PATH` for the app, for example with
+    `launchctl setenv FFMPEG_PATH /path/to/ffmpeg`, makes it use another build
+    instead.
 
 - **Electron**: MIT, shipped as `Contents/Resources/LICENSE.electron.txt`.
 - **Chromium** and its components: many licences, listed in full in
@@ -65,22 +81,17 @@ The app contains:
 The release assets are named `…-unsigned.dmg` because they are not signed with
 an Apple Developer ID. That is a Gatekeeper matter, not a licensing one.
 
-### If FFmpeg is ever bundled with the desktop app
+### Why the desktop FFmpeg is LGPL and not GPL
 
-Distributing FFmpeg ourselves makes us responsible for its licence. The plan is
-a build made in our own CI **without** `--enable-gpl`, which is **LGPL-2.1-or-later**.
-VideoToolbox (macOS) or Media Foundation (Windows) does the encoding, so no GPL
-encoder is needed. Such a release has to:
+A GPL build with x264 would be a software fallback when VideoToolbox fails.
+Shipping it would put every release under the obligation to carry or offer the
+complete corresponding source of FFmpeg and x264. The LGPL build avoids GPL
+code altogether, and on Apple Silicon VideoToolbox is always present.
 
-- ship the LGPL text and FFmpeg's notices;
-- publish the exact source and configure line the binary was built from, beside
-  the release;
-- keep FFmpeg a separate, replaceable executable.
-
-A GPL build (with x264) could be shipped as well, but then every release must
-carry or offer the complete corresponding source of FFmpeg and x264, for three
-years (GPLv2) or through a durable place (GPLv3). The app's own MIT licence
-would stay as it is in either case.
+The price: with the bundled FFmpeg, a transcode has no software encoder to fall
+back to. The server detects that and keeps the hardware path on, instead of
+switching it off after two failures. Remux and direct play are unaffected. A
+Windows build would take the same route with Media Foundation as the encoder.
 
 ## Web interface
 
@@ -102,6 +113,11 @@ Before a release that changes what is bundled:
 - look at `/third-party-licenses.txt` in the build;
 - run `ffmpeg -L` and `dpkg -l ffmpeg 'libx264*' 'libx265*'` in the image;
 - check that the desktop `.app` has `LICENSE.electron.txt` and
-  `LICENSES.chromium.html` in `Contents/Resources`.
+  `LICENSES.chromium.html` in `Contents/Resources`;
+- check that it has `ffmpeg/` with `BUILDINFO.txt` and `licenses/`, and that the
+  release carries the `ffmpeg-*` and `openssl-*` source archives.
+
+`npm run smoke:packaged -w desktop` checks the FFmpeg part: the binary is an LGPL
+build, its licence files are there, and the local backend really ran it.
 
 This page describes how the project is put together. It is not legal advice.

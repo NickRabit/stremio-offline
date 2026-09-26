@@ -36,6 +36,11 @@ jobs:
         with:
           node-version: "22"
           cache: npm
+      # The LGPL FFmpeg takes minutes to build; the result only changes with the script.
+      - uses: actions/cache@v4
+        with:
+          path: desktop/ffmpeg
+          key: desktop-ffmpeg-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('desktop/scripts/build-ffmpeg.sh') }}
       - run: npm ci
       - run: npm run package:mac:arm64 -w desktop
       # Read the fuses back from the packaged .app, so a build with an

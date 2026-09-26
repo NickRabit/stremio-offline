@@ -77,7 +77,7 @@ export interface Diagnostics {
   version: string; builtAt?: string; commit?: string; node: string;
   uptimeSeconds: number; memoryMb: number; logLevel: string; logRetentionDays: number;
   playback: {
-    ffmpeg: { version?: string; initialBurst: boolean };
+    ffmpeg: { version?: string; initialBurst: boolean; softwareEncoder?: boolean };
     vaapi: { device?: string; scaling: boolean; bitrate: boolean; failures: number };
     videotoolbox?: { available: boolean; constantQuality: boolean; failures: number };
     sessions: DiagnosticsSession[];

@@ -68,6 +68,19 @@ export interface LocalBackendForkOptions {
 
 export type LocalBackendFork = (entry: string, options: LocalBackendForkOptions) => LocalBackendChild;
 
+/** The FFmpeg a packaged app carries in its resources. */
+export interface MediaTools {
+  ffmpeg: string;
+  ffprobe: string;
+}
+
+/** The FFmpeg in `<resources>/ffmpeg`, or null where the app has none (a development run). */
+export function bundledMediaTools(resourcesDir: string | null, fileExists: (file: string) => boolean = isFile): MediaTools | null {
+  if (!resourcesDir) return null;
+  const tools = { ffmpeg: path.join(resourcesDir, "ffmpeg", "ffmpeg"), ffprobe: path.join(resourcesDir, "ffmpeg", "ffprobe") };
+  return fileExists(tools.ffmpeg) && fileExists(tools.ffprobe) ? tools : null;
+}
+
 export interface LocalBackendOptions {
   /** The compiled server entry point. */
   entry: string;
@@ -82,6 +95,8 @@ export interface LocalBackendOptions {
   readSettings?: (dir: string) => Promise<LocalSettings>;
   /** Whether something already answers on 127.0.0.1 at the port, checked before a published start. */
   loopbackTaken?: (port: number) => Promise<boolean>;
+  /** The FFmpeg the app carries, handed to the backend unless its environment names one. */
+  tools?: MediaTools | null;
   /** Whether anything is streaming, so the shell can hold the machine awake while published. */
   onActivity?: (streaming: boolean) => void;
   readyTimeoutMs?: number;
@@ -190,6 +205,10 @@ const isDirectory = (dir: string) => {
   try { return statSync(dir).isDirectory(); } catch { return false; }
 };
 
+const isFile = (file: string) => {
+  try { return statSync(file).isFile(); } catch { return false; }
+};
+
 /** An entry as it is compared, without the one trailing slash it may carry. */
 const withoutTrailingSlash = (entry: string) => entry.length > 1 && entry.endsWith("/") ? entry.slice(0, -1) : entry;
 
@@ -210,6 +229,7 @@ export function localBackendEnv(
   platform: NodeJS.Platform = process.platform,
   directoryExists: (dir: string) => boolean = isDirectory,
   settings: LocalSettings = defaultLocalSettings(),
+  tools: MediaTools | null = null,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(parent)) if (value !== undefined) env[key] = value;
@@ -224,6 +244,9 @@ export function localBackendEnv(
   // Off leaves an inherited value alone: a developer running from a terminal keeps their own.
   if (settings.allowPrivateAddons) env.ALLOW_PRIVATE_ADDONS = "1";
   if (platform === "darwin") env.PATH = macosPath(env.PATH, directoryExists);
+  // The app's own FFmpeg, unless someone named another one on purpose.
+  if (tools && !env.FFMPEG_PATH?.trim()) env.FFMPEG_PATH = tools.ffmpeg;
+  if (tools && !env.FFPROBE_PATH?.trim()) env.FFPROBE_PATH = tools.ffprobe;
   return env;
 }
 
@@ -398,7 +421,7 @@ export class LocalBackend {
     const { options } = this;
     this.launchedWith = settings;
     const child = options.fork(options.entry, {
-      env: localBackendEnv(process.env, options.userDataDir, port, process.platform, isDirectory, settings),
+      env: localBackendEnv(process.env, options.userDataDir, port, process.platform, isDirectory, settings, options.tools ?? null),
       cwd: options.userDataDir,
       stdio: "inherit",
       serviceName: SERVICE_NAME,

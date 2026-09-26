@@ -1,7 +1,8 @@
 // Launches the packaged macOS app in its local-backend smoke mode: the app starts the staged
 // server from inside the archive, waits for its ready message, lets it answer /api/status and
 // stops it again. A non-zero exit or a missing marker fails the packaging workflow.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -56,3 +57,16 @@ clearTimeout(timer);
 if (timedOut) fail("the packaged app did not finish the smoke in time");
 if (code !== 0) fail(`the packaged app exited with ${code}`);
 if (!output.includes(READY)) fail("the packaged app never reported a ready local backend");
+
+// The app carries its own LGPL FFmpeg. It has to be there, say it is LGPL, and be the one the
+// backend ran: only that build lacks libx264, and the server logs it when it starts.
+const resources = path.join(path.dirname(path.dirname(binary)), "Resources");
+const ffmpeg = path.join(resources, "ffmpeg", "ffmpeg");
+const licence = spawnSync(ffmpeg, ["-hide_banner", "-L"], { encoding: "utf8" });
+if (licence.status !== 0) fail(`the bundled FFmpeg did not run (${ffmpeg})`);
+if (!licence.stdout.includes("Lesser General Public License")) fail("the bundled FFmpeg is not an LGPL build");
+for (const file of ["ffprobe", "BUILDINFO.txt", "licenses/COPYING.LGPLv3", "licenses/COPYING.GPLv3", "licenses/OPENSSL-LICENSE.txt", "licenses/FFMPEG-THIRD-PARTY-NOTICES.txt"]) {
+  if (!existsSync(path.join(resources, "ffmpeg", file))) fail(`the bundled FFmpeg is missing ${file}`);
+}
+if (!output.includes("This FFmpeg has no libx264")) fail("the local backend did not run the FFmpeg the app carries");
+process.stdout.write("smoke-packaged: the bundled LGPL FFmpeg is in place and in use\n");
