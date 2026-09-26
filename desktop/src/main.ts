@@ -1,4 +1,4 @@
-import { app, BaseWindow, clipboard, dialog, ipcMain, Notification, powerSaveBlocker, session, shell as electronShell, utilityProcess, WebContentsView, type IpcMainEvent, type IpcMainInvokeEvent } from "electron";
+import { app, BaseWindow, clipboard, dialog, ipcMain, Menu, Notification, powerSaveBlocker, screen, session, shell as electronShell, utilityProcess, WebContentsView, type IpcMainEvent, type IpcMainInvokeEvent } from "electron";
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
@@ -20,15 +20,18 @@ import { catalogue } from "./i18n.js";
 import { layout, type PageMode } from "./layout.js";
 import { bundledMediaTools, LOCAL_PARTITION, LocalBackend, LocalPortBusyError, type LocalBackendConnection } from "./local-backend.js";
 import { defaultLocalSettings, parseLocalSettings, readLocalSettings, writeLocalSettings, type LocalSettings } from "./local-settings.js";
+import { buildMenuTemplate } from "./menu.js";
 import { externalBrowserUrl, httpAllowedHost, parseServerOrigin, partitionForOrigin, type ServerOrigin } from "./origin.js";
 import { localPageSent } from "./bridge-sender.js";
+import { SettingsWindow } from "./settings-window.js";
 import type { FailureReason, MainScreen, ProfileResult, ProbeResult, ShellState, Target, Toast } from "./shell-api.js";
-import { effectiveLocale, readShellPrefs, writeShellPrefs, type ShellLocale } from "./shell-prefs.js";
+import { effectiveLocale, readShellPrefs, readShellPrefsSync, writeShellPrefs, type ShellLocale } from "./shell-prefs.js";
 import { downloadFraction, nextToastId, safeFileName } from "./shell-text.js";
 import { SerialQueue } from "./serial-queue.js";
 import { SleepGuard } from "./sleep-guard.js";
 import { MAX_TARGET_ID, LatestRequest, fallbackApplies, launchPlan, readStartupChoice, writeStartupChoice, STARTUP_FILE } from "./startup.js";
 import { fetchStatus, type ProbeFailure } from "./status.js";
+import { Debounced, DEFAULT_SIZE, MIN_SIZE, readWindowState, restoreBounds, writeWindowState, type WindowState } from "./window-state.js";
 
 const ALLOWED_PERMISSIONS = new Set<string>(["fullscreen", "clipboard-sanitized-write"]);
 const ABORTED = -3;
@@ -40,6 +43,8 @@ const TOAST_TIMEOUT_MS = 8_000;
 const MAX_CLIPBOARD_TEXT = 2_000;
 const APP_NAME = "Stremio Offline";
 const WINDOW_BACKGROUND = "#0b0e13";
+const PROJECT_URL = "https://github.com/NickRabit/stremio-offline";
+const WINDOW_SAVE_DELAY_MS = 500;
 
 const RENDERER_PAGE = fileURLToPath(new URL("../renderer/desktop.html", import.meta.url));
 const SHELL_PRELOAD = fileURLToPath(new URL("./shell-preload.js", import.meta.url));
@@ -118,6 +123,61 @@ const shellState: ShellState = {
   toast: null,
 };
 
+const settingsWindow = new SettingsWindow({
+  rendererPage: RENDERER_PAGE,
+  preload: SHELL_PRELOAD,
+  userDataDir: () => app.getPath("userData"),
+  title: () => catalogue(shellState.locale)["settings.title"],
+});
+
+const openSettings = (): void => settingsWindow.open();
+
+const targetKey = (target: Target | null): string =>
+  target === null ? "-" : target.kind === "local" ? "local" : `profile:${target.id}`;
+
+let menuKey = "";
+
+const applyMenu = (): void => {
+  const target = shellState.connection?.target ?? null;
+  const live = shellState.connection !== null;
+  const key = [
+    shellState.locale,
+    shellState.profiles.map((profile) => `${profile.id}:${profile.name}`).join(","),
+    targetKey(target),
+    live ? "connected" : "idle",
+  ].join("|");
+  if (key === menuKey) return;
+  menuKey = key;
+  Menu.setApplicationMenu(Menu.buildFromTemplate(buildMenuTemplate({
+    strings: catalogue(shellState.locale),
+    profiles: shellState.profiles,
+    current: target,
+    connected: live,
+    isPackaged: app.isPackaged,
+    actions: {
+      openSettings,
+      reload: () => {
+        const current = shell;
+        if (!current) return;
+        if (connected !== null && current.remote !== null && !current.remote.webContents.isDestroyed()) {
+          current.remote.webContents.reloadIgnoringCache();
+          return;
+        }
+        if (!current.page.webContents.isDestroyed()) current.page.webContents.reload();
+      },
+      devTools: () => {
+        const current = shell;
+        if (!current) return;
+        if (connected !== null && current.remote !== null && !current.remote.webContents.isDestroyed()) current.remote.webContents.toggleDevTools();
+        else if (!current.page.webContents.isDestroyed()) current.page.webContents.toggleDevTools();
+      },
+      connect: (target) => { void connectTarget(target, { launch: false }); },
+      reconnect: () => { void connectTarget(shellState.chosen ?? { kind: "local" }, { launch: false }); },
+      openProject: () => { void electronShell.openExternal(PROJECT_URL).catch(() => {}); },
+    },
+  })));
+};
+
 const sameLocalSettings = (a: LocalSettings, b: LocalSettings) =>
   a.allowPrivateAddons === b.allowPrivateAddons && a.publish === b.publish && a.publishPort === b.publishPort;
 
@@ -160,9 +220,11 @@ const pushState = () => {
   if (!current) return;
   refreshLocal();
   applyLayout();
+  applyMenu();
   for (const view of [current.page, current.toast]) {
     if (!view.webContents.isDestroyed()) view.webContents.send("shell:state", shellState);
   }
+  settingsWindow.push(shellState);
   current.window.setTitle(titleFor(shellState.screen));
 };
 
@@ -560,9 +622,25 @@ const connectTarget = (target: Target, options: { launch: boolean }): Promise<vo
 
 const restartLocal = async (): Promise<{ ok: boolean }> => {
   const showingLocal = shellState.connection?.target.kind === "local";
+  const wasRunning = localConnection !== null;
   await closeLocalBackend();
-  if (showingLocal) await connectTarget({ kind: "local" }, { launch: false });
-  showToast({ id: nextToastId(), kind: "local-restarted" });
+  if (showingLocal) {
+    await connectTarget({ kind: "local" }, { launch: false });
+    if (shellState.screen.kind === "connected" && shellState.connection?.target.kind === "local") {
+      showToast({ id: nextToastId(), kind: "local-restarted" });
+    }
+    return { ok: true };
+  }
+  // The window shows a remote server, but a running backend has to come back all the same.
+  if (!wasRunning || !localBackend) return { ok: true };
+  try {
+    localConnection = await localBackend.start();
+    syncAwake();
+    pushState();
+    showToast({ id: nextToastId(), kind: "local-restarted" });
+  } catch (error) {
+    console.warn("local backend: " + (error instanceof Error ? error.message : String(error)));
+  }
   return { ok: true };
 };
 
@@ -580,8 +658,20 @@ const wireShellView = (view: WebContentsView, name: "main" | "toast") => {
   void view.webContents.loadFile(RENDERER_PAGE, { query: { view: name } });
 };
 
-const createShell = () => {
-  const window = new BaseWindow({ width: 1100, height: 720, title: APP_NAME, backgroundColor: WINDOW_BACKGROUND });
+const createShell = (saved: WindowState | null) => {
+  const restored = restoreBounds(
+    saved,
+    screen.getAllDisplays().map((display) => display.workArea),
+    screen.getPrimaryDisplay().workArea,
+    DEFAULT_SIZE,
+  );
+  const window = new BaseWindow({
+    ...restored.bounds,
+    minWidth: MIN_SIZE.width,
+    minHeight: MIN_SIZE.height,
+    title: APP_NAME,
+    backgroundColor: WINDOW_BACKGROUND,
+  });
   const page = new WebContentsView({ webPreferences: shellWebPreferences() });
   const toast = new WebContentsView({ webPreferences: shellWebPreferences() });
   wireShellView(page, "main");
@@ -593,6 +683,15 @@ const createShell = () => {
   window.on("resize", applyLayout);
   window.on("enter-full-screen", applyLayout);
   window.on("leave-full-screen", applyLayout);
+  const save = new Debounced(() => {
+    void writeWindowState(app.getPath("userData"), "main",
+      { bounds: window.getNormalBounds(), maximized: window.isMaximized() }).catch(() => {});
+  }, WINDOW_SAVE_DELAY_MS);
+  window.on("resize", () => save.schedule());
+  window.on("move", () => save.schedule());
+  window.on("maximize", () => save.schedule());
+  window.on("unmaximize", () => save.schedule());
+  window.on("close", () => save.flush());
   let retired = false;
   window.on("close", (event) => {
     if (retired || quitting || !liveRemote()) return;
@@ -600,14 +699,17 @@ const createShell = () => {
     retired = true;
     void retireRemote().finally(() => window.close());
   });
-  window.on("closed", () => { shell = null; });
+  window.on("closed", () => { shell = null; settingsWindow.close(); });
   shell = { window, page, toast, remote: null, remotePartition: null };
+  if (restored.maximized) window.maximize();
   pushState();
 };
 
 const fromShellPage = (event: IpcMainInvokeEvent | IpcMainEvent): boolean => {
   const current = shell;
-  return current !== null && (event.sender === current.page.webContents || event.sender === current.toast.webContents);
+  if (current !== null && (event.sender === current.page.webContents || event.sender === current.toast.webContents)) return true;
+  const settings = settingsWindow.contents;
+  return settings !== null && event.sender === settings;
 };
 
 const assertShellSender = (event: IpcMainInvokeEvent | IpcMainEvent) => {
@@ -721,7 +823,7 @@ const registerHandlers = () => {
 
   ipcMain.on("shell:openSettings", (event) => {
     assertShellSender(event);
-    console.log("settings: the settings window arrives in a later round");
+    openSettings();
   });
 
   ipcMain.on("shell:toastAction", (event, input: unknown) => {
@@ -803,6 +905,11 @@ const runLocalBackendSmoke = async () => {
   }
 };
 
+// Chromium settles the server pages' language before the shell can, so an explicit choice has to
+// reach the command line this early; `userData` is readable before the app is ready.
+const earlyPrefs = readShellPrefsSync(app.getPath("userData"));
+if (earlyPrefs.locale !== null) app.commandLine.appendSwitch("lang", earlyPrefs.locale);
+
 if (process.argv.includes(SMOKE_LOCAL_BACKEND)) {
   // The smoke gets its own instance directory, so it neither needs the single-instance lock
   // nor touches the data of an install that happens to be running.
@@ -818,7 +925,8 @@ if (process.argv.includes(SMOKE_LOCAL_BACKEND)) {
   });
 
   app.on("activate", () => {
-    if (!shell) createShell();
+    if (shell) return;
+    void readWindowState(app.getPath("userData"), "main").then((saved) => { if (!shell) createShell(saved); });
   });
 
   let backendShutdownComplete = false;
@@ -840,6 +948,7 @@ if (process.argv.includes(SMOKE_LOCAL_BACKEND)) {
     profileStore = await readProfiles(app.getPath("userData"));
     localSettings = await readLocalSettings(app.getPath("userData"));
     const prefs = await readShellPrefs(app.getPath("userData"));
+    const savedWindow = await readWindowState(app.getPath("userData"), "main");
     shellState.localeChoice = prefs.locale;
     shellState.locale = effectiveLocale(prefs.locale, app.getLocale());
     shellState.appVersion = app.getVersion();
@@ -858,7 +967,7 @@ if (process.argv.includes(SMOKE_LOCAL_BACKEND)) {
       const profile = plan.target.kind === "profile" ? findProfile(profileStore, plan.target.id) : null;
       shellState.screen = { kind: "connecting", target: plan.target, name: profile?.name ?? "", origin: profile?.origin ?? null };
     }
-    createShell();
+    createShell(savedWindow);
     if (plan.screen === "connect") void connectTarget(plan.target, { launch: true });
   });
 } else {

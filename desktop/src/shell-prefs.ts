@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -18,6 +19,25 @@ export async function readShellPrefs(dir: string): Promise<ShellPrefs> {
   let text: string;
   try {
     text = await readFile(path.join(dir, SHELL_PREFS_FILE), "utf8");
+  } catch {
+    return { locale: null };
+  }
+  let body: unknown;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    return { locale: null };
+  }
+  if (typeof body !== "object" || body === null) return { locale: null };
+  const locale = (body as Record<string, unknown>).locale;
+  return { locale: isLocale(locale) ? locale : null };
+}
+
+/** The same read before `whenReady`, where the language switch cannot wait for the async one. */
+export function readShellPrefsSync(dir: string): ShellPrefs {
+  let text: string;
+  try {
+    text = readFileSync(path.join(dir, SHELL_PREFS_FILE), "utf8");
   } catch {
     return { locale: null };
   }

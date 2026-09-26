@@ -9,6 +9,25 @@ only through the `window.stremioShell` bridge. At launch the shell connects to
 the remembered target; a saved server that does not answer falls back to the
 local backend and offers to switch back once it answers again.
 
+## The menu, the settings window and the window geometry
+
+The menu bar carries **Settings…** (⌘,), the usual Edit, View, Window and Help
+menus, and a **Server** menu that switches between **This Mac** and the saved
+servers, offers **Reconnect** (⇧⌘R) and opens the settings window too. **View →
+Reload** (⌘R) reloads the server page, or the shell's own page while nothing is
+connected; a development run also has **Developer tools** (⌥⌘I).
+**Stremio Offline on GitHub** opens the project in the browser.
+
+**Settings** opens in its own window and closes with the main window. Both
+windows remember where they were and how big they were — and the main window
+whether it was maximized — so the next launch opens the way the last one was
+left.
+
+The language chosen in Settings switches the whole app at once. The server page
+takes it at the next launch, because Chromium settles a page's language before
+the shell can set it; each account picks its own language in the web interface
+regardless.
+
 ## Running the backend on this computer
 
 **Run on this computer** on the welcome screen starts the compiled server as

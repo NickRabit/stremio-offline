@@ -6,6 +6,15 @@ export const en = {
   "folder.pickTitle": "Choose a library folder",
   "notify.downloadDone": "Saved {file}",
   "notify.downloadFailed": "Saving {file} did not finish",
+  "menu.settings": "Settings…",
+  "menu.view": "View",
+  "menu.reload": "Reload",
+  "menu.devTools": "Developer tools",
+  "menu.server": "Server",
+  "menu.reconnect": "Reconnect",
+  "menu.serverSettings": "Server settings…",
+  "menu.project": "Stremio Offline on GitHub",
+  "settings.title": "Settings",
 };
 
 export const cs: typeof en = {
@@ -14,6 +23,15 @@ export const cs: typeof en = {
   "folder.pickTitle": "Vyberte složku knihovny",
   "notify.downloadDone": "Uloženo {file}",
   "notify.downloadFailed": "Ukládání {file} nedoběhlo",
+  "menu.settings": "Nastavení…",
+  "menu.view": "Zobrazení",
+  "menu.reload": "Znovu načíst",
+  "menu.devTools": "Vývojářské nástroje",
+  "menu.server": "Server",
+  "menu.reconnect": "Připojit znovu",
+  "menu.serverSettings": "Nastavení serverů…",
+  "menu.project": "Stremio Offline na GitHubu",
+  "settings.title": "Nastavení",
 };
 
 export function catalogue(locale: "cs" | "en"): typeof en {

@@ -206,3 +206,16 @@ test("flush without pending work does nothing", () => {
   debounced.flush();
   assert.equal(writes, 1);
 });
+
+test("the settings window's smaller size is taken back, the main window's minimum still applies to main", async (t) => {
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const pathModule = await import("node:path");
+  const dir = await mkdtemp(pathModule.join(tmpdir(), "window-state-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const small = { bounds: { x: 100, y: 100, width: 680, height: 780 }, maximized: false };
+  await writeWindowState(dir, "settings", small);
+  await writeWindowState(dir, "main", small);
+  assert.deepEqual(await readWindowState(dir, "settings"), small);
+  assert.equal(await readWindowState(dir, "main"), null);
+});

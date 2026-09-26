@@ -9,6 +9,9 @@ export interface WindowState { bounds: Rect; maximized: boolean }
 export const WINDOW_STATE_FILE = "window-state.json";
 export const DEFAULT_SIZE = { width: 1280, height: 800 };
 export const MIN_SIZE = { width: 800, height: 560 };
+/** The settings window is smaller than the main one, and its saved size must still be taken back. */
+export const SETTINGS_MIN_SIZE = { width: 560, height: 520 };
+const MIN_FOR: Record<WindowName, { width: number; height: number }> = { main: MIN_SIZE, settings: SETTINGS_MIN_SIZE };
 
 export type WindowName = "main" | "settings";
 
@@ -17,18 +20,18 @@ const MIN_VISIBLE = 100;
 
 const isInteger = (value: unknown): value is number => typeof value === "number" && Number.isInteger(value);
 
-const readRect = (value: unknown): Rect | null => {
+const readRect = (value: unknown, min: { width: number; height: number }): Rect | null => {
   if (typeof value !== "object" || value === null) return null;
   const record = value as Record<string, unknown>;
   if (!isInteger(record.x) || !isInteger(record.y) || !isInteger(record.width) || !isInteger(record.height)) return null;
-  if (record.width < MIN_SIZE.width || record.height < MIN_SIZE.height) return null;
+  if (record.width < min.width || record.height < min.height) return null;
   return { x: record.x, y: record.y, width: record.width, height: record.height };
 };
 
-const readState = (value: unknown): WindowState | null => {
+const readState = (value: unknown, min: { width: number; height: number }): WindowState | null => {
   if (typeof value !== "object" || value === null) return null;
   const record = value as Record<string, unknown>;
-  const bounds = readRect(record.bounds);
+  const bounds = readRect(record.bounds, min);
   if (bounds === null) return null;
   return { bounds, maximized: record.maximized === true };
 };
@@ -56,7 +59,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 /** The file may hold several named windows; a missing name, a malformed file or a value of the wrong shape all mean "no state". */
 export async function readWindowState(dir: string, name: WindowName): Promise<WindowState | null> {
   const body = parse(await readFileText(path.join(dir, WINDOW_STATE_FILE)));
-  return isRecord(body) ? readState(body[name]) : null;
+  return isRecord(body) ? readState(body[name], MIN_FOR[name]) : null;
 }
 
 const queue = new SerialQueue();

@@ -67,7 +67,7 @@ function ServerSection({ bridge, state }: { bridge: ShellBridge; state: ShellSta
   const localRow = <div className={`shell-server${isCurrent(state, { kind: "local" }) ? " current" : ""}`}>
     <button className="shell-server-main" onClick={() => void bridge.connect({ kind: "local" })}>
       <i><Laptop/></i>
-      <span><strong>{t("desktop.thisMac")}</strong><small>{t("desktop.thisMacText")}</small></span>
+      <span><strong>{t("desktop.thisMac")}</strong><small className="shell-wrap">{t("desktop.thisMacText")}</small></span>
       {isCurrent(state, { kind: "local" }) && <em className={`shell-chip ${fallbackFrom ? "warn" : "ok"}`}>{fallbackFrom ? t("desktop.serverStandIn", { name: fallbackFrom }) : t("desktop.serverConnected")}</em>}
     </button>
   </div>;
