@@ -19,7 +19,7 @@ beforeEach(() => {
 afterEach(() => { act(() => root.unmount()); host.remove(); });
 
 const baseState = (over: Partial<ShellState> = {}): ShellState => ({
-  locale: "en", appVersion: "0.4.85", screen: { kind: "welcome" }, connection: null, chosen: null,
+  locale: "en", localeChoice: null, appVersion: "0.4.85", screen: { kind: "welcome" }, connection: null, chosen: null,
   profiles: [{ id: "nas", name: "NAS", origin: "http://192.168.1.20:8090" }],
   local: { settings: { allowPrivateAddons: false, publish: false, publishPort: 8091 }, running: false, addresses: [], ffmpeg: null, busy: false },
   toast: null, ...over,
@@ -36,6 +36,7 @@ const makeBridge = (view: ShellView, state: ShellState) => {
     probe: vi.fn(async () => ({ ok: false as const, reason: "unreachable" as const })),
     setLocalSettings: vi.fn(async () => ({ ok: true, restartNeeded: true })),
     restartLocal: vi.fn(async () => ({ ok: true })),
+    setLocale: vi.fn(async () => undefined),
     openSettings: vi.fn(), toastAction: vi.fn(), dismissToast: vi.fn(), copyText: vi.fn(),
   } satisfies ShellBridge;
   return bridge;
@@ -145,4 +146,19 @@ it("the fallback toast says the libraries are separate and retries on its button
   expect(bridge.toastAction).toHaveBeenCalledWith(7);
   await click(host.querySelector<HTMLButtonElement>("button[aria-label=Close]")!);
   expect(bridge.dismissToast).toHaveBeenCalledWith(7);
+});
+
+it("the first screen offers the language before anything else, and settings can follow the system", async () => {
+  const bridge = makeBridge("main", baseState());
+  await render(bridge);
+  await click(button("Čeština"));
+  expect(bridge.setLocale).toHaveBeenCalledWith("cs");
+  act(() => root.unmount());
+  root = createRoot(host);
+  const settings = makeBridge("settings", baseState({ localeChoice: "en" }));
+  await render(settings);
+  const select = host.querySelector<HTMLSelectElement>(".shell-controls select")!;
+  expect(select.value).toBe("en");
+  await act(async () => { select.value = "system"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+  expect(settings.setLocale).toHaveBeenCalledWith(null);
 });

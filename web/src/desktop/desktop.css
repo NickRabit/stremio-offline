@@ -40,6 +40,10 @@ input,code,.shell-origin{user-select:text;-webkit-user-select:text}
 .shell-welcome-form h3 svg{width:18px;color:var(--accent2)}
 @media (max-width:620px){.shell-choices{grid-template-columns:1fr}}
 
+.shell-language{position:fixed;top:18px;right:20px;display:flex;padding:3px;border-radius:10px;border:1px solid var(--line);background:#0f141bcc}
+.shell-language button{padding:6px 12px;border:0;background:transparent;color:var(--muted);font-size:12px;border-radius:7px}
+.shell-language button.active{background:var(--panel2);color:var(--text)}
+.shell-controls select{width:auto;min-width:180px}
 .shell-connecting{display:grid;gap:14px;justify-items:center;text-align:center}
 .shell-connecting-text{margin:12px 0 0;font-size:17px;font-weight:600}
 .shell-ghost{background:transparent;border-color:transparent;color:var(--muted);font-weight:600}

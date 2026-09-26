@@ -1218,4 +1218,8 @@ export const cs: Catalog = {
   "desktop.toastRetry": "Zkusit znovu",
   "desktop.toastSwitch": "Přepnout",
   "desktop.dismiss": "Zavřít",
+  "desktop.sectionGeneral": "Obecné",
+  "desktop.language": "Jazyk",
+  "desktop.languageText": "Obrazovky, menu a oznámení aplikace. Webové rozhraní si jazyk drží podle účtu.",
+  "desktop.languageSystem": "Podle systému ({language})",
 };

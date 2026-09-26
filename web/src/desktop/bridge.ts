@@ -52,8 +52,13 @@ export interface LocalState {
   busy: boolean;
 }
 
+export type ShellLocale = "cs" | "en";
+
 export interface ShellState {
-  locale: "cs" | "en";
+  /** The language the shell speaks now. */
+  locale: ShellLocale;
+  /** The user's explicit choice, or null to follow macOS (Czech when the system is Czech, else English). */
+  localeChoice: ShellLocale | null;
   appVersion: string;
   screen: MainScreen;
   connection: Connection | null;
@@ -90,6 +95,8 @@ export interface ShellBridge {
   /** Restarts the local backend with the stored settings (and reconnects the main window if it
    *  showed it). The page asks for confirmation first when `local.busy`. */
   restartLocal(): Promise<{ ok: boolean }>;
+  /** Stores the language choice (null = follow the system); menus and pages switch at once. */
+  setLocale(locale: ShellLocale | null): Promise<void>;
   openSettings(): void;
   /** The toast's own action: "fallback" retries the chosen server, "server-back" switches to it. */
   toastAction(id: number): void;

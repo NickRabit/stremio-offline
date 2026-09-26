@@ -13,6 +13,7 @@ export function previewBridge(search: string): ShellBridge | null {
   const screenKind = query.get("screen") ?? "welcome";
   let state: ShellState = {
     locale: query.get("locale") === "en" ? "en" : "cs",
+    localeChoice: null,
     appVersion: "0.4.85",
     screen: screenKind === "connecting" ? { kind: "connecting", target: nas, name: "NAS v obýváku", origin: "http://192.168.1.20:8090" }
       : screenKind === "error" ? { kind: "error", target: nas, name: "NAS v obýváku", origin: "http://192.168.1.20:8090", reason: (query.get("reason") as never) ?? "unreachable", port: 8091 }
@@ -56,6 +57,7 @@ export function previewBridge(search: string): ShellBridge | null {
     probe: async (origin) => { await wait(600); return origin.includes("192.168.1.20") ? { ok: true, version: "0.4.84", restricted: false, secure: true } : { ok: false, reason: "unreachable" }; },
     setLocalSettings: async (settings) => { emit({ ...state, local: { ...state.local, settings } }); return { ok: true, restartNeeded: state.local.running }; },
     restartLocal: async () => { await wait(800); return { ok: true }; },
+    setLocale: async (locale) => { emit({ ...state, locale: locale ?? "cs", localeChoice: locale }); },
     openSettings: () => undefined,
     toastAction: () => undefined,
     dismissToast: () => undefined,

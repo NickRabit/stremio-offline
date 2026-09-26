@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { Check, Copy, Info, Laptop, Network, Pencil, Plus, RefreshCw, Server, Trash2 } from "lucide-react";
-import { t } from "../i18n";
+import { Check, Copy, Info, Languages, Laptop, Network, Pencil, Plus, RefreshCw, Server, Trash2 } from "lucide-react";
+import { LOCALE_NAMES, t } from "../i18n";
 import { SettingControl, SettingsSectionHead } from "../settings-ui";
 import type { LocalSettings, ServerProfile, ShellBridge, ShellState, Target } from "./bridge";
 import { ServerForm } from "./ServerForm";
@@ -17,11 +17,31 @@ export function SettingsWindow({ bridge, state }: { bridge: ShellBridge; state: 
   return <div className="shell-settings">
     <header className="shell-titlebar"><h1>{t("desktop.settingsTitle")}</h1></header>
     <div className="shell-settings-body">
+      <GeneralSection bridge={bridge} state={state}/>
       <ServerSection bridge={bridge} state={state}/>
       <ThisMacSection bridge={bridge} state={state}/>
       <AboutSection state={state}/>
     </div>
   </div>;
+}
+
+function GeneralSection({ bridge, state }: { bridge: ShellBridge; state: ShellState }) {
+  const systemLocale = state.localeChoice === null ? state.locale : null;
+  return <section className="settings-section shell-card">
+    <SettingsSectionHead icon={<Languages/>} title={t("desktop.sectionGeneral")}/>
+    <div className="shell-controls">
+      <SettingControl title={t("desktop.language")} text={t("desktop.languageText")}>
+        <select value={state.localeChoice ?? "system"} onChange={(event) => {
+          const value = event.target.value;
+          void bridge.setLocale(value === "cs" || value === "en" ? value : null);
+        }}>
+          <option value="system">{t("desktop.languageSystem", { language: LOCALE_NAMES[systemLocale ?? state.locale] })}</option>
+          <option value="cs">{LOCALE_NAMES.cs}</option>
+          <option value="en">{LOCALE_NAMES.en}</option>
+        </select>
+      </SettingControl>
+    </div>
+  </section>;
 }
 
 function ServerSection({ bridge, state }: { bridge: ShellBridge; state: ShellState }) {

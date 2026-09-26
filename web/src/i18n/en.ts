@@ -1223,4 +1223,8 @@ export const en = {
   "desktop.toastRetry": "Try again",
   "desktop.toastSwitch": "Switch",
   "desktop.dismiss": "Close",
+  "desktop.sectionGeneral": "General",
+  "desktop.language": "Language",
+  "desktop.languageText": "The app's own screens, menus and notifications. The web interface keeps each account's language.",
+  "desktop.languageSystem": "Like the system ({language})",
 };
