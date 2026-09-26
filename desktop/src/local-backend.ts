@@ -26,7 +26,8 @@ export const MACOS_TOOL_DIRECTORIES = ["/opt/homebrew/bin", "/usr/local/bin"] as
 const MACOS_FALLBACK_PATH = "/usr/bin:/bin:/usr/sbin:/sbin";
 
 const sameSettings = (a: LocalSettings, b: LocalSettings) =>
-  a.allowPrivateAddons === b.allowPrivateAddons && a.publish === b.publish && a.publishPort === b.publishPort;
+  a.allowPrivateAddons === b.allowPrivateAddons && a.publish === b.publish && a.publishPort === b.publishPort
+  && a.downloadDir === b.downloadDir;
 
 const SERVICE_NAME = "Stremio Offline backend";
 
@@ -240,7 +241,7 @@ export function localBackendEnv(
   env.DESKTOP_LOCAL_BACKEND = "1";
   env.PORT = String(port);
   env.DATA_DIR = path.join(userDataDir, INSTANCE_DIRECTORY);
-  env.DOWNLOAD_DIR = path.join(userDataDir, DOWNLOADS_DIRECTORY);
+  env.DOWNLOAD_DIR = settings.downloadDir ?? path.join(userDataDir, DOWNLOADS_DIRECTORY);
   // Off leaves an inherited value alone: a developer running from a terminal keeps their own.
   if (settings.allowPrivateAddons) env.ALLOW_PRIVATE_ADDONS = "1";
   if (platform === "darwin") env.PATH = macosPath(env.PATH, directoryExists);

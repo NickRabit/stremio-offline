@@ -15,6 +15,11 @@ export const en = {
   "menu.serverSettings": "Server settings…",
   "menu.project": "Stremio Offline on GitHub",
   "settings.title": "Settings",
+  "reset.title": "Reset this Mac?",
+  "reset.detail": "The server on this Mac stops. Its accounts, libraries, history and settings move to the Trash, and the app starts again with the welcome screen.",
+  "reset.detailDownloads": "The download folder {dir} moves to the Trash too.",
+  "reset.confirm": "Reset",
+  "reset.cancel": "Cancel",
 };
 
 export const cs: typeof en = {
@@ -32,6 +37,11 @@ export const cs: typeof en = {
   "menu.serverSettings": "Nastavení serverů…",
   "menu.project": "Stremio Offline na GitHubu",
   "settings.title": "Nastavení",
+  "reset.title": "Obnovit tento Mac?",
+  "reset.detail": "Server na tomto Macu se zastaví. Jeho účty, knihovny, historie a nastavení se přesunou do Koše a aplikace začne znovu úvodní obrazovkou.",
+  "reset.detailDownloads": "Do Koše se přesune i složka pro stahování {dir}.",
+  "reset.confirm": "Obnovit",
+  "reset.cancel": "Zrušit",
 };
 
 export function catalogue(locale: "cs" | "en"): typeof en {

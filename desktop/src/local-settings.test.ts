@@ -25,7 +25,7 @@ const fileOf = (dir: string) => path.join(dir, SETTINGS_FILE);
 
 test("a missing file is the default settings", async () => {
   await withDir(async (dir) => {
-    assert.deepEqual(await readLocalSettings(dir), { allowPrivateAddons: false, publish: false, publishPort: 8091 });
+    assert.deepEqual(await readLocalSettings(dir), { allowPrivateAddons: false, publish: false, publishPort: 8091, downloadDir: null });
   });
 });
 
@@ -57,9 +57,32 @@ test("a non-boolean switch in the file falls back to the default", async () => {
 test("each field is read leniently, a bad one taking its own default", async () => {
   await withDir(async (dir) => {
     await writeFile(fileOf(dir), JSON.stringify({ allowPrivateAddons: true, publish: "yes", publishPort: 80 }), "utf8");
-    assert.deepEqual(await readLocalSettings(dir), { allowPrivateAddons: true, publish: false, publishPort: 8091 });
+    assert.deepEqual(await readLocalSettings(dir), { allowPrivateAddons: true, publish: false, publishPort: 8091, downloadDir: null });
     await writeFile(fileOf(dir), JSON.stringify({ allowPrivateAddons: 1, publish: true, publishPort: 8095 }), "utf8");
-    assert.deepEqual(await readLocalSettings(dir), { allowPrivateAddons: false, publish: true, publishPort: 8095 });
+    assert.deepEqual(await readLocalSettings(dir), { allowPrivateAddons: false, publish: true, publishPort: 8095, downloadDir: null });
+  });
+});
+
+test("the stored download folder is kept only when it is an absolute path", async () => {
+  await withDir(async (dir) => {
+    const longest = `/${"a".repeat(1023)}`;
+    const cases: [unknown, string | null][] = [
+      ["/Users/someone/Movies", "/Users/someone/Movies"],
+      [null, null],
+      ["", null],
+      ["relative/path", null],
+      [longest, longest],
+      [`${longest}a`, null],
+      ["/Users/some\0one", null],
+      [7, null],
+      [true, null],
+      [{ path: "/Users/someone" }, null],
+      [["/Users/someone"], null],
+    ];
+    for (const [value, expected] of cases) {
+      await writeFile(fileOf(dir), JSON.stringify({ downloadDir: value }), "utf8");
+      assert.equal((await readLocalSettings(dir)).downloadDir, expected, JSON.stringify(value));
+    }
   });
 });
 
@@ -79,17 +102,17 @@ test("a port outside 1024..65535 in the file falls back to the default", async (
 test("unknown fields in the file are ignored", async () => {
   await withDir(async (dir) => {
     await writeFile(fileOf(dir), JSON.stringify({ allowPrivateAddons: true, port: 8090 }), "utf8");
-    assert.deepEqual(await readLocalSettings(dir), { allowPrivateAddons: true, publish: false, publishPort: 8091 });
+    assert.deepEqual(await readLocalSettings(dir), { allowPrivateAddons: true, publish: false, publishPort: 8091, downloadDir: null });
   });
 });
 
 test("settings that were written are read back", async () => {
   await withDir(async (dir) => {
-    await writeLocalSettings(dir, { allowPrivateAddons: true, publish: true, publishPort: 8095 });
-    assert.deepEqual(await readLocalSettings(dir), { allowPrivateAddons: true, publish: true, publishPort: 8095 });
+    await writeLocalSettings(dir, { allowPrivateAddons: true, publish: true, publishPort: 8095, downloadDir: "/Users/someone/Movies" });
+    assert.deepEqual(await readLocalSettings(dir), { allowPrivateAddons: true, publish: true, publishPort: 8095, downloadDir: "/Users/someone/Movies" });
     assert.deepEqual(await readdir(dir), [SETTINGS_FILE]);
-    await writeLocalSettings(dir, { allowPrivateAddons: false, publish: false, publishPort: 8091 });
-    assert.deepEqual(await readLocalSettings(dir), { allowPrivateAddons: false, publish: false, publishPort: 8091 });
+    await writeLocalSettings(dir, { allowPrivateAddons: false, publish: false, publishPort: 8091, downloadDir: null });
+    assert.deepEqual(await readLocalSettings(dir), { allowPrivateAddons: false, publish: false, publishPort: 8091, downloadDir: null });
     assert.deepEqual(await readdir(dir), [SETTINGS_FILE]);
   });
 });
@@ -97,17 +120,17 @@ test("settings that were written are read back", async () => {
 test("the switch is saved on its own, not over the remembered port", async () => {
   await withDir(async (dir) => {
     await writeRememberedPort(dir, 8090);
-    await writeLocalSettings(dir, { allowPrivateAddons: true, publish: false, publishPort: 8091 });
+    await writeLocalSettings(dir, { allowPrivateAddons: true, publish: false, publishPort: 8091, downloadDir: null });
     assert.equal(await readRememberedPort(dir), 8090);
     assert.deepEqual([...await readdir(dir)].sort(), ["local-backend.json", SETTINGS_FILE]);
   });
 });
 
-test("the IPC input has exactly three fields with the right types", () => {
-  assert.deepEqual(parseLocalSettings({ allowPrivateAddons: true, publish: true, publishPort: 8091 }),
-    { allowPrivateAddons: true, publish: true, publishPort: 8091 });
-  assert.deepEqual(parseLocalSettings({ allowPrivateAddons: false, publish: false, publishPort: 8095 }),
-    { allowPrivateAddons: false, publish: false, publishPort: 8095 });
+test("the IPC input has exactly four fields with the right types", () => {
+  assert.deepEqual(parseLocalSettings({ allowPrivateAddons: true, publish: true, publishPort: 8091, downloadDir: null }),
+    { allowPrivateAddons: true, publish: true, publishPort: 8091, downloadDir: null });
+  assert.deepEqual(parseLocalSettings({ allowPrivateAddons: false, publish: false, publishPort: 8095, downloadDir: "/Users/someone/Movies" }),
+    { allowPrivateAddons: false, publish: false, publishPort: 8095, downloadDir: "/Users/someone/Movies" });
   const rejected: unknown[] = [
     null,
     undefined,
@@ -118,6 +141,7 @@ test("the IPC input has exactly three fields with the right types", () => {
     [{ allowPrivateAddons: true, publish: false, publishPort: 8091 }],
     {},
     { allowPrivateAddons: true, publish: false },
+    { allowPrivateAddons: true, publish: false, publishPort: 8091 },
     { allowPrivateAddons: true, publish: false, publishPort: 8091, extra: 1 },
     { allowPrivateAddons: "true" },
     { allowPrivateAddons: 1 },
@@ -128,6 +152,12 @@ test("the IPC input has exactly three fields with the right types", () => {
     { allowPrivateAddons: true, publish: false, publishPort: "8091" },
     { allowPrivateAddons: true, publish: 1, publishPort: 8091 },
     { allowPrivateAddons: true, publish: false, port: 8090 },
+    { allowPrivateAddons: true, publish: false, publishPort: 8091, downloadDir: undefined },
+    { allowPrivateAddons: true, publish: false, publishPort: 8091, downloadDir: "" },
+    { allowPrivateAddons: true, publish: false, publishPort: 8091, downloadDir: "relative/path" },
+    { allowPrivateAddons: true, publish: false, publishPort: 8091, downloadDir: `/${"a".repeat(1024)}` },
+    { allowPrivateAddons: true, publish: false, publishPort: 8091, downloadDir: 7 },
+    { allowPrivateAddons: true, publish: false, publishPort: 8091, downloadDir: true, extra: 1 },
   ];
   for (const input of rejected) assert.equal(parseLocalSettings(input), null, JSON.stringify(input));
 });
