@@ -1,13 +1,13 @@
-import { isVideo } from "./library.js";
+import { isVideo, parseSeason } from "./library.js";
 import { LIBRARY_ID } from "./libraries.js";
 
 export const QUALITY_TOKENS = [
   "2160p", "1080p", "720p", "576p", "480p", "4k", "uhd",
   "hdr", "hdr10", "hdr10+", "hdrplus", "dv",
   "web-dl", "webrip", "hdtv", "bdrip", "bluray", "blu-ray", "remux",
-  "dvdrip", "dvdscr",
+  "hdrip", "brrip", "dvdrip", "dvdscr",
   "proper", "repack", "unrated", "extended", "theatrical", "remastered",
-  "czdab", "dabing",
+  "czdab", "dabing", "cztit", "titulky", "tit", "cz", "eng", "sk",
   "ac3", "eac3", "ddp", "dts", "dtshd", "truehd", "atmos", "aac", "mp3", "flac", "opus",
   "x264", "x265", "h264", "h265", "hevc", "avc", "xvid", "divx",
   "10bit", "8bit", "hires",
@@ -36,8 +36,12 @@ export interface ParsedMedia {
   title: string;
   query: string;
   year?: number;
+  /** A trailing country tag such as "(US)" or "(UK)". */
+  country?: string;
   season?: number;
   episode?: number;
+  /** The name of the unit's single film when it differs from the folder it sits in. */
+  fileTitle?: string;
   providerHints?: { imdb?: string; tmdb?: string; tvdb?: string };
 }
 
@@ -46,9 +50,10 @@ const GENRES = new Set(CZECH_GENRE_TOKENS.map((token) => token.toLowerCase()));
 const PHRASES = [...QUALITY_PHRASES].sort((a, b) => b.length - a.length);
 const YEAR_TOKEN = /^(19|20)\d{2}$/;
 const PAREN_YEAR = /\((19|20)\d{2}\)/;
+const COUNTRY_TAG = /\s*\(([A-Z]{2})\)\s*$/;
 const TAGGED_EPISODE = /\bS(\d{1,3})E(\d{1,4})\b/i;
 const X_EPISODE = /\b(\d{1,2})x(\d{1,4})\b/i;
-const CHANNEL = /\b[57]\.1\b/gi;
+const CHANNEL = /\b(?:[57]\.1|2\.0)\b/gi;
 const RELEASE_GROUP = /-[A-Za-z0-9]{2,15}$/;
 
 /** Physical segments of one film: "CD1", "Disc 2". Two of them are still one film. */
@@ -158,6 +163,19 @@ function isYearPart(part: string): boolean {
   if (QUALITY.has(part.toLowerCase())) return false;
   if (/^s\d/i.test(part) || /e\d+$/i.test(part)) return false;
   return true;
+}
+
+/** A run glued with hyphens is a scene name ("REZISTENCE-2015-HDRip") when it carries at
+ *  least two of them, or one of its pieces is a year or a quality; a single hyphen with
+ *  neither is the word's own ("Spider-Man", "WALL-E", "K-pop"). */
+const HYPHEN_RUN = /\S*-\S*/g;
+
+function splitHyphenRuns(source: string): string {
+  return source.replace(HYPHEN_RUN, (run) => {
+    const pieces = run.split("-");
+    if (pieces.length - 1 < 2 && !pieces.some((piece) => isYearPart(piece) || QUALITY.has(piece.toLowerCase()))) return run;
+    return pieces.join(" ");
+  });
 }
 
 function takeYear(source: string): { year?: number; rest: string } {
@@ -310,10 +328,83 @@ function lastFreeIndex(tokens: string[], taken: Set<number>): number | undefined
  *  spellings of one number produce the same string, and a physical segment ("CD2") is no
  *  installment at all. */
 export function partSignature(value: string | undefined, bare = false): string {
-  return partMarkers(markerTokens(String(value ?? "")), bare)
+  const signature = (source: string) => partMarkers(markerTokens(source), bare)
     .filter((marker) => marker.kind === "installment")
     .map((marker) => `part:${marker.number}`)
     .join("+");
+  const raw = String(value ?? "");
+  const whole = signature(raw);
+  if (whole || !bare) return whole;
+  // A subtitle behind the number ("Doba ledová 4: Země v pohybu") still names the part, but
+  // only the head in front of it may be read that way: a bare number needs the caller's leave.
+  const head = raw.split(SUBTITLE_SEPARATOR)[0]!;
+  if (!head || head === raw) return "";
+  return signature(head);
+}
+
+/** The first separator between a title and its subtitle. */
+const SUBTITLE_SEPARATOR = /\s*:\s*|\s+[-–—]\s+/;
+
+/** Every form of the file's name worth comparing and searching, most trusted first.
+ *  `side` marks a half of a spaced bilingual/subtitle split, which is weaker evidence. */
+export interface TitleVariant { text: string; side: boolean }
+
+const VARIANT_SEPARATOR = new RegExp(
+  [" - ", " / ", " | "].map((separator) => separator.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"),
+);
+
+/** The sides of a spaced bilingual or subtitle split: " - ", " / " and " | " only, so a
+ *  hyphen inside a word ("Spider-Man") is never one. */
+export function titleSides(value: string): string[] {
+  return value.split(VARIANT_SEPARATOR);
+}
+
+/** Lowercased, accent-free and punctuation-free, for asking whether two names are the same. */
+function variantKey(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function titleVariants(parsed: ParsedMedia): TitleVariant[] {
+  const out: TitleVariant[] = [];
+  const seen = new Set<string>();
+  const add = (text: string, side: boolean) => {
+    const value = text.trim();
+    if (!value || out.length >= 5) return;
+    const key = variantKey(value);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    out.push({ text: value, side });
+  };
+  add(parsed.query, false);
+  add(parsed.title, false);
+  for (const side of titleSides(parsed.title)) {
+    const normalized = variantKey(side);
+    if (normalized.length < 3) continue;
+    if (!stripPartMarkers(normalized)) continue;
+    if (/^\d+$/.test(normalized)) continue;
+    add(side, true);
+  }
+  // A name the single film inside a folder carries is weaker evidence than the folder a
+  // person named: it may be proposed, never bound on its own.
+  add(parsed.fileTitle ?? "", true);
+  return out;
+}
+
+const PACKAGING_FOLDER = /^[A-Z0-9]{2,12}$/;
+
+/** A folder name that says who packed a release, not what it is: "REFF", "SPARKS". */
+export function isPackagingFolderName(name: string): boolean {
+  const trimmed = name.trim();
+  if (!PACKAGING_FOLDER.test(trimmed) || !/[A-Z]/.test(trimmed)) return false;
+  if (parseSeason(trimmed) != null) return false;
+  const parsed = parseMediaName(trimmed);
+  return parsed.year == null && parsed.season == null && parsed.episode == null && !parsed.providerHints;
 }
 
 /** The words of one title with the markers a filter accepts left out. */
@@ -345,9 +436,15 @@ export function parseMediaName(name: string): ParsedMedia {
   const original = name;
   const releaseGroup = original.match(RELEASE_GROUP)?.[0].slice(1);
   const { rest: withoutHints, hints } = extractHints(original);
+  // A bracket is punctuation between fields, not part of the title: "[2007]" is a year and
+  // "[Eng]" is a language tag that the quality list drops.
+  const separated = withoutHints.replace(/[\[\]]/g, " ");
+  const countryTag = COUNTRY_TAG.exec(separated);
+  const country = countryTag?.[1];
+  const withoutCountry = countryTag ? separated.slice(0, countryTag.index) : separated;
 
   let year: number | undefined;
-  const firstYear = takeYear(withoutHints);
+  const firstYear = takeYear(splitHyphenRuns(withoutCountry));
   year = firstYear.year;
   let working = firstYear.rest;
 
@@ -370,7 +467,8 @@ export function parseMediaName(name: string): ParsedMedia {
     const before = tokens.join(" ");
     let joined = stripPhrases(before);
     tokens = dropQualityTokens(joined.split(" ").filter(Boolean));
-    if (releaseGroup && tokens.length > 1 && tokens[tokens.length - 1]!.toLowerCase() === releaseGroup.toLowerCase()) {
+    const trailing = tokens[tokens.length - 1]?.replace(/^[.\s_-]+/, "").toLowerCase();
+    if (releaseGroup && tokens.length > 1 && trailing === releaseGroup.toLowerCase()) {
       tokens = tokens.slice(0, -1);
     }
     if (tokens.join(" ") === before) break;
@@ -397,6 +495,7 @@ export function parseMediaName(name: string): ParsedMedia {
   const query = bilingualQuery(title);
   const result: ParsedMedia = { title, query };
   if (year != null) result.year = year;
+  if (country) result.country = country;
   if (season != null) result.season = season;
   if (episode != null) result.episode = episode;
   if (hints.imdb || hints.tmdb || hints.tvdb) result.providerHints = hints;

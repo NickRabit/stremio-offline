@@ -234,7 +234,7 @@ test("a title search maps a movie page and keeps the original name and year", as
   assert.equal(result.length, 2, "a row without a name is dropped");
   assert.deepEqual(result[0], {
     id: "tmdb:31410", type: "movie", name: "Návrat do budoucnosti", originalTitle: "Back to the Future",
-    releaseInfo: "1985", poster: "https://image.tmdb.org/t/p/w500/back.jpg",
+    releaseInfo: "1985", released: "1985-07-03", poster: "https://image.tmdb.org/t/p/w500/back.jpg",
     background: "https://image.tmdb.org/t/p/w1280/backdrop.jpg",
   });
   assert.equal("releaseInfo" in result[1]!, false, "a missing release date is not invented");
@@ -250,8 +250,49 @@ test("a title search reads the tv endpoint and the series name", async () => {
 
   assert.match(calls[0]!, /\/search\/tv\?/);
   assert.deepEqual(result, [{
-    id: "tmdb:1396", type: "series", name: "Perníkový táta", originalTitle: "Breaking Bad", releaseInfo: "2008",
+    id: "tmdb:1396", type: "series", name: "Perníkový táta", originalTitle: "Breaking Bad",
+    releaseInfo: "2008", released: "2008-01-20",
   }]);
+});
+
+test("a series row carries its origin countries for the matcher", async () => {
+  clearTmdbCache();
+  const result = await tmdbSearch("series", "The Office", config, async () => json({
+    results: [{ id: 2316, name: "The Office", original_name: "The Office", first_air_date: "2005-03-24", origin_country: ["US"] }],
+  }));
+  assert.deepEqual(result[0]?.originCountry, ["US"]);
+});
+
+test("a search row carries the vote count and the release day the matcher needs", async () => {
+  clearTmdbCache();
+  const result = await tmdbSearch("movie", "Navrat do budoucnosti", config, async () => json({
+    results: [
+      searchRow({ vote_count: 33000 }),
+      searchRow({ id: 99, vote_count: "many" }),
+      searchRow({ id: 98, release_date: "30.7.1985" }),
+    ],
+  }));
+
+  assert.equal(result[0]!.voteCount, 33000);
+  assert.equal(result[0]!.released, "1985-07-03");
+  assert.equal("voteCount" in result[1]!, false, "a vote count that is not a number is not invented");
+  assert.equal("released" in result[2]!, false, "a date that is not a day of the month is not invented");
+});
+
+test("a known year narrows the search the way each medium spells it", async () => {
+  clearTmdbCache();
+  const movieCalls: string[] = [];
+  await tmdbSearch("movie", "Jackass", config, async (url) => { movieCalls.push(url); return json({ results: [] }); }, { year: 2010 });
+  assert.match(movieCalls[0]!, /\/search\/movie\?/);
+  assert.match(movieCalls[0]!, /year=2010/);
+
+  const seriesCalls: string[] = [];
+  await tmdbSearch("series", "Peppa Pig", config, async (url) => { seriesCalls.push(url); return json({ results: [] }); }, { year: 2004 });
+  assert.match(seriesCalls[0]!, /first_air_date_year=2004/);
+
+  const plain: string[] = [];
+  await tmdbSearch("movie", "Jackass", config, async (url) => { plain.push(url); return json({ results: [] }); });
+  assert.equal(/year=/.test(plain[0]!), false, "a search without a year asks without one");
 });
 
 test("a search that times out, is refused or answers rubbish is an empty list", async () => {

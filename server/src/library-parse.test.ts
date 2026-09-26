@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { parseMediaPath, partSignature, stripPartMarkers, stripSegmentMarkers } from "./library-parse.js";
+import { isPackagingFolderName, parseMediaName, parseMediaPath, partSignature, stripPartMarkers, stripSegmentMarkers, titleVariants } from "./library-parse.js";
 
 const parsed = (relative: string) => {
   const result = parseMediaPath(relative);
@@ -55,6 +55,18 @@ test("a dotted year next to 1080p is a year, digits inside 1080p are not", () =>
   assert.equal(parseMediaPath("Show.2160p.mkv").year, undefined);
 });
 
+test("the web of a release is a tag, the Web of a name is a name", () => {
+  assert.equal(parseMediaName("Charlotte's Web").title, "Charlotte's Web");
+  assert.equal(parseMediaName("Charlotte's Web 2006 1080p WEB-DL x264").title, "Charlotte's Web");
+  assert.equal(parseMediaName("Charlotte's.Web.2006.WEBRip.x264").title, "Charlotte's Web");
+});
+
+test("brackets separate fields without losing their content", () => {
+  const result = parseMediaName("Transformers[2007]DvDrip[Eng]-aXXo");
+  assert.equal(result.title, "Transformers");
+  assert.equal(result.year, 2007);
+});
+
 test("digits glued to SxxExx are not a year", () => {
   const result = parseMediaPath("Show.S2020E01.mkv");
   assert.equal(result.year, undefined);
@@ -89,6 +101,15 @@ test("a folder that only looks like a library id still counts as a parent", () =
 
 test("a library root folder keeps its own name", () => {
   assert.equal(parseMediaPath("lib_00000001/Heat (1995)").title, "Heat");
+});
+
+test("a trailing country tag is read as a country, not as part of the name", () => {
+  const office = parseMediaPath("The Office (US)");
+  assert.equal(office.title, "The Office");
+  assert.equal(office.country, "US");
+  assert.equal(parseMediaPath("The Office (UK)").country, "UK");
+  assert.equal(parseMediaPath("Doctor Who (2005)").year, 2005, "a parenthesised year is not a country");
+  assert.equal(parseMediaPath("Doctor Who (2005)").country, undefined);
 });
 
 test("a part signature canonicalises the number, ignores tags and leaves segments alone", () => {
@@ -127,4 +148,56 @@ test("the words a matcher drops carry the installment a segment left behind", ()
   assert.equal(stripPartMarkers("saw iii cd1"), "saw", "scoring compares the film's own words");
   assert.equal(stripPartMarkers("apollo 13 cd1"), "apollo", "the bare number after the title goes with it");
   assert.equal(stripSegmentMarkers("saw iii cd1"), "saw iii", "only the physical half is a segment");
+});
+
+test("a number in front of a subtitle is the part the whole name states", () => {
+  assert.equal(partSignature("Doba ledová 4: Země v pohybu", true), "part:4");
+  assert.equal(partSignature("Hellboy II: The Golden Army", true), "part:2");
+  assert.equal(partSignature("Ice Age: Continental Drift", true), "");
+  assert.equal(partSignature("Alita: Battle Angel", true), "", "a single-token head names no part");
+  assert.equal(partSignature("2001: A Space Odyssey", true), "");
+  assert.equal(partSignature("Doba ledová 4: Země v pohybu", false), "", "a bare number still needs the caller's leave");
+});
+
+test("a scene name glued with hyphens is read field by field", () => {
+  const name = (value: string) => {
+    const result = parseMediaName(value);
+    return { title: result.title, year: result.year };
+  };
+  assert.deepEqual(name("REZISTENCE-2015-HDRip-2.0-CZ-titulky - 2.dil"), { title: "REZISTENCE - 2 dil", year: 2015 });
+  assert.deepEqual(name("Allegiant.2016.BRRip.XviD.CZtit - 3.dil"), { title: "Allegiant - 3 dil", year: 2016 });
+  assert.deepEqual(name("The-Interview-(2014)-TIT"), { title: "The Interview", year: 2014 });
+  assert.deepEqual(name("Sirotčinec-slečny-Peregrinové-pro-podivné-děti-(2016)-CZ-titulky"), {
+    title: "Sirotčinec slečny Peregrinové pro podivné děti", year: 2016,
+  });
+  assert.deepEqual(name("Spider-Man"), { title: "Spider-Man", year: undefined }, "one hyphen with no year or quality is the word's own");
+  assert.deepEqual(name("WALL-E"), { title: "WALL-E", year: undefined });
+  assert.deepEqual(name("K-pop - Lovkyně démonů"), { title: "K-pop - Lovkyně démonů", year: undefined });
+});
+
+test("a name is compared and searched in every form worth trying", () => {
+  assert.deepEqual(titleVariants(parseMediaName("Alita - Bojový Anděl")), [
+    { text: "Alita", side: false },
+    { text: "Alita - Bojový Anděl", side: false },
+    { text: "Bojový Anděl", side: true },
+  ]);
+  assert.deepEqual(titleVariants(parseMediaName("Spider-Man")), [{ text: "Spider-Man", side: false }],
+    "a hyphen without spaces never splits a name");
+  assert.deepEqual(titleVariants(parseMediaName("Na hrane zitrka - Edge of Tomorrow")), [
+    { text: "Na hrane zitrka - Edge of Tomorrow", side: false },
+    { text: "Na hrane zitrka", side: true },
+    { text: "Edge of Tomorrow", side: true },
+  ]);
+  assert.deepEqual(titleVariants(parseMediaName("Kill Bill - Vol 1")).map((variant) => variant.text),
+    ["Kill Bill - Vol 1", "Kill Bill"],
+    "a half that is only an installment marker is not a form of the name");
+});
+
+test("only a release-group folder is packaging, never a title or a season", () => {
+  assert.equal(isPackagingFolderName("REFF"), true);
+  assert.equal(isPackagingFolderName("SPARKS"), true);
+  assert.equal(isPackagingFolderName("Alien"), false);
+  assert.equal(isPackagingFolderName("UP 2009"), false);
+  assert.equal(isPackagingFolderName("2012"), false);
+  assert.equal(isPackagingFolderName("S01"), false);
 });

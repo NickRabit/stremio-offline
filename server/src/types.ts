@@ -61,6 +61,9 @@ export interface MetaItem {
   description?: string;
   releaseInfo?: string;
   year?: string | number;
+  /** How long the film runs, as the provider writes it: a number of minutes or "85 min".
+   *  The scan reads only a movie's, to tell two namesakes of one name apart. */
+  runtime?: string | number | null;
   genres?: string[];
   videos?: Array<Record<string, unknown>>;
   [key: string]: unknown;

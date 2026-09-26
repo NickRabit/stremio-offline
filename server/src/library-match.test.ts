@@ -8,7 +8,7 @@ import {
   MATCH_RULE_VERSION, type LibraryMetaRecord, type LibrarySuggestion, type TitleUnit,
 } from "./library-match.js";
 import { fileMayUseFolderArtwork } from "./artwork.js";
-import { parseMediaPath, partSignature } from "./library-parse.js";
+import { parseMediaPath, partSignature, titleVariants } from "./library-parse.js";
 import { posixBase } from "./libraries.js";
 import type { FoundFile } from "./library.js";
 import type { MetaItem } from "./types.js";
@@ -96,6 +96,19 @@ test("a series stays grouped by series, season and episode", () => {
   assert.equal(titleUnits(files)[0]!.sampleFiles.length, 3);
 });
 
+test("loose numbered episodes are one series, while sequels and disc halves are not", () => {
+  const units = (names: string[]) => titleUnits(names.map((name) => file(`Folder/${name}`))).map((unit) => `${unit.kind}:${unit.key}`).sort();
+  assert.deepEqual(units(["Navstevnici.01.avi", "Navstevnici.02.avi"]), ["series:Folder"],
+    "zero-padded episode numbers sharing one title are one series");
+  assert.deepEqual(units(["Show díl 01.avi", "Show díl 02.avi"]), ["series:Folder"],
+    "an episode word says the same");
+  assert.deepEqual(units(["Toy Story 1.mkv", "Toy Story 2.mkv", "Toy Story 3.mkv"]), [
+    "movie:Folder/Toy Story 1.mkv", "movie:Folder/Toy Story 2.mkv", "movie:Folder/Toy Story 3.mkv",
+  ], "padded sequels are separate films");
+  assert.deepEqual(units(["Film CD1.avi", "Film CD2.avi"]), ["movie:Folder"],
+    "the two halves of one film stay one film");
+});
+
 test("a typed library keeps the boundaries and changes only the kind", () => {
   const files = ["Father Ted/01 serie/01 - Good Luck, Father Ted.mkv", "Interstellar.avi"].map(file);
   assert.deepEqual(
@@ -164,6 +177,35 @@ test("grouping folders recurse and leftover files are units", () => {
   assert.equal(matchKeyFor("Webshare/Movies/Title/file.mkv", files), "Webshare/Movies/Title");
 });
 
+test("a release-group folder under a named folder does not become the title", () => {
+  const units = titleUnits(["lib_a/Ice Age 4/REFF/REFF.avi"].map(file));
+  assert.deepEqual(units.map((unit) => `${unit.kind}:${unit.key}`), ["movie:lib_a/Ice Age 4"]);
+  assert.deepEqual(units[0]!.sampleFiles, ["lib_a/Ice Age 4/REFF/REFF.avi"]);
+  assert.deepEqual(parseUnit(units[0]!), { title: "Ice Age 4", query: "Ice Age 4" },
+    "the release group is no name the film carries");
+});
+
+test("a package folder is re-keyed only where a person's name sits above it", () => {
+  // A mixed-case title folder is a name, not a release group.
+  assert.deepEqual(keys(["Sci-fi/Alien/Alien.avi"]), ["movie:Sci-fi/Alien"]);
+  // Two different films inside the same release group stay two units of their own.
+  assert.deepEqual(
+    keys(["Film/REFF/a.avi", "Film/REFF/b.avi"]),
+    ["movie:Film/REFF/a.avi", "movie:Film/REFF/b.avi"],
+  );
+  // A parent with a video of its own keeps every unit it had.
+  assert.deepEqual(
+    keys(["Film/REFF/REFF.avi", "Film/other.avi"]),
+    ["movie:Film/REFF", "movie:Film/other.avi"],
+  );
+  // A release group directly under the library root never re-keys to the root.
+  assert.deepEqual(keys(["lib_00000001/REFF/REFF.avi"]), ["movie:lib_00000001/REFF"]);
+});
+
+test("a season folder is never read as a release group", () => {
+  assert.deepEqual(keys(["Show/S01/Show.S01E01.mkv", "Show/S01/Show.S01E02.mkv"]), ["series:Show"]);
+});
+
 test("matchKeyFor walks from an episode to the show and from a collection child to itself", () => {
   const series = ["Father Ted/01 serie/01 - Good Luck, Father Ted.mkv"].map(file);
   assert.equal(matchKeyFor("Father Ted/01 serie/01 - Good Luck, Father Ted.mkv", series), "Father Ted");
@@ -188,6 +230,45 @@ test("a unit is searched by its own name: the film for a loose file, the folder 
   const [folderUnit] = titleUnits(encoded);
   assert.equal(folderUnit!.key, "Practical Magic (1998)");
   assert.deepEqual(parseUnit(folderUnit!), { title: "Practical Magic", query: "Practical Magic", year: 1998 });
+});
+
+test("a folder's single film supplies the year and the name the folder lacks", () => {
+  const only = (files: string[]) => titleUnits(files.map(file))[0]!;
+  assert.deepEqual(parseUnit(only(["Sherlock Holomes/Sherlock Holmes 2009 720p BRRip.mp4"])), {
+    title: "Sherlock Holomes", query: "Sherlock Holomes", year: 2009, fileTitle: "Sherlock Holmes",
+  });
+  assert.deepEqual(parseUnit(only(["Hanební parchanti/Hanebný pancharti.mkv"])), {
+    title: "Hanební parchanti", query: "Hanební parchanti", fileTitle: "Hanebný pancharti",
+  });
+  assert.deepEqual(parseUnit(only(["Diktátor/The.Dictator.2012.UNRATED.avi"])), {
+    title: "Diktátor", query: "Diktátor", year: 2012, fileTitle: "The Dictator",
+  });
+  const prince = parseUnit(only(["Malý princ/Malý-princ-[Little-Prince]-(2015)-CZ-dabing.avi"]));
+  assert.equal(prince.year, 2015);
+  assert.equal(prince.fileTitle, "Malý princ Little-Prince", "brackets are separators now, so their content is part of the name");
+  assert.deepEqual(parseUnit(only(["Nevinnost/Nevinnost (2011) Cz.avi"])), {
+    title: "Nevinnost", query: "Nevinnost", year: 2011,
+  }, "a file whose name says the same thing adds nothing");
+  assert.deepEqual(parseUnit(only(["Vzhůru do oblak (2009)/Up.mkv"])), {
+    title: "Vzhůru do oblak", query: "Vzhůru do oblak", year: 2009,
+  }, "a name too short to be a film's is not offered as one");
+  assert.deepEqual(
+    titleVariants(parseUnit(only(["Sherlock Holomes/Sherlock Holmes 2009 720p BRRip.mp4"]))).map((variant) => variant.text),
+    ["Sherlock Holomes", "Sherlock Holmes"],
+    "the film's own name is the last, weakest form of it",
+  );
+});
+
+test("a series unit, a multi-film folder and an encode set read as they always did", () => {
+  const seriesUnit = titleUnits([file("Show/Show.S01E01.mkv")], "series")[0]!;
+  assert.deepEqual(parseUnit(seriesUnit), { title: "Show", query: "Show" });
+  // Two loose films in one folder are two file-keyed units, each read from its own name.
+  const two = titleUnits(["Film/a.mp4", "Film/b.mp4"].map(file));
+  assert.deepEqual(two.map((unit) => unit.key), ["Film/a.mp4", "Film/b.mp4"]);
+  assert.deepEqual(two.map((unit) => parseUnit(unit).title), ["a", "b"]);
+  // An encode set keeps the folder's own name: there is no single film to add to it.
+  const encodes = titleUnits(["Movie/Movie.mkv", "Movie/Movie 1080p.mkv"].map(file));
+  assert.deepEqual(parseUnit(encodes[0]!), { title: "Movie", query: "Movie" });
 });
 
 test("every sample file of a unit resolves to that unit, not to its own path", () => {
@@ -216,14 +297,62 @@ test("a unique year-and-title hit auto-accepts; close years do not", () => {
   assert.equal(pickSuggestion(years)?.id, years.sort((a, b) => b.score - a.score)[0]!.item.id);
 });
 
-test("the same title with a current year wins over older namesakes", () => {
+test("namesakes are decided by how many people know them, never by which one is newer", () => {
   const parsed = parseMediaPath("The Secret Woman");
   const hits = [
     scoreHit(parsed, meta("The Secret Woman", 2026, "movie", "tt37275992"), "movie"),
     scoreHit(parsed, meta("The Secret Woman", 1918, "movie", "tt0009595"), "movie"),
     scoreHit(parsed, meta("Secret Woman", 2023, "movie", "tt39106713"), "movie"),
   ];
-  assert.equal(autoAccept(hits, 2026)?.item.id, "tt37275992");
+  assert.equal(autoAccept(hits, 2026), undefined, "a recent release date alone is not the answer");
+});
+
+test("a namesake wins only when it is far better known than its rivals", () => {
+  const parsed = parseMediaPath("Peppa Pig");
+  const czech = { id: "tt-peppa-2004", type: "series", name: "Prasátko Peppa", originalTitle: "Peppa Pig", releaseInfo: "2004", voteCount: 768 };
+  const empty = { id: "tt-peppa-none", type: "series", name: "Peppa Pig", voteCount: 0 };
+  assert.equal(autoAccept([scoreHit(parsed, czech, "series"), scoreHit(parsed, empty, "series")])?.item.id, "tt-peppa-2004",
+    "the series 768 people know beats the one nobody has voted for");
+
+  const avatar = parseMediaPath("Avatar");
+  const film = { id: "tt-avatar-2009", type: "movie", name: "Avatar", releaseInfo: "2009", voteCount: 33000 };
+  const namesake = { id: "tt-avatar-2025", type: "movie", name: "नरसिंहा Avatar", releaseInfo: "2025", voteCount: 3 };
+  assert.ok(scoreHit(avatar, namesake, "movie").titleSimilarity < 0.95, "a name in another script is not the name Avatar");
+  assert.equal(autoAccept([scoreHit(avatar, film, "movie"), scoreHit(avatar, namesake, "movie")])?.item.id, "tt-avatar-2009");
+
+  const close = parseMediaPath("Some Film");
+  const strong = { id: "tt-strong", type: "movie", name: "Some Film", voteCount: 120 };
+  const weaker = { id: "tt-weaker", type: "movie", name: "Some Film", voteCount: 40 };
+  assert.equal(autoAccept([scoreHit(close, strong, "movie"), scoreHit(close, weaker, "movie")]), undefined,
+    "a namesake ten times smaller than the other is not dominant enough");
+});
+
+test("a country tag tells two series of the same name apart", () => {
+  const parsed = parseMediaPath("The Office (US)");
+  const us = { id: "tt-us", type: "series", name: "The Office", releaseInfo: "2005", originCountry: ["US"], voteCount: 3000 };
+  const gb = { id: "tt-gb", type: "series", name: "The Office", releaseInfo: "2001", originCountry: ["GB"], voteCount: 1500 };
+  assert.equal(autoAccept([scoreHit(parsed, us, "series"), scoreHit(parsed, gb, "series")], undefined, { country: parsed.country })?.item.id, "tt-us");
+  assert.equal(autoAccept([scoreHit(parsed, us, "series"), scoreHit(parsed, gb, "series")]), undefined,
+    "without the country the two namesakes stay ambiguous");
+});
+
+test("a candidate's subtitle does not hide a matching head", () => {
+  const parsed = parseMediaPath("Borat Subsequent Moviefilm");
+  const hit = scoreHit(parsed, {
+    id: "tt-borat", type: "movie", name: "Borat Subsequent Moviefilm: Delivery of Prodigious Bribe to American Regime",
+  }, "movie");
+  assert.equal(hit.titleSimilarity, 1);
+  assert.equal(hit.sideMatch, true);
+  assert.equal(autoAccept([hit]), undefined, "a name only the head explains is never bound on its own");
+});
+
+test("a candidate that is not out yet is never bound on its own", () => {
+  const parsed = parseMediaPath("Some Obscure Film");
+  const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const future = scoreHit(parsed, { id: "tt-future", type: "movie", name: "Some Obscure Film", released: tomorrow }, "movie");
+  assert.equal(future.autoEligible, false);
+  assert.equal(autoAccept([future]), undefined);
+  assert.equal(pickSuggestion([future])?.id, "tt-future", "but a person may still be shown it");
 });
 
 test("a 15-point gap at score 85 auto-accepts the series", () => {
@@ -704,6 +833,15 @@ test("a token coincidence is not title evidence", () => {
   assert.equal(pickSuggestion([scoreHit(orphanage, meta("Semi-Pro", 2008, "movie", "tt2"), "movie")]), undefined);
 });
 
+test("a name written with and without its space is the same words", () => {
+  const spaced = parseMediaPath("Amazing Spiderman");
+  const film = scoreHit(spaced, meta("The Amazing Spider-Man", 2012, "movie", "tt-spider"), "movie");
+  assert.equal(film.titleSimilarity, 1, "one space does not make two names");
+  assert.equal(autoAccept([film])?.item.id, "tt-spider");
+  const sequel = scoreHit(spaced, meta("The Amazing Spider-Man 2", 2014, "movie", "tt-spider-2"), "movie");
+  assert.equal(sequel.partConflict, true, "the sequel is a different film, not another spelling");
+});
+
 test("sequel and part markers are evidence, and a conflict is never auto-accepted", () => {
   const partOne = parseMediaPath("Second Film Part 1");
   const partTwo = scoreHit(partOne, meta("Second Film Part 2", 2004, "movie", "tt2"), "movie");
@@ -721,6 +859,168 @@ test("sequel and part markers are evidence, and a conflict is never auto-accepte
   const first = scoreHit(whole, meta("Second Film", 2004, "movie", "tt1"), "movie");
   assert.equal(first.partConflict, undefined);
   assert.equal(autoAccept([first, sequel])?.item.id, "tt1");
+});
+
+test("the whole name is scored, so a localized title meets its own spelling", () => {
+  const hit = scoreHit(
+    parseMediaPath("lib_a/Alita - Bojový Anděl"),
+    { id: "tt-alita", type: "movie", name: "Alita: Bojový anděl", originalTitle: "Alita: Battle Angel", releaseInfo: "2019" },
+    "movie",
+  );
+  assert.ok(hit.titleSimilarity >= 0.95, `expected a near-exact name, got ${hit.titleSimilarity}`);
+  assert.ok(hit.score >= 95, `expected a high score, got ${hit.score}`);
+  assert.equal(hit.autoEligible, true, "the whole title won the comparison, not a weaker half");
+});
+
+test("a localized name that states the part is agreement, not a conflict", () => {
+  assert.equal(partSignature("Doba ledová 4: Země v pohybu", true), "part:4");
+  const hit = scoreHit(
+    parseMediaPath("lib_a/Ice Age 4"),
+    { id: "tt-ice-age-4", type: "movie", name: "Doba ledová 4: Země v pohybu", originalTitle: "Ice Age: Continental Drift", releaseInfo: "2012" },
+    "movie",
+  );
+  assert.equal(hit.partConflict, undefined, "one name that states part four is enough to agree");
+});
+
+test("a part a candidate's localized name states is agreement even when the file writes no marker", () => {
+  const hotel3 = scoreHit(
+    parseMediaPath("Hotel Transylvania 3 Summer Vacation"),
+    { id: "tt-ht3", type: "movie", name: "Hotel Transylvánie 3: Příšerózní dovolená", originalTitle: "Hotel Transylvania 3: Summer Vacation", releaseInfo: "2018" },
+    "movie",
+  );
+  assert.equal(hotel3.partConflict, undefined, "the file names part three without a marker");
+  assert.equal(autoAccept([hotel3])?.item.id, "tt-ht3");
+
+  const hotel4 = scoreHit(
+    parseMediaPath("Hotel Transylvania 4 Transformania"),
+    { id: "tt-ht4", type: "movie", name: "Hotel Transylvánie 4: Transformánie", originalTitle: "Hotel Transylvania: Transformania", releaseInfo: "2022" },
+    "movie",
+  );
+  assert.equal(hotel4.partConflict, undefined, "the localized name states part four, the original does not");
+});
+
+test("a number glued to a 3D copy still names the part the file is", () => {
+  const hit = scoreHit(
+    parseMediaPath("Jackass 3D"),
+    { id: "tt-3d", type: "movie", name: "Jackass 3", originalTitle: "Jackass 3D", releaseInfo: "2010" },
+    "movie",
+  );
+  assert.equal(hit.partConflict, undefined, "the 3D copy is part three, not a different film");
+  assert.equal(hit.titleSimilarity, 1, "the original title carries the name");
+  assert.equal(autoAccept([hit])?.item.id, "tt-3d");
+});
+
+test("a candidate that states a part the file itself does not is a conflict", () => {
+  const sequel = scoreHit(
+    parseMediaPath("Alvin a Chipmunkove"),
+    { id: "tt-alvin-2", type: "movie", name: "Alvin a Chipmunkové 2", originalTitle: "Alvin and the Chipmunks: The Squeakquel", releaseInfo: "2009" },
+    "movie",
+  );
+  assert.equal(sequel.partConflict, true, "the file names no part, the candidate is the sequel");
+  assert.equal(sequel.autoEligible, false);
+
+  const nuts = scoreHit(
+    parseMediaPath("Ice Age 4"),
+    { id: "tt-nuts", type: "movie", name: "Ice Age: No Time for Nuts 4-D", originalTitle: "Ice Age: No Time for Nuts 4-D" },
+    "movie",
+  );
+  assert.equal(nuts.partConflict, true, "a number welded into a word is not the part the file states");
+  assert.equal(nuts.autoEligible, false);
+});
+
+test("a half of a spaced name may identify, but never binds on its own", () => {
+  const hit = scoreHit(
+    parseMediaPath("Star Wars - The Empire Strikes Back"),
+    meta("Star Wars", 1977, "movie", "tt0076759"),
+    "movie",
+  );
+  assert.equal(hit.titleSimilarity, 1, "the half matches the candidate exactly");
+  assert.equal(hit.sideMatch, true, "a weaker half of the name is never enough to bind");
+  assert.equal(autoAccept([hit]), undefined);
+  assert.equal(pickSuggestion([hit])?.id, "tt0076759", "but it can still be proposed");
+});
+
+test("both halves of a bilingual name naming one candidate are not a weaker half", () => {
+  const cases: Array<[string, MetaItem]> = [
+    ["Blockers - Kazisuci", { id: "tt-blockers", type: "movie", name: "Kazišuci", originalTitle: "Blockers", releaseInfo: "2018" }],
+    ["Na hrane zitrka - Edge of Tomorrow", { id: "tt1631867", type: "movie", name: "Na hraně zítřka", originalTitle: "Edge of Tomorrow", releaseInfo: "2014" }],
+    ["Dum kouzel - The House of Magic", { id: "tt-magic", type: "movie", name: "Dům kouzel", originalTitle: "The House of Magic", releaseInfo: "2013" }],
+    ["Zustan se mnou - If I Stay", { id: "tt-stay", type: "movie", name: "Zůstaň se mnou", originalTitle: "If I Stay", releaseInfo: "2014" }],
+  ];
+  for (const [name, candidate] of cases) {
+    const hit = scoreHit(parseMediaPath(name), candidate, "movie");
+    assert.equal(hit.sideMatch, undefined, `${name}: each half names the one candidate`);
+    assert.equal(autoAccept([hit])?.item.id, candidate.id, `${name} is bound`);
+  }
+
+  // The other half names nothing the candidate knows, so one half of the name is all there is.
+  const starWars = scoreHit(parseMediaPath("Star Wars - The Empire Strikes Back"), meta("Star Wars", 1977, "movie", "tt0076759"), "movie");
+  assert.equal(starWars.sideMatch, true);
+  assert.equal(autoAccept([starWars]), undefined);
+});
+
+test("a folder misspelt but named by its file is the film inside it", () => {
+  const only = (files: string[]) => titleUnits(files.map(file))[0]!;
+  const sherlock = scoreHit(
+    parseUnit(only(["Sherlock Holomes/Sherlock Holmes 2009 720p BRRip.mp4"])),
+    meta("Sherlock Holmes", 2009, "movie", "tt0988045"),
+    "movie",
+  );
+  assert.equal(sherlock.sideMatch, undefined, "the folder and the file spell the one name");
+  assert.equal(autoAccept([sherlock])?.item.id, "tt0988045");
+
+  const hanebni = scoreHit(
+    parseUnit(only(["Hanební parchanti/Hanebný pancharti.mkv"])),
+    { id: "tt0361748", type: "movie", name: "Hanebný pancharti", originalTitle: "Inglourious Basterds", releaseInfo: "2009" },
+    "movie",
+  );
+  assert.equal(hanebni.sideMatch, undefined, "two letters off is still the folder's own name");
+  assert.equal(autoAccept([hanebni])?.item.id, "tt0361748");
+
+  // A folder naming something else is not the film the file names, however well they each score.
+  const obsession = scoreHit(
+    parseUnit(only(["Obsession/The.Voices.2014.mkv"])),
+    meta("The Voices", 2014, "movie", "tt1567437"),
+    "movie",
+  );
+  assert.equal(obsession.sideMatch, true);
+  assert.equal(autoAccept([obsession]), undefined);
+});
+
+test("a whole-name match wins a tie with the head or the half of a longer name", () => {
+  const toyStory = scoreHit(
+    parseMediaPath("Toy Story 3"),
+    { id: "tt-ts3", type: "movie", name: "Toy Story 3: Příběh hraček", originalTitle: "Toy Story 3", releaseInfo: "2010" },
+    "movie",
+  );
+  assert.equal(toyStory.sideMatch, undefined, "the original title carries the whole name");
+  assert.equal(toyStory.titleSimilarity, 1);
+  assert.equal(autoAccept([toyStory])?.item.id, "tt-ts3");
+
+  const pulp = scoreHit(parseMediaPath("Pulp Fiction"), {
+    id: "tt0110912", type: "movie", name: "Pulp Fiction", releaseInfo: "1994", voteCount: 28000,
+  }, "movie");
+  const facts = scoreHit(parseMediaPath("Pulp Fiction"), {
+    id: "tt-facts", type: "movie", name: "Pulp Fiction: The Facts", releaseInfo: "1994", voteCount: 5,
+  }, "movie");
+  assert.equal(facts.sideMatch, true, "the head of the longer name is only half of it");
+  assert.equal(autoAccept([pulp, facts])?.item.id, "tt0110912", "a namesake nobody watched is no rival of it");
+});
+
+test("a part is agreed with the name that states one, whichever name it is", () => {
+  // The localized name numbers the sequel; the original states no part at all.
+  const trolls = scoreHit(
+    parseMediaPath("Trolls Band Together"),
+    { id: "tt-trolls-3", type: "movie", name: "Trollové 3", originalTitle: "Trolls Band Together", releaseInfo: "2023" },
+    "movie",
+  );
+  assert.equal(trolls.partConflict, undefined, "the name the file matched states no part");
+  assert.equal(autoAccept([trolls])?.item.id, "tt-trolls-3");
+
+  // The first film of a name is seldom numbered, so a lone "I" beside no number is no conflict.
+  const transformers = scoreHit(parseMediaPath("Transformers I"), meta("Transformers", 2007, "movie", "tt0418279"), "movie");
+  assert.equal(transformers.partConflict, undefined);
+  assert.equal(autoAccept([transformers])?.item.id, "tt0418279");
 });
 
 test("a missing year on both sides leans on the name alone", () => {

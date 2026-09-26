@@ -4,11 +4,15 @@ import { log } from "./logger.js";
 import {
   autoAccept, cacheFieldsFromMeta, episodesFromMeta, knownTitleForUnit, lookupSkipped, needsRefresh, pickSuggestion, scanMiss,
   scannedRecently, scanSkipReason, scoreHit, viewMeta, yearFromMeta, MATCH_RULE_VERSION, needsReevaluation, parseUnit,
+  runtimeRivals, isExtraName, SUGGESTION_MIN_SCORE,
   type LibraryEpisodeRecord, type LibraryMetaRecord, type LibrarySuggestion, type SuggestionReason, type TitleKind, type TitleUnit,
+  type ScoredHit,
 } from "./library-match.js";
 import type { LibraryCandidate, LibraryCandidateSource } from "./library-candidates.js";
 import type { ParsedMedia } from "./library-parse.js";
-import { parseLibraryPath } from "./libraries.js";
+import { confirmedByEpisodes, diskEpisodes, episodeEvidence, type CatalogueEpisode, type EpisodeEvidence } from "./library-episodes.js";
+import { confirmedByRuntime, runtimeMinutes } from "./library-runtime.js";
+import { parseLibraryPath, posixBase } from "./libraries.js";
 import { isPathWithin, type FoundFile } from "./library.js";
 import type { MediaInfo } from "./naming.js";
 import type { AddonRecord, MetaItem } from "./types.js";
@@ -103,6 +107,9 @@ export interface LibraryScanOpts {
   busy: () => ScanPauseReason | undefined;
   /** A key is qualified, so the scan cannot build a path from one root: the host resolves it. */
   pathExists: (key: string) => Promise<boolean>;
+  /** How long the file at a qualified key runs, in seconds, or undefined when that cannot be
+   *  read. The scan measures a film only to tell its nameless namesakes apart. */
+  durationOf?: (key: string) => Promise<number | undefined>;
   /** Whether an automatic run may still look up metadata for this library. Asked before
    *  each queued item, so a switch thrown mid-run keeps the rest of its queue out. */
   automaticLibraryEnabled: (libraryId: string) => boolean;
@@ -150,6 +157,24 @@ function idForPrefix(raw: string, prefixes: string[], needle: string): string | 
 function recheckable(record?: LibraryMetaRecord): boolean {
   const viewed = viewMeta(record);
   return Boolean(viewed?.id) && viewed!.source === "scan" && viewed!.locked === false && record?.skipLookup !== true;
+}
+
+function catalogueEpisodes(meta: MetaItem | null | undefined): CatalogueEpisode[] {
+  if (!Array.isArray(meta?.videos)) return [];
+  const out: CatalogueEpisode[] = [];
+  for (const video of meta.videos) {
+    const season = Number(video.season);
+    const episode = Number(video.episode);
+    if (!Number.isFinite(season) || !Number.isFinite(episode)) continue;
+    const name = video.name ?? video.title;
+    out.push({ season, episode, ...(typeof name === "string" && name.trim() ? { name: name.trim() } : {}) });
+  }
+  return out;
+}
+
+/** How many people know a candidate, when the provider said. Nobody knows it otherwise. */
+function votesOf(item: MetaItem): number {
+  return typeof item.voteCount === "number" && Number.isFinite(item.voteCount) ? item.voteCount : 0;
 }
 
 export class LibraryScan {
@@ -458,7 +483,10 @@ export class LibraryScan {
             : [];
           if (gallery.length) this.opts.saveGallery?.(key, gallery);
         }
-        log("INFO", "Library title matched", { key, type: item.type, id: item.id, source: "scan" });
+        log("INFO", "Library title matched", {
+          key, type: item.type, id: item.id, source: "scan",
+          ...(identified.accept.evidence ? { evidence: identified.accept.evidence } : {}),
+        });
         this.note("accepted", key, { kind: unit.kind, ...identified.diagnostic, candidateId: item.id });
         await this.finishUnit("matched");
         return;
@@ -518,7 +546,11 @@ export class LibraryScan {
   /** A provider that breaks is a title nobody could identify yet, not a run that failed. */
   private async searchTrusted(unit: TitleUnit, parsed: ParsedMedia): Promise<LibraryCandidate[]> {
     try {
-      return await this.opts.candidates.searchLibraryCandidates(parsed.query, unit.kind, parsed.year, this.language());
+      // The whole title, not the shortened query: the service searches every form of it,
+      // and the name the folder's single film carries, which the folder may have misspelled.
+      return await this.opts.candidates.searchLibraryCandidates(
+        parsed.title || parsed.query, unit.kind, parsed.year, this.language(), parsed.fileTitle ? [parsed.fileTitle] : [],
+      );
     } catch (error) {
       log("WARN", "The trusted title search failed", { key: unit.key, reason: error instanceof Error ? error.message : String(error) });
       return [];
@@ -532,7 +564,7 @@ export class LibraryScan {
   private async recheckBinding(key: string, unit: TitleUnit, bound: LibraryMetaRecord, parsed: ParsedMedia) {
     const found = await this.searchTrusted(unit, parsed);
     const hits = found.filter((candidate) => candidate.item.name).map((candidate) => scoreHit(parsed, candidate.item, unit.kind));
-    const accepted = autoAccept(hits);
+    const accepted = autoAccept(hits, undefined, { country: parsed.country });
     const candidate = accepted ? found.find((entry) => entry.item.id === accepted.item.id) : undefined;
     const chosen = candidate ? await this.opts.candidates.resolveSelected(candidate, unit.kind, this.language()) : undefined;
     if (!accepted || !chosen) {
@@ -592,9 +624,97 @@ export class LibraryScan {
     await this.finishUnit("skipped");
   }
 
+  /** A namesake series is decided by the episodes on disk: ask the leading candidates for
+   *  their episode lists and let the names the files carry pick the one that fits. */
+  private async confirmByEpisodes(
+    unit: TitleUnit,
+    addons: AddonRecord[],
+    hits: ScoredHit[],
+    byId: Map<string, LibraryCandidate>,
+  ): Promise<{ hit: ScoredHit; candidate: LibraryCandidate; item: MetaItem } | undefined> {
+    const ranked: ScoredHit[] = [];
+    const seen = new Set<string>();
+    for (const hit of [...hits].sort((a, b) => b.score - a.score)) {
+      if (hit.score < SUGGESTION_MIN_SCORE || seen.has(hit.item.id) || !byId.has(hit.item.id)) continue;
+      seen.add(hit.item.id);
+      ranked.push(hit);
+      if (ranked.length >= 3) break;
+    }
+    if (!ranked.length) return undefined;
+
+    const disk = diskEpisodes(unit.sampleFiles);
+    const candidates: LibraryCandidate[] = [];
+    const items: MetaItem[] = [];
+    const evidence: EpisodeEvidence[] = [];
+    for (const hit of ranked) {
+      const candidate = byId.get(hit.item.id)!;
+      let item = candidate.item;
+      let meta: MetaItem | null = null;
+      try {
+        item = await this.opts.candidates.resolveSelected(candidate, "series", this.language());
+        meta = await this.opts.metadata(addons, "series", item.id);
+      } catch {
+        meta = null;
+      }
+      candidates.push(candidate);
+      items.push(item);
+      evidence.push(episodeEvidence(disk, catalogueEpisodes(meta)));
+    }
+    const confirmed = confirmedByEpisodes(evidence);
+    if (confirmed == null) return undefined;
+    return { hit: ranked[confirmed]!, candidate: candidates[confirmed]!, item: items[confirmed]! };
+  }
+
+  /** Nameless namesakes of one film are told apart by how long each one runs. The candidates
+   *  are asked for their lengths first, so a film nobody stated a runtime for is never probed;
+   *  the file is read once and, when exactly one candidate fits it, that candidate is the film. */
+  private async confirmByRuntime(
+    unit: TitleUnit,
+    addons: AddonRecord[],
+    hits: ScoredHit[],
+    byId: Map<string, LibraryCandidate>,
+  ): Promise<{ hit: ScoredHit; candidate: LibraryCandidate; item: MetaItem } | undefined> {
+    const durationOf = this.opts.durationOf;
+    if (!durationOf) return undefined;
+    // CD halves and several encodes of one film are one identity already; measuring them says
+    // nothing about which of two namesakes the folder holds.
+    const videos = unit.sampleFiles.filter((file) => !isExtraName(posixBase(file)));
+    if (videos.length !== 1) return undefined;
+    const rivals = runtimeRivals(hits);
+    if (rivals.length < 2) return undefined;
+
+    const candidates: LibraryCandidate[] = [];
+    const items: MetaItem[] = [];
+    const runtimes: Array<number | undefined> = [];
+    for (const hit of rivals) {
+      const candidate = byId.get(hit.item.id);
+      if (!candidate) return undefined;
+      let item = candidate.item;
+      let meta: MetaItem | null = null;
+      try {
+        item = await this.opts.candidates.resolveSelected(candidate, "movie", this.language());
+        meta = await this.opts.metadata(addons, "movie", item.id);
+      } catch {
+        meta = null;
+      }
+      candidates.push(candidate);
+      items.push(item);
+      runtimes.push(runtimeMinutes(meta));
+    }
+    if (runtimes.filter((runtime) => runtime != null).length < 2) return undefined;
+
+    let seconds: number | undefined;
+    try { seconds = await durationOf(videos[0]!); }
+    catch { seconds = undefined; }
+    if (seconds == null) return undefined;
+    const confirmed = confirmedByRuntime(seconds, runtimes, rivals.map((hit) => votesOf(hit.item)));
+    if (confirmed == null) return undefined;
+    return { hit: rivals[confirmed]!, candidate: candidates[confirmed]!, item: items[confirmed]! };
+  }
+
   private async identify(unit: TitleUnit, parsed: ParsedMedia): Promise<{
     called: boolean;
-    accept?: { item: MetaItem; candidate?: LibraryCandidate; fromSearch: boolean };
+    accept?: { item: MetaItem; candidate?: LibraryCandidate; fromSearch: boolean; evidence?: "episodes" | "runtime" };
     suggestion?: LibrarySuggestion;
     diagnostic?: Partial<ScanDiagnostic>;
   }> {
@@ -626,9 +746,27 @@ export class LibraryScan {
     const found = await this.searchTrusted(unit, parsed);
     const byId = new Map(found.map((candidate) => [candidate.item.id, candidate]));
     const hits = found.filter((candidate) => candidate.item.name).map((candidate) => scoreHit(parsed, candidate.item, unit.kind));
-    const accepted = autoAccept(hits);
+    let accepted = autoAccept(hits, undefined, { country: parsed.country });
     const suggestion = pickSuggestion(hits);
-    const candidate = accepted ? byId.get(accepted.item.id) : undefined;
+    let candidate = accepted ? byId.get(accepted.item.id) : undefined;
+    let episodeAccept: { hit: ScoredHit; candidate: LibraryCandidate; item: MetaItem } | undefined;
+    if (!accepted && unit.kind === "series" && suggestion) {
+      episodeAccept = await this.confirmByEpisodes(unit, addons, hits, byId);
+      if (episodeAccept) {
+        accepted = episodeAccept.hit;
+        candidate = episodeAccept.candidate;
+      }
+    }
+    // A film whose rivals share its name has nothing left in the name to tell them apart. Its
+    // length does, so the file is measured once and the candidate it fits is bound.
+    let runtimeAccept: { hit: ScoredHit; candidate: LibraryCandidate; item: MetaItem } | undefined;
+    if (!accepted && unit.kind === "movie" && suggestion?.reason === "ambiguous") {
+      runtimeAccept = await this.confirmByRuntime(unit, addons, hits, byId);
+      if (runtimeAccept) {
+        accepted = runtimeAccept.hit;
+        candidate = runtimeAccept.candidate;
+      }
+    }
     const best = [...hits].sort((a, b) => b.score - a.score)[0];
     const bestProvider = best ? byId.get(best.item.id)?.provider : undefined;
     const diagnostic: Partial<ScanDiagnostic> = {
@@ -647,7 +785,8 @@ export class LibraryScan {
     };
     // The identity that gets bound is the resolved one: an IMDb id whenever the provider has
     // one, so the same title can be looked up by every addon that speaks it.
-    const item = candidate ? await this.opts.candidates.resolveSelected(candidate, unit.kind, this.language()) : accepted?.item;
+    const item = episodeAccept?.item ?? runtimeAccept?.item
+      ?? (candidate ? await this.opts.candidates.resolveSelected(candidate, unit.kind, this.language()) : accepted?.item);
     // Why a title stayed unmatched is the question the scan gets asked most, and the scores
     // that decided it are gone the moment this returns. Debug level: one line per title.
     if (!accepted || !item) log("DEBUG", "No match was accepted for the title", {
@@ -658,7 +797,18 @@ export class LibraryScan {
         : undefined,
       suggested: suggestion?.name,
     });
-    return { called: true, accept: accepted && item ? { item, candidate, fromSearch: true } : undefined, suggestion, diagnostic };
+    return {
+      called: true,
+      accept: accepted && item
+        ? {
+          item, candidate, fromSearch: true,
+          ...(episodeAccept ? { evidence: "episodes" as const }
+            : runtimeAccept ? { evidence: "runtime" as const } : {}),
+        }
+        : undefined,
+      suggestion,
+      diagnostic,
+    };
   }
 
   private save() {

@@ -24,7 +24,7 @@ const waitFor = async (pred: () => boolean | Promise<boolean>, ms = 2_000) => {
 };
 
 /** The trusted search the scan is handed: only these candidates can ever be bound. */
-type Search = (query: string, kind: "movie" | "series", year: number | undefined) => Promise<MetaItem[]>;
+type Search = (query: string, kind: "movie" | "series", year: number | undefined, extra?: string[]) => Promise<MetaItem[]>;
 
 const harness = async (overrides: Partial<LibraryScanOpts> & { search?: Search; gallery?: (candidate: LibraryCandidate) => Promise<Array<{ url: string; kind: "poster" | "background" | "logo" }>> } = {}) => {
   const dataDir = await mkdtemp(path.join(tmpdir(), "stremio-scan-"));
@@ -38,15 +38,17 @@ const harness = async (overrides: Partial<LibraryScanOpts> & { search?: Search; 
   const backdrops: string[] = [];
   const deleted: string[] = [];
   const searches: string[] = [];
+  const extraSearches: string[][] = [];
   const metas: string[] = [];
   const frames: string[] = [];
   const galleries: Array<{ key: string; pictures: Array<{ url: string; kind: string }> }> = [];
   let busy: ScanPauseReason | undefined;
   const search: Search = overrides.search ?? (async (query) => [hit(query)]);
   const candidates: LibraryCandidateSource = {
-    searchLibraryCandidates: async (query, kind, year) => {
+    searchLibraryCandidates: async (query, kind, year, _language, extra) => {
       searches.push(query);
-      return (await search(query, kind, year)).map((item) => ({ item, provider: "cinemeta" as const }));
+      extraSearches.push(extra ?? []);
+      return (await search(query, kind, year, extra)).map((item) => ({ item, provider: "cinemeta" as const }));
     },
     resolveSelected: async (candidate) => candidate.item,
     galleryOf: async (candidate) => (overrides.gallery ? overrides.gallery(candidate) : []),
@@ -78,7 +80,7 @@ const harness = async (overrides: Partial<LibraryScanOpts> & { search?: Search; 
     metadata: async (addons, type, id) => { metas.push(id); return opts.metadata(addons, type, id); },
   });
   return {
-    dataDir, scan, store, posters, posterBackdrops, backdrops, deleted, searches, metas, frames, galleries,
+    dataDir, scan, store, posters, posterBackdrops, backdrops, deleted, searches, extraSearches, metas, frames, galleries,
     setBusy: (value: ScanPauseReason | undefined) => { busy = value; },
     close: async () => { await scan.stop(); await rm(dataDir, { recursive: true, force: true }); },
   };
@@ -601,6 +603,167 @@ test("a wrong kind or a year off by more than two is never auto-bound", async ()
   } finally { await wrongYear.close(); }
 });
 
+test("a namesake series is bound when its episodes are the ones on disk", async () => {
+  const blue = {
+    key: "Blue",
+    kind: "series" as const,
+    relative: "Blue",
+    sampleFiles: [
+      "Blue/Season 1/Blue.S01E01.Magic.Xylophone.mkv",
+      "Blue/Season 1/Blue.S01E02.Hospital.mkv",
+    ],
+  };
+  const candidates = [
+    { id: "tt-blue-1", type: "series", name: "Blue", voteCount: 3000 },
+    { id: "tt-blue-2", type: "series", name: "Blue", voteCount: 3000 },
+  ];
+  const h = await harness({
+    units: async () => [blue],
+    search: async () => candidates,
+    metadata: async (_addons, _type, id) => id === "tt-blue-1"
+      ? { id, type: "series", name: "Blue", videos: [
+        { season: 1, episode: 1, name: "Magic Xylophone" },
+        { season: 1, episode: 2, name: "Hospital" },
+      ] }
+      : { id, type: "series", name: "Blue", videos: [
+        { season: 1, episode: 1, name: "Unrelated" },
+        { season: 1, episode: 2, name: "Something Else" },
+      ] },
+  });
+  try {
+    await h.scan.start();
+    await waitFor(() => h.scan.snapshot().status === "completed");
+    assert.equal(h.scan.snapshot().matched, 1);
+    assert.equal(h.store.meta.Blue?.id, "tt-blue-1");
+    assert.equal(h.store.suggestions.Blue, undefined);
+  } finally { await h.close(); }
+});
+
+test("a series proposal stays a proposal when the episode lists cannot be read", async () => {
+  const blue = {
+    key: "Blue",
+    kind: "series" as const,
+    relative: "Blue",
+    sampleFiles: [
+      "Blue/Season 1/Blue.S01E01.Magic.Xylophone.mkv",
+      "Blue/Season 1/Blue.S01E02.Hospital.mkv",
+    ],
+  };
+  const h = await harness({
+    units: async () => [blue],
+    search: async () => [
+      { id: "tt-blue-1", type: "series", name: "Blue", voteCount: 3000 },
+      { id: "tt-blue-2", type: "series", name: "Blue", voteCount: 3000 },
+    ],
+    metadata: async () => null,
+  });
+  try {
+    await h.scan.start();
+    await waitFor(() => h.scan.snapshot().status === "completed");
+    assert.equal(h.scan.snapshot().matched, 0);
+    assert.equal(h.store.meta.Blue, undefined);
+    assert.equal(h.store.suggestions.Blue?.id, "tt-blue-1", "the proposal remains the ranked first candidate");
+  } finally { await h.close(); }
+});
+
+test("episode evidence is never asked for a movie", async () => {
+  const h = await harness({
+    units: async () => [movie("Blue")],
+    search: async () => [
+      { id: "tt-blue-1", type: "movie", name: "Blue", voteCount: 3000 },
+      { id: "tt-blue-2", type: "movie", name: "Blue", voteCount: 3000 },
+    ],
+  });
+  try {
+    await h.scan.start();
+    await waitFor(() => h.scan.snapshot().status === "completed");
+    assert.equal(h.store.suggestions.Blue?.reason, "ambiguous");
+    assert.deepEqual(h.metas, [], "no metadata lookup happens for a movie proposal");
+  } finally { await h.close(); }
+});
+
+test("a nameless namesake is settled by how long the file runs", async () => {
+  const probed: string[] = [];
+  const h = await harness({
+    units: async () => [{
+      key: "Lilo & Stitch",
+      kind: "movie",
+      relative: "Lilo & Stitch",
+      sampleFiles: ["Lilo & Stitch/Lilo.and.Stitch.mkv"],
+    }],
+    // Two films of the one name, the remake better known than the original.
+    search: async () => [
+      { id: "tt-2002", type: "movie", name: "Lilo & Stitch", releaseInfo: "2002", voteCount: 4000 },
+      { id: "tt-2025", type: "movie", name: "Lilo & Stitch", releaseInfo: "2025", voteCount: 9000 },
+    ],
+    metadata: async (_addons, _type, id) => (id === "tt-2002"
+      ? { id, type: "movie", name: "Lilo & Stitch", releaseInfo: "2002", runtime: "85 min" }
+      : { id, type: "movie", name: "Lilo & Stitch", releaseInfo: "2025", runtime: 108 }),
+    durationOf: async (key) => { probed.push(key); return 5100; },
+  });
+  try {
+    await h.scan.start();
+    await waitFor(() => h.scan.snapshot().status === "completed");
+    assert.equal(h.scan.snapshot().matched, 1);
+    assert.deepEqual(probed, ["Lilo & Stitch/Lilo.and.Stitch.mkv"], "the file is measured once");
+    assert.equal(h.store.meta["Lilo & Stitch"]?.id, "tt-2002", "the file's 85 minutes are the original, not the remake");
+    assert.equal(h.store.suggestions["Lilo & Stitch"], undefined);
+  } finally { await h.close(); }
+});
+
+test("a namesake nobody can measure stays a proposal", async () => {
+  const h = await harness({
+    units: async () => [{
+      key: "Lilo & Stitch",
+      kind: "movie",
+      relative: "Lilo & Stitch",
+      sampleFiles: ["Lilo & Stitch/Lilo.and.Stitch.mkv"],
+    }],
+    search: async () => [
+      { id: "tt-2002", type: "movie", name: "Lilo & Stitch", releaseInfo: "2002", voteCount: 4000 },
+      { id: "tt-2025", type: "movie", name: "Lilo & Stitch", releaseInfo: "2025", voteCount: 9000 },
+    ],
+    metadata: async (_addons, _type, id) => (id === "tt-2002"
+      ? { id, type: "movie", name: "Lilo & Stitch", releaseInfo: "2002", runtime: 85 }
+      : { id, type: "movie", name: "Lilo & Stitch", releaseInfo: "2025", runtime: 108 }),
+    durationOf: async () => undefined,
+  });
+  try {
+    await h.scan.start();
+    await waitFor(() => h.scan.snapshot().status === "completed");
+    assert.equal(h.scan.snapshot().matched, 0);
+    assert.equal(h.store.meta["Lilo & Stitch"], undefined);
+    assert.equal(h.store.suggestions["Lilo & Stitch"]?.reason, "ambiguous", "an unknown length settles nothing");
+  } finally { await h.close(); }
+});
+
+test("a film in two CD halves is never measured against a namesake", async () => {
+  const probed: string[] = [];
+  const h = await harness({
+    units: async () => [{
+      key: "Lilo & Stitch",
+      kind: "movie",
+      relative: "Lilo & Stitch",
+      sampleFiles: ["Lilo & Stitch/Lilo.and.Stitch.CD1.mkv", "Lilo & Stitch/Lilo.and.Stitch.CD2.mkv"],
+    }],
+    search: async () => [
+      { id: "tt-2002", type: "movie", name: "Lilo & Stitch", releaseInfo: "2002", voteCount: 4000 },
+      { id: "tt-2025", type: "movie", name: "Lilo & Stitch", releaseInfo: "2025", voteCount: 9000 },
+    ],
+    metadata: async (_addons, _type, id) => (id === "tt-2002"
+      ? { id, type: "movie", name: "Lilo & Stitch", releaseInfo: "2002", runtime: 85 }
+      : { id, type: "movie", name: "Lilo & Stitch", releaseInfo: "2025", runtime: 108 }),
+    durationOf: async (key) => { probed.push(key); return 5100; },
+  });
+  try {
+    await h.scan.start();
+    await waitFor(() => h.scan.snapshot().status === "completed");
+    assert.deepEqual(probed, [], "two halves are one identity already, and their length says nothing about it");
+    assert.equal(h.store.meta["Lilo & Stitch"], undefined);
+    assert.equal(h.store.suggestions["Lilo & Stitch"]?.reason, "ambiguous");
+  } finally { await h.close(); }
+});
+
 test("a candidate that resolves to no metadata record is not bound", async () => {
   const h = await harness({
     units: async () => [movie("Foo")],
@@ -887,5 +1050,38 @@ test("a loose film in a collection is searched as the film; a film folder as the
     assert.deepEqual(h.searches, ["Heat", "Practical Magic"], "the film's own name, and the folder's title for an encode set");
     assert.equal(h.store.meta["Collection/Heat (1995).mkv"]?.id, "tt-Heat", "the binding lands on the unit key");
     assert.equal(h.store.meta["Practical Magic (1998)"]?.id, "tt-Practical Magic");
+  } finally { await h.close(); }
+});
+
+test("a bilingual unit is searched by its whole title, not the shortened query", async () => {
+  const h = await harness({ units: async () => [movie("Jižanská pohostinnost-Southern Comfort")] });
+  try {
+    await h.scan.start();
+    await waitFor(() => h.scan.snapshot().status === "completed");
+    assert.deepEqual(h.searches, ["Jižanská pohostinnost-Southern Comfort"], "the search service gets the whole title and tries every form of it");
+  } finally { await h.close(); }
+});
+
+test("a folder whose film is named differently is searched by the film's own name too", async () => {
+  const h = await harness({
+    units: async () => [{
+      key: "Sherlock Holomes",
+      kind: "movie",
+      relative: "Sherlock Holomes",
+      sampleFiles: ["Sherlock Holomes/Sherlock Holmes.mp4"],
+    }],
+    search: async (query, _kind, _year, extra) => {
+      const asked = [query, ...(extra ?? [])];
+      return asked.includes("Sherlock Holmes") ? [{ id: "tt-sherlock", type: "movie", name: "Sherlock Holmes" }] : [];
+    },
+  });
+  try {
+    await h.scan.start();
+    await waitFor(() => h.scan.snapshot().status === "completed");
+    assert.deepEqual(h.searches, ["Sherlock Holomes"], "the unit is searched as the folder names it");
+    assert.deepEqual(h.extraSearches, [["Sherlock Holmes"]], "and the film inside it beside that name");
+    assert.equal(h.store.meta["Sherlock Holomes"]?.id, "tt-sherlock",
+      "the folder misspells the name the file carries, so the film binds");
+    assert.equal(h.store.suggestions["Sherlock Holomes"], undefined);
   } finally { await h.close(); }
 });

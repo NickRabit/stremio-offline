@@ -1,6 +1,6 @@
 import { isPathWithin, isVideo, numberedEpisode, parseSeason, remapPath, type FoundFile } from "./library.js";
-import { parseLibraryPath, posixBase, type LibraryType } from "./libraries.js";
-import { parseMediaPath, partSignature, stripPartMarkers, type ParsedMedia } from "./library-parse.js";
+import { LIBRARY_ID, parseLibraryPath, posixBase, type LibraryType } from "./libraries.js";
+import { isPackagingFolderName, parseMediaName, parseMediaPath, partSignature, stripPartMarkers, titleSides, titleVariants, type ParsedMedia } from "./library-parse.js";
 import type { MetaItem } from "./types.js";
 
 export type TitleKind = "movie" | "series";
@@ -21,6 +21,8 @@ export interface ScoredHit {
   /** The file and the candidate disagree about a sequel/part marker, so this is a
    *  different film rather than a different cut of the same one. */
   partConflict?: boolean;
+  /** The best name match came from one half of a spaced split, never from the whole name. */
+  sideMatch?: boolean;
 }
 
 /** A scan result for one title unit. An entry without an id is the memory of a
@@ -129,7 +131,10 @@ const EXTRA_TOKENS = new Set(["trailer", "sample", "extra", "bonus", "deleted", 
 const ARTICLES = /^(the|a|an)\s+/;
 /** The matching rules that wrote a suggestion or a remembered miss. Bumped whenever a
  *  decision changes meaning, so old rows are reconsidered exactly once. */
-export const MATCH_RULE_VERSION = 5;
+export const MATCH_RULE_VERSION = 6;
+
+/** The lowest score a single candidate can carry and still be bound without a person's word. */
+export const AUTO_ACCEPT_MIN_SCORE = 85;
 
 export function levenshtein(a: string, b: string): number {
   if (a === b) return 0;
@@ -156,7 +161,8 @@ export function normalizeTitle(value: string | undefined): string {
     .normalize("NFD")
     .replace(/\p{M}/gu, "")
     .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, " ")
+    // Every script keeps its own letters: "नरसिंहा Avatar" is not the name "Avatar".
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
     .replace(ARTICLES, "")
     .replace(/\s+/g, " ")
     .trim();
@@ -178,6 +184,19 @@ export function yearFromMeta(item: MetaItem): number | undefined {
   const raw = String(item.releaseInfo ?? item.year ?? "").slice(0, 4);
   if (!/^(19|20)\d{2}$/.test(raw)) return undefined;
   return Number(raw);
+}
+
+/** How many people know the candidate, when the provider says. Nobody knows it otherwise. */
+function votesOf(item: MetaItem): number {
+  const count = item.voteCount;
+  return typeof count === "number" && Number.isFinite(count) ? count : 0;
+}
+
+/** A candidate nobody could have watched yet: the file in front of the user is not it. */
+function releasedInFuture(item: MetaItem, now = Date.now()): boolean {
+  const released = item.released;
+  if (typeof released !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(released)) return false;
+  return released > new Date(now).toISOString().slice(0, 10);
 }
 
 /** Every name a candidate is known by: the localized one and the original the provider
@@ -202,7 +221,15 @@ export function bestCandidateTitle(left: string, item: MetaItem): string {
 function titleSimilarityOf(left: string, right: string): number {
   const maxLen = Math.max(left.length, right.length);
   const edit = maxLen === 0 ? 1 : 1 - levenshtein(left, right) / maxLen;
-  return 0.7 * dice(tokensOf(left), tokensOf(right)) + 0.3 * edit;
+  const similarity = 0.7 * dice(tokensOf(left), tokensOf(right)) + 0.3 * edit;
+  // "Spiderman" and "Spider-Man" are the one name written with and without a space.
+  if (similarity < 1 && left.replace(/\s+/g, "") === right.replace(/\s+/g, "")) return 1;
+  return similarity;
+}
+
+/** Normalised name similarity for callers that compare whole titles, such as episode names. */
+export function titleSimilarity(left: string, right: string): number {
+  return titleSimilarityOf(normalizeTitle(left), normalizeTitle(right));
 }
 
 /** Whether one normalized title appears whole inside the other. A shared word is not
@@ -210,6 +237,7 @@ function titleSimilarityOf(left: string, right: string): number {
 function phraseEvidence(left: string, right: string): boolean {
   if (!left || !right) return false;
   if (left === right) return true;
+  if (left.replace(/\s+/g, "") === right.replace(/\s+/g, "")) return true;
   const haystack = ` ${left} `;
   const needle = ` ${right} `;
   return haystack.includes(needle) || needle.includes(haystack);
@@ -222,15 +250,79 @@ function matchTitle(value: string): string {
   return stripPartMarkers(normalized) || normalized;
 }
 
+/** Whether two names are the same one: the words agree, or the spelling does. A folder
+ *  "Hanební parchanti" holds "Hanebný pancharti.mkv", the name with two letters off. */
+function sameName(left: string, right: string): boolean {
+  const a = matchTitle(left);
+  const b = matchTitle(right);
+  if (!a || !b) return false;
+  if (titleSimilarityOf(a, b) >= 0.75) return true;
+  const length = Math.max(a.length, b.length);
+  return 1 - levenshtein(a, b) / length >= 0.75;
+}
+
+/** A candidate name whose subtitle carries no weight: "Borat Subsequent Moviefilm:
+ *  Delivery of ..." is the film the file names as "Borat Subsequent Moviefilm". Only a
+ *  head of at least two words counts, so "Alita: Battle Angel" is not read as "Alita". */
+function candidateHead(title: string): string | undefined {
+  const head = title.split(":")[0]!.trim();
+  if (head === title) return undefined;
+  return normalizeTitle(head).split(" ").filter(Boolean).length >= 2 ? head : undefined;
+}
+
 export function scoreHit(parsed: ParsedMedia, item: MetaItem, expectedKind?: TitleKind): ScoredHit {
   if (!item.name) return { item, score: 0, titleSimilarity: 0, autoEligible: false };
-  const left = matchTitle(parsed.query || parsed.title);
   let titleSimilarity = 0;
   let evidence = false;
-  for (const candidate of candidateTitles(item)) {
-    const right = matchTitle(candidate);
-    titleSimilarity = Math.max(titleSimilarity, titleSimilarityOf(left, right));
-    if (phraseEvidence(left, right)) evidence = true;
+  let bestSide = false;
+  let bestName = "";
+  let bestVariant = "";
+  const rights = candidateTitles(item).flatMap((title) => {
+    const head = candidateHead(title);
+    return head ? [{ text: title, head: false }, { text: head, head: true }] : [{ text: title, head: false }];
+  });
+  for (const variant of titleVariants(parsed)) {
+    const left = matchTitle(variant.text);
+    for (const candidate of rights) {
+      const right = matchTitle(candidate.text);
+      const similarity = titleSimilarityOf(left, right);
+      const side = variant.side || candidate.head;
+      // On a tie the whole name wins: "Toy Story 3" matches the original title and the head of
+      // "Toy Story 3: Příběh hraček" alike, and it is the whole-name match that counts.
+      if (similarity > titleSimilarity || (similarity === titleSimilarity && bestSide && !side)) {
+        titleSimilarity = similarity;
+        bestSide = side;
+        bestName = candidate.text;
+        bestVariant = variant.text;
+      }
+      if (phraseEvidence(left, right)) evidence = true;
+    }
+  }
+  // Both halves of a bilingual name naming the candidate is stronger evidence than either half
+  // alone: "Blockers - Kazisuci" meets "Kazišuci" and its original "Blockers" at once, which is
+  // not the weaker guess one half of a name on its own would be.
+  const sides = titleSides(parsed.title).map((side) => side.trim()).filter(Boolean);
+  if (sides.length === 2) {
+    const names = candidateTitles(item);
+    const matching = (side: string) => names.reduce(
+      (top, name) => Math.max(top, titleSimilarityOf(matchTitle(side), matchTitle(name))), 0,
+    );
+    const [first, second] = sides as [string, string];
+    const left = matching(first);
+    const right = matching(second);
+    if (left >= 0.9 && right >= 0.9) {
+      titleSimilarity = Math.max(titleSimilarity, Math.min(left, right));
+      bestSide = false;
+    }
+  }
+  // A folder that misspells the film inside it is not one half of a name: the file names the
+  // film, and the folder names the same one badly. Both the folder and the candidate have to
+  // say the same name, and either the year the file wrote agrees with the candidate's or the
+  // file repeats the folder's own name.
+  if (bestSide && bestName && parsed.fileTitle && bestVariant === parsed.fileTitle.trim()
+    && sameName(parsed.title, bestName)
+    && ((parsed.year != null && yearFromMeta(item) === parsed.year) || sameName(parsed.title, parsed.fileTitle))) {
+    bestSide = false;
   }
   let score = 100 - Math.round((1 - titleSimilarity) * 50);
   let autoEligible = true;
@@ -254,44 +346,121 @@ export function scoreHit(parsed: ParsedMedia, item: MetaItem, expectedKind?: Tit
     score -= 25;
     autoEligible = false;
   }
+  if (releasedInFuture(item)) autoEligible = false;
   // The part marker is read from the file's whole title, not the search query: a suffix such
   // as "Nymfomanka - část 2" is dropped from a bilingual query, and losing it there would
-  // hide exactly the disagreement this check exists to catch.
-  const partConflict = titlePartConflict(parsed.title, bestCandidateTitle(parsed.title, item));
+  // hide exactly the disagreement this check exists to catch. The file agrees with a
+  // candidate when it agrees with the first part the candidate's names state ("Doba ledová 4"
+  // beside "Ice Age: Continental Drift") or with the name it matched best ("Trolls Band
+  // Together" beside "Trollové 3").
+  const partConflict = partConflictBetween(parsed.title, candidatePart(item))
+    && partConflictBetween(parsed.title, partSignature(bestName, true));
   if (partConflict) autoEligible = false;
   score = Math.max(0, Math.min(100, score));
-  return { item, score, titleSimilarity, yearDelta, autoEligible, ...(partConflict ? { partConflict: true } : {}) };
+  return {
+    item, score, titleSimilarity, yearDelta, autoEligible,
+    ...(partConflict ? { partConflict: true } : {}),
+    ...(bestSide ? { sideMatch: true } : {}),
+  };
+}
+
+const ROMAN_SPELLING: Record<number, string> = {
+  1: "i", 2: "ii", 3: "iii", 4: "iv", 5: "v", 6: "vi", 7: "vii", 8: "viii", 9: "ix", 10: "x",
+};
+
+/** Whether the file's own name states the number a candidate's `part:N` names, in either
+ *  spelling. "Hotel Transylvania 3 Summer Vacation" writes the part without a marker. */
+function statesPart(fileTitle: string, part: string): boolean {
+  const match = /^part:(\d+)$/.exec(part);
+  if (!match) return false;
+  const number = Number(match[1]);
+  const wanted = new Set([String(number)]);
+  const roman = ROMAN_SPELLING[number];
+  if (roman) wanted.add(roman);
+  // "Jackass 3D" writes part three as the number the 3D copy is named after.
+  return fileTitle.toLowerCase().split(/[^a-z0-9]+/).some((token) => wanted.has(token) || wanted.has(token.replace(/d$/, "")));
+}
+
+/** The part a candidate states: the first non-empty signature among its names. */
+function candidatePart(item: MetaItem): string {
+  for (const name of candidateTitles(item)) {
+    const part = partSignature(name, true);
+    if (part) return part;
+  }
+  return "";
+}
+
+function partConflictBetween(fileTitle: string, candPart: string): boolean {
+  const filePart = partSignature(fileTitle, true);
+  if (filePart === candPart) return false;
+  // The first film is seldom numbered: "Transformers I" is "Transformers".
+  if ((filePart === "part:1" && candPart === "") || (filePart === "" && candPart === "part:1")) return false;
+  // A file that writes the number down without a marker still names the part.
+  if (filePart === "" && statesPart(fileTitle, candPart)) return false;
+  return true;
 }
 
 /** The file and the candidate disagree about which part of a franchise this is. */
 export function titlePartConflict(fileTitle: string, candidateTitle: string): boolean {
-  return partSignature(fileTitle, true) !== partSignature(candidateTitle, true);
+  return partConflictBetween(fileTitle, partSignature(candidateTitle, true));
 }
 
-export function autoAccept(hits: ScoredHit[], nowYear = new Date().getFullYear()): ScoredHit | undefined {
-  const ranked = hits.filter((hit) => hit.autoEligible).sort((a, b) => {
-    if (b.score !== a.score) return b.score - a.score;
-    return (yearFromMeta(b.item) ?? 0) - (yearFromMeta(a.item) ?? 0);
-  });
+/** How well known a namesake has to be before it wins without a person's word, and by how
+ *  much it has to beat the other name of the same title. */
+const NAMESAKE_MIN_VOTES = 50;
+const NAMESAKE_DOMINANCE = 10;
+
+/** `nowYear` stays for callers that pass it: which film is newer no longer decides anything. */
+export function autoAccept(
+  hits: ScoredHit[],
+  nowYear = new Date().getFullYear(),
+  options: { country?: string } = {},
+): ScoredHit | undefined {
+  const ranked = hits.filter((hit) => hit.autoEligible).sort((a, b) =>
+    b.score - a.score || Number(Boolean(a.sideMatch)) - Number(Boolean(b.sideMatch)) || votesOf(b.item) - votesOf(a.item));
   const top = ranked[0];
-  if (!top || top.score < 85 || top.titleSimilarity < 0.90) return undefined;
-  if (top.partConflict) return undefined;
+  if (!top || top.score < AUTO_ACCEPT_MIN_SCORE || top.titleSimilarity < 0.90) return undefined;
+  if (top.partConflict || top.sideMatch) return undefined;
   const close = ranked.filter((hit) => top.score - hit.score < 15 && hit.titleSimilarity >= 0.90);
-  const topName = normalizeTitle(top.item.name);
-  if (close.some((hit) => normalizeTitle(hit.item.name) !== topName)) return undefined;
-  const years = close.map((hit) => yearFromMeta(hit.item)).filter((year): year is number => year != null);
-  const distinct = new Set(years);
-  if (distinct.size <= 1) return top;
-  return Math.max(...years) >= nowYear - 2 ? top : undefined;
+  // A rival that only half of a name explains is weaker evidence than the whole-name match on
+  // top, so it does not stand in its way.
+  const rivals = close.filter((hit) => hit.item.id !== top.item.id && !hit.sideMatch && !foreignCountry(hit.item, options.country));
+  if (!rivals.length) return top;
+  // Two namesakes are told apart by how many people know them, never by which one is newer:
+  // the title the file means is the one with an audience, the other ten times smaller.
+  const votes = votesOf(top.item);
+  const rivalVotes = Math.max(...rivals.map((hit) => votesOf(hit.item)));
+  return votes >= NAMESAKE_MIN_VOTES && votes >= NAMESAKE_DOMINANCE * rivalVotes ? top : undefined;
+}
+
+/** A known origin that does not contain the country the file names is another production,
+ *  so it is no rival of this one. An unknown origin proves nothing either way. */
+function foreignCountry(item: MetaItem, country: string | undefined): boolean {
+  if (!country) return false;
+  const origins = item.originCountry;
+  if (!Array.isArray(origins) || !origins.length) return false;
+  const wanted = country.toUpperCase() === "UK" ? "GB" : country.toUpperCase();
+  return !origins.some((origin) => {
+    const code = String(origin).toUpperCase();
+    return (code === "UK" ? "GB" : code) === wanted;
+  });
 }
 
 /** Below this the best hit is noise -- offering it would only teach the user to distrust the list. */
 export const SUGGESTION_MIN_SCORE = 60;
 
+/** The hits a proposal is argued from, most trusted first: the ones worth showing, a whole
+ *  name on a tie ahead of a half of it, and among equals the better known one. */
+function rankedHits(hits: ScoredHit[]): ScoredHit[] {
+  return hits.filter((hit) => hit.autoEligible || hit.partConflict || releasedInFuture(hit.item))
+    .sort((a, b) =>
+      b.score - a.score || Number(Boolean(a.sideMatch)) - Number(Boolean(b.sideMatch)) || votesOf(b.item) - votesOf(a.item));
+}
+
 /** A title and a distinct identity of its own that the file could equally mean. Either a
  *  close-scoring namesake or the same title with a different year -- two remakes of one name
  *  are as ambiguous to a nameless file as two different titles. */
-function competingHits(ranked: ScoredHit[]): ScoredHit[] {
+export function competingHits(ranked: ScoredHit[]): ScoredHit[] {
   const top = ranked[0];
   if (!top) return [];
   const topName = normalizeTitle(top.item.name);
@@ -300,6 +469,24 @@ function competingHits(ranked: ScoredHit[]): ScoredHit[] {
     const namesake = normalizeTitle(hit.item.name) === topName && yearFromMeta(hit.item) !== yearFromMeta(top.item);
     return namesake || (top.score - hit.score < 15 && hit.titleSimilarity >= 0.90);
   });
+}
+
+/** The candidates whose own length could tell a proposal's nameless namesakes apart: the best
+ *  hit and the ones it competes with, distinct and bounded. */
+export function runtimeRivals(hits: ScoredHit[], limit = 4): ScoredHit[] {
+  const ranked = rankedHits(hits);
+  const top = ranked[0];
+  if (!top) return [];
+  const out = [top];
+  const seen = new Set([`${top.item.type}:${top.item.id}`]);
+  for (const hit of competingHits(ranked)) {
+    const key = `${hit.item.type}:${hit.item.id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(hit);
+    if (out.length >= limit) break;
+  }
+  return out;
 }
 
 /** The other candidates a person needs to tell this one apart from. Bounded in size and
@@ -327,7 +514,11 @@ export function pickSuggestion(hits: ScoredHit[], minScore = SUGGESTION_MIN_SCOR
   // A wrong type or a year off by more than two is not a safe match and is not offered as
   // if it were: the proposal list is where a person decides, and a bad row wastes that.
   // A part conflict is the exception: it is worth a person's look, just never a binding.
-  const ranked = hits.filter((hit) => hit.autoEligible || hit.partConflict).sort((a, b) => b.score - a.score);
+  // On a tie the whole name beats a half of it, and among equals the better known one wins.
+  // A half of the name or a sequel that disagrees is not a binding, but it is still worth a
+  // person's look; so is a title that is not out yet, which the scan would otherwise forget
+  // as a miss for a month.
+  const ranked = rankedHits(hits);
   const top = ranked[0];
   if (!top || top.score < minScore) return undefined;
   const year = yearFromMeta(top.item);
@@ -931,6 +1122,30 @@ function emit(out: TitleUnit[], key: string, kind: TitleKind, samples: string[])
   out.push({ key, kind, relative: key, sampleFiles: samples });
 }
 
+/** "Navstevnici.01" is an episode of one series; a plain "Toy Story 2" is a film of its own. */
+const LOOSE_EPISODE_TAIL = /[\s._-](?:(\d{2,})|(?:e|ep|dil|díl|epizoda|episode)[\s._-]*\d{1,4})$/i;
+
+function looseEpisodeTitle(filename: string): string | undefined {
+  const stem = filename.replace(/\.[^.]+$/, "");
+  const match = LOOSE_EPISODE_TAIL.exec(stem);
+  if (!match || (match[1] && /^(?:19|20)\d{2}$/.test(match[1]))) return undefined;
+  const title = normalizeTitle(stem.slice(0, match.index));
+  return title || undefined;
+}
+
+function hasSharedLooseEpisodes(videos: FoundFile[]): boolean {
+  const groups = new Map<string, number>();
+  for (const file of videos) {
+    if (isExtraName(posixBase(file.relative))) continue;
+    const title = looseEpisodeTitle(posixBase(file.relative));
+    if (!title) continue;
+    const count = (groups.get(title) ?? 0) + 1;
+    groups.set(title, count);
+    if (count >= 2 && count * 2 > videos.length) return true;
+  }
+  return false;
+}
+
 /** A folder of loose files: one film when its non-extra files reduce to one identity,
  *  otherwise one unit per distinct film so every identity is exposed on its own name. */
 function classifyVideosOnly(dir: string, videos: FoundFile[], out: TitleUnit[]) {
@@ -938,6 +1153,10 @@ function classifyVideosOnly(dir: string, videos: FoundFile[], out: TitleUnit[]) 
   if (!nonExtra.length) return;
   const tagged = videos.filter((file) => isTaggedEpisode(posixBase(file.relative)));
   if (tagged.length * 2 > videos.length) {
+    emit(out, dir, "series", videos.map((file) => file.relative));
+    return;
+  }
+  if (hasSharedLooseEpisodes(videos)) {
     emit(out, dir, "series", videos.map((file) => file.relative));
     return;
   }
@@ -964,6 +1183,21 @@ function classifyVideosOnly(dir: string, videos: FoundFile[], out: TitleUnit[]) 
 function classifyFolder(index: DirIndex, dir: string, out: TitleUnit[]) {
   const videos = index.videos.get(dir) ?? [];
   const children = [...(index.children.get(dir) ?? [])];
+  // A folder that only holds one packaging folder is named by its parent: the release group
+  // says who packed the file, not what it is, and the parent is the name a person wrote.
+  if (!videos.length && children.length === 1 && dir && !LIBRARY_ID.test(posixBase(dir))) {
+    const child = children[0]!;
+    if (!(index.children.get(child)?.size ?? 0) && isPackagingFolderName(posixBase(child))) {
+      const temp: TitleUnit[] = [];
+      classifyVideosOnly(child, index.videos.get(child) ?? [], temp);
+      if (temp.length === 1 && temp[0]!.key === child) {
+        emit(out, dir, temp[0]!.kind, temp[0]!.sampleFiles);
+      } else {
+        out.push(...temp);
+      }
+      return;
+    }
+  }
   if (children.some((child) => parseSeason(posixBase(child)) != null)) {
     emit(out, dir, "series", filesUnder(index, dir));
     return;
@@ -1009,9 +1243,24 @@ export function matchKeyFor(relative: string, files: FoundFile[], units = titleU
 
 /** How a unit is searched for: a unit keyed by a video file is read from that file's own
  *  name, so a loose film inside a collection is not searched as the collection folder; a
- *  folder unit is read from the folder's name. The file extension goes with the name. */
+ *  folder unit is read from the folder's name. The file extension goes with the name.
+ *  A folder holding exactly one film adds what that film's own name states and the folder
+ *  does not -- its year, or a title the folder misspells. */
 export function parseUnit(unit: TitleUnit): ParsedMedia {
-  return parseMediaPath(posixBase(unit.key));
+  const parsed = parseMediaPath(posixBase(unit.key));
+  if (unit.kind !== "movie" || isVideo(posixBase(unit.key))) return parsed;
+  if (unit.sampleFiles.length !== 1) return parsed;
+  const sample = unit.sampleFiles[0]!;
+  if (isExtraName(posixBase(sample))) return parsed;
+  const file = parseMediaName(posixBase(sample).replace(/\.[^.]+$/, ""));
+  const result: ParsedMedia = { ...parsed };
+  if (parsed.year == null && file.year != null) result.year = file.year;
+  // A release group's folder name is not a title the film carries, and a name too short to
+  // be one ("Up") would only add noise to the search.
+  const stem = posixBase(sample).replace(/\.[^.]+$/, "");
+  if (file.title && normalizeTitle(file.title).length >= 3 && !isPackagingFolderName(stem)
+    && normalizeTitle(file.title) !== normalizeTitle(parsed.title)) result.fileTitle = file.title;
+  return result;
 }
 
 /** The distinct movie identities a folder stands for, one representative unit each, bounded.

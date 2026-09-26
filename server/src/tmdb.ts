@@ -81,6 +81,8 @@ interface TmdbSearchRow {
   title?: string; name?: string;
   original_title?: string; original_name?: string;
   release_date?: string; first_air_date?: string;
+  origin_country?: unknown;
+  vote_count?: number;
   poster_path?: string | null; backdrop_path?: string | null;
 }
 
@@ -102,16 +104,20 @@ const releaseYear = (value?: string): string | undefined => {
 };
 
 /** Title search against TMDB. A failed or refused request is an empty list, never a throw:
- *  the caller falls back to the next provider. */
+ *  the caller falls back to the next provider. A year the file states narrows the search. */
 export async function tmdbSearch(
   type: "movie" | "series",
   query: string,
   config: TmdbConfig,
   fetchImpl: FetchLike = guardedFetch,
+  options: { year?: number } = {},
 ): Promise<MetaItem[]> {
   const trimmed = query.trim();
   if (!trimmed || (type !== "movie" && type !== "series")) return [];
   if (Date.now() < searchPausedUntil) return [];
+  const yearParam: Record<string, string> = options.year != null
+    ? (mediaType(type) === "movie" ? { year: String(options.year) } : { first_air_date_year: String(options.year) })
+    : {};
   let response: Response;
   try {
     response = await request(`/search/${mediaType(type)}`, {
@@ -120,6 +126,7 @@ export async function tmdbSearch(
       query: trimmed,
       page: "1",
       include_adult: "false",
+      ...yearParam,
     }, fetchImpl, SEARCH_TIMEOUT_MS);
   } catch (error) {
     log("WARN", "TMDB search failed", { operation: "search", type, reason: reasonOf(error, config.apiKey) });
@@ -143,14 +150,23 @@ export async function tmdbSearch(
     const id = typeof row.id === "number" ? row.id : undefined;
     const name = mediaType(type) === "movie" ? row.title || row.original_title : row.name || row.original_name;
     if (id == null || !name) return [];
-    const year = releaseYear(mediaType(type) === "movie" ? row.release_date : row.first_air_date);
+    const date = mediaType(type) === "movie" ? row.release_date : row.first_air_date;
+    const year = releaseYear(date);
     const original = mediaType(type) === "movie" ? row.original_title : row.original_name;
+    const originCountry = Array.isArray(row.origin_country)
+      ? row.origin_country.filter((code): code is string => typeof code === "string" && Boolean(code))
+      : [];
     return [{
       id: `tmdb:${id}`,
       type,
       name,
       ...(original && original !== name ? { originalTitle: original } : {}),
       ...(year ? { releaseInfo: year } : {}),
+      ...(originCountry.length ? { originCountry } : {}),
+      // How many people know this title, and the day it came out: the matcher tells two
+      // namesakes apart by the first, and will not bind one that is not out yet.
+      ...(typeof row.vote_count === "number" && Number.isFinite(row.vote_count) ? { voteCount: row.vote_count } : {}),
+      ...(/^\d{4}-\d{2}-\d{2}$/.test(String(date ?? "")) ? { released: String(date) } : {}),
       ...artworkOf({ poster_path: row.poster_path, backdrop_path: row.backdrop_path }),
     }];
   });

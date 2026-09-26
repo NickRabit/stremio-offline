@@ -16,6 +16,11 @@ test("the season number is recognised in the different folder spellings", () => 
   assert.equal(parseSeason("Serie 2"), 2);
   assert.equal(parseSeason("Série 4"), 4);
   assert.equal(parseSeason("Sezona 5"), 5);
+  assert.equal(parseSeason("1. série"), 1);
+  assert.equal(parseSeason("1. serie"), 1);
+  assert.equal(parseSeason("2. řada"), 2);
+  assert.equal(parseSeason("Řada 1"), 1);
+  assert.equal(parseSeason("1.série"), 1);
   assert.equal(parseSeason("Extra"), null);
   assert.equal(parseSeason("Film 2"), null);
 });
