@@ -1,0 +1,148 @@
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { setLocale } from "../i18n";
+import type { ShellBridge, ShellState, ShellView } from "./bridge";
+import { shellBridge } from "./bridge";
+import { ShellApp } from "./ShellApp";
+
+let root: Root;
+let host: HTMLDivElement;
+
+beforeEach(() => {
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  setLocale("en");
+  host = document.createElement("div");
+  document.body.appendChild(host);
+  root = createRoot(host);
+});
+afterEach(() => { act(() => root.unmount()); host.remove(); });
+
+const baseState = (over: Partial<ShellState> = {}): ShellState => ({
+  locale: "en", appVersion: "0.4.85", screen: { kind: "welcome" }, connection: null, chosen: null,
+  profiles: [{ id: "nas", name: "NAS", origin: "http://192.168.1.20:8090" }],
+  local: { settings: { allowPrivateAddons: false, publish: false, publishPort: 8091 }, running: false, addresses: [], ffmpeg: null, busy: false },
+  toast: null, ...over,
+});
+
+const makeBridge = (view: ShellView, state: ShellState) => {
+  const bridge = {
+    version: 1 as const, view,
+    getState: vi.fn(async () => state),
+    onState: vi.fn(() => () => undefined),
+    connect: vi.fn(async () => undefined),
+    saveProfile: vi.fn(async (input: { id: string | null; name: string; origin: string }) => ({ ok: true as const, profile: { id: "new", name: input.name, origin: input.origin } })),
+    deleteProfile: vi.fn(async () => ({ ok: true })),
+    probe: vi.fn(async () => ({ ok: false as const, reason: "unreachable" as const })),
+    setLocalSettings: vi.fn(async () => ({ ok: true, restartNeeded: true })),
+    restartLocal: vi.fn(async () => ({ ok: true })),
+    openSettings: vi.fn(), toastAction: vi.fn(), dismissToast: vi.fn(), copyText: vi.fn(),
+  } satisfies ShellBridge;
+  return bridge;
+};
+
+const render = async (bridge: ShellBridge) => {
+  await act(async () => { root.render(<ShellApp bridge={bridge}/>); });
+  await act(async () => { await Promise.resolve(); });
+};
+const button = (text: string) => {
+  const found = [...host.querySelectorAll("button")].find((candidate) => candidate.textContent?.includes(text));
+  expect(found, `"${text}" is on screen`).toBeTruthy();
+  return found!;
+};
+const click = async (element: HTMLElement) => { await act(async () => { element.click(); await Promise.resolve(); }); };
+const type = async (input: HTMLInputElement, value: string) => {
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+  await act(async () => { setter.call(input, value); input.dispatchEvent(new Event("input", { bubbles: true })); });
+};
+
+it("only the desktop app's own bridge of version 1 is taken", () => {
+  expect(shellBridge({})).toBeNull();
+  expect(shellBridge({ stremioShell: { version: 2, getState: () => undefined } })).toBeNull();
+  const bridge = makeBridge("main", baseState());
+  expect(shellBridge({ stremioShell: bridge })).toBe(bridge);
+});
+
+it("the welcome screen runs the server on this Mac with one click", async () => {
+  const bridge = makeBridge("main", baseState());
+  await render(bridge);
+  await click(button("This Mac"));
+  expect(bridge.connect).toHaveBeenCalledWith({ kind: "local" });
+});
+
+it("a server added on the welcome screen is saved and connected to", async () => {
+  const bridge = makeBridge("main", baseState());
+  await render(bridge);
+  await click(button("A server on your network"));
+  const [name, origin] = [...host.querySelectorAll("input")];
+  await type(name!, "Living room");
+  await type(origin!, "http://192.168.1.30:8090");
+  await click(button("Connect"));
+  await act(async () => { await Promise.resolve(); });
+  expect(bridge.saveProfile).toHaveBeenCalledWith({ id: null, name: "Living room", origin: "http://192.168.1.30:8090" });
+  expect(bridge.connect).toHaveBeenCalledWith({ kind: "profile", id: "new" });
+});
+
+it("an unreachable server offers a retry, this Mac and the settings", async () => {
+  const target = { kind: "profile" as const, id: "nas" };
+  const bridge = makeBridge("main", baseState({ screen: { kind: "error", target, name: "NAS", origin: "http://192.168.1.20:8090", reason: "unreachable", port: null } }));
+  await render(bridge);
+  expect(host.textContent).toContain("NAS is not answering");
+  await click(button("Try again"));
+  expect(bridge.connect).toHaveBeenLastCalledWith(target);
+  await click(button("Use this Mac"));
+  expect(bridge.connect).toHaveBeenLastCalledWith({ kind: "local" });
+  await click(button("Settings"));
+  expect(bridge.openSettings).toHaveBeenCalled();
+});
+
+it("a taken port names the port", async () => {
+  const bridge = makeBridge("main", baseState({ screen: { kind: "error", target: { kind: "local" }, name: "", origin: null, reason: "port-busy", port: 8091 } }));
+  await render(bridge);
+  expect(host.textContent).toContain("Port 8091 is taken");
+  expect(host.textContent).not.toContain("Use this Mac");
+});
+
+it("the connected main window draws nothing over the server page", async () => {
+  await render(makeBridge("main", baseState({ screen: { kind: "connected" } })));
+  expect(host.textContent).toBe("");
+});
+
+it("settings refuse a port outside 1024–65535 and store a valid one", async () => {
+  const state = baseState({ local: { ...baseState().local, settings: { allowPrivateAddons: false, publish: true, publishPort: 8091 }, running: true } });
+  const bridge = makeBridge("settings", state);
+  await render(bridge);
+  const port = host.querySelector<HTMLInputElement>(".shell-port input")!;
+  await type(port, "80");
+  await act(async () => { port.dispatchEvent(new FocusEvent("focusout", { bubbles: true })); });
+  expect(host.textContent).toContain("Enter a port between 1024 and 65535.");
+  expect(bridge.setLocalSettings).not.toHaveBeenCalled();
+  await type(port, "8095");
+  await act(async () => { port.dispatchEvent(new FocusEvent("focusout", { bubbles: true })); });
+  expect(bridge.setLocalSettings).toHaveBeenCalledWith({ allowPrivateAddons: false, publish: true, publishPort: 8095 });
+  await act(async () => { await Promise.resolve(); });
+  expect(host.textContent).toContain("The changes apply once the server on this Mac restarts.");
+});
+
+it("a restart while something plays asks first", async () => {
+  const state = baseState({ local: { ...baseState().local, running: true, busy: true } });
+  const bridge = makeBridge("settings", state);
+  await render(bridge);
+  await click(host.querySelector<HTMLInputElement>(".shell-controls input[type=checkbox]")!.closest("label")!);
+  await act(async () => { await Promise.resolve(); });
+  await click(button("Restart the server"));
+  expect(bridge.restartLocal).not.toHaveBeenCalled();
+  expect(host.textContent).toContain("Restart anyway?");
+  await click(button("Restart the server"));
+  expect(bridge.restartLocal).toHaveBeenCalledTimes(1);
+});
+
+it("the fallback toast says the libraries are separate and retries on its button", async () => {
+  const bridge = makeBridge("toast", baseState({ toast: { id: 7, kind: "fallback", server: "NAS" } }));
+  await render(bridge);
+  expect(host.textContent).toContain("Its library and accounts are separate.");
+  await click(button("Try again"));
+  expect(bridge.toastAction).toHaveBeenCalledWith(7);
+  await click(host.querySelector<HTMLButtonElement>("button[aria-label=Close]")!);
+  expect(bridge.dismissToast).toHaveBeenCalledWith(7);
+});
