@@ -765,6 +765,11 @@ export class PlaybackManager {
 
   /** VideoToolbox is always there on a Mac, but a frame is still encoded: the encoder can fail
    *  even when the framework loads, and only the result says whether a conversion would work. */
+  /** The hardware path a conversion started now would use. VAAPI wins where both are set. */
+  private accelerator(): "vaapi" | "videotoolbox" | null {
+    return this.vaapiDevice ? "vaapi" : this.videotoolbox ? "videotoolbox" : null;
+  }
+
   private async checkVideotoolbox() {
     try {
       await this.runVideotoolboxProbe(["-q:v", "60"]);
@@ -831,7 +836,10 @@ export class PlaybackManager {
 
     const { copyVideo } = this.plan(session);
     session.mode = copyVideo ? "remux" : "transcode";
-    const attempts = !copyVideo && (this.vaapiDevice || this.videotoolbox) ? [true, false] : [false];
+    // Decided once: a concurrent session can switch a path off while this one awaits, and the
+    // failure below has to be charged to the path this attempt actually used.
+    const accelerator = this.accelerator();
+    const attempts = !copyVideo && accelerator ? [true, false] : [false];
     let firstAttempt = true;
     for (const hardware of attempts) {
       this.assertActive(session);
@@ -847,7 +855,7 @@ export class PlaybackManager {
       // A source that answers 404 will answer the same to the software attempt.
       if (session.error === SOURCE_UNREACHABLE) break;
       if (hardware) {
-        if (!this.vaapiDevice && this.videotoolbox) {
+        if (accelerator === "videotoolbox") {
           log("WARN", "VideoToolbox failed, falling back to a software conversion", { id: session.id, reason: session.error });
           this.videotoolboxFailures += 1;
           if (this.videotoolboxFailures >= 2) {
@@ -930,6 +938,9 @@ export class PlaybackManager {
     const { copyVideo, copyAudio } = this.plan(session);
     const quality = session.quality;
     const bitrate = quality !== null ? QUALITY_BITRATE[quality] : undefined;
+    // Read here, after the awaits that came before: a path switched off meanwhile gives the
+    // software arguments rather than a VAAPI command with no device.
+    const accel = hardware ? this.accelerator() : null;
     const sourceVideo = session.info?.video?.codec ?? "";
     // The mappings and var_stream_map must match exactly what the file really holds. A question mark
     // in -map drops a missing track quietly, but the hls muxer then looks for it in vain and dies on the header.
@@ -953,10 +964,10 @@ export class PlaybackManager {
     // FFmpeg gets no -hwaccel: it decodes and scales in RAM, and the explicitly initialised
     // device is used only by hwupload + h264_vaapi. That avoids the troublesome trip of VAAPI
     // surfaces back into system memory.
-    if (!copyVideo && hardware) {
+    if (!copyVideo && accel) {
       // VideoToolbox decodes on the media engine and hands frames back in system memory, so the
       // ordinary filters below need no upload -- unlike the VAAPI branch.
-      if (!this.vaapiDevice && this.videotoolbox) {
+      if (accel === "videotoolbox") {
         args.push("-hwaccel", "videotoolbox");
       } else if (this.vaapiScaling) {
         args.push("-hwaccel", "vaapi", "-hwaccel_device", this.vaapiDevice!, "-hwaccel_output_format", "vaapi");
@@ -1007,7 +1018,7 @@ export class PlaybackManager {
     // A keyframe every 2 s keeps segments short: HLS may only cut on keyframes, so a longer GOP
     // would stretch the wait for the first segment after a start and after every seek.
     // min(quality, ih) stops the picture being blown up when the source is smaller than the chosen quality.
-    else if (hardware && !this.vaapiDevice && this.videotoolbox) {
+    else if (accel === "videotoolbox") {
       // h264 wants 8-bit 4:2:0, and VideoToolbox frames are already in system memory, so an
       // ordinary scale filter works where the VAAPI branch needs one on the GPU.
       const filters = quality !== null ? `scale=-2:min(${quality}\\,ih),format=nv12` : "format=nv12";
@@ -1017,7 +1028,7 @@ export class PlaybackManager {
       else if (this.videotoolboxQuality) args.push("-q:v", process.env.VIDEOTOOLBOX_QUALITY ?? "60");
       else args.push("-b:v", "8M");
       args.push("-g", "48", "-force_key_frames", "expr:gte(t,n_forced*2)");
-    } else if (hardware) {
+    } else if (accel === "vaapi") {
       const resize = quality !== null ? `w=-2:h=min(${quality}\\,ih)` : "";
       const filters = this.vaapiScaling
         ? (quality !== null ? `scale_vaapi=${resize}:format=nv12` : "scale_vaapi=format=nv12")

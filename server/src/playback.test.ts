@@ -1028,3 +1028,17 @@ test("audio in a language the viewer did not ask for brings the whole film subti
 test("subtitles the viewer's language does not have fall back to English", async () => {
   assert.equal(await subtitlePick("fallback", [english], { audioLanguage: "de", subtitleLanguage: "cs" }), 2);
 });
+
+test("a hardware attempt whose path was switched off meanwhile gets the software arguments", () => {
+  const manager = new PlaybackManager("/tmp/test-playback") as any;
+  const session = {
+    stream: { url: "https://example.test/movie.mkv" },
+    capabilities: { h264: true },
+    info: { video: { codec: "hevc" }, audio: { codec: "aac" }, audioTracks: [{ codec: "aac" }], subtitleTracks: [] },
+    quality: null, audioTrack: 0, subtitleTrack: null,
+  };
+  const args = manager.args(session, 0, "/tmp/output", true) as string[];
+  assert.equal(args[args.indexOf("-c:v") + 1], "libx264");
+  assert.equal(args.includes("-hwaccel"), false);
+  assert.equal(args.some((arg) => arg.includes("vaapi")), false);
+});
