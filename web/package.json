@@ -1,14 +1,15 @@
 {
   "name": "@stremio-offline/web",
   "private": true,
-  "version": "0.4.84",
+  "version": "0.4.85",
   "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "tsc -b && vite build && node scripts/third-party-licenses.mjs",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "build:desktop": "vite build --config vite.desktop.config.ts"
   },
   "dependencies": {
     "hls.js": "1.6.13",

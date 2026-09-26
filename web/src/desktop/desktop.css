@@ -1,0 +1,142 @@
+/* The desktop app's own pages. Everything builds on the web interface's tokens and controls;
+   only the layouts these pages need are defined here. */
+html,body,#root{height:100%}
+body{overflow:hidden;user-select:none;-webkit-user-select:none}
+input,code,.shell-origin{user-select:text;-webkit-user-select:text}
+
+/* Main window: welcome, connecting, error. */
+.shell-screen{height:100%;overflow:auto;display:grid;place-items:center;padding:48px 24px}
+.shell-brand{display:flex;align-items:center;justify-content:center;gap:14px}
+.shell-brand .brand-mark{width:52px;height:52px;border-radius:15px}
+.shell-brand .brand-mark svg{width:28px}
+.shell-brand h1{margin:0;font-size:28px;letter-spacing:-.3px}
+.shell-brand h1 span{color:var(--accent)}
+.shell-pulse{position:relative}
+.shell-pulse:after{content:"";position:absolute;inset:-6px;border-radius:19px;border:2px solid var(--accent);opacity:0;animation:shell-pulse 1.8s ease-out infinite}
+@keyframes shell-pulse{0%{opacity:.55;transform:scale(.92)}100%{opacity:0;transform:scale(1.25)}}
+@media (prefers-reduced-motion:reduce){.shell-pulse:after{animation:none}.shell-spin{animation:none!important}}
+.shell-muted{color:var(--muted);font-size:13px;text-align:center;margin:0}
+.shell-origin{margin:0;color:var(--muted);font:13px ui-monospace,SFMono-Regular,Menlo,monospace}
+.shell-hidden{visibility:hidden}
+.shell-spin{animation:shell-spin 1s linear infinite}
+@keyframes shell-spin{to{transform:rotate(360deg)}}
+
+.shell-card{background:linear-gradient(180deg,#171d27,#131820);border:1px solid var(--line);border-radius:16px;box-shadow:0 24px 60px #00000055}
+
+.shell-welcome{width:min(780px,100%);display:grid;gap:30px;justify-items:center}
+.shell-welcome h2{margin:0;font-size:24px;font-weight:700;text-align:center;letter-spacing:-.2px}
+.shell-choices{width:100%;display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.shell-choice{display:grid;grid-template-columns:auto 1fr auto;align-items:start;gap:16px;text-align:left;padding:26px;border-radius:18px;min-height:132px;background:linear-gradient(180deg,#171d27,#131820);font-weight:400;transition:border-color .15s,transform .15s,box-shadow .15s}
+.shell-choice:hover{border-color:#ff5b3888;transform:translateY(-1px);box-shadow:0 16px 40px #00000066}
+.shell-choice>i{width:48px;height:48px;display:grid;place-items:center;border-radius:12px;border:1px solid #ff5b3840;background:#ff5b3812;color:var(--accent2)}
+.shell-choice>i svg{width:22px;height:22px}
+.shell-choice span{display:grid;gap:7px}
+.shell-choice strong{font-size:17px}
+.shell-choice small{color:var(--muted);font-size:13px;line-height:1.55}
+.shell-choice-go{align-self:center;color:var(--muted);transition:transform .15s,color .15s}
+.shell-choice:hover .shell-choice-go{color:var(--accent2);transform:translateX(3px)}
+.shell-welcome-form{width:min(460px,100%);padding:22px}
+.shell-welcome-form h3{margin:0 0 16px;display:flex;align-items:center;gap:10px;font-size:15px}
+.shell-welcome-form h3 svg{width:18px;color:var(--accent2)}
+@media (max-width:620px){.shell-choices{grid-template-columns:1fr}}
+
+.shell-language{position:fixed;top:18px;right:20px;display:flex;padding:3px;border-radius:10px;border:1px solid var(--line);background:#0f141bcc}
+.shell-language button{padding:6px 12px;border:0;background:transparent;color:var(--muted);font-size:12px;border-radius:7px}
+.shell-language button.active{background:var(--panel2);color:var(--text)}
+.shell-controls select{width:auto;min-width:180px}
+.shell-connecting{display:grid;gap:14px;justify-items:center;text-align:center}
+.shell-connecting-text{margin:12px 0 0;font-size:17px;font-weight:600}
+.shell-ghost{background:transparent;border-color:transparent;color:var(--muted);font-weight:600}
+.shell-ghost:hover{color:var(--text);border-color:var(--line)}
+
+.shell-failure{width:min(600px,100%);padding:32px;display:grid;gap:12px;justify-items:start}
+.shell-failure-icon{width:46px;height:46px;display:grid;place-items:center;border-radius:13px;background:#f06a7614;border:1px solid #f06a7640;color:var(--red)}
+.shell-failure-icon svg{width:22px;height:22px}
+.shell-failure h2{margin:6px 0 0;font-size:20px}
+.shell-failure p{margin:0;color:var(--muted);line-height:1.6;font-size:14px}
+.shell-failure .shell-actions{flex-wrap:nowrap}
+.shell-failure .shell-actions button{white-space:nowrap}
+.shell-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:10px;width:100%;margin-top:10px}
+
+/* Forms (add or edit a server). */
+.shell-form{display:grid;gap:14px}
+.shell-form label{display:grid;gap:7px}
+.shell-form label>span{font-size:12px;font-weight:700}
+.shell-form small{color:var(--muted);font-size:11px;line-height:1.45}
+.shell-inline{display:flex;gap:8px}
+.shell-inline input{flex:1}
+.shell-probe{margin:0;display:flex;align-items:flex-start;gap:9px;padding:10px 12px;border-radius:9px;border:1px solid var(--line);background:#0d1117;font-size:12px;line-height:1.45;color:var(--muted)}
+.shell-probe svg{width:16px;height:16px;flex:0 0 auto;margin-top:1px}
+.shell-probe.ok{color:var(--green);border-color:#42ce9140;background:#42ce910d}
+.shell-probe.bad{color:#ff9ea6;border-color:#f06a7640;background:#f06a760d}
+.shell-form .shell-actions{margin-top:2px}
+
+/* Settings window: its own title bar, since the window hides the system one behind the traffic lights. */
+html[data-view=settings] body{background:var(--bg)}
+.shell-settings{height:100%;display:flex;flex-direction:column}
+.shell-titlebar{flex:0 0 auto;height:52px;display:flex;align-items:center;justify-content:center;border-bottom:1px solid var(--line);background:#0e1218f0;-webkit-app-region:drag}
+.shell-titlebar h1{margin:0;font-size:13px;font-weight:700;color:var(--text)}
+.shell-settings-body{flex:1 1 auto;overflow:auto;padding:20px;display:grid;gap:16px;align-content:start}
+.shell-settings .settings-section{padding:20px;box-shadow:none}
+.shell-section-top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.shell-chip{font-style:normal;font-size:10px;font-weight:800;letter-spacing:.3px;padding:4px 9px;border-radius:99px;border:1px solid var(--line);color:var(--muted);white-space:nowrap}
+.shell-chip.ok{color:var(--green);border-color:#42ce9150;background:#42ce9112}
+.shell-chip.off{color:#ff9ea6;border-color:#f06a7644;background:#f06a760f}
+.shell-chip.warn{color:#f0b35a;border-color:#f0b35a55;background:#f0b35a12}
+
+.shell-servers{display:grid;gap:8px}
+.shell-server{display:flex;align-items:stretch;border:1px solid var(--line);border-radius:12px;background:#0f141b;transition:border-color .15s}
+.shell-server:hover{border-color:#3a4353}
+.shell-server.current{border-color:#ff5b3899;background:linear-gradient(90deg,#ff5b3810,#0f141b 60%)}
+.shell-server.editing{display:block;padding:16px}
+.shell-server-main{flex:1;min-width:0;display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:12px;text-align:left;border:0;background:transparent;padding:12px 14px;font-weight:400}
+.shell-server-main>i{width:34px;height:34px;display:grid;place-items:center;border-radius:10px;background:var(--panel2);color:var(--muted)}
+.shell-server.current .shell-server-main>i{color:var(--accent2);background:#ff5b3818}
+.shell-server-main span{display:grid;gap:3px;min-width:0}
+.shell-server-main strong{font-size:13px}
+.shell-server-main small{color:var(--muted);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.shell-server-main small.shell-wrap{white-space:normal;line-height:1.45}
+.shell-server-tools{display:flex;align-items:center;gap:4px;padding-right:8px}
+.shell-server-confirm{display:flex;align-items:center;gap:8px;padding:8px 10px;font-size:12px;color:var(--muted)}
+.shell-server-confirm button{padding:6px 10px;font-size:12px}
+.shell-icon{width:32px;height:32px;padding:0;border-color:transparent;background:transparent;color:var(--muted)}
+.shell-icon:hover:not(:disabled){color:var(--text);background:var(--panel2)}
+.shell-icon svg{width:15px;height:15px}
+.shell-add{margin-top:10px;width:100%;border-style:dashed;background:transparent;color:var(--muted);font-size:13px;padding:11px}
+.shell-add:hover{color:var(--text);border-color:#ff5b3888}
+
+.shell-controls{display:grid;gap:15px;margin-top:4px}
+.shell-controls .setting-control{grid-template-columns:minmax(0,1fr) auto;gap:22px;cursor:pointer}
+.shell-controls .setting-control small{font-size:11px;line-height:1.5}
+.shell-controls .setting-control strong{font-size:13px}
+.shell-port{display:grid;gap:10px;padding:14px;border-radius:10px;background:#0d1117;border:1px solid var(--line)}
+.shell-port label{display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:12px;font-weight:700}
+.shell-port input{width:96px;text-align:center;font-variant-numeric:tabular-nums}
+.shell-port input[aria-invalid=true]{border-color:var(--red)}
+.shell-error{color:#ff9ea6;font-size:11px}
+.shell-addresses{display:grid;gap:6px}
+.shell-addresses>small{color:var(--muted);font-size:11px}
+.shell-address{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 6px 6px 10px;border-radius:8px;background:var(--panel)}
+.shell-address code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--text);overflow:hidden;text-overflow:ellipsis}
+.shell-notice{margin-top:16px;display:flex;align-items:center;flex-wrap:wrap;gap:10px;padding:12px 14px;border-radius:10px;border:1px solid #ff5b3840;background:#ff5b380d;font-size:12px}
+.shell-notice.warn{border-color:#f0b35a55;background:#f0b35a10}
+.shell-notice>svg{width:16px;height:16px;color:var(--accent2)}
+.shell-notice span{flex:1;min-width:180px;color:var(--text)}
+.shell-notice button{padding:7px 12px;font-size:12px}
+
+.shell-facts{display:grid;grid-template-columns:auto 1fr;gap:9px 18px;margin:0;font-size:12px}
+.shell-facts dt{color:var(--muted)}
+.shell-facts dd{margin:0;overflow-wrap:anywhere}
+
+/* Toast: the page is transparent, only the card paints. */
+html[data-view=toast],html[data-view=toast] body{background:transparent}
+html[data-view=toast] #root{display:flex;align-items:flex-start;justify-content:flex-end;padding:10px}
+.shell-toast{width:100%;display:flex;align-items:center;gap:12px;padding:12px 12px 12px 14px;border-radius:14px;border:1px solid var(--line);background:#161c26f2;backdrop-filter:blur(18px);box-shadow:0 18px 44px #000000aa;animation:shell-toast-in .22s ease-out}
+@keyframes shell-toast-in{from{opacity:0;transform:translateY(-8px)}}
+.shell-toast>i{width:32px;height:32px;flex:0 0 auto;display:grid;place-items:center;border-radius:9px;background:var(--panel2)}
+.shell-toast>i svg{width:17px;height:17px}
+.shell-toast.warn>i{color:#f0b35a;background:#f0b35a18}
+.shell-toast.ok>i{color:var(--green);background:#42ce9118}
+.shell-toast.info>i{color:var(--accent2);background:#ff5b3818}
+.shell-toast p{flex:1;margin:0;font-size:12px;line-height:1.45;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.shell-toast .primary{padding:7px 12px;font-size:12px;white-space:nowrap}

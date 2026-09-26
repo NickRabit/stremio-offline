@@ -1,5 +1,6 @@
-import { app, BaseWindow, dialog, ipcMain, powerSaveBlocker, session, shell as electronShell, utilityProcess, WebContentsView, type IpcMainEvent, type IpcMainInvokeEvent } from "electron";
+import { app, BaseWindow, clipboard, dialog, ipcMain, Menu, Notification, powerSaveBlocker, screen, session, shell as electronShell, utilityProcess, WebContentsView, type IpcMainEvent, type IpcMainInvokeEvent } from "electron";
 import { randomUUID } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -9,47 +10,44 @@ import {
   normalizeProfileOrigin,
   readProfiles,
   removeProfile,
-  selectProfile,
   updateProfile,
   writeProfiles,
   type ProfileStore,
   type ServerProfile,
 } from "./connection-file.js";
-import { downloadProgressPercent, isDeviceTicketDownload } from "./downloads.js";
+import { isDeviceTicketDownload } from "./downloads.js";
 import { catalogue } from "./i18n.js";
-import { layout, type LayoutMode } from "./layout.js";
+import { layout, type PageMode } from "./layout.js";
 import { bundledMediaTools, LOCAL_PARTITION, LocalBackend, LocalPortBusyError, type LocalBackendConnection } from "./local-backend.js";
 import { defaultLocalSettings, parseLocalSettings, readLocalSettings, writeLocalSettings, type LocalSettings } from "./local-settings.js";
+import { buildMenuTemplate } from "./menu.js";
 import { externalBrowserUrl, httpAllowedHost, parseServerOrigin, partitionForOrigin, type ServerOrigin } from "./origin.js";
 import { localPageSent } from "./bridge-sender.js";
+import { SettingsWindow } from "./settings-window.js";
+import type { FailureReason, MainScreen, ProfileResult, ProbeResult, ShellState, Target, Toast } from "./shell-api.js";
+import { effectiveLocale, readShellPrefs, readShellPrefsSync, writeShellPrefs, type ShellLocale } from "./shell-prefs.js";
+import { downloadFraction, nextToastId, safeFileName } from "./shell-text.js";
 import { SerialQueue } from "./serial-queue.js";
 import { SleepGuard } from "./sleep-guard.js";
-import { fetchStatus, type ProbeFailure, type ProbeResult } from "./status.js";
+import { MAX_TARGET_ID, LatestRequest, fallbackApplies, launchPlan, readStartupChoice, writeStartupChoice, STARTUP_FILE } from "./startup.js";
+import { fetchStatus, type ProbeFailure } from "./status.js";
+import { Debounced, DEFAULT_SIZE, MIN_SIZE, readWindowState, restoreBounds, writeWindowState, type WindowState } from "./window-state.js";
 
-type MessageKey = keyof ReturnType<typeof catalogue>;
-
-type ProfileResult =
-  | { ok: true; profiles: ServerProfile[]; selectedProfileId: string | null }
-  | { ok: false; reason: "invalid-name" | "invalid-data" | "save-failed" };
-
-type LocalConnectResult =
-  | { ok: true; version: string; restricted: boolean; secure: boolean; addresses: string[] }
-  | { ok: false; reason: "startup" }
-  | { ok: false; reason: "port-busy"; port: number };
-
-type LocalSettingsResult =
-  | { ok: true; localSettings: LocalSettings }
-  | { ok: false };
-
-// The player asks for fullscreen. Copy on an HTTPS server uses the sanitized clipboard write.
 const ALLOWED_PERMISSIONS = new Set<string>(["fullscreen", "clipboard-sanitized-write"]);
 const ABORTED = -3;
-const DOWNLOAD_NOTICE_INTERVAL = 500;
 /** How long a server page gets to save the position and stop playback before its view goes. */
 const RETIRE_TIMEOUT_MS = 1_500;
+const PROBE_TIMEOUT_MS = 4_000;
+const REPOLL_INTERVAL_MS = 30_000;
+const TOAST_TIMEOUT_MS = 8_000;
+const MAX_CLIPBOARD_TEXT = 2_000;
+const APP_NAME = "Stremio Offline";
+const WINDOW_BACKGROUND = "#0b0e13";
+const PROJECT_URL = "https://github.com/NickRabit/stremio-offline";
+const WINDOW_SAVE_DELAY_MS = 500;
 
-const CONNECTION_PAGE = fileURLToPath(new URL("../static/connection.html", import.meta.url));
-const CONNECTION_PRELOAD = fileURLToPath(new URL("./preload.js", import.meta.url));
+const RENDERER_PAGE = fileURLToPath(new URL("../renderer/desktop.html", import.meta.url));
+const SHELL_PRELOAD = fileURLToPath(new URL("./shell-preload.js", import.meta.url));
 const LOCAL_PRELOAD = fileURLToPath(new URL("./local-preload.js", import.meta.url));
 /** The staged runtime keeps the server's `../../web` layout: `runtime/server/dist` and `runtime/web`. */
 const LOCAL_BACKEND_ENTRY = fileURLToPath(new URL("../runtime/server/dist/index.js", import.meta.url));
@@ -83,52 +81,210 @@ const CAPABILITIES = `() => {
 
 interface Shell {
   window: BaseWindow;
-  connection: WebContentsView;
+  page: WebContentsView;
+  toast: WebContentsView;
   remote: WebContentsView | null;
   remotePartition: string | null;
 }
 
 let shell: Shell | null = null;
 let connected: ServerOrigin | null = null;
-let mode: LayoutMode = "connect";
+let remoteFullscreen = false;
 let loadFailure: ProbeFailure | null = null;
 let localBackend: LocalBackend | null = null;
 let localConnection: LocalBackendConnection | null = null;
 /** The last streaming report from the running backend. */
 let localStreaming = false;
+let ffmpegLine: string | null = null;
 const sleepGuard = new SleepGuard(powerSaveBlocker);
 /** Quitting retires the page itself, so a window closing on the way out does not wait for it again. */
 let quitting = false;
 const preparedPartitions = new Set<string>();
 let profileStore: ProfileStore = { profiles: [], selectedProfileId: null };
 let localSettings: LocalSettings = defaultLocalSettings();
+/** Electron shows the newest of these while a download runs; the shell counts them for `busy`. */
+const deviceDownloads = new Map<object, number>();
+const queue = new SerialQueue();
+/** The newest connect request wins; a stale result is dropped instead of applied. */
+const requests = new LatestRequest();
+let repoll: NodeJS.Timeout | null = null;
+let repollNotified = false;
+let toastTimer: NodeJS.Timeout | null = null;
 
-const windowTitle = () => catalogue(app.getLocale())["connect.title"];
+const shellState: ShellState = {
+  locale: "en",
+  localeChoice: null,
+  appVersion: "",
+  screen: { kind: "welcome" },
+  connection: null,
+  chosen: null,
+  profiles: [],
+  local: { settings: defaultLocalSettings(), running: false, addresses: [], ffmpeg: null, busy: false },
+  toast: null,
+};
+
+const settingsWindow = new SettingsWindow({
+  rendererPage: RENDERER_PAGE,
+  preload: SHELL_PRELOAD,
+  userDataDir: () => app.getPath("userData"),
+  title: () => catalogue(shellState.locale)["settings.title"],
+});
+
+const openSettings = (): void => settingsWindow.open();
+
+const targetKey = (target: Target | null): string =>
+  target === null ? "-" : target.kind === "local" ? "local" : `profile:${target.id}`;
+
+let menuKey = "";
+
+const applyMenu = (): void => {
+  const live = shellState.screen.kind === "connected" && shellState.connection !== null;
+  const target = live ? shellState.connection?.target ?? null : null;
+  const key = [
+    shellState.locale,
+    shellState.profiles.map((profile) => `${profile.id}:${profile.name}`).join(","),
+    targetKey(target),
+    live ? "connected" : "idle",
+  ].join("|");
+  if (key === menuKey) return;
+  menuKey = key;
+  Menu.setApplicationMenu(Menu.buildFromTemplate(buildMenuTemplate({
+    strings: catalogue(shellState.locale),
+    profiles: shellState.profiles,
+    current: target,
+    connected: live,
+    isPackaged: app.isPackaged,
+    actions: {
+      openSettings,
+      reload: () => {
+        const current = shell;
+        if (!current) return;
+        if (connected !== null && current.remote !== null && !current.remote.webContents.isDestroyed()) {
+          current.remote.webContents.reloadIgnoringCache();
+          return;
+        }
+        if (!current.page.webContents.isDestroyed()) current.page.webContents.reload();
+      },
+      devTools: () => {
+        const current = shell;
+        if (!current) return;
+        if (connected !== null && current.remote !== null && !current.remote.webContents.isDestroyed()) current.remote.webContents.toggleDevTools();
+        else if (!current.page.webContents.isDestroyed()) current.page.webContents.toggleDevTools();
+      },
+      // Electron flips a clicked checkbox itself; rebuilding puts the tick back where the state says.
+      connect: (target) => { menuKey = ""; applyMenu(); void connectTarget(target, { launch: false }); },
+      reconnect: () => { void connectTarget(shellState.chosen ?? { kind: "local" }, { launch: false }); },
+      openProject: () => { void electronShell.openExternal(PROJECT_URL).catch(() => {}); },
+    },
+  })));
+};
+
+const sameLocalSettings = (a: LocalSettings, b: LocalSettings) =>
+  a.allowPrivateAddons === b.allowPrivateAddons && a.publish === b.publish && a.publishPort === b.publishPort;
 
 const syncAwake = () => sleepGuard.update({ published: localConnection?.published === true, streaming: localStreaming });
 
-const applyMode = (next: LayoutMode) => {
+const pageMode = (): PageMode =>
+  shellState.screen.kind !== "connected" ? "shell" : remoteFullscreen ? "fullscreen" : "remote";
+
+const applyLayout = () => {
   const current = shell;
   if (!current) return;
-  mode = next;
   const { width, height } = current.window.getContentBounds();
-  const bounds = layout({ width, height }, mode);
-  current.connection.setBounds(bounds.chrome);
+  const bounds = layout({ width, height }, pageMode(), shellState.toast !== null);
+  current.page.setBounds(bounds.shell);
   current.remote?.setBounds(bounds.remote);
+  current.toast.setBounds(bounds.toast);
+  current.toast.setVisible(shellState.toast !== null);
 };
 
-/** The local page owns the wording, so main only names the message it wants shown. */
-const notifyConnection = (key: MessageKey) => {
-  const current = shell;
-  if (!current) return;
-  void current.connection.webContents.executeJavaScript(`window.desktopNotice?.(${JSON.stringify(key)})`).catch(() => {});
+const titleFor = (screen: MainScreen): string => {
+  if (screen.kind === "welcome") return APP_NAME;
+  const name = screen.kind === "connected" ? shellState.connection?.name ?? "" : screen.name;
+  const label = name.trim().length > 0 ? name : catalogue(shellState.locale)["window.thisMac"];
+  return `${APP_NAME} — ${label}`;
 };
 
-/** A download notice arrives as finished text, because it carries a percentage the shell formats. */
-const notifyDownload = (text: string) => {
+const refreshLocal = () => {
+  shellState.profiles = profileStore.profiles;
+  shellState.local = {
+    settings: localSettings,
+    running: localConnection !== null,
+    addresses: localConnection?.addresses ?? [],
+    ffmpeg: ffmpegLine,
+    busy: localStreaming || deviceDownloads.size > 0,
+  };
+};
+
+const pushState = () => {
   const current = shell;
   if (!current) return;
-  void current.connection.webContents.executeJavaScript(`window.desktopDownloadNotice?.(${JSON.stringify(text)})`).catch(() => {});
+  refreshLocal();
+  applyLayout();
+  applyMenu();
+  for (const view of [current.page, current.toast]) {
+    if (!view.webContents.isDestroyed()) view.webContents.send("shell:state", shellState);
+  }
+  settingsWindow.push(shellState);
+  current.window.setTitle(titleFor(shellState.screen));
+};
+
+const setScreen = (screen: MainScreen) => {
+  shellState.screen = screen;
+  pushState();
+};
+
+const hideToast = () => {
+  if (toastTimer) { clearTimeout(toastTimer); toastTimer = null; }
+  if (shellState.toast === null) return;
+  shellState.toast = null;
+  pushState();
+};
+
+const showToast = (toast: Toast) => {
+  if (toastTimer) { clearTimeout(toastTimer); toastTimer = null; }
+  shellState.toast = toast;
+  pushState();
+  // A fallback stays until it is dismissed or acted on; everything else goes by itself.
+  if (toast.kind === "fallback") return;
+  toastTimer = setTimeout(() => {
+    toastTimer = null;
+    if (shellState.toast?.id !== toast.id) return;
+    shellState.toast = null;
+    pushState();
+  }, TOAST_TIMEOUT_MS);
+};
+
+const stopRepoll = () => {
+  if (repoll) { clearInterval(repoll); repoll = null; }
+  repollNotified = false;
+};
+
+const startRepoll = (origin: string, name: string) => {
+  stopRepoll();
+  repoll = setInterval(() => {
+    void fetchStatus(origin, fetch, PROBE_TIMEOUT_MS).then((result) => {
+      if (!result.ok || repollNotified) return;
+      repollNotified = true;
+      if (repoll) { clearInterval(repoll); repoll = null; }
+      showToast({ id: nextToastId(), kind: "server-back", server: name });
+    }).catch(() => {});
+  }, REPOLL_INTERVAL_MS);
+};
+
+const updateDownloadProgress = () => {
+  const current = shell;
+  if (!current) return;
+  current.window.setProgressBar(Array.from(deviceDownloads.values()).at(-1) ?? -1);
+};
+
+const notifyDownload = (kind: "download-done" | "download-failed", file: string) => {
+  const current = shell;
+  if (!current || current.window.isFocused()) return;
+  if (!Notification.isSupported()) return;
+  const strings = catalogue(shellState.locale);
+  const body = (kind === "download-done" ? strings["notify.downloadDone"] : strings["notify.downloadFailed"]).replace("{file}", file);
+  new Notification({ title: APP_NAME, body }).show();
 };
 
 const originOf = (url: string) => {
@@ -154,24 +310,28 @@ const sameConnectedHost = (url: string) => {
   return connected !== null && host !== null && host.toLowerCase() === connected.host.toLowerCase();
 };
 
-const messageFor = (reason: ProbeFailure): MessageKey => reason === "insecure-transport" ? "connect.insecure" : reason === "unreachable" ? "connect.unreachable" : "connect.notStatus";
-
 const blankRemote = () => {
   const remote = shell?.remote;
   if (!remote || remote.webContents.isDestroyed()) return;
   void remote.webContents.loadURL("about:blank")?.catch(() => {});
 };
 
-const failConnection = (reason: ProbeFailure) => {
-  loadFailure = reason;
+/** A failure while connected: the shell page comes back with the reason and no automatic fallback. */
+const failConnected = (reason: FailureReason) => {
+  const connection = shellState.connection;
   const wasConnected = connected !== null;
+  if (reason === "invalid" || reason === "insecure-transport" || reason === "unreachable" || reason === "not-status") loadFailure = reason;
   connected = null;
-  if (mode !== "connect") {
-    applyMode("connect");
-    shell?.window.setTitle(windowTitle());
-    notifyConnection(messageFor(reason));
-  }
+  shellState.connection = null;
   if (wasConnected) blankRemote();
+  setScreen({
+    kind: "error",
+    target: connection?.target ?? shellState.chosen ?? { kind: "local" },
+    name: connection?.name ?? "",
+    origin: connection?.origin ?? null,
+    reason,
+    port: null,
+  });
 };
 
 /**
@@ -211,8 +371,7 @@ const guardRemoteNavigation = (remote: WebContentsView, event: { preventDefault:
   if (onConnectedOrigin(url)) return;
   event.preventDefault();
   if (!connected || originOf(url) === null) return;
-  applyMode("connect");
-  notifyConnection("connect.notStatus");
+  failConnected("not-status");
 };
 
 const openExternally = ({ url }: { url: string }) => {
@@ -229,7 +388,7 @@ const httpRequestBlocked = (rawUrl: string): boolean => {
 const refusePublicHttp = (rawUrl: string, resourceType: string) => {
   if (connected?.transport !== "http") return;
   if (resourceType !== "mainFrame" && !sameConnectedHost(rawUrl)) return;
-  failConnection("insecure-transport");
+  failConnected("insecure-transport");
 };
 
 /** The origin the ticket check compares against is read at download time: the local server may
@@ -247,11 +406,6 @@ const preparePartition = (partition: string, serverOrigin: () => string | null) 
     callback({ cancel });
     if (cancel) refusePublicHttp(details.url, details.resourceType);
   });
-  const activeDownloads = new Map<object, string>();
-  const updateActiveDownload = (item: object, text: string) => {
-    activeDownloads.delete(item);
-    activeDownloads.set(item, text);
-  };
   // Only a ticket this server's own page downloaded stays local. Everything else keeps Electron's
   // routine: the download is not prevented, renamed or given a save path.
   ses.on("will-download", (_event, item, contents) => {
@@ -259,38 +413,25 @@ const preparePartition = (partition: string, serverOrigin: () => string | null) 
     if (expectedOrigin === null || !isDeviceTicketDownload(item.getURL(), item.getInitiatorOrigin(), expectedOrigin)) return;
     const current = shell;
     if (!current?.remote || current.remotePartition !== partition || current.remote.webContents !== contents) return;
-    const strings = catalogue(app.getLocale());
-    const name = path.basename(item.getFilename());
-    item.setSaveDialogOptions({ title: strings["download.saveTitle"], defaultPath: name.length > 0 ? name : "video" });
-    const showLatestActiveDownload = () => {
-      const latest = Array.from(activeDownloads.values()).at(-1);
-      const active = shell;
-      if (latest && active?.remote?.webContents === contents && active.remotePartition === partition) notifyDownload(latest);
-    };
-    updateActiveDownload(item, strings["download.saving"]);
-    showLatestActiveDownload();
-    let lastPercent: number | null = null;
-    let lastNoticeAt = Date.now();
+    const file = safeFileName(item.getFilename());
+    item.setSaveDialogOptions({ title: catalogue(shellState.locale)["download.saveTitle"], defaultPath: file });
+    deviceDownloads.set(item, 2);
+    updateDownloadProgress();
+    pushState();
     item.on("updated", (_updated, state) => {
       if (state !== "progressing") return;
-      const now = Date.now();
-      if (now - lastNoticeAt < DOWNLOAD_NOTICE_INTERVAL) return;
-      const percent = downloadProgressPercent(item.getReceivedBytes(), item.getTotalBytes());
-      if (percent === lastPercent) return;
-      lastNoticeAt = now;
-      lastPercent = percent;
-      updateActiveDownload(item, percent === null ? strings["download.saving"] : strings["download.progress"].replace("{percent}", String(percent)));
-      showLatestActiveDownload();
+      deviceDownloads.set(item, downloadFraction(item.getReceivedBytes(), item.getTotalBytes()));
+      updateDownloadProgress();
     });
     item.once("done", (_done, state) => {
-      activeDownloads.delete(item);
-      if (activeDownloads.size > 0) showLatestActiveDownload();
-      else {
-        const active = shell;
-        if (active?.remote?.webContents === contents && active.remotePartition === partition) {
-          notifyDownload(state === "completed" ? strings["download.completed"] : state === "cancelled" ? strings["download.cancelled"] : strings["download.interrupted"]);
-        }
+      deviceDownloads.delete(item);
+      updateDownloadProgress();
+      if (state === "completed" || state === "interrupted") {
+        const kind = state === "completed" ? "download-done" : "download-failed";
+        showToast({ id: nextToastId(), kind, file });
+        notifyDownload(kind, file);
       }
+      pushState();
     });
   });
 };
@@ -301,8 +442,8 @@ const wireRemote = (remote: WebContentsView) => {
   contents.setWindowOpenHandler(openExternally);
   contents.on("will-navigate", (event, url) => guardRemoteNavigation(remote, event, url));
   contents.on("will-redirect", (event, url) => guardRemoteNavigation(remote, event, url));
-  contents.on("enter-html-full-screen", () => { if (shell?.remote === remote) applyMode("fullscreen"); });
-  contents.on("leave-html-full-screen", () => { if (shell?.remote === remote) applyMode(connected ? "remote" : "connect"); });
+  contents.on("enter-html-full-screen", () => { if (shell?.remote === remote) { remoteFullscreen = true; applyLayout(); } });
+  contents.on("leave-html-full-screen", () => { if (shell?.remote === remote) { remoteFullscreen = false; applyLayout(); } });
   contents.on("did-finish-load", () => {
     if (shell?.remote !== remote || !onConnectedOrigin(contents.getURL())) return;
     void contents.executeJavaScript(`(${CAPABILITIES})()`).then(
@@ -312,7 +453,7 @@ const wireRemote = (remote: WebContentsView) => {
   });
   contents.on("did-fail-load", (_event, errorCode, _description, _url, isMainFrame) => {
     if (shell?.remote !== remote || !isMainFrame || errorCode === ABORTED || !connected) return;
-    failConnection(loadFailure ?? "unreachable");
+    failConnected(loadFailure ?? "unreachable");
   });
 };
 
@@ -326,130 +467,16 @@ const mountRemote = (partition: string, serverOrigin: () => string | null, prelo
     webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true, partition, ...(preload ? { preload } : {}) },
   });
   wireRemote(remote);
-  // Under the connection bar, which is already the top child.
+  // Below the shell's own pages, which stay on top.
   current.window.contentView.addChildView(remote, 0);
   current.remote = remote;
   current.remotePartition = partition;
-  applyMode(mode);
+  applyLayout();
   return remote;
 };
 
-const createShell = () => {
-  const window = new BaseWindow({ width: 1100, height: 720, title: windowTitle() });
-  const connection = new WebContentsView({ webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true, preload: CONNECTION_PRELOAD } });
-
-  connection.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-  connection.webContents.on("will-navigate", (event) => event.preventDefault());
-  void connection.webContents.loadFile(CONNECTION_PAGE);
-
-  window.contentView.addChildView(connection);
-  window.on("resize", () => applyMode(mode));
-  window.on("enter-full-screen", () => applyMode(mode));
-  window.on("leave-full-screen", () => applyMode(mode));
-  let retired = false;
-  window.on("close", (event) => {
-    if (retired || quitting || !liveRemote()) return;
-    event.preventDefault();
-    retired = true;
-    void retireRemote().finally(() => window.close());
-  });
-  window.on("closed", () => { shell = null; });
-  shell = { window, connection, remote: null, remotePartition: null };
-  applyMode("connect");
-};
-
-const fromConnection = (event: IpcMainInvokeEvent | IpcMainEvent) => event.sender === shell?.connection.webContents;
-
-const queue = new SerialQueue();
-
-const persistProfiles = async (next: ProfileStore): Promise<ProfileResult> => {
-  try {
-    await writeProfiles(app.getPath("userData"), next);
-  } catch {
-    return { ok: false, reason: "save-failed" };
-  }
-  profileStore = next;
-  return { ok: true, profiles: next.profiles, selectedProfileId: next.selectedProfileId };
-};
-
-const profileIdOf = (value: unknown) => typeof value === "string" && value.length > 0 ? value : null;
-
-const saveProfile = (input: { id: string | null; name: unknown; origin: unknown }): Promise<ProfileResult> =>
-  queue.run(async (): Promise<ProfileResult> => {
-    const name = normalizeProfileName(input.name);
-    if (name === null) return { ok: false, reason: "invalid-name" };
-    const origin = normalizeProfileOrigin(input.origin);
-    if (origin === null) return { ok: false, reason: "invalid-data" };
-    const next = input.id === null
-      ? addProfile(profileStore, randomUUID(), { name, origin })
-      : updateProfile(profileStore, input.id, { name, origin });
-    if (!next) return { ok: false, reason: "invalid-data" };
-    return persistProfiles(next);
-  });
-
-const deleteProfile = (id: string | null): Promise<ProfileResult> =>
-  queue.run(async (): Promise<ProfileResult> => {
-    if (id === null || !findProfile(profileStore, id)) return { ok: false, reason: "invalid-data" };
-    return persistProfiles(removeProfile(profileStore, id));
-  });
-
-const selectSavedProfile = (id: string | null): Promise<ProfileResult> =>
-  queue.run(async (): Promise<ProfileResult> => {
-    const next = selectProfile(profileStore, id);
-    if (!next) return { ok: false, reason: "invalid-data" };
-    return persistProfiles(next);
-  });
-
-const connectProfile = (id: string | null): Promise<ProbeResult> =>
-  queue.run(async (): Promise<ProbeResult> => {
-    const profile = findProfile(profileStore, id);
-    const server = profile ? parseServerOrigin(profile.origin) : null;
-    if (!profile || !server) return { ok: false, reason: "invalid" };
-    const result = await fetchStatus(server.origin);
-    if (!result.ok) return result;
-    await persistProfiles({ ...profileStore, selectedProfileId: profile.id });
-    const partition = partitionForOrigin(server.origin);
-    if (shell?.remotePartition !== partition) await retireRemote();
-    const remote = mountRemote(partition, () => server.origin);
-    if (!remote) return { ok: false, reason: "unreachable" };
-    loadFailure = null;
-    connected = server;
-    try {
-      await remote.webContents.loadURL(server.origin + "/");
-    } catch {
-      const reason = loadFailure ?? "unreachable";
-      loadFailure = null;
-      connected = null;
-      applyMode("connect");
-      shell?.window.setTitle(windowTitle());
-      blankRemote();
-      return { ok: false, reason };
-    }
-    if (!connected) return { ok: false, reason: loadFailure ?? "unreachable" };
-    shell?.window.setTitle(server.origin);
-    applyMode("remote");
-    // A remote profile that answered takes over from the local backend for good.
-    await closeLocalBackend();
-    return result;
-  });
-
 /** The live local origin, or null when nothing local is running. Never a saved profile. */
 const localOrigin = (): string | null => localConnection?.server.origin ?? null;
-
-const failLocalConnection = () => {
-  localConnection = null;
-  localStreaming = false;
-  syncAwake();
-  const wasConnected = connected !== null;
-  connected = null;
-  loadFailure = null;
-  if (mode !== "connect") {
-    applyMode("connect");
-    shell?.window.setTitle(windowTitle());
-    notifyConnection("connect.localFailed");
-  }
-  if (wasConnected) blankRemote();
-};
 
 const closeLocalBackend = async (): Promise<void> => {
   localConnection = null;
@@ -460,98 +487,401 @@ const closeLocalBackend = async (): Promise<void> => {
   await backend.stop().catch(() => {});
 };
 
-const connectLocal = (): Promise<LocalConnectResult> =>
-  queue.run(async (): Promise<LocalConnectResult> => {
-    const backend = localBackend;
-    if (!backend) return { ok: false, reason: "startup" };
-    let connection: LocalBackendConnection;
+const parseTarget = (value: unknown): Target | null => {
+  if (typeof value !== "object" || value === null) return null;
+  const record = value as Record<string, unknown>;
+  if (record.kind === "local") return { kind: "local" };
+  if (record.kind !== "profile") return null;
+  const id = record.id;
+  if (typeof id !== "string" || id.length === 0 || id.length > MAX_TARGET_ID) return null;
+  return { kind: "profile", id };
+};
+
+/** The local backend comes up and its page loads; a superseded start is stopped again. */
+const startLocal = async (ticket: number, target: Target, fallback: { profileName: string; origin: string } | null, announce = true): Promise<void> => {
+  const name = fallback?.profileName ?? "";
+  const failWith = (reason: FailureReason, port: number | null = null) => {
+    if (requests.isCurrent(ticket)) setScreen({ kind: "error", target, name, origin: fallback?.origin ?? null, reason, port });
+  };
+  const backend = localBackend;
+  if (!backend) { failWith("local-startup"); return; }
+  let connection: LocalBackendConnection;
+  try {
+    connection = await backend.start();
+  } catch (error) {
+    console.warn("local backend: " + (error instanceof Error ? error.message : String(error)));
+    if (!requests.isCurrent(ticket)) { await closeLocalBackend(); return; }
+    if (error instanceof LocalPortBusyError) failWith("port-busy", error.port);
+    else failWith("local-startup");
+    return;
+  }
+  if (!requests.isCurrent(ticket)) { await closeLocalBackend(); return; }
+  localConnection = connection;
+  localStreaming = false;
+  syncAwake();
+  if (shell?.remotePartition !== LOCAL_PARTITION) await retireRemote();
+  const remote = mountRemote(LOCAL_PARTITION, localOrigin, LOCAL_PRELOAD);
+  if (!remote) { await closeLocalBackend(); failWith("local-startup"); return; }
+  loadFailure = null;
+  connected = connection.server;
+  try {
+    await remote.webContents.loadURL(connection.server.origin + "/");
+  } catch {
+    console.warn("local backend: the local page did not load (" + (loadFailure ?? "unreachable") + ")");
+    await closeLocalBackend();
+    failWith("local-startup");
+    return;
+  }
+  if (!requests.isCurrent(ticket)) { await closeLocalBackend(); return; }
+  if (!connected) { await closeLocalBackend(); return; }
+  // What the window shows is this Mac, also while it stands in for a profile: the menu, the
+  // settings and a restart go by it. The profile it stands in for stays the remembered choice.
+  shellState.connection = {
+    target: { kind: "local" },
+    name: "",
+    origin: connection.server.origin,
+    version: connection.status.version,
+    restricted: connection.status.restricted,
+    secure: connection.status.secure,
+    fallbackFrom: fallback?.profileName ?? null,
+  };
+  if (fallback === null) {
+    shellState.chosen = target;
+    await writeStartupChoice(app.getPath("userData"), target).catch(() => {});
+  }
+  setScreen({ kind: "connected" });
+  if (fallback && announce) {
+    showToast({ id: nextToastId(), kind: "fallback", server: fallback.profileName });
+    startRepoll(fallback.origin, fallback.profileName);
+  }
+};
+
+/** A saved profile: probe, then take over the window. An unreachable one falls back on launch. */
+const connectProfile = async (ticket: number, target: Target, profile: ServerProfile, server: ServerOrigin, launch: boolean): Promise<void> => {
+  let result = await fetchStatus(server.origin, fetch, PROBE_TIMEOUT_MS);
+  if (!result.ok && result.reason === "unreachable") result = await fetchStatus(server.origin, fetch, PROBE_TIMEOUT_MS);
+  if (!requests.isCurrent(ticket)) return;
+  if (!result.ok) {
+    if (launch && fallbackApplies(target, result.reason)) {
+      shellState.chosen = target;
+      await startLocal(ticket, target, { profileName: profile.name, origin: server.origin });
+      return;
+    }
+    setScreen({ kind: "error", target, name: profile.name, origin: server.origin, reason: result.reason, port: null });
+    return;
+  }
+  const partition = partitionForOrigin(server.origin);
+  if (shell?.remotePartition !== partition) await retireRemote();
+  const remote = mountRemote(partition, () => server.origin);
+  if (!remote) {
+    setScreen({ kind: "error", target, name: profile.name, origin: server.origin, reason: "unreachable", port: null });
+    return;
+  }
+  loadFailure = null;
+  connected = server;
+  try {
+    await remote.webContents.loadURL(server.origin + "/");
+  } catch {
+    const reason = loadFailure ?? "unreachable";
+    loadFailure = null;
+    connected = null;
+    if (requests.isCurrent(ticket)) setScreen({ kind: "error", target, name: profile.name, origin: server.origin, reason, port: null });
+    return;
+  }
+  if (!requests.isCurrent(ticket)) return;
+  if (!connected) return;
+  shellState.connection = {
+    target,
+    name: profile.name,
+    origin: server.origin,
+    version: result.version,
+    restricted: result.restricted,
+    secure: result.secure,
+    fallbackFrom: null,
+  };
+  shellState.chosen = target;
+  await writeStartupChoice(app.getPath("userData"), target).catch(() => {});
+  // A remote profile that answered takes over from the local backend for good.
+  await closeLocalBackend();
+  setScreen({ kind: "connected" });
+};
+
+/** The page on screen goes before another is tried: a failed attempt must not leave the old
+ *  server playing behind the error screen. Retiring it first lets it save its position. */
+const dropCurrentPage = async () => {
+  await retireRemote();
+  connected = null;
+  shellState.connection = null;
+};
+
+const connectTarget = (target: Target, options: { launch: boolean }): Promise<void> => {
+  const ticket = requests.next();
+  return queue.run(async () => {
+    stopRepoll();
+    const profile = target.kind === "profile" ? findProfile(profileStore, target.id) : null;
+    const server = profile ? parseServerOrigin(profile.origin) : null;
+    if (target.kind === "profile" && (!profile || !server)) {
+      if (requests.isCurrent(ticket)) setScreen({ kind: "error", target, name: "", origin: null, reason: "invalid", port: null });
+      return;
+    }
+    if (!requests.isCurrent(ticket)) return;
+    // A fallback notice belongs to the connection it announced.
+    if (shellState.toast?.kind === "fallback" || shellState.toast?.kind === "server-back") hideToast();
+    setScreen({ kind: "connecting", target, name: profile?.name ?? "", origin: server?.origin ?? null });
+    await dropCurrentPage();
+    if (target.kind === "local") { await startLocal(ticket, target, null); return; }
+    await connectProfile(ticket, target, profile as ServerProfile, server as ServerOrigin, options.launch);
+  });
+};
+
+const restartLocal = async (): Promise<{ ok: boolean }> => {
+  const connection = shellState.connection;
+  const showingLocal = shellState.screen.kind === "connected" && connection?.target.kind === "local";
+  const backend = localBackend;
+  if (showingLocal) {
+    // A stand-in stays a stand-in: the profile it replaces and its re-poll carry on.
+    const standIn = connection.fallbackFrom !== null && shellState.chosen?.kind === "profile"
+      ? findProfile(profileStore, shellState.chosen.id) : null;
+    const ticket = requests.next();
+    const ok = await queue.run(async () => {
+      setScreen({ kind: "connecting", target: { kind: "local" }, name: "", origin: null });
+      await dropCurrentPage();
+      await closeLocalBackend();
+      await startLocal(ticket, standIn ? shellState.chosen as Target : { kind: "local" },
+        standIn ? { profileName: standIn.name, origin: standIn.origin } : null, false);
+      return shellState.screen.kind === "connected";
+    });
+    if (ok) showToast({ id: nextToastId(), kind: "local-restarted" });
+    return { ok };
+  }
+  // The window shows a remote server, but a running backend has to come back all the same.
+  if (localConnection === null || !backend) return { ok: true };
+  return queue.run(async () => {
+    await closeLocalBackend();
     try {
-      connection = await backend.start();
+      localConnection = await backend.start();
     } catch (error) {
       console.warn("local backend: " + (error instanceof Error ? error.message : String(error)));
-      if (error instanceof LocalPortBusyError) return { ok: false, reason: "port-busy", port: error.port };
-      // Nothing was mounted and nothing was given up, so the shell stays where it is.
-      return { ok: false, reason: "startup" };
+      pushState();
+      return { ok: false };
     }
-    localConnection = connection;
-    localStreaming = false;
     syncAwake();
-    if (shell?.remotePartition !== LOCAL_PARTITION) await retireRemote();
-    const remote = mountRemote(LOCAL_PARTITION, localOrigin, LOCAL_PRELOAD);
-    if (!remote) {
-      await closeLocalBackend();
-      failLocalConnection();
-      return { ok: false, reason: "startup" };
+    pushState();
+    showToast({ id: nextToastId(), kind: "local-restarted" });
+    return { ok: true };
+  });
+};
+
+const shellWebPreferences = () => ({
+  nodeIntegration: false,
+  contextIsolation: true,
+  sandbox: true,
+  webSecurity: true,
+  preload: SHELL_PRELOAD,
+});
+
+const wireShellView = (view: WebContentsView, name: "main" | "toast") => {
+  view.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  view.webContents.on("will-navigate", (event) => event.preventDefault());
+  void view.webContents.loadFile(RENDERER_PAGE, { query: { view: name } });
+};
+
+const createShell = (saved: WindowState | null) => {
+  const restored = restoreBounds(
+    saved,
+    screen.getAllDisplays().map((display) => display.workArea),
+    screen.getPrimaryDisplay().workArea,
+    DEFAULT_SIZE,
+  );
+  const window = new BaseWindow({
+    ...restored.bounds,
+    minWidth: MIN_SIZE.width,
+    minHeight: MIN_SIZE.height,
+    title: APP_NAME,
+    backgroundColor: WINDOW_BACKGROUND,
+  });
+  const page = new WebContentsView({ webPreferences: shellWebPreferences() });
+  const toast = new WebContentsView({ webPreferences: shellWebPreferences() });
+  wireShellView(page, "main");
+  wireShellView(toast, "toast");
+  toast.setBackgroundColor("#00000000");
+  toast.setVisible(false);
+  window.contentView.addChildView(page);
+  window.contentView.addChildView(toast);
+  window.on("resize", applyLayout);
+  window.on("enter-full-screen", applyLayout);
+  window.on("leave-full-screen", applyLayout);
+  const save = new Debounced(() => {
+    void writeWindowState(app.getPath("userData"), "main",
+      { bounds: window.getNormalBounds(), maximized: window.isMaximized() }).catch(() => {});
+  }, WINDOW_SAVE_DELAY_MS);
+  window.on("resize", () => save.schedule());
+  window.on("move", () => save.schedule());
+  window.on("maximize", () => save.schedule());
+  window.on("unmaximize", () => save.schedule());
+  window.on("close", () => save.flush());
+  let retired = false;
+  window.on("close", (event) => {
+    if (retired || quitting || !liveRemote()) return;
+    event.preventDefault();
+    retired = true;
+    void retireRemote().finally(() => window.close());
+  });
+  window.on("closed", () => { shell = null; settingsWindow.close(); });
+  shell = { window, page, toast, remote: null, remotePartition: null };
+  if (restored.maximized) window.maximize();
+  pushState();
+};
+
+const fromShellPage = (event: IpcMainInvokeEvent | IpcMainEvent): boolean => {
+  const current = shell;
+  if (current !== null && (event.sender === current.page.webContents || event.sender === current.toast.webContents)) return true;
+  const settings = settingsWindow.contents;
+  return settings !== null && event.sender === settings;
+};
+
+const assertShellSender = (event: IpcMainInvokeEvent | IpcMainEvent) => {
+  if (!fromShellPage(event)) throw new Error("shell: unexpected sender");
+};
+
+const profileIdOf = (value: unknown) => typeof value === "string" && value.length > 0 ? value : null;
+
+const persistProfiles = async (next: ProfileStore): Promise<boolean> => {
+  try {
+    await writeProfiles(app.getPath("userData"), next);
+  } catch {
+    return false;
+  }
+  profileStore = next;
+  return true;
+};
+
+const saveProfile = (input: { id: string | null; name: unknown; origin: unknown }): Promise<ProfileResult> =>
+  queue.run(async (): Promise<ProfileResult> => {
+    const name = normalizeProfileName(input.name);
+    if (name === null) return { ok: false, reason: "invalid-name" };
+    const origin = normalizeProfileOrigin(input.origin);
+    if (origin === null) return { ok: false, reason: "invalid-data" };
+    const id = input.id ?? randomUUID();
+    const next = input.id === null
+      ? addProfile(profileStore, id, { name, origin })
+      : updateProfile(profileStore, input.id, { name, origin });
+    if (!next) return { ok: false, reason: "invalid-data" };
+    if (!await persistProfiles(next)) return { ok: false, reason: "save-failed" };
+    pushState();
+    const profile = findProfile(profileStore, id);
+    return profile ? { ok: true, profile } : { ok: false, reason: "not-found" };
+  });
+
+const deleteProfile = (id: string | null): Promise<{ ok: boolean }> =>
+  queue.run(async (): Promise<{ ok: boolean }> => {
+    if (id === null || !findProfile(profileStore, id)) return { ok: false };
+    // The profile the main window is showing must not vanish under it.
+    if (shellState.connection?.target.kind === "profile" && shellState.connection.target.id === id) return { ok: false };
+    if (!await persistProfiles(removeProfile(profileStore, id))) return { ok: false };
+    // Removing the server this Mac stands in for ends the stand-in: nothing is left to wait for.
+    if (shellState.chosen?.kind === "profile" && shellState.chosen.id === id) {
+      stopRepoll();
+      if (shellState.toast?.kind === "fallback" || shellState.toast?.kind === "server-back") hideToast();
+      const local: Target = { kind: "local" };
+      shellState.chosen = shellState.connection?.target.kind === "local" ? local : null;
+      if (shellState.connection) shellState.connection = { ...shellState.connection, fallbackFrom: null };
+      await writeStartupChoice(app.getPath("userData"), shellState.chosen).catch(() => {});
     }
-    loadFailure = null;
-    connected = connection.server;
-    try {
-      await remote.webContents.loadURL(connection.server.origin + "/");
-    } catch {
-      console.warn("local backend: the local page did not load (" + (loadFailure ?? "unreachable") + ")");
-      await closeLocalBackend();
-      failLocalConnection();
-      return { ok: false, reason: "startup" };
-    }
-    if (!connected) {
-      await closeLocalBackend();
-      return { ok: false, reason: "startup" };
-    }
-    shell?.window.setTitle(connection.server.origin);
-    applyMode("remote");
-    return { ok: true, ...connection.status, addresses: connection.addresses };
+    pushState();
+    return { ok: true };
   });
 
 const registerHandlers = () => {
-  ipcMain.handle("desktop:bootstrap", async (event) => {
-    if (!fromConnection(event)) throw new Error("desktop: unexpected sender");
-    return {
-      strings: catalogue(app.getLocale()),
-      profiles: profileStore.profiles,
-      selectedProfileId: profileStore.selectedProfileId,
-      localSettings,
-    };
+  ipcMain.handle("shell:getState", (event) => {
+    assertShellSender(event);
+    refreshLocal();
+    return shellState;
   });
 
-  ipcMain.handle("desktop:save-profile", async (event, input: unknown): Promise<ProfileResult> => {
-    if (!fromConnection(event)) throw new Error("desktop: unexpected sender");
+  ipcMain.handle("shell:connect", async (event, input: unknown): Promise<void> => {
+    assertShellSender(event);
+    const target = parseTarget(input);
+    if (!target) throw new Error("shell: invalid target");
+    await connectTarget(target, { launch: false });
+  });
+
+  ipcMain.handle("shell:saveProfile", async (event, input: unknown): Promise<ProfileResult> => {
+    assertShellSender(event);
     const record = typeof input === "object" && input !== null ? input as Record<string, unknown> : {};
     return saveProfile({ id: profileIdOf(record.id), name: record.name, origin: record.origin });
   });
 
-  ipcMain.handle("desktop:delete-profile", async (event, input: unknown): Promise<ProfileResult> => {
-    if (!fromConnection(event)) throw new Error("desktop: unexpected sender");
+  ipcMain.handle("shell:deleteProfile", async (event, input: unknown): Promise<{ ok: boolean }> => {
+    assertShellSender(event);
     return deleteProfile(profileIdOf(input));
   });
 
-  ipcMain.handle("desktop:select-profile", async (event, input: unknown): Promise<ProfileResult> => {
-    if (!fromConnection(event)) throw new Error("desktop: unexpected sender");
-    return selectSavedProfile(profileIdOf(input));
+  ipcMain.handle("shell:probe", async (event, input: unknown): Promise<ProbeResult> => {
+    assertShellSender(event);
+    if (typeof input !== "string") return { ok: false, reason: "invalid" };
+    return fetchStatus(input, fetch, PROBE_TIMEOUT_MS);
   });
 
-  ipcMain.handle("desktop:set-local-settings", async (event, input: unknown): Promise<LocalSettingsResult> => {
-    if (!fromConnection(event)) throw new Error("desktop: unexpected sender");
+  ipcMain.handle("shell:setLocalSettings", async (event, input: unknown): Promise<{ ok: boolean; restartNeeded: boolean }> => {
+    assertShellSender(event);
     const settings = parseLocalSettings(input);
-    if (!settings) return { ok: false };
-    return queue.run(async (): Promise<LocalSettingsResult> => {
+    if (!settings) return { ok: false, restartNeeded: false };
+    return queue.run(async (): Promise<{ ok: boolean; restartNeeded: boolean }> => {
       try {
         await writeLocalSettings(app.getPath("userData"), settings);
       } catch {
-        return { ok: false };
+        return { ok: false, restartNeeded: false };
       }
       localSettings = settings;
-      return { ok: true, localSettings };
+      const launched = localBackend?.launchedSettings() ?? null;
+      const restartNeeded = localConnection !== null && (launched === null || !sameLocalSettings(launched, settings));
+      pushState();
+      return { ok: true, restartNeeded };
     });
   });
 
-  ipcMain.handle("desktop:connect", async (event, input: unknown): Promise<ProbeResult> => {
-    if (!fromConnection(event)) throw new Error("desktop: unexpected sender");
-    return connectProfile(profileIdOf(input));
+  ipcMain.handle("shell:restartLocal", async (event): Promise<{ ok: boolean }> => {
+    assertShellSender(event);
+    return restartLocal();
   });
 
-  ipcMain.handle("desktop:connect-local", async (event): Promise<LocalConnectResult> => {
-    if (!fromConnection(event)) throw new Error("desktop: unexpected sender");
-    return connectLocal();
+  ipcMain.handle("shell:setLocale", async (event, input: unknown): Promise<void> => {
+    assertShellSender(event);
+    if (input !== null && input !== "cs" && input !== "en") throw new Error("shell: invalid locale");
+    const choice = input as ShellLocale | null;
+    await queue.run(async () => {
+      await writeShellPrefs(app.getPath("userData"), { locale: choice });
+    });
+    shellState.localeChoice = choice;
+    shellState.locale = effectiveLocale(choice, app.getLocale());
+    pushState();
+  });
+
+  ipcMain.on("shell:openSettings", (event) => {
+    assertShellSender(event);
+    openSettings();
+  });
+
+  ipcMain.on("shell:toastAction", (event, input: unknown) => {
+    assertShellSender(event);
+    const id = typeof input === "number" && Number.isInteger(input) ? input : null;
+    const toast = shellState.toast;
+    if (id === null || !toast || toast.id !== id) return;
+    if ((toast.kind === "fallback" || toast.kind === "server-back") && shellState.chosen) {
+      void connectTarget(shellState.chosen, { launch: false });
+    }
+    hideToast();
+  });
+
+  ipcMain.on("shell:dismissToast", (event, input: unknown) => {
+    assertShellSender(event);
+    if (typeof input === "number" && shellState.toast?.id === input) hideToast();
+  });
+
+  ipcMain.on("shell:copyText", (event, input: unknown) => {
+    assertShellSender(event);
+    if (typeof input === "string" && input.length <= MAX_CLIPBOARD_TEXT) clipboard.writeText(input);
   });
 
   // Only the top frame of the page the local backend serves, while it is the page on screen.
@@ -565,26 +895,25 @@ const registerHandlers = () => {
       localOrigin: localOrigin(),
     })) throw new Error("desktop: unexpected sender");
     const result = await dialog.showOpenDialog(current.window, {
-      title: catalogue(app.getLocale())["folder.pickTitle"],
+      title: catalogue(shellState.locale)["folder.pickTitle"],
       properties: ["openDirectory", "createDirectory"],
     });
     return result.canceled ? null : result.filePaths[0] ?? null;
   });
-
-  ipcMain.handle("desktop:disconnect", async (event) => {
-    if (!fromConnection(event)) throw new Error("desktop: unexpected sender");
-    // The page saves its position to its own server, so the local backend outlives the page.
-    await retireRemote();
-    connected = null;
-    loadFailure = null;
-    await closeLocalBackend();
-    destroyRemote();
-    applyMode("connect");
-    shell?.window.setTitle(windowTitle());
-  });
 };
 
 app.on("window-all-closed", () => app.quit());
+
+/** The first line of the bundled FFmpeg's build info, or null in a development run. */
+const readFfmpegLine = (resourcesDir: string | null): string | null => {
+  if (!resourcesDir) return null;
+  try {
+    const first = readFileSync(path.join(resourcesDir, "ffmpeg", "BUILDINFO.txt"), "utf8").split("\n")[0]?.trim() ?? "";
+    return first.length > 0 ? first : null;
+  } catch {
+    return null;
+  }
+};
 
 const createLocalBackend = (): LocalBackend => new LocalBackend({
   entry: LOCAL_BACKEND_ENTRY,
@@ -592,8 +921,8 @@ const createLocalBackend = (): LocalBackend => new LocalBackend({
   fork: (entry, options) => utilityProcess.fork(entry, [], options),
   probeStatus: fetchStatus,
   tools: bundledMediaTools(app.isPackaged ? process.resourcesPath : null),
-  onActivity: (streaming) => { localStreaming = streaming; syncAwake(); },
-  onUnexpectedExit: () => failLocalConnection(),
+  onActivity: (streaming) => { localStreaming = streaming; syncAwake(); pushState(); },
+  onUnexpectedExit: () => { localConnection = null; localStreaming = false; syncAwake(); failConnected("local-startup"); },
   log: (line) => console.warn("local backend: " + line),
 });
 
@@ -613,6 +942,11 @@ const runLocalBackendSmoke = async () => {
   }
 };
 
+// Chromium settles the server pages' language before the shell can, so an explicit choice has to
+// reach the command line this early; `userData` is readable before the app is ready.
+const earlyPrefs = readShellPrefsSync(app.getPath("userData"));
+if (earlyPrefs.locale !== null) app.commandLine.appendSwitch("lang", earlyPrefs.locale);
+
 if (process.argv.includes(SMOKE_LOCAL_BACKEND)) {
   // The smoke gets its own instance directory, so it neither needs the single-instance lock
   // nor touches the data of an install that happens to be running.
@@ -628,7 +962,8 @@ if (process.argv.includes(SMOKE_LOCAL_BACKEND)) {
   });
 
   app.on("activate", () => {
-    if (!shell) createShell();
+    if (shell) return;
+    void readWindowState(app.getPath("userData"), "main").then((saved) => { if (!shell) createShell(saved); });
   });
 
   let backendShutdownComplete = false;
@@ -649,9 +984,33 @@ if (process.argv.includes(SMOKE_LOCAL_BACKEND)) {
   void app.whenReady().then(async () => {
     profileStore = await readProfiles(app.getPath("userData"));
     localSettings = await readLocalSettings(app.getPath("userData"));
+    const prefs = await readShellPrefs(app.getPath("userData"));
+    const savedWindow = await readWindowState(app.getPath("userData"), "main");
+    shellState.localeChoice = prefs.locale;
+    shellState.locale = effectiveLocale(prefs.locale, app.getLocale());
+    shellState.appVersion = app.getVersion();
+    ffmpegLine = readFfmpegLine(app.isPackaged ? process.resourcesPath : null);
     localBackend = createLocalBackend();
     registerHandlers();
-    createShell();
+    // A one-time migration: the old connection file's selected profile stands in for a choice
+    // until the shell has written its own startup.json.
+    const choice = await readStartupChoice(app.getPath("userData"));
+    const legacy: Target | null = !existsSync(path.join(app.getPath("userData"), STARTUP_FILE)) && profileStore.selectedProfileId !== null
+      ? { kind: "profile", id: profileStore.selectedProfileId }
+      : null;
+    const plan = launchPlan(choice ?? legacy, profileStore.profiles);
+    // The migration happens once: from now on only startup.json decides, so a profile added later
+    // and never connected cannot become the launch target through the old selected id.
+    if (!existsSync(path.join(app.getPath("userData"), STARTUP_FILE))) {
+      await writeStartupChoice(app.getPath("userData"), plan.screen === "connect" ? plan.target : null).catch(() => {});
+    }
+    // The window opens already saying where it connects, never flashing the welcome screen first.
+    if (plan.screen === "connect") {
+      const profile = plan.target.kind === "profile" ? findProfile(profileStore, plan.target.id) : null;
+      shellState.screen = { kind: "connecting", target: plan.target, name: profile?.name ?? "", origin: profile?.origin ?? null };
+    }
+    createShell(savedWindow);
+    if (plan.screen === "connect") void connectTarget(plan.target, { launch: true });
   });
 } else {
   app.quit();

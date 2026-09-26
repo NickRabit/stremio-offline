@@ -1,14 +1,36 @@
 # Desktop shell — macOS arm64 prototype packaging
 
 The `desktop` workspace is an Electron shell that opens an existing Stremio
-Offline server, or runs one on this computer. It keeps all remote-server
-behaviour: it renders the connection page locally and points a second view at
-the server origin you configure, exactly as running the workspace from source
-does.
+Offline server, or runs one on this computer. The window shows either the
+shell's own page — welcome, connecting or error — or the server page in its
+place, full window, with a toast overlay on top. The pages are built from the
+web interface's components into `desktop/renderer` and talk to the main process
+only through the `window.stremioShell` bridge. At launch the shell connects to
+the remembered target; a saved server that does not answer falls back to the
+local backend and offers to switch back once it answers again.
+
+## The menu, the settings window and the window geometry
+
+The menu bar carries **Settings…** (⌘,), the usual Edit, View, Window and Help
+menus, and a **Server** menu that switches between **This Mac** and the saved
+servers, offers **Reconnect** (⇧⌘R) and opens the settings window too. **View →
+Reload** (⌘R) reloads the server page, or the shell's own page while nothing is
+connected; a development run also has **Developer tools** (⌥⌘I).
+**Stremio Offline on GitHub** opens the project in the browser.
+
+**Settings** opens in its own window and closes with the main window. Both
+windows remember where they were and how big they were — and the main window
+whether it was maximized — so the next launch opens the way the last one was
+left.
+
+The language chosen in Settings switches the whole app at once. The server page
+takes it at the next launch, because Chromium settles a page's language before
+the shell can set it; each account picks its own language in the web interface
+regardless.
 
 ## Running the backend on this computer
 
-**Run on this computer** on the connection screen starts the compiled server as
+**Run on this computer** on the welcome screen starts the compiled server as
 a managed Electron utility process. The remote profiles stay as they were; the
 local option is a second way into the same shell.
 
@@ -34,8 +56,8 @@ local option is a second way into the same shell.
 - The shell opens the server only after its `/api/status` answers with this
   app's status, and stops it on **Disconnect**, on a successful connection to a
   remote profile and when the app quits. If the backend exits on its own, the
-  shell returns to the connection screen with a localized message and the local
-  option starts it again.
+  shell shows the shell page again with a localized message and the local option
+  starts it again.
 - A second launch of the app focuses the window that is already open instead of
   starting a second backend against the same instance directory.
 
@@ -60,8 +82,8 @@ public release — see [Limits](#limits) before sharing anything built here.
 
 ## Sharing with other devices
 
-**Share with devices on my network** on the connection screen is off by default
-and is stored in the same `<userData>/local-settings.json` file. While it is on,
+**Share with devices on my network** in the settings window is off by default and
+is stored in the same `<userData>/local-settings.json` file. While it is on,
 the local backend binds to `0.0.0.0` on a fixed, configurable port (8091 by
 default, 1024–65535) instead of a remembered loopback port, and it applies from
 the next start of the local backend. Nothing else about the server changes:
@@ -104,11 +126,12 @@ same-origin URL to Electron, so the media bytes never pass through the shell.
 For such a ticket the shell keeps Electron's **native Save dialog** and only
 sets its title and a safe suggested filename; it never picks a save path,
 never suppresses the dialog and never downloads the file itself. Progress and
-the result are shown in the 48 px bar above the server page.
+the result are shown as a Dock progress bar and a toast over the server page,
+and, when the window is not focused, as a system notification.
 
-- A percentage is shown only when the server reports a positive total size. An
-  unknown size — a playlist being assembled, for example — stays a plain
-  "saving".
+- The Dock bar shows a percentage only when the server reports a positive total
+  size; an unknown size — a playlist being assembled, for example — stays
+  indeterminate.
 - The save is **not resumable and not a background download**. Closing the
   window, losing the connection to the server, or cancelling the dialog ends
   it; an interrupted save has to be started again from the server UI.
@@ -135,10 +158,11 @@ npm run smoke:packaged -w desktop
 ```
 
 `package:mac:arm64` builds the TypeScript (`dist/main.js`, the modules it
-imports, and `dist/preload.js`), builds the root web and server workspaces,
-stages them under `desktop/runtime/` (the server's compiled output, the web
-bundle and the server's production dependencies) and then runs electron-builder
-for the `arm64` target. CI uses this same script, and then
+imports, and `dist/shell-preload.js`), builds the root web and server
+workspaces, builds the shell's own pages into `desktop/renderer`, stages the
+server under `desktop/runtime/` (its compiled output, the web bundle and the
+server's production dependencies) and then runs electron-builder for the
+`arm64` target. CI uses this same script, and then
 `npm run smoke:packaged -w desktop`, which starts the packaged app's utility
 backend, waits for its ready message, reads `/api/status` and stops it again.
 `verify:fuses` reads the applied Electron fuses back out of the built `.app`.
@@ -161,8 +185,8 @@ electron-builder writes both artifacts into `desktop/release/`:
 The bundle is `Stremio Offline.app` with identifier `com.stremiooffline.desktop`
 and version taken from the workspace manifest. Inside it,
 `Contents/Resources/app.asar` holds the compiled desktop modules (`dist/*.js`),
-`static/connection.html`, `package.json` and the staged `runtime/` tree
-(`runtime/server/dist`, `runtime/server/node_modules`, `runtime/web`).
+the shell's own pages (`renderer/`), `package.json` and the staged `runtime/`
+tree (`runtime/server/dist`, `runtime/server/node_modules`, `runtime/web`).
 TypeScript sources, tests, the spike files, and the root `server` and `web`
 workspaces are not packaged.
 
@@ -182,7 +206,7 @@ injection or the inspector CLI switches:
 | `enableEmbeddedAsarIntegrityValidation` | on | `app.asar` is checked against the hash signed into the bundle. |
 | `onlyLoadAppFromAsar` | on | Electron loads only `app.asar`; a stray `app/` directory next to it cannot shadow the packaged code. |
 | `loadBrowserProcessSpecificV8Snapshot` | off | The shell does not ship a browser-process-specific V8 snapshot. |
-| `grantFileProtocolExtraPrivileges` | on | The local `file://` connection page loads its adjacent compiled scripts from `../dist`, which needs Electron's file-to-file privileges. |
+| `grantFileProtocolExtraPrivileges` | on | The shell's own pages load over `file://` from `renderer/`, which needs Electron's file-to-file privileges. |
 | `enableCookieEncryption` | off | Deferred, see below. |
 
 Flipping the fuses rewrites the Electron Framework binary, which invalidates the

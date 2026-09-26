@@ -22,13 +22,13 @@ export function readStatus(body: unknown): StatusInfo | null {
   return { version: record.version, restricted: record.restricted, secure: record.secure };
 }
 
-export async function fetchStatus(input: string, fetchImpl: typeof fetch = fetch): Promise<ProbeResult> {
+export async function fetchStatus(input: string, fetchImpl: typeof fetch = fetch, timeoutMs = 5000): Promise<ProbeResult> {
   const server = parseServerOrigin(input);
   if (!server) return { ok: false, reason: "invalid" };
   if (!httpAllowed(server)) return { ok: false, reason: "insecure-transport" };
   let response: Response;
   try {
-    response = await fetchImpl(server.origin + "/api/status", { redirect: "manual", signal: AbortSignal.timeout(5000) });
+    response = await fetchImpl(server.origin + "/api/status", { redirect: "manual", signal: AbortSignal.timeout(timeoutMs) });
   } catch {
     return { ok: false, reason: "unreachable" };
   }

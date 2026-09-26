@@ -4,6 +4,7 @@ desktop/release/
 # The built server and web output staged for the desktop package by
 # `desktop/scripts/stage-local-backend.mjs`.
 desktop/runtime/
+desktop/renderer/
 desktop/ffmpeg/
 data/
 downloads/
