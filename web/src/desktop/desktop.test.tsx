@@ -19,7 +19,7 @@ beforeEach(() => {
 afterEach(() => { act(() => root.unmount()); host.remove(); });
 
 const baseState = (over: Partial<ShellState> = {}): ShellState => ({
-  locale: "en", localeChoice: null, appVersion: "0.4.86", screen: { kind: "welcome" }, connection: null, chosen: null,
+  locale: "en", localeChoice: null, appVersion: "0.4.87", screen: { kind: "welcome" }, connection: null, chosen: null,
   profiles: [{ id: "nas", name: "NAS", origin: "http://192.168.1.20:8090" }],
   local: {
     settings: { allowPrivateAddons: false, publish: false, publishPort: 8091, downloadDir: null }, running: false, addresses: [], ffmpeg: null, busy: false,
