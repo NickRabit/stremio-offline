@@ -138,8 +138,8 @@ const targetKey = (target: Target | null): string =>
 let menuKey = "";
 
 const applyMenu = (): void => {
-  const target = shellState.connection?.target ?? null;
-  const live = shellState.connection !== null;
+  const live = shellState.screen.kind === "connected" && shellState.connection !== null;
+  const target = live ? shellState.connection?.target ?? null : null;
   const key = [
     shellState.locale,
     shellState.profiles.map((profile) => `${profile.id}:${profile.name}`).join(","),
@@ -171,7 +171,8 @@ const applyMenu = (): void => {
         if (connected !== null && current.remote !== null && !current.remote.webContents.isDestroyed()) current.remote.webContents.toggleDevTools();
         else if (!current.page.webContents.isDestroyed()) current.page.webContents.toggleDevTools();
       },
-      connect: (target) => { void connectTarget(target, { launch: false }); },
+      // Electron flips a clicked checkbox itself; rebuilding puts the tick back where the state says.
+      connect: (target) => { menuKey = ""; applyMenu(); void connectTarget(target, { launch: false }); },
       reconnect: () => { void connectTarget(shellState.chosen ?? { kind: "local" }, { launch: false }); },
       openProject: () => { void electronShell.openExternal(PROJECT_URL).catch(() => {}); },
     },
@@ -497,7 +498,7 @@ const parseTarget = (value: unknown): Target | null => {
 };
 
 /** The local backend comes up and its page loads; a superseded start is stopped again. */
-const startLocal = async (ticket: number, target: Target, fallback: { profileName: string; origin: string } | null): Promise<void> => {
+const startLocal = async (ticket: number, target: Target, fallback: { profileName: string; origin: string } | null, announce = true): Promise<void> => {
   const name = fallback?.profileName ?? "";
   const failWith = (reason: FailureReason, port: number | null = null) => {
     if (requests.isCurrent(ticket)) setScreen({ kind: "error", target, name, origin: fallback?.origin ?? null, reason, port });
@@ -533,8 +534,10 @@ const startLocal = async (ticket: number, target: Target, fallback: { profileNam
   }
   if (!requests.isCurrent(ticket)) { await closeLocalBackend(); return; }
   if (!connected) { await closeLocalBackend(); return; }
+  // What the window shows is this Mac, also while it stands in for a profile: the menu, the
+  // settings and a restart go by it. The profile it stands in for stays the remembered choice.
   shellState.connection = {
-    target,
+    target: { kind: "local" },
     name: "",
     origin: connection.server.origin,
     version: connection.status.version,
@@ -547,7 +550,7 @@ const startLocal = async (ticket: number, target: Target, fallback: { profileNam
     await writeStartupChoice(app.getPath("userData"), target).catch(() => {});
   }
   setScreen({ kind: "connected" });
-  if (fallback) {
+  if (fallback && announce) {
     showToast({ id: nextToastId(), kind: "fallback", server: fallback.profileName });
     startRepoll(fallback.origin, fallback.profileName);
   }
@@ -603,6 +606,14 @@ const connectProfile = async (ticket: number, target: Target, profile: ServerPro
   setScreen({ kind: "connected" });
 };
 
+/** The page on screen goes before another is tried: a failed attempt must not leave the old
+ *  server playing behind the error screen. Retiring it first lets it save its position. */
+const dropCurrentPage = async () => {
+  await retireRemote();
+  connected = null;
+  shellState.connection = null;
+};
+
 const connectTarget = (target: Target, options: { launch: boolean }): Promise<void> => {
   const ticket = requests.next();
   return queue.run(async () => {
@@ -614,34 +625,51 @@ const connectTarget = (target: Target, options: { launch: boolean }): Promise<vo
       return;
     }
     if (!requests.isCurrent(ticket)) return;
+    // A fallback notice belongs to the connection it announced.
+    if (shellState.toast?.kind === "fallback" || shellState.toast?.kind === "server-back") hideToast();
     setScreen({ kind: "connecting", target, name: profile?.name ?? "", origin: server?.origin ?? null });
+    await dropCurrentPage();
     if (target.kind === "local") { await startLocal(ticket, target, null); return; }
     await connectProfile(ticket, target, profile as ServerProfile, server as ServerOrigin, options.launch);
   });
 };
 
 const restartLocal = async (): Promise<{ ok: boolean }> => {
-  const showingLocal = shellState.connection?.target.kind === "local";
-  const wasRunning = localConnection !== null;
-  await closeLocalBackend();
+  const connection = shellState.connection;
+  const showingLocal = shellState.screen.kind === "connected" && connection?.target.kind === "local";
+  const backend = localBackend;
   if (showingLocal) {
-    await connectTarget({ kind: "local" }, { launch: false });
-    if (shellState.screen.kind === "connected" && shellState.connection?.target.kind === "local") {
-      showToast({ id: nextToastId(), kind: "local-restarted" });
-    }
-    return { ok: true };
+    // A stand-in stays a stand-in: the profile it replaces and its re-poll carry on.
+    const standIn = connection.fallbackFrom !== null && shellState.chosen?.kind === "profile"
+      ? findProfile(profileStore, shellState.chosen.id) : null;
+    const ticket = requests.next();
+    const ok = await queue.run(async () => {
+      setScreen({ kind: "connecting", target: { kind: "local" }, name: "", origin: null });
+      await dropCurrentPage();
+      await closeLocalBackend();
+      await startLocal(ticket, standIn ? shellState.chosen as Target : { kind: "local" },
+        standIn ? { profileName: standIn.name, origin: standIn.origin } : null, false);
+      return shellState.screen.kind === "connected";
+    });
+    if (ok) showToast({ id: nextToastId(), kind: "local-restarted" });
+    return { ok };
   }
   // The window shows a remote server, but a running backend has to come back all the same.
-  if (!wasRunning || !localBackend) return { ok: true };
-  try {
-    localConnection = await localBackend.start();
+  if (localConnection === null || !backend) return { ok: true };
+  return queue.run(async () => {
+    await closeLocalBackend();
+    try {
+      localConnection = await backend.start();
+    } catch (error) {
+      console.warn("local backend: " + (error instanceof Error ? error.message : String(error)));
+      pushState();
+      return { ok: false };
+    }
     syncAwake();
     pushState();
     showToast({ id: nextToastId(), kind: "local-restarted" });
-  } catch (error) {
-    console.warn("local backend: " + (error instanceof Error ? error.message : String(error)));
-  }
-  return { ok: true };
+    return { ok: true };
+  });
 };
 
 const shellWebPreferences = () => ({
@@ -751,6 +779,15 @@ const deleteProfile = (id: string | null): Promise<{ ok: boolean }> =>
     // The profile the main window is showing must not vanish under it.
     if (shellState.connection?.target.kind === "profile" && shellState.connection.target.id === id) return { ok: false };
     if (!await persistProfiles(removeProfile(profileStore, id))) return { ok: false };
+    // Removing the server this Mac stands in for ends the stand-in: nothing is left to wait for.
+    if (shellState.chosen?.kind === "profile" && shellState.chosen.id === id) {
+      stopRepoll();
+      if (shellState.toast?.kind === "fallback" || shellState.toast?.kind === "server-back") hideToast();
+      const local: Target = { kind: "local" };
+      shellState.chosen = shellState.connection?.target.kind === "local" ? local : null;
+      if (shellState.connection) shellState.connection = { ...shellState.connection, fallbackFrom: null };
+      await writeStartupChoice(app.getPath("userData"), shellState.chosen).catch(() => {});
+    }
     pushState();
     return { ok: true };
   });
@@ -962,6 +999,11 @@ if (process.argv.includes(SMOKE_LOCAL_BACKEND)) {
       ? { kind: "profile", id: profileStore.selectedProfileId }
       : null;
     const plan = launchPlan(choice ?? legacy, profileStore.profiles);
+    // The migration happens once: from now on only startup.json decides, so a profile added later
+    // and never connected cannot become the launch target through the old selected id.
+    if (!existsSync(path.join(app.getPath("userData"), STARTUP_FILE))) {
+      await writeStartupChoice(app.getPath("userData"), plan.screen === "connect" ? plan.target : null).catch(() => {});
+    }
     // The window opens already saying where it connects, never flashing the welcome screen first.
     if (plan.screen === "connect") {
       const profile = plan.target.kind === "profile" ? findProfile(profileStore, plan.target.id) : null;
