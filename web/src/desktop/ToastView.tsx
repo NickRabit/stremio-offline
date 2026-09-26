@@ -1,4 +1,4 @@
-import { CircleCheck, Info, RefreshCw, TriangleAlert, X } from "lucide-react";
+import { CircleCheck, Download, Info, RefreshCw, TriangleAlert, X } from "lucide-react";
 import { t } from "../i18n";
 import type { ShellBridge, Toast } from "./bridge";
 
@@ -9,6 +9,7 @@ const content = (toast: Toast) => {
     case "download-done": return { icon: <CircleCheck/>, tone: "ok", text: t("desktop.toastDownloadDone", { file: toast.file }), action: null };
     case "download-failed": return { icon: <TriangleAlert/>, tone: "warn", text: t("desktop.toastDownloadFailed", { file: toast.file }), action: null };
     case "local-restarted": return { icon: <Info/>, tone: "info", text: t("desktop.toastLocalRestarted"), action: null };
+    case "update": return { icon: <Download/>, tone: "info", text: t("desktop.toastUpdate", { version: toast.version }), action: t("desktop.toastDownload") };
   }
 };
 
