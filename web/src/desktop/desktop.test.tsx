@@ -34,6 +34,7 @@ const makeBridge = (view: ShellView, state: ShellState) => {
     getState: vi.fn(async () => state),
     onState: vi.fn(() => () => undefined),
     connect: vi.fn(async () => undefined),
+    cancelSetup: vi.fn(async () => undefined),
     saveProfile: vi.fn(async (input: { id: string | null; name: string; origin: string }) => ({ ok: true as const, profile: { id: "new", name: input.name, origin: input.origin } })),
     deleteProfile: vi.fn(async () => ({ ok: true })),
     probe: vi.fn(async () => ({ ok: false as const, reason: "unreachable" as const })),
@@ -169,11 +170,23 @@ it("the first screen offers the language before anything else, and settings can 
   expect(settings.setLocale).toHaveBeenCalledWith(null);
 });
 
-it("a first start on this Mac asks where downloads go, and starts with the chosen folder", async () => {
+it("This Mac on the welcome screen leaves the first-start question to the main process", async () => {
   const bridge = makeBridge("main", baseState({ local: { ...baseState().local, initialized: false } }));
   await render(bridge);
   await click(button("This Mac"));
-  expect(bridge.connect).not.toHaveBeenCalled();
+  expect(bridge.connect).toHaveBeenCalledWith({ kind: "local" });
+});
+
+it("the setup screen goes back to what the window showed before", async () => {
+  const bridge = makeBridge("main", baseState({ screen: { kind: "setup" }, local: { ...baseState().local, initialized: false } }));
+  await render(bridge);
+  await click(button("Back"));
+  expect(bridge.cancelSetup).toHaveBeenCalled();
+});
+
+it("a first start on this Mac asks where downloads go, and starts with the chosen folder", async () => {
+  const bridge = makeBridge("main", baseState({ screen: { kind: "setup" }, local: { ...baseState().local, initialized: false } }));
+  await render(bridge);
   expect(host.textContent).toContain("/Users/me/Movies/Stremio Offline");
   await click(button("Choose another folder…"));
   expect(host.textContent).toContain("/Volumes/Films");
@@ -185,10 +198,9 @@ it("a first start on this Mac asks where downloads go, and starts with the chose
 });
 
 it("a folder the app cannot write to is refused before anything starts", async () => {
-  const bridge = makeBridge("main", baseState({ local: { ...baseState().local, initialized: false } }));
+  const bridge = makeBridge("main", baseState({ screen: { kind: "setup" }, local: { ...baseState().local, initialized: false } }));
   bridge.prepareDownloadDir.mockResolvedValueOnce({ ok: false, reason: "not-writable" } as never);
   await render(bridge);
-  await click(button("This Mac"));
   await click(button("Start"));
   await act(async () => { await Promise.resolve(); });
   expect(host.textContent).toContain("The app cannot write to that folder.");

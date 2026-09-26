@@ -23,6 +23,10 @@ export function MainWindow({ bridge, state }: { bridge: ShellBridge; state: Shel
       <LanguageSwitch bridge={bridge} state={state}/>
       <Welcome bridge={bridge} state={state}/>
     </>}
+    {screen.kind === "setup" && <section className="shell-welcome">
+      <Brand/>
+      <FolderStep bridge={bridge} state={state} onBack={() => void bridge.cancelSetup()}/>
+    </section>}
     {screen.kind === "connecting" && <Connecting bridge={bridge} screen={screen}/>}
     {screen.kind === "error" && <Failure bridge={bridge} screen={screen}/>}
   </main>;
@@ -37,13 +41,12 @@ function LanguageSwitch({ bridge, state }: { bridge: ShellBridge; state: ShellSt
 }
 
 function Welcome({ bridge, state }: { bridge: ShellBridge; state: ShellState }) {
-  const [step, setStep] = useState<"choose" | "folder" | "remote">("choose");
-  // A backend that exists already has its download folder; only a first start asks for one.
-  const thisMac = () => state.local.initialized ? void bridge.connect({ kind: "local" }) : setStep("folder");
+  const [step, setStep] = useState<"choose" | "remote">("choose");
+  // A first start asks for the download folder on a screen of its own, whichever way it is reached.
+  const thisMac = () => void bridge.connect({ kind: "local" });
   return <section className="shell-welcome">
     <Brand/>
     <h2>{t("desktop.welcomeTitle")}</h2>
-    {step === "folder" && <FolderStep bridge={bridge} state={state} onBack={() => setStep("choose")}/>}
     {step === "remote" && <div className="shell-card shell-welcome-form">
         <h3><Server/> {t("desktop.networkServer")}</h3>
         <ServerForm bridge={bridge} submitLabel={t("desktop.connect")} onCancel={() => setStep("choose")}

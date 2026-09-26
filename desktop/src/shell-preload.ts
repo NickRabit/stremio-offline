@@ -22,6 +22,7 @@
       return () => ipcRenderer.removeListener("shell:state", wrapped);
     },
     connect: (target: unknown) => ipcRenderer.invoke("shell:connect", target),
+    cancelSetup: () => ipcRenderer.invoke("shell:cancelSetup"),
     saveProfile: (input: unknown) => ipcRenderer.invoke("shell:saveProfile", input),
     deleteProfile: (id: string) => ipcRenderer.invoke("shell:deleteProfile", id),
     probe: (origin: string) => ipcRenderer.invoke("shell:probe", origin),

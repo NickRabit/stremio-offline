@@ -30,6 +30,9 @@ export type FailureReason = ProbeFailure | "local-startup" | "port-busy";
  *  its own "This Mac" label). */
 export type MainScreen =
   | { kind: "welcome" }
+  /** The download folder is asked for before the first start of the local backend, however the
+   *  window got there; `cancelSetup` goes back to what it showed before. */
+  | { kind: "setup" }
   | { kind: "connecting"; target: Target; name: string; origin: string | null }
   | { kind: "connected" }
   | { kind: "error"; target: Target; name: string; origin: string | null; reason: FailureReason; port: number | null };
@@ -107,6 +110,8 @@ export interface ShellBridge {
   onState(listener: (state: ShellState) => void): () => void;
   /** Connect the main window (last request wins); remembers the target once connected. */
   connect(target: Target): Promise<void>;
+  /** Leaves the download-folder step for what the window showed before it. */
+  cancelSetup(): Promise<void>;
   saveProfile(input: { id: string | null; name: string; origin: string }): Promise<ProfileResult>;
   deleteProfile(id: string): Promise<{ ok: boolean }>;
   /** Reachability check for a typed or saved origin, 4 s budget. */

@@ -214,7 +214,7 @@ const applyLayout = () => {
 
 const titleFor = (screen: MainScreen): string => {
   if (screen.kind === "welcome") return APP_NAME;
-  const name = screen.kind === "connected" ? shellState.connection?.name ?? "" : screen.name;
+  const name = screen.kind === "connected" ? shellState.connection?.name ?? "" : screen.kind === "setup" ? "" : screen.name;
   const label = name.trim().length > 0 ? name : catalogue(shellState.locale)["window.thisMac"];
   return `${APP_NAME} — ${label}`;
 };
@@ -602,7 +602,9 @@ const connectProfile = async (ticket: number, target: Target, profile: ServerPro
   if (!result.ok && result.reason === "unreachable") result = await fetchStatus(server.origin, fetch, PROBE_TIMEOUT_MS);
   if (!requests.isCurrent(ticket)) return;
   if (!result.ok) {
-    if (launch && fallbackApplies(target, result.reason)) {
+    refreshInitialized();
+    // A stand-in that was never set up would start without its download folder chosen.
+    if (launch && fallbackApplies(target, result.reason) && !needsSetup()) {
       shellState.chosen = target;
       await startLocal(ticket, target, { profileName: profile.name, origin: server.origin });
       return;
@@ -654,6 +656,11 @@ const dropCurrentPage = async () => {
   shellState.connection = null;
 };
 
+/** A first start of the local backend waits for a download folder; an install that has run it keeps its own. */
+const needsSetup = (): boolean => !localInitialized && localSettings.downloadDir === null;
+/** What the window showed before the download-folder step, for its Back button. */
+let setupReturn: Target | null = null;
+
 const connectTarget = (target: Target, options: { launch: boolean }): Promise<void> => {
   const ticket = requests.next();
   return queue.run(async () => {
@@ -665,6 +672,19 @@ const connectTarget = (target: Target, options: { launch: boolean }): Promise<vo
       return;
     }
     if (!requests.isCurrent(ticket)) return;
+    if (target.kind === "local") refreshInitialized();
+    if (target.kind === "local" && needsSetup()) {
+      if (shellState.screen.kind !== "setup") {
+        setupReturn = shellState.screen.kind === "connected" ? shellState.connection?.target ?? null
+          : shellState.screen.kind === "welcome" ? null : shellState.screen.target;
+      }
+      setScreen({ kind: "setup" });
+      await dropCurrentPage();
+      pushState();
+      // Asked from the settings window or the menu, the question is in the main window.
+      shell?.window.focus();
+      return;
+    }
     // A fallback notice belongs to the connection it announced.
     if (shellState.toast?.kind === "fallback" || shellState.toast?.kind === "server-back") hideToast();
     setScreen({ kind: "connecting", target, name: profile?.name ?? "", origin: server?.origin ?? null });
@@ -937,6 +957,18 @@ const registerHandlers = () => {
     const target = parseTarget(input);
     if (!target) throw new Error("shell: invalid target");
     await connectTarget(target, { launch: false });
+  });
+
+  ipcMain.handle("shell:cancelSetup", async (event): Promise<void> => {
+    assertShellSender(event);
+    if (shellState.screen.kind !== "setup") return;
+    const previous = setupReturn;
+    setupReturn = null;
+    if (previous) { await connectTarget(previous, { launch: false }); return; }
+    requests.next();
+    await queue.run(async () => {
+      if (shellState.screen.kind === "setup") setScreen({ kind: "welcome" });
+    });
   });
 
   ipcMain.handle("shell:saveProfile", async (event, input: unknown): Promise<ProfileResult> => {

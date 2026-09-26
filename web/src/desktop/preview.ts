@@ -49,7 +49,11 @@ export function previewBridge(search: string): ShellBridge | null {
     view,
     getState: async () => state,
     onState: (listener) => { listeners.add(listener); return () => listeners.delete(listener); },
-    connect: async (target) => { emit({ ...state, chosen: target }); },
+    connect: async (target) => {
+      const setup = target.kind === "local" && !state.local.initialized && state.local.settings.downloadDir === null;
+      emit(setup ? { ...state, screen: { kind: "setup" } } : { ...state, chosen: target });
+    },
+    cancelSetup: async () => { emit({ ...state, screen: { kind: "welcome" } }); },
     saveProfile: async (input) => {
       const profile = { id: input.id ?? `p${Date.now()}`, name: input.name.trim(), origin: input.origin.trim() };
       if (!profile.name) return { ok: false, reason: "invalid-name" };

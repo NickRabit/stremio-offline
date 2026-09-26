@@ -47,7 +47,11 @@ local option is a second way into the same shell.
 - State lives in `<userData>/instance`. Before the first start, a setup step
   asks where downloads go, proposing `~/Movies/Stremio Offline`; the folder
   becomes the first library's root and is fixed once the instance exists. An
-  install that never chose one keeps `<userData>/downloads`. Folders that hold
+  install that never chose one keeps `<userData>/downloads`. The step comes
+  however the local backend is first chosen — the welcome screen, the settings
+  window, the Server menu or an error screen — and **Back** returns to what the
+  window showed. An unreachable remote at launch falls back to this Mac only
+  once it has been set up; before that its error stays on screen. Folders that hold
   the app's own data, the home folder or anything above it are refused.
 - **Reset this Mac** in the settings window asks once more in a native dialog,
   stops the backend, moves `<userData>/instance` to the Trash, deletes the local
