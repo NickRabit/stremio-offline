@@ -30,6 +30,9 @@ import { createLibraryCandidates } from "./library-candidates.js";
 import { ExternalIdStore } from "./external-ids.js";
 import { currentLevel, flushLog, initLogger, log, parseLevel, startLogMaintenance, setLevel } from "./logger.js";
 import { resolveListenTarget, startServer } from "./server-start.js";
+import { loopbackHostCheck } from "./host-check.js";
+import { InFlight } from "./in-flight.js";
+import { killRunningMedia } from "./media-tools.js";
 import { browseDirectory, describePath, emptiedFolders, entryDirectory, holdsLibraryRoot, isPathWithin, isVideo, listVideos, moveDestination, orphanedCatalogKeys, pageFiles, remapPath, scanLibrary, summarize, type FoundFile, type LibraryEntry } from "./library.js";
 import { browseMeta, cacheFieldsFromMeta, episodeKey, episodeNumberOf, episodesFromMeta, dropKeyed, folderMosaicUnits, knownEntryForUnit, knownTitleEntry, knownTitleOf, knownTitleForUnit, matchKeyFor, mosaicIdentities, mosaicSkipped, needsBackfill, needsEpisodes, staleSuggestionKeys, titleUnits, unitFor, unmatchAt, withSkipFlag, type GalleryEntry, type LibraryMetaRecord, type TitleKind, type TitleUnit } from "./library-match.js";
 import { LibraryScan } from "./library-scan.js";
@@ -431,6 +434,9 @@ const requireAccess = (req: express.Request, need: AccessNeed = {}): void => {
   throw loss === "session" ? new ResourceError(401, "AUTH_REQUIRED") : new ResourceError(404, "RESOURCE_NOT_FOUND");
 };
 
+const inFlight = new InFlight();
+app.use(inFlight.middleware());
+app.use(loopbackHostCheck());
 app.use(securityHeaders());
 app.use(express.json({ limit: "256kb" }));
 
@@ -2260,9 +2266,34 @@ try {
   // A short grace period, so the failure message reaches the desktop before this process goes.
   setTimeout(() => process.exit(1), 50);
 }
+const SHUTDOWN_QUIET_MS = 250;
+/** Inside the desktop shell's five seconds before it kills, and Docker's ten. */
+const SHUTDOWN_DRAIN_MS = 3_000;
+/** A request already on its way, such as the position a closing player sends, is answered and
+ *  its state written before the process goes. A stream that never ends is cut at the limit. */
+const shutDown = async (signal: NodeJS.Signals) => {
+  log("INFO", "Shutting down", { signal });
+  const deadline = Date.now() + SHUTDOWN_DRAIN_MS;
+  await inFlight.drained(SHUTDOWN_QUIET_MS, SHUTDOWN_DRAIN_MS);
+  // A conversion or an assembly nobody is reading any more would run on without its parent.
+  const killed = killRunningMedia();
+  if (killed) log("INFO", "Stopped FFmpeg processes still running at shutdown", { count: killed });
+  await Promise.allSettled([store.flush(), stats.activity.flush(), images.flush(), artworks.flush(), metaStore.flush(), libraryOps.flush()]);
+  // The listener stays open, so a request accepted while those were written queues its save
+  // after the flush above.
+  while (inFlight.active() > 0 && Date.now() < deadline) {
+    await inFlight.drained(0, deadline - Date.now());
+    await store.flush();
+  }
+  await flushLog();
+};
+let shuttingDown = false;
 for (const signal of ["SIGTERM", "SIGINT"] as const) {
-  process.once(signal, () => {
-    log("INFO", "Shutting down", { signal });
-    void Promise.allSettled([stats.activity.flush(), images.flush(), artworks.flush(), metaStore.flush(), libraryOps.flush()]).then(flushLog).finally(() => process.exit(0));
+  // Not `once`: a second signal would fall back to the default action and kill the process in
+  // the middle of the drain. It is ignored instead.
+  process.on(signal, () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    void shutDown(signal).finally(() => process.exit(0));
   });
 }

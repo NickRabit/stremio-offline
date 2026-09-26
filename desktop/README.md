@@ -17,6 +17,11 @@ local option is a second way into the same shell.
   last is remembered in `<userData>/local-backend.json`, tried again on the next
   start to keep the local web origin stable, and given up for a fresh port 0 if
   something else holds it. The remembered port is not a saved server profile.
+- It answers only requests addressed to `127.0.0.1:<port>` or `localhost:<port>`
+  (`HOST_CHECK=loopback`) and refuses any other `Host` with 421. Binding to
+  loopback alone does not stop DNS rebinding, where a page in an ordinary
+  browser points a name it controls at 127.0.0.1 and reads the server as its own
+  origin. A server started without `HOST_CHECK` accepts every `Host`, as before.
 - State lives in `<userData>/instance`, downloads go to `<userData>/downloads`.
 - The local page uses one persistent session partition, so its cookies survive a
   reconnect even when the port changed.
@@ -30,7 +35,10 @@ local option is a second way into the same shell.
 
 **FFmpeg is not bundled.** Direct play and every server feature that does not
 need it work as they do on a server; remux and transcode need an `ffmpeg`
-executable that the local backend process can find on its `PATH`.
+executable that the local backend process can find. It looks on the `PATH` it
+inherits and, on macOS, also in `/opt/homebrew/bin` and `/usr/local/bin`, which
+a launch from the Finder or the Dock does not have on `PATH`. `FFMPEG_PATH` and
+`FFPROBE_PATH` name an executable explicitly when it sits somewhere else.
 
 The packaging sections below cover the packaging prototype only. It produces a
 macOS arm64 `.dmg` and `.zip` from the compiled shell. It is deliberately not a

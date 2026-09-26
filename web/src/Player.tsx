@@ -8,6 +8,7 @@ import { label, pickAddonSubtitle } from "./languages";
 import { hostOf, report } from "./diagnostics";
 import { releaseMediaElement, AHEAD_CATCHUP_MS, HLS_PLAYER_CONFIG, ignoreHlsErrorDuringRestart, planDecodeRecovery, planSeek, recordDecodeRecover, waitForSeekable } from "./player-hls";
 import { clampVolume, readVolume, writeVolume } from "./player-volume";
+import { progressToSave } from "./player-progress";
 import { detectCapabilities } from "./capabilities";
 import { t, useI18n, type Key } from "./i18n";
 import type { Capabilities, PlaybackMode, PlaybackSession, Stream, Subtitle, Track } from "./types";
@@ -802,20 +803,21 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   };
 
   // The position is reported every ten seconds and once more on close, so nothing is lost.
+  // Leaving the page unmounts nothing, so a closed tab or a desktop window switching servers
+  // reports it from `pagehide` with a request that outlives the page.
   useEffect(() => {
     if (!open || !progressKey) return;
-    const send = () => {
-      const { position, duration } = reportRef.current;
-      if (!duration || position < 5) return;
-      void api.saveProgress({
-        key: progressKey, position, duration, title,
-        path: stream?.localPath,
-        poster: progressPoster,
-        addonKey: progressAddonKey,
-      }).catch(() => undefined);
-    };
+    const payload = () => progressToSave(reportRef.current, {
+      key: progressKey, title,
+      path: stream?.localPath,
+      poster: progressPoster,
+      addonKey: progressAddonKey,
+    });
+    const send = () => { const body = payload(); if (body) void api.saveProgress(body).catch(() => undefined); };
+    const leaving = () => { const body = payload(); if (body) api.saveProgressOnUnload(body); };
     const timer = setInterval(send, 10_000);
-    return () => { clearInterval(timer); send(); };
+    window.addEventListener("pagehide", leaving);
+    return () => { clearInterval(timer); window.removeEventListener("pagehide", leaving); send(); };
   }, [open, progressKey, title, progressPoster, progressAddonKey]);
 
   useEffect(() => {

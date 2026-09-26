@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { ffmpegPath } from "./media-tools.js";
 
 export class PlayerPreviews {
   private cache = new Map<string, Buffer>();
@@ -13,7 +14,7 @@ export class PlayerPreviews {
     const controller = new AbortController();
     this.pending.set(id, controller);
     try {
-      const { stdout } = await promisify(execFile)("ffmpeg", [
+      const { stdout } = await promisify(execFile)(ffmpegPath(), [
         "-hide_banner", "-loglevel", "error", "-nostdin", "-threads", "1", "-filter_threads", "1", "-ss", String(Math.floor(time / 5) * 5),
         "-i", source, "-an", "-sn", "-frames:v", "1", "-vf", "scale=320:-2", "-threads", "1", "-c:v", "mjpeg", "-f", "image2pipe", "pipe:1",
       ], { encoding: "buffer", timeout: 10_000, killSignal: "SIGKILL", maxBuffer: 256 * 1024, signal: AbortSignal.any([signal, controller.signal]) });

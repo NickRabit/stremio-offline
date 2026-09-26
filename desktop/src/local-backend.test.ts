@@ -5,9 +5,11 @@ import path from "node:path";
 import test, { type TestContext } from "node:test";
 import {
   INSTANCE_DIRECTORY,
+  MACOS_TOOL_DIRECTORIES,
   LOCAL_HOST,
   LOCAL_PARTITION,
   LocalBackend,
+  localBackendEnv,
   readReadyMessage,
   readRememberedPort,
   writeRememberedPort,
@@ -110,6 +112,7 @@ test("the child runs with the per-user directories and the port it reports is th
   const fork = await harness.nextChild();
   assert.equal(fork.entry, "/app/runtime/server/dist/index.js");
   assert.equal(fork.options.env.HOST, LOCAL_HOST);
+  assert.equal(fork.options.env.HOST_CHECK, "loopback");
   assert.equal(fork.options.env.PORT, "0");
   assert.equal(fork.options.env.DATA_DIR, path.join(dir, INSTANCE_DIRECTORY));
   assert.equal(fork.options.env.DOWNLOAD_DIR, path.join(dir, "downloads"));
@@ -320,4 +323,47 @@ test("the local partition shares nothing with a remote origin's partition", () =
   ];
   assert.equal(LOCAL_PARTITION.startsWith("persist:"), true);
   for (const origin of remoteOrigins) assert.notEqual(LOCAL_PARTITION, partitionForOrigin(origin), origin);
+});
+
+test("on macOS the tool directories are appended after the inherited PATH entries", () => {
+  assert.deepEqual([...MACOS_TOOL_DIRECTORIES], ["/opt/homebrew/bin", "/usr/local/bin"]);
+  const env = localBackendEnv({ PATH: "/usr/bin:/bin" }, "/data", 8090, "darwin", () => true);
+  assert.equal(env.PATH, "/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin");
+});
+
+test("a tool directory already on PATH is not added a second time", () => {
+  const plain = localBackendEnv({ PATH: "/opt/homebrew/bin:/usr/bin" }, "/data", 8090, "darwin", () => true);
+  assert.equal(plain.PATH, "/opt/homebrew/bin:/usr/bin:/usr/local/bin");
+  const slashed = localBackendEnv({ PATH: "/opt/homebrew/bin/:/usr/bin" }, "/data", 8090, "darwin", () => true);
+  assert.equal(slashed.PATH, "/opt/homebrew/bin/:/usr/bin:/usr/local/bin");
+});
+
+test("a tool directory that is not there is skipped", () => {
+  const env = localBackendEnv({ PATH: "/usr/bin:/bin" }, "/data", 8090, "darwin", (dir) => dir === "/usr/local/bin");
+  assert.equal(env.PATH, "/usr/bin:/bin:/usr/local/bin");
+});
+
+test("other platforms keep the PATH they were given", () => {
+  for (const platform of ["linux", "win32"] as const) {
+    const env = localBackendEnv({ PATH: "/usr/bin:/bin" }, "/data", 8090, platform, () => true);
+    assert.equal(env.PATH, "/usr/bin:/bin");
+    assert.equal("PATH" in localBackendEnv({}, "/data", 8090, platform, () => true), false);
+  }
+});
+
+test("macOS without an inherited PATH starts from the system directories", () => {
+  assert.equal(localBackendEnv({}, "/data", 8090, "darwin", () => false).PATH, "/usr/bin:/bin:/usr/sbin:/sbin");
+  assert.equal(localBackendEnv({}, "/data", 8090, "darwin", () => true).PATH,
+    "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin");
+});
+
+test("the PATH logic leaves the backend variables as they were", () => {
+  const env = localBackendEnv(
+    { PATH: "/usr/bin", HOST: "elsewhere", PORT: "1", DATA_DIR: "/x", DOWNLOAD_DIR: "/y" },
+    "/data", 8090, "darwin", () => true,
+  );
+  assert.equal(env.HOST, LOCAL_HOST);
+  assert.equal(env.PORT, "8090");
+  assert.equal(env.DATA_DIR, path.join("/data", INSTANCE_DIRECTORY));
+  assert.equal(env.DOWNLOAD_DIR, path.join("/data", "downloads"));
 });

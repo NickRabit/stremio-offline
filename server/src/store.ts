@@ -255,4 +255,8 @@ export class Store {
     });
     return write;
   }
+  /** Settles once every write queued so far has landed or failed. */
+  flush(): Promise<void> {
+    return this.chain;
+  }
 }

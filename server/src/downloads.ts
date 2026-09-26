@@ -11,6 +11,7 @@ import { defaultDownloadSettings, joinTarget, streamExtension, targetPath, type 
 import type { DownloadTargetSettings } from "./types.js";
 import { safeFetch } from "./security.js";
 import { log } from "./logger.js";
+import { ffmpegPath, mediaStopping, trackMedia } from "./media-tools.js";
 import { retryAfterMs } from "./outbound.js";
 import {
   classifyFailure, expectedSize, HttpSourceError, IncompleteDownloadError, parseContentRange,
@@ -1140,7 +1141,7 @@ export class DownloadQueue {
     ];
 
     log("INFO", "Assembling a playlist", { id: job.id, target: job.target });
-    const child = spawn("ffmpeg", args, { stdio: ["ignore", "ignore", "pipe"] });
+    const child = trackMedia(spawn(ffmpegPath(), args, { stdio: ["ignore", "ignore", "pipe"] }));
 
     let stderr = "";
     child.stderr?.on("data", (chunk) => { stderr = `${stderr}${String(chunk)}`.slice(-4000); });
@@ -1168,6 +1169,9 @@ export class DownloadQueue {
         child.once("close", resolve);
       });
       if (controller.signal.aborted) throw new Error("The assembly was stopped.");
+      // Killed by the shutdown: nothing is recorded, so the job is still downloading on disk and
+      // the next start queues it again, as it did before the shutdown took FFmpeg with it.
+      if (code !== 0 && mediaStopping()) await new Promise<never>(() => {});
       if (code !== 0) throw new SourceError(`The playlist could not be assembled. ${stderr.trim().split("\n").pop() ?? ""}`.trim());
     } finally {
       clearInterval(progress);

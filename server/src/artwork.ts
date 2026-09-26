@@ -3,6 +3,7 @@ import { access, readdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { log } from "./logger.js";
+import { ffmpegPath } from "./media-tools.js";
 import { guardedFetch } from "./outbound.js";
 import type { LibraryHealth } from "./library-probe.js";
 import type { LibraryRecord } from "./libraries.js";
@@ -242,7 +243,7 @@ const BACKDROP_WIDTH = 640;
 async function shrinkToWidth(source: string, target: string, width: number): Promise<boolean> {
   const temp = `${target}.tmp.jpg`;
   try {
-    await run("ffmpeg", [
+    await run(ffmpegPath(), [
       "-hide_banner", "-loglevel", "error", "-nostdin", "-threads", "1",
       "-i", source, "-vf", `scale='min(${width},iw)':-2`, "-frames:v", "1", "-q:v", "5", "-y", temp,
     ], { timeout: 15_000, killSignal: "SIGKILL" });
@@ -311,7 +312,7 @@ export async function savePosterFromUrl(directory: string, url: string): Promise
 export async function saveFrame(videoPath: string, target: string, seconds = 300): Promise<boolean> {
   const temp = `${target}.tmp.jpg`;
   try {
-    await run("ffmpeg", [
+    await run(ffmpegPath(), [
       "-hide_banner", "-loglevel", "error", "-nostdin",
       "-ss", String(seconds), "-i", videoPath,
       "-vf", "thumbnail=50,scale=480:-2", "-frames:v", "1", "-q:v", "4", "-y", temp,

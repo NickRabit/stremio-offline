@@ -1,7 +1,7 @@
 {
   "name": "@stremio-offline/desktop",
   "private": true,
-  "version": "0.4.77",
+  "version": "0.4.78",
   "description": "Desktop client for connecting to Stremio Offline servers",
   "author": "Stremio Offline contributors",
   "license": "MIT",

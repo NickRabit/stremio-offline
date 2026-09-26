@@ -332,3 +332,17 @@ test("an install running only on the environment credentials gets a real adminis
   assert.equal(again.users().length, 1);
   assert.equal(again.users()[0].id, adopted.id, "the account keeps the id rows are filed under");
 });
+
+test("flush settles only after every write queued before it is on disk", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-store-"));
+  try {
+    const store = new Store(directory);
+    await store.load();
+    // Not awaited, like a request the shutdown catches in the middle of its save.
+    void store.update((state) => { state.addonsRefreshedAt = "first"; });
+    void store.update((state) => { state.addonsRefreshedAt = "second"; });
+    await store.flush();
+    const saved = JSON.parse(await readFile(path.join(directory, "state.json"), "utf8")) as { addonsRefreshedAt?: string };
+    assert.equal(saved.addonsRefreshedAt, "second");
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});

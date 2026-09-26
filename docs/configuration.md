@@ -172,6 +172,8 @@ Details in [Playback](playback.md) and
 | `FFMPEG_READRATE_REMUX` | `3` | The same for remux only. Lower it to `2` if the NAS chokes on write bursts. |
 | `FFMPEG_PRESET` | `veryfast` | `libx264` preset. Software fallback only. |
 | `FFMPEG_CRF` | `23` | `libx264` quality. Lower means better and heavier. Software fallback only. |
+| `FFMPEG_PATH` | *(unset)* | Full path to the `ffmpeg` executable to run. Unset or empty, `ffmpeg` from `PATH` is used. |
+| `FFPROBE_PATH` | *(unset)* | The same for `ffprobe`. |
 | `VAAPI_QP` | `23` | Hardware CQP quality. Lower means better and more bitrate. |
 | `VAAPI_DEVICE` | *(unset)* | Render node, usually `/dev/dri/renderD128`. |
 | `RENDER_GID` | *(unset)* | GID owning the render node. Without it the process cannot open the device. |
