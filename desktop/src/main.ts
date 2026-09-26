@@ -23,6 +23,7 @@ import { defaultLocalSettings, parseLocalSettings, readLocalSettings, writeLocal
 import { externalBrowserUrl, httpAllowedHost, parseServerOrigin, partitionForOrigin, type ServerOrigin } from "./origin.js";
 import { localPageSent } from "./bridge-sender.js";
 import { SerialQueue } from "./serial-queue.js";
+import { SleepGuard } from "./sleep-guard.js";
 import { fetchStatus, type ProbeFailure, type ProbeResult } from "./status.js";
 
 type MessageKey = keyof ReturnType<typeof catalogue>;
@@ -93,9 +94,9 @@ let mode: LayoutMode = "connect";
 let loadFailure: ProbeFailure | null = null;
 let localBackend: LocalBackend | null = null;
 let localConnection: LocalBackendConnection | null = null;
-/** The last streaming report from the running backend, and the one sleep blocker it holds. */
+/** The last streaming report from the running backend. */
 let localStreaming = false;
-let sleepBlockerId: number | null = null;
+const sleepGuard = new SleepGuard(powerSaveBlocker);
 /** Quitting retires the page itself, so a window closing on the way out does not wait for it again. */
 let quitting = false;
 const preparedPartitions = new Set<string>();
@@ -104,20 +105,7 @@ let localSettings: LocalSettings = defaultLocalSettings();
 
 const windowTitle = () => catalogue(app.getLocale())["connect.title"];
 
-const releaseAwake = () => {
-  if (sleepBlockerId === null) return;
-  powerSaveBlocker.stop(sleepBlockerId);
-  sleepBlockerId = null;
-};
-
-/** One blocker at most, held only while the running backend is published and streaming. */
-const syncAwake = () => {
-  if (!localStreaming || localConnection?.published !== true) {
-    releaseAwake();
-    return;
-  }
-  if (sleepBlockerId === null) sleepBlockerId = powerSaveBlocker.start("prevent-app-suspension");
-};
+const syncAwake = () => sleepGuard.update({ published: localConnection?.published === true, streaming: localStreaming });
 
 const applyMode = (next: LayoutMode) => {
   const current = shell;
