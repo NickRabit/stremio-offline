@@ -104,6 +104,7 @@ on demand, so a catalogue the provider adds later still shows up. See
 | [Accounts](docs/users.md) | Roles, per-user libraries and addons, passwords, recovery |
 | [Hardware acceleration](docs/hardware-acceleration.md) | QuickSync and VAAPI, and how to tell it is really running |
 | [Diagnostics and troubleshooting](docs/troubleshooting.md) | The log, the addon guard, symptom-to-page index |
+| [Installing the macOS app](docs/install-mac.md) | Download, the first launch of an unsigned app, updating and removing it |
 | [Building and releasing](docs/building.md) | Local builds, GHCR, version tags, Windows and macOS hosts |
 | [Testing](docs/testing.md) | What belongs in which test layer, and how to run each |
 | [Roadmap](docs/roadmap.md) | What is done, what is next, what is out of scope |
