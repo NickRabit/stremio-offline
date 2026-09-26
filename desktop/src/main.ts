@@ -838,7 +838,16 @@ const createShell = (saved: WindowState | null) => {
     retired = true;
     void retireRemote().finally(() => window.close());
   });
-  window.on("closed", () => { shell = null; settingsWindow.close(); });
+  window.on("closed", () => {
+    // A closed BaseWindow leaves its views' contents alive, and the app now outlives its window:
+    // without this every close would leave a shell page, a toast and a server page behind.
+    const closing = shell;
+    shell = null;
+    for (const view of [closing?.page, closing?.toast, closing?.remote]) {
+      if (view && !view.webContents.isDestroyed()) view.webContents.close();
+    }
+    settingsWindow.close();
+  });
   shell = { window, page, toast, remote: null, remotePartition: null };
   if (restored.maximized) window.maximize();
   pushState();
