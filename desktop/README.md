@@ -23,6 +23,12 @@ local option is a second way into the same shell.
   browser points a name it controls at 127.0.0.1 and reads the server as its own
   origin. A server started without `HOST_CHECK` accepts every `Host`, as before.
 - State lives in `<userData>/instance`, downloads go to `<userData>/downloads`.
+- **Allow addons on my home network** under the local button is off by default,
+  is stored in `<userData>/local-settings.json` and applies from the next start
+  of the local backend, which the shell then starts with
+  `ALLOW_PRIVATE_ADDONS=1`. That opens your network to every addon, so it is
+  meant for an addon on the NAS or another computer at home and for addons you
+  trust.
 - The local page uses one persistent session partition, so its cookies survive a
   reconnect even when the port changed.
 - The shell opens the server only after its `/api/status` answers with this

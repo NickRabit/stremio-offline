@@ -1097,6 +1097,8 @@ export const cs: Catalog = {
   "err.nameTaken": "Soubor s tímhle jménem už existuje.",
   "err.invalidUrl": "Neplatná URL.",
   "err.onlyHttp": "Podporované jsou pouze HTTP(S) adresy.",
+  "err.privateAddon": "{host} vede na {address}, adresu v privátní síti. Pokud je to váš vlastní addon, povolte ho pomocí ALLOW_ADDON_HOSTS={host}, nebo celou místní síť pomocí ALLOW_PRIVATE_ADDONS=1.",
+  "err.privateAddonDesktop": "{host} vede na {address}, adresu ve vaší místní síti. Chcete-li použít addon z domácí sítě, zapněte na obrazovce připojení „Povolit addony v domácí síti“ a spusťte místní server znovu.",
   "err.credentialsInUrl": "URL nesmí obsahovat jméno ani heslo.",
   "err.subfolderRelative": "Podsložka musí být relativní ke kořeni knihovny.",
   "err.subfolderDepth": "Podsložka může mít nejvýš 8 úrovní.",

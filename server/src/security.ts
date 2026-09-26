@@ -32,6 +32,21 @@ function privateReason(ip: string): string | undefined {
 
 const allowedHosts = new Set((process.env.ALLOW_ADDON_HOSTS ?? "").split(",").map((host) => host.trim().toLowerCase()).filter(Boolean));
 
+/** The desktop app's own backend has no environment its user can edit, so the way out it names
+ *  is the switch on the app's connection screen. The reason stays in the log above. */
+export function privateAddressRefusal(host: string, address: string, env: NodeJS.ProcessEnv = process.env): AppError {
+  if (env.DESKTOP_LOCAL_BACKEND === "1") {
+    return new AppError(
+      `${host} points at ${address}, an address on your local network. To use an addon at home, turn on "Allow addons on my home network" on the connection screen and start the local server again.`,
+      "err.privateAddonDesktop", undefined, { host, address },
+    );
+  }
+  return new AppError(
+    `${host} points at ${address}, an address on a private network. If this is your own addon, allow it with ALLOW_ADDON_HOSTS=${host}, or the whole local network with ALLOW_PRIVATE_ADDONS=1.`,
+    "err.privateAddon", undefined, { host, address },
+  );
+}
+
 export async function validateRemoteUrl(raw: string): Promise<URL> {
   let url: URL;
   try { url = new URL(raw.replace(/^stremio:\/\//i, "https://")); }
@@ -51,7 +66,7 @@ export async function validateRemoteUrl(raw: string): Promise<URL> {
     const reason = privateReason(entry.address);
     if (reason) {
       log("WARN", "Blocked an address outside the public network", { host, ip: entry.address, reason });
-      throw new Error(`${host} points at ${entry.address} (${reason}). If this is your own addon, allow it with ALLOW_ADDON_HOSTS=${host}, or the whole LAN with ALLOW_PRIVATE_ADDONS=1.`);
+      throw privateAddressRefusal(host, entry.address);
     }
   }
   return url;

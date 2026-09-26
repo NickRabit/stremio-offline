@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { defaultLocalSettings, readLocalSettings, type LocalSettings } from "./local-settings.js";
 import { parseServerOrigin, type ServerOrigin } from "./origin.js";
 import type { ProbeResult } from "./status.js";
 
@@ -18,6 +19,8 @@ export const STOP_TIMEOUT_MS = 5_000;
  *  `/usr/bin:/bin:/usr/sbin:/sbin`, so neither is on the child's `PATH` by itself. */
 export const MACOS_TOOL_DIRECTORIES = ["/opt/homebrew/bin", "/usr/local/bin"] as const;
 const MACOS_FALLBACK_PATH = "/usr/bin:/bin:/usr/sbin:/sbin";
+
+const sameSettings = (a: LocalSettings, b: LocalSettings) => a.allowPrivateAddons === b.allowPrivateAddons;
 
 const SERVICE_NAME = "Stremio Offline backend";
 
@@ -67,6 +70,8 @@ export interface LocalBackendOptions {
   probeStatus: (origin: string) => Promise<ProbeResult>;
   readPort?: (dir: string) => Promise<number | null>;
   writePort?: (dir: string, port: number) => Promise<void>;
+  /** Read on every launch, so a switch thrown in the shell applies to the next start. */
+  readSettings?: (dir: string) => Promise<LocalSettings>;
   readyTimeoutMs?: number;
   stopTimeoutMs?: number;
   /** How a child that ignores the graceful signal is finished off. */
@@ -121,14 +126,18 @@ export function localBackendEnv(
   port: number,
   platform: NodeJS.Platform = process.platform,
   directoryExists: (dir: string) => boolean = isDirectory,
+  settings: LocalSettings = defaultLocalSettings(),
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(parent)) if (value !== undefined) env[key] = value;
   env.HOST = LOCAL_HOST;
   env.HOST_CHECK = "loopback";
+  env.DESKTOP_LOCAL_BACKEND = "1";
   env.PORT = String(port);
   env.DATA_DIR = path.join(userDataDir, INSTANCE_DIRECTORY);
   env.DOWNLOAD_DIR = path.join(userDataDir, DOWNLOADS_DIRECTORY);
+  // Off leaves an inherited value alone: a developer running from a terminal keeps their own.
+  if (settings.allowPrivateAddons) env.ALLOW_PRIVATE_ADDONS = "1";
   if (platform === "darwin") env.PATH = macosPath(env.PATH, directoryExists);
   return env;
 }
@@ -221,6 +230,7 @@ export class LocalBackend {
   private tracked: TrackedChild | null = null;
   private connection: LocalBackendConnection | null = null;
   private startPromise: Promise<LocalBackendConnection> | null = null;
+  private launchedWith: LocalSettings | null = null;
   private stopPromise: Promise<void> | null = null;
 
   constructor(options: LocalBackendOptions) {
@@ -232,10 +242,22 @@ export class LocalBackend {
   }
 
   start(): Promise<LocalBackendConnection> {
-    if (this.connection) return Promise.resolve(this.connection);
     if (this.startPromise) return this.startPromise;
-    this.startPromise = this.startBackend().finally(() => { this.startPromise = null; });
+    this.startPromise = this.ensureStarted().finally(() => { this.startPromise = null; });
     return this.startPromise;
+  }
+
+  /** A backend still running from before keeps its environment, so one started with other
+   *  settings than those now stored is replaced: the connection form can come back after a failed
+   *  page load while the child lives on, and a switch turned off there must not stay on. */
+  private async ensureStarted(): Promise<LocalBackendConnection> {
+    if (this.connection) {
+      const wanted = await (this.options.readSettings ?? readLocalSettings)(this.options.userDataDir);
+      if (this.launchedWith && sameSettings(wanted, this.launchedWith)) return this.connection;
+      this.options.log?.("The local settings changed, restarting the local server.");
+      await this.stopTracked();
+    }
+    return this.startBackend();
   }
 
   private async startBackend(): Promise<LocalBackendConnection> {
@@ -280,8 +302,10 @@ export class LocalBackend {
 
   private async launch(port: number): Promise<LocalBackendConnection> {
     const { options } = this;
+    const settings = await (options.readSettings ?? readLocalSettings)(options.userDataDir);
+    this.launchedWith = settings;
     const child = options.fork(options.entry, {
-      env: localBackendEnv(process.env, options.userDataDir, port),
+      env: localBackendEnv(process.env, options.userDataDir, port, process.platform, isDirectory, settings),
       cwd: options.userDataDir,
       stdio: "inherit",
       serviceName: SERVICE_NAME,

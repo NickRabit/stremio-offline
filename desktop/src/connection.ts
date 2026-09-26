@@ -16,6 +16,9 @@ type MessageKey =
   | "connect.local"
   | "connect.localStarting"
   | "connect.localFailed"
+  | "connect.localLan"
+  | "connect.localLanHint"
+  | "connect.localLanFailed"
   | "connect.disconnect"
   | "connect.probing"
   | "connect.unreachable"
@@ -51,6 +54,10 @@ interface ProfileState {
   selectedProfileId: string | null;
 }
 
+interface LocalSettings {
+  allowPrivateAddons: boolean;
+}
+
 type ProfileResult =
   | ({ ok: true } & ProfileState)
   | { ok: false; reason: "invalid-name" | "invalid-data" | "save-failed" };
@@ -59,14 +66,20 @@ type LocalConnectResult =
   | { ok: true; version: string; restricted: boolean; secure: boolean }
   | { ok: false; reason: "startup" };
 
+type LocalSettingsResult =
+  | { ok: true; localSettings: LocalSettings }
+  | { ok: false };
+
 interface DesktopBridge {
-  bootstrap(): Promise<{ strings: Catalogue } & ProfileState>;
+  bootstrap(): Promise<{ strings: Catalogue } & ProfileState & { localSettings: LocalSettings }>;
   strings: Catalogue;
   profiles: ServerProfile[];
   selectedProfileId: string | null;
+  localSettings: LocalSettings;
   saveProfile(input: { id: string | null; name: string; origin: string }): Promise<ProfileResult>;
   deleteProfile(id: string): Promise<ProfileResult>;
   selectProfile(id: string | null): Promise<ProfileResult>;
+  setLocalSettings(input: { allowPrivateAddons: boolean }): Promise<LocalSettingsResult>;
   connect(id: string): Promise<ProbeResult>;
   connectLocal(): Promise<LocalConnectResult>;
   disconnect(): Promise<void>;
@@ -98,11 +111,13 @@ interface Window {
   const removeButton = document.getElementById("remove") as HTMLButtonElement;
   const connectButton = document.getElementById("connect") as HTMLButtonElement;
   const localButton = document.getElementById("local") as HTMLButtonElement;
+  const localLan = document.getElementById("localLan") as HTMLInputElement;
   const disconnectButton = document.getElementById("disconnect") as HTMLButtonElement;
 
   let strings: Catalogue | null = null;
   let profiles: ServerProfile[] = [];
   let selectedId: string | null = null;
+  let localSettings: LocalSettings = { allowPrivateAddons: false };
   let busy = false;
   let actionToken = 0;
   let saving: Promise<string | null> | null = null;
@@ -131,6 +146,7 @@ interface Window {
     saveButton.disabled = busy;
     connectButton.disabled = busy;
     localButton.disabled = busy;
+    localLan.disabled = busy;
     removeButton.disabled = busy || selectedId === null;
   };
 
@@ -297,6 +313,26 @@ interface Window {
     });
   });
 
+  localLan.addEventListener("change", () => {
+    void runAction(async () => {
+      const catalogue = strings;
+      const applyStored = () => { localLan.checked = localSettings.allowPrivateAddons; };
+      if (!catalogue) {
+        applyStored();
+        return;
+      }
+      const result = await window.desktop.setLocalSettings({ allowPrivateAddons: localLan.checked });
+      if (!result.ok) {
+        applyStored();
+        show(catalogue["connect.localLanFailed"]);
+        return;
+      }
+      localSettings = result.localSettings;
+      applyStored();
+      clear();
+    });
+  });
+
   disconnectButton.addEventListener("click", () => {
     void runAction(async () => {
       await window.desktop.disconnect();
@@ -311,6 +347,8 @@ interface Window {
       node.textContent = state.strings[node.dataset.i18n as MessageKey];
     }
     applyState(state);
+    localSettings = state.localSettings;
+    localLan.checked = localSettings.allowPrivateAddons;
     showForm();
   };
 

@@ -19,6 +19,7 @@ import { downloadProgressPercent, isDeviceTicketDownload } from "./downloads.js"
 import { catalogue } from "./i18n.js";
 import { layout, type LayoutMode } from "./layout.js";
 import { LOCAL_PARTITION, LocalBackend, type LocalBackendConnection } from "./local-backend.js";
+import { defaultLocalSettings, parseLocalSettings, readLocalSettings, writeLocalSettings, type LocalSettings } from "./local-settings.js";
 import { externalBrowserUrl, httpAllowedHost, parseServerOrigin, partitionForOrigin, type ServerOrigin } from "./origin.js";
 import { localPageSent } from "./bridge-sender.js";
 import { SerialQueue } from "./serial-queue.js";
@@ -33,6 +34,10 @@ type ProfileResult =
 type LocalConnectResult =
   | { ok: true; version: string; restricted: boolean; secure: boolean }
   | { ok: false; reason: "startup" };
+
+type LocalSettingsResult =
+  | { ok: true; localSettings: LocalSettings }
+  | { ok: false };
 
 // The player asks for fullscreen. Copy on an HTTPS server uses the sanitized clipboard write.
 const ALLOWED_PERMISSIONS = new Set<string>(["fullscreen", "clipboard-sanitized-write"]);
@@ -91,6 +96,7 @@ let localConnection: LocalBackendConnection | null = null;
 let quitting = false;
 const preparedPartitions = new Set<string>();
 let profileStore: ProfileStore = { profiles: [], selectedProfileId: null };
+let localSettings: LocalSettings = defaultLocalSettings();
 
 const windowTitle = () => catalogue(app.getLocale())["connect.title"];
 
@@ -485,7 +491,12 @@ const connectLocal = (): Promise<LocalConnectResult> =>
 const registerHandlers = () => {
   ipcMain.handle("desktop:bootstrap", async (event) => {
     if (!fromConnection(event)) throw new Error("desktop: unexpected sender");
-    return { strings: catalogue(app.getLocale()), profiles: profileStore.profiles, selectedProfileId: profileStore.selectedProfileId };
+    return {
+      strings: catalogue(app.getLocale()),
+      profiles: profileStore.profiles,
+      selectedProfileId: profileStore.selectedProfileId,
+      localSettings,
+    };
   });
 
   ipcMain.handle("desktop:save-profile", async (event, input: unknown): Promise<ProfileResult> => {
@@ -502,6 +513,21 @@ const registerHandlers = () => {
   ipcMain.handle("desktop:select-profile", async (event, input: unknown): Promise<ProfileResult> => {
     if (!fromConnection(event)) throw new Error("desktop: unexpected sender");
     return selectSavedProfile(profileIdOf(input));
+  });
+
+  ipcMain.handle("desktop:set-local-settings", async (event, input: unknown): Promise<LocalSettingsResult> => {
+    if (!fromConnection(event)) throw new Error("desktop: unexpected sender");
+    const settings = parseLocalSettings(input);
+    if (!settings) return { ok: false };
+    return queue.run(async (): Promise<LocalSettingsResult> => {
+      try {
+        await writeLocalSettings(app.getPath("userData"), settings);
+      } catch {
+        return { ok: false };
+      }
+      localSettings = settings;
+      return { ok: true, localSettings };
+    });
   });
 
   ipcMain.handle("desktop:connect", async (event, input: unknown): Promise<ProbeResult> => {
@@ -604,6 +630,7 @@ if (process.argv.includes(SMOKE_LOCAL_BACKEND)) {
 
   void app.whenReady().then(async () => {
     profileStore = await readProfiles(app.getPath("userData"));
+    localSettings = await readLocalSettings(app.getPath("userData"));
     localBackend = createLocalBackend();
     registerHandlers();
     createShell();

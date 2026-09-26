@@ -13,6 +13,10 @@
     button:disabled { opacity: 0.5; cursor: default; }
     #form { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
     #actions, #local-actions { display: flex; gap: 8px; }
+    #local-lan { display: flex; flex-direction: column; gap: 4px; max-width: 360px; }
+    #local-lan label { display: flex; align-items: center; gap: 6px; font-size: 13px; opacity: 1; }
+    #local-lan input { width: auto; padding: 0; border: 0; background: none; }
+    #local-lan p { margin: 0; font-size: 12px; opacity: 0.6; }
     #hint { margin: 0; font-size: 12px; opacity: 0.6; }
     #message { margin: 0; }
     body.connected main { flex-direction: row; align-items: center; gap: 12px; height: 48px; padding: 0 14px; }
@@ -38,6 +42,10 @@
       </div>
       <div id="local-actions">
         <button id="local" type="button" data-i18n="connect.local"></button>
+      </div>
+      <div id="local-lan">
+        <label for="localLan"><input id="localLan" type="checkbox" /><span data-i18n="connect.localLan"></span></label>
+        <p data-i18n="connect.localLanHint"></p>
       </div>
     </div>
     <button id="disconnect" type="button" data-i18n="connect.disconnect" hidden></button>
