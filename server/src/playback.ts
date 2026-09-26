@@ -226,6 +226,10 @@ export class PlaybackManager {
   /** Some drivers only offer constant quality, so a target bitrate makes the encoder refuse to open. */
   private vaapiBitrate = true;
   private vaapiFailures = 0;
+  private videotoolbox = false;
+  /** Intel Macs offer no constant-quality mode, so those encode at a fixed bitrate instead. */
+  private videotoolboxQuality = false;
+  private videotoolboxFailures = 0;
   /** -readrate_initial_burst exists only from FFmpeg 6; an older build would die on the option. */
   private initialBurst = false;
   private ffmpegVersion?: string;
@@ -244,6 +248,9 @@ export class PlaybackManager {
     }
     const device = process.env.VAAPI_DEVICE;
     if (device) await this.checkVaapi(device);
+    // VideoToolbox is macOS-only. A VAAPI device on a Mac is a misconfiguration, and if it did come
+    // up it wins; Linux and Docker never reach this line.
+    if (process.platform === "darwin" && process.env.VIDEOTOOLBOX !== "0" && !this.vaapiDevice) await this.checkVideotoolbox();
     setInterval(() => this.reap(), 30_000).unref();
   }
 
@@ -533,6 +540,7 @@ export class PlaybackManager {
     return {
       ffmpeg: { version: this.ffmpegVersion, initialBurst: this.initialBurst },
       vaapi: { device: this.vaapiDevice, scaling: this.vaapiScaling, bitrate: this.vaapiBitrate, failures: this.vaapiFailures },
+      videotoolbox: { available: this.videotoolbox, constantQuality: this.videotoolboxQuality, failures: this.videotoolboxFailures },
       sessions: [...this.sessions.values()].map((session) => ({
         id: session.id, mode: session.mode, hardware: session.hardware, generation: session.generation,
         title: sourceTitle(session.stream) || undefined,
@@ -577,7 +585,7 @@ export class PlaybackManager {
     return {
       id: session.id, mode: session.mode, url, offset: session.offset,
       duration: session.info?.duration, video: session.info?.video?.codec, audio: session.info?.audio?.codec,
-      hardware: session.hardware, acceleration: Boolean(this.vaapiDevice),
+      hardware: session.hardware, acceleration: Boolean(this.vaapiDevice || this.videotoolbox),
       audioTracks: (session.info?.audioTracks ?? []).map((track) => ({ ...track, title: safeSourceText(track.title, session.stream) })),
       subtitleTracks: (session.info?.subtitleTracks ?? []).map((track) => ({ ...track, title: safeSourceText(track.title, session.stream) })),
       audioTrack: session.audioTrack, subtitleTrack: session.subtitleTrack, quality: session.quality,
@@ -755,6 +763,35 @@ export class PlaybackManager {
     catch { return false; }
   }
 
+  /** VideoToolbox is always there on a Mac, but a frame is still encoded: the encoder can fail
+   *  even when the framework loads, and only the result says whether a conversion would work. */
+  private async checkVideotoolbox() {
+    try {
+      await this.runVideotoolboxProbe(["-q:v", "60"]);
+      this.videotoolbox = true;
+      this.videotoolboxQuality = true;
+      log("INFO", "VideoToolbox is available", { constantQuality: true });
+      return;
+    } catch { /* Intel Macs have no constant-quality mode; the bitrate probe decides. */ }
+    try {
+      await this.runVideotoolboxProbe(["-b:v", "1M"]);
+      this.videotoolbox = true;
+      log("INFO", "VideoToolbox is available", { constantQuality: false });
+    } catch (error) {
+      const output = (error as { stderr?: string }).stderr ?? String(error);
+      const reason = output.split("\n").map((line) => line.trim()).filter(Boolean)[0] ?? "unknown error";
+      log("WARN", "VideoToolbox does not work, conversion will run in software", { reason });
+    }
+  }
+
+  private async runVideotoolboxProbe(encoder: string[]) {
+    await promisify(execFile)(ffmpegPath(), [
+      "-hide_banner", "-loglevel", "error", "-nostdin",
+      "-f", "lavfi", "-i", "nullsrc=s=256x144:d=0.1",
+      "-vf", "format=nv12", "-c:v", "h264_videotoolbox", ...encoder, "-f", "null", "-",
+    ], { timeout: 30_000 });
+  }
+
   /** Emby calls this Direct Stream: the container is repackaged, the video only copied. */
   private plan(session: Session) {
     const caps = session.capabilities;
@@ -794,7 +831,7 @@ export class PlaybackManager {
 
     const { copyVideo } = this.plan(session);
     session.mode = copyVideo ? "remux" : "transcode";
-    const attempts = !copyVideo && this.vaapiDevice ? [true, false] : [false];
+    const attempts = !copyVideo && (this.vaapiDevice || this.videotoolbox) ? [true, false] : [false];
     let firstAttempt = true;
     for (const hardware of attempts) {
       this.assertActive(session);
@@ -810,13 +847,22 @@ export class PlaybackManager {
       // A source that answers 404 will answer the same to the software attempt.
       if (session.error === SOURCE_UNREACHABLE) break;
       if (hardware) {
-        log("WARN", "VAAPI failed, falling back to a software conversion", { id: session.id, reason: session.error });
-        // A driver that refuses twice will refuse every time, and each attempt costs the
-        // viewer about twenty seconds before playback starts. Stop offering it.
-        this.vaapiFailures += 1;
-        if (this.vaapiFailures >= 2) {
-          this.vaapiDevice = undefined;
-          log("WARN", "VAAPI failed repeatedly, it will not be used again until restart", { failures: this.vaapiFailures });
+        if (!this.vaapiDevice && this.videotoolbox) {
+          log("WARN", "VideoToolbox failed, falling back to a software conversion", { id: session.id, reason: session.error });
+          this.videotoolboxFailures += 1;
+          if (this.videotoolboxFailures >= 2) {
+            this.videotoolbox = false;
+            log("WARN", "VideoToolbox failed repeatedly, it will not be used again until restart", { failures: this.videotoolboxFailures });
+          }
+        } else {
+          log("WARN", "VAAPI failed, falling back to a software conversion", { id: session.id, reason: session.error });
+          // A driver that refuses twice will refuse every time, and each attempt costs the
+          // viewer about twenty seconds before playback starts. Stop offering it.
+          this.vaapiFailures += 1;
+          if (this.vaapiFailures >= 2) {
+            this.vaapiDevice = undefined;
+            log("WARN", "VAAPI failed repeatedly, it will not be used again until restart", { failures: this.vaapiFailures });
+          }
         }
       }
     }
@@ -908,7 +954,11 @@ export class PlaybackManager {
     // device is used only by hwupload + h264_vaapi. That avoids the troublesome trip of VAAPI
     // surfaces back into system memory.
     if (!copyVideo && hardware) {
-      if (this.vaapiScaling) {
+      // VideoToolbox decodes on the media engine and hands frames back in system memory, so the
+      // ordinary filters below need no upload -- unlike the VAAPI branch.
+      if (!this.vaapiDevice && this.videotoolbox) {
+        args.push("-hwaccel", "videotoolbox");
+      } else if (this.vaapiScaling) {
         args.push("-hwaccel", "vaapi", "-hwaccel_device", this.vaapiDevice!, "-hwaccel_output_format", "vaapi");
       } else {
         args.push("-init_hw_device", `vaapi=va:${this.vaapiDevice!}`, "-filter_hw_device", "va");
@@ -957,7 +1007,17 @@ export class PlaybackManager {
     // A keyframe every 2 s keeps segments short: HLS may only cut on keyframes, so a longer GOP
     // would stretch the wait for the first segment after a start and after every seek.
     // min(quality, ih) stops the picture being blown up when the source is smaller than the chosen quality.
-    else if (hardware) {
+    else if (hardware && !this.vaapiDevice && this.videotoolbox) {
+      // h264 wants 8-bit 4:2:0, and VideoToolbox frames are already in system memory, so an
+      // ordinary scale filter works where the VAAPI branch needs one on the GPU.
+      const filters = quality !== null ? `scale=-2:min(${quality}\\,ih),format=nv12` : "format=nv12";
+      args.push("-vf", filters, "-c:v", "h264_videotoolbox");
+      if (bitrate) args.push("-b:v", bitrate, "-maxrate", bitrate);
+      // Intel Macs offer no constant-quality mode, so they are given a plain bitrate instead.
+      else if (this.videotoolboxQuality) args.push("-q:v", process.env.VIDEOTOOLBOX_QUALITY ?? "60");
+      else args.push("-b:v", "8M");
+      args.push("-g", "48", "-force_key_frames", "expr:gte(t,n_forced*2)");
+    } else if (hardware) {
       const resize = quality !== null ? `w=-2:h=min(${quality}\\,ih)` : "";
       const filters = this.vaapiScaling
         ? (quality !== null ? `scale_vaapi=${resize}:format=nv12` : "scale_vaapi=format=nv12")
