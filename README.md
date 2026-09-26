@@ -185,4 +185,10 @@ belong in the [roadmap](docs/roadmap.md).
 
 ## License
 
-[MIT](LICENSE). Not affiliated with Stremio.
+The code is [MIT](LICENSE). Not affiliated with Stremio.
+
+The Docker image includes Debian's FFmpeg, which is GPL-2.0-or-later (built with
+x264 and x265). The server runs it as a separate program, so the licence of the
+code stays MIT. The desktop app does not include FFmpeg. What each distribution
+contains, where the licence texts are and where to get FFmpeg's source is in
+[docs/licensing.md](docs/licensing.md).
