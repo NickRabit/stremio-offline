@@ -14,13 +14,13 @@ export function previewBridge(search: string): ShellBridge | null {
   let state: ShellState = {
     locale: query.get("locale") === "en" ? "en" : "cs",
     localeChoice: null,
-    appVersion: "0.4.86",
+    appVersion: "0.4.87",
     screen: screenKind === "connecting" ? { kind: "connecting", target: nas, name: "NAS v obýváku", origin: "http://192.168.1.20:8090" }
       : screenKind === "error" ? { kind: "error", target: nas, name: "NAS v obýváku", origin: "http://192.168.1.20:8090", reason: (query.get("reason") as never) ?? "unreachable", port: 8091 }
       : screenKind === "local" ? { kind: "connecting", target: { kind: "local" }, name: "", origin: null }
       : screenKind === "connected" ? { kind: "connected" }
       : { kind: "welcome" },
-    connection: { target: { kind: "local" }, name: "", origin: "http://127.0.0.1:51234", version: "0.4.86", restricted: false, secure: true, fallbackFrom: query.get("fallback") ? "NAS v obýváku" : null },
+    connection: { target: { kind: "local" }, name: "", origin: "http://127.0.0.1:51234", version: "0.4.87", restricted: false, secure: true, fallbackFrom: query.get("fallback") ? "NAS v obýváku" : null },
     chosen: nas,
     profiles: [
       { id: "nas", name: "NAS v obýváku", origin: "http://192.168.1.20:8090" },
