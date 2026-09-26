@@ -44,7 +44,18 @@ local option is a second way into the same shell.
   loopback alone does not stop DNS rebinding, where a page in an ordinary
   browser points a name it controls at 127.0.0.1 and reads the server as its own
   origin. A server started without `HOST_CHECK` accepts every `Host`, as before.
-- State lives in `<userData>/instance`, downloads go to `<userData>/downloads`.
+- State lives in `<userData>/instance`. Before the first start, a setup step
+  asks where downloads go, proposing `~/Movies/Stremio Offline`; the folder
+  becomes the first library's root and is fixed once the instance exists. An
+  install that never chose one keeps `<userData>/downloads`. Folders that hold
+  the app's own data, the home folder or anything above it are refused.
+- **Reset this Mac** in the settings window asks once more in a native dialog,
+  stops the backend, moves `<userData>/instance` to the Trash, deletes the local
+  settings and the local page's sign-in, and starts again at the welcome screen.
+  Downloaded films stay unless the separate checkbox is ticked, and that
+  checkbox exists only for a folder the app created itself or found empty
+  (`<userData>/download-folder.json` records which), never for a home, system or
+  volume folder. Saved servers are forgotten only on request.
 - **Allow addons on my home network** under the local button is off by default,
   is stored in `<userData>/local-settings.json` and applies from the next start
   of the local backend, which the shell then starts with
