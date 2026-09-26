@@ -49,7 +49,9 @@ export type Toast =
   | { id: number; kind: "server-back"; server: string }
   | { id: number; kind: "download-done"; file: string }
   | { id: number; kind: "download-failed"; file: string }
-  | { id: number; kind: "local-restarted" };
+  | { id: number; kind: "local-restarted" }
+  /** A newer release is out; the action opens its page in the browser. */
+  | { id: number; kind: "update"; version: string };
 
 export interface LocalState {
   settings: LocalSettings;
@@ -58,7 +60,8 @@ export interface LocalState {
   addresses: string[];
   /** First line of the bundled FFmpeg's BUILDINFO.txt, or null in a development run. */
   ffmpeg: string | null;
-  /** Something is playing or downloading through the local backend. */
+  /** Something is playing, saving to this device or downloading on the local backend; quitting
+   *  asks first while it is true. */
   busy: boolean;
   /** The folder downloads go to, as the backend uses it (never null). */
   downloadDir: string;
@@ -73,6 +76,24 @@ export interface LocalState {
 
 export type ShellLocale = "cs" | "en";
 
+/** macOS's answer for the login item: "requires-approval" means the user has to allow it in
+ *  System Settings → General → Login Items; "unsupported" where the system cannot tell. */
+export type LoginItemStatus = "enabled" | "not-registered" | "requires-approval" | "not-found" | "unsupported";
+
+/** App-wide choices that are not the local backend's. */
+export interface AppPrefs {
+  openAtLogin: boolean;
+  /** Look for a newer release on GitHub at launch and once a day. */
+  checkUpdates: boolean;
+}
+
+export interface AppState {
+  prefs: AppPrefs;
+  loginItem: LoginItemStatus;
+  /** The newest release when it is newer than this app, else null. */
+  update: { version: string; url: string } | null;
+}
+
 export interface ShellState {
   /** The language the shell speaks now. */
   locale: ShellLocale;
@@ -85,6 +106,7 @@ export interface ShellState {
   chosen: Target | null;
   profiles: ServerProfile[];
   local: LocalState;
+  app: AppState;
   toast: Toast | null;
 }
 
@@ -105,6 +127,10 @@ export interface ShellBridge {
   onState(listener: (state: ShellState) => void): () => void;
   /** Connect the main window (last request wins); remembers the target once connected. */
   connect(target: Target): Promise<void>;
+  /** Stores the app-wide choices; openAtLogin registers or removes the login item at once. */
+  setAppPrefs(prefs: AppPrefs): Promise<{ ok: boolean }>;
+  /** Opens the newer release's page (state.app.update) in the default browser. */
+  openUpdate(): void;
   /** Leaves the download-folder step for what the window showed before it. */
   cancelSetup(): Promise<void>;
   saveProfile(input: { id: string | null; name: string; origin: string }): Promise<ProfileResult>;
