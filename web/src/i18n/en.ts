@@ -1236,7 +1236,7 @@ export const en = {
   "desktop.folderNotFolder": "That path is a file, not a folder.",
   "desktop.folderNotWritable": "The app cannot write to that folder. Choose another one or check its permissions.",
   "desktop.downloadFolder": "Download folder",
-  "desktop.downloadFolderFixed": "It is the first library now. To download elsewhere, make another library the default in Libraries.",
+  "desktop.downloadFolderFixed": "It is the first library now and stays where it is. To download elsewhere, add a library in any folder under Libraries and make it the default.",
   "desktop.change": "Change…",
   "desktop.sectionReset": "Reset this Mac",
   "desktop.sectionResetText": "Start again from the welcome screen.",

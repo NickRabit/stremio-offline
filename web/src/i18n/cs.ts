@@ -1231,7 +1231,7 @@ export const cs: Catalog = {
   "desktop.folderNotFolder": "Tato cesta je soubor, ne složka.",
   "desktop.folderNotWritable": "Do této složky aplikace nemůže zapisovat. Vyberte jinou nebo zkontrolujte oprávnění.",
   "desktop.downloadFolder": "Složka pro stahování",
-  "desktop.downloadFolderFixed": "Teď je to první knihovna. Chcete-li stahovat jinam, nastavte v Knihovnách jako výchozí jinou knihovnu.",
+  "desktop.downloadFolderFixed": "Teď je to první knihovna a zůstane na místě. Chcete-li stahovat jinam, přidejte v Knihovnách knihovnu v libovolné složce a nastavte ji jako výchozí.",
   "desktop.change": "Změnit…",
   "desktop.sectionReset": "Obnovit tento Mac",
   "desktop.sectionResetText": "Začít znovu od úvodní obrazovky.",

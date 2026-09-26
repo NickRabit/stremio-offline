@@ -215,7 +215,7 @@ it("an existing backend starts straight away and shows its folder as fixed in se
   act(() => root.unmount());
   root = createRoot(host);
   await render(makeBridge("settings", baseState()));
-  expect(host.textContent).toContain("It is the first library now.");
+  expect(host.textContent).toContain("It is the first library now and stays where it is.");
   expect(host.textContent).not.toContain("Change…");
 });
 
