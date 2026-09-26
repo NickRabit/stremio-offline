@@ -211,6 +211,19 @@ smoke-tests the packaged app's local backend and checks the fuses before
 uploading the DMG and ZIP as separate artifacts kept for seven days. It does
 not publish a GitHub Release and does not touch the server image flow.
 
+## Unsigned release (automatic)
+
+Every tag that the **Release** workflow turns into a GitHub Release also gets
+the macOS app. After the release exists, a `desktop` job in
+`.github/workflows/release.yml` packages the tagged commit on an Apple Silicon
+runner, checks the fuses and runs the packaged smoke test, then attaches
+`Stremio-Offline-<version>-arm64-unsigned.dmg` and `.zip` and appends a short
+note on how to open them. It needs no secrets. The bundle is ad-hoc signed like
+the pull-request package, so macOS refuses the first launch until the user
+allows it (right-click → **Open**, or **System Settings → Privacy & Security →
+Open Anyway**). The job refuses a tag that disagrees with
+`desktop/package.json` and never replaces an asset that is already attached.
+
 ## Signed release (manual)
 
 `.github/workflows/desktop-release.yml` (**Desktop release**) is the only path
