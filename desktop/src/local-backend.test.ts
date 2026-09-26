@@ -17,6 +17,7 @@ import {
   type LocalBackendForkOptions,
   type LocalBackendOptions,
 } from "./local-backend.js";
+import { writeLocalSettings } from "./local-settings.js";
 import { partitionForOrigin } from "./origin.js";
 
 class FakeChild implements LocalBackendChild {
@@ -366,4 +367,73 @@ test("the PATH logic leaves the backend variables as they were", () => {
   assert.equal(env.PORT, "8090");
   assert.equal(env.DATA_DIR, path.join("/data", INSTANCE_DIRECTORY));
   assert.equal(env.DOWNLOAD_DIR, path.join("/data", "downloads"));
+});
+
+test("the switch on lets the child reach the local network", () => {
+  const env = localBackendEnv({ PATH: "/usr/bin" }, "/data", 8090, "linux", () => true, { allowPrivateAddons: true });
+  assert.equal(env.ALLOW_PRIVATE_ADDONS, "1");
+});
+
+test("the switch off leaves an inherited permission alone and adds none", () => {
+  const inherited = localBackendEnv({ ALLOW_PRIVATE_ADDONS: "1" }, "/data", 8090, "linux", () => true, { allowPrivateAddons: false });
+  assert.equal(inherited.ALLOW_PRIVATE_ADDONS, "1");
+  const absent = localBackendEnv({}, "/data", 8090, "linux", () => true, { allowPrivateAddons: false });
+  assert.equal("ALLOW_PRIVATE_ADDONS" in absent, false);
+  assert.equal("ALLOW_PRIVATE_ADDONS" in localBackendEnv({}, "/data", 8090, "linux", () => true), false);
+});
+
+test("a start reads the settings and passes the switch to the child", async (t) => {
+  const dir = await tempDir(t);
+  const reads: string[] = [];
+  const harness = makeBackend(dir, {
+    readSettings: async (requested) => {
+      reads.push(requested);
+      return { allowPrivateAddons: true };
+    },
+  });
+  const started = start(harness);
+  const fork = await harness.nextChild();
+  assert.equal(fork.options.env.ALLOW_PRIVATE_ADDONS, "1");
+  fork.child.emit("message", READY);
+  await started;
+  await harness.backend.stop();
+  assert.deepEqual(reads, [dir]);
+});
+
+test("the settings are read again on the next start", async (t) => {
+  const dir = await tempDir(t);
+  let allowPrivateAddons = false;
+  let reads = 0;
+  const harness = makeBackend(dir, {
+    readSettings: async () => {
+      reads += 1;
+      return { allowPrivateAddons };
+    },
+  });
+  const first = start(harness);
+  const firstFork = await harness.nextChild();
+  assert.equal("ALLOW_PRIVATE_ADDONS" in firstFork.options.env, false);
+  firstFork.child.emit("message", READY);
+  await first;
+  await harness.backend.stop();
+  allowPrivateAddons = true;
+  const second = start(harness);
+  const secondFork = await harness.nextChild();
+  assert.equal(secondFork.options.env.ALLOW_PRIVATE_ADDONS, "1");
+  secondFork.child.emit("message", READY);
+  await second;
+  await harness.backend.stop();
+  assert.equal(reads, 2);
+});
+
+test("without a settings reader the stored file decides the child environment", async (t) => {
+  const dir = await tempDir(t);
+  await writeLocalSettings(dir, { allowPrivateAddons: true });
+  const harness = makeBackend(dir);
+  const started = start(harness);
+  const fork = await harness.nextChild();
+  assert.equal(fork.options.env.ALLOW_PRIVATE_ADDONS, "1");
+  fork.child.emit("message", READY);
+  await started;
+  await harness.backend.stop();
 });

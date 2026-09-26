@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { defaultLocalSettings, readLocalSettings, type LocalSettings } from "./local-settings.js";
 import { parseServerOrigin, type ServerOrigin } from "./origin.js";
 import type { ProbeResult } from "./status.js";
 
@@ -67,6 +68,8 @@ export interface LocalBackendOptions {
   probeStatus: (origin: string) => Promise<ProbeResult>;
   readPort?: (dir: string) => Promise<number | null>;
   writePort?: (dir: string, port: number) => Promise<void>;
+  /** Read on every launch, so a switch thrown in the shell applies to the next start. */
+  readSettings?: (dir: string) => Promise<LocalSettings>;
   readyTimeoutMs?: number;
   stopTimeoutMs?: number;
   /** How a child that ignores the graceful signal is finished off. */
@@ -121,6 +124,7 @@ export function localBackendEnv(
   port: number,
   platform: NodeJS.Platform = process.platform,
   directoryExists: (dir: string) => boolean = isDirectory,
+  settings: LocalSettings = defaultLocalSettings(),
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(parent)) if (value !== undefined) env[key] = value;
@@ -129,6 +133,8 @@ export function localBackendEnv(
   env.PORT = String(port);
   env.DATA_DIR = path.join(userDataDir, INSTANCE_DIRECTORY);
   env.DOWNLOAD_DIR = path.join(userDataDir, DOWNLOADS_DIRECTORY);
+  // Off leaves an inherited value alone: a developer running from a terminal keeps their own.
+  if (settings.allowPrivateAddons) env.ALLOW_PRIVATE_ADDONS = "1";
   if (platform === "darwin") env.PATH = macosPath(env.PATH, directoryExists);
   return env;
 }
@@ -280,8 +286,9 @@ export class LocalBackend {
 
   private async launch(port: number): Promise<LocalBackendConnection> {
     const { options } = this;
+    const settings = await (options.readSettings ?? readLocalSettings)(options.userDataDir);
     const child = options.fork(options.entry, {
-      env: localBackendEnv(process.env, options.userDataDir, port),
+      env: localBackendEnv(process.env, options.userDataDir, port, process.platform, isDirectory, settings),
       cwd: options.userDataDir,
       stdio: "inherit",
       serviceName: SERVICE_NAME,
