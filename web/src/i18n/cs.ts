@@ -1033,6 +1033,7 @@ export const cs: Catalog = {
   "err.unknownLibrary": "Taková knihovna neexistuje.",
   "err.notSignedIn": "Nepřihlášeno.",
   "err.setupDone": "Účet už existuje.",
+  "err.setupLocalOnly": "První účet vytvořte na počítači, na kterém aplikace běží.",
   "err.badCredentials": "Nesprávné jméno nebo heslo.",
   "err.tooManyAttempts": "Příliš mnoho neúspěšných pokusů. Zkuste to za {seconds} s.",
   "err.hostUnavailable": "{host} neodpovídá. Zkuste to za {seconds} s.",

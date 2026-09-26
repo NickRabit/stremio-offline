@@ -33,9 +33,16 @@ export function registerAuthRoutes(app: express.Application, ctx: RouteContext):
     res.json({ username: user.username, role: user.role, language, mustChangePassword: Boolean(user.mustChangePassword) });
   });
 
+  const isLoopbackSocket = (address: string | undefined) => ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(address ?? "");
+
   /** First-run account setup. Available only until an account exists. */
   app.post("/api/auth/setup", asyncRoute(async (req, res) => {
     if (!ctx.needsSetup()) throw new AppError("An account already exists.", "err.setupDone");
+    // A desktop app shared with the network before its first account would otherwise hand the
+    // administrator to whichever device on the Wi-Fi answered the setup screen first.
+    if (process.env.HOST_CHECK === "published" && !isLoopbackSocket(req.socket.remoteAddress)) {
+      throw new AppError("Create the first account on the computer that runs the app.", "err.setupLocalOnly", 403);
+    }
     const username = String(req.body.username ?? "").trim();
     const password = String(req.body.password ?? "");
     if (username.length < 3) throw new AppError("The username needs at least 3 characters.", "auth.usernameTooShort");

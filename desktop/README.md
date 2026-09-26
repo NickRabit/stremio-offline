@@ -50,6 +50,31 @@ The packaging sections below cover the packaging prototype only. It produces a
 macOS arm64 `.dmg` and `.zip` from the compiled shell. It is deliberately not a
 public release — see [Limits](#limits) before sharing anything built here.
 
+## Sharing with other devices
+
+**Share with devices on my network** on the connection screen is off by default
+and is stored in the same `<userData>/local-settings.json` file. While it is on,
+the local backend binds to `0.0.0.0` on a fixed, configurable port (8091 by
+default, 1024–65535) instead of a remembered loopback port, and it applies from
+the next start of the local backend. Nothing else about the server changes:
+accounts, roles and the web interface are the same, and another device signs in
+with an account from this server.
+
+- The host check widens from `loopback` to `published`, which accepts a `Host`
+  whose port is the one it listens on and whose name is an IP literal
+  (`192.168.1.41:<port>`, `[fe80::1]:<port>`), `localhost` or this machine's own
+  `.local` name. Any other name is refused with 421, which is what keeps a
+  DNS-rebinding page from reading the server: such a page can point a name it
+  controls at the Mac, but it cannot make that name an IP literal or the Mac's
+  `.local` name.
+- The port is fixed, so a port already taken by another program is reported and
+  never silently swapped for a different one.
+- macOS asks once whether to accept incoming connections the first time. If it
+  was refused, allow the app in **System Settings → Network → Firewall**.
+- The Mac is kept from idle sleep only while something is playing, and only
+  through `powerSaveBlocker.start("prevent-app-suspension")`. Closing the lid
+  still puts it to sleep.
+
 ## Choosing a library folder
 
 In the local mode, **Choose a folder on this computer…** in the new-library

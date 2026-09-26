@@ -6,15 +6,26 @@ export const SETTINGS_FILE = "local-settings.json";
 
 export interface LocalSettings {
   allowPrivateAddons: boolean;
+  publish: boolean;
+  publishPort: number;
 }
 
-export const defaultLocalSettings = (): LocalSettings => ({ allowPrivateAddons: false });
+const DEFAULT_PUBLISH_PORT = 8091;
+
+export const defaultLocalSettings = (): LocalSettings => ({ allowPrivateAddons: false, publish: false, publishPort: DEFAULT_PUBLISH_PORT });
+
+const validPort = (value: unknown): value is number =>
+  typeof value === "number" && Number.isInteger(value) && value >= 1024 && value <= 65535;
 
 /** The file is read leniently: unknown fields are dropped and a bad value means the default. */
 const settingsFromStored = (body: unknown): LocalSettings => {
   if (typeof body !== "object" || body === null) return defaultLocalSettings();
-  const value = (body as Record<string, unknown>).allowPrivateAddons;
-  return { allowPrivateAddons: typeof value === "boolean" ? value : false };
+  const record = body as Record<string, unknown>;
+  return {
+    allowPrivateAddons: typeof record.allowPrivateAddons === "boolean" ? record.allowPrivateAddons : false,
+    publish: typeof record.publish === "boolean" ? record.publish : false,
+    publishPort: validPort(record.publishPort) ? record.publishPort : DEFAULT_PUBLISH_PORT,
+  };
 };
 
 export async function readLocalSettings(dir: string): Promise<LocalSettings> {
@@ -35,7 +46,11 @@ export async function writeLocalSettings(dir: string, settings: LocalSettings): 
   await mkdir(dir, { recursive: true });
   const temporary = path.join(dir, `${SETTINGS_FILE}.${randomUUID()}`);
   try {
-    await writeFile(temporary, JSON.stringify({ allowPrivateAddons: settings.allowPrivateAddons }) + "\n", { encoding: "utf8", flag: "wx" });
+    await writeFile(temporary, JSON.stringify({
+      allowPrivateAddons: settings.allowPrivateAddons,
+      publish: settings.publish,
+      publishPort: settings.publishPort,
+    }) + "\n", { encoding: "utf8", flag: "wx" });
     await rename(temporary, path.join(dir, SETTINGS_FILE));
   } catch (error) {
     await rm(temporary).catch(() => {});
@@ -47,7 +62,8 @@ export async function writeLocalSettings(dir: string, settings: LocalSettings): 
 export function parseLocalSettings(input: unknown): LocalSettings | null {
   if (typeof input !== "object" || input === null || Array.isArray(input)) return null;
   const record = input as Record<string, unknown>;
-  const keys = Object.keys(record);
-  if (keys.length !== 1 || keys[0] !== "allowPrivateAddons") return null;
-  return typeof record.allowPrivateAddons === "boolean" ? { allowPrivateAddons: record.allowPrivateAddons } : null;
+  const keys = Object.keys(record).sort();
+  if (keys.length !== 3 || keys[0] !== "allowPrivateAddons" || keys[1] !== "publish" || keys[2] !== "publishPort") return null;
+  if (typeof record.allowPrivateAddons !== "boolean" || typeof record.publish !== "boolean" || !validPort(record.publishPort)) return null;
+  return { allowPrivateAddons: record.allowPrivateAddons, publish: record.publish, publishPort: record.publishPort };
 }

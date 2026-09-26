@@ -1,6 +1,9 @@
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import net from "node:net";
+import os from "node:os";
 import path from "node:path";
 import { defaultLocalSettings, readLocalSettings, type LocalSettings } from "./local-settings.js";
 import { parseServerOrigin, type ServerOrigin } from "./origin.js";
@@ -10,6 +13,8 @@ import type { ProbeResult } from "./status.js";
 export const LOCAL_PARTITION = "persist:stremio-local";
 /** The local backend is reachable from this machine only. */
 export const LOCAL_HOST = "127.0.0.1";
+/** The address the child reports when it is shared with the home network. */
+export const PUBLISHED_HOST = "0.0.0.0";
 export const INSTANCE_DIRECTORY = "instance";
 export const DOWNLOADS_DIRECTORY = "downloads";
 export const PORT_FILE = "local-backend.json";
@@ -20,7 +25,8 @@ export const STOP_TIMEOUT_MS = 5_000;
 export const MACOS_TOOL_DIRECTORIES = ["/opt/homebrew/bin", "/usr/local/bin"] as const;
 const MACOS_FALLBACK_PATH = "/usr/bin:/bin:/usr/sbin:/sbin";
 
-const sameSettings = (a: LocalSettings, b: LocalSettings) => a.allowPrivateAddons === b.allowPrivateAddons;
+const sameSettings = (a: LocalSettings, b: LocalSettings) =>
+  a.allowPrivateAddons === b.allowPrivateAddons && a.publish === b.publish && a.publishPort === b.publishPort;
 
 const SERVICE_NAME = "Stremio Offline backend";
 
@@ -38,6 +44,8 @@ export interface LocalBackendStatus {
 export interface LocalBackendConnection {
   server: ServerOrigin;
   status: LocalBackendStatus;
+  published: boolean;
+  addresses: string[];
 }
 
 /** The slice of Electron's `UtilityProcess` the lifecycle needs, so tests can stand one in. */
@@ -72,6 +80,10 @@ export interface LocalBackendOptions {
   writePort?: (dir: string, port: number) => Promise<void>;
   /** Read on every launch, so a switch thrown in the shell applies to the next start. */
   readSettings?: (dir: string) => Promise<LocalSettings>;
+  /** Whether something already answers on 127.0.0.1 at the port, checked before a published start. */
+  loopbackTaken?: (port: number) => Promise<boolean>;
+  /** Whether anything is streaming, so the shell can hold the machine awake while published. */
+  onActivity?: (streaming: boolean) => void;
   readyTimeoutMs?: number;
   stopTimeoutMs?: number;
   /** How a child that ignores the graceful signal is finished off. */
@@ -81,6 +93,14 @@ export interface LocalBackendOptions {
 }
 
 class PortBusyError extends Error {}
+
+/** A published start has a fixed port, so an occupied one is a failure the page can name. */
+export class LocalPortBusyError extends Error {
+  constructor(readonly port: number) {
+    super(`Port ${port} is in use by another program.`);
+    this.name = "LocalPortBusyError";
+  }
+}
 
 const isUsablePort = (value: unknown): value is number =>
   typeof value === "number" && Number.isInteger(value) && value > 0 && value <= 65535;
@@ -101,6 +121,69 @@ export function readErrorMessage(message: unknown): { code: string | null } | nu
   const record = message as Record<string, unknown>;
   if (record.type !== "error") return null;
   return { code: typeof record.code === "string" && record.code.length > 0 ? record.code : null };
+}
+
+/** The child reports whether anything is streaming, so the shell can hold the Mac awake. */
+export function readActivityMessage(message: unknown): boolean | null {
+  if (typeof message !== "object" || message === null) return null;
+  const record = message as Record<string, unknown>;
+  if (record.type !== "activity") return null;
+  return typeof record.streaming === "boolean" ? record.streaming : null;
+}
+
+/** The name macOS announces over Bonjour. `os.hostname()` answers with HostName instead when one
+ *  is set -- by DHCP or by hand -- and that name is not what another device can look up. */
+const bonjourName = (): string | null => {
+  if (process.platform !== "darwin") return null;
+  try {
+    return execFileSync("/usr/sbin/scutil", ["--get", "LocalHostName"], { encoding: "utf8", timeout: 2_000 }).trim() || null;
+  } catch {
+    return null;
+  }
+};
+
+/** Whether a connection to 127.0.0.1 at the port is accepted within a second. */
+export const loopbackAnswers = (port: number, timeoutMs = 1_000): Promise<boolean> =>
+  new Promise((resolve) => {
+    const socket = net.connect({ host: LOCAL_HOST, port });
+    const finish = (taken: boolean) => { socket.destroy(); resolve(taken); };
+    socket.setTimeout(timeoutMs, () => finish(false));
+    socket.once("connect", () => finish(true));
+    socket.once("error", () => finish(false));
+  });
+
+/** The machine's own `.local` names, which is how another device reaches it over Bonjour. */
+export function localHostNames(hostname = os.hostname(), announced: string | null = bonjourName()): string[] {
+  const names = new Set<string>();
+  for (const candidate of [announced, hostname]) {
+    const name = candidate?.trim().toLowerCase() ?? "";
+    if (name.length === 0) continue;
+    names.add(name.endsWith(".local") ? name : `${name}.local`);
+  }
+  return [...names];
+}
+
+/** The URLs to type on another device: every IPv4 the machine holds, then its `.local` names. */
+export function lanAddresses(
+  interfaces: NodeJS.Dict<os.NetworkInterfaceInfo[]> = os.networkInterfaces(),
+  port: number,
+  names: string[],
+): string[] {
+  const addresses: string[] = [];
+  const seen = new Set<string>();
+  const add = (address: string) => {
+    if (seen.has(address)) return;
+    seen.add(address);
+    addresses.push(address);
+  };
+  for (const entries of Object.values(interfaces)) {
+    for (const entry of entries ?? []) {
+      if (entry.family !== "IPv4" || entry.internal) continue;
+      add(`http://${entry.address}:${port}`);
+    }
+  }
+  for (const name of names) add(`http://${name}:${port}`);
+  return addresses;
 }
 
 const isDirectory = (dir: string) => {
@@ -130,8 +213,10 @@ export function localBackendEnv(
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(parent)) if (value !== undefined) env[key] = value;
-  env.HOST = LOCAL_HOST;
-  env.HOST_CHECK = "loopback";
+  env.HOST = settings.publish ? PUBLISHED_HOST : LOCAL_HOST;
+  env.HOST_CHECK = settings.publish ? "published" : "loopback";
+  if (settings.publish) env.HOST_NAMES = localHostNames().join(",");
+  else delete env.HOST_NAMES;
   env.DESKTOP_LOCAL_BACKEND = "1";
   env.PORT = String(port);
   env.DATA_DIR = path.join(userDataDir, INSTANCE_DIRECTORY);
@@ -261,12 +346,21 @@ export class LocalBackend {
   }
 
   private async startBackend(): Promise<LocalBackendConnection> {
+    const settings = await (this.options.readSettings ?? readLocalSettings)(this.options.userDataDir);
+    // Publishing has one fixed port: no remembered port, no port-0 fallback.
+    if (settings.publish) {
+      // A listener on 0.0.0.0 binds even where another program holds 127.0.0.1 at the same port,
+      // and the kernel then hands this shell's loopback connections to that program: the window
+      // would show it while the network reached the child. So such a port counts as taken.
+      if (await (this.options.loopbackTaken ?? loopbackAnswers)(settings.publishPort)) throw new LocalPortBusyError(settings.publishPort);
+      return this.launch(settings.publishPort, settings);
+    }
     const remembered = await (this.options.readPort ?? readRememberedPort)(this.options.userDataDir);
     const attempts = remembered === null ? [0] : [remembered, 0];
     let failure: unknown = null;
     for (const port of attempts) {
       try {
-        return await this.launch(port);
+        return await this.launch(port, settings);
       } catch (error) {
         failure = error;
         // Only an occupied remembered port is worth a second try, and only with port 0.
@@ -300,9 +394,8 @@ export class LocalBackend {
     })();
   }
 
-  private async launch(port: number): Promise<LocalBackendConnection> {
+  private async launch(port: number, settings: LocalSettings): Promise<LocalBackendConnection> {
     const { options } = this;
-    const settings = await (options.readSettings ?? readLocalSettings)(options.userDataDir);
     this.launchedWith = settings;
     const child = options.fork(options.entry, {
       env: localBackendEnv(process.env, options.userDataDir, port, process.platform, isDirectory, settings),
@@ -313,12 +406,14 @@ export class LocalBackend {
     const tracked = track(child);
     this.tracked = tracked;
     child.on("exit", (code) => this.onExit(tracked, code));
+    const expectedAddress = settings.publish ? PUBLISHED_HOST : LOCAL_HOST;
     let ready: BoundAddress;
     try {
       ready = await awaitReady(child, options.readyTimeoutMs ?? READY_TIMEOUT_MS);
-      if (ready.address !== LOCAL_HOST) throw new Error("The local server did not bind to the loopback address.");
+      if (ready.address !== expectedAddress) throw new Error("The local server did not bind to the expected address.");
     } catch (error) {
       await this.stopTracked();
+      if (settings.publish && error instanceof PortBusyError) throw new LocalPortBusyError(port);
       throw error;
     }
     const server = parseServerOrigin(`http://${LOCAL_HOST}:${ready.port}`);
@@ -327,8 +422,21 @@ export class LocalBackend {
       await this.stopTracked();
       throw new Error("The local server did not answer its own status check.");
     }
-    this.connection = { server, status: { version: probe.version, restricted: probe.restricted, secure: probe.secure } };
-    await this.remember(ready.port);
+    const onActivity = options.onActivity;
+    if (settings.publish && onActivity) {
+      child.on("message", (message) => {
+        const streaming = readActivityMessage(message);
+        if (streaming !== null) onActivity(streaming);
+      });
+    }
+    this.connection = {
+      server,
+      status: { version: probe.version, restricted: probe.restricted, secure: probe.secure },
+      published: settings.publish,
+      addresses: settings.publish ? lanAddresses(undefined, ready.port, localHostNames()) : [],
+    };
+    // A published port is fixed and configurable, so there is nothing to remember for next time.
+    if (!settings.publish) await this.remember(ready.port);
     return this.connection;
   }
 

@@ -44,3 +44,22 @@ test("the port is read when the request arrives, after the listener wrote it bac
   check({ headers: { host: "127.0.0.1:53003" } } as Request, {} as Response, () => { passed = true; });
   assert.equal(passed, true);
 });
+
+test("the published check accepts an IP literal, a bracketed IPv6, localhost and the machine's names", () => {
+  const env = { HOST_CHECK: "published", PORT: "8091", HOST_NAMES: "mac.local" };
+  assert.equal(run(env, "192.168.1.41:8091").passed, true);
+  assert.equal(run(env, "127.0.0.1:8091").passed, true);
+  assert.equal(run(env, "[fe80::1]:8091").passed, true);
+  assert.equal(run(env, "localhost:8091").passed, true);
+  assert.equal(run(env, "mac.local:8091").passed, true);
+  assert.equal(run(env, "MAC.LOCAL:8091").passed, true);
+});
+
+test("the published check refuses a rebound name, another port, a missing Host and a name not shared", () => {
+  const env = { HOST_CHECK: "published", PORT: "8091", HOST_NAMES: "mac.local" };
+  assert.deepEqual(run(env, "evil.example:8091"), { passed: false, status: 421 });
+  assert.deepEqual(run(env, "192.168.1.41:8092"), { passed: false, status: 421 });
+  assert.deepEqual(run(env, "192.168.1.41"), { passed: false, status: 421 });
+  assert.deepEqual(run(env, undefined), { passed: false, status: 421 });
+  assert.deepEqual(run(env, "nas.local:8091"), { passed: false, status: 421 });
+});

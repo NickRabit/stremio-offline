@@ -19,6 +19,12 @@ type MessageKey =
   | "connect.localLan"
   | "connect.localLanHint"
   | "connect.localLanFailed"
+  | "connect.publish"
+  | "connect.publishPort"
+  | "connect.publishHint"
+  | "connect.publishPortInvalid"
+  | "connect.publishPortBusy"
+  | "connect.publishedAt"
   | "connect.disconnect"
   | "connect.probing"
   | "connect.unreachable"
@@ -56,6 +62,8 @@ interface ProfileState {
 
 interface LocalSettings {
   allowPrivateAddons: boolean;
+  publish: boolean;
+  publishPort: number;
 }
 
 type ProfileResult =
@@ -63,8 +71,9 @@ type ProfileResult =
   | { ok: false; reason: "invalid-name" | "invalid-data" | "save-failed" };
 
 type LocalConnectResult =
-  | { ok: true; version: string; restricted: boolean; secure: boolean }
-  | { ok: false; reason: "startup" };
+  | { ok: true; version: string; restricted: boolean; secure: boolean; addresses: string[] }
+  | { ok: false; reason: "startup" }
+  | { ok: false; reason: "port-busy"; port: number };
 
 type LocalSettingsResult =
   | { ok: true; localSettings: LocalSettings }
@@ -79,7 +88,7 @@ interface DesktopBridge {
   saveProfile(input: { id: string | null; name: string; origin: string }): Promise<ProfileResult>;
   deleteProfile(id: string): Promise<ProfileResult>;
   selectProfile(id: string | null): Promise<ProfileResult>;
-  setLocalSettings(input: { allowPrivateAddons: boolean }): Promise<LocalSettingsResult>;
+  setLocalSettings(input: { allowPrivateAddons: boolean; publish: boolean; publishPort: number }): Promise<LocalSettingsResult>;
   connect(id: string): Promise<ProbeResult>;
   connectLocal(): Promise<LocalConnectResult>;
   disconnect(): Promise<void>;
@@ -112,12 +121,14 @@ interface Window {
   const connectButton = document.getElementById("connect") as HTMLButtonElement;
   const localButton = document.getElementById("local") as HTMLButtonElement;
   const localLan = document.getElementById("localLan") as HTMLInputElement;
+  const publish = document.getElementById("publish") as HTMLInputElement;
+  const publishPort = document.getElementById("publishPort") as HTMLInputElement;
   const disconnectButton = document.getElementById("disconnect") as HTMLButtonElement;
 
   let strings: Catalogue | null = null;
   let profiles: ServerProfile[] = [];
   let selectedId: string | null = null;
-  let localSettings: LocalSettings = { allowPrivateAddons: false };
+  let localSettings: LocalSettings = { allowPrivateAddons: false, publish: false, publishPort: 8091 };
   let busy = false;
   let actionToken = 0;
   let saving: Promise<string | null> | null = null;
@@ -147,7 +158,22 @@ interface Window {
     connectButton.disabled = busy;
     localButton.disabled = busy;
     localLan.disabled = busy;
+    publish.disabled = busy;
+    publishPort.disabled = busy || !publish.checked;
     removeButton.disabled = busy || selectedId === null;
+  };
+
+  /** The port has to be a whole number in range before anything is sent to the shell. */
+  const portOf = (): number | null => {
+    const raw = publishPort.value.trim();
+    if (!/^\d+$/.test(raw)) return null;
+    const port = Number(raw);
+    return port >= 1024 && port <= 65535 ? port : null;
+  };
+
+  const applyPublishControls = () => {
+    publish.checked = localSettings.publish;
+    publishPort.value = String(localSettings.publishPort);
   };
 
   const renderProfiles = () => {
@@ -200,11 +226,12 @@ interface Window {
     return reason === "save-failed" ? "connect.profileSaveFailed" : "connect.profileInvalidData";
   };
 
-  const showConnectedServer = (catalogue: Catalogue, result: { version: string; restricted: boolean; secure: boolean }) => {
+  const showConnectedServer = (catalogue: Catalogue, result: { version: string; restricted: boolean; secure: boolean; addresses?: string[] }) => {
     showConnected();
     const extra: string[] = [];
     if (result.restricted) extra.push(catalogue["connect.restricted"]);
     if (result.secure) extra.push(catalogue["connect.secure"]);
+    if (result.addresses && result.addresses.length > 0) extra.push(catalogue["connect.publishedAt"].replace("{addresses}", result.addresses.join(", ")));
     show(catalogue["connect.version"].replace("{version}", result.version), extra);
   };
 
@@ -306,7 +333,9 @@ interface Window {
       const result = await window.desktop.connectLocal();
       if (!result.ok) {
         showForm();
-        show(catalogue["connect.localFailed"]);
+        show(result.reason === "port-busy"
+          ? catalogue["connect.publishPortBusy"].replace("{port}", String(result.port))
+          : catalogue["connect.localFailed"]);
         return;
       }
       showConnectedServer(catalogue, result);
@@ -321,7 +350,7 @@ interface Window {
         applyStored();
         return;
       }
-      const result = await window.desktop.setLocalSettings({ allowPrivateAddons: localLan.checked });
+      const result = await window.desktop.setLocalSettings({ allowPrivateAddons: localLan.checked, publish: localSettings.publish, publishPort: localSettings.publishPort });
       if (!result.ok) {
         applyStored();
         show(catalogue["connect.localLanFailed"]);
@@ -329,6 +358,58 @@ interface Window {
       }
       localSettings = result.localSettings;
       applyStored();
+      clear();
+    });
+  });
+
+  publish.addEventListener("change", () => {
+    void runAction(async () => {
+      const catalogue = strings;
+      const applyStored = () => { applyPublishControls(); };
+      if (!catalogue) {
+        applyStored();
+        return;
+      }
+      const port = portOf();
+      if (port === null) {
+        applyStored();
+        show(catalogue["connect.publishPortInvalid"]);
+        return;
+      }
+      const result = await window.desktop.setLocalSettings({ allowPrivateAddons: localSettings.allowPrivateAddons, publish: publish.checked, publishPort: port });
+      if (!result.ok) {
+        applyStored();
+        show(catalogue["connect.localLanFailed"]);
+        return;
+      }
+      localSettings = result.localSettings;
+      applyStored();
+      clear();
+    });
+  });
+
+  publishPort.addEventListener("change", () => {
+    void runAction(async () => {
+      const catalogue = strings;
+      const applyStored = () => { applyPublishControls(); };
+      if (!catalogue) {
+        applyStored();
+        return;
+      }
+      const port = portOf();
+      if (port === null) {
+        applyStored();
+        show(catalogue["connect.publishPortInvalid"]);
+        return;
+      }
+      const result = await window.desktop.setLocalSettings({ allowPrivateAddons: localSettings.allowPrivateAddons, publish: localSettings.publish, publishPort: port });
+      if (!result.ok) {
+        applyStored();
+        show(catalogue["connect.localLanFailed"]);
+        return;
+      }
+      localSettings = result.localSettings;
+      applyPublishControls();
       clear();
     });
   });
@@ -349,6 +430,8 @@ interface Window {
     applyState(state);
     localSettings = state.localSettings;
     localLan.checked = localSettings.allowPrivateAddons;
+    applyPublishControls();
+    syncControls();
     showForm();
   };
 

@@ -1,4 +1,4 @@
-import { app, BaseWindow, dialog, ipcMain, session, shell as electronShell, utilityProcess, WebContentsView, type IpcMainEvent, type IpcMainInvokeEvent } from "electron";
+import { app, BaseWindow, dialog, ipcMain, powerSaveBlocker, session, shell as electronShell, utilityProcess, WebContentsView, type IpcMainEvent, type IpcMainInvokeEvent } from "electron";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,7 +18,7 @@ import {
 import { downloadProgressPercent, isDeviceTicketDownload } from "./downloads.js";
 import { catalogue } from "./i18n.js";
 import { layout, type LayoutMode } from "./layout.js";
-import { LOCAL_PARTITION, LocalBackend, type LocalBackendConnection } from "./local-backend.js";
+import { LOCAL_PARTITION, LocalBackend, LocalPortBusyError, type LocalBackendConnection } from "./local-backend.js";
 import { defaultLocalSettings, parseLocalSettings, readLocalSettings, writeLocalSettings, type LocalSettings } from "./local-settings.js";
 import { externalBrowserUrl, httpAllowedHost, parseServerOrigin, partitionForOrigin, type ServerOrigin } from "./origin.js";
 import { localPageSent } from "./bridge-sender.js";
@@ -32,8 +32,9 @@ type ProfileResult =
   | { ok: false; reason: "invalid-name" | "invalid-data" | "save-failed" };
 
 type LocalConnectResult =
-  | { ok: true; version: string; restricted: boolean; secure: boolean }
-  | { ok: false; reason: "startup" };
+  | { ok: true; version: string; restricted: boolean; secure: boolean; addresses: string[] }
+  | { ok: false; reason: "startup" }
+  | { ok: false; reason: "port-busy"; port: number };
 
 type LocalSettingsResult =
   | { ok: true; localSettings: LocalSettings }
@@ -92,6 +93,9 @@ let mode: LayoutMode = "connect";
 let loadFailure: ProbeFailure | null = null;
 let localBackend: LocalBackend | null = null;
 let localConnection: LocalBackendConnection | null = null;
+/** The last streaming report from the running backend, and the one sleep blocker it holds. */
+let localStreaming = false;
+let sleepBlockerId: number | null = null;
 /** Quitting retires the page itself, so a window closing on the way out does not wait for it again. */
 let quitting = false;
 const preparedPartitions = new Set<string>();
@@ -99,6 +103,21 @@ let profileStore: ProfileStore = { profiles: [], selectedProfileId: null };
 let localSettings: LocalSettings = defaultLocalSettings();
 
 const windowTitle = () => catalogue(app.getLocale())["connect.title"];
+
+const releaseAwake = () => {
+  if (sleepBlockerId === null) return;
+  powerSaveBlocker.stop(sleepBlockerId);
+  sleepBlockerId = null;
+};
+
+/** One blocker at most, held only while the running backend is published and streaming. */
+const syncAwake = () => {
+  if (!localStreaming || localConnection?.published !== true) {
+    releaseAwake();
+    return;
+  }
+  if (sleepBlockerId === null) sleepBlockerId = powerSaveBlocker.start("prevent-app-suspension");
+};
 
 const applyMode = (next: LayoutMode) => {
   const current = shell;
@@ -431,6 +450,8 @@ const localOrigin = (): string | null => localConnection?.server.origin ?? null;
 
 const failLocalConnection = () => {
   localConnection = null;
+  localStreaming = false;
+  syncAwake();
   const wasConnected = connected !== null;
   connected = null;
   loadFailure = null;
@@ -444,6 +465,8 @@ const failLocalConnection = () => {
 
 const closeLocalBackend = async (): Promise<void> => {
   localConnection = null;
+  localStreaming = false;
+  syncAwake();
   const backend = localBackend;
   if (!backend) return;
   await backend.stop().catch(() => {});
@@ -458,10 +481,13 @@ const connectLocal = (): Promise<LocalConnectResult> =>
       connection = await backend.start();
     } catch (error) {
       console.warn("local backend: " + (error instanceof Error ? error.message : String(error)));
+      if (error instanceof LocalPortBusyError) return { ok: false, reason: "port-busy", port: error.port };
       // Nothing was mounted and nothing was given up, so the shell stays where it is.
       return { ok: false, reason: "startup" };
     }
     localConnection = connection;
+    localStreaming = false;
+    syncAwake();
     if (shell?.remotePartition !== LOCAL_PARTITION) await retireRemote();
     const remote = mountRemote(LOCAL_PARTITION, localOrigin, LOCAL_PRELOAD);
     if (!remote) {
@@ -485,7 +511,7 @@ const connectLocal = (): Promise<LocalConnectResult> =>
     }
     shell?.window.setTitle(connection.server.origin);
     applyMode("remote");
-    return { ok: true, ...connection.status };
+    return { ok: true, ...connection.status, addresses: connection.addresses };
   });
 
 const registerHandlers = () => {
@@ -577,6 +603,7 @@ const createLocalBackend = (): LocalBackend => new LocalBackend({
   userDataDir: app.getPath("userData"),
   fork: (entry, options) => utilityProcess.fork(entry, [], options),
   probeStatus: fetchStatus,
+  onActivity: (streaming) => { localStreaming = streaming; syncAwake(); },
   onUnexpectedExit: () => failLocalConnection(),
   log: (line) => console.warn("local backend: " + line),
 });
@@ -622,6 +649,8 @@ if (process.argv.includes(SMOKE_LOCAL_BACKEND)) {
     event.preventDefault();
     if (backendShutdown) return;
     quitting = true;
+    localStreaming = false;
+    syncAwake();
     backendShutdown = retireRemote().then(closeLocalBackend).finally(() => {
       backendShutdownComplete = true;
       app.quit();

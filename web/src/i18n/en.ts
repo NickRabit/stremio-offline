@@ -1038,6 +1038,7 @@ export const en = {
   "err.unknownLibrary": "That library does not exist.",
   "err.notSignedIn": "Not signed in.",
   "err.setupDone": "An account already exists.",
+  "err.setupLocalOnly": "Create the first account on the computer that runs the app.",
   "err.badCredentials": "Wrong username or password.",
   "err.tooManyAttempts": "Too many failed attempts. Try again in {seconds} s.",
   "err.hostUnavailable": "{host} is not answering. Try again in {seconds} s.",
