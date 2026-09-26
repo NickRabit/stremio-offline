@@ -48,3 +48,62 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "${{ github.ref_name }}" --generate-notes --title "${{ github.ref_name }}"
+
+  # The macOS app goes onto the same release, unsigned: there is no Developer ID
+  # yet, so the bundle is ad-hoc signed as in "Desktop package" and the asset
+  # names say so. It runs after the release exists, and a failure here leaves
+  # the release and its image as they are.
+  desktop:
+    needs: release
+    # Apple Silicon, so the arm64 build runs natively.
+    runs-on: macos-14
+    permissions:
+      contents: write
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Tag and desktop version agree
+        run: |
+          set -euo pipefail
+          manifest="$(node -p 'require("./desktop/package.json").version')"
+          if [ "v$manifest" != "${GITHUB_REF_NAME}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match desktop/package.json $manifest"
+            exit 1
+          fi
+      - run: npm ci
+      - run: npm run package:mac:arm64 -w desktop
+      - run: npm run verify:fuses -w desktop
+      - run: npm run smoke:packaged -w desktop
+      - name: Name the artifacts as unsigned
+        run: |
+          set -euo pipefail
+          cd desktop/release
+          for file in Stremio-Offline-*-arm64.dmg Stremio-Offline-*-arm64.zip; do
+            mv "$file" "${file%.*}-unsigned.${file##*.}"
+          done
+          ls -l ./*-unsigned.*
+      # `gh release upload` fails on an asset name that is already there, so a
+      # rerun never replaces what was published.
+      - name: Attach the app to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${GITHUB_REF_NAME}" desktop/release/*-unsigned.dmg desktop/release/*-unsigned.zip
+      - name: Say how to open it
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          notes="$RUNNER_TEMP/notes.md"
+          gh release view "${GITHUB_REF_NAME}" --json body --jq .body > "$notes"
+          cat >> "$notes" <<'NOTES'
+
+          ## Desktop app (macOS, Apple Silicon)
+
+          `Stremio-Offline-<version>-arm64-unsigned.dmg` is not signed with an Apple Developer ID, so macOS refuses the first launch. Open it once with a right-click on the app → **Open**, or **System Settings → Privacy & Security → Open Anyway**. Remux and transcoding need FFmpeg: `brew install ffmpeg`.
+          NOTES
+          gh release edit "${GITHUB_REF_NAME}" --notes-file "$notes"
