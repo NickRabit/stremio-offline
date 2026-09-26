@@ -9,7 +9,8 @@
   "main": "dist/main.js",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "dev": "npm run build --prefix .. && npm run build && npm run stage:local-backend && electron .",
+    "build:renderer": "npm run build:desktop --prefix ../web",
+    "dev": "npm run build --prefix .. && npm run build && npm run build:renderer && npm run stage:local-backend && electron .",
     "start": "npm run dev",
     "test": "tsx --test src/*.test.ts",
     "spike:utility": "electron spike/run.mjs",
@@ -17,7 +18,7 @@
     "stage:local-backend": "node scripts/stage-local-backend.mjs",
     "smoke:packaged": "node scripts/smoke-packaged.mjs",
     "build:ffmpeg": "bash scripts/build-ffmpeg.sh",
-    "package:mac:arm64": "npm run build --prefix .. && npm run build && npm run stage:local-backend && npm run build:ffmpeg && electron-builder --mac --arm64 --publish never"
+    "package:mac:arm64": "npm run build --prefix .. && npm run build && npm run build:renderer && npm run stage:local-backend && npm run build:ffmpeg && electron-builder --mac --arm64 --publish never"
   },
   "devDependencies": {
     "@electron/fuses": "1.8.0",
@@ -67,7 +68,7 @@
     ],
     "files": [
       "dist/**/*.js",
-      "static/connection.html",
+      "renderer/**",
       "runtime/**",
       "package.json"
     ],

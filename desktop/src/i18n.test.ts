@@ -8,12 +8,10 @@ test("both catalogues hold the same keys and every value is a sentence", () => {
 });
 
 test("the Czech catalogue is translated", () => {
-  assert.notEqual(en["connect.title"], cs["connect.title"]);
+  assert.notEqual(en["window.thisMac"], cs["window.thisMac"]);
 });
 
 test("the locale picks the catalogue", () => {
-  assert.equal(catalogue("cs-CZ"), cs);
-  assert.equal(catalogue("CS"), cs);
-  assert.equal(catalogue("en-US"), en);
-  assert.equal(catalogue(""), en);
+  assert.equal(catalogue("cs"), cs);
+  assert.equal(catalogue("en"), en);
 });

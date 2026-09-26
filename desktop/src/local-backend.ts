@@ -97,7 +97,7 @@ export interface LocalBackendOptions {
   loopbackTaken?: (port: number) => Promise<boolean>;
   /** The FFmpeg the app carries, handed to the backend unless its environment names one. */
   tools?: MediaTools | null;
-  /** Whether anything is streaming, so the shell can hold the machine awake while published. */
+  /** Whether anything is streaming through the running child, published or not. */
   onActivity?: (streaming: boolean) => void;
   readyTimeoutMs?: number;
   stopTimeoutMs?: number;
@@ -349,6 +349,11 @@ export class LocalBackend {
     return this.connection;
   }
 
+  /** The settings the running child was started with, or null when none runs. */
+  launchedSettings(): LocalSettings | null {
+    return this.launchedWith;
+  }
+
   start(): Promise<LocalBackendConnection> {
     if (this.startPromise) return this.startPromise;
     this.startPromise = this.ensureStarted().finally(() => { this.startPromise = null; });
@@ -406,6 +411,7 @@ export class LocalBackend {
     const tracked = this.tracked;
     this.tracked = null;
     this.connection = null;
+    this.launchedWith = null;
     if (!tracked || tracked.exited) return Promise.resolve();
     return (async () => {
       tracked.child.kill();
@@ -446,7 +452,7 @@ export class LocalBackend {
       throw new Error("The local server did not answer its own status check.");
     }
     const onActivity = options.onActivity;
-    if (settings.publish && onActivity) {
+    if (onActivity) {
       child.on("message", (message) => {
         const streaming = readActivityMessage(message);
         if (streaming !== null) onActivity(streaming);
@@ -468,6 +474,7 @@ export class LocalBackend {
     const wasConnected = this.connection !== null;
     this.tracked = null;
     this.connection = null;
+    this.launchedWith = null;
     if (!wasConnected) return;
     this.options.log?.(`The local server exited (code ${code}).`);
     this.options.onUnexpectedExit?.();

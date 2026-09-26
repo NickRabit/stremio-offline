@@ -610,6 +610,37 @@ test("activity reports are forwarded and malformed ones are ignored", async (t) 
   await harness.backend.stop();
 });
 
+test("activity reports reach the shell even when the backend is not published", async (t) => {
+  const dir = await tempDir(t);
+  const seen: boolean[] = [];
+  const harness = makeBackend(dir, {
+    readSettings: async () => ({ allowPrivateAddons: false, publish: false, publishPort: 8091 }),
+    onActivity: (streaming) => seen.push(streaming),
+  });
+  const started = start(harness);
+  const fork = await harness.nextChild();
+  fork.child.emit("message", READY);
+  await started;
+  fork.child.emit("message", { type: "activity", streaming: true });
+  fork.child.emit("message", { type: "activity", streaming: false });
+  assert.deepEqual(seen, [true, false]);
+  await harness.backend.stop();
+});
+
+test("the running child's settings are known while it runs and gone when it stops", async (t) => {
+  const dir = await tempDir(t);
+  const settings = { allowPrivateAddons: false, publish: false, publishPort: 8091 };
+  const harness = makeBackend(dir, { readSettings: async () => settings });
+  assert.equal(harness.backend.launchedSettings(), null);
+  const started = start(harness);
+  const fork = await harness.nextChild();
+  fork.child.emit("message", READY);
+  await started;
+  assert.deepEqual(harness.backend.launchedSettings(), settings);
+  await harness.backend.stop();
+  assert.equal(harness.backend.launchedSettings(), null);
+});
+
 test("a published start is refused when another program answers on 127.0.0.1 at that port", async (t) => {
   const dir = await tempDir(t);
   const checked: number[] = [];
