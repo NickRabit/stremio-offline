@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import { Check, Copy, Info, Languages, Laptop, Network, Pencil, Plus, RefreshCw, Server, Trash2 } from "lucide-react";
+import { Check, Copy, Info, Languages, Laptop, Network, Pencil, Plus, RefreshCw, RotateCcw, Server, Trash2, TriangleAlert } from "lucide-react";
 import { LOCALE_NAMES, t } from "../i18n";
 import { SettingControl, SettingsSectionHead } from "../settings-ui";
 import type { LocalSettings, ServerProfile, ShellBridge, ShellState, Target } from "./bridge";
+import { adoptDownloadDir, FolderError, FolderPath } from "./DownloadFolder";
 import { ServerForm } from "./ServerForm";
 
 type Reach = "testing" | "online" | "offline";
@@ -21,6 +22,7 @@ export function SettingsWindow({ bridge, state }: { bridge: ShellBridge; state: 
       <ServerSection bridge={bridge} state={state}/>
       <ThisMacSection bridge={bridge} state={state}/>
       <AboutSection state={state}/>
+      <ResetSection bridge={bridge} state={state}/>
     </div>
   </div>;
 }
@@ -149,6 +151,7 @@ function ThisMacSection({ bridge, state }: { bridge: ShellBridge; state: ShellSt
       <SettingsSectionHead icon={<Laptop/>} title={t("desktop.sectionThisMac")} text={t("desktop.sectionThisMacText")}/>
       <em className={`shell-chip ${local.running ? "ok" : "off"}`}>{local.running ? t("desktop.localRunning") : t("desktop.localStopped")}</em>
     </div>
+    <DownloadFolderRow bridge={bridge} state={state}/>
     <div className="shell-controls">
       <SettingControl title={t("desktop.share")} text={t("desktop.shareText")}>
         <span className="switch"><input type="checkbox" checked={local.settings.publish} onChange={(event) => void store({ ...local.settings, publish: event.target.checked })}/><span/></span>
@@ -176,6 +179,48 @@ function ThisMacSection({ bridge, state }: { bridge: ShellBridge; state: ShellSt
       {confirming && <button onClick={() => setConfirming(false)}>{t("desktop.cancel")}</button>}
       <button className="primary" disabled={restarting} onClick={() => void restart()}><RefreshCw className={restarting ? "shell-spin" : ""}/> {t("desktop.restartLocal")}</button>
     </div>}
+  </section>;
+}
+
+/** Fixed once the backend exists (its first library's root); before that it can still be chosen. */
+function DownloadFolderRow({ bridge, state }: { bridge: ShellBridge; state: ShellState }) {
+  const [failure, setFailure] = useState<Parameters<typeof FolderError>[0]["failure"]>(null);
+  const change = async () => {
+    const picked = await bridge.pickFolder(state.local.downloadDir);
+    if (picked) setFailure(await adoptDownloadDir(bridge, state, picked));
+  };
+  return <div className="shell-folder-row">
+    <span><strong>{t("desktop.downloadFolder")}</strong>{state.local.initialized && <small>{t("desktop.downloadFolderFixed")}</small>}</span>
+    <div className="shell-folder"><FolderPath dir={state.local.downloadDir}/>
+      {!state.local.initialized && <button type="button" onClick={() => void change()}>{t("desktop.change")}</button>}</div>
+    <FolderError failure={failure}/>
+  </div>;
+}
+
+function ResetSection({ bridge, state }: { bridge: ShellBridge; state: ShellState }) {
+  const [deleteDownloads, setDeleteDownloads] = useState(false);
+  const [forgetServers, setForgetServers] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const reset = async () => {
+    setBusy(true);
+    setFailed(false);
+    try {
+      // The main process asks once more in a native dialog; a "no" there changes nothing here.
+      const result = await bridge.resetLocal({ deleteDownloads, forgetServers });
+      if (!result.ok && !result.cancelled) setFailed(true);
+    } finally { setBusy(false); }
+  };
+  return <section className="settings-section shell-card shell-danger">
+    <SettingsSectionHead icon={<RotateCcw/>} title={t("desktop.sectionReset")} text={t("desktop.sectionResetText")}/>
+    <p className="shell-step-text">{t("desktop.resetWhat")}</p>
+    <label className="shell-check"><input type="checkbox" checked={deleteDownloads} onChange={(event) => setDeleteDownloads(event.target.checked)}/>
+      <span>{t("desktop.resetDownloads")}<code>{state.local.downloadDir}</code></span></label>
+    <label className="shell-check"><input type="checkbox" checked={forgetServers} onChange={(event) => setForgetServers(event.target.checked)}/>
+      <span>{t("desktop.resetServers")}</span></label>
+    {state.local.busy && <p className="shell-probe bad"><TriangleAlert/><span>{t("desktop.resetBusy")}</span></p>}
+    {failed && <p className="shell-probe bad" role="alert"><TriangleAlert/><span>{t("desktop.resetFailed")}</span></p>}
+    <div className="shell-actions"><button className="danger" disabled={busy} onClick={() => void reset()}><RotateCcw/> {t("desktop.resetButton")}</button></div>
   </section>;
 }
 

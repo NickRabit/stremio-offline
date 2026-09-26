@@ -21,7 +21,10 @@ afterEach(() => { act(() => root.unmount()); host.remove(); });
 const baseState = (over: Partial<ShellState> = {}): ShellState => ({
   locale: "en", localeChoice: null, appVersion: "0.4.85", screen: { kind: "welcome" }, connection: null, chosen: null,
   profiles: [{ id: "nas", name: "NAS", origin: "http://192.168.1.20:8090" }],
-  local: { settings: { allowPrivateAddons: false, publish: false, publishPort: 8091 }, running: false, addresses: [], ffmpeg: null, busy: false },
+  local: {
+    settings: { allowPrivateAddons: false, publish: false, publishPort: 8091, downloadDir: null }, running: false, addresses: [], ffmpeg: null, busy: false,
+    downloadDir: "/Users/me/Library/Application Support/Stremio Offline/downloads", suggestedDownloadDir: "/Users/me/Movies/Stremio Offline", initialized: true,
+  },
   toast: null, ...over,
 });
 
@@ -38,6 +41,9 @@ const makeBridge = (view: ShellView, state: ShellState) => {
     restartLocal: vi.fn(async () => ({ ok: true })),
     setLocale: vi.fn(async () => undefined),
     openSettings: vi.fn(), toastAction: vi.fn(), dismissToast: vi.fn(), copyText: vi.fn(),
+    pickFolder: vi.fn(async () => "/Volumes/Films"),
+    prepareDownloadDir: vi.fn(async (dir: string) => ({ ok: true as const, dir })),
+    resetLocal: vi.fn(async () => ({ ok: true, cancelled: false })),
   } satisfies ShellBridge;
   return bridge;
 };
@@ -110,7 +116,7 @@ it("the connected main window draws nothing over the server page", async () => {
 });
 
 it("settings refuse a port outside 1024–65535 and store a valid one", async () => {
-  const state = baseState({ local: { ...baseState().local, settings: { allowPrivateAddons: false, publish: true, publishPort: 8091 }, running: true } });
+  const state = baseState({ local: { ...baseState().local, settings: { allowPrivateAddons: false, publish: true, publishPort: 8091, downloadDir: null }, running: true } });
   const bridge = makeBridge("settings", state);
   await render(bridge);
   const port = host.querySelector<HTMLInputElement>(".shell-port input")!;
@@ -120,7 +126,7 @@ it("settings refuse a port outside 1024–65535 and store a valid one", async ()
   expect(bridge.setLocalSettings).not.toHaveBeenCalled();
   await type(port, "8095");
   await act(async () => { port.dispatchEvent(new FocusEvent("focusout", { bubbles: true })); });
-  expect(bridge.setLocalSettings).toHaveBeenCalledWith({ allowPrivateAddons: false, publish: true, publishPort: 8095 });
+  expect(bridge.setLocalSettings).toHaveBeenCalledWith({ allowPrivateAddons: false, publish: true, publishPort: 8095, downloadDir: null });
   await act(async () => { await Promise.resolve(); });
   expect(host.textContent).toContain("The changes apply once the server on this Mac restarts.");
 });
@@ -161,4 +167,54 @@ it("the first screen offers the language before anything else, and settings can 
   expect(select.value).toBe("en");
   await act(async () => { select.value = "system"; select.dispatchEvent(new Event("change", { bubbles: true })); });
   expect(settings.setLocale).toHaveBeenCalledWith(null);
+});
+
+it("a first start on this Mac asks where downloads go, and starts with the chosen folder", async () => {
+  const bridge = makeBridge("main", baseState({ local: { ...baseState().local, initialized: false } }));
+  await render(bridge);
+  await click(button("This Mac"));
+  expect(bridge.connect).not.toHaveBeenCalled();
+  expect(host.textContent).toContain("/Users/me/Movies/Stremio Offline");
+  await click(button("Choose another folder…"));
+  expect(host.textContent).toContain("/Volumes/Films");
+  await click(button("Start"));
+  await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+  expect(bridge.prepareDownloadDir).toHaveBeenCalledWith("/Volumes/Films");
+  expect(bridge.setLocalSettings).toHaveBeenCalledWith({ allowPrivateAddons: false, publish: false, publishPort: 8091, downloadDir: "/Volumes/Films" });
+  expect(bridge.connect).toHaveBeenCalledWith({ kind: "local" });
+});
+
+it("a folder the app cannot write to is refused before anything starts", async () => {
+  const bridge = makeBridge("main", baseState({ local: { ...baseState().local, initialized: false } }));
+  bridge.prepareDownloadDir.mockResolvedValueOnce({ ok: false, reason: "not-writable" } as never);
+  await render(bridge);
+  await click(button("This Mac"));
+  await click(button("Start"));
+  await act(async () => { await Promise.resolve(); });
+  expect(host.textContent).toContain("The app cannot write to that folder.");
+  expect(bridge.connect).not.toHaveBeenCalled();
+});
+
+it("an existing backend starts straight away and shows its folder as fixed in settings", async () => {
+  const bridge = makeBridge("main", baseState());
+  await render(bridge);
+  await click(button("This Mac"));
+  expect(bridge.connect).toHaveBeenCalledWith({ kind: "local" });
+  act(() => root.unmount());
+  root = createRoot(host);
+  await render(makeBridge("settings", baseState()));
+  expect(host.textContent).toContain("It is the first library now.");
+  expect(host.textContent).not.toContain("Change…");
+});
+
+it("reset keeps the films unless asked, and forgets servers only when ticked", async () => {
+  const bridge = makeBridge("settings", baseState());
+  await render(bridge);
+  await click(button("Reset this Mac…"));
+  expect(bridge.resetLocal).toHaveBeenLastCalledWith({ deleteDownloads: false, forgetServers: false });
+  const [downloads, servers] = [...host.querySelectorAll<HTMLInputElement>(".shell-check input")];
+  await click(downloads!);
+  await click(servers!);
+  await click(button("Reset this Mac…"));
+  expect(bridge.resetLocal).toHaveBeenLastCalledWith({ deleteDownloads: true, forgetServers: true });
 });

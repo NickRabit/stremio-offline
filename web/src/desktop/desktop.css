@@ -124,6 +124,23 @@ html[data-view=settings] body{background:var(--bg)}
 .shell-notice span{flex:1;min-width:180px;color:var(--text)}
 .shell-notice button{padding:7px 12px;font-size:12px}
 
+.shell-step-text{margin:0 0 14px;color:var(--muted);font-size:13px;line-height:1.55}
+.shell-folder-step{width:min(560px,100%)}
+.shell-folder{display:flex;align-items:center;gap:10px;padding:8px 8px 8px 12px;border-radius:10px;border:1px solid var(--line);background:#0d1117}
+.shell-folder code{flex:1;min-width:0;font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:rtl;text-align:left}
+.shell-folder button{padding:7px 12px;font-size:12px;white-space:nowrap}
+.shell-folder-step .shell-folder{margin-bottom:12px}
+.shell-folder-row{display:grid;gap:8px;margin:4px 0 16px;padding-bottom:16px;border-bottom:1px solid var(--line)}
+.shell-folder-row>span{display:grid;gap:4px}
+.shell-folder-row strong{font-size:13px}
+.shell-folder-row small{color:var(--muted);font-size:11px;line-height:1.5}
+.shell-danger{border-color:#f06a7633}
+.shell-danger .settings-section-head>i{border-color:#f06a7640;background:#f06a7612;color:var(--red)}
+.shell-check{display:flex;align-items:flex-start;gap:10px;margin:0 0 10px;font-size:13px;cursor:pointer}
+.shell-check input{width:auto;margin-top:2px;accent-color:var(--red)}
+.shell-check span{display:grid;gap:4px}
+.shell-check code{font:11px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--muted);overflow-wrap:anywhere}
+.shell-danger .shell-actions{justify-content:flex-start}
 .shell-facts{display:grid;grid-template-columns:auto 1fr;gap:9px 18px;margin:0;font-size:12px}
 .shell-facts dt{color:var(--muted)}
 .shell-facts dd{margin:0;overflow-wrap:anywhere}
