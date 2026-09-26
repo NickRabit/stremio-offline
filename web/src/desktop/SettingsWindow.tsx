@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
-import { Check, Copy, Info, Languages, Laptop, Network, Pencil, Plus, RefreshCw, RotateCcw, Server, Trash2, TriangleAlert } from "lucide-react";
+import { Check, Copy, Download, Info, Languages, Laptop, Network, Pencil, Plus, RefreshCw, RotateCcw, Server, Trash2, TriangleAlert } from "lucide-react";
 import { LOCALE_NAMES, t } from "../i18n";
 import { SettingControl, SettingsSectionHead } from "../settings-ui";
-import type { LocalSettings, ServerProfile, ShellBridge, ShellState, Target } from "./bridge";
+import type { AppPrefs, LocalSettings, ServerProfile, ShellBridge, ShellState, Target } from "./bridge";
 import { adoptDownloadDir, FolderError, FolderPath } from "./DownloadFolder";
 import { ServerForm } from "./ServerForm";
 
@@ -21,7 +21,7 @@ export function SettingsWindow({ bridge, state }: { bridge: ShellBridge; state: 
       <GeneralSection bridge={bridge} state={state}/>
       <ServerSection bridge={bridge} state={state}/>
       <ThisMacSection bridge={bridge} state={state}/>
-      <AboutSection state={state}/>
+      <AboutSection bridge={bridge} state={state}/>
       <ResetSection bridge={bridge} state={state}/>
     </div>
   </div>;
@@ -29,6 +29,15 @@ export function SettingsWindow({ bridge, state }: { bridge: ShellBridge; state: 
 
 function GeneralSection({ bridge, state }: { bridge: ShellBridge; state: ShellState }) {
   const systemLocale = state.localeChoice === null ? state.locale : null;
+  const { prefs, loginItem } = state.app;
+  const [loginFailed, setLoginFailed] = useState(false);
+  const store = async (next: AppPrefs) => {
+    const result = await bridge.setAppPrefs(next);
+    setLoginFailed(!result.ok && next.openAtLogin !== prefs.openAtLogin);
+  };
+  const loginNote = loginItem === "unsupported" ? t("desktop.loginItemUnsupported")
+    : loginFailed ? t("desktop.loginItemFailed")
+    : prefs.openAtLogin && loginItem === "requires-approval" ? t("desktop.loginItemApproval") : null;
   return <section className="settings-section shell-card">
     <SettingsSectionHead icon={<Languages/>} title={t("desktop.sectionGeneral")}/>
     <div className="shell-controls">
@@ -41,6 +50,14 @@ function GeneralSection({ bridge, state }: { bridge: ShellBridge; state: ShellSt
           <option value="cs">{LOCALE_NAMES.cs}</option>
           <option value="en">{LOCALE_NAMES.en}</option>
         </select>
+      </SettingControl>
+      <SettingControl title={t("desktop.openAtLogin")} text={t("desktop.openAtLoginText")}>
+        <span className="switch"><input type="checkbox" checked={prefs.openAtLogin} disabled={loginItem === "unsupported"}
+          onChange={(event) => void store({ ...prefs, openAtLogin: event.target.checked })}/><span/></span>
+      </SettingControl>
+      {loginNote && <p className={`shell-probe ${loginItem === "unsupported" ? "" : "bad"}`}><TriangleAlert/><span>{loginNote}</span></p>}
+      <SettingControl title={t("desktop.checkUpdates")} text={t("desktop.checkUpdatesText")}>
+        <span className="switch"><input type="checkbox" checked={prefs.checkUpdates} onChange={(event) => void store({ ...prefs, checkUpdates: event.target.checked })}/><span/></span>
       </SettingControl>
     </div>
   </section>;
@@ -226,7 +243,7 @@ function ResetSection({ bridge, state }: { bridge: ShellBridge; state: ShellStat
   </section>;
 }
 
-function AboutSection({ state }: { state: ShellState }) {
+function AboutSection({ bridge, state }: { bridge: ShellBridge; state: ShellState }) {
   const connection = state.screen.kind === "connected" ? state.connection : null;
   const mode = !connection ? t("desktop.notConnected")
     : [connection.restricted ? t("desktop.modeRestricted") : t("desktop.modeStandard"), connection.secure ? t("desktop.modeSecure") : ""].filter(Boolean).join(" · ");
@@ -234,6 +251,8 @@ function AboutSection({ state }: { state: ShellState }) {
     <SettingsSectionHead icon={<Info/>} title={t("desktop.sectionAbout")}/>
     <dl className="shell-facts">
       <dt>{t("desktop.appVersion")}</dt><dd>{state.appVersion}</dd>
+      {state.app.update && <><dt>{t("desktop.updateAvailable")}</dt>
+        <dd><button type="button" onClick={() => bridge.openUpdate()}><Download/> {t("desktop.updateDownload", { version: state.app.update.version })}</button></dd></>}
       <dt>{t("desktop.serverVersion")}</dt><dd>{connection ? `${connection.version} · ${connection.name || t("desktop.thisMac")}` : t("desktop.notConnected")}</dd>
       <dt>{t("desktop.mode")}</dt><dd>{mode}</dd>
       {state.local.ffmpeg && <><dt>{t("desktop.ffmpeg")}</dt><dd>{state.local.ffmpeg}</dd></>}

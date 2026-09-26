@@ -25,6 +25,7 @@ const baseState = (over: Partial<ShellState> = {}): ShellState => ({
     settings: { allowPrivateAddons: false, publish: false, publishPort: 8091, downloadDir: null }, running: false, addresses: [], ffmpeg: null, busy: false,
     downloadDir: "/Users/me/Library/Application Support/Stremio Offline/downloads", suggestedDownloadDir: "/Users/me/Movies/Stremio Offline", initialized: true, downloadDirOwned: true,
   },
+  app: { prefs: { openAtLogin: false, checkUpdates: true }, loginItem: "not-registered", update: null },
   toast: null, ...over,
 });
 
@@ -41,6 +42,8 @@ const makeBridge = (view: ShellView, state: ShellState) => {
     setLocalSettings: vi.fn(async () => ({ ok: true, restartNeeded: true })),
     restartLocal: vi.fn(async () => ({ ok: true })),
     setLocale: vi.fn(async () => undefined),
+    setAppPrefs: vi.fn(async () => ({ ok: true })),
+    openUpdate: vi.fn(),
     openSettings: vi.fn(), toastAction: vi.fn(), dismissToast: vi.fn(), copyText: vi.fn(),
     pickFolder: vi.fn(async () => "/Volumes/Films"),
     prepareDownloadDir: vi.fn(async (dir: string) => ({ ok: true as const, dir })),
@@ -58,6 +61,8 @@ const button = (text: string) => {
   expect(found, `"${text}" is on screen`).toBeTruthy();
   return found!;
 };
+// The General section's two switches come first; sharing is the first of This Mac's.
+const shareSwitch = () => host.querySelectorAll<HTMLInputElement>(".shell-controls input[type=checkbox]")[2]!;
 const click = async (element: HTMLElement) => { await act(async () => { element.click(); await Promise.resolve(); }); };
 const type = async (input: HTMLInputElement, value: string) => {
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
@@ -136,7 +141,7 @@ it("a restart while something plays asks first", async () => {
   const state = baseState({ local: { ...baseState().local, running: true, busy: true } });
   const bridge = makeBridge("settings", state);
   await render(bridge);
-  await click(host.querySelector<HTMLInputElement>(".shell-controls input[type=checkbox]")!.closest("label")!);
+  await click(shareSwitch().closest("label")!);
   await act(async () => { await Promise.resolve(); });
   await click(button("Restart the server"));
   expect(bridge.restartLocal).not.toHaveBeenCalled();
@@ -238,4 +243,32 @@ it("reset offers no Trash for a download folder the app did not create", async (
   expect(host.querySelectorAll(".shell-check input")).toHaveLength(1);
   await click(button("Reset this Mac…"));
   expect(bridge.resetLocal).toHaveBeenLastCalledWith({ deleteDownloads: false, forgetServers: false });
+});
+
+it("the login item and the update check are switches that store both choices", async () => {
+  const bridge = makeBridge("settings", baseState());
+  await render(bridge);
+  const [login, updates] = [...host.querySelectorAll<HTMLInputElement>(".switch input")];
+  await click(login!);
+  expect(bridge.setAppPrefs).toHaveBeenLastCalledWith({ openAtLogin: true, checkUpdates: true });
+  await click(updates!);
+  expect(bridge.setAppPrefs).toHaveBeenLastCalledWith({ openAtLogin: false, checkUpdates: false });
+});
+
+it("a login item waiting for approval says where to allow it, and an unsupported one is off", async () => {
+  const approval = makeBridge("settings", baseState({ app: { prefs: { openAtLogin: true, checkUpdates: true }, loginItem: "requires-approval", update: null } }));
+  await render(approval);
+  expect(host.textContent).toContain("Login Items");
+  act(() => root.unmount());
+  root = createRoot(host);
+  await render(makeBridge("settings", baseState({ app: { prefs: { openAtLogin: false, checkUpdates: true }, loginItem: "unsupported", update: null } })));
+  expect(host.querySelector<HTMLInputElement>(".switch input")!.disabled).toBe(true);
+  expect(host.textContent).toContain("Not available in this build.");
+});
+
+it("a newer release shows in About and opens through the shell", async () => {
+  const bridge = makeBridge("settings", baseState({ app: { prefs: { openAtLogin: false, checkUpdates: true }, loginItem: "not-registered", update: { version: "0.4.90", url: "https://github.com/NickRabit/stremio-offline/releases/tag/v0.4.90" } } }));
+  await render(bridge);
+  await click(button("Download 0.4.90"));
+  expect(bridge.openUpdate).toHaveBeenCalled();
 });
