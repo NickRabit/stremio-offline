@@ -74,6 +74,7 @@ endpoint `/api/status`, which must return `{"status":"ok",…}`.
 | Backlog and product direction | [docs/roadmap.md](docs/roadmap.md) |
 | Environment variables | [docs/configuration.md](docs/configuration.md) |
 | Accounts, roles and per-user access | [docs/users.md](docs/users.md) |
+| Licences of what is distributed (FFmpeg, bundled packages) | [docs/licensing.md](docs/licensing.md) |
 | Contributor workflow | [CONTRIBUTING.md](CONTRIBUTING.md) |
 
 Some working documents are deliberately untracked (see `.gitignore`). Read them

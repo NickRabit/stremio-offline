@@ -1,12 +1,12 @@
 {
   "name": "@stremio-offline/web",
   "private": true,
-  "version": "0.4.82",
+  "version": "0.4.83",
   "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && vite build && node scripts/third-party-licenses.mjs",
     "test": "vitest run",
     "test:watch": "vitest"
   },

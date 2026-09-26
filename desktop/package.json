@@ -1,7 +1,7 @@
 {
   "name": "@stremio-offline/desktop",
   "private": true,
-  "version": "0.4.82",
+  "version": "0.4.83",
   "description": "Desktop client for connecting to Stremio Offline servers",
   "author": "Stremio Offline contributors",
   "license": "MIT",
@@ -44,6 +44,16 @@
     "directories": {
       "output": "release"
     },
+    "extraResources": [
+      {
+        "from": "../node_modules/electron/dist/LICENSE",
+        "to": "LICENSE.electron.txt"
+      },
+      {
+        "from": "../node_modules/electron/dist/LICENSES.chromium.html",
+        "to": "LICENSES.chromium.html"
+      }
+    ],
     "files": [
       "dist/**/*.js",
       "static/connection.html",
