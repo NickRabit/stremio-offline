@@ -111,7 +111,7 @@ jobs:
 
           ## Desktop app (macOS, Apple Silicon)
 
-          `Stremio-Offline-<version>-arm64-unsigned.dmg` is not signed with an Apple Developer ID, so macOS refuses the first launch. Open it once with a right-click on the app → **Open**, or **System Settings → Privacy & Security → Open Anyway**.
+          `Stremio-Offline-<version>-arm64-unsigned.dmg` is not signed with an Apple Developer ID, so macOS refuses the first launch. Allow it once in **System Settings → Privacy & Security → Open Anyway** (on macOS 14 and older, right-click the app → **Open**). [docs/install-mac.md](https://github.com/NickRabit/stremio-offline/blob/main/docs/install-mac.md) walks through it.
 
           The app includes FFmpeg, built LGPL-3.0-or-later with OpenSSL; the `ffmpeg-*` and `openssl-*` archives attached here are the exact sources it was built from (see `docs/licensing.md`).
           NOTES

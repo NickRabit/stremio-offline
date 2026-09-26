@@ -28,6 +28,8 @@
     probe: (origin: string) => ipcRenderer.invoke("shell:probe", origin),
     setLocalSettings: (settings: unknown) => ipcRenderer.invoke("shell:setLocalSettings", settings),
     restartLocal: () => ipcRenderer.invoke("shell:restartLocal"),
+    setAppPrefs: (prefs: unknown) => ipcRenderer.invoke("shell:setAppPrefs", prefs),
+    openUpdate: () => ipcRenderer.send("shell:openUpdate"),
     setLocale: (locale: unknown) => ipcRenderer.invoke("shell:setLocale", locale),
     openSettings: () => ipcRenderer.send("shell:openSettings"),
     toastAction: (id: number) => ipcRenderer.send("shell:toastAction", id),

@@ -1,4 +1,4 @@
-import { app, BaseWindow, BrowserWindow, clipboard, dialog, ipcMain, Menu, Notification, powerSaveBlocker, screen, session, shell as electronShell, utilityProcess, WebContentsView, type IpcMainEvent, type IpcMainInvokeEvent } from "electron";
+import { app, BaseWindow, BrowserWindow, clipboard, dialog, ipcMain, Menu, Notification, powerSaveBlocker, screen, session, shell as electronShell, utilityProcess, WebContentsView, type IpcMainEvent, type IpcMainInvokeEvent, type MessageBoxOptions, type MessageBoxReturnValue, type OpenDialogOptions, type OpenDialogReturnValue } from "electron";
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { unlink } from "node:fs/promises";
@@ -26,13 +26,14 @@ import { buildMenuTemplate } from "./menu.js";
 import { externalBrowserUrl, httpAllowedHost, parseServerOrigin, partitionForOrigin, type ServerOrigin } from "./origin.js";
 import { localPageSent } from "./bridge-sender.js";
 import { SettingsWindow } from "./settings-window.js";
-import type { FailureReason, MainScreen, ProfileResult, ProbeResult, ShellState, Target, Toast } from "./shell-api.js";
+import type { AppPrefs, FailureReason, LoginItemStatus, MainScreen, ProfileResult, ProbeResult, ShellState, Target, Toast } from "./shell-api.js";
 import { effectiveLocale, readShellPrefs, readShellPrefsSync, writeShellPrefs, type ShellLocale } from "./shell-prefs.js";
 import { downloadFraction, nextToastId, safeFileName } from "./shell-text.js";
 import { SerialQueue } from "./serial-queue.js";
 import { SleepGuard } from "./sleep-guard.js";
 import { MAX_TARGET_ID, LatestRequest, fallbackApplies, launchPlan, readStartupChoice, writeStartupChoice, STARTUP_FILE } from "./startup.js";
 import { fetchStatus, type ProbeFailure } from "./status.js";
+import { checkForUpdate, readRelease, UPDATE_FEED_URL, type Release } from "./update-check.js";
 import { Debounced, DEFAULT_SIZE, MIN_SIZE, readWindowState, restoreBounds, writeWindowState, type WindowState } from "./window-state.js";
 
 const ALLOWED_PERMISSIONS = new Set<string>(["fullscreen", "clipboard-sanitized-write"]);
@@ -42,6 +43,8 @@ const RETIRE_TIMEOUT_MS = 1_500;
 const PROBE_TIMEOUT_MS = 4_000;
 const REPOLL_INTERVAL_MS = 30_000;
 const TOAST_TIMEOUT_MS = 8_000;
+const UPDATE_INTERVAL_MS = 24 * 60 * 60_000;
+const UPDATE_TIMEOUT_MS = 5_000;
 const MAX_CLIPBOARD_TEXT = 2_000;
 const APP_NAME = "Stremio Offline";
 const WINDOW_BACKGROUND = "#0b0e13";
@@ -97,10 +100,16 @@ let localBackend: LocalBackend | null = null;
 let localConnection: LocalBackendConnection | null = null;
 /** The last streaming report from the running backend. */
 let localStreaming = false;
+/** The last downloading report from the running backend. */
+let localDownloading = false;
 let ffmpegLine: string | null = null;
 const sleepGuard = new SleepGuard(powerSaveBlocker);
 /** Quitting retires the page itself, so a window closing on the way out does not wait for it again. */
 let quitting = false;
+/** The user said yes in the quit dialog; the next `before-quit` goes through. */
+let quitConfirmed = false;
+/** The quit dialog itself, so a second `before-quit` waits for it instead of opening another. */
+let quitPrompt: Promise<void> | null = null;
 const preparedPartitions = new Set<string>();
 let profileStore: ProfileStore = { profiles: [], selectedProfileId: null };
 let localSettings: LocalSettings = defaultLocalSettings();
@@ -114,6 +123,9 @@ const requests = new LatestRequest();
 let repoll: NodeJS.Timeout | null = null;
 let repollNotified = false;
 let toastTimer: NodeJS.Timeout | null = null;
+let updateTimer: NodeJS.Timeout | null = null;
+/** The version this launch has already announced, so the same one is not shown twice. */
+let updateNotified: string | null = null;
 
 const shellState: ShellState = {
   locale: "en",
@@ -134,6 +146,11 @@ const shellState: ShellState = {
     initialized: false,
     downloadDirOwned: false,
   },
+  app: {
+    prefs: { openAtLogin: false, checkUpdates: true },
+    loginItem: "unsupported",
+    update: null,
+  },
   toast: null,
 };
 
@@ -144,7 +161,32 @@ const settingsWindow = new SettingsWindow({
   title: () => catalogue(shellState.locale)["settings.title"],
 });
 
-const openSettings = (): void => settingsWindow.open();
+/** The four answers macOS gives; anything else, or a call that throws, is `unsupported`. */
+const LOGIN_ITEM_STATUSES = new Set<string>(["enabled", "not-registered", "requires-approval", "not-found"]);
+
+/** The login item is the OS's to remember: it is read back rather than stored, and a development
+ *  run cannot register the Electron binary, so it has no answer at all. */
+const refreshLoginItem = (): void => {
+  let openAtLogin = false;
+  let status: string | null = null;
+  try {
+    const settings = app.getLoginItemSettings();
+    openAtLogin = settings.openAtLogin === true;
+    status = typeof settings.status === "string" ? settings.status : null;
+  } catch {
+    status = null;
+  }
+  const loginItem: LoginItemStatus = !app.isPackaged || status === null || !LOGIN_ITEM_STATUSES.has(status)
+    ? "unsupported"
+    : status as LoginItemStatus;
+  shellState.app = { ...shellState.app, prefs: { ...shellState.app.prefs, openAtLogin }, loginItem };
+};
+
+const openSettings = (): void => {
+  refreshLoginItem();
+  settingsWindow.open();
+  pushState();
+};
 
 const targetKey = (target: Target | null): string =>
   target === null ? "-" : target.kind === "local" ? "local" : `profile:${target.id}`;
@@ -196,7 +238,8 @@ const applyMenu = (): void => {
 const sameLocalSettings = (a: LocalSettings, b: LocalSettings) =>
   a.allowPrivateAddons === b.allowPrivateAddons && a.publish === b.publish && a.publishPort === b.publishPort;
 
-const syncAwake = () => sleepGuard.update({ published: localConnection?.published === true, streaming: localStreaming });
+const syncAwake = () =>
+  sleepGuard.update({ published: localConnection?.published === true, streaming: localStreaming, downloading: localDownloading });
 
 const pageMode = (): PageMode =>
   shellState.screen.kind !== "connected" ? "shell" : remoteFullscreen ? "fullscreen" : "remote";
@@ -246,7 +289,7 @@ const refreshLocal = () => {
     running: localConnection !== null,
     addresses: localConnection?.addresses ?? [],
     ffmpeg: ffmpegLine,
-    busy: localStreaming || deviceDownloads.size > 0,
+    busy: localStreaming || localDownloading || deviceDownloads.size > 0,
     downloadDir: effectiveDownloadDir(),
     suggestedDownloadDir: path.join(app.getPath("videos"), "Stremio Offline"),
     initialized: localInitialized,
@@ -255,16 +298,17 @@ const refreshLocal = () => {
 };
 
 const pushState = () => {
-  const current = shell;
-  if (!current) return;
   refreshLocal();
-  applyLayout();
   applyMenu();
-  for (const view of [current.page, current.toast]) {
-    if (!view.webContents.isDestroyed()) view.webContents.send("shell:state", shellState);
+  const current = shell;
+  if (current) {
+    applyLayout();
+    for (const view of [current.page, current.toast]) {
+      if (!view.webContents.isDestroyed()) view.webContents.send("shell:state", shellState);
+    }
+    current.window.setTitle(titleFor(shellState.screen));
   }
   settingsWindow.push(shellState);
-  current.window.setTitle(titleFor(shellState.screen));
 };
 
 const setScreen = (screen: MainScreen) => {
@@ -283,8 +327,9 @@ const showToast = (toast: Toast) => {
   if (toastTimer) { clearTimeout(toastTimer); toastTimer = null; }
   shellState.toast = toast;
   pushState();
-  // A fallback stays until it is dismissed or acted on; everything else goes by itself.
-  if (toast.kind === "fallback") return;
+  // A fallback and an update notice stay until they are dismissed or acted on; the rest go by
+  // themselves.
+  if (toast.kind === "fallback" || toast.kind === "update") return;
   toastTimer = setTimeout(() => {
     toastTimer = null;
     if (shellState.toast?.id !== toast.id) return;
@@ -317,8 +362,8 @@ const updateDownloadProgress = () => {
 };
 
 const notifyDownload = (kind: "download-done" | "download-failed", file: string) => {
-  const current = shell;
-  if (!current || current.window.isFocused()) return;
+  // With the window closed a notification is the only word the user gets.
+  if (shell?.window.isFocused()) return;
   if (!Notification.isSupported()) return;
   const strings = catalogue(shellState.locale);
   const body = (kind === "download-done" ? strings["notify.downloadDone"] : strings["notify.downloadFailed"]).replace("{file}", file);
@@ -519,6 +564,7 @@ const localOrigin = (): string | null => localConnection?.server.origin ?? null;
 const closeLocalBackend = async (): Promise<void> => {
   localConnection = null;
   localStreaming = false;
+  localDownloading = false;
   syncAwake();
   const backend = localBackend;
   if (!backend) return;
@@ -555,8 +601,12 @@ const startLocal = async (ticket: number, target: Target, fallback: { profileNam
     return;
   }
   if (!requests.isCurrent(ticket)) { await closeLocalBackend(); return; }
+  // A backend that was already running keeps its last report; a fresh one reports within a tick.
+  if (connection !== localConnection) {
+    localStreaming = false;
+    localDownloading = false;
+  }
   localConnection = connection;
-  localStreaming = false;
   refreshInitialized();
   syncAwake();
   if (shell?.remotePartition !== LOCAL_PARTITION) await retireRemote();
@@ -662,6 +712,9 @@ const needsSetup = (): boolean => !localInitialized && localSettings.downloadDir
 let setupReturn: Target | null = null;
 
 const connectTarget = (target: Target, options: { launch: boolean }): Promise<void> => {
+  // With the window closed a connection has nowhere to show, and the local backend would be
+  // stopped for it: the window comes back first, on this target.
+  if (!shell) return showMainWindow(target);
   const ticket = requests.next();
   return queue.run(async () => {
     stopRepoll();
@@ -696,7 +749,8 @@ const connectTarget = (target: Target, options: { launch: boolean }): Promise<vo
 
 const restartLocal = async (): Promise<{ ok: boolean }> => {
   const connection = shellState.connection;
-  const showingLocal = shellState.screen.kind === "connected" && connection?.target.kind === "local";
+  // With the window closed there is no page to reload, only a backend to restart.
+  const showingLocal = shell !== null && shellState.screen.kind === "connected" && connection?.target.kind === "local";
   const backend = localBackend;
   if (showingLocal) {
     // A stand-in stays a stand-in: the profile it replaces and its re-poll carry on.
@@ -788,10 +842,53 @@ const createShell = (saved: WindowState | null) => {
     retired = true;
     void retireRemote().finally(() => window.close());
   });
-  window.on("closed", () => { shell = null; settingsWindow.close(); });
+  window.on("closed", () => {
+    // A closed BaseWindow leaves its views' contents alive, and the app now outlives its window:
+    // without this every close would leave a shell page, a toast and a server page behind.
+    const closing = shell;
+    shell = null;
+    for (const view of [closing?.page, closing?.toast, closing?.remote]) {
+      if (view && !view.webContents.isDestroyed()) view.webContents.close();
+    }
+    settingsWindow.close();
+  });
   shell = { window, page, toast, remote: null, remotePartition: null };
   if (restored.maximized) window.maximize();
   pushState();
+};
+
+/** The window the app puts back when there is none: a Dock click, a second launch or a connect.
+ *  It comes back on the target asked for, else on what was connected -- the local backend
+ *  usually still runs, perhaps standing in for a profile -- else the remembered choice. */
+const showMainWindow = (asked?: Target): Promise<void> => {
+  const existing = shell;
+  if (existing) {
+    if (existing.window.isMinimized()) existing.window.restore();
+    existing.window.focus();
+    return asked ? connectTarget(asked, { launch: false }) : Promise.resolve();
+  }
+  return readWindowState(app.getPath("userData"), "main").then(async (saved) => {
+    if (shell) { if (asked) await connectTarget(asked, { launch: false }); return; }
+    const connection = shellState.connection;
+    const localShown = localConnection !== null && connection?.target.kind === "local";
+    const chosen = shellState.chosen;
+    const standIn = !asked && localShown && connection.fallbackFrom !== null && chosen?.kind === "profile"
+      ? findProfile(profileStore, chosen.id) : null;
+    const target: Target | null = asked ?? (localShown ? { kind: "local" } : chosen);
+    const profile = target?.kind === "profile" ? findProfile(profileStore, target.id) : null;
+    // The window opens already saying where it goes, never on the screen it was closed with.
+    shellState.screen = target
+      ? { kind: "connecting", target, name: profile?.name ?? "", origin: profile?.origin ?? null }
+      : { kind: "welcome" };
+    createShell(saved);
+    if (standIn && chosen) {
+      // Still standing in: the profile stays the remembered choice and its re-poll carries on.
+      const ticket = requests.next();
+      await queue.run(() => startLocal(ticket, chosen, { profileName: standIn.name, origin: standIn.origin }, false));
+      return;
+    }
+    if (target) await connectTarget(target, { launch: false });
+  });
 };
 
 const fromShellPage = (event: IpcMainInvokeEvent | IpcMainEvent): boolean => {
@@ -805,17 +902,23 @@ const assertShellSender = (event: IpcMainInvokeEvent | IpcMainEvent) => {
   if (!fromShellPage(event)) throw new Error("shell: unexpected sender");
 };
 
-/** The window a native dialog belongs to: the settings window when it asked, the main one else. */
-const senderWindow = (event: IpcMainInvokeEvent): BaseWindow => {
+/** The window a native dialog belongs to: the settings window when it asked, the main one else.
+ *  Null while there is no main window, which a dialog tolerates. */
+const senderWindow = (event: IpcMainInvokeEvent): BaseWindow | null => {
   const settingsContents = settingsWindow.contents;
   if (settingsContents !== null && event.sender === settingsContents) {
     const settingsBrowserWindow = BrowserWindow.fromWebContents(event.sender);
     if (settingsBrowserWindow !== null) return settingsBrowserWindow;
   }
-  const current = shell;
-  if (!current) throw new Error("shell: no window for the dialog");
-  return current.window;
+  return shell?.window ?? null;
 };
+
+/** The same dialogs, attached to the sender's window only when there is one. */
+const showMessageBox = (owner: BaseWindow | null, options: MessageBoxOptions): Promise<MessageBoxReturnValue> =>
+  owner === null ? dialog.showMessageBox(options) : dialog.showMessageBox(owner, options);
+
+const showOpenDialog = (owner: BaseWindow | null, options: OpenDialogOptions): Promise<OpenDialogReturnValue> =>
+  owner === null ? dialog.showOpenDialog(options) : dialog.showOpenDialog(owner, options);
 
 /** Stops the local server, moves its data to the Trash and puts the app back on the welcome screen. */
 const resetLocal = async (
@@ -831,7 +934,7 @@ const resetLocal = async (
     trashDownloads ? strings["reset.detailDownloads"].replace("{dir}", shownDir) : strings["reset.detailKeepsFilms"],
     ...(options.forgetServers ? [strings["reset.detailServers"]] : []),
   ].join("\n\n");
-  const answer = await dialog.showMessageBox(senderWindow(event), {
+  const answer = await showMessageBox(senderWindow(event), {
     type: "warning",
     buttons: [strings["reset.confirm"], strings["reset.cancel"]],
     defaultId: 1,
@@ -945,6 +1048,82 @@ const deleteProfile = (id: string | null): Promise<{ ok: boolean }> =>
     return { ok: true };
   });
 
+/** Exactly the two switches, both booleans; anything else is a page that has drifted. */
+const parseAppPrefs = (value: unknown): AppPrefs | null => {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const keys = Object.keys(record);
+  if (keys.length !== 2 || !keys.includes("openAtLogin") || !keys.includes("checkUpdates")) return null;
+  if (typeof record.openAtLogin !== "boolean" || typeof record.checkUpdates !== "boolean") return null;
+  return { openAtLogin: record.openAtLogin, checkUpdates: record.checkUpdates };
+};
+
+/** The feed to ask, which a development run may point at a rehearsal server. */
+const updateFeedUrl = (): string => {
+  if (app.isPackaged) return UPDATE_FEED_URL;
+  const override = process.env.STREMIO_OFFLINE_UPDATE_FEED?.trim() ?? "";
+  return override.length > 0 ? override : UPDATE_FEED_URL;
+};
+
+const runUpdateCheck = async (): Promise<void> => {
+  if (!shellState.app.prefs.checkUpdates) return;
+  const release = await checkForUpdate(shellState.appVersion, fetch, updateFeedUrl(), UPDATE_TIMEOUT_MS);
+  // The switch may have gone off while the feed was being asked.
+  if (!shellState.app.prefs.checkUpdates) return;
+  shellState.app = { ...shellState.app, update: release ? { version: release.version, url: release.url } : null };
+  if (release && release.version !== updateNotified) {
+    updateNotified = release.version;
+    showToast({ id: nextToastId(), kind: "update", version: release.version });
+  }
+  pushState();
+};
+
+/** Turning the check off forgets the release it found and stops asking; turning it on asks now. */
+const syncUpdateChecks = (enabled: boolean): void => {
+  if (updateTimer) { clearInterval(updateTimer); updateTimer = null; }
+  if (!enabled) {
+    if (shellState.app.update !== null) shellState.app = { ...shellState.app, update: null };
+    return;
+  }
+  void runUpdateCheck();
+  updateTimer = setInterval(() => void runUpdateCheck(), UPDATE_INTERVAL_MS);
+  updateTimer.unref();
+};
+
+/** Opens the release page of the announced update, and only a link the feed accepted. */
+const openUpdatePage = (): void => {
+  const update = shellState.app.update;
+  if (update === null) return;
+  const release: Release | null = readRelease({ tag_name: update.version, html_url: update.url });
+  if (release === null) return;
+  void electronShell.openExternal(release.url).catch(() => {});
+};
+
+const applyAppPrefs = async (prefs: AppPrefs): Promise<{ ok: boolean }> => {
+  const previous = shellState.app.prefs;
+  let ok = true;
+  if (prefs.openAtLogin !== previous.openAtLogin) {
+    if (!app.isPackaged) {
+      // A development run would register the Electron binary itself as a login item.
+      ok = false;
+    } else {
+      try {
+        app.setLoginItemSettings({ openAtLogin: prefs.openAtLogin });
+      } catch {
+        ok = false;
+      }
+    }
+  }
+  refreshLoginItem();
+  shellState.app = { ...shellState.app, prefs: { ...shellState.app.prefs, checkUpdates: prefs.checkUpdates } };
+  await queue.run(async () => {
+    await writeShellPrefs(app.getPath("userData"), { locale: shellState.localeChoice, checkUpdates: prefs.checkUpdates });
+  });
+  if (prefs.checkUpdates !== previous.checkUpdates) syncUpdateChecks(prefs.checkUpdates);
+  pushState();
+  return { ok };
+};
+
 const registerHandlers = () => {
   ipcMain.handle("shell:getState", (event) => {
     assertShellSender(event);
@@ -1028,11 +1207,23 @@ const registerHandlers = () => {
     if (input !== null && input !== "cs" && input !== "en") throw new Error("shell: invalid locale");
     const choice = input as ShellLocale | null;
     await queue.run(async () => {
-      await writeShellPrefs(app.getPath("userData"), { locale: choice });
+      await writeShellPrefs(app.getPath("userData"), { locale: choice, checkUpdates: shellState.app.prefs.checkUpdates });
     });
     shellState.localeChoice = choice;
     shellState.locale = effectiveLocale(choice, app.getLocale());
     pushState();
+  });
+
+  ipcMain.handle("shell:setAppPrefs", async (event, input: unknown): Promise<{ ok: boolean }> => {
+    assertShellSender(event);
+    const prefs = parseAppPrefs(input);
+    if (!prefs) return { ok: false };
+    return applyAppPrefs(prefs);
+  });
+
+  ipcMain.on("shell:openUpdate", (event) => {
+    assertShellSender(event);
+    openUpdatePage();
   });
 
   ipcMain.on("shell:openSettings", (event) => {
@@ -1048,6 +1239,7 @@ const registerHandlers = () => {
     if ((toast.kind === "fallback" || toast.kind === "server-back") && shellState.chosen) {
       void connectTarget(shellState.chosen, { launch: false });
     }
+    if (toast.kind === "update") openUpdatePage();
     hideToast();
   });
 
@@ -1063,7 +1255,7 @@ const registerHandlers = () => {
 
   ipcMain.handle("shell:pickFolder", async (event, input: unknown): Promise<string | null> => {
     assertShellSender(event);
-    const result = await dialog.showOpenDialog(senderWindow(event), {
+    const result = await showOpenDialog(senderWindow(event), {
       properties: ["openDirectory", "createDirectory"],
       defaultPath: typeof input === "string" && path.isAbsolute(input) ? input : undefined,
     });
@@ -1105,7 +1297,8 @@ const registerHandlers = () => {
   });
 };
 
-app.on("window-all-closed", () => app.quit());
+// macOS convention: closing the window leaves the app in the Dock, its backend still downloading.
+app.on("window-all-closed", () => {});
 
 /** The first line of the bundled FFmpeg's build info, or null in a development run. */
 const readFfmpegLine = (resourcesDir: string | null): string | null => {
@@ -1124,8 +1317,19 @@ const createLocalBackend = (): LocalBackend => new LocalBackend({
   fork: (entry, options) => utilityProcess.fork(entry, [], options),
   probeStatus: fetchStatus,
   tools: bundledMediaTools(app.isPackaged ? process.resourcesPath : null),
-  onActivity: (streaming) => { localStreaming = streaming; syncAwake(); pushState(); },
-  onUnexpectedExit: () => { localConnection = null; localStreaming = false; syncAwake(); failConnected("local-startup"); },
+  onActivity: (activity) => {
+    localStreaming = activity.streaming;
+    localDownloading = activity.downloading;
+    syncAwake();
+    pushState();
+  },
+  onUnexpectedExit: () => {
+    localConnection = null;
+    localStreaming = false;
+    localDownloading = false;
+    syncAwake();
+    failConnected("local-startup");
+  },
   log: (line) => console.warn("local backend: " + line),
 });
 
@@ -1157,26 +1361,43 @@ if (process.argv.includes(SMOKE_LOCAL_BACKEND)) {
   void app.whenReady().then(runLocalBackendSmoke);
 } else if (app.requestSingleInstanceLock()) {
   // A second launch must not start a second backend against the same instance directory.
-  app.on("second-instance", () => {
-    const current = shell;
-    if (!current) return;
-    if (current.window.isMinimized()) current.window.restore();
-    current.window.focus();
-  });
+  app.on("second-instance", () => { void showMainWindow(); });
 
-  app.on("activate", () => {
-    if (shell) return;
-    void readWindowState(app.getPath("userData"), "main").then((saved) => { if (!shell) createShell(saved); });
-  });
+  app.on("activate", () => { void showMainWindow(); });
 
   let backendShutdownComplete = false;
   let backendShutdown: Promise<void> | null = null;
+
+  /** The quit the user has to confirm while this Mac still has a download or a stream in flight. */
+  const confirmQuit = async (): Promise<void> => {
+    const strings = catalogue(shellState.locale);
+    const answer = await showMessageBox(shell?.window ?? null, {
+      type: "warning",
+      buttons: [strings["quit.confirm"], strings["quit.cancel"]],
+      defaultId: 1,
+      cancelId: 1,
+      message: strings["quit.title"],
+      detail: strings["quit.detail"],
+    });
+    if (answer.response !== 0) return;
+    quitConfirmed = true;
+    app.quit();
+  };
+
   app.on("before-quit", (event) => {
     if (backendShutdownComplete) return;
+    refreshLocal();
+    if (!quitConfirmed && shellState.local.busy) {
+      event.preventDefault();
+      if (quitPrompt) return;
+      quitPrompt = confirmQuit().catch(() => {}).finally(() => { quitPrompt = null; });
+      return;
+    }
     event.preventDefault();
     if (backendShutdown) return;
     quitting = true;
     localStreaming = false;
+    localDownloading = false;
     syncAwake();
     backendShutdown = retireRemote().then(closeLocalBackend).finally(() => {
       backendShutdownComplete = true;
@@ -1194,6 +1415,7 @@ if (process.argv.includes(SMOKE_LOCAL_BACKEND)) {
     shellState.localeChoice = prefs.locale;
     shellState.locale = effectiveLocale(prefs.locale, app.getLocale());
     shellState.appVersion = app.getVersion();
+    refreshLoginItem();
     ffmpegLine = readFfmpegLine(app.isPackaged ? process.resourcesPath : null);
     localBackend = createLocalBackend();
     registerHandlers();
@@ -1215,6 +1437,7 @@ if (process.argv.includes(SMOKE_LOCAL_BACKEND)) {
       shellState.screen = { kind: "connecting", target: plan.target, name: profile?.name ?? "", origin: profile?.origin ?? null };
     }
     createShell(savedWindow);
+    syncUpdateChecks(prefs.checkUpdates);
     if (plan.screen === "connect") void connectTarget(plan.target, { launch: true });
   });
 } else {

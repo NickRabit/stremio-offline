@@ -4,7 +4,8 @@ export interface SleepBlocker {
   stop(id: number): void;
 }
 
-/** One blocker at most, held only while the local backend is shared and something streams. */
+/** One blocker at most, held while the local backend downloads, or is shared and something
+ *  streams: a sleeping Mac would cut a download off from the network. */
 export class SleepGuard {
   private id: number | null = null;
 
@@ -14,8 +15,8 @@ export class SleepGuard {
     return this.id !== null;
   }
 
-  update(state: { published: boolean; streaming: boolean }): void {
-    if (!state.published || !state.streaming) return this.release();
+  update(state: { published: boolean; streaming: boolean; downloading: boolean }): void {
+    if (!state.downloading && !(state.published && state.streaming)) return this.release();
     if (this.id === null) this.id = this.blocker.start("prevent-app-suspension");
   }
 

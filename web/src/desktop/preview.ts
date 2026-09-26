@@ -14,13 +14,13 @@ export function previewBridge(search: string): ShellBridge | null {
   let state: ShellState = {
     locale: query.get("locale") === "en" ? "en" : "cs",
     localeChoice: null,
-    appVersion: "0.4.86",
+    appVersion: "0.4.87",
     screen: screenKind === "connecting" ? { kind: "connecting", target: nas, name: "NAS v obýváku", origin: "http://192.168.1.20:8090" }
       : screenKind === "error" ? { kind: "error", target: nas, name: "NAS v obýváku", origin: "http://192.168.1.20:8090", reason: (query.get("reason") as never) ?? "unreachable", port: 8091 }
       : screenKind === "local" ? { kind: "connecting", target: { kind: "local" }, name: "", origin: null }
       : screenKind === "connected" ? { kind: "connected" }
       : { kind: "welcome" },
-    connection: { target: { kind: "local" }, name: "", origin: "http://127.0.0.1:51234", version: "0.4.86", restricted: false, secure: true, fallbackFrom: query.get("fallback") ? "NAS v obýváku" : null },
+    connection: { target: { kind: "local" }, name: "", origin: "http://127.0.0.1:51234", version: "0.4.87", restricted: false, secure: true, fallbackFrom: query.get("fallback") ? "NAS v obýváku" : null },
     chosen: nas,
     profiles: [
       { id: "nas", name: "NAS v obýváku", origin: "http://192.168.1.20:8090" },
@@ -37,8 +37,14 @@ export function previewBridge(search: string): ShellBridge | null {
       ffmpeg: "ffmpeg 9.0.2 + openssl 3.5.8, macOS 12.0, arm64",
       busy: query.get("busy") === "1",
     },
+    app: {
+      prefs: { openAtLogin: query.get("login") !== null, checkUpdates: true },
+      loginItem: (query.get("login") as never) ?? "not-registered",
+      update: query.get("update") ? { version: query.get("update")!, url: "https://github.com/NickRabit/stremio-offline/releases/latest" } : null,
+    },
     toast: view === "toast"
-      ? (query.get("toast") === "download-done" ? { id: 1, kind: "download-done", file: "Film.2021.mkv" } : { id: 1, kind: "fallback", server: "NAS v obýváku" })
+      ? (query.get("toast") === "download-done" ? { id: 1, kind: "download-done", file: "Film.2021.mkv" }
+        : query.get("toast") === "update" ? { id: 1, kind: "update", version: "0.4.90" } : { id: 1, kind: "fallback", server: "NAS v obýváku" })
       : null,
   };
   const listeners = new Set<(next: ShellState) => void>();
@@ -65,6 +71,8 @@ export function previewBridge(search: string): ShellBridge | null {
     probe: async (origin) => { await wait(600); return origin.includes("192.168.1.20") ? { ok: true, version: "0.4.84", restricted: false, secure: true } : { ok: false, reason: "unreachable" }; },
     setLocalSettings: async (settings) => { emit({ ...state, local: { ...state.local, settings } }); return { ok: true, restartNeeded: state.local.running }; },
     restartLocal: async () => { await wait(800); return { ok: true }; },
+    setAppPrefs: async (prefs) => { emit({ ...state, app: { ...state.app, prefs, loginItem: prefs.openAtLogin ? "enabled" : "not-registered" } }); return { ok: true }; },
+    openUpdate: () => undefined,
     setLocale: async (locale) => { emit({ ...state, locale: locale ?? "cs", localeChoice: locale }); },
     openSettings: () => undefined,
     toastAction: () => undefined,

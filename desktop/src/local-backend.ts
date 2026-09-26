@@ -98,8 +98,8 @@ export interface LocalBackendOptions {
   loopbackTaken?: (port: number) => Promise<boolean>;
   /** The FFmpeg the app carries, handed to the backend unless its environment names one. */
   tools?: MediaTools | null;
-  /** Whether anything is streaming through the running child, published or not. */
-  onActivity?: (streaming: boolean) => void;
+  /** What the running child reports about its traffic, published or not. */
+  onActivity?: (activity: { streaming: boolean; downloading: boolean }) => void;
   readyTimeoutMs?: number;
   stopTimeoutMs?: number;
   /** How a child that ignores the graceful signal is finished off. */
@@ -139,12 +139,14 @@ export function readErrorMessage(message: unknown): { code: string | null } | nu
   return { code: typeof record.code === "string" && record.code.length > 0 ? record.code : null };
 }
 
-/** The child reports whether anything is streaming, so the shell can hold the Mac awake. */
-export function readActivityMessage(message: unknown): boolean | null {
+/** The child reports what is streaming and downloading, so the shell can hold the Mac awake.
+ *  A report without a `downloading` flag comes from a child too old to send one. */
+export function readActivityMessage(message: unknown): { streaming: boolean; downloading: boolean } | null {
   if (typeof message !== "object" || message === null) return null;
   const record = message as Record<string, unknown>;
   if (record.type !== "activity") return null;
-  return typeof record.streaming === "boolean" ? record.streaming : null;
+  if (typeof record.streaming !== "boolean") return null;
+  return { streaming: record.streaming, downloading: record.downloading === true };
 }
 
 /** The name macOS announces over Bonjour. `os.hostname()` answers with HostName instead when one
@@ -455,8 +457,8 @@ export class LocalBackend {
     const onActivity = options.onActivity;
     if (onActivity) {
       child.on("message", (message) => {
-        const streaming = readActivityMessage(message);
-        if (streaming !== null) onActivity(streaming);
+        const activity = readActivityMessage(message);
+        if (activity !== null) onActivity(activity);
       });
     }
     this.connection = {
