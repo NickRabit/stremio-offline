@@ -940,12 +940,87 @@ test("a half of a spaced name may identify, but never binds on its own", () => {
   assert.equal(pickSuggestion([hit])?.id, "tt0076759", "but it can still be proposed");
 });
 
-test("a bilingual name whose halves match is proposed, not dropped", () => {
-  const parsed = parseMediaPath("Na hrane zitrka - Edge of Tomorrow");
-  const hit = scoreHit(parsed, { ...meta("Na hraně zítřka", 2014, "movie", "tt1631867"), originalTitle: "Edge of Tomorrow" }, "movie");
-  assert.equal(hit.sideMatch, true);
-  assert.equal(pickSuggestion([hit])?.id, "tt1631867");
-  assert.equal(autoAccept([hit]), undefined);
+test("both halves of a bilingual name naming one candidate are not a weaker half", () => {
+  const cases: Array<[string, MetaItem]> = [
+    ["Blockers - Kazisuci", { id: "tt-blockers", type: "movie", name: "Kazišuci", originalTitle: "Blockers", releaseInfo: "2018" }],
+    ["Na hrane zitrka - Edge of Tomorrow", { id: "tt1631867", type: "movie", name: "Na hraně zítřka", originalTitle: "Edge of Tomorrow", releaseInfo: "2014" }],
+    ["Dum kouzel - The House of Magic", { id: "tt-magic", type: "movie", name: "Dům kouzel", originalTitle: "The House of Magic", releaseInfo: "2013" }],
+    ["Zustan se mnou - If I Stay", { id: "tt-stay", type: "movie", name: "Zůstaň se mnou", originalTitle: "If I Stay", releaseInfo: "2014" }],
+  ];
+  for (const [name, candidate] of cases) {
+    const hit = scoreHit(parseMediaPath(name), candidate, "movie");
+    assert.equal(hit.sideMatch, undefined, `${name}: each half names the one candidate`);
+    assert.equal(autoAccept([hit])?.item.id, candidate.id, `${name} is bound`);
+  }
+
+  // The other half names nothing the candidate knows, so one half of the name is all there is.
+  const starWars = scoreHit(parseMediaPath("Star Wars - The Empire Strikes Back"), meta("Star Wars", 1977, "movie", "tt0076759"), "movie");
+  assert.equal(starWars.sideMatch, true);
+  assert.equal(autoAccept([starWars]), undefined);
+});
+
+test("a folder misspelt but named by its file is the film inside it", () => {
+  const only = (files: string[]) => titleUnits(files.map(file))[0]!;
+  const sherlock = scoreHit(
+    parseUnit(only(["Sherlock Holomes/Sherlock Holmes 2009 720p BRRip.mp4"])),
+    meta("Sherlock Holmes", 2009, "movie", "tt0988045"),
+    "movie",
+  );
+  assert.equal(sherlock.sideMatch, undefined, "the folder and the file spell the one name");
+  assert.equal(autoAccept([sherlock])?.item.id, "tt0988045");
+
+  const hanebni = scoreHit(
+    parseUnit(only(["Hanební parchanti/Hanebný pancharti.mkv"])),
+    { id: "tt0361748", type: "movie", name: "Hanebný pancharti", originalTitle: "Inglourious Basterds", releaseInfo: "2009" },
+    "movie",
+  );
+  assert.equal(hanebni.sideMatch, undefined, "two letters off is still the folder's own name");
+  assert.equal(autoAccept([hanebni])?.item.id, "tt0361748");
+
+  // A folder naming something else is not the film the file names, however well they each score.
+  const obsession = scoreHit(
+    parseUnit(only(["Obsession/The.Voices.2014.mkv"])),
+    meta("The Voices", 2014, "movie", "tt1567437"),
+    "movie",
+  );
+  assert.equal(obsession.sideMatch, true);
+  assert.equal(autoAccept([obsession]), undefined);
+});
+
+test("a whole-name match wins a tie with the head or the half of a longer name", () => {
+  const toyStory = scoreHit(
+    parseMediaPath("Toy Story 3"),
+    { id: "tt-ts3", type: "movie", name: "Toy Story 3: Příběh hraček", originalTitle: "Toy Story 3", releaseInfo: "2010" },
+    "movie",
+  );
+  assert.equal(toyStory.sideMatch, undefined, "the original title carries the whole name");
+  assert.equal(toyStory.titleSimilarity, 1);
+  assert.equal(autoAccept([toyStory])?.item.id, "tt-ts3");
+
+  const pulp = scoreHit(parseMediaPath("Pulp Fiction"), {
+    id: "tt0110912", type: "movie", name: "Pulp Fiction", releaseInfo: "1994", voteCount: 28000,
+  }, "movie");
+  const facts = scoreHit(parseMediaPath("Pulp Fiction"), {
+    id: "tt-facts", type: "movie", name: "Pulp Fiction: The Facts", releaseInfo: "1994", voteCount: 5,
+  }, "movie");
+  assert.equal(facts.sideMatch, true, "the head of the longer name is only half of it");
+  assert.equal(autoAccept([pulp, facts])?.item.id, "tt0110912", "a namesake nobody watched is no rival of it");
+});
+
+test("a part is agreed with the name that states one, whichever name it is", () => {
+  // The localized name numbers the sequel; the original states no part at all.
+  const trolls = scoreHit(
+    parseMediaPath("Trolls Band Together"),
+    { id: "tt-trolls-3", type: "movie", name: "Trollové 3", originalTitle: "Trolls Band Together", releaseInfo: "2023" },
+    "movie",
+  );
+  assert.equal(trolls.partConflict, undefined, "the name the file matched states no part");
+  assert.equal(autoAccept([trolls])?.item.id, "tt-trolls-3");
+
+  // The first film of a name is seldom numbered, so a lone "I" beside no number is no conflict.
+  const transformers = scoreHit(parseMediaPath("Transformers I"), meta("Transformers", 2007, "movie", "tt0418279"), "movie");
+  assert.equal(transformers.partConflict, undefined);
+  assert.equal(autoAccept([transformers])?.item.id, "tt0418279");
 });
 
 test("a missing year on both sides leans on the name alone", () => {

@@ -4,14 +4,15 @@ import { log } from "./logger.js";
 import {
   autoAccept, cacheFieldsFromMeta, episodesFromMeta, knownTitleForUnit, lookupSkipped, needsRefresh, pickSuggestion, scanMiss,
   scannedRecently, scanSkipReason, scoreHit, viewMeta, yearFromMeta, MATCH_RULE_VERSION, needsReevaluation, parseUnit,
-  SUGGESTION_MIN_SCORE,
+  runtimeRivals, isExtraName, SUGGESTION_MIN_SCORE,
   type LibraryEpisodeRecord, type LibraryMetaRecord, type LibrarySuggestion, type SuggestionReason, type TitleKind, type TitleUnit,
   type ScoredHit,
 } from "./library-match.js";
 import type { LibraryCandidate, LibraryCandidateSource } from "./library-candidates.js";
 import type { ParsedMedia } from "./library-parse.js";
 import { confirmedByEpisodes, diskEpisodes, episodeEvidence, type CatalogueEpisode, type EpisodeEvidence } from "./library-episodes.js";
-import { parseLibraryPath } from "./libraries.js";
+import { confirmedByRuntime, runtimeMinutes } from "./library-runtime.js";
+import { parseLibraryPath, posixBase } from "./libraries.js";
 import { isPathWithin, type FoundFile } from "./library.js";
 import type { MediaInfo } from "./naming.js";
 import type { AddonRecord, MetaItem } from "./types.js";
@@ -106,6 +107,9 @@ export interface LibraryScanOpts {
   busy: () => ScanPauseReason | undefined;
   /** A key is qualified, so the scan cannot build a path from one root: the host resolves it. */
   pathExists: (key: string) => Promise<boolean>;
+  /** How long the file at a qualified key runs, in seconds, or undefined when that cannot be
+   *  read. The scan measures a film only to tell its nameless namesakes apart. */
+  durationOf?: (key: string) => Promise<number | undefined>;
   /** Whether an automatic run may still look up metadata for this library. Asked before
    *  each queued item, so a switch thrown mid-run keeps the rest of its queue out. */
   automaticLibraryEnabled: (libraryId: string) => boolean;
@@ -166,6 +170,11 @@ function catalogueEpisodes(meta: MetaItem | null | undefined): CatalogueEpisode[
     out.push({ season, episode, ...(typeof name === "string" && name.trim() ? { name: name.trim() } : {}) });
   }
   return out;
+}
+
+/** How many people know a candidate, when the provider said. Nobody knows it otherwise. */
+function votesOf(item: MetaItem): number {
+  return typeof item.voteCount === "number" && Number.isFinite(item.voteCount) ? item.voteCount : 0;
 }
 
 export class LibraryScan {
@@ -656,9 +665,56 @@ export class LibraryScan {
     return { hit: ranked[confirmed]!, candidate: candidates[confirmed]!, item: items[confirmed]! };
   }
 
+  /** Nameless namesakes of one film are told apart by how long each one runs. The candidates
+   *  are asked for their lengths first, so a film nobody stated a runtime for is never probed;
+   *  the file is read once and, when exactly one candidate fits it, that candidate is the film. */
+  private async confirmByRuntime(
+    unit: TitleUnit,
+    addons: AddonRecord[],
+    hits: ScoredHit[],
+    byId: Map<string, LibraryCandidate>,
+  ): Promise<{ hit: ScoredHit; candidate: LibraryCandidate; item: MetaItem } | undefined> {
+    const durationOf = this.opts.durationOf;
+    if (!durationOf) return undefined;
+    // CD halves and several encodes of one film are one identity already; measuring them says
+    // nothing about which of two namesakes the folder holds.
+    const videos = unit.sampleFiles.filter((file) => !isExtraName(posixBase(file)));
+    if (videos.length !== 1) return undefined;
+    const rivals = runtimeRivals(hits);
+    if (rivals.length < 2) return undefined;
+
+    const candidates: LibraryCandidate[] = [];
+    const items: MetaItem[] = [];
+    const runtimes: Array<number | undefined> = [];
+    for (const hit of rivals) {
+      const candidate = byId.get(hit.item.id);
+      if (!candidate) return undefined;
+      let item = candidate.item;
+      let meta: MetaItem | null = null;
+      try {
+        item = await this.opts.candidates.resolveSelected(candidate, "movie", this.language());
+        meta = await this.opts.metadata(addons, "movie", item.id);
+      } catch {
+        meta = null;
+      }
+      candidates.push(candidate);
+      items.push(item);
+      runtimes.push(runtimeMinutes(meta));
+    }
+    if (runtimes.filter((runtime) => runtime != null).length < 2) return undefined;
+
+    let seconds: number | undefined;
+    try { seconds = await durationOf(videos[0]!); }
+    catch { seconds = undefined; }
+    if (seconds == null) return undefined;
+    const confirmed = confirmedByRuntime(seconds, runtimes, rivals.map((hit) => votesOf(hit.item)));
+    if (confirmed == null) return undefined;
+    return { hit: rivals[confirmed]!, candidate: candidates[confirmed]!, item: items[confirmed]! };
+  }
+
   private async identify(unit: TitleUnit, parsed: ParsedMedia): Promise<{
     called: boolean;
-    accept?: { item: MetaItem; candidate?: LibraryCandidate; fromSearch: boolean; evidence?: "episodes" };
+    accept?: { item: MetaItem; candidate?: LibraryCandidate; fromSearch: boolean; evidence?: "episodes" | "runtime" };
     suggestion?: LibrarySuggestion;
     diagnostic?: Partial<ScanDiagnostic>;
   }> {
@@ -701,6 +757,16 @@ export class LibraryScan {
         candidate = episodeAccept.candidate;
       }
     }
+    // A film whose rivals share its name has nothing left in the name to tell them apart. Its
+    // length does, so the file is measured once and the candidate it fits is bound.
+    let runtimeAccept: { hit: ScoredHit; candidate: LibraryCandidate; item: MetaItem } | undefined;
+    if (!accepted && unit.kind === "movie" && suggestion?.reason === "ambiguous") {
+      runtimeAccept = await this.confirmByRuntime(unit, addons, hits, byId);
+      if (runtimeAccept) {
+        accepted = runtimeAccept.hit;
+        candidate = runtimeAccept.candidate;
+      }
+    }
     const best = [...hits].sort((a, b) => b.score - a.score)[0];
     const bestProvider = best ? byId.get(best.item.id)?.provider : undefined;
     const diagnostic: Partial<ScanDiagnostic> = {
@@ -719,7 +785,7 @@ export class LibraryScan {
     };
     // The identity that gets bound is the resolved one: an IMDb id whenever the provider has
     // one, so the same title can be looked up by every addon that speaks it.
-    const item = episodeAccept?.item
+    const item = episodeAccept?.item ?? runtimeAccept?.item
       ?? (candidate ? await this.opts.candidates.resolveSelected(candidate, unit.kind, this.language()) : accepted?.item);
     // Why a title stayed unmatched is the question the scan gets asked most, and the scores
     // that decided it are gone the moment this returns. Debug level: one line per title.
@@ -734,7 +800,11 @@ export class LibraryScan {
     return {
       called: true,
       accept: accepted && item
-        ? { item, candidate, fromSearch: true, ...(episodeAccept ? { evidence: "episodes" as const } : {}) }
+        ? {
+          item, candidate, fromSearch: true,
+          ...(episodeAccept ? { evidence: "episodes" as const }
+            : runtimeAccept ? { evidence: "runtime" as const } : {}),
+        }
         : undefined,
       suggestion,
       diagnostic,

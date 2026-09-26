@@ -33,6 +33,7 @@ import { resolveListenTarget, startServer } from "./server-start.js";
 import { browseDirectory, describePath, emptiedFolders, entryDirectory, holdsLibraryRoot, isPathWithin, isVideo, listVideos, moveDestination, orphanedCatalogKeys, pageFiles, remapPath, scanLibrary, summarize, type FoundFile, type LibraryEntry } from "./library.js";
 import { browseMeta, cacheFieldsFromMeta, episodeKey, episodeNumberOf, episodesFromMeta, dropKeyed, folderMosaicUnits, knownEntryForUnit, knownTitleEntry, knownTitleOf, knownTitleForUnit, matchKeyFor, mosaicIdentities, mosaicSkipped, needsBackfill, needsEpisodes, staleSuggestionKeys, titleUnits, unitFor, unmatchAt, withSkipFlag, type GalleryEntry, type LibraryMetaRecord, type TitleKind, type TitleUnit } from "./library-match.js";
 import { LibraryScan } from "./library-scan.js";
+import { probe } from "./probe.js";
 import { createLibraryProbe, type LibraryHealth } from "./library-probe.js";
 import { LibraryAutoScan } from "./library-autoscan.js";
 import { watchLibrary } from "./library-watch.js";
@@ -717,6 +718,23 @@ const mediaPath = (key: string, ...rest: string[]) => {
  *  the client speaks, so the server's own probe does not depend on how many libraries
  *  happen to be configured. */
 const inspectLibraryFile = (key: string) => playback.inspect({ url: `file://${key}` }).catch(() => undefined);
+
+/** How long one file runs, read from the file itself. Only the scan's runtime check asks for
+ *  it, and one sick file must never stall a run: the probe is bounded and a failure is an
+ *  unknown length rather than an error. */
+const SCAN_PROBE_TIMEOUT_MS = 20_000;
+const durationOfKey = async (key: string): Promise<number | undefined> => {
+  let timer: number | NodeJS.Timeout | undefined;
+  try {
+    const info = await Promise.race([
+      probe(mediaPath(key)).catch(() => undefined),
+      new Promise<undefined>((resolve) => { timer = setTimeout(resolve, SCAN_PROBE_TIMEOUT_MS); }),
+    ]);
+    return info?.duration;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+};
 
 const libraryProbe = createLibraryProbe();
 const libraryHealth = new Map<string, LibraryHealth>();
@@ -1840,6 +1858,7 @@ const libraryScan = new LibraryScan({
   dataDir: DATA_DIR,
   // The scan works on keys, so the walk it injects is the qualified one.
   pathExists: async (key: string) => { try { await access(mediaPath(key)); return true; } catch { return false; } },
+  durationOf: durationOfKey,
   units: async () => { await refreshLibraryHealth(); return libraryUnits(); },
   // The freshness pass is a courtesy to what the user actually looks at: only the
   // libraries the interface touched since the last run pay for it.

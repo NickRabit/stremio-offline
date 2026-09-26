@@ -353,6 +353,12 @@ const VARIANT_SEPARATOR = new RegExp(
   [" - ", " / ", " | "].map((separator) => separator.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"),
 );
 
+/** The sides of a spaced bilingual or subtitle split: " - ", " / " and " | " only, so a
+ *  hyphen inside a word ("Spider-Man") is never one. */
+export function titleSides(value: string): string[] {
+  return value.split(VARIANT_SEPARATOR);
+}
+
 /** Lowercased, accent-free and punctuation-free, for asking whether two names are the same. */
 function variantKey(value: string): string {
   return value
@@ -377,7 +383,7 @@ export function titleVariants(parsed: ParsedMedia): TitleVariant[] {
   };
   add(parsed.query, false);
   add(parsed.title, false);
-  for (const side of parsed.title.split(VARIANT_SEPARATOR)) {
+  for (const side of titleSides(parsed.title)) {
     const normalized = variantKey(side);
     if (normalized.length < 3) continue;
     if (!stripPartMarkers(normalized)) continue;
