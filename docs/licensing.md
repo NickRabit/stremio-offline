@@ -57,9 +57,12 @@ The app contains:
   - It is statically linked with **OpenSSL 3.5.8** (Apache-2.0) for https
     sources. FFmpeg accepts OpenSSL only with `--enable-version3`, so the
     binaries are licensed **LGPL-3.0-or-later**.
-  - The LGPLv3 and GPLv3 texts, FFmpeg's `LICENSE.md`, OpenSSL's licence and a
-    `BUILDINFO.txt` with the exact versions, source URLs, checksums and
-    configure lines sit beside the binaries.
+  - These sit beside the binaries:
+    - the LGPLv3 and GPLv3 texts, FFmpeg's `LICENSE.md` and OpenSSL's licence;
+    - `FFMPEG-THIRD-PARTY-NOTICES.txt` with the notices of FFmpeg's
+      BSD-licensed files and the IJG credit;
+    - a `BUILDINFO.txt` with the exact versions, source URLs, checksums,
+      configure lines and the repository revision that built them.
   - **Every release attaches the exact source archives** (`ffmpeg-*.tar.xz`,
     `openssl-*.tar.gz`) the binaries were built from. The build script in the
     tagged commit rebuilds them.

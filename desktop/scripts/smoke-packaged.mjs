@@ -65,7 +65,7 @@ const ffmpeg = path.join(resources, "ffmpeg", "ffmpeg");
 const licence = spawnSync(ffmpeg, ["-hide_banner", "-L"], { encoding: "utf8" });
 if (licence.status !== 0) fail(`the bundled FFmpeg did not run (${ffmpeg})`);
 if (!licence.stdout.includes("Lesser General Public License")) fail("the bundled FFmpeg is not an LGPL build");
-for (const file of ["ffprobe", "BUILDINFO.txt", "licenses/COPYING.LGPLv3", "licenses/OPENSSL-LICENSE.txt"]) {
+for (const file of ["ffprobe", "BUILDINFO.txt", "licenses/COPYING.LGPLv3", "licenses/COPYING.GPLv3", "licenses/OPENSSL-LICENSE.txt", "licenses/FFMPEG-THIRD-PARTY-NOTICES.txt"]) {
   if (!existsSync(path.join(resources, "ffmpeg", file))) fail(`the bundled FFmpeg is missing ${file}`);
 }
 if (!output.includes("This FFmpeg has no libx264")) fail("the local backend did not run the FFmpeg the app carries");
