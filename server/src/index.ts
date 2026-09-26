@@ -2258,15 +2258,17 @@ try {
   const bound = await startServer({ app, ...listenTarget });
   markServerReady();
   log("INFO", "Stremio Offline is listening", { port: bound.port, address: bound.address });
-  // The desktop shell holds the Mac awake while something streams; Docker has no parent port.
+  // The desktop shell holds the Mac awake while something streams or downloads; Docker has no
+  // parent port.
   const activityPort = utilityParentPort();
   if (activityPort) {
-    let lastStreaming: boolean | null = null;
+    let last: { streaming: boolean; downloading: boolean } | null = null;
     const reportActivity = () => {
       const streaming = playback.active().length > 0 || activeMedia.size > 0;
-      if (streaming === lastStreaming) return;
-      lastStreaming = streaming;
-      activityPort.postMessage({ type: "activity", streaming });
+      const downloading = queue.transferring();
+      if (last && last.streaming === streaming && last.downloading === downloading) return;
+      last = { streaming, downloading };
+      activityPort.postMessage({ type: "activity", streaming, downloading });
     };
     reportActivity();
     setInterval(reportActivity, 10_000).unref();
