@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { defaultLocalSettings, readLocalSettings, type LocalSettings } from "./local-settings.js";
@@ -79,6 +80,8 @@ export interface LocalBackendOptions {
   writePort?: (dir: string, port: number) => Promise<void>;
   /** Read on every launch, so a switch thrown in the shell applies to the next start. */
   readSettings?: (dir: string) => Promise<LocalSettings>;
+  /** Whether something already answers on 127.0.0.1 at the port, checked before a published start. */
+  loopbackTaken?: (port: number) => Promise<boolean>;
   /** Whether anything is streaming, so the shell can hold the machine awake while published. */
   onActivity?: (streaming: boolean) => void;
   readyTimeoutMs?: number;
@@ -138,6 +141,16 @@ const bonjourName = (): string | null => {
     return null;
   }
 };
+
+/** Whether a connection to 127.0.0.1 at the port is accepted within a second. */
+export const loopbackAnswers = (port: number, timeoutMs = 1_000): Promise<boolean> =>
+  new Promise((resolve) => {
+    const socket = net.connect({ host: LOCAL_HOST, port });
+    const finish = (taken: boolean) => { socket.destroy(); resolve(taken); };
+    socket.setTimeout(timeoutMs, () => finish(false));
+    socket.once("connect", () => finish(true));
+    socket.once("error", () => finish(false));
+  });
 
 /** The machine's own `.local` names, which is how another device reaches it over Bonjour. */
 export function localHostNames(hostname = os.hostname(), announced: string | null = bonjourName()): string[] {
@@ -335,7 +348,13 @@ export class LocalBackend {
   private async startBackend(): Promise<LocalBackendConnection> {
     const settings = await (this.options.readSettings ?? readLocalSettings)(this.options.userDataDir);
     // Publishing has one fixed port: no remembered port, no port-0 fallback.
-    if (settings.publish) return this.launch(settings.publishPort, settings);
+    if (settings.publish) {
+      // A listener on 0.0.0.0 binds even where another program holds 127.0.0.1 at the same port,
+      // and the kernel then hands this shell's loopback connections to that program: the window
+      // would show it while the network reached the child. So such a port counts as taken.
+      if (await (this.options.loopbackTaken ?? loopbackAnswers)(settings.publishPort)) throw new LocalPortBusyError(settings.publishPort);
+      return this.launch(settings.publishPort, settings);
+    }
     const remembered = await (this.options.readPort ?? readRememberedPort)(this.options.userDataDir);
     const attempts = remembered === null ? [0] : [remembered, 0];
     let failure: unknown = null;

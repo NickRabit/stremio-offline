@@ -11,6 +11,7 @@ import {
   PUBLISHED_HOST,
   LocalBackend,
   LocalPortBusyError,
+  loopbackAnswers,
   lanAddresses,
   localBackendEnv,
   localHostNames,
@@ -87,6 +88,7 @@ const makeBackend = (userDataDir: string, overrides: Partial<LocalBackendOptions
       probed.push(origin);
       return { ok: true, version: "0.4.73", restricted: false, secure: true };
     },
+    loopbackTaken: async () => false,
     ...overrides,
   });
   /** The child is forked after the start reads the remembered port, so tests wait for it. */
@@ -605,4 +607,28 @@ test("activity reports are forwarded and malformed ones are ignored", async (t) 
   fork.child.emit("message", { type: "activity", streaming: false });
   assert.deepEqual(seen, [true, false]);
   await harness.backend.stop();
+});
+
+test("a published start is refused when another program answers on 127.0.0.1 at that port", async (t) => {
+  const dir = await tempDir(t);
+  const checked: number[] = [];
+  const harness = makeBackend(dir, {
+    readSettings: async () => ({ allowPrivateAddons: false, publish: true, publishPort: 8091 }),
+    loopbackTaken: async (port) => { checked.push(port); return true; },
+  });
+  await assert.rejects(harness.backend.start(), (error: unknown) => error instanceof LocalPortBusyError && error.port === 8091);
+  assert.deepEqual(checked, [8091]);
+  assert.equal(harness.forks.length, 0, "nothing is started behind the other program");
+});
+
+test("loopbackAnswers sees a listener on 127.0.0.1 and nothing where there is none", async (t) => {
+  const { createServer } = await import("node:net");
+  const server = createServer((socket) => socket.end());
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+  const port = (server.address() as { port: number }).port;
+  assert.equal(await loopbackAnswers(port), true);
+  server.close();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(await loopbackAnswers(port), false);
 });

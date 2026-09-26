@@ -479,3 +479,13 @@ test("PATCH /api/auth/password clears the must-change flag an administrator set"
   assert.equal(findUserById(harness.store.users(), owner.id)?.mustChangePassword, false,
     "the password is the account's own now, so nothing is left to change");
 });
+
+test("POST /api/auth/setup still works from the computer itself while the app is shared", async (t) => {
+  const previous = process.env.HOST_CHECK;
+  process.env.HOST_CHECK = "published";
+  t.after(() => { if (previous === undefined) delete process.env.HOST_CHECK; else process.env.HOST_CHECK = previous; });
+  const harness = await mount();
+  t.after(harness.close);
+  const created = await api(harness.base, "/api/auth/setup", { method: "POST", body: { username: "owner", password: "secret1" } });
+  assert.equal(created.status, 201, "the harness connects over loopback");
+});
