@@ -2262,13 +2262,11 @@ try {
   // parent port.
   const activityPort = utilityParentPort();
   if (activityPort) {
-    let last: { streaming: boolean; downloading: boolean } | null = null;
+    // Sent on every tick, not only on a change: the shell starts listening after the ready
+    // message, and a download resumed at start would otherwise never be reported.
     const reportActivity = () => {
       const streaming = playback.active().length > 0 || activeMedia.size > 0;
-      const downloading = queue.transferring();
-      if (last && last.streaming === streaming && last.downloading === downloading) return;
-      last = { streaming, downloading };
-      activityPort.postMessage({ type: "activity", streaming, downloading });
+      activityPort.postMessage({ type: "activity", streaming, downloading: queue.transferring() });
     };
     reportActivity();
     setInterval(reportActivity, 10_000).unref();

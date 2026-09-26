@@ -37,7 +37,7 @@ function GeneralSection({ bridge, state }: { bridge: ShellBridge; state: ShellSt
   };
   const loginNote = loginItem === "unsupported" ? t("desktop.loginItemUnsupported")
     : loginFailed ? t("desktop.loginItemFailed")
-    : prefs.openAtLogin && loginItem === "requires-approval" ? t("desktop.loginItemApproval") : null;
+    : loginItem === "requires-approval" ? t("desktop.loginItemApproval") : null;
   return <section className="settings-section shell-card">
     <SettingsSectionHead icon={<Languages/>} title={t("desktop.sectionGeneral")}/>
     <div className="shell-controls">

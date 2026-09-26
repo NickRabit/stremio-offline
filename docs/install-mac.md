@@ -53,9 +53,13 @@ The welcome screen offers two choices:
 ## Everyday use
 
 - **Closing the window does not quit the app.** It stays in the Dock, and the
-  server on this Mac keeps downloading and stays available to your other
-  devices. Click the Dock icon to open the window again. Quit with ⌘Q; while
-  something is still downloading or playing, the app asks first.
+  server on this Mac keeps downloading and, when sharing is on, stays available
+  to your other devices. Click the Dock icon to open the window again.
+- **Quit with ⌘Q.** While the server on this Mac is downloading or playing
+  something, on this Mac or on another device, or a film is being saved to this
+  Mac, the app asks first. The same question also holds up logging out or
+  shutting down until you answer it. Unfinished downloads carry on at the next
+  start.
 - **Your Mac stays awake while the app downloads.** It can still sleep when you
   close the lid.
 - **Open at login** in **Settings → General** starts the app when you log in.
@@ -66,7 +70,9 @@ The welcome screen offers two choices:
 
 The app checks GitHub for a newer release at launch and once a day, and says
 so when one is out. You can turn this off in **Settings → General**. The check
-sends nothing about you or your library.
+is a plain request to GitHub's release feed that names the app and its
+version; like any request, it shows GitHub your IP address. Nothing about you
+or your library is sent.
 
 To update, download the new disk image and drag the app into Applications
 again, replacing the old one. Your libraries, accounts and settings stay. A new

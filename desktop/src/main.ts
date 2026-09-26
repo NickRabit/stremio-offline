@@ -228,8 +228,8 @@ const applyMenu = (): void => {
         else if (!current.page.webContents.isDestroyed()) current.page.webContents.toggleDevTools();
       },
       // Electron flips a clicked checkbox itself; rebuilding puts the tick back where the state says.
-      connect: (target) => { menuKey = ""; applyMenu(); void showMainWindow().then(() => connectTarget(target, { launch: false })); },
-      reconnect: () => { void showMainWindow().then(() => connectTarget(shellState.chosen ?? { kind: "local" }, { launch: false })); },
+      connect: (target) => { menuKey = ""; applyMenu(); void connectTarget(target, { launch: false }); },
+      reconnect: () => { void connectTarget(shellState.chosen ?? { kind: "local" }, { launch: false }); },
       openProject: () => { void electronShell.openExternal(PROJECT_URL).catch(() => {}); },
     },
   })));
@@ -362,8 +362,8 @@ const updateDownloadProgress = () => {
 };
 
 const notifyDownload = (kind: "download-done" | "download-failed", file: string) => {
-  const current = shell;
-  if (!current || current.window.isFocused()) return;
+  // With the window closed a notification is the only word the user gets.
+  if (shell?.window.isFocused()) return;
   if (!Notification.isSupported()) return;
   const strings = catalogue(shellState.locale);
   const body = (kind === "download-done" ? strings["notify.downloadDone"] : strings["notify.downloadFailed"]).replace("{file}", file);
@@ -601,7 +601,7 @@ const startLocal = async (ticket: number, target: Target, fallback: { profileNam
     return;
   }
   if (!requests.isCurrent(ticket)) { await closeLocalBackend(); return; }
-  // A backend that was already running keeps its last report: it only speaks again on a change.
+  // A backend that was already running keeps its last report; a fresh one reports within a tick.
   if (connection !== localConnection) {
     localStreaming = false;
     localDownloading = false;
@@ -712,6 +712,9 @@ const needsSetup = (): boolean => !localInitialized && localSettings.downloadDir
 let setupReturn: Target | null = null;
 
 const connectTarget = (target: Target, options: { launch: boolean }): Promise<void> => {
+  // With the window closed a connection has nowhere to show, and the local backend would be
+  // stopped for it: the window comes back first, on this target.
+  if (!shell) return showMainWindow(target);
   const ticket = requests.next();
   return queue.run(async () => {
     stopRepoll();
@@ -746,7 +749,8 @@ const connectTarget = (target: Target, options: { launch: boolean }): Promise<vo
 
 const restartLocal = async (): Promise<{ ok: boolean }> => {
   const connection = shellState.connection;
-  const showingLocal = shellState.screen.kind === "connected" && connection?.target.kind === "local";
+  // With the window closed there is no page to reload, only a backend to restart.
+  const showingLocal = shell !== null && shellState.screen.kind === "connected" && connection?.target.kind === "local";
   const backend = localBackend;
   if (showingLocal) {
     // A stand-in stays a stand-in: the profile it replaces and its re-poll carry on.
@@ -853,28 +857,36 @@ const createShell = (saved: WindowState | null) => {
   pushState();
 };
 
-/** The window the app puts back when there is none: a Dock click, a second launch or the menu.
- *  It comes back on what was connected -- the local backend usually still runs -- else on the
- *  remembered choice, else on the welcome screen. */
-const showMainWindow = (): Promise<void> => {
+/** The window the app puts back when there is none: a Dock click, a second launch or a connect.
+ *  It comes back on the target asked for, else on what was connected -- the local backend
+ *  usually still runs, perhaps standing in for a profile -- else the remembered choice. */
+const showMainWindow = (asked?: Target): Promise<void> => {
   const existing = shell;
   if (existing) {
     if (existing.window.isMinimized()) existing.window.restore();
     existing.window.focus();
-    return Promise.resolve();
+    return asked ? connectTarget(asked, { launch: false }) : Promise.resolve();
   }
   return readWindowState(app.getPath("userData"), "main").then(async (saved) => {
-    if (shell) return;
-    // A running local backend is what the window showed, whether or not a profile was chosen.
-    const target: Target | null = localConnection !== null && shellState.connection?.target.kind === "local"
-      ? { kind: "local" }
-      : shellState.chosen;
+    if (shell) { if (asked) await connectTarget(asked, { launch: false }); return; }
+    const connection = shellState.connection;
+    const localShown = localConnection !== null && connection?.target.kind === "local";
+    const chosen = shellState.chosen;
+    const standIn = !asked && localShown && connection.fallbackFrom !== null && chosen?.kind === "profile"
+      ? findProfile(profileStore, chosen.id) : null;
+    const target: Target | null = asked ?? (localShown ? { kind: "local" } : chosen);
     const profile = target?.kind === "profile" ? findProfile(profileStore, target.id) : null;
     // The window opens already saying where it goes, never on the screen it was closed with.
     shellState.screen = target
       ? { kind: "connecting", target, name: profile?.name ?? "", origin: profile?.origin ?? null }
       : { kind: "welcome" };
     createShell(saved);
+    if (standIn && chosen) {
+      // Still standing in: the profile stays the remembered choice and its re-poll carries on.
+      const ticket = requests.next();
+      await queue.run(() => startLocal(ticket, chosen, { profileName: standIn.name, origin: standIn.origin }, false));
+      return;
+    }
     if (target) await connectTarget(target, { launch: false });
   });
 };
