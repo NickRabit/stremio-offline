@@ -370,6 +370,10 @@ export class DownloadQueue {
 
   list() { return this.jobs.map((job, index) => ({ ...this.publicJob(job), order: index })); }
   snapshot() { return { jobs: this.list(), halt: this.haltInfo() }; }
+  /** Whether any job is moving bytes right now, so the desktop shell can keep the Mac awake. */
+  transferring(): boolean {
+    return this.jobs.some((job) => job.status === "downloading" || job.status === "checking");
+  }
 
   /** Who asked for a job. A job queued before ownership existed belongs to the administrator
    *  the single-account state migrated into: the answer is resolved here, on reading the job,

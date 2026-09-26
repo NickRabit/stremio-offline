@@ -611,47 +611,50 @@ test("a running backend is replaced when publishing is switched on", async (t) =
   await harness.backend.stop();
 });
 
-test("only a boolean streaming flag is an activity report", () => {
-  assert.equal(readActivityMessage({ type: "activity", streaming: true }), true);
-  assert.equal(readActivityMessage({ type: "activity", streaming: false }), false);
+test("an activity report is the two flags, and only a boolean streaming flag is one", () => {
+  assert.deepEqual(readActivityMessage({ type: "activity", streaming: true, downloading: true }), { streaming: true, downloading: true });
+  assert.deepEqual(readActivityMessage({ type: "activity", streaming: false, downloading: false }), { streaming: false, downloading: false });
+  // A child from before this flag existed reports only whether anything streams.
+  assert.deepEqual(readActivityMessage({ type: "activity", streaming: true }), { streaming: true, downloading: false });
+  assert.deepEqual(readActivityMessage({ type: "activity", streaming: true, downloading: "yes" }), { streaming: true, downloading: false });
   const rejected: unknown[] = [null, "activity", {}, { type: "activity" }, { type: "activity", streaming: "yes" }, { type: "ready", port: 8091, address: LOCAL_HOST }];
   for (const message of rejected) assert.equal(readActivityMessage(message), null, JSON.stringify(message));
 });
 
 test("activity reports are forwarded and malformed ones are ignored", async (t) => {
   const dir = await tempDir(t);
-  const seen: boolean[] = [];
+  const seen: { streaming: boolean; downloading: boolean }[] = [];
   const harness = makeBackend(dir, {
     readSettings: async () => ({ allowPrivateAddons: false, publish: true, publishPort: 8091, downloadDir: null }),
-    onActivity: (streaming) => seen.push(streaming),
+    onActivity: (activity) => seen.push(activity),
   });
   const started = start(harness);
   const fork = await harness.nextChild();
   fork.child.emit("message", { type: "ready", port: 8091, address: PUBLISHED_HOST });
   await started;
-  fork.child.emit("message", { type: "activity", streaming: true });
+  fork.child.emit("message", { type: "activity", streaming: true, downloading: false });
   fork.child.emit("message", { type: "activity" });
   fork.child.emit("message", { type: "activity", streaming: "yes" });
   fork.child.emit("message", { type: "ready", port: 8091, address: PUBLISHED_HOST });
-  fork.child.emit("message", { type: "activity", streaming: false });
-  assert.deepEqual(seen, [true, false]);
+  fork.child.emit("message", { type: "activity", streaming: false, downloading: true });
+  assert.deepEqual(seen, [{ streaming: true, downloading: false }, { streaming: false, downloading: true }]);
   await harness.backend.stop();
 });
 
 test("activity reports reach the shell even when the backend is not published", async (t) => {
   const dir = await tempDir(t);
-  const seen: boolean[] = [];
+  const seen: { streaming: boolean; downloading: boolean }[] = [];
   const harness = makeBackend(dir, {
     readSettings: async () => ({ allowPrivateAddons: false, publish: false, publishPort: 8091, downloadDir: null }),
-    onActivity: (streaming) => seen.push(streaming),
+    onActivity: (activity) => seen.push(activity),
   });
   const started = start(harness);
   const fork = await harness.nextChild();
   fork.child.emit("message", READY);
   await started;
+  fork.child.emit("message", { type: "activity", streaming: true, downloading: true });
   fork.child.emit("message", { type: "activity", streaming: true });
-  fork.child.emit("message", { type: "activity", streaming: false });
-  assert.deepEqual(seen, [true, false]);
+  assert.deepEqual(seen, [{ streaming: true, downloading: true }, { streaming: true, downloading: false }]);
   await harness.backend.stop();
 });
 

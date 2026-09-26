@@ -160,6 +160,30 @@ test("a higher per-provider limit lets transfers run side by side again", async 
   assert.equal(await runThree(2), 2, "at two, exactly two should run at once");
 });
 
+test("a queue reports a transfer only while one is running", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-dl-"));
+  const { server, port } = await countingServer(MB);
+  const downloads = path.join(directory, "downloads");
+  const library = downloadLibrary(downloads);
+  const queue = new DownloadQueue(() => 1, () => 1, path.join(directory, "data"), downloads, {
+    libraries: () => [library],
+    defaultLibrary: () => library,
+  });
+  try {
+    await queue.load();
+    assert.equal(queue.transferring(), false, "nothing queued, nothing moving");
+    await queue.add("Film", { url: `http://127.0.0.1:${port}/film.mp4` });
+    await waitFor(queue, () => queue.transferring());
+    assert.equal(queue.transferring(), true, "a job in flight is a transfer");
+    await waitFor(queue, () => queue.list()[0]?.status === "completed", 30_000);
+    assert.equal(queue.transferring(), false, "a finished job is not");
+  } finally {
+    await queue.stop();
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("the same source cannot be queued twice", async () => {
   const { directory, queue } = await tempQueue();
   try {
