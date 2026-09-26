@@ -87,6 +87,15 @@ export function isPlaylistSource(stream: StreamItem, info?: MediaInfo): boolean 
 
 export const sourceTitle = (stream: StreamItem) => stream.behaviorHints?.filename ?? stream.title ?? stream.name;
 
+/** Whether `ffmpeg -version` names libx264 in its configure line, the software encoder transcodes use. */
+export const hasSoftwareEncoder = (versionOutput: string) => /--enable-libx264\b/.test(versionOutput);
+
+/** The hardware and software passes a conversion tries, in order. Copying the video needs neither. */
+export function conversionAttempts(copyVideo: boolean, hardware: boolean, software: boolean): boolean[] {
+  if (copyVideo || !hardware) return [false];
+  return software ? [true, false] : [true];
+}
+
 export const QUALITY_BITRATE: Record<number, string> = { 1080: "6M", 720: "3M", 480: "1500k" };
 
 /** One session as the statistics see it. The stream comes along whole, so the caller can
@@ -232,6 +241,8 @@ export class PlaybackManager {
   private videotoolboxFailures = 0;
   /** -readrate_initial_burst exists only from FFmpeg 6; an older build would die on the option. */
   private initialBurst = false;
+  /** An LGPL build, like the one the desktop app carries, has no libx264: hardware is all there is. */
+  private softwareEncoder = true;
   private ffmpegVersion?: string;
 
   constructor(dataDir = process.env.DATA_DIR ?? "/data", private onStop: (id: string) => void = () => {}) { this.root = path.join(dataDir, "playback"); }
@@ -245,6 +256,8 @@ export class PlaybackManager {
       const major = Number(/version\s+n?(\d+)[.\s-]/.exec(stdout)?.[1]);
       this.initialBurst = major >= 6;
       if (!this.initialBurst) log("WARN", "FFmpeg is older than 6, start and seek will be slowed by the read rate limit", { major });
+      this.softwareEncoder = hasSoftwareEncoder(stdout);
+      if (!this.softwareEncoder) log("INFO", "This FFmpeg has no libx264, so a real transcode needs hardware encoding");
     }
     const device = process.env.VAAPI_DEVICE;
     if (device) await this.checkVaapi(device);
@@ -538,7 +551,7 @@ export class PlaybackManager {
   /** Overview for diagnostics: what the server can do and what is running right now. */
   diagnostics() {
     return {
-      ffmpeg: { version: this.ffmpegVersion, initialBurst: this.initialBurst },
+      ffmpeg: { version: this.ffmpegVersion, initialBurst: this.initialBurst, softwareEncoder: this.softwareEncoder },
       vaapi: { device: this.vaapiDevice, scaling: this.vaapiScaling, bitrate: this.vaapiBitrate, failures: this.vaapiFailures },
       videotoolbox: { available: this.videotoolbox, constantQuality: this.videotoolboxQuality, failures: this.videotoolboxFailures },
       sessions: [...this.sessions.values()].map((session) => ({
@@ -839,7 +852,7 @@ export class PlaybackManager {
     // Decided once: a concurrent session can switch a path off while this one awaits, and the
     // failure below has to be charged to the path this attempt actually used.
     const accelerator = this.accelerator();
-    const attempts = !copyVideo && accelerator ? [true, false] : [false];
+    const attempts = conversionAttempts(copyVideo, accelerator !== null, this.softwareEncoder);
     let firstAttempt = true;
     for (const hardware of attempts) {
       this.assertActive(session);
@@ -858,7 +871,9 @@ export class PlaybackManager {
         if (accelerator === "videotoolbox") {
           log("WARN", "VideoToolbox failed, falling back to a software conversion", { id: session.id, reason: session.error });
           this.videotoolboxFailures += 1;
-          if (this.videotoolboxFailures >= 2) {
+          // Without libx264 there is nothing to fall back to: switching the path off would turn
+          // two passing failures into every transcode failing until a restart.
+          if (this.videotoolboxFailures >= 2 && this.softwareEncoder) {
             this.videotoolbox = false;
             log("WARN", "VideoToolbox failed repeatedly, it will not be used again until restart", { failures: this.videotoolboxFailures });
           }
@@ -867,7 +882,7 @@ export class PlaybackManager {
           // A driver that refuses twice will refuse every time, and each attempt costs the
           // viewer about twenty seconds before playback starts. Stop offering it.
           this.vaapiFailures += 1;
-          if (this.vaapiFailures >= 2) {
+          if (this.vaapiFailures >= 2 && this.softwareEncoder) {
             this.vaapiDevice = undefined;
             log("WARN", "VAAPI failed repeatedly, it will not be used again until restart", { failures: this.vaapiFailures });
           }

@@ -1,7 +1,7 @@
 {
   "name": "@stremio-offline/desktop",
   "private": true,
-  "version": "0.4.83",
+  "version": "0.4.84",
   "description": "Desktop client for connecting to Stremio Offline servers",
   "author": "Stremio Offline contributors",
   "license": "MIT",
@@ -16,7 +16,8 @@
     "verify:fuses": "node scripts/verify-fuses.mjs",
     "stage:local-backend": "node scripts/stage-local-backend.mjs",
     "smoke:packaged": "node scripts/smoke-packaged.mjs",
-    "package:mac:arm64": "npm run build --prefix .. && npm run build && npm run stage:local-backend && electron-builder --mac --arm64 --publish never"
+    "build:ffmpeg": "bash scripts/build-ffmpeg.sh",
+    "package:mac:arm64": "npm run build --prefix .. && npm run build && npm run stage:local-backend && npm run build:ffmpeg && electron-builder --mac --arm64 --publish never"
   },
   "devDependencies": {
     "@electron/fuses": "1.8.0",
@@ -45,6 +46,16 @@
       "output": "release"
     },
     "extraResources": [
+      {
+        "from": "ffmpeg",
+        "to": "ffmpeg",
+        "filter": [
+          "ffmpeg",
+          "ffprobe",
+          "BUILDINFO.txt",
+          "licenses/**"
+        ]
+      },
       {
         "from": "../node_modules/electron/dist/LICENSE",
         "to": "LICENSE.electron.txt"

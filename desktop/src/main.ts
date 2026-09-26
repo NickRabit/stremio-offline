@@ -18,7 +18,7 @@ import {
 import { downloadProgressPercent, isDeviceTicketDownload } from "./downloads.js";
 import { catalogue } from "./i18n.js";
 import { layout, type LayoutMode } from "./layout.js";
-import { LOCAL_PARTITION, LocalBackend, LocalPortBusyError, type LocalBackendConnection } from "./local-backend.js";
+import { bundledMediaTools, LOCAL_PARTITION, LocalBackend, LocalPortBusyError, type LocalBackendConnection } from "./local-backend.js";
 import { defaultLocalSettings, parseLocalSettings, readLocalSettings, writeLocalSettings, type LocalSettings } from "./local-settings.js";
 import { externalBrowserUrl, httpAllowedHost, parseServerOrigin, partitionForOrigin, type ServerOrigin } from "./origin.js";
 import { localPageSent } from "./bridge-sender.js";
@@ -603,6 +603,7 @@ const createLocalBackend = (): LocalBackend => new LocalBackend({
   userDataDir: app.getPath("userData"),
   fork: (entry, options) => utilityProcess.fork(entry, [], options),
   probeStatus: fetchStatus,
+  tools: bundledMediaTools(app.isPackaged ? process.resourcesPath : null),
   onActivity: (streaming) => { localStreaming = streaming; syncAwake(); },
   onUnexpectedExit: () => failLocalConnection(),
   log: (line) => console.warn("local backend: " + line),

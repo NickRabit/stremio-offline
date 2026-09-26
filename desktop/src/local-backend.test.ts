@@ -11,6 +11,7 @@ import {
   PUBLISHED_HOST,
   LocalBackend,
   LocalPortBusyError,
+  bundledMediaTools,
   loopbackAnswers,
   lanAddresses,
   localBackendEnv,
@@ -631,4 +632,36 @@ test("loopbackAnswers sees a listener on 127.0.0.1 and nothing where there is no
   server.close();
   await new Promise((resolve) => setTimeout(resolve, 50));
   assert.equal(await loopbackAnswers(port), false);
+});
+
+const TOOLS = { ffmpeg: "/App/Contents/Resources/ffmpeg/ffmpeg", ffprobe: "/App/Contents/Resources/ffmpeg/ffprobe" };
+
+test("the app's own FFmpeg is handed to the backend", () => {
+  const env = localBackendEnv({ PATH: "/usr/bin" }, "/data", 8090, "darwin", () => false, undefined, TOOLS);
+  assert.equal(env.FFMPEG_PATH, TOOLS.ffmpeg);
+  assert.equal(env.FFPROBE_PATH, TOOLS.ffprobe);
+});
+
+test("an FFmpeg named in the environment wins over the bundled one", () => {
+  const env = localBackendEnv({ FFMPEG_PATH: "/opt/ffmpeg", FFPROBE_PATH: "/opt/ffprobe" }, "/data", 8090, "linux", () => false, undefined, TOOLS);
+  assert.equal(env.FFMPEG_PATH, "/opt/ffmpeg");
+  assert.equal(env.FFPROBE_PATH, "/opt/ffprobe");
+  assert.equal("FFMPEG_PATH" in localBackendEnv({}, "/data", 8090, "linux", () => false), false, "without bundled tools nothing is set");
+});
+
+test("the bundled tools are found only where both binaries are", () => {
+  assert.deepEqual(bundledMediaTools("/App/Contents/Resources", () => true), TOOLS);
+  assert.equal(bundledMediaTools("/App/Contents/Resources", (file) => file.endsWith("/ffmpeg")), null);
+  assert.equal(bundledMediaTools(null, () => true), null, "a development run has no resources to look in");
+});
+
+test("a start passes the bundled FFmpeg in the child's environment", async (t) => {
+  const dir = await tempDir(t);
+  const harness = makeBackend(dir, { tools: TOOLS });
+  const started = start(harness);
+  const fork = await harness.nextChild();
+  assert.equal(fork.options.env.FFMPEG_PATH, TOOLS.ffmpeg);
+  fork.child.emit("message", READY);
+  await started;
+  await harness.backend.stop();
 });

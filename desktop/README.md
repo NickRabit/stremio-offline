@@ -39,12 +39,20 @@ local option is a second way into the same shell.
 - A second launch of the app focuses the window that is already open instead of
   starting a second backend against the same instance directory.
 
-**FFmpeg is not bundled.** Direct play and every server feature that does not
-need it work as they do on a server; remux and transcode need an `ffmpeg`
-executable that the local backend process can find. It looks on the `PATH` it
-inherits and, on macOS, also in `/opt/homebrew/bin` and `/usr/local/bin`, which
-a launch from the Finder or the Dock does not have on `PATH`. `FFMPEG_PATH` and
-`FFPROBE_PATH` name an executable explicitly when it sits somewhere else.
+**FFmpeg is bundled.** The packaged app carries `ffmpeg` and `ffprobe` in
+`Contents/Resources/ffmpeg` and hands them to the local backend.
+`desktop/scripts/build-ffmpeg.sh` builds them from pinned, checksummed FFmpeg
+and OpenSSL releases, and `npm run package:mac:arm64` runs it (instantly when the
+build is current).
+
+- The build is **LGPL-3.0-or-later**: no x264, H.264 encoded by VideoToolbox,
+  OpenSSL for https sources with certificate checks against macOS's CA bundle.
+  [docs/licensing.md](../docs/licensing.md) says what that obliges.
+- Setting `FFMPEG_PATH`/`FFPROBE_PATH` in the app's environment still picks
+  another build.
+- A development run (`npm run dev -w desktop`) uses no bundled copy. It looks on
+  the inherited `PATH` and, on macOS, in `/opt/homebrew/bin` and
+  `/usr/local/bin`.
 
 The packaging sections below cover the packaging prototype only. It produces a
 macOS arm64 `.dmg` and `.zip` from the compiled shell. It is deliberately not a
@@ -298,8 +306,8 @@ release:
 - **No automatic updates.** Nothing checks for or installs a newer version.
 - **arm64 only.** There is no Intel or universal build, and no promise to add
   one here.
-- **No bundled FFmpeg and no installer for one.** Remux and transcode need an
-  `ffmpeg` the local backend can run; the app neither ships it nor installs it.
+- **No software H.264 encoder.** The bundled FFmpeg has no x264, so a
+  transcode relies on VideoToolbox. That is always there on Apple Silicon.
 - **No data migration.** The local backend starts with an empty instance
   directory; pointing it at an existing Docker or NAS install is not part of
   this prototype.

@@ -1042,3 +1042,18 @@ test("a hardware attempt whose path was switched off meanwhile gets the software
   assert.equal(args.includes("-hwaccel"), false);
   assert.equal(args.some((arg) => arg.includes("vaapi")), false);
 });
+
+test("a build without libx264 is recognised from its configure line", async () => {
+  const { hasSoftwareEncoder } = await import("./playback.js");
+  assert.equal(hasSoftwareEncoder("ffmpeg version 7.1.5\nconfiguration: --enable-gpl --enable-libx264 --enable-libx265"), true);
+  assert.equal(hasSoftwareEncoder("ffmpeg version 9.0.2\nconfiguration: --disable-autodetect --enable-version3 --enable-openssl --enable-videotoolbox"), false);
+  assert.equal(hasSoftwareEncoder("configuration: --enable-libx264rgb"), false);
+});
+
+test("without a software encoder a transcode tries hardware only, and a remux never needs either", async () => {
+  const { conversionAttempts } = await import("./playback.js");
+  assert.deepEqual(conversionAttempts(false, true, true), [true, false]);
+  assert.deepEqual(conversionAttempts(false, true, false), [true]);
+  assert.deepEqual(conversionAttempts(false, false, true), [false]);
+  assert.deepEqual(conversionAttempts(true, true, false), [false]);
+});
