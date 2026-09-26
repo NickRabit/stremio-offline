@@ -22,6 +22,7 @@
       return () => ipcRenderer.removeListener("shell:state", wrapped);
     },
     connect: (target: unknown) => ipcRenderer.invoke("shell:connect", target),
+    cancelSetup: () => ipcRenderer.invoke("shell:cancelSetup"),
     saveProfile: (input: unknown) => ipcRenderer.invoke("shell:saveProfile", input),
     deleteProfile: (id: string) => ipcRenderer.invoke("shell:deleteProfile", id),
     probe: (origin: string) => ipcRenderer.invoke("shell:probe", origin),
@@ -32,5 +33,8 @@
     toastAction: (id: number) => ipcRenderer.send("shell:toastAction", id),
     dismissToast: (id: number) => ipcRenderer.send("shell:dismissToast", id),
     copyText: (text: string) => ipcRenderer.send("shell:copyText", text),
+    pickFolder: (defaultPath: string | null) => ipcRenderer.invoke("shell:pickFolder", defaultPath),
+    prepareDownloadDir: (dir: string) => ipcRenderer.invoke("shell:prepareDownloadDir", dir),
+    resetLocal: (options: unknown) => ipcRenderer.invoke("shell:resetLocal", options),
   });
 })();

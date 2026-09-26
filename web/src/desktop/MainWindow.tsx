@@ -3,6 +3,7 @@ import { ArrowRight, Laptop, Server, Settings2, TriangleAlert } from "lucide-rea
 import { LOCALE_NAMES, t, type Key } from "../i18n";
 import type { FailureReason, MainScreen, ShellBridge, ShellState } from "./bridge";
 import { Brand } from "./Brand";
+import { FolderStep } from "./DownloadFolder";
 import { ServerForm } from "./ServerForm";
 
 const ERROR_TEXT: Record<FailureReason, [Key, Key]> = {
@@ -20,8 +21,12 @@ export function MainWindow({ bridge, state }: { bridge: ShellBridge; state: Shel
   return <main className="shell-screen">
     {screen.kind === "welcome" && <>
       <LanguageSwitch bridge={bridge} state={state}/>
-      <Welcome bridge={bridge}/>
+      <Welcome bridge={bridge} state={state}/>
     </>}
+    {screen.kind === "setup" && <section className="shell-welcome">
+      <Brand/>
+      <FolderStep bridge={bridge} state={state} onBack={() => void bridge.cancelSetup()}/>
+    </section>}
     {screen.kind === "connecting" && <Connecting bridge={bridge} screen={screen}/>}
     {screen.kind === "error" && <Failure bridge={bridge} screen={screen}/>}
   </main>;
@@ -35,24 +40,25 @@ function LanguageSwitch({ bridge, state }: { bridge: ShellBridge; state: ShellSt
   </div>;
 }
 
-function Welcome({ bridge }: { bridge: ShellBridge }) {
-  const [adding, setAdding] = useState(false);
+function Welcome({ bridge, state }: { bridge: ShellBridge; state: ShellState }) {
+  const [step, setStep] = useState<"choose" | "remote">("choose");
+  // A first start asks for the download folder on a screen of its own, whichever way it is reached.
+  const thisMac = () => void bridge.connect({ kind: "local" });
   return <section className="shell-welcome">
     <Brand/>
     <h2>{t("desktop.welcomeTitle")}</h2>
-    {adding
-      ? <div className="shell-card shell-welcome-form">
+    {step === "remote" && <div className="shell-card shell-welcome-form">
         <h3><Server/> {t("desktop.networkServer")}</h3>
-        <ServerForm bridge={bridge} submitLabel={t("desktop.connect")} onCancel={() => setAdding(false)}
+        <ServerForm bridge={bridge} submitLabel={t("desktop.connect")} onCancel={() => setStep("choose")}
           onSaved={(profile) => void bridge.connect({ kind: "profile", id: profile.id })}/>
-      </div>
-      : <div className="shell-choices">
-        <button className="shell-choice" onClick={() => void bridge.connect({ kind: "local" })}>
+      </div>}
+    {step === "choose" && <div className="shell-choices">
+        <button className="shell-choice" onClick={thisMac}>
           <i><Laptop/></i>
           <span><strong>{t("desktop.thisMac")}</strong><small>{t("desktop.thisMacText")}</small></span>
           <ArrowRight className="shell-choice-go"/>
         </button>
-        <button className="shell-choice" onClick={() => setAdding(true)}>
+        <button className="shell-choice" onClick={() => setStep("remote")}>
           <i><Server/></i>
           <span><strong>{t("desktop.networkServer")}</strong><small>{t("desktop.networkServerText")}</small></span>
           <ArrowRight className="shell-choice-go"/>

@@ -378,15 +378,22 @@ test("the PATH logic leaves the backend variables as they were", () => {
   assert.equal(env.DOWNLOAD_DIR, path.join("/data", "downloads"));
 });
 
+test("a stored download folder replaces the default one in the child's environment", () => {
+  const env = localBackendEnv({}, "/data", 8090, "linux", () => true,
+    { allowPrivateAddons: false, publish: false, publishPort: 8091, downloadDir: "/Users/someone/Movies" });
+  assert.equal(env.DOWNLOAD_DIR, "/Users/someone/Movies");
+  assert.equal(localBackendEnv({}, "/data", 8090, "linux", () => true).DOWNLOAD_DIR, path.join("/data", "downloads"));
+});
+
 test("the switch on lets the child reach the local network", () => {
-  const env = localBackendEnv({ PATH: "/usr/bin" }, "/data", 8090, "linux", () => true, { allowPrivateAddons: true, publish: false, publishPort: 8091 });
+  const env = localBackendEnv({ PATH: "/usr/bin" }, "/data", 8090, "linux", () => true, { allowPrivateAddons: true, publish: false, publishPort: 8091, downloadDir: null });
   assert.equal(env.ALLOW_PRIVATE_ADDONS, "1");
 });
 
 test("the switch off leaves an inherited permission alone and adds none", () => {
-  const inherited = localBackendEnv({ ALLOW_PRIVATE_ADDONS: "1" }, "/data", 8090, "linux", () => true, { allowPrivateAddons: false, publish: false, publishPort: 8091 });
+  const inherited = localBackendEnv({ ALLOW_PRIVATE_ADDONS: "1" }, "/data", 8090, "linux", () => true, { allowPrivateAddons: false, publish: false, publishPort: 8091, downloadDir: null });
   assert.equal(inherited.ALLOW_PRIVATE_ADDONS, "1");
-  const absent = localBackendEnv({}, "/data", 8090, "linux", () => true, { allowPrivateAddons: false, publish: false, publishPort: 8091 });
+  const absent = localBackendEnv({}, "/data", 8090, "linux", () => true, { allowPrivateAddons: false, publish: false, publishPort: 8091, downloadDir: null });
   assert.equal("ALLOW_PRIVATE_ADDONS" in absent, false);
   assert.equal("ALLOW_PRIVATE_ADDONS" in localBackendEnv({}, "/data", 8090, "linux", () => true), false);
 });
@@ -397,7 +404,7 @@ test("a start reads the settings and passes the switch to the child", async (t) 
   const harness = makeBackend(dir, {
     readSettings: async (requested) => {
       reads.push(requested);
-      return { allowPrivateAddons: true, publish: false, publishPort: 8091 };
+      return { allowPrivateAddons: true, publish: false, publishPort: 8091, downloadDir: null };
     },
   });
   const started = start(harness);
@@ -416,7 +423,7 @@ test("the settings are read again on the next start", async (t) => {
   const harness = makeBackend(dir, {
     readSettings: async () => {
       reads += 1;
-      return { allowPrivateAddons, publish: false, publishPort: 8091 };
+      return { allowPrivateAddons, publish: false, publishPort: 8091, downloadDir: null };
     },
   });
   const first = start(harness);
@@ -437,7 +444,7 @@ test("the settings are read again on the next start", async (t) => {
 
 test("without a settings reader the stored file decides the child environment", async (t) => {
   const dir = await tempDir(t);
-  await writeLocalSettings(dir, { allowPrivateAddons: true, publish: false, publishPort: 8091 });
+  await writeLocalSettings(dir, { allowPrivateAddons: true, publish: false, publishPort: 8091, downloadDir: null });
   const harness = makeBackend(dir);
   const started = start(harness);
   const fork = await harness.nextChild();
@@ -449,7 +456,7 @@ test("without a settings reader the stored file decides the child environment", 
 
 test("a running backend is reused while the stored settings match what it was started with", async (t) => {
   const dir = await tempDir(t);
-  const harness = makeBackend(dir, { readSettings: async () => ({ allowPrivateAddons: true, publish: false, publishPort: 8091 }) });
+  const harness = makeBackend(dir, { readSettings: async () => ({ allowPrivateAddons: true, publish: false, publishPort: 8091, downloadDir: null }) });
   const first = start(harness);
   const fork = await harness.nextChild();
   fork.child.emit("message", READY);
@@ -460,12 +467,33 @@ test("a running backend is reused while the stored settings match what it was st
   await harness.backend.stop();
 });
 
+test("a running backend is replaced when only the download folder changed", async (t) => {
+  const dir = await tempDir(t);
+  let downloadDir: string | null = null;
+  const harness = makeBackend(dir, {
+    readSettings: async () => ({ allowPrivateAddons: false, publish: false, publishPort: 8091, downloadDir }),
+  });
+  const first = start(harness);
+  const firstFork = await harness.nextChild();
+  assert.equal(firstFork.options.env.DOWNLOAD_DIR, path.join(dir, "downloads"));
+  firstFork.child.emit("message", READY);
+  await first;
+  downloadDir = path.join(dir, "movies");
+  const second = start(harness);
+  const secondFork = await harness.nextChild();
+  assert.equal(firstFork.child.kills, 1);
+  assert.equal(secondFork.options.env.DOWNLOAD_DIR, path.join(dir, "movies"));
+  secondFork.child.emit("message", READY);
+  await second;
+  await harness.backend.stop();
+});
+
 test("a running backend started with other settings is replaced on the next start", async (t) => {
   const dir = await tempDir(t);
   let allowPrivateAddons = true;
   let unexpected = 0;
   const harness = makeBackend(dir, {
-    readSettings: async () => ({ allowPrivateAddons, publish: false, publishPort: 8091 }),
+    readSettings: async () => ({ allowPrivateAddons, publish: false, publishPort: 8091, downloadDir: null }),
     onUnexpectedExit: () => { unexpected += 1; },
   });
   const first = start(harness);
@@ -485,7 +513,7 @@ test("a running backend started with other settings is replaced on the next star
 });
 
 test("publishing points the child at every interface and the published host check", () => {
-  const env = localBackendEnv({}, "/data", 8091, "linux", () => true, { allowPrivateAddons: false, publish: true, publishPort: 8091 });
+  const env = localBackendEnv({}, "/data", 8091, "linux", () => true, { allowPrivateAddons: false, publish: true, publishPort: 8091, downloadDir: null });
   assert.equal(env.HOST, PUBLISHED_HOST);
   assert.equal(env.HOST_CHECK, "published");
   assert.equal(env.PORT, "8091");
@@ -493,7 +521,7 @@ test("publishing points the child at every interface and the published host chec
 });
 
 test("not publishing keeps the loopback check and names no host", () => {
-  const env = localBackendEnv({}, "/data", 8091, "linux", () => true, { allowPrivateAddons: false, publish: false, publishPort: 8091 });
+  const env = localBackendEnv({}, "/data", 8091, "linux", () => true, { allowPrivateAddons: false, publish: false, publishPort: 8091, downloadDir: null });
   assert.equal(env.HOST, LOCAL_HOST);
   assert.equal(env.HOST_CHECK, "loopback");
   assert.equal("HOST_NAMES" in env, false);
@@ -527,7 +555,7 @@ test("the lan addresses are the IPv4 ones in order, then the names, without dupl
 test("a published start asks for its configured port only", async (t) => {
   const dir = await tempDir(t);
   await writeRememberedPort(dir, 51234);
-  const harness = makeBackend(dir, { readSettings: async () => ({ allowPrivateAddons: false, publish: true, publishPort: 8095 }) });
+  const harness = makeBackend(dir, { readSettings: async () => ({ allowPrivateAddons: false, publish: true, publishPort: 8095, downloadDir: null }) });
   const started = start(harness);
   const fork = await harness.nextChild();
   assert.equal(fork.options.env.PORT, "8095");
@@ -541,7 +569,7 @@ test("a published start asks for its configured port only", async (t) => {
 
 test("a published ready on every interface is accepted and fills the addresses", async (t) => {
   const dir = await tempDir(t);
-  const harness = makeBackend(dir, { readSettings: async () => ({ allowPrivateAddons: false, publish: true, publishPort: 8091 }) });
+  const harness = makeBackend(dir, { readSettings: async () => ({ allowPrivateAddons: false, publish: true, publishPort: 8091, downloadDir: null }) });
   const started = start(harness);
   const fork = await harness.nextChild();
   fork.child.emit("message", { type: "ready", port: 8091, address: PUBLISHED_HOST });
@@ -568,7 +596,7 @@ test("an unpublished ready on every interface is refused", async (t) => {
 test("a running backend is replaced when publishing is switched on", async (t) => {
   const dir = await tempDir(t);
   let publish = false;
-  const harness = makeBackend(dir, { readSettings: async () => ({ allowPrivateAddons: false, publish, publishPort: 8091 }) });
+  const harness = makeBackend(dir, { readSettings: async () => ({ allowPrivateAddons: false, publish, publishPort: 8091, downloadDir: null }) });
   const first = start(harness);
   const firstFork = await harness.nextChild();
   firstFork.child.emit("message", READY);
@@ -594,7 +622,7 @@ test("activity reports are forwarded and malformed ones are ignored", async (t) 
   const dir = await tempDir(t);
   const seen: boolean[] = [];
   const harness = makeBackend(dir, {
-    readSettings: async () => ({ allowPrivateAddons: false, publish: true, publishPort: 8091 }),
+    readSettings: async () => ({ allowPrivateAddons: false, publish: true, publishPort: 8091, downloadDir: null }),
     onActivity: (streaming) => seen.push(streaming),
   });
   const started = start(harness);
@@ -614,7 +642,7 @@ test("activity reports reach the shell even when the backend is not published", 
   const dir = await tempDir(t);
   const seen: boolean[] = [];
   const harness = makeBackend(dir, {
-    readSettings: async () => ({ allowPrivateAddons: false, publish: false, publishPort: 8091 }),
+    readSettings: async () => ({ allowPrivateAddons: false, publish: false, publishPort: 8091, downloadDir: null }),
     onActivity: (streaming) => seen.push(streaming),
   });
   const started = start(harness);
@@ -629,7 +657,7 @@ test("activity reports reach the shell even when the backend is not published", 
 
 test("the running child's settings are known while it runs and gone when it stops", async (t) => {
   const dir = await tempDir(t);
-  const settings = { allowPrivateAddons: false, publish: false, publishPort: 8091 };
+  const settings = { allowPrivateAddons: false, publish: false, publishPort: 8091, downloadDir: null };
   const harness = makeBackend(dir, { readSettings: async () => settings });
   assert.equal(harness.backend.launchedSettings(), null);
   const started = start(harness);
@@ -645,7 +673,7 @@ test("a published start is refused when another program answers on 127.0.0.1 at 
   const dir = await tempDir(t);
   const checked: number[] = [];
   const harness = makeBackend(dir, {
-    readSettings: async () => ({ allowPrivateAddons: false, publish: true, publishPort: 8091 }),
+    readSettings: async () => ({ allowPrivateAddons: false, publish: true, publishPort: 8091, downloadDir: null }),
     loopbackTaken: async (port) => { checked.push(port); return true; },
   });
   await assert.rejects(harness.backend.start(), (error: unknown) => error instanceof LocalPortBusyError && error.port === 8091);

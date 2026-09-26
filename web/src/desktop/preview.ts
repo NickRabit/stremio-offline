@@ -14,20 +14,24 @@ export function previewBridge(search: string): ShellBridge | null {
   let state: ShellState = {
     locale: query.get("locale") === "en" ? "en" : "cs",
     localeChoice: null,
-    appVersion: "0.4.85",
+    appVersion: "0.4.86",
     screen: screenKind === "connecting" ? { kind: "connecting", target: nas, name: "NAS v obýváku", origin: "http://192.168.1.20:8090" }
       : screenKind === "error" ? { kind: "error", target: nas, name: "NAS v obýváku", origin: "http://192.168.1.20:8090", reason: (query.get("reason") as never) ?? "unreachable", port: 8091 }
       : screenKind === "local" ? { kind: "connecting", target: { kind: "local" }, name: "", origin: null }
       : screenKind === "connected" ? { kind: "connected" }
       : { kind: "welcome" },
-    connection: { target: { kind: "local" }, name: "", origin: "http://127.0.0.1:51234", version: "0.4.85", restricted: false, secure: true, fallbackFrom: query.get("fallback") ? "NAS v obýváku" : null },
+    connection: { target: { kind: "local" }, name: "", origin: "http://127.0.0.1:51234", version: "0.4.86", restricted: false, secure: true, fallbackFrom: query.get("fallback") ? "NAS v obýváku" : null },
     chosen: nas,
     profiles: [
       { id: "nas", name: "NAS v obýváku", origin: "http://192.168.1.20:8090" },
       { id: "office", name: "Kancelář", origin: "https://media.example.cz" },
     ],
     local: {
-      settings: { allowPrivateAddons: false, publish: true, publishPort: 8091 },
+      settings: { allowPrivateAddons: false, publish: true, publishPort: 8091, downloadDir: null },
+      downloadDir: "/Users/ondrej/Movies/Stremio Offline",
+      suggestedDownloadDir: "/Users/ondrej/Movies/Stremio Offline",
+      initialized: query.get("initialized") !== "0",
+      downloadDirOwned: query.get("owned") !== "0",
       running: true,
       addresses: ["http://192.168.1.41:8091", "http://ondrej-macbook-pro.local:8091"],
       ffmpeg: "ffmpeg 9.0.2 + openssl 3.5.8, macOS 12.0, arm64",
@@ -45,7 +49,11 @@ export function previewBridge(search: string): ShellBridge | null {
     view,
     getState: async () => state,
     onState: (listener) => { listeners.add(listener); return () => listeners.delete(listener); },
-    connect: async (target) => { emit({ ...state, chosen: target }); },
+    connect: async (target) => {
+      const setup = target.kind === "local" && !state.local.initialized && state.local.settings.downloadDir === null;
+      emit(setup ? { ...state, screen: { kind: "setup" } } : { ...state, chosen: target });
+    },
+    cancelSetup: async () => { emit({ ...state, screen: { kind: "welcome" } }); },
     saveProfile: async (input) => {
       const profile = { id: input.id ?? `p${Date.now()}`, name: input.name.trim(), origin: input.origin.trim() };
       if (!profile.name) return { ok: false, reason: "invalid-name" };
@@ -61,6 +69,9 @@ export function previewBridge(search: string): ShellBridge | null {
     openSettings: () => undefined,
     toastAction: () => undefined,
     dismissToast: () => undefined,
+    pickFolder: async () => "/Volumes/Filmy/Stremio",
+    prepareDownloadDir: async (dir) => dir.startsWith("/") ? { ok: true, dir } : { ok: false, reason: "not-absolute" },
+    resetLocal: async () => { await wait(500); emit({ ...state, screen: { kind: "welcome" }, chosen: null }); return { ok: true, cancelled: false, downloadsKept: true }; },
     copyText: (text) => { void navigator.clipboard?.writeText(text).catch(() => undefined); },
   };
 }
