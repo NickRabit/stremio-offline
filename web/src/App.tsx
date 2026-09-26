@@ -2442,6 +2442,7 @@ function DiagnosticsSection({ build, onNotify, onError }: { build: BuildInfo | n
   };
 
   const vaapi = info?.playback.vaapi;
+  const videotoolbox = info?.playback.videotoolbox;
   const sessions = info?.playback.sessions ?? [];
   const failed = info?.downloads.failed ?? [];
   const troubled = info?.outbound ?? [];
@@ -2460,7 +2461,7 @@ function DiagnosticsSection({ build, onNotify, onError }: { build: BuildInfo | n
       <dl className="diagnostics-facts">
         <Fact term={t("diag.version")}>{info?.version ?? build?.version ?? "—"}{build?.commit ? <small> · {build.commit.slice(0, 7)}</small> : null}</Fact>
         <Fact term={t("diag.uptime")}>{info ? duration(info.uptimeSeconds) : "—"}</Fact>
-        <Fact term={t("diag.conversion")}>{info?.playback.ffmpeg.version ? `FFmpeg ${info.playback.ffmpeg.version}` : "—"}<small>{vaapi?.device ? ` · GPU ${vaapi.device}` : ` · ${t("diag.software")}`}</small></Fact>
+        <Fact term={t("diag.conversion")}>{info?.playback.ffmpeg.version ? `FFmpeg ${info.playback.ffmpeg.version}` : "—"}<small>{vaapi?.device ? ` · GPU ${vaapi.device}` : videotoolbox?.available ? " · VideoToolbox" : ` · ${t("diag.software")}`}</small></Fact>
         <Fact term={t("diag.playback")}>{sessions.length ? t("diag.sessionCount", { count: sessions.length }) : t("diag.noSessions")}</Fact>
         <Fact term={t("diag.queue")}>{queue.length ? queue.map(([status, count]) => `${statusLabel(status as DownloadJob["status"])} ${count}`).join(", ") : t("diag.queueEmpty")}</Fact>
         {(info?.storage ?? []).map((disk) => <Fact key={disk.path} term={t("diag.freeSpace", { path: disk.path })}>{bytes(disk.freeBytes)}<small>{disk.totalBytes ? ` ${t("diag.ofTotal", { total: bytes(disk.totalBytes) })}` : ""}</small></Fact>)}

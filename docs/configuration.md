@@ -176,6 +176,8 @@ Details in [Playback](playback.md) and
 | `FFPROBE_PATH` | *(unset)* | The same for `ffprobe`. |
 | `VAAPI_QP` | `23` | Hardware CQP quality. Lower means better and more bitrate. |
 | `VAAPI_DEVICE` | *(unset)* | Render node, usually `/dev/dri/renderD128`. |
+| `VIDEOTOOLBOX` | `1` | macOS only. `0` stops the desktop backend probing or using VideoToolbox. |
+| `VIDEOTOOLBOX_QUALITY` | `60` | macOS constant-quality value (`-q:v`, 1–100). Higher means better and more bitrate — the opposite of `VAAPI_QP`. |
 | `RENDER_GID` | *(unset)* | GID owning the render node. Without it the process cannot open the device. |
 | `LIBVA_DRIVER_NAME` | *(auto)* | Force `iHD` (Gemini Lake and newer) or `i965` (older Braswell). |
 

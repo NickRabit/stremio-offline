@@ -63,6 +63,148 @@ test("a Synology without VAAPI scaling decodes on the CPU and encodes on the GPU
   assert.equal(args[args.indexOf("-qp") + 1], "23");
 });
 
+test("VideoToolbox decodes, scales and encodes on the Mac without a single VAAPI flag", () => {
+  const manager = new PlaybackManager("/tmp/test-videotoolbox") as any;
+  manager.videotoolbox = true;
+  const session = {
+    stream: { url: "https://example.test/movie.mkv" },
+    capabilities: { h264: true, aac: true },
+    info: {
+      video: { codec: "h264" },
+      audio: { codec: "aac" },
+      audioTracks: [{ codec: "aac" }],
+      subtitleTracks: [],
+    },
+    quality: 720,
+    audioTrack: 0,
+    subtitleTrack: null,
+  };
+
+  const args = manager.args(session, 0, "/tmp/output", true) as string[];
+  const input = args.indexOf("-i");
+  assert.ok(input > 0, "the input position is present");
+  assert.deepEqual(args.slice(args.indexOf("-hwaccel"), args.indexOf("-hwaccel") + 2), ["-hwaccel", "videotoolbox"]);
+  assert.ok(args.indexOf("-hwaccel") < input, "the GPU decoder applies to the input");
+  // Frames come back in system memory, so the filter is an ordinary one, on the chosen height.
+  assert.equal(args[args.indexOf("-vf") + 1], "scale=-2:min(720\\,ih),format=nv12");
+  assert.equal(args[args.indexOf("-c:v") + 1], "h264_videotoolbox");
+  assert.deepEqual(args.slice(args.indexOf("-b:v"), args.indexOf("-b:v") + 4), ["-b:v", "3M", "-maxrate", "3M"]);
+  assert.equal(args[args.indexOf("-g") + 1], "48");
+  assert.equal(args.includes("-init_hw_device"), false);
+  assert.equal(args.join(" ").toLowerCase().includes("vaapi"), false);
+});
+
+test("VideoToolbox uses constant quality where it can and a plain bitrate on an Intel Mac", () => {
+  const manager = new PlaybackManager("/tmp/test-videotoolbox-quality") as any;
+  manager.videotoolbox = true;
+  const session = {
+    stream: { url: "https://example.test/movie.mkv" },
+    capabilities: { h264: true, aac: true },
+    info: {
+      video: { codec: "mpeg4" },
+      audio: { codec: "aac" },
+      audioTracks: [{ codec: "aac" }],
+      subtitleTracks: [],
+    },
+    quality: null,
+    audioTrack: 0,
+    subtitleTrack: null,
+  };
+
+  manager.videotoolboxQuality = true;
+  const constant = manager.args(session, 0, "/tmp/output", true) as string[];
+  assert.equal(constant[constant.indexOf("-vf") + 1], "format=nv12");
+  assert.equal(constant[constant.indexOf("-q:v") + 1], "60");
+
+  process.env.VIDEOTOOLBOX_QUALITY = "70";
+  try {
+    const tuned = manager.args(session, 0, "/tmp/output", true) as string[];
+    assert.equal(tuned[tuned.indexOf("-q:v") + 1], "70");
+  } finally {
+    delete process.env.VIDEOTOOLBOX_QUALITY;
+  }
+
+  manager.videotoolboxQuality = false;
+  const fixed = manager.args(session, 0, "/tmp/output", true) as string[];
+  assert.deepEqual(fixed.slice(fixed.indexOf("-b:v"), fixed.indexOf("-b:v") + 2), ["-b:v", "8M"]);
+  assert.equal(fixed.includes("-q:v"), false);
+});
+
+test("the software fallback for a Mac stays libx264", () => {
+  const manager = new PlaybackManager("/tmp/test-videotoolbox-software") as any;
+  manager.videotoolbox = true;
+  manager.videotoolboxQuality = true;
+  const session = {
+    stream: { url: "https://example.test/movie.mkv" },
+    capabilities: { h264: true, aac: true },
+    info: {
+      video: { codec: "h264" },
+      audio: { codec: "aac" },
+      audioTracks: [{ codec: "aac" }],
+      subtitleTracks: [],
+    },
+    quality: 720,
+    audioTrack: 0,
+    subtitleTrack: null,
+  };
+
+  const args = manager.args(session, 0, "/tmp/output", false) as string[];
+  assert.equal(args[args.indexOf("-c:v") + 1], "libx264");
+  assert.equal(args.includes("-hwaccel"), false);
+  assert.equal(args.join(" ").includes("videotoolbox"), false);
+});
+
+test("VAAPI wins over VideoToolbox when a Mac carries both", () => {
+  const manager = new PlaybackManager("/tmp/test-videotoolbox-vaapi") as any;
+  manager.vaapiDevice = "/dev/dri/renderD128";
+  manager.videotoolbox = true;
+  const session = {
+    stream: { url: "https://example.test/movie.mkv" },
+    capabilities: { h264: true, aac: true },
+    info: {
+      video: { codec: "h264" },
+      audio: { codec: "aac" },
+      audioTracks: [{ codec: "aac" }],
+      subtitleTracks: [],
+    },
+    quality: 720,
+    audioTrack: 0,
+    subtitleTrack: null,
+  };
+
+  const args = manager.args(session, 0, "/tmp/output", true) as string[];
+  assert.deepEqual(args.slice(args.indexOf("-hwaccel"), args.indexOf("-hwaccel") + 4), [
+    "-hwaccel", "vaapi", "-hwaccel_device", "/dev/dri/renderD128",
+  ]);
+  assert.equal(args[args.indexOf("-c:v") + 1], "h264_vaapi");
+  assert.equal(args.join(" ").includes("videotoolbox"), false);
+});
+
+test("a remux never touches VideoToolbox, whatever the accelerator", () => {
+  const manager = new PlaybackManager("/tmp/test-videotoolbox-remux") as any;
+  manager.videotoolbox = true;
+  manager.videotoolboxQuality = true;
+  const session = {
+    stream: { url: "https://example.test/movie.mkv" },
+    capabilities: { h264: true, aac: true },
+    info: {
+      video: { codec: "h264" },
+      audio: { codec: "aac" },
+      audioTracks: [{ codec: "aac" }],
+      subtitleTracks: [],
+    },
+    quality: null,
+    audioTrack: 0,
+    subtitleTrack: null,
+  };
+
+  for (const hardware of [false, true]) {
+    const args = manager.args(session, 0, "/tmp/output", hardware) as string[];
+    assert.equal(args[args.indexOf("-c:v") + 1], "copy");
+    assert.equal(args.includes("-hwaccel"), false);
+  }
+});
+
 test("a remux still copies compatible video and audio", () => {
   const manager = new PlaybackManager("/tmp/test-playback") as any;
   const session = {
@@ -885,4 +1027,18 @@ test("audio in a language the viewer did not ask for brings the whole film subti
 
 test("subtitles the viewer's language does not have fall back to English", async () => {
   assert.equal(await subtitlePick("fallback", [english], { audioLanguage: "de", subtitleLanguage: "cs" }), 2);
+});
+
+test("a hardware attempt whose path was switched off meanwhile gets the software arguments", () => {
+  const manager = new PlaybackManager("/tmp/test-playback") as any;
+  const session = {
+    stream: { url: "https://example.test/movie.mkv" },
+    capabilities: { h264: true },
+    info: { video: { codec: "hevc" }, audio: { codec: "aac" }, audioTracks: [{ codec: "aac" }], subtitleTracks: [] },
+    quality: null, audioTrack: 0, subtitleTrack: null,
+  };
+  const args = manager.args(session, 0, "/tmp/output", true) as string[];
+  assert.equal(args[args.indexOf("-c:v") + 1], "libx264");
+  assert.equal(args.includes("-hwaccel"), false);
+  assert.equal(args.some((arg) => arg.includes("vaapi")), false);
 });
