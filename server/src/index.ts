@@ -29,7 +29,7 @@ import { tmdbGallery, tmdbMeta, type TmdbConfig } from "./tmdb.js";
 import { createLibraryCandidates } from "./library-candidates.js";
 import { ExternalIdStore } from "./external-ids.js";
 import { currentLevel, flushLog, initLogger, log, parseLevel, startLogMaintenance, setLevel } from "./logger.js";
-import { resolveListenTarget, startServer } from "./server-start.js";
+import { resolveListenTarget, startServer, utilityParentPort } from "./server-start.js";
 import { loopbackHostCheck } from "./host-check.js";
 import { InFlight } from "./in-flight.js";
 import { killRunningMedia } from "./media-tools.js";
@@ -2258,6 +2258,19 @@ try {
   const bound = await startServer({ app, ...listenTarget });
   markServerReady();
   log("INFO", "Stremio Offline is listening", { port: bound.port, address: bound.address });
+  // The desktop shell holds the Mac awake while something streams; Docker has no parent port.
+  const activityPort = utilityParentPort();
+  if (activityPort) {
+    let lastStreaming: boolean | null = null;
+    const reportActivity = () => {
+      const streaming = playback.active().length > 0 || activeMedia.size > 0;
+      if (streaming === lastStreaming) return;
+      lastStreaming = streaming;
+      activityPort.postMessage({ type: "activity", streaming });
+    };
+    reportActivity();
+    setInterval(reportActivity, 10_000).unref();
+  }
 } catch (error) {
   log("ERROR", "Stremio Offline could not start", {
     ...listenTarget,

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { tmpdir, type NetworkInterfaceInfo } from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
 import {
@@ -8,8 +8,13 @@ import {
   MACOS_TOOL_DIRECTORIES,
   LOCAL_HOST,
   LOCAL_PARTITION,
+  PUBLISHED_HOST,
   LocalBackend,
+  LocalPortBusyError,
+  lanAddresses,
   localBackendEnv,
+  localHostNames,
+  readActivityMessage,
   readReadyMessage,
   readRememberedPort,
   writeRememberedPort,
@@ -371,14 +376,14 @@ test("the PATH logic leaves the backend variables as they were", () => {
 });
 
 test("the switch on lets the child reach the local network", () => {
-  const env = localBackendEnv({ PATH: "/usr/bin" }, "/data", 8090, "linux", () => true, { allowPrivateAddons: true });
+  const env = localBackendEnv({ PATH: "/usr/bin" }, "/data", 8090, "linux", () => true, { allowPrivateAddons: true, publish: false, publishPort: 8091 });
   assert.equal(env.ALLOW_PRIVATE_ADDONS, "1");
 });
 
 test("the switch off leaves an inherited permission alone and adds none", () => {
-  const inherited = localBackendEnv({ ALLOW_PRIVATE_ADDONS: "1" }, "/data", 8090, "linux", () => true, { allowPrivateAddons: false });
+  const inherited = localBackendEnv({ ALLOW_PRIVATE_ADDONS: "1" }, "/data", 8090, "linux", () => true, { allowPrivateAddons: false, publish: false, publishPort: 8091 });
   assert.equal(inherited.ALLOW_PRIVATE_ADDONS, "1");
-  const absent = localBackendEnv({}, "/data", 8090, "linux", () => true, { allowPrivateAddons: false });
+  const absent = localBackendEnv({}, "/data", 8090, "linux", () => true, { allowPrivateAddons: false, publish: false, publishPort: 8091 });
   assert.equal("ALLOW_PRIVATE_ADDONS" in absent, false);
   assert.equal("ALLOW_PRIVATE_ADDONS" in localBackendEnv({}, "/data", 8090, "linux", () => true), false);
 });
@@ -389,7 +394,7 @@ test("a start reads the settings and passes the switch to the child", async (t) 
   const harness = makeBackend(dir, {
     readSettings: async (requested) => {
       reads.push(requested);
-      return { allowPrivateAddons: true };
+      return { allowPrivateAddons: true, publish: false, publishPort: 8091 };
     },
   });
   const started = start(harness);
@@ -408,7 +413,7 @@ test("the settings are read again on the next start", async (t) => {
   const harness = makeBackend(dir, {
     readSettings: async () => {
       reads += 1;
-      return { allowPrivateAddons };
+      return { allowPrivateAddons, publish: false, publishPort: 8091 };
     },
   });
   const first = start(harness);
@@ -429,7 +434,7 @@ test("the settings are read again on the next start", async (t) => {
 
 test("without a settings reader the stored file decides the child environment", async (t) => {
   const dir = await tempDir(t);
-  await writeLocalSettings(dir, { allowPrivateAddons: true });
+  await writeLocalSettings(dir, { allowPrivateAddons: true, publish: false, publishPort: 8091 });
   const harness = makeBackend(dir);
   const started = start(harness);
   const fork = await harness.nextChild();
@@ -441,7 +446,7 @@ test("without a settings reader the stored file decides the child environment", 
 
 test("a running backend is reused while the stored settings match what it was started with", async (t) => {
   const dir = await tempDir(t);
-  const harness = makeBackend(dir, { readSettings: async () => ({ allowPrivateAddons: true }) });
+  const harness = makeBackend(dir, { readSettings: async () => ({ allowPrivateAddons: true, publish: false, publishPort: 8091 }) });
   const first = start(harness);
   const fork = await harness.nextChild();
   fork.child.emit("message", READY);
@@ -457,7 +462,7 @@ test("a running backend started with other settings is replaced on the next star
   let allowPrivateAddons = true;
   let unexpected = 0;
   const harness = makeBackend(dir, {
-    readSettings: async () => ({ allowPrivateAddons }),
+    readSettings: async () => ({ allowPrivateAddons, publish: false, publishPort: 8091 }),
     onUnexpectedExit: () => { unexpected += 1; },
   });
   const first = start(harness);
@@ -473,5 +478,131 @@ test("a running backend started with other settings is replaced on the next star
   secondFork.child.emit("message", READY);
   await second;
   assert.equal(unexpected, 0, "a replacement is not an unexpected exit");
+  await harness.backend.stop();
+});
+
+test("publishing points the child at every interface and the published host check", () => {
+  const env = localBackendEnv({}, "/data", 8091, "linux", () => true, { allowPrivateAddons: false, publish: true, publishPort: 8091 });
+  assert.equal(env.HOST, PUBLISHED_HOST);
+  assert.equal(env.HOST_CHECK, "published");
+  assert.equal(env.PORT, "8091");
+  assert.equal(env.HOST_NAMES, localHostNames().join(","));
+});
+
+test("not publishing keeps the loopback check and names no host", () => {
+  const env = localBackendEnv({}, "/data", 8091, "linux", () => true, { allowPrivateAddons: false, publish: false, publishPort: 8091 });
+  assert.equal(env.HOST, LOCAL_HOST);
+  assert.equal(env.HOST_CHECK, "loopback");
+  assert.equal("HOST_NAMES" in env, false);
+});
+
+test("the .local names are lower-cased and given the suffix once", () => {
+  assert.deepEqual(localHostNames("Mac", null), ["mac.local"]);
+  assert.deepEqual(localHostNames("Mac.local", null), ["mac.local"]);
+  assert.deepEqual(localHostNames("MAC.LOCAL", null), ["mac.local"]);
+  assert.deepEqual(localHostNames("", null), []);
+  // A HostName set by DHCP is not what Bonjour announces; the announced name comes first.
+  assert.deepEqual(localHostNames("192-168-1-41.isp.example", "Ondrej-Mac"), ["ondrej-mac.local", "192-168-1-41.isp.example.local"]);
+  assert.deepEqual(localHostNames("Ondrej-Mac.local", "Ondrej-Mac"), ["ondrej-mac.local"]);
+});
+
+const face = (address: string, family: "IPv4" | "IPv6", internal: boolean): NetworkInterfaceInfo =>
+  ({ address, family, internal, netmask: "", mac: "", cidr: null, scopeid: 0 }) as NetworkInterfaceInfo;
+
+test("the lan addresses are the IPv4 ones in order, then the names, without duplicates", () => {
+  const interfaces = {
+    lo0: [face("127.0.0.1", "IPv4", true), face("::1", "IPv6", true)],
+    en0: [face("192.168.1.41", "IPv4", false), face("fe80::1", "IPv6", false)],
+    en1: [face("192.168.1.41", "IPv4", false)],
+  } as unknown as NodeJS.Dict<NetworkInterfaceInfo[]>;
+  assert.deepEqual(lanAddresses(interfaces, 8091, ["mac.local", "mac.local"]), [
+    "http://192.168.1.41:8091",
+    "http://mac.local:8091",
+  ]);
+});
+
+test("a published start asks for its configured port only", async (t) => {
+  const dir = await tempDir(t);
+  await writeRememberedPort(dir, 51234);
+  const harness = makeBackend(dir, { readSettings: async () => ({ allowPrivateAddons: false, publish: true, publishPort: 8095 }) });
+  const started = start(harness);
+  const fork = await harness.nextChild();
+  assert.equal(fork.options.env.PORT, "8095");
+  assert.equal(fork.options.env.HOST, PUBLISHED_HOST);
+  fork.child.emit("message", { type: "error", code: "EADDRINUSE", message: "listen EADDRINUSE" });
+  await assert.rejects(started, (error: unknown) => error instanceof LocalPortBusyError && error.port === 8095);
+  assert.equal(harness.forks.length, 1, "a busy published port is not retried on port 0");
+  assert.equal(await readRememberedPort(dir), 51234, "publishing leaves the remembered port alone");
+  await harness.backend.stop();
+});
+
+test("a published ready on every interface is accepted and fills the addresses", async (t) => {
+  const dir = await tempDir(t);
+  const harness = makeBackend(dir, { readSettings: async () => ({ allowPrivateAddons: false, publish: true, publishPort: 8091 }) });
+  const started = start(harness);
+  const fork = await harness.nextChild();
+  fork.child.emit("message", { type: "ready", port: 8091, address: PUBLISHED_HOST });
+  const connection = await started;
+  assert.equal(connection.server.origin, "http://127.0.0.1:8091");
+  assert.equal(connection.published, true);
+  assert.deepEqual(connection.addresses, lanAddresses(undefined, 8091, localHostNames()));
+  assert.equal(await readRememberedPort(dir), null, "a published port is not remembered");
+  await harness.backend.stop();
+});
+
+test("an unpublished ready on every interface is refused", async (t) => {
+  const dir = await tempDir(t);
+  const harness = makeBackend(dir);
+  const started = start(harness);
+  const fork = await harness.nextChild();
+  fork.child.emit("message", { type: "ready", port: 51234, address: PUBLISHED_HOST });
+  await assert.rejects(started, /expected address/);
+  assert.equal(fork.child.kills, 1);
+  assert.equal(harness.backend.current(), null);
+  await harness.backend.stop();
+});
+
+test("a running backend is replaced when publishing is switched on", async (t) => {
+  const dir = await tempDir(t);
+  let publish = false;
+  const harness = makeBackend(dir, { readSettings: async () => ({ allowPrivateAddons: false, publish, publishPort: 8091 }) });
+  const first = start(harness);
+  const firstFork = await harness.nextChild();
+  firstFork.child.emit("message", READY);
+  await first;
+  publish = true;
+  const second = start(harness);
+  const secondFork = await harness.nextChild();
+  assert.equal(firstFork.child.kills, 1);
+  assert.equal(secondFork.options.env.HOST_CHECK, "published");
+  secondFork.child.emit("message", { type: "ready", port: 8091, address: PUBLISHED_HOST });
+  await second;
+  await harness.backend.stop();
+});
+
+test("only a boolean streaming flag is an activity report", () => {
+  assert.equal(readActivityMessage({ type: "activity", streaming: true }), true);
+  assert.equal(readActivityMessage({ type: "activity", streaming: false }), false);
+  const rejected: unknown[] = [null, "activity", {}, { type: "activity" }, { type: "activity", streaming: "yes" }, { type: "ready", port: 8091, address: LOCAL_HOST }];
+  for (const message of rejected) assert.equal(readActivityMessage(message), null, JSON.stringify(message));
+});
+
+test("activity reports are forwarded and malformed ones are ignored", async (t) => {
+  const dir = await tempDir(t);
+  const seen: boolean[] = [];
+  const harness = makeBackend(dir, {
+    readSettings: async () => ({ allowPrivateAddons: false, publish: true, publishPort: 8091 }),
+    onActivity: (streaming) => seen.push(streaming),
+  });
+  const started = start(harness);
+  const fork = await harness.nextChild();
+  fork.child.emit("message", { type: "ready", port: 8091, address: PUBLISHED_HOST });
+  await started;
+  fork.child.emit("message", { type: "activity", streaming: true });
+  fork.child.emit("message", { type: "activity" });
+  fork.child.emit("message", { type: "activity", streaming: "yes" });
+  fork.child.emit("message", { type: "ready", port: 8091, address: PUBLISHED_HOST });
+  fork.child.emit("message", { type: "activity", streaming: false });
+  assert.deepEqual(seen, [true, false]);
   await harness.backend.stop();
 });

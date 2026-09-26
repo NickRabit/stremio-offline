@@ -17,6 +17,11 @@
     #local-lan label { display: flex; align-items: center; gap: 6px; font-size: 13px; opacity: 1; }
     #local-lan input { width: auto; padding: 0; border: 0; background: none; }
     #local-lan p { margin: 0; font-size: 12px; opacity: 0.6; }
+    #local-publish { display: flex; flex-direction: column; gap: 4px; max-width: 360px; }
+    #local-publish label.publish-toggle { display: flex; align-items: center; gap: 6px; font-size: 13px; opacity: 1; }
+    #local-publish input[type="checkbox"] { width: auto; padding: 0; border: 0; background: none; }
+    #publishPort { width: 120px; }
+    #local-publish p { margin: 0; font-size: 12px; opacity: 0.6; }
     #hint { margin: 0; font-size: 12px; opacity: 0.6; }
     #message { margin: 0; }
     body.connected main { flex-direction: row; align-items: center; gap: 12px; height: 48px; padding: 0 14px; }
@@ -46,6 +51,12 @@
       <div id="local-lan">
         <label for="localLan"><input id="localLan" type="checkbox" /><span data-i18n="connect.localLan"></span></label>
         <p data-i18n="connect.localLanHint"></p>
+      </div>
+      <div id="local-publish">
+        <label class="publish-toggle" for="publish"><input id="publish" type="checkbox" /><span data-i18n="connect.publish"></span></label>
+        <label for="publishPort" data-i18n="connect.publishPort"></label>
+        <input id="publishPort" type="number" min="1024" max="65535" step="1" inputmode="numeric" />
+        <p data-i18n="connect.publishHint"></p>
       </div>
     </div>
     <button id="disconnect" type="button" data-i18n="connect.disconnect" hidden></button>

@@ -9,6 +9,8 @@
 
   interface LocalSettings {
     allowPrivateAddons: boolean;
+    publish: boolean;
+    publishPort: number;
   }
 
   interface Bootstrap {
@@ -24,7 +26,7 @@
   };
 
   const ready = ipcRenderer.invoke("desktop:bootstrap") as Promise<Bootstrap>;
-  const live: Bootstrap = { strings: {}, profiles: [], selectedProfileId: null, localSettings: { allowPrivateAddons: false } };
+  const live: Bootstrap = { strings: {}, profiles: [], selectedProfileId: null, localSettings: { allowPrivateAddons: false, publish: false, publishPort: 8091 } };
   void ready.then((state) => {
     live.strings = state.strings;
     live.profiles = state.profiles;
@@ -41,7 +43,7 @@
     saveProfile: (input: { id: string | null; name: string; origin: string }) => ipcRenderer.invoke("desktop:save-profile", input),
     deleteProfile: (id: string) => ipcRenderer.invoke("desktop:delete-profile", id),
     selectProfile: (id: string | null) => ipcRenderer.invoke("desktop:select-profile", id),
-    setLocalSettings: (input: { allowPrivateAddons: boolean }) => ipcRenderer.invoke("desktop:set-local-settings", input),
+    setLocalSettings: (input: { allowPrivateAddons: boolean; publish: boolean; publishPort: number }) => ipcRenderer.invoke("desktop:set-local-settings", input),
     connect: (id: string) => ipcRenderer.invoke("desktop:connect", id),
     connectLocal: () => ipcRenderer.invoke("desktop:connect-local"),
     disconnect: () => ipcRenderer.invoke("desktop:disconnect") as Promise<void>,
