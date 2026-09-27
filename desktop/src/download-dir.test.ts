@@ -54,10 +54,10 @@ test("an empty folder is owned; one that already holds the user's files is not",
 });
 
 test("the disk root, the home folder and above it, and the app's own data are refused", () => {
-  for (const dir of ["/", "/Users", "/Users/someone", "/Users/someone/", PLACES.userData, path.join(PLACES.userData, "instance"), "/Users/someone/Library/Application Support"]) {
+  for (const dir of ["/", "/Users", "/Users/someone", "/Users/someone/", PLACES.userData, path.posix.join(PLACES.userData, "instance"), "/Users/someone/Library/Application Support"]) {
     assert.equal(reservedDownloadDir(dir, PLACES), true, dir);
   }
-  for (const dir of [path.join(PLACES.userData, "downloads"), "/Users/someone/Movies", "/Users/someone/Movies/Stremio Offline", "/Volumes/Films"]) {
+  for (const dir of [path.posix.join(PLACES.userData, "downloads"), "/Users/someone/Movies", "/Users/someone/Movies/Stremio Offline", "/Volumes/Films"]) {
     assert.equal(reservedDownloadDir(dir, PLACES), false, dir);
   }
 });
@@ -129,7 +129,7 @@ test("only an owned, still stored, unprotected folder may go to the Trash", () =
   assert.equal(mayTrashDownloadDir(films, films, null, PLACES), false, "no record, no trust");
   assert.equal(mayTrashDownloadDir(films, "/Volumes/X/Films", { dir: films, owned: true }, PLACES), false, "not the stored folder any more");
   assert.equal(mayTrashDownloadDir("/Users/someone/Movies", "/Users/someone/Movies", { dir: "/Users/someone/Movies", owned: true }, PLACES), false, "a home folder never goes");
-  assert.equal(mayTrashDownloadDir(path.join(PLACES.userData, "downloads"), null, null, PLACES), true, "the app's own default");
+  assert.equal(mayTrashDownloadDir(path.posix.join(PLACES.userData, "downloads"), null, null, PLACES), true, "the app's own default");
 });
 
 test("ownership is written atomically and read back leniently", async (t) => {
