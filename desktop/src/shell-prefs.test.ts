@@ -19,8 +19,8 @@ const fileOf = (dir: string) => path.join(dir, SHELL_PREFS_FILE);
 test("a chosen language survives a round trip", async () => {
   await withDir(async (dir) => {
     for (const locale of ["cs", "en", null] as const) {
-      await writeShellPrefs(dir, { locale, checkUpdates: true });
-      assert.deepEqual(await readShellPrefs(dir), { locale, checkUpdates: true });
+      await writeShellPrefs(dir, { locale, checkUpdates: true, trayNoticeShown: false });
+      assert.deepEqual(await readShellPrefs(dir), { locale, checkUpdates: true, trayNoticeShown: false });
     }
     assert.deepEqual(await readdir(dir), [SHELL_PREFS_FILE]);
   });
@@ -28,7 +28,7 @@ test("a chosen language survives a round trip", async () => {
 
 test("a missing file means the system decides", async () => {
   await withDir(async (dir) => {
-    assert.deepEqual(await readShellPrefs(dir), { locale: null, checkUpdates: true });
+    assert.deepEqual(await readShellPrefs(dir), { locale: null, checkUpdates: true, trayNoticeShown: false });
   });
 });
 
@@ -37,24 +37,24 @@ test("a malformed or unexpected file means the system decides", async () => {
     const rejected = ["not json", "null", "[]", JSON.stringify({ locale: "de" }), JSON.stringify({ locale: 1 }), JSON.stringify({})];
     for (const text of rejected) {
       await writeFile(fileOf(dir), text, "utf8");
-      assert.deepEqual(await readShellPrefs(dir), { locale: null, checkUpdates: true }, text);
+      assert.deepEqual(await readShellPrefs(dir), { locale: null, checkUpdates: true, trayNoticeShown: false }, text);
     }
   });
 });
 
 test("the file holds the locale and the update check", async () => {
   await withDir(async (dir) => {
-    await writeShellPrefs(dir, { locale: "cs", checkUpdates: false });
-    assert.deepEqual(JSON.parse(await readFile(fileOf(dir), "utf8")), { locale: "cs", checkUpdates: false });
+    await writeShellPrefs(dir, { locale: "cs", checkUpdates: false, trayNoticeShown: true });
+    assert.deepEqual(JSON.parse(await readFile(fileOf(dir), "utf8")), { locale: "cs", checkUpdates: false, trayNoticeShown: true });
   });
 });
 
 test("turning the update check off survives a round trip", async () => {
   await withDir(async (dir) => {
     for (const checkUpdates of [true, false]) {
-      await writeShellPrefs(dir, { locale: "en", checkUpdates });
-      assert.deepEqual(await readShellPrefs(dir), { locale: "en", checkUpdates });
-      assert.deepEqual(readShellPrefsSync(dir), { locale: "en", checkUpdates });
+      await writeShellPrefs(dir, { locale: "en", checkUpdates, trayNoticeShown: false });
+      assert.deepEqual(await readShellPrefs(dir), { locale: "en", checkUpdates, trayNoticeShown: false });
+      assert.deepEqual(readShellPrefsSync(dir), { locale: "en", checkUpdates, trayNoticeShown: false });
     }
   });
 });
@@ -62,9 +62,19 @@ test("turning the update check off survives a round trip", async () => {
 test("a file written before the update check existed keeps it on", async () => {
   await withDir(async (dir) => {
     await writeFile(fileOf(dir), JSON.stringify({ locale: "cs" }), "utf8");
-    assert.deepEqual(await readShellPrefs(dir), { locale: "cs", checkUpdates: true });
+    assert.deepEqual(await readShellPrefs(dir), { locale: "cs", checkUpdates: true, trayNoticeShown: false });
     await writeFile(fileOf(dir), JSON.stringify({ locale: "cs", checkUpdates: "no" }), "utf8");
-    assert.deepEqual(await readShellPrefs(dir), { locale: "cs", checkUpdates: true });
+    assert.deepEqual(await readShellPrefs(dir), { locale: "cs", checkUpdates: true, trayNoticeShown: false });
+  });
+});
+
+test("the tray notice flag is written, read back and off by default", async () => {
+  await withDir(async (dir) => {
+    await writeShellPrefs(dir, { locale: "en", checkUpdates: true, trayNoticeShown: true });
+    assert.deepEqual(await readShellPrefs(dir), { locale: "en", checkUpdates: true, trayNoticeShown: true });
+    assert.deepEqual(readShellPrefsSync(dir), { locale: "en", checkUpdates: true, trayNoticeShown: true });
+    await writeFile(fileOf(dir), JSON.stringify({ locale: "cs", checkUpdates: false, trayNoticeShown: "yes" }), "utf8");
+    assert.deepEqual(await readShellPrefs(dir), { locale: "cs", checkUpdates: false, trayNoticeShown: false });
   });
 });
 
@@ -79,16 +89,16 @@ test("the choice wins, else Czech, else English", () => {
 
 test("the synchronous read answers exactly like the asynchronous one", async () => {
   await withDir(async (dir) => {
-    assert.deepEqual(readShellPrefsSync(dir), { locale: null, checkUpdates: true });
+    assert.deepEqual(readShellPrefsSync(dir), { locale: null, checkUpdates: true, trayNoticeShown: false });
     const lenient = ["not json", "null", "[]", JSON.stringify({ locale: "de" }), JSON.stringify({ locale: 1 }), JSON.stringify({})];
     for (const text of lenient) {
       await writeFile(fileOf(dir), text, "utf8");
       assert.deepEqual(readShellPrefsSync(dir), await readShellPrefs(dir), text);
-      assert.deepEqual(readShellPrefsSync(dir), { locale: null, checkUpdates: true }, text);
+      assert.deepEqual(readShellPrefsSync(dir), { locale: null, checkUpdates: true, trayNoticeShown: false }, text);
     }
     for (const locale of ["cs", "en", null] as const) {
-      await writeShellPrefs(dir, { locale, checkUpdates: true });
-      assert.deepEqual(readShellPrefsSync(dir), { locale, checkUpdates: true });
+      await writeShellPrefs(dir, { locale, checkUpdates: true, trayNoticeShown: false });
+      assert.deepEqual(readShellPrefsSync(dir), { locale, checkUpdates: true, trayNoticeShown: false });
       assert.deepEqual(readShellPrefsSync(dir), await readShellPrefs(dir));
     }
   });

@@ -19,7 +19,7 @@ beforeEach(() => {
 afterEach(() => { act(() => root.unmount()); host.remove(); });
 
 const baseState = (over: Partial<ShellState> = {}): ShellState => ({
-  locale: "en", localeChoice: null, appVersion: "0.4.88", screen: { kind: "welcome" }, connection: null, chosen: null,
+  platform: "darwin", locale: "en", localeChoice: null, appVersion: "0.4.88", screen: { kind: "welcome" }, connection: null, chosen: null,
   profiles: [{ id: "nas", name: "NAS", origin: "http://192.168.1.20:8090" }],
   local: {
     settings: { allowPrivateAddons: false, publish: false, publishPort: 8091, downloadDir: null }, running: false, addresses: [], ffmpeg: null, busy: false,
@@ -276,4 +276,23 @@ it("a newer release shows in About and opens through the shell", async () => {
   await render(bridge);
   await click(button("Download 0.4.90"));
   expect(bridge.openUpdate).toHaveBeenCalled();
+});
+
+it("on Windows the pages say This PC and Recycle Bin, and leave the title bar to the window", async () => {
+  const win = (over: Partial<ShellState> = {}) => baseState({ platform: "win32", ...over });
+  await render(makeBridge("main", win()));
+  expect(host.textContent).toContain("This PC");
+  expect(host.textContent).not.toMatch(/\bMac\b|⌘/);
+  act(() => root.unmount());
+  root = createRoot(host);
+  await render(makeBridge("settings", win({ local: { ...baseState().local, downloadDirOwned: false } })));
+  expect(host.querySelector(".shell-titlebar")).toBeNull();
+  expect(host.textContent).toContain("Reset this PC…");
+  expect(host.textContent).toContain("Recycle Bin");
+  expect(host.textContent).not.toMatch(/\bMac\b|macOS|Trash/);
+  act(() => root.unmount());
+  root = createRoot(host);
+  await render(makeBridge("settings", baseState()));
+  expect(host.querySelector(".shell-titlebar")).not.toBeNull();
+  expect(host.textContent).toContain("Reset this Mac…");
 });

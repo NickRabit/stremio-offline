@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { renameWithRetry } from "./fs-retry.js";
 import { httpAllowed, parseServerOrigin } from "./origin.js";
 
 const FILE = "connection.json";
@@ -139,7 +140,7 @@ export async function writeProfiles(dir: string, store: ProfileStore): Promise<v
   const temporary = path.join(dir, `${TMP_FILE}.${randomUUID()}`);
   try {
     await writeFile(temporary, body, { encoding: "utf8", flag: "wx" });
-    await rename(temporary, path.join(dir, FILE));
+    await renameWithRetry(temporary, path.join(dir, FILE));
   } catch (error) {
     await unlink(temporary).catch(() => {});
     throw error;

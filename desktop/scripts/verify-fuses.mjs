@@ -26,7 +26,10 @@ const REVIEWED_FUSES = {
 };
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
-const defaultAppPath = path.resolve(scriptDir, "..", "release", "mac-arm64", "Stremio Offline.app");
+// The packaged layout differs per platform; an argument still overrides the default.
+const defaultAppPath = process.platform === "win32"
+  ? path.resolve(scriptDir, "..", "release", "win-unpacked", "Stremio Offline.exe")
+  : path.resolve(scriptDir, "..", "release", "mac-arm64", "Stremio Offline.app");
 const appPath = path.resolve(process.argv[2] ?? defaultAppPath);
 
 const describe = (state) => STATE_NAMES[state] ?? `unknown (${state})`;

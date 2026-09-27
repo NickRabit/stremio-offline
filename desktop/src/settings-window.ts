@@ -12,6 +12,7 @@ export interface SettingsWindowOptions {
   preload: string;
   userDataDir: () => string;
   title: () => string;
+  platform: NodeJS.Platform;
 }
 
 /** The settings window: one instance, opened from the menu or the shell page, closed with the main window. */
@@ -64,7 +65,8 @@ export class SettingsWindow {
       minHeight: SETTINGS_MIN_SIZE.height,
       show: false,
       title: this.options.title(),
-      titleBarStyle: "hiddenInset",
+      ...(this.options.platform === "darwin" ? { titleBarStyle: "hiddenInset" as const } : {}),
+      ...(this.options.platform === "win32" ? { autoHideMenuBar: true } : {}),
       backgroundColor: BACKGROUND,
       fullscreenable: false,
       webPreferences: {

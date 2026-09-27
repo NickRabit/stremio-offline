@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Check, LoaderCircle, TriangleAlert } from "lucide-react";
-import { t } from "../i18n";
+import { t } from "./text";
 import type { ProbeResult, ServerProfile, ShellBridge } from "./bridge";
 
 const probeText = (result: ProbeResult) => result.ok ? t("desktop.testOk", { version: result.version })

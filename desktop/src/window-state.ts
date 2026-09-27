@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { renameWithRetry } from "./fs-retry.js";
 import { SerialQueue } from "./serial-queue.js";
 
 export interface Rect { x: number; y: number; width: number; height: number }
@@ -73,7 +74,7 @@ export async function writeWindowState(dir: string, name: WindowName, state: Win
     const temporary = path.join(dir, `${WINDOW_STATE_FILE}.${randomUUID()}`);
     try {
       await writeFile(temporary, JSON.stringify(store) + "\n", { encoding: "utf8", flag: "wx" });
-      await rename(temporary, path.join(dir, WINDOW_STATE_FILE));
+      await renameWithRetry(temporary, path.join(dir, WINDOW_STATE_FILE));
     } catch (error) {
       await rm(temporary).catch(() => {});
       throw error;

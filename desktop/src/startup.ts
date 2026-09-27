@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { ServerProfile } from "./connection-file.js";
+import { renameWithRetry } from "./fs-retry.js";
 import type { ProbeFailure } from "./status.js";
 
 /** What the app connects to: the backend it runs itself, or a saved server profile. */
@@ -44,7 +45,7 @@ export async function writeStartupChoice(dir: string, target: Target | null): Pr
   const temporary = path.join(dir, `${STARTUP_FILE}.${randomUUID()}`);
   try {
     await writeFile(temporary, JSON.stringify({ target }) + "\n", { encoding: "utf8", flag: "wx" });
-    await rename(temporary, path.join(dir, STARTUP_FILE));
+    await renameWithRetry(temporary, path.join(dir, STARTUP_FILE));
   } catch (error) {
     await rm(temporary).catch(() => {});
     throw error;

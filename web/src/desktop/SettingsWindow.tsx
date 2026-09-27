@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Check, Copy, Download, Info, Languages, Laptop, Network, Pencil, Plus, RefreshCw, RotateCcw, Server, Trash2, TriangleAlert } from "lucide-react";
-import { LOCALE_NAMES, t } from "../i18n";
+import { LOCALE_NAMES } from "../i18n";
+import { t } from "./text";
 import { SettingControl, SettingsSectionHead } from "../settings-ui";
 import type { AppPrefs, LocalSettings, ServerProfile, ShellBridge, ShellState, Target } from "./bridge";
 import { adoptDownloadDir, FolderError, FolderPath } from "./DownloadFolder";
@@ -16,7 +17,8 @@ const isCurrent = (state: ShellState, target: Target) => {
 
 export function SettingsWindow({ bridge, state }: { bridge: ShellBridge; state: ShellState }) {
   return <div className="shell-settings">
-    <header className="shell-titlebar"><h1>{t("desktop.settingsTitle")}</h1></header>
+    {/* Windows draws the window's own frame and title; macOS leaves the bar to the page. */}
+    {state.platform === "darwin" && <header className="shell-titlebar"><h1>{t("desktop.settingsTitle")}</h1></header>}
     <div className="shell-settings-body">
       <GeneralSection bridge={bridge} state={state}/>
       <ServerSection bridge={bridge} state={state}/>

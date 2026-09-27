@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { FolderOpen, TriangleAlert } from "lucide-react";
-import { t } from "../i18n";
+import { t } from "./text";
 import type { ShellBridge, ShellState } from "./bridge";
 
 type Failure = keyof typeof FAILURE_TEXT;

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -200,8 +200,8 @@ test("writes reject invalid profiles and dangling selections", async () => {
 
 test("a read error other than a missing file is surfaced", async () => {
   await withDir(async (dir) => {
-    const file = path.join(dir, "not-a-directory");
-    await writeFile(file, "", "utf8");
-    await assert.rejects(readProfiles(file), { code: "ENOTDIR" });
+    // A folder where the file should be is refused the same way on every platform.
+    await mkdir(path.join(dir, "connection.json"));
+    await assert.rejects(readProfiles(dir), { code: "EISDIR" });
   });
 });

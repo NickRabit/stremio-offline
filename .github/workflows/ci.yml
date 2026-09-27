@@ -49,6 +49,7 @@ jobs:
       - run: npx tsc -p desktop
       - run: npx tsc --noEmit -p server
       - run: npm run test -w server
+      - run: npm run test -w desktop
 
   # The Playwright container carries the browser and its system libraries, so the
   # same image is used locally when baselines are involved. See docs/testing.md.

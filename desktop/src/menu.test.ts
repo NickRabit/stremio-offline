@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { MenuItemConstructorOptions } from "electron";
 import type { ServerProfile } from "./connection-file.js";
-import { en } from "./i18n.js";
+import { catalogue, en } from "./i18n.js";
 import { buildMenuTemplate, type MenuActions, type MenuInput } from "./menu.js";
 import type { Target } from "./shell-api.js";
 
@@ -24,7 +24,7 @@ const build = (over: Partial<MenuInput> = {}) => {
     openProject: () => { calls.push({ action: "openProject", target: null }); },
   };
   const template = buildMenuTemplate({
-    strings: en, profiles, current: null, connected: false, isPackaged: false, actions, ...over,
+    strings: en, profiles, current: null, connected: false, isPackaged: false, actions, platform: "darwin", ...over,
   });
   return { template, calls };
 };
@@ -121,4 +121,49 @@ test("Reconnect and the server pickers hand over the target", () => {
     { action: "openSettings", target: null },
     { action: "openProject", target: null },
   ]);
+});
+
+const windows = (over: Partial<MenuInput> = {}) =>
+  build({ platform: "win32", strings: catalogue("en", "win32"), ...over });
+
+const roles = (items: MenuItemConstructorOptions[]): string[] =>
+  items.flatMap((item) => [item.role ?? "", ...roles(submenu(item))]).filter((role) => role.length > 0);
+
+test("the Windows bar is File, Edit, View, Server and Help, with no app menu", () => {
+  const strings = catalogue("en", "win32");
+  const { template } = windows();
+  assert.deepEqual(shape(template), [strings["menu.file"], "editMenu", strings["menu.view"], strings["menu.server"], "help"]);
+  assert.deepEqual(shape(submenu(template[0])), [strings["menu.settings"], "separator", "quit"]);
+  assert.equal(submenu(template[0])[2].label, strings["menu.exit"]);
+  assert.deepEqual(shape(submenu(template[2])), [strings["menu.reload"], "togglefullscreen", strings["menu.devTools"]]);
+  assert.deepEqual(shape(serverItems(template)),
+    [strings["window.thisPC"], "Living room", "NAS", "separator", strings["menu.reconnect"], strings["menu.serverSettings"]]);
+  assert.deepEqual(shape(submenu(template[4])), [strings["menu.project"]]);
+});
+
+test("Settings in the File menu carries the usual accelerator and Exit is the quit role", () => {
+  const { template } = windows();
+  const file = submenu(template[0]);
+  assert.equal(file[0].accelerator, "CmdOrCtrl+,");
+  assert.equal(file[0].role, undefined);
+  assert.equal(file[2].label, catalogue("en", "win32")["menu.exit"]);
+  assert.equal(file[2].role, "quit");
+});
+
+test("no macOS-only role reaches the Windows bar", () => {
+  const macOnly = ["about", "services", "hide", "hideOthers", "unhide", "windowMenu"];
+  for (const platform of ["win32", "linux"] as const) {
+    const { template } = windows({ platform });
+    for (const role of macOnly) assert.equal(roles(template).includes(role), false, `${platform} ${role}`);
+    assert.equal(roles(template).includes("editMenu"), true);
+    assert.equal(roles(template).includes("quit"), true);
+  }
+});
+
+test("every Windows entry reaches its own action", () => {
+  const { template, calls } = windows({ current: { kind: "profile", id: "one" }, connected: true });
+  fire(template);
+  assert.deepEqual(calls.map((call) => call.action === "connect" ?
+    `connect:${call.target?.kind === "profile" ? call.target.id : "local"}` : call.action).sort(),
+  ["connect:local", "connect:one", "connect:two", "devTools", "openProject", "openSettings", "openSettings", "reconnect", "reload"]);
 });
