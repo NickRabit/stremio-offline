@@ -315,7 +315,9 @@ The same shell runs on Windows x64. Where it differs from macOS:
   macOS job and attaches `Stremio-Offline-<version>-x64-unsigned-setup.exe`
   and `.zip`. The files are unsigned, so SmartScreen warns on the first run.
 
-Users read [docs/install-windows.md](../docs/install-windows.md).
+Users read [docs/install-windows.md](../docs/install-windows.md); the manual
+check before the build loses its experimental label is
+[docs/testing-windows.md](../docs/testing-windows.md).
 
 ## Signed release (manual)
 
