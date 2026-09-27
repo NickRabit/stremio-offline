@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
@@ -86,7 +86,7 @@ test("a folder that cannot be written to is refused", async () => {
 
 test("a folder that cannot be created is refused", async () => {
   const fsImpl: DownloadDirFs = {
-    stat: async () => { throw new Error("ENOENT"); },
+    stat: async () => { throw Object.assign(new Error("missing"), { code: "ENOENT" }); },
     readdir: async () => [],
     mkdir: async () => { throw new Error("EACCES"); },
     writeFile: async () => undefined,
@@ -112,4 +112,30 @@ test("ownership is written atomically and read back leniently", async (t) => {
   assert.deepEqual(await readOwnership(dir), { dir: "/x/Films", owned: true });
   await writeFile(path.join(dir, "download-folder.json"), "{\"dir\":7}", "utf8");
   assert.equal(await readOwnership(dir), null);
+});
+
+test("a folder whose contents cannot be listed is used but never owned", async (t) => {
+  // Write and search, but no read: the user's own film stays invisible to readdir.
+  const dir = path.join(await tempDir(t), "Films");
+  await mkdir(dir);
+  await writeFile(path.join(dir, "my-own-film.mkv"), "x", "utf8");
+  await chmod(dir, 0o300);
+  try {
+    assert.deepEqual(await prepareDownloadDir(dir, PLACES), { ok: true, dir, owned: false });
+  } finally {
+    await chmod(dir, 0o700);
+  }
+});
+
+test("a folder that cannot even be looked at is refused, not created", async () => {
+  let made = false;
+  const fsImpl: DownloadDirFs = {
+    stat: async () => { throw Object.assign(new Error("denied"), { code: "EACCES" }); },
+    readdir: async () => [],
+    mkdir: async () => { made = true; return undefined; },
+    writeFile: async () => undefined,
+    rm: async () => undefined,
+  };
+  assert.deepEqual(await prepareDownloadDir("/Users/someone/Films", PLACES, fsImpl), { ok: false, reason: "not-writable" });
+  assert.equal(made, false);
 });

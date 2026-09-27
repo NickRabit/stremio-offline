@@ -62,11 +62,19 @@ export async function prepareDownloadDir(dir: unknown, places: Places, fsImpl: D
   }
   const resolved = path.resolve(dir);
   if (reservedDownloadDir(resolved, places)) return { ok: false, reason: "reserved" };
+  // Only a folder created here, or one whose contents were read and found empty, is the app's:
+  // a folder it cannot list may hold anything.
   let fresh = false;
+  let exists = true;
   try {
     if (!(await fsImpl.stat(resolved)).isDirectory()) return { ok: false, reason: "not-folder" };
-    fresh = (await fsImpl.readdir(resolved)).every((entry) => IGNORED_ENTRIES.has(entry));
-  } catch {
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") return { ok: false, reason: "not-writable" };
+    exists = false;
+  }
+  if (exists) {
+    fresh = await fsImpl.readdir(resolved).then((entries) => entries.every((entry) => IGNORED_ENTRIES.has(entry)), () => false);
+  } else {
     try {
       await fsImpl.mkdir(resolved, { recursive: true });
       fresh = true;

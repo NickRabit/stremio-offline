@@ -136,7 +136,6 @@ function ThisMacSection({ bridge, state }: { bridge: ShellBridge; state: ShellSt
   const { local } = state;
   const [port, setPort] = useState(String(local.settings.publishPort));
   const [portError, setPortError] = useState(false);
-  const [restartNeeded, setRestartNeeded] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [restarting, setRestarting] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -144,8 +143,7 @@ function ThisMacSection({ bridge, state }: { bridge: ShellBridge; state: ShellSt
   useEffect(() => setPort(String(local.settings.publishPort)), [local.settings.publishPort]);
 
   const store = async (settings: LocalSettings) => {
-    const result = await bridge.setLocalSettings(settings);
-    if (result.ok && result.restartNeeded) setRestartNeeded(true);
+    await bridge.setLocalSettings(settings);
   };
   const commitPort = () => {
     if (!validPort(port)) return setPortError(true);
@@ -159,7 +157,7 @@ function ThisMacSection({ bridge, state }: { bridge: ShellBridge; state: ShellSt
     setFailed(false);
     const result = await bridge.restartLocal();
     setRestarting(false);
-    if (result.ok) setRestartNeeded(false); else setFailed(true);
+    if (!result.ok) setFailed(true);
   };
   const copy = (address: string) => { bridge.copyText(address); setCopied(address); setTimeout(() => setCopied((current) => current === address ? null : current), 1500); };
 
@@ -190,7 +188,7 @@ function ThisMacSection({ bridge, state }: { bridge: ShellBridge; state: ShellSt
         <span className="switch"><input type="checkbox" checked={local.settings.allowPrivateAddons} onChange={(event) => void store({ ...local.settings, allowPrivateAddons: event.target.checked })}/><span/></span>
       </SettingControl>
     </div>
-    {(restartNeeded || confirming || failed) && local.running && <div className={`shell-notice${confirming ? " warn" : ""}`} role="status">
+    {(local.restartNeeded || confirming || failed) && local.running && <div className={`shell-notice${confirming ? " warn" : ""}`} role="status">
       <Network/>
       <span>{failed ? t("desktop.restartFailed") : confirming ? t("desktop.restartBusy") : t("desktop.restartNeeded")}</span>
       {confirming && <button onClick={() => setConfirming(false)}>{t("desktop.cancel")}</button>}
