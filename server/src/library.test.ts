@@ -380,6 +380,27 @@ test("listVideos walks the same tree scanLibrary uses", async () => {
   }
 });
 
+test("a walk with several calls in flight answers in the order of a sequential one", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "stremio-videos-"));
+  try {
+    await mkdir(path.join(root, "B show", "01 serie"), { recursive: true });
+    await mkdir(path.join(root, "D film"), { recursive: true });
+    await mkdir(path.join(root, "Skipped"), { recursive: true });
+    for (let index = 0; index < 40; index += 1) await writeFile(path.join(root, "B show", "01 serie", `${String(index).padStart(2, "0")}.mkv`), "");
+    await writeFile(path.join(root, "A.mkv"), "");
+    await writeFile(path.join(root, "C.mkv"), "");
+    await writeFile(path.join(root, "D film", "film.mp4"), "12345");
+    await writeFile(path.join(root, "Skipped", "x.mkv"), "");
+    const parallel = await listVideos(root, "", 0, new Set(["Skipped"]));
+    const sequential = await listVideos(root, "", 0, new Set(["Skipped"]), { files: 1_000, until: Date.now() + 60_000 });
+    assert.equal(parallel.length, 43);
+    assert.deepEqual(parallel, sequential);
+    assert.equal(parallel.find((file) => file.relative === "D film/film.mp4")?.size, 5);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("a walk with a budget stops where the budget ends", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "stremio-videos-"));
   try {

@@ -35,7 +35,7 @@ export interface ContentDeps extends RouteContext {
   libraryPathBusy(keys: string[]): Promise<string | undefined>;
   libraryRootBrowse(viewer: Viewer): Promise<{ path: string; items: unknown[]; total: number; pending: boolean }>;
   /** Every title unit of every library, the walk the browse folder mosaic groups. */
-  libraryUnits(): Promise<TitleUnit[]>;
+  libraryUnits(read?: { stale?: boolean }): Promise<TitleUnit[]>;
   locateArtwork(entry: LibraryEntry, shape?: ArtShape): Promise<string | undefined>;
   locateFileArtwork(key: string, shape?: ArtShape): Promise<string | undefined>;
   locateFolderArtwork(key: string, shape?: ArtShape): Promise<string | undefined>;
@@ -134,7 +134,7 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     const result = await browseDirectory(library.root, resolved?.relative ?? "", String(req.query.query ?? ""),
       Math.max(0, Number(req.query.skip) || 0), limit, sort, req.query.order === "desc", String(req.query.seed ?? ""), onlyPaths,
       carveOutsOf(library));
-    const units = result.items.some((item) => item.kind === "folder") ? await libraryUnits() : [];
+    const units = result.items.some((item) => item.kind === "folder") ? await libraryUnits({ stale: true }) : [];
     // Missing thumbnails are produced in the background; the client asks for the page again shortly.
     const items = await Promise.all(result.items.map(async (item) => {
       const key = inLibrary(item.path);

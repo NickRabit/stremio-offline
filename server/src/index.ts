@@ -32,8 +32,9 @@ import { currentLevel, flushLog, initLogger, log, parseLevel, startLogMaintenanc
 import { resolveListenTarget, startServer, utilityParentPort } from "./server-start.js";
 import { loopbackHostCheck } from "./host-check.js";
 import { InFlight } from "./in-flight.js";
+import { WalkCache } from "./walk-cache.js";
 import { killRunningMedia } from "./media-tools.js";
-import { browseDirectory, describePath, emptiedFolders, entryDirectory, holdsLibraryRoot, isPathWithin, isVideo, listVideos, moveDestination, orphanedCatalogKeys, pageFiles, remapPath, scanLibrary, summarize, type FoundFile, type LibraryEntry } from "./library.js";
+import { browseDirectory, describePath, emptiedFolders, entryDirectory, holdsLibraryRoot, isPathWithin, isVideo, listVideos, moveDestination, orphanedCatalogKeys, pageFiles, remapPath, summarize, buildLibrary, type FoundFile, type LibraryEntry } from "./library.js";
 import { browseMeta, cacheFieldsFromMeta, episodeKey, episodeNumberOf, episodesFromMeta, dropKeyed, folderMosaicUnits, knownEntryForUnit, knownTitleEntry, knownTitleOf, knownTitleForUnit, matchKeyFor, mosaicIdentities, mosaicSkipped, needsBackfill, needsEpisodes, staleSuggestionKeys, titleUnits, unitFor, unmatchAt, withSkipFlag, type GalleryEntry, type LibraryMetaRecord, type TitleKind, type TitleUnit } from "./library-match.js";
 import { LibraryScan } from "./library-scan.js";
 import { probe } from "./probe.js";
@@ -747,12 +748,15 @@ const libraryHealth = new Map<string, LibraryHealth>();
 /** Probes are cached for half a minute, and a library whose answer changed drops the walks. */
 const refreshLibraryHealth = async () => {
   let changed = false;
-  for (const library of store.libraries()) {
+  // Each probe may wait out its timeout on a sick mount; one slow disk must not hold up the rest.
+  const libraries = store.libraries();
+  const probes = await Promise.all(libraries.map((library) => libraryProbe.cached(library.root)));
+  libraries.forEach((library, index) => {
     const before = libraryHealth.get(library.id);
-    const health = await libraryProbe.cached(library.root);
+    const health = probes[index]!;
     if (before && (before.unreachable !== health.unreachable || before.readOnly !== health.readOnly)) changed = true;
     libraryHealth.set(library.id, health);
-  }
+  });
   if (changed) invalidateLibrary();
   return libraryHealth;
 };
@@ -784,41 +788,32 @@ const cachedMeta = async (type: string, id: string, language: string = prefsOf()
   return value;
 };
 // Walking the tree is expensive, so it is held in memory for a while. The queue invalidates it once a download finishes.
-let libraryCache: { at: number; entries: Awaited<ReturnType<typeof scanLibrary>> } | undefined;
-let videoCache: { at: number; files: Awaited<ReturnType<typeof listVideos>> } | undefined;
-const invalidateLibrary = () => { libraryCache = undefined; videoCache = undefined; unitCache = undefined; };
-registerCatalogRoutes(app, { ...routeContext, tmdbProvider, cachedMeta, prefsOf, libraryTarget, ownerOf, trackMedia, libraryKey, metaStore, externalIds, subtitleDelay });
-const libraryFiles = async () => {
-  if (videoCache && Date.now() - videoCache.at < 30_000) return videoCache.files;
+// Units and entries are derived from the one walk, so a cold listing reads the disk once.
+type WalkRead = { stale?: boolean };
+const videoCache = new WalkCache<FoundFile[]>(async () => {
   const files: FoundFile[] = [];
   for (const library of walkableLibraries()) {
     for (const file of await listVideos(library.root, "", 0, carveOutsOf(library))) {
       files.push({ ...file, relative: libraryPath(library.id, file.relative) });
     }
   }
-  videoCache = { at: Date.now(), files };
   return files;
-};
-const libraryFilesIn = async (library: LibraryRecord) =>
-  (await libraryFiles()).filter((file) => relativeKeyIn(library.id, file.relative) !== undefined);
+}, 30_000);
+const filesOf = (files: FoundFile[], library: LibraryRecord) =>
+  files.filter((file) => relativeKeyIn(library.id, file.relative) !== undefined);
 /** Title units of every library, the type of each one applied. Cached with the walk
  *  it derives from, because a catalogue-sized tree is expensive to index. */
-let unitCache: { at: number; units: TitleUnit[] } | undefined;
-const libraryUnits = async (): Promise<TitleUnit[]> => {
-  if (unitCache && Date.now() - unitCache.at < 30_000) return unitCache.units;
-  const files = await libraryFiles();
-  const units = walkableLibraries().flatMap((library) =>
-    titleUnits(files.filter((file) => relativeKeyIn(library.id, file.relative) !== undefined), library.type));
-  unitCache = { at: Date.now(), units };
-  return units;
-};
-const libraryEntries = async () => {
-  if (libraryCache && Date.now() - libraryCache.at < 30_000) return libraryCache.entries;
+const unitCache = new WalkCache<TitleUnit[]>(async () => {
+  const files = await videoCache.get();
+  return walkableLibraries().flatMap((library) => titleUnits(filesOf(files, library), library.type));
+}, 30_000);
+const libraryCache = new WalkCache<LibraryEntry[]>(async () => {
+  const [files, units] = await Promise.all([videoCache.get(), unitCache.get()]);
   const known = metaStore.qualifiedMeta();
   const entries: LibraryEntry[] = [];
-  const units = await libraryUnits();
   for (const library of walkableLibraries()) {
-    for (const entry of await scanLibrary(library.root, carveOutsOf(library))) {
+    const own = filesOf(files, library).map((file) => ({ ...file, relative: relativeKeyIn(library.id, file.relative)! }));
+    for (const entry of buildLibrary(own)) {
       const key = libraryPath(library.id, entry.key);
       const qualified: LibraryEntry = {
         ...entry, key,
@@ -837,9 +832,16 @@ const libraryEntries = async () => {
     }
   }
   entries.sort((a, b) => b.modified.localeCompare(a.modified));
-  libraryCache = { at: Date.now(), entries };
   return entries;
-};
+}, 30_000);
+const invalidateLibrary = () => { videoCache.invalidate(); unitCache.invalidate(); libraryCache.invalidate(); };
+registerCatalogRoutes(app, { ...routeContext, tmdbProvider, cachedMeta, prefsOf, libraryTarget, ownerOf, trackMedia, libraryKey, metaStore, externalIds, subtitleDelay });
+/** `stale` is for a caller that only renders what it gets: it may be answered with the last
+ *  walk while the next one runs. Anything that acts on the tree asks for a current one. */
+const libraryFiles = (read?: WalkRead) => videoCache.get(read);
+const libraryFilesIn = async (library: LibraryRecord) => filesOf(await libraryFiles(), library);
+const libraryUnits = (read?: WalkRead) => unitCache.get(read);
+const libraryEntries = (read?: WalkRead) => libraryCache.get(read);
 
 /** The address of a thumbnail never changes, so without a stamp the browser keeps
  *  showing the frame it loaded before the title was matched. */
@@ -852,7 +854,7 @@ const artStamp = async (file: string) => {
  *  the root does not walk the tree again. */
 const libraryRootBrowse = async (viewer: Viewer) => {
   await refreshLibraryHealth();
-  const [stats, entries] = await Promise.all([libraryStats(), libraryEntries()]);
+  const [stats, entries] = await Promise.all([libraryStats({ stale: true }), libraryEntries({ stale: true })]);
   let pending = false;
   const items = await Promise.all([...visibleLibraries(store.libraries(), viewer)].sort((a, b) => a.order - b.order).map(async (library) => {
     const counts = stats.get(library.id) ?? { titles: 0, files: 0, bytes: 0 };
@@ -976,7 +978,7 @@ const catalogArt = async (wanted: ArtShape, posterUrl?: string, backdropUrl?: st
 };
 
 /** Someone else's picture in the folder always wins: nothing is overwritten or regenerated. */
-async function locateArtwork(entry: Awaited<ReturnType<typeof scanLibrary>>[number], shape: ArtShape = "poster") {
+async function locateArtwork(entry: LibraryEntry, shape: ArtShape = "poster") {
   const directory = entryDirectory(entry);
   if (directory) {
     const folder = mediaPath(directory);
@@ -988,7 +990,7 @@ async function locateArtwork(entry: Awaited<ReturnType<typeof scanLibrary>>[numb
 }
 
 /** Fills a missing thumbnail: the poster from metadata first, otherwise a representative frame from the video. */
-function scheduleArtwork(entry: Awaited<ReturnType<typeof scanLibrary>>[number]) {
+function scheduleArtwork(entry: LibraryEntry) {
   // Repeated polling asks for the same missing thumbnail before the first attempt
   // finishes; without this it would queue the same expensive job over and over.
   if (artworkQueue.has(entry.key)) return;
@@ -1021,8 +1023,8 @@ const grantRows = async () => Promise.all(libraryGrants().map(async (grant) => (
 })));
 
 /** Titles, files and bytes per library, taken from the walks the listing already caches. */
-const libraryStats = async () => {
-  const [entries, files] = await Promise.all([libraryEntries(), libraryFiles()]);
+const libraryStats = async (read?: WalkRead) => {
+  const [entries, files] = await Promise.all([libraryEntries(read), libraryFiles(read)]);
   const stats = new Map<string, { titles: number; files: number; bytes: number }>();
   for (const library of store.libraries()) stats.set(library.id, { titles: 0, files: 0, bytes: 0 });
   for (const entry of entries) {
@@ -1091,9 +1093,17 @@ const knownTitle = (key: string) => knownTitleOf(key, metaStore.qualifiedMeta())
 
 /** One item named by a stored key, from the library that owns it. Favourites and the
  *  resume list span libraries, so neither can go through the first library's root. */
-const describeLibraryPath = async (key: string) => {
+const describeLibraryPath = async (key: string, read?: WalkRead) => {
   const { library, relative } = libraryOfKey(key);
-  return describePath(library.root, relative, carveOutsOf(library));
+  // A library outside the walk -- switched off or away -- is described from the disk as before.
+  const walked = read?.stale && relative !== "" && walkableLibraries().some((candidate) => candidate.id === library.id);
+  const videosInside = walked
+    ? async () => (await libraryFiles(read)).flatMap((file) => {
+      const inside = relativeKeyIn(library.id, file.relative);
+      return inside !== undefined && inside !== relative && isPathWithin(inside, relative) ? [{ ...file, relative: inside }] : [];
+    })
+    : undefined;
+  return describePath(library.root, relative, carveOutsOf(library), videosInside);
 };
 
 /** Thumbnail of one video. Next to the video it is looked up by Jellyfin's naming convention.
@@ -1463,9 +1473,13 @@ async function sweepArtwork() {
         rememberArt(`dir:${parts.slice(0, depth).join("/")}`);
       }
     };
-    for (const entry of await scanLibrary(library.root, carveOutsOf(library))) {
-      rememberArt(libraryPath(library.id, entry.key));
-      for (const file of entry.files) remember(libraryPath(library.id, file.path));
+    const own = (await libraryEntries()).filter((entry) => parseLibraryPath(entry.key)?.libraryId === library.id);
+    // The walk is shared and may predate the readability check above: an empty answer is as
+    // likely a root that was away a moment ago as a library with nothing in it.
+    if (!own.length) continue;
+    for (const entry of own) {
+      rememberArt(entry.key);
+      for (const file of entry.files) remember(file.path);
     }
     for (const key of queued) if (parseLibraryPath(key)?.libraryId === library.id) remember(key);
 

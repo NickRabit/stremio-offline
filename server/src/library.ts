@@ -197,19 +197,37 @@ export interface FoundFile { relative: string; size: number; modified: string }
  *  `Date.now()` deadline; either reaching zero ends the walk where it stands. */
 export interface WalkBudget { files: number; until: number }
 
+/** How many directory reads and stats one walk keeps in flight. A network mount answers each
+ *  call with a round trip, and one call at a time made a large library take seconds to list. */
+const WALK_CONCURRENCY = 16;
+
+/** Runs at most `limit` calls at once. Only single filesystem calls take a slot, never a
+ *  recursion, so a deep tree cannot fill every slot with parents waiting on children. */
+function limiter(limit: number) {
+  let active = 0;
+  const waiting: (() => void)[] = [];
+  return async <T>(call: () => Promise<T>): Promise<T> => {
+    if (active >= limit) await new Promise<void>((resolve) => waiting.push(resolve));
+    active += 1;
+    try { return await call(); }
+    finally { active -= 1; waiting.shift()?.(); }
+  };
+}
+
 /** Every video under root, same walk `scanLibrary` uses. Depth cap 8, skip dotfiles.
  *  `exclude` holds library-relative folders another library owns: they are never entered.
  *  `budget` bounds a walk over a tree nobody has vouched for yet (§6's add preview). */
 export async function listVideos(root: string, relative = "", depth = 0, exclude?: ReadonlySet<string>, budget?: WalkBudget): Promise<FoundFile[]> {
+  if (!budget) return walkVideos(root, relative, depth, exclude, limiter(WALK_CONCURRENCY));
   // The structure is the user's own: downloads/series/Show/01 serie/episode.mkv and deeper.
   if (depth > 8) return [];
-  if (budget && (budget.files <= 0 || Date.now() > budget.until)) return [];
+  if (budget.files <= 0 || Date.now() > budget.until) return [];
   let entries;
   try { entries = await readdir(path.join(root, toFs(relative)), { withFileTypes: true }); }
   catch { return []; }
   const found: FoundFile[] = [];
   for (const entry of entries) {
-    if (budget && (budget.files <= 0 || Date.now() > budget.until)) break;
+    if (budget.files <= 0 || Date.now() > budget.until) break;
     if (entry.name.startsWith(".")) continue;
     const next = posixJoin(relative, entry.name);
     if (entry.isDirectory()) {
@@ -218,13 +236,32 @@ export async function listVideos(root: string, relative = "", depth = 0, exclude
       continue;
     }
     if (!entry.isFile() || !isVideo(entry.name)) continue;
-    if (budget) budget.files -= 1;
+    budget.files -= 1;
     try {
       const info = await stat(path.join(root, toFs(next)));
       found.push({ relative: next, size: info.size, modified: info.mtime.toISOString() });
     } catch { /* the file disappeared meanwhile */ }
   }
   return found;
+}
+
+/** The unbounded walk, several calls in flight, answering in the order a sequential one would. */
+async function walkVideos(root: string, relative: string, depth: number, exclude: ReadonlySet<string> | undefined, slot: ReturnType<typeof limiter>): Promise<FoundFile[]> {
+  if (depth > 8) return [];
+  let entries;
+  try { entries = await slot(() => readdir(path.join(root, toFs(relative)), { withFileTypes: true })); }
+  catch { return []; }
+  const parts = entries.map(async (entry): Promise<FoundFile[]> => {
+    if (entry.name.startsWith(".")) return [];
+    const next = posixJoin(relative, entry.name);
+    if (entry.isDirectory()) return exclude?.has(next) ? [] : walkVideos(root, next, depth + 1, exclude, slot);
+    if (!entry.isFile() || !isVideo(entry.name)) return [];
+    try {
+      const info = await slot(() => stat(path.join(root, toFs(next))));
+      return [{ relative: next, size: info.size, modified: info.mtime.toISOString() }];
+    } catch { return []; /* the file disappeared meanwhile */ }
+  });
+  return (await Promise.all(parts)).flat();
 }
 
 /** A cheap stamp of the whole tree. The automatic scan compares it before doing anything,
@@ -320,8 +357,9 @@ export function sortFiles<T extends { label: string; size: number; modified: str
 }
 
 /** Describes one path as a list item. Used for the virtual favourites folder, whose items
- *  come from all over the tree. */
-export async function describePath(root: string, relative: string, exclude?: ReadonlySet<string>): Promise<BrowseItem | undefined> {
+ *  come from all over the tree. `videosInside` answers a folder's videos from a walk the
+ *  caller already holds instead of walking the folder again. */
+export async function describePath(root: string, relative: string, exclude?: ReadonlySet<string>, videosInside?: () => Promise<FoundFile[]>): Promise<BrowseItem | undefined> {
   if (exclude?.has(relative)) return undefined;
   const target = resolveInside(root, relative);
   if (!target) return undefined;
@@ -329,7 +367,7 @@ export async function describePath(root: string, relative: string, exclude?: Rea
   if (!info) return undefined;
   const name = posixBase(relative);
   if (info.isDirectory()) {
-    const inside = await listVideos(root, relative, 0, exclude);
+    const inside = videosInside ? await videosInside() : await listVideos(root, relative, 0, exclude);
     if (!inside.length) return undefined;
     return {
       kind: "folder", path: relative, name, fileCount: inside.length,

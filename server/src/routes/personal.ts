@@ -23,7 +23,7 @@ export interface PersonalDeps extends RouteContext {
   attachBrowseMeta<T extends { path: string; kind: string; name?: string; label?: string }>(item: T, language: string): Promise<{ item: T; backfill: boolean }>;
   cachedMeta(type: string, id: string, language?: string, viewer?: Viewer): Promise<MetaItem | null>;
   dataOf(req: express.Request): UserData;
-  describeLibraryPath(key: string): Promise<BrowseItem | undefined>;
+  describeLibraryPath(key: string, read?: { stale?: boolean }): Promise<BrowseItem | undefined>;
   libraryKey(value: string): string;
   libraryOfKey(key: string): { library: LibraryRecord; relative: string };
   locateFileArtwork(key: string, shape?: ArtShape): Promise<string | undefined>;
@@ -303,7 +303,7 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     const viewer = viewerOf(currentUser(req));
     const libraries = store.libraries();
     const described = await Promise.all(dataOf(req).favorites.filter((stored) => pathVisible(stored, viewer, libraries)).map(async (stored) => {
-      const item = await describeLibraryPath(stored);
+      const item = await describeLibraryPath(stored, { stale: true });
       return item && { ...item, path: wirePath(libraryKey(stored)) };
     }));
     // Paths that disappeared meanwhile are skipped but not dropped from the list:
