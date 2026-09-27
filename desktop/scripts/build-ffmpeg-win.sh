@@ -46,12 +46,13 @@ jobs="$(nproc)"
 # makes the result LGPL-3.0-or-later, as on macOS. -static keeps libgcc out of the DLL imports;
 # mingw's w32threads default (no --enable-pthreads) keeps libwinpthread-1.dll out too.
 # --disable-devices: the app never captures a camera or the screen, and the capture devices
-# (vfwcap, dshow, gdigrab) would pull AVICAP32 and more into the imports.
+# (vfwcap, dshow, gdigrab) would pull AVICAP32 and more into the imports. lavfi stays: the
+# server's encoder probes feed a generated test picture through it.
 configure=(
   --disable-autodetect --enable-version3
   --target-os=mingw32 --arch=x86_64 --cross-prefix="$cross"
   --enable-schannel --enable-mediafoundation --enable-d3d11va --enable-dxva2 --enable-zlib
-  --disable-devices --disable-doc --disable-ffplay --disable-debug --disable-shared --enable-static
+  --disable-devices --enable-indev=lavfi --disable-doc --disable-ffplay --disable-debug --disable-shared --enable-static
   --extra-ldflags=-static
 )
 # configure's own log is what explains a failure on the runner, so it is shown then.
