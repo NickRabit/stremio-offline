@@ -55,14 +55,16 @@ configure=(
   --extra-ldflags=-static
 )
 # configure's own log is what explains a failure on the runner, so it is shown then.
-(cd "$src" && ./configure --prefix="$work/ffmpeg-out" "${configure[@]}" >/dev/null) \
+(cd "$src" && ./configure --prefix="$work/ffmpeg-out" "${configure[@]}" >"$work/configure.out") \
   || { tail -n 60 "$src/ffbuild/config.log" >&2; exit 1; }
 # Read back what configure decided, before minutes of compiling: no GPL part, and the two
 # Windows features this build is for. A missing feature shows the checks that turned it off.
 for expected in "CONFIG_GPL 0" "CONFIG_NONFREE 0" "CONFIG_SCHANNEL 1" "CONFIG_H264_MF_ENCODER 1"; do
   grep -qx "#define $expected" "$src/config.h" || {
     echo "build-ffmpeg-win: config.h lacks '$expected'" >&2
-    grep -n -A12 -E "mftransform\.h|MFCreateAlignedMemoryBuffer|schnlsp|SECURITY_WIN32" "$src/ffbuild/config.log" | tail -n 120 >&2
+    grep -iE "warning|mediafoundation|schannel" "$work/configure.out" >&2 || true
+    grep -iE "MEDIAFOUNDATION|MFTRANSFORM|SCHANNEL" "$src/config.h" >&2 || true
+    grep -n -A14 -E "^check_headers mftransform\.h|^check_func_headers mfapi\.h" "$src/ffbuild/config.log" >&2 || true
     exit 1
   }
 done
