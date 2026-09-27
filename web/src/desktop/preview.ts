@@ -32,6 +32,7 @@ export function previewBridge(search: string): ShellBridge | null {
       suggestedDownloadDir: "/Users/ondrej/Movies/Stremio Offline",
       initialized: query.get("initialized") !== "0",
       downloadDirOwned: query.get("owned") !== "0",
+      restartNeeded: query.get("restart") === "1",
       running: true,
       addresses: ["http://192.168.1.41:8091", "http://ondrej-macbook-pro.local:8091"],
       ffmpeg: "ffmpeg 9.0.2 + openssl 3.5.8, macOS 12.0, arm64",

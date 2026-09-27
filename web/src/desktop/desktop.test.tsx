@@ -23,7 +23,7 @@ const baseState = (over: Partial<ShellState> = {}): ShellState => ({
   profiles: [{ id: "nas", name: "NAS", origin: "http://192.168.1.20:8090" }],
   local: {
     settings: { allowPrivateAddons: false, publish: false, publishPort: 8091, downloadDir: null }, running: false, addresses: [], ffmpeg: null, busy: false,
-    downloadDir: "/Users/me/Library/Application Support/Stremio Offline/downloads", suggestedDownloadDir: "/Users/me/Movies/Stremio Offline", initialized: true, downloadDirOwned: true,
+    downloadDir: "/Users/me/Library/Application Support/Stremio Offline/downloads", suggestedDownloadDir: "/Users/me/Movies/Stremio Offline", initialized: true, downloadDirOwned: true, restartNeeded: false,
   },
   app: { prefs: { openAtLogin: false, checkUpdates: true }, loginItem: "not-registered", update: null },
   toast: null, ...over,
@@ -61,8 +61,6 @@ const button = (text: string) => {
   expect(found, `"${text}" is on screen`).toBeTruthy();
   return found!;
 };
-// The General section's two switches come first; sharing is the first of This Mac's.
-const shareSwitch = () => host.querySelectorAll<HTMLInputElement>(".shell-controls input[type=checkbox]")[2]!;
 const click = async (element: HTMLElement) => { await act(async () => { element.click(); await Promise.resolve(); }); };
 const type = async (input: HTMLInputElement, value: string) => {
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
@@ -133,16 +131,23 @@ it("settings refuse a port outside 1024–65535 and store a valid one", async ()
   await type(port, "8095");
   await act(async () => { port.dispatchEvent(new FocusEvent("focusout", { bubbles: true })); });
   expect(bridge.setLocalSettings).toHaveBeenCalledWith({ allowPrivateAddons: false, publish: true, publishPort: 8095, downloadDir: null });
-  await act(async () => { await Promise.resolve(); });
+});
+
+it("a pending restart is the main process's to remember, so a reopened settings window still offers it", async () => {
+  const running = { ...baseState().local, running: true };
+  await render(makeBridge("settings", baseState({ local: running })));
+  expect(host.textContent).not.toContain("The changes apply once the server on this Mac restarts.");
+  act(() => root.unmount());
+  root = createRoot(host);
+  await render(makeBridge("settings", baseState({ local: { ...running, restartNeeded: true } })));
   expect(host.textContent).toContain("The changes apply once the server on this Mac restarts.");
+  expect(button("Restart the server")).toBeTruthy();
 });
 
 it("a restart while something plays asks first", async () => {
-  const state = baseState({ local: { ...baseState().local, running: true, busy: true } });
+  const state = baseState({ local: { ...baseState().local, running: true, busy: true, restartNeeded: true } });
   const bridge = makeBridge("settings", state);
   await render(bridge);
-  await click(shareSwitch().closest("label")!);
-  await act(async () => { await Promise.resolve(); });
   await click(button("Restart the server"));
   expect(bridge.restartLocal).not.toHaveBeenCalled();
   expect(host.textContent).toContain("Restart anyway?");

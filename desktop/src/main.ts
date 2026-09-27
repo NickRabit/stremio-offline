@@ -145,6 +145,7 @@ const shellState: ShellState = {
     suggestedDownloadDir: "",
     initialized: false,
     downloadDirOwned: false,
+    restartNeeded: false,
   },
   app: {
     prefs: { openAtLogin: false, checkUpdates: true },
@@ -282,6 +283,13 @@ const refreshInitialized = () => {
   }
 };
 
+/** The running backend was started with other settings than those stored now. */
+const localRestartNeeded = (): boolean => {
+  if (localConnection === null) return false;
+  const launched = localBackend?.launchedSettings() ?? null;
+  return launched === null || !sameLocalSettings(launched, localSettings);
+};
+
 const refreshLocal = () => {
   shellState.profiles = profileStore.profiles;
   shellState.local = {
@@ -294,6 +302,7 @@ const refreshLocal = () => {
     suggestedDownloadDir: path.join(app.getPath("videos"), "Stremio Offline"),
     initialized: localInitialized,
     downloadDirOwned: mayTrashDownloadDir(effectiveDownloadDir(), localSettings.downloadDir, ownership, places()),
+    restartNeeded: localRestartNeeded(),
   };
 };
 
@@ -1190,8 +1199,7 @@ const registerHandlers = () => {
         return { ok: false, restartNeeded: false };
       }
       localSettings = settings;
-      const launched = localBackend?.launchedSettings() ?? null;
-      const restartNeeded = localConnection !== null && (launched === null || !sameLocalSettings(launched, settings));
+      const restartNeeded = localRestartNeeded();
       pushState();
       return { ok: true, restartNeeded };
     });
@@ -1413,6 +1421,7 @@ if (process.argv.includes(SMOKE_LOCAL_BACKEND)) {
     const prefs = await readShellPrefs(app.getPath("userData"));
     const savedWindow = await readWindowState(app.getPath("userData"), "main");
     shellState.localeChoice = prefs.locale;
+    shellState.app = { ...shellState.app, prefs: { ...shellState.app.prefs, checkUpdates: prefs.checkUpdates } };
     shellState.locale = effectiveLocale(prefs.locale, app.getLocale());
     shellState.appVersion = app.getVersion();
     refreshLoginItem();

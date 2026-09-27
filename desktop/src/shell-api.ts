@@ -77,6 +77,9 @@ export interface LocalState {
   /** The app created the download folder (or found it empty) and it is no system folder, so a
    *  reset may move it to the Trash. Otherwise it is the user's and never goes. */
   downloadDirOwned: boolean;
+  /** The running backend was started with other settings than the stored ones, so they apply
+   *  only after a restart. Derived here, so a closed and reopened settings window still says so. */
+  restartNeeded: boolean;
 }
 
 export type ShellLocale = "cs" | "en";
