@@ -26,7 +26,7 @@ export interface LibrariesDeps extends RouteContext {
   invalidateAutoScan(libraryId: string): void;
   invalidateLibrary(): void;
   libraryGrants(): RootGrant[];
-  libraryStats(): Promise<Map<string, { titles: number; files: number; bytes: number }>>;
+  libraryStats(read?: { stale?: boolean }): Promise<Map<string, { titles: number; files: number; bytes: number }>>;
   libraryView(library: LibraryRecord, health: LibraryHealth, stats: { titles: number; files: number; bytes: number }, admin: boolean): Record<string, unknown>;
   progressOf(data: UserData): Record<string, { path?: string }>;
   refreshLibraryHealth(): Promise<Map<string, LibraryHealth>>;
@@ -59,7 +59,7 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
 
   app.get("/api/libraries", asyncRoute(async (req, res) => {
     await refreshLibraryHealth();
-    const stats = await libraryStats();
+    const stats = await libraryStats({ stale: true });
     const libraries = [...visibleLibraries(store.libraries(), viewerOf(currentUser(req)))].sort((a, b) => a.order - b.order);
     const admin = currentUser(req)?.role === "admin";
     res.json(libraries.map((library) => libraryView(library, healthOf(library), stats.get(library.id) ?? { titles: 0, files: 0, bytes: 0 }, admin)));
