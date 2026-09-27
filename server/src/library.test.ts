@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -363,6 +363,28 @@ test("a video written into a folder shows up in its listing", async () => {
     await writeFile(path.join(root, "Alpha", "02.mkv"), "x");
     const after = await browseDirectory(root, "Alpha", "", 0, 20, "name");
     assert.equal(after.total, 2, "the folder's own mtime moved, so the cached listing is stale");
+    assert.deepEqual(after.items.map((item) => item.path), ["Alpha/01.mkv", "Alpha/02.mkv"]);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("a folder whose own mtime did not move is still listed afresh", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "stremio-lazy-mtime-"));
+  try {
+    const folder = path.join(root, "Alpha");
+    await mkdir(folder);
+    await writeFile(path.join(folder, "01.mkv"), "x");
+    // NTFS moves a folder's mtime lazily, so writing 02.mkv can leave it exactly where it was.
+    // Pinning it is what that looks like: the listing still has to notice the second file.
+    const frozen = new Date(1_700_000_000_000);
+    await utimes(folder, frozen, frozen);
+    assert.equal((await stat(folder)).mtimeMs, frozen.getTime());
+    const before = await browseDirectory(root, "Alpha", "", 0, 20, "name");
+    assert.deepEqual(before.items.map((item) => item.path), ["Alpha/01.mkv"]);
+
+    await writeFile(path.join(folder, "02.mkv"), "x");
+    await utimes(folder, frozen, frozen);
+    const after = await browseDirectory(root, "Alpha", "", 0, 20, "name");
+    assert.equal(after.total, 2, "the listing was served from a folder mtime that never moved");
     assert.deepEqual(after.items.map((item) => item.path), ["Alpha/01.mkv", "Alpha/02.mkv"]);
   } finally { await rm(root, { recursive: true, force: true }); }
 });

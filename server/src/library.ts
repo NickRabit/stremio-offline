@@ -419,14 +419,15 @@ interface MixedItem {
   season?: number | null; episode?: number | null; folder?: BrowseFolder; file?: LibraryFile;
 }
 
-interface BrowseCacheEntry { complete: boolean; mtimeMs?: number; builtAt: number; mixed: MixedItem[] }
+interface BrowseCacheEntry { complete: boolean; mtimeMs?: number; signature: string; builtAt: number; mixed: MixedItem[] }
 
 const BROWSE_CACHE_MS = 20_000;
 const BROWSE_CACHE_MAX = 64;
 const browseCache = new Map<string, BrowseCacheEntry>();
 
 /** Pages 2..N of a folder should not repeat the walk page 1 already did. Entries are
- *  dropped when the folder's own mtime moves, and in any case after `BROWSE_CACHE_MS`. */
+ *  dropped when the folder's own mtime or its entry list moves, and in any case after
+ *  `BROWSE_CACHE_MS`. */
 export function clearBrowseCache(): void {
   browseCache.clear();
 }
@@ -434,10 +435,14 @@ export function clearBrowseCache(): void {
 const browseCacheKey = (root: string, relative: string, query: string, exclude?: ReadonlySet<string>) =>
   `${root}\u0000${relative}\u0000${query}\u0000${exclude?.size ? [...exclude].sort().join("\u0001") : ""}`;
 
-function readBrowseCache(key: string, mtimeMs: number | undefined): BrowseCacheEntry | undefined {
+/** NTFS moves a folder's mtime lazily, so a file written into it can leave the previous
+ *  listing looking fresh. The names the folder holds are the reliable half of the key. */
+const browseSignature = (entries: Dirent[]) => entries.map((entry) => entry.name).sort().join("\u0000");
+
+function readBrowseCache(key: string, mtimeMs: number | undefined, signature: string): BrowseCacheEntry | undefined {
   const entry = browseCache.get(key);
   if (!entry) return undefined;
-  if (Date.now() - entry.builtAt > BROWSE_CACHE_MS || entry.mtimeMs !== mtimeMs) {
+  if (Date.now() - entry.builtAt > BROWSE_CACHE_MS || entry.mtimeMs !== mtimeMs || entry.signature !== signature) {
     browseCache.delete(key);
     return undefined;
   }
@@ -511,13 +516,16 @@ export async function browseDirectory(root: string, relative: string, query = ""
   exclude?: ReadonlySet<string>): Promise<BrowseResult> {
   const target = resolveInside(root, relative);
   if (!target) return { path: relative, items: [], total: 0 };
+  let entries: Dirent[];
+  try { entries = await readdir(target, { withFileTypes: true }); } catch { return { path: relative, items: [], total: 0 }; }
   const info = await stat(target).catch(() => undefined);
   // Ordering by date or size needs every aggregate, so those sorts walk the whole folder and
   // rely on the cache instead. A name and a random order read only the label and the path, so
   // they can leave the walk to the page that is actually returned.
   const cheap = sort === "name" || sort === "random";
   const key = browseCacheKey(root, relative, query, exclude);
-  const cached = readBrowseCache(key, info?.mtimeMs);
+  const signature = browseSignature(entries);
+  const cached = readBrowseCache(key, info?.mtimeMs, signature);
 
   let mixed: MixedItem[];
   let complete: boolean;
@@ -525,11 +533,9 @@ export async function browseDirectory(root: string, relative: string, query = ""
     mixed = cached.mixed;
     complete = cached.complete;
   } else {
-    let entries;
-    try { entries = await readdir(target, { withFileTypes: true }); } catch { return { path: relative, items: [], total: 0 }; }
     mixed = await readMixed(root, relative, entries, query.trim().toLowerCase(), exclude, cheap);
     complete = !cheap;
-    writeBrowseCache(key, { complete, mtimeMs: info?.mtimeMs, builtAt: Date.now(), mixed });
+    writeBrowseCache(key, { complete, mtimeMs: info?.mtimeMs, signature, builtAt: Date.now(), mixed });
   }
 
   // The filter has to run before paging. Otherwise a favourite on the second page would

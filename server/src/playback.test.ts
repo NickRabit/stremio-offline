@@ -7,6 +7,13 @@ import { PlaybackManager, SOURCE_UNREACHABLE, SerialOperations, describeFailure,
 
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** A fake reader waits for the abort the server sends. The signal may already be aborted by the
+ *  time the reader arrives, and `abort` fires only once, so a bare listener would never settle. */
+const whenAborted = (signal: AbortSignal) => new Promise<void>((resolve) => {
+  if (signal.aborted) resolve();
+  else signal.addEventListener("abort", () => resolve(), { once: true });
+});
+
 /** A path under the runner's own scratch directory. Nothing here is read back except the files
  *  the fake readers write, so the name only has to be somewhere a runner may write. */
 const tmp = (name: string) => path.join(os.tmpdir(), name);
@@ -603,7 +610,7 @@ test("a playable mp4 with a preferred subtitle stays on direct play", async () =
   let extracted = 0;
   manager.sidecars.run = async (_args: string[], _file: string, _append: boolean, signal: AbortSignal) => {
     extracted += 1;
-    await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+    await whenAborted(signal);
   };
   const started = await manager.start({ url: "https://cdn.example/movie.mp4" }, playCaps, { subtitleLanguage: "cs" });
   assert.equal(spawned, false);
@@ -632,7 +639,7 @@ test("mkv with subtitles still remuxes", async () => {
   let extracted = 0;
   manager.sidecars.run = async (_args: string[], _file: string, _append: boolean, signal: AbortSignal) => {
     extracted += 1;
-    await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+    await whenAborted(signal);
   };
   const started = await manager.start({ url: "https://cdn.example/movie.mkv" }, playCaps, { subtitleLanguage: "cs" });
   assert.equal(spawned, true);
@@ -836,7 +843,7 @@ test("seeking re-reads the same subtitles instead of starting FFmpeg again", asy
     sidecarArgs.push(args);
     // What FFmpeg would have written by then: cues with the source's own timestamps.
     await writeFile(file, "WEBVTT\n\n01:27:30.000 --> 01:40:00.000\nspoken\n\n");
-    await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+    await whenAborted(signal);
   };
   const started = await manager.start({ url: "https://cdn.example/large.mkv" }, { hevc: true }, { startTime: 5245, subtitleLanguage: "cs" });
   while (!readers.length) await pause(5);
@@ -894,7 +901,7 @@ test("switching subtitles changes the reader, not the conversion", async () => {
   const readers: number[] = [];
   manager.spawnAt = async (session: any, offset: number) => { session.offset = offset; session.generation += 1; spawns.push(offset); return `/api/playback/${session.id}/${session.generation}/master.m3u8`; };
   manager.sidecars.run = async (_args: string[], _file: string, _append: boolean, signal: AbortSignal) => {
-    await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+    await whenAborted(signal);
   };
   const started = await manager.start({ url: "https://cdn.example/large.mkv" }, { hevc: true }, { startTime: 900, subtitleLanguage: "cs" });
   assert.deepEqual(spawns, [900]);
@@ -1009,7 +1016,7 @@ const subtitlePick = async (name: string, subtitleTracks: any[], options: Record
   });
   manager.spawnAt = async () => "/nope";
   manager.sidecars.run = async (_args: string[], _file: string, _append: boolean, signal: AbortSignal) =>
-    new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+    whenAborted(signal);
   const started = await manager.start({ url: "https://cdn.example/movie.mp4" }, playCaps, options);
   await manager.stop(started.id);
   return started.subtitleTrack;
