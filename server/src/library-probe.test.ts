@@ -31,14 +31,12 @@ test("the probe file is written once and taken away again", async (t) => {
     "the case question rides on the writability probe rather than on a file of its own");
 });
 
-test("the answer carries the folder the root really is", {
-  skip: process.platform === "win32" ? "symlinks need developer mode or admin on Windows" : false,
-}, async (t) => {
+test("the answer carries the folder the root really is", async (t) => {
   const dir = await temp(t);
   const target = path.join(dir, "Media");
   const link = path.join(dir, "alias");
   await mkdir(target, { recursive: true });
-  await symlink(target, link);
+  await symlink(target, link, "junction");
   const probe = createLibraryProbe();
   assert.equal((await probe.probe(target)).realRoot, await realpath(target));
   assert.equal((await probe.probe(link)).realRoot, await realpath(target), "a root reached through a symlink is the folder it points at");

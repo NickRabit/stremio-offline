@@ -158,7 +158,8 @@ export function fitTargetName(
   }
   if (base.length <= room) return base;
   const cut = base.slice(0, room).replace(/[\s.]+$/, "").replace(/\s*-\s*$/, "").trim();
-  return cut || base.slice(0, room);
+  // Windows drops a trailing dot or space from a name, so a cut never ends in one.
+  return cut || base.slice(0, room).replace(/[\s.]+$/, "") || "video".slice(0, room);
 }
 
 /** Derive extensions in one place for both library and device downloads. */

@@ -157,7 +157,7 @@ export function remapBackupLibraries(
     if (!local.has(id)) {
       const source = backup.libraries.find((item) => item.id === id);
       local.set(id, source
-        ? libraries.find((library) => sameFile(library.root, source.root))
+        ? libraries.find((library) => sameFile(toPosix(library.root), toPosix(source.root)))
           ?? libraries.find((library) => library.name === source.name && library.type === source.type)
         : undefined);
     }

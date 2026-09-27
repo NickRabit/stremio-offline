@@ -122,6 +122,10 @@ test("a single configured library keeps the unqualified wire format", async () =
     assert.equal(passed?.relative, "Show/01.mkv");
     assert.equal(passed?.key, `${only.id}/Show/01.mkv`);
     assert.equal(passed?.absolute, path.join(root, "Show", "01.mkv"));
+    // A leading slash is the same relative key it always was; only a drive or a share is refused.
+    assert.equal((await resolveLibraryPath([only], "/Show/01.mkv"))?.key, `${only.id}/Show/01.mkv`);
+    assert.equal(await resolveLibraryPath([only], "C:\\Films\\01.mkv"), undefined);
+    assert.equal(await resolveLibraryPath([only], "\\\\nas\\films\\01.mkv"), undefined);
 
     const qualified = await resolveLibraryPath([only], `${only.id}/Show`);
     assert.equal(qualified?.absolute, path.join(root, "Show"));
@@ -199,16 +203,14 @@ test("a playing session is found under the folder an operation wants", async () 
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test("a folder added again takes back the id it had before", {
-  skip: process.platform === "win32" ? "symlinks need developer mode or admin on Windows" : false,
-}, async () => {
+test("a folder added again takes back the id it had before", async () => {
   const base = await mkdtemp(path.join(tmpdir(), "departed-"));
   const root = path.join(base, "Films");
   const elsewhere = path.join(base, "Elsewhere");
   await mkdir(root, { recursive: true });
   await mkdir(elsewhere, { recursive: true });
   const link = path.join(base, "link");
-  await symlink(root, link);
+  await symlink(root, link, "junction");
   const now = Date.parse("2026-09-14T12:00:00.000Z");
   // A departed entry holds the realpath, the way the route records it: on macOS the temporary
   // directory is reached through a symlink, and two names for one folder must still match.

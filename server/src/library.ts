@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readdir, stat } from "node:fs/promises";
 import type { Dirent } from "node:fs";
 import path from "node:path";
@@ -435,9 +436,12 @@ export function clearBrowseCache(): void {
 const browseCacheKey = (root: string, relative: string, query: string, exclude?: ReadonlySet<string>) =>
   `${root}\u0000${relative}\u0000${query}\u0000${exclude?.size ? [...exclude].sort().join("\u0001") : ""}`;
 
-/** NTFS moves a folder's mtime lazily, so a file written into it can leave the previous
- *  listing looking fresh. The names the folder holds are the reliable half of the key. */
-const browseSignature = (entries: Dirent[]) => entries.map((entry) => entry.name).sort().join("\u0000");
+/** NTFS moves a folder's mtime lazily, so there a file written into it can leave the previous
+ *  listing looking fresh, and the names the folder holds become part of the key. Elsewhere the
+ *  mtime is reliable and a cached page costs no directory read. */
+const LAZY_FOLDER_MTIME = process.platform === "win32";
+const browseSignature = (entries: Dirent[]) =>
+  createHash("sha1").update(entries.map((entry) => entry.name).sort().join("\u0000")).digest("base64");
 
 function readBrowseCache(key: string, mtimeMs: number | undefined, signature: string): BrowseCacheEntry | undefined {
   const entry = browseCache.get(key);
@@ -516,15 +520,17 @@ export async function browseDirectory(root: string, relative: string, query = ""
   exclude?: ReadonlySet<string>): Promise<BrowseResult> {
   const target = resolveInside(root, relative);
   if (!target) return { path: relative, items: [], total: 0 };
-  let entries: Dirent[];
-  try { entries = await readdir(target, { withFileTypes: true }); } catch { return { path: relative, items: [], total: 0 }; }
+  let entries: Dirent[] | undefined;
+  if (LAZY_FOLDER_MTIME) {
+    try { entries = await readdir(target, { withFileTypes: true }); } catch { return { path: relative, items: [], total: 0 }; }
+  }
   const info = await stat(target).catch(() => undefined);
   // Ordering by date or size needs every aggregate, so those sorts walk the whole folder and
   // rely on the cache instead. A name and a random order read only the label and the path, so
   // they can leave the walk to the page that is actually returned.
   const cheap = sort === "name" || sort === "random";
   const key = browseCacheKey(root, relative, query, exclude);
-  const signature = browseSignature(entries);
+  const signature = entries ? browseSignature(entries) : "";
   const cached = readBrowseCache(key, info?.mtimeMs, signature);
 
   let mixed: MixedItem[];
@@ -533,6 +539,9 @@ export async function browseDirectory(root: string, relative: string, query = ""
     mixed = cached.mixed;
     complete = cached.complete;
   } else {
+    if (!entries) {
+      try { entries = await readdir(target, { withFileTypes: true }); } catch { return { path: relative, items: [], total: 0 }; }
+    }
     mixed = await readMixed(root, relative, entries, query.trim().toLowerCase(), exclude, cheap);
     complete = !cheap;
     writeBrowseCache(key, { complete, mtimeMs: info?.mtimeMs, signature, builtAt: Date.now(), mixed });

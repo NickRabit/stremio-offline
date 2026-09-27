@@ -45,14 +45,12 @@ test("a relative path, a file and a missing folder are each named", async () => 
   } finally { await rm(dataDir, { recursive: true, force: true }); }
 });
 
-test("two libraries cannot share a root, not even through a symlink", {
-  skip: process.platform === "win32" ? "symlinks need developer mode or admin on Windows" : false,
-}, async () => {
+test("two libraries cannot share a root, not even through a symlink", async () => {
   const dataDir = await mkdtemp(path.join(tmpdir(), "admin-"));
   const granted = path.join(dataDir, "granted");
   await mkdir(granted, { recursive: true });
   const link = path.join(dataDir, "link");
-  await symlink(granted, link);
+  await symlink(granted, link, "junction");
   const grants = [grant(dataDir)];
   const taken = library({ root: granted });
   try {
@@ -80,15 +78,13 @@ test("a root inside another library's root is legal, and reads as a carve-out", 
   } finally { await rm(dataDir, { recursive: true, force: true }); }
 });
 
-test("a child reached through a symlink is a carve-out of the tree it points into", {
-  skip: process.platform === "win32" ? "symlinks need developer mode or admin on Windows" : false,
-}, async () => {
+test("a child reached through a symlink is a carve-out of the tree it points into", async () => {
   const dataDir = await mkdtemp(path.join(tmpdir(), "admin-"));
   const granted = path.join(dataDir, "granted");
   const child = path.join(granted, "Archive", "Serialy");
   const alias = path.join(dataDir, "alias");
   await mkdir(child, { recursive: true });
-  await symlink(path.join(granted, "Archive"), alias);
+  await symlink(path.join(granted, "Archive"), alias, "junction");
   const parent = library({ id: "lib_aaaaaaaa", root: granted });
   const nested = library({ id: "lib_bbbbbbbb", root: path.join(alias, "Serialy") });
   try {
@@ -292,9 +288,7 @@ test("a new folder beside the old root is a valid re-root destination", async ()
   } finally { await rm(dataDir, { recursive: true, force: true }); }
 });
 
-test("one view resolved and one spelled misses a carve-out that the union of both catches", {
-  skip: process.platform === "win32" ? "symlinks need developer mode or admin on Windows" : false,
-}, async () => {
+test("one view resolved and one spelled misses a carve-out that the union of both catches", async () => {
   // The state the guard is in between a restart and the first probe, and after a root was
   // away when its own probe ran: one library's root has been resolved and another's is still
   // the spelling it was configured with. Neither view alone sees the nested child then --
@@ -304,7 +298,7 @@ test("one view resolved and one spelled misses a carve-out that the union of bot
   const child = path.join(real, "Serialy");
   const alias = path.join(dataDir, "box");
   await mkdir(child, { recursive: true });
-  await symlink(real, alias);
+  await symlink(real, alias, "junction");
   try {
     const parentSpelled = { id: "lib_aaaaaaaa", root: alias };
     const parentResolved = { id: "lib_aaaaaaaa", root: await realpath(alias) };

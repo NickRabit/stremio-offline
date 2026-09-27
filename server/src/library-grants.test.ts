@@ -46,13 +46,11 @@ test("a user grant is dropped where the operator already granted the same path",
   assert.equal(merged.length, 2, "the same path is granted once");
 });
 
-test("only a path inside a granted root is granted", {
-  skip: process.platform === "win32" ? "symlinks need developer mode or admin on Windows" : false,
-}, async () => {
+test("only a path inside a granted root is granted", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "grant-"));
   const outside = await mkdtemp(path.join(tmpdir(), "outside-"));
   await mkdir(path.join(root, "Films"));
-  await symlink(outside, path.join(root, "link"));
+  await symlink(outside, path.join(root, "link"), "junction");
   const grants = [grant({ path: root })];
 
   assert.equal(await insideGrant(grants, path.join(root, "Films")), true);

@@ -367,7 +367,7 @@ test("a video written into a folder shows up in its listing", async () => {
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test("a folder whose own mtime did not move is still listed afresh", async () => {
+test("a folder whose own mtime did not move is still listed afresh", { skip: process.platform !== "win32" && "only NTFS moves a folder's mtime lazily; elsewhere the mtime is the key" }, async () => {
   const root = await mkdtemp(path.join(tmpdir(), "stremio-lazy-mtime-"));
   try {
     const folder = path.join(root, "Alpha");

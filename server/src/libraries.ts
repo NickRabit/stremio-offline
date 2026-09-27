@@ -212,9 +212,9 @@ export async function resolveLibraryPath(libraries: LibraryRecord[], value: stri
     relative = parsed.relative;
   } else {
     if (libraries.length !== 1) return undefined;
-    // A filesystem path is not a wire path, whatever the host's separators look like: the
-    // single-library pass-through takes a relative key only.
-    if (path.isAbsolute(value)) return undefined;
+    // A Windows filesystem path is not a wire path. A leading "/" stays what it always was, a
+    // relative key with a slash in front.
+    if (/^[A-Za-z]:|^[\\/]{2}/.test(value)) return undefined;
     [library] = libraries;
     relative = normalize(value);
   }

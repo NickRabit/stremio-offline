@@ -116,8 +116,17 @@ const releaseTarget = async (target: string, directory: boolean, reserved?: { in
  *  folder, not even the empty placeholder of its own making, so the placeholder goes first
  *  there. The reservation has already kept a second caller out, which is what it was for. */
 const swapInto = async (staged: string, target: string, directory: boolean): Promise<void> => {
-  if (directory && process.platform === "win32") await rmdir(target).catch(() => undefined);
-  await rename(staged, target);
+  if (!directory || process.platform !== "win32") return rename(staged, target);
+  await rmdir(target).catch(() => undefined);
+  try {
+    await rename(staged, target);
+  } catch (error) {
+    // Between the rmdir and the rename the name was free for a moment. Another transfer that took
+    // it is a taken name, as the reservation would have said, not a raw EPERM.
+    const code = (error as NodeJS.ErrnoException).code;
+    if ((code === "EPERM" || code === "EEXIST" || code === "ENOTEMPTY") && await stat(target).then(() => true, () => false)) throw nameTaken();
+    throw error;
+  }
 };
 
 /** Publishes the staged copy at a name only this call may take. A second transfer into the same
