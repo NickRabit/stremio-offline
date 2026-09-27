@@ -55,7 +55,9 @@ test("no process in the server is started by a bare ffmpeg or ffprobe name", asy
   assert.deepEqual(offenders, [], "start them through ffmpegPath() or ffprobePath()");
 });
 
-test("a tracked FFmpeg is killed at shutdown, and one that already ended is forgotten", async () => {
+test("a tracked FFmpeg is killed at shutdown, and one that already ended is forgotten", {
+  skip: process.platform === "win32" ? "a kill is not a signal there: the child reports an exit code" : false,
+}, async () => {
   const { spawn } = await import("node:child_process");
   const { killRunningMedia, trackMedia } = await import("./media-tools.js");
   const done = trackMedia(spawn(process.execPath, ["-e", ""]));
@@ -67,7 +69,9 @@ test("a tracked FFmpeg is killed at shutdown, and one that already ended is forg
   assert.equal(killRunningMedia(), 0);
 });
 
-test("once the shutdown killed the running ones, a new FFmpeg is killed as it starts", async () => {
+test("once the shutdown killed the running ones, a new FFmpeg is killed as it starts", {
+  skip: process.platform === "win32" ? "a kill is not a signal there: the child reports an exit code" : false,
+}, async () => {
   const { spawn } = await import("node:child_process");
   const { killRunningMedia, mediaStopping, trackMedia } = await import("./media-tools.js");
   killRunningMedia();

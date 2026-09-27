@@ -41,6 +41,9 @@ const extract: Extract = (args, file, append, signal) => new Promise<void>((reso
     // A backstop against an FFmpeg that hung; the reader is normally ended by the abort.
     const backstop = setTimeout(kill, 30 * 60_000);
     signal.addEventListener("abort", kill, { once: true });
+    // A stop that arrived while the output file was opening has already fired its one abort,
+    // and the listener above would never see it, leaving FFmpeg reading the source.
+    if (signal.aborted) kill();
     child.once("error", (error) => { clearTimeout(backstop); out.end(); reject(error); });
     child.once("close", (code, killedBy) => {
       clearTimeout(backstop);

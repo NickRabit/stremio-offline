@@ -17,7 +17,16 @@ const byteSize = async (source: string): Promise<number> => {
 };
 
 const syncFile = async (file: string) => {
-  const handle = await open(file, "r");
+  // Flushing buffers needs a handle open for writing on Windows, where a read-only one is
+  // refused with EPERM. A copy that kept a read-only attribute has no such handle to open:
+  // the copy is still whole, only the flush is lost. POSIX flushes a read handle, and the
+  // copy may be read-only there.
+  const handle = await open(file, process.platform === "win32" ? "r+" : "r")
+    .catch((error: NodeJS.ErrnoException) => {
+      if (process.platform === "win32" && (error.code === "EACCES" || error.code === "EPERM")) return undefined;
+      throw error;
+    });
+  if (!handle) return;
   try { await handle.sync(); } finally { await handle.close(); }
 };
 
@@ -94,9 +103,29 @@ const releaseTarget = async (target: string, directory: boolean, reserved?: { in
       await rm(target, { force: true });
     }
   } catch (error) {
+    // Windows drops the folder placeholder before the swap, so by the time the fallback
+    // releases it there is nothing left -- and nothing left is nothing to warn about.
+    if (process.platform === "win32" && (error as NodeJS.ErrnoException).code === "ENOENT") return;
     log("WARN", "A reserved destination could not be released", {
       target, reason: (error instanceof Error ? error.message : String(error)).slice(0, 120),
     });
+  }
+};
+
+/** Renames onto the reserved placeholder. Windows cannot rename a folder over an existing
+ *  folder, not even the empty placeholder of its own making, so the placeholder goes first
+ *  there. The reservation has already kept a second caller out, which is what it was for. */
+const swapInto = async (staged: string, target: string, directory: boolean): Promise<void> => {
+  if (!directory || process.platform !== "win32") return rename(staged, target);
+  await rmdir(target).catch(() => undefined);
+  try {
+    await rename(staged, target);
+  } catch (error) {
+    // Between the rmdir and the rename the name was free for a moment. Another transfer that took
+    // it is a taken name, as the reservation would have said, not a raw EPERM.
+    const code = (error as NodeJS.ErrnoException).code;
+    if ((code === "EPERM" || code === "EEXIST" || code === "ENOTEMPTY") && await stat(target).then(() => true, () => false)) throw nameTaken();
+    throw error;
   }
 };
 
@@ -106,7 +135,7 @@ const releaseTarget = async (target: string, directory: boolean, reserved?: { in
 const publish = async (temporary: string, target: string, directory: boolean): Promise<void> => {
   const reserved = await reserveTarget(target, directory);
   try {
-    await rename(temporary, target);
+    await swapInto(temporary, target, directory);
   } catch (error) {
     await releaseTarget(target, directory, reserved);
     throw error;
@@ -150,11 +179,12 @@ export async function renameAcross(source: string, target: string): Promise<bool
   const directory = (await lstat(source)).isDirectory();
   const reserved = await reserveTarget(target, directory);
   try {
-    await rename(source, target);
+    await swapInto(source, target, directory);
     return true;
   } catch (error) {
-    // The rename never landed, so the placeholder is still this call's to drop. It has to go
-    // before the fallback: the copy that follows would otherwise meet it and refuse itself.
+    // The rename never landed, so whatever is left of the placeholder is this call's to drop
+    // (Windows took the folder's before the swap). It has to go before the fallback: the copy
+    // that follows would otherwise meet it and refuse itself.
     await releaseTarget(target, directory, reserved);
     if ((error as NodeJS.ErrnoException).code !== "EXDEV") throw error;
     log("INFO", "The move crosses a filesystem, copying instead", { source, target });

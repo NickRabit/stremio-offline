@@ -1,5 +1,6 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { renameWithRetry } from "./fs-retry.js";
 import { log } from "./logger.js";
 import {
   autoAccept, cacheFieldsFromMeta, episodesFromMeta, knownTitleForUnit, lookupSkipped, needsRefresh, pickSuggestion, scanMiss,
@@ -818,7 +819,7 @@ export class LibraryScan {
       await mkdir(path.dirname(this.stateFile), { recursive: true });
       const temp = `${this.stateFile}.tmp`;
       await writeFile(temp, JSON.stringify(snapshot), { mode: 0o600 });
-      await rename(temp, this.stateFile);
+      await renameWithRetry(temp, this.stateFile);
     }).catch((error) => {
       log("WARN", "The library scan state could not be saved", { reason: error instanceof Error ? error.message : String(error) });
     });

@@ -1,8 +1,9 @@
 import { randomBytes } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { AddonRecord } from "./types.js";
 import { hashPassword, type AuthState } from "./auth.js";
+import { renameWithRetry } from "./fs-retry.js";
 import { normalizeDownloadSettings } from "./naming.js";
 import type { UiLanguage } from "./language.js";
 import { newLibraryId, type DepartedLibrary, type LibraryRecord, type RootGrant } from "./libraries.js";
@@ -240,7 +241,7 @@ export class Store {
     const write = this.chain.then(async () => {
       const temp = `${this.filename}.tmp`;
       await writeFile(temp, JSON.stringify(this.state, null, 2), { mode: 0o600 });
-      await rename(temp, this.filename);
+      await renameWithRetry(temp, this.filename);
     });
     // The queue continues past a failed write. Chaining onto the rejection itself would
     // skip every later save without a word, and the state would only live in memory until

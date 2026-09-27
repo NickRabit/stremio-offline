@@ -74,7 +74,7 @@ export async function departedIdFor(departed: DepartedLibrary[], root: string, n
   const real = await realpath(absolute).catch(() => absolute);
   // A root that is away when it is removed can only be recorded as it was spelled, so both
   // forms count: the resolved one and the lexical one.
-  return [...activeDeparted(departed, now)].reverse().find((entry) => entry.root === real || entry.root === absolute)?.id;
+  return [...activeDeparted(departed, now)].reverse().find((entry) => sameFile(entry.root, real) || sameFile(entry.root, absolute))?.id;
 }
 
 /** The part of `Settings` a default lookup needs. Kept structural so this module
@@ -115,7 +115,7 @@ export const posixJoin = (...parts: string[]) => parts.filter(Boolean).join("/")
 
 /** "lib_ab12cd34/Show/01 serie/01.mkv" -> the id and "Show/01 serie/01.mkv". */
 export function parseLibraryPath(value: string): { libraryId: string; relative: string } | undefined {
-  const trimmed = normalize(value);
+  const trimmed = wireKey(value);
   const parts = trimmed.split("/");
   if (!LIBRARY_ID.test(parts[0] ?? "")) return undefined;
   return { libraryId: parts[0]!, relative: parts.slice(1).join("/") };
@@ -212,6 +212,9 @@ export async function resolveLibraryPath(libraries: LibraryRecord[], value: stri
     relative = parsed.relative;
   } else {
     if (libraries.length !== 1) return undefined;
+    // A Windows filesystem path is not a wire path. A leading "/" stays what it always was, a
+    // relative key with a slash in front.
+    if (/^[A-Za-z]:|^[\\/]{2}/.test(value)) return undefined;
     [library] = libraries;
     relative = normalize(value);
   }
@@ -248,6 +251,12 @@ function normalize(value: string): string {
   // under a name no string comparison recognises -- and the carve-out guard and the
   // listing's exclusion are both string comparisons.
   return toPosix(value).replace(/\/{2,}/g, "/").replace(/^\/+|\/+$/g, "");
+}
+
+/** The same on the wire, where the separator is always `/`: a backslash is an ordinary
+ *  character, so a key spelled with one does not name a library. */
+function wireKey(value: string): string {
+  return value.replace(/\/{2,}/g, "/").replace(/^\/+|\/+$/g, "");
 }
 
 /** The deepest existing ancestor of `target`, resolved. A path that does not exist yet

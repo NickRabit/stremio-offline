@@ -1,7 +1,8 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { messageKeyOf } from "./errors.js";
+import { renameWithRetry } from "./fs-retry.js";
 import { log } from "./logger.js";
 
 /** Who asked for the operation. A job is carried out long after the request that queued it,
@@ -265,7 +266,7 @@ export class LibraryOps {
       await mkdir(path.dirname(this.options.file), { recursive: true });
       const temporary = `${this.options.file}.tmp`;
       await writeFile(temporary, serialized, { mode: 0o600 });
-      await rename(temporary, this.options.file);
+      await renameWithRetry(temporary, this.options.file);
     });
     return this.saveTail;
   }

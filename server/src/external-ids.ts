@@ -1,6 +1,7 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { FetchLike } from "./debrid.js";
+import { renameWithRetry } from "./fs-retry.js";
 import { log } from "./logger.js";
 import { guardedMetadataFetch } from "./outbound.js";
 
@@ -43,7 +44,7 @@ async function writeAtomic(file: string, data: string) {
   await mkdir(path.dirname(file), { recursive: true });
   const temp = `${file}.tmp`;
   await writeFile(temp, data, { mode: 0o600 });
-  await rename(temp, file);
+  await renameWithRetry(temp, file);
 }
 
 /**

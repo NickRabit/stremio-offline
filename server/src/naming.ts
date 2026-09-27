@@ -78,7 +78,8 @@ export function safeSubfolder(value: unknown): string {
   const segments = raw.split(/[\\/]+/).filter(Boolean);
   if (segments.length > 8) throw new AppError("The subfolder can be at most 8 levels deep.", "err.subfolderDepth");
   if (segments.some((segment) => segment === "." || segment === "..")) throw new AppError("The subfolder cannot contain . or .. segments.", "err.subfolderDots");
-  return segments.map(safeName).join(path.sep);
+  // The stored and wire form is POSIX; `path.join` at the syscall turns it back.
+  return segments.map(safeName).join("/");
 }
 
 /** The library a rule names, or the reason it cannot be used. Called with the libraries a
@@ -130,6 +131,36 @@ export function targetPath(media: MediaInfo | undefined, fallbackTitle: string, 
 
 export const joinTarget = (directory: string, base: string, extension: string, copy = 1) =>
   path.join(directory, `${base}${copy > 1 ? ` (${copy})` : ""}${extension}`);
+
+/** Windows APIs, the bundled FFmpeg and Explorer stop around 260 characters, and a library
+ *  root plus the folders a rule names eats most of that. A new download keeps well below it. */
+const MAX_TARGET_CHARS = 240;
+
+/** Shortens a new download's file name so its absolute path stays usable on win32. Only the
+ *  stem gives way -- its own tail, the episode title, first -- never the extension and never
+ *  the folder names the user chose. Everywhere else the name comes back as it was, and so does
+ *  a target that already fits. `platform` is a parameter so the cap can be read on any runner. */
+export function fitTargetName(
+  root: string,
+  directory: string,
+  base: string,
+  extension: string,
+  copy = 1,
+  platform = process.platform,
+): string {
+  if (platform !== "win32") return base;
+  const suffix = copy > 1 ? ` (${copy})` : "";
+  const room = MAX_TARGET_CHARS - path.join(root, directory, `${suffix}${extension}`).length;
+  if (room < 1) {
+    throw new AppError(
+      "The path is too long for Windows: not even an empty file name fits in this folder.",
+      "err.pathTooLong");
+  }
+  if (base.length <= room) return base;
+  const cut = base.slice(0, room).replace(/[\s.]+$/, "").replace(/\s*-\s*$/, "").trim();
+  // Windows drops a trailing dot or space from a name, so a cut never ends in one.
+  return cut || base.slice(0, room).replace(/[\s.]+$/, "") || "video".slice(0, room);
+}
 
 /** Derive extensions in one place for both library and device downloads. */
 export function streamExtension(stream: StreamItem): string {

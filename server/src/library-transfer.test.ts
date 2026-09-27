@@ -177,7 +177,8 @@ test("a copy that fails after staging clears its own staging path and nothing el
 });
 
 test("a copy that fails part way leaves the destination absent and the source alone", {
-  skip: process.getuid?.() === 0 ? "needs a user that write permission applies to" : false,
+  skip: process.platform === "win32" ? "file modes are not enforced on NTFS"
+    : process.getuid?.() === 0 ? "needs a user that write permission applies to" : false,
 }, async () => {
   const root = await mkdtemp(path.join(tmpdir(), "stremio-transfer-"));
   try {
@@ -196,7 +197,9 @@ test("a copy that fails part way leaves the destination absent and the source al
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test("a move of a folder holding a relative symlink lands instead of failing", async () => {
+test("a move of a folder holding a relative symlink lands instead of failing", {
+  skip: process.platform === "win32" ? "symlinks need developer mode or admin on Windows" : false,
+}, async () => {
   const root = await mkdtemp(path.join(tmpdir(), "stremio-transfer-"));
   try {
     const source = path.join(root, "Season 1");
@@ -216,7 +219,9 @@ test("a move of a folder holding a relative symlink lands instead of failing", a
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test("a copy of a folder holding a symlink is still refused before anything is staged", async () => {
+test("a copy of a folder holding a symlink is still refused before anything is staged", {
+  skip: process.platform === "win32" ? "symlinks need developer mode or admin on Windows" : false,
+}, async () => {
   const root = await mkdtemp(path.join(tmpdir(), "stremio-transfer-"));
   try {
     const source = path.join(root, "Season 1");
@@ -271,7 +276,8 @@ test("a same-volume folder move reports the size it moved", async () => {
 });
 
 test("a move that fails after it took the name leaves the source and no placeholder", {
-  skip: process.getuid?.() === 0 ? "needs a user that write permission applies to" : false,
+  skip: process.platform === "win32" ? "file modes are not enforced on NTFS"
+    : process.getuid?.() === 0 ? "needs a user that write permission applies to" : false,
 }, async () => {
   const root = await mkdtemp(path.join(tmpdir(), "stremio-transfer-"));
   const held = path.join(root, "held");
@@ -296,7 +302,8 @@ test("a move that fails after it took the name leaves the source and no placehol
 // Reachable only across volumes inside `transferLibraryPath`, so the step is tested where
 // it lives. Root may unlink inside a directory it cannot write, hence the guard.
 test("the source of a finished move is reported, not thrown, when it will not go", {
-  skip: process.getuid?.() === 0 ? "needs a user that write permission applies to" : false,
+  skip: process.platform === "win32" ? "file modes are not enforced on NTFS"
+    : process.getuid?.() === 0 ? "needs a user that write permission applies to" : false,
 }, async () => {
   const root = await mkdtemp(path.join(tmpdir(), "stremio-transfer-"));
   const held = path.join(root, "held");

@@ -36,7 +36,7 @@ test("the answer carries the folder the root really is", async (t) => {
   const target = path.join(dir, "Media");
   const link = path.join(dir, "alias");
   await mkdir(target, { recursive: true });
-  await symlink(target, link);
+  await symlink(target, link, "junction");
   const probe = createLibraryProbe();
   assert.equal((await probe.probe(target)).realRoot, await realpath(target));
   assert.equal((await probe.probe(link)).realRoot, await realpath(target), "a root reached through a symlink is the folder it points at");
@@ -62,10 +62,12 @@ test("a root that could not be asked folds, whatever the platform would have gue
   // itself on macOS, where the guess happens to be `true` -- this assertion only bites on a
   // case-sensitive runner, which is what CI is.
   const dir = await temp(t);
-  await chmod(dir, 0o500);
   const probe = createLibraryProbe();
   const missing = path.join(dir, "missing");
   assert.equal((await probe.probe(missing)).caseInsensitive, true, "nothing reached the disk");
+  // The read-only half is POSIX-only: NTFS keeps no mode that stops the probe writing.
+  if (process.platform === "win32") return;
+  await chmod(dir, 0o500);
   if (process.getuid?.() === 0) return;
   assert.equal((await probe.probe(dir)).caseInsensitive, true, "a read-only volume cannot be probed either");
 });
@@ -79,7 +81,9 @@ test("the case rule is one inode on one volume, driven both ways", () => {
   assert.equal(sameVolumeEntry(undefined, entry), false, "and so is one that was never written");
 });
 
-test("a directory that refuses the probe file reads as read-only", async (t) => {
+test("a directory that refuses the probe file reads as read-only", {
+  skip: process.platform === "win32" ? "file modes are not enforced on NTFS" : false,
+}, async (t) => {
   if (process.getuid?.() === 0) return t.skip("root writes anywhere");
   const dir = await temp(t);
   await chmod(dir, 0o500);

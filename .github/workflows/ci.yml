@@ -32,6 +32,24 @@ jobs:
       - run: npm run build
       - run: npm test
 
+  # The server and the desktop shell are what the Windows app runs, and neither had ever been
+  # built there. The web suite and the browser end-to-end run are platform-neutral, and the
+  # browser image is Linux-only by design, so this job leaves them out.
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - run: npx tsc -p desktop
+      - run: npx tsc --noEmit -p server
+      - run: npm run test -w server
+
   # The Playwright container carries the browser and its system libraries, so the
   # same image is used locally when baselines are involved. See docs/testing.md.
   e2e:

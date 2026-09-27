@@ -42,6 +42,8 @@ let nestedRoot: string;
 let boxRoot: string;
 let aliasRoot: string;
 let mixedRoot: string;
+/** Whether the alias below could be made: a symlink needs developer mode or admin on Windows. */
+let aliasReady = false;
 let server: SpawnedServer;
 let base = "";
 let cookie = "";
@@ -121,7 +123,10 @@ before(async () => {
   await put(archiveRoot, "Second Show/Season 1/01 - Pilot.mkv");
   await put(nestedRoot, "Season 1/01 - Nested.mkv");
   await put(boxRoot, "Archiv/Aliased/Season 1/01 - Aliased.mkv");
-  await symlink(path.join(boxRoot, "Archiv", "Aliased"), aliasRoot);
+  try {
+    await symlink(path.join(boxRoot, "Archiv", "Aliased"), aliasRoot);
+    aliasReady = true;
+  } catch { aliasReady = false; }
   await put(filmsRoot, "Volne/Film.mkv");
   await put(mixedRoot, "Document.mkv");
   await mkdir(filmsRoot, { recursive: true });
@@ -144,7 +149,7 @@ before(async () => {
   archive = await addLibrary("Archiv", "series", archiveRoot);
   nested = await addLibrary("Serialy", "series", nestedRoot);
   box = await addLibrary("Box", "mixed", boxRoot);
-  aliased = await addLibrary("Aliased", "mixed", aliasRoot);
+  if (aliasReady) aliased = await addLibrary("Aliased", "mixed", aliasRoot);
   mixed = await addLibrary("Smisene", "mixed", mixedRoot);
 });
 
@@ -321,7 +326,8 @@ const boxHolding = () => `${box}/Archiv`;
 /** The aliased library's own file, reached through the folder it really sits in. */
 const aliasedFile = () => path.join(boxRoot, "Archiv", "Aliased", "Season 1", "01 - Aliased.mkv");
 
-test("a child rooted at a symlink into the parent's tree is seen as nested", async () => {
+test("a child rooted at a symlink into the parent's tree is seen as nested", async (t) => {
+  if (!aliasReady) return t.skip("symlinks need developer mode or admin on Windows");
   const parent = await api(`/api/library/browse?path=${encodeURIComponent(boxHolding())}`);
   assert.equal(parent.status, 200);
   const listed = (await parent.json() as { items: Array<{ path: string }> }).items.map((item) => item.path);
@@ -335,7 +341,8 @@ test("a child rooted at a symlink into the parent's tree is seen as nested", asy
   assert.ok(ownListed.length > 0, "the aliased library lists the season behind the symlink");
 });
 
-test("a delete, a move and a rename of the folder holding the aliased library are refused", async () => {
+test("a delete, a move and a rename of the folder holding the aliased library are refused", async (t) => {
+  if (!aliasReady) return t.skip("symlinks need developer mode or admin on Windows");
   const deleted = await api(`/api/library/item?path=${encodeURIComponent(boxHolding())}`, { method: "DELETE" });
   assert.equal(deleted.status, 409);
   assert.deepEqual(await deleted.json(), {
@@ -356,7 +363,8 @@ test("a delete, a move and a rename of the folder holding the aliased library ar
   assert.equal(await exists(path.join(boxRoot, "Archiv")), true, "the folder itself stayed where it was");
 });
 
-test("a folder beside the aliased library is not part of it", async () => {
+test("a folder beside the aliased library is not part of it", async (t) => {
+  if (!aliasReady) return t.skip("symlinks need developer mode or admin on Windows");
   await put(boxRoot, "Archiv/Loose/Season 1/01 - Loose.mkv");
   const deleted = await api(`/api/library/item?path=${encodeURIComponent(`${boxHolding()}/Loose`)}`, { method: "DELETE" });
   assert.equal(deleted.status, 204, "the guard engages on the nested library, not on the folder that holds it");

@@ -1129,6 +1129,7 @@ export const cs: Catalog = {
   "err.debridTokenMissing": "Chybí token Real-Debrid.",
   "err.jobNoInfoHash": "Torrent nemá infoHash.",
   "err.noFreeName": "Nepodařilo se najít volné jméno souboru.",
+  "err.pathTooLong": "Cesta ke složce je pro Windows příliš dlouhá. Vyberte knihovnu s kratší cestou, třeba D:\\Filmy.",
   "err.cannotPauseCompleted": "Dokončené stahování nelze pozastavit.",
   "err.cannotResume": "Tuhle položku nelze obnovit.",
   "err.retryOnlyFailed": "Opakovat lze jen chybné stahování.",

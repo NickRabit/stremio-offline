@@ -7,9 +7,10 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { addonAllowed } from "./addons.js";
 import type { AddonDownloadSettings, AddonRecord, StreamItem, SubtitleItem } from "./types.js";
-import { defaultDownloadSettings, joinTarget, streamExtension, targetPath, type MediaInfo } from "./naming.js";
+import { defaultDownloadSettings, fitTargetName, joinTarget, streamExtension, targetPath, type MediaInfo } from "./naming.js";
 import type { DownloadTargetSettings } from "./types.js";
 import { safeFetch } from "./security.js";
+import { renameWithRetry } from "./fs-retry.js";
 import { log } from "./logger.js";
 import { ffmpegPath, mediaStopping, trackMedia } from "./media-tools.js";
 import { retryAfterMs } from "./outbound.js";
@@ -591,11 +592,12 @@ export class DownloadQueue {
   /** History can be cleared, but the files stay. A free name therefore has to be looked for on
    *  disk as well, or a finished film would be quietly overwritten by downloading the same title. */
   private async uniqueTarget(library: LibraryRecord | undefined, directory: string, base: string, extension: string) {
+    const root = library?.root ?? this.downloadDir;
     for (let copy = 1; copy <= 999; copy += 1) {
-      const relative = joinTarget(directory, base, extension, copy);
+      const relative = joinTarget(directory, fitTargetName(root, directory, base, extension, copy), extension, copy);
       const target = library ? libraryPath(library.id, relative) : relative;
       if (this.jobs.some((job) => job.target === target)) continue;
-      const full = path.join(library?.root ?? this.downloadDir, relative);
+      const full = path.join(root, relative);
       if (await exists(full) || await exists(`${full}.part`)) continue;
       return target;
     }
@@ -822,7 +824,7 @@ export class DownloadQueue {
     this.saveChain = this.saveChain.then(async () => {
       const tmp = `${this.stateFile}.tmp`;
       await writeFile(tmp, JSON.stringify(this.jobs, null, 2), { mode: 0o600 });
-      await rename(tmp, this.stateFile);
+      await renameWithRetry(tmp, this.stateFile);
     }).catch((error) => { log("ERROR", "The queue state could not be saved", { reason: error instanceof Error ? error.message : String(error) }); });
     return this.saveChain;
   }

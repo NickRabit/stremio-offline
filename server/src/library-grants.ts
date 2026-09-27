@@ -1,7 +1,7 @@
 import { realpath } from "node:fs/promises";
 import path from "node:path";
 import { log } from "./logger.js";
-import { isInside, realAncestor, toPosix, type RootGrant } from "./libraries.js";
+import { foldPath, isInside, realAncestor, toPosix, type RootGrant } from "./libraries.js";
 
 /** `LIBRARY_ROOTS` is a comma-separated list of absolute paths, and an empty value
  *  keeps the download directory the install has always had. Relative entries are
@@ -13,7 +13,8 @@ export function parseRootList(value: string | undefined, fallback: string): stri
   for (const root of roots.filter((root) => !path.isAbsolute(root))) {
     log("WARN", "Ignoring a relative LIBRARY_ROOTS entry", { root });
   }
-  return [...new Set(absolute.map((root) => path.resolve(root)))];
+  const byFolded = new Map(absolute.map((root) => [foldPath(path.resolve(root)), path.resolve(root)] as const));
+  return [...byFolded.values()];
 }
 
 /** The operator's grants. Rebuilt on every boot, so they are not persisted. */
@@ -25,7 +26,7 @@ export function envGrants(value: string | undefined, downloadDir: string, at = n
 export function mergeGrants(env: RootGrant[], user: RootGrant[]): RootGrant[] {
   const merged = new Map<string, RootGrant>();
   // Inserted user first so an operator grant on the same path overwrites it.
-  for (const grant of [...user, ...env]) merged.set(path.resolve(grant.path), grant);
+  for (const grant of [...user, ...env]) merged.set(foldPath(path.resolve(grant.path)), grant);
   return [...merged.values()];
 }
 

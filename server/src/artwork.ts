@@ -1,7 +1,8 @@
 import { execFile } from "node:child_process";
-import { access, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { access, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { renameWithRetry } from "./fs-retry.js";
 import { log } from "./logger.js";
 import { ffmpegPath } from "./media-tools.js";
 import { guardedFetch } from "./outbound.js";
@@ -113,7 +114,7 @@ export async function findArtwork(directory: string, names = POSTER_NAMES): Prom
 async function writeAtomic(target: string, data: Buffer) {
   const temp = `${target}.tmp`;
   await writeFile(temp, data, { mode: 0o644 });
-  await rename(temp, target);
+  await renameWithRetry(temp, target);
 }
 
 /** Why a picture did not arrive. Named rather than collapsed into `false`: a poster that never
@@ -247,7 +248,7 @@ async function shrinkToWidth(source: string, target: string, width: number): Pro
       "-hide_banner", "-loglevel", "error", "-nostdin", "-threads", "1",
       "-i", source, "-vf", `scale='min(${width},iw)':-2`, "-frames:v", "1", "-q:v", "5", "-y", temp,
     ], { timeout: 15_000, killSignal: "SIGKILL" });
-    await rename(temp, target);
+    await renameWithRetry(temp, target);
     return true;
   } catch (error) {
     await rm(temp, { force: true });
@@ -277,7 +278,7 @@ async function saveNarrowed(target: string, picture: Picture, width: number): Pr
   try {
     // The same mode a poster is written with, because the fallback below renames this very file.
     await writeFile(source, picture.data, { mode: 0o644 });
-    if (!await shrinkToWidth(source, target, width)) await rename(source, target);
+    if (!await shrinkToWidth(source, target, width)) await renameWithRetry(source, target);
     return { ok: true };
   } catch (error) {
     return { ok: false, reason: "failed", detail: error instanceof Error ? error.message : String(error) };
@@ -317,7 +318,7 @@ export async function saveFrame(videoPath: string, target: string, seconds = 300
       "-ss", String(seconds), "-i", videoPath,
       "-vf", "thumbnail=50,scale=480:-2", "-frames:v", "1", "-q:v", "4", "-y", temp,
     ], { timeout: 60_000 });
-    await rename(temp, target);
+    await renameWithRetry(temp, target);
     return true;
   } catch (error) {
     log("WARN", "The thumbnail could not be generated", { file: path.basename(videoPath), reason: error instanceof Error ? error.message.slice(0, 120) : String(error) });

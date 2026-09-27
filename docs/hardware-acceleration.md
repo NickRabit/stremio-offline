@@ -1,4 +1,4 @@
-# Hardware acceleration (Intel QuickSync / VAAPI / VideoToolbox)
+# Hardware acceleration (Intel QuickSync / VAAPI / VideoToolbox / Media Foundation)
 
 Hardware acceleration matters only for a **real transcode**. Direct play and
 remux — the common path — never touch the GPU. See
@@ -55,6 +55,7 @@ line.
 | --- | --- | --- |
 | `VAAPI_QP` | hardware | CQP quality, default 23. Lower means higher quality and more bitrate. |
 | `VIDEOTOOLBOX_QUALITY` | macOS hardware | Constant-quality value 1–100, default 60. Higher means higher quality and more bitrate — the opposite direction to `VAAPI_QP`. |
+| `MEDIAFOUNDATION_QUALITY` | Windows hardware | Constant-quality value 1–100, default 60. Only used when the vendor MFT takes constant quality; a chosen quality sets a CBR bitrate instead. |
 | `FFMPEG_CRF` | software fallback only | Same idea for `libx264`. |
 | `FFMPEG_PRESET` | software fallback only | `libx264` speed/quality trade-off. |
 
@@ -81,6 +82,34 @@ Set `VIDEOTOOLBOX=0` in the environment to switch the path off; without it, a
 chosen quality (1080p, 720p, 480p) sets the bitrate, and everything else is
 encoded at constant quality with `-q:v` — tune it with `VIDEOTOOLBOX_QUALITY`
 (default 60).
+
+## Windows (Media Foundation)
+
+The desktop app's local backend on Windows has no VAAPI, and the bundled LGPL
+FFmpeg has no libx264 either, so it probes Media Foundation's `h264_mf` at
+start. `h264_mf` uses the GPU vendor's encoder when the driver offers one and
+Microsoft's software encoder otherwise; both are part of Windows 10 and 11, so
+nothing needs installing. The log line `Media Foundation is available` says the
+path is live, with `hardware:true` for the vendor MFT and `constantQuality:true`
+when it takes constant quality. Remux and direct play never touch it, and a
+Linux, Docker or macOS install never probes it at all.
+
+A heavy source — HEVC, AV1, VP9, a 10-bit pixel format, or anything over 1080
+lines — is decoded on the GPU (`-hwaccel d3d11va`, with FFmpeg falling back to
+software when the D3D11 decoder cannot be set up); a 1080p H.264 is decoded on
+the CPU, which is cheaper than the round trip. Encoding is `h264_mf`; scaling
+stays on the CPU, because the frames come back in system memory. A chosen
+quality sets a CBR target bitrate; without one the vendor MFT is used at
+constant quality.
+
+Set `MEDIAFOUNDATION=0` in the environment to switch the path off. Without it, a
+chosen quality (1080p, 720p, 480p) sets the bitrate, and everything else uses
+the vendor MFT's constant quality — tune it with `MEDIAFOUNDATION_QUALITY`
+(default 60).
+
+A virtual machine without a GPU has no vendor encoder, so the probe falls back
+to Microsoft's software H.264 encoder. That path still works, but it runs on the
+CPU and is slow — a real transcode there is better avoided.
 
 ## When the driver does not start
 

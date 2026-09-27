@@ -66,7 +66,8 @@ test("bursts of writes settle into one atomic file", async () => {
     }
     assert.deepEqual(await readdir(path.join(dataDir, "library")).catch(() => []), [], "nothing is written before the debounce runs out");
     await store.flush();
-    assert.equal((await stat(libraryFile(dataDir, "lib_a"))).mode & 0o777, 0o600);
+    // NTFS keeps no POSIX mode to read back; the rest of the write is still checked there.
+    if (process.platform !== "win32") assert.equal((await stat(libraryFile(dataDir, "lib_a"))).mode & 0o777, 0o600);
     assert.equal(Object.keys(JSON.parse(await readFile(libraryFile(dataDir, "lib_a"), "utf8")).meta).length, 5);
     assert.deepEqual(await readdir(path.join(dataDir, "library")), ["lib_a.json"], "no temporary file is left behind");
   });

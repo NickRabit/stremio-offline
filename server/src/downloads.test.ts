@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createWriteStream, existsSync } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import os from "node:os";
@@ -683,6 +683,38 @@ test("notBefore stops pump from retrying immediately", async () => {
     await new Promise((resolve) => setTimeout(resolve, 120));
     assert.equal(hits, hitsAfterFirst, "Retry-After must be honoured");
     assert.equal(queue.list()[0].status, "queued");
+  } finally {
+    await queue.stop();
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a commit the filesystem refuses leaves the job retryable", async () => {
+  const size = 4096;
+  const { server, port } = await listen((_req, res) => {
+    res.writeHead(200, { "content-length": String(size), "content-type": "video/mp4" });
+    res.end(Buffer.alloc(size, 3));
+  });
+  const { directory, queue } = await tempQueue({
+    retryDelay: () => 60_000,
+    // By the time the commit renames onto the target, the name is a folder holding a file.
+    // That is the shape an older copy of the film still open in a player makes on Windows.
+    createWriteStream: (file, options) => {
+      if (file.endsWith(".part")) {
+        const target = file.slice(0, -".part".length);
+        mkdirSync(target, { recursive: true });
+        writeFileSync(path.join(target, "held.mkv"), "an older copy");
+      }
+      return createWriteStream(file, options);
+    },
+  });
+  try {
+    await queue.add("Film", { url: `http://127.0.0.1:${port}/film.mp4` });
+    await waitFor(queue, () => (queue.list()[0]?.retryCount ?? 0) >= 1);
+    const job = queue.list()[0];
+    assert.notEqual(job.status, "failed", "a refused commit is not a dead end");
+    assert.equal(job.status, "queued", "the job goes back to the queue and is tried again");
   } finally {
     await queue.stop();
     server.close();

@@ -1,5 +1,6 @@
-import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { renameWithRetry } from "./fs-retry.js";
 import { dropKeyed, pinInherited, remapKeyed, type LibraryEpisodeRecord, type LibraryMetaRecord, type LibrarySuggestion } from "./library-match.js";
 import { isPathWithin, remapPath } from "./library.js";
 import { libraryPath, parseLibraryPath } from "./libraries.js";
@@ -38,7 +39,7 @@ async function writeAtomic(file: string, data: string) {
   await mkdir(path.dirname(file), { recursive: true });
   const temp = `${file}.tmp`;
   await writeFile(temp, data, { mode: 0o600 });
-  await rename(temp, file);
+  await renameWithRetry(temp, file);
 }
 
 /** Written by the migration as well, which runs before any store exists. */

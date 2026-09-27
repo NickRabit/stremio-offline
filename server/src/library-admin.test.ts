@@ -50,7 +50,7 @@ test("two libraries cannot share a root, not even through a symlink", async () =
   const granted = path.join(dataDir, "granted");
   await mkdir(granted, { recursive: true });
   const link = path.join(dataDir, "link");
-  await symlink(granted, link);
+  await symlink(granted, link, "junction");
   const grants = [grant(dataDir)];
   const taken = library({ root: granted });
   try {
@@ -84,7 +84,7 @@ test("a child reached through a symlink is a carve-out of the tree it points int
   const child = path.join(granted, "Archive", "Serialy");
   const alias = path.join(dataDir, "alias");
   await mkdir(child, { recursive: true });
-  await symlink(path.join(granted, "Archive"), alias);
+  await symlink(path.join(granted, "Archive"), alias, "junction");
   const parent = library({ id: "lib_aaaaaaaa", root: granted });
   const nested = library({ id: "lib_bbbbbbbb", root: path.join(alias, "Serialy") });
   try {
@@ -259,7 +259,8 @@ test("a root that cannot be created records the errno the interface hides", asyn
 
     const line = written.find((entry) => entry.includes("A library root could not be created"));
     assert.ok(line, "the refusal is logged");
-    assert.match(line!, /"code":"(ENOTDIR|EEXIST|EACCES)"/);
+    // Which refusal comes back differs by platform: NTFS answers where POSIX says ENOTDIR.
+    assert.match(line!, /"code":"(ENOTDIR|EEXIST|EACCES|ENOENT|EPERM)"/);
   } finally {
     process.stdout.write = original;
     await flushLog();
@@ -297,7 +298,7 @@ test("one view resolved and one spelled misses a carve-out that the union of bot
   const child = path.join(real, "Serialy");
   const alias = path.join(dataDir, "box");
   await mkdir(child, { recursive: true });
-  await symlink(real, alias);
+  await symlink(real, alias, "junction");
   try {
     const parentSpelled = { id: "lib_aaaaaaaa", root: alias };
     const parentResolved = { id: "lib_aaaaaaaa", root: await realpath(alias) };

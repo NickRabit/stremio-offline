@@ -2,47 +2,47 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import { test } from "node:test";
 import { AppError } from "./errors.js";
-import { assertUsableName, deviceFilename, joinTarget, normalizeDownloadSettings, safeName, safeSubfolder, streamExtension, targetPath } from "./naming.js";
+import { assertUsableName, deviceFilename, fitTargetName, joinTarget, normalizeDownloadSettings, safeName, safeSubfolder, streamExtension, targetPath } from "./naming.js";
 import type { LibraryRecord } from "./libraries.js";
 
 test("a film goes into a folder of its own with the same name", () => {
   const { directory, base } = targetPath({ kind: "movie", title: "The Matrix" }, "cokoli", ".mkv");
-  assert.equal(joinTarget(directory, base, ".mkv"), "The Matrix/The Matrix.mkv");
+  assert.equal(joinTarget(directory, base, ".mkv"), path.join("The Matrix", "The Matrix.mkv"));
 });
 
 test("an episode goes into the series and season folders", () => {
   const { directory, base } = targetPath(
     { kind: "episode", title: "Simpsonovi", season: 1, episode: 7, episodeTitle: "Vánoce u Simpsonových" }, "x", ".mp4");
-  assert.equal(joinTarget(directory, base, ".mp4"), "Simpsonovi/01 serie/07 - Vánoce u Simpsonových.mp4");
+  assert.equal(joinTarget(directory, base, ".mp4"), path.join("Simpsonovi", "01 serie", "07 - Vánoce u Simpsonových.mp4"));
 });
 
 test("two-digit season and episode numbers are left as they are", () => {
   const { directory, base } = targetPath({ kind: "episode", title: "Seriál", season: 12, episode: 134, episodeTitle: "Díl" }, "x", ".mkv");
-  assert.equal(joinTarget(directory, base, ".mkv"), "Seriál/12 serie/134 - Díl.mkv");
+  assert.equal(joinTarget(directory, base, ".mkv"), path.join("Seriál", "12 serie", "134 - Díl.mkv"));
 });
 
 test("an episode with no name keeps at least its number", () => {
   const { directory, base } = targetPath({ kind: "episode", title: "Seriál", season: 2, episode: 3 }, "x", ".mkv");
-  assert.equal(joinTarget(directory, base, ".mkv"), "Seriál/02 serie/03.mkv");
+  assert.equal(joinTarget(directory, base, ".mkv"), path.join("Seriál", "02 serie", "03.mkv"));
 });
 
 test("specials in season zero get a folder of their own", () => {
   const { directory } = targetPath({ kind: "episode", title: "Seriál", season: 0, episode: 1 }, "x", ".mkv");
-  assert.equal(directory, "Seriál/00 serie");
+  assert.equal(directory, path.join("Seriál", "00 serie"));
 });
 
 test("with no season number the episode stays directly in the series folder", () => {
   const { directory, base } = targetPath({ kind: "episode", title: "Seriál", episode: 5, episodeTitle: "Díl" }, "x", ".mkv");
-  assert.equal(joinTarget(directory, base, ".mkv"), "Seriál/05 - Díl.mkv");
+  assert.equal(joinTarget(directory, base, ".mkv"), path.join("Seriál", "05 - Díl.mkv"));
 });
 
 test("with no show details the given name is used", () => {
   const { directory, base } = targetPath(undefined, "Nějaké video", ".avi");
-  assert.equal(joinTarget(directory, base, ".avi"), "Nějaké video/Nějaké video.avi");
+  assert.equal(joinTarget(directory, base, ".avi"), path.join("Nějaké video", "Nějaké video.avi"));
 });
 
 test("a copy gets a running number and the folder stays the same", () => {
-  assert.equal(joinTarget("Film", "Film", ".mkv", 2), "Film/Film (2).mkv");
+  assert.equal(joinTarget("Film", "Film", ".mkv", 2), path.join("Film", "Film (2).mkv"));
 });
 
 test("a name must not escape the target directory", () => {
@@ -76,6 +76,31 @@ test("an over-long name is trimmed", () => {
   assert.ok(safeName("a".repeat(400)).length <= 150);
 });
 
+test("a download name gives way so a win32 path stays usable", () => {
+  const root = "C:\\Media\\Filmy";
+  const { directory } = targetPath({ kind: "episode", title: "Seriál", season: 1, episode: 7 }, "x", ".mkv");
+  const base = `07 - ${"Vánoce u Simpsonových ".repeat(20)}`.trim();
+  const fitted = fitTargetName(root, directory, base, ".mkv", 1, "win32");
+  assert.ok(fitted.length < base.length, "the stem had to give way");
+  assert.ok(path.join(root, directory, `${fitted}.mkv`).length <= 240, "the absolute path is inside the cap");
+  assert.ok(fitted.startsWith("07 - "), "the episode number stays");
+  assert.ok(!fitted.endsWith(".") && !fitted.endsWith(" "), "no dangling dot or space");
+  assert.ok(path.join(root, directory, `${fitted}.mkv`).startsWith(`${path.join(root, directory)}${path.sep}`), "the folder the user chose is untouched");
+});
+
+test("the cap is Windows only, and a name that fits is left alone", () => {
+  const base = `07 - ${"x".repeat(300)}`;
+  assert.equal(fitTargetName("/media/films", "Seriál/01 serie", base, ".mkv", 1, "darwin"), base);
+  assert.equal(fitTargetName("/media/films", "Seriál/01 serie", base, ".mkv", 1, "linux"), base);
+  assert.equal(fitTargetName("C:\\Media", "Seriál\\01 serie", "07 - Díl", ".mkv", 1, "win32"), "07 - Díl");
+});
+
+test("a folder tree that leaves no room for a name fails rather than overflowing", () => {
+  const root = `C:\\${"deep\\".repeat(50)}`;
+  assert.throws(() => fitTargetName(root, "", "Film", ".mkv", 1, "win32"), (error: unknown) =>
+    error instanceof AppError && error.messageKey === "err.pathTooLong");
+});
+
 test("a name Windows refuses becomes one it accepts", () => {
   // Whatever follows it: `CON`, `CON.mkv` and `CON.txt` are all device names there.
   for (const reserved of ["CON", "con.mkv", "PRN", "AUX", "NUL", "COM1", "LPT9.txt"]) {
@@ -92,22 +117,22 @@ test("a subfolder Windows could not use is refused", () => {
   for (const value of ["C:\\Windows", "\\\\server\\share\\Films", "\\Films", "Films\\..\\..\\etc"]) {
     assert.throws(() => safeSubfolder(value), `${value} must not become a subfolder`);
   }
-  assert.equal(safeSubfolder("Films\\2024"), path.join("Films", "2024"), "a backslash inside is still a separator");
+  assert.equal(safeSubfolder("Films\\2024"), "Films/2024", "a backslash inside is still a separator");
 });
 
 test("a film can be saved flat into the addon's subfolder", () => {
   const target = targetPath({ kind: "movie", title: "The Matrix" }, "x", ".mkv", { subfolder: "Webshare/Filmy", layout: "flat" });
-  assert.equal(joinTarget(target.directory, target.base, ".mkv"), "Webshare/Filmy/The Matrix.mkv");
+  assert.equal(joinTarget(target.directory, target.base, ".mkv"), path.join("Webshare", "Filmy", "The Matrix.mkv"));
 });
 
 test("a series can be saved flat without episode names colliding", () => {
   const target = targetPath({ kind: "episode", title: "Simpsonovi", season: 1, episode: 7, episodeTitle: "Vánoce" }, "x", ".mkv", { subfolder: "Sosac", layout: "flat" });
-  assert.equal(joinTarget(target.directory, target.base, ".mkv"), "Sosac/Simpsonovi - S01E07 - Vánoce.mkv");
+  assert.equal(joinTarget(target.directory, target.base, ".mkv"), path.join("Sosac", "Simpsonovi - S01E07 - Vánoce.mkv"));
 });
 
 test("structured saving puts the subfolder before the usual structure", () => {
   const target = targetPath({ kind: "episode", title: "Simpsonovi", season: 2, episode: 3, episodeTitle: "Díl" }, "x", ".mkv", { subfolder: "Streamy/Seriály", layout: "structured" });
-  assert.equal(joinTarget(target.directory, target.base, ".mkv"), "Streamy/Seriály/Simpsonovi/02 serie/03 - Díl.mkv");
+  assert.equal(joinTarget(target.directory, target.base, ".mkv"), path.join("Streamy", "Seriály", "Simpsonovi", "02 serie", "03 - Díl.mkv"));
 });
 
 test("the default settings migrate to the base folder and structure", () => {

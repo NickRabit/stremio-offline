@@ -1,9 +1,22 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { PlaybackManager, SOURCE_UNREACHABLE, SerialOperations, describeFailure, hlsCanStart, hlsPlaylistFiles, isPlaylistSource, sourceReachable } from "./playback.js";
 
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** A fake reader waits for the abort the server sends. The signal may already be aborted by the
+ *  time the reader arrives, and `abort` fires only once, so a bare listener would never settle. */
+const whenAborted = (signal: AbortSignal) => new Promise<void>((resolve) => {
+  if (signal.aborted) resolve();
+  else signal.addEventListener("abort", () => resolve(), { once: true });
+});
+
+/** A path under the runner's own scratch directory. Nothing here is read back except the files
+ *  the fake readers write, so the name only has to be somewhere a runner may write. */
+const tmp = (name: string) => path.join(os.tmpdir(), name);
 
 test("operations of one playback session never overlap", async () => {
   const queue = new SerialOperations();
@@ -35,7 +48,7 @@ test("a failed operation does not block the seek after it", async () => {
 });
 
 test("a Synology without VAAPI scaling decodes on the CPU and encodes on the GPU", () => {
-  const manager = new PlaybackManager("/tmp/test-playback") as any;
+  const manager = new PlaybackManager(tmp("test-playback")) as any;
   manager.vaapiDevice = "/dev/dri/renderD128";
   manager.vaapiScaling = false;
   manager.vaapiBitrate = false;
@@ -53,7 +66,7 @@ test("a Synology without VAAPI scaling decodes on the CPU and encodes on the GPU
     subtitleTrack: null,
   };
 
-  const args = manager.args(session, 0, "/tmp/output", true) as string[];
+  const args = manager.args(session, 0, tmp("output"), true) as string[];
   assert.deepEqual(args.slice(args.indexOf("-init_hw_device"), args.indexOf("-init_hw_device") + 4), [
     "-init_hw_device", "vaapi=va:/dev/dri/renderD128", "-filter_hw_device", "va",
   ]);
@@ -64,7 +77,7 @@ test("a Synology without VAAPI scaling decodes on the CPU and encodes on the GPU
 });
 
 test("VideoToolbox decodes, scales and encodes on the Mac without a single VAAPI flag", () => {
-  const manager = new PlaybackManager("/tmp/test-videotoolbox") as any;
+  const manager = new PlaybackManager(tmp("test-videotoolbox")) as any;
   manager.videotoolbox = true;
   const session = {
     stream: { url: "https://example.test/movie.mkv" },
@@ -80,7 +93,7 @@ test("VideoToolbox decodes, scales and encodes on the Mac without a single VAAPI
     subtitleTrack: null,
   };
 
-  const args = manager.args(session, 0, "/tmp/output", true) as string[];
+  const args = manager.args(session, 0, tmp("output"), true) as string[];
   const input = args.indexOf("-i");
   assert.ok(input > 0, "the input position is present");
   assert.deepEqual(args.slice(args.indexOf("-hwaccel"), args.indexOf("-hwaccel") + 2), ["-hwaccel", "videotoolbox"]);
@@ -95,7 +108,7 @@ test("VideoToolbox decodes, scales and encodes on the Mac without a single VAAPI
 });
 
 test("VideoToolbox uses constant quality where it can and a plain bitrate on an Intel Mac", () => {
-  const manager = new PlaybackManager("/tmp/test-videotoolbox-quality") as any;
+  const manager = new PlaybackManager(tmp("test-videotoolbox-quality")) as any;
   manager.videotoolbox = true;
   const session = {
     stream: { url: "https://example.test/movie.mkv" },
@@ -112,26 +125,26 @@ test("VideoToolbox uses constant quality where it can and a plain bitrate on an 
   };
 
   manager.videotoolboxQuality = true;
-  const constant = manager.args(session, 0, "/tmp/output", true) as string[];
+  const constant = manager.args(session, 0, tmp("output"), true) as string[];
   assert.equal(constant[constant.indexOf("-vf") + 1], "format=nv12");
   assert.equal(constant[constant.indexOf("-q:v") + 1], "60");
 
   process.env.VIDEOTOOLBOX_QUALITY = "70";
   try {
-    const tuned = manager.args(session, 0, "/tmp/output", true) as string[];
+    const tuned = manager.args(session, 0, tmp("output"), true) as string[];
     assert.equal(tuned[tuned.indexOf("-q:v") + 1], "70");
   } finally {
     delete process.env.VIDEOTOOLBOX_QUALITY;
   }
 
   manager.videotoolboxQuality = false;
-  const fixed = manager.args(session, 0, "/tmp/output", true) as string[];
+  const fixed = manager.args(session, 0, tmp("output"), true) as string[];
   assert.deepEqual(fixed.slice(fixed.indexOf("-b:v"), fixed.indexOf("-b:v") + 2), ["-b:v", "8M"]);
   assert.equal(fixed.includes("-q:v"), false);
 });
 
 test("the software fallback for a Mac stays libx264", () => {
-  const manager = new PlaybackManager("/tmp/test-videotoolbox-software") as any;
+  const manager = new PlaybackManager(tmp("test-videotoolbox-software")) as any;
   manager.videotoolbox = true;
   manager.videotoolboxQuality = true;
   const session = {
@@ -148,14 +161,14 @@ test("the software fallback for a Mac stays libx264", () => {
     subtitleTrack: null,
   };
 
-  const args = manager.args(session, 0, "/tmp/output", false) as string[];
+  const args = manager.args(session, 0, tmp("output"), false) as string[];
   assert.equal(args[args.indexOf("-c:v") + 1], "libx264");
   assert.equal(args.includes("-hwaccel"), false);
   assert.equal(args.join(" ").includes("videotoolbox"), false);
 });
 
 test("VAAPI wins over VideoToolbox when a Mac carries both", () => {
-  const manager = new PlaybackManager("/tmp/test-videotoolbox-vaapi") as any;
+  const manager = new PlaybackManager(tmp("test-videotoolbox-vaapi")) as any;
   manager.vaapiDevice = "/dev/dri/renderD128";
   manager.videotoolbox = true;
   const session = {
@@ -172,7 +185,7 @@ test("VAAPI wins over VideoToolbox when a Mac carries both", () => {
     subtitleTrack: null,
   };
 
-  const args = manager.args(session, 0, "/tmp/output", true) as string[];
+  const args = manager.args(session, 0, tmp("output"), true) as string[];
   assert.deepEqual(args.slice(args.indexOf("-hwaccel"), args.indexOf("-hwaccel") + 4), [
     "-hwaccel", "vaapi", "-hwaccel_device", "/dev/dri/renderD128",
   ]);
@@ -181,7 +194,7 @@ test("VAAPI wins over VideoToolbox when a Mac carries both", () => {
 });
 
 test("a remux never touches VideoToolbox, whatever the accelerator", () => {
-  const manager = new PlaybackManager("/tmp/test-videotoolbox-remux") as any;
+  const manager = new PlaybackManager(tmp("test-videotoolbox-remux")) as any;
   manager.videotoolbox = true;
   manager.videotoolboxQuality = true;
   const session = {
@@ -199,14 +212,143 @@ test("a remux never touches VideoToolbox, whatever the accelerator", () => {
   };
 
   for (const hardware of [false, true]) {
-    const args = manager.args(session, 0, "/tmp/output", hardware) as string[];
+    const args = manager.args(session, 0, tmp("output"), hardware) as string[];
     assert.equal(args[args.indexOf("-c:v") + 1], "copy");
     assert.equal(args.includes("-hwaccel"), false);
   }
 });
 
+/** A source that is always transcoded: no capability matches, so the video arguments are built. */
+const transcodeSession = (video: Record<string, unknown>, capabilities: Record<string, unknown>, quality: number | null = null) => ({
+  stream: { url: "https://example.test/movie.mkv" },
+  capabilities,
+  info: { video, audio: { codec: "aac" }, audioTracks: [{ codec: "aac" }], subtitleTracks: [] },
+  quality,
+  audioTrack: 0,
+  subtitleTrack: null,
+});
+
+test("Media Foundation decodes on the GPU only for a heavy source with the hardware encoder", () => {
+  const manager = new PlaybackManager(tmp("test-mediafoundation-decode")) as any;
+  manager.mediafoundation = true;
+  manager.mediafoundationHardware = true;
+  manager.mediafoundationQuality = true;
+
+  const hevc4k = manager.args(transcodeSession({ codec: "hevc", height: 2160 }, { aac: true }), 0, tmp("output"), true) as string[];
+  assert.deepEqual(hevc4k.slice(hevc4k.indexOf("-hwaccel"), hevc4k.indexOf("-hwaccel") + 2), ["-hwaccel", "d3d11va"]);
+  assert.ok(hevc4k.indexOf("-hwaccel") < hevc4k.indexOf("-i"), "the GPU decoder applies to the input");
+  assert.equal(hevc4k.includes("-hwaccel_device"), false);
+  assert.equal(hevc4k.includes("-hwaccel_output_format"), false);
+
+  const tenBit = manager.args(transcodeSession({ codec: "h264", pixelFormat: "yuv420p10le" }, { h264: false, aac: true }), 0, tmp("output"), true) as string[];
+  assert.deepEqual(tenBit.slice(tenBit.indexOf("-hwaccel"), tenBit.indexOf("-hwaccel") + 2), ["-hwaccel", "d3d11va"]);
+
+  const plain1080 = manager.args(transcodeSession({ codec: "h264", height: 1080 }, { h264: false, aac: true }), 0, tmp("output"), true) as string[];
+  assert.equal(plain1080.includes("-hwaccel"), false);
+  assert.equal(plain1080[plain1080.indexOf("-c:v") + 1], "h264_mf");
+
+  manager.mediafoundationHardware = false;
+  const software = manager.args(transcodeSession({ codec: "hevc", height: 2160 }, { aac: true }), 0, tmp("output"), true) as string[];
+  assert.equal(software.includes("-hwaccel"), false);
+  assert.equal(software.includes("-hw_encoding"), false);
+});
+
+test("Media Foundation encodes at hardware constant quality without a chosen bitrate", () => {
+  const manager = new PlaybackManager(tmp("test-mediafoundation-quality")) as any;
+  manager.mediafoundation = true;
+  manager.mediafoundationHardware = true;
+  manager.mediafoundationQuality = true;
+  const session = transcodeSession({ codec: "mpeg4" }, { aac: true });
+
+  const args = manager.args(session, 0, tmp("output"), true) as string[];
+  assert.equal(args[args.indexOf("-c:v") + 1], "h264_mf");
+  assert.equal(args[args.indexOf("-vf") + 1], "format=nv12");
+  assert.deepEqual(args.slice(args.indexOf("-rate_control"), args.indexOf("-rate_control") + 4), ["-rate_control", "quality", "-quality", "60"]);
+  assert.equal(args[args.indexOf("-hw_encoding") + 1], "1");
+  assert.equal(args[args.indexOf("-g") + 1], "48");
+  assert.equal(args.join(" ").includes("libx264"), false);
+
+  process.env.MEDIAFOUNDATION_QUALITY = "70";
+  try {
+    const tuned = manager.args(session, 0, tmp("output"), true) as string[];
+    assert.equal(tuned[tuned.indexOf("-quality") + 1], "70");
+  } finally {
+    delete process.env.MEDIAFOUNDATION_QUALITY;
+  }
+});
+
+test("Media Foundation targets a chosen quality with CBR and the hardware encoder", () => {
+  const manager = new PlaybackManager(tmp("test-mediafoundation-bitrate")) as any;
+  manager.mediafoundation = true;
+  manager.mediafoundationHardware = true;
+  manager.mediafoundationQuality = true;
+  const session = transcodeSession({ codec: "mpeg4" }, { aac: true }, 720);
+
+  const args = manager.args(session, 0, tmp("output"), true) as string[];
+  assert.equal(args[args.indexOf("-vf") + 1], "scale=-2:min(720\\,ih),format=nv12");
+  assert.deepEqual(args.slice(args.indexOf("-rate_control"), args.indexOf("-rate_control") + 6), ["-rate_control", "cbr", "-b:v", "3M", "-maxrate", "3M"]);
+  assert.equal(args[args.indexOf("-hw_encoding") + 1], "1");
+  assert.equal(args[args.indexOf("-force_key_frames") + 1], "expr:gte(t,n_forced*2)");
+  assert.equal(args.includes("-quality"), false);
+});
+
+test("the software Media Foundation MFT gets no hardware flags", () => {
+  const manager = new PlaybackManager(tmp("test-mediafoundation-software")) as any;
+  manager.mediafoundation = true;
+  manager.mediafoundationHardware = false;
+  manager.mediafoundationQuality = false;
+
+  const withBitrate = manager.args(transcodeSession({ codec: "mpeg4" }, { aac: true }, 720), 0, tmp("output"), true) as string[];
+  assert.equal(withBitrate[withBitrate.indexOf("-c:v") + 1], "h264_mf");
+  assert.deepEqual(withBitrate.slice(withBitrate.indexOf("-rate_control"), withBitrate.indexOf("-rate_control") + 6), ["-rate_control", "cbr", "-b:v", "3M", "-maxrate", "3M"]);
+  assert.equal(withBitrate.includes("-hwaccel"), false);
+  assert.equal(withBitrate.includes("-hw_encoding"), false);
+
+  const fixed = manager.args(transcodeSession({ codec: "mpeg4" }, { aac: true }), 0, tmp("output"), true) as string[];
+  assert.deepEqual(fixed.slice(fixed.indexOf("-b:v"), fixed.indexOf("-b:v") + 2), ["-b:v", "8M"]);
+  assert.equal(fixed.includes("-rate_control"), false);
+});
+
+test("VAAPI wins over Media Foundation when a machine carries both", () => {
+  const manager = new PlaybackManager(tmp("test-mediafoundation-vaapi")) as any;
+  manager.vaapiDevice = "/dev/dri/renderD128";
+  manager.mediafoundation = true;
+  manager.mediafoundationHardware = true;
+  manager.mediafoundationQuality = true;
+
+  const args = manager.args(transcodeSession({ codec: "mpeg4" }, { aac: true }), 0, tmp("output"), true) as string[];
+  assert.deepEqual(args.slice(args.indexOf("-hwaccel"), args.indexOf("-hwaccel") + 4), [
+    "-hwaccel", "vaapi", "-hwaccel_device", "/dev/dri/renderD128",
+  ]);
+  assert.equal(args[args.indexOf("-c:v") + 1], "h264_vaapi");
+  assert.equal(args.join(" ").includes("h264_mf"), false);
+});
+
+test("the Media Foundation probe follows the platform and MEDIAFOUNDATION", async () => {
+  const manager = new PlaybackManager(tmp("test-mediafoundation-gate")) as any;
+  manager.readFfmpegVersion = async () => undefined;
+  let probes = 0;
+  manager.checkMediaFoundation = async () => { probes += 1; };
+
+  const original = Object.getOwnPropertyDescriptor(process, "platform")!;
+  const loadOn = async (platform: string, off: boolean) => {
+    Object.defineProperty(process, "platform", { value: platform, configurable: true });
+    if (off) process.env.MEDIAFOUNDATION = "0"; else delete process.env.MEDIAFOUNDATION;
+    try { await manager.load(); } finally { delete process.env.MEDIAFOUNDATION; }
+  };
+  try {
+    await loadOn("linux", false);
+    await loadOn("win32", true);
+    assert.equal(probes, 0);
+    await loadOn("win32", false);
+    assert.equal(probes, 1);
+  } finally {
+    Object.defineProperty(process, "platform", original);
+  }
+});
+
 test("a remux still copies compatible video and audio", () => {
-  const manager = new PlaybackManager("/tmp/test-playback") as any;
+  const manager = new PlaybackManager(tmp("test-playback")) as any;
   const session = {
     stream: { url: "https://example.test/movie.mkv" },
     capabilities: { h264: true, eac3: true },
@@ -221,13 +363,13 @@ test("a remux still copies compatible video and audio", () => {
     subtitleTrack: null,
   };
 
-  const args = manager.args(session, 0, "/tmp/output", false) as string[];
+  const args = manager.args(session, 0, tmp("output"), false) as string[];
   assert.equal(args[args.indexOf("-c:v") + 1], "copy");
   assert.equal(args[args.indexOf("-c:a") + 1], "copy");
 });
 
 test("Dolby Vision is read as it comes but never announced to the browser", () => {
-  const manager = new PlaybackManager("/tmp/test-dolby-vision") as any;
+  const manager = new PlaybackManager(tmp("test-dolby-vision")) as any;
   const session = {
     capabilities: { hevc: true, hevc10: true, aac: true },
     info: { container: "matroska", duration: 6520,
@@ -237,7 +379,7 @@ test("Dolby Vision is read as it comes but never announced to the browser", () =
     mode: "remux", generation: 1, offset: 0, hardware: false, subtitleTrack: null,
     startedAt: Date.now(), lastAccess: Date.now(), operations: new SerialOperations(), stopped: false, claimed: false,
   };
-  const args: string[] = manager.args(session, 0, "/tmp/gen", false);
+  const args: string[] = manager.args(session, 0, tmp("gen"), false);
   const input = args.indexOf("-i");
   assert.equal(manager.plan(session).copyVideo, true, "the picture is copied; it is ordinary HEVC underneath");
   // Reading it needs the unofficial mapping, or FFmpeg refuses the file outright.
@@ -248,7 +390,7 @@ test("Dolby Vision is read as it comes but never announced to the browser", () =
   assert.ok(args.slice(input).join(" ").includes("-tag:v hvc1"));
 });
 test("ordinary HEVC Main 10 still copies when the client supports it", () => {
-  const manager = new PlaybackManager("/tmp/test-playback") as any;
+  const manager = new PlaybackManager(tmp("test-playback")) as any;
   const session = {
     stream: { url: "https://example.test/movie.mkv" },
     capabilities: { hevc: true, hevc10: true, eac3: true },
@@ -270,7 +412,7 @@ test("ordinary HEVC Main 10 still copies when the client supports it", () => {
 test("copied AAC is rewritten out of ADTS, which fMP4 will not take", () => {
   // Without it the muxer refuses every packet and FFmpeg dies before writing the
   // master playlist's stream line, leaving the client a master with no CODECS.
-  const manager = new PlaybackManager("/tmp/test-playback") as any;
+  const manager = new PlaybackManager(tmp("test-playback")) as any;
   const session = {
     stream: { url: "https://example.test/master.m3u8" },
     capabilities: { h264: true, aac: true },
@@ -286,13 +428,13 @@ test("copied AAC is rewritten out of ADTS, which fMP4 will not take", () => {
     subtitleTrack: null,
   };
 
-  const args = manager.args(session, 0, "/tmp/output", false) as string[];
+  const args = manager.args(session, 0, tmp("output"), false) as string[];
   assert.equal(args[args.indexOf("-c:a") + 1], "copy");
   assert.equal(args[args.indexOf("-bsf:a") + 1], "aac_adtstoasc");
 });
 
 test("copied AAC from a file is left alone, ADTS only comes from a playlist", () => {
-  const manager = new PlaybackManager("/tmp/test-playback") as any;
+  const manager = new PlaybackManager(tmp("test-playback")) as any;
   const session = {
     stream: { url: "https://example.test/movie.mkv" },
     capabilities: { h264: true, aac: true },
@@ -308,13 +450,13 @@ test("copied AAC from a file is left alone, ADTS only comes from a playlist", ()
     subtitleTrack: null,
   };
 
-  const args = manager.args(session, 0, "/tmp/output", false) as string[];
+  const args = manager.args(session, 0, tmp("output"), false) as string[];
   assert.equal(args[args.indexOf("-c:a") + 1], "copy");
   assert.equal(args.includes("-bsf:a"), false);
 });
 
 test("audio that is not AAC is copied without the AAC filter", () => {
-  const manager = new PlaybackManager("/tmp/test-playback") as any;
+  const manager = new PlaybackManager(tmp("test-playback")) as any;
   const session = {
     stream: { url: "https://example.test/movie.mkv" },
     capabilities: { h264: true, eac3: true },
@@ -329,13 +471,13 @@ test("audio that is not AAC is copied without the AAC filter", () => {
     subtitleTrack: null,
   };
 
-  const args = manager.args(session, 0, "/tmp/output", false) as string[];
+  const args = manager.args(session, 0, tmp("output"), false) as string[];
   assert.equal(args[args.indexOf("-c:a") + 1], "copy");
   assert.equal(args.includes("-bsf:a"), false);
 });
 
 test("a transcoded track is re-encoded to AAC, so it needs no filter", () => {
-  const manager = new PlaybackManager("/tmp/test-playback") as any;
+  const manager = new PlaybackManager(tmp("test-playback")) as any;
   const session = {
     stream: { url: "https://example.test/master.m3u8" },
     capabilities: { h264: false, aac: true },
@@ -351,13 +493,13 @@ test("a transcoded track is re-encoded to AAC, so it needs no filter", () => {
     subtitleTrack: null,
   };
 
-  const args = manager.args(session, 0, "/tmp/output", false) as string[];
+  const args = manager.args(session, 0, tmp("output"), false) as string[];
   assert.equal(args[args.indexOf("-c:a") + 1], "aac");
   assert.equal(args.includes("-bsf:a"), false);
 });
 
 test("text subtitles behind a filtered-out PGS track use the real index", () => {
-  const manager = new PlaybackManager("/tmp/test-playback") as any;
+  const manager = new PlaybackManager(tmp("test-playback")) as any;
   const session = {
     stream: { url: "https://example.test/movie.mkv" },
     capabilities: { h264: true, aac: true },
@@ -374,7 +516,7 @@ test("text subtitles behind a filtered-out PGS track use the real index", () => 
   };
 
   assert.equal(manager.preferredSubtitle(session.info.subtitleTracks, "cs"), 1);
-  const args = manager.args(session, 0, "/tmp/output", false) as string[];
+  const args = manager.args(session, 0, tmp("output"), false) as string[];
   // WebVTT in the fMP4 mux dies with "timescale not set"; the track is extracted as a sidecar.
   assert.equal(args.includes("0:s:1?"), false);
   assert.equal(args.includes("webvtt"), false);
@@ -382,7 +524,7 @@ test("text subtitles behind a filtered-out PGS track use the real index", () => 
 });
 
 test("a seek with copied AC3 audio converts it to AAC for the fMP4 init segment", () => {
-  const manager = new PlaybackManager("/tmp/test-playback") as any;
+  const manager = new PlaybackManager(tmp("test-playback")) as any;
   const session = {
     stream: { url: "https://example.test/movie.mkv" },
     capabilities: { hevc: true, ac3: true },
@@ -397,15 +539,15 @@ test("a seek with copied AC3 audio converts it to AAC for the fMP4 init segment"
     subtitleTrack: null,
   };
 
-  const initial = manager.args(session, 0, "/tmp/output", false) as string[];
+  const initial = manager.args(session, 0, tmp("output"), false) as string[];
   assert.equal(initial[initial.indexOf("-c:a") + 1], "copy");
-  const seeked = manager.args(session, 2369, "/tmp/output", false) as string[];
+  const seeked = manager.args(session, 2369, tmp("output"), false) as string[];
   const audio = seeked.indexOf("-c:a");
   assert.deepEqual(seeked.slice(audio, audio + 6), ["-c:a", "aac", "-ac", "2", "-b:a", "160k"]);
 });
 
 test("a conversion reconnects when a remote source drops the stream", () => {
-  const manager = new PlaybackManager("/tmp/test-playback-reconnect") as any;
+  const manager = new PlaybackManager(tmp("test-playback-reconnect")) as any;
   const session = {
     stream: { url: "https://example.test/large.mkv" },
     capabilities: { hevc: true, ac3: true },
@@ -420,7 +562,7 @@ test("a conversion reconnects when a remote source drops the stream", () => {
     subtitleTrack: null,
   };
 
-  const args = manager.args(session, 3949, "/tmp/output", false) as string[];
+  const args = manager.args(session, 3949, tmp("output"), false) as string[];
   const input = args.indexOf("-i");
   assert.ok(input > 0, "the input position is present");
   assert.deepEqual(args.slice(args.indexOf("-reconnect"), args.indexOf("-reconnect") + 8), [
@@ -436,16 +578,16 @@ test("a conversion reconnects when a remote source drops the stream", () => {
 });
 
 test("a trailing request for the previous generation still gets its directory for a while", () => {
-  const manager = new PlaybackManager("/tmp/test-playback") as any;
+  const manager = new PlaybackManager(tmp("test-playback")) as any;
   const session = {
-    id: "s1", mode: "remux", generation: 3, directory: "/tmp/test-playback/s1/3",
+    id: "s1", mode: "remux", generation: 3, directory: tmp("test-playback/s1/3"),
     lastAccess: 0, claimed: false,
-    retired: { generation: 2, directory: "/tmp/test-playback/s1/2", until: Date.now() + 5_000 },
+    retired: { generation: 2, directory: tmp("test-playback/s1/2"), until: Date.now() + 5_000 },
   };
   manager.sessions.set("s1", session);
 
-  assert.equal(manager.directory("s1", "3"), "/tmp/test-playback/s1/3");
-  assert.equal(manager.directory("s1", "2"), "/tmp/test-playback/s1/2");
+  assert.equal(manager.directory("s1", "3"), tmp("test-playback/s1/3"));
+  assert.equal(manager.directory("s1", "2"), tmp("test-playback/s1/2"));
   assert.equal(session.claimed, true);
   assert.equal(manager.directory("s1", "1"), undefined);
 
@@ -454,7 +596,7 @@ test("a trailing request for the previous generation still gets its directory fo
 });
 
 test("a session no client claimed is closed by the sweep sooner than an idle one", async () => {
-  const manager = new PlaybackManager("/tmp/test-playback") as any;
+  const manager = new PlaybackManager(tmp("test-playback")) as any;
   const stopped: string[] = [];
   manager.stop = async (id: string) => { stopped.push(id); manager.sessions.delete(id); };
   const base = { mode: "transcode", operations: new SerialOperations(), stopped: false };
@@ -468,7 +610,7 @@ test("a session no client claimed is closed by the sweep sooner than an idle one
 });
 
 test("concurrent inspect of the same URL runs ffprobe once", async () => {
-  const manager = new PlaybackManager("/tmp/test-playback") as any;
+  const manager = new PlaybackManager(tmp("test-playback")) as any;
   let calls = 0;
   manager.probeSource = async () => {
     calls += 1;
@@ -507,13 +649,13 @@ test("an unreachable source is never handed to ffprobe", async (t) => {
   process.env.ALLOW_PRIVATE_ADDONS = "1";
   t.after(() => { delete process.env.ALLOW_PRIVATE_ADDONS; });
   t.mock.method(globalThis, "fetch", async () => { throw new Error("connect ETIMEDOUT"); });
-  const manager = new PlaybackManager("/tmp/test-playback") as any;
+  const manager = new PlaybackManager(tmp("test-playback")) as any;
   const info = await manager.inspect({ url: "https://cdn.example/movie.mkv" });
   assert.equal(info, undefined);
 });
 
 test("inspect of different URLs is not coalesced", async () => {
-  const manager = new PlaybackManager("/tmp/test-playback") as any;
+  const manager = new PlaybackManager(tmp("test-playback")) as any;
   const seen: string[] = [];
   manager.probeSource = async (stream: { url: string }) => {
     seen.push(stream.url);
@@ -547,7 +689,7 @@ test("hlsCanStart accepts one segment or a finished playlist", () => {
 });
 
 test("direct play follows the probed container, not a misleading filename", () => {
-  const manager = new PlaybackManager("/tmp/test-playback") as any;
+  const manager = new PlaybackManager(tmp("test-playback")) as any;
   const mp4 = { container: "mov,mp4,m4a,3gp,3g2,mj2", video: { codec: "h264" }, audio: { codec: "aac" } };
   assert.equal(manager.directPlay({ url: "https://cdn.example/a", behaviorHints: { filename: "Movie.mkv" } }, mp4, playCaps).ok, true);
   const mkv = { container: "matroska,webm", video: { codec: "h264" }, audio: { codec: "aac" } };
@@ -556,14 +698,14 @@ test("direct play follows the probed container, not a misleading filename", () =
 });
 
 test("direct play still uses the extension when ffprobe omitted the format name", () => {
-  const manager = new PlaybackManager("/tmp/test-playback") as any;
+  const manager = new PlaybackManager(tmp("test-playback")) as any;
   const info = { container: "", video: { codec: "h264" }, audio: { codec: "aac" } };
   assert.equal(manager.directPlay({ url: "https://cdn.example/a.mp4", behaviorHints: { filename: "Movie.mp4" } }, info, playCaps).ok, true);
   assert.equal(manager.directPlay({ url: "https://cdn.example/a.mkv", behaviorHints: { filename: "Movie.mkv" } }, info, playCaps).ok, false);
 });
 
 test("webm codecs inside matroska,webm play directly; h264 in that container does not", () => {
-  const manager = new PlaybackManager("/tmp/test-playback") as any;
+  const manager = new PlaybackManager(tmp("test-playback")) as any;
   const webm = { container: "matroska,webm", video: { codec: "vp9" }, audio: { codec: "opus" } };
   assert.equal(manager.directPlay({ url: "https://cdn.example/a.mkv" }, webm, playCaps).ok, true);
   const mkv = { container: "matroska,webm", video: { codec: "h264" }, audio: { codec: "aac" } };
@@ -571,7 +713,7 @@ test("webm codecs inside matroska,webm play directly; h264 in that container doe
 });
 
 test("incompatible codecs, HLS and notWebReady still force a conversion", () => {
-  const manager = new PlaybackManager("/tmp/test-playback") as any;
+  const manager = new PlaybackManager(tmp("test-playback")) as any;
   const mp4 = { container: "mov,mp4,m4a,3gp,3g2,mj2", video: { codec: "h264" }, audio: { codec: "aac" } };
   assert.equal(manager.directPlay({ url: "https://cdn.example/a.mp4", behaviorHints: { notWebReady: true } }, mp4, playCaps).ok, false);
   const ac3 = { container: "mov,mp4,m4a,3gp,3g2,mj2", video: { codec: "h264" }, audio: { codec: "ac3" } };
@@ -585,7 +727,7 @@ test("incompatible codecs, HLS and notWebReady still force a conversion", () => 
 });
 
 test("a playable mp4 with a preferred subtitle stays on direct play", async () => {
-  const manager = new PlaybackManager("/tmp/test-playback-sidecar") as any;
+  const manager = new PlaybackManager(tmp("test-playback-sidecar")) as any;
   manager.inspect = async () => ({
     container: "mov,mp4,m4a,3gp,3g2,mj2",
     video: { codec: "h264" }, audio: { codec: "aac" }, duration: 120,
@@ -597,7 +739,7 @@ test("a playable mp4 with a preferred subtitle stays on direct play", async () =
   let extracted = 0;
   manager.sidecars.run = async (_args: string[], _file: string, _append: boolean, signal: AbortSignal) => {
     extracted += 1;
-    await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+    await whenAborted(signal);
   };
   const started = await manager.start({ url: "https://cdn.example/movie.mp4" }, playCaps, { subtitleLanguage: "cs" });
   assert.equal(spawned, false);
@@ -610,7 +752,7 @@ test("a playable mp4 with a preferred subtitle stays on direct play", async () =
 });
 
 test("mkv with subtitles still remuxes", async () => {
-  const manager = new PlaybackManager("/tmp/test-playback-sidecar-mkv") as any;
+  const manager = new PlaybackManager(tmp("test-playback-sidecar-mkv")) as any;
   manager.inspect = async () => ({
     container: "matroska,webm",
     video: { codec: "h264" }, audio: { codec: "aac" }, duration: 120,
@@ -626,7 +768,7 @@ test("mkv with subtitles still remuxes", async () => {
   let extracted = 0;
   manager.sidecars.run = async (_args: string[], _file: string, _append: boolean, signal: AbortSignal) => {
     extracted += 1;
-    await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+    await whenAborted(signal);
   };
   const started = await manager.start({ url: "https://cdn.example/movie.mkv" }, playCaps, { subtitleLanguage: "cs" });
   assert.equal(spawned, true);
@@ -667,7 +809,7 @@ const stubSpawn = (manager: any, session: Record<string, any>, spawned: number[]
 };
 
 test("a copy the browser refused is transcoded instead, video and audio both", () => {
-  const manager = new PlaybackManager("/tmp/test-playback") as any;
+  const manager = new PlaybackManager(tmp("test-playback")) as any;
   const session = remuxSession(manager, { capabilities: { h264: true, ac3: true }, info: {
     container: "matroska,webm", video: { codec: "h264" }, audio: { codec: "ac3" },
     audioTracks: [{ index: 0, codec: "ac3" }], subtitleTracks: [],
@@ -677,13 +819,13 @@ test("a copy the browser refused is transcoded instead, video and audio both", (
   session.copyRejected = true;
   assert.deepEqual(manager.plan(session), { copyVideo: false, copyAudio: false });
 
-  const args = manager.args(session, 0, "/tmp/output", false) as string[];
+  const args = manager.args(session, 0, tmp("output"), false) as string[];
   assert.equal(args[args.indexOf("-c:v") + 1], "libx264");
   assert.equal(args[args.indexOf("-c:a") + 1], "aac");
 });
 
 test("escalate marks the session and restarts the conversion at the same spot", async () => {
-  const manager = new PlaybackManager("/tmp/test-playback") as any;
+  const manager = new PlaybackManager(tmp("test-playback")) as any;
   const session = remuxSession(manager);
   const spawned = stubSpawn(manager, session);
 
@@ -695,7 +837,7 @@ test("escalate marks the session and restarts the conversion at the same spot", 
 });
 
 test("escalate from direct play converts instead of handing the file over again", async () => {
-  const manager = new PlaybackManager("/tmp/test-playback") as any;
+  const manager = new PlaybackManager(tmp("test-playback")) as any;
   const session = remuxSession(manager, { mode: "direct" });
   stubSpawn(manager, session);
 
@@ -706,7 +848,7 @@ test("escalate from direct play converts instead of handing the file over again"
 });
 
 test("a session that already transcodes is not escalated twice, only restarted", async () => {
-  const manager = new PlaybackManager("/tmp/test-playback") as any;
+  const manager = new PlaybackManager(tmp("test-playback")) as any;
   const session = remuxSession(manager, { mode: "transcode", copyRejected: true });
   const restarts = stubSpawn(manager, session);
 
@@ -717,7 +859,7 @@ test("a session that already transcodes is not escalated twice, only restarted",
 });
 
 test("a track switch does not fall back to direct play the browser has already refused", async () => {
-  const manager = new PlaybackManager("/tmp/test-playback") as any;
+  const manager = new PlaybackManager(tmp("test-playback")) as any;
   const session = remuxSession(manager, {
     copyRejected: true, audioTrack: 1,
     stream: { url: "https://cdn.example/movie.mp4" },
@@ -736,7 +878,7 @@ test("a track switch does not fall back to direct play the browser has already r
 });
 
 test("a source that answers 404 is not handed to FFmpeg a second time", async () => {
-  const manager = new PlaybackManager("/tmp/test-playback-source") as any;
+  const manager = new PlaybackManager(tmp("test-playback-source")) as any;
   manager.vaapiDevice = "/dev/dri/renderD128";
   const session = remuxSession(manager, { mode: "transcode", copyRejected: true });
   let attempts = 0;
@@ -756,7 +898,7 @@ test("a conversion FFmpeg could not open is told apart from one the viewer walke
 });
 
 test("probe caching separates credentials for the same source URL", async () => {
-  const manager = new PlaybackManager("/tmp/test-playback") as any;
+  const manager = new PlaybackManager(tmp("test-playback")) as any;
   let probes = 0;
   manager.probeSource = async () => { probes++; return undefined; };
   for (const authorization of ["first", "second", "first"]) {
@@ -775,7 +917,7 @@ test("a playlist source is recognised by its address or by the probe", () => {
 });
 
 test("the playlist demuxer flags reach the conversion, ahead of the input", () => {
-  const manager = new PlaybackManager("/tmp/test-playback") as any;
+  const manager = new PlaybackManager(tmp("test-playback")) as any;
   const session = {
     stream: { url: "https://example.test/master.m3u8" },
     capabilities: { h264: true, aac: true },
@@ -791,7 +933,7 @@ test("the playlist demuxer flags reach the conversion, ahead of the input", () =
   };
 
   const flags = ["-allowed_extensions", "ALL"];
-  const args = manager.args(session, 0, "/tmp/output", false, flags) as string[];
+  const args = manager.args(session, 0, tmp("output"), false, flags) as string[];
 
 
   // An option after -i applies to the output, where the HLS demuxer never sees it.
@@ -800,7 +942,7 @@ test("the playlist demuxer flags reach the conversion, ahead of the input", () =
 
   // Without them, every playlist entry our proxy rewrites to /api/media/<id> is refused for
   // having no file ending, and an HLS source probes fine and then will not convert.
-  const bare = manager.args(session, 0, "/tmp/output", false) as string[];
+  const bare = manager.args(session, 0, tmp("output"), false) as string[];
   assert.equal(bare.includes("-allowed_extensions"), false);
 });
 
@@ -816,7 +958,7 @@ test("the playlist flags are left out for a source that is not a playlist", () =
 });
 
 test("seeking re-reads the same subtitles instead of starting FFmpeg again", async () => {
-  const manager = new PlaybackManager("/tmp/test-seek-sidecars") as any;
+  const manager = new PlaybackManager(tmp("test-seek-sidecars")) as any;
   manager.inspect = async () => ({ container: "matroska", duration: 7000,
     video: { codec: "hevc" }, audio: { codec: "ac3" },
     audioTracks: [{ index: 0, codec: "ac3" }], subtitleTracks: [{ index: 2, codec: "subrip", language: "cs" }],
@@ -830,7 +972,7 @@ test("seeking re-reads the same subtitles instead of starting FFmpeg again", asy
     sidecarArgs.push(args);
     // What FFmpeg would have written by then: cues with the source's own timestamps.
     await writeFile(file, "WEBVTT\n\n01:27:30.000 --> 01:40:00.000\nspoken\n\n");
-    await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+    await whenAborted(signal);
   };
   const started = await manager.start({ url: "https://cdn.example/large.mkv" }, { hevc: true }, { startTime: 5245, subtitleLanguage: "cs" });
   while (!readers.length) await pause(5);
@@ -864,7 +1006,7 @@ test("stop terminates media and subtitle readers before revoking their source", 
   let mediaRunning = true;
   let subtitlesRunning = true;
   let revoked = false;
-  const manager = new PlaybackManager("/tmp/test-seek-stop", () => {
+  const manager = new PlaybackManager(tmp("test-seek-stop"), () => {
     assert.equal(mediaRunning, false);
     assert.equal(subtitlesRunning, false);
     revoked = true;
@@ -878,7 +1020,7 @@ test("stop terminates media and subtitle readers before revoking their source", 
 });
 
 test("switching subtitles changes the reader, not the conversion", async () => {
-  const manager = new PlaybackManager("/tmp/test-subtitle-switch") as any;
+  const manager = new PlaybackManager(tmp("test-subtitle-switch")) as any;
   manager.inspect = async () => ({ container: "matroska", duration: 7000,
     video: { codec: "hevc" }, audio: { codec: "ac3" },
     audioTracks: [{ index: 0, codec: "ac3" }],
@@ -888,7 +1030,7 @@ test("switching subtitles changes the reader, not the conversion", async () => {
   const readers: number[] = [];
   manager.spawnAt = async (session: any, offset: number) => { session.offset = offset; session.generation += 1; spawns.push(offset); return `/api/playback/${session.id}/${session.generation}/master.m3u8`; };
   manager.sidecars.run = async (_args: string[], _file: string, _append: boolean, signal: AbortSignal) => {
-    await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+    await whenAborted(signal);
   };
   const started = await manager.start({ url: "https://cdn.example/large.mkv" }, { hevc: true }, { startTime: 900, subtitleLanguage: "cs" });
   assert.deepEqual(spawns, [900]);
@@ -912,7 +1054,7 @@ test("switching subtitles changes the reader, not the conversion", async () => {
 });
 
 test("a position the source will not open costs the seek, not the film", async () => {
-  const manager = new PlaybackManager("/tmp/test-seek-keeps-playing") as any;
+  const manager = new PlaybackManager(tmp("test-seek-keeps-playing")) as any;
   manager.inspect = async () => ({ container: "matroska", duration: 7000,
     video: { codec: "hevc" }, audio: { codec: "ac3" },
     audioTracks: [{ index: 0, codec: "ac3" }], subtitleTracks: [],
@@ -922,7 +1064,7 @@ test("a position the source will not open costs the seek, not the film", async (
   manager.spawnAt = async (session: any, offset: number) => {
     if (refuse) throw new Error("The source could not be opened: it did not answer, or it refused the connection.");
     session.offset = offset; session.generation += 1; session.process = alive;
-    session.directory = `/tmp/test-seek-keeps-playing/${session.generation}`;
+    session.directory = tmp(`test-seek-keeps-playing/${session.generation}`);
     return `/api/playback/${session.id}/${session.generation}/master.m3u8`;
   };
   manager.killChild = async () => {};
@@ -946,11 +1088,11 @@ test("a position the source will not open costs the seek, not the film", async (
 });
 
 test("cleanup never deletes the generation a conversion is writing into", async () => {
-  const manager = new PlaybackManager("/tmp/test-purge-guard") as any;
+  const manager = new PlaybackManager(tmp("test-purge-guard")) as any;
   const deleted: string[] = [];
   manager.purgeNow = async (directory: string) => { deleted.push(directory); };
   const session = remuxSession(manager);
-  session.directory = "/tmp/test-purge-guard/session/2";
+  session.directory = tmp("test-purge-guard/session/2");
   session.process = { exitCode: null, signalCode: null };
 
   await manager.purge(session.directory, "a generation that was replaced");
@@ -965,7 +1107,7 @@ test("cleanup never deletes the generation a conversion is writing into", async 
 
 
 test("a session no player is watching is closed, however busy FFmpeg is", async () => {
-  const manager = new PlaybackManager("/tmp/test-orphan") as any;
+  const manager = new PlaybackManager(tmp("test-orphan")) as any;
   const stopped: string[] = [];
   manager.stop = async (id: string) => { stopped.push(id); manager.sessions.delete(id); };
   const session = remuxSession(manager);
@@ -983,7 +1125,7 @@ test("a session no player is watching is closed, however busy FFmpeg is", async 
 });
 
 test("the player asking for a segment is what counts as watching", () => {
-  const manager = new PlaybackManager("/tmp/test-attended") as any;
+  const manager = new PlaybackManager(tmp("test-attended")) as any;
   const session = remuxSession(manager);
   session.clientAt = undefined;
   manager.touch(session.id);
@@ -994,7 +1136,7 @@ test("the player asking for a segment is what counts as watching", () => {
 
 /** The rule the tracks are chosen by, spelled out once and exercised four ways. */
 const subtitlePick = async (name: string, subtitleTracks: any[], options: Record<string, unknown>) => {
-  const manager = new PlaybackManager(`/tmp/test-playback-${name}`) as any;
+  const manager = new PlaybackManager(tmp(`test-playback-${name}`)) as any;
   manager.inspect = async () => ({
     container: "mov,mp4,m4a,3gp,3g2,mj2",
     video: { codec: "h264" }, audio: { codec: "aac" }, duration: 120,
@@ -1003,7 +1145,7 @@ const subtitlePick = async (name: string, subtitleTracks: any[], options: Record
   });
   manager.spawnAt = async () => "/nope";
   manager.sidecars.run = async (_args: string[], _file: string, _append: boolean, signal: AbortSignal) =>
-    new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+    whenAborted(signal);
   const started = await manager.start({ url: "https://cdn.example/movie.mp4" }, playCaps, options);
   await manager.stop(started.id);
   return started.subtitleTrack;
@@ -1030,14 +1172,14 @@ test("subtitles the viewer's language does not have fall back to English", async
 });
 
 test("a hardware attempt whose path was switched off meanwhile gets the software arguments", () => {
-  const manager = new PlaybackManager("/tmp/test-playback") as any;
+  const manager = new PlaybackManager(tmp("test-playback")) as any;
   const session = {
     stream: { url: "https://example.test/movie.mkv" },
     capabilities: { h264: true },
     info: { video: { codec: "hevc" }, audio: { codec: "aac" }, audioTracks: [{ codec: "aac" }], subtitleTracks: [] },
     quality: null, audioTrack: 0, subtitleTrack: null,
   };
-  const args = manager.args(session, 0, "/tmp/output", true) as string[];
+  const args = manager.args(session, 0, tmp("output"), true) as string[];
   assert.equal(args[args.indexOf("-c:v") + 1], "libx264");
   assert.equal(args.includes("-hwaccel"), false);
   assert.equal(args.some((arg) => arg.includes("vaapi")), false);

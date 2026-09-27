@@ -5,7 +5,9 @@ import path from "node:path";
 import test from "node:test";
 import { nextVideoFile } from "./next-file.js";
 
-test("next video follows natural episode order and ignores folders, sidecars and symlinks", async () => {
+test("next video follows natural episode order and ignores folders, sidecars and symlinks", {
+  skip: process.platform === "win32" ? "symlinks need developer mode or admin on Windows" : false,
+}, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "next-video-"));
   try {
     for (const name of ["Episode 10.mp4", "Episode 2.mkv", "Episode 1.mp4", "Episode 3.srt", ".hidden.mp4"]) await writeFile(path.join(root, name), "");
