@@ -42,8 +42,7 @@ The welcome screen offers two choices:
   your first library. To download somewhere else later, add a library in
   another folder and make it the default.
 - **A server on the network** opens a server you already run. You can switch
-  between it and this PC at any time from the **Server** menu (press Alt to
-  show the menu bar), from the icon in the notification area, or in
+  between it and this PC at any time from the **Server** menu, from the icon in the notification area, or in
   **Settings**.
 
 ## Everyday use
@@ -53,6 +52,8 @@ The welcome screen offers two choices:
   downloading. When sharing is on, it also stays available to your other
   devices. Click the icon to open the window again. The first time you close
   the window, a notification says so.
+- **Settings** are under **File → Settings…** in the window's menu bar, or
+  `Ctrl+,`, or in the icon's menu.
 - **Quit** from the icon's menu, or with **File → Exit**. While the server on
   this PC is downloading or playing something, on this PC or on another
   device, the app asks first. The question also holds up signing out or

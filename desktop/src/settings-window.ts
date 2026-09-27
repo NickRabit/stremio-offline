@@ -45,6 +45,13 @@ export class SettingsWindow {
     window.setTitle(this.options.title());
   }
 
+  /** Windows hands every window the application menu; this one has none. */
+  removeMenu(): void {
+    const window = this.window;
+    if (window === null || window.isDestroyed() || this.options.platform !== "win32") return;
+    window.removeMenu();
+  }
+
   close(): void {
     const window = this.window;
     if (window === null || window.isDestroyed()) return;
@@ -66,7 +73,6 @@ export class SettingsWindow {
       show: false,
       title: this.options.title(),
       ...(this.options.platform === "darwin" ? { titleBarStyle: "hiddenInset" as const } : {}),
-      ...(this.options.platform === "win32" ? { autoHideMenuBar: true } : {}),
       backgroundColor: BACKGROUND,
       fullscreenable: false,
       webPreferences: {
@@ -77,6 +83,9 @@ export class SettingsWindow {
         preload: this.options.preload,
       },
     });
+    // Windows gives every window the application menu; the settings window is the settings, and the
+    // main window carries the menu.
+    if (this.options.platform === "win32") window.removeMenu();
     window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
     window.webContents.on("will-navigate", (event) => event.preventDefault());
     // The page is called Stremio Offline; the window keeps its own title.

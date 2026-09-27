@@ -56,7 +56,8 @@ where something looks wrong.
    - Click the tray icon and the window comes back, on the same server.
    - Right-click the tray icon: the menu has Open, This PC and servers,
      Settings and Quit.
-   - Press **Alt** and the menu bar appears.
+   - The main window has a menu bar (File, Edit, View, Server, Help), and
+     **File → Settings…** opens Settings.
 6. **Quit while busy.** Start a download and choose **Quit** from the tray.
    The app asks first. **Cancel** keeps it running, and **Quit** stops it. At
    the next start the download continues.
