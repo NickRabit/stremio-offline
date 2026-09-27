@@ -1,4 +1,4 @@
-# Desktop shell — macOS arm64 prototype packaging
+# Desktop shell — macOS arm64 and experimental Windows x64
 
 The `desktop` workspace is an Electron shell that opens an existing Stremio
 Offline server, or runs one on this computer. The window shows either the
@@ -157,6 +157,8 @@ and, when the window is not focused, as a system notification.
 
 - macOS on Apple Silicon (arm64). Only arm64 is built and labelled; there is no
   Intel or universal artifact.
+- Windows 10 or 11, x64 (experimental). Windows on ARM runs the x64 build under
+  emulation.
 - Node.js >= 22, matching the root `engines` field.
 
 ## Build locally
@@ -270,6 +272,50 @@ the pull-request package, so macOS refuses the first launch until the user
 allows it (right-click → **Open**, or **System Settings → Privacy & Security →
 Open Anyway**). The job refuses a tag that disagrees with
 `desktop/package.json` and never replaces an asset that is already attached.
+
+## Windows (experimental)
+
+The same shell runs on Windows x64. Where it differs from macOS:
+
+- **Window and tray.**
+  - Closing the window leaves the app in the notification area, not the Dock.
+    The tray menu opens the window or settings, switches servers and quits. The
+    first close says so once, and `shell-prefs.json` keeps `trayNoticeShown`.
+  - The menu bar is hidden until Alt: File, Edit, View, Server, Help.
+  - The settings window keeps Windows' own frame.
+- **Open at login** writes the Run key with `--hidden`. Such a start stays in
+  the tray and, when this PC was the choice, brings the local backend up
+  without a window.
+- **Download folder.** The setup step proposes `Videos\Stremio Offline`, or
+  `<profile>\Stremio Offline` when Videos is synced by OneDrive.
+  - Protected: profile folders, OneDrive folders, every known folder as
+    Windows resolves it, and their parents.
+  - Reserved: drive and share roots.
+  - Paths compare without case and through `realpath`.
+  - **Reset never moves the download folder**, because the Recycle Bin has a
+    quota and Windows deletes what does not fit; only the server's data goes
+    there.
+- **FFmpeg.** `scripts/build-ffmpeg-win.sh` cross-compiles an LGPL FFmpeg with
+  mingw-w64 on Linux: static, schannel for TLS, Media Foundation (`h264_mf`)
+  and D3D11VA. It leaves out the capture devices except `lavfi`, and checks
+  that the executables import only Windows' own DLLs. See
+  [docs/hardware-acceleration.md](../docs/hardware-acceleration.md) for how
+  transcoding uses it.
+- **Packaging.** `npm run package:win:x64 -w desktop` builds a one-click,
+  per-user NSIS installer and a ZIP. It needs `desktop/ffmpeg-win`, which CI
+  takes from the `ffmpeg-windows` job. The fuses are the same as on macOS.
+- **CI.** The **Desktop package** workflow's `package-windows` job, on
+  `windows-latest`:
+  - packages the app and verifies the fuses;
+  - runs the packaged smoke test, which also checks that the bundled
+    `ffmpeg.exe` is LGPL and that an `h264_mf` encode works;
+  - prints the local backend's log, since a Windows GUI app does not pass the
+    utility process's output on.
+- **Release.** The **Release** workflow's `desktop-windows` job runs after the
+  macOS job and attaches `Stremio-Offline-<version>-x64-unsigned-setup.exe`
+  and `.zip`. The files are unsigned, so SmartScreen warns on the first run.
+
+Users read [docs/install-windows.md](../docs/install-windows.md).
 
 ## Signed release (manual)
 

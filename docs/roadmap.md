@@ -119,6 +119,11 @@ the cookie-encryption fuse stays off until a signed build has been tested across
 an upgrade. Finish the distribution work before adding another native desktop
 feature.
 
+An **experimental Windows x64 build** of the same shell is packaged and
+smoke-tested in CI and attached to releases, unsigned (see
+[docs/install-windows.md](install-windows.md)). It stays experimental until it
+has been checked by hand on a real Windows PC.
+
 ## Engineering health
 
 Feature work is cheap now; long-lived complexity is not. These items are about
