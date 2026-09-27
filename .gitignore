@@ -6,6 +6,7 @@ desktop/release/
 desktop/runtime/
 desktop/renderer/
 desktop/ffmpeg/
+desktop/ffmpeg-win/
 data/
 downloads/
 datacenter/

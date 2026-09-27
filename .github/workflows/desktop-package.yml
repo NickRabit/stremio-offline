@@ -10,6 +10,7 @@ on:
   pull_request:
     paths:
       - "desktop/**"
+      - "desktop/scripts/build-ffmpeg-win.sh"
       - "server/**"
       - "web/**"
       - "package.json"
@@ -22,6 +23,26 @@ permissions:
   contents: read
 
 jobs:
+  # Builds the LGPL FFmpeg for Windows x64 with the mingw-w64 cross toolchain. The artifact is
+  # consumed by the Windows packaging job (win-package), which runs it on a Windows runner.
+  ffmpeg-windows:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      # The LGPL FFmpeg takes minutes to build; the result only changes with the script.
+      - uses: actions/cache@v4
+        with:
+          path: desktop/ffmpeg-win
+          key: desktop-ffmpeg-win-${{ hashFiles('desktop/scripts/build-ffmpeg-win.sh') }}
+      - run: sudo apt-get update && sudo apt-get install -y mingw-w64 nasm pkg-config make xz-utils curl libz-mingw-w64-dev
+      - run: bash desktop/scripts/build-ffmpeg-win.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-windows
+          path: desktop/ffmpeg-win
+          if-no-files-found: error
+          retention-days: 7
+
   package:
     # macos-14 is an Apple Silicon runner, so the arm64 Electron build runs
     # natively and can be handed to hdiutil for the DMG.
