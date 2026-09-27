@@ -81,6 +81,20 @@ The app contains:
 The release assets are named `…-unsigned.dmg` because they are not signed with
 an Apple Developer ID. That is a Gatekeeper matter, not a licensing one.
 
+### Desktop app (Windows)
+
+The experimental Windows app carries **FFmpeg 9.0.2 (`ffmpeg.exe`,
+`ffprobe.exe`)**, cross-compiled on Linux by
+`desktop/scripts/build-ffmpeg-win.sh`. It is the same LGPL build as on macOS —
+made without `--enable-gpl`, so it contains no x264 — and H.264 is encoded by
+**Media Foundation** (`h264_mf`), so the binaries are licensed
+**LGPL-3.0-or-later**. TLS uses Windows' own **schannel** instead of OpenSSL, so
+no OpenSSL notice belongs to this build. schannel verifies against the Windows
+certificate store and also checks revocation online
+(`SCH_CRED_REVOCATION_CHECK_CHAIN`), so a source whose chain cannot be checked
+can fail on Windows where macOS succeeds. As on macOS, every release attaches
+the exact source archive (`ffmpeg-*.tar.xz`) the binaries were built from.
+
 ### Why the desktop FFmpeg is LGPL and not GPL
 
 A GPL build with x264 would be a software fallback when VideoToolbox fails.
