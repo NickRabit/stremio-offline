@@ -20,7 +20,7 @@ import { mayTrashDownloadDir, OWNERSHIP_FILE, prepareDownloadDir, readOwnership,
 import { isDeviceTicketDownload } from "./downloads.js";
 import { catalogue } from "./i18n.js";
 import { layout, type PageMode } from "./layout.js";
-import { launchedHidden, loginItemQuery, loginItemStatus, loginItemUpdate, type LoginItemReadings } from "./login-item.js";
+import { launchedHidden, loginItemQuery, loginItemStatus, loginItemUpdate, type LoginItemReadings, loginItemOn } from "./login-item.js";
 import { bundledMediaTools, DOWNLOADS_DIRECTORY, INSTANCE_DIRECTORY, LOCAL_PARTITION, LocalBackend, LocalPortBusyError, PORT_FILE, type LocalBackendConnection } from "./local-backend.js";
 import { defaultLocalSettings, parseLocalSettings, readLocalSettings, SETTINGS_FILE, writeLocalSettings, type LocalSettings } from "./local-settings.js";
 import { buildMenuTemplate } from "./menu.js";
@@ -183,7 +183,7 @@ const refreshLoginItem = (): void => {
   }
   shellState.app = {
     ...shellState.app,
-    prefs: { ...shellState.app.prefs, openAtLogin: settings.openAtLogin === true },
+    prefs: { ...shellState.app.prefs, openAtLogin: loginItemOn(settings, PLATFORM) },
     loginItem: loginItemStatus(settings, PLATFORM, app.isPackaged),
   };
 };
@@ -207,6 +207,8 @@ const applyMenu = (): void => {
     shellState.profiles.map((profile) => `${profile.id}:${profile.name}`).join(","),
     targetKey(target),
     live ? "connected" : "idle",
+    targetKey(shellState.chosen),
+    localConnection !== null ? "local-running" : "local-stopped",
   ].join("|");
   if (key === menuKey) return;
   menuKey = key;
@@ -244,7 +246,8 @@ const applyMenu = (): void => {
   tray?.setContextMenu(Menu.buildFromTemplate(buildTrayTemplate({
     strings,
     profiles: shellState.profiles,
-    current: target,
+    // Without a window the tray still shows what runs: a local backend started hidden, or the choice.
+    current: target ?? (localConnection !== null ? { kind: "local" } : shellState.chosen),
     connected: live,
     platform: PLATFORM,
     actions: {
@@ -301,7 +304,9 @@ const places = (): Places => {
       // Not every platform knows every folder.
     }
   }
-  return { home: app.getPath("home"), userData: app.getPath("userData"), platform: PLATFORM, knownFolders };
+  // A development run's executable is Electron in node_modules, which nobody picks.
+  const installDir = app.isPackaged ? path.dirname(process.execPath) : undefined;
+  return { home: app.getPath("home"), userData: app.getPath("userData"), platform: PLATFORM, knownFolders, installDir };
 };
 
 const effectiveDownloadDir = (): string =>
@@ -832,18 +837,26 @@ const restartLocal = async (): Promise<{ ok: boolean }> => {
 
 /** A login start opens no window: the backend comes up on its own so other devices can reach it
  *  and downloads resume, and the tray is the only way in. A failure leaves it in the tray. */
-const startLocalHidden = async (): Promise<void> => {
-  const backend = localBackend;
-  if (!backend) return;
-  try {
-    localConnection = await backend.start();
-  } catch (error) {
-    console.warn("local backend: " + (error instanceof Error ? error.message : String(error)));
-    return;
-  }
-  refreshInitialized();
-  syncAwake();
-  pushState();
+const startLocalHidden = (): Promise<void> => {
+  // In the queue with a ticket of its own, so a reset or a connect asked from the tray meanwhile
+  // is not undone by a start that finishes after it.
+  const ticket = requests.next();
+  return queue.run(async () => {
+    const backend = localBackend;
+    if (!backend || !requests.isCurrent(ticket)) return;
+    let connection: LocalBackendConnection;
+    try {
+      connection = await backend.start();
+    } catch (error) {
+      console.warn("local backend: " + (error instanceof Error ? error.message : String(error)));
+      return;
+    }
+    if (!requests.isCurrent(ticket)) { await closeLocalBackend(); return; }
+    localConnection = connection;
+    refreshInitialized();
+    syncAwake();
+    pushState();
+  });
 };
 
 const shellWebPreferences = () => ({

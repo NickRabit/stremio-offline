@@ -7,6 +7,13 @@ name: Desktop package
 # release path is the manual "Desktop release" workflow
 # (.github/workflows/desktop-release.yml). See desktop/README.md.
 on:
+  # A push to main that changes an FFmpeg script rebuilds it there, so main's cache is what every
+  # new pull request starts from instead of a build of its own.
+  push:
+    branches: [main]
+    paths:
+      - "desktop/scripts/build-ffmpeg.sh"
+      - "desktop/scripts/build-ffmpeg-win.sh"
   pull_request:
     paths:
       - "desktop/**"

@@ -191,11 +191,19 @@ jobs:
       - name: Attach the app to the release
         env:
           GH_TOKEN: ${{ github.token }}
+        # A rerun after a later step failed finds the app attached already; that is done, not an error.
         run: |
           set -euo pipefail
-          gh release upload "${GITHUB_REF_NAME}" \
-            desktop/release/*-unsigned-setup.exe \
-            desktop/release/*-unsigned.zip
+          present="$(gh release view "${GITHUB_REF_NAME}" --json assets --jq '.assets[].name')"
+          files=()
+          for file in desktop/release/*-unsigned-setup.exe desktop/release/*-unsigned.zip; do
+            if printf '%s\n' "$present" | grep -qxF -e "$(basename "$file")"; then
+              echo "the release already carries $(basename "$file")"
+              continue
+            fi
+            files+=("$file")
+          done
+          if [ ${#files[@]} -gt 0 ]; then gh release upload "${GITHUB_REF_NAME}" "${files[@]}"; fi
       # The Windows sources share the FFmpeg tarball's name with the macOS job's, which has
       # already run, so only names the release does not have yet are uploaded.
       - name: Attach the FFmpeg sources
@@ -233,6 +241,11 @@ jobs:
           set -euo pipefail
           notes="$RUNNER_TEMP/notes-windows.md"
           gh release view "${GITHUB_REF_NAME}" --json body --jq .body > "$notes"
+          # A rerun must not add the section twice.
+          if grep -qF "## Desktop app (Windows x64, experimental)" "$notes"; then
+            echo "the release notes already describe the Windows app"
+            exit 0
+          fi
           cat >> "$notes" <<'NOTES'
 
           ## Desktop app (Windows x64, experimental)

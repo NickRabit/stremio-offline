@@ -12,6 +12,8 @@ export interface LoginItemQuery {
 export interface LoginItemUpdate {
   openAtLogin: boolean;
   args?: string[];
+  /** Windows only: switches the entry back on where Task Manager's Startup tab turned it off. */
+  enabled?: boolean;
 }
 
 /** The readings the decision needs out of `getLoginItemSettings()`. */
@@ -31,7 +33,7 @@ export function loginItemQuery(platform: NodeJS.Platform = process.platform): Lo
 
 export function loginItemUpdate(openAtLogin: boolean, platform: NodeJS.Platform = process.platform): LoginItemUpdate[] {
   if (platform !== "win32") return [{ openAtLogin }];
-  if (openAtLogin) return [{ openAtLogin, args: LOGIN_ARGS }];
+  if (openAtLogin) return [{ openAtLogin, args: LOGIN_ARGS, enabled: true }];
   // An entry registered before the arguments were added must go too, and the registry entry is
   // matched by path and arguments: removing it means clearing both spellings.
   return [{ openAtLogin, args: LOGIN_ARGS }, { openAtLogin }];
@@ -44,12 +46,18 @@ export function loginItemStatus(
   isPackaged: boolean,
 ): LoginItemStatus {
   if (!isPackaged) return "unsupported";
-  if (platform === "win32") {
-    return settings.openAtLogin === true || settings.executableWillLaunchAtLogin === true ? "enabled" : "not-registered";
-  }
+  if (platform === "win32") return loginItemOn(settings, platform) ? "enabled" : "not-registered";
   if (platform !== "darwin") return "unsupported";
   const status = settings.status;
   return typeof status === "string" && MACOS_STATUSES.has(status) ? status as LoginItemStatus : "unsupported";
+}
+
+/** Whether the app will really start at login. On Windows an entry that Task Manager's Startup tab
+ *  switched off is still registered, so `openAtLogin` alone says yes where Windows says no;
+ *  `executableWillLaunchAtLogin` answers for the entry as Windows will run it. */
+export function loginItemOn(settings: LoginItemReadings, platform: NodeJS.Platform = process.platform): boolean {
+  if (platform === "win32") return (settings.executableWillLaunchAtLogin ?? settings.openAtLogin) === true;
+  return settings.openAtLogin === true;
 }
 
 export function launchedHidden(argv: readonly string[]): boolean {

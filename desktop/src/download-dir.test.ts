@@ -243,3 +243,11 @@ test("mixed-case spellings still name one Windows folder", () => {
   assert.equal(mayTrashDownloadDir("C:\\Users\\me\\Movies\\Stremio Offline", "C:\\Users\\me\\Movies\\Stremio Offline",
     { dir: "C:\\Users\\me\\Movies\\Stremio Offline", owned: false }, WINDOWS_PLACES), false, "it held the user's files");
 });
+
+test("the folder the app is installed in, and anything inside it, is reserved", () => {
+  const places = { home: "C:\\Users\\me", userData: "C:\\Users\\me\\AppData\\Roaming\\Stremio Offline", platform: "win32" as const,
+    installDir: "C:\\Users\\me\\AppData\\Local\\Programs\\stremio-offline" };
+  assert.equal(reservedDownloadDir("C:\\Users\\me\\AppData\\Local\\Programs\\stremio-offline\\Films", places), true);
+  assert.equal(reservedDownloadDir("c:\\users\\me\\appdata\\local\\programs\\STREMIO-OFFLINE", places), true);
+  assert.equal(reservedDownloadDir("C:\\Users\\me\\Videos\\Stremio Offline", places), false);
+});

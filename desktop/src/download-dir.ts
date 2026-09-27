@@ -19,6 +19,8 @@ export interface Places {
   /** Known folders (Videos, Desktop, ...) as the system resolves them, so a folder of the user's
    *  that OneDrive or another drive moved out of the home folder is still recognized. */
   knownFolders?: string[];
+  /** Where the app itself is installed. An uninstall or update removes that folder whole. */
+  installDir?: string;
 }
 
 /** The file operations the check needs, so a test can fail one of them on purpose. */
@@ -99,6 +101,8 @@ export function reservedDownloadDir(dir: string, places: Places): boolean {
   if (samePath(resolved, pathImpl.parse(resolved).root, platform)) return true;
   if (inside(places.home, resolved, pathImpl)) return true;
   if (inside(places.userData, resolved, pathImpl)) return true;
+  // An uninstall or an update wipes the app's own folder, films and all.
+  if (places.installDir && (inside(resolved, places.installDir, pathImpl) || inside(places.installDir, resolved, pathImpl))) return true;
   return inside(resolved, places.userData, pathImpl) && !samePath(resolved, pathImpl.join(places.userData, "downloads"), platform);
 }
 

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { LOGIN_ARGS, launchedHidden, loginItemQuery, loginItemStatus, loginItemUpdate } from "./login-item.js";
+import { LOGIN_ARGS, launchedHidden, loginItemQuery, loginItemStatus, loginItemUpdate, loginItemOn } from "./login-item.js";
 
 test("a login launch on Windows starts the app in the notification area", () => {
   assert.deepEqual([...LOGIN_ARGS], ["--hidden"]);
@@ -18,7 +18,7 @@ test("the login item is looked up with the arguments it was registered with", ()
 });
 
 test("registering a login item passes the arguments on Windows only", () => {
-  assert.deepEqual(loginItemUpdate(true, "win32"), [{ openAtLogin: true, args: ["--hidden"] }]);
+  assert.deepEqual(loginItemUpdate(true, "win32"), [{ openAtLogin: true, args: ["--hidden"], enabled: true }]);
   assert.deepEqual(loginItemUpdate(true, "darwin"), [{ openAtLogin: true }]);
   assert.deepEqual(loginItemUpdate(true, "linux"), [{ openAtLogin: true }]);
 });
@@ -54,4 +54,12 @@ test("Windows has no approval step: the registry decides", () => {
 
 test("Linux has no login item", () => {
   assert.equal(loginItemStatus({ openAtLogin: true, status: "enabled" }, "linux", true), "unsupported");
+});
+
+test("an entry Task Manager switched off reads as off on Windows, and enabling switches it back on", () => {
+  assert.equal(loginItemStatus({ openAtLogin: true, executableWillLaunchAtLogin: false }, "win32", true), "not-registered");
+  assert.equal(loginItemOn({ openAtLogin: true, executableWillLaunchAtLogin: false }, "win32"), false);
+  assert.equal(loginItemOn({ openAtLogin: true }, "darwin"), true);
+  assert.deepEqual(loginItemUpdate(true, "win32"), [{ openAtLogin: true, args: ["--hidden"], enabled: true }]);
+  assert.deepEqual(loginItemUpdate(true, "darwin"), [{ openAtLogin: true }]);
 });
