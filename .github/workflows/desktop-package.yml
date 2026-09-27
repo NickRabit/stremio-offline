@@ -1,11 +1,11 @@
 name: Desktop package
 
 # Packages the macOS arm64 prototype from the desktop workspace. This is a
-# packaging check, not a release: the artifacts have no Developer ID identity,
-# are not notarized and are only uploaded to the workflow run. It stays
-# credentials-free on purpose; the signed, notarized release path is the manual
-# "Desktop release" workflow (.github/workflows/desktop-release.yml). See
-# desktop/README.md.
+# packaging check, not a release: the artifacts have no Developer ID identity
+# and no code-signing certificate, are not notarized and are only uploaded to
+# the workflow run. It stays credentials-free on purpose; the signed, notarized
+# release path is the manual "Desktop release" workflow
+# (.github/workflows/desktop-release.yml). See desktop/README.md.
 on:
   pull_request:
     paths:
@@ -79,6 +79,41 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: stremio-offline-macos-arm64-zip
+          path: desktop/release/*.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  # Packages the Windows x64 NSIS installer and portable zip. Unsigned like the macOS job, so
+  # discovery is off and no certificate is involved.
+  package-windows:
+    needs: ffmpeg-windows
+    runs-on: windows-latest
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      # The cross-built LGPL FFmpeg comes from the ffmpeg-windows job; this job never builds it.
+      - uses: actions/download-artifact@v4
+        with:
+          name: ffmpeg-windows
+          path: desktop/ffmpeg-win
+      - run: npm ci
+      - run: npm run package:win:x64 -w desktop
+      - run: npm run verify:fuses -w desktop
+      - run: npm run smoke:packaged -w desktop
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stremio-offline-windows-x64-setup
+          path: desktop/release/*.exe
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stremio-offline-windows-x64-zip
           path: desktop/release/*.zip
           if-no-files-found: error
           retention-days: 7

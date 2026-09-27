@@ -116,3 +116,129 @@ jobs:
           The app includes FFmpeg, built LGPL-3.0-or-later with OpenSSL; the `ffmpeg-*` and `openssl-*` archives attached here are the exact sources it was built from (see `docs/licensing.md`).
           NOTES
           gh release edit "${GITHUB_REF_NAME}" --notes-file "$notes"
+
+  # The LGPL FFmpeg the Windows app carries, cross-built with mingw-w64 exactly as the
+  # pull-request check builds it.
+  ffmpeg-windows:
+    needs: release
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      # The LGPL FFmpeg takes minutes to build; the result only changes with the script.
+      - uses: actions/cache@v4
+        with:
+          path: desktop/ffmpeg-win
+          key: desktop-ffmpeg-win-${{ hashFiles('desktop/scripts/build-ffmpeg-win.sh') }}
+      - run: sudo apt-get update && sudo apt-get install -y mingw-w64 nasm pkg-config make xz-utils curl libz-mingw-w64-dev
+      - run: bash desktop/scripts/build-ffmpeg-win.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-windows
+          path: desktop/ffmpeg-win
+          if-no-files-found: error
+          retention-days: 7
+
+  # The Windows x64 app, unsigned like the macOS one. Depending on the desktop job keeps it
+  # strictly after it, so the two never edit the release notes or the assets at the same time.
+  desktop-windows:
+    needs: [release, ffmpeg-windows, desktop]
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    # Git Bash is the shell the runner has that behaves like the macOS job's.
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Tag and desktop version agree
+        run: |
+          set -euo pipefail
+          manifest="$(node -p 'require("./desktop/package.json").version')"
+          if [ "v$manifest" != "${GITHUB_REF_NAME}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match desktop/package.json $manifest"
+            exit 1
+          fi
+      - uses: actions/download-artifact@v4
+        with:
+          name: ffmpeg-windows
+          path: desktop/ffmpeg-win
+      - run: npm ci
+      - run: npm run package:win:x64 -w desktop
+      - run: npm run verify:fuses -w desktop
+      - run: npm run smoke:packaged -w desktop
+      - name: Name the artifacts as unsigned
+        run: |
+          set -euo pipefail
+          cd desktop/release
+          for file in Stremio-Offline-*-x64.exe; do
+            mv "$file" "${file%.exe}-unsigned-setup.exe"
+          done
+          for file in Stremio-Offline-*-x64.zip; do
+            mv "$file" "${file%.zip}-unsigned.zip"
+          done
+          ls -l ./*-unsigned*
+      # `gh release upload` fails on an asset name that is already there, so a rerun never
+      # replaces what was published.
+      - name: Attach the app to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release upload "${GITHUB_REF_NAME}" \
+            desktop/release/*-unsigned-setup.exe \
+            desktop/release/*-unsigned.zip
+      # The Windows sources share the FFmpeg tarball's name with the macOS job's, which has
+      # already run, so only names the release does not have yet are uploaded.
+      - name: Attach the FFmpeg sources
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          present="$(gh release view "${GITHUB_REF_NAME}" --json assets --jq '.assets[].name')"
+          files=()
+          for file in desktop/ffmpeg-win/sources/*; do
+            name="$(basename "$file")"
+            if printf '%s\n' "$present" | grep -qxF -e "$name"; then
+              echo "the release already carries $name"
+              continue
+            fi
+            files+=("$file")
+          done
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "every source archive is already attached"
+            exit 0
+          fi
+          if ! gh release upload "${GITHUB_REF_NAME}" "${files[@]}" 2>"$RUNNER_TEMP/source-upload.err"; then
+            if grep -qi "already exists" "$RUNNER_TEMP/source-upload.err"; then
+              echo "an asset was already attached; treating it as success"
+              cat "$RUNNER_TEMP/source-upload.err"
+              exit 0
+            fi
+            cat "$RUNNER_TEMP/source-upload.err" >&2
+            exit 1
+          fi
+      - name: Say how to install it
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          notes="$RUNNER_TEMP/notes-windows.md"
+          gh release view "${GITHUB_REF_NAME}" --json body --jq .body > "$notes"
+          cat >> "$notes" <<'NOTES'
+
+          ## Desktop app (Windows x64, experimental)
+
+          `Stremio-Offline-<version>-x64-unsigned-setup.exe` is not signed, so Microsoft Defender SmartScreen stops the first launch: choose **More info** → **Run anyway**. [docs/install-windows.md](https://github.com/NickRabit/stremio-offline/blob/main/docs/install-windows.md) walks through the install. The build stays experimental until it has been checked on real Windows machines.
+
+          The app includes FFmpeg, built LGPL-3.0-or-later for Windows; the `ffmpeg-*` source archive attached here is the exact source it was built from (see `docs/licensing.md`).
+          NOTES
+          gh release edit "${GITHUB_REF_NAME}" --notes-file "$notes"
