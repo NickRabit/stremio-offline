@@ -102,7 +102,7 @@ if (isWindows) {
     },
     {
       name: "cbr",
-      args: ["-hide_banner", "-loglevel", "error", "-nostdin", "-f", "lavfi", "-i", "nullsrc=s=256x144:d=0.1", "-vf", "format=nv12", "-c:v", "h264_mf", "-hw_encoding", "1", "-rate_control", "cbr", "-b:v", "1M", "-f", "null", "-"],
+      args: ["-hide_banner", "-loglevel", "error", "-nostdin", "-f", "lavfi", "-i", "nullsrc=s=256x144:d=0.1", "-vf", "format=nv12", "-c:v", "h264_mf", "-rate_control", "cbr", "-b:v", "1M", "-f", "null", "-"],
     },
   ];
   let working = null;
@@ -112,7 +112,8 @@ if (isWindows) {
       working = probe.name;
       break;
     }
-    process.stdout.write(`smoke-packaged: the Media Foundation ${probe.name} probe did not work\n`);
+    const reason = (result.stderr || result.error?.message || "").trim().split("\n")[0] ?? "";
+    process.stdout.write(`smoke-packaged: the Media Foundation ${probe.name} probe did not work: ${reason}\n`);
     if (result.stderr) process.stderr.write(result.stderr);
   }
   if (working === null) fail("neither Media Foundation h264_mf probe worked");
