@@ -86,8 +86,9 @@ test("load resumes a persisted in-flight job at its current item", async () => {
     });
     queues.push(resumed);
     await resumed.load();
+    // A cold Windows runner takes longer than two seconds to write this file the first time.
     await waitFor(async () => resumed.snapshot().jobs[0]?.status === "completed"
-      && (await storedJobs(file))[0]?.status === "completed");
+      && (await storedJobs(file))[0]?.status === "completed", 10_000);
     assert.deepEqual(h.seen, ["one", "two"]);
     assert.equal(resumed.snapshot().jobs[0]?.done, 2);
     assert.equal((await storedJobs(file))[0]?.status, "completed");
