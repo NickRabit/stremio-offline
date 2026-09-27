@@ -4,7 +4,7 @@ import { constants } from "node:fs";
 import { access, mkdir, readdir, realpath, rm, stat } from "node:fs/promises";
 import { artworks } from "../artwork-cache.js";
 import { AppError } from "../errors.js";
-import { activeDeparted, automaticMetadataEnabled, carveOuts, DEPARTED_MAX, departedIdFor, isInside, libraryPath, newLibraryId, parseLibraryPath, posixBase, toPosix, visibleLibraries, type LibraryRecord, type RootGrant } from "../libraries.js";
+import { activeDeparted, automaticMetadataEnabled, carveOuts, DEPARTED_MAX, departedIdFor, isInside, libraryPath, newLibraryId, parseLibraryPath, posixBase, sameFile, toPosix, visibleLibraries, type LibraryRecord, type RootGrant } from "../libraries.js";
 import { asLibraryType, checkLibraryRemoval, checkLibraryRoot, checkRerootItems, checkRerootPaths, libraryFlag } from "../library-admin.js";
 import { grantingRoot, insideGrant } from "../library-grants.js";
 import { listVideos, type WalkBudget } from "../library.js";
@@ -181,7 +181,7 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
     const root = path.resolve(raw);
     // An operator grant is rebuilt from the environment on the next boot, so only a grant
     // somebody made at the keyboard can be revoked.
-    if (!store.grants().some((grant) => path.resolve(grant.path) === root)) {
+    if (!store.grants().some((grant) => sameFile(path.resolve(grant.path), root))) {
       throw new AppError("That root was not granted here.", "err.grantNotFound", 404);
     }
     // Revoking disables the libraries under it. Nothing is deleted -- the media, the metadata
@@ -189,7 +189,7 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
     const affected = store.libraries().filter((library) => isInside(path.resolve(library.root), root));
     await store.update((state) => {
       assertStillAdmin(state.users ?? [], actor);
-      state.grants = (state.grants ?? []).filter((grant) => path.resolve(grant.path) !== root);
+      state.grants = (state.grants ?? []).filter((grant) => !sameFile(path.resolve(grant.path), root));
       state.libraries = (state.libraries ?? []).map((library) =>
         affected.some((item) => item.id === library.id) ? { ...library, enabled: false } : library);
     });
@@ -221,7 +221,7 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
     const type = asLibraryType(req.body?.type) ?? "mixed";
     const units = titleUnits(files, type);
     // No addon is asked anything: the estimate is the walk plus what the state already knows.
-    const library = store.libraries().find((item) => path.resolve(item.root) === root);
+    const library = store.libraries().find((item) => sameFile(path.resolve(item.root), root));
     const records = metaStore.qualifiedMeta();
     const identified = library
       ? units.filter((unit) => Boolean(knownTitleOf(libraryPath(library.id, unit.relative), records)?.id)).length

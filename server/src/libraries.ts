@@ -74,7 +74,7 @@ export async function departedIdFor(departed: DepartedLibrary[], root: string, n
   const real = await realpath(absolute).catch(() => absolute);
   // A root that is away when it is removed can only be recorded as it was spelled, so both
   // forms count: the resolved one and the lexical one.
-  return [...activeDeparted(departed, now)].reverse().find((entry) => entry.root === real || entry.root === absolute)?.id;
+  return [...activeDeparted(departed, now)].reverse().find((entry) => sameFile(entry.root, real) || sameFile(entry.root, absolute))?.id;
 }
 
 /** The part of `Settings` a default lookup needs. Kept structural so this module

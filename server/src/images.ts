@@ -1,8 +1,9 @@
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { renameWithRetry } from "./fs-retry.js";
 import { log } from "./logger.js";
 import { ffmpegPath } from "./media-tools.js";
 import { guardedFetch } from "./outbound.js";
@@ -161,7 +162,7 @@ export class ImageProxy {
     const temp = `${this.indexFile}.tmp`;
     try {
       await writeFile(temp, data, { mode: 0o600 });
-      await rename(temp, this.indexFile);
+      await renameWithRetry(temp, this.indexFile);
     } catch (error) {
       log("WARN", "The image cache index could not be saved", { reason: String(error).slice(0, 120) });
     }
@@ -288,7 +289,7 @@ export class ImageProxy {
       const target = this.path(id, storedExt);
       const temp = `${target}.tmp`;
       await writeFile(temp, data, { mode: 0o600 });
-      await rename(temp, target);
+      await renameWithRetry(temp, target);
       entry.ext = storedExt;
       entry.bytes = data.length;
       entry.at = Date.now();

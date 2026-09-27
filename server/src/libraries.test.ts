@@ -134,7 +134,9 @@ test("a single configured library keeps the unqualified wire format", async () =
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test("resolution refuses what the guard exists for", async () => {
+test("resolution refuses what the guard exists for", {
+  skip: process.platform === "win32" ? "symlinks need developer mode or admin on Windows" : false,
+}, async () => {
   const root = await mkdtemp(path.join(tmpdir(), "libraries-"));
   const outside = await mkdtemp(path.join(tmpdir(), "outside-"));
   await mkdir(path.join(root, "Show"));
@@ -197,7 +199,9 @@ test("a playing session is found under the folder an operation wants", async () 
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test("a folder added again takes back the id it had before", async () => {
+test("a folder added again takes back the id it had before", {
+  skip: process.platform === "win32" ? "symlinks need developer mode or admin on Windows" : false,
+}, async () => {
   const base = await mkdtemp(path.join(tmpdir(), "departed-"));
   const root = path.join(base, "Films");
   const elsewhere = path.join(base, "Elsewhere");

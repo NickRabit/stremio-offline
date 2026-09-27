@@ -4,7 +4,7 @@ import { defaultSettings, type Settings } from "./store.js";
 import { isUiLanguage, normalizeLanguage } from "./language.js";
 import { AppError } from "./errors.js";
 import { normalizeRefreshHours } from "./addon-refresh.js";
-import { toPosix, type LibraryRecord, type LibraryType } from "./libraries.js";
+import { sameFile, toPosix, type LibraryRecord, type LibraryType } from "./libraries.js";
 
 export const BACKUP_FORMAT = "stremio-offline-settings";
 /** 2 adds the library roster, so a rule that names a library survives the trip to another
@@ -157,7 +157,7 @@ export function remapBackupLibraries(
     if (!local.has(id)) {
       const source = backup.libraries.find((item) => item.id === id);
       local.set(id, source
-        ? libraries.find((library) => toPosix(library.root) === toPosix(source.root))
+        ? libraries.find((library) => sameFile(library.root, source.root))
           ?? libraries.find((library) => library.name === source.name && library.type === source.type)
         : undefined);
     }

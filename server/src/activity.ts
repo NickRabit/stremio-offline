@@ -1,5 +1,6 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { renameWithRetry } from "./fs-retry.js";
 import { log } from "./logger.js";
 
 export type ActivityKind = "playback" | "library" | "device";
@@ -73,7 +74,7 @@ export class ActivityLog {
     this.chain = this.chain.catch(() => undefined).then(async () => {
       try {
         await writeFile(`${this.file}.tmp`, JSON.stringify(this.entries), { mode: 0o600 });
-        await rename(`${this.file}.tmp`, this.file);
+        await renameWithRetry(`${this.file}.tmp`, this.file);
       } catch (error) { this.dirty = true; throw error; }
     });
     return this.chain;

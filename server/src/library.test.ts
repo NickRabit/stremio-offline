@@ -88,7 +88,7 @@ test("the newest additions come first", () => {
 
 test("a path cannot get outside the download directory", () => {
   const root = "/downloads";
-  assert.equal(resolveInside(root, "Film/Film.mkv"), "/downloads/Film/Film.mkv");
+  assert.equal(resolveInside(root, "Film/Film.mkv"), path.resolve(root, "Film", "Film.mkv"));
   assert.equal(resolveInside(root, "../etc/passwd"), undefined);
   assert.equal(resolveInside(root, "/etc/passwd"), undefined);
   assert.equal(resolveInside(root, "Film/../../secret"), undefined);

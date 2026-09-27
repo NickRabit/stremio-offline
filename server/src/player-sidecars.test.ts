@@ -171,7 +171,9 @@ test("closing playback waits for the subtitle reader to stop", async () => {
   } finally { await sidecars.stop("session"); await rm(directory, { recursive: true, force: true }); }
 });
 
-test("the default extractor waits for the actual child exit after cancellation", async () => {
+test("the default extractor waits for the actual child exit after cancellation", {
+  skip: process.platform === "win32" ? "needs a POSIX executable on PATH" : false,
+}, async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "sidecar-process-"));
   const originalPath = process.env.PATH;
   const sidecars = new PlayerSidecars();

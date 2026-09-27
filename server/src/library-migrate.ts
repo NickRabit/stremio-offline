@@ -3,6 +3,7 @@ import { constants } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { buildLibrary, listVideos, type LibraryEntry } from "./library.js";
+import { renameWithRetry } from "./fs-retry.js";
 import { libraryPath, newLibraryId, parseLibraryPath, relativeWithin, toPosix, type LibraryRecord } from "./libraries.js";
 import { writeEpisodesFile, writeLibraryFile } from "./library-meta-store.js";
 import type { LibraryEpisodeRecord, LibraryMetaRecord, LibrarySuggestion } from "./library-match.js";
@@ -79,7 +80,7 @@ export async function migrateStateFile(dataDir: string, downloadDir: string): Pr
   if (globalArtwork) summary.artworkSetting = retireArtworkLocation(state, legacy);
   const temp = `${file}.tmp`;
   await writeFile(temp, JSON.stringify(state, null, 2), { mode: 0o600 });
-  await rename(temp, file);
+  await renameWithRetry(temp, file);
   return summary;
 }
 

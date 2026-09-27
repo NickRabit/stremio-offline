@@ -1,6 +1,7 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { ActivityLog } from "./activity.js";
+import { renameWithRetry } from "./fs-retry.js";
 
 /** Where the traffic flows from. The library reads a file from disk and so costs the line
  * nothing -- it is kept apart and not mixed into the external traffic figures. */
@@ -315,7 +316,7 @@ export class StatsLog {
     this.chain = this.chain.then(async () => {
       const temp = `${this.file}.tmp`;
       await writeFile(temp, JSON.stringify(this.events), { mode: 0o600 });
-      await rename(temp, this.file);
+      await renameWithRetry(temp, this.file);
     });
     return this.chain;
   }

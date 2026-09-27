@@ -31,6 +31,14 @@ test("disk errors halt the queue instead of hopping to the next source", () => {
   assert.deepEqual(storageMessage(enospc), { message: "No space left on the disk.", key: "err.noSpace" });
 });
 
+test("a commit Windows refused for the moment is retried, not given up on", () => {
+  // The queue's commit is a bare rename, so a film another process still holds open answers
+  // EPERM/EBUSY/EACCES there. The job is queued again and can be retried; it is not a dead end.
+  for (const code of ["EPERM", "EBUSY", "EACCES"]) {
+    assert.equal(classifyFailure(Object.assign(new Error(`${code}: operation not permitted, rename`), { code })), "transient");
+  }
+});
+
 test("Content-Range start and total are parsed", () => {
   assert.deepEqual(parseContentRange("bytes 100-199/1000"), { start: 100, end: 199, total: 1000 });
   assert.deepEqual(parseContentRange("bytes 0-9/*"), { start: 0, end: 9, total: undefined });

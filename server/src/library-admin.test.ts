@@ -45,7 +45,9 @@ test("a relative path, a file and a missing folder are each named", async () => 
   } finally { await rm(dataDir, { recursive: true, force: true }); }
 });
 
-test("two libraries cannot share a root, not even through a symlink", async () => {
+test("two libraries cannot share a root, not even through a symlink", {
+  skip: process.platform === "win32" ? "symlinks need developer mode or admin on Windows" : false,
+}, async () => {
   const dataDir = await mkdtemp(path.join(tmpdir(), "admin-"));
   const granted = path.join(dataDir, "granted");
   await mkdir(granted, { recursive: true });
@@ -78,7 +80,9 @@ test("a root inside another library's root is legal, and reads as a carve-out", 
   } finally { await rm(dataDir, { recursive: true, force: true }); }
 });
 
-test("a child reached through a symlink is a carve-out of the tree it points into", async () => {
+test("a child reached through a symlink is a carve-out of the tree it points into", {
+  skip: process.platform === "win32" ? "symlinks need developer mode or admin on Windows" : false,
+}, async () => {
   const dataDir = await mkdtemp(path.join(tmpdir(), "admin-"));
   const granted = path.join(dataDir, "granted");
   const child = path.join(granted, "Archive", "Serialy");
@@ -259,7 +263,8 @@ test("a root that cannot be created records the errno the interface hides", asyn
 
     const line = written.find((entry) => entry.includes("A library root could not be created"));
     assert.ok(line, "the refusal is logged");
-    assert.match(line!, /"code":"(ENOTDIR|EEXIST|EACCES)"/);
+    // Which refusal comes back differs by platform: NTFS answers where POSIX says ENOTDIR.
+    assert.match(line!, /"code":"(ENOTDIR|EEXIST|EACCES|ENOENT|EPERM)"/);
   } finally {
     process.stdout.write = original;
     await flushLog();
@@ -287,7 +292,9 @@ test("a new folder beside the old root is a valid re-root destination", async ()
   } finally { await rm(dataDir, { recursive: true, force: true }); }
 });
 
-test("one view resolved and one spelled misses a carve-out that the union of both catches", async () => {
+test("one view resolved and one spelled misses a carve-out that the union of both catches", {
+  skip: process.platform === "win32" ? "symlinks need developer mode or admin on Windows" : false,
+}, async () => {
   // The state the guard is in between a restart and the first probe, and after a root was
   // away when its own probe ran: one library's root has been resolved and another's is still
   // the spelling it was configured with. Neither view alone sees the nested child then --

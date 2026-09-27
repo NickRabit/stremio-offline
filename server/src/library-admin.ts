@@ -1,7 +1,7 @@
 import { mkdir, readdir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { grantingRoot } from "./library-grants.js";
-import { isInside, realTarget, type LibraryRecord, type LibraryType, type RootGrant } from "./libraries.js";
+import { isInside, realTarget, sameFile, type LibraryRecord, type LibraryType, type RootGrant } from "./libraries.js";
 import { log } from "./logger.js";
 
 /** A root the deployment will accept, or why it will not. The message carries the catalogue
@@ -100,7 +100,7 @@ export async function checkLibraryRoot(opts: {
   for (const library of opts.libraries) {
     if (library.id === opts.exceptId) continue;
     const other = await realpath(library.root).catch(() => path.resolve(library.root));
-    if (other === real) return refuse("Another library already uses that folder.", "err.libraryRootTaken");
+    if (sameFile(other, real)) return refuse("Another library already uses that folder.", "err.libraryRootTaken");
   }
   return { ok: true, root };
 }
@@ -109,7 +109,7 @@ export async function checkLibraryRoot(opts: {
 export function libraryFlag(libraries: LibraryRecord[], target: string) {
   const absolute = path.resolve(target);
   const owner = libraries.find((library) => isInside(absolute, path.resolve(library.root)));
-  return owner ? { libraryId: owner.id, libraryRoot: path.resolve(owner.root) === absolute } : {};
+  return owner ? { libraryId: owner.id, libraryRoot: sameFile(path.resolve(owner.root), absolute) } : {};
 }
 
 /** Whether a library may be removed. The last one may not: an empty set breaks every

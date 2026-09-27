@@ -1134,6 +1134,7 @@ export const en = {
   "err.debridTokenMissing": "The Real-Debrid token is missing.",
   "err.jobNoInfoHash": "The torrent has no infoHash.",
   "err.noFreeName": "Could not find a free file name.",
+  "err.pathTooLong": "The folder path is too long for Windows. Choose a library with a shorter path, for example D:\\Films.",
   "err.cannotPauseCompleted": "A finished download cannot be paused.",
   "err.cannotResume": "This item cannot be resumed.",
   "err.retryOnlyFailed": "Only a failed download can be retried.",

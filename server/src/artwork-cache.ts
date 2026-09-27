@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { renameWithRetry } from "./fs-retry.js";
 import { parseLibraryPath } from "./libraries.js";
 import { log } from "./logger.js";
 
@@ -75,7 +76,7 @@ export class ArtworkCache {
     const temp = `${this.indexFile}.tmp`;
     try {
       await writeFile(temp, JSON.stringify(Object.fromEntries(this.entries)), { mode: 0o600 });
-      await rename(temp, this.indexFile);
+      await renameWithRetry(temp, this.indexFile);
     } catch (error) {
       log("WARN", "The artwork cache index could not be saved", { reason: String(error).slice(0, 120) });
     }
