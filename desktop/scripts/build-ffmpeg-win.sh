@@ -59,8 +59,9 @@ configure=(
   || { tail -n 60 "$src/ffbuild/config.log" >&2; exit 1; }
 # Read back what configure decided, before minutes of compiling: no GPL part, and the two
 # Windows features this build is for. A missing feature shows the checks that turned it off.
-for expected in "CONFIG_GPL 0" "CONFIG_NONFREE 0" "CONFIG_SCHANNEL 1" "CONFIG_H264_MF_ENCODER 1"; do
-  grep -qx "#define $expected" "$src/config.h" || {
+# The encoders are listed in config_components.h, the features in config.h.
+for expected in "CONFIG_GPL 0" "CONFIG_NONFREE 0" "CONFIG_SCHANNEL 1" "CONFIG_MEDIAFOUNDATION 1" "CONFIG_H264_MF_ENCODER 1"; do
+  grep -qx "#define $expected" "$src/config.h" "$src/config_components.h" 2>/dev/null || {
     echo "build-ffmpeg-win: config.h lacks '$expected'" >&2
     grep -iE "warning|mediafoundation|schannel" "$work/configure.out" >&2 || true
     grep -iE "MEDIAFOUNDATION|MFTRANSFORM|SCHANNEL" "$src/config.h" >&2 || true
