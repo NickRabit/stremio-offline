@@ -277,3 +277,22 @@ it("a newer release shows in About and opens through the shell", async () => {
   await click(button("Download 0.4.90"));
   expect(bridge.openUpdate).toHaveBeenCalled();
 });
+
+it("on Windows the pages say This PC and Recycle Bin, and leave the title bar to the window", async () => {
+  const win = (over: Partial<ShellState> = {}) => baseState({ platform: "win32", ...over });
+  await render(makeBridge("main", win()));
+  expect(host.textContent).toContain("This PC");
+  expect(host.textContent).not.toMatch(/\bMac\b|⌘/);
+  act(() => root.unmount());
+  root = createRoot(host);
+  await render(makeBridge("settings", win({ local: { ...baseState().local, downloadDirOwned: false } })));
+  expect(host.querySelector(".shell-titlebar")).toBeNull();
+  expect(host.textContent).toContain("Reset this PC…");
+  expect(host.textContent).toContain("Recycle Bin");
+  expect(host.textContent).not.toMatch(/\bMac\b|macOS|Trash/);
+  act(() => root.unmount());
+  root = createRoot(host);
+  await render(makeBridge("settings", baseState()));
+  expect(host.querySelector(".shell-titlebar")).not.toBeNull();
+  expect(host.textContent).toContain("Reset this Mac…");
+});

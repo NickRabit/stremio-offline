@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ArrowRight, Laptop, Server, Settings2, TriangleAlert } from "lucide-react";
-import { LOCALE_NAMES, t, type Key } from "../i18n";
+import { LOCALE_NAMES, type Key } from "../i18n";
+import { t } from "./text";
 import type { FailureReason, MainScreen, ShellBridge, ShellState } from "./bridge";
 import { Brand } from "./Brand";
 import { FolderStep } from "./DownloadFolder";

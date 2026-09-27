@@ -1,5 +1,5 @@
 import { CircleCheck, Download, Info, RefreshCw, TriangleAlert, X } from "lucide-react";
-import { t } from "../i18n";
+import { t } from "./text";
 import type { ShellBridge, Toast } from "./bridge";
 
 const content = (toast: Toast) => {
