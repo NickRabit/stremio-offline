@@ -1,12 +1,14 @@
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { renameWithRetry } from "./fs-retry.js";
 import { defaultLocalSettings, readLocalSettings, type LocalSettings } from "./local-settings.js";
 import { parseServerOrigin, type ServerOrigin } from "./origin.js";
+import { pathFor } from "./platform.js";
 import type { ProbeResult } from "./status.js";
 
 /** One persistent partition for the local server, so its cookies survive a changed port. */
@@ -76,9 +78,18 @@ export interface MediaTools {
 }
 
 /** The FFmpeg in `<resources>/ffmpeg`, or null where the app has none (a development run). */
-export function bundledMediaTools(resourcesDir: string | null, fileExists: (file: string) => boolean = isFile): MediaTools | null {
+export function bundledMediaTools(
+  resourcesDir: string | null,
+  fileExists: (file: string) => boolean = isFile,
+  platform: NodeJS.Platform = process.platform,
+): MediaTools | null {
   if (!resourcesDir) return null;
-  const tools = { ffmpeg: path.join(resourcesDir, "ffmpeg", "ffmpeg"), ffprobe: path.join(resourcesDir, "ffmpeg", "ffprobe") };
+  const pathImpl = pathFor(platform);
+  const suffix = platform === "win32" ? ".exe" : "";
+  const tools = {
+    ffmpeg: pathImpl.join(resourcesDir, "ffmpeg", `ffmpeg${suffix}`),
+    ffprobe: pathImpl.join(resourcesDir, "ffmpeg", `ffprobe${suffix}`),
+  };
   return fileExists(tools.ffmpeg) && fileExists(tools.ffprobe) ? tools : null;
 }
 
@@ -170,8 +181,15 @@ export const loopbackAnswers = (port: number, timeoutMs = 1_000): Promise<boolea
     socket.once("error", () => finish(false));
   });
 
-/** The machine's own `.local` names, which is how another device reaches it over Bonjour. */
-export function localHostNames(hostname = os.hostname(), announced: string | null = bonjourName()): string[] {
+/** The machine's own `.local` names, which is how another device reaches it over Bonjour.
+ *  Windows answers those names unreliably, and an address that does not answer is worse than
+ *  none, so it offers its addresses only. */
+export function localHostNames(
+  hostname = os.hostname(),
+  announced: string | null = bonjourName(),
+  platform: NodeJS.Platform = process.platform,
+): string[] {
+  if (platform === "win32") return [];
   const names = new Set<string>();
   for (const candidate of [announced, hostname]) {
     const name = candidate?.trim().toLowerCase() ?? "";
@@ -274,7 +292,7 @@ export async function writeRememberedPort(dir: string, port: number): Promise<vo
   const temporary = path.join(dir, `${PORT_FILE}.${randomUUID()}`);
   try {
     await writeFile(temporary, JSON.stringify({ port }) + "\n", { encoding: "utf8", flag: "wx" });
-    await rename(temporary, path.join(dir, PORT_FILE));
+    await renameWithRetry(temporary, path.join(dir, PORT_FILE));
   } catch (error) {
     await rm(temporary).catch(() => {});
     throw error;

@@ -24,6 +24,8 @@ export interface MenuInput {
   connected: boolean;
   isPackaged: boolean;
   actions: MenuActions;
+  /** The operating system the menu is built for; macOS keeps the app menu. */
+  platform?: NodeJS.Platform;
 }
 
 const isLocal = (target: Target | null): boolean => target?.kind === "local";
@@ -32,7 +34,7 @@ const isProfile = (target: Target | null, id: string): boolean => target?.kind =
 
 /** Pure: the shell tests the template without Electron's `Menu`, which needs a ready app. */
 export function buildMenuTemplate(input: MenuInput): MenuItemConstructorOptions[] {
-  const { strings, profiles, current, connected, isPackaged, actions } = input;
+  const { strings, profiles, current, connected, isPackaged, actions, platform = process.platform } = input;
 
   const view: MenuItemConstructorOptions[] = [
     // An explicit click, not `role: "reload"`, which acts on the focused contents.
@@ -45,7 +47,7 @@ export function buildMenuTemplate(input: MenuInput): MenuItemConstructorOptions[
 
   const server: MenuItemConstructorOptions[] = [
     {
-      label: strings["window.thisMac"],
+      label: platform === "win32" ? strings["window.thisPC"] : strings["window.thisMac"],
       type: "checkbox",
       checked: isLocal(current) && connected,
       click: () => actions.connect({ kind: "local" }),
@@ -60,6 +62,26 @@ export function buildMenuTemplate(input: MenuInput): MenuItemConstructorOptions[
     { label: strings["menu.reconnect"], accelerator: "CmdOrCtrl+Shift+R", click: () => actions.reconnect() },
     { label: strings["menu.serverSettings"], click: () => actions.openSettings() },
   ];
+
+  const help: MenuItemConstructorOptions = { role: "help", submenu: [{ label: strings["menu.project"], click: () => actions.openProject() }] };
+
+  // Windows hides the bar until Alt, and has no app menu to put the settings and Exit in.
+  if (platform !== "darwin") {
+    return [
+      {
+        label: strings["menu.file"],
+        submenu: [
+          { label: strings["menu.settings"], accelerator: "CmdOrCtrl+,", click: () => actions.openSettings() },
+          { type: "separator" },
+          { label: strings["menu.exit"], role: "quit" },
+        ],
+      },
+      { role: "editMenu" },
+      { label: strings["menu.view"], submenu: view },
+      { label: strings["menu.server"], submenu: server },
+      help,
+    ];
+  }
 
   return [
     {
@@ -82,6 +104,6 @@ export function buildMenuTemplate(input: MenuInput): MenuItemConstructorOptions[
     { label: strings["menu.view"], submenu: view },
     { label: strings["menu.server"], submenu: server },
     { role: "windowMenu" },
-    { role: "help", submenu: [{ label: strings["menu.project"], click: () => actions.openProject() }] },
+    help,
   ];
 }

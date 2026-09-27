@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { renameWithRetry } from "./fs-retry.js";
 
 export const SETTINGS_FILE = "local-settings.json";
 
@@ -60,7 +61,7 @@ export async function writeLocalSettings(dir: string, settings: LocalSettings): 
       publishPort: settings.publishPort,
       downloadDir: settings.downloadDir,
     }) + "\n", { encoding: "utf8", flag: "wx" });
-    await rename(temporary, path.join(dir, SETTINGS_FILE));
+    await renameWithRetry(temporary, path.join(dir, SETTINGS_FILE));
   } catch (error) {
     await rm(temporary).catch(() => {});
     throw error;

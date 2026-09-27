@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { renameWithRetry } from "./fs-retry.js";
 
 export const SHELL_PREFS_FILE = "shell-prefs.json";
 
@@ -64,7 +65,7 @@ export async function writeShellPrefs(dir: string, prefs: ShellPrefs): Promise<v
   const temporary = path.join(dir, `${SHELL_PREFS_FILE}.${randomUUID()}`);
   try {
     await writeFile(temporary, JSON.stringify({ locale: prefs.locale, checkUpdates: prefs.checkUpdates }) + "\n", { encoding: "utf8", flag: "wx" });
-    await rename(temporary, path.join(dir, SHELL_PREFS_FILE));
+    await renameWithRetry(temporary, path.join(dir, SHELL_PREFS_FILE));
   } catch (error) {
     await rm(temporary).catch(() => {});
     throw error;

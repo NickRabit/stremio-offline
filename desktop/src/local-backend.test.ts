@@ -361,6 +361,17 @@ test("other platforms keep the PATH they were given", () => {
   }
 });
 
+test("on Windows the child's environment is the parent's plus the backend's own variables", () => {
+  const parent = { PATH: "C:\\Windows\\System32", FFMPEG_PATH: "C:\\tools\\ffmpeg.exe", KEEP: "me" };
+  const env = localBackendEnv(parent, "C:\\data", 8090, "win32", () => true);
+  assert.deepEqual(Object.keys(env).filter((key) => !(key in parent)).sort(),
+    ["DATA_DIR", "DESKTOP_LOCAL_BACKEND", "DOWNLOAD_DIR", "HOST", "HOST_CHECK", "PORT"]);
+  assert.equal(env.PATH, parent.PATH, "no tool directory is added on Windows");
+  assert.equal(env.FFMPEG_PATH, parent.FFMPEG_PATH, "an inherited tool path is left alone");
+  assert.equal(env.KEEP, "me");
+  assert.equal("HOST_NAMES" in env, false);
+});
+
 test("macOS without an inherited PATH starts from the system directories", () => {
   assert.equal(localBackendEnv({}, "/data", 8090, "darwin", () => false).PATH, "/usr/bin:/bin:/usr/sbin:/sbin");
   assert.equal(localBackendEnv({}, "/data", 8090, "darwin", () => true).PATH,
@@ -528,13 +539,19 @@ test("not publishing keeps the loopback check and names no host", () => {
 });
 
 test("the .local names are lower-cased and given the suffix once", () => {
-  assert.deepEqual(localHostNames("Mac", null), ["mac.local"]);
-  assert.deepEqual(localHostNames("Mac.local", null), ["mac.local"]);
-  assert.deepEqual(localHostNames("MAC.LOCAL", null), ["mac.local"]);
-  assert.deepEqual(localHostNames("", null), []);
+  assert.deepEqual(localHostNames("Mac", null, "darwin"), ["mac.local"]);
+  assert.deepEqual(localHostNames("Mac.local", null, "darwin"), ["mac.local"]);
+  assert.deepEqual(localHostNames("MAC.LOCAL", null, "darwin"), ["mac.local"]);
+  assert.deepEqual(localHostNames("", null, "darwin"), []);
   // A HostName set by DHCP is not what Bonjour announces; the announced name comes first.
-  assert.deepEqual(localHostNames("192-168-1-41.isp.example", "Ondrej-Mac"), ["ondrej-mac.local", "192-168-1-41.isp.example.local"]);
-  assert.deepEqual(localHostNames("Ondrej-Mac.local", "Ondrej-Mac"), ["ondrej-mac.local"]);
+  assert.deepEqual(localHostNames("192-168-1-41.isp.example", "Ondrej-Mac", "darwin"), ["ondrej-mac.local", "192-168-1-41.isp.example.local"]);
+  assert.deepEqual(localHostNames("Ondrej-Mac.local", "Ondrej-Mac", "darwin"), ["ondrej-mac.local"]);
+});
+
+test("Windows is offered no .local name, announced or not", () => {
+  assert.deepEqual(localHostNames("Mac", "Ondrej-Mac", "win32"), []);
+  assert.deepEqual(localHostNames("", null, "win32"), []);
+  assert.deepEqual(localHostNames("Mac", null, "linux"), ["mac.local"], "other platforms keep their names");
 });
 
 const face = (address: string, family: "IPv4" | "IPv6", internal: boolean): NetworkInterfaceInfo =>
@@ -712,9 +729,19 @@ test("an FFmpeg named in the environment wins over the bundled one", () => {
 });
 
 test("the bundled tools are found only where both binaries are", () => {
-  assert.deepEqual(bundledMediaTools("/App/Contents/Resources", () => true), TOOLS);
-  assert.equal(bundledMediaTools("/App/Contents/Resources", (file) => file.endsWith("/ffmpeg")), null);
+  assert.deepEqual(bundledMediaTools("/App/Contents/Resources", () => true, "darwin"), TOOLS);
+  assert.equal(bundledMediaTools("/App/Contents/Resources", (file) => file.endsWith("/ffmpeg"), "darwin"), null);
   assert.equal(bundledMediaTools(null, () => true), null, "a development run has no resources to look in");
+});
+
+test("the bundled tools of a Windows app carry the .exe suffix", () => {
+  const windowsTools = {
+    ffmpeg: path.win32.join("C:\\App\\resources", "ffmpeg", "ffmpeg.exe"),
+    ffprobe: path.win32.join("C:\\App\\resources", "ffmpeg", "ffprobe.exe"),
+  };
+  assert.deepEqual(bundledMediaTools("C:\\App\\resources", () => true, "win32"), windowsTools);
+  assert.equal(bundledMediaTools("C:\\App\\resources", (file) => file.endsWith("ffmpeg.exe"), "win32"), null, "ffprobe is missing");
+  assert.equal(bundledMediaTools(null, () => true, "win32"), null);
 });
 
 test("a start passes the bundled FFmpeg in the child's environment", async (t) => {
