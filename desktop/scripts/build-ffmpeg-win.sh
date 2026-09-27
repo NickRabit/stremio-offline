@@ -57,14 +57,19 @@ configure=(
 # configure's own log is what explains a failure on the runner, so it is shown then.
 (cd "$src" && ./configure --prefix="$work/ffmpeg-out" "${configure[@]}" >/dev/null) \
   || { tail -n 60 "$src/ffbuild/config.log" >&2; exit 1; }
+# Read back what configure decided, before minutes of compiling: no GPL part, and the two
+# Windows features this build is for. A missing feature shows the checks that turned it off.
+for expected in "CONFIG_GPL 0" "CONFIG_NONFREE 0" "CONFIG_SCHANNEL 1" "CONFIG_H264_MF_ENCODER 1"; do
+  grep -qx "#define $expected" "$src/config.h" || {
+    echo "build-ffmpeg-win: config.h lacks '$expected'" >&2
+    grep -n -A12 -E "mftransform\.h|MFCreateAlignedMemoryBuffer|schnlsp|SECURITY_WIN32" "$src/ffbuild/config.log" | tail -n 120 >&2
+    exit 1
+  }
+done
 (cd "$src" \
   && make -j"$jobs" >/dev/null \
   && make install >/dev/null)
 
-# Read back what configure decided: no GPL part, and the two Windows features this build is for.
-for expected in "CONFIG_GPL 0" "CONFIG_NONFREE 0" "CONFIG_SCHANNEL 1" "CONFIG_H264_MF_ENCODER 1"; do
-  grep -qx "#define $expected" "$src/config.h" || { echo "build-ffmpeg-win: config.h lacks '$expected'" >&2; exit 1; }
-done
 
 # Anything outside that set is a mingw runtime DLL that would have to travel with the exe. Windows'
 # own DLLs are allowed, mfplat.dll is not listed because desktop mode loads it at run time.
