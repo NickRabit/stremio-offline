@@ -80,6 +80,7 @@ export interface Diagnostics {
     ffmpeg: { version?: string; initialBurst: boolean; softwareEncoder?: boolean };
     vaapi: { device?: string; scaling: boolean; bitrate: boolean; failures: number };
     videotoolbox?: { available: boolean; constantQuality: boolean; failures: number };
+    mediafoundation?: { available: boolean; hardware: boolean; constantQuality: boolean; failures: number };
     sessions: DiagnosticsSession[];
   };
   downloads: { total: number; byStatus: Record<string, number>; halt: QueueHalt | null; failed: Array<{ id: string; title: string; error?: string; errorKey?: string }> };

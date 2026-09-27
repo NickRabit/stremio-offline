@@ -142,6 +142,14 @@ const hevcPlayable = (video: MediaInfo["video"], caps: ClientCapabilities) => {
   return deep ? caps.hevc10 === true : caps.hevc === true;
 };
 
+/** A source whose software decode cannot keep up: HEVC, AV1, VP9, anything 10-bit, or over 1080 lines.
+ *  Only those pay back a hardware decode on Windows; a 1080p H.264 is cheaper decoded on the CPU. */
+const isHeavySource = (video?: MediaInfo["video"]): boolean => {
+  if (!video) return false;
+  return video.codec === "hevc" || video.codec === "av1" || video.codec === "vp9"
+    || /p1[02](le|be)$/i.test(video.pixelFormat ?? "") || (video.height ?? 0) > 1080;
+};
+
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const DIRECT_MP4 = new Set([".mp4", ".m4v", ".mov"]);
 const MP4_FORMAT = new Set(["mp4", "mov", "m4a", "m4v", "3gp", "3g2", "mj2", "ism"]);
@@ -239,6 +247,11 @@ export class PlaybackManager {
   /** Intel Macs offer no constant-quality mode, so those encode at a fixed bitrate instead. */
   private videotoolboxQuality = false;
   private videotoolboxFailures = 0;
+  private mediafoundation = false;
+  /** The vendor MFT encodes when the hardware probe passes; a machine without one gets the software one. */
+  private mediafoundationHardware = false;
+  private mediafoundationQuality = false;
+  private mediafoundationFailures = 0;
   /** -readrate_initial_burst exists only from FFmpeg 6; an older build would die on the option. */
   private initialBurst = false;
   /** An LGPL build, like the one the desktop app carries, has no libx264: hardware is all there is. */
@@ -264,6 +277,8 @@ export class PlaybackManager {
     // VideoToolbox is macOS-only. A VAAPI device on a Mac is a misconfiguration, and if it did come
     // up it wins; Linux and Docker never reach this line.
     if (process.platform === "darwin" && process.env.VIDEOTOOLBOX !== "0" && !this.vaapiDevice) await this.checkVideotoolbox();
+    // Media Foundation is Windows-only and never shares a machine with VAAPI.
+    if (process.platform === "win32" && process.env.MEDIAFOUNDATION !== "0" && !this.vaapiDevice) await this.checkMediaFoundation();
     setInterval(() => this.reap(), 30_000).unref();
   }
 
@@ -554,6 +569,7 @@ export class PlaybackManager {
       ffmpeg: { version: this.ffmpegVersion, initialBurst: this.initialBurst, softwareEncoder: this.softwareEncoder },
       vaapi: { device: this.vaapiDevice, scaling: this.vaapiScaling, bitrate: this.vaapiBitrate, failures: this.vaapiFailures },
       videotoolbox: { available: this.videotoolbox, constantQuality: this.videotoolboxQuality, failures: this.videotoolboxFailures },
+      mediafoundation: { available: this.mediafoundation, hardware: this.mediafoundationHardware, constantQuality: this.mediafoundationQuality, failures: this.mediafoundationFailures },
       sessions: [...this.sessions.values()].map((session) => ({
         id: session.id, mode: session.mode, hardware: session.hardware, generation: session.generation,
         title: sourceTitle(session.stream) || undefined,
@@ -598,7 +614,7 @@ export class PlaybackManager {
     return {
       id: session.id, mode: session.mode, url, offset: session.offset,
       duration: session.info?.duration, video: session.info?.video?.codec, audio: session.info?.audio?.codec,
-      hardware: session.hardware, acceleration: Boolean(this.vaapiDevice || this.videotoolbox),
+      hardware: session.hardware, acceleration: Boolean(this.vaapiDevice || this.videotoolbox || this.mediafoundation),
       audioTracks: (session.info?.audioTracks ?? []).map((track) => ({ ...track, title: safeSourceText(track.title, session.stream) })),
       subtitleTracks: (session.info?.subtitleTracks ?? []).map((track) => ({ ...track, title: safeSourceText(track.title, session.stream) })),
       audioTrack: session.audioTrack, subtitleTrack: session.subtitleTrack, quality: session.quality,
@@ -779,8 +795,10 @@ export class PlaybackManager {
   /** VideoToolbox is always there on a Mac, but a frame is still encoded: the encoder can fail
    *  even when the framework loads, and only the result says whether a conversion would work. */
   /** The hardware path a conversion started now would use. VAAPI wins where both are set. */
-  private accelerator(): "vaapi" | "videotoolbox" | null {
-    return this.vaapiDevice ? "vaapi" : this.videotoolbox ? "videotoolbox" : null;
+  private accelerator(): "vaapi" | "videotoolbox" | "mediafoundation" | null {
+    if (this.vaapiDevice) return "vaapi";
+    if (this.videotoolbox) return "videotoolbox";
+    return this.mediafoundation ? "mediafoundation" : null;
   }
 
   private async checkVideotoolbox() {
@@ -807,6 +825,36 @@ export class PlaybackManager {
       "-hide_banner", "-loglevel", "error", "-nostdin",
       "-f", "lavfi", "-i", "nullsrc=s=256x144:d=0.1",
       "-vf", "format=nv12", "-c:v", "h264_videotoolbox", ...encoder, "-f", "null", "-",
+    ], { timeout: 30_000 });
+  }
+
+  /** The vendor MFT gives constant quality; the first probe demands it. A machine without one, a VM
+   *  with no GPU included, answers only the plain CBR probe and encodes through Microsoft's software MFT. */
+  private async checkMediaFoundation() {
+    try {
+      await this.runMediaFoundationProbe(["-hw_encoding", "1", "-rate_control", "quality", "-quality", process.env.MEDIAFOUNDATION_QUALITY ?? "60"]);
+      this.mediafoundation = true;
+      this.mediafoundationHardware = true;
+      this.mediafoundationQuality = true;
+      log("INFO", "Media Foundation is available", { hardware: true, constantQuality: true });
+      return;
+    } catch { /* no vendor encoder, so the CBR probe decides whether the software MFT answers. */ }
+    try {
+      await this.runMediaFoundationProbe(["-rate_control", "cbr", "-b:v", "1M"]);
+      this.mediafoundation = true;
+      log("INFO", "Media Foundation is available", { hardware: false, constantQuality: false });
+    } catch (error) {
+      const output = (error as { stderr?: string }).stderr ?? String(error);
+      const reason = output.split("\n").map((line) => line.trim()).filter(Boolean)[0] ?? "unknown error";
+      log("WARN", "Media Foundation does not work, conversion will run in software", { reason });
+    }
+  }
+
+  private async runMediaFoundationProbe(encoder: string[]) {
+    await promisify(execFile)(ffmpegPath(), [
+      "-hide_banner", "-loglevel", "error", "-nostdin",
+      "-f", "lavfi", "-i", "nullsrc=s=256x144:d=0.1",
+      "-vf", "format=nv12", "-c:v", "h264_mf", ...encoder, "-f", "null", "-",
     ], { timeout: 30_000 });
   }
 
@@ -876,6 +924,13 @@ export class PlaybackManager {
           if (this.videotoolboxFailures >= 2 && this.softwareEncoder) {
             this.videotoolbox = false;
             log("WARN", "VideoToolbox failed repeatedly, it will not be used again until restart", { failures: this.videotoolboxFailures });
+          }
+        } else if (accelerator === "mediafoundation") {
+          log("WARN", "Media Foundation failed, falling back to a software conversion", { id: session.id, reason: session.error });
+          this.mediafoundationFailures += 1;
+          if (this.mediafoundationFailures >= 2 && this.softwareEncoder) {
+            this.mediafoundation = false;
+            log("WARN", "Media Foundation failed repeatedly, it will not be used again until restart", { failures: this.mediafoundationFailures });
           }
         } else {
           log("WARN", "VAAPI failed, falling back to a software conversion", { id: session.id, reason: session.error });
@@ -984,6 +1039,12 @@ export class PlaybackManager {
       // ordinary filters below need no upload -- unlike the VAAPI branch.
       if (accel === "videotoolbox") {
         args.push("-hwaccel", "videotoolbox");
+      } else if (accel === "mediafoundation") {
+        // D3D11VA without -hwaccel_output_format leaves the decoded frames in system memory for the
+        // ordinary filters and h264_mf. Only a heavy source is worth the copy; for 1080p H.264 the
+        // software decoder is cheaper. No -hwaccel_device either: a machine without the decoder must
+        // still fall back to software instead of erroring out.
+        if (this.mediafoundationHardware && isHeavySource(session.info?.video)) args.push("-hwaccel", "d3d11va");
       } else if (this.vaapiScaling) {
         args.push("-hwaccel", "vaapi", "-hwaccel_device", this.vaapiDevice!, "-hwaccel_output_format", "vaapi");
       } else {
@@ -1042,6 +1103,15 @@ export class PlaybackManager {
       // Intel Macs offer no constant-quality mode, so they are given a plain bitrate instead.
       else if (this.videotoolboxQuality) args.push("-q:v", process.env.VIDEOTOOLBOX_QUALITY ?? "60");
       else args.push("-b:v", "8M");
+      args.push("-g", "48", "-force_key_frames", "expr:gte(t,n_forced*2)");
+    } else if (accel === "mediafoundation") {
+      const filters = quality !== null ? `scale=-2:min(${quality}\\,ih),format=nv12` : "format=nv12";
+      args.push("-vf", filters, "-c:v", "h264_mf");
+      if (bitrate) args.push("-rate_control", "cbr", "-b:v", bitrate, "-maxrate", bitrate);
+      // The vendor MFT takes constant quality; the software one only has a plain bitrate.
+      else if (this.mediafoundationQuality) args.push("-rate_control", "quality", "-quality", process.env.MEDIAFOUNDATION_QUALITY ?? "60");
+      else args.push("-b:v", "8M");
+      if (this.mediafoundationHardware) args.push("-hw_encoding", "1");
       args.push("-g", "48", "-force_key_frames", "expr:gte(t,n_forced*2)");
     } else if (accel === "vaapi") {
       const resize = quality !== null ? `w=-2:h=min(${quality}\\,ih)` : "";

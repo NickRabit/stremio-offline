@@ -218,6 +218,135 @@ test("a remux never touches VideoToolbox, whatever the accelerator", () => {
   }
 });
 
+/** A source that is always transcoded: no capability matches, so the video arguments are built. */
+const transcodeSession = (video: Record<string, unknown>, capabilities: Record<string, unknown>, quality: number | null = null) => ({
+  stream: { url: "https://example.test/movie.mkv" },
+  capabilities,
+  info: { video, audio: { codec: "aac" }, audioTracks: [{ codec: "aac" }], subtitleTracks: [] },
+  quality,
+  audioTrack: 0,
+  subtitleTrack: null,
+});
+
+test("Media Foundation decodes on the GPU only for a heavy source with the hardware encoder", () => {
+  const manager = new PlaybackManager(tmp("test-mediafoundation-decode")) as any;
+  manager.mediafoundation = true;
+  manager.mediafoundationHardware = true;
+  manager.mediafoundationQuality = true;
+
+  const hevc4k = manager.args(transcodeSession({ codec: "hevc", height: 2160 }, { aac: true }), 0, tmp("output"), true) as string[];
+  assert.deepEqual(hevc4k.slice(hevc4k.indexOf("-hwaccel"), hevc4k.indexOf("-hwaccel") + 2), ["-hwaccel", "d3d11va"]);
+  assert.ok(hevc4k.indexOf("-hwaccel") < hevc4k.indexOf("-i"), "the GPU decoder applies to the input");
+  assert.equal(hevc4k.includes("-hwaccel_device"), false);
+  assert.equal(hevc4k.includes("-hwaccel_output_format"), false);
+
+  const tenBit = manager.args(transcodeSession({ codec: "h264", pixelFormat: "yuv420p10le" }, { h264: false, aac: true }), 0, tmp("output"), true) as string[];
+  assert.deepEqual(tenBit.slice(tenBit.indexOf("-hwaccel"), tenBit.indexOf("-hwaccel") + 2), ["-hwaccel", "d3d11va"]);
+
+  const plain1080 = manager.args(transcodeSession({ codec: "h264", height: 1080 }, { h264: false, aac: true }), 0, tmp("output"), true) as string[];
+  assert.equal(plain1080.includes("-hwaccel"), false);
+  assert.equal(plain1080[plain1080.indexOf("-c:v") + 1], "h264_mf");
+
+  manager.mediafoundationHardware = false;
+  const software = manager.args(transcodeSession({ codec: "hevc", height: 2160 }, { aac: true }), 0, tmp("output"), true) as string[];
+  assert.equal(software.includes("-hwaccel"), false);
+  assert.equal(software.includes("-hw_encoding"), false);
+});
+
+test("Media Foundation encodes at hardware constant quality without a chosen bitrate", () => {
+  const manager = new PlaybackManager(tmp("test-mediafoundation-quality")) as any;
+  manager.mediafoundation = true;
+  manager.mediafoundationHardware = true;
+  manager.mediafoundationQuality = true;
+  const session = transcodeSession({ codec: "mpeg4" }, { aac: true });
+
+  const args = manager.args(session, 0, tmp("output"), true) as string[];
+  assert.equal(args[args.indexOf("-c:v") + 1], "h264_mf");
+  assert.equal(args[args.indexOf("-vf") + 1], "format=nv12");
+  assert.deepEqual(args.slice(args.indexOf("-rate_control"), args.indexOf("-rate_control") + 4), ["-rate_control", "quality", "-quality", "60"]);
+  assert.equal(args[args.indexOf("-hw_encoding") + 1], "1");
+  assert.equal(args[args.indexOf("-g") + 1], "48");
+  assert.equal(args.join(" ").includes("libx264"), false);
+
+  process.env.MEDIAFOUNDATION_QUALITY = "70";
+  try {
+    const tuned = manager.args(session, 0, tmp("output"), true) as string[];
+    assert.equal(tuned[tuned.indexOf("-quality") + 1], "70");
+  } finally {
+    delete process.env.MEDIAFOUNDATION_QUALITY;
+  }
+});
+
+test("Media Foundation targets a chosen quality with CBR and the hardware encoder", () => {
+  const manager = new PlaybackManager(tmp("test-mediafoundation-bitrate")) as any;
+  manager.mediafoundation = true;
+  manager.mediafoundationHardware = true;
+  manager.mediafoundationQuality = true;
+  const session = transcodeSession({ codec: "mpeg4" }, { aac: true }, 720);
+
+  const args = manager.args(session, 0, tmp("output"), true) as string[];
+  assert.equal(args[args.indexOf("-vf") + 1], "scale=-2:min(720\\,ih),format=nv12");
+  assert.deepEqual(args.slice(args.indexOf("-rate_control"), args.indexOf("-rate_control") + 6), ["-rate_control", "cbr", "-b:v", "3M", "-maxrate", "3M"]);
+  assert.equal(args[args.indexOf("-hw_encoding") + 1], "1");
+  assert.equal(args[args.indexOf("-force_key_frames") + 1], "expr:gte(t,n_forced*2)");
+  assert.equal(args.includes("-quality"), false);
+});
+
+test("the software Media Foundation MFT gets no hardware flags", () => {
+  const manager = new PlaybackManager(tmp("test-mediafoundation-software")) as any;
+  manager.mediafoundation = true;
+  manager.mediafoundationHardware = false;
+  manager.mediafoundationQuality = false;
+
+  const withBitrate = manager.args(transcodeSession({ codec: "mpeg4" }, { aac: true }, 720), 0, tmp("output"), true) as string[];
+  assert.equal(withBitrate[withBitrate.indexOf("-c:v") + 1], "h264_mf");
+  assert.deepEqual(withBitrate.slice(withBitrate.indexOf("-rate_control"), withBitrate.indexOf("-rate_control") + 6), ["-rate_control", "cbr", "-b:v", "3M", "-maxrate", "3M"]);
+  assert.equal(withBitrate.includes("-hwaccel"), false);
+  assert.equal(withBitrate.includes("-hw_encoding"), false);
+
+  const fixed = manager.args(transcodeSession({ codec: "mpeg4" }, { aac: true }), 0, tmp("output"), true) as string[];
+  assert.deepEqual(fixed.slice(fixed.indexOf("-b:v"), fixed.indexOf("-b:v") + 2), ["-b:v", "8M"]);
+  assert.equal(fixed.includes("-rate_control"), false);
+});
+
+test("VAAPI wins over Media Foundation when a machine carries both", () => {
+  const manager = new PlaybackManager(tmp("test-mediafoundation-vaapi")) as any;
+  manager.vaapiDevice = "/dev/dri/renderD128";
+  manager.mediafoundation = true;
+  manager.mediafoundationHardware = true;
+  manager.mediafoundationQuality = true;
+
+  const args = manager.args(transcodeSession({ codec: "mpeg4" }, { aac: true }), 0, tmp("output"), true) as string[];
+  assert.deepEqual(args.slice(args.indexOf("-hwaccel"), args.indexOf("-hwaccel") + 4), [
+    "-hwaccel", "vaapi", "-hwaccel_device", "/dev/dri/renderD128",
+  ]);
+  assert.equal(args[args.indexOf("-c:v") + 1], "h264_vaapi");
+  assert.equal(args.join(" ").includes("h264_mf"), false);
+});
+
+test("the Media Foundation probe follows the platform and MEDIAFOUNDATION", async () => {
+  const manager = new PlaybackManager(tmp("test-mediafoundation-gate")) as any;
+  manager.readFfmpegVersion = async () => undefined;
+  let probes = 0;
+  manager.checkMediaFoundation = async () => { probes += 1; };
+
+  const original = Object.getOwnPropertyDescriptor(process, "platform")!;
+  const loadOn = async (platform: string, off: boolean) => {
+    Object.defineProperty(process, "platform", { value: platform, configurable: true });
+    if (off) process.env.MEDIAFOUNDATION = "0"; else delete process.env.MEDIAFOUNDATION;
+    try { await manager.load(); } finally { delete process.env.MEDIAFOUNDATION; }
+  };
+  try {
+    await loadOn("linux", false);
+    await loadOn("win32", true);
+    assert.equal(probes, 0);
+    await loadOn("win32", false);
+    assert.equal(probes, 1);
+  } finally {
+    Object.defineProperty(process, "platform", original);
+  }
+});
+
 test("a remux still copies compatible video and audio", () => {
   const manager = new PlaybackManager(tmp("test-playback")) as any;
   const session = {
