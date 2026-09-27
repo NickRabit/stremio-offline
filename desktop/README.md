@@ -281,7 +281,8 @@ The same shell runs on Windows x64. Where it differs from macOS:
   - Closing the window leaves the app in the notification area, not the Dock.
     The tray menu opens the window or settings, switches servers and quits. The
     first close says so once, and `shell-prefs.json` keeps `trayNoticeShown`.
-  - The menu bar is hidden until Alt: File, Edit, View, Server, Help.
+  - The main window shows a menu bar: File (Settings, Exit), Edit, View, Server,
+    Help. The settings window has none.
   - The settings window keeps Windows' own frame.
 - **Open at login** writes the Run key with `--hidden`. Such a start stays in
   the tray and, when this PC was the choice, brings the local backend up

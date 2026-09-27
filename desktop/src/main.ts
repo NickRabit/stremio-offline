@@ -243,6 +243,12 @@ const applyMenu = (): void => {
       openProject: () => { void electronShell.openExternal(PROJECT_URL).catch(() => {}); },
     },
   })));
+  if (PLATFORM === "win32") {
+    // Windows puts the application menu on every window: the main window keeps it in view, the
+    // settings window loses it again after each rebuild.
+    shell?.window.setMenu(Menu.getApplicationMenu());
+    settingsWindow.removeMenu();
+  }
   tray?.setContextMenu(Menu.buildFromTemplate(buildTrayTemplate({
     strings,
     profiles: shellState.profiles,
@@ -908,10 +914,12 @@ const createShell = (saved: WindowState | null) => {
     minHeight: MIN_SIZE.height,
     title: APP_NAME,
     backgroundColor: WINDOW_BACKGROUND,
-    ...(PLATFORM === "win32" ? { autoHideMenuBar: true } : {}),
+    // On Windows the menu bar stays in view: the server page fills the window, and a menu hidden
+    // until Alt is one nobody finds, Settings with it.
     // A packaged app takes its icon from the executable; a development run has to point at it.
     ...(PLATFORM === "win32" && !app.isPackaged ? { icon: path.join(app.getAppPath(), "build", "icon.png") } : {}),
   });
+  if (PLATFORM === "win32") window.setMenu(Menu.getApplicationMenu());
   const page = new WebContentsView({ webPreferences: shellWebPreferences() });
   const toast = new WebContentsView({ webPreferences: shellWebPreferences() });
   wireShellView(page, "main");
