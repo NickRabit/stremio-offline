@@ -79,6 +79,9 @@ export interface LocalState {
 
 export type ShellLocale = "cs" | "en";
 
+/** The operating system the shell runs on; pages and texts follow it ("This Mac" / "This PC"). */
+export type ShellPlatform = "darwin" | "win32" | "linux";
+
 /** macOS's answer for the login item: "requires-approval" means the user has to allow it in
  *  System Settings → General → Login Items; "unsupported" where the system cannot tell. */
 export type LoginItemStatus = "enabled" | "not-registered" | "requires-approval" | "not-found" | "unsupported";
@@ -99,6 +102,7 @@ export interface AppState {
 
 export interface ShellState {
   /** The language the shell speaks now. */
+  platform: ShellPlatform;
   locale: ShellLocale;
   /** The user's explicit choice, or null to follow macOS (Czech when the system is Czech, else English). */
   localeChoice: ShellLocale | null;

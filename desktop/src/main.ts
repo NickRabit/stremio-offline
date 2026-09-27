@@ -128,6 +128,7 @@ let updateTimer: NodeJS.Timeout | null = null;
 let updateNotified: string | null = null;
 
 const shellState: ShellState = {
+  platform: process.platform === "win32" ? "win32" : process.platform === "darwin" ? "darwin" : "linux",
   locale: "en",
   localeChoice: null,
   appVersion: "",
