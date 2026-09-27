@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import path from "node:path";
 import { test } from "node:test";
 import {
   autoAccept, browseMeta, cacheFieldsFromMeta, clipText, dropKeyed, episodeKey, episodeNumberOf, episodesFromMeta, isExtraName,
@@ -211,7 +210,7 @@ test("matchKeyFor walks from an episode to the show and from a collection child 
   assert.equal(matchKeyFor("Father Ted/01 serie/01 - Good Luck, Father Ted.mkv", series), "Father Ted");
   const dump = ["xxx/one.mp4", "xxx/two.mp4", "xxx/I Prefer Anal/I Prefer Anal.mp4"].map(file);
   assert.equal(matchKeyFor("xxx/one.mp4", dump), "xxx/one.mp4");
-  assert.equal(matchKeyFor(path.join("xxx", "I Prefer Anal", "I Prefer Anal.mp4"), dump), path.join("xxx", "I Prefer Anal"));
+  assert.equal(matchKeyFor("xxx/I Prefer Anal/I Prefer Anal.mp4", dump), "xxx/I Prefer Anal");
 });
 
 test("a unit is searched by its own name: the film for a loose file, the folder for an encode set", () => {
@@ -561,7 +560,7 @@ test("episode rows are read out of the series meta", () => {
 test("episode numbering comes from the file name, then from the season folder", () => {
   assert.deepEqual(episodeNumberOf("Ted/Ted.S01E02.mkv"), { season: 1, episode: 2 });
   assert.deepEqual(episodeNumberOf("Ted/Ted 1x03.mkv"), { season: 1, episode: 3 });
-  assert.deepEqual(episodeNumberOf(path.join("Ted", "Serie 2", "04 - Nazev.mkv")), { season: 2, episode: 4 });
+  assert.deepEqual(episodeNumberOf("Ted/Serie 2/04 - Nazev.mkv"), { season: 2, episode: 4 });
   assert.equal(episodeNumberOf("Film (2024)/Film.mkv"), undefined);
   assert.deepEqual(episodeNumberOf("Ted/anything.mkv", { type: "series", id: "tt1", season: 3, episode: 7 }), { season: 3, episode: 7 });
 });
@@ -569,25 +568,25 @@ test("episode numbering comes from the file name, then from the season folder", 
 test("each episode of a bound series gets its own copy, never the series plot", () => {
   const records = { Ted: { type: "series", id: "tt1", name: "Father Ted", year: "1995", description: "A priest." } };
   const episodes = episodesFromMeta(seriesMeta());
-  const first = browseMeta(path.join("Ted", "Ted.S01E01.mkv"), "Ted.S01E01", records, {}, episodes);
-  const second = browseMeta(path.join("Ted", "Ted.S01E02.mkv"), "Ted.S01E02", records, {}, episodes);
+  const first = browseMeta("Ted/Ted.S01E01.mkv", "Ted.S01E01", records, {}, episodes);
+  const second = browseMeta("Ted/Ted.S01E02.mkv", "Ted.S01E02", records, {}, episodes);
   assert.equal(first.description, "The parochial house.");
   assert.equal(second.description, "A visitor.");
   assert.equal(first.catalogName, "Good Luck");
   assert.equal(first.year, "1995");
   assert.deepEqual([first.season, first.episode], [1, 1]);
   // An episode nobody cached says nothing rather than repeating the series plot.
-  const unknown = browseMeta(path.join("Ted", "Ted.S09E09.mkv"), "Ted.S09E09", records, {}, episodes);
+  const unknown = browseMeta("Ted/Ted.S09E09.mkv", "Ted.S09E09", records, {}, episodes);
   assert.equal(unknown.description, undefined);
   assert.equal(unknown.match, "matched");
   // The series folder itself still carries it.
   assert.equal(browseMeta("Ted", "Ted", records, {}, episodes).description, "A priest.");
   // And so does no season folder under it.
-  assert.equal(browseMeta(path.join("Ted", "Serie 1"), "Serie 1", records, {}, episodes).description, undefined);
+  assert.equal(browseMeta("Ted/Serie 1", "Serie 1", records, {}, episodes).description, undefined);
 });
 
 test("a file bound to one episode wins over the numbering in its name", () => {
-  const key = path.join("Ted", "whatever.mkv");
+  const key = "Ted/whatever.mkv";
   const records = {
     Ted: { type: "series", id: "tt1", name: "Father Ted" },
     [key]: { type: "series", id: "tt1", source: "user" as const, season: 1, episode: 2 },
@@ -598,7 +597,7 @@ test("a file bound to one episode wins over the numbering in its name", () => {
 });
 
 test("unmatching a file inside a matched folder leaves a sentinel, not the parent binding", () => {
-  const key = path.join("Ted", "a.mkv");
+  const key = "Ted/a.mkv";
   const records = {
     Ted: { type: "series", id: "tt1" },
     [key]: { type: "series", id: "tt2", source: "user" as const },
@@ -606,7 +605,7 @@ test("unmatching a file inside a matched folder leaves a sentinel, not the paren
   const next = unmatchAt(records, key);
   assert.equal(next[key]?.id, "");
   assert.equal(knownTitleOf(key, next), undefined);
-  assert.equal(knownTitleOf(path.join("Ted", "b.mkv"), next)?.id, "tt1");
+  assert.equal(knownTitleOf("Ted/b.mkv", next)?.id, "tt1");
   // Exclusion from matching survives the unmatch.
   const excluded = unmatchAt({ ...records, [key]: { type: "movie", id: "tt2", skipLookup: true } }, key);
   assert.equal(excluded[key]?.skipLookup, true);
@@ -623,8 +622,8 @@ test("a weak hit is no suggestion and a fruitless search is remembered", () => {
   assert.equal(matchStatus("Foo", {}, { Foo: miss }), "unmatched");
   assert.equal(suggestionFor("Foo", { Foo: miss }), undefined);
   const real = { type: "movie", id: "tt1", name: "Film", score: 90 };
-  assert.equal(matchStatus(path.join("Foo", "a.mkv"), {}, { Foo: real }), "suggested");
-  assert.deepEqual(browseMeta(path.join("Foo", "a.mkv"), "a", {}, { Foo: real }).suggestion, real);
+  assert.equal(matchStatus("Foo/a.mkv", {}, { Foo: real }), "suggested");
+  assert.deepEqual(browseMeta("Foo/a.mkv", "a", {}, { Foo: real }).suggestion, real);
 });
 
 test("a description is cut on a word boundary and a finished backfill holds", () => {
@@ -642,7 +641,7 @@ test("a description is cut on a word boundary and a finished backfill holds", ()
   assert.equal(needsEpisodes({ type: "movie", id: "tt1" }, undefined, {}), false);
 });
 
-const join = (...parts: string[]) => parts.join(path.sep);
+const join = (...parts: string[]) => parts.join("/");
 
 test("a moved file takes the title it inherited from the folder it leaves", () => {
   const meta = { "Přátelé": { type: "series", id: "tt0108778", source: "user" as const, locked: true, name: "Přátelé" } };
@@ -1284,7 +1283,7 @@ test("a file kept out of matching or the mosaic keeps the title its folder gave 
 });
 
 test("a flagged episode of a series keeps its series, its episode and its exclusion", () => {
-  const episode = path.join("Ted", "Serie 1", "02 - Nazev.mkv");
+  const episode = "Ted/Serie 1/02 - Nazev.mkv";
   const records: Record<string, LibraryMetaRecord> = {
     Ted: { type: "series", id: "tt1", name: "Father Ted", year: "1995", description: "A priest." },
     [episode]: { type: "series", id: "", source: "user", skipMosaic: true },

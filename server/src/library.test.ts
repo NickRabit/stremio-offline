@@ -214,7 +214,7 @@ test("favourites are filtered before paging", async () => {
     await mkdir(path.join(root, "kolekce"));
     await Promise.all(Array.from({ length: 80 }, (_, index) =>
       writeFile(path.join(root, "kolekce", `video-${String(index).padStart(2, "0")}.mp4`), "")));
-    const wanted = path.join("kolekce", "video-70.mp4");
+    const wanted = "kolekce/video-70.mp4";
     const result = await browseDirectory(root, "kolekce", "", 0, 60, "name", false, "", new Set([wanted]));
     assert.equal(result.total, 1);
     assert.deepEqual(result.items.map((item) => item.path), [wanted]);
@@ -232,7 +232,7 @@ test("a favourites filter is not served the list a plain call cached", async () 
     // The same folder and query, so only the filter differs. The filter has to stay per request.
     const plain = await browseDirectory(root, "kolekce", "", 0, 60, "name");
     assert.equal(plain.total, 80);
-    const wanted = path.join("kolekce", "video-70.mp4");
+    const wanted = "kolekce/video-70.mp4";
     const filtered = await browseDirectory(root, "kolekce", "", 0, 60, "name", false, "", new Set([wanted]));
     assert.equal(filtered.total, 1);
     assert.deepEqual(filtered.items.map((item) => item.path), [wanted]);
@@ -374,7 +374,7 @@ test("listVideos walks the same tree scanLibrary uses", async () => {
     await writeFile(path.join(root, "Show", "01 serie", "01.mkv"), "");
     await writeFile(path.join(root, "note.txt"), "");
     const found = await listVideos(root);
-    assert.deepEqual(found.map((item) => item.relative), [path.join("Show", "01 serie", "01.mkv")]);
+    assert.deepEqual(found.map((item) => item.relative), ["Show/01 serie/01.mkv"]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -466,26 +466,26 @@ test("the fingerprint moves with a new, a resized or a touched file", () => {
 });
 
 test("a moved item keeps its name and lands in the chosen folder", () => {
-  assert.deepEqual(moveDestination(path.join("filmy", "Duna.mkv"), "archiv"), { path: path.join("archiv", "Duna.mkv") });
-  assert.deepEqual(moveDestination(path.join("filmy", "Duna.mkv"), ""), { path: "Duna.mkv" }, "the root is the empty path");
-  assert.deepEqual(moveDestination("Duna.mkv", "filmy"), { path: path.join("filmy", "Duna.mkv") });
+  assert.deepEqual(moveDestination("filmy/Duna.mkv", "archiv"), { path: "archiv/Duna.mkv" });
+  assert.deepEqual(moveDestination("filmy/Duna.mkv", ""), { path: "Duna.mkv" }, "the root is the empty path");
+  assert.deepEqual(moveDestination("Duna.mkv", "filmy"), { path: "filmy/Duna.mkv" });
 });
 
 test("a move that changes nothing and a folder swallowing itself are refused", () => {
-  assert.deepEqual(moveDestination(path.join("filmy", "Duna.mkv"), "filmy"), { error: "sameFolder" });
+  assert.deepEqual(moveDestination("filmy/Duna.mkv", "filmy"), { error: "sameFolder" });
   assert.deepEqual(moveDestination("Duna.mkv", ""), { error: "sameFolder" });
-  assert.deepEqual(moveDestination("serialy", path.join("serialy", "Přátelé")), { error: "intoItself" });
+  assert.deepEqual(moveDestination("serialy", "serialy/Přátelé"), { error: "intoItself" });
   assert.deepEqual(moveDestination("serialy", "serialy"), { error: "intoItself" });
 });
 
 test("the folder of the last deleted video is emptied up the tree", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "stremio-empty-"));
   try {
-    const season = path.join("Přátelé", "01 serie");
+    const season = "Přátelé/01 serie";
     await mkdir(path.join(root, season), { recursive: true });
     await writeFile(path.join(root, season, "01.mkv"), "x");
     await writeFile(path.join(root, season, "01.srt"), "x", "utf8");
-    const episode = path.join(season, "01.mkv");
+    const episode = `${season}/01.mkv`;
     assert.deepEqual(await emptiedFolders(root, episode), [], "the episode is still there");
 
     await rm(path.join(root, episode));

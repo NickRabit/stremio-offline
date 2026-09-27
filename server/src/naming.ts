@@ -78,7 +78,8 @@ export function safeSubfolder(value: unknown): string {
   const segments = raw.split(/[\\/]+/).filter(Boolean);
   if (segments.length > 8) throw new AppError("The subfolder can be at most 8 levels deep.", "err.subfolderDepth");
   if (segments.some((segment) => segment === "." || segment === "..")) throw new AppError("The subfolder cannot contain . or .. segments.", "err.subfolderDots");
-  return segments.map(safeName).join(path.sep);
+  // The stored and wire form is POSIX; `path.join` at the syscall turns it back.
+  return segments.map(safeName).join("/");
 }
 
 /** The library a rule names, or the reason it cannot be used. Called with the libraries a

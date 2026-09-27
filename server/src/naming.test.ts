@@ -117,7 +117,7 @@ test("a subfolder Windows could not use is refused", () => {
   for (const value of ["C:\\Windows", "\\\\server\\share\\Films", "\\Films", "Films\\..\\..\\etc"]) {
     assert.throws(() => safeSubfolder(value), `${value} must not become a subfolder`);
   }
-  assert.equal(safeSubfolder("Films\\2024"), path.join("Films", "2024"), "a backslash inside is still a separator");
+  assert.equal(safeSubfolder("Films\\2024"), "Films/2024", "a backslash inside is still a separator");
 });
 
 test("a film can be saved flat into the addon's subfolder", () => {
@@ -168,7 +168,7 @@ test("a save rule may name a library, and only one that takes the kind", () => {
 
 test("a subfolder must not escape downloads", () => {
   for (const value of ["../tajne", "/etc", "C:\\Windows", "filmy/../../etc"]) assert.throws(() => safeSubfolder(value));
-  assert.equal(safeSubfolder("Doplňky/Webshare"), path.join("Doplňky", "Webshare"));
+  assert.equal(safeSubfolder("Doplňky/Webshare"), "Doplňky/Webshare");
 });
 
 test("device downloads use the same filename as the library", () => {

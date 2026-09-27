@@ -11,21 +11,29 @@ const grant = (over: Partial<RootGrant> = {}): RootGrant => ({
 });
 
 test("the root list is comma separated, deduplicated and keeps only absolute paths", () => {
-  assert.deepEqual(parseRootList(undefined, "/downloads"), ["/downloads"]);
-  assert.deepEqual(parseRootList("", "/downloads"), ["/downloads"]);
-  assert.deepEqual(parseRootList(" , ", "/downloads"), ["/downloads"]);
-  assert.deepEqual(parseRootList("/media, /archive/", "/downloads"), ["/media", "/archive"]);
-  assert.deepEqual(parseRootList("/media,/media", "/downloads"), ["/media"]);
-  assert.deepEqual(parseRootList("media,/archive", "/downloads"), ["/archive"], "a relative entry would depend on the working directory");
+  // A fixture only counts as an absolute root on a host that reads it as one: on Windows a
+  // leading `/` is rooted on the current drive and a drive letter is a root of its own.
+  const resolved = (value: string) => path.resolve(value);
+  assert.deepEqual(parseRootList(undefined, "/downloads"), [resolved("/downloads")]);
+  assert.deepEqual(parseRootList("", "/downloads"), [resolved("/downloads")]);
+  assert.deepEqual(parseRootList(" , ", "/downloads"), [resolved("/downloads")]);
+  assert.deepEqual(parseRootList("/media, /archive/", "/downloads"), [resolved("/media"), resolved("/archive")]);
+  assert.deepEqual(parseRootList("/media,/media", "/downloads"), [resolved("/media")]);
+  assert.deepEqual(parseRootList("media,/archive", "/downloads"), [resolved("/archive")], "a relative entry would depend on the working directory");
   // Windows shapes arrive whole: the list is split on the comma only, never on a colon.
-  assert.deepEqual(parseRootList("C:\\Media,/archive", "/downloads"), ["/archive"], "a drive letter is not a POSIX root");
-  assert.deepEqual(parseRootList("/archive,D:\\Films", "/downloads"), ["/archive"]);
-  assert.deepEqual(parseRootList("C:\\Media", "/downloads"), [], "a Windows-only list has nothing this build can use");
+  const windows = process.platform === "win32";
+  assert.deepEqual(parseRootList("C:\\Media,/archive", "/downloads"),
+    windows ? [resolved("C:\\Media"), resolved("/archive")] : [resolved("/archive")],
+    "a drive letter is a root on Windows and a bare name on POSIX");
+  assert.deepEqual(parseRootList("/archive,D:\\Films", "/downloads"),
+    windows ? [resolved("/archive"), resolved("D:\\Films")] : [resolved("/archive")]);
+  assert.deepEqual(parseRootList("C:\\Media", "/downloads"),
+    windows ? [resolved("C:\\Media")] : [], "a Windows-only list has nothing POSIX can use");
 });
 
 test("env grants carry their source and the boot time", () => {
   assert.deepEqual(envGrants("/media", "/downloads", "2026-09-13T00:00:00.000Z"), [
-    { path: "/media", source: "env", grantedAt: "2026-09-13T00:00:00.000Z" },
+    { path: path.resolve("/media"), source: "env", grantedAt: "2026-09-13T00:00:00.000Z" },
   ]);
 });
 
