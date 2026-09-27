@@ -15,6 +15,14 @@ export const en = {
   "menu.serverSettings": "Server settings…",
   "menu.project": "Stremio Offline on GitHub",
   "settings.title": "Settings",
+  "reset.title": "Reset this Mac?",
+  "reset.detail": "The server on this Mac stops and you are signed out of it. Its accounts, library records, history and settings move to the Trash, the app's own settings are deleted, and the app starts again with the welcome screen.",
+  "reset.detailDownloads": "The download folder {dir} moves to the Trash too.",
+  "reset.confirm": "Reset",
+  "reset.cancel": "Cancel",
+  "reset.downloadsKept": "The download folder stayed where it is: {dir}",
+  "reset.detailServers": "The saved servers and the sign-ins to them are forgotten as well.",
+  "reset.detailKeepsFilms": "Downloaded films stay where they are.",
 };
 
 export const cs: typeof en = {
@@ -32,6 +40,14 @@ export const cs: typeof en = {
   "menu.serverSettings": "Nastavení serverů…",
   "menu.project": "Stremio Offline na GitHubu",
   "settings.title": "Nastavení",
+  "reset.title": "Obnovit tento Mac?",
+  "reset.detail": "Server na tomto Macu se zastaví a odhlásíte se z něj. Jeho účty, záznamy knihoven, historie a nastavení se přesunou do Koše, nastavení aplikace se smaže a aplikace začne znovu úvodní obrazovkou.",
+  "reset.detailDownloads": "Do Koše se přesune i složka pro stahování {dir}.",
+  "reset.confirm": "Obnovit",
+  "reset.cancel": "Zrušit",
+  "reset.downloadsKept": "Složka pro stahování zůstala na místě: {dir}",
+  "reset.detailServers": "Zapomenou se i uložené servery a přihlášení k nim.",
+  "reset.detailKeepsFilms": "Stažené filmy zůstanou na místě.",
 };
 
 export function catalogue(locale: "cs" | "en"): typeof en {

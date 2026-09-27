@@ -8,14 +8,21 @@ export interface LocalSettings {
   allowPrivateAddons: boolean;
   publish: boolean;
   publishPort: number;
+  /** The folder the local backend downloads to; null means `<userData>/downloads`. */
+  downloadDir: string | null;
 }
 
 const DEFAULT_PUBLISH_PORT = 8091;
+const MAX_DOWNLOAD_DIR = 1024;
 
-export const defaultLocalSettings = (): LocalSettings => ({ allowPrivateAddons: false, publish: false, publishPort: DEFAULT_PUBLISH_PORT });
+export const defaultLocalSettings = (): LocalSettings =>
+  ({ allowPrivateAddons: false, publish: false, publishPort: DEFAULT_PUBLISH_PORT, downloadDir: null });
 
 const validPort = (value: unknown): value is number =>
   typeof value === "number" && Number.isInteger(value) && value >= 1024 && value <= 65535;
+
+const validDownloadDir = (value: unknown): value is string =>
+  typeof value === "string" && path.isAbsolute(value) && value.length <= MAX_DOWNLOAD_DIR && !value.includes("\0");
 
 /** The file is read leniently: unknown fields are dropped and a bad value means the default. */
 const settingsFromStored = (body: unknown): LocalSettings => {
@@ -25,6 +32,7 @@ const settingsFromStored = (body: unknown): LocalSettings => {
     allowPrivateAddons: typeof record.allowPrivateAddons === "boolean" ? record.allowPrivateAddons : false,
     publish: typeof record.publish === "boolean" ? record.publish : false,
     publishPort: validPort(record.publishPort) ? record.publishPort : DEFAULT_PUBLISH_PORT,
+    downloadDir: validDownloadDir(record.downloadDir) ? record.downloadDir : null,
   };
 };
 
@@ -50,6 +58,7 @@ export async function writeLocalSettings(dir: string, settings: LocalSettings): 
       allowPrivateAddons: settings.allowPrivateAddons,
       publish: settings.publish,
       publishPort: settings.publishPort,
+      downloadDir: settings.downloadDir,
     }) + "\n", { encoding: "utf8", flag: "wx" });
     await rename(temporary, path.join(dir, SETTINGS_FILE));
   } catch (error) {
@@ -63,7 +72,14 @@ export function parseLocalSettings(input: unknown): LocalSettings | null {
   if (typeof input !== "object" || input === null || Array.isArray(input)) return null;
   const record = input as Record<string, unknown>;
   const keys = Object.keys(record).sort();
-  if (keys.length !== 3 || keys[0] !== "allowPrivateAddons" || keys[1] !== "publish" || keys[2] !== "publishPort") return null;
+  if (keys.length !== 4 || keys[0] !== "allowPrivateAddons" || keys[1] !== "downloadDir" || keys[2] !== "publish" || keys[3] !== "publishPort") return null;
   if (typeof record.allowPrivateAddons !== "boolean" || typeof record.publish !== "boolean" || !validPort(record.publishPort)) return null;
-  return { allowPrivateAddons: record.allowPrivateAddons, publish: record.publish, publishPort: record.publishPort };
+  const downloadDir = record.downloadDir;
+  if (downloadDir !== null && !validDownloadDir(downloadDir)) return null;
+  return {
+    allowPrivateAddons: record.allowPrivateAddons,
+    publish: record.publish,
+    publishPort: record.publishPort,
+    downloadDir: downloadDir === null ? null : downloadDir,
+  };
 }

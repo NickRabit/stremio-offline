@@ -1,6 +1,7 @@
-import { app, BaseWindow, clipboard, dialog, ipcMain, Menu, Notification, powerSaveBlocker, screen, session, shell as electronShell, utilityProcess, WebContentsView, type IpcMainEvent, type IpcMainInvokeEvent } from "electron";
+import { app, BaseWindow, BrowserWindow, clipboard, dialog, ipcMain, Menu, Notification, powerSaveBlocker, screen, session, shell as electronShell, utilityProcess, WebContentsView, type IpcMainEvent, type IpcMainInvokeEvent } from "electron";
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { unlink } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -15,11 +16,12 @@ import {
   type ProfileStore,
   type ServerProfile,
 } from "./connection-file.js";
+import { mayTrashDownloadDir, OWNERSHIP_FILE, prepareDownloadDir, readOwnership, writeOwnership, type Ownership, type Places } from "./download-dir.js";
 import { isDeviceTicketDownload } from "./downloads.js";
 import { catalogue } from "./i18n.js";
 import { layout, type PageMode } from "./layout.js";
-import { bundledMediaTools, LOCAL_PARTITION, LocalBackend, LocalPortBusyError, type LocalBackendConnection } from "./local-backend.js";
-import { defaultLocalSettings, parseLocalSettings, readLocalSettings, writeLocalSettings, type LocalSettings } from "./local-settings.js";
+import { bundledMediaTools, DOWNLOADS_DIRECTORY, INSTANCE_DIRECTORY, LOCAL_PARTITION, LocalBackend, LocalPortBusyError, PORT_FILE, type LocalBackendConnection } from "./local-backend.js";
+import { defaultLocalSettings, parseLocalSettings, readLocalSettings, SETTINGS_FILE, writeLocalSettings, type LocalSettings } from "./local-settings.js";
 import { buildMenuTemplate } from "./menu.js";
 import { externalBrowserUrl, httpAllowedHost, parseServerOrigin, partitionForOrigin, type ServerOrigin } from "./origin.js";
 import { localPageSent } from "./bridge-sender.js";
@@ -102,6 +104,8 @@ let quitting = false;
 const preparedPartitions = new Set<string>();
 let profileStore: ProfileStore = { profiles: [], selectedProfileId: null };
 let localSettings: LocalSettings = defaultLocalSettings();
+/** Whether `<userData>/<INSTANCE_DIRECTORY>` exists; cached, so a push does not touch the disk. */
+let localInitialized = false;
 /** Electron shows the newest of these while a download runs; the shell counts them for `busy`. */
 const deviceDownloads = new Map<object, number>();
 const queue = new SerialQueue();
@@ -119,7 +123,17 @@ const shellState: ShellState = {
   connection: null,
   chosen: null,
   profiles: [],
-  local: { settings: defaultLocalSettings(), running: false, addresses: [], ffmpeg: null, busy: false },
+  local: {
+    settings: defaultLocalSettings(),
+    running: false,
+    addresses: [],
+    ffmpeg: null,
+    busy: false,
+    downloadDir: "",
+    suggestedDownloadDir: "",
+    initialized: false,
+    downloadDirOwned: false,
+  },
   toast: null,
 };
 
@@ -200,9 +214,29 @@ const applyLayout = () => {
 
 const titleFor = (screen: MainScreen): string => {
   if (screen.kind === "welcome") return APP_NAME;
-  const name = screen.kind === "connected" ? shellState.connection?.name ?? "" : screen.name;
+  const name = screen.kind === "connected" ? shellState.connection?.name ?? "" : screen.kind === "setup" ? "" : screen.name;
   const label = name.trim().length > 0 ? name : catalogue(shellState.locale)["window.thisMac"];
   return `${APP_NAME} — ${label}`;
+};
+
+/** The folder downloads go to: the stored one, else the default every install before the setup
+ *  step keeps. */
+/** Whose the stored download folder is, recorded when it was adopted. */
+let ownership: Ownership | null = null;
+/** Folders that passed the check in this session, and whether each was the app's to own; only
+ *  these can become the download folder. */
+const preparedDirs = new Map<string, boolean>();
+const places = (): Places => ({ home: app.getPath("home"), userData: app.getPath("userData") });
+
+const effectiveDownloadDir = (): string =>
+  localSettings.downloadDir ?? path.join(app.getPath("userData"), DOWNLOADS_DIRECTORY);
+
+const refreshInitialized = () => {
+  try {
+    localInitialized = statSync(path.join(app.getPath("userData"), INSTANCE_DIRECTORY)).isDirectory();
+  } catch {
+    localInitialized = false;
+  }
 };
 
 const refreshLocal = () => {
@@ -213,6 +247,10 @@ const refreshLocal = () => {
     addresses: localConnection?.addresses ?? [],
     ffmpeg: ffmpegLine,
     busy: localStreaming || deviceDownloads.size > 0,
+    downloadDir: effectiveDownloadDir(),
+    suggestedDownloadDir: path.join(app.getPath("videos"), "Stremio Offline"),
+    initialized: localInitialized,
+    downloadDirOwned: mayTrashDownloadDir(effectiveDownloadDir(), localSettings.downloadDir, ownership, places()),
   };
 };
 
@@ -510,6 +548,7 @@ const startLocal = async (ticket: number, target: Target, fallback: { profileNam
     connection = await backend.start();
   } catch (error) {
     console.warn("local backend: " + (error instanceof Error ? error.message : String(error)));
+    refreshInitialized();
     if (!requests.isCurrent(ticket)) { await closeLocalBackend(); return; }
     if (error instanceof LocalPortBusyError) failWith("port-busy", error.port);
     else failWith("local-startup");
@@ -518,6 +557,7 @@ const startLocal = async (ticket: number, target: Target, fallback: { profileNam
   if (!requests.isCurrent(ticket)) { await closeLocalBackend(); return; }
   localConnection = connection;
   localStreaming = false;
+  refreshInitialized();
   syncAwake();
   if (shell?.remotePartition !== LOCAL_PARTITION) await retireRemote();
   const remote = mountRemote(LOCAL_PARTITION, localOrigin, LOCAL_PRELOAD);
@@ -562,7 +602,9 @@ const connectProfile = async (ticket: number, target: Target, profile: ServerPro
   if (!result.ok && result.reason === "unreachable") result = await fetchStatus(server.origin, fetch, PROBE_TIMEOUT_MS);
   if (!requests.isCurrent(ticket)) return;
   if (!result.ok) {
-    if (launch && fallbackApplies(target, result.reason)) {
+    refreshInitialized();
+    // A stand-in that was never set up would start without its download folder chosen.
+    if (launch && fallbackApplies(target, result.reason) && !needsSetup()) {
       shellState.chosen = target;
       await startLocal(ticket, target, { profileName: profile.name, origin: server.origin });
       return;
@@ -614,6 +656,11 @@ const dropCurrentPage = async () => {
   shellState.connection = null;
 };
 
+/** A first start of the local backend waits for a download folder; an install that has run it keeps its own. */
+const needsSetup = (): boolean => !localInitialized && localSettings.downloadDir === null;
+/** What the window showed before the download-folder step, for its Back button. */
+let setupReturn: Target | null = null;
+
 const connectTarget = (target: Target, options: { launch: boolean }): Promise<void> => {
   const ticket = requests.next();
   return queue.run(async () => {
@@ -625,6 +672,19 @@ const connectTarget = (target: Target, options: { launch: boolean }): Promise<vo
       return;
     }
     if (!requests.isCurrent(ticket)) return;
+    if (target.kind === "local") refreshInitialized();
+    if (target.kind === "local" && needsSetup()) {
+      if (shellState.screen.kind !== "setup") {
+        setupReturn = shellState.screen.kind === "connected" ? shellState.connection?.target ?? null
+          : shellState.screen.kind === "welcome" ? null : shellState.screen.target;
+      }
+      setScreen({ kind: "setup" });
+      await dropCurrentPage();
+      pushState();
+      // Asked from the settings window or the menu, the question is in the main window.
+      shell?.window.focus();
+      return;
+    }
     // A fallback notice belongs to the connection it announced.
     if (shellState.toast?.kind === "fallback" || shellState.toast?.kind === "server-back") hideToast();
     setScreen({ kind: "connecting", target, name: profile?.name ?? "", origin: server?.origin ?? null });
@@ -665,6 +725,7 @@ const restartLocal = async (): Promise<{ ok: boolean }> => {
       pushState();
       return { ok: false };
     }
+    refreshInitialized();
     syncAwake();
     pushState();
     showToast({ id: nextToastId(), kind: "local-restarted" });
@@ -744,6 +805,98 @@ const assertShellSender = (event: IpcMainInvokeEvent | IpcMainEvent) => {
   if (!fromShellPage(event)) throw new Error("shell: unexpected sender");
 };
 
+/** The window a native dialog belongs to: the settings window when it asked, the main one else. */
+const senderWindow = (event: IpcMainInvokeEvent): BaseWindow => {
+  const settingsContents = settingsWindow.contents;
+  if (settingsContents !== null && event.sender === settingsContents) {
+    const settingsBrowserWindow = BrowserWindow.fromWebContents(event.sender);
+    if (settingsBrowserWindow !== null) return settingsBrowserWindow;
+  }
+  const current = shell;
+  if (!current) throw new Error("shell: no window for the dialog");
+  return current.window;
+};
+
+/** Stops the local server, moves its data to the Trash and puts the app back on the welcome screen. */
+const resetLocal = async (
+  event: IpcMainInvokeEvent,
+  options: { deleteDownloads: boolean; forgetServers: boolean },
+): Promise<{ ok: boolean; cancelled: boolean; downloadsKept: boolean }> => {
+  const strings = catalogue(shellState.locale);
+  // The folder the dialog names is the folder that goes, and only one the app owns.
+  const shownDir = effectiveDownloadDir();
+  const trashDownloads = options.deleteDownloads && mayTrashDownloadDir(shownDir, localSettings.downloadDir, ownership, places());
+  const detail = [
+    strings["reset.detail"],
+    trashDownloads ? strings["reset.detailDownloads"].replace("{dir}", shownDir) : strings["reset.detailKeepsFilms"],
+    ...(options.forgetServers ? [strings["reset.detailServers"]] : []),
+  ].join("\n\n");
+  const answer = await dialog.showMessageBox(senderWindow(event), {
+    type: "warning",
+    buttons: [strings["reset.confirm"], strings["reset.cancel"]],
+    defaultId: 1,
+    cancelId: 1,
+    message: strings["reset.title"],
+    detail,
+  });
+  if (answer.response !== 0) return { ok: false, cancelled: true, downloadsKept: true };
+  const previous = shellState.connection?.target ?? null;
+  const result = await queue.run(async (): Promise<{ ok: boolean; touched: boolean; downloadsKept: boolean }> => {
+    if (effectiveDownloadDir() !== shownDir) return { ok: false, touched: false, downloadsKept: true };
+    // A fresh ticket, so a connect still probing cannot land on the reset state afterwards.
+    requests.next();
+    stopRepoll();
+    hideToast();
+    await dropCurrentPage();
+    await closeLocalBackend();
+    const userDataDir = app.getPath("userData");
+    // A backend that never started has no data to move; that is a reset already done, not a failure.
+    const instance = path.join(userDataDir, INSTANCE_DIRECTORY);
+    if (existsSync(instance)) {
+      try {
+        await electronShell.trashItem(instance);
+      } catch {
+        return { ok: false, touched: true, downloadsKept: true };
+      }
+    }
+    let downloadsKept = !trashDownloads;
+    if (trashDownloads && existsSync(shownDir)) {
+      try {
+        await electronShell.trashItem(shownDir);
+      } catch {
+        downloadsKept = true;
+      }
+    }
+    // Sign-ins go only once the data has: a reset that stopped above leaves them as they were.
+    await session.fromPartition(LOCAL_PARTITION).clearStorageData().catch(() => {});
+    for (const file of [SETTINGS_FILE, STARTUP_FILE, PORT_FILE, OWNERSHIP_FILE]) await unlink(path.join(userDataDir, file)).catch(() => {});
+    if (options.forgetServers) {
+      await writeProfiles(userDataDir, { profiles: [], selectedProfileId: null }).catch(() => {});
+      for (const profile of profileStore.profiles) {
+        await session.fromPartition(partitionForOrigin(profile.origin)).clearStorageData().catch(() => {});
+      }
+    }
+    localSettings = defaultLocalSettings();
+    ownership = null;
+    preparedDirs.clear();
+    shellState.chosen = null;
+    shellState.connection = null;
+    connected = null;
+    profileStore = await readProfiles(userDataDir);
+    refreshInitialized();
+    shellState.screen = { kind: "welcome" };
+    pushState();
+    settingsWindow.close();
+    return { ok: true, touched: true, downloadsKept };
+  });
+  // A reset that stopped half way brings back what the window showed rather than leave it blank.
+  if (!result.ok && result.touched && previous) void connectTarget(previous, { launch: false });
+  if (result.ok && options.deleteDownloads && result.downloadsKept) {
+    void dialog.showMessageBox({ type: "info", message: strings["reset.downloadsKept"].replace("{dir}", shownDir) }).catch(() => {});
+  }
+  return { ok: result.ok, cancelled: false, downloadsKept: result.downloadsKept };
+};
+
 const profileIdOf = (value: unknown) => typeof value === "string" && value.length > 0 ? value : null;
 
 const persistProfiles = async (next: ProfileStore): Promise<boolean> => {
@@ -806,6 +959,18 @@ const registerHandlers = () => {
     await connectTarget(target, { launch: false });
   });
 
+  ipcMain.handle("shell:cancelSetup", async (event): Promise<void> => {
+    assertShellSender(event);
+    if (shellState.screen.kind !== "setup") return;
+    const previous = setupReturn;
+    setupReturn = null;
+    if (previous) { await connectTarget(previous, { launch: false }); return; }
+    requests.next();
+    await queue.run(async () => {
+      if (shellState.screen.kind === "setup") setScreen({ kind: "welcome" });
+    });
+  });
+
   ipcMain.handle("shell:saveProfile", async (event, input: unknown): Promise<ProfileResult> => {
     assertShellSender(event);
     const record = typeof input === "object" && input !== null ? input as Record<string, unknown> : {};
@@ -828,8 +993,20 @@ const registerHandlers = () => {
     const settings = parseLocalSettings(input);
     if (!settings) return { ok: false, restartNeeded: false };
     return queue.run(async (): Promise<{ ok: boolean; restartNeeded: boolean }> => {
+      // Checked here, in the queue: a first start may still be creating the instance while the page asks.
+      refreshInitialized();
+      const folder = settings.downloadDir;
+      const changing = folder !== localSettings.downloadDir;
+      // The first library's root is fixed once the instance exists, and only a folder that passed
+      // the check may become it.
+      if (changing && (localInitialized || (folder !== null && !preparedDirs.has(folder)))) return { ok: false, restartNeeded: false };
       try {
         await writeLocalSettings(app.getPath("userData"), settings);
+        if (changing) {
+          ownership = folder === null ? null : { dir: folder, owned: preparedDirs.get(folder) === true };
+          if (ownership) await writeOwnership(app.getPath("userData"), ownership);
+          else await unlink(path.join(app.getPath("userData"), OWNERSHIP_FILE)).catch(() => {});
+        }
       } catch {
         return { ok: false, restartNeeded: false };
       }
@@ -882,6 +1059,32 @@ const registerHandlers = () => {
   ipcMain.on("shell:copyText", (event, input: unknown) => {
     assertShellSender(event);
     if (typeof input === "string" && input.length <= MAX_CLIPBOARD_TEXT) clipboard.writeText(input);
+  });
+
+  ipcMain.handle("shell:pickFolder", async (event, input: unknown): Promise<string | null> => {
+    assertShellSender(event);
+    const result = await dialog.showOpenDialog(senderWindow(event), {
+      properties: ["openDirectory", "createDirectory"],
+      defaultPath: typeof input === "string" && path.isAbsolute(input) ? input : undefined,
+    });
+    return result.canceled ? null : result.filePaths[0] ?? null;
+  });
+
+  ipcMain.handle("shell:prepareDownloadDir", async (event, input: unknown) => {
+    assertShellSender(event);
+    const result = await prepareDownloadDir(input, places());
+    if (!result.ok) return result;
+    preparedDirs.set(result.dir, result.owned);
+    return { ok: true, dir: result.dir };
+  });
+
+  ipcMain.handle("shell:resetLocal", async (event, input: unknown): Promise<{ ok: boolean; cancelled: boolean; downloadsKept: boolean }> => {
+    assertShellSender(event);
+    const record = typeof input === "object" && input !== null ? input as Record<string, unknown> : {};
+    if (typeof record.deleteDownloads !== "boolean" || typeof record.forgetServers !== "boolean") {
+      throw new Error("shell: invalid reset options");
+    }
+    return resetLocal(event, { deleteDownloads: record.deleteDownloads, forgetServers: record.forgetServers });
   });
 
   // Only the top frame of the page the local backend serves, while it is the page on screen.
@@ -984,6 +1187,8 @@ if (process.argv.includes(SMOKE_LOCAL_BACKEND)) {
   void app.whenReady().then(async () => {
     profileStore = await readProfiles(app.getPath("userData"));
     localSettings = await readLocalSettings(app.getPath("userData"));
+    ownership = await readOwnership(app.getPath("userData"));
+    refreshInitialized();
     const prefs = await readShellPrefs(app.getPath("userData"));
     const savedWindow = await readWindowState(app.getPath("userData"), "main");
     shellState.localeChoice = prefs.locale;
