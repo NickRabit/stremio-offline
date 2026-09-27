@@ -1,50 +1,26 @@
 import assert from "node:assert/strict";
-import { spawn, type ChildProcess } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
-import { fileURLToPath } from "node:url";
 import { hashPassword } from "./auth.js";
+import { spawnServer, type SpawnedServer } from "./test-server.js";
 
 /** Visibility has no unit seam: the predicate is pure, but the backstop lives in
  *  `libraryTarget` inside `index.ts`, which starts the app the way the container runs it.
  *  So the server is booted on a throwaway data directory seeded with two accounts -- no
  *  ordinary user can be created over HTTP yet -- and driven the way the interface drives it. */
-const serverDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 const ADMIN = "usr_00000001";
 const USER = "usr_00000002";
 const GRANTED = "lib_00000001";
 const HIDDEN = "lib_00000002";
 
-const freePort = () => new Promise<number>((resolve, reject) => {
-  const probe = createServer();
-  probe.on("error", reject);
-  probe.listen(0, "127.0.0.1", () => {
-    const address = probe.address();
-    const port = typeof address === "object" && address ? address.port : 0;
-    probe.close(() => (port ? resolve(port) : reject(new Error("No free port"))));
-  });
-});
-
-const waitFor = async <T>(what: string, read: () => Promise<T | undefined>, timeout = 30_000) => {
-  const deadline = Date.now() + timeout;
-  while (Date.now() < deadline) {
-    const value = await read().catch(() => undefined);
-    if (value !== undefined) return value;
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
-  throw new Error(`Timed out waiting for ${what}`);
-};
-
 let workDir: string;
 let dataDir: string;
 let grantedRoot: string;
 let hiddenRoot: string;
-let child: ChildProcess;
-let log = "";
+let server: SpawnedServer;
 let base = "";
 let adminCookie = "";
 let userCookie = "";
@@ -61,7 +37,7 @@ const api = (pathname: string, init: { method?: string; body?: unknown; cookie?:
 
 const signIn = async (username: string, password: string) => {
   const response = await api("/api/auth/login", { method: "POST", body: { username, password } });
-  assert.equal(response.status, 200, `could not sign in as ${username}\n${log}`);
+  assert.equal(response.status, 200, `could not sign in as ${username}\n${server.log()}`);
   return response.headers.getSetCookie()[0]!.split(";")[0]!;
 };
 
@@ -100,38 +76,21 @@ before(async () => {
     userData: { [ADMIN]: personal(), [USER]: personal() },
   }, null, 2));
 
-  const port = await freePort();
-  base = `http://127.0.0.1:${port}`;
-  child = spawn(process.execPath, ["--import", "tsx", path.join(serverDir, "src", "index.ts")], {
-    cwd: serverDir,
-    stdio: ["ignore", "ignore", "pipe"],
-    env: {
-      ...process.env,
-      PORT: String(port),
-      DATA_DIR: dataDir,
-      DOWNLOAD_DIR: path.join(workDir, "downloads"),
-      LIBRARY_ROOTS: roots,
-      LIBRARY_AUTO_SCAN: "0",
-      ADDON_AUTO_REFRESH: "0",
-      LOG_LEVEL: "WARN",
-    },
+  server = await spawnServer({
+    DATA_DIR: dataDir,
+    DOWNLOAD_DIR: path.join(workDir, "downloads"),
+    LIBRARY_ROOTS: roots,
+    LIBRARY_AUTO_SCAN: "0",
+    ADDON_AUTO_REFRESH: "0",
   });
-  child.stderr?.on("data", (chunk) => { log += String(chunk); });
-  await waitFor("the server to answer", async () => {
-    if (child.exitCode !== null) throw new Error(`the server exited with ${child.exitCode}\n${log}`);
-    return (await fetch(`${base}/api/status`)).ok ? true : undefined;
-  });
+  base = server.base;
 
   adminCookie = await signIn("ada", "admin-password");
   userCookie = await signIn("bob", "user-password");
 });
 
 after(async () => {
-  if (child && child.exitCode === null) {
-    const exited = new Promise((resolve) => child.once("exit", resolve));
-    child.kill("SIGTERM");
-    await exited;
-  }
+  await server?.stop();
   if (workDir) await rm(workDir, { recursive: true, force: true });
 });
 
@@ -164,7 +123,7 @@ test("the contents summary names only the libraries the caller may see", async (
 
 test("the backstop refuses a file in a library the session has lost", async () => {
   const source = await api("/api/library/source", { method: "POST", cookie: userCookie, body: { path: `${GRANTED}/Heat.mkv` } });
-  assert.equal(source.status, 200, `the granted library is readable\n${log}`);
+  assert.equal(source.status, 200, `the granted library is readable\n${server.log()}`);
   const { sourceId } = await source.json() as { sourceId: string };
 
   const ticket = await api("/api/device-download", { method: "POST", cookie: userCookie, body: { sourceId } });
