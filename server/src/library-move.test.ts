@@ -1,27 +1,14 @@
 import assert from "node:assert/strict";
-import { spawn, type ChildProcess } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
-import { fileURLToPath } from "node:url";
+import { spawnServer, type SpawnedServer } from "./test-server.js";
 
 /** The move rules have no unit seam: the route, `assertMoveType`, `transferLibraryItem`
  *  and `parseLibraryOp` all live in `index.ts`, which starts the app the way the
  *  container runs it. So the server is booted here, on a throwaway data directory, and
  *  driven over HTTP -- which is also how the interface reaches these rules. */
-const serverDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-
-const freePort = () => new Promise<number>((resolve, reject) => {
-  const probe = createServer();
-  probe.on("error", reject);
-  probe.listen(0, "127.0.0.1", () => {
-    const address = probe.address();
-    const port = typeof address === "object" && address ? address.port : 0;
-    probe.close(() => (port ? resolve(port) : reject(new Error("No free port"))));
-  });
-});
 
 const waitFor = async <T>(what: string, read: () => Promise<T | undefined>, timeout = 30_000) => {
   const deadline = Date.now() + timeout;
@@ -55,8 +42,7 @@ let nestedRoot: string;
 let boxRoot: string;
 let aliasRoot: string;
 let mixedRoot: string;
-let child: ChildProcess;
-let log = "";
+let server: SpawnedServer;
 let base = "";
 let cookie = "";
 let films = "";
@@ -140,31 +126,18 @@ before(async () => {
   await put(mixedRoot, "Document.mkv");
   await mkdir(filmsRoot, { recursive: true });
 
-  const port = await freePort();
-  base = `http://127.0.0.1:${port}`;
-  child = spawn(process.execPath, ["--import", "tsx", path.join(serverDir, "src", "index.ts")], {
-    cwd: serverDir,
-    stdio: ["ignore", "ignore", "pipe"],
-    env: {
-      ...process.env,
-      PORT: String(port),
-      DATA_DIR: dataDir,
-      DOWNLOAD_DIR: path.join(workDir, "downloads"),
-      LIBRARY_ROOTS: granted,
-      LIBRARY_AUTO_SCAN: "0",
-      ADDON_AUTO_REFRESH: "0",
-      LOG_LEVEL: "WARN",
-    },
+  server = await spawnServer({
+    DATA_DIR: dataDir,
+    DOWNLOAD_DIR: path.join(workDir, "downloads"),
+    LIBRARY_ROOTS: granted,
+    LIBRARY_AUTO_SCAN: "0",
+    ADDON_AUTO_REFRESH: "0",
   });
-  child.stderr?.on("data", (chunk) => { log += String(chunk); });
-  await waitFor("the server to answer", async () => {
-    if (child.exitCode !== null) throw new Error(`the server exited with ${child.exitCode}\n${log}`);
-    return (await fetch(`${base}/api/status`)).ok ? true : undefined;
-  });
+  base = server.base;
 
   // A fresh data directory has no account, and the interface is the only way in.
   const setup = await api("/api/auth/setup", { method: "POST", body: { username: "mover", password: "move-password" } });
-  assert.equal(setup.status, 201, `could not create the account\n${log}`);
+  assert.equal(setup.status, 201, `could not create the account\n${server.log()}`);
   cookie = setup.headers.getSetCookie()[0]!.split(";")[0]!;
   films = await addLibrary("Filmy", "movie", filmsRoot);
   shows = await addLibrary("Serie", "series", showsRoot);
@@ -176,11 +149,7 @@ before(async () => {
 });
 
 after(async () => {
-  if (child && child.exitCode === null) {
-    const exited = new Promise((resolve) => child.once("exit", resolve));
-    child.kill("SIGTERM");
-    await exited;
-  }
+  await server?.stop();
   if (workDir) await rm(workDir, { recursive: true, force: true });
 });
 
