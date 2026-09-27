@@ -122,6 +122,22 @@ export function protectedDownloadDir(dir: string, places: Places): boolean {
     folderAndParents(folder, pathImpl, platform).some((entry) => samePath(entry, resolved, platform)));
 }
 
+/** A path segment naming OneDrive: the plain folder or a work account's `OneDrive - ...`. */
+const isOneDriveSegment = (segment: string): boolean => {
+  const name = segment.toLowerCase();
+  return name === "onedrive" || name.startsWith("onedrive - ");
+};
+
+/** Where the setup step proposes to download to. A Videos folder that lives in OneDrive would sync
+ *  every film to the cloud, so Windows suggests a folder beside the profile instead. */
+export function suggestedDownloadDir(home: string, videos: string, platform: NodeJS.Platform = process.platform): string {
+  const pathImpl = pathFor(platform);
+  const inOneDrive = pathImpl.resolve(videos).split(pathImpl.sep).some(isOneDriveSegment);
+  return platform === "win32" && inOneDrive
+    ? pathImpl.join(home, "Stremio Offline")
+    : pathImpl.join(videos, "Stremio Offline");
+}
+
 /** Creates the folder when it is missing and writes a probe file, so the setup step can tell
  *  the user before the backend does that downloads cannot land there. */
 export async function prepareDownloadDir(dir: unknown, places: Places, fsImpl: DownloadDirFs = nodeFs): Promise<DownloadDirResult> {

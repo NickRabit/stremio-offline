@@ -3,7 +3,7 @@ import { chmod, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises"
 import os from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
-import { mayTrashDownloadDir, prepareDownloadDir, protectedDownloadDir, readOwnership, reservedDownloadDir, writeOwnership, type DownloadDirFs, type Places } from "./download-dir.js";
+import { mayTrashDownloadDir, prepareDownloadDir, protectedDownloadDir, readOwnership, reservedDownloadDir, suggestedDownloadDir, writeOwnership, type DownloadDirFs, type Places } from "./download-dir.js";
 
 const tempDir = async (t: TestContext) => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "stremio-download-dir-"));
@@ -90,6 +90,16 @@ test("anything that is not an absolute path is refused", async () => {
   }
   assert.deepEqual(await prepareDownloadDir(`/${"a".repeat(1024)}`, PLACES), { ok: false, reason: "not-absolute" });
   assert.deepEqual(await prepareDownloadDir("/tmp/a\0b", PLACES), { ok: false, reason: "not-absolute" });
+});
+
+test("the suggested download folder steps out of OneDrive on Windows", () => {
+  const home = "C:\\Users\\me";
+  assert.equal(suggestedDownloadDir(home, "C:\\Users\\me\\Videos", "win32"), "C:\\Users\\me\\Videos\\Stremio Offline");
+  assert.equal(suggestedDownloadDir(home, "C:\\Users\\me\\OneDrive\\Videos", "win32"), "C:\\Users\\me\\Stremio Offline");
+  assert.equal(suggestedDownloadDir(home, "C:\\Users\\me\\OneDrive - Firma\\Videa", "win32"), "C:\\Users\\me\\Stremio Offline");
+  assert.equal(suggestedDownloadDir(home, "D:\\OneDrive Videa", "win32"), "D:\\OneDrive Videa\\Stremio Offline",
+    "a folder that merely starts with OneDrive is no OneDrive");
+  assert.equal(suggestedDownloadDir("/Users/me", "/Users/me/Movies", "darwin"), "/Users/me/Movies/Stremio Offline");
 });
 
 test("a file where the folder should be is refused", async (t) => {

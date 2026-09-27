@@ -1,4 +1,4 @@
-import { app, BaseWindow, BrowserWindow, clipboard, dialog, ipcMain, Menu, Notification, powerSaveBlocker, screen, session, shell as electronShell, utilityProcess, WebContentsView, type IpcMainEvent, type IpcMainInvokeEvent, type MessageBoxOptions, type MessageBoxReturnValue, type OpenDialogOptions, type OpenDialogReturnValue } from "electron";
+import { app, BaseWindow, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, Notification, powerSaveBlocker, screen, session, shell as electronShell, Tray, utilityProcess, WebContentsView, type IpcMainEvent, type IpcMainInvokeEvent, type MessageBoxOptions, type MessageBoxReturnValue, type OpenDialogOptions, type OpenDialogReturnValue } from "electron";
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { unlink } from "node:fs/promises";
@@ -16,23 +16,25 @@ import {
   type ProfileStore,
   type ServerProfile,
 } from "./connection-file.js";
-import { mayTrashDownloadDir, OWNERSHIP_FILE, prepareDownloadDir, readOwnership, writeOwnership, type Ownership, type Places } from "./download-dir.js";
+import { mayTrashDownloadDir, OWNERSHIP_FILE, prepareDownloadDir, readOwnership, suggestedDownloadDir, writeOwnership, type Ownership, type Places } from "./download-dir.js";
 import { isDeviceTicketDownload } from "./downloads.js";
 import { catalogue } from "./i18n.js";
 import { layout, type PageMode } from "./layout.js";
+import { launchedHidden, loginItemQuery, loginItemStatus, loginItemUpdate, type LoginItemReadings } from "./login-item.js";
 import { bundledMediaTools, DOWNLOADS_DIRECTORY, INSTANCE_DIRECTORY, LOCAL_PARTITION, LocalBackend, LocalPortBusyError, PORT_FILE, type LocalBackendConnection } from "./local-backend.js";
 import { defaultLocalSettings, parseLocalSettings, readLocalSettings, SETTINGS_FILE, writeLocalSettings, type LocalSettings } from "./local-settings.js";
 import { buildMenuTemplate } from "./menu.js";
 import { externalBrowserUrl, httpAllowedHost, parseServerOrigin, partitionForOrigin, type ServerOrigin } from "./origin.js";
 import { localPageSent } from "./bridge-sender.js";
 import { SettingsWindow } from "./settings-window.js";
-import type { AppPrefs, FailureReason, LoginItemStatus, MainScreen, ProfileResult, ProbeResult, ShellState, Target, Toast } from "./shell-api.js";
+import type { AppPrefs, FailureReason, MainScreen, ProfileResult, ProbeResult, ShellState, Target, Toast } from "./shell-api.js";
 import { effectiveLocale, readShellPrefs, readShellPrefsSync, writeShellPrefs, type ShellLocale } from "./shell-prefs.js";
 import { downloadFraction, nextToastId, safeFileName } from "./shell-text.js";
 import { SerialQueue } from "./serial-queue.js";
 import { SleepGuard } from "./sleep-guard.js";
 import { MAX_TARGET_ID, LatestRequest, fallbackApplies, launchPlan, readStartupChoice, writeStartupChoice, STARTUP_FILE } from "./startup.js";
 import { fetchStatus, type ProbeFailure } from "./status.js";
+import { buildTrayTemplate } from "./tray.js";
 import { checkForUpdate, readRelease, UPDATE_FEED_URL, type Release } from "./update-check.js";
 import { Debounced, DEFAULT_SIZE, MIN_SIZE, readWindowState, restoreBounds, writeWindowState, type WindowState } from "./window-state.js";
 
@@ -50,6 +52,8 @@ const APP_NAME = "Stremio Offline";
 const WINDOW_BACKGROUND = "#0b0e13";
 const PROJECT_URL = "https://github.com/NickRabit/stremio-offline";
 const WINDOW_SAVE_DELAY_MS = 500;
+/** The operating system whose rules the shell follows, read once. */
+const PLATFORM = process.platform;
 
 const RENDERER_PAGE = fileURLToPath(new URL("../renderer/desktop.html", import.meta.url));
 const SHELL_PRELOAD = fileURLToPath(new URL("./shell-preload.js", import.meta.url));
@@ -93,6 +97,10 @@ interface Shell {
 }
 
 let shell: Shell | null = null;
+/** The Windows notification-area icon; null everywhere else and once the app is quitting. */
+let tray: Tray | null = null;
+/** Whether the close-to-tray balloon has already been shown on this install. */
+let trayNoticeShown = false;
 let connected: ServerOrigin | null = null;
 let remoteFullscreen = false;
 let loadFailure: ProbeFailure | null = null;
@@ -128,7 +136,7 @@ let updateTimer: NodeJS.Timeout | null = null;
 let updateNotified: string | null = null;
 
 const shellState: ShellState = {
-  platform: process.platform === "win32" ? "win32" : process.platform === "darwin" ? "darwin" : "linux",
+  platform: PLATFORM === "win32" ? "win32" : PLATFORM === "darwin" ? "darwin" : "linux",
   locale: "en",
   localeChoice: null,
   appVersion: "",
@@ -160,28 +168,24 @@ const settingsWindow = new SettingsWindow({
   rendererPage: RENDERER_PAGE,
   preload: SHELL_PRELOAD,
   userDataDir: () => app.getPath("userData"),
-  title: () => catalogue(shellState.locale)["settings.title"],
+  title: () => catalogue(shellState.locale, PLATFORM)["settings.title"],
+  platform: PLATFORM,
 });
-
-/** The four answers macOS gives; anything else, or a call that throws, is `unsupported`. */
-const LOGIN_ITEM_STATUSES = new Set<string>(["enabled", "not-registered", "requires-approval", "not-found"]);
 
 /** The login item is the OS's to remember: it is read back rather than stored, and a development
  *  run cannot register the Electron binary, so it has no answer at all. */
 const refreshLoginItem = (): void => {
-  let openAtLogin = false;
-  let status: string | null = null;
+  let settings: LoginItemReadings = {};
   try {
-    const settings = app.getLoginItemSettings();
-    openAtLogin = settings.openAtLogin === true;
-    status = typeof settings.status === "string" ? settings.status : null;
+    settings = app.getLoginItemSettings(loginItemQuery(PLATFORM));
   } catch {
-    status = null;
+    settings = {};
   }
-  const loginItem: LoginItemStatus = !app.isPackaged || status === null || !LOGIN_ITEM_STATUSES.has(status)
-    ? "unsupported"
-    : status as LoginItemStatus;
-  shellState.app = { ...shellState.app, prefs: { ...shellState.app.prefs, openAtLogin }, loginItem };
+  shellState.app = {
+    ...shellState.app,
+    prefs: { ...shellState.app.prefs, openAtLogin: settings.openAtLogin === true },
+    loginItem: loginItemStatus(settings, PLATFORM, app.isPackaged),
+  };
 };
 
 const openSettings = (): void => {
@@ -206,12 +210,14 @@ const applyMenu = (): void => {
   ].join("|");
   if (key === menuKey) return;
   menuKey = key;
+  const strings = catalogue(shellState.locale, PLATFORM);
   Menu.setApplicationMenu(Menu.buildFromTemplate(buildMenuTemplate({
-    strings: catalogue(shellState.locale),
+    strings,
     profiles: shellState.profiles,
     current: target,
     connected: live,
     isPackaged: app.isPackaged,
+    platform: PLATFORM,
     actions: {
       openSettings,
       reload: () => {
@@ -233,6 +239,19 @@ const applyMenu = (): void => {
       connect: (target) => { menuKey = ""; applyMenu(); void connectTarget(target, { launch: false }); },
       reconnect: () => { void connectTarget(shellState.chosen ?? { kind: "local" }, { launch: false }); },
       openProject: () => { void electronShell.openExternal(PROJECT_URL).catch(() => {}); },
+    },
+  })));
+  tray?.setContextMenu(Menu.buildFromTemplate(buildTrayTemplate({
+    strings,
+    profiles: shellState.profiles,
+    current: target,
+    connected: live,
+    platform: PLATFORM,
+    actions: {
+      open: () => { void showMainWindow(); },
+      openSettings,
+      connect: (target) => { menuKey = ""; applyMenu(); void connectTarget(target, { launch: false }); },
+      quit: () => app.quit(),
     },
   })));
 };
@@ -260,7 +279,7 @@ const applyLayout = () => {
 const titleFor = (screen: MainScreen): string => {
   if (screen.kind === "welcome") return APP_NAME;
   const name = screen.kind === "connected" ? shellState.connection?.name ?? "" : screen.kind === "setup" ? "" : screen.name;
-  const label = name.trim().length > 0 ? name : catalogue(shellState.locale)["window.thisMac"];
+  const label = name.trim().length > 0 ? name : catalogue(shellState.locale, PLATFORM)["window.thisMac"];
   return `${APP_NAME} — ${label}`;
 };
 
@@ -271,7 +290,19 @@ let ownership: Ownership | null = null;
 /** Folders that passed the check in this session, and whether each was the app's to own; only
  *  these can become the download folder. */
 const preparedDirs = new Map<string, boolean>();
-const places = (): Places => ({ home: app.getPath("home"), userData: app.getPath("userData") });
+/** The folders a download folder is measured against; a known folder the system does not have is
+ *  skipped rather than failing the whole check. */
+const places = (): Places => {
+  const knownFolders: string[] = [];
+  for (const name of ["videos", "desktop", "documents", "downloads", "music", "pictures"] as const) {
+    try {
+      knownFolders.push(app.getPath(name));
+    } catch {
+      // Not every platform knows every folder.
+    }
+  }
+  return { home: app.getPath("home"), userData: app.getPath("userData"), platform: PLATFORM, knownFolders };
+};
 
 const effectiveDownloadDir = (): string =>
   localSettings.downloadDir ?? path.join(app.getPath("userData"), DOWNLOADS_DIRECTORY);
@@ -300,9 +331,11 @@ const refreshLocal = () => {
     ffmpeg: ffmpegLine,
     busy: localStreaming || localDownloading || deviceDownloads.size > 0,
     downloadDir: effectiveDownloadDir(),
-    suggestedDownloadDir: path.join(app.getPath("videos"), "Stremio Offline"),
+    suggestedDownloadDir: suggestedDownloadDir(app.getPath("home"), app.getPath("videos"), PLATFORM),
     initialized: localInitialized,
-    downloadDirOwned: mayTrashDownloadDir(effectiveDownloadDir(), localSettings.downloadDir, ownership, places()),
+    // Windows may delete a folder too large for the Recycle Bin for good, so it is never offered.
+    downloadDirOwned: PLATFORM !== "win32"
+      && mayTrashDownloadDir(effectiveDownloadDir(), localSettings.downloadDir, ownership, places()),
     restartNeeded: localRestartNeeded(),
   };
 };
@@ -375,7 +408,7 @@ const notifyDownload = (kind: "download-done" | "download-failed", file: string)
   // With the window closed a notification is the only word the user gets.
   if (shell?.window.isFocused()) return;
   if (!Notification.isSupported()) return;
-  const strings = catalogue(shellState.locale);
+  const strings = catalogue(shellState.locale, PLATFORM);
   const body = (kind === "download-done" ? strings["notify.downloadDone"] : strings["notify.downloadFailed"]).replace("{file}", file);
   new Notification({ title: APP_NAME, body }).show();
 };
@@ -507,7 +540,7 @@ const preparePartition = (partition: string, serverOrigin: () => string | null) 
     const current = shell;
     if (!current?.remote || current.remotePartition !== partition || current.remote.webContents !== contents) return;
     const file = safeFileName(item.getFilename());
-    item.setSaveDialogOptions({ title: catalogue(shellState.locale)["download.saveTitle"], defaultPath: file });
+    item.setSaveDialogOptions({ title: catalogue(shellState.locale, PLATFORM)["download.saveTitle"], defaultPath: file });
     deviceDownloads.set(item, 2);
     updateDownloadProgress();
     pushState();
@@ -797,6 +830,22 @@ const restartLocal = async (): Promise<{ ok: boolean }> => {
   });
 };
 
+/** A login start opens no window: the backend comes up on its own so other devices can reach it
+ *  and downloads resume, and the tray is the only way in. A failure leaves it in the tray. */
+const startLocalHidden = async (): Promise<void> => {
+  const backend = localBackend;
+  if (!backend) return;
+  try {
+    localConnection = await backend.start();
+  } catch (error) {
+    console.warn("local backend: " + (error instanceof Error ? error.message : String(error)));
+    return;
+  }
+  refreshInitialized();
+  syncAwake();
+  pushState();
+};
+
 const shellWebPreferences = () => ({
   nodeIntegration: false,
   contextIsolation: true,
@@ -809,6 +858,28 @@ const wireShellView = (view: WebContentsView, name: "main" | "toast") => {
   view.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   view.webContents.on("will-navigate", (event) => event.preventDefault());
   void view.webContents.loadFile(RENDERER_PAGE, { query: { view: name } });
+};
+
+/** The notification-area icon: the app's own icon, shrunk for the tray. Only Windows has one. */
+const createTray = (): void => {
+  const icon = nativeImage.createFromPath(path.join(app.getAppPath(), "build", "icon.png")).resize({ width: 16, height: 16 });
+  const created = new Tray(icon);
+  created.setToolTip(APP_NAME);
+  created.on("click", () => { void showMainWindow(); });
+  created.on("double-click", () => { void showMainWindow(); });
+  tray = created;
+};
+
+/** One balloon per install: the first close leaves the app running in the notification area. */
+const showTrayNotice = (): void => {
+  if (trayNoticeShown || !tray) return;
+  trayNoticeShown = true;
+  const strings = catalogue(shellState.locale, PLATFORM);
+  tray.displayBalloon({ iconType: "info", title: strings["tray.stillRunningTitle"], content: strings["tray.stillRunningBody"] });
+  void queue.run(async () => {
+    await writeShellPrefs(app.getPath("userData"),
+      { locale: shellState.localeChoice, checkUpdates: shellState.app.prefs.checkUpdates, trayNoticeShown: true });
+  }).catch(() => {});
 };
 
 const createShell = (saved: WindowState | null) => {
@@ -824,6 +895,9 @@ const createShell = (saved: WindowState | null) => {
     minHeight: MIN_SIZE.height,
     title: APP_NAME,
     backgroundColor: WINDOW_BACKGROUND,
+    ...(PLATFORM === "win32" ? { autoHideMenuBar: true } : {}),
+    // A packaged app takes its icon from the executable; a development run has to point at it.
+    ...(PLATFORM === "win32" && !app.isPackaged ? { icon: path.join(app.getAppPath(), "build", "icon.png") } : {}),
   });
   const page = new WebContentsView({ webPreferences: shellWebPreferences() });
   const toast = new WebContentsView({ webPreferences: shellWebPreferences() });
@@ -861,6 +935,7 @@ const createShell = (saved: WindowState | null) => {
       if (view && !view.webContents.isDestroyed()) view.webContents.close();
     }
     settingsWindow.close();
+    if (PLATFORM === "win32" && !quitting) showTrayNotice();
   });
   shell = { window, page, toast, remote: null, remotePartition: null };
   if (restored.maximized) window.maximize();
@@ -935,10 +1010,13 @@ const resetLocal = async (
   event: IpcMainInvokeEvent,
   options: { deleteDownloads: boolean; forgetServers: boolean },
 ): Promise<{ ok: boolean; cancelled: boolean; downloadsKept: boolean }> => {
-  const strings = catalogue(shellState.locale);
+  const strings = catalogue(shellState.locale, PLATFORM);
   // The folder the dialog names is the folder that goes, and only one the app owns.
   const shownDir = effectiveDownloadDir();
-  const trashDownloads = options.deleteDownloads && mayTrashDownloadDir(shownDir, localSettings.downloadDir, ownership, places());
+  // Windows never moves the download folder: the Recycle Bin has a quota, and a folder over it is
+  // deleted for good. The instance data, which is small, still goes to the bin.
+  const trashDownloads = PLATFORM !== "win32" && options.deleteDownloads
+    && mayTrashDownloadDir(shownDir, localSettings.downloadDir, ownership, places());
   const detail = [
     strings["reset.detail"],
     trashDownloads ? strings["reset.detailDownloads"].replace("{dir}", shownDir) : strings["reset.detailKeepsFilms"],
@@ -1118,7 +1196,8 @@ const applyAppPrefs = async (prefs: AppPrefs): Promise<{ ok: boolean }> => {
       ok = false;
     } else {
       try {
-        app.setLoginItemSettings({ openAtLogin: prefs.openAtLogin });
+        // Windows matches the registry entry by path and arguments, so disabling clears both.
+        for (const update of loginItemUpdate(prefs.openAtLogin, PLATFORM)) app.setLoginItemSettings(update);
       } catch {
         ok = false;
       }
@@ -1127,7 +1206,8 @@ const applyAppPrefs = async (prefs: AppPrefs): Promise<{ ok: boolean }> => {
   refreshLoginItem();
   shellState.app = { ...shellState.app, prefs: { ...shellState.app.prefs, checkUpdates: prefs.checkUpdates } };
   await queue.run(async () => {
-    await writeShellPrefs(app.getPath("userData"), { locale: shellState.localeChoice, checkUpdates: prefs.checkUpdates });
+    await writeShellPrefs(app.getPath("userData"),
+      { locale: shellState.localeChoice, checkUpdates: prefs.checkUpdates, trayNoticeShown });
   });
   if (prefs.checkUpdates !== previous.checkUpdates) syncUpdateChecks(prefs.checkUpdates);
   pushState();
@@ -1216,7 +1296,8 @@ const registerHandlers = () => {
     if (input !== null && input !== "cs" && input !== "en") throw new Error("shell: invalid locale");
     const choice = input as ShellLocale | null;
     await queue.run(async () => {
-      await writeShellPrefs(app.getPath("userData"), { locale: choice, checkUpdates: shellState.app.prefs.checkUpdates });
+      await writeShellPrefs(app.getPath("userData"),
+        { locale: choice, checkUpdates: shellState.app.prefs.checkUpdates, trayNoticeShown });
     });
     shellState.localeChoice = choice;
     shellState.locale = effectiveLocale(choice, app.getLocale());
@@ -1299,7 +1380,7 @@ const registerHandlers = () => {
       localOrigin: localOrigin(),
     })) throw new Error("desktop: unexpected sender");
     const result = await dialog.showOpenDialog(current.window, {
-      title: catalogue(shellState.locale)["folder.pickTitle"],
+      title: catalogue(shellState.locale, PLATFORM)["folder.pickTitle"],
       properties: ["openDirectory", "createDirectory"],
     });
     return result.canceled ? null : result.filePaths[0] ?? null;
@@ -1325,7 +1406,7 @@ const createLocalBackend = (): LocalBackend => new LocalBackend({
   userDataDir: app.getPath("userData"),
   fork: (entry, options) => utilityProcess.fork(entry, [], options),
   probeStatus: fetchStatus,
-  tools: bundledMediaTools(app.isPackaged ? process.resourcesPath : null),
+  tools: bundledMediaTools(app.isPackaged ? process.resourcesPath : null, undefined, PLATFORM),
   onActivity: (activity) => {
     localStreaming = activity.streaming;
     localDownloading = activity.downloading;
@@ -1363,6 +1444,10 @@ const runLocalBackendSmoke = async () => {
 const earlyPrefs = readShellPrefsSync(app.getPath("userData"));
 if (earlyPrefs.locale !== null) app.commandLine.appendSwitch("lang", earlyPrefs.locale);
 
+// Windows toasts and the taskbar need the AUMID, which the NSIS installer's Start menu shortcut
+// registers. The portable ZIP gets no notifications at all; nothing here waits for one.
+if (PLATFORM === "win32") app.setAppUserModelId("com.stremiooffline.desktop");
+
 if (process.argv.includes(SMOKE_LOCAL_BACKEND)) {
   // The smoke gets its own instance directory, so it neither needs the single-instance lock
   // nor touches the data of an install that happens to be running.
@@ -1379,7 +1464,7 @@ if (process.argv.includes(SMOKE_LOCAL_BACKEND)) {
 
   /** The quit the user has to confirm while this Mac still has a download or a stream in flight. */
   const confirmQuit = async (): Promise<void> => {
-    const strings = catalogue(shellState.locale);
+    const strings = catalogue(shellState.locale, PLATFORM);
     const answer = await showMessageBox(shell?.window ?? null, {
       type: "warning",
       buttons: [strings["quit.confirm"], strings["quit.cancel"]],
@@ -1410,6 +1495,8 @@ if (process.argv.includes(SMOKE_LOCAL_BACKEND)) {
     syncAwake();
     backendShutdown = retireRemote().then(closeLocalBackend).finally(() => {
       backendShutdownComplete = true;
+      tray?.destroy();
+      tray = null;
       app.quit();
     });
   });
@@ -1425,6 +1512,7 @@ if (process.argv.includes(SMOKE_LOCAL_BACKEND)) {
     shellState.app = { ...shellState.app, prefs: { ...shellState.app.prefs, checkUpdates: prefs.checkUpdates } };
     shellState.locale = effectiveLocale(prefs.locale, app.getLocale());
     shellState.appVersion = app.getVersion();
+    trayNoticeShown = prefs.trayNoticeShown;
     refreshLoginItem();
     ffmpegLine = readFfmpegLine(app.isPackaged ? process.resourcesPath : null);
     localBackend = createLocalBackend();
@@ -1441,10 +1529,21 @@ if (process.argv.includes(SMOKE_LOCAL_BACKEND)) {
     if (!existsSync(path.join(app.getPath("userData"), STARTUP_FILE))) {
       await writeStartupChoice(app.getPath("userData"), plan.screen === "connect" ? plan.target : null).catch(() => {});
     }
+    // A login start on Windows opens no window; the tray is the only way in.
+    const startHidden = PLATFORM === "win32" && launchedHidden(process.argv);
     // The window opens already saying where it connects, never flashing the welcome screen first.
     if (plan.screen === "connect") {
       const profile = plan.target.kind === "profile" ? findProfile(profileStore, plan.target.id) : null;
       shellState.screen = { kind: "connecting", target: plan.target, name: profile?.name ?? "", origin: profile?.origin ?? null };
+      if (startHidden) shellState.chosen = plan.target;
+    }
+    if (PLATFORM === "win32") createTray();
+    if (startHidden) {
+      pushState();
+      // Starting the backend with no window lets other devices reach it and downloads resume.
+      if (plan.screen === "connect" && plan.target.kind === "local" && !needsSetup()) await startLocalHidden();
+      syncUpdateChecks(prefs.checkUpdates);
+      return;
     }
     createShell(savedWindow);
     syncUpdateChecks(prefs.checkUpdates);
