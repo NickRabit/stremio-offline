@@ -941,7 +941,9 @@ const createShell = (saved: WindowState | null) => {
   window.on("enter-full-screen", applyLayout);
   window.on("leave-full-screen", settleLayout);
   // Maximizing and restoring move the menu bar on Windows as well.
-  for (const event of ["maximize", "unmaximize", "restore"] as const) window.on(event, settleLayout);
+  window.on("maximize", settleLayout);
+  window.on("unmaximize", settleLayout);
+  window.on("restore", settleLayout);
   const save = new Debounced(() => {
     void writeWindowState(app.getPath("userData"), "main",
       { bounds: window.getNormalBounds(), maximized: window.isMaximized() }).catch(() => {});
