@@ -1479,6 +1479,13 @@ const runLocalBackendSmoke = async () => {
   }
 };
 
+// A development run keeps its own data: it shares the package name, and so the folder, with an
+// installed app on the same machine, and would otherwise write into that app's server and log.
+// An explicit --user-data-dir (tests, the smoke) already chose.
+if (!app.isPackaged && !process.argv.some((arg) => arg.startsWith("--user-data-dir"))) {
+  app.setPath("userData", `${app.getPath("userData")}-dev`);
+}
+
 // Chromium settles the server pages' language before the shell can, so an explicit choice has to
 // reach the command line this early; `userData` is readable before the app is ready.
 const earlyPrefs = readShellPrefsSync(app.getPath("userData"));
@@ -1542,6 +1549,9 @@ if (process.argv.includes(SMOKE_LOCAL_BACKEND)) {
   });
 
   void app.whenReady().then(async () => {
+    // 0.4.92 and older on Windows left the conversion's init.mp4 in this folder (FFmpeg's working
+    // folder then). It is the app's own leftover, and nothing reads it.
+    if (PLATFORM === "win32") await unlink(path.join(app.getPath("userData"), "init.mp4")).catch(() => {});
     profileStore = await readProfiles(app.getPath("userData"));
     localSettings = await readLocalSettings(app.getPath("userData"));
     ownership = await readOwnership(app.getPath("userData"));

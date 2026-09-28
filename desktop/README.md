@@ -316,6 +316,16 @@ The same shell runs on Windows x64. Where it differs from macOS:
   macOS job and attaches `Stremio-Offline-<version>-x64-unsigned-setup.exe`
   and `.zip`. The files are unsigned, so SmartScreen warns on the first run.
 
+- **Developing on Windows.**
+  - After `npm ci`, check that `node_modules\electron\dist\electron.exe`
+    exists. An npm that gates install scripts (`allowScripts`) skips
+    Electron's download; `node node_modules\electron\install.js` fetches it.
+  - A development run finds no bundled FFmpeg. Put one on `PATH`, or set
+    `FFMPEG_PATH`/`FFPROBE_PATH`, for example to an installed app's
+    `resources\ffmpeg\ffmpeg.exe`.
+  - A development run keeps its data in `<appData>\@stremio-offline\desktop-dev`,
+    apart from an installed app's `desktop` folder, on every platform.
+
 Users read [docs/install-windows.md](../docs/install-windows.md); the manual
 check before the build loses its experimental label is
 [docs/testing-windows.md](../docs/testing-windows.md).
