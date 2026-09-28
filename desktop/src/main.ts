@@ -274,6 +274,15 @@ const syncAwake = () =>
 const pageMode = (): PageMode =>
   shellState.screen.kind !== "connected" ? "shell" : remoteFullscreen ? "fullscreen" : "remote";
 
+/** Windows gives the menu bar back a moment after a window leaves full screen, and that shrinks
+ *  the content area without a resize event: laid out at once, the page runs under the bottom edge.
+ *  So the layout is taken again once the frame has settled. */
+const settleLayout = () => {
+  applyLayout();
+  if (PLATFORM !== "win32") return;
+  for (const delay of [50, 200, 500]) setTimeout(applyLayout, delay).unref();
+};
+
 const applyLayout = () => {
   const current = shell;
   if (!current) return;
@@ -580,7 +589,7 @@ const wireRemote = (remote: WebContentsView) => {
   contents.on("will-navigate", (event, url) => guardRemoteNavigation(remote, event, url));
   contents.on("will-redirect", (event, url) => guardRemoteNavigation(remote, event, url));
   contents.on("enter-html-full-screen", () => { if (shell?.remote === remote) { remoteFullscreen = true; applyLayout(); } });
-  contents.on("leave-html-full-screen", () => { if (shell?.remote === remote) { remoteFullscreen = false; applyLayout(); } });
+  contents.on("leave-html-full-screen", () => { if (shell?.remote === remote) { remoteFullscreen = false; settleLayout(); } });
   contents.on("did-finish-load", () => {
     if (shell?.remote !== remote || !onConnectedOrigin(contents.getURL())) return;
     void contents.executeJavaScript(`(${CAPABILITIES})()`).then(
@@ -930,7 +939,9 @@ const createShell = (saved: WindowState | null) => {
   window.contentView.addChildView(toast);
   window.on("resize", applyLayout);
   window.on("enter-full-screen", applyLayout);
-  window.on("leave-full-screen", applyLayout);
+  window.on("leave-full-screen", settleLayout);
+  // Maximizing and restoring move the menu bar on Windows as well.
+  for (const event of ["maximize", "unmaximize", "restore"] as const) window.on(event, settleLayout);
   const save = new Debounced(() => {
     void writeWindowState(app.getPath("userData"), "main",
       { bounds: window.getNormalBounds(), maximized: window.isMaximized() }).catch(() => {});
