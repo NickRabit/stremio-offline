@@ -20,7 +20,7 @@ body:
     attributes:
       label: Version
       description: Image tag, GitHub release, or git commit. Settings → Diagnostics shows this.
-      placeholder: "0.3.2 or ghcr.io/nickrabit/stremio-offline:latest"
+      placeholder: "0.4.95 or ghcr.io/nickrabit/stremio-offline:latest"
     validations:
       required: true
   - type: dropdown
@@ -31,6 +31,8 @@ body:
         - Docker Compose (build locally)
         - Docker Compose (compose.pull.yml / GHCR)
         - Synology Container Manager
+        - macOS app
+        - Windows app
         - Other
     validations:
       required: true
@@ -38,14 +40,14 @@ body:
     id: host
     attributes:
       label: Host
-      description: For example DS920+, Mac M2, Windows + Docker Desktop.
+      description: For example DS920+, MacBook Air M2 with macOS 15, Windows 11 PC.
     validations:
       required: true
   - type: textarea
     id: diagnostics
     attributes:
       label: Diagnostics
-      description: Relevant lines from Settings → Diagnostics or `docker compose logs --tail=80 stremio-offline`.
+      description: Relevant lines from Settings → Diagnostics, or `docker compose logs --tail=80 stremio-offline` on Docker.
       render: text
   - type: checkboxes
     id: checks

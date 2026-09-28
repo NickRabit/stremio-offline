@@ -54,20 +54,18 @@ being reopened, not as a changelog.
   cached artwork sized for a tile.
 - Restricted / demo mode (`RESTRICTED_MODE=1`), English documentation, the
   community files, the GHCR image and the build and release workflows.
-- **Desktop shell**: a separate window that opens an existing server, after a
-  main-process status check, with its own connection screen, named server
-  profiles, a session per origin, a refused public HTTP request and links that
-  leave for the system browser. An arm64 packaging prototype builds a macOS
-  `.dmg`/`.zip` with the reviewed Electron Fuse V1 hardening applied at package
-  time — Node-as-Node, Node option injection, inspector switches and asar
-  shadowing are off, asar integrity validation is on, and the packaging
-  workflow reads the fuses back from the built `.app`. **Save to this device**
-  hands a download to the native dialog. Delivered by
-  [PR #211](https://github.com/NickRabit/stremio-offline/pull/211),
-  [PR #221](https://github.com/NickRabit/stremio-offline/pull/221),
-  [PR #222](https://github.com/NickRabit/stremio-offline/pull/222) and
-  [PR #223](https://github.com/NickRabit/stremio-offline/pull/223); it stays an
-  unsigned, unnotarized prototype, not a distribution.
+- **Desktop apps** for macOS (Apple Silicon) and Windows x64, attached unsigned
+  to every release. Each runs the server on the computer, with bundled FFmpeg,
+  hardware conversion (VideoToolbox, Media Foundation) and a download-folder
+  step at setup, or opens a server elsewhere through named profiles. They share
+  the local server with the home network on request, save to the device through
+  the native dialog, stay running when the window closes, keep the computer
+  awake while downloading, open at login, check GitHub for a newer release and
+  reset themselves from Settings. The Electron Fuse V1 hardening is applied at
+  package time and read back from the built app. See
+  [Installing the macOS app](install-mac.md),
+  [Installing the Windows app](install-windows.md) and
+  [desktop/README.md](../desktop/README.md).
 
 ## Next (daily friction)
 
@@ -106,22 +104,16 @@ catalogs, and an optional rank-by-title-match.
 
 ### Desktop
 
-The remote desktop shell ships with named server profiles and a macOS arm64
-packaging prototype (`.dmg`/`.zip`) with the native save-to-device handoff and
-the reviewed Electron Fuse V1 hardening applied at package time;
-[desktop/README.md](../desktop/README.md) records how it stands and what it
-deliberately leaves out. The shell and locally managed backend are both in
-`main`. A manual **Desktop release** workflow now has the
-Developer ID signing, App Store Connect notarization, packaged-app verification
-and release-asset upload steps, but no signed release has been produced with it
-yet. Update delivery and clean-install verification remain outstanding, and
-the cookie-encryption fuse stays off until a signed build has been tested across
-an upgrade. Finish the distribution work before adding another native desktop
-feature.
+The apps are distributed unsigned: the first launch needs a one-time approval on
+macOS and a click through SmartScreen on Windows. Signing and notarization need
+an Apple Developer account and a Windows code-signing certificate, which the
+project does not have, so the manual **Desktop release** workflow stays unused
+and the cookie-encryption fuse stays off. There is no Intel Mac build. Updates
+are a notice pointing at the release, not an installer.
 
-A **Windows x64 build** of the same shell is packaged and smoke-tested in CI,
-attached to releases unsigned (see [docs/install-windows.md](install-windows.md)),
-and has been checked by hand on a real Windows 11 PC (0.4.94).
+Open items: verify a clean install and an upgrade on both platforms before each
+release, and keep the Windows checklist in
+[testing-windows.md](testing-windows.md) current.
 
 ## Engineering health
 

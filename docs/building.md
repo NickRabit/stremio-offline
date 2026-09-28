@@ -86,6 +86,12 @@ image: ghcr.io/nickrabit/stremio-offline:0.4.0
 
 ## Other hosts
 
+A Mac or a Windows PC normally runs the desktop app instead, which needs no
+Docker — see [Installing the macOS app](install-mac.md) and
+[Installing the Windows app](install-windows.md), and
+[desktop/README.md](../desktop/README.md) for building it. Docker on those
+machines still works, as below.
+
 **Apple Silicon Mac.** The same image works: `docker pull` and
 `docker compose up` pick the architecture that matches the machine, so an
 M-series Mac downloads a ready arm64 image instead of building for eight minutes
