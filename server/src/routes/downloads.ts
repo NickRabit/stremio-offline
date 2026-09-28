@@ -1,5 +1,6 @@
 import type express from "express";
 import { allowedAddons } from "../addons.js";
+import type { DeviceTransfers } from "../device-transfers.js";
 import { ownerMayDownload, type AudioMode, type DownloadQueue, type DownloadSelection, type SubtitleMode } from "../downloads.js";
 import { AppError } from "../errors.js";
 import { normalizeLanguage } from "../language.js";
@@ -12,6 +13,7 @@ import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
 
 export interface DownloadsDeps extends RouteContext {
   queue: DownloadQueue;
+  deviceTransfers: DeviceTransfers;
   jobView: <T extends { media?: MediaInfo; target?: string }>(job: T) => T;
   sourceOf(req: express.Request): StreamItem;
   mediaSource(value: unknown): MediaInfo | undefined;
@@ -25,7 +27,7 @@ export interface DownloadsDeps extends RouteContext {
 }
 
 export function registerDownloadRoutes(app: express.Application, deps: DownloadsDeps): void {
-  const { store, currentUser, queue, jobView, sourceOf, mediaSource, posterOf, rememberTitle, titleKey, saveCatalogPoster, libraryKey, cachedMeta, prefsOf } = deps;
+  const { store, currentUser, queue, deviceTransfers, jobView, sourceOf, mediaSource, posterOf, rememberTitle, titleKey, saveCatalogPoster, libraryKey, cachedMeta, prefsOf } = deps;
 
   /** The owner-bound check where a failure reaches the caller instead of pausing a job. The
    *  rights are asked before the body is read; the source and the library the rule names are
@@ -51,7 +53,7 @@ export function registerDownloadRoutes(app: express.Application, deps: Downloads
     const viewer = viewerOf(currentUser(req));
     const snapshot = queue.snapshot();
     const jobs = snapshot.jobs.filter((job) => viewer.role === "admin" || job.ownerUserId === viewer.id);
-    res.json({ ...snapshot, jobs: jobs.map(jobView) });
+    res.json({ ...snapshot, jobs: jobs.map(jobView), deviceTransfers: deviceTransfers.list(viewer) });
   });
   app.post("/api/downloads", asyncRoute(async (req, res) => {
     const owner = currentUser(req);

@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { once } from "node:events";
+import { EventEmitter, once } from "node:events";
 import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 import express from "express";
+import { DeviceTransfers } from "../device-transfers.js";
 import type { DownloadQueue } from "../downloads.js";
 import { AppError, messageKeyOf } from "../errors.js";
 import { defaultDownloadSettings, type MediaInfo } from "../naming.js";
@@ -12,6 +13,7 @@ import { registerDownloadRoutes, type DownloadsDeps } from "./downloads.js";
 
 interface Harness {
   base: string;
+  transfers: DeviceTransfers;
   added: Array<{ title: string; ownerUserId?: string }>;
   actions: string[];
   moves: Array<{ id: string; direction: number }>;
@@ -49,6 +51,7 @@ const mount = async (
   options: { viewer?: UserRecord; jobs?: Array<{ id: string; ownerUserId?: string }> } = {},
 ): Promise<Harness> => {
   const jobs = options.jobs ?? [{ id: "job-1", ownerUserId: ADA }, { id: "job-2", ownerUserId: ADA }];
+  const transfers = new DeviceTransfers();
   const added: Array<{ title: string; ownerUserId?: string }> = [];
   const actions: string[] = [];
   const moves: Array<{ id: string; direction: number }> = [];
@@ -88,6 +91,7 @@ const mount = async (
     requireAccess: () => undefined,
     stopContentAccess: async () => undefined,
     queue: queue as unknown as DownloadQueue,
+    deviceTransfers: transfers,
     jobView: <T extends { media?: MediaInfo; target?: string }>(job: T) => {
       viewed.push(job);
       return { ...job, viewed: true } as T;
@@ -114,6 +118,7 @@ const mount = async (
   const { port } = server.address() as AddressInfo;
   return {
     base: `http://127.0.0.1:${port}`,
+    transfers,
     added,
     actions,
     moves,
@@ -137,6 +142,22 @@ const keyOf = async (response: Response) => ((await response.json()) as { messag
 
 const episodes = (count: number) => Array.from({ length: count }, (_, index) => ({ id: `ep-${index}` }));
 
+/** A response the registry can wrap and dispose of without a socket behind it. */
+class OpenResponse extends EventEmitter {
+  statusCode = 200;
+  writableFinished = false;
+  private headers: Record<string, string | number> = {};
+  setHeader(name: string, value: string | number) { this.headers[name.toLowerCase()] = value; return this; }
+  getHeader(name: string) { return this.headers[name.toLowerCase()]; }
+  write(_chunk: unknown) { return true; }
+  end(_chunk?: unknown) { this.writableFinished = true; this.emit("close"); return this; }
+  destroy() { this.emit("close"); }
+}
+
+const attachTransfer = (transfers: DeviceTransfers, ticketId: string, userId: string, username: string) => {
+  transfers.attach(ticketId, { userId, username, filename: `${ticketId}.mkv`, source: "library" }, new OpenResponse() as unknown as express.Response);
+};
+
 test("GET /api/downloads returns the snapshot with every job passed through jobView", async (t) => {
   const harness = await mount();
   t.after(harness.close);
@@ -146,6 +167,31 @@ test("GET /api/downloads returns the snapshot with every job passed through jobV
   assert.equal(body.halt, null);
   assert.deepEqual(body.jobs.map((job) => job.viewed), [true, true]);
   assert.deepEqual(harness.viewed.map((job) => job.id), ["job-1", "job-2"]);
+});
+
+test("GET /api/downloads shows an ordinary user only their own device transfers", async (t) => {
+  const harness = await mount([streamAddon("stream-addon")], { viewer: ordinary });
+  t.after(harness.close);
+  attachTransfer(harness.transfers, "t-ada", ADA, "ada");
+  attachTransfer(harness.transfers, "t-bob", BOB, "bob");
+
+  const response = await api(harness.base, "/api/downloads");
+  const body = await response.json() as { deviceTransfers: Array<{ userId: string; username?: string; state: string }> };
+  assert.deepEqual(body.deviceTransfers.map((row) => row.userId), [BOB], "another account's transfer is invisible");
+  assert.equal(body.deviceTransfers[0].state, "running");
+  assert.equal("username" in body.deviceTransfers[0], false, "an ordinary user never sees a username");
+});
+
+test("GET /api/downloads shows an administrator every device transfer with usernames", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  attachTransfer(harness.transfers, "t-ada", ADA, "ada");
+  attachTransfer(harness.transfers, "t-bob", BOB, "bob");
+
+  const response = await api(harness.base, "/api/downloads");
+  const body = await response.json() as { deviceTransfers: Array<{ userId: string; username?: string }> };
+  assert.deepEqual(body.deviceTransfers.map((row) => row.userId).sort(), [ADA, BOB].sort());
+  assert.deepEqual(body.deviceTransfers.map((row) => row.username).sort(), ["ada", "bob"]);
 });
 
 test("POST /api/downloads/bulk refuses an empty episode list", async (t) => {

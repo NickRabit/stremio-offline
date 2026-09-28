@@ -60,7 +60,14 @@ export interface DownloadSelection {
   subtitleLanguage?: string;
   fallbackSubtitleLanguage?: string;
 }
-export interface DownloadSnapshot { jobs: Download[]; halt: QueueHalt | null }
+export interface DeviceTransfer {
+  id: string; userId: string; username?: string; filename: string;
+  source: "library" | "addon" | "hls"; addonName?: string;
+  state: "running" | "completed" | "interrupted";
+  sent: number; total?: number; speed: number;
+  startedAt: string; finishedAt?: string;
+}
+export interface DownloadSnapshot { jobs: Download[]; halt: QueueHalt | null; deviceTransfers?: DeviceTransfer[] }
 
 export type PlaybackMode = "direct" | "remux" | "transcode";
 export type TileSize = "compact" | "small" | "medium" | "large";

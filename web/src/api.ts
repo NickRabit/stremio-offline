@@ -80,6 +80,7 @@ export const api = {
   moveDownload: (id: string, direction: -1 | 1) => request<void>(`/api/downloads/${id}/move`, { method: "POST", body: JSON.stringify({ direction }) }),
   removeDownload: (id: string) => request<void>(`/api/downloads/${id}`, { method: "DELETE" }),
   clearCompleted: () => request<void>("/api/downloads", { method: "DELETE" }),
+  abortDeviceTransfer: (id: string) => request<void>(`/api/device-transfers/${encodeURIComponent(id)}`, { method: "DELETE" }),
   settings: () => request<SettingsView>("/api/settings"),
   updateSettings: (patch: SettingsPatch) => request<SettingsView>("/api/settings", { method: "PATCH", body: JSON.stringify(patch) }),
   views: () => request<UserViews>("/api/views"),

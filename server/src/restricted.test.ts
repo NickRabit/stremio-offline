@@ -80,6 +80,7 @@ test("ALLOWED_MUTATIONS covers the demo writes and omits configuration", () => {
   assert.equal(isAllowedMutation("DELETE", "/downloads/job-1"), true);
   assert.equal(isAllowedMutation("DELETE", "/downloads"), true);
   assert.equal(isAllowedMutation("POST", "/device-download"), true);
+  assert.equal(isAllowedMutation("DELETE", "/device-transfers/x"), true);
   assert.equal(isAllowedMutation("POST", "/client-log"), true);
   assert.equal(isAllowedMutation("POST", "/inspect"), true);
   assert.equal(isAllowedMutation("POST", "/playback"), true);

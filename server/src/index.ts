@@ -10,6 +10,7 @@ import { allowedAddons, loadAddon, metadata, searchAll, searchableCatalogs, stre
 import { autoRefreshEnabled, refreshDue, refreshManifests, type RefreshOutcome } from "./addon-refresh.js";
 import { rankStreams } from "./ranking.js";
 import { DownloadQueue, ownerMayDownload, type DownloadJob } from "./downloads.js";
+import { DeviceTransfers } from "./device-transfers.js";
 import { selectDownloadSource } from "./download-selection.js";
 import { StatsLog, type TrafficEvent, type TrafficMeta } from "./stats.js";
 import { Throughput } from "./throughput.js";
@@ -382,6 +383,7 @@ const safeInspection = (info: Awaited<ReturnType<PlaybackManager["inspect"]>>, s
 });
 const DEVICE_TICKET_TTL = 24 * 60 * 60_000;
 const deviceDownloadTickets = new Map<string, DeviceDownloadTicket>();
+const deviceTransfers = new DeviceTransfers();
 const pruneDeviceDownloadTickets = () => {
   const now = Date.now();
   for (const [key, ticket] of deviceDownloadTickets) if (ticket.expiresAt <= now) deviceDownloadTickets.delete(key);
@@ -2206,8 +2208,8 @@ registerLibrariesRoutes(app, { ...routeContext, grantRows, healthOf, invalidateA
 
 registerCurateRoutes(app, { ...routeContext, candidates: libraryCandidates, invalidateLibrary, libraryAutoScan, libraryOps, libraryPathBusy, libraryScan, libraryTarget, libraryUnits, matchLibraryItem, metaStore, ownRecord, ownerOf, prefsOf, proxyImage: (url) => images.proxied(url), refreshLibraryHealth, scheduleMetaBackfill, wirePath });
 
-registerDeviceRoutes(app, { ...routeContext, stats, countBytes, deviceDownloadTickets, DEVICE_TICKET_TTL, httpSourceOf, libraryTarget, mediaSource, ownerOf, pruneDeviceDownloadTickets, statMeta, trackMedia });
-registerDownloadRoutes(app, { ...routeContext, queue, jobView, sourceOf, mediaSource, posterOf, rememberTitle, titleKey, saveCatalogPoster, libraryKey, cachedMeta, prefsOf });
+registerDeviceRoutes(app, { ...routeContext, stats, countBytes, deviceDownloadTickets, deviceTransfers, DEVICE_TICKET_TTL, httpSourceOf, libraryTarget, mediaSource, ownerOf, pruneDeviceDownloadTickets, statMeta, trackMedia });
+registerDownloadRoutes(app, { ...routeContext, queue, deviceTransfers, jobView, sourceOf, mediaSource, posterOf, rememberTitle, titleKey, saveCatalogPoster, libraryKey, cachedMeta, prefsOf });
 const freeSpace = async (target: string) => {
   try { const info = await statfs(target); return { path: target, freeBytes: info.bavail * info.bsize, totalBytes: info.blocks * info.bsize }; }
   catch { return { path: target }; }

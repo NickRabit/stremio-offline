@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import express from "express";
+import { DeviceTransfers } from "../device-transfers.js";
 import { messageKeyOf } from "../errors.js";
 import { ResourceError, type ResourceOwner } from "../media-resources.js";
 import type { Store } from "../store.js";
@@ -23,6 +24,7 @@ const BOB_ID = "usr_00000002";
 interface Harness {
   base: string;
   tickets: DeviceDeps["deviceDownloadTickets"];
+  transfers: DeviceTransfers;
   /** The rights of the ordinary account, so a test can take one away mid-flight. */
   permissions: UserPermissions;
   activities: Array<Record<string, unknown>>;
@@ -37,6 +39,7 @@ const mount = async (): Promise<Harness> => {
   await writeFile(file, "movie bytes");
   const activities: Array<Record<string, unknown>> = [];
   const tickets: DeviceDeps["deviceDownloadTickets"] = new Map();
+  const transfers = new DeviceTransfers();
   const ownerOf = (req: express.Request) => (req.header("x-user") === "bob" ? BOB : ADA);
   const permissions: UserPermissions = { downloadToLibrary: false, downloadToDevice: true };
   const account = (id: string, username: string, role: "admin" | "user"): UserRecord => ({
@@ -61,6 +64,7 @@ const mount = async (): Promise<Harness> => {
     countBytes: () => undefined,
     stats: { activity: { record: (entry: Record<string, unknown>) => activities.push(entry) } } as unknown as DeviceDeps["stats"],
     deviceDownloadTickets: tickets,
+    deviceTransfers: transfers,
     DEVICE_TICKET_TTL: TTL,
     httpSourceOf: async () => ({ url: `file://${SOURCE}` }) as StreamItem,
     libraryTarget: async (value: string) => {
@@ -90,6 +94,7 @@ const mount = async (): Promise<Harness> => {
   return {
     base: `http://127.0.0.1:${port}`,
     tickets,
+    transfers,
     permissions,
     activities,
     close: async () => {
@@ -109,6 +114,8 @@ const api = (base: string, pathname: string, init: { method?: string; body?: unk
     },
     body: init.body === undefined ? undefined : JSON.stringify(init.body),
   });
+
+const settle = () => new Promise((resolve) => setTimeout(resolve, 30));
 
 test("POST /api/device-download mints a ticket for the caller that never outlives the session", async (t) => {
   const harness = await mount();
@@ -202,4 +209,61 @@ test("successful device transfer records its user, while HEAD does not", async (
   const missing = await fetch(`${harness.base}/api/device-download/missing`, { headers: { "x-user": "bob" } });
   assert.equal(missing.status, 404);
   assert.equal(harness.activities.length, 2);
+});
+
+test("a finished library download leaves a completed row in the registry", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const minted = await api(harness.base, "/api/device-download", { method: "POST", user: "bob", body: {} });
+  const { url } = await minted.json() as { url: string };
+
+  const response = await api(harness.base, url, { user: "bob" });
+  assert.equal(await response.text(), "movie bytes");
+  await settle();
+
+  const rows = harness.transfers.list({ id: BOB_ID, role: "user" });
+  assert.equal(rows.length, 1, "one row covers the whole download");
+  assert.equal(rows[0].state, "completed");
+  assert.equal(rows[0].sent, 11);
+  assert.equal(rows[0].total, 11);
+  assert.equal(rows[0].filename, "Some Movie.mkv");
+  assert.equal(rows[0].source, "library");
+  assert.equal("username" in rows[0], false, "an ordinary user never sees a username");
+});
+
+test("a HEAD request leaves no device transfer row", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const minted = await api(harness.base, "/api/device-download", { method: "POST", user: "bob", body: {} });
+  const { url } = await minted.json() as { url: string };
+
+  const response = await api(harness.base, url, { method: "HEAD", user: "bob" });
+  assert.equal(response.status, 200);
+  await settle();
+
+  assert.deepEqual(harness.transfers.list({ id: BOB_ID, role: "user" }), []);
+  assert.deepEqual(harness.transfers.list({ id: ADA_ID, role: "admin" }), []);
+});
+
+test("DELETE /api/device-transfers/:id refuses a stranger and stops the owner's transfer", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const minted = await api(harness.base, "/api/device-download", { method: "POST", user: "ada", body: {} });
+  const { url } = await minted.json() as { url: string };
+  const ticketId = url.replace("/api/device-download/", "");
+  const response = await api(harness.base, url, { user: "ada" });
+  await response.text();
+  await settle();
+
+  const row = harness.transfers.list({ id: ADA_ID, role: "admin" })[0];
+  assert.ok(row, "the finished download is visible for ninety seconds");
+
+  const stranger = await api(harness.base, `/api/device-transfers/${row.id}`, { method: "DELETE", user: "bob" });
+  assert.equal(stranger.status, 404);
+  assert.equal((await stranger.json() as { messageKey?: string }).messageKey, "err.itemNotFound");
+  assert.equal(harness.tickets.has(ticketId), true, "a refused abort leaves the ticket alone");
+
+  const owner = await api(harness.base, `/api/device-transfers/${row.id}`, { method: "DELETE", user: "ada" });
+  assert.equal(owner.status, 204);
+  assert.equal(harness.tickets.has(ticketId), false, "the ticket is deleted with the transfer");
 });

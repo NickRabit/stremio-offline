@@ -60,6 +60,7 @@ export const ALLOWED_MUTATIONS: Rule[] = [
   { method: "DELETE", pattern: /^\/downloads\/[^/]+$/ },
   { method: "DELETE", pattern: /^\/downloads$/ },
   { method: "POST", pattern: /^\/device-download$/ },
+  { method: "DELETE", pattern: /^\/device-transfers\/[^/]+$/ },
   { method: "POST", pattern: /^\/client-log$/ },
   { method: "POST", pattern: /^\/inspect$/ },
   { method: "POST", pattern: /^\/playback$/ },

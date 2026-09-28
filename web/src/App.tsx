@@ -28,7 +28,7 @@ import { catalogResumeEntries, localResumeEntries } from "./resume-visibility";
 import { resumeTarget, resumeVideo, type ResumeTarget } from "./resume-target";
 import { trailerAction } from "./trailers";
 import { emptyViews, prefsFor, scopeOf, withDownloads, withExtra, withLibrary } from "./views";
-import type { Addon, BuildInfo, Diagnostics, BrowseFile, BrowseItem, BrowseLibrary, BrowseResult, DownloadDateField, DownloadPageSize, DownloadSort, DownloadStatusFilter, DownloadsViewPrefs, LibraryOp, LibraryOpsState, LibraryOrder, LibrarySort, LibraryView, LibraryViewPrefs, ProgressEntry, UserViews, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, DownloadSelection, Inspection, Meta, QueueHalt, ScanState, SearchableCatalog, Session, Settings as AppSettings, SettingsPatch, SiteLink, Stream, Subtitle, Trailer, Video } from "./types";
+import type { Addon, BuildInfo, Diagnostics, BrowseFile, BrowseItem, BrowseLibrary, BrowseResult, DeviceTransfer, DownloadDateField, DownloadPageSize, DownloadSort, DownloadStatusFilter, DownloadsViewPrefs, LibraryOp, LibraryOpsState, LibraryOrder, LibrarySort, LibraryView, LibraryViewPrefs, ProgressEntry, UserViews, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, DownloadSelection, Inspection, Meta, QueueHalt, ScanState, SearchableCatalog, Session, Settings as AppSettings, SettingsPatch, SiteLink, Stream, Subtitle, Trailer, Video } from "./types";
 
 /** The names of the linked sites. They are trademarks, not interface text, so they are
  *  spelled the same in every language and live here rather than in the catalogues. */
@@ -197,6 +197,7 @@ export function App() {
   const [season, setSeason] = useState<number | null>(null);
   const [bulkDownload, setBulkDownload] = useState<{ label: string; title: string; type: string; episodes: Array<{ id: string; season?: number; episode?: number; title?: string }>; media: { id?: string; metaType?: string; poster?: string; background?: string; gallery?: Array<{ url: string; kind: GalleryKind }> } } | null>(null);
   const [downloads, setDownloads] = useState<DownloadJob[]>([]); const [queueHalt, setQueueHalt] = useState<QueueHalt | null>(null); const [busy, setBusy] = useState(false); const [message, setMessage] = useState(""); const [error, setError] = useState(""); const [playerOpen, setPlayerOpen] = useState(false);
+  const [deviceTransfers, setDeviceTransfers] = useState<DeviceTransfer[]>([]);
   const [settings, setSettings] = useState<AppSettings>({ concurrentDownloads: 1, parallelPerProvider: 1, downloadSegments: 2, uiLanguage: locale(), audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui", mergeByName: true, streamSort: "recommended", trackProgress: true, showResumeRow: true, libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, addonRefreshHours: 24, catalogTileSize: "medium", libraryTileSize: "medium", catalogTileShape: "poster", libraryTileShape: "poster", realDebridConfigured: false, tmdbConfigured: false });
   const [languages, setLanguages] = useState<Array<{ code: string; name: string }>>([]);
   const [inspection, setInspection] = useState<Inspection | null>(null);
@@ -968,7 +969,7 @@ export function App() {
   };
   const downloadsSeen = useRef(false);
   const jobStatus = useRef(new Map<string, DownloadJob["status"]>());
-  const applyDownloads = (snapshot: { jobs?: DownloadJob[]; halt?: QueueHalt | null } | DownloadJob[]) => {
+  const applyDownloads = (snapshot: { jobs?: DownloadJob[]; halt?: QueueHalt | null; deviceTransfers?: DeviceTransfer[] } | DownloadJob[]) => {
     const jobs = Array.isArray(snapshot) ? snapshot : snapshot.jobs ?? [];
     if (downloadsSeen.current) {
       for (const job of jobs) {
@@ -985,6 +986,7 @@ export function App() {
     jobStatus.current = new Map(jobs.map((job) => [job.id, job.status]));
     setDownloads(jobs);
     setQueueHalt(Array.isArray(snapshot) ? null : snapshot.halt ?? null);
+    setDeviceTransfers(Array.isArray(snapshot) ? [] : snapshot.deviceTransfers ?? []);
   };
   const loadDownloads = () => api.downloads().then(applyDownloads).catch(fail);
   const [setupNeeded, setSetupNeeded] = useState(false);
@@ -2082,7 +2084,7 @@ export function App() {
         </div>
       </section>}
       {view === "addons" && <AddonManager addons={addons} libraries={libraries} restricted={restricted} admin={admin} onChanged={refresh} onNotify={notify} onError={fail}/>} 
-      {view === "downloads" && <Downloads jobs={downloads} libraries={libraries} halt={queueHalt} admin={session!.role === "admin"} refresh={loadDownloads} onError={fail} onReveal={revealInLibrary} prefs={views.downloads} onPrefs={persistDownloadPrefs}/>}
+      {view === "downloads" && <Downloads jobs={downloads} deviceTransfers={deviceTransfers} libraries={libraries} halt={queueHalt} admin={session!.role === "admin"} refresh={loadDownloads} onError={fail} onReveal={revealInLibrary} prefs={views.downloads} onPrefs={persistDownloadPrefs}/>}
       {view === "stats" && <StatsPanel key={statsReset} onError={fail}/>}
       {view === "settings" && <SettingsPage build={buildInfo} restricted={restricted} settings={settings} languages={languages} libraries={libraries} session={session!} onSession={setSession} onSave={saveSettings} onLibrariesChanged={refreshLibraries} onImported={async (backup) => {
         const restored = await api.importSettings(backup);
@@ -2536,7 +2538,7 @@ function DiagnosticsSection({ build, onNotify, onError }: { build: BuildInfo | n
  *  clearing the completed list are instance-wide -- one queue, everybody's bandwidth -- so an
  *  ordinary account may pause, resume, retry and remove its own job and nothing else.
  *  Rendering the rest for it offers buttons whose only outcome is an error. */
-function Downloads({ jobs, libraries, halt, admin, refresh, onError, onReveal, prefs, onPrefs }: { jobs: DownloadJob[]; libraries: LibraryView[]; halt: QueueHalt | null; admin: boolean; refresh: () => Promise<void>; onError: (e: unknown) => void; onReveal: (target: string) => void; prefs: DownloadsViewPrefs; onPrefs: (prefs: DownloadsViewPrefs) => void }) {
+function Downloads({ jobs, deviceTransfers, libraries, halt, admin, refresh, onError, onReveal, prefs, onPrefs }: { jobs: DownloadJob[]; deviceTransfers: DeviceTransfer[]; libraries: LibraryView[]; halt: QueueHalt | null; admin: boolean; refresh: () => Promise<void>; onError: (e: unknown) => void; onReveal: (target: string) => void; prefs: DownloadsViewPrefs; onPrefs: (prefs: DownloadsViewPrefs) => void }) {
   const [expandedJobs, setExpandedJobs] = useState<Record<string, boolean>>({});
   const [completedOpen, setCompletedOpen] = useState(false);
   const [pendingPage, setPendingPage] = useState(1);
@@ -2584,6 +2586,24 @@ function Downloads({ jobs, libraries, halt, admin, refresh, onError, onReveal, p
     <button onClick={() => { setQuery(""); setFrom(""); setTo(""); onPrefs({ ...prefs, status: "" }); }}>{t("downloads.reset")}</button>
   </div></details>
     <div className="queue-blocks" role="region" aria-label={t("downloads.queueLabel")}>
+      {deviceTransfers.length > 0 && <section id="queue-device" className="queue-block queue-block-device" aria-labelledby="queue-heading-device">
+        <div className="queue-block-head">
+          <h3 id="queue-heading-device"><span className="queue-state-dot" aria-hidden="true"/>{t("downloads.section.device")}<span className="queue-count">{deviceTransfers.length}</span></h3>
+        </div>
+        <div className="downloads queue-block-list">
+          {deviceTransfers.map((item) => <div className="download-row" data-status={deviceStatus(item.state)} data-kind="device" key={item.id}>
+            <div className="download-job">
+              <strong>{item.filename}</strong>
+              <small>{item.source === "library" ? t("downloads.device.source.library") : item.source === "addon" ? t("downloads.device.source.addon", { addon: item.addonName ?? "" }) : t("downloads.device.source.hls")}</small>
+              {admin && <small className="queue-job-user">{t("downloads.device.user", { username: item.username ?? "" })}</small>}
+            </div>
+            <span className={`job-status ${deviceStatus(item.state)}`}>{t(`downloads.device.state.${item.state}`)}</span>
+            <div className="download-progress"><span>{item.total != null ? `${bytes(item.sent)} / ${bytes(item.total)}` : bytes(item.sent)}</span><div className={item.total != null ? "progress" : "progress indeterminate"}><i style={item.total != null ? { width: `${Math.min(100, (item.sent / item.total) * 100)}%` } : undefined}/></div></div>
+            <span className="download-speed">{item.state === "running" ? speed(item.speed) : ""}</span>
+            <div className="queue-actions">{item.state === "running" && <button className="danger" title={t("downloads.device.abort")} aria-label={t("downloads.device.abort")} onClick={() => action(() => api.abortDeviceTransfer(item.id))}><X/></button>}</div>
+          </div>)}
+        </div>
+      </section>}
       {(["active", "pending", "completed"] as const).map((group) => {
         const items = groups[group];
         const isHistory = group === "completed";
@@ -2613,3 +2633,4 @@ function Downloads({ jobs, libraries, halt, admin, refresh, onError, onReveal, p
 }
 const fmtEta = (seconds: number) => seconds < 60 ? `${Math.ceil(seconds)} s` : seconds < 3600 ? `${Math.ceil(seconds / 60)} min` : `${Math.floor(seconds / 3600)} h ${Math.ceil((seconds % 3600) / 60)} min`;
 const statusLabel = (status: DownloadJob["status"]) => t(({ queued: "downloads.status.queued", waiting: "downloads.status.waiting", checking: "downloads.status.checking", downloading: "downloads.status.downloading", paused: "downloads.status.paused", completed: "downloads.status.completed", failed: "downloads.status.failed" } as const)[status]);
+const deviceStatus = (state: DeviceTransfer["state"]) => state === "running" ? "downloading" : state === "completed" ? "completed" : "failed";

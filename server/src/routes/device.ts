@@ -4,6 +4,7 @@ import { stat } from "node:fs/promises";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { isPlaylist, mayDownloadToDevice } from "../downloads.js";
+import type { DeviceTransfers } from "../device-transfers.js";
 import { AppError } from "../errors.js";
 import { posixBase, type Viewer } from "../libraries.js";
 import { log } from "../logger.js";
@@ -13,7 +14,7 @@ import { contentOf, type AccessNeed } from "../revocation.js";
 import { safeFetch, validateRemoteUrl } from "../security.js";
 import type { StatsLog, TrafficMeta } from "../stats.js";
 import type { StreamItem } from "../types.js";
-import { asyncRoute, type RouteContext } from "./context.js";
+import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
 
 /** Saving a stream on the device that asked for it, without handing out the source address. */
 export interface DeviceDeps extends RouteContext {
@@ -25,6 +26,7 @@ export interface DeviceDeps extends RouteContext {
     filename: string;
     source: { kind: "local"; path: string } | { kind: "remote"; stream: StreamItem; title: string; media?: MediaInfo };
   }>;
+  deviceTransfers: DeviceTransfers;
   DEVICE_TICKET_TTL: number;
   httpSourceOf(req: express.Request): Promise<StreamItem>;
   libraryTarget(value: string, viewer: Viewer | undefined): Promise<string>;
@@ -37,7 +39,7 @@ export interface DeviceDeps extends RouteContext {
 }
 
 export function registerDeviceRoutes(app: express.Application, deps: DeviceDeps): void {
-  const { store, currentUser, stats, countBytes, deviceDownloadTickets, DEVICE_TICKET_TTL, httpSourceOf, libraryTarget, mediaSource, ownerOf, pruneDeviceDownloadTickets, requireAccess, statMeta, trackMedia } = deps;
+  const { store, currentUser, stats, countBytes, deviceDownloadTickets, deviceTransfers, DEVICE_TICKET_TTL, httpSourceOf, libraryTarget, mediaSource, ownerOf, pruneDeviceDownloadTickets, requireAccess, statMeta, trackMedia } = deps;
 
   /** Saving to the device is a right an administrator hands out, and it is read at every use:
    *  taking it away stops a ticket that was minted while it was still there. This governs the
@@ -113,6 +115,7 @@ export function registerDeviceRoutes(app: express.Application, deps: DeviceDeps)
       const target = await libraryTarget(ticket.source.path, currentUser(req));
       if (!target) return res.status(404).json({ error: "The file was not found in the library.", messageKey: "err.libraryFileMissing" });
       countBytes(res, { source: "library", provider: "knihovna", title: ticket.filename, kind: "other" });
+      deviceTransfers.attach(String(req.params.id), { userId: ticket.owner.userId, username: user?.username, filename: ticket.filename, source: "library" }, res);
       return void res.download(path.basename(target), ticket.filename, { root: path.dirname(target), acceptRanges: true, dotfiles: "deny" }, (error) => {
         if (!error) {
           if (res.writableFinished) record(); else res.once("finish", record);
@@ -158,6 +161,7 @@ export function registerDeviceRoutes(app: express.Application, deps: DeviceDeps)
       res.on("close", () => { if (!res.writableEnded) child.kill("SIGKILL"); });
 
       countBytes(res, statMeta({ source: "download", url: stream.url, title, addonKey: stream.addonKey, addonName: stream.addonName, kind: media?.kind }));
+      deviceTransfers.attach(String(req.params.id), { userId: ticket.owner.userId, username: user?.username, filename: ticket.filename, source: "hls", addonName: stream.addonName }, res);
       // No length is known ahead of an assembly, so the browser shows no progress bar.
       res.status(200).attachment(ticket.filename).setHeader("content-type", "video/mp4");
 
@@ -181,6 +185,7 @@ export function registerDeviceRoutes(app: express.Application, deps: DeviceDeps)
     if (!upstream.ok) { await upstream.body?.cancel(); throw new Error("Download source unavailable."); }
 
     countBytes(res, statMeta({ source: "download", url: stream.url, title, addonKey: stream.addonKey, addonName: stream.addonName, kind: media?.kind }));
+    deviceTransfers.attach(String(req.params.id), { userId: ticket.owner.userId, username: user?.username, filename: ticket.filename, source: "addon", addonName: stream.addonName }, res);
     res.status(upstream.status).attachment(ticket.filename).setHeader("cache-control", "private, no-store");
     for (const name of ["content-type", "content-length", "content-range", "accept-ranges"]) {
       const value = upstream.headers.get(name); if (value) res.setHeader(name, value);
@@ -189,5 +194,15 @@ export function registerDeviceRoutes(app: express.Application, deps: DeviceDeps)
     const { Readable } = await import("node:stream");
     try { await pipeline(Readable.fromWeb(upstream.body as never), res, { signal: controller.signal }); record(); }
     catch (error) { if (!res.destroyed && !res.writableEnded) throw error; }
+  }));
+
+  /** Stopping a device transfer is asked for the running responses and the ticket together:
+   *  the transfer is destroyed first, so a range request that arrives afterwards finds the
+   *  link expired. A stranger's id is answered like one that does not exist. */
+  app.delete("/api/device-transfers/:id", asyncRoute(async (req, res) => {
+    const ticketId = deviceTransfers.abort(String(req.params.id), viewerOf(currentUser(req)));
+    if (!ticketId) throw new AppError("The item was not found.", "err.itemNotFound", 404);
+    deviceDownloadTickets.delete(ticketId);
+    res.status(204).end();
   }));
 }

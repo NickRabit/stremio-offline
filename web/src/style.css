@@ -995,6 +995,7 @@ img.broken{visibility:hidden}
 .queue-block-list .download-row.details-expanded .download-job>strong,.queue-block-list .download-row.details-expanded .job-link>span{-webkit-line-clamp:unset}
 .queue-block-list .queue-job-details>small{display:block;white-space:normal;overflow-wrap:anywhere;margin-top:10px}
 .queue-block-list .progress{height:5px;margin-top:8px}
+.progress.indeterminate i{width:100%;opacity:.35}
 .queue-block-active .progress i{background:#70dfbc;transition:width 1.15s linear}
 .queue-block-active .download-speed{color:#70dfbc;font-size:15px;font-weight:700}
 .queue-block-list .download-row:not([data-status="downloading"]) .download-speed{display:none}

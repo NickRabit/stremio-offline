@@ -64,6 +64,7 @@ const ALLOWED: Array<[string, string]> = [
   ["GET", "/media/abc/u/signature"],
   ["POST", "/device-download"],
   ["GET", "/device-download/abc"],
+  ["DELETE", "/device-transfers/abc"],
   ["POST", "/client-log"],
   ["GET", "/downloads"],
   ["POST", "/downloads"],
