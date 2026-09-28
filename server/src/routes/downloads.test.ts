@@ -46,7 +46,11 @@ process.on("exit", () => rmSync(MEDIA, { recursive: true, force: true }));
 /** One configured library, shaped the way the store keeps it. */
 const library = (id: string, type: "movie" | "series" | "mixed", extra: Partial<LibraryRecord> = {}): LibraryRecord => {
   const root = path.join(MEDIA, id);
-  for (const folder of ["Kino", "S", "Sci-Fi: Classics"]) mkdirSync(path.join(root, folder), { recursive: true });
+  // "Sci-Fi  Classics" is named with two spaces on purpose: it is what the tidying a rule's
+  // subfolder gets would collapse, so it proves an explicit target hands the name back as it
+  // stands. A colon would say the same and is what the naming tests use, but Windows refuses
+  // it in a path, and these folders are created for real.
+  for (const folder of ["Kino", "S", "Sci-Fi  Classics"]) mkdirSync(path.join(root, folder), { recursive: true });
   return { id, name: id, type, root, enabled: true, order: 0, addedAt: "2026-01-01T00:00:00.000Z", writeArtwork: true, ...extra };
 };
 /** A record shaped the way the store keeps one, so the flags the check must not read are on it. */
@@ -378,10 +382,10 @@ test("an explicit folder keeps its name as it is on disk", async (t) => {
   t.after(harness.close);
   const response = await api(harness.base, "/api/downloads", {
     method: "POST",
-    body: { title: "Film", target: { libraryId: "lib_movies", subfolder: "Sci-Fi: Classics" } },
+    body: { title: "Film", target: { libraryId: "lib_movies", subfolder: "Sci-Fi  Classics" } },
   });
   assert.equal(response.status, 201);
-  assert.equal(harness.added[0]?.settings?.subfolder, "Sci-Fi: Classics");
+  assert.equal(harness.added[0]?.settings?.subfolder, "Sci-Fi  Classics");
 });
 
 test("POST /api/downloads refuses an unusable explicit target and queues nothing", async (t) => {
