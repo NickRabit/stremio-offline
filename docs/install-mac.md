@@ -87,7 +87,7 @@ To remove the app entirely:
 
 1. Quit it.
 2. Move it from Applications to the Trash.
-3. Move `~/Library/Application Support/Stremio Offline` to the Trash as well.
+3. Move `~/Library/Application Support/@stremio-offline/desktop` to the Trash as well.
 
 Your download folder is not touched; delete it yourself if you want the films
 gone.

@@ -81,7 +81,7 @@ where something looks wrong.
     the app says a newer version is out, and **Download** opens the release page.
 12. **Uninstall.**
     - **Settings → Apps** uninstalls it.
-    - `%APPDATA%\Stremio Offline` and the films stay until you delete them.
+    - `%APPDATA%\@stremio-offline\desktop` and the films stay until you delete them.
 
 ## Letting Claude run it
 
@@ -90,8 +90,9 @@ repository there, open Claude Code in it and give it this prompt:
 
 > Read `docs/testing-windows.md` and `docs/install-windows.md`. Install the
 > Windows build I downloaded to `<path>` and go through the checklist with me.
-> Do what you can yourself: read the app's log in `%APPDATA%\Stremio
-> Offline\instance\app.log`, check files and folders, run PowerShell. Ask me to
+> Do what you can yourself: read the app's log in
+> `%APPDATA%\@stremio-offline\desktop\instance\app.log`, check files and
+> folders, run PowerShell. Ask me to
 > click where a person has to: SmartScreen, the firewall, the tray, signing out.
 > Never delete my own files. At the end, write a report with OK or what
 > happened for every step, and save it as `windows-check-<date>.md`.

@@ -108,7 +108,7 @@ To remove the app entirely:
 
 1. Quit it.
 2. Uninstall it in **Settings → Apps → Installed apps**.
-3. Delete `%APPDATA%\Stremio Offline` as well. Paste that into the File Explorer
+3. Delete `%APPDATA%\@stremio-offline\desktop` as well. Paste that into the File Explorer
    address bar.
 
 Your download folder is not touched; delete it yourself if you want the films
