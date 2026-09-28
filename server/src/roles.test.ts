@@ -27,6 +27,7 @@ const ALLOWED: Array<[string, string]> = [
   ["PATCH", "/views"],
   ["GET", "/library"],
   ["GET", "/library/browse"],
+  ["GET", "/library/folders"],
   ["GET", "/library/thumb"],
   ["GET", "/library/next/movie:tt1254207"],
   ["GET", "/library/previous/movie:tt1254207"],

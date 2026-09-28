@@ -36,6 +36,7 @@ export const USER_ALLOWED: Rule[] = [
   // Browsing and playing.
   { method: "GET", pattern: /^\/library$/ },
   { method: "GET", pattern: /^\/library\/browse$/ },
+  { method: "GET", pattern: /^\/library\/folders$/ },
   { method: "GET", pattern: /^\/library\/thumb$/ },
   { method: "GET", pattern: /^\/library\/next\/[^/]+$/ },
   { method: "GET", pattern: /^\/library\/previous\/[^/]+$/ },

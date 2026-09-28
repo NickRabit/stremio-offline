@@ -71,22 +71,32 @@ export const defaultDownloadSettings = (): AddonDownloadSettings => ({
 
 /** The subfolder is relative to the root of the library the rule names. Several levels are
  *  allowed, but never an absolute path, a drive letter, or . and .. segments. */
-export function safeSubfolder(value: unknown): string {
+const subfolderSegments = (value: unknown): string[] => {
   const raw = String(value ?? "").trim();
-  if (!raw) return "";
+  if (!raw) return [];
   if (/^[\\/]/.test(raw) || /^[a-z]:/i.test(raw)) throw new AppError("The subfolder has to be relative to the library's root.", "err.subfolderRelative");
   const segments = raw.split(/[\\/]+/).filter(Boolean);
   if (segments.length > 8) throw new AppError("The subfolder can be at most 8 levels deep.", "err.subfolderDepth");
   if (segments.some((segment) => segment === "." || segment === "..")) throw new AppError("The subfolder cannot contain . or .. segments.", "err.subfolderDots");
+  return segments;
+};
+
+export function safeSubfolder(value: unknown): string {
   // The stored and wire form is POSIX; `path.join` at the syscall turns it back.
-  return segments.map(safeName).join("/");
+  return subfolderSegments(value).map(safeName).join("/");
+}
+
+/** A folder picked from the library as it stands: its names are what is on disk, so they are
+ *  checked and kept, never tidied into a folder that does not exist. */
+export function exactSubfolder(value: unknown): string {
+  return subfolderSegments(value).join("/");
 }
 
 /** The library a rule names, or the reason it cannot be used. Called with the libraries a
  *  request is up against (`store.libraries()`), so the editor and the route agree on what a
  *  writable destination is. Without them the id is kept as it stands: the queue resolves it
  *  when the job starts, where a library that went away must not fail the download. */
-const targetLibrary = (id: string, kind: "movie" | "series", libraries?: LibraryRecord[]): string | undefined => {
+export const targetLibrary = (id: string, kind: "movie" | "series", libraries?: LibraryRecord[]): string | undefined => {
   if (!id || !libraries) return id || undefined;
   const library = libraries.find((item) => item.id === id);
   if (!library) throw new AppError("That library does not exist.", "err.libraryNotFound");
@@ -111,7 +121,7 @@ export function normalizeDownloadSettings(value: unknown, libraries?: LibraryRec
 
 /** A film goes into a folder of its own, an episode into the series and season folders. Media libraries expect that. */
 export function targetPath(media: MediaInfo | undefined, fallbackTitle: string, extension: string, settings: DownloadTargetSettings = defaultDownloadSettings().movie): { directory: string; base: string } {
-  const prefix = safeSubfolder(settings.subfolder);
+  const prefix = settings.explicit ? exactSubfolder(settings.subfolder) : safeSubfolder(settings.subfolder);
   if (media?.kind === "episode" && media.title?.trim()) {
     const series = safeName(media.title);
     const number = media.episode == null ? "" : pad(media.episode);

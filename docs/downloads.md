@@ -108,8 +108,10 @@ retry budget instead of going faster.
 
 The selected source and the player offer two destinations:
 
-- **To library** (`Do knihovny`) adds the file to the server queue and it lands
-  under `DOWNLOAD_PATH`.
+- **To library** (`Do knihovny`) adds the file to the server queue. Where it
+  lands follows the addon's rule ([Where files are saved](#where-files-are-saved));
+  the arrow next to the button saves one download somewhere else
+  ([Choosing the place for one download](#choosing-the-place-for-one-download)).
 - **To device** (`Do zařízení`) starts a native download in the current browser.
 
 Individual library files can also be downloaded from their context menu.
@@ -165,6 +167,34 @@ library are never moved by a change of rule; it applies to newly queued items.
 | Flat | Straight into the chosen subdirectory: `Movie.mkv`, `Show - S01E07 - Episode title.mkv`. |
 
 The change applies to newly queued items.
+
+### Choosing the place for one download
+
+The arrow next to **To library** opens **Save to…** (`Uložit jinam…`). It starts
+on **Addon rule**, which shows where the rule would put the title and does the
+same as the button itself. **Somewhere else** (`Jinam`) picks, for this download
+only:
+
+- a **library** — only those you can write to that take this kind of title;
+- a **folder** inside it, browsed from what is on disk. Its name is kept exactly
+  as it is: the title goes into that folder, never into a tidied copy next to it;
+- the **layout**, structured or flat, as in the table above.
+
+The line under the choices previews the folder the title lands in. The file
+name itself is still chosen by the server and may be shortened or get a number
+when a file of that name exists.
+
+Downloading a season or a whole show offers the same choice at the bottom of its
+dialog; every episode of that batch then goes to the place picked there.
+
+A library picked this way is never swapped for another one. If it goes away
+while the download waits, the job pauses like any other; if it has not come back
+after half an hour, the job **fails** with *The library chosen for this download
+is gone* instead of taking the default. The rule's own library still falls back
+as described above.
+
+Ordinary accounts see only the libraries an administrator has shared with them,
+and only those they can write to appear in the folder browser.
 
 ## Backing up the configuration
 

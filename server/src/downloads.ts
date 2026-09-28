@@ -121,6 +121,14 @@ export interface DownloadOwnerScope {
   libraries: LibraryRecord[];
 }
 
+/** The library a job writes into, where it is named. A resolved job carries it on `libraryId`;
+ *  an unresolved one names it in its qualified target, in the rule it was queued with, or --
+ *  for a lazy job that has not picked a source yet -- only in the selection it will resolve
+ *  against. */
+export const jobLibraryId = (job: Pick<DownloadJob, "libraryId" | "target" | "targetSettings" | "source">): string | undefined =>
+  job.libraryId ?? (job.target ? parseLibraryPath(job.target)?.libraryId : undefined)
+    ?? job.targetSettings?.libraryId ?? job.source?.selection?.targetSettings.libraryId;
+
 /**
  * The owner-bound check, answered from the current state every time it is asked because a
  * queued job outlives the request that queued it: the account must still exist and may queue,
@@ -129,7 +137,7 @@ export interface DownloadOwnerScope {
  * is known -- a lazy job has no source until the resolver picks one, and a library that has
  * been removed is waited for -- so the check is asked again once they are.
  */
-export function ownerMayDownload(scope: DownloadOwnerScope, job: { stream?: StreamItem; subtitle?: SubtitleItem; libraryId?: string; target?: string }): boolean {
+export function ownerMayDownload(scope: DownloadOwnerScope, job: { stream?: StreamItem; subtitle?: SubtitleItem; libraryId?: string; target?: string; targetSettings?: DownloadTargetSettings; source?: DownloadJob["source"] }): boolean {
   const owner = scope.owner;
   if (!owner || owner.disabled || !mayDownloadToLibrary(owner)) return false;
   const viewer: Viewer = { id: owner.id, role: owner.role };
@@ -140,7 +148,7 @@ export function ownerMayDownload(scope: DownloadOwnerScope, job: { stream?: Stre
     const addon = scope.addons.find((item) => item.key === addonKey);
     if (!addon?.enabled || !addonAllowed(addon, viewer)) return false;
   }
-  const libraryId = job.libraryId ?? (job.target ? parseLibraryPath(job.target)?.libraryId : undefined);
+  const libraryId = jobLibraryId({ libraryId: job.libraryId, target: job.target ?? "", targetSettings: job.targetSettings, source: job.source });
   const library = libraryId ? scope.libraries.find((item) => item.id === libraryId) : undefined;
   if (library && (!libraryVisible(library, viewer) || !library.enabled || Boolean(library.readOnly))) return false;
   return true;
@@ -226,6 +234,15 @@ class NoLibraryForKindError extends AppError {
       kind === "series" ? "err.noLibraryForSeries" : "err.noLibraryForMovies",
     );
     this.name = "NoLibraryForKindError";
+  }
+}
+
+/** An explicitly chosen library went away and its deadline passed. Unlike a rule, the user's
+ *  choice is not redirected to the default: the job fails rather than lands somewhere else. */
+class ChosenLibraryGoneError extends AppError {
+  constructor() {
+    super("The library chosen for this download is gone.", "err.chosenLibraryGone");
+    this.name = "ChosenLibraryGoneError";
   }
 }
 
@@ -472,6 +489,21 @@ export class DownloadQueue {
       const expired = !named && job.libraryGone && this.now() - Date.parse(job.pausedAt ?? "") >= this.libraryWaitMs;
       if (!named && !expired) continue;
       const kind = this.kindOf(job);
+      // A library the user picked is never swapped for the default: once the deadline for a
+      // removed one passes, the job fails where it is instead of landing somewhere unasked for.
+      if (!named && job.targetSettings?.explicit) {
+        const refusal = new ChosenLibraryGoneError();
+        log("WARN", "The chosen library is gone, the download fails", { id: job.id, title: job.title, library: waited });
+        job.status = "failed";
+        this.setError(job, refusal.message, refusal.messageKey);
+        job.pauseReason = undefined;
+        job.pausedAt = undefined;
+        job.libraryGone = undefined;
+        job.speed = 0;
+        job.updatedAt = new Date(this.now()).toISOString();
+        woke = true;
+        continue;
+      }
       const library = named ?? this.defaultLibrary(kind);
       // The deadline passed and no library takes this kind either: the job has nowhere to go,
       // so it fails instead of landing in the download directory. The rest of the queue carries on.

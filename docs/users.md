@@ -52,7 +52,9 @@ dialog:
   search and streams are built from those, and it can arrange their priority
   order for itself without changing anyone else's.
 - **Downloads.** *Download to the library* lets the account queue files onto the
-  server; *Save to this device* lets it save content to the device it is using.
+  server, and to send a single download to another granted library it can
+  write to, into a folder it picks there ([downloads.md](downloads.md#choosing-the-place-for-one-download));
+  *Save to this device* lets it save content to the device it is using.
   An administrator has both.
 - **The account itself.** The role, whether it is enabled, and a new password.
 

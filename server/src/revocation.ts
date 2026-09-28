@@ -1,7 +1,7 @@
 import { addonAllowed } from "./addons.js";
 import type { AirPlayAccess } from "./airplay-access.js";
 import { readSession } from "./auth.js";
-import { mayDownloadToDevice, mayDownloadToLibrary, type DownloadJob } from "./downloads.js";
+import { jobLibraryId, mayDownloadToDevice, mayDownloadToLibrary, type DownloadJob } from "./downloads.js";
 import { libraryVisible, parseLibraryPath, type LibraryRecord, type Viewer } from "./libraries.js";
 import { log } from "./logger.js";
 import type { DeviceDownloadTicket, MediaResources, ResourceOwner } from "./media-resources.js";
@@ -229,7 +229,7 @@ export class Revocations {
     // A queued download keeps its place, like every other pause: the job is not wrong, the
     // library it writes to is simply not this account's to write to any more.
     await this.pauseJobs((job) => this.deps.queue.ownerOf(job) === user.id && (lost({
-      libraryId: job.libraryId ?? (job.target ? parseLibraryPath(job.target)?.libraryId : undefined),
+      libraryId: jobLibraryId(job),
       addonKey: job.stream?.addonKey,
     }) || lost({ addonKey: job.subtitle?.addonKey })), user.id);
   }
@@ -271,7 +271,7 @@ export class Revocations {
   private jobTouches(job: DownloadJob, opts: StopContentOptions): boolean {
     if (opts.userId !== undefined && this.deps.queue.ownerOf(job) !== opts.userId) return false;
     if (opts.libraryId !== undefined) {
-      const libraryId = job.libraryId ?? (job.target ? parseLibraryPath(job.target)?.libraryId : undefined);
+      const libraryId = jobLibraryId(job);
       if (libraryId === opts.libraryId) return true;
     }
     // The subtitle counts as much as the video: it is commonly chosen from another addon and

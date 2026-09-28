@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { AirPlayAccess } from "./airplay-access.js";
-import type { DownloadJob } from "./downloads.js";
+import type { DownloadJob, DownloadSelection } from "./downloads.js";
 import { MediaResources, type ResourceOwner } from "./media-resources.js";
 import { Revocations, type ActiveTransfer, type RevocationDeps } from "./revocation.js";
 import type { DeviceDownloadTicket } from "./media-resources.js";
@@ -132,4 +132,19 @@ test("a sweep for one account does not touch another", async () => {
   assert.equal((theirs as unknown as { destroyed: boolean }).destroyed, false);
   assert.deepEqual(h.stopped, []);
   assert.deepEqual(h.paused, ["one"]);
+});
+
+test("a library revocation reaches a lazy job that names the library only in its target settings", async () => {
+  const selection: DownloadSelection = {
+    addonKeys: ["stream-addon"], sourceStrategy: "priority", audioLanguage: "en", subtitleMode: "off",
+    targetSettings: { subfolder: "", layout: "structured", libraryId: "lib_x", explicit: true },
+  };
+  // No target and no libraryId yet: the chosen library lives only in the selection the job will
+  // resolve against, which is where a library revocation has to look for it.
+  const lazy = job("lazy", "usr_a", { target: "", source: { type: "series", videoId: "tt1", tried: [], selection } });
+  const h = harness([lazy, job("other", "usr_a")]);
+
+  await h.revocations.stopContent({ libraryId: "lib_x" });
+
+  assert.deepEqual(h.paused, ["lazy"], "only the job bound to the revoked library pauses");
 });
