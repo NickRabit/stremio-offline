@@ -5,6 +5,15 @@ import path from "node:path";
 import test from "node:test";
 import { PlayerSidecars, SIDECAR_AHEAD_S, SIDECAR_LEAD_S, SIDECAR_RETRY_MS } from "./player-sidecars.js";
 
+/** A fake reader waits for its abort. The abort may already have fired while the fake was still
+ *  starting -- the Windows runner is slow enough for that -- and a listener added then never hears
+ *  it, which leaves the test waiting forever. */
+const whenAborted = (signal: AbortSignal, delayMs = 0) => new Promise<void>((resolve) => {
+  const done = () => { if (delayMs) setTimeout(resolve, delayMs); else resolve(); };
+  if (signal.aborted) done();
+  else signal.addEventListener("abort", done, { once: true });
+});
+
 const tick = () => new Promise((resolve) => setTimeout(resolve, 10));
 const cue = (from: number, to: number, text: string) => {
   const stamp = (v: number) => `${String(Math.floor(v / 3600)).padStart(2, "0")}:${String(Math.floor((v % 3600) / 60)).padStart(2, "0")}:${(v % 60).toFixed(3).padStart(6, "0")}`;
@@ -17,7 +26,7 @@ test("a seek past everything the reader has written starts one at the new positi
   const sidecars = new PlayerSidecars(async (args, file, _append, signal) => {
     starts.push(Number(args[args.indexOf("-ss") + 1] ?? 0));
     await writeFile(file, `WEBVTT\n\n${cue(3100, 3400, "line")}\n\n`);
-    await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+    await whenAborted(signal);
   });
   try {
     const args = async (start: number) => (start > 0 ? ["-ss", start.toFixed(3)] : []);
@@ -64,7 +73,7 @@ test("a reader that replaces another is started once, not once per caller", asyn
     open.add(file);
     starts.push(Number(args[args.indexOf("-ss") + 1] ?? 0));
     await writeFile(file, `WEBVTT\n\n${cue(3000, 3100, "line")}\n\n`);
-    try { await new Promise<void>((resolve) => signal.addEventListener("abort", () => setTimeout(resolve, 20), { once: true })); }
+    try { await whenAborted(signal, 20); }
     finally { open.delete(file); }
   });
   try {
@@ -118,7 +127,8 @@ test("cues are held back until they reach past the playhead, then shifted to it"
     await writeFile(file, `WEBVTT\n\n${cue(2990, 2996, "just said")}\n\n`);
     await new Promise<void>((resolve) => {
       finish = resolve;
-      signal.addEventListener("abort", () => resolve(), { once: true });
+      if (signal.aborted) resolve();
+      else signal.addEventListener("abort", () => resolve(), { once: true });
       burstWritten();
     });
     await writeFile(file, `WEBVTT\n\n${cue(2990, 2996, "just said")}\n\n${cue(3000 + SIDECAR_LEAD_S + 5, 3000 + SIDECAR_LEAD_S + 9, "ahead")}\n\n`);
@@ -140,7 +150,7 @@ test("a partly written cue is never handed to the player", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "sidecar-partial-"));
   const sidecars = new PlayerSidecars(async (args, file, _append, signal) => {
     await writeFile(file, `WEBVTT\n\n${cue(3100, 3200, "complete")}\n\n00:53:30.000 --> `);
-    await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+    await whenAborted(signal);
   });
   try {
     sidecars.ensure("session", directory, 0, 3000, async () => []);
@@ -158,7 +168,7 @@ test("closing playback waits for the subtitle reader to stop", async () => {
   let active = false;
   const sidecars = new PlayerSidecars(async (_args, _file, _append, signal) => {
     active = true;
-    await new Promise<void>((resolve) => signal.addEventListener("abort", () => setTimeout(resolve, 20), { once: true }));
+    await whenAborted(signal, 20);
     active = false;
   });
   try {
@@ -212,7 +222,7 @@ test("the reader lets go of the source once it is far enough ahead, and picks it
     running = true;
     const reach = 100 + SIDECAR_AHEAD_S + runs.length * 50;
     await writeFile(file, `WEBVTT\n\n${cue(reach - 5, reach, `line ${runs.length}`)}\n\n`, append ? { flag: "a" } : {});
-    await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+    await whenAborted(signal);
     running = false;
   });
   try {
@@ -239,7 +249,7 @@ test("a conversion that needs the source gets it: release stops the reader but k
   const sidecars = new PlayerSidecars(async (_args, file, _append, signal) => {
     running = true;
     await writeFile(file, `WEBVTT\n\n${cue(300, 400, "spoken")}\n\n`);
-    await new Promise<void>((resolve) => signal.addEventListener("abort", () => setTimeout(resolve, 15), { once: true }));
+    await whenAborted(signal, 15);
     running = false;
   });
   try {
@@ -257,7 +267,7 @@ test("the viewer's own correction holds the cues back, or brings them forward", 
   const directory = await mkdtemp(path.join(os.tmpdir(), "sidecar-delay-"));
   const sidecars = new PlayerSidecars(async (_args, file, _append, signal) => {
     await writeFile(file, `WEBVTT\n\n${cue(3100, 3200, "spoken")}\n\n`);
-    await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+    await whenAborted(signal);
   });
   try {
     sidecars.ensure("session", directory, 0, 3000, async () => []);
@@ -279,7 +289,7 @@ test("a reader on a slow source hands over what it has instead of holding it bac
   // nowhere near the couple of minutes a fast link produces.
   const sidecars = new PlayerSidecars(async (_args, file, _append, signal) => {
     await writeFile(file, `WEBVTT\n\n${cue(1402, 1408, "first words")}\n\n`);
-    await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+    await whenAborted(signal);
   });
   try {
     sidecars.ensure("session", directory, 1, 1401, async () => []);
@@ -298,7 +308,7 @@ test("a read that lands after the session closed does not leave a reader behind"
   const sidecars = new PlayerSidecars(async (_args, file, _append, signal) => {
     started += 1;
     await writeFile(file, `WEBVTT\n\n${cue(10, 20, "line")}\n\n`);
-    await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+    await whenAborted(signal);
   });
   try {
     sidecars.ensure("session", directory, 0, 0, async () => []);
@@ -332,7 +342,7 @@ test("asking for the same position again keeps the reader that is already on it"
   const starts: number[] = [];
   const sidecars = new PlayerSidecars(async (args, _file, _append, signal) => {
     starts.push(Number(args[args.indexOf("-ss") + 1] ?? 0));
-    await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+    await whenAborted(signal);
   });
   try {
     const args = async (start: number) => ["-ss", start.toFixed(3)];
@@ -359,7 +369,7 @@ test("subtitle polls cannot reopen the source while repeated seeks hold it relea
     starts++;
     await writeFile(file, `WEBVTT\n\n${cue(10, 20, "spoken")}\n\n`);
     running++;
-    await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+    await whenAborted(signal);
     running--;
   });
   try {
