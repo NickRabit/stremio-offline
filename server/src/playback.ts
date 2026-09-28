@@ -959,7 +959,10 @@ export class PlaybackManager {
       id: session.id, generation: session.generation, mode: session.mode, hardware,
       offset: Math.round(offset), args: args.join(" "),
     });
-    const child = trackMedia(spawn(ffmpegPath(), args, { stdio: ["ignore", "ignore", "pipe"] }));
+    // FFmpeg places the fMP4 init file next to the playlist by cutting the playlist path at its
+    // last "/". A Windows path has none, so there init.mp4 landed in FFmpeg's working folder and
+    // the start waited for it in vain. Working in the output folder puts it where it belongs.
+    const child = trackMedia(spawn(ffmpegPath(), args, { cwd: directory, stdio: ["ignore", "ignore", "pipe"] }));
     session.process = child; session.hardware = hardware; session.error = undefined;
     const generation = session.generation;
     let stderr = ""; let finished = false; let exitCode: number | null = null; let handedToClient = false;

@@ -136,7 +136,8 @@ if (isWindows) {
     "-hls_segment_type", "fmp4", "-hls_flags", "independent_segments+temp_file", "-hls_fmp4_init_filename", "init.mp4",
     "-master_pl_name", "master.m3u8", "-var_stream_map", "v:0,a:0",
     "-hls_segment_filename", path.join(out, "seg-%v-%06d.m4s"), path.join(out, "index-%v.m3u8")],
-    { encoding: "utf8", timeout: 120_000 });
+    // The server runs this FFmpeg in the output folder, which is where a Windows build puts init.mp4.
+    { cwd: out, encoding: "utf8", timeout: 120_000 });
   process.stdout.write(`smoke-packaged: HLS remux exited ${hls.status}; ${out} holds: ${readdirSync(out).join(", ")}\n`);
   if (hls.stderr) process.stdout.write(hls.stderr);
   const playlistFile = path.join(out, "index-0.m3u8");
@@ -145,5 +146,10 @@ if (isWindows) {
   process.stdout.write(`smoke-packaged: index-0.m3u8:\n${playlist}\n`);
   if (!/#EXT-X-MAP:URI="init\.mp4"/.test(playlist)) fail("the HLS playlist does not name init.mp4 by a plain name");
   if (!/^seg-0-\d+\.m4s$/m.test(playlist)) fail("the HLS playlist does not name its segments by plain names");
+  // What the server waits for before it hands the stream over: every file the playlist names.
+  const named = [...playlist.matchAll(/#EXT-X-MAP:URI="([^"]+)"/g)].map((match) => match[1])
+    .concat(playlist.split(/\r?\n/).filter((line) => line && !line.startsWith("#")));
+  const missing = named.filter((name) => !existsSync(path.join(out, name)));
+  if (missing.length) fail(`the HLS playlist names files that are not in its folder: ${missing.join(", ")}`);
   process.stdout.write("smoke-packaged: an fMP4 HLS remux into an absolute Windows path works\n");
 }
