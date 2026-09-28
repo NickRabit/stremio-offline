@@ -2589,6 +2589,7 @@ function Downloads({ jobs, deviceTransfers, libraries, halt, admin, refresh, onE
       {deviceTransfers.length > 0 && <section id="queue-device" className="queue-block queue-block-device" aria-labelledby="queue-heading-device">
         <div className="queue-block-head">
           <h3 id="queue-heading-device"><span className="queue-state-dot" aria-hidden="true"/>{t("downloads.section.device")}<span className="queue-count">{deviceTransfers.length}</span></h3>
+          {deviceTransfers.some((item) => item.state !== "running") && <button className="queue-device-clear" onClick={() => action(api.clearDeviceTransfers)}><Trash2/> {t("downloads.device.clear")}</button>}
         </div>
         <div className="downloads queue-block-list">
           {deviceTransfers.map((item) => <div className="download-row" data-status={deviceStatus(item.state)} data-kind="device" key={item.id}>

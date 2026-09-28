@@ -92,11 +92,15 @@ export class DeviceTransfers {
       this.byTicket.set(ticketId, transfer);
       this.byId.set(transfer.id, ticketId);
       this.sweep();
+    } else if (transfer.aborted) {
+      // A request that passed its checks before the stop and only now has its body: the stop
+      // stands, so it never becomes a running transfer again.
+      res.destroy();
+      return;
     } else if (transfer.state !== "running") {
       transfer.state = "running";
       delete transfer.finishedAt;
     }
-    transfer.aborted = false;
     const current = transfer;
 
     const response: OpenResponse = { res, end: 0 };
@@ -106,6 +110,8 @@ export class DeviceTransfers {
     const end = res.end.bind(res) as (...args: unknown[]) => express.Response;
     const measure = (chunk: unknown) => {
       if (typeof chunk !== "string" && !(chunk instanceof Uint8Array)) return;
+      // An error answer is not the file: it is neither progress nor a transfer that happened.
+      if (res.statusCode >= 400) return;
       const bytes = Buffer.byteLength(chunk);
       if (!bytes) return;
       if (response.start == null) this.resolveStart(current, response);
@@ -122,6 +128,8 @@ export class DeviceTransfers {
     res.write = ((...args: unknown[]) => { measure(args[0]); return write(...args); }) as typeof res.write;
     res.end = ((...args: unknown[]) => { measure(args[0]); return end(...args); }) as typeof res.end;
 
+    // The stream pipeline on the remote path already brings a response to Node's default of ten.
+    res.setMaxListeners(res.getMaxListeners() + 1);
     res.once("close", () => {
       current.open.delete(response);
       if (current.open.size) return;
@@ -152,6 +160,14 @@ export class DeviceTransfers {
     if (transfer.finishedAt == null) transfer.finishedAt = this.now();
     for (const response of [...transfer.open]) response.res.destroy();
     return ticketId;
+  }
+
+  /** Drop the finished rows the viewer may see; running ones stay. */
+  clear(viewer: Viewer): void {
+    for (const transfer of [...this.byTicket.values()]) {
+      if (transfer.finishedAt == null) continue;
+      if (viewer.role === "admin" || transfer.userId === viewer.id) this.drop(transfer);
+    }
   }
 
   private resolveStart(transfer: Transfer, response: OpenResponse): void {

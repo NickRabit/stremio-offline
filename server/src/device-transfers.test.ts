@@ -206,3 +206,55 @@ test("the entry bound drops finished rows before running ones", () => {
   assert.equal(rows.length, 2);
   assert.deepEqual(rows.map((row) => row.state).sort(), ["completed", "running"]);
 });
+
+test("a response that arrives after a stop is cut and does not bring the row back", () => {
+  const transfers = new DeviceTransfers();
+  const first = fake({ "content-length": 10 });
+  transfers.attach("ticket", meta("ada"), asRes(first));
+  first.write(Buffer.alloc(3));
+  const id = transfers.list(USER)[0].id;
+  transfers.abort(id, USER);
+
+  const late = fake({ "content-range": "bytes 3-9/10" });
+  transfers.attach("ticket", meta("ada"), asRes(late));
+  assert.equal(late.destroyed, true, "the late request is cut");
+  const [row] = transfers.list(USER);
+  assert.equal(row.state, "interrupted");
+  assert.equal(row.sent, 3);
+});
+
+test("an error answer is not counted, and one with nothing else leaves no row", () => {
+  const transfers = new DeviceTransfers();
+  const response = fake({ "content-length": 80 });
+  transfers.attach("ticket", meta("ada"), asRes(response));
+  response.statusCode = 502;
+  response.end(JSON.stringify({ error: "The stream could not be assembled." }));
+  assert.deepEqual(transfers.list(USER), []);
+});
+
+test("clear drops the viewer's finished rows and leaves running ones and strangers' alone", () => {
+  const transfers = new DeviceTransfers();
+  const done = fake({ "content-length": 2 });
+  transfers.attach("done", meta("ada"), asRes(done));
+  done.end(Buffer.alloc(2));
+  const running = fake({ "content-length": 10 });
+  transfers.attach("running", meta("ada"), asRes(running));
+  running.write(Buffer.alloc(1));
+  const other = fake({ "content-length": 2 });
+  transfers.attach("other", meta("bob"), asRes(other));
+  other.end(Buffer.alloc(2));
+
+  transfers.clear(USER);
+  assert.deepEqual(transfers.list(USER).map((row) => row.state), ["running"]);
+  assert.equal(transfers.list(ADMIN).length, 2, "bob's finished row is not ada's to clear");
+  transfers.clear(ADMIN);
+  assert.deepEqual(transfers.list(ADMIN).map((row) => row.state), ["running"]);
+});
+
+test("attaching raises the response's listener limit by the one listener it adds", () => {
+  const transfers = new DeviceTransfers();
+  const response = fake();
+  const before = response.getMaxListeners();
+  transfers.attach("ticket", meta("ada"), asRes(response));
+  assert.equal(response.getMaxListeners(), before + 1);
+});

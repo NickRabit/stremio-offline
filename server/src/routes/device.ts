@@ -100,6 +100,12 @@ export function registerDeviceRoutes(app: express.Application, deps: DeviceDeps)
       : contentOf(ticket.source.stream);
     requireAccess(req, { permission: "downloadToDevice", ...content });
 
+    // Every branch waits for something before its body starts, and a stop can land meanwhile.
+    // The stop deletes the ticket, so a request whose ticket is gone by then goes no further.
+    const ticketId = String(req.params.id);
+    const expired = () => deviceDownloadTickets.get(ticketId) !== ticket;
+    const expiredAnswer = () => res.status(404).json({ error: "The download link expired. Start the download again.", messageKey: "err.downloadTicketExpired" });
+
     res.setHeader("cache-control", "private, no-store");
     trackMedia(ticket.owner, res, undefined, { device: true, ...content });
     const user = currentUser(req);
@@ -114,8 +120,9 @@ export function registerDeviceRoutes(app: express.Application, deps: DeviceDeps)
     if (ticket.source.kind === "local") {
       const target = await libraryTarget(ticket.source.path, currentUser(req));
       if (!target) return res.status(404).json({ error: "The file was not found in the library.", messageKey: "err.libraryFileMissing" });
+      if (expired()) return expiredAnswer();
       countBytes(res, { source: "library", provider: "knihovna", title: ticket.filename, kind: "other" });
-      deviceTransfers.attach(String(req.params.id), { userId: ticket.owner.userId, username: user?.username, filename: ticket.filename, source: "library" }, res);
+      deviceTransfers.attach(ticketId, { userId: ticket.owner.userId, username: user?.username, filename: ticket.filename, source: "library" }, res);
       return void res.download(path.basename(target), ticket.filename, { root: path.dirname(target), acceptRanges: true, dotfiles: "deny" }, (error) => {
         if (!error) {
           if (res.writableFinished) record(); else res.once("finish", record);
@@ -143,6 +150,7 @@ export function registerDeviceRoutes(app: express.Application, deps: DeviceDeps)
         .map(([name, value]) => `${name}: ${value}\r\n`)
         .join("");
 
+      if (expired()) return expiredAnswer();
       const child = trackMedia(spawn(ffmpegPath(), [
         "-hide_banner", "-loglevel", "error", "-nostdin",
         "-protocol_whitelist", "file,http,https,tcp,tls,crypto",
@@ -161,7 +169,7 @@ export function registerDeviceRoutes(app: express.Application, deps: DeviceDeps)
       res.on("close", () => { if (!res.writableEnded) child.kill("SIGKILL"); });
 
       countBytes(res, statMeta({ source: "download", url: stream.url, title, addonKey: stream.addonKey, addonName: stream.addonName, kind: media?.kind }));
-      deviceTransfers.attach(String(req.params.id), { userId: ticket.owner.userId, username: user?.username, filename: ticket.filename, source: "hls", addonName: stream.addonName }, res);
+      deviceTransfers.attach(ticketId, { userId: ticket.owner.userId, username: user?.username, filename: ticket.filename, source: "hls", addonName: stream.addonName }, res);
       // No length is known ahead of an assembly, so the browser shows no progress bar.
       res.status(200).attachment(ticket.filename).setHeader("content-type", "video/mp4");
 
@@ -170,8 +178,14 @@ export function registerDeviceRoutes(app: express.Application, deps: DeviceDeps)
         if (code !== 0) log("WARN", "Assembling a playlist for a device failed", { filename: ticket.filename, code, stderr: stderr.slice(-400) });
         if (code === 0) {
           if (res.writableFinished) record(); else res.once("finish", record);
+          if (!res.writableEnded) res.end();
+          return;
         }
-        if (!res.writableEnded) res.end();
+        // Ending the response normally would hand the browser a cut-off file as a finished
+        // one. Before any byte left it gets an error; after, the connection is cut.
+        if (res.headersSent) return void res.destroy();
+        res.removeHeader("content-disposition");
+        res.status(502).json({ error: "The stream could not be assembled.", messageKey: "err.deviceAssemblyFailed" });
       });
       child.stdout!.pipe(res, { end: false });
       return;
@@ -183,9 +197,10 @@ export function registerDeviceRoutes(app: express.Application, deps: DeviceDeps)
     try { upstream = await safeFetch(stream.url!, { method: req.method === "HEAD" ? "HEAD" : "GET", headers, signal: controller.signal }); }
     finally { clearTimeout(headerTimeout); }
     if (!upstream.ok) { await upstream.body?.cancel(); throw new Error("Download source unavailable."); }
+    if (expired()) { await upstream.body?.cancel(); return expiredAnswer(); }
 
     countBytes(res, statMeta({ source: "download", url: stream.url, title, addonKey: stream.addonKey, addonName: stream.addonName, kind: media?.kind }));
-    deviceTransfers.attach(String(req.params.id), { userId: ticket.owner.userId, username: user?.username, filename: ticket.filename, source: "addon", addonName: stream.addonName }, res);
+    deviceTransfers.attach(ticketId, { userId: ticket.owner.userId, username: user?.username, filename: ticket.filename, source: "addon", addonName: stream.addonName }, res);
     res.status(upstream.status).attachment(ticket.filename).setHeader("cache-control", "private, no-store");
     for (const name of ["content-type", "content-length", "content-range", "accept-ranges"]) {
       const value = upstream.headers.get(name); if (value) res.setHeader(name, value);
@@ -199,6 +214,12 @@ export function registerDeviceRoutes(app: express.Application, deps: DeviceDeps)
   /** Stopping a device transfer is asked for the running responses and the ticket together:
    *  the transfer is destroyed first, so a range request that arrives afterwards finds the
    *  link expired. A stranger's id is answered like one that does not exist. */
+  /** Clearing takes the finished rows the caller may see; a running one has its own stop. */
+  app.delete("/api/device-transfers", (req, res) => {
+    deviceTransfers.clear(viewerOf(currentUser(req)));
+    res.status(204).end();
+  });
+
   app.delete("/api/device-transfers/:id", asyncRoute(async (req, res) => {
     const ticketId = deviceTransfers.abort(String(req.params.id), viewerOf(currentUser(req)));
     if (!ticketId) throw new AppError("The item was not found.", "err.itemNotFound", 404);

@@ -81,6 +81,7 @@ export const api = {
   removeDownload: (id: string) => request<void>(`/api/downloads/${id}`, { method: "DELETE" }),
   clearCompleted: () => request<void>("/api/downloads", { method: "DELETE" }),
   abortDeviceTransfer: (id: string) => request<void>(`/api/device-transfers/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  clearDeviceTransfers: () => request<void>("/api/device-transfers", { method: "DELETE" }),
   settings: () => request<SettingsView>("/api/settings"),
   updateSettings: (patch: SettingsPatch) => request<SettingsView>("/api/settings", { method: "PATCH", body: JSON.stringify(patch) }),
   views: () => request<UserViews>("/api/views"),

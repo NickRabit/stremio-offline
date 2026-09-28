@@ -118,6 +118,25 @@ External streams always pass through the server proxy: the browser talks only to
 Stremio Offline, and the provider URL is never placed in the download link.
 Filenames follow the same rules as library downloads.
 
+### Watching downloads to a device
+
+While a download to a device runs, **Downloads** shows it in a **Device
+downloads** (`Stahování do zařízení`) block above the queue: the file, where it
+comes from, how much the server has sent, the size when it is known, and the
+speed. An ordinary account sees only its own; an administrator sees everybody's,
+with the account name.
+
+- **Stop** (the cross on a running row) cuts the transfer and cancels its link,
+  so the browser cannot resume it. The owner and administrators can stop one.
+- **Clear finished** (`Vyčistit dokončené`) removes the rows that are no longer
+  running. Finished rows also disappear by themselves after a minute and a half.
+
+The server knows what it has sent, not what the device has saved. A download
+cancelled in the browser and a dropped connection both show as **Interrupted**.
+A stream assembled from a playlist has no size ahead of time, so its row shows
+the amount sent without a percentage; if the assembly fails, the browser's
+download fails too rather than keeping a cut-off file.
+
 ## Where files are saved
 
 In **Addons → Storage rules**, each stream addon sets where its movies and its

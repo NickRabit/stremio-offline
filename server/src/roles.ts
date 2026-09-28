@@ -70,6 +70,7 @@ export const USER_ALLOWED: Rule[] = [
   { method: "GET", pattern: /^\/media\/[^/]+\/u\/[^/]+$/ },
   { method: "POST", pattern: /^\/device-download$/ },
   { method: "GET", pattern: /^\/device-download\/[^/]+$/ },
+  { method: "DELETE", pattern: /^\/device-transfers$/ },
   { method: "DELETE", pattern: /^\/device-transfers\/[^/]+$/ },
   { method: "POST", pattern: /^\/client-log$/ },
   // Downloads. Which jobs are theirs is the next task; here only the path passes.
