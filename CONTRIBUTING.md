@@ -48,7 +48,8 @@ with `npm run test:e2e:snapshots`, or run the **Update screenshot baselines**
 workflow on the branch; do not regenerate them to make an unexplained diff go
 away. See [docs/testing.md](docs/testing.md) for what belongs in which layer.
 
-The supported runtime is Docker:
+Docker is the primary runtime; check a change there before opening a pull
+request:
 
 ```bash
 cp .env.example .env

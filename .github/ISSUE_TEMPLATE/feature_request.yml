@@ -12,7 +12,7 @@ body:
     id: problem
     attributes:
       label: The friction
-      description: What is awkward or missing when you use the app on a NAS or at home.
+      description: What is awkward or missing when you use the app at home, on a NAS or in the desktop app.
     validations:
       required: true
   - type: textarea
@@ -33,6 +33,7 @@ body:
         - Catalog / search
         - Settings / diagnostics
         - Deployment / Docker / Synology
+        - macOS or Windows app
         - Other
     validations:
       required: true

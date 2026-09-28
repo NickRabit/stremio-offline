@@ -9,11 +9,18 @@ It reads catalog and stream manifests, aggregates streams and subtitles, plays
 HTTP sources through a compatible HLS layer, and saves direct streams into a
 persistent download queue and a local library.
 
-Built for a Docker host that is always on — a Synology NAS in particular — and
-used from a browser on the home network.
+It runs in three ways:
+
+- **Docker**, the primary target — a host that is always on, a Synology NAS in
+  particular — used from a browser on any device on the home network.
+- **A macOS app** for Apple Silicon, which runs the server on the Mac or opens
+  one elsewhere, such as the NAS.
+- **A Windows app** for Windows 10 and 11 (x64), which does the same.
 
 > Unofficial. Not affiliated with Stremio or Smart Code Ltd.
-> Use only sources and accounts you have the right to access.
+> The app provides, hosts and searches no content: everything it shows comes
+> from addons the user adds. Use only sources and accounts you have the right to
+> access; what you add and download is your responsibility.
 
 ![The catalog with a title's details, its source and the buttons to play or save it](docs/images/catalog.jpg)
 
@@ -22,13 +29,16 @@ used from a browser on the home network.
 - **Catalogs and metadata** from any standard addon manifest, Cinemeta included.
 - **Playback that costs what it has to.** Direct play when the browser can
   handle the file, remux when only the container is wrong, a real transcode only
-  as a last resort — with Intel QuickSync when the hardware has it.
+  as a last resort — in hardware when there is some: Intel QuickSync on a NAS,
+  VideoToolbox on a Mac, Media Foundation on Windows.
 - **Audio tracks and subtitles**, both embedded in the file and from subtitle
   addons, with preferred languages picked in settings.
 - **A download queue that survives a restart**, resumes partial files with HTTP
   Range, and pauses itself when the disk fills up. Each addon has a rule for
   where its files go, and a single download can be sent to another library or
   folder.
+- **Saving to a device**: a file goes straight to the phone or laptop you are
+  using, through the server, and **Downloads** shows the transfer while it runs.
 - **A local library** of what you downloaded, with artwork, continue watching,
   and a list of your own.
 - **Several libraries** — another disk, films and series kept apart, a friend's
@@ -63,6 +73,8 @@ The films shown are Blender Foundation open movies (CC BY), served by a small
 local test addon, and public-domain classics. The app ships with no content.
 
 ## Quick start
+
+### With Docker
 
 Requires Docker. Everything else — FFmpeg included — is in the image.
 
@@ -101,6 +113,22 @@ PUID=1000
 PGID=100
 ```
 
+### The desktop apps
+
+Every [release](https://github.com/NickRabit/stremio-offline/releases/latest)
+carries a macOS disk image (Apple Silicon, M1 or newer) and a Windows installer
+and portable zip (x64). Neither needs Docker: FFmpeg is bundled. On first launch
+choose whether the server runs on this computer — you then pick where downloads
+go — or whether the app opens a server already running elsewhere, and switch
+between the two at any time.
+
+The apps are not code-signed, so macOS and Windows ask once before the first
+launch. The steps are in
+**[Installing the macOS app](docs/install-mac.md)** and
+**[Installing the Windows app](docs/install-windows.md)**. Both check GitHub for
+a newer release and say when one is out; updating means installing the new one
+over the old, and libraries, accounts and settings stay.
+
 ### Adding addons
 
 In **Addons**, paste a full `manifest.json` URL. A catalog manifest supplies
@@ -118,15 +146,16 @@ on demand, so a catalogue the provider adds later still shows up. See
 | [Configuration reference](docs/configuration.md) | Every environment variable, with defaults |
 | [Playback](docs/playback.md) | Direct play vs. remux vs. transcode, seeking, tracks, subtitles |
 | [Trailers](docs/trailers.md) | Where the trailer comes from, and how secure mode plays it |
-| [Addons and downloads](docs/downloads.md) | Debrid addons, the queue, save rules, config backup |
+| [Addons and downloads](docs/downloads.md) | Debrid addons, the queue, save rules, saving to a device, config backup |
 | [Libraries](docs/libraries.md) | Several roots, types, artwork per library, splitting the download folder |
 | [Library identification](docs/library-metadata.md) | How folders become titles, the scan, suggestions and Identify |
 | [Accounts](docs/users.md) | Roles, per-user libraries and addons, passwords, recovery |
-| [Hardware acceleration](docs/hardware-acceleration.md) | QuickSync and VAAPI, and how to tell it is really running |
+| [Hardware acceleration](docs/hardware-acceleration.md) | QuickSync and VAAPI, VideoToolbox, Media Foundation, and how to tell it is really running |
 | [Diagnostics and troubleshooting](docs/troubleshooting.md) | The log, the addon guard, symptom-to-page index |
 | [Installing the macOS app](docs/install-mac.md) | Download, the first launch of an unsigned app, updating and removing it |
 | [Installing the Windows app](docs/install-windows.md) | SmartScreen, the notification area, firewall, updating and removing it |
 | [Building and releasing](docs/building.md) | Local builds, GHCR, version tags, Windows and macOS hosts |
+| [Licensing](docs/licensing.md) | What each distribution contains, FFmpeg's licence and source |
 | [Testing](docs/testing.md) | What belongs in which test layer, and how to run each |
 | [Roadmap](docs/roadmap.md) | What is done, what is next, what is out of scope |
 
@@ -135,7 +164,7 @@ on demand, so a catalogue the provider adds later still shows up. See
 The browser reports which codecs it can handle, and the server takes the
 cheapest route that works:
 
-| Source | Mode | NAS load |
+| Source | Mode | Server load |
 | --- | --- | --- |
 | MP4/WebM the browser can play | direct play, FFmpeg never starts | none |
 | MKV with H.264 or HEVC | remux to fMP4, video and audio copied | negligible |

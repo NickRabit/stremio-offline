@@ -13,7 +13,6 @@
     "dev": "npm run build --prefix .. && npm run build && npm run build:renderer && npm run stage:local-backend && electron .",
     "start": "npm run dev",
     "test": "tsx --test src/*.test.ts",
-    "spike:utility": "electron spike/run.mjs",
     "verify:fuses": "node scripts/verify-fuses.mjs",
     "require-ffmpeg-win": "node scripts/require-ffmpeg-win.mjs",
     "stage:local-backend": "node scripts/stage-local-backend.mjs",

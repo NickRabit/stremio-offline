@@ -91,9 +91,9 @@ build is current).
   the inherited `PATH` and, on macOS, in `/opt/homebrew/bin` and
   `/usr/local/bin`.
 
-The packaging sections below cover the packaging prototype only. It produces a
-macOS arm64 `.dmg` and `.zip` from the compiled shell. It is deliberately not a
-public release — see [Limits](#limits) before sharing anything built here.
+The packaging sections below build the macOS arm64 `.dmg` and `.zip` and the
+Windows x64 installer and `.zip` from the compiled shell. The tagged release
+attaches them unsigned; see [Limits](#limits) for what that means.
 
 ## Sharing with other devices
 
@@ -204,7 +204,7 @@ and version taken from the workspace manifest. Inside it,
 `Contents/Resources/app.asar` holds the compiled desktop modules (`dist/*.js`),
 the shell's own pages (`renderer/`), `package.json` and the staged `runtime/`
 tree (`runtime/server/dist`, `runtime/server/node_modules`, `runtime/web`).
-TypeScript sources, tests, the spike files, and the root `server` and `web`
+TypeScript sources, tests, and the root `server` and `web`
 workspaces are not packaged.
 
 ## Runtime hardening
@@ -388,32 +388,20 @@ asset that already has that name.
 
 ## Limits
 
-This prototype exists to prove the packaging step, not to hand out an installer.
-The **Desktop package** artifact is **not** a signed, notarized, auto-updating
-release:
+The released apps are unsigned builds of the packaging above:
 
-- **The pull-request package has no Developer ID signing and no
-  notarization.** The bundle is only re-signed ad-hoc, so macOS Gatekeeper may
-  still refuse the first launch. A user who wants to try one has to approve it
-  explicitly, for example with **System Settings → Privacy & Security → Open
-  Anyway**, or by right-clicking the app and choosing **Open**. Do not describe
-  a build as Gatekeeper-ready. The manual **Desktop release** workflow signs and
-  notarizes a tagged build, but it has not been run yet against real
-  credentials and no signed release exists — see [Signed release
-  (manual)](#signed-release-manual).
-- **No automatic updates.** Nothing checks for or installs a newer version.
-- **arm64 only.** There is no Intel or universal build, and no promise to add
-  one here.
-- **No software H.264 encoder.** The bundled FFmpeg has no x264, so a
-  transcode relies on VideoToolbox. That is always there on Apple Silicon.
+- **No Developer ID signing, no notarization, no Authenticode.** The macOS
+  bundle is only re-signed ad-hoc, so Gatekeeper refuses the first launch until
+  the user approves it (**System Settings → Privacy & Security → Open Anyway**,
+  or right-click → **Open**); Windows SmartScreen warns once. Do not describe a
+  build as Gatekeeper-ready. The manual **Desktop release** workflow can sign
+  and notarize a tagged build, but the project has no Apple Developer account,
+  so it has never run — see [Signed release (manual)](#signed-release-manual).
+- **Updates are a notice, not an installer.** The app checks GitHub's release
+  feed at launch and once a day and says when a newer version is out; the user
+  downloads and installs it over the old one.
+- **arm64 only on macOS.** There is no Intel or universal build.
+- **No software H.264 encoder on macOS.** The bundled FFmpeg has no x264, so a
+  transcode relies on VideoToolbox, which is always there on Apple Silicon.
 - **No data migration.** The local backend starts with an empty instance
-  directory; pointing it at an existing Docker or NAS install is not part of
-  this prototype.
-- **No clean-install verification or support promise.** Neither the workflow nor
-  a signed build has been exercised end to end, the package has not been
-  verified from a clean install, and it is not a supported distribution.
-
-Workflow support for signing and notarization exists, but an actual signed
-release, update delivery, clean-install testing and support documentation are
-still outstanding; see
-[docs/roadmap.md](../docs/roadmap.md).
+  directory; pointing it at an existing Docker or NAS install is not supported.
