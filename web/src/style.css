@@ -382,7 +382,9 @@ main.view-catalog{padding-top:98px}main.view-catalog .heading{margin-bottom:8px}
   .detail-panel .stream-filters select{min-height:36px;padding:6px 8px;font-size:11px}
   .detail-panel .source-footer{position:static;flex:0 0 auto;bottom:auto;margin:6px -12px 0;padding:8px 12px 4px}
   .detail-panel .source-footer .source-info{margin-bottom:6px}
-  .detail-panel .source-footer .actions{grid-template-columns:1.15fr 1fr 1fr;gap:6px}
+  /* The middle cell holds the split button, so it takes the share its caret needs. */
+  .detail-panel .source-footer .actions{grid-template-columns:1fr 1.3fr 1fr;gap:6px}
+  .split-button>button:first-child>svg{display:none}
   .detail-panel .source-footer .actions .primary{grid-column:auto;min-height:36px;order:0;padding:7px 8px;font-size:11px}
   .detail-panel .source-footer .actions button:not(.primary),.detail-panel .source-footer .actions .button{min-height:36px;padding:7px 8px;font-size:10px}
   .detail-panel.series-sources-layout{overflow:hidden}
@@ -1368,3 +1370,14 @@ img.broken{visibility:hidden}
   .stats-history-list li { grid-template-columns: minmax(0, 1fr); gap: .4rem; }
   .stats-history-filters, .stats-history-filters label { min-width: 0; max-width: 100%; }
 }
+/* The "to library" split button: the main half queues with the addon's rule, the caret opens
+   the destination dialog. One shared border and squared inner corners read it as one control. */
+.split-button{display:inline-flex;align-items:stretch;min-width:0}
+.split-button>button{min-width:0;border-radius:0}
+.split-button>button:first-child{flex:1 1 auto;border-radius:8px 0 0 8px;overflow:hidden;text-overflow:ellipsis}
+.split-button>button:last-child{border-radius:0 8px 8px 0;border-left:0}
+.split-button>.split-button-toggle{flex:0 0 auto;min-width:34px;padding:0 6px}
+/* The narrow action rows size and pad every child of the row; the wrapper is only a frame. */
+.detail-panel .source-footer .actions>.split-button,.detail-workflow .source-footer .actions>.split-button{padding:0;min-height:0}
+.save-target-card{width:min(480px,100%);max-height:100%}
+.save-target-preview{display:grid;gap:4px}

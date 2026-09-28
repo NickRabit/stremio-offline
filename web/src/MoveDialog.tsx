@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronRight, CornerLeftUp, FolderOpen, HardDrive, X } from "lucide-react";
+import { X } from "lucide-react";
 import { api, describeError } from "./api";
+import { FolderBrowser } from "./FolderBrowser";
 import { t, useI18n } from "./i18n";
-import type { LibraryFolder, LibraryView } from "./types";
+import type { LibraryView } from "./types";
 
 const parentOf = (folder: string) => folder.includes("/") ? folder.slice(0, folder.lastIndexOf("/")) : "";
 
@@ -15,7 +16,6 @@ export function MoveDialog({ path, paths, copy = false, label, itemType, librari
     paths?: string[]; copy?: boolean; onClose: () => void; onQueued?: (id: string) => void }) {
   useI18n();
   const [folder, setFolder] = useState(parentOf(path));
-  const [folders, setFolders] = useState<LibraryFolder[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const chips = useRef<HTMLDivElement>(null);
@@ -34,16 +34,6 @@ export function MoveDialog({ path, paths, copy = false, label, itemType, librari
     chips.current?.querySelector("[aria-pressed=true]")?.scrollIntoView?.({ block: "nearest" });
   }, [folder, libraries.length]);
 
-  useEffect(() => {
-    let cancelled = false;
-    setBusy(true);
-    void api.libraryFolders(folder)
-      .then((result) => { if (!cancelled) { setFolders(result.folders); setError(""); } })
-      .catch((value) => { if (!cancelled) setError(describeError(value)); })
-      .finally(() => { if (!cancelled) setBusy(false); });
-    return () => { cancelled = true; };
-  }, [folder]);
-
   // One library speaks bare paths on the wire, several name the library first.
   const qualified = libraries.length > 1;
   const libraryOf = (value: string) => libraries.find((library) => value === library.id || value.startsWith(`${library.id}/`));
@@ -55,13 +45,11 @@ export function MoveDialog({ path, paths, copy = false, label, itemType, librari
     library.id === source || (library.enabled && !library.unreachable && !library.readOnly
       && (library.type === "mixed" || !itemType || library.type === itemType));
   const offered = libraries.filter(takes);
-  const open = (value: string) => setFolder(root ? (value ? `${root}/${value}` : root) : value);
 
   // The item cannot land where it already is, and a folder cannot be moved inside itself.
   const moving = paths?.length ? paths : [path];
   const inItself = moving.some((item) => folder === item || folder.startsWith(`${item}/`));
   const unchanged = moving.every((item) => folder === parentOf(item));
-  const crumbs = relative ? relative.split("/") : [];
 
   const move = async () => {
     setBusy(true);
@@ -86,22 +74,7 @@ export function MoveDialog({ path, paths, copy = false, label, itemType, librari
           onClick={() => setFolder(qualified ? library.id : "")}>{library.name}</button>)}
       </div>}
       <div className="dialog-body">
-        <nav className="move-crumbs" aria-label={t("library.moveDestination")}>
-          <button type="button" onClick={() => open("")}><HardDrive/> {qualified && current ? current.name : t("library.rootFolder")}</button>
-          {crumbs.map((name, index) => <span key={name + index}>
-            <ChevronRight aria-hidden="true"/>
-            <button type="button" onClick={() => open(crumbs.slice(0, index + 1).join("/"))}>{name}</button>
-          </span>)}
-        </nav>
-        <div className="move-list">
-          {relative && <button type="button" className="move-up" onClick={() => open(parentOf(relative))}>
-            <CornerLeftUp/> {t("library.moveUp")}
-          </button>}
-          {folders.map((item) => <button type="button" key={item.path} disabled={moving.includes(item.path)} onClick={() => setFolder(item.path)}>
-            <FolderOpen/> <span>{item.name}</span> <ChevronRight/>
-          </button>)}
-          {!busy && !folders.length && <p className="identify-hint">{t("library.moveNoSubfolders")}</p>}
-        </div>
+        <FolderBrowser libraries={libraries} folder={folder} onFolder={setFolder} onError={setError} disabledPaths={moving}/>
       </div>
       <footer className="dialog-foot">
         {error && <p className="login-error">{error}</p>}

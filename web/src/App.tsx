@@ -13,6 +13,8 @@ import { LibraryManager, LibraryManagerDialog, libraryTypeLabel } from "./Librar
 import { UserManager } from "./UserManager";
 import { PosterMosaic, TileArt } from "./TileArt";
 import { MoveDialog } from "./MoveDialog";
+import { SaveTargetDialog } from "./SaveTargetDialog";
+import type { SaveTarget } from "./save-target";
 import { SuggestionsDialog } from "./SuggestionsDialog";
 import { SeriesDownloadDialog } from "./SeriesDownloadDialog";
 import { StatsPanel } from "./Stats";
@@ -219,6 +221,7 @@ export function App() {
   const [browseBusy, setBrowseBusy] = useState(false);
   const [identifyPath, setIdentifyPath] = useState<string | null>(null);
   const [movePath, setMovePath] = useState<{ path: string; label: string; type?: "movie" | "series"; paths?: string[]; copy?: boolean } | null>(null);
+  const [saveTargetOpen, setSaveTargetOpen] = useState(false);
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(() => new Set());
   const [libraryOps, setLibraryOps] = useState<LibraryOpsState[]>([]);
@@ -1639,12 +1642,12 @@ export function App() {
       : { kind: "movie", title: baseDownloadTitle, id: selected?.id, metaType: selected?.type, ...art };
   };
   const canPlay = Boolean(selectedStream?.playable);
-  const enqueue = async () => {
+  const enqueue = async (target?: SaveTarget) => {
     if (!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)) return false;
     // The server builds the path from this; without it an episode would end up a flat file.
     const media = selectedMedia();
     try {
-      const job = await api.download(videoTitle, selectedStream, media);
+      const job = await api.download(videoTitle, selectedStream, media, target);
       notify(t(job.status === "waiting" ? "downloads.waitingDebrid" : "downloads.queued"));
       await loadDownloads(); return true;
     } catch (e) { fail(e); return false; }
@@ -1691,9 +1694,9 @@ export function App() {
     });
   };
 
-  const submitBulkDownload = async (selection: DownloadSelection) => {
+  const submitBulkDownload = async (selection: DownloadSelection, target?: SaveTarget) => {
     if (!bulkDownload) return;
-    const result = await api.downloadBulk(bulkDownload.title, bulkDownload.type, bulkDownload.episodes, selection, bulkDownload.media);
+    const result = await api.downloadBulk(bulkDownload.title, bulkDownload.type, bulkDownload.episodes, selection, bulkDownload.media, target);
     notify(t("episodes.bulkAdded", { count: result.added }) + (result.skipped ? ` ${t("episodes.bulkSkipped", { count: result.skipped })}` : ""));
     await loadDownloads();
   };
@@ -1854,7 +1857,7 @@ export function App() {
               <div className="source-footer"><div className="source-info"><Subtitles/> {t("sources.subtitleCount", { count: subtitles.length + (selectedStream?.subtitles?.length || 0) })}
                 {inspection && <> · <b>{t("sources.audioInFile")}</b> {inspection.audioTracks.length ? inspection.audioTracks.map((track, index) => <em className="lang-badge" key={index}>{label(track.language)}</em>) : "—"}
                 · <b>{t("sources.subtitlesInFile")}</b> {inspection.subtitleTracks.length ? inspection.subtitleTracks.map((track, index) => <em className="lang-badge" key={index}>{label(track.language)}</em>) : "—"}</>}
-              {selectedStream?.playable && !inspection && <> · {t("sources.probing")}</>}</div><div className="action-slot"><div className="actions"><button className="primary" disabled={!canPlay} onClick={() => openPlayer({ kind: "catalog", key: `${selected.type || "movie"}:${selected.id}` })}><CirclePlay/> {t("player.play")}</button><button disabled={!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)} onClick={() => void enqueue()}><HardDrive/> {t("save.toLibrary")}</button><button disabled={!canPlay} onClick={() => void downloadStreamToDevice()}><Download/> {t("save.toDevice")}</button></div></div></div>
+              {selectedStream?.playable && !inspection && <> · {t("sources.probing")}</>}</div><div className="action-slot"><div className="actions"><button className="primary" disabled={!canPlay} onClick={() => openPlayer({ kind: "catalog", key: `${selected.type || "movie"}:${selected.id}` })}><CirclePlay/> {t("player.play")}</button><div className="split-button"><button disabled={!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)} onClick={() => void enqueue()}><HardDrive/> {t("save.toLibrary")}</button><button className="split-button-toggle" disabled={!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)} aria-haspopup="dialog" aria-label={t("save.toLibraryElsewhere")} title={t("save.toLibraryElsewhere")} onClick={() => setSaveTargetOpen(true)}><ChevronDown/></button></div><button disabled={!canPlay} onClick={() => void downloadStreamToDevice()}><Download/> {t("save.toDevice")}</button></div></div></div>
             </div>}
             </div>
           </> : <Empty icon={<Film/>} title={t("catalog.pickTitle")} text={t("catalog.pickText")}/>}</section></div>
@@ -2110,6 +2113,11 @@ export function App() {
     {movePath && <MoveDialog path={movePath.path} paths={movePath.paths} copy={movePath.copy} label={movePath.label}
       itemType={movePath.type} libraries={libraries} onClose={() => setMovePath(null)}
       onQueued={(id) => { leaveSelection(); void trackQueuedOp(id); }}/>}
+    {saveTargetOpen && selectedStream && <SaveTargetDialog
+      label={videoTitle} kind={selectedMedia().kind === "episode" ? "series" : "movie"} title={baseDownloadTitle}
+      season={selectedVideo?.season} libraries={libraries}
+      rule={addons.find((addon) => addon.key === selectedStream.addonKey)?.downloadSettings}
+      onClose={() => setSaveTargetOpen(false)} onSubmit={enqueue}/>}
     {identifyPath && <IdentifyDialog path={identifyPath} onClose={() => setIdentifyPath(null)}
       onApplied={() => { setIdentifyPath(null); void loadSuggestionCount(); void loadBrowse(browsePath); }}/>}
     {bulkIdentifyPaths?.length && <IdentifyDialog path={bulkIdentifyPaths[0]!} paths={bulkIdentifyPaths}
@@ -2124,7 +2132,7 @@ export function App() {
     {identifyFrom && <IdentifyDialog path={identifyFrom}
       onClose={() => setIdentifyFrom(null)}
       onApplied={() => { setAppliedSuggestion(identifyFrom); setIdentifyFrom(null); void loadBrowse(browsePath); }}/>}
-    {bulkDownload && <SeriesDownloadDialog type={bulkDownload.type} label={bulkDownload.label} episodes={bulkDownload.episodes} audioLanguage={settings.audioLanguage} subtitleLanguage={settings.subtitleLanguage} languages={languages} onClose={() => setBulkDownload(null)} onSubmit={submitBulkDownload}/>}
+    {bulkDownload && <SeriesDownloadDialog type={bulkDownload.type} label={bulkDownload.label} title={bulkDownload.title} episodes={bulkDownload.episodes} audioLanguage={settings.audioLanguage} subtitleLanguage={settings.subtitleLanguage} languages={languages} libraries={libraries} addons={addons} onClose={() => setBulkDownload(null)} onSubmit={submitBulkDownload}/>}
     {galleryIndex !== null && shownGallery[galleryIndex] && <MediaGallery images={shownGallery} index={galleryIndex} onIndex={setGalleryIndex} onClose={closeGallery}/>}
     {(message || error) && <div className={`toast ${error ? "error" : ""}`}>{error || message}<button onClick={() => {setError("");setMessage("");}}><X/></button></div>}
   </div>;

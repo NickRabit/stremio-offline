@@ -1,20 +1,25 @@
 import { useEffect, useState } from "react";
-import { ArrowDown, ArrowUp, Download, Languages, ListFilter, Subtitles, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Download, FolderOpen, Languages, ListFilter, Subtitles, X } from "lucide-react";
 import { api, describeError } from "./api";
 import { languageName, t, useI18n } from "./i18n";
-import type { AudioMode, DownloadSelection, DownloadSourceStrategy, SubtitleMode } from "./types";
+import { SaveTargetFields } from "./SaveTargetFields";
+import type { SaveTarget } from "./save-target";
+import type { Addon, AudioMode, DownloadSelection, DownloadSourceStrategy, LibraryView, SubtitleMode } from "./types";
 
 interface Episode { id: string; season?: number; episode?: number; title?: string }
 
-export function SeriesDownloadDialog({ type, label, episodes, audioLanguage, subtitleLanguage, languages, onClose, onSubmit }: {
+export function SeriesDownloadDialog({ type, label, title, episodes, audioLanguage, subtitleLanguage, languages, libraries, addons, onClose, onSubmit }: {
   type: string;
   label: string;
+  title: string;
   episodes: Episode[];
   audioLanguage: string;
   subtitleLanguage: string;
   languages: Array<{ code: string; name: string }>;
+  libraries: LibraryView[];
+  addons: Addon[];
   onClose: () => void;
-  onSubmit: (selection: DownloadSelection) => Promise<void>;
+  onSubmit: (selection: DownloadSelection, target?: SaveTarget) => Promise<void>;
 }) {
   useI18n();
   const [sources, setSources] = useState<Array<{ key: string; name: string }>>([]);
@@ -26,6 +31,7 @@ export function SeriesDownloadDialog({ type, label, episodes, audioLanguage, sub
   const [subtitleMode, setSubtitleMode] = useState<SubtitleMode>("optional");
   const [subtitle, setSubtitle] = useState(subtitleLanguage);
   const [subtitleFallback, setSubtitleFallback] = useState(subtitleLanguage === "en" ? "" : "en");
+  const [target, setTarget] = useState<SaveTarget | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -57,6 +63,8 @@ export function SeriesDownloadDialog({ type, label, episodes, audioLanguage, sub
     if (left < 0 || right < 0) return left < 0 ? 1 : -1;
     return left - right;
   });
+  // The destination defaults to the rule of the first addon in the chosen order.
+  const rule = addons.find((addon) => addon.key === chosen[0])?.downloadSettings;
   const languageOptions = () => languages.map(({ code }) => <option key={code} value={code}>{languageName(code)}</option>);
 
   const submit = async () => {
@@ -70,7 +78,7 @@ export function SeriesDownloadDialog({ type, label, episodes, audioLanguage, sub
         subtitleMode,
         subtitleLanguage: subtitleMode === "off" ? undefined : subtitle,
         fallbackSubtitleLanguage: subtitleMode !== "off" && subtitleFallback !== subtitle ? subtitleFallback || undefined : undefined,
-      });
+      }, target ?? undefined);
       onClose();
     } catch (value) { setError(describeError(value)); }
     finally { setBusy(false); }
@@ -117,6 +125,10 @@ export function SeriesDownloadDialog({ type, label, episodes, audioLanguage, sub
             <label><span>{t("bulk.subtitleFallback")}</span><select disabled={subtitleMode === "off"} value={subtitleFallback} onChange={(event) => setSubtitleFallback(event.target.value)}><option value="">{t("bulk.noFallback")}</option>{languageOptions()}</select></label>
           </div>
           {subtitleMode === "optional" && <p className="identify-hint bulk-subtitle-hint">{t("bulk.subtitlePriorityHint")}</p>}
+        </section>
+        <section className="bulk-section">
+          <div className="bulk-section-head"><FolderOpen/><div><h3>{t("saveTarget.where")}</h3><p>{t("saveTarget.whereHint")}</p></div></div>
+          <SaveTargetFields kind="series" title={title} libraries={libraries} rule={rule} value={target} onChange={setTarget}/>
         </section>
         {error && <p className="login-error" role="alert">{error}</p>}
       </div>

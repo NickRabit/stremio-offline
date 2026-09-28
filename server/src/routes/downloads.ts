@@ -5,10 +5,11 @@ import { ownerMayDownload, type AudioMode, type DownloadQueue, type DownloadSele
 import { AppError } from "../errors.js";
 import { normalizeLanguage } from "../language.js";
 import { log } from "../logger.js";
-import { defaultDownloadSettings, type MediaInfo } from "../naming.js";
+import { libraryVisible } from "../libraries.js";
+import { defaultDownloadSettings, safeSubfolder, targetLibrary, type MediaInfo } from "../naming.js";
 import { titleLanguage } from "../ranking.js";
 import type { UserPrefs } from "../store.js";
-import type { MetaItem, StreamItem } from "../types.js";
+import type { DownloadTargetSettings, MetaItem, StreamItem } from "../types.js";
 import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
 
 export interface DownloadsDeps extends RouteContext {
@@ -38,6 +39,28 @@ export function registerDownloadRoutes(app: express.Application, deps: Downloads
     throw new AppError("This account may not download to the library.", "err.downloadLibraryNotAllowed", 403);
   };
 
+  /** The library the caller picked, checked here so an unusable one is refused rather than
+   *  queued. A missing library and one the caller may not see answer the same, so the route
+   *  gives nothing away about libraries that are not theirs. */
+  const explicitTarget = (req: express.Request, value: unknown, kind: "movie" | "series"): DownloadTargetSettings | undefined => {
+    if (value === undefined || value === null) return undefined;
+    const item = typeof value === "object" ? value as Record<string, unknown> : undefined;
+    const libraryId = typeof item?.libraryId === "string" ? item.libraryId.trim() : "";
+    if (!libraryId) throw new AppError("Invalid download destination.", "err.invalidDownloadTarget");
+    const libraries = store.libraries();
+    const library = libraries.find((entry) => entry.id === libraryId);
+    if (!library || !libraryVisible(library, viewerOf(currentUser(req)))) {
+      throw new AppError("That library does not exist.", "err.libraryNotFound");
+    }
+    targetLibrary(libraryId, kind, libraries);
+    return {
+      subfolder: safeSubfolder(item!.subfolder),
+      layout: item!.layout === "flat" ? "flat" : "structured",
+      libraryId,
+      explicit: true,
+    };
+  };
+
   /** A job the caller does not own is answered exactly like one that is not there: 403 would
    *  tell the caller that the id exists. */
   const requireOwnJob = (req: express.Request, id: string): string => {
@@ -62,7 +85,9 @@ export function registerDownloadRoutes(app: express.Application, deps: Downloads
     const media = mediaSource(req.body.media);
     const addon = store.addons().find((item) => item.key === stream.addonKey);
     const settings = addon?.downloadSettings ?? defaultDownloadSettings();
-    const targetSettings = media?.kind === "episode" ? settings.series : settings.movie;
+    const kind = media?.kind === "episode" ? "series" : "movie";
+    const chosen = explicitTarget(req, req.body.target, kind);
+    const targetSettings = chosen ?? (kind === "series" ? settings.series : settings.movie);
     assertMayQueue(req, { stream, libraryId: targetSettings.libraryId });
     const job = await queue.add(String(req.body.title ?? "video"), stream, media, targetSettings, owner?.id);
     await rememberTitle(job.target, media, targetSettings.layout === "flat");
@@ -79,6 +104,7 @@ export function registerDownloadRoutes(app: express.Application, deps: Downloads
   app.post("/api/downloads/bulk", asyncRoute(async (req, res) => {
     const owner = currentUser(req);
     assertMayQueue(req);
+    const explicit = explicitTarget(req, req.body.target, "series");
     const title = String(req.body.title ?? "").trim() || "Show";
     const type = String(req.body.type ?? "series");
     const parent = req.body.media && typeof req.body.media === "object" ? req.body.media as Record<string, unknown> : {};
@@ -114,7 +140,7 @@ export function registerDownloadRoutes(app: express.Application, deps: Downloads
       titleLanguage: metaLanguage,
       subtitleMode, subtitleLanguage,
       fallbackSubtitleLanguage: fallbackSubtitleLanguage === subtitleLanguage ? undefined : fallbackSubtitleLanguage,
-      targetSettings: firstAddon?.downloadSettings.series ?? defaultDownloadSettings().series,
+      targetSettings: explicit ?? (firstAddon?.downloadSettings.series ?? defaultDownloadSettings().series),
     };
     assertMayQueue(req, { libraryId: selection.targetSettings.libraryId });
     let added = 0, skipped = 0;

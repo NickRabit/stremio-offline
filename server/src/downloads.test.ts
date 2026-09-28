@@ -361,6 +361,40 @@ test("a job whose owner lost the right pauses with the permission reason and run
   }
 });
 
+test("an explicitly chosen library that never comes back fails the job instead of taking the default", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-dl-"));
+  const downloadDir = path.join(directory, "downloads");
+  const archiveRoot = path.join(directory, "archive");
+  const archive = { id: "lib_12345678", name: "Archive", type: "movie" as const, root: archiveRoot, enabled: true, order: 0, addedAt: "2026-01-01T00:00:00.000Z", writeArtwork: true };
+  // The default library is right here and takes the kind, so falling back would be possible --
+  // which is exactly what an explicit choice must not do.
+  const downloads = downloadLibrary(downloadDir);
+  const size = 4096;
+  const { server, port } = await listen((_req, res) => {
+    res.writeHead(200, { "content-length": String(size), "content-type": "video/mp4" });
+    void send(res, size).then(() => res.end());
+  });
+  const queue = new DownloadQueue(() => 1, () => 1, path.join(directory, "data"), downloadDir, {
+    stallInitialMs: 5_000, stallTransferMs: 5_000, libraryRetryMs: 20, libraryWaitMs: 60,
+    libraries: () => [downloads],
+    defaultLibrary: () => downloads,
+    libraryState: async () => undefined,
+  });
+  await queue.load();
+  try {
+    const job = await queue.add("Film", { url: `http://127.0.0.1:${port}/film.mp4` }, undefined, { subfolder: "", layout: "structured", libraryId: archive.id, explicit: true });
+    await waitFor(queue, () => queue.list().find((item) => item.id === job.id)?.status === "paused");
+    assert.equal(queue.list().find((item) => item.id === job.id)?.pauseReason, "library", "a removed library is waited for first");
+    await waitFor(queue, () => queue.list().find((item) => item.id === job.id)?.status === "failed");
+    assert.equal(queue.list().find((item) => item.id === job.id)?.errorKey, "err.chosenLibraryGone", "past the deadline it fails rather than lands elsewhere");
+    await assert.rejects(stat(path.join(downloadDir, "Film", "Film.mp4")), "nothing lands in the default library");
+  } finally {
+    await queue.stop();
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("a series download no library accepts is refused before it is queued", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-dl-"));
   const downloadDir = path.join(directory, "downloads");

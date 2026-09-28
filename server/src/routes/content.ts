@@ -247,7 +247,14 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
    *  into one of them is perfectly reasonable, so this lists them all. */
   app.get("/api/library/folders", asyncRoute(async (req, res) => {
     const relative = String(req.query.path ?? "").trim();
-    const resolved = await resolveLibraryPath(visibleLibraries(store.libraries(), viewerOf(currentUser(req))), relative);
+    const viewer = viewerOf(currentUser(req));
+    // An ordinary user may only walk into libraries they could save to: a picker that names a
+    // library it cannot write to would offer a destination the download would then refuse. An
+    // administrator keeps seeing every library, as elsewhere.
+    const walkable = viewer.role === "admin"
+      ? store.libraries()
+      : visibleLibraries(store.libraries(), viewer).filter((library) => library.enabled && !library.readOnly && !library.unreachable);
+    const resolved = await resolveLibraryPath(walkable, relative);
     if (!resolved) throw new AppError("Invalid path.", "err.invalidPath");
     markBrowsed(resolved.library);
     const folders = await listFolders(resolved.library.root, resolved.relative, carveOutsOf(resolved.library));

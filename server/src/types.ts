@@ -5,6 +5,8 @@ export interface DownloadTargetSettings {
   layout: DownloadLayout;
   /** Library the finished file goes to. Absent or empty means the default for the kind. */
   libraryId?: string;
+  /** Chosen by the user for this job; never redirected. */
+  explicit?: true;
 }
 export interface AddonDownloadSettings { movie: DownloadTargetSettings; series: DownloadTargetSettings }
 

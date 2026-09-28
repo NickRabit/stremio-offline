@@ -86,7 +86,7 @@ export function safeSubfolder(value: unknown): string {
  *  request is up against (`store.libraries()`), so the editor and the route agree on what a
  *  writable destination is. Without them the id is kept as it stands: the queue resolves it
  *  when the job starts, where a library that went away must not fail the download. */
-const targetLibrary = (id: string, kind: "movie" | "series", libraries?: LibraryRecord[]): string | undefined => {
+export const targetLibrary = (id: string, kind: "movie" | "series", libraries?: LibraryRecord[]): string | undefined => {
   if (!id || !libraries) return id || undefined;
   const library = libraries.find((item) => item.id === id);
   if (!library) throw new AppError("That library does not exist.", "err.libraryNotFound");

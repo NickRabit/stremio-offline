@@ -261,6 +261,44 @@ test("GET /api/library/folders refuses a path in a library the caller may not se
   assert.equal((await response.json() as { messageKey?: string }).messageKey, "err.invalidPath");
 });
 
+test("GET /api/library/folders lets an ordinary user into a visible, writable library", async (t) => {
+  const root = await makeRoot();
+  await mkdir(path.join(root, "Archive"), { recursive: true });
+  const harness = await mount([library("lib_00000001", root, 0, [BOB])]);
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const response = await api(harness.base, "/api/library/folders", { user: BOB });
+
+  assert.equal(response.status, 200);
+  const body = await response.json() as { folders: Array<{ name: string }> };
+  assert.deepEqual(body.folders.map((folder) => folder.name), ["Archive"]);
+});
+
+test("GET /api/library/folders keeps an ordinary user out of a read-only library", async (t) => {
+  const root = await makeRoot();
+  await mkdir(path.join(root, "Archive"), { recursive: true });
+  const harness = await mount([{ ...library("lib_00000001", root, 0, [BOB]), readOnly: true }]);
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const response = await api(harness.base, "/api/library/folders", { user: BOB });
+
+  assert.equal(response.status, 400);
+  assert.equal((await response.json() as { messageKey?: string }).messageKey, "err.invalidPath");
+});
+
+test("GET /api/library/folders still shows an administrator a read-only library", async (t) => {
+  const root = await makeRoot();
+  await mkdir(path.join(root, "Archive"), { recursive: true });
+  const harness = await mount([{ ...library("lib_00000001", root, 0, [BOB]), readOnly: true }]);
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const response = await api(harness.base, "/api/library/folders");
+
+  assert.equal(response.status, 200);
+  const body = await response.json() as { folders: Array<{ name: string }> };
+  assert.deepEqual(body.folders.map((folder) => folder.name), ["Archive"]);
+});
+
 test("GET /api/library/browse marks the library it read as browsed", async (t) => {
   const root = await makeRoot();
   await put(root, "Films/Heat.mkv");

@@ -23,7 +23,7 @@ afterEach(() => { act(() => root.unmount()); host.remove(); vi.unstubAllGlobals(
 describe("SeriesDownloadDialog", () => {
   it("submits ordered sources and per-batch language choices", async () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined);
-    await act(async () => { root.render(<SeriesDownloadDialog type="series" label="Season 1" episodes={[{ id: "tt1:1:1" }]} audioLanguage="cs" subtitleLanguage="cs" languages={[{ code: "cs", name: "Čeština" }, { code: "en", name: "English" }]} onClose={() => undefined} onSubmit={onSubmit}/>); });
+    await act(async () => { root.render(<SeriesDownloadDialog type="series" label="Season 1" title="Show" libraries={[]} addons={[]} episodes={[{ id: "tt1:1:1" }]} audioLanguage="cs" subtitleLanguage="cs" languages={[{ code: "cs", name: "Čeština" }, { code: "en", name: "English" }]} onClose={() => undefined} onSubmit={onSubmit}/>); });
     await act(async () => { await Promise.resolve(); });
     const priorityStrategy = host.querySelector<HTMLInputElement>('input[name="source-strategy"][value="priority"]')!;
     expect(host.querySelector<HTMLInputElement>('input[name="source-strategy"][value="largest"]')!.checked).toBe(true);
@@ -34,17 +34,17 @@ describe("SeriesDownloadDialog", () => {
     await act(async () => { subtitleMode.value = "required"; subtitleMode.dispatchEvent(new Event("change", { bubbles: true })); });
     const add = [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("Add to queue"))!;
     await act(async () => { add.click(); await Promise.resolve(); });
-    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ addonKeys: ["second", "first"], sourceStrategy: "priority", audioLanguage: "cs", fallbackAudioLanguage: "en", audioMode: "listed", subtitleMode: "required", subtitleLanguage: "cs" }));
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ addonKeys: ["second", "first"], sourceStrategy: "priority", audioLanguage: "cs", fallbackAudioLanguage: "en", audioMode: "listed", subtitleMode: "required", subtitleLanguage: "cs" }), undefined);
   });
 
   it("submits the chosen audio matching mode", async () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined);
-    await act(async () => { root.render(<SeriesDownloadDialog type="series" label="Season 1" episodes={[{ id: "tt1:1:1" }]} audioLanguage="cs" subtitleLanguage="cs" languages={[{ code: "cs", name: "Čeština" }, { code: "en", name: "English" }]} onClose={() => undefined} onSubmit={onSubmit}/>); });
+    await act(async () => { root.render(<SeriesDownloadDialog type="series" label="Season 1" title="Show" libraries={[]} addons={[]} episodes={[{ id: "tt1:1:1" }]} audioLanguage="cs" subtitleLanguage="cs" languages={[{ code: "cs", name: "Čeština" }, { code: "en", name: "English" }]} onClose={() => undefined} onSubmit={onSubmit}/>); });
     await act(async () => { await Promise.resolve(); });
     const audioMode = [...host.querySelectorAll("select")].find((select) => [...select.options].some((option) => option.value === "preferred"))!;
     await act(async () => { audioMode.value = "preferred"; audioMode.dispatchEvent(new Event("change", { bubbles: true })); });
     const add = [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("Add to queue"))!;
     await act(async () => { add.click(); await Promise.resolve(); });
-    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ audioMode: "preferred" }));
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ audioMode: "preferred" }), undefined);
   });
 });

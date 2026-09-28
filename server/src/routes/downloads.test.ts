@@ -6,19 +6,21 @@ import express from "express";
 import { DeviceTransfers } from "../device-transfers.js";
 import type { DownloadQueue } from "../downloads.js";
 import { AppError, messageKeyOf } from "../errors.js";
+import type { LibraryRecord } from "../libraries.js";
 import { defaultDownloadSettings, type MediaInfo } from "../naming.js";
 import type { Store, UserPrefs } from "../store.js";
+import type { DownloadTargetSettings } from "../types.js";
 import type { UserRecord } from "../users.js";
 import { registerDownloadRoutes, type DownloadsDeps } from "./downloads.js";
 
 interface Harness {
   base: string;
   transfers: DeviceTransfers;
-  added: Array<{ title: string; ownerUserId?: string }>;
+  added: Array<{ title: string; ownerUserId?: string; settings?: DownloadTargetSettings }>;
   actions: string[];
   moves: Array<{ id: string; direction: number }>;
   viewed: Array<{ id?: string; media?: MediaInfo; target?: string }>;
-  pending: Array<{ selection?: { addonKeys?: string[] }; ownerUserId?: string }>;
+  pending: Array<{ selection?: { addonKeys?: string[]; targetSettings?: DownloadTargetSettings }; ownerUserId?: string }>;
   close(): Promise<void>;
 }
 
@@ -34,6 +36,11 @@ const streamAddon = (key: string, options: { enabled?: boolean; role?: string; a
 
 const ADA = "usr_00000001";
 const BOB = "usr_00000002";
+
+/** One configured library, shaped the way the store keeps it. */
+const library = (id: string, type: "movie" | "series" | "mixed", extra: Partial<LibraryRecord> = {}): LibraryRecord => ({
+  id, name: id, type, root: `/media/${id}`, enabled: true, order: 0, addedAt: "2026-01-01T00:00:00.000Z", writeArtwork: true, ...extra,
+});
 /** A record shaped the way the store keeps one, so the flags the check must not read are on it. */
 const account = (id: string, role: "admin" | "user", downloadToLibrary: boolean): UserRecord => ({
   id, username: role === "admin" ? "ada" : "bob", role, createdAt: "2026-01-01T00:00:00.000Z",
@@ -48,15 +55,15 @@ const denied = account(BOB, "user", false);
  *  instance over fake collaborators that record what they were asked to do. */
 const mount = async (
   addons: unknown[] = [streamAddon("stream-addon")],
-  options: { viewer?: UserRecord; jobs?: Array<{ id: string; ownerUserId?: string }> } = {},
+  options: { viewer?: UserRecord; jobs?: Array<{ id: string; ownerUserId?: string }>; libraries?: unknown[] } = {},
 ): Promise<Harness> => {
   const jobs = options.jobs ?? [{ id: "job-1", ownerUserId: ADA }, { id: "job-2", ownerUserId: ADA }];
   const transfers = new DeviceTransfers();
-  const added: Array<{ title: string; ownerUserId?: string }> = [];
+  const added: Array<{ title: string; ownerUserId?: string; settings?: DownloadTargetSettings }> = [];
   const actions: string[] = [];
   const moves: Array<{ id: string; direction: number }> = [];
   const viewed: Array<{ id?: string; media?: MediaInfo; target?: string }> = [];
-  const pending: Array<{ selection?: { addonKeys?: string[] }; ownerUserId?: string }> = [];
+  const pending: Array<{ selection?: { addonKeys?: string[]; targetSettings?: DownloadTargetSettings }; ownerUserId?: string }> = [];
   /** What the queue does with an id it does not hold, so a foreign job can be compared with one. */
   const require = (name: string, id: string) => {
     if (!jobs.some((job) => job.id === id)) throw new AppError("The item was not found.", "err.itemNotFound");
@@ -65,8 +72,8 @@ const mount = async (
   const queue = {
     snapshot: () => ({ jobs, halt: null }),
     list: () => jobs,
-    add: async (title: string, _stream: unknown, _media: unknown, _settings: unknown, ownerUserId?: string) => {
-      added.push({ title, ownerUserId });
+    add: async (title: string, _stream: unknown, _media: unknown, settings: DownloadTargetSettings, ownerUserId?: string) => {
+      added.push({ title, ownerUserId, settings });
       return { id: "job-1", target: "Movies/Film/Film.mkv" };
     },
     addPending: async (_title: string, source: { selection?: { addonKeys?: string[] } }, _media: unknown, ownerUserId?: string) => {
@@ -81,7 +88,7 @@ const mount = async (
     clearCompleted: async () => undefined,
   };
   const deps: DownloadsDeps = {
-    store: { addons: () => addons, libraries: () => [] } as unknown as Store,
+    store: { addons: () => addons, libraries: () => options.libraries ?? [] } as unknown as Store,
     needsSetup: () => false,
     currentSession: () => undefined,
     currentUser: () => options.viewer ?? admin,
@@ -345,4 +352,89 @@ test("an administrator queues onto the NAS whatever the stored flags say", async
   const response = await api(harness.base, "/api/downloads", { method: "POST", body: { title: "Film" } });
   assert.equal(response.status, 201);
   assert.deepEqual(harness.added.map((job) => job.ownerUserId), [ADA], "the job records who asked for it");
+});
+
+test("POST /api/downloads accepts an explicit target and queues it with the job", async (t) => {
+  const harness = await mount(undefined, { libraries: [library("lib_movies", "movie")] });
+  t.after(harness.close);
+  const response = await api(harness.base, "/api/downloads", {
+    method: "POST",
+    body: { title: "Film", target: { libraryId: "lib_movies", subfolder: "Kino", layout: "flat" } },
+  });
+  assert.equal(response.status, 201);
+  assert.deepEqual(harness.added[0]?.settings, { subfolder: "Kino", layout: "flat", libraryId: "lib_movies", explicit: true });
+});
+
+test("POST /api/downloads refuses an unusable explicit target and queues nothing", async (t) => {
+  const cases: Array<{ library?: LibraryRecord; target: unknown; key: string }> = [
+    { target: { libraryId: "lib_missing" }, key: "err.libraryNotFound" },
+    { target: { libraryId: "" }, key: "err.invalidDownloadTarget" },
+    { target: "nope", key: "err.invalidDownloadTarget" },
+    { library: library("lib_shows", "series"), target: { libraryId: "lib_shows" }, key: "err.libraryTypeMismatch" },
+    { library: library("lib_off", "movie", { enabled: false }), target: { libraryId: "lib_off" }, key: "err.libraryNotWritable" },
+    { library: library("lib_ro", "movie", { readOnly: true }), target: { libraryId: "lib_ro" }, key: "err.libraryNotWritable" },
+    { library: library("lib_away", "movie", { unreachable: true }), target: { libraryId: "lib_away" }, key: "err.libraryNotWritable" },
+    { library: library("lib_movies", "movie"), target: { libraryId: "lib_movies", subfolder: ".." }, key: "err.subfolderDots" },
+  ];
+  for (const [index, item] of cases.entries()) {
+    const harness = await mount(undefined, { libraries: item.library ? [item.library] : [] });
+    t.after(harness.close);
+    const response = await api(harness.base, "/api/downloads", { method: "POST", body: { title: "Film", target: item.target } });
+    assert.equal(response.status, 400, `case ${index}`);
+    assert.equal(await keyOf(response), item.key, `case ${index}`);
+    assert.deepEqual(harness.added, [], `case ${index} queues nothing`);
+  }
+});
+
+test("a library invisible to the caller answers exactly like one that does not exist", async (t) => {
+  const harness = await mount(undefined, { viewer: ordinary, libraries: [library("lib_private", "movie", { visibleTo: [] })] });
+  t.after(harness.close);
+  const invisible = await api(harness.base, "/api/downloads", { method: "POST", body: { title: "Film", target: { libraryId: "lib_private" } } });
+  const missing = await api(harness.base, "/api/downloads", { method: "POST", body: { title: "Film", target: { libraryId: "lib_nope" } } });
+  assert.equal(invisible.status, 400);
+  assert.equal(invisible.status, missing.status);
+  const invisibleBody = await invisible.json() as { messageKey?: string };
+  assert.deepEqual(invisibleBody, await missing.json(), "the two answers give nothing away");
+  assert.equal(invisibleBody.messageKey, "err.libraryNotFound");
+  assert.deepEqual(harness.added, []);
+});
+
+test("POST /api/downloads refuses an explicit target for an account without the library permission", async (t) => {
+  const harness = await mount(undefined, { viewer: denied, libraries: [library("lib_movies", "movie")] });
+  t.after(harness.close);
+  const response = await api(harness.base, "/api/downloads", { method: "POST", body: { title: "Film", target: { libraryId: "lib_movies" } } });
+  assert.equal(response.status, 403);
+  assert.equal(await keyOf(response), "err.downloadLibraryNotAllowed");
+  assert.deepEqual(harness.added, []);
+});
+
+test("POST /api/downloads/bulk stores an explicit target in the selection", async (t) => {
+  const harness = await mount(undefined, { libraries: [library("lib_shows", "series", { visibleTo: [] })] });
+  t.after(harness.close);
+  const response = await api(harness.base, "/api/downloads/bulk", {
+    method: "POST",
+    body: {
+      title: "Show", episodes: episodes(1),
+      selection: { addonKeys: ["stream-addon"], audioLanguage: "en" },
+      target: { libraryId: "lib_shows", subfolder: "S", layout: "flat" },
+    },
+  });
+  assert.equal(response.status, 201);
+  assert.deepEqual(harness.pending[0]?.selection?.targetSettings, { subfolder: "S", layout: "flat", libraryId: "lib_shows", explicit: true });
+});
+
+test("POST /api/downloads/bulk refuses an unusable explicit target and queues nothing", async (t) => {
+  const harness = await mount(undefined, { libraries: [] });
+  t.after(harness.close);
+  const response = await api(harness.base, "/api/downloads/bulk", {
+    method: "POST",
+    body: {
+      title: "Show", episodes: episodes(1),
+      selection: { addonKeys: ["stream-addon"], audioLanguage: "en" },
+      target: { libraryId: "lib_missing" },
+    },
+  });
+  assert.equal(response.status, 400);
+  assert.equal(await keyOf(response), "err.libraryNotFound");
+  assert.deepEqual(harness.pending, []);
 });
