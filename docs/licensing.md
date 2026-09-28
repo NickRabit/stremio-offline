@@ -83,7 +83,7 @@ an Apple Developer ID. That is a Gatekeeper matter, not a licensing one.
 
 ### Desktop app (Windows)
 
-The experimental Windows app carries **FFmpeg 9.0.2 (`ffmpeg.exe`,
+The Windows app carries **FFmpeg 9.0.2 (`ffmpeg.exe`,
 `ffprobe.exe`)**, cross-compiled on Linux by
 `desktop/scripts/build-ffmpeg-win.sh`. It is the same LGPL build as on macOS —
 made without `--enable-gpl`, so it contains no x264 — and H.264 is encoded by

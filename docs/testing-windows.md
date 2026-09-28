@@ -11,8 +11,8 @@ It cannot show:
 - the firewall;
 - a real graphics card encoding.
 
-This checklist covers those. Run it on a real Windows 10 or 11 PC before the
-Windows build loses its experimental label.
+This checklist covers those. Run it on a real Windows 10 or 11 PC after a
+change that touches the Windows app.
 
 ## Get the build
 
