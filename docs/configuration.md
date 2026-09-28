@@ -150,6 +150,7 @@ container does not start a round that is not due yet.
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `ADDON_AUTO_REFRESH` | `1` | `0` stops the server refreshing manifests on its own, whatever the interval in Settings says. |
+| `STREAM_ADDON_TIMEOUT_MS` | `60000` | How long a stream request to one addon may take before its answer is dropped. Debrid addons that resolve on request can be slow. |
 
 ## Library metadata
 
@@ -170,6 +171,7 @@ Details in [Playback](playback.md) and
 | --- | --- | --- |
 | `FFMPEG_READRATE` | `1.5` | How far ahead of real time conversion may run. |
 | `FFMPEG_READRATE_REMUX` | `3` | The same for remux only. Lower it to `2` if the NAS chokes on write bursts. |
+| `FFMPEG_BURST` | `30` | Seconds read at full speed before the read rate applies, so the first segment is ready quickly. |
 | `FFMPEG_PRESET` | `veryfast` | `libx264` preset. Software fallback only. |
 | `FFMPEG_CRF` | `23` | `libx264` quality. Lower means better and heavier. Software fallback only. |
 | `FFMPEG_PATH` | *(unset)* | Full path to the `ffmpeg` executable to run. Unset or empty, `ffmpeg` from `PATH` is used. |
@@ -178,6 +180,8 @@ Details in [Playback](playback.md) and
 | `VAAPI_DEVICE` | *(unset)* | Render node, usually `/dev/dri/renderD128`. |
 | `VIDEOTOOLBOX` | `1` | macOS only. `0` stops the desktop backend probing or using VideoToolbox. |
 | `VIDEOTOOLBOX_QUALITY` | `60` | macOS constant-quality value (`-q:v`, 1–100). Higher means better and more bitrate — the opposite of `VAAPI_QP`. |
+| `MEDIAFOUNDATION` | `1` | Windows only. `0` stops the desktop backend probing or using Media Foundation. |
+| `MEDIAFOUNDATION_QUALITY` | `60` | Windows constant-quality value (1–100), used when the graphics card's encoder takes it. Higher means better and more bitrate. |
 | `RENDER_GID` | *(unset)* | GID owning the render node. Without it the process cannot open the device. |
 | `LIBVA_DRIVER_NAME` | *(auto)* | Force `iHD` (Gemini Lake and newer) or `i965` (older Braswell). |
 
