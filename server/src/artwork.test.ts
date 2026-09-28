@@ -242,3 +242,15 @@ test("a gallery slot keeps its own key, and the poster keeps the one it has alwa
   assert.equal(new Set(keys).size, keys.length);
   assert.equal(ART_VARIANTS.length, GALLERY_SIZE + 2);
 });
+
+test("ArtworkQueue drops a job whose library went away while it waited", async () => {
+  const removed = new Set<string>();
+  const queue = new ArtworkQueue((key) => removed.has(key.split("/")[0]!));
+  const ran: string[] = [];
+  const first = queue.run("lib_a/one", async () => { ran.push("one"); removed.add("lib_a"); });
+  const second = queue.run("lib_a/two", async () => { ran.push("two"); });
+  const third = queue.run("lib_b/three", async () => { ran.push("three"); });
+  await Promise.all([first, second, third]);
+  assert.deepEqual(ran, ["one", "three"]);
+  assert.equal(queue.size, 0);
+});

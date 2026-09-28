@@ -337,13 +337,17 @@ export class ArtworkQueue {
   private pending = new Set<string>();
   private chain: Promise<void> = Promise.resolve();
 
+  /** `gone` answers for a key whose library was removed while its job waited: a scan of a big
+   *  folder queues thousands, and each would otherwise fail and be logged one by one. */
+  constructor(private readonly gone: (key: string) => boolean = () => false) {}
+
   /** Whether a job for this key is already queued or running. */
   has(key: string) { return this.pending.has(key); }
 
   run(key: string, task: () => Promise<void>) {
     this.pending.add(key);
     this.chain = this.chain
-      .then(task)
+      .then(() => this.gone(key) ? undefined : task())
       .catch((error) => log("WARN", "The artwork job failed", { key, reason: String(error).slice(0, 120) }))
       .finally(() => { this.pending.delete(key); });
     return this.chain;

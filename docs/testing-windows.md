@@ -76,7 +76,10 @@ where something looks wrong.
 10. **Folders.**
     - Add a library on another drive, for example `D:\Films`. It works.
     - A long series name downloads without an error.
-    - Trying the drive root `D:\` itself as the download folder is refused.
+    - In the **first-run setup step** (a fresh install, or after Reset this
+      PC), choosing the drive root `D:\`, the profile folder itself or a folder
+      inside the install folder as the download folder is refused. A library
+      added later may sit at a drive root on purpose, for example a NAS share.
 11. **Update notice.** Nothing to do unless an older build is installed. Then
     the app says a newer version is out, and **Download** opens the release page.
 12. **Uninstall.**

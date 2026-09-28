@@ -28,7 +28,7 @@ SmartScreen stops it the first time:
 2. Choose **Run anyway**.
 
 The installer needs no administrator rights. It installs for your account
-only, adds a Start menu entry and a desktop shortcut, and opens the app. Each
+only, into `%LOCALAPPDATA%\Programs\@stremio-offlinedesktop`, adds a Start menu entry and a desktop shortcut, and opens the app. Each
 new version shows the SmartScreen warning again.
 
 ## Setting it up

@@ -900,7 +900,12 @@ const thumbUrl = async (param: "path" | "dir" | "key", value: string, art: strin
     ? `/api/library/thumb?${param}=${encodeURIComponent(value)}${shape === "wide" ? "&shape=wide" : ""}&v=${await artStamp(art)}`
     : undefined);
 
-const artworkQueue = new ArtworkQueue();
+/** A job for a library that has been removed meanwhile is dropped without a word. */
+const libraryGone = (key: string) => {
+  const id = /(?:^|:)(lib_[A-Za-z0-9]+)(?:\/|$)/.exec(key)?.[1];
+  return id !== undefined && !libraryFor(store.libraries(), id);
+};
+const artworkQueue = new ArtworkQueue(libraryGone);
 const fileExists = async (file: string) => { try { await access(file); return true; } catch { return false; } };
 const dataArtworkFile = (key: string) => artworks.file(key);
 
