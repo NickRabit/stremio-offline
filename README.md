@@ -15,6 +15,8 @@ used from a browser on the home network.
 > Unofficial. Not affiliated with Stremio or Smart Code Ltd.
 > Use only sources and accounts you have the right to access.
 
+![The catalog with a title's details, its source and the buttons to play or save it](docs/images/catalog.jpg)
+
 ## What it does
 
 - **Catalogs and metadata** from any standard addon manifest, Cinemeta included.
@@ -43,6 +45,22 @@ used from a browser on the home network.
 Personalized addon URLs that already resolve through a debrid service work.
 A raw torrent needs a Real-Debrid API token in Settings; the app never runs a
 torrent engine. See [Addons and downloads](docs/downloads.md#real-debrid-and-other-debrid-services).
+
+## Screenshots
+
+| Library | Download queue |
+| --- | --- |
+| ![Downloaded films in the library, with posters and descriptions](docs/images/library.jpg) | ![One film downloading, another waiting in the queue](docs/images/downloads.jpg) |
+
+![The player with subtitles from an addon](docs/images/player.jpg)
+
+<p>
+  <img src="docs/images/mobile-catalog.jpg" alt="The catalog on a phone" width="260">
+  <img src="docs/images/mobile-library.jpg" alt="The library on a phone" width="260">
+</p>
+
+The films shown are Blender Foundation open movies (CC BY), served by a small
+local test addon, and public-domain classics. The app ships with no content.
 
 ## Quick start
 
