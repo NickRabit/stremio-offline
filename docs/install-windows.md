@@ -1,11 +1,8 @@
-# Installing the Windows app (experimental)
+# Installing the Windows app
 
 The Windows app runs Stremio Offline on your PC, or opens a server you already
 run somewhere else, such as a NAS. It needs 64-bit Windows 10 or 11. On a
 Windows on ARM laptop the x64 build runs under emulation.
-
-**Experimental.** The Windows build is packaged and tested automatically, but
-not yet on many real machines. Tell us what does not work.
 
 ## Download
 

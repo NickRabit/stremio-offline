@@ -242,15 +242,15 @@ jobs:
           notes="$RUNNER_TEMP/notes-windows.md"
           gh release view "${GITHUB_REF_NAME}" --json body --jq .body > "$notes"
           # A rerun must not add the section twice.
-          if grep -qF "## Desktop app (Windows x64, experimental)" "$notes"; then
+          if grep -qF "## Desktop app (Windows x64)" "$notes"; then
             echo "the release notes already describe the Windows app"
             exit 0
           fi
           cat >> "$notes" <<'NOTES'
 
-          ## Desktop app (Windows x64, experimental)
+          ## Desktop app (Windows x64)
 
-          `Stremio-Offline-<version>-x64-unsigned-setup.exe` is not signed, so Microsoft Defender SmartScreen stops the first launch: choose **More info** → **Run anyway**. [docs/install-windows.md](https://github.com/NickRabit/stremio-offline/blob/main/docs/install-windows.md) walks through the install. The build stays experimental until it has been checked on real Windows machines.
+          `Stremio-Offline-<version>-x64-unsigned-setup.exe` is not signed, so Microsoft Defender SmartScreen stops the first launch: choose **More info** → **Run anyway**. [docs/install-windows.md](https://github.com/NickRabit/stremio-offline/blob/main/docs/install-windows.md) walks through the install.
 
           The app includes FFmpeg, built LGPL-3.0-or-later for Windows; the `ffmpeg-*` source archive attached here is the exact source it was built from (see `docs/licensing.md`).
           NOTES

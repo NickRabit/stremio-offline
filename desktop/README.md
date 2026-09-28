@@ -1,4 +1,4 @@
-# Desktop shell — macOS arm64 and experimental Windows x64
+# Desktop shell — macOS arm64 and Windows x64
 
 The `desktop` workspace is an Electron shell that opens an existing Stremio
 Offline server, or runs one on this computer. The window shows either the
@@ -157,7 +157,7 @@ and, when the window is not focused, as a system notification.
 
 - macOS on Apple Silicon (arm64). Only arm64 is built and labelled; there is no
   Intel or universal artifact.
-- Windows 10 or 11, x64 (experimental). Windows on ARM runs the x64 build under
+- Windows 10 or 11, x64. Windows on ARM runs the x64 build under
   emulation.
 - Node.js >= 22, matching the root `engines` field.
 
@@ -273,7 +273,7 @@ allows it (right-click → **Open**, or **System Settings → Privacy & Security
 Open Anyway**). The job refuses a tag that disagrees with
 `desktop/package.json` and never replaces an asset that is already attached.
 
-## Windows (experimental)
+## Windows
 
 The same shell runs on Windows x64. Where it differs from macOS:
 
@@ -327,7 +327,7 @@ The same shell runs on Windows x64. Where it differs from macOS:
     apart from an installed app's `desktop` folder, on every platform.
 
 Users read [docs/install-windows.md](../docs/install-windows.md); the manual
-check before the build loses its experimental label is
+check on a real PC, for a change that touches Windows, is
 [docs/testing-windows.md](../docs/testing-windows.md).
 
 ## Signed release (manual)
