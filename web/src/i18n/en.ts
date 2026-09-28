@@ -1058,6 +1058,7 @@ export const en = {
   "err.lastAdmin": "The last administrator cannot be removed.",
   "err.libraryNotWritable": "The library cannot be written to.",
   "err.invalidDownloadTarget": "Invalid download destination.",
+  "err.targetFolderMissing": "That folder is not in the library.",
   "err.chosenLibraryGone": "The library chosen for this download is gone.",
   "err.unknownLibrary": "That library does not exist.",
   "err.notSignedIn": "Not signed in.",

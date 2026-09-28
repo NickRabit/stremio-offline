@@ -1053,6 +1053,7 @@ export const cs: Catalog = {
   "err.lastAdmin": "Posledního administrátora nelze odebrat.",
   "err.libraryNotWritable": "Do knihovny nejde zapisovat.",
   "err.invalidDownloadTarget": "Neplatné umístění pro stažení.",
+  "err.targetFolderMissing": "Tato složka v knihovně není.",
   "err.chosenLibraryGone": "Knihovna zvolená pro toto stahování už neexistuje.",
   "err.unknownLibrary": "Taková knihovna neexistuje.",
   "err.notSignedIn": "Nepřihlášeno.",

@@ -1,3 +1,4 @@
+import { stat } from "node:fs/promises";
 import type express from "express";
 import { allowedAddons } from "../addons.js";
 import type { DeviceTransfers } from "../device-transfers.js";
@@ -5,8 +6,8 @@ import { ownerMayDownload, type AudioMode, type DownloadQueue, type DownloadSele
 import { AppError } from "../errors.js";
 import { normalizeLanguage } from "../language.js";
 import { log } from "../logger.js";
-import { libraryVisible } from "../libraries.js";
-import { defaultDownloadSettings, safeSubfolder, targetLibrary, type MediaInfo } from "../naming.js";
+import { libraryVisible, resolveLibraryPath } from "../libraries.js";
+import { defaultDownloadSettings, exactSubfolder, targetLibrary, type MediaInfo } from "../naming.js";
 import { titleLanguage } from "../ranking.js";
 import type { UserPrefs } from "../store.js";
 import type { DownloadTargetSettings, MetaItem, StreamItem } from "../types.js";
@@ -42,7 +43,7 @@ export function registerDownloadRoutes(app: express.Application, deps: Downloads
   /** The library the caller picked, checked here so an unusable one is refused rather than
    *  queued. A missing library and one the caller may not see answer the same, so the route
    *  gives nothing away about libraries that are not theirs. */
-  const explicitTarget = (req: express.Request, value: unknown, kind: "movie" | "series"): DownloadTargetSettings | undefined => {
+  const explicitTarget = async (req: express.Request, value: unknown, kind: "movie" | "series"): Promise<DownloadTargetSettings | undefined> => {
     if (value === undefined || value === null) return undefined;
     const item = typeof value === "object" ? value as Record<string, unknown> : undefined;
     const libraryId = typeof item?.libraryId === "string" ? item.libraryId.trim() : "";
@@ -53,8 +54,16 @@ export function registerDownloadRoutes(app: express.Application, deps: Downloads
       throw new AppError("That library does not exist.", "err.libraryNotFound");
     }
     targetLibrary(libraryId, kind, libraries);
+    // The folder was picked from the library, so it is checked as it is and has to be there:
+    // tidying its name would put the title in a folder next to the one the user chose.
+    const subfolder = exactSubfolder(item!.subfolder);
+    if (subfolder) {
+      const resolved = await resolveLibraryPath([library], subfolder);
+      const info = resolved ? await stat(resolved.absolute).catch(() => undefined) : undefined;
+      if (!info?.isDirectory()) throw new AppError("That folder is not in the library.", "err.targetFolderMissing");
+    }
     return {
-      subfolder: safeSubfolder(item!.subfolder),
+      subfolder,
       layout: item!.layout === "flat" ? "flat" : "structured",
       libraryId,
       explicit: true,
@@ -86,7 +95,7 @@ export function registerDownloadRoutes(app: express.Application, deps: Downloads
     const addon = store.addons().find((item) => item.key === stream.addonKey);
     const settings = addon?.downloadSettings ?? defaultDownloadSettings();
     const kind = media?.kind === "episode" ? "series" : "movie";
-    const chosen = explicitTarget(req, req.body.target, kind);
+    const chosen = await explicitTarget(req, req.body.target, kind);
     const targetSettings = chosen ?? (kind === "series" ? settings.series : settings.movie);
     assertMayQueue(req, { stream, libraryId: targetSettings.libraryId });
     const job = await queue.add(String(req.body.title ?? "video"), stream, media, targetSettings, owner?.id);
@@ -104,7 +113,7 @@ export function registerDownloadRoutes(app: express.Application, deps: Downloads
   app.post("/api/downloads/bulk", asyncRoute(async (req, res) => {
     const owner = currentUser(req);
     assertMayQueue(req);
-    const explicit = explicitTarget(req, req.body.target, "series");
+    const explicit = await explicitTarget(req, req.body.target, "series");
     const title = String(req.body.title ?? "").trim() || "Show";
     const type = String(req.body.type ?? "series");
     const parent = req.body.media && typeof req.body.media === "object" ? req.body.media as Record<string, unknown> : {};

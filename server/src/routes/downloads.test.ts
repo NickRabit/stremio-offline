@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { EventEmitter, once } from "node:events";
 import type { AddressInfo } from "node:net";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { test } from "node:test";
 import express from "express";
 import { DeviceTransfers } from "../device-transfers.js";
@@ -37,10 +40,15 @@ const streamAddon = (key: string, options: { enabled?: boolean; role?: string; a
 const ADA = "usr_00000001";
 const BOB = "usr_00000002";
 
+/** The folders an explicit target may name have to exist, so every library gets a real root. */
+const MEDIA = mkdtempSync(path.join(tmpdir(), "routes-downloads-"));
+process.on("exit", () => rmSync(MEDIA, { recursive: true, force: true }));
 /** One configured library, shaped the way the store keeps it. */
-const library = (id: string, type: "movie" | "series" | "mixed", extra: Partial<LibraryRecord> = {}): LibraryRecord => ({
-  id, name: id, type, root: `/media/${id}`, enabled: true, order: 0, addedAt: "2026-01-01T00:00:00.000Z", writeArtwork: true, ...extra,
-});
+const library = (id: string, type: "movie" | "series" | "mixed", extra: Partial<LibraryRecord> = {}): LibraryRecord => {
+  const root = path.join(MEDIA, id);
+  for (const folder of ["Kino", "S", "Sci-Fi: Classics"]) mkdirSync(path.join(root, folder), { recursive: true });
+  return { id, name: id, type, root, enabled: true, order: 0, addedAt: "2026-01-01T00:00:00.000Z", writeArtwork: true, ...extra };
+};
 /** A record shaped the way the store keeps one, so the flags the check must not read are on it. */
 const account = (id: string, role: "admin" | "user", downloadToLibrary: boolean): UserRecord => ({
   id, username: role === "admin" ? "ada" : "bob", role, createdAt: "2026-01-01T00:00:00.000Z",
@@ -365,6 +373,17 @@ test("POST /api/downloads accepts an explicit target and queues it with the job"
   assert.deepEqual(harness.added[0]?.settings, { subfolder: "Kino", layout: "flat", libraryId: "lib_movies", explicit: true });
 });
 
+test("an explicit folder keeps its name as it is on disk", async (t) => {
+  const harness = await mount(undefined, { libraries: [library("lib_movies", "movie")] });
+  t.after(harness.close);
+  const response = await api(harness.base, "/api/downloads", {
+    method: "POST",
+    body: { title: "Film", target: { libraryId: "lib_movies", subfolder: "Sci-Fi: Classics" } },
+  });
+  assert.equal(response.status, 201);
+  assert.equal(harness.added[0]?.settings?.subfolder, "Sci-Fi: Classics");
+});
+
 test("POST /api/downloads refuses an unusable explicit target and queues nothing", async (t) => {
   const cases: Array<{ library?: LibraryRecord; target: unknown; key: string }> = [
     { target: { libraryId: "lib_missing" }, key: "err.libraryNotFound" },
@@ -375,6 +394,7 @@ test("POST /api/downloads refuses an unusable explicit target and queues nothing
     { library: library("lib_ro", "movie", { readOnly: true }), target: { libraryId: "lib_ro" }, key: "err.libraryNotWritable" },
     { library: library("lib_away", "movie", { unreachable: true }), target: { libraryId: "lib_away" }, key: "err.libraryNotWritable" },
     { library: library("lib_movies", "movie"), target: { libraryId: "lib_movies", subfolder: ".." }, key: "err.subfolderDots" },
+    { library: library("lib_movies", "movie"), target: { libraryId: "lib_movies", subfolder: "Nowhere" }, key: "err.targetFolderMissing" },
   ];
   for (const [index, item] of cases.entries()) {
     const harness = await mount(undefined, { libraries: item.library ? [item.library] : [] });

@@ -200,3 +200,12 @@ test("a usable typed name comes back tidied, not changed", () => {
   assert.equal(assertUsableName("S.W.A.T. 2017"), "S.W.A.T. 2017");
   assert.equal(assertUsableName("Amélie"), "Amélie");
 });
+
+test("an explicit subfolder is used as named, a rule's is tidied", () => {
+  const media = { kind: "movie" as const, title: "Dune" };
+  assert.equal(targetPath(media, "Dune", ".mkv", { subfolder: "Sci-Fi: Classics", layout: "structured", libraryId: "lib_a", explicit: true }).directory,
+    path.join("Sci-Fi: Classics", "Dune"));
+  assert.equal(targetPath(media, "Dune", ".mkv", { subfolder: "Sci-Fi: Classics", layout: "structured" }).directory,
+    path.join("Sci-Fi Classics", "Dune"));
+  assert.throws(() => targetPath(media, "Dune", ".mkv", { subfolder: "../x", layout: "flat", explicit: true }), /\.\./);
+});
