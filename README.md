@@ -24,7 +24,9 @@ used from a browser on the home network.
 - **Audio tracks and subtitles**, both embedded in the file and from subtitle
   addons, with preferred languages picked in settings.
 - **A download queue that survives a restart**, resumes partial files with HTTP
-  Range, and pauses itself when the disk fills up.
+  Range, and pauses itself when the disk fills up. Each addon has a rule for
+  where its files go, and a single download can be sent to another library or
+  folder.
 - **A local library** of what you downloaded, with artwork, continue watching,
   and a list of your own.
 - **Several libraries** — another disk, films and series kept apart, a friend's
@@ -184,6 +186,12 @@ npm run build
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow and
 [docs/testing.md](docs/testing.md) for the test layers. Larger product questions
 belong in the [roadmap](docs/roadmap.md).
+
+## Supporting the project
+
+Stremio Offline is free and stays that way. If it is useful to you and you
+would like to support its development, you can do so on
+[Ko-fi](https://ko-fi.com/nickrabit).
 
 ## License
 
