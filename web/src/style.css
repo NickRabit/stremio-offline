@@ -1486,3 +1486,15 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
 ::-webkit-scrollbar-thumb{border:3px solid transparent;border-radius:99px;background:#2f3947;background-clip:padding-box}
 ::-webkit-scrollbar-thumb:hover{background:#3d4858;background-clip:padding-box}
 ::-webkit-scrollbar-track{background:transparent}
+/* A home-screen app draws under the status bar, and a dialog that fills the screen starts there:
+   its title and close button have to start below it, or the way out is behind the clock. */
+@media(max-width:700px),(max-height:500px) and (orientation:landscape){
+  .identify-overlay .identify-card>.identify-head{padding-top:calc(16px + env(safe-area-inset-top, 0px));padding-left:max(16px,env(safe-area-inset-left, 0px));padding-right:max(16px,env(safe-area-inset-right, 0px))}
+  .identify-overlay .dialog-body{padding-left:max(16px,env(safe-area-inset-left, 0px));padding-right:max(16px,env(safe-area-inset-right, 0px))}
+  .identify-overlay .dialog-foot{padding-left:max(16px,env(safe-area-inset-left, 0px));padding-right:max(16px,env(safe-area-inset-right, 0px))}
+}
+.identify-overlay{padding-top:max(24px,env(safe-area-inset-top, 0px))}
+@media(max-width:700px),(max-height:500px) and (orientation:landscape){.identify-overlay{padding-top:0}}
+.gallery-overlay{padding-top:calc(54px + env(safe-area-inset-top, 0px))}
+.gallery-close{top:calc(16px + env(safe-area-inset-top, 0px))}
+.trailer-overlay{padding-top:calc(16px + env(safe-area-inset-top, 0px))}
