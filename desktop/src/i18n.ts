@@ -1,3 +1,13 @@
+import { de } from "./i18n/de.js";
+import { es } from "./i18n/es.js";
+import { fr } from "./i18n/fr.js";
+import { it } from "./i18n/it.js";
+import { pl } from "./i18n/pl.js";
+import { ptBR } from "./i18n/ptBR.js";
+import { ru } from "./i18n/ru.js";
+import { sk } from "./i18n/sk.js";
+import type { ShellLocale } from "./shell-prefs.js";
+
 // Strings the main process itself needs: the window title and the native dialogs and
 // notifications. Everything the shell's own pages render is translated in web/src/i18n.
 export const en = {
@@ -92,8 +102,23 @@ const win32Cs: Partial<typeof cs> = {
   "reset.detail": "Server na tomto počítači se zastaví a odhlásíte se z něj. Jeho účty, záznamy knihoven, historie a nastavení se přesunou do Koše, nastavení aplikace se smaže a aplikace začne znovu úvodní obrazovkou.",
 };
 
-export function catalogue(locale: "cs" | "en", platform: NodeJS.Platform = process.platform): typeof en {
-  const own = locale === "cs" ? cs : en;
-  if (platform !== "win32") return own;
-  return { ...own, ...(locale === "cs" ? win32Cs : win32En) };
+const native: Record<Exclude<ShellLocale, "cs" | "en">, Record<string, string>> = { sk, de, es, fr, it, pl, "pt-BR": ptBR, ru };
+
+export function catalogue(locale: ShellLocale, platform: NodeJS.Platform = process.platform): typeof en {
+  const own: Record<string, string> = locale === "cs" ? cs : locale === "en" ? en : native[locale];
+  if (platform !== "win32") {
+    const strings = { ...own };
+    for (const key of ["quit.detail.win", "reset.title.win", "reset.detail.win", "reset.detailDownloads.win"]) delete strings[key];
+    return strings as typeof en;
+  }
+  const windows = locale === "en" ? win32En : locale === "cs" ? win32Cs : {
+    "window.thisMac": own["window.thisPC"],
+    "quit.detail": own["quit.detail.win"],
+    "reset.title": own["reset.title.win"],
+    "reset.detail": own["reset.detail.win"],
+    "reset.detailDownloads": own["reset.detailDownloads.win"],
+  };
+  const strings: Record<string, string> = { ...own, ...windows };
+  for (const key of ["quit.detail.win", "reset.title.win", "reset.detail.win", "reset.detailDownloads.win"]) delete strings[key];
+  return strings as typeof en;
 }

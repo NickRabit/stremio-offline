@@ -82,7 +82,7 @@ export interface LocalState {
   restartNeeded: boolean;
 }
 
-export type ShellLocale = "cs" | "en";
+export type ShellLocale = "cs" | "en" | "sk" | "de" | "es" | "fr" | "it" | "pl" | "pt-BR" | "ru";
 
 /** The operating system the shell runs on; pages and texts follow it ("This Mac" / "This PC"). */
 export type ShellPlatform = "darwin" | "win32" | "linux";
@@ -109,7 +109,7 @@ export interface ShellState {
   /** The language the shell speaks now. */
   platform: ShellPlatform;
   locale: ShellLocale;
-  /** The user's explicit choice, or null to follow macOS (Czech when the system is Czech, else English). */
+  /** The user's explicit choice, or null to follow the closest supported system language. */
   localeChoice: ShellLocale | null;
   appVersion: string;
   screen: MainScreen;

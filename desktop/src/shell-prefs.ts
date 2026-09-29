@@ -6,7 +6,8 @@ import { renameWithRetry } from "./fs-retry.js";
 
 export const SHELL_PREFS_FILE = "shell-prefs.json";
 
-export type ShellLocale = "cs" | "en";
+export const SHELL_LOCALES = ["en", "cs", "sk", "de", "es", "fr", "it", "pl", "pt-BR", "ru"] as const;
+export type ShellLocale = (typeof SHELL_LOCALES)[number];
 
 export interface ShellPrefs {
   locale: ShellLocale | null;
@@ -16,7 +17,7 @@ export interface ShellPrefs {
   trayNoticeShown: boolean;
 }
 
-const isLocale = (value: unknown): value is ShellLocale => value === "cs" || value === "en";
+const isLocale = (value: unknown): value is ShellLocale => SHELL_LOCALES.includes(value as ShellLocale);
 
 /** A missing or malformed value means the default: the check is on. */
 const readCheckUpdates = (body: Record<string, unknown>): boolean => body.checkUpdates !== false;
@@ -81,8 +82,11 @@ export async function writeShellPrefs(dir: string, prefs: ShellPrefs): Promise<v
   }
 }
 
-/** The explicit choice, else Czech when the system speaks it, else English. */
+/** The explicit choice, else the closest supported system language, else English. */
 export function effectiveLocale(choice: ShellLocale | null, systemLocale: string): ShellLocale {
   if (choice !== null) return choice;
-  return systemLocale.trim().toLowerCase().startsWith("cs") ? "cs" : "en";
+  const tag = systemLocale.trim().toLowerCase().replaceAll("_", "-");
+  return SHELL_LOCALES.find((locale) => locale.toLowerCase() === tag)
+    ?? SHELL_LOCALES.find((locale) => locale.toLowerCase().split("-")[0] === tag.split("-")[0])
+    ?? "en";
 }

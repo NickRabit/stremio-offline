@@ -1,5 +1,5 @@
-/** Source of truth for the key set: `cs.ts` is typed against it, so a missing or
- *  misspelled key is a build error rather than a hole a user finds.
+/** Source of truth for the key set: every locale is typed against it, so a missing
+ *  or misspelled key is a build error rather than a hole a user finds.
  *
  *  House style: labels and buttons are short and article-free ("Clear filters",
  *  not "Clear the filters"); hints are one sentence about what the setting does
@@ -922,18 +922,18 @@ export const en = {
   "settings.historyCleared": "History deleted.",
   "settings.clearHistory": "Delete history",
   "settings.artworkMoved": "Whether a poster is written next to the video is set for each library, in Libraries. Existing images are never overwritten.",
-  "catalog.shapeWide": "Zobrazit dlaždice na šířku",
-  "catalog.shapePoster": "Zobrazit plakáty",
-  "library.shapeWide": "Zobrazit dlaždice na šířku",
-  "library.shapePoster": "Zobrazit plakáty",
+  "catalog.shapeWide": "Show wide tiles",
+  "catalog.shapePoster": "Show posters",
+  "library.shapeWide": "Show wide tiles",
+  "library.shapePoster": "Show posters",
   "catalog.showTools": "Show search and filters",
   "library.showTools": "Show filter and tools",
-  "settings.catalogShape": "Tvar dlaždic katalogu",
-  "settings.catalogShapeHint": "Plakáty na výšku, nebo obrázky na šířku tam, kde je doplněk má.",
-  "settings.libraryShape": "Tvar dlaždic knihovny",
-  "settings.libraryShapeHint": "Plakáty na výšku, nebo obrázky na šířku tam, kde je knihovna má.",
-  "settings.shape.poster": "Na výšku (výchozí)",
-  "settings.shape.wide": "Na šířku",
+  "settings.catalogShape": "Catalog tile shape",
+  "settings.catalogShapeHint": "Portrait posters or landscape artwork, when the addon provides it.",
+  "settings.libraryShape": "Library tile shape",
+  "settings.libraryShapeHint": "Portrait posters or landscape artwork, when the library has it.",
+  "settings.shape.poster": "Portrait (default)",
+  "settings.shape.wide": "Landscape",
   "settings.catalogTiles": "Catalog tile size",
   "settings.catalogTilesHint": "How many posters fit in a catalog row.",
   "settings.libraryTiles": "Library tile size",

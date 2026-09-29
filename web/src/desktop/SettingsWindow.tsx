@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Check, Copy, Download, Info, Languages, Laptop, Network, Pencil, Plus, RefreshCw, RotateCcw, Server, Trash2, TriangleAlert } from "lucide-react";
-import { LOCALE_NAMES } from "../i18n";
+import { LOCALES, LOCALE_NAMES } from "../i18n";
 import { t } from "./text";
 import { SettingControl, SettingsSectionHead } from "../settings-ui";
 import type { AppPrefs, LocalSettings, ServerProfile, ShellBridge, ShellState, Target } from "./bridge";
@@ -46,11 +46,10 @@ function GeneralSection({ bridge, state }: { bridge: ShellBridge; state: ShellSt
       <SettingControl title={t("desktop.language")} text={t("desktop.languageText")}>
         <select value={state.localeChoice ?? "system"} onChange={(event) => {
           const value = event.target.value;
-          void bridge.setLocale(value === "cs" || value === "en" ? value : null);
+          void bridge.setLocale(value === "system" ? null : value as typeof LOCALES[number]);
         }}>
           <option value="system">{t("desktop.languageSystem", { language: LOCALE_NAMES[systemLocale ?? state.locale] })}</option>
-          <option value="cs">{LOCALE_NAMES.cs}</option>
-          <option value="en">{LOCALE_NAMES.en}</option>
+          {LOCALES.map((locale) => <option key={locale} value={locale}>{LOCALE_NAMES[locale]}</option>)}
         </select>
       </SettingControl>
       <SettingControl title={t("desktop.openAtLogin")} text={t("desktop.openAtLoginText")}>

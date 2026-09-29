@@ -3,8 +3,16 @@ import { detectLocale } from "./detect";
 import { pluralForm, type PluralForms } from "./plural";
 import { en } from "./en";
 import { cs } from "./cs";
+import { sk } from "./sk";
+import { de } from "./de";
+import { es } from "./es";
+import { fr } from "./fr";
+import { it } from "./it";
+import { pl } from "./pl";
+import { ptBR } from "./ptBR";
+import { ru } from "./ru";
 
-export const LOCALES = ["en", "cs"] as const;
+export const LOCALES = ["en", "cs", "sk", "de", "es", "fr", "it", "pl", "pt-BR", "ru"] as const;
 export type Locale = (typeof LOCALES)[number];
 export type Catalog = { [K in keyof typeof en]: (typeof en)[K] extends string ? string : PluralForms };
 export type Key = keyof Catalog;
@@ -12,9 +20,12 @@ export type Vars = Record<string, string | number>;
 
 /** Always written in the language itself: someone looking for Czech finds "Čeština"
  *  even while the interface is still English. */
-export const LOCALE_NAMES: Record<Locale, string> = { en: "English", cs: "Čeština" };
+export const LOCALE_NAMES: Record<Locale, string> = {
+  en: "English", cs: "Čeština", sk: "Slovenčina", de: "Deutsch", es: "Español",
+  fr: "Français", it: "Italiano", pl: "Polski", "pt-BR": "Português (Brasil)", ru: "Русский",
+};
 
-const CATALOGS: Record<Locale, Catalog> = { en, cs };
+const CATALOGS: Record<Locale, Catalog> = { en, cs, sk, de, es, fr, it, pl, "pt-BR": ptBR, ru };
 const CACHE_KEY = "ui-language";
 const isLocale = (value: unknown): value is Locale => LOCALES.includes(value as Locale);
 
@@ -33,7 +44,7 @@ export function setLocale(next: Locale) {
   if (!isLocale(next) || next === current) return;
   current = next;
   try { localStorage.setItem(CACHE_KEY, next); } catch { /* storage may be unavailable */ }
-  document.documentElement.lang = next;
+  document.documentElement.lang = localeTag(next);
   for (const listener of listeners) listener();
 }
 
@@ -74,4 +85,9 @@ export function languageName(code: string): string {
   catch { return code.toUpperCase(); }
 }
 
-export const localeTag = () => current === "cs" ? "cs-CZ" : "en-GB";
+const LOCALE_TAGS: Record<Locale, string> = {
+  en: "en-GB", cs: "cs-CZ", sk: "sk-SK", de: "de-DE", es: "es-ES", fr: "fr-FR",
+  it: "it-IT", pl: "pl-PL", "pt-BR": "pt-BR", ru: "ru-RU",
+};
+export const localeTag = (value: Locale = current) => LOCALE_TAGS[value];
+if (typeof document !== "undefined") document.documentElement.lang = localeTag();

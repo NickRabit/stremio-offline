@@ -72,6 +72,14 @@ export default defineConfig({
       dependencies: ["setup", "chromium"],
       use: { ...use, storageState },
     })),
+    {
+      // Language expansion changes labels everywhere; isolate its mobile width check
+      // so it does not have to rerun the full journey suite as a dependency.
+      name: "mobile-locales",
+      testMatch: /layout\/locales\.spec\.ts/,
+      dependencies: ["setup"],
+      use: { ...devices["iPhone 13"], storageState },
+    },
   ],
   webServer: [
     {

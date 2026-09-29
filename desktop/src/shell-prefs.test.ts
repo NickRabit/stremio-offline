@@ -3,7 +3,7 @@ import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { SHELL_PREFS_FILE, effectiveLocale, readShellPrefs, readShellPrefsSync, writeShellPrefs } from "./shell-prefs.js";
+import { SHELL_LOCALES, SHELL_PREFS_FILE, effectiveLocale, readShellPrefs, readShellPrefsSync, writeShellPrefs } from "./shell-prefs.js";
 
 const withDir = async (body: (dir: string) => Promise<void>) => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "stremio-shell-prefs-"));
@@ -18,7 +18,7 @@ const fileOf = (dir: string) => path.join(dir, SHELL_PREFS_FILE);
 
 test("a chosen language survives a round trip", async () => {
   await withDir(async (dir) => {
-    for (const locale of ["cs", "en", null] as const) {
+    for (const locale of [...SHELL_LOCALES, null] as const) {
       await writeShellPrefs(dir, { locale, checkUpdates: true, trayNoticeShown: false });
       assert.deepEqual(await readShellPrefs(dir), { locale, checkUpdates: true, trayNoticeShown: false });
     }
@@ -34,7 +34,7 @@ test("a missing file means the system decides", async () => {
 
 test("a malformed or unexpected file means the system decides", async () => {
   await withDir(async (dir) => {
-    const rejected = ["not json", "null", "[]", JSON.stringify({ locale: "de" }), JSON.stringify({ locale: 1 }), JSON.stringify({})];
+    const rejected = ["not json", "null", "[]", JSON.stringify({ locale: "xx" }), JSON.stringify({ locale: 1 }), JSON.stringify({})];
     for (const text of rejected) {
       await writeFile(fileOf(dir), text, "utf8");
       assert.deepEqual(await readShellPrefs(dir), { locale: null, checkUpdates: true, trayNoticeShown: false }, text);
@@ -84,19 +84,21 @@ test("the choice wins, else Czech, else English", () => {
   assert.equal(effectiveLocale(null, "cs-CZ"), "cs");
   assert.equal(effectiveLocale(null, "CS"), "cs");
   assert.equal(effectiveLocale(null, "en-US"), "en");
+  assert.equal(effectiveLocale(null, "sk-SK"), "sk");
+  assert.equal(effectiveLocale(null, "pt"), "pt-BR");
   assert.equal(effectiveLocale(null, ""), "en");
 });
 
 test("the synchronous read answers exactly like the asynchronous one", async () => {
   await withDir(async (dir) => {
     assert.deepEqual(readShellPrefsSync(dir), { locale: null, checkUpdates: true, trayNoticeShown: false });
-    const lenient = ["not json", "null", "[]", JSON.stringify({ locale: "de" }), JSON.stringify({ locale: 1 }), JSON.stringify({})];
+    const lenient = ["not json", "null", "[]", JSON.stringify({ locale: "xx" }), JSON.stringify({ locale: 1 }), JSON.stringify({})];
     for (const text of lenient) {
       await writeFile(fileOf(dir), text, "utf8");
       assert.deepEqual(readShellPrefsSync(dir), await readShellPrefs(dir), text);
       assert.deepEqual(readShellPrefsSync(dir), { locale: null, checkUpdates: true, trayNoticeShown: false }, text);
     }
-    for (const locale of ["cs", "en", null] as const) {
+    for (const locale of [...SHELL_LOCALES, null] as const) {
       await writeShellPrefs(dir, { locale, checkUpdates: true, trayNoticeShown: false });
       assert.deepEqual(readShellPrefsSync(dir), { locale, checkUpdates: true, trayNoticeShown: false });
       assert.deepEqual(readShellPrefsSync(dir), await readShellPrefs(dir));
