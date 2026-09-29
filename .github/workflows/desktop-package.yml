@@ -35,15 +35,15 @@ jobs:
   ffmpeg-windows:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # The LGPL FFmpeg takes minutes to build; the result only changes with the script.
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: desktop/ffmpeg-win
           key: desktop-ffmpeg-win-${{ hashFiles('desktop/scripts/build-ffmpeg-win.sh') }}
       - run: sudo apt-get update && sudo apt-get install -y mingw-w64 nasm pkg-config make xz-utils curl libz-mingw-w64-dev
       - run: bash desktop/scripts/build-ffmpeg-win.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ffmpeg-windows
           path: desktop/ffmpeg-win
@@ -59,13 +59,13 @@ jobs:
       # Apple certificate or notarization credentials.
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
       # The LGPL FFmpeg takes minutes to build; the result only changes with the script.
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: desktop/ffmpeg
           key: desktop-ffmpeg-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('desktop/scripts/build-ffmpeg.sh') }}
@@ -77,13 +77,13 @@ jobs:
       # The packaged app runs the staged server from inside the archive and proves the
       # production dependencies came along, before anything is uploaded.
       - run: npm run smoke:packaged -w desktop
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: stremio-offline-macos-arm64-dmg
           path: desktop/release/*.dmg
           if-no-files-found: error
           retention-days: 7
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: stremio-offline-macos-arm64-zip
           path: desktop/release/*.zip
@@ -98,13 +98,13 @@ jobs:
     env:
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
       # The cross-built LGPL FFmpeg comes from the ffmpeg-windows job; this job never builds it.
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: ffmpeg-windows
           path: desktop/ffmpeg-win
@@ -112,13 +112,13 @@ jobs:
       - run: npm run package:win:x64 -w desktop
       - run: npm run verify:fuses -w desktop
       - run: npm run smoke:packaged -w desktop
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: stremio-offline-windows-x64-setup
           path: desktop/release/*.exe
           if-no-files-found: error
           retention-days: 7
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: stremio-offline-windows-x64-zip
           path: desktop/release/*.zip
