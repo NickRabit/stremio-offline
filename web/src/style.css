@@ -1381,3 +1381,33 @@ img.broken{visibility:hidden}
 .detail-panel .source-footer .actions>.split-button,.detail-workflow .source-footer .actions>.split-button{padding:0;min-height:0}
 .save-target-card{width:min(480px,100%);max-height:100%}
 .save-target-preview{display:grid;gap:4px}
+/* Once the source list has been scrolled the hero has done its job: it shrinks to a title bar so
+   the list gets the height. A pull back towards the top restores it (see compactOnScroll). */
+@media(min-width:981px){
+  .detail-panel.hero-compact .hero{height:auto;min-height:0;max-height:none;margin-bottom:8px;padding:9px 16px;background-image:none!important}
+  .detail-panel.hero-compact .hero>:not(.detail-copy),.detail-panel.hero-compact .hero .detail-copy>:not(h2){display:none}
+  .detail-panel.hero-compact .hero .detail-copy{max-width:none}
+  .detail-panel.hero-compact .hero h2{margin:0;overflow:hidden;font-size:17px;text-overflow:ellipsis;white-space:nowrap}
+}
+/* A tablet held upright has a sidebar and a wide window but not the height for a list beside a
+   detail: it works like the phone, one pane at a time. The detail covers the listing, which stays
+   mounted underneath so its scroll position survives the way back. */
+@media(min-width:701px) and (max-width:980px) and (orientation:portrait){
+  main.view-catalog{height:100dvh;display:flex;flex-direction:column;overflow:hidden;padding-bottom:18px}
+  main.view-catalog>.catalog-view{display:flex;flex:1 1 auto;min-height:0;flex-direction:column;overflow:hidden}
+  main.view-catalog .catalog-layout{position:relative;display:block;flex:1 1 auto;height:auto;min-height:0}
+  main.view-catalog .result-panel{height:100%;margin:0}
+  main.view-catalog:has(.detail-panel.mobile-open) :is(.heading,.searchbar,.filterbar){display:none}
+  main.view-catalog .detail-panel{display:none}
+  main.view-catalog .detail-panel.mobile-open{position:absolute;inset:0;z-index:5;display:flex;flex-direction:column;min-height:0;padding:0 16px 14px;overflow:hidden}
+  .mobile-detail-head{position:relative;display:grid;flex:0 0 auto;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:10px;margin:0 -16px 12px;padding:10px 16px;border-bottom:1px solid var(--line)}
+  .mobile-detail-head:after{content:"";width:88px}
+  .mobile-detail-head button{background:transparent;color:var(--accent2)}
+  .mobile-detail-head strong{overflow:hidden;text-align:center;text-overflow:ellipsis;white-space:nowrap}
+  .detail-panel .hero{flex:0 0 auto}
+  .detail-panel.hero-compact .hero{display:none}
+  .detail-panel .episodes,.detail-panel .sources{display:flex;flex:1 1 auto;min-height:0;flex-direction:column;overflow:hidden}
+  .detail-panel .episode-list,.detail-panel .stream-list{flex:1 1 auto;min-height:120px;max-height:none;overflow-y:auto;overscroll-behavior:contain}
+  .detail-panel .source-footer{position:static;flex:0 0 auto}
+  .detail-panel.series-sources-layout .hero{height:auto;min-height:0;max-height:none}
+}
