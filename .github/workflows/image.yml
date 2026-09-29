@@ -42,7 +42,7 @@ jobs:
       matrix:
         include:
           - platform: linux/amd64
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
           - platform: linux/arm64
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
@@ -50,7 +50,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # GHCR accepts only lowercase, while github.repository keeps the owner
       # casing from GitHub. Derive the name by converting, not by hard-coding.
       - name: Set image name, build time, and a filesystem-safe platform slug
@@ -84,7 +84,7 @@ jobs:
           mkdir -p /tmp/digests
           digest="${{ steps.build.outputs.digest }}"
           touch "/tmp/digests/${digest#sha256:}"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: digests-${{ env.PLATFORM_SLUG }}
           path: /tmp/digests/*
@@ -95,7 +95,7 @@ jobs:
   # receives the real tags. Docker picks the variant that matches the client.
   manifest:
     needs: image
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       packages: write
@@ -108,7 +108,7 @@ jobs:
           IMAGE="ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')"
           echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: /tmp/digests
           pattern: digests-*
@@ -143,7 +143,7 @@ jobs:
   # does not run on that machine.
   verify:
     needs: manifest
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       packages: read
@@ -172,7 +172,7 @@ jobs:
         run: |
           mkdir -p dist
           docker save "${{ needs.manifest.outputs.image }}:${{ github.sha }}" | gzip -1 > dist/stremio-offline-amd64.tar.gz
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: inputs.bundle
         with:
           name: stremio-offline-amd64

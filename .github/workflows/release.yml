@@ -12,7 +12,7 @@ on:
 
 jobs:
   version:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.v.outputs.version }}
       minor: ${{ steps.v.outputs.minor }}
@@ -37,11 +37,11 @@ jobs:
   # releases list never shows a version whose image failed to build.
   release:
     needs: image
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Create GitHub Release with generated notes
@@ -62,8 +62,8 @@ jobs:
     env:
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -76,7 +76,7 @@ jobs:
             exit 1
           fi
       # The LGPL FFmpeg takes minutes to build; the result only changes with the script.
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: desktop/ffmpeg
           key: desktop-ffmpeg-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('desktop/scripts/build-ffmpeg.sh') }}
@@ -125,15 +125,15 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # The LGPL FFmpeg takes minutes to build; the result only changes with the script.
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: desktop/ffmpeg-win
           key: desktop-ffmpeg-win-${{ hashFiles('desktop/scripts/build-ffmpeg-win.sh') }}
       - run: sudo apt-get update && sudo apt-get install -y mingw-w64 nasm pkg-config make xz-utils curl libz-mingw-w64-dev
       - run: bash desktop/scripts/build-ffmpeg-win.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ffmpeg-windows
           path: desktop/ffmpeg-win
@@ -154,8 +154,8 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -167,7 +167,7 @@ jobs:
             echo "::error::tag ${GITHUB_REF_NAME} does not match desktop/package.json $manifest"
             exit 1
           fi
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: ffmpeg-windows
           path: desktop/ffmpeg-win
