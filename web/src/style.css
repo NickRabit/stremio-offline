@@ -1388,6 +1388,14 @@ img.broken{visibility:hidden}
   .detail-panel.hero-compact .hero>:not(.detail-copy),.detail-panel.hero-compact .hero .detail-copy>:not(h2){display:none}
   .detail-panel.hero-compact .hero .detail-copy{max-width:none}
   .detail-panel.hero-compact .hero h2{margin:0;overflow:hidden;font-size:17px;text-overflow:ellipsis;white-space:nowrap}
+  /* The source list is what the column is for: filters share one row and the footer takes two
+     lines, not four. */
+  .detail-panel .stream-filters{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .detail-panel .source-footer .source-info{flex-wrap:nowrap;max-height:none;overflow-x:auto;white-space:nowrap;scrollbar-width:none}
+  .detail-panel .source-footer .source-info::-webkit-scrollbar{display:none}
+  .detail-panel .source-footer .actions{grid-template-columns:1.2fr 1.3fr 1fr;gap:6px}
+  .detail-panel .source-footer .actions .primary{grid-column:auto}
+  .split-button>button:first-child>svg{display:none}
 }
 /* A tablet held upright has a sidebar and a wide window but not the height for a list beside a
    detail: it works like the phone, one pane at a time. The detail covers the listing, which stays
@@ -1399,7 +1407,7 @@ img.broken{visibility:hidden}
   main.view-catalog .result-panel{height:100%;margin:0}
   main.view-catalog:has(.detail-panel.mobile-open) :is(.heading,.searchbar,.filterbar){display:none}
   main.view-catalog .detail-panel{display:none}
-  main.view-catalog .detail-panel.mobile-open{position:absolute;inset:0;z-index:5;display:flex;flex-direction:column;min-height:0;padding:0 16px 14px;overflow:hidden}
+  main.view-catalog .detail-panel.mobile-open{position:absolute;inset:0;z-index:5;background:linear-gradient(150deg,#191f2a,#11161e);display:flex;flex-direction:column;min-height:0;padding:0 16px 14px;overflow:hidden}
   .mobile-detail-head{position:relative;display:grid;flex:0 0 auto;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:10px;margin:0 -16px 12px;padding:10px 16px;border-bottom:1px solid var(--line)}
   .mobile-detail-head:after{content:"";width:88px}
   .mobile-detail-head button{background:transparent;color:var(--accent2)}
@@ -1410,4 +1418,7 @@ img.broken{visibility:hidden}
   .detail-panel .episode-list,.detail-panel .stream-list{flex:1 1 auto;min-height:120px;max-height:none;overflow-y:auto;overscroll-behavior:contain}
   .detail-panel .source-footer{position:static;flex:0 0 auto}
   .detail-panel.series-sources-layout .hero{height:auto;min-height:0;max-height:none}
+  .detail-panel .stream-filters{grid-template-columns:repeat(3,minmax(0,1fr));margin-bottom:8px}
+  .detail-panel .source-footer .source-info{flex-wrap:nowrap;max-height:none;overflow-x:auto;white-space:nowrap;scrollbar-width:none}
+  .detail-panel .source-footer .source-info::-webkit-scrollbar{display:none}
 }
