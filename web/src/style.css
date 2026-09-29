@@ -1432,6 +1432,29 @@ img.broken{visibility:hidden}
   .topbar{transition:transform .34s cubic-bezier(.22,.7,.26,1)}
   main.view-catalog,main.view-library{transition:padding-top .34s cubic-bezier(.22,.7,.26,1)}
   body:has(:is(.catalog-compact,.library-compact)):not(:has(.detail-panel.mobile-open)) .topbar{transform:translateY(-100%)}
-  body:has(:is(.catalog-compact,.library-compact)):not(:has(.detail-panel.mobile-open)) main:is(.view-catalog,.view-library){padding-top:12px}
+  body:has(:is(.catalog-compact,.library-compact)):not(:has(.detail-panel.mobile-open)) main:is(.view-catalog,.view-library){padding-top:calc(12px + env(safe-area-inset-top, 0px))}
 }
-@media(prefers-reduced-motion:reduce){.topbar,main.view-catalog,main.view-library{transition:none}}
+/* The same in a phone's landscape, where the bar is 54px and the rail sits beside the listing. */
+@media(max-width:980px) and (max-height:500px) and (orientation:landscape){
+  .topbar{transition:transform .34s cubic-bezier(.22,.7,.26,1)}
+  .sidebar{transition:top .34s cubic-bezier(.22,.7,.26,1)}
+  main.view-catalog,main.view-library{transition:padding-top .34s cubic-bezier(.22,.7,.26,1)}
+  body:has(:is(.catalog-compact,.library-compact)):not(:has(.detail-panel.mobile-open)) .topbar{transform:translateY(-100%)}
+  body:has(:is(.catalog-compact,.library-compact)):not(:has(.detail-panel.mobile-open)) .sidebar{top:0}
+  body:has(:is(.catalog-compact,.library-compact)):not(:has(.detail-panel.mobile-open)) main:is(.view-catalog,.view-library){padding-top:8px}
+}
+@media(prefers-reduced-motion:reduce){.topbar,.sidebar,main.view-catalog,main.view-library{transition:none}}
+/* An app added to the home screen draws under the status bar (viewport-fit=cover, translucent
+   status bar), so everything pinned to the top edge has to start below the notch. In a browser the
+   inset is zero and none of this changes anything. Landscape phones have no inset on top. */
+@media(min-width:701px) and (min-height:501px){
+  .topbar{height:calc(82px + env(safe-area-inset-top, 0px));padding-top:env(safe-area-inset-top, 0px)}
+  .sidebar{top:calc(82px + env(safe-area-inset-top, 0px))}
+  main{padding-top:calc(116px + env(safe-area-inset-top, 0px))}
+}
+@media(min-width:981px) and (max-height:780px){main.view-catalog{padding-top:calc(98px + env(safe-area-inset-top, 0px))}}
+@media(max-width:700px) and (orientation:portrait){
+  .topbar{height:calc(66px + env(safe-area-inset-top, 0px));padding-top:env(safe-area-inset-top, 0px)}
+  main{padding-top:calc(88px + env(safe-area-inset-top, 0px))}
+  .catalog-layout .detail-panel.mobile-open{top:calc(66px + env(safe-area-inset-top, 0px))}
+}
