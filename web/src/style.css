@@ -1387,9 +1387,6 @@ img.broken{visibility:hidden}
   .detail-panel .stream-filters{grid-template-columns:repeat(3,minmax(0,1fr))}
   .detail-panel .source-footer .source-info{flex-wrap:nowrap;max-height:none;overflow-x:auto;white-space:nowrap;scrollbar-width:none}
   .detail-panel .source-footer .source-info::-webkit-scrollbar{display:none}
-  .detail-panel .source-footer .actions{grid-template-columns:1.2fr 1.3fr 1fr;gap:6px}
-  .detail-panel .source-footer .actions .primary{grid-column:auto}
-  .split-button>button:first-child>svg{display:none}
 }
 /* A tablet held upright has a sidebar and a wide window but not the height for a list beside a
    detail: it works like the phone, one pane at a time. The detail covers the listing, which stays
