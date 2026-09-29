@@ -10,6 +10,8 @@ The single set of rules for any coding agent working in this repository.
 - All comments, documentation and specifications must be written in English.
   Older files still contain Czech comments — translate them only when you are
   already editing that code.
+- Dialogs and form controls follow [docs/ui-conventions.md](docs/ui-conventions.md). Read it
+  before adding or changing a dialog; do not build a one-off shell.
 - The interface is translated. Never put a user-visible string in a component:
   add it to `web/src/i18n/en.ts` and `cs.ts` and call `t("key")`. `cs.ts` is
   typed against `en.ts`, so a forgotten key fails the build. A message the
@@ -74,6 +76,7 @@ endpoint `/api/status`, which must return `{"status":"ok",…}`.
 | Backlog and product direction | [docs/roadmap.md](docs/roadmap.md) |
 | Environment variables | [docs/configuration.md](docs/configuration.md) |
 | Accounts, roles and per-user access | [docs/users.md](docs/users.md) |
+| Dialogs, form controls, safe areas, folding toolbars | [docs/ui-conventions.md](docs/ui-conventions.md) |
 | Licences of what is distributed (FFmpeg, bundled packages) | [docs/licensing.md](docs/licensing.md) |
 | Contributor workflow | [CONTRIBUTING.md](CONTRIBUTING.md) |
 
