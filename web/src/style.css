@@ -1412,6 +1412,7 @@ img.broken{visibility:hidden}
   .detail-panel .hero{flex:0 0 auto}
   .detail-panel.hero-compact .hero{display:none}
   .detail-panel .episodes,.detail-panel .sources{display:flex;flex:1 1 auto;min-height:0;flex-direction:column;overflow:hidden}
+  .detail-panel .episodes.collapsed{flex:0 0 auto;overflow:visible}
   .detail-panel .episode-list,.detail-panel .stream-list{flex:1 1 auto;min-height:120px;max-height:none;overflow-y:auto;overscroll-behavior:contain}
   .detail-panel .source-footer{position:static;flex:0 0 auto}
   .detail-panel.series-sources-layout .hero{height:auto;min-height:0;max-height:none}
