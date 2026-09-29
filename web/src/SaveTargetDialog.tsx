@@ -49,6 +49,7 @@ export function SaveTargetDialog({ label, kind, title, season, libraries, rule, 
       </div>
       <footer className="dialog-foot">
         {error && <p className="login-error" role="alert">{error}</p>}
+        <button type="button" disabled={busy} onClick={onClose}>{t("common.cancel")}</button>
         <button type="button" className="primary" disabled={busy} onClick={() => void submit()}>
           {busy ? t("save.adding") : t("save.toLibrary")}
         </button>

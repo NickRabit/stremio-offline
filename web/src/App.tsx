@@ -594,6 +594,19 @@ export function App() {
   const loadingRef = useRef(false); const requestRef = useRef(0); const itemsRef = useRef<Meta[]>([]); const gridRef = useRef<HTMLDivElement>(null); const browseScrollRef = useRef<HTMLDivElement | null>(null); const detailRef = useRef<HTMLElement>(null);
   const playerOpenRef = useRef(false); const playbackReturn = useRef<PlaybackReturn | null>(null);
   const viewAnchor = useRef<ViewAnchor | null>(null); const anchorFrozen = useRef(false); const anchorFrame = useRef(0);
+  // A toolbar folds to give a scrolling list more room. A list that already fits has nothing to
+  // scroll, so nothing could ever unfold the toolbar again: it opens instead of staying folded.
+  useEffect(() => {
+    const target = view === "library" ? { compact: libraryCompact, set: setLibraryCompact, element: browseScrollRef.current }
+      : view === "catalog" ? { compact: catalogCompact, set: setCatalogCompact, element: gridRef.current } : null;
+    const element = target?.element;
+    if (!target?.compact || !element) return;
+    const unfoldIfFits = () => { if (element.scrollHeight <= element.clientHeight + 1) target.set(false); };
+    const observer = new ResizeObserver(unfoldIfFits);
+    observer.observe(element);
+    const settled = window.setTimeout(unfoldIfFits, 450);
+    return () => { observer.disconnect(); window.clearTimeout(settled); };
+  }, [view, libraryCompact, catalogCompact, items, browse]);
   // The built-in lists look like a catalogue, they just do not come from an addon.
   const VIRTUAL = { resume: ":resume", watchlist: ":watchlist" } as const;
   const virtualCatalog = selectedCatalog === VIRTUAL.resume || selectedCatalog === VIRTUAL.watchlist ? selectedCatalog : "";
