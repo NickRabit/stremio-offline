@@ -1425,3 +1425,13 @@ img.broken{visibility:hidden}
   .detail-panel .source-footer .source-info{flex-wrap:nowrap;max-height:none;overflow-x:auto;white-space:nowrap;scrollbar-width:none}
   .detail-panel .source-footer .source-info::-webkit-scrollbar{display:none}
 }
+/* A phone held upright: once the toolbar has folded, the top bar goes with it and the listing
+   takes the height. Unfolding the toolbar (pull down, or its button) brings both back. Left alone
+   while a detail is open, which is laid out under the bar. */
+@media(max-width:700px) and (orientation:portrait){
+  .topbar{transition:transform .34s cubic-bezier(.22,.7,.26,1)}
+  main.view-catalog,main.view-library{transition:padding-top .34s cubic-bezier(.22,.7,.26,1)}
+  body:has(:is(.catalog-compact,.library-compact)):not(:has(.detail-panel.mobile-open)) .topbar{transform:translateY(-100%)}
+  body:has(:is(.catalog-compact,.library-compact)):not(:has(.detail-panel.mobile-open)) main:is(.view-catalog,.view-library){padding-top:12px}
+}
+@media(prefers-reduced-motion:reduce){.topbar,main.view-catalog,main.view-library{transition:none}}
