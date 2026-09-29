@@ -15,7 +15,7 @@
    stay the flex row they were, in the order they were written. */
 .browse-fold-inner{display:contents}
 .browse-keep{display:contents}
-@media(max-width:700px),(max-width:980px) and (max-height:500px) and (orientation:landscape){
+@media(max-width:700px),(min-width:701px) and (max-width:980px) and (orientation:portrait),(max-width:980px) and (max-height:500px) and (orientation:landscape){
   /* `min-height:auto` is a flex item's default and it refuses to shrink below its content, which
      left a folded block standing at the height of the controls inside it. */
   .fold{display:grid;grid-template-rows:1fr;min-width:0;min-height:0;transition:grid-template-rows .34s cubic-bezier(.22,.7,.26,1),opacity .2s ease,margin .34s cubic-bezier(.22,.7,.26,1)}
@@ -1406,6 +1406,9 @@ img.broken{visibility:hidden}
   main.view-catalog .catalog-layout{position:relative;display:block;flex:1 1 auto;height:auto;min-height:0}
   main.view-catalog .result-panel{height:100%;margin:0}
   main.view-catalog:has(.detail-panel.mobile-open) :is(.heading,.searchbar,.filterbar){display:none}
+  main.view-catalog>.catalog-view>.heading,main.view-library>.library-page>.heading{display:none}
+  .catalog-view.catalog-compact .filterbar{display:flex}
+  .catalog-view.catalog-compact .filterbar>label.catalog-filter{flex:1 1 auto;min-width:0}
   main.view-catalog .detail-panel{display:none}
   main.view-catalog .detail-panel.mobile-open{position:absolute;inset:0;z-index:5;background:linear-gradient(150deg,#191f2a,#11161e);display:flex;flex-direction:column;min-height:0;padding:0 16px 14px;overflow:hidden}
   .mobile-detail-head{position:relative;display:grid;flex:0 0 auto;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:10px;margin:0 -16px 12px;padding:10px 16px;border-bottom:1px solid var(--line)}
