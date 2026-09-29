@@ -7,6 +7,44 @@ The target platform remains a Synology NAS with an Intel Celeron (QuickSync on a
 DS220+ or DS920+). Direct play and remux are the common path; a real transcode
 needs VAAPI. See [Hardware acceleration](hardware-acceleration.md) for the setup.
 
+## Direction and delivery order
+
+Reviewed against PR #260 (`11f1759`) and `main` (`14f7beb`) on 2026-09-29.
+This is a proposed delivery sequence, not a statement that the work below has
+shipped.
+
+Make the NAS a dependable family media library: a useful home screen, a
+restricted child account and predictable playback. Deliver household UX alongside
+focused data-safety work, then reduce daily effort with show following and
+guided library management. Extend into Sonarr/Radarr through the
+existing queue only after its durability and staging boundaries are proven.
+Keep desktop clients on the same server contracts; avoid a second downloader,
+metadata store or scheduler for each platform.
+
+| Order | Outcome | Scope / release gate |
+| --- | --- | --- |
+| P0a | Files survive failure | Audit destructive paths; recover transfers without overwrites or lost evidence |
+| P0b | Playback and mobile controls are dependable | Session lifecycle tests and physical iOS verification |
+| P1a | Home is useful immediately | Permission-filtered personal rows from existing state; no scheduler dependency |
+| P1b | Children can use the app safely | Restricted child account, server-enforced policy, parent-authenticated exit |
+| P2a | New episodes are easy to discover | Follow show with opt-in downloads, durable deduplication and bounded polling |
+| P2b | Library management is guided | Guided split, then live search; bulk rename only after P0 recovery works |
+| P3 | External automation is usable | Opt-in HTTP Sonarr/Radarr bridge passing the real-application harness |
+
+Home-screen work, small mobile fixes and backup inventory documentation can
+ship alongside P0. Child mode requires its own server policy before release;
+it does not depend on completing the entire engineering backlog.
+The ordering is a dependency guide, not a reason to bundle unrelated changes.
+Signing, unattended installers, remote-instance protocols, richer profiles and
+additional debrid providers remain separate investments. Do not add them to a
+release merely because a related screen is being edited.
+
+The [delivery specification](roadmap-delivery-spec.md) defines contracts,
+non-goals, acceptance scenarios and suggested PR boundaries. It also records
+where the previous roadmap overstated missing functionality. Existing feature
+documents describe shipped behavior; the delivery specification describes
+proposed changes.
+
 ## Done
 
 Shipped and living in `main`. The list is here to stop settled questions from
@@ -31,8 +69,8 @@ being reopened, not as a changelog.
   gets an opaque link, and a Content-Security-Policy keeps the browser from
   loading anything else.
 - Settings export/import, including installed addons, their save rules and the
-  names and roots of the libraries. Tokens in addon URLs mean the file is a
-  secret.
+  names and roots of the libraries. Addon URLs, the Real-Debrid token and the
+  TMDB API key mean the file is a secret.
 - Playback: direct play vs. remux vs. transcode, on-demand timeline previews,
   next/previous episode, embedded and addon subtitles, and the player volume
   remembered on the device. See [Playback](playback.md).
@@ -69,6 +107,49 @@ being reopened, not as a changelog.
 
 ## Next (daily friction)
 
+These are the highest-value improvements for daily use. The priority is not to
+add surface area for its own sake, but to make the common household journeys
+faster, safer and more automatic.
+
+### Family home and kids mode
+
+Add a deliberately simple child-facing mode on top of the existing account and
+library permissions:
+
+- large, obvious tiles and touch targets with very little text;
+- **Continue watching**, favourite shows and recently added episodes first;
+- hide administration, diagnostics, addon management and destructive library
+  actions;
+- allow a parent to choose which libraries and addons are visible and require a
+  parent-authenticated account switch to leave the child-facing UI; a PIN is
+  optional convenience only after its server-side policy is designed;
+- make repeated taps harmless and always show immediate feedback for actions
+  that take noticeable time.
+
+The MVP uses a dedicated restricted child account, with enforcement on the
+server as well as a simplified interface. Hiding buttons in an adult session is
+not a parental boundary. See [Family home and kids mode](roadmap-delivery-spec.md#family-home-and-kids-mode).
+
+The practical UX target is intentionally strict: a child who already knows the
+app should be able to open it, find a favourite show and start the intended
+episode without adult help, documentation or recovery through browser controls.
+
+### Home screen
+
+Make the normal entry point useful without first navigating a catalogue. Start
+with rows that can be derived from state the app already has:
+
+- **Continue watching**;
+- favourites / **My shows**;
+- recently added local media;
+- new episodes from followed shows once that feature exists;
+- completed downloads that are ready to play.
+
+Keep this personal per account and make the child-facing variant much smaller
+than the full adult home screen. Ship the existing-state rows first; followed
+episodes are an additive row, not a reason to block the home screen. See the
+[home contract](roadmap-delivery-spec.md#family-home-and-kids-mode).
+
 ### Player and mobile chrome
 
 - Improve Safari landscape chrome behavior on a physical iPhone/iPad; WebKit
@@ -87,9 +168,17 @@ being reopened, not as a changelog.
 
 ### Follow show
 
-Daily check for new episodes of a show, enqueued as lazy jobs. The lazy-job
-plumbing exists; the watch list and the scheduler do not. Torrent sources should
-enqueue the same way.
+Let a user follow a series and optionally download new episodes automatically.
+Run a daily check and enqueue new episodes as lazy jobs; the lazy-job plumbing
+exists, but the watch list and scheduler do not. Torrent sources should enqueue
+the same way.
+
+The feature should build on the existing source ordering, preferred audio
+language, subtitle policy and library selection rather than inventing another
+download path. Surface new episodes on the home screen and make duplicate
+detection explicit so a repeated scheduler run is harmless. Following defaults
+to discovery only; automatic downloads are a separate opt-in. See
+[Follow show](roadmap-delivery-spec.md#follow-show).
 
 ### Queue robustness
 
@@ -142,15 +231,17 @@ domain layer.
 ### Give interrupted operations a defined restart
 
 Downloads have `.part` files and a resume, and a library scan or bulk job
-survives a restart through `library-scan.json` and `library-ops.json`. Nothing
-else does: artwork generation, a metadata update or a transcode killed mid-flight
-has no stated behaviour on the next start, and a cross-mount copy stages through
-a name derived from the destination.
+survives a restart through `library-scan.json` and `library-ops.json`. That does not yet prove recovery at every side-effect boundary. Artwork
+and metadata bulk jobs already use the operations queue; individual generation,
+metadata writes and playback sessions need explicit recovery contracts too.
+Cross-mount copies already use random-suffixed staging paths, destination
+reservations and flushes; persist their ownership and publication phase so a
+restart can distinguish an unfinished copy from a completed move.
 
 After a restart every interrupted operation should end up resumed, retried,
 marked failed, cleaned up, or shown to the user — never displayed as finished
-while the disk holds half a file. Temporary and staging files need deterministic
-names, a rule for collisions and an owner that clears them, and a partial
+while the disk holds half a file. Temporary and staging files need durable
+ownership, collision-safe names and a conservative cleanup rule. A partial
 destination must never be scannable as complete media.
 
 ### Playback hardening
@@ -159,7 +250,8 @@ Direct play → remux → transcode stays the order, and it should be determinis
 and testable rather than discovered per stream. What needs checking: byte ranges
 and seeking on direct play; the fragmented MP4 lifecycle and audio-only
 conversion on remux; cancellation, client disconnect and concurrent sessions on
-transcode — no FFmpeg process may outlive its request; and the VAAPI failure
+transcode — every FFmpeg process must belong to a live session or bounded
+cleanup, rather than to an individual HLS segment request; and the VAAPI failure
 counter turning into a clean software fallback instead of a failed playback. A
 failed playback should tell us the source, the mode chosen, hardware or software,
 and the stage that failed, without a token or a full private stream URL reaching
@@ -172,10 +264,13 @@ roots are remapped on the way back in — and it deliberately carries neither th
 accounts nor the media library. What a backup means beyond that is not written
 down: which data must be preserved (favourites, resume state, metadata bindings,
 download settings), which is genuinely rebuildable cache — verified, not
-assumed — and how secrets in addon URLs are handled. Restore validates the file
-before applying any of it, fails loudly on an incompatible or partial backup, and
-stays explicit about remapping when the filesystem roots moved. A full-instance
-restore, accounts included, is a separate undesigned operation.
+assumed — and how secrets in addon URLs are handled. The target contract is a
+restore preview that validates before mutation,
+explains defaulted fields and unresolved mappings, and requires an explicit
+choice before redirecting downloads. Today the parser accepts versions 1/2,
+normalizes some fields and falls back to the default library for unresolved
+references; this is not a strict or transactional full-instance restore.
+A full-instance restore, accounts included, is a separate undesigned operation.
 
 ### A classification behind the errors
 
@@ -186,13 +281,48 @@ group failures, say whether the thing is still going, and say whether a retry
 helps, instead of showing a raw exception string. Redaction stays covered by
 tests.
 
+### Exercise recovery as a first-class test surface
+
+Add an adversarial recovery pass around operations that can leave durable state
+or files behind. Kill or restart the server while a download, cross-library
+copy, metadata update, scan, artwork job or transcode is in progress and verify
+that the next start reaches one defined state: resumed, retried, failed,
+cleaned up or explicitly shown to the user.
+
+The goal is not another large end-to-end suite. Add the cheapest deterministic
+regression test for each failure that the campaign discovers, and keep a small
+number of full restart journeys for the boundaries that cannot be proven below
+E2E.
+
+### Measure the autonomous maintenance loop
+
+GitHub issues are also the live test bed for the AI-assisted maintenance
+workflow. Keep the automation useful by measuring outcomes rather than the
+number of generated commits.
+
+Track at least:
+
+- issues rejected as invalid, duplicate or not reproducible;
+- valid issues turned into a pull request without human implementation;
+- pull requests that needed a human technical decision before they were ready;
+- defects found by independent cross-review before merge;
+- regressions caused by an AI-generated fix;
+- flaky tests introduced or exposed by maintenance work;
+- number of agent iterations from accepted issue to a green, reviewable change.
+
+The implementer and the independent reviewer should not be treated as a voting
+system. A green CI run or agreement between models is evidence, not proof; the
+original behaviour and the regression test remain the source of truth. Use
+[the measurement contract](roadmap-delivery-spec.md#maintenance-measurement) to
+define denominators, human intervention and regression attribution.
+
 ## Later
 
 ### Access and multi-instance
 
-- Profiles beyond an account: lockable profiles, kids profiles that honour age
-  metadata when the catalog provides it, and switching between them without a
-  password. Accounts already separate addons, libraries, history and settings.
+- Richer profiles beyond the initial kids mode: several profiles under one
+  account, optional age-aware filtering where trustworthy metadata exists, and
+  fast profile switching without weakening the account boundary.
 - Configurable LAN IP/host for the running container. The web client should try
   that address first so playback on the home network does not hairpin through a
   reverse proxy or Cloudflare Tunnel. Fail closed: never treat an unauthenticated
@@ -203,6 +333,18 @@ tests.
 
 Do not expose the app directly to the internet. An HTTPS reverse proxy or a VPN
 remains the rule; the cookie is only `Secure` when the server sees HTTPS.
+
+### External automation
+
+- *arr integration can expose installed Stremio addons as a source of results
+  and hand matching jobs back to Stremio Offline as a download client,
+  especially for HTTP sources that the existing *arr ecosystem does not handle
+  well. Keep this behind the household UX and reliability work above: it is a
+  useful power-user integration, not a prerequisite for the core product. The
+  [bridge specification](arr-integration-spec.md) and
+  [execution plan](arr-integration-agent-task.md) own its contract. The protocol
+  probe proves feasibility, not production readiness; automatic search is not
+  continuous release discovery, and RSS remains a separate milestone.
 
 ### Packaging
 
