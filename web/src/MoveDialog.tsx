@@ -82,6 +82,7 @@ export function MoveDialog({ path, paths, copy = false, label, itemType, librari
           ? t("library.moveIntoItself")
           : unchanged ? t("library.moveSameFolder")
             : t("library.moveTargetHint", { folder: relative || (qualified && current ? current.name : t("library.rootFolder")) })}</p>
+        <button type="button" disabled={busy} onClick={onClose}>{t("common.cancel")}</button>
         <button type="button" className="primary" disabled={busy || inItself || unchanged} onClick={() => void move()}>
           {t(copy ? "library.copyConfirm" : "library.moveConfirm")}
         </button>

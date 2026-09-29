@@ -215,6 +215,7 @@ export function IdentifyDialog({ path, paths, onClose, onApplied }: { path: stri
       </div>}
       </div>
       <footer className="dialog-foot">
+        <button type="button" disabled={busy} onClick={onClose}>{t("common.cancel")}</button>
         <button type="button" className="primary" disabled={!picked || busy || (wantsEpisode && !episode.trim())} onClick={() => void apply()}>{t("library.identifyApply")}</button>
       </footer>
     </form>

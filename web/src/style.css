@@ -688,12 +688,10 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .addon-essential svg{width:17px;height:17px}
 @media(max-width:700px){.identify-row{grid-template-columns:1fr}}
 .job-status.checking{color:var(--accent2)}
-.bulk-card{width:min(700px,100%);max-height:min(100%,820px);padding:0;gap:0;overflow:hidden;grid-template-rows:auto minmax(0,1fr) auto}
-.bulk-head{padding:20px 22px 17px;border-bottom:1px solid var(--line);background:linear-gradient(135deg,#202631,#151a23)}
+.bulk-card{width:min(700px,100%);max-height:min(100%,820px)}
 .bulk-head>div{display:grid;gap:3px}
-.bulk-head h2{font-size:21px}
 .bulk-eyebrow{color:var(--accent2);font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase}
-.bulk-body{display:grid;gap:12px;padding:16px 22px;overflow:auto}
+.bulk-body{display:grid;gap:12px}
 .bulk-section{display:grid;gap:11px;padding:14px;border:1px solid var(--line);border-radius:11px;background:#10151d}
 .bulk-section-head{display:flex;align-items:flex-start;gap:10px}
 .bulk-section-head>svg{width:18px;height:18px;margin-top:1px;color:var(--accent2);flex:0 0 auto}
@@ -724,10 +722,7 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .bulk-language-grid label span{font-size:10px;color:var(--muted)}
 .bulk-language-grid select{padding:9px 10px;font-size:12px}
 .bulk-subtitle-hint,.bulk-mode-hint{margin:0;padding:9px 10px;border-radius:8px;background:#1a202a}
-.bulk-footer{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:14px 22px;border-top:1px solid var(--line);background:#141a23}
-.bulk-footer>p{max-width:390px}
-.bulk-footer>div{display:flex;gap:8px;flex:0 0 auto}
-@media(max-width:700px){.identify-overlay{padding:0;align-items:end}.identify-card{width:100%;max-height:100%;border-radius:16px 16px 0 0}.dialog-split>.identify-head{padding:16px 16px 10px}.dialog-body{padding:0 16px 14px}.dialog-foot{padding:12px 16px max(14px,env(safe-area-inset-bottom,0px))}.bulk-card{width:100%;border-radius:16px 16px 0 0}.bulk-head{padding:17px 16px 14px}.bulk-body{padding:12px 14px}.bulk-strategy,.bulk-language-grid,.bulk-subtitle-grid,.bulk-audio-grid{grid-template-columns:1fr}.bulk-footer{align-items:stretch;padding:12px 14px}.bulk-footer>p{display:none}.bulk-footer>div{width:100%}.bulk-footer button{flex:1}}
+@media(max-width:700px){.identify-overlay{padding:0;align-items:end}.identify-card{width:100%;max-height:100%;border-radius:16px 16px 0 0}.dialog-split>.identify-head{padding:16px 16px 10px}.dialog-body{padding:0 16px 14px}.dialog-foot{padding:12px 16px max(14px,env(safe-area-inset-bottom,0px))}.bulk-strategy,.bulk-language-grid,.bulk-subtitle-grid,.bulk-audio-grid{grid-template-columns:1fr}}
 .library-action{display:flex;align-items:center;gap:7px;min-height:44px;font-size:12px;color:var(--accent2);padding:8px 2px}
 .library-action svg{width:18px;height:18px;flex-shrink:0}.library-action svg:last-child:not(:first-child){margin-left:auto}
 .library-page .browse-menu{opacity:1;width:36px;height:36px;top:8px;right:8px;padding:8px;border:1px solid #ffffff24;background:#10151eeb;z-index:2}
@@ -1194,9 +1189,8 @@ img.broken{visibility:hidden}
 .addon-configure svg{width:14px;height:14px}
 .addon-edit-actions{display:flex;flex-wrap:wrap;gap:8px}
 .addon-edit-actions button{font-size:11px;padding:8px 11px}
-.addon-edit-footer{flex:0 0 auto;display:flex;justify-content:flex-end;gap:8px;padding:14px 22px 22px;border-top:1px solid var(--line);background:#121721f5}
 .addon-edit-footer .primary{min-width:150px}
-@media(max-width:700px){.addon-tools{justify-content:stretch}.addon-filter{flex:1 1 100%}.addon-head{grid-template-columns:42px minmax(0,1fr) auto}.addon-head>img,.addon-logo{width:42px;height:42px}.addon-edit-footer{display:grid}.addon-edit-footer button{width:100%}}
+@media(max-width:700px){.addon-tools{justify-content:stretch}.addon-filter{flex:1 1 100%}.addon-head{grid-template-columns:42px minmax(0,1fr) auto}.addon-head>img,.addon-logo{width:42px;height:42px}}
 /* Full screen, not a sheet. Sized to its pane it jumped on every switch and a short pane
    left a third of the screen dark above it -- the same reason the account dialog below
    gives for its own card. */
@@ -1458,3 +1452,37 @@ img.broken{visibility:hidden}
   main{padding-top:calc(88px + env(safe-area-inset-top, 0px))}
   .catalog-layout .detail-panel.mobile-open{top:calc(66px + env(safe-area-inset-top, 0px))}
 }
+/* One dialog shell. The footer is the same everywhere: a line of explanation across the top, then
+   Cancel and the action on the right. A phone gets the whole screen, from the top, and a dialog
+   never sits as a sheet pinned to the bottom edge. */
+.dialog-foot{display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:10px}
+.dialog-foot>:not(button){flex:1 1 100%;min-width:0;margin:0}
+.dialog-foot .primary{min-width:130px}
+@media(max-width:700px),(max-height:500px) and (orientation:landscape){
+  .identify-overlay{padding:0}
+  .identify-overlay .identify-card{width:100%;height:100%;max-height:100%;border-radius:0}
+  .identify-overlay .identify-card>.identify-head{padding:16px 16px 10px}
+  .identify-overlay .dialog-body{padding:0 16px 14px}
+  .identify-overlay .dialog-foot{padding:12px 16px max(14px,env(safe-area-inset-bottom,0px))}
+}
+/* Form controls. A native select draws its arrow hard against the right edge and looks different
+   on every platform; here the arrow is ours, set in from the edge with room reserved for it so a
+   long value never runs under it. `!important` is on purpose: the narrow layouts each restate the
+   padding and background of their own selects as shorthands, which would wipe this. */
+select:not([multiple]){appearance:none;-webkit-appearance:none;cursor:pointer;padding-right:36px!important;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23929eae' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E")!important;background-repeat:no-repeat!important;background-position:right 12px center!important;background-size:16px!important;text-overflow:ellipsis}
+select:not([multiple]):focus{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23ff795c' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E")!important}
+select option{background:#141922;color:var(--text)}
+input,select{transition:border-color .15s ease,box-shadow .15s ease}
+input:hover:not(:disabled):not(:focus),select:hover:not(:disabled):not(:focus){border-color:#3b4658}
+input:disabled,select:disabled{opacity:.5;cursor:not-allowed}
+input::placeholder{color:#6f7b8b}
+input[type=checkbox],input[type=radio]{accent-color:var(--accent)}
+button,.button{transition:background-color .15s ease,border-color .15s ease,filter .15s ease}
+.dialog-foot button:not(.primary):not(:disabled):hover,.actions button:not(.primary):not(:disabled):hover{background:#242d3b;border-color:#3b4658}
+.primary:not(:disabled):active{filter:brightness(.94)}
+@media(prefers-reduced-motion:reduce){input,select,button,.button{transition:none}}
+* {scrollbar-width:thin;scrollbar-color:#2f3947 transparent}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-thumb{border:3px solid transparent;border-radius:99px;background:#2f3947;background-clip:padding-box}
+::-webkit-scrollbar-thumb:hover{background:#3d4858;background-clip:padding-box}
+::-webkit-scrollbar-track{background:transparent}

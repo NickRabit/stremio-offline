@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useState } from "react";
-import { ArrowDown, ArrowUp, Check, Copy, ExternalLink, FileJson, PackagePlus, Plus, RefreshCw, ShieldCheck, SlidersHorizontal, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Copy, ExternalLink, FileJson, PackagePlus, Plus, RefreshCw, ShieldCheck, SlidersHorizontal, Trash2, X } from "lucide-react";
 import { api } from "./api";
 import { copyText } from "./clipboard";
 import { Heading, hideBroken } from "./settings-ui";
@@ -356,7 +356,7 @@ function AddonEditDialog({ addon, libraries, onClose, onChanged, onNotify, onErr
       </div>
       <footer className="dialog-foot addon-edit-footer">
         <button type="button" disabled={busy} onClick={onClose}>{t("common.cancel")}</button>
-        <button className="primary" disabled={busy || !dirty || !valid}><Check/> {t(busy ? "common.saving" : "addons.saveChanges")}</button>
+        <button className="primary" disabled={busy || !dirty || !valid}>{t(busy ? "common.saving" : "addons.saveChanges")}</button>
       </footer>
     </form>
   </div>;

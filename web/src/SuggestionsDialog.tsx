@@ -100,11 +100,12 @@ export function SuggestionsDialog(
   };
 
   return <div className="identify-overlay" role="dialog" aria-modal="true" aria-label={t("library.suggestions")} onClick={(event) => { if (event.target === event.currentTarget && !identifyPath) onClose(); }}>
-    <div className="panel identify-card">
+    <div className="panel identify-card dialog-split">
       <div className="identify-head">
         <h2>{t("library.suggestions")}</h2>
         <button type="button" className="icon-button" aria-label={t("common.cancel")} onClick={onClose}><X/></button>
       </div>
+      <div className="dialog-body">
       {error && <p className="login-error">{error}</p>}
       {!rows && <p className="identify-hint">{t("common.loading")}</p>}
       {rows && !rows.length && <p className="identify-hint">{t("library.suggestionsEmpty")}</p>}
@@ -136,6 +137,8 @@ export function SuggestionsDialog(
           </article>)}
         </div>
       </>}
+      </div>
+      <footer className="dialog-foot"><button type="button" onClick={onClose}>{t("common.close")}</button></footer>
     </div>
   </div>;
 }

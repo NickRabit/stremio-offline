@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ArrowDown, ArrowUp, Download, FolderOpen, Languages, ListFilter, Subtitles, X } from "lucide-react";
+import { ArrowDown, ArrowUp, FolderOpen, Languages, ListFilter, Subtitles, X } from "lucide-react";
 import { api, describeError } from "./api";
 import { languageName, t, useI18n } from "./i18n";
 import { SaveTargetFields } from "./SaveTargetFields";
@@ -85,9 +85,9 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
   };
 
   return <div className="identify-overlay" role="dialog" aria-modal="true" aria-labelledby="bulk-dialog-title" onClick={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }}>
-    <div className="panel identify-card bulk-card">
+    <div className="panel identify-card dialog-split bulk-card">
       <div className="identify-head bulk-head"><div><span className="bulk-eyebrow">{label}</span><h2 id="bulk-dialog-title">{t("bulk.title")}</h2></div><button className="icon-button" aria-label={t("common.cancel")} disabled={busy} onClick={onClose}><X/></button></div>
-      <div className="bulk-body">
+      <div className="dialog-body bulk-body">
         <section className="bulk-section">
           <div className="bulk-section-head"><ListFilter/><div><h3>{t("bulk.sourceStrategy")}</h3><p>{t("bulk.sourceStrategyHint")}</p></div></div>
           <div className="bulk-strategy" role="radiogroup" aria-label={t("bulk.sourceStrategy")}>
@@ -132,7 +132,7 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
         </section>
         {error && <p className="login-error" role="alert">{error}</p>}
       </div>
-      <div className="bulk-footer"><p className="identify-hint">{t("bulk.queueHint")}</p><div><button disabled={busy} onClick={onClose}>{t("common.cancel")}</button><button className="primary" disabled={busy || !chosen.length || !sources.length} onClick={() => void submit()}><Download/> {busy ? t("save.adding") : t("bulk.add")}</button></div></div>
+      <footer className="dialog-foot"><p className="identify-hint">{t("bulk.queueHint")}</p><button type="button" disabled={busy} onClick={onClose}>{t("common.cancel")}</button><button type="button" className="primary" disabled={busy || !chosen.length || !sources.length} onClick={() => void submit()}>{busy ? t("save.adding") : t("bulk.add")}</button></footer>
     </div>
   </div>;
 }
