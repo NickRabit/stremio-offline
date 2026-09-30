@@ -14,6 +14,7 @@ on:
     paths:
       - "desktop/scripts/build-ffmpeg.sh"
       - "desktop/scripts/build-ffmpeg-win.sh"
+      - "desktop/scripts/build-ffmpeg-linux.sh"
   pull_request:
     paths:
       - "desktop/**"
@@ -47,6 +48,25 @@ jobs:
         with:
           name: ffmpeg-windows
           path: desktop/ffmpeg-win
+          if-no-files-found: error
+          retention-days: 7
+
+  # Builds the LGPL FFmpeg for Linux x64 inside a pinned ubuntu:22.04 container, with VAAPI for
+  # Intel and AMD GPUs and NVENC for NVIDIA. The artifact is consumed by the Linux packaging job.
+  ffmpeg-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # The LGPL FFmpeg takes minutes to build; the result only changes with the script.
+      - uses: actions/cache@v6
+        with:
+          path: desktop/ffmpeg-linux
+          key: desktop-ffmpeg-linux-${{ hashFiles('desktop/scripts/build-ffmpeg-linux.sh') }}
+      - run: bash desktop/scripts/build-ffmpeg-linux.sh
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ffmpeg-linux
+          path: desktop/ffmpeg-linux
           if-no-files-found: error
           retention-days: 7
 

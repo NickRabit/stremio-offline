@@ -95,6 +95,22 @@ certificate store and also checks revocation online
 can fail on Windows where macOS succeeds. As on macOS, every release attaches
 the exact source archive (`ffmpeg-*.tar.xz`) the binaries were built from.
 
+### Desktop app (Linux)
+
+The Linux app carries **FFmpeg 9.0.2 (`ffmpeg`, `ffprobe`)**, built inside a
+pinned `ubuntu:22.04` container by `desktop/scripts/build-ffmpeg-linux.sh`, so
+the binaries need glibc 2.35 or newer. It is the same LGPL build as on the
+other platforms — made without `--enable-gpl`, so it contains no x264 — and
+H.264 is encoded by **VAAPI** on Intel and AMD GPUs or by **NVENC** on NVIDIA,
+so the binaries are licensed **LGPL-3.0-or-later**. TLS uses a statically
+linked **OpenSSL 3.5.8** (Apache-2.0), whose licence and notice ship beside the
+binaries as on macOS. **libva** and **libdrm** are linked dynamically from the
+system, because they have to match the installed GPU driver, and NVIDIA's
+encoder interface is loaded at run time from the driver, so nothing links to
+it. As on the other platforms, every release attaches the exact source
+archives (`ffmpeg-*.tar.xz`, `openssl-*.tar.gz` and the nv-codec-headers
+tarball) the binaries were built from.
+
 ### Why the desktop FFmpeg is LGPL and not GPL
 
 A GPL build with x264 would be a software fallback when VideoToolbox fails.
