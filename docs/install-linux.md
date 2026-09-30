@@ -35,10 +35,13 @@ and pick one file:
   - On Ubuntu 24.04 and newer, install `libfuse2t64` first:
     `sudo apt install libfuse2t64`. On other distributions the package is
     usually `fuse2` or `fuse-libs`.
-  - Ubuntu 24.04 also restricts the sandbox that Electron apps use. If the
-    AppImage does not open, either use the `.deb`, which sets the sandbox up
-    properly, or start it once with `--appimage-extract-and-run` to see the
-    error. Do not run the app as root.
+  - Ubuntu 24.04 also restricts the user namespaces Electron's sandbox is
+    built on. Where they are unavailable, the AppImage's launcher starts the
+    app without the sandbox rather than not at all; everywhere else the
+    sandbox stays on. The `.deb` sets the sandbox up properly on every
+    distribution, so prefer it on Ubuntu 24.04. If the AppImage does not
+    open, start it once with `--appimage-extract-and-run` to see the error.
+    Do not run the app as root.
 
 ## Setting it up
 
@@ -78,7 +81,8 @@ graphics card:
   (`intel-media-va-driver` or `mesa-va-drivers` on Ubuntu and Debian), and
   make sure you are in the `render` group: `sudo usermod -aG render $USER`,
   then log out and in.
-- **NVIDIA:** NVENC, through the proprietary NVIDIA driver.
+- **NVIDIA:** NVENC, through the proprietary NVIDIA driver, version 530 or
+  newer.
 
 The app's own FFmpeg has no software encoder. **Without a working graphics
 card it cannot convert**, but direct play and remux still work. If your

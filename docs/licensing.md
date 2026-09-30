@@ -89,7 +89,8 @@ The Windows app carries **FFmpeg 9.0.2 (`ffmpeg.exe`,
 made without `--enable-gpl`, so it contains no x264 — and H.264 is encoded by
 **NVENC** (`h264_nvenc`) on NVIDIA cards, else by **Media Foundation**
 (`h264_mf`), so the binaries are licensed **LGPL-3.0-or-later**. NVENC's
-interface comes from the MIT-licensed nv-codec-headers, whose archive is
+interface comes from the MIT-licensed nv-codec-headers (12.1, which needs
+NVIDIA driver 531 or newer on Windows and 530 on Linux), whose archive is
 attached too; the NVIDIA driver is loaded at run time and is not part of the
 app. TLS uses Windows' own **schannel** instead of OpenSSL, so
 no OpenSSL notice belongs to this build. schannel verifies against the Windows

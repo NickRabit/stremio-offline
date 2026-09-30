@@ -167,6 +167,16 @@ jobs:
       # machine's own GPU driver, so they come from the system, as the .deb's dependencies say.
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libva2 libva-drm2 libdrm2
       - run: npm run package:linux:x64 -w desktop
+      # electron-builder writes --no-sandbox into the AppImage's menu entry unless told otherwise;
+      # a desktop integration (AppImageLauncher, Gear Lever) would start every run that way.
+      - name: The AppImage's menu entry keeps the sandbox
+        working-directory: desktop/release
+        run: |
+          chmod +x ./*.AppImage
+          ./*.AppImage --appimage-extract '*.desktop' >/dev/null
+          cat squashfs-root/*.desktop
+          ! grep -q -- --no-sandbox squashfs-root/*.desktop
+          rm -rf squashfs-root
       # Both checks start the packaged app, which needs a display; the runner has no screen.
       - run: xvfb-run -a npm run verify:fuses -w desktop
       - run: xvfb-run -a npm run smoke:packaged -w desktop

@@ -16,8 +16,8 @@ FFMPEG_VERSION=9.0.2
 FFMPEG_SHA256=8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e
 # NVENC's interface headers (MIT), the same pin as the Linux build. The NVIDIA driver's DLLs are
 # loaded at run time, so they add nothing to the imports.
-NV_CODEC_HEADERS_TAG=n13.1.15.0
-NV_CODEC_HEADERS_SHA256=52532ceade3d5c1af62624986f13cf01b63c910576b08c0c278756c5e4b41ad0
+NV_CODEC_HEADERS_TAG=n12.1.14.0
+NV_CODEC_HEADERS_SHA256=62b30ab37e4e9be0d0c5b37b8fee4b094e38e570984d56e1135a6b6c2c164c9f
 cross=x86_64-w64-mingw32-
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

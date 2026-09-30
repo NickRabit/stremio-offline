@@ -178,6 +178,9 @@
       },
       "maintainer": "NickRabit <NickRabit@users.noreply.github.com>"
     },
+    "appImage": {
+      "executableArgs": []
+    },
     "deb": {
       "depends": [
         "libgtk-3-0 | libgtk-3-0t64",
