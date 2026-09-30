@@ -1174,7 +1174,7 @@ export class PlaybackManager {
       args.push("-vf", filters, "-c:v", "h264_nvenc", "-preset", "p4", "-tune", "ll");
       // A chosen quality sets a target bitrate; otherwise constant quality is left to the driver.
       if (bitrate) args.push("-rc", "vbr", "-b:v", bitrate, "-maxrate", bitrate);
-      else args.push("-rc", "vbr", "-cq", process.env.NVENC_CQ ?? "23");
+      else args.push("-rc", "vbr", "-cq", process.env.NVENC_CQ ?? "23", "-b:v", "0");
       // -forced-idr is NVENC's own switch and what lets the muxer mark the segments independent.
       args.push("-g", "48", "-force_key_frames", "expr:gte(t,n_forced*2)", "-forced-idr", "1");
     } else if (accel === "vaapi") {

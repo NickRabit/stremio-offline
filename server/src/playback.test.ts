@@ -357,6 +357,7 @@ test("NVENC encodes at constant quality without a chosen bitrate", () => {
   assert.equal(args[args.indexOf("-vf") + 1], "format=nv12");
   assert.deepEqual(args.slice(args.indexOf("-preset"), args.indexOf("-preset") + 4), ["-preset", "p4", "-tune", "ll"]);
   assert.deepEqual(args.slice(args.indexOf("-rc"), args.indexOf("-rc") + 4), ["-rc", "vbr", "-cq", "23"]);
+  assert.equal(args[args.indexOf("-b:v") + 1], "0", "without -b:v 0 NVENC keeps its 2 Mb/s default as the target");
   assert.equal(args[args.indexOf("-g") + 1], "48");
   assert.equal(args[args.indexOf("-forced-idr") + 1], "1");
   assert.equal(args.includes("-hwaccel"), false);
