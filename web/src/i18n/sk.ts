@@ -806,6 +806,8 @@ export const sk: Catalog = {
   "addons.refreshAllDone": { one: "Bol aktualizovaný 1 doplnok.", other: "Počet aktualizovaných doplnkov: {count}.", few: "Boli aktualizované {count} doplnky." },
   "addons.refreshAllFailed": { one: "1 doplnok neodpovedal.", other: "{count} doplnkov neodpovedalo.", few: "{count} doplnky neodpovedali." },
   "settings.privacyTitle": "Ochrana osobných údajov",
+  "settings.supportTitle": "Podporte projekt",
+  "settings.supportText": "Páči sa vám Stremio Offline? Podporte jeho vývoj na Ko-fi.",
   "settings.addonsTitle": "Doplnky",
   "settings.addonsText": "Uložený manifest určuje, ktoré katalógy a zdroje doplnok ponúka.",
   "settings.addonRefresh": "Obnovovanie doplnkov",

@@ -499,7 +499,7 @@ test("a job whose library never comes back fails when no library takes its kind"
   let filmsReachable = false;
   const queue = new DownloadQueue(() => 1, () => 1, path.join(directory, "data"), downloadDir, {
     stallInitialMs: 5_000, stallTransferMs: 5_000,
-    libraryRetryMs: 20, libraryWaitMs: 40,
+    libraryRetryMs: 20, libraryWaitMs: 500,
     // The series library the first job names was removed; the film library is merely away.
     libraries: () => [filmsReachable ? films : { ...films, unreachable: true }],
     libraryState: async (libraryId) => libraryId === films.id ? (filmsReachable ? films : { ...films, unreachable: true }) : undefined,

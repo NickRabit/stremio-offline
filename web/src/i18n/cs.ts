@@ -846,6 +846,8 @@ export const cs: Catalog = {
 
   // Settings.
   "settings.privacyTitle": "Soukromí",
+  "settings.supportTitle": "Podpořit projekt",
+  "settings.supportText": "Líbí se vám Stremio Offline? Podpořte jeho vývoj na Ko-fi.",
   "settings.addonsTitle": "Doplňky",
   "settings.addonsText": "Uložený manifest rozhoduje, které katalogy se nabízejí a kterých doplňků se ptáme na zdroje.",
   "settings.addonRefresh": "Obnovování manifestů",

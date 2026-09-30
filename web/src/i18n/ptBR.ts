@@ -806,6 +806,8 @@ export const ptBR: Catalog = {
   "addons.refreshAllDone": { one: "1 complemento atualizado.", other: "{count} complementos atualizados." },
   "addons.refreshAllFailed": { one: "1 complemento não respondeu.", other: "{count} complementos não responderam." },
   "settings.privacyTitle": "Privacidade",
+  "settings.supportTitle": "Apoie o projeto",
+  "settings.supportText": "Gostando do Stremio Offline? Apoie o desenvolvimento no Ko-fi.",
   "settings.addonsTitle": "Complementos",
   "settings.addonsText": "O manifesto armazenado decide quais catálogos são oferecidos e quais complementos são solicitados para fluxos.",
   "settings.addonRefresh": "Atualização de complementos",

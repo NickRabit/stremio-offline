@@ -806,6 +806,8 @@ export const de: Catalog = {
   "addons.refreshAllDone": { one: "1 Add-on aktualisiert.", other: "{count} Addons aktualisiert." },
   "addons.refreshAllFailed": { one: "1 Addon hat nicht geantwortet.", other: "{count} Addons haben nicht geantwortet." },
   "settings.privacyTitle": "Privatsphäre",
+  "settings.supportTitle": "Projekt unterstützen",
+  "settings.supportText": "Gefällt Ihnen Stremio Offline? Unterstützen Sie die Entwicklung auf Ko-fi.",
   "settings.addonsTitle": "Add-ons",
   "settings.addonsText": "Das hinterlegte Manifest entscheidet darüber, welche Kataloge angeboten und welche Addons nach Streams gefragt werden.",
   "settings.addonRefresh": "Add-on-Aktualisierung",

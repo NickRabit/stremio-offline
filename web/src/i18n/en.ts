@@ -850,6 +850,8 @@ export const en = {
 
   // Settings.
   "settings.privacyTitle": "Privacy",
+  "settings.supportTitle": "Support the project",
+  "settings.supportText": "Enjoying Stremio Offline? Support its development on Ko-fi.",
   "settings.addonsTitle": "Addons",
   "settings.addonsText": "The stored manifest decides which catalogs are offered and which addons are asked for streams.",
   "settings.addonRefresh": "Manifest refresh",

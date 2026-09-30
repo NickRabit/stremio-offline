@@ -806,6 +806,8 @@ export const ru: Catalog = {
   "addons.refreshAllDone": { one: "Обновлен 1 аддон.", other: "Обновлено аддонов: {count}.", few: "Обновлено {count} аддона.", many: "Обновлено {count} аддонов." },
   "addons.refreshAllFailed": { one: "1 аддон не ответил.", other: "{count} аддоны не ответили.", few: "{count} аддона не ответили.", many: "{count} аддонов не ответили." },
   "settings.privacyTitle": "Конфиденциальность",
+  "settings.supportTitle": "Поддержать проект",
+  "settings.supportText": "Нравится Stremio Offline? Поддержите его разработку на Ko-fi.",
   "settings.addonsTitle": "Дополнения",
   "settings.addonsText": "Сохраненный манифест решает, какие каталоги предлагаются и какие дополнения запрашиваются для потоков.",
   "settings.addonRefresh": "Обновление дополнений",

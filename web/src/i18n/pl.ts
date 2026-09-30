@@ -806,6 +806,8 @@ export const pl: Catalog = {
   "addons.refreshAllDone": { one: "Zaktualizowano 1 dodatek.", other: "Zaktualizowano dodatki: {count}.", few: "Zaktualizowano {count} dodatki.", many: "Zaktualizowano {count} dodatków." },
   "addons.refreshAllFailed": { one: "1 dodatek nie odpowiedział.", other: "Dodatki {count} nie odpowiedziały.", few: "{count} dodatki nie odpowiedziały.", many: "{count} dodatków nie odpowiedziało." },
   "settings.privacyTitle": "Prywatność",
+  "settings.supportTitle": "Wesprzyj projekt",
+  "settings.supportText": "Podoba Ci się Stremio Offline? Wesprzyj jego rozwój na Ko-fi.",
   "settings.addonsTitle": "Dodatki",
   "settings.addonsText": "Przechowywany manifest decyduje, które katalogi są oferowane i które dodatki są wymagane dla strumieni.",
   "settings.addonRefresh": "Odświeżanie dodatków",
