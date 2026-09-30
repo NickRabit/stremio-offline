@@ -92,6 +92,23 @@ const realPath = async (entry: string, fsImpl: DownloadDirFs): Promise<string> =
   }
 };
 
+/** A folder that does not exist yet as the file system will spell it once created: the nearest
+ *  existing ancestor resolved, the missing tail appended. */
+const realPathOfMissing = async (entry: string, fsImpl: DownloadDirFs, pathImpl: typeof path): Promise<string> => {
+  const tail: string[] = [];
+  let current = entry;
+  for (;;) {
+    try {
+      return pathImpl.join(await fsImpl.realpath(current), ...tail);
+    } catch {
+      const parent = pathImpl.dirname(current);
+      if (parent === current) return entry;
+      tail.unshift(pathImpl.basename(current));
+      current = parent;
+    }
+  }
+};
+
 /** A folder that cannot be the download folder: the disk root, the home folder or anything above
  *  it, and the app's own data (its own `downloads` default excepted). */
 export function reservedDownloadDir(dir: string, places: Places): boolean {
@@ -165,18 +182,19 @@ export async function prepareDownloadDir(dir: unknown, places: Places, fsImpl: D
   // The same folder under another spelling -- an 8.3 name, a junction -- is still that folder.
   let spelledReserved = false;
   let spelledProtected = false;
+  const real = exists ? await realPath(resolved, fsImpl) : await realPathOfMissing(resolved, fsImpl, pathImpl);
+  if (!samePath(real, resolved, platform)) {
+    const realPlaces: Places = {
+      ...places,
+      home: await realPath(places.home, fsImpl),
+      userData: await realPath(places.userData, fsImpl),
+      knownFolders: await Promise.all(knownFoldersOf(places).map((folder) => realPath(folder, fsImpl))),
+    };
+    spelledReserved = reservedDownloadDir(real, realPlaces);
+    spelledProtected = protectedDownloadDir(real, realPlaces);
+  }
+  if (spelledReserved) return { ok: false, reason: "reserved" };
   if (exists) {
-    const real = await realPath(resolved, fsImpl);
-    if (!samePath(real, resolved, platform)) {
-      const realPlaces: Places = {
-        ...places,
-        home: await realPath(places.home, fsImpl),
-        userData: await realPath(places.userData, fsImpl),
-        knownFolders: await Promise.all(knownFoldersOf(places).map((folder) => realPath(folder, fsImpl))),
-      };
-      spelledReserved = reservedDownloadDir(real, realPlaces);
-      spelledProtected = protectedDownloadDir(real, realPlaces);
-    }
     fresh = await fsImpl.readdir(resolved).then((entries) => entries.every((entry) => IGNORED_ENTRIES.has(entry)), () => false);
   } else {
     try {
@@ -186,7 +204,6 @@ export async function prepareDownloadDir(dir: unknown, places: Places, fsImpl: D
       return { ok: false, reason: "not-writable" };
     }
   }
-  if (spelledReserved) return { ok: false, reason: "reserved" };
   const probe = pathImpl.join(resolved, `${PROBE_PREFIX}${randomUUID()}`);
   try {
     await fsImpl.writeFile(probe, "", { encoding: "utf8", flag: "wx" });
