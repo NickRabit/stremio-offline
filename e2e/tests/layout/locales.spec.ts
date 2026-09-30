@@ -1,7 +1,11 @@
 import { expect, test } from "@playwright/test";
 
+test.afterEach(async ({ page }) => {
+  await page.request.patch("/api/settings", { data: { uiLanguage: "cs" } });
+});
+
 const locales = [
-  { code: "sk", tag: "sk-SK", nav: ["Katalóg", "Knižnica", "Sťahovanie", "Doplnky", "Nastavenia", "Štatistiky"] },
+  { code: "sk", tag: "sk-SK", nav: ["Katalóg", "Knižnica", "Stiahnuté", "Doplnky", "Nastavenia", "Štatistiky"] },
   { code: "de", tag: "de-DE", nav: ["Katalog", "Bibliothek", "Downloads", "Add-ons", "Einstellungen", "Statistiken"] },
   { code: "es", tag: "es-ES", nav: ["Catálogo", "Biblioteca", "Descargas", "Complementos", "Configuración", "Estadísticas"] },
   { code: "fr", tag: "fr-FR", nav: ["Catalogue", "Bibliothèque", "Téléch.", "Modules", "Paramètres", "Statistiques"] },
