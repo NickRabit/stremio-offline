@@ -28,6 +28,10 @@ and pick one file:
   ./Stremio-Offline-*.AppImage
   ```
 
+  - The AppImage uses the system's VA-API libraries, which most desktop
+    distributions already have (browsers and video players use them). If
+    films will not play or convert, install them: `libva2 libva-drm2` on
+    Debian and Ubuntu, `libva` on Fedora, Arch and openSUSE.
   - On Ubuntu 24.04 and newer, install `libfuse2t64` first:
     `sudo apt install libfuse2t64`. On other distributions the package is
     usually `fuse2` or `fuse-libs`.

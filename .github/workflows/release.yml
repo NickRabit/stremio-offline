@@ -307,6 +307,9 @@ jobs:
       # An artifact download loses the executable bit.
       - run: chmod +x desktop/ffmpeg-linux/ffmpeg desktop/ffmpeg-linux/ffprobe
       - run: npm ci
+      # The system libraries the bundled FFmpeg links against: libva and libdrm must match the
+      # machine's own GPU driver, so they come from the system, as the .deb's dependencies say.
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libva2 libva-drm2 libdrm2
       - run: npm run package:linux:x64 -w desktop
       # Both checks start the packaged app, which needs a display; the runner has no screen.
       - run: xvfb-run -a npm run verify:fuses -w desktop
