@@ -66,13 +66,12 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     if (library.mosaic === false) return [];
     const distinct = folderMosaicUnits(units, folderKey, metaStore.qualifiedMeta(), metaStore.qualifiedSuggestions(), 5);
     if (distinct.length < 2) return [];
-    const posters: string[] = [];
-    for (const unit of distinct) {
+    const previews = await Promise.all(distinct.map(async (unit) => {
       const file = isVideo(posixBase(unit.key));
       const art = file ? await locateFileArtwork(unit.key) : await locateFolderArtwork(unit.key);
-      const poster = await thumbUrl(file ? "path" : "dir", wirePath(unit.key), art);
-      if (poster) posters.push(poster);
-    }
+      return thumbUrl(file ? "path" : "dir", wirePath(unit.key), art);
+    }));
+    const posters = previews.filter((poster): poster is string => Boolean(poster));
     return posters.length > 1 ? posters : [];
   };
 
@@ -317,7 +316,7 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     }
     if (!art) return res.status(404).end();
     void artworks.served(art);
-    res.setHeader("cache-control", "private, no-store");
+    res.setHeader("cache-control", "private, no-cache");
     res.sendFile(art, { dotfiles: "allow" }, (error) => { if (error && !res.headersSent) res.status(404).end(); });
   }));
 }
