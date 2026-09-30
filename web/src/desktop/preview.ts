@@ -12,7 +12,7 @@ export function previewBridge(search: string): ShellBridge | null {
   const nas: Target = { kind: "profile", id: "nas" };
   const screenKind = query.get("screen") ?? "welcome";
   let state: ShellState = {
-    platform: query.get("platform") === "win32" ? "win32" : "darwin",
+    platform: query.get("platform") === "win32" ? "win32" : query.get("platform") === "linux" ? "linux" : "darwin",
     locale: query.get("locale") === "en" ? "en" : "cs",
     localeChoice: null,
     appVersion: "0.4.88",

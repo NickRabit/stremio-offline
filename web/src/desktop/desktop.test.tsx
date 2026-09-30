@@ -316,3 +316,17 @@ it("on Windows the pages say This PC and Recycle Bin, and leave the title bar to
   expect(host.querySelector(".shell-titlebar")).not.toBeNull();
   expect(host.textContent).toContain("Reset this Mac…");
 });
+
+it("on Linux the pages say This computer, keep the Trash, and speak of neither macOS nor Windows", async () => {
+  const lin = (over: Partial<ShellState> = {}) => baseState({ platform: "linux", ...over });
+  await render(makeBridge("main", lin()));
+  expect(host.textContent).toContain("This computer");
+  expect(host.textContent).not.toMatch(/\bMac\b|⌘|\bPC\b|Windows/);
+  act(() => root.unmount());
+  root = createRoot(host);
+  await render(makeBridge("settings", lin({ local: { ...baseState().local, running: true, settings: { ...baseState().local.settings, publish: true } } })));
+  expect(host.textContent).toContain("Reset this computer…");
+  expect(host.textContent).toContain("Trash");
+  expect(host.textContent).toContain("ufw or firewalld");
+  expect(host.textContent).not.toMatch(/\bMac\b|macOS|\bPC\b|Windows|Recycle Bin/);
+});
