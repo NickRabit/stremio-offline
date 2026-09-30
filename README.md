@@ -129,6 +129,14 @@ launch. The steps are in
 a newer release and say when one is out; updating means installing the new one
 over the old, and libraries, accounts and settings stay.
 
+### On phones and tablets
+
+Open the address of your NAS or Docker host in your mobile browser. On iPhone
+and iPad, add Stremio Offline to the Home Screen from Safari to open it without
+the browser's address bar. On Android, Chrome offers app installation or a Home
+Screen shortcut. See **[Phones and tablets](docs/mobile.md)** for the steps and
+network requirements.
+
 ### Adding addons
 
 In **Addons**, paste a full `manifest.json` URL. A catalog manifest supplies
@@ -144,6 +152,7 @@ on demand, so a catalogue the provider adds later still shows up. See
 | --- | --- |
 | [Install on a Synology NAS](docs/install-synology.md) | Container Manager and SSH paths, `PUID`/`PGID`, backups, reverse proxy |
 | [Configuration reference](docs/configuration.md) | Every environment variable, with defaults |
+| [Phones and tablets](docs/mobile.md) | iPhone, iPad and Android, Home Screen setup, server access |
 | [Playback](docs/playback.md) | Direct play vs. remux vs. transcode, seeking, tracks, subtitles |
 | [Trailers](docs/trailers.md) | Where the trailer comes from, and how secure mode plays it |
 | [Addons and downloads](docs/downloads.md) | Debrid addons, the queue, save rules, saving to a device, config backup |
