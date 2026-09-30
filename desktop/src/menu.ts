@@ -32,6 +32,10 @@ const isLocal = (target: Target | null): boolean => target?.kind === "local";
 
 const isProfile = (target: Target | null, id: string): boolean => target?.kind === "profile" && target.id === id;
 
+/** The local target's name: Windows says PC, Linux a computer, macOS a Mac. */
+const localLabel = (strings: MenuStrings, platform: NodeJS.Platform): string =>
+  platform === "win32" ? strings["window.thisPC"] : platform === "linux" ? strings["window.thisComputer"] : strings["window.thisMac"];
+
 /** Pure: the shell tests the template without Electron's `Menu`, which needs a ready app. */
 export function buildMenuTemplate(input: MenuInput): MenuItemConstructorOptions[] {
   const { strings, profiles, current, connected, isPackaged, actions, platform = process.platform } = input;
@@ -47,7 +51,7 @@ export function buildMenuTemplate(input: MenuInput): MenuItemConstructorOptions[
 
   const server: MenuItemConstructorOptions[] = [
     {
-      label: platform === "win32" ? strings["window.thisPC"] : strings["window.thisMac"],
+      label: localLabel(strings, platform),
       type: "checkbox",
       checked: isLocal(current) && connected,
       click: () => actions.connect({ kind: "local" }),

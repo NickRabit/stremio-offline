@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
+import path from "node:path";
 import test from "node:test";
-import { LOGIN_ARGS, launchedHidden, loginItemQuery, loginItemStatus, loginItemUpdate, loginItemOn } from "./login-item.js";
+import {
+  AUTOSTART_NAME, autostartEntry, autostartExecutable, autostartFile, launchExecutable, launchedHidden, LOGIN_ARGS, loginItemQuery,
+  loginItemStatus, loginItemUpdate, loginItemOn, readAutostart, removeAutostart, writeAutostart, type AutostartFs,
+} from "./login-item.js";
 
 test("a login launch on Windows starts the app in the notification area", () => {
   assert.deepEqual([...LOGIN_ARGS], ["--hidden"]);
@@ -52,8 +56,10 @@ test("Windows has no approval step: the registry decides", () => {
   assert.equal(loginItemStatus({ status: "requires-approval" }, "win32", true), "not-registered");
 });
 
-test("Linux has no login item", () => {
-  assert.equal(loginItemStatus({ openAtLogin: true, status: "enabled" }, "linux", true), "unsupported");
+test("Linux reads its own autostart file instead of Electron's login item", () => {
+  assert.equal(loginItemStatus({ openAtLogin: true }, "linux", true), "enabled");
+  assert.equal(loginItemStatus({ openAtLogin: false }, "linux", true), "not-registered");
+  assert.equal(loginItemStatus({ openAtLogin: true }, "linux", false), "unsupported");
 });
 
 test("an entry Task Manager switched off reads as off on Windows, and enabling switches it back on", () => {
@@ -62,4 +68,91 @@ test("an entry Task Manager switched off reads as off on Windows, and enabling s
   assert.equal(loginItemOn({ openAtLogin: true }, "darwin"), true);
   assert.deepEqual(loginItemUpdate(true, "win32"), [{ openAtLogin: true, args: ["--hidden"], enabled: true }]);
   assert.deepEqual(loginItemUpdate(true, "darwin"), [{ openAtLogin: true }]);
+});
+
+const memoryFs = (): AutostartFs & { files: Map<string, string>; dirs: Set<string> } => {
+  const files = new Map<string, string>();
+  const dirs = new Set<string>();
+  return {
+    files,
+    dirs,
+    readFile: async (file) => {
+      const body = files.get(file);
+      if (body === undefined) throw Object.assign(new Error("missing"), { code: "ENOENT" });
+      return body;
+    },
+    mkdir: async (dir) => { dirs.add(dir); },
+    writeFile: async (file, data) => { files.set(file, data); },
+    rename: async (from, to) => {
+      const body = files.get(from);
+      if (body === undefined) throw Object.assign(new Error("missing"), { code: "ENOENT" });
+      files.delete(from);
+      files.set(to, body);
+    },
+    rm: async (file) => { files.delete(file); },
+  };
+};
+
+test("the autostart entry quotes the Exec line the way the Desktop Entry spec reads it", () => {
+  const entry = autostartEntry("/opt/Stremio Offline/Stremio $Offline `100%`");
+  // The quoting level writes \$ and \`, and the string level doubles each of those backslashes.
+  const exec = entry.split("\n").find((line) => line.startsWith("Exec="));
+  assert.equal(exec, String.raw`Exec="/opt/Stremio Offline/Stremio \\$Offline \\` + "`100%%" + String.raw`\\` + "`\" --hidden");
+  assert.equal(entry.includes("[Desktop Entry]"), true);
+  assert.equal(entry.includes("Type=Application"), true);
+  assert.equal(entry.includes("Name=Stremio Offline"), true);
+  assert.equal(entry.includes("X-GNOME-Autostart-enabled=true"), true);
+  assert.equal(entry.includes("Hidden=false"), true);
+  assert.equal(entry.includes("NoDisplay=false"), true);
+});
+
+test("the Exec line reads back as the executable it names", () => {
+  assert.equal(autostartExecutable(autostartEntry("/opt/stremio-offline/stremio-offline")), "/opt/stremio-offline/stremio-offline");
+  for (const tricky of ["/opt/Stremio $Offline `100%`", String.raw`/home/me/My "Apps"\Stremio.AppImage`]) {
+    assert.equal(autostartExecutable(autostartEntry(tricky)), tricky, tricky);
+  }
+  // An entry written with a single backslash before the reserved character still reads back.
+  assert.equal(autostartExecutable(String.raw`Exec="/opt/a \$b" --hidden`), "/opt/a $b");
+  assert.equal(autostartExecutable("[Desktop Entry]\nExec=/usr/bin/thing --hidden\n"), "/usr/bin/thing");
+  assert.equal(autostartExecutable("[Desktop Entry]\nType=Application\n"), null);
+});
+
+test("the autostart file lives under XDG_CONFIG_HOME, or under the home folder when it is unset", () => {
+  const fallback = path.join("/home/me", ".config", "autostart", AUTOSTART_NAME);
+  assert.equal(autostartFile("/home/me", {}), fallback);
+  assert.equal(autostartFile("/home/me", { XDG_CONFIG_HOME: "" }), fallback);
+  assert.equal(autostartFile("/home/me", { XDG_CONFIG_HOME: "/custom/config" }), path.join("/custom/config", "autostart", AUTOSTART_NAME));
+});
+
+test("an AppImage starts itself from the file it was launched as", () => {
+  assert.equal(launchExecutable({ APPIMAGE: "/home/me/Apps/Stremio.AppImage", APPDIR: "/tmp/.mount_StremiXYZ" },
+    "/tmp/.mount_StremiXYZ/stremio-offline"), "/home/me/Apps/Stremio.AppImage");
+  // Variables inherited from another AppImage (a terminal started from one) are not this app's.
+  assert.equal(launchExecutable({ APPIMAGE: "/home/me/Apps/Editor.AppImage", APPDIR: "/tmp/.mount_EditorABC" },
+    "/opt/stremio-offline/stremio-offline"), "/opt/stremio-offline/stremio-offline");
+  assert.equal(launchExecutable({ APPIMAGE: "/home/me/Apps/Stremio.AppImage" }, "/opt/stremio-offline/stremio-offline"),
+    "/opt/stremio-offline/stremio-offline");
+  assert.equal(launchExecutable({}, "/opt/stremio-offline/stremio-offline"), "/opt/stremio-offline/stremio-offline");
+  assert.equal(launchExecutable({ APPIMAGE: "" }, "/opt/x"), "/opt/x");
+});
+
+test("the autostart entry round-trips: write, read and remove", async () => {
+  const fsImpl = memoryFs();
+  const file = autostartFile("/home/me", {});
+  assert.deepEqual(await readAutostart(file, fsImpl), { enabled: false });
+  await writeAutostart(file, "/opt/stremio-offline/stremio-offline", fsImpl);
+  assert.equal(fsImpl.dirs.has(path.dirname(file)), true);
+  assert.deepEqual(await readAutostart(file, fsImpl), { enabled: true });
+  await removeAutostart(file, fsImpl);
+  assert.deepEqual(await readAutostart(file, fsImpl), { enabled: false });
+});
+
+test("an entry the desktop turned off reads as disabled", async () => {
+  const fsImpl = memoryFs();
+  const file = autostartFile("/home/me", {});
+  await writeAutostart(file, "/opt/x", fsImpl);
+  fsImpl.files.set(file, autostartEntry("/opt/x").replace("Hidden=false", "Hidden=true"));
+  assert.deepEqual(await readAutostart(file, fsImpl), { enabled: false });
+  fsImpl.files.set(file, autostartEntry("/opt/x").replace("X-GNOME-Autostart-enabled=true", "X-GNOME-Autostart-enabled=false"));
+  assert.deepEqual(await readAutostart(file, fsImpl), { enabled: false });
 });

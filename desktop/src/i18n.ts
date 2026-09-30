@@ -13,6 +13,7 @@ import type { ShellLocale } from "./shell-prefs.js";
 export const en = {
   "window.thisMac": "This Mac",
   "window.thisPC": "This PC",
+  "window.thisComputer": "This computer",
   "download.saveTitle": "Save to this device",
   "folder.pickTitle": "Choose a library folder",
   "notify.downloadDone": "Saved {file}",
@@ -41,6 +42,7 @@ export const en = {
   "reset.downloadsKept": "The download folder stayed where it is: {dir}",
   "reset.detailServers": "The saved servers and the sign-ins to them are forgotten as well.",
   "reset.detailKeepsFilms": "Downloaded films stay where they are.",
+  "reset.trashFailed": "The data could not be moved to the Trash, and nothing was deleted: {reason}",
   "tray.open": "Open Stremio Offline",
   "tray.settings": "Settings…",
   "tray.quit": "Quit",
@@ -51,6 +53,7 @@ export const en = {
 export const cs: typeof en = {
   "window.thisMac": "Tento Mac",
   "window.thisPC": "Tento počítač",
+  "window.thisComputer": "Tento počítač",
   "download.saveTitle": "Uložit do tohoto zařízení",
   "folder.pickTitle": "Vyberte složku knihovny",
   "notify.downloadDone": "Uloženo {file}",
@@ -79,6 +82,7 @@ export const cs: typeof en = {
   "reset.downloadsKept": "Složka pro stahování zůstala na místě: {dir}",
   "reset.detailServers": "Zapomenou se i uložené servery a přihlášení k nim.",
   "reset.detailKeepsFilms": "Stažené filmy zůstanou na místě.",
+  "reset.trashFailed": "Data se nepodařilo přesunout do Koše a nic se nesmazalo: {reason}",
   "tray.open": "Otevřít Stremio Offline",
   "tray.settings": "Nastavení…",
   "tray.quit": "Ukončit",
@@ -102,23 +106,62 @@ const win32Cs: Partial<typeof cs> = {
   "reset.detail": "Server na tomto počítači se zastaví a odhlásíte se z něj. Jeho účty, záznamy knihoven, historie a nastavení se přesunou do Koše, nastavení aplikace se smaže a aplikace začne znovu úvodní obrazovkou.",
 };
 
+/** The strings that name a Mac or a PC said for Linux: a computer, and the Trash as it is. */
+const linuxEn: Partial<typeof en> = {
+  "window.thisMac": "This computer",
+  "window.thisPC": "This computer",
+  "quit.detail": "Something is still downloading or playing on this computer. Quitting stops it; unfinished downloads carry on the next time the app starts.",
+  "reset.title": "Reset this computer?",
+  "reset.detail": "The server on this computer stops and you are signed out of it. Its accounts, library records, history and settings move to the Trash, the app's own settings are deleted, and the app starts again with the welcome screen.",
+};
+
+const linuxCs: Partial<typeof cs> = {
+  "window.thisMac": "Tento počítač",
+  "window.thisPC": "Tento počítač",
+  "quit.detail": "Na tomto počítači se ještě něco stahuje nebo přehrává. Ukončením se to zastaví; nedokončená stahování pokračují po příštím spuštění aplikace.",
+  "reset.title": "Obnovit tento počítač?",
+  "reset.detail": "Server na tomto počítači se zastaví a odhlásíte se z něj. Jeho účty, záznamy knihoven, historie a nastavení se přesunou do Koše, nastavení aplikace se smaže a aplikace začne znovu úvodní obrazovkou.",
+};
+
 const native: Record<Exclude<ShellLocale, "cs" | "en">, Record<string, string>> = { sk, de, es, fr, it, pl, "pt-BR": ptBR, ru };
+
+/** The language's own strings with the platform's wording laid over them. The `.win` twins belong
+ *  to Windows alone and never reach another platform. */
+const forPlatform = (own: Record<string, string>, overrides: Partial<typeof en>): typeof en => {
+  const strings: Record<string, string> = { ...own };
+  for (const [key, value] of Object.entries(overrides)) {
+    if (typeof value === "string") strings[key] = value;
+  }
+  for (const key of ["quit.detail.win", "reset.title.win", "reset.detail.win", "reset.detailDownloads.win"]) delete strings[key];
+  return strings as typeof en;
+};
 
 export function catalogue(locale: ShellLocale, platform: NodeJS.Platform = process.platform): typeof en {
   const own: Record<string, string> = locale === "cs" ? cs : locale === "en" ? en : native[locale];
-  if (platform !== "win32") {
-    const strings = { ...own };
-    for (const key of ["quit.detail.win", "reset.title.win", "reset.detail.win", "reset.detailDownloads.win"]) delete strings[key];
-    return strings as typeof en;
+  if (platform === "win32") {
+    if (locale === "en") return forPlatform(en, win32En);
+    if (locale === "cs") return forPlatform(cs, win32Cs);
+    return forPlatform(own, {
+      "window.thisMac": own["window.thisPC"],
+      "quit.detail": own["quit.detail.win"],
+      "reset.title": own["reset.title.win"],
+      "reset.detail": own["reset.detail.win"],
+      "reset.detailDownloads": own["reset.detailDownloads.win"],
+    });
   }
-  const windows = locale === "en" ? win32En : locale === "cs" ? win32Cs : {
-    "window.thisMac": own["window.thisPC"],
-    "quit.detail": own["quit.detail.win"],
-    "reset.title": own["reset.title.win"],
-    "reset.detail": own["reset.detail.win"],
-    "reset.detailDownloads": own["reset.detailDownloads.win"],
-  };
-  const strings: Record<string, string> = { ...own, ...windows };
-  for (const key of ["quit.detail.win", "reset.title.win", "reset.detail.win", "reset.detailDownloads.win"]) delete strings[key];
-  return strings as typeof en;
+  if (platform === "linux") {
+    if (locale === "en") return forPlatform(en, linuxEn);
+    if (locale === "cs") return forPlatform(cs, linuxCs);
+    // The other languages have no Linux wording of their own: their Windows one speaks of "this
+    // computer" and of the Trash as their language calls it, which fits Linux; the download
+    // folder's Trash line stays the macOS one, since Linux has no Recycle Bin quota to explain.
+    return forPlatform(own, {
+      "window.thisMac": own["window.thisComputer"],
+      "window.thisPC": own["window.thisComputer"],
+      "quit.detail": own["quit.detail.win"],
+      "reset.title": own["reset.title.win"],
+      "reset.detail": own["reset.detail.win"],
+    });
+  }
+  return forPlatform(own, {});
 }

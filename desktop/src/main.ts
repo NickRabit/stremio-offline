@@ -16,11 +16,11 @@ import {
   type ProfileStore,
   type ServerProfile,
 } from "./connection-file.js";
-import { mayTrashDownloadDir, OWNERSHIP_FILE, prepareDownloadDir, readOwnership, suggestedDownloadDir, writeOwnership, type Ownership, type Places } from "./download-dir.js";
+import { mayTrashDownloadDirReal, OWNERSHIP_FILE, prepareDownloadDir, readOwnership, suggestedDownloadDir, writeOwnership, type Ownership, type Places } from "./download-dir.js";
 import { isDeviceTicketDownload } from "./downloads.js";
 import { catalogue } from "./i18n.js";
 import { layout, type PageMode } from "./layout.js";
-import { launchedHidden, loginItemQuery, loginItemStatus, loginItemUpdate, type LoginItemReadings, loginItemOn } from "./login-item.js";
+import { autostartExecutable, autostartFile, launchedHidden, launchExecutable, loginItemQuery, loginItemStatus, loginItemUpdate, readAutostart, removeAutostart, writeAutostart, type LoginItemReadings, loginItemOn } from "./login-item.js";
 import { bundledMediaTools, DOWNLOADS_DIRECTORY, INSTANCE_DIRECTORY, LOCAL_PARTITION, LocalBackend, LocalPortBusyError, PORT_FILE, type LocalBackendConnection } from "./local-backend.js";
 import { defaultLocalSettings, parseLocalSettings, readLocalSettings, SETTINGS_FILE, writeLocalSettings, type LocalSettings } from "./local-settings.js";
 import { buildMenuTemplate } from "./menu.js";
@@ -35,6 +35,7 @@ import { SerialQueue } from "./serial-queue.js";
 import { SleepGuard } from "./sleep-guard.js";
 import { MAX_TARGET_ID, LatestRequest, fallbackApplies, launchPlan, readStartupChoice, writeStartupChoice, STARTUP_FILE } from "./startup.js";
 import { fetchStatus, type ProbeFailure } from "./status.js";
+import { findSystemFfmpeg, type SystemFfmpeg } from "./system-ffmpeg.js";
 import { buildTrayTemplate } from "./tray.js";
 import { checkForUpdate, readRelease, UPDATE_FEED_URL, type Release } from "./update-check.js";
 import { Debounced, DEFAULT_SIZE, MIN_SIZE, readWindowState, restoreBounds, writeWindowState, type WindowState } from "./window-state.js";
@@ -98,7 +99,7 @@ interface Shell {
 }
 
 let shell: Shell | null = null;
-/** The Windows notification-area icon; null everywhere else and once the app is quitting. */
+/** The notification-area icon on Windows and Linux; null on macOS and once the app is quitting. */
 let tray: Tray | null = null;
 /** Whether the close-to-tray balloon has already been shown on this install. */
 let trayNoticeShown = false;
@@ -115,6 +116,8 @@ let localStreaming = false;
 /** The last downloading report from the running backend. */
 let localDownloading = false;
 let ffmpegLine: string | null = null;
+/** The system FFmpeg a Linux desktop may run instead of the bundled one, found once at startup. */
+let systemFfmpeg: SystemFfmpeg | null = null;
 const sleepGuard = new SleepGuard(powerSaveBlocker);
 /** Quitting retires the page itself, so a window closing on the way out does not wait for it again. */
 let quitting = false;
@@ -153,6 +156,7 @@ const shellState: ShellState = {
     running: false,
     addresses: [],
     ffmpeg: null,
+    systemFfmpeg: null,
     busy: false,
     downloadDir: "",
     suggestedDownloadDir: "",
@@ -176,12 +180,17 @@ const settingsWindow = new SettingsWindow({
   platform: PLATFORM,
 });
 
-/** The login item is the OS's to remember: it is read back rather than stored, and a development
- *  run cannot register the Electron binary, so it has no answer at all. */
-const refreshLoginItem = (): void => {
+/** The login item is the OS's to remember: it is read back rather than stored. Windows and macOS
+ *  answer through Electron, Linux through its own XDG autostart file, and a development run cannot
+ *  register the Electron binary, so it has no answer at all. */
+const refreshLoginItem = async (): Promise<void> => {
   let settings: LoginItemReadings = {};
   try {
-    settings = app.getLoginItemSettings(loginItemQuery(PLATFORM));
+    if (PLATFORM === "linux") {
+      settings = { openAtLogin: (await readAutostart(autostartFile(app.getPath("home"), process.env))).enabled };
+    } else {
+      settings = app.getLoginItemSettings(loginItemQuery(PLATFORM));
+    }
   } catch {
     settings = {};
   }
@@ -192,10 +201,31 @@ const refreshLoginItem = (): void => {
   };
 };
 
+/** A renamed or replaced AppImage leaves an enabled entry pointing at the old file: this launch's
+ *  executable is written back so a login start keeps working. */
+const refreshAutostartExec = async (): Promise<void> => {
+  const file = autostartFile(app.getPath("home"), process.env);
+  if (!(await readAutostart(file)).enabled) return;
+  const current = launchExecutable(process.env, process.execPath);
+  let text: string;
+  try {
+    text = readFileSync(file, "utf8");
+  } catch {
+    return;
+  }
+  if (autostartExecutable(text) === current) return;
+  // A login entry that cannot be rewritten (a read-only folder, a full disk) is no reason to stop
+  // the app from starting; it keeps the old path and says so.
+  try {
+    await writeAutostart(file, current);
+  } catch (error) {
+    console.warn("autostart: the login entry could not be updated: " + (error instanceof Error ? error.message : String(error)));
+  }
+};
+
 const openSettings = (): void => {
-  refreshLoginItem();
   settingsWindow.open();
-  pushState();
+  void refreshLoginItem().then(() => pushState());
 };
 
 const targetKey = (target: Target | null): string =>
@@ -247,9 +277,9 @@ const applyMenu = (): void => {
       openProject: () => { void electronShell.openExternal(PROJECT_URL).catch(() => {}); },
     },
   })));
-  if (PLATFORM === "win32") {
-    // Windows puts the application menu on every window: the main window keeps it in view, the
-    // settings window loses it again after each rebuild.
+  if (PLATFORM !== "darwin") {
+    // Windows and Linux put the application menu on every window: the main window keeps it in
+    // view, the settings window loses it again after each rebuild.
     shell?.window.setMenu(Menu.getApplicationMenu());
     settingsWindow.removeMenu();
   }
@@ -270,7 +300,8 @@ const applyMenu = (): void => {
 };
 
 const sameLocalSettings = (a: LocalSettings, b: LocalSettings) =>
-  a.allowPrivateAddons === b.allowPrivateAddons && a.publish === b.publish && a.publishPort === b.publishPort;
+  a.allowPrivateAddons === b.allowPrivateAddons && a.publish === b.publish && a.publishPort === b.publishPort
+  && a.useSystemFfmpeg === b.useSystemFfmpeg;
 
 const syncAwake = () =>
   sleepGuard.update({ published: localConnection?.published === true, streaming: localStreaming, downloading: localDownloading });
@@ -350,6 +381,24 @@ const localRestartNeeded = (): boolean => {
   return launched === null || !sameLocalSettings(launched, localSettings);
 };
 
+/** Whether the download folder is the app's to move to the Trash. The folder's real location is
+ *  read asynchronously, so the state carries the last answer and a different one is pushed again. */
+let downloadDirOwned = false;
+
+const refreshDownloadDirOwned = async (): Promise<void> => {
+  let owned = false;
+  if (PLATFORM !== "win32") {
+    try {
+      owned = await mayTrashDownloadDirReal(effectiveDownloadDir(), localSettings.downloadDir, ownership, places());
+    } catch {
+      owned = false;
+    }
+  }
+  if (owned === downloadDirOwned) return;
+  downloadDirOwned = owned;
+  pushState();
+};
+
 const refreshLocal = () => {
   shellState.profiles = profileStore.profiles;
   shellState.local = {
@@ -357,13 +406,13 @@ const refreshLocal = () => {
     running: localConnection !== null,
     addresses: localConnection?.addresses ?? [],
     ffmpeg: ffmpegLine,
+    systemFfmpeg: systemFfmpeg?.ffmpeg ?? null,
     busy: localStreaming || localDownloading || deviceDownloads.size > 0,
     downloadDir: effectiveDownloadDir(),
     suggestedDownloadDir: suggestedDownloadDir(app.getPath("home"), app.getPath("videos"), PLATFORM),
     initialized: localInitialized,
     // Windows may delete a folder too large for the Recycle Bin for good, so it is never offered.
-    downloadDirOwned: PLATFORM !== "win32"
-      && mayTrashDownloadDir(effectiveDownloadDir(), localSettings.downloadDir, ownership, places()),
+    downloadDirOwned,
     restartNeeded: localRestartNeeded(),
   };
 };
@@ -380,6 +429,7 @@ const pushState = () => {
     current.window.setTitle(titleFor(shellState.screen));
   }
   settingsWindow.push(shellState);
+  void refreshDownloadDirOwned();
 };
 
 const setScreen = (screen: MainScreen) => {
@@ -964,14 +1014,19 @@ const wireShellView = (view: WebContentsView, name: "main" | "toast") => {
   void view.webContents.loadFile(RENDERER_PAGE, { query: { view: name } });
 };
 
-/** The notification-area icon: the app's own icon, shrunk for the tray. Only Windows has one. */
+/** The notification-area icon: the app's own icon, shrunk for the tray. Windows and Linux have one;
+ *  a Linux desktop with no status notifier refuses it, which the app tolerates and logs once. */
 const createTray = (): void => {
-  const icon = nativeImage.createFromPath(path.join(app.getAppPath(), "build", "icon.png")).resize({ width: 16, height: 16 });
-  const created = new Tray(icon);
-  created.setToolTip(APP_NAME);
-  created.on("click", () => { void showMainWindow(); });
-  created.on("double-click", () => { void showMainWindow(); });
-  tray = created;
+  try {
+    const icon = nativeImage.createFromPath(path.join(app.getAppPath(), "build", "icon.png")).resize({ width: 16, height: 16 });
+    const created = new Tray(icon);
+    created.setToolTip(APP_NAME);
+    created.on("click", () => { void showMainWindow(); });
+    created.on("double-click", () => { void showMainWindow(); });
+    tray = created;
+  } catch (error) {
+    console.warn("tray: " + (error instanceof Error ? error.message : String(error)));
+  }
 };
 
 /** One balloon per install: the first close leaves the app running in the notification area. */
@@ -986,7 +1041,10 @@ const showTrayNotice = (): void => {
   }).catch(() => {});
 };
 
-const createShell = (saved: WindowState | null) => {
+/** A login start's window waits for its page before it is shown minimized. */
+let pendingMinimize = false;
+
+const createShell = (saved: WindowState | null, startMinimized = false) => {
   const restored = restoreBounds(
     saved,
     screen.getAllDisplays().map((display) => display.workArea),
@@ -999,16 +1057,32 @@ const createShell = (saved: WindowState | null) => {
     minHeight: MIN_SIZE.height,
     title: APP_NAME,
     backgroundColor: WINDOW_BACKGROUND,
-    // On Windows the menu bar stays in view: the server page fills the window, and a menu hidden
-    // until Alt is one nobody finds, Settings with it.
-    // A packaged app takes its icon from the executable; a development run has to point at it.
-    ...(PLATFORM === "win32" && !app.isPackaged ? { icon: path.join(app.getAppPath(), "build", "icon.png") } : {}),
+    // A login start on Linux opens the window minimized, so it is still reachable from the taskbar.
+    ...(startMinimized ? { show: false } : {}),
+    // On Windows and Linux the menu bar stays in view: the server page fills the window, and a
+    // menu hidden until Alt is one nobody finds, Settings with it.
+    // A packaged app takes its icon from the executable, which neither Linux nor a development
+    // run has, so both point the window at the icon file.
+    ...(PLATFORM === "linux" || (PLATFORM === "win32" && !app.isPackaged)
+      ? { icon: path.join(app.getAppPath(), "build", "icon.png") } : {}),
   });
-  if (PLATFORM === "win32") window.setMenu(Menu.getApplicationMenu());
+  if (PLATFORM !== "darwin") window.setMenu(Menu.getApplicationMenu());
   const page = new WebContentsView({ webPreferences: shellWebPreferences() });
   const toast = new WebContentsView({ webPreferences: shellWebPreferences() });
   wireShellView(page, "main");
   wireShellView(toast, "toast");
+  // Minimizing before the window is mapped is unreliable, on Wayland especially: it is shown once
+  // its page is ready, then minimized.
+  // A launch from the menu while the page still loads asked for the window: it stays up then.
+  if (startMinimized) {
+    pendingMinimize = true;
+    page.webContents.once("did-finish-load", () => {
+      if (!pendingMinimize) return;
+      pendingMinimize = false;
+      window.show();
+      window.minimize();
+    });
+  }
   toast.setBackgroundColor("#00000000");
   toast.setVisible(false);
   window.contentView.addChildView(page);
@@ -1031,6 +1105,13 @@ const createShell = (saved: WindowState | null) => {
   window.on("close", () => save.flush());
   let retired = false;
   window.on("close", (event) => {
+    // Linux has no Dock to return to, and its tray is not relied on: closing the window is the way
+    // out, through the same question the Quit item asks.
+    if (PLATFORM === "linux" && !quitting) {
+      event.preventDefault();
+      app.quit();
+      return;
+    }
     if (retired || quitting || !liveRemote()) return;
     event.preventDefault();
     retired = true;
@@ -1048,7 +1129,7 @@ const createShell = (saved: WindowState | null) => {
     if (PLATFORM === "win32" && !quitting) showTrayNotice();
   });
   shell = { window, page, toast, remote: null, remotePartition: null };
-  if (restored.maximized) window.maximize();
+  if (restored.maximized && !startMinimized) window.maximize();
   pushState();
 };
 
@@ -1058,6 +1139,10 @@ const createShell = (saved: WindowState | null) => {
 const showMainWindow = (asked?: Target): Promise<void> => {
   const existing = shell;
   if (existing) {
+    if (pendingMinimize) {
+      pendingMinimize = false;
+      existing.window.show();
+    }
     if (existing.window.isMinimized()) existing.window.restore();
     existing.window.focus();
     return asked ? connectTarget(asked, { launch: false }) : Promise.resolve();
@@ -1126,7 +1211,7 @@ const resetLocal = async (
   // Windows never moves the download folder: the Recycle Bin has a quota, and a folder over it is
   // deleted for good. The instance data, which is small, still goes to the bin.
   const trashDownloads = PLATFORM !== "win32" && options.deleteDownloads
-    && mayTrashDownloadDir(shownDir, localSettings.downloadDir, ownership, places());
+    && await mayTrashDownloadDirReal(shownDir, localSettings.downloadDir, ownership, places());
   const detail = [
     strings["reset.detail"],
     trashDownloads ? strings["reset.detailDownloads"].replace("{dir}", shownDir) : strings["reset.detailKeepsFilms"],
@@ -1142,8 +1227,8 @@ const resetLocal = async (
   });
   if (answer.response !== 0) return { ok: false, cancelled: true, downloadsKept: true };
   const previous = shellState.connection?.target ?? null;
-  const result = await queue.run(async (): Promise<{ ok: boolean; touched: boolean; downloadsKept: boolean }> => {
-    if (effectiveDownloadDir() !== shownDir) return { ok: false, touched: false, downloadsKept: true };
+  const result = await queue.run(async (): Promise<{ ok: boolean; touched: boolean; downloadsKept: boolean; trashFailure: string | null }> => {
+    if (effectiveDownloadDir() !== shownDir) return { ok: false, touched: false, downloadsKept: true, trashFailure: null };
     // A fresh ticket, so a connect still probing cannot land on the reset state afterwards.
     requests.next();
     stopRepoll();
@@ -1156,8 +1241,8 @@ const resetLocal = async (
     if (existsSync(instance)) {
       try {
         await electronShell.trashItem(instance);
-      } catch {
-        return { ok: false, touched: true, downloadsKept: true };
+      } catch (error) {
+        return { ok: false, touched: true, downloadsKept: true, trashFailure: error instanceof Error ? error.message : String(error) };
       }
     }
     let downloadsKept = !trashDownloads;
@@ -1188,10 +1273,17 @@ const resetLocal = async (
     shellState.screen = { kind: "welcome" };
     pushState();
     settingsWindow.close();
-    return { ok: true, touched: true, downloadsKept };
+    return { ok: true, touched: true, downloadsKept, trashFailure: null };
   });
   // A reset that stopped half way brings back what the window showed rather than leave it blank.
   if (!result.ok && result.touched && previous) void connectTarget(previous, { launch: false });
+  // Linux has no Trash on every mount, and the move fails loudly rather than delete: say so.
+  if (PLATFORM === "linux" && result.trashFailure !== null) {
+    void showMessageBox(senderWindow(event), {
+      type: "warning",
+      message: strings["reset.trashFailed"].replace("{reason}", result.trashFailure),
+    }).catch(() => {});
+  }
   if (result.ok && options.deleteDownloads && result.downloadsKept) {
     void dialog.showMessageBox({ type: "info", message: strings["reset.downloadsKept"].replace("{dir}", shownDir) }).catch(() => {});
   }
@@ -1304,6 +1396,14 @@ const applyAppPrefs = async (prefs: AppPrefs): Promise<{ ok: boolean }> => {
     if (!app.isPackaged) {
       // A development run would register the Electron binary itself as a login item.
       ok = false;
+    } else if (PLATFORM === "linux") {
+      try {
+        const file = autostartFile(app.getPath("home"), process.env);
+        if (prefs.openAtLogin) await writeAutostart(file, launchExecutable(process.env, process.execPath));
+        else await removeAutostart(file);
+      } catch {
+        ok = false;
+      }
     } else {
       try {
         // Windows matches the registry entry by path and arguments, so disabling clears both.
@@ -1313,7 +1413,7 @@ const applyAppPrefs = async (prefs: AppPrefs): Promise<{ ok: boolean }> => {
       }
     }
   }
-  refreshLoginItem();
+  await refreshLoginItem();
   shellState.app = { ...shellState.app, prefs: { ...shellState.app.prefs, checkUpdates: prefs.checkUpdates } };
   await queue.run(async () => {
     await writeShellPrefs(app.getPath("userData"),
@@ -1529,6 +1629,7 @@ const createLocalBackend = (): LocalBackend => new LocalBackend({
   fork: (entry, options) => utilityProcess.fork(entry, [], options),
   probeStatus: fetchStatus,
   tools: bundledMediaTools(app.isPackaged ? process.resourcesPath : null, undefined, PLATFORM),
+  systemTools: systemFfmpeg,
   onActivity: (activity) => {
     localStreaming = activity.streaming;
     localDownloading = activity.downloading;
@@ -1582,6 +1683,10 @@ if (earlyPrefs.locale !== null) app.commandLine.appendSwitch("lang", earlyPrefs.
 // Windows toasts and the taskbar need the AUMID, which the NSIS installer's Start menu shortcut
 // registers. The portable ZIP gets no notifications at all; nothing here waits for one.
 if (PLATFORM === "win32") app.setAppUserModelId("com.stremiooffline.desktop");
+
+// Electron derives WM_CLASS and the Wayland app id from this name, and xdg-desktop-portal refuses
+// an id no desktop file answers to, which reaches the file dialog.
+if (PLATFORM === "linux") app.setDesktopName("stremio-offline.desktop");
 
 if (process.argv.includes(SMOKE_LOCAL_BACKEND)) {
   // The smoke gets its own instance directory, so it neither needs the single-instance lock
@@ -1651,8 +1756,10 @@ if (process.argv.includes(SMOKE_LOCAL_BACKEND)) {
     shellState.locale = effectiveLocale(prefs.locale, app.getLocale());
     shellState.appVersion = app.getVersion();
     trayNoticeShown = prefs.trayNoticeShown;
-    refreshLoginItem();
+    if (PLATFORM === "linux" && app.isPackaged) await refreshAutostartExec().catch(() => {});
+    await refreshLoginItem();
     ffmpegLine = readFfmpegLine(app.isPackaged ? process.resourcesPath : null);
+    if (PLATFORM === "linux") systemFfmpeg = await findSystemFfmpeg(process.env, PLATFORM);
     localBackend = createLocalBackend();
     registerHandlers();
     // A one-time migration: the old connection file's selected profile stands in for a choice
@@ -1667,15 +1774,18 @@ if (process.argv.includes(SMOKE_LOCAL_BACKEND)) {
     if (!existsSync(path.join(app.getPath("userData"), STARTUP_FILE))) {
       await writeStartupChoice(app.getPath("userData"), plan.screen === "connect" ? plan.target : null).catch(() => {});
     }
-    // A login start on Windows opens no window; the tray is the only way in.
-    const startHidden = PLATFORM === "win32" && launchedHidden(process.argv);
+    // A login start on Windows opens no window; the tray is the only way in. On Linux the window
+    // opens minimized instead, so it can still be reached from the taskbar.
+    const hiddenLaunch = launchedHidden(process.argv);
+    const startHidden = PLATFORM === "win32" && hiddenLaunch;
+    const startMinimized = PLATFORM === "linux" && hiddenLaunch;
     // The window opens already saying where it connects, never flashing the welcome screen first.
     if (plan.screen === "connect") {
       const profile = plan.target.kind === "profile" ? findProfile(profileStore, plan.target.id) : null;
       shellState.screen = { kind: "connecting", target: plan.target, name: profile?.name ?? "", origin: profile?.origin ?? null };
       if (startHidden) shellState.chosen = plan.target;
     }
-    if (PLATFORM === "win32") createTray();
+    if (PLATFORM === "win32" || PLATFORM === "linux") createTray();
     if (startHidden) {
       pushState();
       // Starting the backend with no window lets other devices reach it and downloads resume.
@@ -1683,7 +1793,7 @@ if (process.argv.includes(SMOKE_LOCAL_BACKEND)) {
       syncUpdateChecks(prefs.checkUpdates);
       return;
     }
-    createShell(savedWindow);
+    createShell(savedWindow, startMinimized);
     syncUpdateChecks(prefs.checkUpdates);
     if (plan.screen === "connect") void connectTarget(plan.target, { launch: true });
   });

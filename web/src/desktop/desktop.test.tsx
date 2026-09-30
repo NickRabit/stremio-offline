@@ -22,8 +22,8 @@ const baseState = (over: Partial<ShellState> = {}): ShellState => ({
   platform: "darwin", locale: "en", localeChoice: null, appVersion: "0.4.88", screen: { kind: "welcome" }, connection: null, chosen: null,
   profiles: [{ id: "nas", name: "NAS", origin: "http://192.168.1.20:8090" }],
   local: {
-    settings: { allowPrivateAddons: false, publish: false, publishPort: 8091, downloadDir: null }, running: false, addresses: [], ffmpeg: null, busy: false,
-    downloadDir: "/Users/me/Library/Application Support/Stremio Offline/downloads", suggestedDownloadDir: "/Users/me/Movies/Stremio Offline", initialized: true, downloadDirOwned: true, restartNeeded: false,
+    settings: { allowPrivateAddons: false, publish: false, publishPort: 8091, downloadDir: null, useSystemFfmpeg: false }, running: false, addresses: [], ffmpeg: null, busy: false,
+    downloadDir: "/Users/me/Library/Application Support/Stremio Offline/downloads", suggestedDownloadDir: "/Users/me/Movies/Stremio Offline", initialized: true, downloadDirOwned: true, restartNeeded: false, systemFfmpeg: null,
   },
   app: { prefs: { openAtLogin: false, checkUpdates: true }, loginItem: "not-registered", update: null },
   toast: null, ...over,
@@ -135,7 +135,7 @@ it("the connected main window draws nothing over the server page", async () => {
 });
 
 it("settings refuse a port outside 1024–65535 and store a valid one", async () => {
-  const state = baseState({ local: { ...baseState().local, settings: { allowPrivateAddons: false, publish: true, publishPort: 8091, downloadDir: null }, running: true } });
+  const state = baseState({ local: { ...baseState().local, settings: { allowPrivateAddons: false, publish: true, publishPort: 8091, downloadDir: null, useSystemFfmpeg: false }, running: true } });
   const bridge = makeBridge("settings", state);
   await render(bridge);
   const port = host.querySelector<HTMLInputElement>(".shell-port input")!;
@@ -145,7 +145,7 @@ it("settings refuse a port outside 1024–65535 and store a valid one", async ()
   expect(bridge.setLocalSettings).not.toHaveBeenCalled();
   await type(port, "8095");
   await act(async () => { port.dispatchEvent(new FocusEvent("focusout", { bubbles: true })); });
-  expect(bridge.setLocalSettings).toHaveBeenCalledWith({ allowPrivateAddons: false, publish: true, publishPort: 8095, downloadDir: null });
+  expect(bridge.setLocalSettings).toHaveBeenCalledWith({ allowPrivateAddons: false, publish: true, publishPort: 8095, downloadDir: null, useSystemFfmpeg: false });
 });
 
 it("a pending restart is the main process's to remember, so a reopened settings window still offers it", async () => {
@@ -223,7 +223,7 @@ it("a first start on this Mac asks where downloads go, and starts with the chose
   await click(button("Start"));
   await act(async () => { await Promise.resolve(); await Promise.resolve(); });
   expect(bridge.prepareDownloadDir).toHaveBeenCalledWith("/Volumes/Films");
-  expect(bridge.setLocalSettings).toHaveBeenCalledWith({ allowPrivateAddons: false, publish: false, publishPort: 8091, downloadDir: "/Volumes/Films" });
+  expect(bridge.setLocalSettings).toHaveBeenCalledWith({ allowPrivateAddons: false, publish: false, publishPort: 8091, downloadDir: "/Volumes/Films", useSystemFfmpeg: false });
   expect(bridge.connect).toHaveBeenCalledWith({ kind: "local" });
 });
 
@@ -315,4 +315,32 @@ it("on Windows the pages say This PC and Recycle Bin, and leave the title bar to
   await render(makeBridge("settings", baseState()));
   expect(host.querySelector(".shell-titlebar")).not.toBeNull();
   expect(host.textContent).toContain("Reset this Mac…");
+});
+
+it("on Linux the pages say This computer, keep the Trash, and speak of neither macOS nor Windows", async () => {
+  const lin = (over: Partial<ShellState> = {}) => baseState({ platform: "linux", ...over });
+  await render(makeBridge("main", lin()));
+  expect(host.textContent).toContain("This computer");
+  expect(host.textContent).not.toMatch(/\bMac\b|⌘|\bPC\b|Windows/);
+  act(() => root.unmount());
+  root = createRoot(host);
+  await render(makeBridge("settings", lin({ local: { ...baseState().local, running: true, settings: { ...baseState().local.settings, publish: true } } })));
+  expect(host.textContent).toContain("Reset this computer…");
+  expect(host.textContent).toContain("Trash");
+  expect(host.textContent).toContain("ufw or firewalld");
+  expect(host.textContent).not.toMatch(/\bMac\b|macOS|\bPC\b|Windows|Recycle Bin/);
+});
+
+it("on Linux with a system FFmpeg that has libx264, Settings offers to use it", async () => {
+  const withSystem = baseState({ platform: "linux", local: { ...baseState().local, running: true, systemFfmpeg: "/usr/bin/ffmpeg" } });
+  const bridge = makeBridge("settings", withSystem);
+  await render(bridge);
+  expect(host.textContent).toContain("/usr/bin/ffmpeg can convert video without a graphics card");
+  const toggle = [...host.querySelectorAll<HTMLInputElement>(".switch input")].at(-1)!;
+  await click(toggle);
+  expect(bridge.setLocalSettings).toHaveBeenLastCalledWith(expect.objectContaining({ useSystemFfmpeg: true }));
+  act(() => root.unmount());
+  root = createRoot(host);
+  await render(makeBridge("settings", baseState({ platform: "darwin", local: { ...baseState().local, systemFfmpeg: "/usr/bin/ffmpeg" } })));
+  expect(host.textContent).not.toContain("system's FFmpeg");
 });

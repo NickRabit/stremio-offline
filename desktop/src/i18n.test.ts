@@ -57,3 +57,33 @@ test("the tray and menu words are there on both platforms", () => {
     }
   }
 });
+
+test("on Linux nothing says Mac or PC, and the Trash stays the Trash", () => {
+  for (const locale of ["en", "cs"] as const) {
+    const strings = catalogue(locale, "linux");
+    assert.deepEqual(Object.keys(strings), Object.keys(en), locale);
+    for (const [key, value] of Object.entries(strings)) {
+      assert.equal(/\bMac/i.test(value), false, `${locale} ${key}: ${value}`);
+      assert.equal(/\bPC/i.test(value), false, `${locale} ${key}: ${value}`);
+    }
+  }
+  assert.equal(catalogue("en", "linux")["window.thisMac"], "This computer");
+  assert.equal(catalogue("en", "linux")["window.thisPC"], "This computer");
+  assert.equal(catalogue("en", "linux")["window.thisComputer"], "This computer");
+  assert.equal(catalogue("en", "linux")["reset.title"], "Reset this computer?");
+  assert.equal(catalogue("cs", "linux")["window.thisMac"], "Tento počítač");
+  assert.equal(catalogue("cs", "linux")["window.thisComputer"], "Tento počítač");
+  assert.equal(catalogue("en", "linux")["reset.detailDownloads"].includes("the Trash"), true);
+  assert.equal(catalogue("cs", "linux")["reset.detailDownloads"].includes("Koše"), true);
+  assert.equal(catalogue("en", "linux")["reset.trashFailed"],
+    "The data could not be moved to the Trash, and nothing was deleted: {reason}");
+});
+
+test("no language says Mac in the Linux dialogs", () => {
+  for (const locale of ["en", "cs", "sk", "de", "es", "fr", "it", "pl", "pt-BR", "ru"] as const) {
+    const strings = catalogue(locale, "linux");
+    for (const key of ["window.thisMac", "quit.detail", "reset.title", "reset.detail"] as const) {
+      assert.doesNotMatch(strings[key], /\bMac(u|a|e|om|s)?\b|\bMacOS\b/i, `${locale} ${key}: ${strings[key]}`);
+    }
+  }
+});

@@ -7,6 +7,7 @@ desktop/runtime/
 desktop/renderer/
 desktop/ffmpeg/
 desktop/ffmpeg-win/
+desktop/ffmpeg-linux/
 data/
 downloads/
 datacenter/

@@ -40,7 +40,15 @@ const nodeFs: DownloadDirFs = { stat, readdir, mkdir, writeFile, rm, realpath };
 const MAX_PATH = 1024;
 const PROBE_PREFIX = ".stremio-offline-write-test-";
 /** Folders macOS gives every account: fine to download into, never the app's to throw away. */
-const HOME_FOLDERS = ["Applications", "Desktop", "Documents", "Downloads", "Library", "Movies", "Music", "Pictures", "Public"];
+const MAC_HOME_FOLDERS = ["Applications", "Desktop", "Documents", "Downloads", "Library", "Movies", "Music", "Pictures", "Public"];
+/** The same for a Linux home directory, with snap, which holds the user's applications. */
+const LINUX_HOME_FOLDERS = ["Desktop", "Documents", "Downloads", "Music", "Pictures", "Videos", "Public", "Templates", "snap"];
+/** Where Linux mounts removable and network disks: a mount root, not the disk itself. */
+const LINUX_MOUNT_ROOTS = [/^\/media\/[^/]+$/, /^\/media\/[^/]+\/[^/]+$/, /^\/run\/media\/[^/]+\/[^/]+$/, /^\/mnt\/[^/]+$/];
+/** The folders a mount root hangs under: never a download folder themselves. `/media/<name>` is
+ *  left out: udisks puts a user's folder there, but plain Debian, usbmount and many fstabs mount a
+ *  whole disk at it, and the mount-root rule already keeps it from the Trash. */
+const LINUX_RESERVED = [/^\/media$/, /^\/run$/, /^\/run\/media$/, /^\/run\/media\/[^/]+$/, /^\/mnt$/];
 /** The same for Windows, directly under the profile folder. */
 const WINDOWS_HOME_FOLDERS = [
   "Desktop", "Documents", "Downloads", "Music", "Pictures", "Videos", "AppData",
@@ -120,6 +128,7 @@ export function reservedDownloadDir(dir: string, places: Places): boolean {
   if (inside(places.userData, resolved, pathImpl)) return true;
   // An uninstall or an update wipes the app's own folder, films and all.
   if (places.installDir && (inside(resolved, places.installDir, pathImpl) || inside(places.installDir, resolved, pathImpl))) return true;
+  if (platform === "linux" && LINUX_RESERVED.some((pattern) => pattern.test(resolved))) return true;
   return inside(resolved, places.userData, pathImpl) && !samePath(resolved, pathImpl.join(places.userData, "downloads"), platform);
 }
 
@@ -135,8 +144,13 @@ export function protectedDownloadDir(dir: string, places: Places): boolean {
     if (named) return true;
     const name = pathImpl.basename(resolved).toLowerCase();
     if (name.startsWith(ONEDRIVE_WORK_PREFIX) && samePath(pathImpl.dirname(resolved), home, platform)) return true;
+  } else if (platform === "linux") {
+    if (LINUX_HOME_FOLDERS.some((name) => samePath(resolved, pathImpl.join(home, name), platform))) return true;
+    // Every dot folder right under the home folder holds the user's settings, not downloads.
+    if (samePath(pathImpl.dirname(resolved), home, platform) && pathImpl.basename(resolved).startsWith(".")) return true;
+    if (LINUX_MOUNT_ROOTS.some((pattern) => pattern.test(resolved))) return true;
   } else {
-    if (HOME_FOLDERS.some((name) => samePath(resolved, pathImpl.join(home, name), platform))) return true;
+    if (MAC_HOME_FOLDERS.some((name) => samePath(resolved, pathImpl.join(home, name), platform))) return true;
     if (/^\/Volumes\/[^/]+$/.test(resolved)) return true;
   }
   return knownFoldersOf(places).some((folder) =>
@@ -251,4 +265,20 @@ export function mayTrashDownloadDir(dir: string, stored: string | null, ownershi
   return ownership !== null && ownership.owned
     && samePath(pathImpl.resolve(ownership.dir), resolved, platform)
     && samePath(pathImpl.resolve(stored), resolved, platform);
+}
+
+/** As `mayTrashDownloadDir`, but the folder's real location counts too: a symlinked home or folder
+ *  must not smuggle the Trash past the rules. Both spellings have to agree. */
+export async function mayTrashDownloadDirReal(
+  dir: string, stored: string | null, ownership: Ownership | null, places: Places, fsImpl: DownloadDirFs = nodeFs,
+): Promise<boolean> {
+  if (!mayTrashDownloadDir(dir, stored, ownership, places)) return false;
+  const real = await realPath(dir, fsImpl);
+  const realPlaces: Places = {
+    ...places,
+    home: await realPath(places.home, fsImpl),
+    userData: await realPath(places.userData, fsImpl),
+    knownFolders: await Promise.all(knownFoldersOf(places).map((folder) => realPath(folder, fsImpl))),
+  };
+  return mayTrashDownloadDir(real, stored, ownership, realPlaces);
 }

@@ -3,6 +3,7 @@ import type { en } from "../i18n.js";
 export const es: typeof en & Record<string, string> = {
   "window.thisMac": "Esta Mac",
   "window.thisPC": "Esta computadora",
+  "window.thisComputer": "Este equipo",
   "download.saveTitle": "Guardar en este dispositivo",
   "folder.pickTitle": "Elija una carpeta de biblioteca",
   "notify.downloadDone": "Guardado {file}",
@@ -31,6 +32,7 @@ export const es: typeof en & Record<string, string> = {
   "reset.downloadsKept": "La carpeta de descarga se quedó donde está: {dir}",
   "reset.detailServers": "Los servidores guardados y los inicios de sesión en ellos también se olvidan.",
   "reset.detailKeepsFilms": "Las películas descargadas permanecen donde están.",
+  "reset.trashFailed": "No se pudieron mover los datos a la Papelera y no se eliminó nada: {reason}",
   "tray.open": "Abrir Stremio Offline",
   "tray.settings": "Configuración…",
   "tray.quit": "Salir",

@@ -25,7 +25,7 @@ const fileOf = (dir: string) => path.join(dir, SETTINGS_FILE);
 
 test("a missing file is the default settings", async () => {
   await withDir(async (dir) => {
-    assert.deepEqual(await readLocalSettings(dir), { allowPrivateAddons: false, publish: false, publishPort: 8091, downloadDir: null });
+    assert.deepEqual(await readLocalSettings(dir), { allowPrivateAddons: false, publish: false, publishPort: 8091, downloadDir: null, useSystemFfmpeg: false });
   });
 });
 
@@ -57,9 +57,20 @@ test("a non-boolean switch in the file falls back to the default", async () => {
 test("each field is read leniently, a bad one taking its own default", async () => {
   await withDir(async (dir) => {
     await writeFile(fileOf(dir), JSON.stringify({ allowPrivateAddons: true, publish: "yes", publishPort: 80 }), "utf8");
-    assert.deepEqual(await readLocalSettings(dir), { allowPrivateAddons: true, publish: false, publishPort: 8091, downloadDir: null });
+    assert.deepEqual(await readLocalSettings(dir), { allowPrivateAddons: true, publish: false, publishPort: 8091, downloadDir: null, useSystemFfmpeg: false });
     await writeFile(fileOf(dir), JSON.stringify({ allowPrivateAddons: 1, publish: true, publishPort: 8095 }), "utf8");
-    assert.deepEqual(await readLocalSettings(dir), { allowPrivateAddons: false, publish: true, publishPort: 8095, downloadDir: null });
+    assert.deepEqual(await readLocalSettings(dir), { allowPrivateAddons: false, publish: true, publishPort: 8095, downloadDir: null, useSystemFfmpeg: false });
+  });
+});
+
+test("the system FFmpeg switch is read leniently too", async () => {
+  await withDir(async (dir) => {
+    await writeFile(fileOf(dir), JSON.stringify({ useSystemFfmpeg: true }), "utf8");
+    assert.equal((await readLocalSettings(dir)).useSystemFfmpeg, true);
+    for (const value of ["\"true\"", "1", "null", "{}", "[]"]) {
+      await writeFile(fileOf(dir), `{"useSystemFfmpeg":${value}}`, "utf8");
+      assert.equal((await readLocalSettings(dir)).useSystemFfmpeg, false, value);
+    }
   });
 });
 
@@ -102,17 +113,17 @@ test("a port outside 1024..65535 in the file falls back to the default", async (
 test("unknown fields in the file are ignored", async () => {
   await withDir(async (dir) => {
     await writeFile(fileOf(dir), JSON.stringify({ allowPrivateAddons: true, port: 8090 }), "utf8");
-    assert.deepEqual(await readLocalSettings(dir), { allowPrivateAddons: true, publish: false, publishPort: 8091, downloadDir: null });
+    assert.deepEqual(await readLocalSettings(dir), { allowPrivateAddons: true, publish: false, publishPort: 8091, downloadDir: null, useSystemFfmpeg: false });
   });
 });
 
 test("settings that were written are read back", async () => {
   await withDir(async (dir) => {
-    await writeLocalSettings(dir, { allowPrivateAddons: true, publish: true, publishPort: 8095, downloadDir: "/Users/someone/Movies" });
-    assert.deepEqual(await readLocalSettings(dir), { allowPrivateAddons: true, publish: true, publishPort: 8095, downloadDir: "/Users/someone/Movies" });
+    await writeLocalSettings(dir, { allowPrivateAddons: true, publish: true, publishPort: 8095, downloadDir: "/Users/someone/Movies", useSystemFfmpeg: true });
+    assert.deepEqual(await readLocalSettings(dir), { allowPrivateAddons: true, publish: true, publishPort: 8095, downloadDir: "/Users/someone/Movies", useSystemFfmpeg: true });
     assert.deepEqual(await readdir(dir), [SETTINGS_FILE]);
-    await writeLocalSettings(dir, { allowPrivateAddons: false, publish: false, publishPort: 8091, downloadDir: null });
-    assert.deepEqual(await readLocalSettings(dir), { allowPrivateAddons: false, publish: false, publishPort: 8091, downloadDir: null });
+    await writeLocalSettings(dir, { allowPrivateAddons: false, publish: false, publishPort: 8091, downloadDir: null, useSystemFfmpeg: false });
+    assert.deepEqual(await readLocalSettings(dir), { allowPrivateAddons: false, publish: false, publishPort: 8091, downloadDir: null, useSystemFfmpeg: false });
     assert.deepEqual(await readdir(dir), [SETTINGS_FILE]);
   });
 });
@@ -120,17 +131,19 @@ test("settings that were written are read back", async () => {
 test("the switch is saved on its own, not over the remembered port", async () => {
   await withDir(async (dir) => {
     await writeRememberedPort(dir, 8090);
-    await writeLocalSettings(dir, { allowPrivateAddons: true, publish: false, publishPort: 8091, downloadDir: null });
+    await writeLocalSettings(dir, { allowPrivateAddons: true, publish: false, publishPort: 8091, downloadDir: null, useSystemFfmpeg: false });
     assert.equal(await readRememberedPort(dir), 8090);
     assert.deepEqual([...await readdir(dir)].sort(), ["local-backend.json", SETTINGS_FILE]);
   });
 });
 
-test("the IPC input has exactly four fields with the right types", () => {
-  assert.deepEqual(parseLocalSettings({ allowPrivateAddons: true, publish: true, publishPort: 8091, downloadDir: null }),
-    { allowPrivateAddons: true, publish: true, publishPort: 8091, downloadDir: null });
-  assert.deepEqual(parseLocalSettings({ allowPrivateAddons: false, publish: false, publishPort: 8095, downloadDir: "/Users/someone/Movies" }),
-    { allowPrivateAddons: false, publish: false, publishPort: 8095, downloadDir: "/Users/someone/Movies" });
+test("the IPC input has exactly five fields with the right types", () => {
+  assert.deepEqual(parseLocalSettings({ allowPrivateAddons: true, publish: true, publishPort: 8091, downloadDir: null, useSystemFfmpeg: false }),
+    { allowPrivateAddons: true, publish: true, publishPort: 8091, downloadDir: null, useSystemFfmpeg: false });
+  assert.deepEqual(parseLocalSettings({ allowPrivateAddons: false, publish: false, publishPort: 8095, downloadDir: "/Users/someone/Movies", useSystemFfmpeg: true }),
+    { allowPrivateAddons: false, publish: false, publishPort: 8095, downloadDir: "/Users/someone/Movies", useSystemFfmpeg: true });
+  assert.deepEqual(parseLocalSettings({ useSystemFfmpeg: true, downloadDir: null, publishPort: 8091, publish: false, allowPrivateAddons: false }),
+    { allowPrivateAddons: false, publish: false, publishPort: 8091, downloadDir: null, useSystemFfmpeg: true }, "the field order does not matter");
   const rejected: unknown[] = [
     null,
     undefined,
@@ -142,7 +155,12 @@ test("the IPC input has exactly four fields with the right types", () => {
     {},
     { allowPrivateAddons: true, publish: false },
     { allowPrivateAddons: true, publish: false, publishPort: 8091 },
-    { allowPrivateAddons: true, publish: false, publishPort: 8091, extra: 1 },
+    { allowPrivateAddons: true, publish: false, publishPort: 8091, downloadDir: null },
+    { allowPrivateAddons: true, publish: false, publishPort: 8091, downloadDir: null, useSystemFfmpeg: false, extra: 1 },
+    { allowPrivateAddons: true, publish: false, publishPort: 8091, downloadDir: null, useSystemFfmpeg: "true" },
+    { allowPrivateAddons: true, publish: false, publishPort: 8091, downloadDir: null, useSystemFfmpeg: 1 },
+    { allowPrivateAddons: true, publish: false, publishPort: 8091, downloadDir: null, useSystemFfmpeg: null },
+    { allowPrivateAddons: true, publish: false, publishPort: 8091, downloadDir: null, useSystemFfmpeg: undefined },
     { allowPrivateAddons: "true" },
     { allowPrivateAddons: 1 },
     { allowPrivateAddons: null },
@@ -157,7 +175,7 @@ test("the IPC input has exactly four fields with the right types", () => {
     { allowPrivateAddons: true, publish: false, publishPort: 8091, downloadDir: "relative/path" },
     { allowPrivateAddons: true, publish: false, publishPort: 8091, downloadDir: `/${"a".repeat(1024)}` },
     { allowPrivateAddons: true, publish: false, publishPort: 8091, downloadDir: 7 },
-    { allowPrivateAddons: true, publish: false, publishPort: 8091, downloadDir: true, extra: 1 },
+    { allowPrivateAddons: true, publish: false, publishPort: 8091, downloadDir: true, useSystemFfmpeg: false, extra: 1 },
   ];
   for (const input of rejected) assert.equal(parseLocalSettings(input), null, JSON.stringify(input));
 });

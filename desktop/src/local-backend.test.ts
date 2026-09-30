@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir, type NetworkInterfaceInfo } from "node:os";
@@ -23,6 +24,7 @@ import {
   type LocalBackendChild,
   type LocalBackendForkOptions,
   type LocalBackendOptions,
+  isCharacterDevice,
 } from "./local-backend.js";
 import { writeLocalSettings } from "./local-settings.js";
 import { partitionForOrigin } from "./origin.js";
@@ -391,20 +393,37 @@ test("the PATH logic leaves the backend variables as they were", () => {
 
 test("a stored download folder replaces the default one in the child's environment", () => {
   const env = localBackendEnv({}, "/data", 8090, "linux", () => true,
-    { allowPrivateAddons: false, publish: false, publishPort: 8091, downloadDir: "/Users/someone/Movies" });
+    { allowPrivateAddons: false, publish: false, publishPort: 8091, downloadDir: "/Users/someone/Movies", useSystemFfmpeg: false });
   assert.equal(env.DOWNLOAD_DIR, "/Users/someone/Movies");
   assert.equal(localBackendEnv({}, "/data", 8090, "linux", () => true).DOWNLOAD_DIR, path.join("/data", "downloads"));
 });
 
+test("on Linux the render node the system has is offered to the server for VAAPI", () => {
+  const withDevice = localBackendEnv({}, "/data", 8090, "linux", () => true, undefined, null, () => true);
+  assert.equal(withDevice.VAAPI_DEVICE, "/dev/dri/renderD128");
+  const withoutDevice = localBackendEnv({}, "/data", 8090, "linux", () => true, undefined, null, () => false);
+  assert.equal("VAAPI_DEVICE" in withoutDevice, false);
+});
+
+test("an inherited VAAPI device and the other platforms are left alone", () => {
+  const inherited = localBackendEnv({ VAAPI_DEVICE: "/dev/dri/renderD129" }, "/data", 8090, "linux", () => true,
+    undefined, null, () => true);
+  assert.equal(inherited.VAAPI_DEVICE, "/dev/dri/renderD129");
+  for (const platform of ["darwin", "win32"] as const) {
+    const env = localBackendEnv({}, "/data", 8090, platform, () => true, undefined, null, () => true);
+    assert.equal("VAAPI_DEVICE" in env, false, platform);
+  }
+});
+
 test("the switch on lets the child reach the local network", () => {
-  const env = localBackendEnv({ PATH: "/usr/bin" }, "/data", 8090, "linux", () => true, { allowPrivateAddons: true, publish: false, publishPort: 8091, downloadDir: null });
+  const env = localBackendEnv({ PATH: "/usr/bin" }, "/data", 8090, "linux", () => true, { allowPrivateAddons: true, publish: false, publishPort: 8091, downloadDir: null, useSystemFfmpeg: false });
   assert.equal(env.ALLOW_PRIVATE_ADDONS, "1");
 });
 
 test("the switch off leaves an inherited permission alone and adds none", () => {
-  const inherited = localBackendEnv({ ALLOW_PRIVATE_ADDONS: "1" }, "/data", 8090, "linux", () => true, { allowPrivateAddons: false, publish: false, publishPort: 8091, downloadDir: null });
+  const inherited = localBackendEnv({ ALLOW_PRIVATE_ADDONS: "1" }, "/data", 8090, "linux", () => true, { allowPrivateAddons: false, publish: false, publishPort: 8091, downloadDir: null, useSystemFfmpeg: false });
   assert.equal(inherited.ALLOW_PRIVATE_ADDONS, "1");
-  const absent = localBackendEnv({}, "/data", 8090, "linux", () => true, { allowPrivateAddons: false, publish: false, publishPort: 8091, downloadDir: null });
+  const absent = localBackendEnv({}, "/data", 8090, "linux", () => true, { allowPrivateAddons: false, publish: false, publishPort: 8091, downloadDir: null, useSystemFfmpeg: false });
   assert.equal("ALLOW_PRIVATE_ADDONS" in absent, false);
   assert.equal("ALLOW_PRIVATE_ADDONS" in localBackendEnv({}, "/data", 8090, "linux", () => true), false);
 });
@@ -415,7 +434,7 @@ test("a start reads the settings and passes the switch to the child", async (t) 
   const harness = makeBackend(dir, {
     readSettings: async (requested) => {
       reads.push(requested);
-      return { allowPrivateAddons: true, publish: false, publishPort: 8091, downloadDir: null };
+      return { allowPrivateAddons: true, publish: false, publishPort: 8091, downloadDir: null, useSystemFfmpeg: false };
     },
   });
   const started = start(harness);
@@ -434,7 +453,7 @@ test("the settings are read again on the next start", async (t) => {
   const harness = makeBackend(dir, {
     readSettings: async () => {
       reads += 1;
-      return { allowPrivateAddons, publish: false, publishPort: 8091, downloadDir: null };
+      return { allowPrivateAddons, publish: false, publishPort: 8091, downloadDir: null, useSystemFfmpeg: false };
     },
   });
   const first = start(harness);
@@ -455,7 +474,7 @@ test("the settings are read again on the next start", async (t) => {
 
 test("without a settings reader the stored file decides the child environment", async (t) => {
   const dir = await tempDir(t);
-  await writeLocalSettings(dir, { allowPrivateAddons: true, publish: false, publishPort: 8091, downloadDir: null });
+  await writeLocalSettings(dir, { allowPrivateAddons: true, publish: false, publishPort: 8091, downloadDir: null, useSystemFfmpeg: false });
   const harness = makeBackend(dir);
   const started = start(harness);
   const fork = await harness.nextChild();
@@ -467,7 +486,7 @@ test("without a settings reader the stored file decides the child environment", 
 
 test("a running backend is reused while the stored settings match what it was started with", async (t) => {
   const dir = await tempDir(t);
-  const harness = makeBackend(dir, { readSettings: async () => ({ allowPrivateAddons: true, publish: false, publishPort: 8091, downloadDir: null }) });
+  const harness = makeBackend(dir, { readSettings: async () => ({ allowPrivateAddons: true, publish: false, publishPort: 8091, downloadDir: null, useSystemFfmpeg: false }) });
   const first = start(harness);
   const fork = await harness.nextChild();
   fork.child.emit("message", READY);
@@ -482,7 +501,7 @@ test("a running backend is replaced when only the download folder changed", asyn
   const dir = await tempDir(t);
   let downloadDir: string | null = null;
   const harness = makeBackend(dir, {
-    readSettings: async () => ({ allowPrivateAddons: false, publish: false, publishPort: 8091, downloadDir }),
+    readSettings: async () => ({ allowPrivateAddons: false, publish: false, publishPort: 8091, downloadDir, useSystemFfmpeg: false }),
   });
   const first = start(harness);
   const firstFork = await harness.nextChild();
@@ -504,7 +523,7 @@ test("a running backend started with other settings is replaced on the next star
   let allowPrivateAddons = true;
   let unexpected = 0;
   const harness = makeBackend(dir, {
-    readSettings: async () => ({ allowPrivateAddons, publish: false, publishPort: 8091, downloadDir: null }),
+    readSettings: async () => ({ allowPrivateAddons, publish: false, publishPort: 8091, downloadDir: null, useSystemFfmpeg: false }),
     onUnexpectedExit: () => { unexpected += 1; },
   });
   const first = start(harness);
@@ -524,7 +543,7 @@ test("a running backend started with other settings is replaced on the next star
 });
 
 test("publishing points the child at every interface and the published host check", () => {
-  const env = localBackendEnv({}, "/data", 8091, "linux", () => true, { allowPrivateAddons: false, publish: true, publishPort: 8091, downloadDir: null });
+  const env = localBackendEnv({}, "/data", 8091, "linux", () => true, { allowPrivateAddons: false, publish: true, publishPort: 8091, downloadDir: null, useSystemFfmpeg: false });
   assert.equal(env.HOST, PUBLISHED_HOST);
   assert.equal(env.HOST_CHECK, "published");
   assert.equal(env.PORT, "8091");
@@ -532,7 +551,7 @@ test("publishing points the child at every interface and the published host chec
 });
 
 test("not publishing keeps the loopback check and names no host", () => {
-  const env = localBackendEnv({}, "/data", 8091, "linux", () => true, { allowPrivateAddons: false, publish: false, publishPort: 8091, downloadDir: null });
+  const env = localBackendEnv({}, "/data", 8091, "linux", () => true, { allowPrivateAddons: false, publish: false, publishPort: 8091, downloadDir: null, useSystemFfmpeg: false });
   assert.equal(env.HOST, LOCAL_HOST);
   assert.equal(env.HOST_CHECK, "loopback");
   assert.equal("HOST_NAMES" in env, false);
@@ -572,7 +591,7 @@ test("the lan addresses are the IPv4 ones in order, then the names, without dupl
 test("a published start asks for its configured port only", async (t) => {
   const dir = await tempDir(t);
   await writeRememberedPort(dir, 51234);
-  const harness = makeBackend(dir, { readSettings: async () => ({ allowPrivateAddons: false, publish: true, publishPort: 8095, downloadDir: null }) });
+  const harness = makeBackend(dir, { readSettings: async () => ({ allowPrivateAddons: false, publish: true, publishPort: 8095, downloadDir: null, useSystemFfmpeg: false }) });
   const started = start(harness);
   const fork = await harness.nextChild();
   assert.equal(fork.options.env.PORT, "8095");
@@ -586,7 +605,7 @@ test("a published start asks for its configured port only", async (t) => {
 
 test("a published ready on every interface is accepted and fills the addresses", async (t) => {
   const dir = await tempDir(t);
-  const harness = makeBackend(dir, { readSettings: async () => ({ allowPrivateAddons: false, publish: true, publishPort: 8091, downloadDir: null }) });
+  const harness = makeBackend(dir, { readSettings: async () => ({ allowPrivateAddons: false, publish: true, publishPort: 8091, downloadDir: null, useSystemFfmpeg: false }) });
   const started = start(harness);
   const fork = await harness.nextChild();
   fork.child.emit("message", { type: "ready", port: 8091, address: PUBLISHED_HOST });
@@ -613,7 +632,7 @@ test("an unpublished ready on every interface is refused", async (t) => {
 test("a running backend is replaced when publishing is switched on", async (t) => {
   const dir = await tempDir(t);
   let publish = false;
-  const harness = makeBackend(dir, { readSettings: async () => ({ allowPrivateAddons: false, publish, publishPort: 8091, downloadDir: null }) });
+  const harness = makeBackend(dir, { readSettings: async () => ({ allowPrivateAddons: false, publish, publishPort: 8091, downloadDir: null, useSystemFfmpeg: false }) });
   const first = start(harness);
   const firstFork = await harness.nextChild();
   firstFork.child.emit("message", READY);
@@ -642,7 +661,7 @@ test("activity reports are forwarded and malformed ones are ignored", async (t) 
   const dir = await tempDir(t);
   const seen: { streaming: boolean; downloading: boolean }[] = [];
   const harness = makeBackend(dir, {
-    readSettings: async () => ({ allowPrivateAddons: false, publish: true, publishPort: 8091, downloadDir: null }),
+    readSettings: async () => ({ allowPrivateAddons: false, publish: true, publishPort: 8091, downloadDir: null, useSystemFfmpeg: false }),
     onActivity: (activity) => seen.push(activity),
   });
   const started = start(harness);
@@ -662,7 +681,7 @@ test("activity reports reach the shell even when the backend is not published", 
   const dir = await tempDir(t);
   const seen: { streaming: boolean; downloading: boolean }[] = [];
   const harness = makeBackend(dir, {
-    readSettings: async () => ({ allowPrivateAddons: false, publish: false, publishPort: 8091, downloadDir: null }),
+    readSettings: async () => ({ allowPrivateAddons: false, publish: false, publishPort: 8091, downloadDir: null, useSystemFfmpeg: false }),
     onActivity: (activity) => seen.push(activity),
   });
   const started = start(harness);
@@ -677,7 +696,7 @@ test("activity reports reach the shell even when the backend is not published", 
 
 test("the running child's settings are known while it runs and gone when it stops", async (t) => {
   const dir = await tempDir(t);
-  const settings = { allowPrivateAddons: false, publish: false, publishPort: 8091, downloadDir: null };
+  const settings = { allowPrivateAddons: false, publish: false, publishPort: 8091, downloadDir: null, useSystemFfmpeg: false };
   const harness = makeBackend(dir, { readSettings: async () => settings });
   assert.equal(harness.backend.launchedSettings(), null);
   const started = start(harness);
@@ -693,7 +712,7 @@ test("a published start is refused when another program answers on 127.0.0.1 at 
   const dir = await tempDir(t);
   const checked: number[] = [];
   const harness = makeBackend(dir, {
-    readSettings: async () => ({ allowPrivateAddons: false, publish: true, publishPort: 8091, downloadDir: null }),
+    readSettings: async () => ({ allowPrivateAddons: false, publish: true, publishPort: 8091, downloadDir: null, useSystemFfmpeg: false }),
     loopbackTaken: async (port) => { checked.push(port); return true; },
   });
   await assert.rejects(harness.backend.start(), (error: unknown) => error instanceof LocalPortBusyError && error.port === 8091);
@@ -753,4 +772,82 @@ test("a start passes the bundled FFmpeg in the child's environment", async (t) =
   fork.child.emit("message", READY);
   await started;
   await harness.backend.stop();
+});
+
+const SYSTEM_TOOLS = { ffmpeg: "/usr/bin/ffmpeg", ffprobe: "/usr/bin/ffprobe" };
+
+test("the system FFmpeg replaces the bundled one when it is passed as the override", () => {
+  const env = localBackendEnv({ PATH: "/usr/bin" }, "/data", 8090, "linux", () => false, undefined, TOOLS, undefined, SYSTEM_TOOLS);
+  assert.equal(env.FFMPEG_PATH, SYSTEM_TOOLS.ffmpeg);
+  assert.equal(env.FFPROBE_PATH, SYSTEM_TOOLS.ffprobe);
+});
+
+test("an FFmpeg named in the environment beats the system override too", () => {
+  const env = localBackendEnv({ FFMPEG_PATH: "/opt/ffmpeg", FFPROBE_PATH: "/opt/ffprobe" }, "/data", 8090, "linux",
+    () => false, undefined, TOOLS, undefined, SYSTEM_TOOLS);
+  assert.equal(env.FFMPEG_PATH, "/opt/ffmpeg");
+  assert.equal(env.FFPROBE_PATH, "/opt/ffprobe");
+});
+
+test("the switch on runs the system FFmpeg, the switch off the bundled one", async (t) => {
+  const dir = await tempDir(t);
+  const tools = { tools: TOOLS, systemTools: SYSTEM_TOOLS };
+  const harness = makeBackend(dir, { ...tools, readSettings: async () => ({ allowPrivateAddons: false, publish: false, publishPort: 8091, downloadDir: null, useSystemFfmpeg: true }) });
+  const started = start(harness);
+  const fork = await harness.nextChild();
+  assert.equal(fork.options.env.FFMPEG_PATH, SYSTEM_TOOLS.ffmpeg);
+  assert.equal(fork.options.env.FFPROBE_PATH, SYSTEM_TOOLS.ffprobe);
+  fork.child.emit("message", READY);
+  await started;
+  await harness.backend.stop();
+
+  const off = makeBackend(dir, { ...tools, readSettings: async () => ({ allowPrivateAddons: false, publish: false, publishPort: 8091, downloadDir: null, useSystemFfmpeg: false }) });
+  const offStarted = start(off);
+  const offFork = await off.nextChild();
+  assert.equal(offFork.options.env.FFMPEG_PATH, TOOLS.ffmpeg);
+  assert.equal(offFork.options.env.FFPROBE_PATH, TOOLS.ffprobe);
+  offFork.child.emit("message", READY);
+  await offStarted;
+  await off.backend.stop();
+});
+
+test("the switch on without a system FFmpeg found keeps the bundled one", async (t) => {
+  const dir = await tempDir(t);
+  const harness = makeBackend(dir, { tools: TOOLS, readSettings: async () => ({ allowPrivateAddons: false, publish: false, publishPort: 8091, downloadDir: null, useSystemFfmpeg: true }) });
+  const started = start(harness);
+  const fork = await harness.nextChild();
+  assert.equal(fork.options.env.FFMPEG_PATH, TOOLS.ffmpeg);
+  fork.child.emit("message", READY);
+  await started;
+  await harness.backend.stop();
+});
+
+test("a running backend is replaced when only the system FFmpeg switch changed", async (t) => {
+  const dir = await tempDir(t);
+  let useSystemFfmpeg = false;
+  const harness = makeBackend(dir, {
+    tools: TOOLS,
+    systemTools: SYSTEM_TOOLS,
+    readSettings: async () => ({ allowPrivateAddons: false, publish: false, publishPort: 8091, downloadDir: null, useSystemFfmpeg }),
+  });
+  const first = start(harness);
+  const firstFork = await harness.nextChild();
+  assert.equal(firstFork.options.env.FFMPEG_PATH, TOOLS.ffmpeg);
+  firstFork.child.emit("message", READY);
+  await first;
+  useSystemFfmpeg = true;
+  const second = start(harness);
+  const secondFork = await harness.nextChild();
+  assert.equal(firstFork.child.kills, 1);
+  assert.equal(secondFork.options.env.FFMPEG_PATH, SYSTEM_TOOLS.ffmpeg);
+  secondFork.child.emit("message", READY);
+  await second;
+  await harness.backend.stop();
+});
+
+test("the default VAAPI check finds a character device, which a render node is", () => {
+  // /dev/null is a character device on every POSIX host; a regular file is not one.
+  assert.equal(isCharacterDevice("/dev/null"), process.platform !== "win32");
+  assert.equal(isCharacterDevice(fileURLToPath(import.meta.url)), false);
+  assert.equal(isCharacterDevice("/nonexistent/renderD128"), false);
 });

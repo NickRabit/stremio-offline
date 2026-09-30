@@ -3,6 +3,7 @@ import type { en } from "../i18n.js";
 export const pl: typeof en & Record<string, string> = {
   "window.thisMac": "Tego Maca",
   "window.thisPC": "Ten komputer",
+  "window.thisComputer": "Ten komputer",
   "download.saveTitle": "Zapisz na tym urządzeniu",
   "folder.pickTitle": "Wybierz folder biblioteki",
   "notify.downloadDone": "Zapisano {file}",
@@ -31,6 +32,7 @@ export const pl: typeof en & Record<string, string> = {
   "reset.downloadsKept": "Folder pobierania pozostał tam, gdzie jest: {dir}",
   "reset.detailServers": "Zapisane serwery i logowania do nich również zostają zapomniane.",
   "reset.detailKeepsFilms": "Pobrane filmy pozostają tam, gdzie są.",
+  "reset.trashFailed": "Nie udało się przenieść danych do Kosza i nic nie zostało usunięte: {reason}",
   "tray.open": "Otwórz Stremio Offline",
   "tray.settings": "Ustawienia…",
   "tray.quit": "Zamknij",

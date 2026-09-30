@@ -26,10 +26,12 @@ export const STOP_TIMEOUT_MS = 5_000;
  *  `/usr/bin:/bin:/usr/sbin:/sbin`, so neither is on the child's `PATH` by itself. */
 export const MACOS_TOOL_DIRECTORIES = ["/opt/homebrew/bin", "/usr/local/bin"] as const;
 const MACOS_FALLBACK_PATH = "/usr/bin:/bin:/usr/sbin:/sbin";
+/** The render node a desktop Linux install usually has, offered to the server for VAAPI. */
+const VAAPI_DEVICE_PATH = "/dev/dri/renderD128";
 
 const sameSettings = (a: LocalSettings, b: LocalSettings) =>
   a.allowPrivateAddons === b.allowPrivateAddons && a.publish === b.publish && a.publishPort === b.publishPort
-  && a.downloadDir === b.downloadDir;
+  && a.downloadDir === b.downloadDir && a.useSystemFfmpeg === b.useSystemFfmpeg;
 
 const SERVICE_NAME = "Stremio Offline backend";
 
@@ -109,6 +111,8 @@ export interface LocalBackendOptions {
   loopbackTaken?: (port: number) => Promise<boolean>;
   /** The FFmpeg the app carries, handed to the backend unless its environment names one. */
   tools?: MediaTools | null;
+  /** The FFmpeg found on the system, used in place of the bundled one when the settings say so. */
+  systemTools?: MediaTools | null;
   /** What the running child reports about its traffic, published or not. */
   onActivity?: (activity: { streaming: boolean; downloading: boolean }) => void;
   readyTimeoutMs?: number;
@@ -230,6 +234,11 @@ const isFile = (file: string) => {
   try { return statSync(file).isFile(); } catch { return false; }
 };
 
+/** A render node is a character device, not a file: `isFile` would never find one. */
+export const isCharacterDevice = (entry: string) => {
+  try { return statSync(entry).isCharacterDevice(); } catch { return false; }
+};
+
 /** An entry as it is compared, without the one trailing slash it may carry. */
 const withoutTrailingSlash = (entry: string) => entry.length > 1 && entry.endsWith("/") ? entry.slice(0, -1) : entry;
 
@@ -251,6 +260,8 @@ export function localBackendEnv(
   directoryExists: (dir: string) => boolean = isDirectory,
   settings: LocalSettings = defaultLocalSettings(),
   tools: MediaTools | null = null,
+  deviceExists: (entry: string) => boolean = isCharacterDevice,
+  toolsOverride: MediaTools | null = null,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(parent)) if (value !== undefined) env[key] = value;
@@ -265,9 +276,14 @@ export function localBackendEnv(
   // Off leaves an inherited value alone: a developer running from a terminal keeps their own.
   if (settings.allowPrivateAddons) env.ALLOW_PRIVATE_ADDONS = "1";
   if (platform === "darwin") env.PATH = macosPath(env.PATH, directoryExists);
+  // The server probes the device and logs why transcoding is off, so an unreadable one is fine.
+  if (platform === "linux" && !env.VAAPI_DEVICE?.trim() && deviceExists(VAAPI_DEVICE_PATH)) {
+    env.VAAPI_DEVICE = VAAPI_DEVICE_PATH;
+  }
   // The app's own FFmpeg, unless someone named another one on purpose.
-  if (tools && !env.FFMPEG_PATH?.trim()) env.FFMPEG_PATH = tools.ffmpeg;
-  if (tools && !env.FFPROBE_PATH?.trim()) env.FFPROBE_PATH = tools.ffprobe;
+  const media = toolsOverride ?? tools;
+  if (media && !env.FFMPEG_PATH?.trim()) env.FFMPEG_PATH = media.ffmpeg;
+  if (media && !env.FFPROBE_PATH?.trim()) env.FFPROBE_PATH = media.ffprobe;
   return env;
 }
 
@@ -447,8 +463,9 @@ export class LocalBackend {
   private async launch(port: number, settings: LocalSettings): Promise<LocalBackendConnection> {
     const { options } = this;
     this.launchedWith = settings;
+    const toolsOverride = settings.useSystemFfmpeg ? options.systemTools ?? null : null;
     const child = options.fork(options.entry, {
-      env: localBackendEnv(process.env, options.userDataDir, port, process.platform, isDirectory, settings, options.tools ?? null),
+      env: localBackendEnv(process.env, options.userDataDir, port, process.platform, isDirectory, settings, options.tools ?? null, isCharacterDevice, toolsOverride),
       cwd: options.userDataDir,
       stdio: "inherit",
       serviceName: SERVICE_NAME,

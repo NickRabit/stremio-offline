@@ -163,6 +163,7 @@ on demand, so a catalogue the provider adds later still shows up. See
 | [Diagnostics and troubleshooting](docs/troubleshooting.md) | The log, the addon guard, symptom-to-page index |
 | [Installing the macOS app](docs/install-mac.md) | Download, the first launch of an unsigned app, updating and removing it |
 | [Installing the Windows app](docs/install-windows.md) | SmartScreen, the notification area, firewall, updating and removing it |
+| [Installing the Linux app](docs/install-linux.md) | .deb or AppImage, VA-API/NVENC or the system's FFmpeg, firewall, updating and removing it |
 | [Building and releasing](docs/building.md) | Local builds, GHCR, version tags, Windows and macOS hosts |
 | [Licensing](docs/licensing.md) | What each distribution contains, FFmpeg's licence and source |
 | [Testing](docs/testing.md) | What belongs in which test layer, and how to run each |

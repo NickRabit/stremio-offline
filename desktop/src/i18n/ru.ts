@@ -3,6 +3,7 @@ import type { en } from "../i18n.js";
 export const ru: typeof en & Record<string, string> = {
   "window.thisMac": "Этот Мак",
   "window.thisPC": "Этот компьютер",
+  "window.thisComputer": "Этот компьютер",
   "download.saveTitle": "Сохранить на это устройство",
   "folder.pickTitle": "Выберите папку библиотеки",
   "notify.downloadDone": "Сохранен {file}",
@@ -31,6 +32,7 @@ export const ru: typeof en & Record<string, string> = {
   "reset.downloadsKept": "Папка загрузок осталась там, где она есть: {dir}.",
   "reset.detailServers": "Сохраненные серверы и входы на них также забываются.",
   "reset.detailKeepsFilms": "Загруженные фильмы остаются там, где они есть.",
+  "reset.trashFailed": "Не удалось переместить данные в Корзину, и ничего не было удалено: {reason}",
   "tray.open": "Открыть Stremio Offline",
   "tray.settings": "Настройки…",
   "tray.quit": "Выйти",

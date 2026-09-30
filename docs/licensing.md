@@ -87,13 +87,33 @@ The Windows app carries **FFmpeg 9.0.2 (`ffmpeg.exe`,
 `ffprobe.exe`)**, cross-compiled on Linux by
 `desktop/scripts/build-ffmpeg-win.sh`. It is the same LGPL build as on macOS —
 made without `--enable-gpl`, so it contains no x264 — and H.264 is encoded by
-**Media Foundation** (`h264_mf`), so the binaries are licensed
-**LGPL-3.0-or-later**. TLS uses Windows' own **schannel** instead of OpenSSL, so
+**NVENC** (`h264_nvenc`) on NVIDIA cards, else by **Media Foundation**
+(`h264_mf`), so the binaries are licensed **LGPL-3.0-or-later**. NVENC's
+interface comes from the MIT-licensed nv-codec-headers (12.1, which needs
+NVIDIA driver 531 or newer on Windows and 530 on Linux), whose archive is
+attached too; the NVIDIA driver is loaded at run time and is not part of the
+app. TLS uses Windows' own **schannel** instead of OpenSSL, so
 no OpenSSL notice belongs to this build. schannel verifies against the Windows
 certificate store and also checks revocation online
 (`SCH_CRED_REVOCATION_CHECK_CHAIN`), so a source whose chain cannot be checked
 can fail on Windows where macOS succeeds. As on macOS, every release attaches
 the exact source archive (`ffmpeg-*.tar.xz`) the binaries were built from.
+
+### Desktop app (Linux)
+
+The Linux app carries **FFmpeg 9.0.2 (`ffmpeg`, `ffprobe`)**, built inside a
+pinned `ubuntu:22.04` container by `desktop/scripts/build-ffmpeg-linux.sh`, so
+the binaries need glibc 2.35 or newer. It is the same LGPL build as on the
+other platforms — made without `--enable-gpl`, so it contains no x264 — and
+H.264 is encoded by **VAAPI** on Intel and AMD GPUs or by **NVENC** on NVIDIA,
+so the binaries are licensed **LGPL-3.0-or-later**. TLS uses a statically
+linked **OpenSSL 3.5.8** (Apache-2.0), whose licence and notice ship beside the
+binaries as on macOS. **libva** and **libdrm** are linked dynamically from the
+system, because they have to match the installed GPU driver, and NVIDIA's
+encoder interface is loaded at run time from the driver, so nothing links to
+it. As on the other platforms, every release attaches the exact source
+archives (`ffmpeg-*.tar.xz`, `openssl-*.tar.gz` and the nv-codec-headers
+tarball) the binaries were built from.
 
 ### Why the desktop FFmpeg is LGPL and not GPL
 

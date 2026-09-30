@@ -341,6 +341,24 @@ Users read [docs/install-windows.md](../docs/install-windows.md); the manual
 check on a real PC, for a change that touches Windows, is
 [docs/testing-windows.md](../docs/testing-windows.md).
 
+## Trying the Linux app on a Mac
+
+`desktop/scripts/linux-preview.sh` runs an Ubuntu 24.04 desktop (Xfce) in a
+Docker container and shows it in the browser at
+`http://localhost:6080/vnc.html`:
+
+- It installs a `.deb` you name (or an AppImage), the latest release's
+  (`--release`), or the one a pull request's CI built (`--pr <number>`).
+  `--stop` removes the container.
+- The app's data lives in a named volume across runs; `--fresh` forgets it.
+- On Apple Silicon the x64 build runs under Docker's emulation. That is fine
+  for the look and behaviour, including the tray, the setup and Settings, but
+  slow for playback, and there is no GPU for VA-API or NVENC.
+- The system `ffmpeg` in the image has libx264, so **Use the system's
+  FFmpeg** can be tried there.
+- The preview disables Electron's sandbox (`ELECTRON_DISABLE_SANDBOX=1`),
+  which a container cannot provide. The app itself never does.
+
 ## Signed release (manual)
 
 `.github/workflows/desktop-release.yml` (**Desktop release**) is the only path

@@ -160,6 +160,14 @@ test("no macOS-only role reaches the Windows bar", () => {
   }
 });
 
+test("the Linux bar names the local server a computer, not a Mac", () => {
+  const strings = catalogue("en", "linux");
+  const { template } = windows({ platform: "linux", strings });
+  assert.deepEqual(shape(template), [strings["menu.file"], "editMenu", strings["menu.view"], strings["menu.server"], "help"]);
+  assert.deepEqual(shape(serverItems(template)),
+    [strings["window.thisComputer"], "Living room", "NAS", "separator", strings["menu.reconnect"], strings["menu.serverSettings"]]);
+});
+
 test("every Windows entry reaches its own action", () => {
   const { template, calls } = windows({ current: { kind: "profile", id: "one" }, connected: true });
   fire(template);

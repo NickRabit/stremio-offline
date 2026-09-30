@@ -3,7 +3,7 @@ import { chmod, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises"
 import os from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
-import { mayTrashDownloadDir, prepareDownloadDir, protectedDownloadDir, readOwnership, reservedDownloadDir, suggestedDownloadDir, writeOwnership, type DownloadDirFs, type Places } from "./download-dir.js";
+import { mayTrashDownloadDir, mayTrashDownloadDirReal, prepareDownloadDir, protectedDownloadDir, readOwnership, reservedDownloadDir, suggestedDownloadDir, writeOwnership, type DownloadDirFs, type Places } from "./download-dir.js";
 
 const tempDir = async (t: TestContext) => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "stremio-download-dir-"));
@@ -19,6 +19,12 @@ const WINDOWS_PLACES: Places = {
   home: "C:\\Users\\me",
   userData: "C:\\Users\\me\\AppData\\Roaming\\Stremio Offline",
   platform: "win32",
+};
+
+const LINUX_PLACES: Places = {
+  home: "/home/me",
+  userData: "/home/me/.config/Stremio Offline",
+  platform: "linux",
 };
 
 const fakeFs = (over: Partial<DownloadDirFs> = {}): DownloadDirFs => ({
@@ -286,4 +292,47 @@ test("the folder the app is installed in, and anything inside it, is reserved", 
   assert.equal(reservedDownloadDir("C:\\Users\\me\\AppData\\Local\\Programs\\stremio-offline\\Films", places), true);
   assert.equal(reservedDownloadDir("c:\\users\\me\\appdata\\local\\programs\\STREMIO-OFFLINE", places), true);
   assert.equal(reservedDownloadDir("C:\\Users\\me\\Videos\\Stremio Offline", places), false);
+});
+
+test("Linux refuses the file-system root, the home folder and the folders a mount root hangs under", () => {
+  for (const dir of ["/", "/home", "/home/me", "/media", "/run", "/run/media", "/run/media/me", "/mnt"]) {
+    assert.equal(reservedDownloadDir(dir, LINUX_PLACES), true, dir);
+  }
+  // A disk mounted straight at /media/<label> is a folder like any other, kept from the Trash only.
+  for (const dir of ["/media/films", "/home/me/Videos", "/media/me/Disk", "/run/media/me/Disk", "/mnt/nas", "/home/me/Videos/Stremio Offline"]) {
+    assert.equal(reservedDownloadDir(dir, LINUX_PLACES), false, dir);
+  }
+});
+
+test("Linux protects the home folders, every dot folder right under the home folder, and the mount roots", () => {
+  for (const dir of ["/home/me/Desktop", "/home/me/Documents", "/home/me/Downloads", "/home/me/Music", "/home/me/Pictures",
+    "/home/me/Videos", "/home/me/Public", "/home/me/Templates", "/home/me/snap", "/home/me/.config", "/home/me/.ssh",
+    "/media/me/Disk", "/run/media/me/Disk", "/mnt/nas"]) {
+    assert.equal(protectedDownloadDir(dir, LINUX_PLACES), true, dir);
+  }
+  for (const dir of ["/home/me/Videos/Stremio Offline", "/media/me/Disk/Films", "/mnt/nas/Films", "/home/me/Public/Films"]) {
+    assert.equal(protectedDownloadDir(dir, LINUX_PLACES), false, dir);
+  }
+});
+
+test("Linux compares paths with the case they are written in", () => {
+  assert.equal(protectedDownloadDir("/home/me/videos", LINUX_PLACES), false);
+  assert.equal(protectedDownloadDir("/home/me/Videos", LINUX_PLACES), true);
+});
+
+test("a Linux folder the user keeps is used but never the app's, and one below it is the app's", async () => {
+  assert.deepEqual(await prepareDownloadDir("/home/me/Videos/Stremio Offline", LINUX_PLACES, fakeFs()),
+    { ok: true, dir: "/home/me/Videos/Stremio Offline", owned: true });
+  for (const dir of ["/home/me/Videos", "/media/films", "/media/me/Disk", "/mnt/nas"]) {
+    assert.deepEqual(await prepareDownloadDir(dir, LINUX_PLACES, fakeFs()), { ok: true, dir, owned: false }, dir);
+  }
+  assert.deepEqual(await prepareDownloadDir("/media", LINUX_PLACES, fakeFs()), { ok: false, reason: "reserved" });
+});
+
+test("a reset refuses a folder that is a symlink into a protected one", async () => {
+  const dir = "/home/me/Media";
+  const fsImpl = fakeFs({ realpath: async (entry) => entry === dir ? "/home/me/Videos" : entry });
+  assert.equal(await mayTrashDownloadDirReal(dir, dir, { dir, owned: true }, LINUX_PLACES, fsImpl), false);
+  assert.equal(await mayTrashDownloadDirReal("/home/me/Films", "/home/me/Films", { dir: "/home/me/Films", owned: true },
+    LINUX_PLACES, fakeFs()), true, "an ordinary owned folder still may go");
 });

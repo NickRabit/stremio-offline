@@ -18,6 +18,9 @@ export interface LocalSettings {
   /** Where the local backend downloads to (its first library). null = the pre-setup default,
    *  `<userData>/downloads`, which installs from before this setting keep. */
   downloadDir: string | null;
+  /** Linux only: run the `ffmpeg` found on `PATH` in place of the bundled one. Ignored while
+   *  `systemFfmpeg` is null. */
+  useSystemFfmpeg: boolean;
 }
 
 export type ShellView = "main" | "settings" | "toast";
@@ -68,6 +71,8 @@ export interface LocalState {
   addresses: string[];
   /** First line of the bundled FFmpeg's BUILDINFO.txt, or null in a development run. */
   ffmpeg: string | null;
+  /** The system `ffmpeg` this Linux desktop may run instead of the bundled one, else null. */
+  systemFfmpeg: string | null;
   /** Something is playing, saving to this device or downloading on the local backend; quitting
    *  asks first while it is true. */
   busy: boolean;

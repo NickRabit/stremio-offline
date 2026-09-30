@@ -14,6 +14,7 @@ on:
     paths:
       - "desktop/scripts/build-ffmpeg.sh"
       - "desktop/scripts/build-ffmpeg-win.sh"
+      - "desktop/scripts/build-ffmpeg-linux.sh"
   pull_request:
     paths:
       - "desktop/**"
@@ -47,6 +48,25 @@ jobs:
         with:
           name: ffmpeg-windows
           path: desktop/ffmpeg-win
+          if-no-files-found: error
+          retention-days: 7
+
+  # Builds the LGPL FFmpeg for Linux x64 inside a pinned ubuntu:22.04 container, with VAAPI for
+  # Intel and AMD GPUs and NVENC for NVIDIA. The artifact is consumed by the Linux packaging job.
+  ffmpeg-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # The LGPL FFmpeg takes minutes to build; the result only changes with the script.
+      - uses: actions/cache@v6
+        with:
+          path: desktop/ffmpeg-linux
+          key: desktop-ffmpeg-linux-${{ hashFiles('desktop/scripts/build-ffmpeg-linux.sh') }}
+      - run: bash desktop/scripts/build-ffmpeg-linux.sh
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ffmpeg-linux
+          path: desktop/ffmpeg-linux
           if-no-files-found: error
           retention-days: 7
 
@@ -123,4 +143,84 @@ jobs:
           name: stremio-offline-windows-x64-zip
           path: desktop/release/*.zip
           if-no-files-found: error
+          retention-days: 7
+
+  # Packages the Linux x64 AppImage and .deb. Unsigned like the macOS and Windows jobs.
+  package-linux:
+    needs: ffmpeg-linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+      # The LGPL FFmpeg comes from the ffmpeg-linux job; this job never builds it.
+      - uses: actions/download-artifact@v8
+        with:
+          name: ffmpeg-linux
+          path: desktop/ffmpeg-linux
+      # An artifact download loses the executable bit.
+      - run: chmod +x desktop/ffmpeg-linux/ffmpeg desktop/ffmpeg-linux/ffprobe
+      - run: npm ci
+      # The system libraries the bundled FFmpeg links against: libva and libdrm must match the
+      # machine's own GPU driver, so they come from the system, as the .deb's dependencies say.
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libva2 libva-drm2 libdrm2
+      - run: npm run package:linux:x64 -w desktop
+      # electron-builder writes --no-sandbox into the AppImage's menu entry unless told otherwise;
+      # a desktop integration (AppImageLauncher, Gear Lever) would start every run that way.
+      - name: The AppImage's menu entry keeps the sandbox
+        working-directory: desktop/release
+        run: |
+          chmod +x ./*.AppImage
+          ./*.AppImage --appimage-extract '*.desktop' >/dev/null
+          cat squashfs-root/*.desktop
+          ! grep -q -- --no-sandbox squashfs-root/*.desktop
+          rm -rf squashfs-root
+      # Both checks start the packaged app, which needs a display; the runner has no screen.
+      - run: xvfb-run -a npm run verify:fuses -w desktop
+      - run: xvfb-run -a npm run smoke:packaged -w desktop
+        env:
+          # Ubuntu 24.04 runners restrict unprivileged user namespaces, and the unpacked app has
+          # no SUID sandbox, so the browser cannot start without this.
+          ELECTRON_DISABLE_SANDBOX: "1"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: stremio-offline-linux-x64-appimage
+          path: desktop/release/*.AppImage
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@v7
+        with:
+          name: stremio-offline-linux-x64-deb
+          path: desktop/release/*.deb
+          if-no-files-found: error
+          retention-days: 7
+
+  # Plays the desktop scenarios against the development app on a screen of its own. Only the
+  # Linux branch of the close behaviour runs here; the others are skipped by the tests.
+  desktop-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+      # Installs the Electron binary the tests start, alongside Playwright.
+      - run: npm ci
+      - run: npm run build
+      - run: npm run build -w desktop
+      - run: npm run build:renderer -w desktop
+      - run: npm run stage:local-backend -w desktop
+      - run: xvfb-run -a npm run test:e2e -w desktop
+        env:
+          # The runner restricts unprivileged user namespaces and Electron has no SUID sandbox.
+          ELECTRON_DISABLE_SANDBOX: "1"
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: desktop-playwright-report
+          path: desktop/e2e/playwright-report
+          if-no-files-found: ignore
           retention-days: 7

@@ -11,13 +11,15 @@ export interface LocalSettings {
   publishPort: number;
   /** The folder the local backend downloads to; null means `<userData>/downloads`. */
   downloadDir: string | null;
+  /** Linux only: run the `ffmpeg` found on `PATH` instead of the bundled one. */
+  useSystemFfmpeg: boolean;
 }
 
 const DEFAULT_PUBLISH_PORT = 8091;
 const MAX_DOWNLOAD_DIR = 1024;
 
 export const defaultLocalSettings = (): LocalSettings =>
-  ({ allowPrivateAddons: false, publish: false, publishPort: DEFAULT_PUBLISH_PORT, downloadDir: null });
+  ({ allowPrivateAddons: false, publish: false, publishPort: DEFAULT_PUBLISH_PORT, downloadDir: null, useSystemFfmpeg: false });
 
 const validPort = (value: unknown): value is number =>
   typeof value === "number" && Number.isInteger(value) && value >= 1024 && value <= 65535;
@@ -34,6 +36,7 @@ const settingsFromStored = (body: unknown): LocalSettings => {
     publish: typeof record.publish === "boolean" ? record.publish : false,
     publishPort: validPort(record.publishPort) ? record.publishPort : DEFAULT_PUBLISH_PORT,
     downloadDir: validDownloadDir(record.downloadDir) ? record.downloadDir : null,
+    useSystemFfmpeg: typeof record.useSystemFfmpeg === "boolean" ? record.useSystemFfmpeg : false,
   };
 };
 
@@ -60,6 +63,7 @@ export async function writeLocalSettings(dir: string, settings: LocalSettings): 
       publish: settings.publish,
       publishPort: settings.publishPort,
       downloadDir: settings.downloadDir,
+      useSystemFfmpeg: settings.useSystemFfmpeg,
     }) + "\n", { encoding: "utf8", flag: "wx" });
     await renameWithRetry(temporary, path.join(dir, SETTINGS_FILE));
   } catch (error) {
@@ -73,14 +77,16 @@ export function parseLocalSettings(input: unknown): LocalSettings | null {
   if (typeof input !== "object" || input === null || Array.isArray(input)) return null;
   const record = input as Record<string, unknown>;
   const keys = Object.keys(record).sort();
-  if (keys.length !== 4 || keys[0] !== "allowPrivateAddons" || keys[1] !== "downloadDir" || keys[2] !== "publish" || keys[3] !== "publishPort") return null;
+  if (keys.length !== 5 || keys[0] !== "allowPrivateAddons" || keys[1] !== "downloadDir" || keys[2] !== "publish" || keys[3] !== "publishPort" || keys[4] !== "useSystemFfmpeg") return null;
   if (typeof record.allowPrivateAddons !== "boolean" || typeof record.publish !== "boolean" || !validPort(record.publishPort)) return null;
   const downloadDir = record.downloadDir;
   if (downloadDir !== null && !validDownloadDir(downloadDir)) return null;
+  if (typeof record.useSystemFfmpeg !== "boolean") return null;
   return {
     allowPrivateAddons: record.allowPrivateAddons,
     publish: record.publish,
     publishPort: record.publishPort,
     downloadDir: downloadDir === null ? null : downloadDir,
+    useSystemFfmpeg: record.useSystemFfmpeg,
   };
 }

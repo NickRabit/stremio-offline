@@ -188,6 +188,11 @@ function ThisMacSection({ bridge, state }: { bridge: ShellBridge; state: ShellSt
       <SettingControl title={t("desktop.lanAddons")} text={t("desktop.lanAddonsText")}>
         <span className="switch"><input type="checkbox" checked={local.settings.allowPrivateAddons} onChange={(event) => void store({ ...local.settings, allowPrivateAddons: event.target.checked })}/><span/></span>
       </SettingControl>
+      {/* Linux only: the app's own FFmpeg cannot convert without a graphics card, a distribution's
+          one with libx264 can. Offered only when such an FFmpeg is installed. */}
+      {state.platform === "linux" && local.systemFfmpeg && <SettingControl title={t("desktop.systemFfmpeg")} text={t("desktop.systemFfmpegText", { path: local.systemFfmpeg })}>
+        <span className="switch"><input type="checkbox" checked={local.settings.useSystemFfmpeg} onChange={(event) => void store({ ...local.settings, useSystemFfmpeg: event.target.checked })}/><span/></span>
+      </SettingControl>}
     </div>
     {(local.restartNeeded || confirming || failed) && local.running && <div className={`shell-notice${confirming ? " warn" : ""}`} role="status">
       <Network/>
