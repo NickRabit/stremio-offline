@@ -1497,3 +1497,11 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
 .gallery-overlay{padding-top:calc(54px + env(safe-area-inset-top, 0px))}
 .gallery-close{top:calc(16px + env(safe-area-inset-top, 0px))}
 .trailer-overlay{padding-top:calc(16px + env(safe-area-inset-top, 0px))}
+/* The player's title strip on a phone: 7px and 13px type over a video read as blurred on a small
+   screen. The label is the size of every other label and takes the brighter accent, since the
+   plain one sinks into the dark gradient. */
+@media(max-width:700px),(max-height:500px) and (orientation:landscape){
+  .player-overlay .player-head small{font-size:9px;letter-spacing:1.2px;color:var(--accent2)}
+  .player-overlay .player-head strong{font-size:15px;line-height:1.25;-webkit-font-smoothing:antialiased}
+  .player-overlay .player-head{background:linear-gradient(#000d,#0007 55%,transparent)}
+}
