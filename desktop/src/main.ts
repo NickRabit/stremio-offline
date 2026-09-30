@@ -29,7 +29,7 @@ import { localPageSent } from "./bridge-sender.js";
 import { SettingsWindow } from "./settings-window.js";
 import { sessionFetch } from "./session-fetch.js";
 import type { AppPrefs, FailureReason, MainScreen, ProfileResult, ProbeResult, ShellState, Target, Toast } from "./shell-api.js";
-import { effectiveLocale, readShellPrefs, readShellPrefsSync, writeShellPrefs, type ShellLocale } from "./shell-prefs.js";
+import { effectiveLocale, readShellPrefs, readShellPrefsSync, SHELL_LOCALES, writeShellPrefs, type ShellLocale } from "./shell-prefs.js";
 import { downloadFraction, nextToastId, safeFileName } from "./shell-text.js";
 import { SerialQueue } from "./serial-queue.js";
 import { SleepGuard } from "./sleep-guard.js";
@@ -1403,7 +1403,7 @@ const registerHandlers = () => {
 
   ipcMain.handle("shell:setLocale", async (event, input: unknown): Promise<void> => {
     assertShellSender(event);
-    if (input !== null && input !== "cs" && input !== "en") throw new Error("shell: invalid locale");
+    if (input !== null && !SHELL_LOCALES.includes(input as ShellLocale)) throw new Error("shell: invalid locale");
     const choice = input as ShellLocale | null;
     await queue.run(async () => {
       await writeShellPrefs(app.getPath("userData"),
