@@ -168,7 +168,9 @@ the browser is later.
 ### Search
 
 Live input (~400 ms debounce), recent queries, suggestions from already loaded
-catalogs, and an optional rank-by-title-match.
+catalogs, and an optional rank-by-title-match. Per-account history must be
+clearable and its storage can be disabled in Settings. See the proposed
+[research and implementation specification](enhanced-search-spec.md).
 
 ### Desktop
 
