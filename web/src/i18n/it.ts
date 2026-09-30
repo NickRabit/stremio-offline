@@ -1281,4 +1281,6 @@ export const it: Catalog = {
   "desktop.sectionReset.linux": "Ripristina questo PC",
   "desktop.resetButton.linux": "Ripristina questo PC...",
   "desktop.resetBusy.linux": "Qualcosa è in riproduzione o in download da questo PC; si fermerà.",
+  "desktop.systemFfmpeg": "Usa l'FFmpeg di sistema",
+  "desktop.systemFfmpegText": "{path} può convertire i video anche senza scheda grafica (libx264); l'FFmpeg dell'app ne ha bisogno. Vale dopo il riavvio del server.",
 };

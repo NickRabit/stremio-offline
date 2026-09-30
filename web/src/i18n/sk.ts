@@ -1281,4 +1281,6 @@ export const sk: Catalog = {
   "desktop.sectionReset.linux": "Obnovte tento počítač",
   "desktop.resetButton.linux": "Obnoviť tento počítač…",
   "desktop.resetBusy.linux": "Niečo sa prehráva alebo sťahuje z tohto počítača; prestane to.",
+  "desktop.systemFfmpeg": "Použiť systémový FFmpeg",
+  "desktop.systemFfmpegText": "{path} dokáže prevádzať video aj bez grafickej karty (libx264); vlastný FFmpeg aplikácie ju potrebuje. Prejaví sa po reštarte servera.",
 };

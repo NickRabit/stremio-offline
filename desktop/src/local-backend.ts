@@ -31,7 +31,7 @@ const VAAPI_DEVICE_PATH = "/dev/dri/renderD128";
 
 const sameSettings = (a: LocalSettings, b: LocalSettings) =>
   a.allowPrivateAddons === b.allowPrivateAddons && a.publish === b.publish && a.publishPort === b.publishPort
-  && a.downloadDir === b.downloadDir;
+  && a.downloadDir === b.downloadDir && a.useSystemFfmpeg === b.useSystemFfmpeg;
 
 const SERVICE_NAME = "Stremio Offline backend";
 
@@ -111,6 +111,8 @@ export interface LocalBackendOptions {
   loopbackTaken?: (port: number) => Promise<boolean>;
   /** The FFmpeg the app carries, handed to the backend unless its environment names one. */
   tools?: MediaTools | null;
+  /** The FFmpeg found on the system, used in place of the bundled one when the settings say so. */
+  systemTools?: MediaTools | null;
   /** What the running child reports about its traffic, published or not. */
   onActivity?: (activity: { streaming: boolean; downloading: boolean }) => void;
   readyTimeoutMs?: number;
@@ -254,6 +256,7 @@ export function localBackendEnv(
   settings: LocalSettings = defaultLocalSettings(),
   tools: MediaTools | null = null,
   fileExists: (file: string) => boolean = isFile,
+  toolsOverride: MediaTools | null = null,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(parent)) if (value !== undefined) env[key] = value;
@@ -273,8 +276,9 @@ export function localBackendEnv(
     env.VAAPI_DEVICE = VAAPI_DEVICE_PATH;
   }
   // The app's own FFmpeg, unless someone named another one on purpose.
-  if (tools && !env.FFMPEG_PATH?.trim()) env.FFMPEG_PATH = tools.ffmpeg;
-  if (tools && !env.FFPROBE_PATH?.trim()) env.FFPROBE_PATH = tools.ffprobe;
+  const media = toolsOverride ?? tools;
+  if (media && !env.FFMPEG_PATH?.trim()) env.FFMPEG_PATH = media.ffmpeg;
+  if (media && !env.FFPROBE_PATH?.trim()) env.FFPROBE_PATH = media.ffprobe;
   return env;
 }
 
@@ -454,8 +458,9 @@ export class LocalBackend {
   private async launch(port: number, settings: LocalSettings): Promise<LocalBackendConnection> {
     const { options } = this;
     this.launchedWith = settings;
+    const toolsOverride = settings.useSystemFfmpeg ? options.systemTools ?? null : null;
     const child = options.fork(options.entry, {
-      env: localBackendEnv(process.env, options.userDataDir, port, process.platform, isDirectory, settings, options.tools ?? null),
+      env: localBackendEnv(process.env, options.userDataDir, port, process.platform, isDirectory, settings, options.tools ?? null, isFile, toolsOverride),
       cwd: options.userDataDir,
       stdio: "inherit",
       serviceName: SERVICE_NAME,

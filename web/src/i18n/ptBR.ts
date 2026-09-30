@@ -1281,4 +1281,6 @@ export const ptBR: Catalog = {
   "desktop.sectionReset.linux": "Reinicialize este PC",
   "desktop.resetButton.linux": "Reinicialize este PC…",
   "desktop.resetBusy.linux": "Algo está sendo reproduzido ou baixado deste PC; isso vai parar.",
+  "desktop.systemFfmpeg": "Usar o FFmpeg do sistema",
+  "desktop.systemFfmpegText": "{path} converte vídeo sem placa de vídeo (libx264); o FFmpeg do próprio aplicativo precisa de uma. Vale após reiniciar o servidor.",
 };

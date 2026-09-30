@@ -28,11 +28,12 @@ export function previewBridge(search: string): ShellBridge | null {
       { id: "office", name: "Kancelář", origin: "https://media.example.cz" },
     ],
     local: {
-      settings: { allowPrivateAddons: false, publish: true, publishPort: 8091, downloadDir: null },
+      settings: { allowPrivateAddons: false, publish: true, publishPort: 8091, downloadDir: null, useSystemFfmpeg: false },
       downloadDir: "/Users/ondrej/Movies/Stremio Offline",
       suggestedDownloadDir: "/Users/ondrej/Movies/Stremio Offline",
       initialized: query.get("initialized") !== "0",
       downloadDirOwned: query.get("owned") !== "0",
+      systemFfmpeg: query.get("platform") === "linux" ? "/usr/bin/ffmpeg" : null,
       restartNeeded: query.get("restart") === "1",
       running: true,
       addresses: ["http://192.168.1.41:8091", "http://ondrej-macbook-pro.local:8091"],

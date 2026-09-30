@@ -1329,4 +1329,6 @@ export const cs: Catalog = {
   "desktop.sectionReset.linux": "Obnovit tento počítač",
   "desktop.resetButton.linux": "Obnovit tento počítač…",
   "desktop.resetBusy.linux": "Z tohoto počítače se něco přehrává nebo stahuje; zastaví se to.",
+  "desktop.systemFfmpeg": "Použít systémový FFmpeg",
+  "desktop.systemFfmpegText": "{path} umí převádět video i bez grafické karty (libx264), vlastní FFmpeg aplikace ji potřebuje. Projeví se po restartu serveru.",
 };

@@ -1281,4 +1281,6 @@ export const ru: Catalog = {
   "desktop.sectionReset.linux": "Перезагрузить этот компьютер",
   "desktop.resetButton.linux": "Перезагрузить этот компьютер…",
   "desktop.resetBusy.linux": "Что-то воспроизводится или загружается с этого компьютера; это остановится.",
+  "desktop.systemFfmpeg": "Использовать системный FFmpeg",
+  "desktop.systemFfmpegText": "{path} может конвертировать видео без видеокарты (libx264); собственному FFmpeg приложения она нужна. Применяется после перезапуска сервера.",
 };

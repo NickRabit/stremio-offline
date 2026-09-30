@@ -1281,4 +1281,6 @@ export const fr: Catalog = {
   "desktop.sectionReset.linux": "Réinitialiser ce PC",
   "desktop.resetButton.linux": "Réinitialiser ce PC…",
   "desktop.resetBusy.linux": "Quelque chose est en cours de lecture ou de téléchargement depuis ce PC ; ça va s'arrêter.",
+  "desktop.systemFfmpeg": "Utiliser le FFmpeg du système",
+  "desktop.systemFfmpegText": "{path} peut convertir la vidéo sans carte graphique (libx264) ; le FFmpeg de l'application en a besoin. S'applique au redémarrage du serveur.",
 };

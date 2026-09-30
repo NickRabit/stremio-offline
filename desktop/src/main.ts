@@ -35,6 +35,7 @@ import { SerialQueue } from "./serial-queue.js";
 import { SleepGuard } from "./sleep-guard.js";
 import { MAX_TARGET_ID, LatestRequest, fallbackApplies, launchPlan, readStartupChoice, writeStartupChoice, STARTUP_FILE } from "./startup.js";
 import { fetchStatus, type ProbeFailure } from "./status.js";
+import { findSystemFfmpeg, type SystemFfmpeg } from "./system-ffmpeg.js";
 import { buildTrayTemplate } from "./tray.js";
 import { checkForUpdate, readRelease, UPDATE_FEED_URL, type Release } from "./update-check.js";
 import { Debounced, DEFAULT_SIZE, MIN_SIZE, readWindowState, restoreBounds, writeWindowState, type WindowState } from "./window-state.js";
@@ -115,6 +116,8 @@ let localStreaming = false;
 /** The last downloading report from the running backend. */
 let localDownloading = false;
 let ffmpegLine: string | null = null;
+/** The system FFmpeg a Linux desktop may run instead of the bundled one, found once at startup. */
+let systemFfmpeg: SystemFfmpeg | null = null;
 const sleepGuard = new SleepGuard(powerSaveBlocker);
 /** Quitting retires the page itself, so a window closing on the way out does not wait for it again. */
 let quitting = false;
@@ -153,6 +156,7 @@ const shellState: ShellState = {
     running: false,
     addresses: [],
     ffmpeg: null,
+    systemFfmpeg: null,
     busy: false,
     downloadDir: "",
     suggestedDownloadDir: "",
@@ -290,7 +294,8 @@ const applyMenu = (): void => {
 };
 
 const sameLocalSettings = (a: LocalSettings, b: LocalSettings) =>
-  a.allowPrivateAddons === b.allowPrivateAddons && a.publish === b.publish && a.publishPort === b.publishPort;
+  a.allowPrivateAddons === b.allowPrivateAddons && a.publish === b.publish && a.publishPort === b.publishPort
+  && a.useSystemFfmpeg === b.useSystemFfmpeg;
 
 const syncAwake = () =>
   sleepGuard.update({ published: localConnection?.published === true, streaming: localStreaming, downloading: localDownloading });
@@ -395,6 +400,7 @@ const refreshLocal = () => {
     running: localConnection !== null,
     addresses: localConnection?.addresses ?? [],
     ffmpeg: ffmpegLine,
+    systemFfmpeg: systemFfmpeg?.ffmpeg ?? null,
     busy: localStreaming || localDownloading || deviceDownloads.size > 0,
     downloadDir: effectiveDownloadDir(),
     suggestedDownloadDir: suggestedDownloadDir(app.getPath("home"), app.getPath("videos"), PLATFORM),
@@ -1601,6 +1607,7 @@ const createLocalBackend = (): LocalBackend => new LocalBackend({
   fork: (entry, options) => utilityProcess.fork(entry, [], options),
   probeStatus: fetchStatus,
   tools: bundledMediaTools(app.isPackaged ? process.resourcesPath : null, undefined, PLATFORM),
+  systemTools: systemFfmpeg,
   onActivity: (activity) => {
     localStreaming = activity.streaming;
     localDownloading = activity.downloading;
@@ -1730,6 +1737,7 @@ if (process.argv.includes(SMOKE_LOCAL_BACKEND)) {
     if (PLATFORM === "linux" && app.isPackaged) await refreshAutostartExec();
     await refreshLoginItem();
     ffmpegLine = readFfmpegLine(app.isPackaged ? process.resourcesPath : null);
+    if (PLATFORM === "linux") systemFfmpeg = await findSystemFfmpeg(process.env, PLATFORM);
     localBackend = createLocalBackend();
     registerHandlers();
     // A one-time migration: the old connection file's selected profile stands in for a choice

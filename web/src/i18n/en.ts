@@ -1334,4 +1334,6 @@ export const en = {
   "desktop.sectionReset.linux": "Reset this computer",
   "desktop.resetButton.linux": "Reset this computer…",
   "desktop.resetBusy.linux": "Something is playing or downloading from this computer; it will stop.",
+  "desktop.systemFfmpeg": "Use the system's FFmpeg",
+  "desktop.systemFfmpegText": "{path} can convert video without a graphics card (libx264); the app's own FFmpeg needs one. Applies once the server restarts.",
 };
