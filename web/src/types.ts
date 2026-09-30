@@ -86,6 +86,7 @@ export interface Diagnostics {
   playback: {
     ffmpeg: { version?: string; initialBurst: boolean; softwareEncoder?: boolean };
     vaapi: { device?: string; scaling: boolean; bitrate: boolean; failures: number };
+    nvenc?: { available: boolean; failures: number };
     videotoolbox?: { available: boolean; constantQuality: boolean; failures: number };
     mediafoundation?: { available: boolean; hardware: boolean; constantQuality: boolean; failures: number };
     sessions: DiagnosticsSession[];

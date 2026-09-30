@@ -243,6 +243,9 @@ export class PlaybackManager {
   /** Some drivers only offer constant quality, so a target bitrate makes the encoder refuse to open. */
   private vaapiBitrate = true;
   private vaapiFailures = 0;
+  /** NVENC runs on any platform; a machine with no NVIDIA driver simply fails the probe. */
+  private nvenc = false;
+  private nvencFailures = 0;
   private videotoolbox = false;
   /** Intel Macs offer no constant-quality mode, so those encode at a fixed bitrate instead. */
   private videotoolboxQuality = false;
@@ -274,6 +277,11 @@ export class PlaybackManager {
     }
     const device = process.env.VAAPI_DEVICE;
     if (device) await this.checkVaapi(device);
+    // NVENC loads the driver's library at run time, so the LGPL build can carry it. It is the only
+    // GPU path on a Linux NVIDIA box, and it also skips Media Foundation on Windows. A working
+    // VAAPI device already covers the same job, so it stands down and pays no extra probe.
+    // Macs have no NVIDIA encoder to find; elsewhere a working VAAPI wins and NVENC is not asked.
+    if (process.platform !== "darwin" && process.env.NVENC !== "0" && !this.vaapiDevice) await this.checkNvenc();
     // VideoToolbox is macOS-only. A VAAPI device on a Mac is a misconfiguration, and if it did come
     // up it wins; Linux and Docker never reach this line.
     if (process.platform === "darwin" && process.env.VIDEOTOOLBOX !== "0" && !this.vaapiDevice) await this.checkVideotoolbox();
@@ -568,6 +576,7 @@ export class PlaybackManager {
     return {
       ffmpeg: { version: this.ffmpegVersion, initialBurst: this.initialBurst, softwareEncoder: this.softwareEncoder },
       vaapi: { device: this.vaapiDevice, scaling: this.vaapiScaling, bitrate: this.vaapiBitrate, failures: this.vaapiFailures },
+      nvenc: { available: this.nvenc, failures: this.nvencFailures },
       videotoolbox: { available: this.videotoolbox, constantQuality: this.videotoolboxQuality, failures: this.videotoolboxFailures },
       mediafoundation: { available: this.mediafoundation, hardware: this.mediafoundationHardware, constantQuality: this.mediafoundationQuality, failures: this.mediafoundationFailures },
       sessions: [...this.sessions.values()].map((session) => ({
@@ -614,7 +623,7 @@ export class PlaybackManager {
     return {
       id: session.id, mode: session.mode, url, offset: session.offset,
       duration: session.info?.duration, video: session.info?.video?.codec, audio: session.info?.audio?.codec,
-      hardware: session.hardware, acceleration: Boolean(this.vaapiDevice || this.videotoolbox || this.mediafoundation),
+      hardware: session.hardware, acceleration: Boolean(this.vaapiDevice || this.nvenc || this.videotoolbox || this.mediafoundation),
       audioTracks: (session.info?.audioTracks ?? []).map((track) => ({ ...track, title: safeSourceText(track.title, session.stream) })),
       subtitleTracks: (session.info?.subtitleTracks ?? []).map((track) => ({ ...track, title: safeSourceText(track.title, session.stream) })),
       audioTrack: session.audioTrack, subtitleTrack: session.subtitleTrack, quality: session.quality,
@@ -792,11 +801,45 @@ export class PlaybackManager {
     catch { return false; }
   }
 
+  /** h264_nvenc appears only in a build configured with NVENC, and a machine with no NVIDIA driver
+   *  fails the frame probe. Both are ordinary absences, so they are logged at INFO rather than WARN. */
+  private async checkNvenc() {
+    if (!(await this.hasNvencEncoder())) {
+      log("INFO", "NVENC is not available, this FFmpeg has no h264_nvenc");
+      return;
+    }
+    try {
+      await this.runNvencProbe();
+      this.nvenc = true;
+      log("INFO", "NVENC is available", { preset: "p4" });
+    } catch (error) {
+      const output = (error as { stderr?: string }).stderr ?? String(error);
+      const reason = output.split("\n").map((line) => line.trim()).filter(Boolean)[0] ?? "unknown error";
+      log("INFO", "NVENC is not available, conversion will run in software", { reason });
+    }
+  }
+
+  private async hasNvencEncoder() {
+    try {
+      const { stdout } = await promisify(execFile)(ffmpegPath(), ["-hide_banner", "-encoders"], { timeout: 10_000 });
+      return /\bh264_nvenc\b/.test(stdout);
+    } catch { return false; }
+  }
+
+  private async runNvencProbe() {
+    await promisify(execFile)(ffmpegPath(), [
+      "-hide_banner", "-loglevel", "error", "-nostdin",
+      "-f", "lavfi", "-i", "nullsrc=s=256x144:d=0.1",
+      "-vf", "format=nv12", "-c:v", "h264_nvenc", "-preset", "p4", "-f", "null", "-",
+    ], { timeout: 30_000 });
+  }
+
   /** VideoToolbox is always there on a Mac, but a frame is still encoded: the encoder can fail
    *  even when the framework loads, and only the result says whether a conversion would work. */
-  /** The hardware path a conversion started now would use. VAAPI wins where both are set. */
-  private accelerator(): "vaapi" | "videotoolbox" | "mediafoundation" | null {
+  /** The hardware path a conversion started now would use, in the order they are preferred. */
+  private accelerator(): "vaapi" | "nvenc" | "videotoolbox" | "mediafoundation" | null {
     if (this.vaapiDevice) return "vaapi";
+    if (this.nvenc) return "nvenc";
     if (this.videotoolbox) return "videotoolbox";
     return this.mediafoundation ? "mediafoundation" : null;
   }
@@ -932,6 +975,13 @@ export class PlaybackManager {
             this.mediafoundation = false;
             log("WARN", "Media Foundation failed repeatedly, it will not be used again until restart", { failures: this.mediafoundationFailures });
           }
+        } else if (accelerator === "nvenc") {
+          log("WARN", "NVENC failed, falling back to a software conversion", { id: session.id, reason: session.error });
+          this.nvencFailures += 1;
+          if (this.nvencFailures >= 2 && this.softwareEncoder) {
+            this.nvenc = false;
+            log("WARN", "NVENC failed repeatedly, it will not be used again until restart", { failures: this.nvencFailures });
+          }
         } else {
           log("WARN", "VAAPI failed, falling back to a software conversion", { id: session.id, reason: session.error });
           // A driver that refuses twice will refuse every time, and each attempt costs the
@@ -1048,6 +1098,9 @@ export class PlaybackManager {
         // software decoder is cheaper. No -hwaccel_device either: a machine without the decoder must
         // still fall back to software instead of erroring out.
         if (this.mediafoundationHardware && isHeavySource(session.info?.video)) args.push("-hwaccel", "d3d11va");
+      } else if (accel === "nvenc") {
+        // NVDEC would need its own device handling; decoding in software keeps a GPU without a
+        // usable NVDEC working and costs little against the encode itself.
       } else if (this.vaapiScaling) {
         args.push("-hwaccel", "vaapi", "-hwaccel_device", this.vaapiDevice!, "-hwaccel_output_format", "vaapi");
       } else {
@@ -1116,6 +1169,14 @@ export class PlaybackManager {
       else args.push("-b:v", "8M");
       if (this.mediafoundationHardware) args.push("-hw_encoding", "1");
       args.push("-g", "48", "-force_key_frames", "expr:gte(t,n_forced*2)");
+    } else if (accel === "nvenc") {
+      const filters = quality !== null ? `scale=-2:min(${quality}\\,ih),format=nv12` : "format=nv12";
+      args.push("-vf", filters, "-c:v", "h264_nvenc", "-preset", "p4", "-tune", "ll");
+      // A chosen quality sets a target bitrate; otherwise constant quality is left to the driver.
+      if (bitrate) args.push("-rc", "vbr", "-b:v", bitrate, "-maxrate", bitrate);
+      else args.push("-rc", "vbr", "-cq", process.env.NVENC_CQ ?? "23");
+      // -forced-idr is NVENC's own switch and what lets the muxer mark the segments independent.
+      args.push("-g", "48", "-force_key_frames", "expr:gte(t,n_forced*2)", "-forced-idr", "1");
     } else if (accel === "vaapi") {
       const resize = quality !== null ? `w=-2:h=min(${quality}\\,ih)` : "";
       const filters = this.vaapiScaling

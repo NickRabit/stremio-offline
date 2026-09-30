@@ -180,6 +180,8 @@ Details in [Playback](playback.md) and
 | `VAAPI_DEVICE` | *(unset)* | Render node, usually `/dev/dri/renderD128`. |
 | `VIDEOTOOLBOX` | `1` | macOS only. `0` stops the desktop backend probing or using VideoToolbox. |
 | `VIDEOTOOLBOX_QUALITY` | `60` | macOS constant-quality value (`-q:v`, 1–100). Higher means better and more bitrate — the opposite of `VAAPI_QP`. |
+| `NVENC` | `1` | Linux and Windows. `0` stops the server probing or using an NVIDIA encoder (`h264_nvenc`). It is only probed when no VAAPI device is set. |
+| `NVENC_CQ` | `23` | NVENC constant-quality value, used when no target bitrate applies. Lower means better and more bitrate. |
 | `MEDIAFOUNDATION` | `1` | Windows only. `0` stops the desktop backend probing or using Media Foundation. |
 | `MEDIAFOUNDATION_QUALITY` | `60` | Windows constant-quality value (1–100), used when the graphics card's encoder takes it. Higher means better and more bitrate. |
 | `RENDER_GID` | *(unset)* | GID owning the render node. Without it the process cannot open the device. |
