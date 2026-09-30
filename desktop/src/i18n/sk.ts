@@ -3,6 +3,7 @@ import type { en } from "../i18n.js";
 export const sk: typeof en & Record<string, string> = {
   "window.thisMac": "Tento Mac",
   "window.thisPC": "Tento PC",
+  "window.thisComputer": "Tento počítač",
   "download.saveTitle": "Uložiť do tohto zariadenia",
   "folder.pickTitle": "Vyberte priečinok knižnice",
   "notify.downloadDone": "Uložený {file}",

@@ -3,6 +3,7 @@ import type { en } from "../i18n.js";
 export const ptBR: typeof en & Record<string, string> = {
   "window.thisMac": "Este Mac",
   "window.thisPC": "Este PC",
+  "window.thisComputer": "Este computador",
   "download.saveTitle": "Salvar neste dispositivo",
   "folder.pickTitle": "Escolha uma pasta da biblioteca",
   "notify.downloadDone": "{file} salvo",

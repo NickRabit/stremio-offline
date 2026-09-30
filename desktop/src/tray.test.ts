@@ -36,8 +36,10 @@ test("the tray menu keeps the order: Open, the servers, Settings and Quit", () =
     ["normal", "separator", "checkbox", "checkbox", "checkbox", "separator", "normal", "separator", "normal"]);
 });
 
-test("the tray says PC on Windows and Mac anywhere else", () => {
+test("the tray says PC on Windows, computer on Linux and Mac on macOS", () => {
   assert.equal(build().template[2].label, catalogue("en", "win32")["window.thisPC"]);
+  assert.equal(build({ platform: "linux", strings: catalogue("en", "linux") }).template[2].label,
+    catalogue("en", "linux")["window.thisComputer"]);
   assert.equal(build({ platform: "darwin", strings: catalogue("en", "darwin") }).template[2].label,
     catalogue("en", "darwin")["window.thisMac"]);
 });

@@ -3,6 +3,7 @@ import type { en } from "../i18n.js";
 export const es: typeof en & Record<string, string> = {
   "window.thisMac": "Esta Mac",
   "window.thisPC": "Esta computadora",
+  "window.thisComputer": "Este equipo",
   "download.saveTitle": "Guardar en este dispositivo",
   "folder.pickTitle": "Elija una carpeta de biblioteca",
   "notify.downloadDone": "Guardado {file}",
