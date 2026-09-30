@@ -32,6 +32,7 @@ export const de: typeof en & Record<string, string> = {
   "reset.downloadsKept": "Der Download-Ordner blieb dort, wo er ist: {dir}",
   "reset.detailServers": "Die gespeicherten Server und die Anmeldungen bei ihnen werden ebenfalls vergessen.",
   "reset.detailKeepsFilms": "Heruntergeladene Filme bleiben dort, wo sie sind.",
+  "reset.trashFailed": "Die Daten konnten nicht in den Papierkorb verschoben werden und nichts wurde gelöscht: {reason}",
   "tray.open": "Stremio Offline öffnen",
   "tray.settings": "Einstellungen…",
   "tray.quit": "Beenden",

@@ -16,7 +16,7 @@ import {
   type ProfileStore,
   type ServerProfile,
 } from "./connection-file.js";
-import { mayTrashDownloadDir, OWNERSHIP_FILE, prepareDownloadDir, readOwnership, suggestedDownloadDir, writeOwnership, type Ownership, type Places } from "./download-dir.js";
+import { mayTrashDownloadDirReal, OWNERSHIP_FILE, prepareDownloadDir, readOwnership, suggestedDownloadDir, writeOwnership, type Ownership, type Places } from "./download-dir.js";
 import { isDeviceTicketDownload } from "./downloads.js";
 import { catalogue } from "./i18n.js";
 import { layout, type PageMode } from "./layout.js";
@@ -247,9 +247,9 @@ const applyMenu = (): void => {
       openProject: () => { void electronShell.openExternal(PROJECT_URL).catch(() => {}); },
     },
   })));
-  if (PLATFORM === "win32") {
-    // Windows puts the application menu on every window: the main window keeps it in view, the
-    // settings window loses it again after each rebuild.
+  if (PLATFORM !== "darwin") {
+    // Windows and Linux put the application menu on every window: the main window keeps it in
+    // view, the settings window loses it again after each rebuild.
     shell?.window.setMenu(Menu.getApplicationMenu());
     settingsWindow.removeMenu();
   }
@@ -350,6 +350,24 @@ const localRestartNeeded = (): boolean => {
   return launched === null || !sameLocalSettings(launched, localSettings);
 };
 
+/** Whether the download folder is the app's to move to the Trash. The folder's real location is
+ *  read asynchronously, so the state carries the last answer and a different one is pushed again. */
+let downloadDirOwned = false;
+
+const refreshDownloadDirOwned = async (): Promise<void> => {
+  let owned = false;
+  if (PLATFORM !== "win32") {
+    try {
+      owned = await mayTrashDownloadDirReal(effectiveDownloadDir(), localSettings.downloadDir, ownership, places());
+    } catch {
+      owned = false;
+    }
+  }
+  if (owned === downloadDirOwned) return;
+  downloadDirOwned = owned;
+  pushState();
+};
+
 const refreshLocal = () => {
   shellState.profiles = profileStore.profiles;
   shellState.local = {
@@ -362,8 +380,7 @@ const refreshLocal = () => {
     suggestedDownloadDir: suggestedDownloadDir(app.getPath("home"), app.getPath("videos"), PLATFORM),
     initialized: localInitialized,
     // Windows may delete a folder too large for the Recycle Bin for good, so it is never offered.
-    downloadDirOwned: PLATFORM !== "win32"
-      && mayTrashDownloadDir(effectiveDownloadDir(), localSettings.downloadDir, ownership, places()),
+    downloadDirOwned,
     restartNeeded: localRestartNeeded(),
   };
 };
@@ -380,6 +397,7 @@ const pushState = () => {
     current.window.setTitle(titleFor(shellState.screen));
   }
   settingsWindow.push(shellState);
+  void refreshDownloadDirOwned();
 };
 
 const setScreen = (screen: MainScreen) => {
@@ -999,12 +1017,14 @@ const createShell = (saved: WindowState | null) => {
     minHeight: MIN_SIZE.height,
     title: APP_NAME,
     backgroundColor: WINDOW_BACKGROUND,
-    // On Windows the menu bar stays in view: the server page fills the window, and a menu hidden
-    // until Alt is one nobody finds, Settings with it.
-    // A packaged app takes its icon from the executable; a development run has to point at it.
-    ...(PLATFORM === "win32" && !app.isPackaged ? { icon: path.join(app.getAppPath(), "build", "icon.png") } : {}),
+    // On Windows and Linux the menu bar stays in view: the server page fills the window, and a
+    // menu hidden until Alt is one nobody finds, Settings with it.
+    // A packaged app takes its icon from the executable, which neither Linux nor a development
+    // run has, so both point the window at the icon file.
+    ...(PLATFORM === "linux" || (PLATFORM === "win32" && !app.isPackaged)
+      ? { icon: path.join(app.getAppPath(), "build", "icon.png") } : {}),
   });
-  if (PLATFORM === "win32") window.setMenu(Menu.getApplicationMenu());
+  if (PLATFORM !== "darwin") window.setMenu(Menu.getApplicationMenu());
   const page = new WebContentsView({ webPreferences: shellWebPreferences() });
   const toast = new WebContentsView({ webPreferences: shellWebPreferences() });
   wireShellView(page, "main");
@@ -1031,6 +1051,13 @@ const createShell = (saved: WindowState | null) => {
   window.on("close", () => save.flush());
   let retired = false;
   window.on("close", (event) => {
+    // Linux has no Dock to return to, and its tray is not relied on: closing the window is the way
+    // out, through the same question the Quit item asks.
+    if (PLATFORM === "linux" && !quitting) {
+      event.preventDefault();
+      app.quit();
+      return;
+    }
     if (retired || quitting || !liveRemote()) return;
     event.preventDefault();
     retired = true;
@@ -1126,7 +1153,7 @@ const resetLocal = async (
   // Windows never moves the download folder: the Recycle Bin has a quota, and a folder over it is
   // deleted for good. The instance data, which is small, still goes to the bin.
   const trashDownloads = PLATFORM !== "win32" && options.deleteDownloads
-    && mayTrashDownloadDir(shownDir, localSettings.downloadDir, ownership, places());
+    && await mayTrashDownloadDirReal(shownDir, localSettings.downloadDir, ownership, places());
   const detail = [
     strings["reset.detail"],
     trashDownloads ? strings["reset.detailDownloads"].replace("{dir}", shownDir) : strings["reset.detailKeepsFilms"],
@@ -1142,8 +1169,8 @@ const resetLocal = async (
   });
   if (answer.response !== 0) return { ok: false, cancelled: true, downloadsKept: true };
   const previous = shellState.connection?.target ?? null;
-  const result = await queue.run(async (): Promise<{ ok: boolean; touched: boolean; downloadsKept: boolean }> => {
-    if (effectiveDownloadDir() !== shownDir) return { ok: false, touched: false, downloadsKept: true };
+  const result = await queue.run(async (): Promise<{ ok: boolean; touched: boolean; downloadsKept: boolean; trashFailure: string | null }> => {
+    if (effectiveDownloadDir() !== shownDir) return { ok: false, touched: false, downloadsKept: true, trashFailure: null };
     // A fresh ticket, so a connect still probing cannot land on the reset state afterwards.
     requests.next();
     stopRepoll();
@@ -1156,8 +1183,8 @@ const resetLocal = async (
     if (existsSync(instance)) {
       try {
         await electronShell.trashItem(instance);
-      } catch {
-        return { ok: false, touched: true, downloadsKept: true };
+      } catch (error) {
+        return { ok: false, touched: true, downloadsKept: true, trashFailure: error instanceof Error ? error.message : String(error) };
       }
     }
     let downloadsKept = !trashDownloads;
@@ -1188,10 +1215,17 @@ const resetLocal = async (
     shellState.screen = { kind: "welcome" };
     pushState();
     settingsWindow.close();
-    return { ok: true, touched: true, downloadsKept };
+    return { ok: true, touched: true, downloadsKept, trashFailure: null };
   });
   // A reset that stopped half way brings back what the window showed rather than leave it blank.
   if (!result.ok && result.touched && previous) void connectTarget(previous, { launch: false });
+  // Linux has no Trash on every mount, and the move fails loudly rather than delete: say so.
+  if (PLATFORM === "linux" && result.trashFailure !== null) {
+    void showMessageBox(senderWindow(event), {
+      type: "warning",
+      message: strings["reset.trashFailed"].replace("{reason}", result.trashFailure),
+    }).catch(() => {});
+  }
   if (result.ok && options.deleteDownloads && result.downloadsKept) {
     void dialog.showMessageBox({ type: "info", message: strings["reset.downloadsKept"].replace("{dir}", shownDir) }).catch(() => {});
   }
@@ -1582,6 +1616,10 @@ if (earlyPrefs.locale !== null) app.commandLine.appendSwitch("lang", earlyPrefs.
 // Windows toasts and the taskbar need the AUMID, which the NSIS installer's Start menu shortcut
 // registers. The portable ZIP gets no notifications at all; nothing here waits for one.
 if (PLATFORM === "win32") app.setAppUserModelId("com.stremiooffline.desktop");
+
+// Electron derives WM_CLASS and the Wayland app id from this name, and xdg-desktop-portal refuses
+// an id no desktop file answers to, which reaches the file dialog.
+if (PLATFORM === "linux") app.setDesktopName("stremio-offline.desktop");
 
 if (process.argv.includes(SMOKE_LOCAL_BACKEND)) {
   // The smoke gets its own instance directory, so it neither needs the single-instance lock

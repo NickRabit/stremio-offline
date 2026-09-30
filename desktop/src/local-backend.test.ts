@@ -396,6 +396,23 @@ test("a stored download folder replaces the default one in the child's environme
   assert.equal(localBackendEnv({}, "/data", 8090, "linux", () => true).DOWNLOAD_DIR, path.join("/data", "downloads"));
 });
 
+test("on Linux the render node the system has is offered to the server for VAAPI", () => {
+  const withDevice = localBackendEnv({}, "/data", 8090, "linux", () => true, undefined, null, () => true);
+  assert.equal(withDevice.VAAPI_DEVICE, "/dev/dri/renderD128");
+  const withoutDevice = localBackendEnv({}, "/data", 8090, "linux", () => true, undefined, null, () => false);
+  assert.equal("VAAPI_DEVICE" in withoutDevice, false);
+});
+
+test("an inherited VAAPI device and the other platforms are left alone", () => {
+  const inherited = localBackendEnv({ VAAPI_DEVICE: "/dev/dri/renderD129" }, "/data", 8090, "linux", () => true,
+    undefined, null, () => true);
+  assert.equal(inherited.VAAPI_DEVICE, "/dev/dri/renderD129");
+  for (const platform of ["darwin", "win32"] as const) {
+    const env = localBackendEnv({}, "/data", 8090, platform, () => true, undefined, null, () => true);
+    assert.equal("VAAPI_DEVICE" in env, false, platform);
+  }
+});
+
 test("the switch on lets the child reach the local network", () => {
   const env = localBackendEnv({ PATH: "/usr/bin" }, "/data", 8090, "linux", () => true, { allowPrivateAddons: true, publish: false, publishPort: 8091, downloadDir: null });
   assert.equal(env.ALLOW_PRIVATE_ADDONS, "1");

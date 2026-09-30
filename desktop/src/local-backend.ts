@@ -26,6 +26,8 @@ export const STOP_TIMEOUT_MS = 5_000;
  *  `/usr/bin:/bin:/usr/sbin:/sbin`, so neither is on the child's `PATH` by itself. */
 export const MACOS_TOOL_DIRECTORIES = ["/opt/homebrew/bin", "/usr/local/bin"] as const;
 const MACOS_FALLBACK_PATH = "/usr/bin:/bin:/usr/sbin:/sbin";
+/** The render node a desktop Linux install usually has, offered to the server for VAAPI. */
+const VAAPI_DEVICE_PATH = "/dev/dri/renderD128";
 
 const sameSettings = (a: LocalSettings, b: LocalSettings) =>
   a.allowPrivateAddons === b.allowPrivateAddons && a.publish === b.publish && a.publishPort === b.publishPort
@@ -251,6 +253,7 @@ export function localBackendEnv(
   directoryExists: (dir: string) => boolean = isDirectory,
   settings: LocalSettings = defaultLocalSettings(),
   tools: MediaTools | null = null,
+  fileExists: (file: string) => boolean = isFile,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(parent)) if (value !== undefined) env[key] = value;
@@ -265,6 +268,10 @@ export function localBackendEnv(
   // Off leaves an inherited value alone: a developer running from a terminal keeps their own.
   if (settings.allowPrivateAddons) env.ALLOW_PRIVATE_ADDONS = "1";
   if (platform === "darwin") env.PATH = macosPath(env.PATH, directoryExists);
+  // The server probes the device and logs why transcoding is off, so an unreadable one is fine.
+  if (platform === "linux" && !env.VAAPI_DEVICE?.trim() && fileExists(VAAPI_DEVICE_PATH)) {
+    env.VAAPI_DEVICE = VAAPI_DEVICE_PATH;
+  }
   // The app's own FFmpeg, unless someone named another one on purpose.
   if (tools && !env.FFMPEG_PATH?.trim()) env.FFMPEG_PATH = tools.ffmpeg;
   if (tools && !env.FFPROBE_PATH?.trim()) env.FFPROBE_PATH = tools.ffprobe;

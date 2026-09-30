@@ -32,6 +32,7 @@ export const fr: typeof en & Record<string, string> = {
   "reset.downloadsKept": "Le dossier de téléchargement est resté là où il se trouve : {dir}",
   "reset.detailServers": "Les serveurs enregistrés et les connexions à ceux-ci sont également oubliés.",
   "reset.detailKeepsFilms": "Les films téléchargés restent là où ils sont.",
+  "reset.trashFailed": "Les données n’ont pas pu être déplacées vers la corbeille et rien n’a été supprimé : {reason}",
   "tray.open": "Ouvrir Stremio Offline",
   "tray.settings": "Paramètres…",
   "tray.quit": "Quitter",

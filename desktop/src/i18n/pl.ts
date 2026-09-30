@@ -32,6 +32,7 @@ export const pl: typeof en & Record<string, string> = {
   "reset.downloadsKept": "Folder pobierania pozostał tam, gdzie jest: {dir}",
   "reset.detailServers": "Zapisane serwery i logowania do nich również zostają zapomniane.",
   "reset.detailKeepsFilms": "Pobrane filmy pozostają tam, gdzie są.",
+  "reset.trashFailed": "Nie udało się przenieść danych do Kosza i nic nie zostało usunięte: {reason}",
   "tray.open": "Otwórz Stremio Offline",
   "tray.settings": "Ustawienia…",
   "tray.quit": "Zamknij",

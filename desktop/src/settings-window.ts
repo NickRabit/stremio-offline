@@ -45,10 +45,10 @@ export class SettingsWindow {
     window.setTitle(this.options.title());
   }
 
-  /** Windows hands every window the application menu; this one has none. */
+  /** Windows and Linux hand every window the application menu; this one has none. */
   removeMenu(): void {
     const window = this.window;
-    if (window === null || window.isDestroyed() || this.options.platform !== "win32") return;
+    if (window === null || window.isDestroyed() || this.options.platform === "darwin") return;
     window.removeMenu();
   }
 
@@ -83,9 +83,9 @@ export class SettingsWindow {
         preload: this.options.preload,
       },
     });
-    // Windows gives every window the application menu; the settings window is the settings, and the
-    // main window carries the menu.
-    if (this.options.platform === "win32") window.removeMenu();
+    // Windows and Linux give every window the application menu; the settings window is the
+    // settings, and the main window carries the menu.
+    if (this.options.platform !== "darwin") window.removeMenu();
     window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
     window.webContents.on("will-navigate", (event) => event.preventDefault());
     // The page is called Stremio Offline; the window keeps its own title.

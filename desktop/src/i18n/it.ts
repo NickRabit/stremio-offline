@@ -32,6 +32,7 @@ export const it: typeof en & Record<string, string> = {
   "reset.downloadsKept": "La cartella dei download è rimasta dov'è: {dir}",
   "reset.detailServers": "Anche i server salvati e gli accessi ad essi vengono dimenticati.",
   "reset.detailKeepsFilms": "I film scaricati rimangono dove sono.",
+  "reset.trashFailed": "I dati non sono stati spostati nel Cestino e non è stato eliminato nulla: {reason}",
   "tray.open": "Apri Stremio Offline",
   "tray.settings": "Impostazioni...",
   "tray.quit": "Esci",

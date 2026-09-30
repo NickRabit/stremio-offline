@@ -75,6 +75,8 @@ test("on Linux nothing says Mac or PC, and the Trash stays the Trash", () => {
   assert.equal(catalogue("cs", "linux")["window.thisComputer"], "Tento počítač");
   assert.equal(catalogue("en", "linux")["reset.detailDownloads"].includes("the Trash"), true);
   assert.equal(catalogue("cs", "linux")["reset.detailDownloads"].includes("Koše"), true);
+  assert.equal(catalogue("en", "linux")["reset.trashFailed"],
+    "The data could not be moved to the Trash, and nothing was deleted: {reason}");
 });
 
 test("no language says Mac in the Linux dialogs", () => {

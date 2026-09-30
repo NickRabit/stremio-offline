@@ -32,6 +32,7 @@ export const sk: typeof en & Record<string, string> = {
   "reset.downloadsKept": "Priečinok na sťahovanie zostal na mieste: {dir}",
   "reset.detailServers": "Odstránia sa aj uložené servery a prihlasovacie údaje k nim.",
   "reset.detailKeepsFilms": "Stiahnuté filmy zostanú na mieste.",
+  "reset.trashFailed": "Dáta sa nepodarilo presunúť do Koša a nič sa nezmazalo: {reason}",
   "tray.open": "Otvoriť Stremio Offline",
   "tray.settings": "Nastavenia…",
   "tray.quit": "Ukončiť",

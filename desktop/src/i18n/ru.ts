@@ -32,6 +32,7 @@ export const ru: typeof en & Record<string, string> = {
   "reset.downloadsKept": "Папка загрузок осталась там, где она есть: {dir}.",
   "reset.detailServers": "Сохраненные серверы и входы на них также забываются.",
   "reset.detailKeepsFilms": "Загруженные фильмы остаются там, где они есть.",
+  "reset.trashFailed": "Не удалось переместить данные в Корзину, и ничего не было удалено: {reason}",
   "tray.open": "Открыть Stremio Offline",
   "tray.settings": "Настройки…",
   "tray.quit": "Выйти",
