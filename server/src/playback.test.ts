@@ -3,7 +3,7 @@ import test from "node:test";
 import { writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { PlaybackManager, SOURCE_UNREACHABLE, SerialOperations, describeFailure, hlsCanStart, hlsPlaylistFiles, isPlaylistSource, sourceReachable } from "./playback.js";
+import { PlaybackManager, SOURCE_UNREACHABLE, SerialOperations, describeFailure, hlsCanStart, hlsPlaylistFiles, isPlaylistSource, sourceReachable, nvencBusy } from "./playback.js";
 
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -345,6 +345,100 @@ test("the Media Foundation probe follows the platform and MEDIAFOUNDATION", asyn
   } finally {
     Object.defineProperty(process, "platform", original);
   }
+});
+
+test("NVENC encodes at constant quality without a chosen bitrate", () => {
+  const manager = new PlaybackManager(tmp("test-nvenc-quality")) as any;
+  manager.nvenc = true;
+  const session = transcodeSession({ codec: "mpeg4" }, { aac: true });
+
+  const args = manager.args(session, 0, tmp("output"), true) as string[];
+  assert.equal(args[args.indexOf("-c:v") + 1], "h264_nvenc");
+  assert.equal(args[args.indexOf("-vf") + 1], "format=nv12");
+  assert.deepEqual(args.slice(args.indexOf("-preset"), args.indexOf("-preset") + 4), ["-preset", "p4", "-tune", "ll"]);
+  assert.deepEqual(args.slice(args.indexOf("-rc"), args.indexOf("-rc") + 4), ["-rc", "vbr", "-cq", "23"]);
+  assert.equal(args[args.indexOf("-b:v") + 1], "0", "without -b:v 0 NVENC keeps its 2 Mb/s default as the target");
+  assert.equal(args[args.indexOf("-g") + 1], "48");
+  assert.equal(args[args.indexOf("-forced-idr") + 1], "1");
+  assert.equal(args.includes("-hwaccel"), false);
+  assert.equal(args.join(" ").includes("libx264"), false);
+
+  process.env.NVENC_CQ = "28";
+  try {
+    const tuned = manager.args(session, 0, tmp("output"), true) as string[];
+    assert.equal(tuned[tuned.indexOf("-cq") + 1], "28");
+  } finally {
+    delete process.env.NVENC_CQ;
+  }
+});
+
+test("NVENC targets a chosen quality with VBR and forced IDRs", () => {
+  const manager = new PlaybackManager(tmp("test-nvenc-bitrate")) as any;
+  manager.nvenc = true;
+  const session = transcodeSession({ codec: "mpeg4" }, { aac: true }, 720);
+
+  const args = manager.args(session, 0, tmp("output"), true) as string[];
+  assert.equal(args[args.indexOf("-vf") + 1], "scale=-2:min(720\\,ih),format=nv12");
+  assert.deepEqual(args.slice(args.indexOf("-rc"), args.indexOf("-rc") + 6), ["-rc", "vbr", "-b:v", "3M", "-maxrate", "3M"]);
+  assert.equal(args[args.indexOf("-forced-idr") + 1], "1");
+  assert.equal(args[args.indexOf("-force_key_frames") + 1], "expr:gte(t,n_forced*2)");
+  assert.equal(args.includes("-cq"), false);
+  assert.equal(args.includes("-hwaccel"), false);
+});
+
+test("VAAPI wins over NVENC when a machine carries both", () => {
+  const manager = new PlaybackManager(tmp("test-nvenc-vaapi")) as any;
+  manager.vaapiDevice = "/dev/dri/renderD128";
+  manager.nvenc = true;
+
+  const args = manager.args(transcodeSession({ codec: "mpeg4" }, { aac: true }), 0, tmp("output"), true) as string[];
+  assert.deepEqual(args.slice(args.indexOf("-hwaccel"), args.indexOf("-hwaccel") + 4), [
+    "-hwaccel", "vaapi", "-hwaccel_device", "/dev/dri/renderD128",
+  ]);
+  assert.equal(args[args.indexOf("-c:v") + 1], "h264_vaapi");
+  assert.equal(args.join(" ").includes("h264_nvenc"), false);
+});
+
+test("NVENC wins over Media Foundation when a Windows machine carries both", () => {
+  const manager = new PlaybackManager(tmp("test-nvenc-mediafoundation")) as any;
+  manager.nvenc = true;
+  manager.mediafoundation = true;
+  manager.mediafoundationHardware = true;
+  manager.mediafoundationQuality = true;
+
+  const args = manager.args(transcodeSession({ codec: "mpeg4" }, { aac: true }), 0, tmp("output"), true) as string[];
+  assert.equal(args[args.indexOf("-c:v") + 1], "h264_nvenc");
+  assert.equal(args.join(" ").includes("h264_mf"), false);
+  assert.equal(args.includes("-hw_encoding"), false);
+});
+
+test("the NVENC probe follows NVENC and stands down for VAAPI", { skip: process.platform === "darwin" ? "a Mac has no NVIDIA encoder, so NVENC is never probed there" : false }, async () => {
+  const manager = new PlaybackManager(tmp("test-nvenc-gate")) as any;
+  manager.readFfmpegVersion = async () => undefined;
+  let probes = 0;
+  manager.checkNvenc = async () => { probes += 1; };
+
+  const loadWith = async (off: boolean, vaapi: string | undefined) => {
+    if (off) process.env.NVENC = "0"; else delete process.env.NVENC;
+    manager.vaapiDevice = vaapi;
+    try { await manager.load(); } finally { delete process.env.NVENC; manager.vaapiDevice = undefined; }
+  };
+  await loadWith(false, undefined);
+  assert.equal(probes, 1);
+  await loadWith(true, undefined);
+  assert.equal(probes, 1);
+  await loadWith(false, "/dev/dri/renderD128");
+  assert.equal(probes, 1);
+});
+
+test("a Mac never probes NVENC", { skip: process.platform !== "darwin" ? "only a Mac skips the probe" : false }, async () => {
+  const manager = new PlaybackManager(tmp("test-nvenc-mac")) as any;
+  manager.readFfmpegVersion = async () => undefined;
+  manager.checkVideotoolbox = async () => undefined;
+  let probes = 0;
+  manager.checkNvenc = async () => { probes += 1; };
+  await manager.load();
+  assert.equal(probes, 0);
 });
 
 test("a remux still copies compatible video and audio", () => {
@@ -1209,4 +1303,11 @@ test("a failed inspection is retried and a successful retry is cached", async ()
   assert.equal(await manager.inspect(stream), info);
   assert.equal(await manager.inspect(stream), info);
   assert.equal(calls, 2);
+});
+
+test("a busy NVIDIA card does not count against NVENC", () => {
+  assert.equal(nvencBusy("[h264_nvenc @ 0x1] OpenEncodeSessionEx failed: out of memory (10)"), true);
+  assert.equal(nvencBusy("[h264_nvenc @ 0x1] No capable devices found"), true);
+  assert.equal(nvencBusy("[h264_nvenc @ 0x1] Cannot load libcuda.so.1"), false);
+  assert.equal(nvencBusy(undefined), false);
 });

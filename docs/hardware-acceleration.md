@@ -1,4 +1,4 @@
-# Hardware acceleration (Intel QuickSync / VAAPI / VideoToolbox / Media Foundation)
+# Hardware acceleration (Intel QuickSync / VAAPI / NVENC / VideoToolbox / Media Foundation)
 
 Hardware acceleration matters only for a **real transcode**. Direct play and
 remux — the common path — never touch the GPU. See
@@ -54,6 +54,7 @@ line.
 | Variable | Applies to | Meaning |
 | --- | --- | --- |
 | `VAAPI_QP` | hardware | CQP quality, default 23. Lower means higher quality and more bitrate. |
+| `NVENC_CQ` | NVIDIA hardware | Constant-quality value, default 23. Lower means higher quality and more bitrate. |
 | `VIDEOTOOLBOX_QUALITY` | macOS hardware | Constant-quality value 1–100, default 60. Higher means higher quality and more bitrate — the opposite direction to `VAAPI_QP`. |
 | `MEDIAFOUNDATION_QUALITY` | Windows hardware | Constant-quality value 1–100, default 60. Only used when the vendor MFT takes constant quality; a chosen quality sets a CBR bitrate instead. |
 | `FFMPEG_CRF` | software fallback only | Same idea for `libx264`. |
@@ -110,6 +111,45 @@ the vendor MFT's constant quality — tune it with `MEDIAFOUNDATION_QUALITY`
 A virtual machine without a GPU has no vendor encoder, so the probe falls back
 to Microsoft's software H.264 encoder. That path still works, but it runs on the
 CPU and is slow — a real transcode there is better avoided.
+
+## NVIDIA (NVENC)
+
+FFmpeg's `h264_nvenc` loads the NVIDIA driver's library at run time, so the LGPL
+build can carry it and, on a desktop, nothing needs installing beyond the driver.
+It is the only GPU path for an NVIDIA card on Linux, and it is preferred over
+Media Foundation on Windows, where the vendor path was measured slower than
+software. The desktop apps' bundled FFmpeg carries it on Linux and Windows.
+
+In Docker the container needs the GPU too: install the NVIDIA Container Toolkit
+on the host and give the service the card, with `video` among the driver
+capabilities:
+
+```yaml
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu, video]
+    environment:
+      NVIDIA_DRIVER_CAPABILITIES: compute,video,utility
+```
+
+A busy card (a consumer GeForce limits parallel encode sessions, and its memory
+can run out) makes that one conversion fall back to software without counting
+against NVENC; only real refusals switch it off until a restart. The
+probe runs on every platform, but only when the build lists `h264_nvenc` and
+VAAPI has not already come up, so an Intel or AMD host pays nothing for it. Set
+`NVENC=0` in the environment to switch the path off.
+
+At start the server encodes a test frame and, when that works, the log line
+`NVENC is available` says the path is live. A machine with no NVIDIA driver logs
+`NVENC is not available` at INFO rather than WARN, because that is ordinary.
+Decoding stays on the CPU; only the encoder runs on the GPU. Without a chosen
+quality the encoder runs at constant quality with `-cq` — tune it with
+`NVENC_CQ` (default 23). A chosen quality (1080p, 720p, 480p) sets a VBR target
+bitrate instead.
 
 ## When the driver does not start
 
