@@ -900,7 +900,7 @@ test("a conversion FFmpeg could not open is told apart from one the viewer walke
 test("probe caching separates credentials for the same source URL", async () => {
   const manager = new PlaybackManager(tmp("test-playback")) as any;
   let probes = 0;
-  manager.probeSource = async () => { probes++; return undefined; };
+  manager.probeSource = async () => { probes++; return { video: { codec: "h264" }, audioTracks: [], subtitleTracks: [] }; };
   for (const authorization of ["first", "second", "first"]) {
     await manager.inspect({ url: "https://provider.test/media", behaviorHints: { proxyHeaders: { request: { authorization } } } });
   }
@@ -1105,7 +1105,6 @@ test("cleanup never deletes the generation a conversion is writing into", async 
   assert.deepEqual(deleted, [session.directory]);
 });
 
-
 test("a session no player is watching is closed, however busy FFmpeg is", async () => {
   const manager = new PlaybackManager(tmp("test-orphan")) as any;
   const stopped: string[] = [];
@@ -1198,4 +1197,16 @@ test("without a software encoder a transcode tries hardware only, and a remux ne
   assert.deepEqual(conversionAttempts(false, true, false), [true]);
   assert.deepEqual(conversionAttempts(false, false, true), [false]);
   assert.deepEqual(conversionAttempts(true, true, false), [false]);
+});
+
+test("a failed inspection is retried and a successful retry is cached", async () => {
+  const manager = new PlaybackManager(tmp("test-probe-retry")) as any;
+  let calls = 0;
+  const info = { video: { codec: "h264" }, duration: 6107, audioTracks: [], subtitleTracks: [] };
+  manager.probeSource = async () => ++calls === 1 ? undefined : info;
+  const stream = { url: "https://cdn.example/recovered.mkv" };
+  assert.equal(await manager.inspect(stream), undefined);
+  assert.equal(await manager.inspect(stream), info);
+  assert.equal(await manager.inspect(stream), info);
+  assert.equal(calls, 2);
 });

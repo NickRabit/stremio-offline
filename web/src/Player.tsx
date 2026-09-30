@@ -389,6 +389,9 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     const syncTrackModes = () => {
       if (syncingModes) return;
       syncingModes = true;
+      // The app's picker owns these tracks; browser caption preferences must not
+      // leave a selected sidecar disabled in a standalone web app.
+      for (const element of video.querySelectorAll("track")) mirrored.add(element.track);
       for (const track of Array.from(video.textTracks)) {
         if (track.mode === "showing") mirrored.add(track);
         // The picker never uses disabled: it unmounts the track or starts a new
@@ -1060,7 +1063,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
           reportRef.current = { position: absolute, duration: duration || probeDurationRef.current };
           if (scrub === null && !seekingRef.current) showTime(absolute);
         }}
-        onDurationChange={(event) => { const value = event.currentTarget.duration; if (Number.isFinite(value) && (modeRef.current === "direct" || !probeDurationRef.current)) setDuration(value); }}
+        onDurationChange={(event) => { const value = event.currentTarget.duration; if (Number.isFinite(value) && modeRef.current === "direct") setDuration(value); }}
         onWaiting={noteStall} onPlaying={clearBuffering}
         onError={(event) => {
           if (event.target !== event.currentTarget) return;
