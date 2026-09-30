@@ -90,10 +90,18 @@ export function autostartFile(home: string, env: NodeJS.ProcessEnv): string {
   return path.join(configHome, "autostart", AUTOSTART_NAME);
 }
 
-/** A Desktop Entry `Exec` value: quoted, with the characters the spec reserves escaped and the
- *  field-code `%` doubled. */
-const quotedExec = (exec: string): string =>
-  `"${exec.replace(/(["`$\\])/g, "\\$1").replace(/%/g, "%%")}"`;
+/** A Desktop Entry `Exec` value, escaped at both levels the spec reads it at: the quoting level
+ *  puts a backslash before `"`, `` ` ``, `$` and `\`, and the key-file string level then doubles
+ *  every backslash. The field-code `%` is doubled too. */
+const quotedExec = (exec: string): string => {
+  const quoted = `"${exec.replace(/(["`$\\])/g, "\\$1").replace(/%/g, "%%")}"`;
+  return quoted.replace(/\\/g, "\\\\");
+};
+
+/** The key-file string level: `\s`, `\n`, `\t`, `\r` and `\\`. */
+const unescapeString = (value: string): string =>
+  value.replace(/\\([sntr\\])/g, (_, code: string) =>
+    code === "s" ? " " : code === "n" ? "\n" : code === "t" ? "\t" : code === "r" ? "\r" : "\\");
 
 export function autostartEntry(exec: string): string {
   return [
@@ -113,7 +121,7 @@ export function autostartEntry(exec: string): string {
 export function autostartExecutable(text: string): string | null {
   const line = text.split("\n").find((candidate) => /^exec=/i.test(candidate.trim()));
   if (line === undefined) return null;
-  const value = line.slice(line.indexOf("=") + 1).trim();
+  const value = unescapeString(line.slice(line.indexOf("=") + 1).trim());
   if (value.length === 0) return null;
   if (!value.startsWith("\"")) return value.split(/\s+/)[0] ?? null;
   let exec = "";
@@ -126,9 +134,16 @@ export function autostartExecutable(text: string): string | null {
   return exec.replace(/%%/g, "%");
 }
 
-/** The AppImage file is the stable path; its mount changes on every run, so `$APPIMAGE` wins. */
+/** The AppImage file is the stable path; its mount changes on every run, so `$APPIMAGE` wins --
+ *  but only when this process runs from that AppImage's mount (`$APPDIR`). A .deb build started
+ *  from a terminal inside another AppImage inherits that one's variables, and must not register
+ *  it to start at login. */
 export function launchExecutable(env: NodeJS.ProcessEnv, execPath: string): string {
-  return env.APPIMAGE && env.APPIMAGE.length > 0 ? env.APPIMAGE : execPath;
+  const appDir = env.APPDIR;
+  if (!env.APPIMAGE || !appDir) return execPath;
+  const relative = path.posix.relative(path.posix.resolve(appDir), path.posix.resolve(execPath));
+  const fromMount = relative.length > 0 && !relative.startsWith("..") && !path.posix.isAbsolute(relative);
+  return fromMount ? env.APPIMAGE : execPath;
 }
 
 export interface AutostartState {

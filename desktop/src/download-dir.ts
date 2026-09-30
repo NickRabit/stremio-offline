@@ -45,8 +45,10 @@ const MAC_HOME_FOLDERS = ["Applications", "Desktop", "Documents", "Downloads", "
 const LINUX_HOME_FOLDERS = ["Desktop", "Documents", "Downloads", "Music", "Pictures", "Videos", "Public", "Templates", "snap"];
 /** Where Linux mounts removable and network disks: a mount root, not the disk itself. */
 const LINUX_MOUNT_ROOTS = [/^\/media\/[^/]+$/, /^\/media\/[^/]+\/[^/]+$/, /^\/run\/media\/[^/]+\/[^/]+$/, /^\/mnt\/[^/]+$/];
-/** The folders a mount root hangs under: never a download folder themselves. */
-const LINUX_RESERVED = [/^\/media$/, /^\/media\/[^/]+$/, /^\/run$/, /^\/run\/media$/, /^\/run\/media\/[^/]+$/, /^\/mnt$/];
+/** The folders a mount root hangs under: never a download folder themselves. `/media/<name>` is
+ *  left out: udisks puts a user's folder there, but plain Debian, usbmount and many fstabs mount a
+ *  whole disk at it, and the mount-root rule already keeps it from the Trash. */
+const LINUX_RESERVED = [/^\/media$/, /^\/run$/, /^\/run\/media$/, /^\/run\/media\/[^/]+$/, /^\/mnt$/];
 /** The same for Windows, directly under the profile folder. */
 const WINDOWS_HOME_FOLDERS = [
   "Desktop", "Documents", "Downloads", "Music", "Pictures", "Videos", "AppData",

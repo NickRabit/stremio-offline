@@ -295,10 +295,11 @@ test("the folder the app is installed in, and anything inside it, is reserved", 
 });
 
 test("Linux refuses the file-system root, the home folder and the folders a mount root hangs under", () => {
-  for (const dir of ["/", "/home", "/home/me", "/media", "/media/me", "/run", "/run/media", "/run/media/me", "/mnt"]) {
+  for (const dir of ["/", "/home", "/home/me", "/media", "/run", "/run/media", "/run/media/me", "/mnt"]) {
     assert.equal(reservedDownloadDir(dir, LINUX_PLACES), true, dir);
   }
-  for (const dir of ["/home/me/Videos", "/media/me/Disk", "/run/media/me/Disk", "/mnt/nas", "/home/me/Videos/Stremio Offline"]) {
+  // A disk mounted straight at /media/<label> is a folder like any other, kept from the Trash only.
+  for (const dir of ["/media/films", "/home/me/Videos", "/media/me/Disk", "/run/media/me/Disk", "/mnt/nas", "/home/me/Videos/Stremio Offline"]) {
     assert.equal(reservedDownloadDir(dir, LINUX_PLACES), false, dir);
   }
 });
@@ -322,7 +323,7 @@ test("Linux compares paths with the case they are written in", () => {
 test("a Linux folder the user keeps is used but never the app's, and one below it is the app's", async () => {
   assert.deepEqual(await prepareDownloadDir("/home/me/Videos/Stremio Offline", LINUX_PLACES, fakeFs()),
     { ok: true, dir: "/home/me/Videos/Stremio Offline", owned: true });
-  for (const dir of ["/home/me/Videos", "/media/me/Disk", "/mnt/nas"]) {
+  for (const dir of ["/home/me/Videos", "/media/films", "/media/me/Disk", "/mnt/nas"]) {
     assert.deepEqual(await prepareDownloadDir(dir, LINUX_PLACES, fakeFs()), { ok: true, dir, owned: false }, dir);
   }
   assert.deepEqual(await prepareDownloadDir("/media", LINUX_PLACES, fakeFs()), { ok: false, reason: "reserved" });

@@ -95,7 +95,9 @@ const memoryFs = (): AutostartFs & { files: Map<string, string>; dirs: Set<strin
 
 test("the autostart entry quotes the Exec line the way the Desktop Entry spec reads it", () => {
   const entry = autostartEntry("/opt/Stremio Offline/Stremio $Offline `100%`");
-  assert.equal(entry.includes(`Exec="/opt/Stremio Offline/Stremio \\$Offline \\\`100%%\\\`" --hidden`), true, entry);
+  // The quoting level writes \$ and \`, and the string level doubles each of those backslashes.
+  const exec = entry.split("\n").find((line) => line.startsWith("Exec="));
+  assert.equal(exec, String.raw`Exec="/opt/Stremio Offline/Stremio \\$Offline \\` + "`100%%" + String.raw`\\` + "`\" --hidden");
   assert.equal(entry.includes("[Desktop Entry]"), true);
   assert.equal(entry.includes("Type=Application"), true);
   assert.equal(entry.includes("Name=Stremio Offline"), true);
@@ -106,8 +108,11 @@ test("the autostart entry quotes the Exec line the way the Desktop Entry spec re
 
 test("the Exec line reads back as the executable it names", () => {
   assert.equal(autostartExecutable(autostartEntry("/opt/stremio-offline/stremio-offline")), "/opt/stremio-offline/stremio-offline");
-  const tricky = "/opt/Stremio $Offline `100%`";
-  assert.equal(autostartExecutable(autostartEntry(tricky)), tricky);
+  for (const tricky of ["/opt/Stremio $Offline `100%`", String.raw`/home/me/My "Apps"\Stremio.AppImage`]) {
+    assert.equal(autostartExecutable(autostartEntry(tricky)), tricky, tricky);
+  }
+  // An entry written with a single backslash before the reserved character still reads back.
+  assert.equal(autostartExecutable(String.raw`Exec="/opt/a \$b" --hidden`), "/opt/a $b");
   assert.equal(autostartExecutable("[Desktop Entry]\nExec=/usr/bin/thing --hidden\n"), "/usr/bin/thing");
   assert.equal(autostartExecutable("[Desktop Entry]\nType=Application\n"), null);
 });
@@ -120,8 +125,13 @@ test("the autostart file lives under XDG_CONFIG_HOME, or under the home folder w
 });
 
 test("an AppImage starts itself from the file it was launched as", () => {
+  assert.equal(launchExecutable({ APPIMAGE: "/home/me/Apps/Stremio.AppImage", APPDIR: "/tmp/.mount_StremiXYZ" },
+    "/tmp/.mount_StremiXYZ/stremio-offline"), "/home/me/Apps/Stremio.AppImage");
+  // Variables inherited from another AppImage (a terminal started from one) are not this app's.
+  assert.equal(launchExecutable({ APPIMAGE: "/home/me/Apps/Editor.AppImage", APPDIR: "/tmp/.mount_EditorABC" },
+    "/opt/stremio-offline/stremio-offline"), "/opt/stremio-offline/stremio-offline");
   assert.equal(launchExecutable({ APPIMAGE: "/home/me/Apps/Stremio.AppImage" }, "/opt/stremio-offline/stremio-offline"),
-    "/home/me/Apps/Stremio.AppImage");
+    "/opt/stremio-offline/stremio-offline");
   assert.equal(launchExecutable({}, "/opt/stremio-offline/stremio-offline"), "/opt/stremio-offline/stremio-offline");
   assert.equal(launchExecutable({ APPIMAGE: "" }, "/opt/x"), "/opt/x");
 });

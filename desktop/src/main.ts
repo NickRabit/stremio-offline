@@ -1041,6 +1041,9 @@ const showTrayNotice = (): void => {
   }).catch(() => {});
 };
 
+/** A login start's window waits for its page before it is shown minimized. */
+let pendingMinimize = false;
+
 const createShell = (saved: WindowState | null, startMinimized = false) => {
   const restored = restoreBounds(
     saved,
@@ -1070,7 +1073,16 @@ const createShell = (saved: WindowState | null, startMinimized = false) => {
   wireShellView(toast, "toast");
   // Minimizing before the window is mapped is unreliable, on Wayland especially: it is shown once
   // its page is ready, then minimized.
-  if (startMinimized) page.webContents.once("did-finish-load", () => { window.show(); window.minimize(); });
+  // A launch from the menu while the page still loads asked for the window: it stays up then.
+  if (startMinimized) {
+    pendingMinimize = true;
+    page.webContents.once("did-finish-load", () => {
+      if (!pendingMinimize) return;
+      pendingMinimize = false;
+      window.show();
+      window.minimize();
+    });
+  }
   toast.setBackgroundColor("#00000000");
   toast.setVisible(false);
   window.contentView.addChildView(page);
@@ -1127,6 +1139,10 @@ const createShell = (saved: WindowState | null, startMinimized = false) => {
 const showMainWindow = (asked?: Target): Promise<void> => {
   const existing = shell;
   if (existing) {
+    if (pendingMinimize) {
+      pendingMinimize = false;
+      existing.window.show();
+    }
     if (existing.window.isMinimized()) existing.window.restore();
     existing.window.focus();
     return asked ? connectTarget(asked, { launch: false }) : Promise.resolve();
