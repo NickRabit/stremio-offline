@@ -14,13 +14,17 @@ set -euo pipefail
 
 FFMPEG_VERSION=9.0.2
 FFMPEG_SHA256=8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e
+# NVENC's interface headers (MIT), the same pin as the Linux build. The NVIDIA driver's DLLs are
+# loaded at run time, so they add nothing to the imports.
+NV_CODEC_HEADERS_TAG=n13.1.15.0
+NV_CODEC_HEADERS_SHA256=52532ceade3d5c1af62624986f13cf01b63c910576b08c0c278756c5e4b41ad0
 cross=x86_64-w64-mingw32-
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 out="$here/ffmpeg-win"
 # The script's own hash is in the stamp, so a changed configure line is a new build.
 script_hash="$(sha256sum "${BASH_SOURCE[0]}" | cut -c1-16)"
-stamp="ffmpeg $FFMPEG_VERSION (schannel, mediafoundation), windows x64, script $script_hash"
+stamp="ffmpeg $FFMPEG_VERSION (schannel, mediafoundation, nvenc), windows x64, script $script_hash"
 if [ -x "$out/ffmpeg.exe" ] && [ -x "$out/ffprobe.exe" ] && grep -qxF "$stamp" "$out/BUILDINFO.txt" 2>/dev/null; then
   echo "build-ffmpeg-win: $out is current"
   exit 0
@@ -38,6 +42,9 @@ fetch() { # url sha256 file
 }
 fetch "https://ffmpeg.org/releases/ffmpeg-$FFMPEG_VERSION.tar.xz" "$FFMPEG_SHA256" ffmpeg.tar.xz
 tar xf ffmpeg.tar.xz
+fetch "https://github.com/FFmpeg/nv-codec-headers/releases/download/$NV_CODEC_HEADERS_TAG/nv-codec-headers-${NV_CODEC_HEADERS_TAG#n}.tar.gz" "$NV_CODEC_HEADERS_SHA256" nv-codec-headers.tar.gz
+mkdir nv-codec-headers && tar xf nv-codec-headers.tar.gz -C nv-codec-headers --strip-components=1
+make -C nv-codec-headers install PREFIX="$work/nvcodec" >/dev/null
 
 src="$work/ffmpeg-$FFMPEG_VERSION"
 jobs="$(nproc)"
@@ -52,16 +59,17 @@ configure=(
   --disable-autodetect --enable-version3
   --target-os=mingw32 --arch=x86_64 --cross-prefix="$cross"
   --enable-schannel --enable-mediafoundation --enable-d3d11va --enable-dxva2 --enable-zlib
+  --enable-ffnvcodec --enable-nvenc --pkg-config=pkg-config
   --disable-devices --enable-indev=lavfi --disable-doc --disable-ffplay --disable-debug --disable-shared --enable-static
   --extra-ldflags=-static
 )
 # configure's own log is what explains a failure on the runner, so it is shown then.
-(cd "$src" && ./configure --prefix="$work/ffmpeg-out" "${configure[@]}" >"$work/configure.out") \
+(cd "$src" && PKG_CONFIG_PATH="$work/nvcodec/lib/pkgconfig" ./configure --prefix="$work/ffmpeg-out" "${configure[@]}" >"$work/configure.out") \
   || { tail -n 60 "$src/ffbuild/config.log" >&2; exit 1; }
 # Read back what configure decided, before minutes of compiling: no GPL part, and the two
 # Windows features this build is for. A missing feature shows the checks that turned it off.
 # The encoders are listed in config_components.h, the features in config.h.
-for expected in "CONFIG_GPL 0" "CONFIG_NONFREE 0" "CONFIG_SCHANNEL 1" "CONFIG_MEDIAFOUNDATION 1" "CONFIG_H264_MF_ENCODER 1"; do
+for expected in "CONFIG_GPL 0" "CONFIG_NONFREE 0" "CONFIG_SCHANNEL 1" "CONFIG_MEDIAFOUNDATION 1" "CONFIG_H264_MF_ENCODER 1" "CONFIG_H264_NVENC_ENCODER 1"; do
   grep -qx "#define $expected" "$src/config.h" "$src/config_components.h" 2>/dev/null || {
     echo "build-ffmpeg-win: config.h lacks '$expected'" >&2
     grep -iE "warning|mediafoundation|schannel" "$work/configure.out" >&2 || true
@@ -116,7 +124,10 @@ revision="$(git -C "$here" describe --tags --always --dirty 2>/dev/null || echo 
   echo "FFmpeg $FFMPEG_VERSION, licensed LGPL-3.0-or-later as built here (no GPL components)."
   echo "Source: https://ffmpeg.org/releases/ffmpeg-$FFMPEG_VERSION.tar.xz (sha256 $FFMPEG_SHA256)"
   echo "TLS uses Windows' schannel, not OpenSSL, so no OpenSSL notice belongs to this build."
-  echo "H.264 is encoded by Media Foundation (h264_mf); decoding can use D3D11VA or DXVA2."
+  echo "H.264 is encoded by NVENC (h264_nvenc) on NVIDIA cards, else by Media Foundation (h264_mf);"
+  echo "decoding can use D3D11VA or DXVA2."
+  echo "The NVENC encoder interface comes from the nv-codec-headers $NV_CODEC_HEADERS_TAG headers (MIT); the driver is loaded at run time."
+  echo "Source: https://github.com/FFmpeg/nv-codec-headers/releases/download/$NV_CODEC_HEADERS_TAG/nv-codec-headers-${NV_CODEC_HEADERS_TAG#n}.tar.gz (sha256 $NV_CODEC_HEADERS_SHA256)"
   echo "The source archive is also attached to every GitHub release that ships this app."
   echo "Built by desktop/scripts/build-ffmpeg-win.sh in the Stremio Offline repository,"
   echo "${repo:-https://github.com/NickRabit/stremio-offline} at $revision; the script is in that revision's source archive."
@@ -128,6 +139,7 @@ revision="$(git -C "$here" describe --tags --always --dirty 2>/dev/null || echo 
 } > "$stage/BUILDINFO.txt"
 # The sources travel with a release; they are kept next to the build for the workflow to attach.
 cp ffmpeg.tar.xz "$stage/sources/ffmpeg-$FFMPEG_VERSION.tar.xz"
+cp nv-codec-headers.tar.gz "$stage/sources/nv-codec-headers-${NV_CODEC_HEADERS_TAG#n}.tar.gz"
 rm -rf "$out"
 mv "$stage" "$out"
 echo "build-ffmpeg-win: $out ready"
