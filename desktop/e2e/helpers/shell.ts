@@ -1,5 +1,5 @@
 import { _electron as electron, type ElectronApplication, type Page } from "@playwright/test";
-import { mkdir, mkdtemp, readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -43,7 +43,9 @@ export interface Sandbox {
 }
 
 export async function sandbox(): Promise<Sandbox> {
-  const root = await mkdtemp(path.join(tmpdir(), "stremio-desktop-e2e-"));
+  // The real location: macOS's temp folder is under /var, a link to /private/var, and Electron
+  // reports its user data folder by the real path, so the tests have to spell it the same way.
+  const root = await realpath(await mkdtemp(path.join(tmpdir(), "stremio-desktop-e2e-")));
   const box = {
     root,
     userData: path.join(root, "user-data"),
