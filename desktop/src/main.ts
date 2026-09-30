@@ -1479,6 +1479,13 @@ const registerHandlers = () => {
     return resetLocal(event, { deleteDownloads: record.deleteDownloads, forgetServers: record.forgetServers });
   });
 
+  // The language is no secret, but only the local backend's page asks for it.
+  ipcMain.on("desktop:locale", (event) => {
+    const current = shell;
+    event.returnValue = current !== null && current.remote !== null && event.sender === current.remote.webContents
+      && current.remotePartition === LOCAL_PARTITION ? shellState.locale : null;
+  });
+
   // Only the top frame of the page the local backend serves, while it is the page on screen.
   ipcMain.handle("desktop:pick-folder", async (event): Promise<string | null> => {
     const current = shell;

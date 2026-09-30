@@ -24,8 +24,11 @@ export function registerAuthRoutes(app: express.Application, ctx: RouteContext):
     const user = ctx.currentUser(req);
     // Nobody signed in means no personal choice to read, so the first account's language is
     // the best guess for the screen that is about to be shown.
+    // Before the first account there is no choice to read at all, only the defaults, and sending
+    // their English would override what the page already knows: the language picked in the
+    // desktop app, or the browser's. The first-run screen keeps its own guess then.
+    if (ctx.needsSetup()) return res.json({ setup: true });
     const language = ctx.store.prefs(user?.id ?? ctx.store.users()[0]?.id).uiLanguage;
-    if (ctx.needsSetup()) return res.json({ setup: true, language });
     if (!user) return res.status(401).json({ error: "Not signed in.", messageKey: "err.notSignedIn", language });
     // The flag travels, because the gate that enforces it is invisible from the outside: the
     // interface would otherwise render the whole app and watch every call it makes come back

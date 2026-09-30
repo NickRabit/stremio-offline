@@ -136,12 +136,14 @@ const singleAccountState = async (password = "current-secret", secret = "signing
   progress: { "movie:tt1": { position: 12, duration: 100, title: "Neco", updatedAt: "2026-01-01T00:00:00.000Z" } },
 });
 
-test("GET /api/auth/me answers the setup flag with the interface language", async (t) => {
+test("GET /api/auth/me answers the setup flag without a language, so the page keeps its own guess", async (t) => {
   const harness = await mount();
   t.after(harness.close);
   const response = await api(harness.base, "/api/auth/me");
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { setup: true, language: "en" });
+  // No account means no stored choice; the defaults' English would override the language the
+  // desktop app or the browser gave the page.
+  assert.deepEqual(await response.json(), { setup: true });
 });
 
 test("GET /api/auth/me without a session is 401 and still carries the language", async (t) => {

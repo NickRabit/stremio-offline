@@ -36,7 +36,14 @@ const cached = (): Locale | undefined => {
   catch { return undefined; }
 };
 
-let current: Locale = cached() ?? detectLocale(LOCALES, "en");
+/** The desktop app hands its own language to the page of the server it runs, so a first run
+ *  speaks the language picked on the app's welcome screen rather than the one Chromium started with. */
+const desktopLocale = (): Locale | undefined => {
+  const value = (globalThis as { stremioDesktop?: { locale?: unknown } }).stremioDesktop?.locale;
+  return isLocale(value) ? value : undefined;
+};
+
+let current: Locale = cached() ?? desktopLocale() ?? detectLocale(LOCALES, "en");
 const listeners = new Set<() => void>();
 
 export const locale = () => current;
