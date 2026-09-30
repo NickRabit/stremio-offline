@@ -38,7 +38,9 @@ The single set of rules for any coding agent working in this repository.
   state -- a conflict resolved by hand is code nobody has run yet.
 - When that pull request ships a user-facing feature or fix, bump the patch
   version in the same PR before opening it. Keep `package.json`,
-  `server/package.json`, `web/package.json`, and `package-lock.json` in sync.
+  `server/package.json`, `web/package.json`, `desktop/package.json`, and
+  `package-lock.json` in sync; the release workflow refuses a tag that does not
+  match the desktop version.
   Bump minor or major only when the user asks. Skip the bump for docs, rules,
   and other non-shipping work.
 
