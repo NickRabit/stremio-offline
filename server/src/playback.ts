@@ -346,7 +346,7 @@ export class PlaybackManager {
         subtitles: info?.subtitleTracks.map((track) => `${track.codec}/${track.language ?? "?"}${track.title ? `/${track.title}` : ""}`),
       });
       if (this.inspected.size > 200) this.inspected.clear();
-      this.inspected.set(this.inspectionKey(stream), { info, at: Date.now() });
+      if (info?.video) this.inspected.set(this.inspectionKey(stream), { info, at: Date.now() });
       return info;
     } finally {
       this.inspecting.delete(this.inspectionKey(stream));

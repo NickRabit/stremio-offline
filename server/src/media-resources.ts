@@ -126,6 +126,7 @@ export class MediaResources {
   private expired = new Map<string, { sid: string; scope: ResourceScope }>();
   private creationWindows = new Map<string, { at: number; count: number }>();
   private bindings = new WeakMap<StreamItem, string>();
+  private internalBindings = new WeakMap<StreamItem, string>();
   private bytes = 0;
   private prunedAt = Number.NEGATIVE_INFINITY;
   constructor(private now = Date.now, private maxEntries = 20_000, private maxBytes = 64 * 1024 * 1024,
@@ -252,10 +253,14 @@ export class MediaResources {
   }
 
   path(stream: StreamItem): string {
-    let id = this.bindings.get(stream);
-    if (!id) {
+    const claimed = this.bindings.get(stream);
+    if (claimed) return `/api/media/${claimed}`;
+    let id = this.internalBindings.get(stream);
+    const record = id ? this.entries.get(id) : undefined;
+    if (!record || record.expiresAt <= this.now()) {
+      if (record) this.remove(record.id, true);
       id = this.add(stream, { userId: "internal", sid: "internal", expiresAt: this.now() + 30 * 60_000 }, "media");
-      this.bindings.set(stream, id);
+      this.internalBindings.set(stream, id);
     }
     return `/api/media/${id}`;
   }

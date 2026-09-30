@@ -15,6 +15,17 @@ test("embedded subtitle URLs load directly and a subtitle error never stops the 
     contentType: "text/vtt", headers: { "x-sidecar-complete": complete ? "1" : "0", "x-sidecar-coverage": "600" },
     body: `WEBVTT\n\n00:00:00.000 --> 00:01:00.000\n${complete ? "Whole subtitle" : "Embedded subtitle"}\n`,
   }));
+  await page.addInitScript(() => {
+    const descriptor = Object.getOwnPropertyDescriptor(HTMLTrackElement.prototype, "default")!;
+    Object.defineProperty(HTMLTrackElement.prototype, "default", {
+      ...descriptor, set() { descriptor.set!.call(this, false); },
+    });
+    const setAttribute = Element.prototype.setAttribute;
+    Element.prototype.setAttribute = function (name, value) {
+      if (this instanceof HTMLTrackElement && name === "default") return;
+      setAttribute.call(this, name, value);
+    };
+  });
   await page.goto("/");
   await page.getByRole("button", { name: "Katalog", exact: true }).click();
   const catalog = page.getByRole("combobox", { name: "Procházet katalog" });

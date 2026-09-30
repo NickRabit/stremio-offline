@@ -178,3 +178,24 @@ test("a subtitle child is tombstoned with the media resource it hangs off", () =
   registry.remove(media.resourceId, true);
   assert.throws(() => registry.get(child, owner.sid, "subtitle"), { status: 410, code: "RESOURCE_EXPIRED" });
 });
+
+test("internal probe paths renew after expiry without reviving playback claims", () => {
+  let now = 0;
+  const registry = new MediaResources(() => now);
+  const first = registry.path(source);
+  assert.equal(registry.path(source), first);
+  now = 30 * 60_000 - 1;
+  registry.add({ url: "https://other.test/movie" }, owner, "source");
+  now += 1;
+  const renewed = registry.path(source);
+  assert.notEqual(renewed, first);
+  assert.equal(registry.get(renewed.split("/").pop()!, "internal", "media").stream.url, source.url);
+  const claim = registry.mediaStream(source, owner);
+  registry.remove(claim.resourceId);
+  assert.equal(registry.path(claim.stream), `/api/media/${claim.resourceId}`);
+  assert.throws(() => registry.get(claim.resourceId, owner.sid, "media"), { status: 404 });
+  const expiredClaim = registry.mediaStream(source, owner);
+  now = owner.expiresAt;
+  assert.equal(registry.path(expiredClaim.stream), `/api/media/${expiredClaim.resourceId}`);
+  assert.throws(() => registry.get(expiredClaim.resourceId, owner.sid, "media"), { status: 410 });
+});
