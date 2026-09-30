@@ -215,6 +215,42 @@ test("an 8.3 name or a junction of a folder is still that folder", async () => {
   assert.deepEqual(await prepareDownloadDir(junction, WINDOWS_PLACES, junctionFs), { ok: false, reason: "reserved" });
 });
 
+const enoent = () => Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+
+test("a missing folder is checked under the spelling of its nearest existing ancestor", async () => {
+  const link = "/var/folders/x/user-data";
+  const real = "/private/var/folders/x/user-data";
+  const places: Places = { home: "/Users/someone", userData: real, platform: "darwin" };
+  const created: string[] = [];
+  const fs = fakeFs({
+    stat: async () => { throw enoent(); },
+    mkdir: async (dir) => { created.push(dir); },
+    realpath: async (entry) => {
+      if (entry === link) return real;
+      if (entry.startsWith(`${link}/`)) throw enoent();
+      return entry;
+    },
+  });
+  assert.deepEqual(await prepareDownloadDir(`${link}/instance`, places, fs), { ok: false, reason: "reserved" });
+  assert.deepEqual(await prepareDownloadDir(`${link}/a/b/c`, places, fs), { ok: false, reason: "reserved" });
+  assert.deepEqual(created, [], "nothing is created before the check");
+  assert.deepEqual(await prepareDownloadDir("/films/new", places, fakeFs({ ...fs, realpath: async (entry) => { if (entry === "/films/new") throw enoent(); return entry; } })),
+    { ok: true, dir: "/films/new", owned: true });
+});
+
+test("a missing Windows folder below a junction into the app's data is refused", async () => {
+  const junction = "C:\\films";
+  const fs = fakeFs({
+    stat: async () => { throw enoent(); },
+    realpath: async (entry) => {
+      if (entry === junction) return WINDOWS_PLACES.userData;
+      if (entry.startsWith(`${junction}\\`)) throw enoent();
+      return entry;
+    },
+  });
+  assert.deepEqual(await prepareDownloadDir(`${junction}\\new\\deeper`, WINDOWS_PLACES, fs), { ok: false, reason: "reserved" });
+});
+
 test("Explorer's own files do not make a Windows folder the user's", async () => {
   const dir = "C:\\Users\\me\\Videos\\Stremio Offline";
   assert.deepEqual(await prepareDownloadDir(dir, WINDOWS_PLACES, fakeFs({ readdir: async () => ["desktop.ini", "Thumbs.db"] })),
