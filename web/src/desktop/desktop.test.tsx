@@ -168,7 +168,12 @@ it("the fallback toast says the libraries are separate and retries on its button
 it("the first screen offers the language before anything else, and settings can follow the system", async () => {
   const bridge = makeBridge("main", baseState());
   await render(bridge);
-  await click(button("Čeština"));
+  const welcomeLocale = host.querySelector<HTMLSelectElement>(".shell-language select")!;
+  await act(async () => {
+    welcomeLocale.value = "cs";
+    welcomeLocale.dispatchEvent(new Event("change", { bubbles: true }));
+    await Promise.resolve();
+  });
   expect(bridge.setLocale).toHaveBeenCalledWith("cs");
   act(() => root.unmount());
   root = createRoot(host);

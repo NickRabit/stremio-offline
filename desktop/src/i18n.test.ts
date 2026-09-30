@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { catalogue, cs, en } from "./i18n.js";
+import { SHELL_LOCALES } from "./shell-prefs.js";
 
 test("both catalogues hold the same keys and every value is a sentence", () => {
   assert.deepEqual(Object.keys(en), Object.keys(cs));
@@ -12,12 +13,17 @@ test("the Czech catalogue is translated", () => {
 });
 
 test("the locale picks the catalogue", () => {
-  assert.equal(catalogue("cs", "darwin"), cs);
-  assert.equal(catalogue("en", "darwin"), en);
+  assert.deepEqual(catalogue("cs", "darwin"), cs);
+  assert.deepEqual(catalogue("en", "darwin"), en);
+  for (const locale of SHELL_LOCALES) {
+    const strings = catalogue(locale, "darwin");
+    assert.deepEqual(Object.keys(strings), Object.keys(en), locale);
+    for (const value of Object.values(strings)) assert.equal(value.length > 0, true, locale);
+  }
 });
 
 test("on Windows every string about a Mac is said for a PC", () => {
-  for (const locale of ["en", "cs"] as const) {
+  for (const locale of SHELL_LOCALES) {
     const strings = catalogue(locale, "win32");
     assert.deepEqual(Object.keys(strings), Object.keys(en), locale);
     for (const [key, value] of Object.entries(strings)) {
@@ -30,6 +36,7 @@ test("on Windows every string about a Mac is said for a PC", () => {
   assert.equal(catalogue("cs", "win32")["quit.detail"].includes("tomto počítači"), true);
   assert.equal(catalogue("en", "win32")["reset.title"], "Reset this PC?");
   assert.equal(catalogue("cs", "win32")["reset.title"], "Obnovit tento počítač?");
+  for (const locale of SHELL_LOCALES) assert.deepEqual(Object.keys(catalogue(locale, "win32")), Object.keys(en), locale);
 });
 
 test("on Windows the reset moves its data to the Recycle Bin, which is still the Koš in Czech", () => {

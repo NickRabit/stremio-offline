@@ -310,6 +310,7 @@ main.view-catalog{padding-top:98px}main.view-catalog .heading{margin-bottom:8px}
   .filterbar select.catalog-select{max-width:none}
   .sidebar nav{width:100%;gap:2px}
   .sidebar nav button{flex:1 1 0;min-width:0;padding:5px 2px}
+  .sidebar nav button>span{max-width:100%;font-size:8px;line-height:1.1;text-align:center;white-space:normal;overflow-wrap:normal}
   .sidebar nav button svg{width:19px;height:19px}
   .sidebar nav b{margin-left:min(35px,8vw)}
   /* The search block folds rather than vanishing: `display:none` cannot be animated, and the jump

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { ArrowRight, Laptop, Server, Settings2, TriangleAlert } from "lucide-react";
-import { LOCALE_NAMES, type Key } from "../i18n";
+import { LOCALES, LOCALE_NAMES, type Key } from "../i18n";
 import { t } from "./text";
 import type { FailureReason, MainScreen, ShellBridge, ShellState } from "./bridge";
 import { Brand } from "./Brand";
@@ -35,10 +35,11 @@ export function MainWindow({ bridge, state }: { bridge: ShellBridge; state: Shel
 
 /** On the first screen, before anything else is chosen: the language the rest is read in. */
 function LanguageSwitch({ bridge, state }: { bridge: ShellBridge; state: ShellState }) {
-  return <div className="shell-language" role="radiogroup" aria-label={t("desktop.language")}>
-    {(["cs", "en"] as const).map((locale) => <button key={locale} role="radio" aria-checked={state.locale === locale}
-      className={state.locale === locale ? "active" : ""} onClick={() => void bridge.setLocale(locale)}>{LOCALE_NAMES[locale]}</button>)}
-  </div>;
+  return <label className="shell-language">
+    <select aria-label={t("desktop.language")} value={state.locale} onChange={(event) => void bridge.setLocale(event.target.value as typeof LOCALES[number])}>
+      {LOCALES.map((locale) => <option key={locale} value={locale}>{LOCALE_NAMES[locale]}</option>)}
+    </select>
+  </label>;
 }
 
 function Welcome({ bridge, state }: { bridge: ShellBridge; state: ShellState }) {

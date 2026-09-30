@@ -5,6 +5,16 @@ import { detectLocale } from "./detect";
 import { pluralForm } from "./plural";
 import { en } from "./en";
 import { cs } from "./cs";
+import { sk } from "./sk";
+import { de } from "./de";
+import { es } from "./es";
+import { fr } from "./fr";
+import { it as itIT } from "./it";
+import { pl } from "./pl";
+import { ptBR } from "./ptBR";
+import { ru } from "./ru";
+
+const catalogues: Record<string, Record<keyof typeof en, unknown>> = { en, cs, sk, de, es, fr, it: itIT, pl, "pt-BR": ptBR, ru };
 
 describe("detectLocale", () => {
   const withLanguages = (languages: string[] | undefined, run: () => void) => {
@@ -24,6 +34,11 @@ describe("detectLocale", () => {
 
   it("falls back when nothing matches", () => {
     withLanguages(["de-DE", "fr"], () => expect(detectLocale(["en", "cs"], "en")).toBe("en"));
+  });
+
+  it("matches a language region and prefers an exact regional choice", () => {
+    withLanguages(["pt-BR", "pt-PT"], () => expect(detectLocale(["en", "pt-BR"], "en")).toBe("pt-BR"));
+    withLanguages(["pt-PT"], () => expect(detectLocale(["en", "pt-BR"], "en")).toBe("pt-BR"));
   });
 
   it("survives a browser that exposes no language list", () => {
@@ -48,27 +63,43 @@ describe("pluralForm", () => {
   it("falls back to other where a locale has no few form", () => {
     expect(pluralForm("cs", 3, { one: "one", other: "other" })).toBe("other");
   });
+
+  it("uses each language's grammatical plural categories", () => {
+    const forms = { one: "one", few: "few", many: "many", other: "other" };
+    expect(pluralForm("sk", 3, forms)).toBe("few");
+    expect(pluralForm("pl", 2, forms)).toBe("few");
+    expect(pluralForm("pl", 5, forms)).toBe("many");
+    expect(pluralForm("ru", 22, forms)).toBe("few");
+    expect(pluralForm("ru", 25, forms)).toBe("many");
+    expect(pluralForm("de", 2, forms)).toBe("other");
+  });
 });
 
 describe("catalogues", () => {
   it("cover exactly the same keys", () => {
-    expect(Object.keys(cs).sort()).toEqual(Object.keys(en).sort());
+    for (const [locale, catalog] of Object.entries(catalogues)) {
+      expect(Object.keys(catalog).sort(), locale).toEqual(Object.keys(en).sort());
+    }
   });
 
   it("agree on which entries are plural", () => {
     const shape = (catalog: Record<string, unknown>) =>
       Object.entries(catalog).filter(([, value]) => typeof value !== "string").map(([key]) => key).sort();
-    expect(shape(cs)).toEqual(shape(en));
+    for (const [locale, catalog] of Object.entries(catalogues)) {
+      expect(shape(catalog), locale).toEqual(shape(en));
+    }
   });
 
   it("keep every placeholder the English text uses", () => {
     const placeholders = (value: unknown): string[] => typeof value === "string"
       ? [...value.matchAll(/\{(\w+)\}/g)].map((match) => match[1])
       : Object.values(value as Record<string, string>).flatMap(placeholders);
-    for (const key of Object.keys(en) as Array<keyof typeof en>) {
-      const wanted = new Set(placeholders(en[key]));
-      const got = new Set(placeholders(cs[key]));
-      expect({ key, missing: [...wanted].filter((name) => !got.has(name)) }).toEqual({ key, missing: [] });
+    for (const [locale, catalog] of Object.entries(catalogues)) {
+      for (const key of Object.keys(en) as Array<keyof typeof en>) {
+        const wanted = new Set(placeholders(en[key]));
+        const got = new Set(placeholders(catalog[key]));
+        expect({ locale, key, missing: [...wanted].filter((name) => !got.has(name)) }).toEqual({ locale, key, missing: [] });
+      }
     }
   });
 });
@@ -102,5 +133,12 @@ describe("every message key the server can send exists in the catalogue", () => 
   it("cs.ts carries them all", () => {
     const missing = serverKeys().filter((key) => !(key in cs));
     expect(missing, `add these to web/src/i18n/cs.ts: ${missing.join(", ")}`).toEqual([]);
+  });
+
+  it("each added locale carries every message the server can send", () => {
+    for (const [locale, catalog] of Object.entries(catalogues)) {
+      const missing = serverKeys().filter((key) => !(key in catalog));
+      expect(missing, `${locale}: ${missing.join(", ")}`).toEqual([]);
+    }
   });
 });

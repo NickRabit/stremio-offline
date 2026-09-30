@@ -3,6 +3,13 @@
  *  a Czech install opened from an English laptop must stay Czech. */
 export function detectLocale<T extends string>(supported: readonly T[], fallback: T): T {
   const tags = (typeof navigator !== "undefined" && navigator.languages?.length ? navigator.languages : [navigator?.language]).filter(Boolean);
-  const base = tags.map((tag) => String(tag).toLowerCase().split("-")[0]);
-  return base.find((tag): tag is T => (supported as readonly string[]).includes(tag)) ?? fallback;
+  const normalized = tags.map((tag) => String(tag).toLowerCase().replaceAll("_", "-"));
+  for (const tag of normalized) {
+    const exact = supported.find((candidate) => candidate.toLowerCase() === tag);
+    if (exact) return exact;
+    const base = tag.split("-")[0];
+    const language = supported.find((candidate) => candidate.toLowerCase().split("-")[0] === base);
+    if (language) return language;
+  }
+  return fallback;
 }

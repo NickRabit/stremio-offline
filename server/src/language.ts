@@ -44,7 +44,7 @@ export const LANGUAGE_NAMES: Record<string, string> = {
 
 /** Locales the interface itself is translated into. Everything else is a
  *  content language: pickable for audio and subtitles, never for the UI. */
-export const UI_LANGUAGES = ["en", "cs"] as const;
+export const UI_LANGUAGES = ["en", "cs", "sk", "de", "es", "fr", "it", "pl", "pt-BR", "ru"] as const;
 export type UiLanguage = (typeof UI_LANGUAGES)[number];
 export const isUiLanguage = (value: unknown): value is UiLanguage => UI_LANGUAGES.includes(value as UiLanguage);
 
