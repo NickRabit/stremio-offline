@@ -115,9 +115,30 @@ CPU and is slow — a real transcode there is better avoided.
 ## NVIDIA (NVENC)
 
 FFmpeg's `h264_nvenc` loads the NVIDIA driver's library at run time, so the LGPL
-build can carry it and nothing needs installing beyond the driver. It is the
-only GPU path for an NVIDIA card on Linux, and on Windows it is preferred over
-Media Foundation, where the vendor path was measured slower than software. The
+build can carry it and, on a desktop, nothing needs installing beyond the driver.
+It is the only GPU path for an NVIDIA card on Linux, and it is preferred over
+Media Foundation on Windows, where the vendor path was measured slower than
+software. The desktop apps' bundled FFmpeg carries it on Linux and Windows.
+
+In Docker the container needs the GPU too: install the NVIDIA Container Toolkit
+on the host and give the service the card, with `video` among the driver
+capabilities:
+
+```yaml
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu, video]
+    environment:
+      NVIDIA_DRIVER_CAPABILITIES: compute,video,utility
+```
+
+A busy card (a consumer GeForce limits parallel encode sessions, and its memory
+can run out) makes that one conversion fall back to software without counting
+against NVENC; only real refusals switch it off until a restart. The
 probe runs on every platform, but only when the build lists `h264_nvenc` and
 VAAPI has not already come up, so an Intel or AMD host pays nothing for it. Set
 `NVENC=0` in the environment to switch the path off.

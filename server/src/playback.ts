@@ -195,6 +195,9 @@ export async function waitForHlsOutput(directory: string, finished: () => boolea
 // AC-3 family does not expose enough codec information to the fragmented MP4 muxer
 // until the first packet arrives. After an input seek video can arrive first, making
 // HLS fail while writing the init segment ("Cannot write moov atom before AC3 packets").
+/** NVENC refusing a session because the card is busy, not because it cannot encode. */
+export const nvencBusy = (error: string | undefined) =>
+  /OpenEncodeSessionEx failed|out of memory|No capable devices found|incompatible client key|CUDA_ERROR_OUT_OF_MEMORY/i.test(error ?? "");
 const AUDIO_REQUIRING_PACKET_FOR_FMP4 = new Set(["ac3", "eac3"]);
 const IDLE_MS = 5 * 60_000;
 // If the start finishes after the client gave up, the session and its FFmpeg hang around for
@@ -977,7 +980,9 @@ export class PlaybackManager {
           }
         } else if (accelerator === "nvenc") {
           log("WARN", "NVENC failed, falling back to a software conversion", { id: session.id, reason: session.error });
-          this.nvencFailures += 1;
+          // A card that is only busy -- a consumer GeForce caps parallel encode sessions, and its
+          // memory runs out -- works again for the next viewer; only a real refusal counts.
+          if (!nvencBusy(session.error)) this.nvencFailures += 1;
           if (this.nvencFailures >= 2 && this.softwareEncoder) {
             this.nvenc = false;
             log("WARN", "NVENC failed repeatedly, it will not be used again until restart", { failures: this.nvencFailures });

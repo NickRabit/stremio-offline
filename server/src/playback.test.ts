@@ -3,7 +3,7 @@ import test from "node:test";
 import { writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { PlaybackManager, SOURCE_UNREACHABLE, SerialOperations, describeFailure, hlsCanStart, hlsPlaylistFiles, isPlaylistSource, sourceReachable } from "./playback.js";
+import { PlaybackManager, SOURCE_UNREACHABLE, SerialOperations, describeFailure, hlsCanStart, hlsPlaylistFiles, isPlaylistSource, sourceReachable, nvencBusy } from "./playback.js";
 
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -1303,4 +1303,11 @@ test("a failed inspection is retried and a successful retry is cached", async ()
   assert.equal(await manager.inspect(stream), info);
   assert.equal(await manager.inspect(stream), info);
   assert.equal(calls, 2);
+});
+
+test("a busy NVIDIA card does not count against NVENC", () => {
+  assert.equal(nvencBusy("[h264_nvenc @ 0x1] OpenEncodeSessionEx failed: out of memory (10)"), true);
+  assert.equal(nvencBusy("[h264_nvenc @ 0x1] No capable devices found"), true);
+  assert.equal(nvencBusy("[h264_nvenc @ 0x1] Cannot load libcuda.so.1"), false);
+  assert.equal(nvencBusy(undefined), false);
 });
