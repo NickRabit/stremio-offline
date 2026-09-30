@@ -24,9 +24,10 @@ import { launchedHidden, loginItemQuery, loginItemStatus, loginItemUpdate, type 
 import { bundledMediaTools, DOWNLOADS_DIRECTORY, INSTANCE_DIRECTORY, LOCAL_PARTITION, LocalBackend, LocalPortBusyError, PORT_FILE, type LocalBackendConnection } from "./local-backend.js";
 import { defaultLocalSettings, parseLocalSettings, readLocalSettings, SETTINGS_FILE, writeLocalSettings, type LocalSettings } from "./local-settings.js";
 import { buildMenuTemplate } from "./menu.js";
-import { externalBrowserUrl, httpAllowedHost, parseServerOrigin, partitionForOrigin, type ServerOrigin } from "./origin.js";
+import { externalBrowserUrl, httpAllowedHost, isAccessSignInUrl, parseServerOrigin, partitionForOrigin, type ServerOrigin } from "./origin.js";
 import { localPageSent } from "./bridge-sender.js";
 import { SettingsWindow } from "./settings-window.js";
+import { sessionFetch } from "./session-fetch.js";
 import type { AppPrefs, FailureReason, MainScreen, ProfileResult, ProbeResult, ShellState, Target, Toast } from "./shell-api.js";
 import { effectiveLocale, readShellPrefs, readShellPrefsSync, writeShellPrefs, type ShellLocale } from "./shell-prefs.js";
 import { downloadFraction, nextToastId, safeFileName } from "./shell-text.js";
@@ -104,6 +105,9 @@ let trayNoticeShown = false;
 let connected: ServerOrigin | null = null;
 let remoteFullscreen = false;
 let loadFailure: ProbeFailure | null = null;
+/** A profile whose probe hit Cloudflare Access: while this is set, the server's own view shows
+ *  Cloudflare's sign-in page and the connection is completed when it lands back on the server. */
+let signIn: { ticket: number; target: Target; profile: ServerProfile; server: ServerOrigin } | null = null;
 let localBackend: LocalBackend | null = null;
 let localConnection: LocalBackendConnection | null = null;
 /** The last streaming report from the running backend. */
@@ -271,8 +275,12 @@ const sameLocalSettings = (a: LocalSettings, b: LocalSettings) =>
 const syncAwake = () =>
   sleepGuard.update({ published: localConnection?.published === true, streaming: localStreaming, downloading: localDownloading });
 
+/** Both the connected server page and Cloudflare's sign-in page take the whole window. */
+const serverPageShown = (): boolean =>
+  shellState.screen.kind === "connected" || shellState.screen.kind === "sign-in";
+
 const pageMode = (): PageMode =>
-  shellState.screen.kind !== "connected" ? "shell" : remoteFullscreen ? "fullscreen" : "remote";
+  !serverPageShown() ? "shell" : remoteFullscreen ? "fullscreen" : "remote";
 
 /** Windows gives the menu bar back a moment after a window leaves full screen, and that shrinks
  *  the content area without a resize event: laid out at once, the page runs under the bottom edge.
@@ -406,11 +414,20 @@ const stopRepoll = () => {
   repollNotified = false;
 };
 
+/** A remote profile is probed through its own partition, so a signed-in Cloudflare Access
+ *  cookie goes along; anything that does not parse as a server keeps the plain fetch. */
+const probeProfile = (input: string) => {
+  const server = parseServerOrigin(input);
+  const ses = server ? session.fromPartition(partitionForOrigin(server.origin)) : null;
+  return fetchStatus(input, ses ? sessionFetch(ses) : fetch, PROBE_TIMEOUT_MS);
+};
+
 const startRepoll = (origin: string, name: string) => {
   stopRepoll();
   repoll = setInterval(() => {
-    void fetchStatus(origin, fetch, PROBE_TIMEOUT_MS).then((result) => {
-      if (!result.ok || repollNotified) return;
+    void probeProfile(origin).then((result) => {
+      // Access-protected is back too: the sign-in page answers, so the server is up again.
+      if ((!result.ok && result.reason !== "access-required") || repollNotified) return;
       repollNotified = true;
       if (repoll) { clearInterval(repoll); repoll = null; }
       showToast({ id: nextToastId(), kind: "server-back", server: name });
@@ -450,6 +467,17 @@ const hostOf = (url: string) => {
 };
 
 const onConnectedOrigin = (url: string) => connected !== null && originOf(url) === connected.origin;
+
+/** Cloudflare Access's handshake runs under `/cdn-cgi/` on the server origin; a landing anywhere
+ *  else on the origin means the sign-in is done. */
+const onConnectedOriginOutsideCdnCgi = (url: string): boolean => {
+  if (!onConnectedOrigin(url)) return false;
+  try {
+    return !new URL(url).pathname.startsWith("/cdn-cgi/");
+  } catch {
+    return false;
+  }
+};
 
 const sameConnectedHost = (url: string) => {
   const host = hostOf(url);
@@ -515,6 +543,8 @@ const destroyRemote = () => {
 const guardRemoteNavigation = (remote: WebContentsView, event: { preventDefault: () => void }, url: string) => {
   if (shell?.remote !== remote) return;
   if (onConnectedOrigin(url)) return;
+  // A remote profile behind Cloudflare Access sends its sign-in page to the team's own host.
+  if (connected !== null && shell?.remotePartition !== LOCAL_PARTITION && isAccessSignInUrl(url)) return;
   event.preventDefault();
   if (!connected || originOf(url) === null) return;
   failConnected("not-status");
@@ -588,6 +618,11 @@ const wireRemote = (remote: WebContentsView) => {
   contents.setWindowOpenHandler(openExternally);
   contents.on("will-navigate", (event, url) => guardRemoteNavigation(remote, event, url));
   contents.on("will-redirect", (event, url) => guardRemoteNavigation(remote, event, url));
+  contents.on("did-navigate", (_event, url) => {
+    // Back on the server after the sign-in page: the cookie is there now, so probe and finish.
+    if (shell?.remote !== remote || !signIn || !onConnectedOriginOutsideCdnCgi(url)) return;
+    void queue.run(() => completeSignIn());
+  });
   contents.on("enter-html-full-screen", () => { if (shell?.remote === remote) { remoteFullscreen = true; applyLayout(); } });
   contents.on("leave-html-full-screen", () => { if (shell?.remote === remote) { remoteFullscreen = false; settleLayout(); } });
   contents.on("did-finish-load", () => {
@@ -709,12 +744,33 @@ const startLocal = async (ticket: number, target: Target, fallback: { profileNam
   }
 };
 
+/** A remote profile that answered takes over the window: the local backend goes and the server
+ *  page stays. Shared by the straight success and the sign-in that has just come back. */
+const finishProfile = async (ticket: number, target: Target, profile: ServerProfile, server: ServerOrigin, result: { version: string; restricted: boolean; secure: boolean }): Promise<void> => {
+  if (!requests.isCurrent(ticket)) return;
+  if (!connected) return;
+  shellState.connection = {
+    target,
+    name: profile.name,
+    origin: server.origin,
+    version: result.version,
+    restricted: result.restricted,
+    secure: result.secure,
+    fallbackFrom: null,
+  };
+  shellState.chosen = target;
+  await writeStartupChoice(app.getPath("userData"), target).catch(() => {});
+  // A remote profile that answered takes over from the local backend for good.
+  await closeLocalBackend();
+  setScreen({ kind: "connected" });
+};
+
 /** A saved profile: probe, then take over the window. An unreachable one falls back on launch. */
 const connectProfile = async (ticket: number, target: Target, profile: ServerProfile, server: ServerOrigin, launch: boolean): Promise<void> => {
-  let result = await fetchStatus(server.origin, fetch, PROBE_TIMEOUT_MS);
-  if (!result.ok && result.reason === "unreachable") result = await fetchStatus(server.origin, fetch, PROBE_TIMEOUT_MS);
+  let result = await probeProfile(server.origin);
+  if (!result.ok && result.reason === "unreachable") result = await probeProfile(server.origin);
   if (!requests.isCurrent(ticket)) return;
-  if (!result.ok) {
+  if (!result.ok && result.reason !== "access-required") {
     refreshInitialized();
     // A stand-in that was never set up would start without its download folder chosen.
     if (launch && fallbackApplies(target, result.reason) && !needsSetup()) {
@@ -743,22 +799,40 @@ const connectProfile = async (ticket: number, target: Target, profile: ServerPro
     if (requests.isCurrent(ticket)) setScreen({ kind: "error", target, name: profile.name, origin: server.origin, reason, port: null });
     return;
   }
+  if (result.ok) {
+    await finishProfile(ticket, target, profile, server, result);
+    return;
+  }
+  // The probe asked for a sign-in: the page on screen is Cloudflare's own.
   if (!requests.isCurrent(ticket)) return;
-  if (!connected) return;
-  shellState.connection = {
-    target,
-    name: profile.name,
-    origin: server.origin,
-    version: result.version,
-    restricted: result.restricted,
-    secure: result.secure,
-    fallbackFrom: null,
-  };
-  shellState.chosen = target;
-  await writeStartupChoice(app.getPath("userData"), target).catch(() => {});
-  // A remote profile that answered takes over from the local backend for good.
-  await closeLocalBackend();
-  setScreen({ kind: "connected" });
+  signIn = { ticket, target, profile, server };
+  setScreen({ kind: "sign-in", target, name: profile.name, origin: server.origin });
+  // A view that is already on the server, outside Cloudflare's own path, needs no further click.
+  if (onConnectedOriginOutsideCdnCgi(remote.webContents.getURL())) void queue.run(() => completeSignIn());
+};
+
+/** Cloudflare Access sent the window back to the server: probe again through the partition now
+ *  that the cookie is there, and either connect or leave the sign-in page up. */
+const completeSignIn = async (): Promise<void> => {
+  const pending = signIn;
+  if (!pending) return;
+  signIn = null;
+  if (!requests.isCurrent(pending.ticket)) return;
+  const result = await probeProfile(pending.server.origin);
+  // A connect asked for while the probe ran wins; the sign-in is abandoned silently.
+  if (!requests.isCurrent(pending.ticket)) return;
+  if (result.ok) {
+    await finishProfile(pending.ticket, pending.target, pending.profile, pending.server, result);
+    return;
+  }
+  if (result.reason === "access-required") {
+    signIn = pending;
+    return;
+  }
+  // Not failConnected: there is no connection yet, and the error screen should name the profile.
+  connected = null;
+  blankRemote();
+  setScreen({ kind: "error", target: pending.target, name: pending.profile.name, origin: pending.server.origin, reason: result.reason, port: null });
 };
 
 /** The page on screen goes before another is tried: a failed attempt must not leave the old
@@ -766,6 +840,7 @@ const connectProfile = async (ticket: number, target: Target, profile: ServerPro
 const dropCurrentPage = async () => {
   await retireRemote();
   connected = null;
+  signIn = null;
   shellState.connection = null;
 };
 
@@ -781,6 +856,7 @@ const connectTarget = (target: Target, options: { launch: boolean }): Promise<vo
   const ticket = requests.next();
   return queue.run(async () => {
     stopRepoll();
+    signIn = null;
     const profile = target.kind === "profile" ? findProfile(profileStore, target.id) : null;
     const server = profile ? parseServerOrigin(profile.origin) : null;
     if (target.kind === "profile" && (!profile || !server)) {
@@ -1288,7 +1364,7 @@ const registerHandlers = () => {
   ipcMain.handle("shell:probe", async (event, input: unknown): Promise<ProbeResult> => {
     assertShellSender(event);
     if (typeof input !== "string") return { ok: false, reason: "invalid" };
-    return fetchStatus(input, fetch, PROBE_TIMEOUT_MS);
+    return probeProfile(input);
   });
 
   ipcMain.handle("shell:setLocalSettings", async (event, input: unknown): Promise<{ ok: boolean; restartNeeded: boolean }> => {

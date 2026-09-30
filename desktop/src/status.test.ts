@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
 import { createServer, type AddressInfo, type Socket } from "node:net";
 import test from "node:test";
-import { fetchStatus, readStatus } from "./status.js";
+import { accessChallenge, fetchStatus, readStatus, type StatusFetch } from "./status.js";
 
-const answering = (body: unknown, status = 200) => (async () => ({ status, json: async () => body })) as unknown as typeof fetch;
+const answering = (body: unknown, status = 200) => (async () => ({ status, headers: new Headers(), json: async () => body })) as unknown as typeof fetch;
+
+/** A probe that hands back a real Response, for the headers only a Response carries. */
+const replying = (response: Response): StatusFetch => async () => response;
 
 test("a status body keeps the version, restricted and secure", () => {
   assert.deepEqual(readStatus({ status: "ok", version: "0.4.62", restricted: false, secure: true, builtAt: "x", commit: "abc" }), { version: "0.4.62", restricted: false, secure: true });
@@ -31,6 +34,30 @@ test("only a 200 with this app's status is ok", async () => {
   assert.deepEqual(await fetchStatus("http://192.168.1.20:8090", answering({}, 302)), { ok: false, reason: "not-status" });
   assert.deepEqual(await fetchStatus("http://192.168.1.20:8090", answering({})), { ok: false, reason: "not-status" });
   assert.deepEqual(await fetchStatus("http://192.168.1.20:8090", answering({ status: "ok", version: "0.4.62", restricted: true, secure: false })), { ok: true, version: "0.4.62", restricted: true, secure: false });
+});
+
+test("a redirect to Cloudflare Access's own sign-in page asks for a sign-in", async () => {
+  const location = "https://holubovi.cloudflareaccess.com/cdn-cgi/access/login/stremio-test.holubovi.cz?kid=x&meta=y";
+  const response = new Response(null, { status: 302, headers: { location } });
+  assert.deepEqual(await fetchStatus("https://stremio-test.holubovi.cz", replying(response)), { ok: false, reason: "access-required" });
+});
+
+test("a 401 carrying Cloudflare Access's own challenge asks for a sign-in", async () => {
+  const resourceMetadata = 'Cloudflare-Access resource_metadata="https://server.example/.well-known/cloudflare-access-protected-resource/api/status"';
+  const response = new Response(null, { status: 401, headers: { "www-authenticate": resourceMetadata } });
+  assert.deepEqual(await fetchStatus("https://server.example", replying(response)), { ok: false, reason: "access-required" });
+});
+
+test("a redirect anywhere else, or a relative one, is still not this app", async () => {
+  const elsewhere = new Response(null, { status: 302, headers: { location: "https://example.com/login" } });
+  assert.deepEqual(await fetchStatus("https://server.example", replying(elsewhere)), { ok: false, reason: "not-status" });
+  const relative = new Response(null, { status: 302, headers: { location: "/login" } });
+  assert.deepEqual(await fetchStatus("https://server.example", replying(relative)), { ok: false, reason: "not-status" });
+});
+
+test("an answered request is never a challenge, whatever the headers say", () => {
+  const answered = new Response(null, { status: 200, headers: { "www-authenticate": "Cloudflare-Access resource_metadata=x" } });
+  assert.equal(accessChallenge(answered), false);
 });
 
 test("a server that never answers is unreachable within the given timeout", async () => {

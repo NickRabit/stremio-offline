@@ -109,7 +109,7 @@ test("launch of a deleted profile shows the welcome screen", () => {
   assert.deepEqual(launchPlan({ kind: "profile", id: "p1" }, []), { screen: "welcome" });
 });
 
-const failures: ProbeFailure[] = ["invalid", "insecure-transport", "unreachable", "not-status"];
+const failures: ProbeFailure[] = ["invalid", "insecure-transport", "unreachable", "not-status", "access-required"];
 
 test("a failed profile connection falls back only when nothing answered", () => {
   for (const reason of failures) {

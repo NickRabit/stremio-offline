@@ -61,6 +61,19 @@ export function partitionForOrigin(origin: string): string {
   return `persist:stremio-${Buffer.from(origin, "utf8").toString("base64url")}`;
 }
 
+/** Cloudflare Access's own sign-in pages: https only, on the team's
+ *  <team>.cloudflareaccess.com host. */
+export function isAccessSignInUrl(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== "https:") return false;
+  return parsed.hostname.toLowerCase().endsWith(".cloudflareaccess.com");
+}
+
 /** A link the system browser may open. Anything else stays in the shell, which refuses it. */
 export function externalBrowserUrl(input: string): string | null {
   let url: URL;

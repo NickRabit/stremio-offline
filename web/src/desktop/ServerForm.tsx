@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Check, LoaderCircle, TriangleAlert } from "lucide-react";
+import { Check, LoaderCircle, LockKeyhole, TriangleAlert } from "lucide-react";
 import { t } from "./text";
 import type { ProbeResult, ServerProfile, ShellBridge } from "./bridge";
 
@@ -7,6 +7,7 @@ const probeText = (result: ProbeResult) => result.ok ? t("desktop.testOk", { ver
   : result.reason === "insecure-transport" ? t("desktop.errorInsecureText")
   : result.reason === "not-status" ? t("desktop.errorNotStatusText")
   : result.reason === "invalid" ? t("desktop.invalidAddress")
+  : result.reason === "access-required" ? t("desktop.accessRequiredText")
   : t("desktop.errorUnreachableText");
 
 /** Adds or edits a saved server. `onSaved` gets the stored profile, so the caller can connect to it. */
@@ -47,8 +48,8 @@ export function ServerForm({ bridge, profile, submitLabel, onSaved, onCancel }: 
         <button type="button" onClick={() => void test()} disabled={probe === "testing" || !origin.trim()}>{t("desktop.testServer")}</button>
       </div>
       <small>{t("desktop.serverAddressHint")}</small></label>
-    {probe && <p className={`shell-probe ${probe === "testing" ? "" : probe.ok ? "ok" : "bad"}`} role="status">
-      {probe === "testing" ? <LoaderCircle className="shell-spin"/> : probe.ok ? <Check/> : <TriangleAlert/>}
+    {probe && <p className={`shell-probe ${probe === "testing" ? "" : probe.ok ? "ok" : probe.reason === "access-required" ? "" : "bad"}`} role="status">
+      {probe === "testing" ? <LoaderCircle className="shell-spin"/> : probe.ok ? <Check/> : probe.reason === "access-required" ? <LockKeyhole/> : <TriangleAlert/>}
       <span>{probe === "testing" ? t("desktop.connectingTo", { name: origin.trim() }) : probeText(probe)}</span>
     </p>}
     {error && <p className="shell-probe bad" role="alert"><TriangleAlert/><span>{error}</span></p>}
