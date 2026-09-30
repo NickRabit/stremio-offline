@@ -108,6 +108,24 @@ export function autostartEntry(exec: string): string {
   ].join("\n");
 }
 
+/** The program an entry's `Exec` line runs: its first argument, unescaped, or null when there is
+ *  none. Used to spot an entry a renamed or replaced AppImage left pointing at an old file. */
+export function autostartExecutable(text: string): string | null {
+  const line = text.split("\n").find((candidate) => /^exec=/i.test(candidate.trim()));
+  if (line === undefined) return null;
+  const value = line.slice(line.indexOf("=") + 1).trim();
+  if (value.length === 0) return null;
+  if (!value.startsWith("\"")) return value.split(/\s+/)[0] ?? null;
+  let exec = "";
+  for (let index = 1; index < value.length; index += 1) {
+    const char = value[index];
+    if (char === "\\") { exec += value[index + 1] ?? ""; index += 1; continue; }
+    if (char === "\"") break;
+    exec += char;
+  }
+  return exec.replace(/%%/g, "%");
+}
+
 /** The AppImage file is the stable path; its mount changes on every run, so `$APPIMAGE` wins. */
 export function launchExecutable(env: NodeJS.ProcessEnv, execPath: string): string {
   return env.APPIMAGE && env.APPIMAGE.length > 0 ? env.APPIMAGE : execPath;

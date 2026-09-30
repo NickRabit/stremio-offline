@@ -20,7 +20,7 @@ import { mayTrashDownloadDirReal, OWNERSHIP_FILE, prepareDownloadDir, readOwners
 import { isDeviceTicketDownload } from "./downloads.js";
 import { catalogue } from "./i18n.js";
 import { layout, type PageMode } from "./layout.js";
-import { launchedHidden, loginItemQuery, loginItemStatus, loginItemUpdate, type LoginItemReadings, loginItemOn } from "./login-item.js";
+import { autostartExecutable, autostartFile, launchedHidden, launchExecutable, loginItemQuery, loginItemStatus, loginItemUpdate, readAutostart, removeAutostart, writeAutostart, type LoginItemReadings, loginItemOn } from "./login-item.js";
 import { bundledMediaTools, DOWNLOADS_DIRECTORY, INSTANCE_DIRECTORY, LOCAL_PARTITION, LocalBackend, LocalPortBusyError, PORT_FILE, type LocalBackendConnection } from "./local-backend.js";
 import { defaultLocalSettings, parseLocalSettings, readLocalSettings, SETTINGS_FILE, writeLocalSettings, type LocalSettings } from "./local-settings.js";
 import { buildMenuTemplate } from "./menu.js";
@@ -98,7 +98,7 @@ interface Shell {
 }
 
 let shell: Shell | null = null;
-/** The Windows notification-area icon; null everywhere else and once the app is quitting. */
+/** The notification-area icon on Windows and Linux; null on macOS and once the app is quitting. */
 let tray: Tray | null = null;
 /** Whether the close-to-tray balloon has already been shown on this install. */
 let trayNoticeShown = false;
@@ -176,12 +176,17 @@ const settingsWindow = new SettingsWindow({
   platform: PLATFORM,
 });
 
-/** The login item is the OS's to remember: it is read back rather than stored, and a development
- *  run cannot register the Electron binary, so it has no answer at all. */
-const refreshLoginItem = (): void => {
+/** The login item is the OS's to remember: it is read back rather than stored. Windows and macOS
+ *  answer through Electron, Linux through its own XDG autostart file, and a development run cannot
+ *  register the Electron binary, so it has no answer at all. */
+const refreshLoginItem = async (): Promise<void> => {
   let settings: LoginItemReadings = {};
   try {
-    settings = app.getLoginItemSettings(loginItemQuery(PLATFORM));
+    if (PLATFORM === "linux") {
+      settings = { openAtLogin: (await readAutostart(autostartFile(app.getPath("home"), process.env))).enabled };
+    } else {
+      settings = app.getLoginItemSettings(loginItemQuery(PLATFORM));
+    }
   } catch {
     settings = {};
   }
@@ -192,10 +197,25 @@ const refreshLoginItem = (): void => {
   };
 };
 
+/** A renamed or replaced AppImage leaves an enabled entry pointing at the old file: this launch's
+ *  executable is written back so a login start keeps working. */
+const refreshAutostartExec = async (): Promise<void> => {
+  const file = autostartFile(app.getPath("home"), process.env);
+  if (!(await readAutostart(file)).enabled) return;
+  const current = launchExecutable(process.env, process.execPath);
+  let text: string;
+  try {
+    text = readFileSync(file, "utf8");
+  } catch {
+    return;
+  }
+  if (autostartExecutable(text) === current) return;
+  await writeAutostart(file, current);
+};
+
 const openSettings = (): void => {
-  refreshLoginItem();
   settingsWindow.open();
-  pushState();
+  void refreshLoginItem().then(() => pushState());
 };
 
 const targetKey = (target: Target | null): string =>
@@ -982,14 +1002,19 @@ const wireShellView = (view: WebContentsView, name: "main" | "toast") => {
   void view.webContents.loadFile(RENDERER_PAGE, { query: { view: name } });
 };
 
-/** The notification-area icon: the app's own icon, shrunk for the tray. Only Windows has one. */
+/** The notification-area icon: the app's own icon, shrunk for the tray. Windows and Linux have one;
+ *  a Linux desktop with no status notifier refuses it, which the app tolerates and logs once. */
 const createTray = (): void => {
-  const icon = nativeImage.createFromPath(path.join(app.getAppPath(), "build", "icon.png")).resize({ width: 16, height: 16 });
-  const created = new Tray(icon);
-  created.setToolTip(APP_NAME);
-  created.on("click", () => { void showMainWindow(); });
-  created.on("double-click", () => { void showMainWindow(); });
-  tray = created;
+  try {
+    const icon = nativeImage.createFromPath(path.join(app.getAppPath(), "build", "icon.png")).resize({ width: 16, height: 16 });
+    const created = new Tray(icon);
+    created.setToolTip(APP_NAME);
+    created.on("click", () => { void showMainWindow(); });
+    created.on("double-click", () => { void showMainWindow(); });
+    tray = created;
+  } catch (error) {
+    console.warn("tray: " + (error instanceof Error ? error.message : String(error)));
+  }
 };
 
 /** One balloon per install: the first close leaves the app running in the notification area. */
@@ -1004,7 +1029,7 @@ const showTrayNotice = (): void => {
   }).catch(() => {});
 };
 
-const createShell = (saved: WindowState | null) => {
+const createShell = (saved: WindowState | null, startMinimized = false) => {
   const restored = restoreBounds(
     saved,
     screen.getAllDisplays().map((display) => display.workArea),
@@ -1017,6 +1042,8 @@ const createShell = (saved: WindowState | null) => {
     minHeight: MIN_SIZE.height,
     title: APP_NAME,
     backgroundColor: WINDOW_BACKGROUND,
+    // A login start on Linux opens the window minimized, so it is still reachable from the taskbar.
+    ...(startMinimized ? { show: false } : {}),
     // On Windows and Linux the menu bar stays in view: the server page fills the window, and a
     // menu hidden until Alt is one nobody finds, Settings with it.
     // A packaged app takes its icon from the executable, which neither Linux nor a development
@@ -1029,6 +1056,9 @@ const createShell = (saved: WindowState | null) => {
   const toast = new WebContentsView({ webPreferences: shellWebPreferences() });
   wireShellView(page, "main");
   wireShellView(toast, "toast");
+  // Minimizing before the window is mapped is unreliable, on Wayland especially: it is shown once
+  // its page is ready, then minimized.
+  if (startMinimized) page.webContents.once("did-finish-load", () => { window.show(); window.minimize(); });
   toast.setBackgroundColor("#00000000");
   toast.setVisible(false);
   window.contentView.addChildView(page);
@@ -1075,7 +1105,7 @@ const createShell = (saved: WindowState | null) => {
     if (PLATFORM === "win32" && !quitting) showTrayNotice();
   });
   shell = { window, page, toast, remote: null, remotePartition: null };
-  if (restored.maximized) window.maximize();
+  if (restored.maximized && !startMinimized) window.maximize();
   pushState();
 };
 
@@ -1338,6 +1368,14 @@ const applyAppPrefs = async (prefs: AppPrefs): Promise<{ ok: boolean }> => {
     if (!app.isPackaged) {
       // A development run would register the Electron binary itself as a login item.
       ok = false;
+    } else if (PLATFORM === "linux") {
+      try {
+        const file = autostartFile(app.getPath("home"), process.env);
+        if (prefs.openAtLogin) await writeAutostart(file, launchExecutable(process.env, process.execPath));
+        else await removeAutostart(file);
+      } catch {
+        ok = false;
+      }
     } else {
       try {
         // Windows matches the registry entry by path and arguments, so disabling clears both.
@@ -1347,7 +1385,7 @@ const applyAppPrefs = async (prefs: AppPrefs): Promise<{ ok: boolean }> => {
       }
     }
   }
-  refreshLoginItem();
+  await refreshLoginItem();
   shellState.app = { ...shellState.app, prefs: { ...shellState.app.prefs, checkUpdates: prefs.checkUpdates } };
   await queue.run(async () => {
     await writeShellPrefs(app.getPath("userData"),
@@ -1689,7 +1727,8 @@ if (process.argv.includes(SMOKE_LOCAL_BACKEND)) {
     shellState.locale = effectiveLocale(prefs.locale, app.getLocale());
     shellState.appVersion = app.getVersion();
     trayNoticeShown = prefs.trayNoticeShown;
-    refreshLoginItem();
+    if (PLATFORM === "linux" && app.isPackaged) await refreshAutostartExec();
+    await refreshLoginItem();
     ffmpegLine = readFfmpegLine(app.isPackaged ? process.resourcesPath : null);
     localBackend = createLocalBackend();
     registerHandlers();
@@ -1705,15 +1744,18 @@ if (process.argv.includes(SMOKE_LOCAL_BACKEND)) {
     if (!existsSync(path.join(app.getPath("userData"), STARTUP_FILE))) {
       await writeStartupChoice(app.getPath("userData"), plan.screen === "connect" ? plan.target : null).catch(() => {});
     }
-    // A login start on Windows opens no window; the tray is the only way in.
-    const startHidden = PLATFORM === "win32" && launchedHidden(process.argv);
+    // A login start on Windows opens no window; the tray is the only way in. On Linux the window
+    // opens minimized instead, so it can still be reached from the taskbar.
+    const hiddenLaunch = launchedHidden(process.argv);
+    const startHidden = PLATFORM === "win32" && hiddenLaunch;
+    const startMinimized = PLATFORM === "linux" && hiddenLaunch;
     // The window opens already saying where it connects, never flashing the welcome screen first.
     if (plan.screen === "connect") {
       const profile = plan.target.kind === "profile" ? findProfile(profileStore, plan.target.id) : null;
       shellState.screen = { kind: "connecting", target: plan.target, name: profile?.name ?? "", origin: profile?.origin ?? null };
       if (startHidden) shellState.chosen = plan.target;
     }
-    if (PLATFORM === "win32") createTray();
+    if (PLATFORM === "win32" || PLATFORM === "linux") createTray();
     if (startHidden) {
       pushState();
       // Starting the backend with no window lets other devices reach it and downloads resume.
@@ -1721,7 +1763,7 @@ if (process.argv.includes(SMOKE_LOCAL_BACKEND)) {
       syncUpdateChecks(prefs.checkUpdates);
       return;
     }
-    createShell(savedWindow);
+    createShell(savedWindow, startMinimized);
     syncUpdateChecks(prefs.checkUpdates);
     if (plan.screen === "connect") void connectTarget(plan.target, { launch: true });
   });

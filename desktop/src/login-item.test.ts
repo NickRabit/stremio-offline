@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import test from "node:test";
 import {
-  AUTOSTART_NAME, autostartEntry, autostartFile, launchExecutable, launchedHidden, LOGIN_ARGS, loginItemQuery, loginItemStatus,
-  loginItemUpdate, loginItemOn, readAutostart, removeAutostart, writeAutostart, type AutostartFs,
+  AUTOSTART_NAME, autostartEntry, autostartExecutable, autostartFile, launchExecutable, launchedHidden, LOGIN_ARGS, loginItemQuery,
+  loginItemStatus, loginItemUpdate, loginItemOn, readAutostart, removeAutostart, writeAutostart, type AutostartFs,
 } from "./login-item.js";
 
 test("a login launch on Windows starts the app in the notification area", () => {
@@ -102,6 +102,14 @@ test("the autostart entry quotes the Exec line the way the Desktop Entry spec re
   assert.equal(entry.includes("X-GNOME-Autostart-enabled=true"), true);
   assert.equal(entry.includes("Hidden=false"), true);
   assert.equal(entry.includes("NoDisplay=false"), true);
+});
+
+test("the Exec line reads back as the executable it names", () => {
+  assert.equal(autostartExecutable(autostartEntry("/opt/stremio-offline/stremio-offline")), "/opt/stremio-offline/stremio-offline");
+  const tricky = "/opt/Stremio $Offline `100%`";
+  assert.equal(autostartExecutable(autostartEntry(tricky)), tricky);
+  assert.equal(autostartExecutable("[Desktop Entry]\nExec=/usr/bin/thing --hidden\n"), "/usr/bin/thing");
+  assert.equal(autostartExecutable("[Desktop Entry]\nType=Application\n"), null);
 });
 
 test("the autostart file lives under XDG_CONFIG_HOME, or under the home folder when it is unset", () => {
