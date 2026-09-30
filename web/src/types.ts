@@ -34,6 +34,8 @@ export interface Trailer { youtubeId: string; title?: string; provider: "cinemet
 export interface Stream {
   sourceId: string; kind: "remote" | "library" | "torrent" | "unsupported"; playable: boolean; localPath?: string; name?: string; title?: string; description?: string;
   subtitles?: Subtitle[]; addonKey?: string; addonName?: string;
+  /** A library file bound to a catalogue title: what subtitle addons are asked about. */
+  subtitlesFor?: { type: string; id: string };
   behaviorHints?: { notWebReady?: boolean; filename?: string; videoSize?: number; bingeGroup?: string };
 }
 export interface QueueHalt { reason: "storage"; at: string; message: string; messageKey?: string }

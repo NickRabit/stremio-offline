@@ -558,6 +558,26 @@ test("POST /api/library/source hands the file and its sidecars to the media reso
   assert.equal(missing.status, 404);
 });
 
+test("POST /api/library/source names the catalogue title a bound file is asked about", async (t) => {
+  const root = await makeRoot("stremio-curate-source-bound-");
+  await put(root, "Dark/Season 2/Dark.S02E03.mkv");
+  await put(root, "Loose.mkv");
+  const harness = await mount({
+    libraries: [library("lib_00000001", root)],
+    units: [{ key: "lib_00000001/Dark", kind: "series", relative: "Dark", sampleFiles: ["Dark/Season 2/Dark.S02E03.mkv"] }],
+    records: { "lib_00000001/Dark": { type: "series", id: "tt5753856", source: "scan" } },
+  });
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const episode = await api(harness.base, "/api/library/source", { method: "POST", body: { path: "Dark/Season 2/Dark.S02E03.mkv" } });
+  assert.equal(episode.status, 200);
+  assert.deepEqual((await episode.json() as { subtitlesFor?: unknown }).subtitlesFor, { type: "series", id: "tt5753856:2:3" });
+
+  const loose = await api(harness.base, "/api/library/source", { method: "POST", body: { path: "Loose.mkv" } });
+  assert.equal(loose.status, 200);
+  assert.equal((await loose.json() as { subtitlesFor?: unknown }).subtitlesFor, undefined, "an unbound file asks about nothing");
+});
+
 test("GET /api/library/suggestions scopes to one library and proxies the candidate poster", async (t) => {
   const harness = await mount({
     libraries: [library("lib_00000001", "/media/films"), library("lib_00000002", "/media/series", 1)],

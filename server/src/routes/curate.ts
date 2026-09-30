@@ -7,7 +7,7 @@ import { normalizeLanguage } from "../language.js";
 import { libraryFor, parseLibraryPath, posixBase, resolveLibraryPath, type Viewer } from "../libraries.js";
 import type { LibraryAutoScan } from "../library-autoscan.js";
 import type { LibraryCandidateSource } from "../library-candidates.js";
-import { episodeNumberOf, knownEntryForUnit, knownTitleOf, lookupSkipped, needsBackfill, parseUnit, pendingSuggestionKeys, scanMiss, suggestionFor, suggestionForUnit, unitFor, type LibraryMetaRecord, type TitleUnit } from "../library-match.js";
+import { episodeNumberOf, knownEntryForUnit, knownTitleOf, lookupSkipped, needsBackfill, parseUnit, pendingSuggestionKeys, scanMiss, subtitleTarget, suggestionFor, suggestionForUnit, unitFor, type LibraryMetaRecord, type TitleUnit } from "../library-match.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import type { LibraryOp, LibraryOps } from "../library-ops.js";
 import { parseMediaPath } from "../library-parse.js";
@@ -289,9 +289,17 @@ export function registerCurateRoutes(app: express.Application, deps: CurateDeps)
       if (!match) return [];
       return [{ url: `file://${path.posix.join(path.posix.dirname(key), entry.name)}`, lang: normalizeLanguage(match[1]) }];
     });
+    // What the player asks subtitle addons about. Found here, behind the visibility check
+    // above, rather than through the identity route, which only an administrator may call.
+    const records = metaStore.qualifiedMeta();
+    const bound = knownEntryForUnit(unitFor(key, await libraryUnits()), records, key)?.record;
+    const subtitlesFor = subtitleTarget(bound, episodeNumberOf(key, ownRecord(key, records)));
     // The media resource and its sidecars are minted here, in one step with the check: the
     // library may have been switched off, or its grant withdrawn, while the tree was read.
     requireAccess(req, { libraryId: parseLibraryPath(key)?.libraryId });
-    res.setHeader("cache-control", "private, no-store").json(mediaResources.publicStream({ url: `file://${key}`, subtitles: sidecars, behaviorHints: { filename: path.basename(relative) } }, ownerOf(req)));
+    res.setHeader("cache-control", "private, no-store").json({
+      ...mediaResources.publicStream({ url: `file://${key}`, subtitles: sidecars, behaviorHints: { filename: path.basename(relative) } }, ownerOf(req)),
+      ...(subtitlesFor ? { subtitlesFor } : {}),
+    });
   }));
 }

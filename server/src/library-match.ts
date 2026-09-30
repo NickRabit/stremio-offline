@@ -878,6 +878,21 @@ export function episodeNumberOf(relative: string, record?: LibraryMetaRecord): {
   return numberedEpisode(relative);
 }
 
+/** The catalogue title a subtitle addon is asked about for a library file: the bound title,
+ *  and for a series the episode as `id:season:episode`. An unbound file, or an episode whose
+ *  numbers are known neither from its binding nor from its name, has nothing to ask about. */
+export function subtitleTarget(
+  record: LibraryMetaRecord | undefined,
+  numbers: { season: number; episode: number } | undefined,
+): { type: string; id: string } | undefined {
+  if (!record?.id) return undefined;
+  if (record.type !== "series") return { type: record.type, id: record.id };
+  const season = record.season ?? numbers?.season;
+  const episode = record.episode ?? numbers?.episode;
+  if (season == null || episode == null) return undefined;
+  return { type: record.type, id: `${record.id}:${season}:${episode}` };
+}
+
 /** A bound series nobody re-read for the TTL. Only series: their episode list is what
  *  goes stale, while a movie binding carries everything it will ever carry. */
 export function needsRefresh(raw: LibraryMetaRecord | undefined, ttlMs: number, now = Date.now()): boolean {

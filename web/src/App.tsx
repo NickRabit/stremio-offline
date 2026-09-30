@@ -30,7 +30,6 @@ import { catalogResumeEntries, localResumeEntries } from "./resume-visibility";
 import { resumeTarget, resumeVideo, type ResumeTarget } from "./resume-target";
 import { trailerAction } from "./trailers";
 import { emptyViews, prefsFor, scopeOf, withDownloads, withExtra, withLibrary } from "./views";
-import { librarySubtitleTarget } from "./library-subtitles";
 import type { Addon, BuildInfo, Diagnostics, BrowseFile, BrowseItem, BrowseLibrary, BrowseResult, DeviceTransfer, DownloadDateField, DownloadPageSize, DownloadSort, DownloadStatusFilter, DownloadsViewPrefs, LibraryOp, LibraryOpsState, LibraryOrder, LibrarySort, LibraryView, LibraryViewPrefs, ProgressEntry, UserViews, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, DownloadSelection, Inspection, Meta, QueueHalt, ScanState, SearchableCatalog, Session, Settings as AppSettings, SettingsPatch, SiteLink, Stream, Subtitle, Trailer, Video } from "./types";
 
 /** The names of the linked sites. They are trademarks, not interface text, so they are
@@ -1298,16 +1297,18 @@ export function App() {
     try { return await playLocal(file.title, file.path, localPoster, localEpisode); }
     finally { nextBusyRef.current = false; setNextBusy(false); }
   };
-  /** The player hands addon subtitle ids to the session when it starts, so a library file's
-   *  are asked for before it opens, as a catalogue title's are. */
-  const librarySubtitles = async (path: string): Promise<Subtitle[]> => {
-    const target = librarySubtitleTarget(await api.libraryIdentity(path).catch(() => null));
-    return target ? api.subtitles(target.type, target.id).catch(() => []) : [];
-  };
+  const playLocalRequest = useRef(0);
   const playLocal = async (title: string, path: string, poster?: string, episode = false) => {
     const returning = capturePlaybackReturn({ kind: "library", key: path });
+    // A slow answer for an earlier click must not replace the file chosen after it.
+    const request = ++playLocalRequest.current;
     try {
-      const [source, extra] = await Promise.all([api.librarySource(path), librarySubtitles(path)]);
+      const source = await api.librarySource(path);
+      // The player hands addon subtitle ids to the session when it starts, so they are asked
+      // for before it opens, as a catalogue title's are.
+      const target = source.subtitlesFor;
+      const extra = target ? await api.subtitles(target.type, target.id).catch(() => [] as Subtitle[]) : [];
+      if (request !== playLocalRequest.current) return false;
       setLocalSubtitles(extra);
       setLocalPoster(poster);
       setLocalTitle(title);
@@ -1319,7 +1320,7 @@ export function App() {
       pickedRef.current = true;
       setPlayerOpen(true);
       return true;
-    } catch (error) { fail(error); return false; }
+    } catch (error) { if (request === playLocalRequest.current) fail(error); return false; }
   };
   // Polling reschedules itself instead of running on a fixed interval: a hidden tab
   // does nothing, and a failing server is asked ever less often. A toast on every tick

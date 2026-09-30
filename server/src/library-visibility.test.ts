@@ -76,6 +76,12 @@ before(async () => {
     userData: { [ADMIN]: personal(), [USER]: personal() },
   }, null, 2));
 
+  // Heat is bound to its catalogue title, so the player has something to ask subtitle addons about.
+  await mkdir(path.join(dataDir, "library"), { recursive: true });
+  await writeFile(path.join(dataDir, "library", `${GRANTED}.json`), JSON.stringify({
+    version: 1, meta: { "Heat.mkv": { type: "movie", id: "tt0113277", source: "user" } }, suggestions: {},
+  }));
+
   server = await spawnServer({
     DATA_DIR: dataDir,
     DOWNLOAD_DIR: path.join(workDir, "downloads"),
@@ -124,7 +130,9 @@ test("the contents summary names only the libraries the caller may see", async (
 test("the backstop refuses a file in a library the session has lost", async () => {
   const source = await api("/api/library/source", { method: "POST", cookie: userCookie, body: { path: `${GRANTED}/Heat.mkv` } });
   assert.equal(source.status, 200, `the granted library is readable\n${server.log()}`);
-  const { sourceId } = await source.json() as { sourceId: string };
+  const { sourceId, subtitlesFor } = await source.json() as { sourceId: string; subtitlesFor?: { type: string; id: string } };
+  // The identity route is an administrator's; an ordinary account learns the title from here.
+  assert.deepEqual(subtitlesFor, { type: "movie", id: "tt0113277" }, "a user is told what to ask subtitle addons about");
 
   const ticket = await api("/api/device-download", { method: "POST", cookie: userCookie, body: { sourceId } });
   assert.equal(ticket.status, 201);

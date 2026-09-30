@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  autoAccept, browseMeta, cacheFieldsFromMeta, clipText, dropKeyed, episodeKey, episodeNumberOf, episodesFromMeta, isExtraName,
+  autoAccept, browseMeta, cacheFieldsFromMeta, clipText, dropKeyed, episodeKey, episodeNumberOf, episodesFromMeta, subtitleTarget, isExtraName,
   folderMosaicUnits, knownEntryForUnit, knownTitleOf, knownTitleForUnit, lookupSkipped, mosaicSkipped, matchKeyFor, mosaicIdentities, needsReevaluation, parseUnit, pendingSuggestionKeys, pinInherited, matchStatus, needsBackfill, needsEpisodes, needsRefresh, pickSuggestion, remapKeyed, scanMiss, unitFor,
   scannedRecently, scanSkipReason, scoreHit, staleSuggestionKeys, suggestionFor, suggestionForUnit, titlePartConflict, titleUnits, unmatchAt, viewMeta, withSkipFlag,
   MATCH_RULE_VERSION, type LibraryMetaRecord, type LibrarySuggestion, type TitleUnit,
@@ -1365,4 +1365,14 @@ test("clearing a flag preserves a legacy unmatch sentinel but removes a legacy e
   const included = withSkipFlag(exclusion, "Heat/Heat.mkv", "skipLookup", false);
   assert.equal(included["Heat/Heat.mkv"], undefined, "a flag-only record is removed when its last flag is cleared");
   assert.equal(knownTitleForUnit(unit, included, "Heat/Heat.mkv")?.id, "tt-heat", "the cleared exclusion still inherits the folder");
+});
+
+test("subtitleTarget asks about a film by its id and an episode by its numbers", () => {
+  assert.deepEqual(subtitleTarget({ type: "movie", id: "tt0113277" }, undefined), { type: "movie", id: "tt0113277" });
+  assert.deepEqual(subtitleTarget({ type: "series", id: "tt5753856" }, { season: 2, episode: 3 }), { type: "series", id: "tt5753856:2:3" });
+  // An episode binding names the numbers itself, and they beat the file name.
+  assert.deepEqual(subtitleTarget({ type: "series", id: "tt5753856", season: 3, episode: 8 }, { season: 1, episode: 1 }), { type: "series", id: "tt5753856:3:8" });
+  assert.equal(subtitleTarget(undefined, { season: 1, episode: 1 }), undefined);
+  assert.equal(subtitleTarget({ type: "movie", id: "" }, undefined), undefined, "an unmatch records no id");
+  assert.equal(subtitleTarget({ type: "series", id: "tt5753856" }, undefined), undefined, "an episode without numbers asks about nothing");
 });
