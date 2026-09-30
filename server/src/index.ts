@@ -854,7 +854,7 @@ const artStamp = async (file: string) => {
 /** The libraries the viewer may see, as browse rows, for an empty path while more than one
  *  is configured. Counts come from the walks the library listing already holds, so opening
  *  the root does not walk the tree again. */
-const libraryRootBrowse = async (viewer: Viewer) => {
+const libraryRootBrowse = async (viewer: Viewer, options: { prewarm?: boolean } = {}) => {
   await refreshLibraryHealth();
   const [stats, entries] = await Promise.all([libraryStats({ stale: true }), libraryEntries({ stale: true })]);
   let pending = false;
@@ -879,7 +879,7 @@ const libraryRootBrowse = async (viewer: Viewer) => {
         const art = await locateArtwork(entry);
         // Only a bound title has catalogue artwork to wait for. An unbound folder is shown as
         // it is rather than paying for a video frame the mosaic never asked to generate.
-        if (!art && entry.meta?.id) { scheduleArtwork(entry); pending = true; }
+        if (!art && entry.meta?.id && !options.prewarm) { scheduleArtwork(entry); pending = true; }
         return thumbUrl("key", wirePath(entry.key), art);
       }));
       for (const poster of previews) if (poster) posters.add(poster);
@@ -1043,6 +1043,21 @@ const libraryStats = async (read?: WalkRead) => {
     if (stat) stat.files += 1;
   }
   return stats;
+};
+
+/** Fills the walks the first library visit would otherwise pay for on the spot. Best-effort
+ *  and read-only: it takes the caches the listing already keeps, so a visit arriving at the
+ *  same moment shares the work instead of walking the tree twice. Nothing waits on it and a
+ *  failure is the visit's own problem, so it is logged and dropped rather than left to reject
+ *  into an unhandled promise. */
+const warmLibraryCaches = async () => {
+  try {
+    await refreshLibraryHealth();
+    const [stats] = await Promise.all([libraryStats({ stale: true }), libraryEntries({ stale: true })]);
+    log("DEBUG", "Library caches warmed", { libraries: stats.size });
+  } catch (error) {
+    log("WARN", "The library warm-up failed", { reason: error instanceof Error ? error.message : String(error) });
+  }
 };
 
 /** A library the probes have not answered for yet. The guard reads the fold from here, and an
@@ -1272,7 +1287,7 @@ const clearGeneratedArt = async (key: string) => {
   }
 };
 
-const attachBrowseMeta = async <T extends { path: string; kind: string; name?: string; label?: string }>(item: T, language: string) => {
+const attachBrowseMeta = async <T extends { path: string; kind: string; name?: string; label?: string }>(item: T, language: string, options: { prewarm?: boolean } = {}) => {
   const records = metaStore.qualifiedMeta();
   const episodes = metaStore.episodes();
   const key = libraryKey(item.path);
@@ -1291,7 +1306,7 @@ const attachBrowseMeta = async <T extends { path: string; kind: string; name?: s
   // Only a key can answer with a better language; without one every record stays wanted as it is.
   const wantedLanguage = store.settings().tmdbApiKey ? language : undefined;
   const wanted = needsBackfill(known, undefined, wantedLanguage) || needsEpisodes(known, numbers, episodes);
-  const backfill = wanted && scheduleMetaBackfill(known!.type, known!.id, language);
+  const backfill = wanted && !options.prewarm && scheduleMetaBackfill(known!.type, known!.id, language);
   // The move dialog offers only the libraries that take what it is about to hand them,
   // and a row without a binding has no kind to compare -- the server stays the backstop.
   const titled = known && (known.type === "movie" || known.type === "series") ? { titleType: known.type } : {};
@@ -1891,7 +1906,10 @@ const libraryScan = new LibraryScan({
   // libraries the interface touched since the last run pay for it.
   browsed: () => new Set(browsedLibraries),
   metaTtlMs: metaTtlMs(),
-  onCompleted: () => pruneStaleSuggestions(),
+  // The run has just rewritten the bindings, so the walks behind the next listing are primed
+  // again. It runs in the background: the completion state is already saved and nobody is
+  // waiting on the warm-up.
+  onCompleted: () => { void warmLibraryCaches(); return pruneStaleSuggestions(); },
   // A library with its automatic lookup switched off stays out of the walk the scanner
   // takes: no catalogue search, no refresh, and no fingerprint that could look like news.
   automaticLibraryEnabled: (libraryId) => {
@@ -2279,6 +2297,8 @@ try {
   const bound = await startServer({ app, ...listenTarget });
   markServerReady();
   log("INFO", "Stremio Offline is listening", { port: bound.port, address: bound.address });
+  // Readiness is announced first: the warm-up only fills the walks, and nothing waits on it.
+  void warmLibraryCaches();
   // The desktop shell holds the Mac awake while something streams or downloads; Docker has no
   // parent port.
   const activityPort = utilityParentPort();

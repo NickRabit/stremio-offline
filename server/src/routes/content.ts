@@ -19,7 +19,7 @@ import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
 
 /** Browsing a library and the file operations under it. */
 export interface ContentDeps extends RouteContext {
-  attachBrowseMeta<T extends { path: string; kind: string; name?: string; label?: string }>(item: T, language: string): Promise<{ item: T; backfill: boolean }>;
+  attachBrowseMeta<T extends { path: string; kind: string; name?: string; label?: string }>(item: T, language: string, options?: { prewarm?: boolean }): Promise<{ item: T; backfill: boolean }>;
   carveOutsOf(library: LibraryRecord): Set<string>;
   dataOf(req: express.Request): UserData;
   deleteLibraryItem(relative: string): Promise<void>;
@@ -33,7 +33,7 @@ export interface ContentDeps extends RouteContext {
   libraryEntries(): Promise<LibraryEntry[]>;
   libraryKey(value: string): string;
   libraryPathBusy(keys: string[]): Promise<string | undefined>;
-  libraryRootBrowse(viewer: Viewer): Promise<{ path: string; items: unknown[]; total: number; pending: boolean }>;
+  libraryRootBrowse(viewer: Viewer, options?: { prewarm?: boolean }): Promise<{ path: string; items: unknown[]; total: number; pending: boolean }>;
   /** Every title unit of every library, the walk the browse folder mosaic groups. */
   libraryUnits(read?: { stale?: boolean }): Promise<TitleUnit[]>;
   locateArtwork(entry: LibraryEntry, shape?: ArtShape): Promise<string | undefined>;
@@ -103,7 +103,10 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     const sort = sorts.has(String(req.query.sort)) ? String(req.query.sort) as "name" : "name";
     const onlyFavorites = req.query.favorites === "1";
     const onlyUnconfirmed = req.query.unconfirmed === "1";
-    void sweepArtwork();
+    // A prewarm only wants the rows and their existing pictures. It skips the maintenance and
+    // the missing-artwork scheduling the ordinary flow does, so it never produces a poster.
+    const prewarm = req.query.prewarm === "1";
+    if (!prewarm) void sweepArtwork();
     const configured = store.libraries();
     const viewer = viewerOf(currentUser(req));
     const libraries = visibleLibraries(configured, viewer);
@@ -113,14 +116,14 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     // is still part of the setup, and a browse root that changed shape when a drive spun down
     // would be worse than a row with a warning. The row says so instead of hiding it.
     if (!requested && configured.length !== 1) {
-      res.json(await libraryRootBrowse(viewer));
+      res.json(await libraryRootBrowse(viewer, { prewarm }));
       return;
     }
     const resolved = requested ? await resolveLibraryPath(libraries, requested) : undefined;
     if (requested && !resolved) throw new AppError("Invalid path.", "err.invalidPath");
     if (!libraries.length) throw new AppError("Invalid path.", "err.invalidPath");
     const library = resolved?.library ?? libraries[0]!;
-    markBrowsed(library);
+    if (!prewarm) markBrowsed(library);
     const inLibrary = (path: string) => libraryPath(library.id, path);
     const data = dataOf(req);
     const favoritePaths = onlyFavorites
@@ -139,14 +142,16 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
       const key = inLibrary(item.path);
       const path = wirePath(key);
       if (item.kind === "folder") {
-        const { item: withMeta, backfill } = await attachBrowseMeta({ ...item, path }, prefsOf(req).uiLanguage);
+        const { item: withMeta, backfill } = await attachBrowseMeta({ ...item, path }, prefsOf(req).uiLanguage, { prewarm });
         // A collection stands for several films: it shows their posters rather than a folder
         // frame of its own, and no frame is scheduled for it.
         const posters = await folderPosters(key, library, units);
         if (posters.length > 1) return { ...withMeta, path, posters, poster: undefined, wide: undefined, backfill };
         const { poster: art, wide } = await locateFolderArtworkPair(key);
-        if (!art) scheduleFolderArtwork(key);
-        if (!wide) scheduleFolderArtwork(key, "wide");
+        if (!prewarm) {
+          if (!art) scheduleFolderArtwork(key);
+          if (!wide) scheduleFolderArtwork(key, "wide");
+        }
         return {
           ...withMeta, path,
           poster: await thumbUrl("dir", path, art),
@@ -155,11 +160,13 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
         };
       }
       const art = await locateFileArtwork(key);
-      if (!art) scheduleFileArtwork(key);
       const wide = await locateFileArtwork(key, "wide");
-      if (!wide) scheduleFileArtwork(key, "wide");
+      if (!prewarm) {
+        if (!art) scheduleFileArtwork(key);
+        if (!wide) scheduleFileArtwork(key, "wide");
+      }
       const watched = progressOf(data)[`file:${key}`];
-      const { item: withMeta, backfill } = await attachBrowseMeta({ ...item, path }, prefsOf(req).uiLanguage);
+      const { item: withMeta, backfill } = await attachBrowseMeta({ ...item, path }, prefsOf(req).uiLanguage, { prewarm });
       return {
         ...withMeta,
         path,

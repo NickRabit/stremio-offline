@@ -30,6 +30,11 @@ interface Calls {
   thumbAsked: string[];
   entriesAsked: number;
   artworkAsked: string[];
+  swept: number;
+  scheduledFolder: string[];
+  scheduledFile: string[];
+  rootPrewarm: boolean[];
+  browseMetaPrewarm: boolean[];
 }
 
 interface Harness {
@@ -71,7 +76,7 @@ const makeRoot = () => mkdtemp(path.join(tmpdir(), "stremio-content-"));
  *  instance over fake collaborators that record what they were asked to do. The filesystem
  *  is real: the resolver, the browse walk and the name checks are module singletons. */
 const mount = async (libraries: LibraryRecord[], entries: LibraryEntry[] = [], activeItems: () => string[] = () => [], state: LibraryState = {}): Promise<Harness> => {
-  const calls: Calls = { browsed: [], rootBrowses: 0, deleted: [], transfers: [], relocated: [], thumbAsked: [], entriesAsked: 0, artworkAsked: [] };
+  const calls: Calls = { browsed: [], rootBrowses: 0, deleted: [], transfers: [], relocated: [], thumbAsked: [], entriesAsked: 0, artworkAsked: [], swept: 0, scheduledFolder: [], scheduledFile: [], rootPrewarm: [], browseMetaPrewarm: [] };
   const deps: ContentDeps = {
     store: { libraries: () => libraries, users: () => [admin, ordinary] } as unknown as Store,
     needsSetup: () => false,
@@ -82,7 +87,7 @@ const mount = async (libraries: LibraryRecord[], entries: LibraryEntry[] = [], a
     stopUserSessions: async () => undefined,
     requireAccess: () => undefined,
     stopContentAccess: async () => undefined,
-    attachBrowseMeta: async (item) => ({ item, backfill: false }),
+    attachBrowseMeta: async (item, _language, options) => { calls.browseMetaPrewarm.push(options?.prewarm === true); return { item, backfill: false }; },
     carveOutsOf: () => new Set(),
     dataOf: () => ({ ...emptyUserData(), favorites: state.favorites ?? [] }),
     deleteLibraryItem: async (relative) => { calls.deleted.push(relative); },
@@ -109,8 +114,9 @@ const mount = async (libraries: LibraryRecord[], entries: LibraryEntry[] = [], a
       }
       return undefined;
     },
-    libraryRootBrowse: async (viewer) => {
+    libraryRootBrowse: async (viewer, options) => {
       calls.rootBrowses += 1;
+      calls.rootPrewarm.push(options?.prewarm === true);
       const visible = visibleLibraries(libraries, viewer);
       return { path: "", items: visible.map((record) => ({ kind: "library", libraryId: record.id, name: record.name })), total: visible.length, pending: false };
     },
@@ -128,9 +134,9 @@ const mount = async (libraries: LibraryRecord[], entries: LibraryEntry[] = [], a
     progressOf: () => ({}),
     relativeKeyIn: (libraryId, key) => (key.startsWith(`${libraryId}/`) ? key.slice(libraryId.length + 1) : undefined),
     relocateLibraryPath: async (key, nextKey) => { calls.relocated.push({ key, nextKey }); },
-    scheduleFileArtwork: () => undefined,
-    scheduleFolderArtwork: () => undefined,
-    sweepArtwork: async () => undefined,
+    scheduleFileArtwork: (key) => { calls.scheduledFile.push(key); },
+    scheduleFolderArtwork: (key) => { calls.scheduledFolder.push(key); },
+    sweepArtwork: async () => { calls.swept += 1; },
     thumbUrl: async (param, value, art) => (art ? `${param}:${value}` : undefined),
     transferLibraryItem: async (relative, folder, copy, _progress, confirmTypeMismatch) => {
       calls.transfers.push({ relative, folder, copy, confirmTypeMismatch });
@@ -206,6 +212,49 @@ test("GET /api/library/browse lists what is inside one library", async (t) => {
   assert.equal(body.total, 1);
   assert.deepEqual(body.items.map((item) => [item.kind, item.path, item.label]), [["file", "Films/Heat.mkv", "Heat"]]);
   assert.equal(harness.calls.rootBrowses, 0, "one library is opened, not listed");
+});
+
+test("a prewarm browse schedules no artwork and sweeps nothing", async (t) => {
+  const root = await makeRoot();
+  await put(root, "Films/Heat.mkv");
+  const harness = await mount([library("lib_00000001", root)]);
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const response = await api(harness.base, "/api/library/browse?path=Films&prewarm=1");
+
+  assert.equal(response.status, 200);
+  const body = await response.json() as { items: Array<{ path: string }> };
+  assert.deepEqual(body.items.map((item) => item.path), ["Films/Heat.mkv"], "the rows are the ordinary ones");
+  assert.equal(harness.calls.swept, 0, "a prewarm does not sweep the artwork cache");
+  assert.deepEqual(harness.calls.scheduledFile, [], "a prewarm schedules no file artwork");
+  assert.deepEqual(harness.calls.scheduledFolder, [], "a prewarm schedules no folder artwork");
+  assert.deepEqual(harness.calls.browsed, [], "a prewarm does not count as a library visit");
+  assert.deepEqual(harness.calls.browseMetaPrewarm, [true], "a prewarm cannot schedule metadata backfill");
+});
+
+test("an ordinary browse still sweeps and schedules the missing artwork", async (t) => {
+  const root = await makeRoot();
+  await put(root, "Films/Heat.mkv");
+  const harness = await mount([library("lib_00000001", root)]);
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const response = await api(harness.base, "/api/library/browse?path=Films");
+
+  assert.equal(response.status, 200);
+  assert.equal(harness.calls.swept, 1, "an ordinary browse sweeps the artwork cache");
+  assert.deepEqual(harness.calls.scheduledFile, ["lib_00000001/Films/Heat.mkv", "lib_00000001/Films/Heat.mkv"], "the missing poster and backdrop are scheduled");
+});
+
+test("a prewarm root browse sweeps nothing and asks the root listing for a prewarm", async (t) => {
+  const harness = await mount([library("lib_00000001", "/media/films"), library("lib_00000002", "/media/shows", 1)]);
+  t.after(harness.close);
+
+  const response = await api(harness.base, "/api/library/browse?prewarm=1");
+
+  assert.equal(response.status, 200);
+  assert.equal(harness.calls.rootBrowses, 1);
+  assert.deepEqual(harness.calls.rootPrewarm, [true], "the prewarm option reaches the root listing");
+  assert.equal(harness.calls.swept, 0, "a prewarm root browse does not sweep the artwork cache");
 });
 
 test("GET /api/library/browse lists only granted libraries to an ordinary user", async (t) => {

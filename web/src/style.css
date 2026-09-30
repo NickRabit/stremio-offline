@@ -818,6 +818,12 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 /* Settings use one reading order at every viewport width. */
 .settings-page{max-width:1040px;container-type:inline-size}
 .settings-page .settings-title{margin-bottom:24px;flex-wrap:wrap;gap:12px}
+.settings-page .support-link{display:flex;align-items:center;gap:14px;margin-top:18px;padding:18px 22px;border:1px solid var(--line);border-radius:12px;color:var(--text);text-decoration:none;background:var(--panel)}
+.settings-page .support-link>svg:first-child{color:var(--accent);flex:none}
+.settings-page .support-link>svg:last-child{margin-left:auto;color:var(--muted);flex:none}
+.settings-page .support-link span{display:grid;gap:3px}
+.settings-page .support-link small{color:var(--muted)}
+.settings-page .support-link:hover{border-color:var(--accent)}
 .settings-page .settings-grid{grid-template-columns:minmax(0,1fr);gap:18px}
 .settings-page .settings-section{grid-column:1;padding:22px 24px}
 .settings-page .settings-section-head{margin-bottom:16px}

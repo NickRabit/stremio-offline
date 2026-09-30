@@ -806,6 +806,8 @@ export const fr: Catalog = {
   "addons.refreshAllDone": { one: "1 module complémentaire mis à jour.", other: "{count} modules complémentaires mis à jour." },
   "addons.refreshAllFailed": { one: "1 module complémentaire n'a pas répondu.", other: "{count} modules complémentaires n'ont pas répondu." },
   "settings.privacyTitle": "Confidentialité",
+  "settings.supportTitle": "Soutenir le projet",
+  "settings.supportText": "Stremio Offline vous plaît ? Soutenez son développement sur Ko-fi.",
   "settings.addonsTitle": "Modules complémentaires",
   "settings.addonsText": "Le manifeste stocké décide quels catalogues sont proposés et quels modules complémentaires sont demandés pour les flux.",
   "settings.addonRefresh": "Actualisation des modules",

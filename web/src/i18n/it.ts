@@ -806,6 +806,8 @@ export const it: Catalog = {
   "addons.refreshAllDone": { one: "1 componente aggiuntivo aggiornato.", other: "{count} componenti aggiuntivi aggiornati." },
   "addons.refreshAllFailed": { one: "1 componente aggiuntivo non ha risposto.", other: "{count} componenti aggiuntivi non hanno risposto." },
   "settings.privacyTitle": "Privacy",
+  "settings.supportTitle": "Sostieni il progetto",
+  "settings.supportText": "Ti piace Stremio Offline? Sostieni il suo sviluppo su Ko-fi.",
   "settings.addonsTitle": "Componenti aggiuntivi",
   "settings.addonsText": "Il manifest memorizzato decide quali cataloghi vengono offerti e quali componenti aggiuntivi vengono richiesti per i flussi.",
   "settings.addonRefresh": "Aggiornamento dei componenti aggiuntivi",

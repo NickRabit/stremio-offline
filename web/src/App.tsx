@@ -1,6 +1,7 @@
 import { FormEvent, ReactNode, TouchEvent as ReactTouchEvent, UIEvent, WheelEvent as ReactWheelEvent, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, BarChart3, ArrowUp, Check, RectangleHorizontal, RectangleVertical, Copy, FolderInput, FolderOpen, ImageOff, Images, KeyRound, Languages, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, ShieldCheck, ShieldQuestion, SlidersHorizontal, Sparkles, Star, FileJson, Link2, LogOut, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, FileText, Film, FolderCog, HardDrive, Library, PackagePlus, Pause, Play, Plus, RefreshCw, Search, SearchX, Settings, Subtitles, Trash2, Upload, Users, X } from "lucide-react";
+import { ArrowDown, BarChart3, ArrowUp, Check, RectangleHorizontal, RectangleVertical, Copy, FolderInput, FolderOpen, ImageOff, Images, KeyRound, Languages, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, ShieldCheck, ShieldQuestion, SlidersHorizontal, Sparkles, Star, FileJson, Link2, LogOut, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, FileText, Film, FolderCog, HardDrive, Heart, Library, PackagePlus, Pause, Play, Plus, RefreshCw, Search, SearchX, Settings, Subtitles, Trash2, Upload, Users, X } from "lucide-react";
 import { queueDestination } from "./queue-target";
+import { preloadLibraryPosters, scheduleIdle } from "./library-preload";
 import { api, ApiError, describeError, logDownloadUrl, saveToDevice } from "./api";
 import { AccountSettings, LoginScreen, PasswordChangeRequired } from "./Login";
 import { bytes, Heading, hideBroken, SettingControl, SettingsSectionHead } from "./settings-ui";
@@ -130,6 +131,7 @@ export function App() {
   const [catalogReset, setCatalogReset] = useState(0);
   const [statsReset, setStatsReset] = useState(0);
   const scrollByView = useRef<Partial<Record<View, number>>>({});
+  const libraryPrewarmStarted = useRef(false);
   const restoringScroll = useRef(false);
   const viewRef = useRef<View>("catalog");
   const [galleryIndex, setGalleryIndex] = useState<number | null>(null);
@@ -1135,6 +1137,24 @@ export function App() {
     void api.favorites({ limit: 12 }).then((result) => { if (!cancelled) setFavoritePreview(result); }).catch(() => { if (!cancelled) setFavoritePreview(null); });
     return () => { cancelled = true; };
   }, [ready, view, browse, browsePath, browseQuery, onlyFavorites]);
+
+  // While the user is somewhere other than the library, idle time goes into the root listing
+  // and the pictures it will draw, so the first visit finds them warm. Best-effort: the
+  // ordinary request on entry stays the authoritative one, and a cancelled pass starts nothing.
+  useEffect(() => {
+    if (!ready) { libraryPrewarmStarted.current = false; return; }
+    if (!viewsReady || view === "library" || !libraries.length || libraryPrewarmStarted.current) return;
+    const controller = new AbortController();
+    let started = false;
+    const cancelIdle = scheduleIdle(() => {
+      started = true;
+      libraryPrewarmStarted.current = true;
+      void api.browse({ path: "", limit: 20, prewarm: true })
+        .then((page) => preloadLibraryPosters(page.items, { signal: controller.signal }))
+        .catch(() => undefined);
+    });
+    return () => { controller.abort(); cancelIdle(); if (!started) libraryPrewarmStarted.current = false; };
+  }, [ready, viewsReady, view, libraries.length]);
 
   /** Each scope opens on what it was left in. Walking deeper inside one is the same scope:
    *  the tools keep what they show, and nothing is re-applied or written. */
@@ -2368,6 +2388,7 @@ function SettingsPage({ build, restricted = false, settings, languages, librarie
       {!restricted && admin && <section className="panel settings-section backup-section"><SettingsSectionHead icon={<FileJson/>} title={t("settings.backupTitle")} text={t("settings.backupText")}/><p>{t("settings.backupBody")}</p><p className="notice">{t("settings.backupWarning")}</p><div className="setting-actions"><button disabled={backupBusy} onClick={() => void exportSettings()}><Download/> {t("settings.export")}</button><button disabled={backupBusy} onClick={() => importInput.current?.click()}><Upload/> {t("settings.import")}</button><input ref={importInput} className="file-input" type="file" accept="application/json,.json" aria-label={t("settings.pickBackup")} onChange={(event) => void importSettings(event.target.files?.[0])}/></div></section>}
       {!restricted && admin && <DiagnosticsSection build={build} onNotify={onNotify} onError={onError}/>}
     </div>
+    <a className="support-link" href="https://ko-fi.com/nickrabit" target="_blank" rel="noopener noreferrer"><Heart aria-hidden="true"/><span><strong>{t("settings.supportTitle")}</strong><small>{t("settings.supportText")}</small></span><ChevronRight aria-hidden="true"/></a>
   </section>;
 }
 
