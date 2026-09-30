@@ -874,15 +874,15 @@ const libraryRootBrowse = async (viewer: Viewer) => {
       // catalogue title contribute one poster. Deduplicating before the artwork lookups keeps
       // a large collection from paying for the same picture twice.
       const distinct = mosaicIdentities(visible.map((entry) => ({ key: entry.key, meta: entry.meta })), 5);
-      for (const source of distinct) {
+      const previews = await Promise.all(distinct.map(async (source) => {
         const entry = visible.find((candidate) => candidate.key === source.key)!;
         const art = await locateArtwork(entry);
         // Only a bound title has catalogue artwork to wait for. An unbound folder is shown as
         // it is rather than paying for a video frame the mosaic never asked to generate.
         if (!art && entry.meta?.id) { scheduleArtwork(entry); pending = true; }
-        const poster = await thumbUrl("key", wirePath(entry.key), art);
-        if (poster) posters.add(poster);
-      }
+        return thumbUrl("key", wirePath(entry.key), art);
+      }));
+      for (const poster of previews) if (poster) posters.add(poster);
     }
     return {
       kind: "library" as const, libraryId: library.id, name: library.name, label: library.name,

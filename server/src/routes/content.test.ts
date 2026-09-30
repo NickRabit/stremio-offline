@@ -588,3 +588,28 @@ test("GET /api/library/thumb answers 404 for a key whose artwork is missing", as
   assert.equal(harness.calls.entriesAsked, 1);
   assert.deepEqual(harness.calls.artworkAsked, ["lib_00000001/Films"], "the key is looked up among the library entries");
 });
+
+test("library thumbnails revalidate cached bytes and still enforce library visibility", async (t) => {
+  const root = await makeRoot();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const art = path.join(root, "poster.jpg");
+  await writeFile(art, "poster bytes");
+  const harness = await mount([library("lib_00000001", root, 0, [ADA])], [], () => [], { artwork: () => art });
+  t.after(() => harness.close());
+  const url = `${harness.base}/api/library/thumb?path=Films/Heat.mkv&v=stamp`;
+  const first = await fetch(url);
+  assert.equal(first.status, 200);
+  assert.equal(first.headers.get("cache-control"), "private, no-cache");
+  assert.equal(await first.text(), "poster bytes");
+  const etag = first.headers.get("etag")!;
+  assert.ok(etag);
+  const cached = await fetch(url, { headers: { "if-none-match": etag, "cache-control": "max-age=0" } });
+  assert.equal(cached.status, 304);
+  assert.equal(await cached.text(), "");
+  const denied = await fetch(url, { headers: { "if-none-match": etag, "cache-control": "max-age=0", "x-user": BOB } });
+  assert.equal(denied.status, 404);
+  await writeFile(art, "updated poster bytes");
+  const changed = await fetch(url, { headers: { "if-none-match": etag, "cache-control": "max-age=0" } });
+  assert.equal(changed.status, 200);
+  assert.equal(await changed.text(), "updated poster bytes");
+});
