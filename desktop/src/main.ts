@@ -1482,8 +1482,13 @@ const registerHandlers = () => {
   // The language is no secret, but only the local backend's page asks for it.
   ipcMain.on("desktop:locale", (event) => {
     const current = shell;
-    event.returnValue = current !== null && current.remote !== null && event.sender === current.remote.webContents
-      && current.remotePartition === LOCAL_PARTITION ? shellState.locale : null;
+    const frame = event.senderFrame;
+    event.returnValue = current !== null && localPageSent({
+      currentView: current.remote !== null && event.sender === current.remote.webContents,
+      partition: current.remotePartition,
+      frame: frame ? { url: frame.url, top: frame.parent === null } : null,
+      localOrigin: localOrigin(),
+    }) ? shellState.locale : null;
   });
 
   // Only the top frame of the page the local backend serves, while it is the page on screen.
