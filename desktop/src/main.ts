@@ -214,7 +214,13 @@ const refreshAutostartExec = async (): Promise<void> => {
     return;
   }
   if (autostartExecutable(text) === current) return;
-  await writeAutostart(file, current);
+  // A login entry that cannot be rewritten (a read-only folder, a full disk) is no reason to stop
+  // the app from starting; it keeps the old path and says so.
+  try {
+    await writeAutostart(file, current);
+  } catch (error) {
+    console.warn("autostart: the login entry could not be updated: " + (error instanceof Error ? error.message : String(error)));
+  }
 };
 
 const openSettings = (): void => {
@@ -1734,7 +1740,7 @@ if (process.argv.includes(SMOKE_LOCAL_BACKEND)) {
     shellState.locale = effectiveLocale(prefs.locale, app.getLocale());
     shellState.appVersion = app.getVersion();
     trayNoticeShown = prefs.trayNoticeShown;
-    if (PLATFORM === "linux" && app.isPackaged) await refreshAutostartExec();
+    if (PLATFORM === "linux" && app.isPackaged) await refreshAutostartExec().catch(() => {});
     await refreshLoginItem();
     ffmpegLine = readFfmpegLine(app.isPackaged ? process.resourcesPath : null);
     if (PLATFORM === "linux") systemFfmpeg = await findSystemFfmpeg(process.env, PLATFORM);

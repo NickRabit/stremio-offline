@@ -234,6 +234,11 @@ const isFile = (file: string) => {
   try { return statSync(file).isFile(); } catch { return false; }
 };
 
+/** A render node is a character device, not a file: `isFile` would never find one. */
+export const isCharacterDevice = (entry: string) => {
+  try { return statSync(entry).isCharacterDevice(); } catch { return false; }
+};
+
 /** An entry as it is compared, without the one trailing slash it may carry. */
 const withoutTrailingSlash = (entry: string) => entry.length > 1 && entry.endsWith("/") ? entry.slice(0, -1) : entry;
 
@@ -255,7 +260,7 @@ export function localBackendEnv(
   directoryExists: (dir: string) => boolean = isDirectory,
   settings: LocalSettings = defaultLocalSettings(),
   tools: MediaTools | null = null,
-  fileExists: (file: string) => boolean = isFile,
+  deviceExists: (entry: string) => boolean = isCharacterDevice,
   toolsOverride: MediaTools | null = null,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
@@ -272,7 +277,7 @@ export function localBackendEnv(
   if (settings.allowPrivateAddons) env.ALLOW_PRIVATE_ADDONS = "1";
   if (platform === "darwin") env.PATH = macosPath(env.PATH, directoryExists);
   // The server probes the device and logs why transcoding is off, so an unreadable one is fine.
-  if (platform === "linux" && !env.VAAPI_DEVICE?.trim() && fileExists(VAAPI_DEVICE_PATH)) {
+  if (platform === "linux" && !env.VAAPI_DEVICE?.trim() && deviceExists(VAAPI_DEVICE_PATH)) {
     env.VAAPI_DEVICE = VAAPI_DEVICE_PATH;
   }
   // The app's own FFmpeg, unless someone named another one on purpose.
@@ -460,7 +465,7 @@ export class LocalBackend {
     this.launchedWith = settings;
     const toolsOverride = settings.useSystemFfmpeg ? options.systemTools ?? null : null;
     const child = options.fork(options.entry, {
-      env: localBackendEnv(process.env, options.userDataDir, port, process.platform, isDirectory, settings, options.tools ?? null, isFile, toolsOverride),
+      env: localBackendEnv(process.env, options.userDataDir, port, process.platform, isDirectory, settings, options.tools ?? null, isCharacterDevice, toolsOverride),
       cwd: options.userDataDir,
       stdio: "inherit",
       serviceName: SERVICE_NAME,

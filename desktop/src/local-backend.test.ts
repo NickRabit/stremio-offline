@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir, type NetworkInterfaceInfo } from "node:os";
@@ -23,6 +24,7 @@ import {
   type LocalBackendChild,
   type LocalBackendForkOptions,
   type LocalBackendOptions,
+  isCharacterDevice,
 } from "./local-backend.js";
 import { writeLocalSettings } from "./local-settings.js";
 import { partitionForOrigin } from "./origin.js";
@@ -841,4 +843,11 @@ test("a running backend is replaced when only the system FFmpeg switch changed",
   secondFork.child.emit("message", READY);
   await second;
   await harness.backend.stop();
+});
+
+test("the default VAAPI check finds a character device, which a render node is", () => {
+  // /dev/null is a character device on every POSIX host; a regular file is not one.
+  assert.equal(isCharacterDevice("/dev/null"), process.platform !== "win32");
+  assert.equal(isCharacterDevice(fileURLToPath(import.meta.url)), false);
+  assert.equal(isCharacterDevice("/nonexistent/renderD128"), false);
 });
