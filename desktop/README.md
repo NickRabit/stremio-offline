@@ -9,6 +9,17 @@ only through the `window.stremioShell` bridge. At launch the shell connects to
 the remembered target; a saved server that does not answer falls back to the
 local backend and offers to switch back once it answers again.
 
+## Cloudflare Access
+
+A saved server behind **Cloudflare Access** signs in with the email one-time
+PIN. Connecting to it shows Cloudflare's own sign-in page inside the app
+window, and only sign-in pages on `*.cloudflareaccess.com` are allowed there,
+so identity providers on other domains are refused by the window. The
+Cloudflare cookie is kept per server until Cloudflare's session duration ends,
+so the next launch connects without asking until then. Anything that fetches a
+media link without the app — AirPlay or an external player — needs a **Bypass**
+rule in Access.
+
 ## The menu, the settings window and the window geometry
 
 The menu bar carries **Settings…** (⌘,), the usual Edit, View, Window and Help

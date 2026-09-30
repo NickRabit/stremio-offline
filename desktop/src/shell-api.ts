@@ -22,7 +22,7 @@ export interface LocalSettings {
 
 export type ShellView = "main" | "settings" | "toast";
 
-export type ProbeFailure = "invalid" | "insecure-transport" | "unreachable" | "not-status";
+export type ProbeFailure = "invalid" | "insecure-transport" | "unreachable" | "not-status" | "access-required";
 export type FailureReason = ProbeFailure | "local-startup" | "port-busy";
 
 /** What the main window shows. "connected" means the server page is on screen and the shell's
@@ -34,6 +34,9 @@ export type MainScreen =
    *  window got there; `cancelSetup` goes back to what it showed before. */
   | { kind: "setup" }
   | { kind: "connecting"; target: Target; name: string; origin: string | null }
+  /** The server sits behind Cloudflare Access: its sign-in page is on screen in the server's
+   *  own view, which fills the window. */
+  | { kind: "sign-in"; target: Target; name: string; origin: string }
   | { kind: "connected" }
   | { kind: "error"; target: Target; name: string; origin: string | null; reason: FailureReason; port: number | null };
 

@@ -11,6 +11,7 @@ const ERROR_TEXT: Record<FailureReason, [Key, Key]> = {
   unreachable: ["desktop.errorUnreachable", "desktop.errorUnreachableText"],
   "insecure-transport": ["desktop.errorInsecure", "desktop.errorInsecureText"],
   "not-status": ["desktop.errorNotStatus", "desktop.errorNotStatusText"],
+  "access-required": ["desktop.errorAccess", "desktop.errorAccessText"],
   invalid: ["desktop.errorInvalid", "desktop.errorInvalidText"],
   "local-startup": ["desktop.errorLocal", "desktop.errorLocalText"],
   "port-busy": ["desktop.errorPortBusy", "desktop.errorPortBusyText"],
@@ -18,7 +19,8 @@ const ERROR_TEXT: Record<FailureReason, [Key, Key]> = {
 
 export function MainWindow({ bridge, state }: { bridge: ShellBridge; state: ShellState }) {
   const { screen } = state;
-  if (screen.kind === "connected") return null;
+  // The connected server page and Cloudflare's sign-in page fill the window on their own.
+  if (screen.kind === "connected" || screen.kind === "sign-in") return null;
   return <main className="shell-screen">
     {screen.kind === "welcome" && <>
       <LanguageSwitch bridge={bridge} state={state}/>

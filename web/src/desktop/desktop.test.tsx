@@ -94,6 +94,21 @@ it("a server added on the welcome screen is saved and connected to", async () =>
   expect(bridge.connect).toHaveBeenCalledWith({ kind: "profile", id: "new" });
 });
 
+it("a server behind Cloudflare Access is tested with a neutral sign-in line", async () => {
+  const bridge = makeBridge("main", baseState());
+  bridge.probe.mockResolvedValueOnce({ ok: false, reason: "access-required" } as never);
+  await render(bridge);
+  await click(button("A server on your network"));
+  const [, origin] = [...host.querySelectorAll("input")];
+  await type(origin!, "https://stremio-test.holubovi.cz");
+  await click(button("Test"));
+  await act(async () => { await Promise.resolve(); });
+  expect(host.textContent).toContain("This server is protected by Cloudflare Access.");
+  const line = host.querySelector(".shell-probe")!;
+  expect(line.className).not.toContain("bad");
+  expect(line.className).not.toContain("ok");
+});
+
 it("an unreachable server offers a retry, this Mac and the settings", async () => {
   const target = { kind: "profile" as const, id: "nas" };
   const bridge = makeBridge("main", baseState({ screen: { kind: "error", target, name: "NAS", origin: "http://192.168.1.20:8090", reason: "unreachable", port: null } }));

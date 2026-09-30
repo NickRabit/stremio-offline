@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { externalBrowserUrl, httpAllowed, httpAllowedHost, parseServerOrigin, partitionForOrigin } from "./origin.js";
+import { externalBrowserUrl, httpAllowed, httpAllowedHost, isAccessSignInUrl, parseServerOrigin, partitionForOrigin } from "./origin.js";
 
 test("input that is not a bare origin is rejected", () => {
   const rejected = [
@@ -41,6 +41,19 @@ test("two origins never share a session, including two ports of one name", () =>
   assert.notEqual(first, partitionForOrigin("https://nas.local:8090"));
   assert.equal(first.startsWith("persist:stremio-"), true);
   assert.equal(first.includes("/"), false);
+});
+
+test("Cloudflare Access's sign-in pages are its own host and nothing else", () => {
+  assert.equal(isAccessSignInUrl("https://team.cloudflareaccess.com/cdn-cgi/access/login/x"), true);
+  assert.equal(isAccessSignInUrl("https://holubovi.cloudflareaccess.com/"), true);
+  const refused = [
+    "http://team.cloudflareaccess.com/cdn-cgi/access/login/x",
+    "https://cloudflareaccess.com/cdn-cgi/access/login/x",
+    "https://evilcloudflareaccess.com/cdn-cgi/access/login/x",
+    "https://team.cloudflareaccess.com.evil.test/",
+    "not a url",
+  ];
+  for (const url of refused) assert.equal(isAccessSignInUrl(url), false, url);
 });
 
 test("only a plain http(s) link may leave the shell", () => {
