@@ -1,7 +1,9 @@
 // Launches the packaged app in its local-backend smoke mode: the app starts the staged
 // server from inside the archive, waits for its ready message, lets it answer /api/status and
 // stops it again. A non-zero exit or a missing marker fails the packaging workflow. The same
-// script covers the macOS bundle and the Windows build, including its Media Foundation encoder.
+// script covers the macOS bundle, the Windows build with its Media Foundation encoder, and the
+// Linux build. The app needs a display even for this, so CI starts the script through
+// `xvfb-run -a`.
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -14,6 +16,7 @@ const releaseDir = path.join(desktopDir, "release");
 const READY = "local-backend-smoke: ready";
 const TIMEOUT_MS = 180_000;
 const isWindows = process.platform === "win32";
+const isLinux = process.platform === "linux";
 
 const fail = (message) => {
   process.stderr.write(`smoke-packaged: ${message}\n`);
@@ -47,7 +50,12 @@ const findWindowsBinary = async () => {
   return null;
 };
 
-const binary = await (isWindows ? findWindowsBinary() : findMacBinary());
+const findLinuxBinary = async () => {
+  const candidate = path.join(releaseDir, "linux-unpacked", "stremio-offline");
+  return existsSync(candidate) ? candidate : null;
+};
+
+const binary = await (isWindows ? findWindowsBinary() : isLinux ? findLinuxBinary() : findMacBinary());
 if (binary === null) fail(`no packaged app under ${path.relative(desktopDir, releaseDir)}; the packaging script has to run first`);
 process.stdout.write(`smoke-packaged: ${path.relative(desktopDir, binary)}\n`);
 
@@ -75,7 +83,7 @@ if (!output.includes(READY)) fail("the packaged app never reported a ready local
 
 // The app carries its own LGPL FFmpeg. It has to be there, say it is LGPL, and be the one the
 // backend ran: only that build lacks libx264, and the server logs it when it starts.
-const resources = isWindows
+const resources = isWindows || isLinux
   ? path.join(path.dirname(binary), "resources")
   : path.join(path.dirname(path.dirname(binary)), "Resources");
 const tools = isWindows ? { ffmpeg: "ffmpeg.exe", ffprobe: "ffprobe.exe" } : { ffmpeg: "ffmpeg", ffprobe: "ffprobe" };
@@ -93,41 +101,29 @@ for (const file of expected) {
 if (!output.includes("This FFmpeg has no libx264")) fail("the local backend did not run the FFmpeg the app carries");
 process.stdout.write("smoke-packaged: the bundled LGPL FFmpeg is in place and in use\n");
 
-// The runner has no GPU, so these probes also exercise Microsoft's software H.264 encoder.
-// win-transcode probes the same two command lines at start-up; one of them has to work.
-if (isWindows) {
-  const probes = [
-    {
-      name: "quality",
-      args: ["-hide_banner", "-loglevel", "error", "-nostdin", "-f", "lavfi", "-i", "nullsrc=s=256x144:d=0.1", "-vf", "format=nv12", "-c:v", "h264_mf", "-hw_encoding", "1", "-rate_control", "quality", "-quality", "60", "-f", "null", "-"],
-    },
-    {
-      name: "cbr",
-      args: ["-hide_banner", "-loglevel", "error", "-nostdin", "-f", "lavfi", "-i", "nullsrc=s=256x144:d=0.1", "-vf", "format=nv12", "-c:v", "h264_mf", "-rate_control", "cbr", "-b:v", "1M", "-f", "null", "-"],
-    },
-  ];
-  let working = null;
-  for (const probe of probes) {
-    const result = spawnSync(ffmpeg, probe.args, { encoding: "utf8", timeout: 60_000 });
-    if (result.status === 0) {
-      working = probe.name;
-      break;
-    }
-    const reason = (result.stderr || result.error?.message || "").trim().split("\n")[0] ?? "";
-    process.stdout.write(`smoke-packaged: the Media Foundation ${probe.name} probe did not work: ${reason}\n`);
-    if (result.stderr) process.stderr.write(result.stderr);
-  }
-  if (working === null) fail("neither Media Foundation h264_mf probe worked");
-  process.stdout.write(`smoke-packaged: the Media Foundation ${working} probe worked\n`);
+const firstLine = (text) => (text || "").trim().split("\n")[0] ?? "";
 
-  // The server remuxes into fMP4 HLS in a folder named by an absolute Windows path. Do exactly
-  // that on a short generated clip and check the playlist the server waits for comes out whole.
+const probeFfmpeg = (name, args, failHard) => {
+  const result = spawnSync(ffmpeg, args, { encoding: "utf8", timeout: 60_000 });
+  if (result.status === 0) {
+    process.stdout.write(`smoke-packaged: the ${name} probe worked\n`);
+    return true;
+  }
+  const reason = firstLine(result.stderr) || result.error?.message || "";
+  process.stdout.write(`smoke-packaged: the ${name} probe did not work: ${reason}\n`);
+  if (failHard && result.stderr) process.stderr.write(result.stderr);
+  return false;
+};
+
+// The server remuxes into fMP4 HLS in a folder named by an absolute path. Do exactly that on a
+// short generated clip and check the playlist the server waits for comes out whole.
+const checkHlsRemux = (clipEncoding) => {
   const work = mkdtempSync(path.join(tmpdir(), "stremio-offline-hls-"));
   const source = path.join(work, "source.mkv");
   const made = spawnSync(ffmpeg, ["-hide_banner", "-loglevel", "error", "-nostdin", "-f", "lavfi", "-i", "testsrc2=s=640x360:d=8:r=24",
-    "-f", "lavfi", "-i", "sine=d=8", "-c:v", "h264_mf", "-rate_control", "cbr", "-b:v", "1M", "-g", "48", "-c:a", "aac", "-shortest", source],
+    "-f", "lavfi", "-i", "sine=d=8", ...clipEncoding, "-g", "48", "-c:a", "aac", "-shortest", source],
     { encoding: "utf8", timeout: 120_000 });
-  if (made.status !== 0) fail(`could not make the HLS test clip: ${(made.stderr ?? "").trim().split("\n")[0]}`);
+  if (made.status !== 0) fail(`could not make the HLS test clip: ${firstLine(made.stderr)}`);
   const out = path.join(work, "gen-0");
   mkdirSync(out);
   const hls = spawnSync(ffmpeg, ["-hide_banner", "-loglevel", "warning", "-nostdin", "-i", source,
@@ -136,7 +132,7 @@ if (isWindows) {
     "-hls_segment_type", "fmp4", "-hls_flags", "independent_segments+temp_file", "-hls_fmp4_init_filename", "init.mp4",
     "-master_pl_name", "master.m3u8", "-var_stream_map", "v:0,a:0",
     "-hls_segment_filename", path.join(out, "seg-%v-%06d.m4s"), path.join(out, "index-%v.m3u8")],
-    // The server runs this FFmpeg in the output folder, which is where a Windows build puts init.mp4.
+    // The server runs this FFmpeg inside the output folder, which is where init.mp4 lands.
     { cwd: out, encoding: "utf8", timeout: 120_000 });
   process.stdout.write(`smoke-packaged: HLS remux exited ${hls.status}; ${out} holds: ${readdirSync(out).join(", ")}\n`);
   if (hls.stderr) process.stdout.write(hls.stderr);
@@ -151,5 +147,35 @@ if (isWindows) {
     .concat(playlist.split(/\r?\n/).filter((line) => line && !line.startsWith("#")));
   const missing = named.filter((name) => !existsSync(path.join(out, name)));
   if (missing.length) fail(`the HLS playlist names files that are not in its folder: ${missing.join(", ")}`);
-  process.stdout.write("smoke-packaged: an fMP4 HLS remux into an absolute Windows path works\n");
+  process.stdout.write("smoke-packaged: an fMP4 HLS remux into an absolute path works\n");
+};
+
+// The runner has no GPU, so these probes also exercise Microsoft's software H.264 encoder.
+// win-transcode probes the same two command lines at start-up; one of them has to work.
+if (isWindows) {
+  const probes = [
+    {
+      name: "Media Foundation quality",
+      args: ["-hide_banner", "-loglevel", "error", "-nostdin", "-f", "lavfi", "-i", "nullsrc=s=256x144:d=0.1", "-vf", "format=nv12", "-c:v", "h264_mf", "-hw_encoding", "1", "-rate_control", "quality", "-quality", "60", "-f", "null", "-"],
+    },
+    {
+      name: "Media Foundation cbr",
+      args: ["-hide_banner", "-loglevel", "error", "-nostdin", "-f", "lavfi", "-i", "nullsrc=s=256x144:d=0.1", "-vf", "format=nv12", "-c:v", "h264_mf", "-rate_control", "cbr", "-b:v", "1M", "-f", "null", "-"],
+    },
+  ];
+  if (!probes.some((probe) => probeFfmpeg(probe.name, probe.args, true))) fail("neither Media Foundation h264_mf probe worked");
+  checkHlsRemux(["-c:v", "h264_mf", "-rate_control", "cbr", "-b:v", "1M"]);
+}
+
+if (isLinux) {
+  // The runner has no GPU, so both probes report what a conversion would find here; neither can
+  // fail the smoke.
+  const device = "/dev/dri/renderD128";
+  probeFfmpeg("VAAPI", ["-hide_banner", "-loglevel", "error", "-nostdin", "-init_hw_device", `vaapi=va:${device}`,
+    "-filter_hw_device", "va", "-f", "lavfi", "-i", "nullsrc=s=256x144:d=0.1", "-vf", "format=nv12,hwupload",
+    "-c:v", "h264_vaapi", "-f", "null", "-"], false);
+  probeFfmpeg("NVENC", ["-hide_banner", "-loglevel", "error", "-nostdin", "-f", "lavfi", "-i", "nullsrc=s=256x144:d=0.1",
+    "-vf", "format=nv12", "-c:v", "h264_nvenc", "-f", "null", "-"], false);
+  // The LGPL build has no software H.264 encoder, so the clip comes from the native mpeg4 encoder.
+  checkHlsRemux(["-c:v", "mpeg4", "-q:v", "5"]);
 }

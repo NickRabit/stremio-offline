@@ -3,6 +3,7 @@
   "private": true,
   "version": "0.4.108",
   "description": "Desktop client for connecting to Stremio Offline servers",
+  "homepage": "https://github.com/NickRabit/stremio-offline",
   "author": "Stremio Offline contributors",
   "license": "MIT",
   "type": "module",
@@ -16,11 +17,13 @@
     "test": "tsx --test src/*.test.ts",
     "verify:fuses": "node scripts/verify-fuses.mjs",
     "require-ffmpeg-win": "node scripts/require-ffmpeg-win.mjs",
+    "require-ffmpeg-linux": "node scripts/require-ffmpeg-linux.mjs",
     "stage:local-backend": "node scripts/stage-local-backend.mjs",
     "smoke:packaged": "node scripts/smoke-packaged.mjs",
     "build:ffmpeg": "bash scripts/build-ffmpeg.sh",
     "package:mac:arm64": "npm run build --prefix .. && npm run build && npm run build:renderer && npm run stage:local-backend && npm run build:ffmpeg && electron-builder --mac --arm64 --publish never",
-    "package:win:x64": "npm run require-ffmpeg-win && npm run build --prefix .. && npm run build && npm run build:renderer && npm run stage:local-backend && electron-builder --win --x64 --publish never"
+    "package:win:x64": "npm run require-ffmpeg-win && npm run build --prefix .. && npm run build && npm run build:renderer && npm run stage:local-backend && electron-builder --win --x64 --publish never",
+    "package:linux:x64": "npm run require-ffmpeg-linux && npm run build --prefix .. && npm run build && npm run build:renderer && npm run stage:local-backend && electron-builder --linux --x64 --publish never"
   },
   "devDependencies": {
     "@electron/fuses": "1.8.0",
@@ -135,6 +138,62 @@
       "createStartMenuShortcut": true,
       "shortcutName": "Stremio Offline",
       "deleteAppDataOnUninstall": false
+    },
+    "linux": {
+      "executableName": "stremio-offline",
+      "category": "AudioVideo",
+      "icon": "build/icon.png",
+      "artifactName": "Stremio-Offline-${version}-${arch}.${ext}",
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "extraResources": [
+        {
+          "from": "ffmpeg-linux",
+          "to": "ffmpeg",
+          "filter": [
+            "ffmpeg",
+            "ffprobe",
+            "BUILDINFO.txt",
+            "licenses/**"
+          ]
+        }
+      ],
+      "desktop": {
+        "entry": {
+          "StartupWMClass": "stremio-offline"
+        }
+      },
+      "maintainer": "NickRabit <NickRabit@users.noreply.github.com>"
+    },
+    "deb": {
+      "depends": [
+        "libgtk-3-0 | libgtk-3-0t64",
+        "libnotify4",
+        "libnss3",
+        "libxss1",
+        "libxtst6",
+        "xdg-utils",
+        "libatspi2.0-0 | libatspi2.0-0t64",
+        "libuuid1",
+        "libsecret-1-0",
+        "libva2",
+        "libva-drm2",
+        "libdrm2",
+        "libglib2.0-bin"
+      ],
+      "packageName": "stremio-offline"
     }
   }
 }

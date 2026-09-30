@@ -255,3 +255,145 @@ jobs:
           The app includes FFmpeg, built LGPL-3.0-or-later for Windows; the `ffmpeg-*` source archive attached here is the exact source it was built from (see `docs/licensing.md`).
           NOTES
           gh release edit "${GITHUB_REF_NAME}" --notes-file "$notes"
+
+  # The LGPL FFmpeg the Linux app carries, built in the same pinned ubuntu:22.04 container as the
+  # pull-request check builds it.
+  ffmpeg-linux:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      # The LGPL FFmpeg takes minutes to build; the result only changes with the script.
+      - uses: actions/cache@v6
+        with:
+          path: desktop/ffmpeg-linux
+          key: desktop-ffmpeg-linux-${{ hashFiles('desktop/scripts/build-ffmpeg-linux.sh') }}
+      - run: bash desktop/scripts/build-ffmpeg-linux.sh
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ffmpeg-linux
+          path: desktop/ffmpeg-linux
+          if-no-files-found: error
+          retention-days: 7
+
+  # The Linux x64 AppImage and .deb, unsigned like the macOS and Windows ones. Depending on the
+  # Windows job keeps it strictly after it, so the three never edit the release notes or the assets
+  # at the same time.
+  desktop-linux:
+    needs: [release, ffmpeg-linux, desktop-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Tag and desktop version agree
+        run: |
+          set -euo pipefail
+          manifest="$(node -p 'require("./desktop/package.json").version')"
+          if [ "v$manifest" != "${GITHUB_REF_NAME}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match desktop/package.json $manifest"
+            exit 1
+          fi
+      - uses: actions/download-artifact@v8
+        with:
+          name: ffmpeg-linux
+          path: desktop/ffmpeg-linux
+      # An artifact download loses the executable bit.
+      - run: chmod +x desktop/ffmpeg-linux/ffmpeg desktop/ffmpeg-linux/ffprobe
+      - run: npm ci
+      - run: npm run package:linux:x64 -w desktop
+      # Both checks start the packaged app, which needs a display; the runner has no screen.
+      - run: xvfb-run -a npm run verify:fuses -w desktop
+      - run: xvfb-run -a npm run smoke:packaged -w desktop
+        env:
+          # Ubuntu 24.04 runners restrict unprivileged user namespaces, and the unpacked app has
+          # no SUID sandbox, so the browser cannot start without this.
+          ELECTRON_DISABLE_SANDBOX: "1"
+      - name: Name the artifacts as unsigned
+        run: |
+          set -euo pipefail
+          version="$(node -p 'require("./desktop/package.json").version')"
+          for file in desktop/release/*.AppImage; do
+            mv "$file" "${file%.AppImage}-unsigned.AppImage"
+          done
+          # electron-builder names the .deb with linux.artifactName; the release gives it Debian's
+          # fixed name docs/install-linux.md tells people to install.
+          for file in desktop/release/*.deb; do
+            mv "$file" "desktop/release/stremio-offline_${version}_amd64-unsigned.deb"
+          done
+          ls -l desktop/release/*-unsigned*
+      # `gh release upload` fails on an asset name that is already there, so a rerun never
+      # replaces what was published.
+      - name: Attach the app to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # A rerun after a later step failed finds the app attached already; that is done, not an error.
+        run: |
+          set -euo pipefail
+          present="$(gh release view "${GITHUB_REF_NAME}" --json assets --jq '.assets[].name')"
+          files=()
+          for file in desktop/release/*-unsigned.AppImage desktop/release/*-unsigned.deb; do
+            if printf '%s\n' "$present" | grep -qxF -e "$(basename "$file")"; then
+              echo "the release already carries $(basename "$file")"
+              continue
+            fi
+            files+=("$file")
+          done
+          if [ ${#files[@]} -gt 0 ]; then gh release upload "${GITHUB_REF_NAME}" "${files[@]}"; fi
+      # The Linux sources share the FFmpeg tarball's name with the macOS and Windows jobs' ones,
+      # which have already run, so only names the release does not have yet are uploaded.
+      - name: Attach the FFmpeg sources
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          present="$(gh release view "${GITHUB_REF_NAME}" --json assets --jq '.assets[].name')"
+          files=()
+          for file in desktop/ffmpeg-linux/sources/*; do
+            name="$(basename "$file")"
+            if printf '%s\n' "$present" | grep -qxF -e "$name"; then
+              echo "the release already carries $name"
+              continue
+            fi
+            files+=("$file")
+          done
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "every source archive is already attached"
+            exit 0
+          fi
+          if ! gh release upload "${GITHUB_REF_NAME}" "${files[@]}" 2>"$RUNNER_TEMP/source-upload.err"; then
+            if grep -qi "already exists" "$RUNNER_TEMP/source-upload.err"; then
+              echo "an asset was already attached; treating it as success"
+              cat "$RUNNER_TEMP/source-upload.err"
+              exit 0
+            fi
+            cat "$RUNNER_TEMP/source-upload.err" >&2
+            exit 1
+          fi
+      - name: Say how to install it
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          notes="$RUNNER_TEMP/notes-linux.md"
+          gh release view "${GITHUB_REF_NAME}" --json body --jq .body > "$notes"
+          # A rerun must not add the section twice.
+          if grep -qF "## Desktop app (Linux x64)" "$notes"; then
+            echo "the release notes already describe the Linux app"
+            exit 0
+          fi
+          cat >> "$notes" <<'NOTES'
+
+          ## Desktop app (Linux x64)
+
+          `stremio-offline_<version>_amd64-unsigned.deb` installs on Ubuntu and Debian with `sudo apt install ./stremio-offline_<version>_amd64-unsigned.deb`. `Stremio-Offline-<version>-x86_64-unsigned.AppImage` is one file with no install, for every other distribution. [docs/install-linux.md](https://github.com/NickRabit/stremio-offline/blob/main/docs/install-linux.md) walks through both.
+
+          The app includes FFmpeg, built LGPL-3.0-or-later for Linux with VA-API and NVENC; the `ffmpeg-*`, `openssl-*` and `nv-codec-headers-*` archives attached here are the exact sources it was built from (see `docs/licensing.md`).
+          NOTES
+          gh release edit "${GITHUB_REF_NAME}" --notes-file "$notes"

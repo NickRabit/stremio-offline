@@ -144,3 +144,42 @@ jobs:
           path: desktop/release/*.zip
           if-no-files-found: error
           retention-days: 7
+
+  # Packages the Linux x64 AppImage and .deb. Unsigned like the macOS and Windows jobs.
+  package-linux:
+    needs: ffmpeg-linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+      # The LGPL FFmpeg comes from the ffmpeg-linux job; this job never builds it.
+      - uses: actions/download-artifact@v8
+        with:
+          name: ffmpeg-linux
+          path: desktop/ffmpeg-linux
+      # An artifact download loses the executable bit.
+      - run: chmod +x desktop/ffmpeg-linux/ffmpeg desktop/ffmpeg-linux/ffprobe
+      - run: npm ci
+      - run: npm run package:linux:x64 -w desktop
+      # Both checks start the packaged app, which needs a display; the runner has no screen.
+      - run: xvfb-run -a npm run verify:fuses -w desktop
+      - run: xvfb-run -a npm run smoke:packaged -w desktop
+        env:
+          # Ubuntu 24.04 runners restrict unprivileged user namespaces, and the unpacked app has
+          # no SUID sandbox, so the browser cannot start without this.
+          ELECTRON_DISABLE_SANDBOX: "1"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: stremio-offline-linux-x64-appimage
+          path: desktop/release/*.AppImage
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@v7
+        with:
+          name: stremio-offline-linux-x64-deb
+          path: desktop/release/*.deb
+          if-no-files-found: error
+          retention-days: 7
