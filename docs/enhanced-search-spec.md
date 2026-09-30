@@ -70,6 +70,12 @@ No production traffic measurement or external-addon load test was run.
   paging, and restores the selected browsing catalog. No empty-query request.
 - A one-character unsubmitted draft cancels pending work and shows a hint to
   type another character or press Enter; it does not execute automatically.
+  Clear busy and loading-more state immediately when invalidating a request,
+  independently of its stale finally handler. A sub-minimum draft shows
+  Awaiting submission, never Updating, and leaves old cards/pagination disabled.
+  Enter commits it; an explicit Revert draft action restores the committed query
+  and re-enables its loaded results. Revert reloads the first page if that query
+  was aborted before completion. These transitions cannot leave a spinner running.
 - Scope/type changes with a committed query start a new first page immediately,
   unless an edited draft is pending: then apply the same debounce/minimum rules
   to that draft. Changing sort only rearranges loaded items.
@@ -82,7 +88,8 @@ No production traffic measurement or external-addon load test was run.
 - Show at most eight rows: up to three matching recent queries, then locally
   loaded titles filling the remaining slots. With empty input show up to eight
   recent queries; no remote request is made just to populate the popup.
-- Match case-insensitively, ignoring diacritics and repeated whitespace. Keep
+- Use the same normalization as title ranking: Unicode decomposition,
+  diacritic removal, lowercase, punctuation-to-space and whitespace collapse. Keep
   original spelling for display and remote requests. History and title rows
   have distinct labels and are deduplicated within their kind.
 - Candidate titles come only from catalog pages loaded during the current
@@ -104,13 +111,26 @@ No production traffic measurement or external-addon load test was run.
   and final result status through a polite status region without announcing
   each keystroke. Popup fits phone/tablet viewports and does not obscure scope
   controls; touch selection must survive blur ordering.
+- Provenance is server-owned: add `searchSources: { addonKey: string;
+  catalogType: string; catalogId: string }[]` to result items from both
+  `/api/search` and `/api/catalog`. Search merges retain every contributing
+  catalog identity; browse results are stamped with the authorized requested
+  catalog. Never trust attribution from addon payloads or map display names to
+  keys. Client grouping unions provenance, and candidate eligibility requires
+  at least one currently eligible source. Existing `sources` display names stay
+  compatible. Update server/web result types and catalog-route tests.
 
 ### History and privacy controls
 
 - Settings > Search contains Save search history (default on), Clear search
   history, Search while typing, and default result order (Source order or Title
   match). Controls apply only to the signed-in account, including admin accounts.
-  They remain available when server-level settings are restricted.
+  They remain available when server-level settings are restricted. Add PATCH
+  `/api/search/preferences`, POST `/api/search/history` and DELETE
+  `/api/search/history` to `server/src/restricted.ts` ALLOWED_MUTATIONS using
+  its existing method/path convention. Do not disable these personal controls
+  via the UI restricted flag. This explicitly extends restricted-mode policy
+  for these routes only; cover it in unit and restricted E2E tests.
 - Helper text: “Save queries for recent-search suggestions on your devices.”
   Explain that turning saving off also deletes existing search history.
 - Turning Save search history off atomically sets the preference to false and
@@ -127,18 +147,29 @@ No production traffic measurement or external-addon load test was run.
 - Do not store each debounce submission. A query becomes eligible only after
   its current first-page request completes successfully (empty results count).
   Record it on explicit Enter/Search/suggestion selection, result activation,
-  or leaving the input after completion. If blur occurs before completion,
+  or leaving the input after completion. Enter/Search/suggestion selection
+  mark intent first, then record only after that submitted query's first page
+  succeeds. If the identical query/context already completed, intent can record
+  immediately without another search. Record at most once per query generation;
+  later reuse starts a new intent. If blur occurs before completion,
   defer until completion while that same query/context remains current. Drop
   intermediate/superseded drafts and pagination/filter-only operations.
 - The server rechecks Save search history at mutation time. Add a monotonically
   increasing history revision to prevent delayed record requests from
   repopulating history after clear/disable. Record requests carry the revision
-  obtained from GET; mismatches return 409 and do not retry automatically.
+  captured when that query generation begins, not when a delayed write fires;
+  mismatches return 409 and do not retry automatically. A disabled state takes
+  precedence and returns 204 without mutation, even for a stale revision.
 - Serialize clear/disable/record within the account storage transaction. Never
   replace a stale full UserData snapshot. A disable that wins before a record
   prevents it; a clear that wins after a record removes it.
-- Other tabs/devices refresh history/preferences on focus and before recording.
-  A stale tab cannot store history while disabled or restore cleared entries.
+- Other tabs/devices refresh history/preferences on focus and before starting a
+  new query generation. A refresh never upgrades the revision attached to an
+  existing generation or deferred intent. Drop pending intents if a refresh
+  reveals a changed revision or disabled saving; locally clear/disable also
+  invalidates them immediately. Record requests always send their pinned
+  revision, so a fresh GET cannot authorize an old query after clear. A stale
+  tab cannot store history while disabled or restore cleared entries.
   Client draft text is not saved in localStorage, URLs, analytics or telemetry.
 - Remove raw search query and query-bearing error URLs/reasons from new search
   logs at every log level; retain addon/catalog identifiers and safe error
@@ -146,11 +177,23 @@ No production traffic measurement or external-addon load test was run.
   this. No promise of erasing old logs, backups, browser network records or
   external addon logs: remote search necessarily sends its query to addons.
   Personal history stays out of settings export/import and diagnostic bundles.
+  For this release, all of SearchState (including its three preferences and
+  revision) is deliberately excluded from settings backup/import. Those controls
+  are account-owned search state like view preferences; importing instance
+  settings must not re-enable history or replace a person's erasure revision.
+  Document this backup boundary and test export/import preserves SearchState.
 
 ### Optional relevance order
 
 - Existing source order remains the default. Title match is selectable in the
   search sort menu and as the account default; existing name/year modes remain.
+  On entering search from browsing, initialize a separate search-sort state from
+  defaultOrder. During that search session, preserve explicit source/title/name/
+  year selection across queries and scope changes. Label source order explicitly
+  rather than using an ambiguous Default option. A preference change applies on
+  the next search session, not by silently overriding an active manual choice.
+  Browse retains its own default/name/year sort; title match is absent there.
+  Clearing restores browse sort; favorites/resume retain their meaningful order.
 - Normalize query/title with Unicode decomposition, diacritic removal,
   lowercase, punctuation-to-space and whitespace collapse. Rank by: exact full
   normalized title; title prefix; all query tokens as full title tokens; title
@@ -192,7 +235,9 @@ returned as empty. Preferences loading failure must allow manual search but
 must not assume history saving is permitted. Existing users get defaults
 lazily; do not copy any shared query history into accounts.
 
-Retain `/api/search` response shape and scope authorization. History writes
+Retain the `/api/search` envelope, cursor behavior and scope authorization,
+with the additive item provenance field defined above. Apply the same additive
+field to `/api/catalog`, including every contributing catalog on search merges. History writes
 are separate from GET search, so scans/API callers and pagination cannot
 accidentally record queries. Existing failures do not distinguish complete
 addon failure from genuinely empty search: recording acknowledges a completed
@@ -218,10 +263,13 @@ explicit Search wording, distinct from the existing playback-history action.
    when caller cancellation is supplied; abort does not produce an error toast.
 3. Account route tests: isolation between two users including admin, unauthenticated
    rejection, strict validation, defaults, restart persistence, retention/bounds,
-   clear without changing saving, disable+erase, reenable empty.
+   clear without changing saving, disable+erase, reenable empty, restricted-mode
+   mutations and backup/import exclusion.
 4. Race tests: delayed record after clear or disable, concurrent tabs, stale
    revision, and simultaneous unrelated account mutations cannot resurrect
-   history or overwrite preferences. Failed persistence is surfaced in Settings.
+   history or overwrite preferences. Include an intervening GET before a deferred
+   write, pinned generation revisions and disabled-versus-stale status precedence.
+   Failed persistence is surfaced in Settings.
 5. History interaction tests: typing several prefixes stores only the settled
    used query; zero-result completion can be recorded; failed/superseded requests,
    paging and filter changes do not add entries.
@@ -234,7 +282,8 @@ explicit Search wording, distinct from the existing playback-history action.
    settings export; inspect nested error reasons as well as top-level fields.
 8. Performance fixture: a burst within 400 ms produces one first-page fan-out;
    no autocomplete requests, no overlapping pagination, and no extra call for
-   immediate Enter. Record behavior with delayed/failed addon fixtures.
+   immediate Enter. Record behavior with delayed/failed addon fixtures. Assert
+   a sub-minimum draft ends all spinners and Revert restores or reloads results.
 9. After functional checks stabilize, verify keyboard/screen-reader operation
    and phone/tablet/desktop layout once. Run repository build/unit/E2E gates for
    implementation, then local Docker deployment and health check per AGENTS.md.
