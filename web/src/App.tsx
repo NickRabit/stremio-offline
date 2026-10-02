@@ -1889,10 +1889,7 @@ export function App() {
                 } else if (e.key === "Enter" && activeOption >= 0) { e.preventDefault(); chooseSuggestion(suggestions[activeOption]); }
                 else if (e.key === "Escape" && suggestions.length) { e.preventDefault(); setSuggestOpen(false); setActiveSuggestion(-1); }
               }} placeholder={t("catalog.searchPlaceholder")}/>
-              {suggestions.length > 0 && <ul id="search-suggestions" role="listbox" aria-label={t("catalog.suggestions")} className="search-suggestions">{suggestions.map((suggestion, index) =>
-                <li key={`${suggestion.kind}:${suggestion.text}`} id={`search-suggestion-${index}`} role="option" aria-selected={index === activeOption} className={index === activeOption ? "active" : undefined}
-                  onPointerDown={(e) => e.preventDefault()} onMouseDown={(e) => e.preventDefault()} onClick={() => chooseSuggestion(suggestion)}>
-                  {suggestion.kind === "recent" ? <History/> : <Film/>}<span>{suggestion.text}</span><small>{t(suggestion.kind === "recent" ? "catalog.suggestRecent" : "catalog.suggestTitle")}</small></li>)}</ul>}
+
             </div>
             <label className="scope-select"><span>{t("catalog.searchScopeIn")}</span><select aria-label={t("catalog.searchScope")} value={searchScopeValue} onChange={(e) => pickSearchScope(e.target.value)}>
               <option value="">{t("catalog.allAddons")}</option>
@@ -1903,6 +1900,12 @@ export function App() {
             </select></label>
             <button className="primary"><Search/> {t("catalog.search")}</button>
             {submittedQuery && <button type="button" onClick={() => { live.cancel(); setSearch(""); setSubmittedQuery(""); }}><X/> {t("common.cancel")}</button>}
+            {/* Under the whole bar, not the field: on a narrow screen the scope and the Search
+                button wrap below the field, and a list hanging from it would cover them. */}
+            {suggestions.length > 0 && <ul id="search-suggestions" role="listbox" aria-label={t("catalog.suggestions")} className="search-suggestions">{suggestions.map((suggestion, index) =>
+                <li key={`${suggestion.kind}:${suggestion.text}`} id={`search-suggestion-${index}`} role="option" aria-selected={index === activeOption} className={index === activeOption ? "active" : undefined}
+                  onPointerDown={(e) => e.preventDefault()} onMouseDown={(e) => e.preventDefault()} onClick={() => chooseSuggestion(suggestion)}>
+                  {suggestion.kind === "recent" ? <History/> : <Film/>}<span>{suggestion.text}</span><small>{t(suggestion.kind === "recent" ? "catalog.suggestRecent" : "catalog.suggestTitle")}</small></li>)}</ul>}
           </form></div>
           <div className="filter-slot"><div className="filterbar">
             {submittedQuery
