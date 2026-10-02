@@ -20,6 +20,9 @@ jobs:
         with:
           node-version: "22"
           cache: npm
+      # A bump that misses one manifest only fails the release's desktop job, after the
+      # image is out. Here it fails the pull request instead.
+      - run: node scripts/check-versions.mjs
       - run: npm ci
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
