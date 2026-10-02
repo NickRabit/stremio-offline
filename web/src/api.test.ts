@@ -178,6 +178,51 @@ describe("describeError", () => {
   });
 });
 
+describe("request deadlines with a caller signal", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  // Stands in for a request that never resolves, and that rejects with the signal's own
+  // reason the moment it aborts -- exactly what a real fetch does.
+  const hangingFetch = () => fetchMock.mockImplementation((_url: string, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+    const signal = init?.signal;
+    if (signal?.aborted) { reject(signal.reason); return; }
+    signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+  }));
+
+  it("keeps the deadline when a caller passes a signal", async () => {
+    hangingFetch();
+    const caller = new AbortController();
+    const settled = api.search("dune", { signal: caller.signal }).catch((error) => error);
+    await vi.advanceTimersByTimeAsync(30_000);
+    const error = await settled;
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({ status: 408, code: "REQUEST_TIMEOUT" });
+  });
+
+  it("rethrows a caller abort as an AbortError", async () => {
+    hangingFetch();
+    const caller = new AbortController();
+    const settled = api.search("dune", { signal: caller.signal }).catch((error) => error);
+    caller.abort();
+    const error = await settled;
+    expect(error).toBeInstanceOf(DOMException);
+    expect((error as DOMException).name).toBe("AbortError");
+  });
+
+  it("passes the signal to search without putting it on the query string", async () => {
+    hangingFetch();
+    const caller = new AbortController();
+    const settled = api.search("dune", { signal: caller.signal }).catch((error) => error);
+    const passed = optionsOf().signal as AbortSignal;
+    expect(passed.aborted).toBe(false);
+    caller.abort();
+    await settled;
+    expect(passed.aborted).toBe(true);
+    expect(String(fetchMock.mock.calls[0][0])).toBe("/api/search?query=dune");
+  });
+});
+
 describe("logDownloadUrl", () => {
   it("downloads the whole log when nothing is filtered", () => {
     expect(logDownloadUrl()).toBe("/api/logs");

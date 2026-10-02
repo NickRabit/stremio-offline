@@ -26,6 +26,8 @@ import { label, titleLanguage } from "./languages";
 import { languageName, locale, localeTag, serverText, setLocale, t, useI18n, type Key, type Locale } from "./i18n";
 import { addonNotices, canQueue, noticeText, offeredStreams, pickDefaultStream, pickNextEpisodeStream, repickStream, streamBadge, streamLanguages, streamSize, visibleCatalogStreams, type StreamSort } from "./streams";
 import { parseSearchScope } from "./search-scope";
+import { createLiveSearch, type LiveSearch, type LiveSearchState } from "./live-search";
+import { rankByTitle } from "./title-match";
 import { galleryPayload, gridArt, localizedDownloadTitle, mergeMetaDetail } from "./meta";
 import { catalogResumeEntries, localResumeEntries } from "./resume-visibility";
 import { resumeTarget, resumeVideo, type ResumeTarget } from "./resume-target";
@@ -577,7 +579,13 @@ export function App() {
   const [localStream, setLocalStream] = useState<Stream | null>(null); const [localTitle, setLocalTitle] = useState("");
   const [streamAddon, setStreamAddon] = useState(""); const [streamLanguage, setStreamLanguage] = useState(""); const [streamSort, setStreamSort] = useState<StreamSort>("recommended");
   useEffect(() => { setStreamSort(settings.streamSort as StreamSort); }, [settings.streamSort]);
-  const [submittedQuery, setSubmittedQuery] = useState(""); const [searchScopeValue, setSearchScopeValue] = useState(""); const [searchable, setSearchable] = useState<SearchableCatalog[]>([]); const [typeFilter, setTypeFilter] = useState(""); const [genre, setGenre] = useState(""); const [sort, setSort] = useState("default");
+  const [submittedQuery, setSubmittedQuery] = useState(""); const [searchScopeValue, setSearchScopeValue] = useState(""); const [searchable, setSearchable] = useState<SearchableCatalog[]>([]); const [typeFilter, setTypeFilter] = useState(""); const [genre, setGenre] = useState(""); const [sort, setSort] = useState("default"); const [searchSort, setSearchSort] = useState("default");
+  const [liveState, setLiveState] = useState<LiveSearchState>("idle");
+  // One debounce controller for the searchbox. It commits the draft to `submittedQuery`
+  // itself, so nothing else has to watch keystrokes.
+  const liveRef = useRef<LiveSearch | null>(null);
+  if (!liveRef.current) liveRef.current = createLiveSearch({ onCommit: setSubmittedQuery, onState: setLiveState });
+  const live = liveRef.current;
   const searchScope = parseSearchScope(searchScopeValue);
   const scopedCatalog = searchScope.catalogId ? searchable.find((item) => item.addonKey === searchScope.addonKey && item.type === searchScope.catalogType && item.id === searchScope.catalogId) : undefined;
   const effectiveTypeFilter = searchScope.catalogType ?? typeFilter;
@@ -594,6 +602,8 @@ export function App() {
   const pickedRef = useRef(false); const sourcesRequestRef = useRef(0);
   const linksRequestRef = useRef(0); const trailerRequestRef = useRef(0); const askedLibraryLinks = useRef(new Set<string>()); const askedLibraryTrailers = useRef(new Set<string>());
   const loadingRef = useRef(false); const requestRef = useRef(0); const itemsRef = useRef<Meta[]>([]); const gridRef = useRef<HTMLDivElement>(null); const browseScrollRef = useRef<HTMLDivElement | null>(null); const detailRef = useRef<HTMLElement>(null);
+  const searchAbortRef = useRef<AbortController | null>(null);
+  const loadedSearchRef = useRef<{ query: string; scope: string; type: string; genre: string; virtual: string; catalog: string; reset: number } | null>(null);
   const playerOpenRef = useRef(false); const playbackReturn = useRef<PlaybackReturn | null>(null);
   const viewAnchor = useRef<ViewAnchor | null>(null); const anchorFrozen = useRef(false); const anchorFrame = useRef(0);
   // A toolbar folds to give a scrolling list more room. A list that already fits has nothing to
@@ -949,11 +959,12 @@ export function App() {
   }, [selected]);
 
   const resetCatalog = () => {
+    live.cancel();
     setCatalogCompact(false);
     const firstCatalog = catalogs[0];
     scrollByView.current.catalog = 0;
     setView("catalog");
-    setSearch(""); setSubmittedQuery(""); setSearchScopeValue(""); setTypeFilter(""); setGenre(""); setSort("default");
+    setSearch(""); setSubmittedQuery(""); setSearchScopeValue(""); setTypeFilter(""); setGenre(""); setSort("default"); setSearchSort("default");
     setSelectedCatalog(firstCatalog ? `${firstCatalog.addonKey}:${firstCatalog.type}:${firstCatalog.id}` : "");
     setSelected(null); setSelectedVideo(null); setStreams([]); setSelectedStream(null); setSubtitles([]); setSourcesLoaded(false);
     setGalleryIndex(null);
@@ -1379,10 +1390,16 @@ export function App() {
     const stale = () => request !== requestRef.current;
     loadingRef.current = true;
     const from = reset ? 0 : skip;
-    if (reset) { setBusy(true); setSelected(null); setStreams([]); } else setLoadingMore(true);
+    if (reset) {
+      searchAbortRef.current?.abort();
+      searchAbortRef.current = null;
+      setBusy(true); setSelected(null); setStreams([]);
+    } else setLoadingMore(true);
     try {
       if (submittedQuery) {
-        const result = await api.search(submittedQuery, { ...searchScope, type: effectiveTypeFilter, cursor: reset ? "" : cursor });
+        const controller = new AbortController();
+        searchAbortRef.current = controller;
+        const result = await api.search(submittedQuery, { ...searchScope, type: effectiveTypeFilter, cursor: reset ? "" : cursor, signal: controller.signal });
         if (stale()) return;
         const next = reset ? result.items : merge(itemsRef.current, result.items);
         // An addon may keep returning the same thing; without this guard paging would never end.
@@ -1400,15 +1417,37 @@ export function App() {
         itemsRef.current = next; setItems(next);
         setSkip(from + metas.length); setHasMore(metas.length > 0 && !gainedNothing);
       }
-    } catch (e) { if (!stale()) { fail(e); setHasMore(false); } }
+    } catch (e) {
+      // A superseded search aborts the fetch in the browser; that is not a failure to report.
+      if ((e as { name?: unknown } | null)?.name === "AbortError") return;
+      if (!stale()) { if (reset) { itemsRef.current = []; setItems([]); } fail(e); setHasMore(false); }
+    }
     finally { if (!stale()) { loadingRef.current = false; setBusy(false); setLoadingMore(false); } }
   };
 
-  const submitSearch = (event?: FormEvent) => { event?.preventDefault(); setSubmittedQuery(search.trim()); };
+  // After Enter or a debounced commit the committed query changes, so the note is recomputed.
+  useEffect(() => { live.update(search, submittedQuery); }, [submittedQuery]);
+  // Leaving the catalogue drops a pending commit instead of firing it from behind another view.
+  useEffect(() => { if (view !== "catalog") live.cancel(); }, [view]);
+  useEffect(() => () => live.cancel(), []);
+  const submitSearch = (event?: FormEvent) => { event?.preventDefault(); live.cancel(); setSubmittedQuery(search.trim()); };
   // A changed catalogue, query or filter starts from the first page. The scope only
   // decides what a search asks for, so on its own it reloads nothing.
-  useEffect(() => { itemsRef.current = []; setItems([]); setSkip(0); setCursor(""); setHasMore(false); setSourceCount(0); void loadPage(true); },
+  useEffect(() => {
+    const snapshot = { query: submittedQuery, scope: searchScopeValue, type: typeFilter, genre: activeGenre, virtual: virtualCatalog, catalog: `${currentCatalog?.addonKey}:${currentCatalog?.type}:${currentCatalog?.id}`, reset: catalogReset };
+    const previous = loadedSearchRef.current;
+    loadedSearchRef.current = snapshot;
+    // Only a new query text inside the same search keeps the previous results on screen; every
+    // other reset -- new scope, filter, catalogue or built-in list -- starts from nothing.
+    const queryOnly = previous !== null && previous.query !== "" && snapshot.query !== "" && previous.query !== snapshot.query
+      && previous.scope === snapshot.scope && previous.type === snapshot.type && previous.genre === snapshot.genre
+      && previous.virtual === snapshot.virtual && previous.catalog === snapshot.catalog && previous.reset === snapshot.reset;
+    if (!queryOnly) { itemsRef.current = []; setItems([]); }
+    setSkip(0); setCursor(""); setHasMore(false); setSourceCount(0); void loadPage(true);
+  },
     [submittedQuery, submittedQuery && searchScopeValue, typeFilter, activeGenre, virtualCatalog, currentCatalog?.addonKey, currentCatalog?.type, currentCatalog?.id, catalogReset]);
+  // Entering search starts from the addon order; browse keeps its own sort untouched.
+  useEffect(() => { setSearchSort("default"); }, [Boolean(submittedQuery)]);
 
   // The grid scrolls on its own. A plain scroll listener works even where
   // IntersectionObserver stays quiet (a hidden document, power-saving modes).
@@ -1533,10 +1572,14 @@ export function App() {
     // to the list. General sorting would only break it.
     if (virtualCatalog) return items;
     const list = settings.mergeByName ? groupByName(items) : [...items];
-    if (sort === "name") list.sort((a, b) => a.name.localeCompare(b.name, localeTag()));
-    else if (sort === "year") list.sort((a, b) => year(b) - year(a));
+    const active = submittedQuery ? searchSort : sort;
+    if (active === "titleMatch") return rankByTitle(list, submittedQuery);
+    if (active === "name") list.sort((a, b) => a.name.localeCompare(b.name, localeTag()));
+    else if (active === "year") list.sort((a, b) => year(b) - year(a));
     return list;
-  }, [items, sort, settings.mergeByName, virtualCatalog]);
+  }, [items, sort, searchSort, submittedQuery, settings.mergeByName, virtualCatalog]);
+  const activeSort = submittedQuery ? searchSort : sort;
+  const staleGrid = busy && items.length > 0;
   /** One addon's answer, with a failure turned into nothing. */
   const loadStreamPart = async (type: string, id: string, source: { key: string; name: string }) => {
     try { return await api.streams(type, id, source.key); }
@@ -1778,7 +1821,7 @@ export function App() {
           {/* The head sits on the same columns as the panels below it: search spans both, so it ends
               with the sources panel, and the filters keep to the first, so they end with the results. */}
           <div className="catalog-head"><div className={`fold${catalogCompact ? " closed" : ""}`}><form className="searchbar" onSubmit={submitSearch}>
-            <div className="search-input"><Search/><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={t("catalog.searchPlaceholder")}/></div>
+            <div className="search-input"><Search/><input value={search} onChange={(e) => { setSearch(e.target.value); live.update(e.target.value, submittedQuery); }} onCompositionStart={() => live.compositionStart()} onCompositionEnd={(e) => live.compositionEnd(e.currentTarget.value, submittedQuery)} placeholder={t("catalog.searchPlaceholder")}/></div>
             <label className="scope-select"><span>{t("catalog.searchScopeIn")}</span><select aria-label={t("catalog.searchScope")} value={searchScopeValue} onChange={(e) => pickSearchScope(e.target.value)}>
               <option value="">{t("catalog.allAddons")}</option>
               {[...new Map(searchable.map((item) => [item.addonKey, { name: item.addonName, globalSearch: item.globalSearch }])).entries()].map(([key, group]) => <optgroup key={key} label={`${group.name}${group.globalSearch ? "" : " ·"}`} title={group.globalSearch ? undefined : t("catalog.onlyWhenPicked")}>
@@ -1786,8 +1829,8 @@ export function App() {
                 {searchable.filter((item) => item.addonKey === key).map((item) => <option key={`${item.type}:${item.id}`} value={`catalog:${key}:${item.type}:${item.id}`} title={item.globalSearch ? undefined : t("catalog.onlyWhenPicked")}>{item.name} ({typeTag(item.type)}){item.globalSearch ? "" : " ·"}</option>)}
               </optgroup>)}
             </select></label>
-            <button className="primary" disabled={busy}><Search/> {t("catalog.search")}</button>
-            {submittedQuery && <button type="button" onClick={() => { setSearch(""); setSubmittedQuery(""); }}><X/> {t("common.cancel")}</button>}
+            <button className="primary"><Search/> {t("catalog.search")}</button>
+            {submittedQuery && <button type="button" onClick={() => { live.cancel(); setSearch(""); setSubmittedQuery(""); }}><X/> {t("common.cancel")}</button>}
           </form></div>
           <div className="filter-slot"><div className="filterbar">
             {submittedQuery
@@ -1807,8 +1850,8 @@ export function App() {
                   </select></label>
                   {genreOptions.length > 0 && <label><span>{t("catalog.genre")}</span><select aria-label={t("catalog.genre")} value={activeGenre} onChange={(e) => setGenre(e.target.value)}><option value="">{t("catalog.allGenres")}</option>{genreOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select></label>}
                 </>}
-            <label><span>{t("common.sorting")}</span><select aria-label={t("catalog.sorting")} value={sort} onChange={(e) => setSort(e.target.value)}><option value="default">{t("catalog.sortAddon")}</option><option value="name">{t("catalog.sortName")}</option><option value="year">{t("catalog.sortYear")}</option></select></label>
-            {sort !== "default" && <small className="filter-note">{t("catalog.sortNote")}</small>}
+            <label><span>{t("common.sorting")}</span><select aria-label={t("catalog.sorting")} value={activeSort} onChange={(e) => (submittedQuery ? setSearchSort(e.target.value) : setSort(e.target.value))}><option value="default">{t("catalog.sortAddon")}</option>{submittedQuery && <option value="titleMatch">{t("catalog.sortTitleMatch")}</option>}<option value="name">{t("catalog.sortName")}</option><option value="year">{t("catalog.sortYear")}</option></select></label>
+            {activeSort !== "default" && <small className="filter-note">{t("catalog.sortNote")}</small>}
             <button className="shape-toggle" title={t(settings.catalogTileShape === "wide" ? "catalog.shapePoster" : "catalog.shapeWide")} aria-pressed={settings.catalogTileShape === "wide"} onClick={() => void toggleShape("catalogTileShape")}>{settings.catalogTileShape === "wide" ? <RectangleVertical/> : <RectangleHorizontal/>}</button>
             {/* The one control the collapsed header keeps: it unfolds the search block and hands over the caret. */}
             <button className="header-expand" title={t("catalog.showTools")} aria-label={t("catalog.showTools")} aria-expanded={!catalogCompact} onClick={(event) => {
@@ -1828,8 +1871,8 @@ export function App() {
               window.setTimeout(() => { bar?.removeEventListener("transitionend", onEnd); focus(); }, 400);
             }}><SlidersHorizontal/></button>
           </div></div></div>
-          <div className="catalog-layout"><section className="panel result-panel"><div className="panel-head"><h3>{submittedQuery ? t("catalog.searchHeading", { query: submittedQuery }) : t("catalog.results")}</h3><span>{t("catalog.itemCount", { count: visibleItems.length })}{hasMore ? "+" : ""}</span></div>
-            <div className="poster-grid" ref={gridRef} onScroll={(event) => { compactOnScroll(event, catalogCompact, setCatalogCompact); scheduleViewAnchor(); }}>
+          <div className="catalog-layout"><section className="panel result-panel"><div className="panel-head"><h3>{submittedQuery ? t("catalog.searchHeading", { query: submittedQuery }) : t("catalog.results")}</h3><small className="search-status" role="status">{liveState === "pending" || (busy && submittedQuery) ? t("catalog.searchUpdating") : liveState === "tooShort" ? t("catalog.searchMinChars") : ""}</small><span>{t("catalog.itemCount", { count: visibleItems.length })}{hasMore ? "+" : ""}</span></div>
+            <div className={`poster-grid${staleGrid ? " stale" : ""}`} aria-busy={staleGrid || undefined} ref={gridRef} onScroll={(event) => { compactOnScroll(event, catalogCompact, setCatalogCompact); scheduleViewAnchor(); }}>
               {visibleItems.map((item) => {
                 const klic = `${item.type || "movie"}:${item.id}`;
                 const postup = catalogProgress(item);

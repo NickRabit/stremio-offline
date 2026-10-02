@@ -21,23 +21,34 @@ export interface ProgressPayload { key: string; position: number; duration: numb
  * operating system gives up, which takes minutes, and six of those exhaust the browser's
  * per-origin pool -- the app then looks dead on that one device while others are fine. */
 async function request<T>(url: string, options?: RequestInit & { timeoutMs?: number }): Promise<T> {
-  const { timeoutMs = 30_000, ...init } = options ?? {};
-  let response: Response;
+  const { timeoutMs = 30_000, signal: callerSignal, ...init } = options ?? {};
+  // `AbortSignal.any` is not in Safari < 17.4, so the deadline and the caller's own signal are
+  // wired into one controller by hand. The timeout aborts with a TimeoutError reason, which the
+  // catch below turns into a 408; a caller abort keeps its own reason and passes through.
+  const controller = new AbortController();
+  const onCallerAbort = () => controller.abort(callerSignal?.reason);
+  const timer = setTimeout(() => controller.abort(new DOMException("The request timed out.", "TimeoutError")), timeoutMs);
+  callerSignal?.addEventListener("abort", onCallerAbort, { once: true });
+  if (callerSignal?.aborted) controller.abort(callerSignal.reason);
+  // The deadline also covers reading the body: a stalled answer holds the connection just the same.
   try {
-    response = await fetch(url, {
+    const response = await fetch(url, {
       ...init,
-      signal: init.signal ?? AbortSignal.timeout(timeoutMs),
+      signal: controller.signal,
       headers: { "content-type": "application/json", ...init.headers },
     });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({} as { error?: string; code?: string; messageKey?: string; vars?: Record<string, string | number> }));
+      throw new ApiError(body.error ?? `HTTP ${response.status}`, response.status, body.code, body.messageKey, body.vars);
+    }
+    return response.status === 204 ? undefined as T : await response.json();
   } catch (error) {
     if (error instanceof DOMException && error.name === "TimeoutError") throw new ApiError(t("api.timeout"), 408, "REQUEST_TIMEOUT");
     throw error;
+  } finally {
+    clearTimeout(timer);
+    callerSignal?.removeEventListener("abort", onCallerAbort);
   }
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({} as { error?: string; code?: string; messageKey?: string; vars?: Record<string, string | number> }));
-    throw new ApiError(body.error ?? `HTTP ${response.status}`, response.status, body.code, body.messageKey, body.vars);
-  }
-  return response.status === 204 ? undefined as T : response.json();
 }
 /** A conversion restart waits for the first segments and retries once. */
 const PLAYBACK_RESTART_MS = 120_000;
@@ -61,7 +72,7 @@ export const api = {
   toggleAddon: (key: string, enabled: boolean) => request<Addon>(`/api/addons/${key}`, { method: "PATCH", body: JSON.stringify({ enabled }) }),
   catalogs: () => request<Catalog[]>("/api/catalogs"),
   catalog: (catalog: Catalog, search = "", skip = 0, genre = "") => request<Meta[]>(`/api/catalog?${q({ addon: catalog.addonKey, type: catalog.type, id: catalog.id, search: search || undefined, skip: skip || undefined, genre: genre || undefined })}`),
-  search: (query: string, options: { type?: string; cursor?: string; addonKey?: string; catalogType?: string; catalogId?: string } = {}) => request<SearchResult>(`/api/search?${q({ query, type: options.type || undefined, cursor: options.cursor || undefined, addon: options.addonKey || undefined, catalogType: options.catalogType || undefined, catalogId: options.catalogId || undefined })}`),
+  search: (query: string, options: { type?: string; cursor?: string; addonKey?: string; catalogType?: string; catalogId?: string; signal?: AbortSignal } = {}) => request<SearchResult>(`/api/search?${q({ query, type: options.type || undefined, cursor: options.cursor || undefined, addon: options.addonKey || undefined, catalogType: options.catalogType || undefined, catalogId: options.catalogId || undefined })}`, { signal: options.signal }),
   searchable: () => request<SearchableCatalog[]>("/api/searchable"),
   meta: (type: string, id: string, language?: string) => request<Meta>(`/api/meta/${encodeURIComponent(type)}/${encodeURIComponent(id)}${language ? `?${q({ language })}` : ""}`),
   links: (type: string, id: string, language: string) => request<{ links: SiteLink[] }>(`/api/links/${encodeURIComponent(type)}/${encodeURIComponent(id)}?${q({ language })}`, { timeoutMs: 60_000 }),

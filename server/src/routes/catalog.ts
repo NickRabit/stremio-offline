@@ -70,6 +70,7 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
   app.get("/api/search", asyncRoute(async (req, res) => {
     const query = String(req.query.query ?? "").trim();
     if (!query) throw new AppError("Enter a search term.", "err.emptyQuery");
+    res.set("Cache-Control", "no-store");
     const type = req.query.type ? String(req.query.type) : undefined;
     const addonKey = req.query.addon ? String(req.query.addon) : undefined;
     const found = await searchAll(inOrder(req), query, type, req.query.cursor ? String(req.query.cursor) : undefined, {
