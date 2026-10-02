@@ -1542,5 +1542,12 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
   main.view-catalog .detail-panel.series-sources-layout .series-hero .gallery-open img{width:34px;height:40px}
   main.view-catalog .detail-panel.series-sources-layout .series-hero .gallery-open span{display:none}
 }
-.panel-head .search-status{margin-left:auto;margin-right:10px;font-size:10px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
-.poster-grid.stale{opacity:.5;transition:opacity .15s}
+/* While a new query loads, the previous results stay as a dimmed placeholder; the moving bar
+   is what says it is loading rather than broken. The heading gives way before the note does. */
+.result-panel .panel-head h3{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.panel-head .search-status{flex:0 0 auto;margin-left:auto;margin-right:10px;font-size:10px;color:var(--muted);white-space:nowrap}
+.poster-grid.stale{opacity:.6;transition:opacity .2s}
+.result-panel{position:relative}
+.result-panel.refreshing::before{content:"";position:absolute;inset:0 0 auto;height:2px;background:linear-gradient(90deg,transparent,var(--accent),transparent) no-repeat;background-size:35% 100%;animation:refresh-slide 1.1s linear infinite}
+@keyframes refresh-slide{from{background-position:-50% 0}to{background-position:150% 0}}
+@media(prefers-reduced-motion:reduce){.result-panel.refreshing::before{animation:none;background:var(--accent);opacity:.6}}

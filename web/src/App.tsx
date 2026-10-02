@@ -1442,8 +1442,8 @@ export function App() {
     const queryOnly = previous !== null && previous.query !== "" && snapshot.query !== "" && previous.query !== snapshot.query
       && previous.scope === snapshot.scope && previous.type === snapshot.type && previous.genre === snapshot.genre
       && previous.virtual === snapshot.virtual && previous.catalog === snapshot.catalog && previous.reset === snapshot.reset;
-    if (!queryOnly) { itemsRef.current = []; setItems([]); }
-    setSkip(0); setCursor(""); setHasMore(false); setSourceCount(0); void loadPage(true);
+    if (!queryOnly) { itemsRef.current = []; setItems([]); setSourceCount(0); }
+    setSkip(0); setCursor(""); setHasMore(false); void loadPage(true);
   },
     [submittedQuery, submittedQuery && searchScopeValue, typeFilter, activeGenre, virtualCatalog, currentCatalog?.addonKey, currentCatalog?.type, currentCatalog?.id, catalogReset]);
   // Entering search starts from the addon order; browse keeps its own sort untouched.
@@ -1871,7 +1871,7 @@ export function App() {
               window.setTimeout(() => { bar?.removeEventListener("transitionend", onEnd); focus(); }, 400);
             }}><SlidersHorizontal/></button>
           </div></div></div>
-          <div className="catalog-layout"><section className="panel result-panel"><div className="panel-head"><h3>{submittedQuery ? t("catalog.searchHeading", { query: submittedQuery }) : t("catalog.results")}</h3><small className="search-status" role="status">{liveState === "pending" || (busy && submittedQuery) ? t("catalog.searchUpdating") : liveState === "tooShort" ? t("catalog.searchMinChars") : ""}</small><span>{t("catalog.itemCount", { count: visibleItems.length })}{hasMore ? "+" : ""}</span></div>
+          <div className="catalog-layout"><section className={`panel result-panel${staleGrid ? " refreshing" : ""}`}><div className="panel-head"><h3>{submittedQuery ? t("catalog.searchHeading", { query: submittedQuery }) : t("catalog.results")}</h3><small className="search-status" role="status">{liveState === "pending" || (busy && submittedQuery) ? t("catalog.searchUpdating") : liveState === "tooShort" ? t("catalog.searchMinChars") : ""}</small><span>{t("catalog.itemCount", { count: visibleItems.length })}{hasMore ? "+" : ""}</span></div>
             <div className={`poster-grid${staleGrid ? " stale" : ""}`} aria-busy={staleGrid || undefined} ref={gridRef} onScroll={(event) => { compactOnScroll(event, catalogCompact, setCatalogCompact); scheduleViewAnchor(); }}>
               {visibleItems.map((item) => {
                 const klic = `${item.type || "movie"}:${item.id}`;
