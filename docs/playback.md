@@ -76,8 +76,12 @@ only stops drawing the text. Playback and conversion keep going, and turning
 subtitles back on is instant, even mid-line. **Off** in the list really drops the
 track from the conversion, so that *does* restart it.
 
-**Settings** pick preferred audio and subtitle languages — Czech then English by
-default. The player selects a track on start from that list.
+**Settings** pick preferred audio and subtitle languages. The first-run
+interface language seeds both preferences. Audio selection prefers that
+language, then English, then a default or first available track. Embedded
+subtitles prefer a full track in the chosen language or English; if the audio
+already matches your preferred audio language, only a matching forced subtitle
+track is selected automatically. See [Languages](languages.md).
 
 In the source list, language is guessed from the title the addon sent. The
 selected source also shows the real languages found by probing the file.

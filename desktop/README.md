@@ -1,4 +1,4 @@
-# Desktop shell — macOS arm64 and Windows x64
+# Desktop shell — macOS arm64, Windows x64 and Linux x64
 
 The `desktop` workspace is an Electron shell that opens an existing Stremio
 Offline server, or runs one on this computer. The window shows either the
@@ -34,10 +34,12 @@ windows remember where they were and how big they were — and the main window
 whether it was maximized — so the next launch opens the way the last one was
 left.
 
-The language chosen in Settings switches the whole app at once. The server page
-takes it at the next launch, because Chromium settles a page's language before
-the shell can set it; each account picks its own language in the web interface
-regardless.
+The shell supports the same ten [interface languages](../docs/languages.md)
+as the web client. Choosing a language switches the shell pages, menus and
+native dialogs. A fresh local server page takes that choice when it loads,
+through `stremioDesktop.locale`; a stored web language takes precedence, and
+a signed-in account uses its own language preference. Remote server pages
+follow the browser and account preferences and receive no local bridge.
 
 ## Running the backend on this computer
 
@@ -103,7 +105,8 @@ build is current).
   `/usr/local/bin`.
 
 The packaging sections below build the macOS arm64 `.dmg` and `.zip` and the
-Windows x64 installer and `.zip` from the compiled shell. The tagged release
+Windows x64 installer and `.zip`, and Linux x64 `.deb` and AppImage from the
+compiled shell. The tagged release
 attaches them unsigned; see [Limits](#limits) for what that means.
 
 ## Sharing with other devices
@@ -170,7 +173,9 @@ and, when the window is not focused, as a system notification.
   Intel or universal artifact.
 - Windows 10 or 11, x64. Windows on ARM runs the x64 build under
   emulation.
-- Node.js >= 22, matching the root `engines` field.
+- Linux x64 with glibc 2.35 or newer; the packaged app uses system VA-API
+  libraries and GPU drivers. See [Linux installation](../docs/install-linux.md).
+- Node.js >= 22, matching the root `engines` field (for development).
 
 ## Build locally
 
@@ -308,8 +313,8 @@ The same shell runs on Windows x64. Where it differs from macOS:
     quota and Windows deletes what does not fit; only the server's data goes
     there.
 - **FFmpeg.** `scripts/build-ffmpeg-win.sh` cross-compiles an LGPL FFmpeg with
-  mingw-w64 on Linux: static, schannel for TLS, Media Foundation (`h264_mf`)
-  and D3D11VA. It leaves out the capture devices except `lavfi`, and checks
+  mingw-w64 on Linux: static, schannel for TLS, NVENC (`h264_nvenc`), Media Foundation
+  (`h264_mf`) and D3D11VA. It leaves out the capture devices except `lavfi`, and checks
   that the executables import only Windows' own DLLs. See
   [docs/hardware-acceleration.md](../docs/hardware-acceleration.md) for how
   transcoding uses it.
@@ -341,6 +346,40 @@ Users read [docs/install-windows.md](../docs/install-windows.md); the manual
 check on a real PC, for a change that touches Windows, is
 [docs/testing-windows.md](../docs/testing-windows.md).
 
+## Linux
+
+The Linux x64 app uses the same local backend and named remote profiles.
+Closing its window quits the app, asking first while downloads or playback are
+active. A tray menu is available on desktops that support tray icons. Open at
+login writes `~/.config/autostart/stremio-offline.desktop` and starts minimized.
+Setup proposes the system's Videos folder; data lives under
+`~/.config/@stremio-offline/desktop`.
+
+The bundled LGPL FFmpeg encodes through VAAPI (Intel/AMD) or NVENC (NVIDIA)
+and has no software H.264 encoder. **Use the system's FFmpeg** is offered when
+both system tools are found and the FFmpeg build enables libx264; it applies
+when the local backend next starts. Direct play and remux need no encoder.
+
+Build the FFmpeg bundle on a host with Docker, then package on Linux:
+
+```bash
+bash desktop/scripts/build-ffmpeg-linux.sh
+npm run package:linux:x64 -w desktop
+npm run verify:fuses -w desktop
+npm run smoke:packaged -w desktop
+```
+
+The build script uses a pinned Ubuntu 22.04 container. Packaging requires
+`desktop/ffmpeg-linux`; the **Desktop package** and **Release** workflows build
+it in their `ffmpeg-linux` job. Packaging produces an AppImage and `.deb` in
+`desktop/release/`. The release workflow renames them to
+`Stremio-Offline-<version>-x86_64-unsigned.AppImage` and
+`stremio-offline_<version>_amd64-unsigned.deb`, and attaches their exact FFmpeg,
+OpenSSL and nv-codec-headers sources.
+
+See [Installing the Linux app](../docs/install-linux.md) for dependencies,
+sandbox behavior, graphics drivers, sharing, updates and removal.
+
 ## Trying the Linux app on a Mac
 
 `desktop/scripts/linux-preview.sh` runs an Ubuntu 24.04 desktop (Xfce) in a
@@ -357,7 +396,9 @@ Docker container and shows it in the browser at
 - The system `ffmpeg` in the image has libx264, so **Use the system's
   FFmpeg** can be tried there.
 - The preview disables Electron's sandbox (`ELECTRON_DISABLE_SANDBOX=1`),
-  which a container cannot provide. The app itself never does.
+  which this preview container cannot provide. This is separate from the
+  AppImage launcher fallback on hosts that restrict user namespaces; see
+  [Linux installation](../docs/install-linux.md#download).
 
 ## Signed release (manual)
 

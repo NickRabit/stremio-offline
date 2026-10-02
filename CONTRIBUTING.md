@@ -30,8 +30,8 @@ npm run dev:server
 npm run dev:web
 ```
 
-`npm test` runs both unit suites: the server one (`node:test`) and the client
-one (Vitest). `npm run test:watch -w web` watches the client one.
+`npm test` runs the server (`node:test`), web (Vitest) and desktop
+(`tsx --test`) unit suites. `npm run test:watch -w web` watches the client one.
 
 End-to-end tests drive the built app in a browser against a fake addon:
 

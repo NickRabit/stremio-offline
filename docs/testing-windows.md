@@ -42,7 +42,8 @@ where something looks wrong.
    - Add an addon, download a film, and play it in the window.
    - Pick a lower quality to force a conversion.
    - In **Settings → Diagnostics** of the server page, the conversion line says
-     **Media Foundation** and not "(software)" if the PC has a graphics card.
+     **NVENC** on a supported NVIDIA card, or **Media Foundation** with
+     hardware encoding on other supported graphics cards.
    - In **Task Manager → Performance → GPU**, the **Video Encode** graph moves
      during the conversion.
 4. **Share to other devices.**

@@ -86,24 +86,39 @@ being reopened, not as a changelog.
   or library playback — with library traffic kept out of the external figures.
 - Diagnostics panel: levels, rotation, retention, redaction, client playback
   errors, grouped issues, and a per-host guard on outbound addon calls.
-- English or Czech throughout, chosen on first run; server messages travel as
-  English text plus a catalogue key.
+- Ten interface languages throughout the web and desktop apps: English,
+  Czech, Slovak, German, Spanish, French, Italian, Polish, Brazilian Portuguese
+  and Russian. Server messages travel as English text plus a catalogue key.
+  A fresh local desktop server starts in the language picked in the shell. See
+  [Languages](languages.md).
 - Tile size that follows the panel, portrait or landscape tiles per page, and
   cached artwork sized for a tile.
 - Restricted / demo mode (`RESTRICTED_MODE=1`), English documentation, the
   community files, the GHCR image and the build and release workflows.
-- **Desktop apps** for macOS (Apple Silicon) and Windows x64, attached unsigned
+- **Desktop apps** for macOS (Apple Silicon), Windows x64 and Linux x64
+  (`.deb` and AppImage, glibc 2.35+), attached unsigned
   to every release. Each runs the server on the computer, with bundled FFmpeg,
-  hardware conversion (VideoToolbox, Media Foundation) and a download-folder
-  step at setup, or opens a server elsewhere through named profiles. They share
+  hardware conversion (VideoToolbox, Media Foundation, VAAPI and NVENC) and a
+  download-folder step at setup, or opens a server elsewhere through named profiles. They share
   the local server with the home network on request, save to the device through
-  the native dialog, stay running when the window closes, keep the computer
+  the native dialog, keep running after closing the window on macOS and
+  Windows (closing quits on Linux), keep the computer
   awake while downloading, open at login, check GitHub for a newer release and
   reset themselves from Settings. The Electron Fuse V1 hardening is applied at
   package time and read back from the built app. See
   [Installing the macOS app](install-mac.md),
-  [Installing the Windows app](install-windows.md) and
+  [Installing the Windows app](install-windows.md),
+  [Installing the Linux app](install-linux.md) and
   [desktop/README.md](../desktop/README.md).
+
+- **Cloudflare Access in the desktop app**: email one-time PIN sign-in inside
+  the window, with a separate cookie session per saved server. External identity
+  provider pages are not supported. See
+  [Cloudflare Access](../desktop/README.md#cloudflare-access).
+- **Phones and tablets**: responsive layouts, folding headers, tablet detail
+  navigation and Home Screen setup. See [Phones and tablets](mobile.md).
+- Library listings and mosaics are warmed in the background, and private
+  thumbnail caches are revalidated with access checks on every request.
 
 ## Next (daily friction)
 

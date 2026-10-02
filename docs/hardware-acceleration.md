@@ -87,8 +87,9 @@ encoded at constant quality with `-q:v` — tune it with `VIDEOTOOLBOX_QUALITY`
 ## Windows (Media Foundation)
 
 The desktop app's local backend on Windows has no VAAPI, and the bundled LGPL
-FFmpeg has no libx264 either, so it probes Media Foundation's `h264_mf` at
-start. `h264_mf` uses the GPU vendor's encoder when the driver offers one and
+FFmpeg has no libx264 either, so it prefers NVENC on a supported NVIDIA card
+and otherwise probes Media Foundation's `h264_mf` at start. `h264_mf` uses the
+GPU vendor's encoder when the driver offers one and
 Microsoft's software encoder otherwise; both are part of Windows 10 and 11, so
 nothing needs installing. The log line `Media Foundation is available` says the
 path is live, with `hardware:true` for the vendor MFT and `constantQuality:true`
@@ -139,8 +140,9 @@ capabilities:
 A busy card (a consumer GeForce limits parallel encode sessions, and its memory
 can run out) makes that one conversion fall back to software without counting
 against NVENC; only real refusals switch it off until a restart. The
-probe runs on every platform, but only when the build lists `h264_nvenc` and
-VAAPI has not already come up, so an Intel or AMD host pays nothing for it. Set
+probe never runs on macOS. Elsewhere it runs only when the build lists
+`h264_nvenc` and no `VAAPI_DEVICE` is configured, so a host configured for
+VAAPI pays nothing for it. Set
 `NVENC=0` in the environment to switch the path off.
 
 At start the server encodes a test frame and, when that works, the log line
@@ -163,5 +165,8 @@ vainfo --display drm --device /dev/dri/renderD128
 If libva does not pick a driver, force it in `.env` with `LIBVA_DRIVER_NAME` —
 `iHD` for Gemini Lake and newer, `i965` especially for older Braswell.
 
-If VAAPI never comes up, nothing breaks: direct play and remux still work, and a
-real transcode falls back to `libx264` on the CPU.
+If VAAPI never comes up, direct play and remux still work. The Docker build
+can fall back to `libx264` on the CPU. The Linux app's bundled LGPL FFmpeg has
+no software H.264 encoder; use **Use the system's FFmpeg** in desktop Settings
+when a system build with libx264 is available. See
+[Installing the Linux app](install-linux.md#converting-video).

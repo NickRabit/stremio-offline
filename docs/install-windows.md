@@ -66,10 +66,10 @@ The welcome screen offers two choices:
 
 ## Converting video
 
-When a device cannot play a film as it is, the app converts it with Windows'
-own Media Foundation encoder. With a graphics card, that uses the card's
-encoder (NVIDIA, Intel or AMD). Without one it uses Microsoft's software
-encoder, which works but is slow. See [Hardware
+When a device cannot play a film as it is, the app converts it with NVENC on
+an NVIDIA card with a working driver (531 or newer for the bundled build).
+Otherwise it uses Windows' Media Foundation encoder: the graphics card's
+encoder when available, or Microsoft's slower software encoder without one. See [Hardware
 acceleration](hardware-acceleration.md) for how to tell which one runs.
 
 Some sources check their HTTPS certificates online for revocation on Windows.
