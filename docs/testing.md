@@ -367,7 +367,8 @@ the player while the fallback is still running.
 
 A rejected seek with a live fallback returns that generation with `seekRestored`, so the
 client can resume the attached stream at its paused frame or attach the server's actual
-fallback after coalesced seeks. It preserves a user pause and shows a translated notice.
+fallback after coalesced seeks. It preserves a user pause and shows a notice that leaves
+after five seconds: the film plays on, so it is never the error curtain over the picture.
 No recovery is inferred from a network error, a dead fallback, or a failed decode
 escalation. `player-seek-resume.spec.ts` exercises playback progress, pause preservation,
 a queued seek, a late response after closing, and an unconfirmed failure with real HLS.

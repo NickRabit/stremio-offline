@@ -70,8 +70,11 @@ for (const scenario of ["playing", "paused", "queued", "closed", "unconfirmed"] 
       expect(starts).toBe(1);
       return;
     }
+    // A refused seek leaves the film playing, so it is a passing notice, never the error curtain.
+    const kept = overlay.getByRole("status").filter({ hasText: "Nepodařilo se přeskočit" });
     if (scenario === "unconfirmed" || scenario === "paused") {
-      await expect(overlay.locator(".player-error")).toBeVisible();
+      if (scenario === "unconfirmed") await expect(overlay.locator(".player-error")).toBeVisible();
+      else { await expect(kept).toBeVisible(); await expect(overlay.locator(".player-error")).toHaveCount(0); }
       await expect.poll(() => video.evaluate((v: HTMLVideoElement) => v.paused)).toBe(true);
       expect(await video.evaluate((v: HTMLVideoElement) => v.currentTime)).toBeGreaterThanOrEqual(before - 0.05);
     } else {
@@ -84,7 +87,8 @@ for (const scenario of ["playing", "paused", "queued", "closed", "unconfirmed"] 
         await expect.poll(() => video.evaluate((v: HTMLVideoElement) => v.currentTime)).toBeGreaterThan(before + 0.3);
         expect(playlists.filter((url) => url === "/seek-resume/1/index.m3u8")).toHaveLength(1);
       }
-      await expect(overlay.locator(".player-error")).toBeVisible();
+      await expect(kept).toBeVisible();
+      await expect(overlay.locator(".player-error")).toHaveCount(0);
     }
   });
 }
