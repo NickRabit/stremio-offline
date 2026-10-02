@@ -77,20 +77,17 @@ two places:
 Downloaded language-tagged `.srt` and `.vtt` sidecars are discovered beside
 library videos and offered in the player as external tracks.
 
-Changing an audio track or quality restarts conversion at the current
-position. Changing an embedded subtitle track replaces only its sidecar
-reader; addon subtitle selection changes the browser track. Neither restarts
-the video conversion. Bitmap subtitles (PGS, VobSub) are not offered; they
-cannot be turned into WebVTT.
+Audio or quality changes restart conversion at the current position. Subtitle
+changes keep video playing; **Off** stops the subtitle reader. Bitmap subtitles
+(PGS, VobSub) are not offered because they cannot become WebVTT.
 
 The subtitle icon in the controls (or <kbd>c</kbd>) does not change the track: it
 only stops drawing the text. Playback and conversion keep going, and turning
-subtitles back on is instant, even mid-line. **Off** in the list really drops the
-subtitle track and stops an embedded sidecar reader, while video keeps playing.
+subtitles back on is instant, even mid-line.
 
 **Subtitle delay** in playback settings adjusts embedded and addon subtitles
 in 0.25-second steps, from −30 to +30 seconds. Positive delay makes text appear
-later; the reset button (**Back in step**) returns it to zero. This is a playback-session adjustment.
+later; **Back in step** resets it. The adjustment lasts for this playback session.
 
 **Settings** pick preferred audio and subtitle languages. The first-run
 interface language seeds both preferences. Audio selection prefers that
@@ -104,9 +101,5 @@ selected source also shows the real languages found by probing the file.
 
 ## Remote playback
 
-AirPlay is currently disabled in the custom player: there is no route picker,
-remote playback is disallowed on the video element, and wireless events do not
-switch playback engines. The earlier AirPlay implementation was withdrawn
-following playback and seek regressions. Use the browser or desktop player;
-server-side receiver access code does not imply working AirPlay support in the
-current interface.
+AirPlay is currently disabled in the custom player following playback and seek
+regressions. There is no route picker; use the browser or desktop player.

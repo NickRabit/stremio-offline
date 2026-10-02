@@ -349,19 +349,16 @@ check on a real PC, for a change that touches Windows, is
 
 ## Linux
 
-The Linux x64 app uses the same local backend and named remote profiles.
-Closing its window quits the app, asking first while downloads or playback are
-active. A tray menu is available on desktops that support tray icons. Open at
-login writes `~/.config/autostart/stremio-offline.desktop` and starts minimized.
-Setup proposes the system's Videos folder; data lives under
+Linux x64 packages are `.deb` and AppImage (glibc 2.35+). Closing the window
+quits, with confirmation during active downloads or playback. Tray support
+varies by desktop. Login startup uses `~/.config/autostart`; app data lives in
 `~/.config/@stremio-offline/desktop`.
 
-The bundled LGPL FFmpeg encodes through VAAPI (Intel/AMD) or NVENC (NVIDIA)
-and has no software H.264 encoder. **Use the system's FFmpeg** is offered when
-both system tools are found and the FFmpeg build enables libx264; it applies
-when the local backend next starts. Direct play and remux need no encoder.
+Bundled FFmpeg uses VAAPI or NVENC, without a software H.264 encoder.
+**Use the system's FFmpeg** is offered when FFmpeg/ffprobe are installed and
+FFmpeg enables libx264; it applies at the next backend start.
 
-Build the FFmpeg bundle on a host with Docker, then package on Linux:
+Build FFmpeg with Docker, then package and verify on Linux:
 
 ```bash
 bash desktop/scripts/build-ffmpeg-linux.sh
@@ -370,16 +367,9 @@ npm run verify:fuses -w desktop
 npm run smoke:packaged -w desktop
 ```
 
-The build script uses a pinned Ubuntu 22.04 container. Packaging requires
-`desktop/ffmpeg-linux`; the **Desktop package** and **Release** workflows build
-it in their `ffmpeg-linux` job. Packaging produces an AppImage and `.deb` in
-`desktop/release/`. The release workflow renames them to
-`Stremio-Offline-<version>-x86_64-unsigned.AppImage` and
-`stremio-offline_<version>_amd64-unsigned.deb`, and attaches their exact FFmpeg,
-OpenSSL and nv-codec-headers sources.
-
-See [Installing the Linux app](../docs/install-linux.md) for dependencies,
-sandbox behavior, graphics drivers, sharing, updates and removal.
+CI builds the same bundle and attaches packages and dependency sources to
+releases. See [Linux installation](../docs/install-linux.md) for artifact names,
+dependencies, drivers, sharing and removal.
 
 ## Trying the Linux app on a Mac
 

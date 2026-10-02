@@ -14,19 +14,16 @@ removed; deliberately removed optional addons are not restored on restart.
 
 ### Search scopes and addon settings
 
-The catalogue search can query all addons, one addon, or one searchable
-catalogue. **Include in search across all addons** in an addon's settings
-controls the default global search; turning it off still allows that addon to
-be selected explicitly. Choosing one catalogue as the search scope also
-selects it in the browse picker, so clearing the search returns to that
-catalogue. Library identification uses its own provider rules; see
-[Library identification](library-metadata.md).
+Search all addons, one addon or one searchable catalogue. Turning off
+**Include in search across all addons** excludes an addon from global search;
+you can still select it explicitly. Selecting a catalogue also selects it for
+browsing after the search is cleared.
 
-Each addon has one settings dialog for its role, visibility and storage rules.
-You can replace a configured manifest URL while keeping its order, enabled
-state and save rules. Enabled manifests refresh on the interval in
-**Settings → Addons**, and **Refresh manifest** or **Refresh manifests** runs
-that check on demand, including catalogues the provider added since setup.
+The addon settings dialog holds its role, visibility and storage rules.
+Replacing its manifest URL preserves order, enabled state and save rules.
+Enabled manifests refresh on the interval in **Settings → Addons**, or on demand
+with **Refresh manifest** or **Refresh manifests**. Identification has separate
+[provider rules](library-metadata.md).
 
 ### Real-Debrid and other debrid services
 

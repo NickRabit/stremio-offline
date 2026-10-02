@@ -89,13 +89,10 @@ watching** switch. Hiding a source preserves its resume positions.
 
 ### Stored artwork galleries
 
-Titles with saved gallery pictures show a gallery button beside their item
-menu. It opens the full-size viewer with arrows and thumbnails. Downloads can
-retain the catalogue's gallery as well as portrait and landscape tile artwork;
-identification can also add TMDB gallery pictures. Galleries are stored under
-`DATA_PATH/artwork/<library id>/`, travel with a title when it is moved or copied,
-and are cleaned up with it. Gallery pictures are never written beside media,
-even when the library allows poster artwork there.
+A title's gallery button opens saved pictures with arrows and thumbnails.
+Downloads retain catalogue galleries; identification can add TMDB pictures.
+Galleries live under `DATA_PATH/artwork/<library id>/`, follow moves/copies and
+are cleaned up with the title. They are never written beside media.
 
 ## Types, moves and the queue
 
@@ -188,28 +185,18 @@ is ever copied twice, and the parent's own listing shrinks as it should.
 
 **Change folder** offers two choices:
 
-- **Only point at the new folder** is the default. It changes the library root
-  and moves no media. Use it when you have already moved the whole tree yourself.
-  Relative match, favourite and resume paths remain valid when the contents keep
-  the same layout. The picker can create a missing destination folder.
-- **Move the content along** queues a move into the selected folder. The library
-  switches its root only after every item has arrived. The job appears in the
-  operation strip with progress and cancellation; it waits for active playback
-  and unavailable disks. A cross-filesystem transfer copies before removing
-  the source rather than relying on a same-volume rename.
+- **Only point at the new folder** (default): move no media; use after relocating
+  the tree yourself. Relative metadata and resume paths keep working when the
+  folder layout stays the same.
+- **Move the content along**: queue the transfer, then switch the root after
+  every item arrives. Progress and cancellation appear in the operation strip.
 
-Moving the content is refused when another library sits inside the source,
-when source and destination contain each other, when a destination name already
-exists, or when the source is empty. Use the point-only choice for an empty
-source or an already relocated tree.
+A content move refuses nested libraries, overlapping source/destination paths,
+colliding names and an empty source. Failure or cancellation keeps the old root,
+but does not roll back files already moved; check both folders before retrying.
 
-If a queued move fails or is cancelled, the library keeps its old root.
-Some items may already have reached the destination; inspect the operation
-results and both folders before retrying. Do not assume cancellation rolls
-back files already moved.
-
-For a manual relocation, stop the server, move the tree, restart it and choose
-**Only point at the new folder**. This avoids a scan seeing a half-moved tree.
+For manual relocation, stop the server, move the whole tree, restart and choose
+**Only point at the new folder**.
 
 ## Where the state lives
 
