@@ -890,7 +890,7 @@ img.broken{visibility:hidden}
 /* Short screens, and tablets whose browser bar leaves them short, spend their height on the source list. */
 @media(min-width:981px) and (max-height:900px),(min-width:981px) and (max-width:1400px) and (max-height:1050px){.catalog-view{--catalog-cols:minmax(0,1.15fr) minmax(0,1fr)}}
 @media(min-width:701px) and (min-height:501px) and (max-height:900px),(min-width:981px) and (max-width:1400px) and (max-height:1050px){
-  main.view-catalog>.catalog-view>.heading{display:none}
+  main.view-catalog>.catalog-view:has(.catalog-layout)>.heading{display:none}
   .detail-panel.series-sources-layout .hero{height:auto;min-height:0;padding:10px 16px}
   .detail-panel.series-sources-layout .series-hero .detail-copy>:is(.title-chips,.catalog-description){display:none}
   .detail-panel.series-sources-layout .hero:not(.series-hero) .description-preview{display:none}
