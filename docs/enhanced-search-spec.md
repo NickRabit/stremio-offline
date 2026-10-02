@@ -1,301 +1,270 @@
 # Enhanced catalog search: research and implementation specification
 
 Status: proposed; no behavior in this document is implemented by this change.
-Research date: 2026-09-30. Baseline: main, commit 5719f52.
+Research date: 2026-10-02. Baseline: main, commit b67ce84.
 
 ## Outcome and scope
 
-Make catalog search useful while typing, with recent queries, suggestions from
-already loaded catalogs, and optional title relevance sorting. Each account can
-clear its search history and disable history storage in Settings.
+Make catalog search useful while typing, sort loaded results by how well their
+title matches, and offer recent queries and already seen titles as suggestions.
+Each account can clear its search history and turn history off in Settings.
 
 This covers the catalog search box only. Library filtering, download filtering,
-metadata identification, playback history, and diagnostic log search keep their
-existing semantics. No external autocomplete service, AI query expansion,
-fuzzy remote search, or extra metadata provider is introduced.
+metadata identification, playback history and diagnostic log search keep their
+existing semantics. No external autocomplete service, AI query expansion, fuzzy
+remote search or extra metadata provider is introduced.
+
+The design is deliberately small: the app runs on a home server for a handful
+of accounts. Where a stronger guarantee would need its own protocol (revision
+counters, cross-tab synchronisation, server-side provenance), this document
+names the weaker guarantee it accepts instead.
 
 ## Research: current implementation
 
 | Area | Evidence | Consequence |
 | --- | --- | --- |
-| Submission | `web/src/App.tsx`, `submitSearch`, updates `submittedQuery` on form submit | Live input needs a separate draft/committed query lifecycle. |
-| Request lifecycle | `App.tsx`, `loadPage`, request generation refs and first-page reset effect | Stale results are guarded, but transport cancellation is not implemented. Invalidating only at dispatch leaves a debounce window where an old response can still win. |
-| Transport | `web/src/api.ts`, `request`, uses caller signal OR a 30-second timeout | Adding cancellation must retain the deadline; the current OR would lose it. |
-| Scopes | `web/src/search-scope.ts`; `/api/search` and `/api/searchable` in `server/src/routes/catalog.ts` | Keep all/addon/catalog scopes, type restrictions, user grants, addon order and globalSearch behavior. |
-| Fan-out | `server/src/addons.ts`, `searchableCatalogs` and `searchAll` | One first-page query can contact every eligible catalog. Debounce reduces calls but does not cancel upstream work by itself. |
-| Pagination | `searchAll` uses a separate offset per source; client deduplicates and stops on no gain | Preserve opaque cursors and reset on query/scope/type changes. Sorting must not rewrite cursor semantics. |
-| Result ordering | `App.tsx`, `visibleItems`, default/name/year sorting after optional name/year grouping | Add relevance after existing grouping; preserve other sort modes. |
-| Personal storage | `server/src/users.ts`, `UserData`; `routes/personal.ts`, `dataOf` and `updateData`; `views.ts` | Use authenticated account storage, not shared localStorage or global configuration. |
-| Settings | `App.tsx`, Settings has a playback-history action and restricted controls | Add clearly named search controls accessible to all account roles; do not reuse Clear playback history. |
-| Logging | `server/src/addons.ts`, search failure warning includes query and error reason | New history controls must not leave raw queries in newly generated application logs. |
+| Submission | `web/src/App.tsx`: the input only sets the `search` draft; `submitSearch` copies it into `submittedQuery` on form submit | Live input needs a debounced path from draft to committed query. |
+| Request lifecycle | `App.tsx`, `loadPage`: `requestRef` generation counter and `stale()` guard; no `AbortController` | Late responses are already ignored; transport cancellation is new. |
+| Transport | `web/src/api.ts`, `request`: `signal: init.signal ?? AbortSignal.timeout(timeoutMs)` | A caller signal would silently drop the 30 s deadline. Combine both. |
+| Scopes | `web/src/search-scope.ts` (`parseSearchScope`); `/api/search` and `/api/searchable` in `server/src/routes/catalog.ts` | Keep all/addon/catalog scopes, type filter, grants, addon order and `globalSearch`. |
+| Fan-out | `server/src/addons.ts`, `searchAll` → one `catalog()` per target from `searchableCatalogs`; `TIMEOUT_MS = 12_000`; no cache keyed by query | Every committed query is a full fan-out to every eligible catalog. Prefixes are not cheaper than whole words. |
+| Pagination | `searchAll` keeps a per-source offset in an opaque cursor; the client deduplicates and stops when a page gains nothing | Reset on query/scope/type change; sorting never touches cursors. |
+| Result ordering | `App.tsx`, `visibleItems`: optional grouping by name, then `sort` of `"default"` (source order), `"name"` or `"year"`. One `sort` state serves browse and search | Search needs its own sort state to offer Title match. |
+| Personal storage | `UserData` in `server/src/users.ts`; `dataOf`/`updateData` implemented in `server/src/index.ts`, injected into `routes/personal.ts` | Use the account store, not localStorage or instance settings. |
+| Atomicity | `Store.update` in `server/src/store.ts` runs the mutator synchronously on live state, then queues the file write | A read-modify-write done *inside* the `updateData` mutator is already atomic per account. `PATCH /api/views` computes its value from `dataOf` outside the mutator; do not copy that pattern. |
+| Restricted mode | `ALLOWED_MUTATIONS` in `server/src/restricted.ts`, matched on the Express-stripped path (`/views`, not `/api/views`) | New personal routes must be listed there. |
+| Settings prefs | `UserPrefs`/`PERSONAL_SETTINGS` flow through `PATCH /api/settings` (403 in restricted mode) and into the settings backup | Search preferences must not live in `UserPrefs`. |
+| Logging | `addons.ts`, `searchAll` failure: `log("WARN", "Addon request failed", { …, query, reason })`. The generic `/api` request logger logs `req.path` only | That warning is the only server log line carrying a catalog search query. |
+| i18n | `web/src/i18n/index.ts`, `LOCALES`: en, cs, sk, de, es, fr, it, pl, pt-BR, ru; `i18n.test.ts` enforces key parity | Every new key goes into all ten catalogues. |
 
 External findings:
 
 - The Stremio [manifest format](https://stremio.github.io/stremio-addon-sdk/api/responses/manifest.html)
-  declares search capability through catalog extras. The
+  declares search through catalog extras, and the
   [catalog guide](https://stremio.github.io/stremio-addon-guide/sdk-guide/step2)
-  describes `skip` pagination. Neither is an autocomplete interface. Therefore
-  this proposal derives suggestions locally and preserves addon-owned matching.
+  describes `skip` pagination. Neither offers autocomplete, so suggestions are
+  derived locally and matching stays with the addons.
 - The W3C [combobox pattern](https://www.w3.org/WAI/ARIA/apg/patterns/combobox/)
-  provides the keyboard and accessibility contract for an editable input with a
-  suggestion popup. Use this pattern, with manual selection and no automatic
-  replacement of the user's text.
+  is the keyboard and accessibility contract for the suggestion popup.
 - MDN [AbortSignal](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal)
-  documents cancellation and composing signals. Combine request cancellation
-  with the existing deadline, using a tested compatibility fallback if needed.
+  documents `AbortSignal.any` for combining cancellation with a deadline.
 
-The thresholds below are product choices, not results of a latency benchmark.
-No production traffic measurement or external-addon load test was run.
+Thresholds below are product choices, not benchmark results.
 
 ## Product behavior
 
-### Live input
+### Search while typing
 
-- Default: enabled. Commit a trimmed query after 400 ms without input, only
-  when it contains at least two Unicode code points. Never dispatch during IME
-  composition; start the timer after compositionend.
-- Enter and Search immediately submit any non-empty query, including one
-  character. Cancel the pending debounce. Repeated submission of the same
-  query/context does not create another first-page request.
-- Settings offers Search while typing. Turning it off restores explicit
-  submission and cancels any pending timer. This preference is per account.
-- Invalidate the current request generation on draft edits, scope/type changes,
-  clearing, leaving the catalog view, and account changes. Abort obsolete
-  client requests immediately. A late result cannot change items, selection,
-  source count, cursor, errors, busy state, or history eligibility.
-- While a new draft is pending, existing results may remain visible with their
-  old query heading and an Updating state. Disable pagination and selection of
-  stale result cards until that draft is committed or explicitly reverted.
-- Clearing immediately aborts search, clears draft/committed query and search
-  paging, and restores the selected browsing catalog. No empty-query request.
-- A one-character unsubmitted draft cancels pending work and shows a hint to
-  type another character or press Enter; it does not execute automatically.
-  Clear busy and loading-more state immediately when invalidating a request,
-  independently of its stale finally handler. A sub-minimum draft shows
-  Awaiting submission, never Updating, and leaves old cards/pagination disabled.
-  Enter commits it; an explicit Revert draft action restores the committed query
-  and re-enables its loaded results. Revert reloads the first page if that query
-  was aborted before completion. These transitions cannot leave a spinner running.
-- Scope/type changes with a committed query start a new first page immediately,
-  unless an edited draft is pending: then apply the same debounce/minimum rules
-  to that draft. Changing sort only rearranges loaded items.
-- Leaving search cancels timers. Returning does not execute an unfinished draft.
-  Session reset clears all in-memory query, history and suggestion state before
-  rendering the next account. Authentication failures retain existing handling.
+- On by default; Settings > Search can turn it off per account, which restores
+  explicit submission.
+- Commit the trimmed draft after **500 ms** without input when it has at least
+  **three** Unicode code points. Three, not two: there is no query cache, and a
+  two-letter prefix costs the same full fan-out as a word while matching almost
+  everything. Never commit during IME composition; start the timer on
+  `compositionend`.
+- Enter and the Search button submit any non-empty draft immediately, including
+  one or two characters, and cancel the pending timer. Submitting the query that
+  is already committed in the same scope/type does not start another request.
+- Any new commit, scope/type change, clear, leaving the catalog view or account
+  change aborts the in-flight request (`AbortController`) and invalidates its
+  generation. An aborted request shows no error. Busy and loading-more state
+  are cleared by the code that invalidates, not by the stale request's
+  `finally`, so no spinner can be left running.
+- While a draft is pending or its first page is loading, the previous results
+  stay visible under their own query heading with an Updating indicator.
+  Loading further pages is paused until the new first page arrives.
+- A draft shorter than the minimum and not submitted leaves the committed
+  results as they are and shows a hint: type more or press Enter.
+- Clearing the input to empty aborts search and returns to the selected
+  browsing catalog, as the existing Cancel button does today.
+- Changing scope or type with a committed query reloads the first page
+  immediately. Changing sort only reorders loaded items.
+
+### Title match order
+
+- The search sort menu offers Source order (today's "By addon"), Title match,
+  Name and Year. Browse keeps its own sort with the existing three options;
+  this splits today's shared `sort` state into a browse sort and a search sort.
+- The search sort starts from the account's default order (Settings > Search,
+  Source order unless changed) each time search is entered from browsing, and
+  keeps a manual choice for the rest of that search session.
+- Rank by: exact normalized title; title starts with the query; every query
+  token is a whole title token; title contains the query; everything else.
+  Ties keep source/page arrival order. A query that normalizes to nothing keeps
+  source order. Ranking runs after deduplication and grouping and never changes
+  IDs, metadata or cursors.
+- Only loaded results are ranked; the option is labelled "Title match (loaded
+  results)" because a later page can bring a better match. Appending a page
+  keeps the scroll position.
 
 ### Suggestions
 
-- Show at most eight rows: up to three matching recent queries, then locally
-  loaded titles filling the remaining slots. With empty input show up to eight
-  recent queries; no remote request is made just to populate the popup.
-- Use the same normalization as title ranking: Unicode decomposition,
-  diacritic removal, lowercase, punctuation-to-space and whitespace collapse. Keep
-  original spelling for display and remote requests. History and title rows
-  have distinct labels and are deduplicated within their kind.
-- Candidate titles come only from catalog pages loaded during the current
-  authenticated session. Maintain a bounded memory pool of 500 identities
-  (type/id plus provenance), evicting oldest candidates. Do not fetch artwork,
-  details, or extra pages to build it; do not persist this pool.
-- Filter candidates by current scope/type and current addon grants/enabled
-  state. Track contributing sources when deduplicating. In all-addon scope,
-  exclude provenance that is opted out of global search. Clear the pool on
-  logout/account changes and conservatively on grants/addon configuration
-  changes. Never index playback lists, library filenames or other accounts.
-- Clicking a title suggestion submits its displayed title in the current
-  context; it does not navigate directly to details. Clicking a history query
-  also uses the current context. History stores text only, not old scopes.
-- Up/Down move the active option, Enter selects it or submits the draft, Escape
-  closes the popup without clearing input, and Tab moves focus normally.
-  Editing reopens suggestions. Preserve text editing and IME keys.
-- Follow the W3C combobox roles and active-descendant pattern. Announce loading
-  and final result status through a polite status region without announcing
-  each keystroke. Popup fits phone/tablet viewports and does not obscure scope
-  controls; touch selection must survive blur ordering.
-- Provenance is server-owned: add `searchSources: { addonKey: string;
-  catalogType: string; catalogId: string }[]` to result items from both
-  `/api/search` and `/api/catalog`. Search merges retain every contributing
-  catalog identity; browse results are stamped with the authorized requested
-  catalog. Never trust attribution from addon payloads or map display names to
-  keys. Client grouping unions provenance, and candidate eligibility requires
-  at least one currently eligible source. Existing `sources` display names stay
-  compatible. Update server/web result types and catalog-route tests.
+- A listbox under the input shows at most eight rows: up to three recent
+  queries matching the draft, then titles from the candidate pool. With an
+  empty focused input it shows up to eight recent queries. Opening it never
+  makes a request except refreshing history (below).
+- The candidate pool holds up to 500 titles from catalog and search pages
+  loaded in this session, oldest evicted first, in memory only. Each candidate
+  records its type and, when the page came from one addon (a browse catalog or
+  an addon/catalog-scoped search), that addon's key. No artwork, details or
+  extra pages are fetched for it, and nothing from the library, playback lists
+  or other accounts enters it.
+- In an addon or catalog scope only candidates tagged with that addon are
+  offered; in the all-addon scope every candidate is. The type filter applies
+  in every scope. The pool is emptied on logout, account change and whenever
+  the addon list or grants are reloaded.
+- This is not an authorization boundary and needs no server provenance: every
+  candidate is a title this account was already shown, and choosing one only
+  submits its text, which `/api/search` authorizes again. The accepted cost is
+  an occasional suggestion that returns nothing in the current scope.
+- Choosing a recent query or a title submits its text in the current scope; a
+  title suggestion does not open details. History stores text only.
+- Up/Down move the active option, Enter chooses it or submits the draft,
+  Escape closes the popup and keeps the text, Tab moves focus normally.
+  Typing reopens it. Use the combobox roles with `aria-activedescendant`, and
+  announce result status in a polite live region, not on every keystroke. On a
+  phone the popup fits the viewport and does not cover the scope controls; a
+  touch on an option must win over the input's blur.
+- Matching uses `matchKey` (see Normalization) for both kinds of row. Rows
+  display their original text, and title rows are labelled as titles.
 
 ### History and privacy controls
 
-- Settings > Search contains Save search history (default on), Clear search
-  history, Search while typing, and default result order (Source order or Title
-  match). Controls apply only to the signed-in account, including admin accounts.
-  They remain available when server-level settings are restricted. Add PATCH
-  `/api/search/preferences`, POST `/api/search/history` and DELETE
-  `/api/search/history` to `server/src/restricted.ts` ALLOWED_MUTATIONS using
-  its existing method/path convention. Do not disable these personal controls
-  via the UI restricted flag. This explicitly extends restricted-mode policy
-  for these routes only; cover it in unit and restricted E2E tests.
-- Helper text: “Save queries for recent-search suggestions on your devices.”
-  Explain that turning saving off also deletes existing search history.
-- Turning Save search history off atomically sets the preference to false and
-  deletes all entries. Hide recent-query suggestions immediately. On failure,
-  show an error and retain/reload the server state; never report success early.
-- Turning it on starts with an empty history. Clearing history while saving is
-  on leaves saving on. Clear requires a confirmation, succeeds only after
-  persistence, is idempotent, and affects no playback history or other account.
-- Store at most 20 unique queries for 90 days, most recent first, using server
-  timestamps. Prune on read and mutation; expired entries are never returned.
-  Duplicate key: NFC, trim, whitespace collapse and Unicode lowercase; retain
-  diacritics in the key to avoid merging distinct searches. Display the latest
-  submitted spelling. Reject blank/invalid/over-200-code-point history writes.
-- Do not store each debounce submission. A query becomes eligible only after
-  its current first-page request completes successfully (empty results count).
-  Record it on explicit Enter/Search/suggestion selection, result activation,
-  or leaving the input after completion. Enter/Search/suggestion selection
-  mark intent first, then record only after that submitted query's first page
-  succeeds. If the identical query/context already completed, intent can record
-  immediately without another search. Record at most once per query generation;
-  later reuse starts a new intent. If blur occurs before completion,
-  defer until completion while that same query/context remains current. Drop
-  intermediate/superseded drafts and pagination/filter-only operations.
-- The server rechecks Save search history at mutation time. Add a monotonically
-  increasing history revision to prevent delayed record requests from
-  repopulating history after clear/disable. Record requests carry the revision
-  captured when that query generation begins, not when a delayed write fires;
-  mismatches return 409 and do not retry automatically. A disabled state takes
-  precedence and returns 204 without mutation, even for a stale revision.
-- Serialize clear/disable/record within the account storage transaction. Never
-  replace a stale full UserData snapshot. A disable that wins before a record
-  prevents it; a clear that wins after a record removes it.
-- Other tabs/devices refresh history/preferences on focus and before starting a
-  new query generation. A refresh never upgrades the revision attached to an
-  existing generation or deferred intent. Drop pending intents if a refresh
-  reveals a changed revision or disabled saving; locally clear/disable also
-  invalidates them immediately. Record requests always send their pinned
-  revision, so a fresh GET cannot authorize an old query after clear. A stale
-  tab cannot store history while disabled or restore cleared entries.
-  Client draft text is not saved in localStorage, URLs, analytics or telemetry.
-- Remove raw search query and query-bearing error URLs/reasons from new search
-  logs at every log level; retain addon/catalog identifiers and safe error
-  categories. Audit generic request logging and URL-keyed caches before claiming
-  this. No promise of erasing old logs, backups, browser network records or
-  external addon logs: remote search necessarily sends its query to addons.
-  Personal history stays out of settings export/import and diagnostic bundles.
-  For this release, all of SearchState (including its three preferences and
-  revision) is deliberately excluded from settings backup/import. Those controls
-  are account-owned search state like view preferences; importing instance
-  settings must not re-enable history or replace a person's erasure revision.
-  Document this backup boundary and test export/import preserves SearchState.
+- Settings > Search has: Save search history (on), Clear search history,
+  Search while typing (on) and Default order (Source order / Title match).
+  Toggles and the select write as soon as they change, like the rest of the
+  account settings; Clear asks for confirmation first. They apply to the
+  signed-in account only, admins included, and stay usable in restricted mode.
+  They are separate from the existing Clear playback history action.
+- Helper text under Save search history: “Recent searches are suggested on all
+  your devices. Turning this off also deletes them.”
+- Turning saving off sets the flag and empties the list in one mutation.
+  Turning it on starts empty. Clearing leaves saving on. Errors are shown and
+  the control returns to the server's state; nothing reports success before the
+  server answers.
+- At most 20 queries, newest first, kept 90 days by server timestamp.
+  Duplicates are detected with `historyKey`; the newest spelling is kept.
+  Blank queries and queries over 200 code points are refused.
+- A query is recorded when both hold: its first page completed without a
+  transport error (an empty result counts), and the user acted on it — pressed
+  Enter or Search, chose a suggestion, or opened a result. Debounced commits the
+  user only looked at, superseded drafts, failed requests, pagination and
+  filter changes are not recorded. Each committed query is recorded at most
+  once.
+- The server checks Save search history inside the same `updateData` mutator
+  that would append, so nothing is stored while saving is off, whatever a stale
+  tab sends. Clearing or disabling in a tab drops that tab's not-yet-sent
+  record.
+- Accepted limitation: if another tab or device had a record in flight when
+  history was cleared (saving still on), that one query can reappear. No revision
+  protocol is added for this; it only ever re-adds the user's own latest search.
+- History is reloaded when the search input gains focus, so other tabs and
+  devices catch up without polling. Draft text is never written to
+  localStorage, URLs, analytics or telemetry.
 
-### Optional relevance order
+### Logging and caching
 
-- Existing source order remains the default. Title match is selectable in the
-  search sort menu and as the account default; existing name/year modes remain.
-  On entering search from browsing, initialize a separate search-sort state from
-  defaultOrder. During that search session, preserve explicit source/title/name/
-  year selection across queries and scope changes. Label source order explicitly
-  rather than using an ambiguous Default option. A preference change applies on
-  the next search session, not by silently overriding an active manual choice.
-  Browse retains its own default/name/year sort; title match is absent there.
-  Clearing restores browse sort; favorites/resume retain their meaningful order.
-- Normalize query/title with Unicode decomposition, diacritic removal,
-  lowercase, punctuation-to-space and whitespace collapse. Rank by: exact full
-  normalized title; title prefix; all query tokens as full title tokens; title
-  substring; remaining results. Ties preserve original source/page arrival order.
-  A normalization that yields empty text preserves source order.
-- Rank after existing deduplication/grouping without changing IDs, metadata or
-  stream lookup. Rank only loaded results; label it “Title match (loaded
-  results)” because later pages can insert better matches. Preserve the scroll
-  anchor when appending a page. Do not claim global relevance or fetch all pages.
+- Drop `query` from the `searchAll` failure warning in `addons.ts`; keep addon,
+  catalog and the reason category. This line is shared with library
+  identification, which is fine: it loses nothing it needs.
+- The two DEBUG lines in `server/src/library-candidates.ts` that log a library
+  title are out of scope: they carry file-derived titles, not anything a person
+  typed.
+- Send `Cache-Control: no-store` on `/api/search` and the new search routes.
+- Search state is not part of the settings backup; it does not live in
+  `UserPrefs`, so `createSettingsBackup` never sees it. Old logs, backups,
+  browser history and addon-side logs are not erased; a remote search always
+  sends its text to the addons.
 
 ## Architecture and API contract
 
-Add `search` to account `UserData`, with tolerant reads and strict mutation
-validation. Proposed storage:
+Add an optional `search` field to `UserData`, read tolerantly. Do not add it to
+`emptyUserData()`: the exact-shape assertion in `server/src/users.test.ts`
+stays as it is, and every fake store keeps working.
 
 ```ts
 type SearchState = {
-  saveHistory: boolean;        // true when absent
-  liveSearch: boolean;         // true when absent
-  defaultOrder: "source" | "titleMatch";
-  historyRevision: number;     // zero when absent; increment on clear/disable
-  recent: { query: string; usedAt: string }[];
+  saveHistory: boolean;                           // true when absent
+  liveSearch: boolean;                            // true when absent
+  defaultOrder: "source" | "titleMatch";          // "source" when absent
+  recent: { query: string; usedAt: string }[];    // newest first
 };
 ```
 
-Do not put the history array in `/api/views` or global settings. Add personal
-routes using the existing session-derived `dataOf`/`updateData` boundary:
+Routes in `server/src/routes/personal.ts`, all session-derived through
+`dataOf`/`updateData`, never accepting a user ID:
 
 | Endpoint | Contract |
 | --- | --- |
-| GET `/api/search/preferences` | Returns preferences, revision and pruned recent entries; response Cache-Control: no-store. |
-| PATCH `/api/search/preferences` | Partial strict preference patch. Disabling atomically clears and advances revision; returns updated state. |
-| POST `/api/search/history` | `{ query, historyRevision }`; server timestamp/dedup/bounds; 204 if saved or saving is disabled, 409 on stale revision. |
-| DELETE `/api/search/history` | Clears entries and advances revision atomically; returns updated state. |
+| GET `/api/search/state` | Preferences plus recent entries, expired ones filtered out (not written back). Empty `recent` when saving is off. |
+| PATCH `/api/search/preferences` | Strict partial patch of the three preferences; unknown keys or wrong types are refused. `saveHistory: false` also empties `recent`. Returns the state. |
+| POST `/api/search/history` | `{ query }`. 204 when stored, and 204 without a write when saving is off. Prunes expired entries while writing. |
+| DELETE `/api/search/history` | Empties `recent`, idempotent. Returns the state. |
 
-All routes require a session, derive the account server-side, reject unknown
-mutation keys and never accept a target user ID. A disabled history is always
-returned as empty. Preferences loading failure must allow manual search but
-must not assume history saving is permitted. Existing users get defaults
-lazily; do not copy any shared query history into accounts.
+Every mutation reads and writes inside the single `updateData` mutator. Add
+`PATCH /search/preferences`, `POST /search/history` and `DELETE /search/history`
+to `ALLOWED_MUTATIONS`. If the state fails to load, manual search still works,
+history is not recorded, and live search falls back to on.
 
-Retain the `/api/search` envelope, cursor behavior and scope authorization,
-with the additive item provenance field defined above. Apply the same additive
-field to `/api/catalog`, including every contributing catalog on search merges. History writes
-are separate from GET search, so scans/API callers and pagination cannot
-accidentally record queries. Existing failures do not distinguish complete
-addon failure from genuinely empty search: recording acknowledges a completed
-API response, not successful access to every addon. Do not add a reliability
-claim or treat an empty response as proof that no matching title exists.
+The `/api/search` envelope, cursor and scope authorization are unchanged.
+Recording is a separate request, so API callers, scans and pagination never
+write history.
 
-Extract draft/debounce/request lifecycle, normalization/ranking and suggestions
-from `App.tsx` into focused search modules/components. Extend `api.search` to
-accept a signal composed with the deadline; an intentional abort is silent.
-Browser abort alone is not an upstream cancellation guarantee. Keep upstream
-cancellation out of the initial release unless its propagation through shared
-fetch/cache work is proven safe. Audit fan-out load with a delayed fixture.
+Client structure: move the draft/debounce/abort lifecycle, normalization and
+ranking, and the suggestion pool out of `App.tsx` into focused modules next to
+`web/src/search-scope.ts`, plus a combobox component. `api.search` takes an
+optional signal; `request` combines it with the deadline via `AbortSignal.any`
+(or an equivalent tested fallback). Upstream addon requests are not cancelled
+in this release; the browser abort only frees the client.
 
-All UI text is added to English and Czech catalogs. Deliver controls with
-explicit Search wording, distinct from the existing playback-history action.
+### Normalization
+
+Two functions with different jobs, named so they cannot be swapped:
+
+- `matchKey(text)`: NFD, strip combining marks, lowercase, punctuation to
+  space, collapse whitespace. Used for ranking and for matching suggestions, so
+  "pribehy" finds "Příběhy".
+- `historyKey(text)`: NFC, trim, collapse whitespace, lowercase, diacritics
+  kept. Used only to deduplicate history, so "Pes" and "Peš" stay separate.
 
 ## Acceptance and validation
 
-1. Fake-timer tests: 399/400 ms boundary, rapid edits, one-character Enter,
-   composition events, duplicate submission, live-search off, clear and unmount.
-2. Delayed-response integration: A resolves while B is debouncing or after B;
-   A cannot update any visible state or record history. Deadline still applies
-   when caller cancellation is supplied; abort does not produce an error toast.
-3. Account route tests: isolation between two users including admin, unauthenticated
-   rejection, strict validation, defaults, restart persistence, retention/bounds,
-   clear without changing saving, disable+erase, reenable empty, restricted-mode
-   mutations and backup/import exclusion.
-4. Race tests: delayed record after clear or disable, concurrent tabs, stale
-   revision, and simultaneous unrelated account mutations cannot resurrect
-   history or overwrite preferences. Include an intervening GET before a deferred
-   write, pinned generation revisions and disabled-versus-stale status precedence.
-   Failed persistence is surfaced in Settings.
-5. History interaction tests: typing several prefixes stores only the settled
-   used query; zero-result completion can be recorded; failed/superseded requests,
-   paging and filter changes do not add entries.
-6. Ranking/suggestion tests: accented Czech titles, punctuation-only queries,
-   duplicate names and identities, stable ties, grouping on/off, all scopes,
-   revoked grants and global-search exclusions; eight-row/500-candidate bounds.
-7. Functional E2E: Search while typing, keyboard/touch suggestion selection,
-   explicit one-character query, disable/clear on a regular user, another account
-   stays unaffected. Query text is absent from captured application logs and
-   settings export; inspect nested error reasons as well as top-level fields.
-8. Performance fixture: a burst within 400 ms produces one first-page fan-out;
-   no autocomplete requests, no overlapping pagination, and no extra call for
-   immediate Enter. Record behavior with delayed/failed addon fixtures. Assert
-   a sub-minimum draft ends all spinners and Revert restores or reloads results.
-9. After functional checks stabilize, verify keyboard/screen-reader operation
-   and phone/tablet/desktop layout once. Run repository build/unit/E2E gates for
-   implementation, then local Docker deployment and health check per AGENTS.md.
+1. Unit, fake timers: 499/500 ms boundary, three-code-point minimum, Enter with
+   one character, IME composition, duplicate submission, live search off,
+   clear and unmount cancel the timer.
+2. Unit: `request` with a caller signal still times out; an abort raises no
+   error toast.
+3. Integration, delayed fixture: response A arriving after B was committed
+   changes nothing visible and records nothing; no spinner survives a clear or
+   a sub-minimum draft.
+4. Routes: two accounts including an admin stay isolated; unauthenticated
+   requests are refused; strict validation; defaults when `search` is absent;
+   20-entry and 90-day bounds; dedupe by `historyKey`; disable empties; record
+   while disabled is a no-op 204; all three mutations pass in restricted mode;
+   a settings export/import leaves `search` untouched.
+5. History: typing several prefixes and pressing Enter stores one query; a
+   debounced result nobody acted on stores nothing; a zero-result search acted
+   on is stored; failures, pagination and filter changes are not.
+6. Ranking and normalization: accented Czech titles, punctuation-only queries,
+   duplicate titles, stable ties, grouping on and off.
+7. Suggestions: eight-row and 500-candidate bounds, addon-scope filtering, pool
+   emptied on account and addon/grant reload, keyboard and touch selection.
+8. E2E: search while typing, choosing a suggestion, a one-character Enter,
+   clear and disable history on a regular user without touching another
+   account; Settings > Search usable in the restricted suite without changing
+   its existing assertions.
+9. Server log: a failing addon during search logs no query text.
+10. After the functional checks are stable: keyboard and screen reader pass,
+    layout across the viewport matrix, then the repository gates and local
+    Docker check per AGENTS.md.
 
 ## Delivery sequence
 
-1. Account state, personal API, history controls and privacy logging audit, with
-   isolation and race tests. Deliver erase and disable together.
-2. Draft lifecycle, debounce, cancellation and local suggestions, with functional
-   and load fixtures. Preserve all current scopes and pagination.
-3. Optional title ranking, preference, translated labels and final accessibility
-   and visual verification. Update shipped docs only when behavior is released.
+1. Search while typing, request cancellation with the kept deadline, separate
+   search sort with Title match, and the logging/no-store fix. Visible on its
+   own and needs no new storage.
+2. Search state, the four routes, Settings > Search and history recording.
+3. Suggestion popup with recent queries and the candidate pool.
 
-This specification PR needs documentation review only: no application build,
-version bump or Docker deployment because it ships no executable change.
+Each step is its own pull request with a patch version bump. Update shipped
+docs only when a step is released.
