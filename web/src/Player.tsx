@@ -668,7 +668,13 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
         if (epoch !== seekEpochRef.current) return;
         // If the viewer picked another spot meanwhile, the old generation is never attached.
         if (pendingSeekRef.current !== null) continue;
-        applySession(next, autoplay);
+        if (next.seekRestored && session?.id === next.id && session.url === next.url) {
+          setSession(next);
+          showTime(next.offset + video.currentTime);
+          hlsRef.current?.startLoad(video.currentTime);
+          if (autoplay) void video.play().catch(() => undefined);
+        } else applySession(next, autoplay);
+        if (next.seekRestored) setError(t("player.seekRestored"));
         if (recoveredDirectAt !== null) {
           const moveDirect = () => { const current = videoRef.current; if (current) current.currentTime = recoveredDirectAt!; showTime(recoveredDirectAt!); };
           if (videoRef.current && videoRef.current.readyState >= 1) moveDirect();

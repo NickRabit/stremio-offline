@@ -199,6 +199,7 @@ export const it: Catalog = {
   "player.stalling": "La riproduzione continua a bloccarsi.",
   "player.lowerQualityTo": "Scendi a {height} p",
   "player.hideHint": "Ignora",
+  "player.seekRestored": "Impossibile cambiare posizione. È stata mantenuta la posizione precedente.",
   "player.playbackFailed": "Riproduzione non riuscita: {details} ({type})",
   "player.noHls": "Questo browser non può riprodurre HLS.",
   "player.browserRefused": "Il browser non è riuscito a riprodurre questo flusso.",

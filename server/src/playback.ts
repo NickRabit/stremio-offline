@@ -54,6 +54,8 @@ export interface PlaybackOptions {
 }
 
 export interface PlaybackDescriptor {
+  /** A failed seek restored this generation; the client should resume it. */
+  seekRestored?: boolean;
   id: string; mode: PlaybackMode; url: string; offset: number;
   duration?: number; video?: string; audio?: string; hardware: boolean;
   /** Whether the server can transcode with hardware acceleration; unused in remux mode. */
@@ -435,7 +437,7 @@ export class PlaybackManager {
   /** A seek outside the part already produced: FFmpeg restarts from the new position and the client shifts its timeline. */
   async seek(id: string, time: number) {
     const session = this.require(id);
-    return session.operations.run(() => this.restart(session, time, "Playback seek"));
+    return session.operations.run(() => this.restart(session, time, "Playback seek", true));
   }
 
   /** The browser refused what the server sent. Repeating it is pointless: the copy is dropped
@@ -480,9 +482,9 @@ export class PlaybackManager {
     });
   }
 
-  private async restart(session: Session, time: number, message: string) {
+  private async restart(session: Session, time: number, message: string, restoreSeek = false) {
     const previous = session.process;
-    try { return await this.restartConversion(session, time, message); }
+    try { return await this.restartConversion(session, time, message, restoreSeek); }
     catch (error) {
       if (!session.stopped && session.subtitleTrack !== null) this.extractSidecar(session);
       throw error;
@@ -492,7 +494,7 @@ export class PlaybackManager {
     }
   }
 
-  private async restartConversion(session: Session, time: number, message: string) {
+  private async restartConversion(session: Session, time: number, message: string, restoreSeek = false) {
     this.assertActive(session);
     const id = session.id;
     const limit = session.info?.duration ? Math.max(0, session.info.duration - 2) : Number.POSITIVE_INFINITY;
@@ -503,7 +505,7 @@ export class PlaybackManager {
     this.assertActive(session);
     // What is playing is worth more than the seek: the film keeps running while the new position
     // is opened, so a source that refuses the connection costs the viewer a jump, not the film.
-    const playing = { process: session.process, generation: session.generation, directory: session.directory, offset: session.offset, mode: session.mode, retired: session.retired };
+    const playing = { process: session.process, generation: session.generation, directory: session.directory, offset: session.offset, mode: session.mode, retired: session.retired, hardware: session.hardware, error: session.error };
     if (playing.directory) session.fallback = { generation: playing.generation, directory: playing.directory };
     if (session.mode === "direct") session.mode = this.plan(session).copyVideo ? "remux" : "transcode";
     session.offset = target;
@@ -521,6 +523,10 @@ export class PlaybackManager {
         if (playing.process && playing.process.exitCode === null && playing.process.signalCode === null) {
           Object.assign(session, playing);
           log("WARN", "The new position could not be opened, the film carries on where it was", { id, wanted: Math.round(target), playing: Math.round(playing.offset) });
+          if (restoreSeek && !session.stopped) {
+            if (session.subtitleTrack !== null) this.extractSidecar(session);
+            return { ...this.describe(session, this.currentUrl(session)), seekRestored: true };
+          }
         }
         throw again;
       }

@@ -1167,7 +1167,10 @@ test("a position the source will not open costs the seek, not the film", async (
   const playing = { generation: (manager.sessions.get(started.id) as any).generation, url: started.url };
 
   refuse = true;
-  await assert.rejects(() => manager.seek(started.id, 4000), /could not be opened/);
+  const restored = await manager.seek(started.id, 4000);
+  assert.equal(restored.seekRestored, true);
+  assert.equal(restored.url, started.url);
+  assert.equal(restored.offset, 900);
   const session = manager.sessions.get(started.id) as any;
   // The film is where it was, on the generation that is still running and still has its connection.
   assert.equal(session.offset, 900);
@@ -1386,13 +1389,19 @@ test("failed seek retries preserve the fallback without accumulating retirement 
     generations.push(session.generation);
     assert.equal(manager.directory(session.id, "1"), oldDirectory, "also served during the second attempt");
     session.process = { exitCode: refusing ? 1 : null, signalCode: null };
+    session.hardware = true;
+    session.error = refusing ? "attempt failed" : undefined;
     return refusing ? undefined : "/new";
   };
   t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
   for (let attempt = 0; attempt < 12; attempt++) {
     let done = false;
-    const failed = assert.rejects(manager.seek(session.id, 1200), /conversion could not be started/)
-      .finally(() => { done = true; });
+    const failed = manager.seek(session.id, 1200).then((result: any) => {
+      assert.equal(result.seekRestored, true);
+      assert.equal(result.offset, 0);
+      assert.equal(result.hardware, false);
+      assert.equal(session.error, undefined);
+    }).finally(() => { done = true; });
     while (!done) { await flushPlayback(); t.mock.timers.tick(1000); }
     await failed;
     assert.equal(manager.directory(session.id, "1"), oldDirectory);
@@ -1431,3 +1440,19 @@ test("closing during a seek also stops the preserved fallback conversion", async
   await assert.rejects(manager.seek(session.id, 1200), /no longer exists/);
   assert.ok(killed.includes(previous), "the fallback process must not outlive a closed player");
 });
+
+for (const scenario of ["dead fallback", "decode recovery"] as const) {
+  test(`a failed restart does not report a recoverable seek for ${scenario}`, async (t) => {
+    const { manager, session, previous } = retirementFixture();
+    if (scenario === "dead fallback") previous.exitCode = 1;
+    manager.run = async () => { session.process = { exitCode: 1, signalCode: null }; return undefined; };
+    t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+    let done = false;
+    const rejected = assert.rejects(scenario === "dead fallback"
+      ? manager.seek(session.id, 1200)
+      : manager.escalate(session.id, 1200), /conversion could not be started/)
+      .finally(() => { done = true; });
+    while (!done) { await flushPlayback(); t.mock.timers.tick(1000); }
+    await rejected;
+  });
+}
