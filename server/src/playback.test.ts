@@ -1314,33 +1314,106 @@ test("a busy NVIDIA card does not count against NVENC", () => {
 });
 
 
-test("retirement waits for the previous writer even when the next seek exceeds the grace period", async (t) => {
-  const manager = new PlaybackManager(tmp("test-slow-seek-retirement")) as any;
+const flushPlayback = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+const retirementFixture = () => {
+  const manager = new PlaybackManager(tmp("test-seek-retirement")) as any;
   const previous = Object.assign(new EventEmitter(), { exitCode: null as number | null, signalCode: null });
   const session = remuxSession(manager, {
-    directory: tmp("test-slow-seek-retirement/escalated/1"), process: previous,
+    directory: tmp("test-seek-retirement/escalated/1"), process: previous,
     pendingKill: Promise.resolve(),
   });
-  const oldDirectory = session.directory;
   const deleted: string[] = [];
   manager.purgeNow = async (directory: string) => { deleted.push(directory); };
+  manager.killChild = async () => {};
+  return { manager, session, previous, deleted, oldDirectory: session.directory };
+};
+
+test("a slow seek serves its fallback until success and then grants a full retirement window", async (t) => {
+  const { manager, session, previous, deleted, oldDirectory } = retirementFixture();
+  let ready!: () => void;
+  const entered = new Promise<void>((resolve) => { ready = resolve; });
+  let finish!: () => void;
   manager.run = async () => {
     session.process = { exitCode: null, signalCode: null };
+    ready();
+    await new Promise<void>((resolve) => { finish = resolve; });
     return "/new-playlist";
   };
   t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
-  await manager.spawnAt(session, 1200);
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  t.mock.timers.tick(15_001);
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  assert.deepEqual(deleted, [], "a prior seek's pendingKill does not belong to the writer still running");
-
+  const seek = manager.seek(session.id, 1200);
+  await entered;
+  t.mock.timers.tick(30_000);
+  await flushPlayback();
+  assert.equal(manager.directory(session.id, "1"), oldDirectory);
+  assert.deepEqual(deleted, []);
+  finish();
+  await seek;
   previous.exitCode = 0;
   previous.emit("exit", 0, null);
-  await new Promise<void>((resolve) => setImmediate(resolve));
+  await flushPlayback();
+  t.mock.timers.tick(14_999);
+  await flushPlayback();
+  assert.equal(manager.directory(session.id, "1"), oldDirectory);
+  assert.deepEqual(deleted, []);
   t.mock.timers.tick(1);
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  assert.deepEqual(deleted, [oldDirectory], "the retired directory is removed after its own writer exits");
+  await flushPlayback();
+  assert.equal(manager.directory(session.id, "1"), undefined);
+  assert.deepEqual(deleted, [oldDirectory]);
+});
+
+test("retirement never deletes output before its own writer exits", async (t) => {
+  const { manager, session, previous, deleted, oldDirectory } = retirementFixture();
+  manager.run = async () => { session.process = { exitCode: null, signalCode: null }; return "/new"; };
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  await manager.seek(session.id, 1200);
+  t.mock.timers.tick(20_000);
+  await flushPlayback();
+  assert.deepEqual(deleted, []);
+  previous.exitCode = 0;
+  previous.emit("exit", 0, null);
+  await flushPlayback();
+  t.mock.timers.tick(1);
+  await flushPlayback();
+  assert.deepEqual(deleted, [oldDirectory]);
+});
+
+test("failed seek retries preserve the fallback without accumulating retirement listeners or reusing output", async (t) => {
+  const { manager, session, previous, deleted, oldDirectory } = retirementFixture();
+  const generations: number[] = [];
+  let refusing = true;
+  manager.run = async () => {
+    generations.push(session.generation);
+    assert.equal(manager.directory(session.id, "1"), oldDirectory, "also served during the second attempt");
+    session.process = { exitCode: refusing ? 1 : null, signalCode: null };
+    return refusing ? undefined : "/new";
+  };
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  for (let attempt = 0; attempt < 12; attempt++) {
+    let done = false;
+    const failed = assert.rejects(manager.seek(session.id, 1200), /conversion could not be started/)
+      .finally(() => { done = true; });
+    while (!done) { await flushPlayback(); t.mock.timers.tick(1000); }
+    await failed;
+    assert.equal(manager.directory(session.id, "1"), oldDirectory);
+    assert.equal(previous.listenerCount("exit"), 0);
+    assert.equal(deleted.includes(oldDirectory), false);
+  }
+  assert.equal(deleted.length, 24, "partial output from both failed attempts is cleaned up");
+  refusing = false;
+  await manager.seek(session.id, 1300);
+  assert.equal(new Set(generations).size, generations.length, "failed generation directories are never reused");
+  assert.equal(previous.listenerCount("exit"), 1);
+  previous.exitCode = 0;
+  previous.emit("exit", 0, null);
+  await flushPlayback();
+  t.mock.timers.tick(14_999);
+  await flushPlayback();
+  assert.equal(manager.directory(session.id, "1"), oldDirectory);
+  assert.equal(deleted.includes(oldDirectory), false, "no stale timer from a failed seek shortens the new grace period");
+  t.mock.timers.tick(1);
+  await flushPlayback();
+  assert.equal(deleted.filter((directory) => directory === oldDirectory).length, 1);
 });
 
 test("closing during a seek also stops the preserved fallback conversion", async () => {

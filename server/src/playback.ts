@@ -122,6 +122,9 @@ export class SerialOperations {
 interface Session {
   id: string; stream: StreamItem; capabilities: ClientCapabilities; info?: MediaInfo;
   mode: PlaybackMode; generation: number; offset: number; hardware: boolean;
+  /** Failed attempts must not reuse output directories after a rollback. */
+  generationSequence?: number;
+  fallback?: { generation: number; directory: string };
   audioTrack: number; subtitleTrack: number | null; quality: number | null;
   process?: ChildProcess; directory?: string; error?: string; startedAt: number; lastAccess: number; pendingKill?: Promise<void>;
   operations: SerialOperations; stopped: boolean;
@@ -484,6 +487,7 @@ export class PlaybackManager {
       if (!session.stopped && session.subtitleTrack !== null) this.extractSidecar(session);
       throw error;
     } finally {
+      session.fallback = undefined;
       if (session.stopped) await this.killChild(previous);
     }
   }
@@ -500,6 +504,7 @@ export class PlaybackManager {
     // What is playing is worth more than the seek: the film keeps running while the new position
     // is opened, so a source that refuses the connection costs the viewer a jump, not the film.
     const playing = { process: session.process, generation: session.generation, directory: session.directory, offset: session.offset, mode: session.mode, retired: session.retired };
+    if (playing.directory) session.fallback = { generation: playing.generation, directory: playing.directory };
     if (session.mode === "direct") session.mode = this.plan(session).copyVideo ? "remux" : "transcode";
     session.offset = target;
     let url: string;
@@ -521,6 +526,7 @@ export class PlaybackManager {
       }
     }
     // Only now is there something to play instead of it.
+    if (playing.directory) this.retire(session, playing.directory, playing.generation, playing.process);
     session.pendingKill = this.killChild(playing.process);
     if (session.subtitleTrack !== null) this.extractSidecar(session);
     // Whether the restart ended up on the GPU is worth knowing: a transcode that says
@@ -599,7 +605,9 @@ export class PlaybackManager {
     const session = this.playing(id);
     if (!session) return undefined;
     const retired = session.retired;
-    const directory = String(session.generation) === generation ? session.directory
+    const fallback = session.fallback;
+    const directory = fallback && String(fallback.generation) === generation ? fallback.directory
+      : String(session.generation) === generation ? session.directory
       : retired && String(retired.generation) === generation && retired.until > Date.now() ? retired.directory
       : undefined;
     if (!directory) return undefined;
@@ -921,34 +929,31 @@ export class PlaybackManager {
     return { copyVideo, copyAudio: !session.copyRejected && Boolean(audioCapability && caps[audioCapability] === true) };
   }
 
+  private retire(session: Session, directory: string, generation: number, process?: ChildProcess) {
+    const retired = { generation, directory, until: Date.now() + RETIRED_MS };
+    session.retired = retired;
+    const exited = !process || process.exitCode !== null || process.signalCode !== null
+      ? Promise.resolve()
+      : new Promise<void>((resolve) => process.once("exit", () => resolve()));
+    void exited.then(async () => {
+      await sleep(Math.max(0, retired.until - Date.now()));
+      if (session.retired === retired) session.retired = undefined;
+      if (session.directory !== directory && session.fallback?.directory !== directory) {
+        await this.purge(directory, "a generation that was replaced");
+      }
+    });
+  }
+
   private async spawnAt(session: Session, offset: number): Promise<string> {
     this.assertActive(session);
-    const previous = session.directory;
-    const previousProcess = session.process;
-    session.generation += 1;
+    session.generationSequence = Math.max(session.generationSequence ?? 0, session.generation) + 1;
+    session.generation = session.generationSequence;
     session.offset = offset;
     const directory = path.join(this.root, session.id, String(session.generation));
     await mkdir(directory, { recursive: true });
     this.assertActive(session);
     session.directory = directory;
     session.lastAccess = Date.now();
-    // Cleanup can only follow the old process's real end, or the two reach into the same directory.
-    if (previous) {
-      const retired = { generation: session.generation - 1, directory: previous, until: Date.now() + RETIRED_MS };
-      session.retired = retired;
-      // pendingKill can belong to an earlier seek; this writer stays alive until its
-      // replacement is ready, which may take longer than the retirement grace period.
-      const exited = !previousProcess || previousProcess.exitCode !== null || previousProcess.signalCode !== null
-        ? Promise.resolve()
-        : new Promise<void>((resolve) => previousProcess.once("exit", () => resolve()));
-      void exited.then(async () => {
-        await sleep(Math.max(0, retired.until - Date.now()));
-        if (session.retired === retired) session.retired = undefined;
-        // Unless the film went back to it: a position that could not be opened leaves the
-        // old generation playing, and it is the one thing that must not be deleted.
-        if (session.directory !== previous) await this.purge(previous, "a generation that was replaced");
-      });
-    }
 
     const { copyVideo } = this.plan(session);
     session.mode = copyVideo ? "remux" : "transcode";
@@ -1008,6 +1013,8 @@ export class PlaybackManager {
         }
       }
     }
+    await this.killChild(session.process);
+    await this.purge(directory, "a conversion that failed");
     throw new AppError(session.error || "The video conversion could not be started.", "err.conversionFailed");
   }
 
