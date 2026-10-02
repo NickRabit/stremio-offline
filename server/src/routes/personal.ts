@@ -11,6 +11,7 @@ import { log } from "../logger.js";
 import { markersOwingRow, nextEpisodeOf } from "../next-episode.js";
 import { groupSeriesProgress, seriesOf, type ProgressSeries } from "../progress-series.js";
 import { groupResumeRows } from "../resume-group.js";
+import { defaultSearchState, parseRecordBody, parseSearchPreferencesPatch, parseSearchState, publicSearchState, withRecorded, type SearchState } from "../search-state.js";
 import type { StoredProgress, UserPrefs, WatchedMarker, WatchlistEntry } from "../store.js";
 import type { MetaItem } from "../types.js";
 import type { UserData } from "../users.js";
@@ -91,6 +92,46 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     const next = applyPatch(parseViews(dataOf(req).views), req.body);
     await updateData(req, (data) => { data.views = next; });
     res.json(next);
+  }));
+
+  // Catalog search history and preferences, one account's own. Outside UserPrefs on purpose,
+  // so the settings backup never carries them. Reads and writes happen inside the single
+  // `updateData` mutator, so two requests cannot lose each other's append.
+  app.get("/api/search/state", (req, res) => {
+    res.set("Cache-Control", "no-store");
+    res.json(publicSearchState(parseSearchState(dataOf(req).search)));
+  });
+  app.patch("/api/search/preferences", asyncRoute(async (req, res) => {
+    const patch = parseSearchPreferencesPatch(req.body);
+    const now = Date.now();
+    let written = defaultSearchState();
+    await updateData(req, (data) => {
+      const merged: SearchState = { ...parseSearchState(data.search, now), ...patch };
+      if (!merged.saveHistory) merged.recent = [];
+      data.search = merged;
+      written = merged;
+    });
+    res.set("Cache-Control", "no-store").json(publicSearchState(written));
+  }));
+  app.post("/api/search/history", asyncRoute(async (req, res) => {
+    const query = parseRecordBody(req.body);
+    const now = Date.now();
+    await updateData(req, (data) => {
+      const current = parseSearchState(data.search, now);
+      if (!current.saveHistory) return;
+      data.search = withRecorded(current, query, now);
+    });
+    res.set("Cache-Control", "no-store").status(204).end();
+  }));
+  app.delete("/api/search/history", asyncRoute(async (req, res) => {
+    const now = Date.now();
+    let written = defaultSearchState();
+    await updateData(req, (data) => {
+      const next: SearchState = { ...parseSearchState(data.search, now), recent: [] };
+      data.search = next;
+      written = next;
+    });
+    res.set("Cache-Control", "no-store").json(publicSearchState(written));
   }));
 
   // Resume list: the position is reported as it goes, and a finished title forgets itself.

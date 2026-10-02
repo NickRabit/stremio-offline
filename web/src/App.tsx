@@ -1,5 +1,5 @@
 import { FormEvent, ReactNode, TouchEvent as ReactTouchEvent, UIEvent, WheelEvent as ReactWheelEvent, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, BarChart3, ArrowUp, Check, RectangleHorizontal, RectangleVertical, Copy, FolderInput, FolderOpen, ImageOff, Images, KeyRound, Languages, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, ShieldCheck, ShieldQuestion, SlidersHorizontal, Sparkles, Star, FileJson, Link2, LogOut, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, FileText, Film, FolderCog, HardDrive, Heart, Library, PackagePlus, Pause, Play, Plus, RefreshCw, Search, SearchX, Settings, Subtitles, Trash2, Upload, Users, X } from "lucide-react";
+import { ArrowDown, BarChart3, History, ArrowUp, Check, RectangleHorizontal, RectangleVertical, Copy, FolderInput, FolderOpen, ImageOff, Images, KeyRound, Languages, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, ShieldCheck, ShieldQuestion, SlidersHorizontal, Sparkles, Star, FileJson, Link2, LogOut, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, FileText, Film, FolderCog, HardDrive, Heart, Library, PackagePlus, Pause, Play, Plus, RefreshCw, Search, SearchX, Settings, Subtitles, Trash2, Upload, Users, X } from "lucide-react";
 import { queueDestination } from "./queue-target";
 import { preloadLibraryPosters, scheduleIdle } from "./library-preload";
 import { api, ApiError, describeError, logDownloadUrl, saveToDevice } from "./api";
@@ -28,12 +28,14 @@ import { addonNotices, canQueue, noticeText, offeredStreams, pickDefaultStream, 
 import { parseSearchScope } from "./search-scope";
 import { createLiveSearch, type LiveSearch, type LiveSearchState } from "./live-search";
 import { rankByTitle } from "./title-match";
+import { CandidatePool, suggest, type Suggestion } from "./search-suggestions";
+import { SearchSettings } from "./SearchSettings";
 import { galleryPayload, gridArt, localizedDownloadTitle, mergeMetaDetail } from "./meta";
 import { catalogResumeEntries, localResumeEntries } from "./resume-visibility";
 import { resumeTarget, resumeVideo, type ResumeTarget } from "./resume-target";
 import { trailerAction } from "./trailers";
 import { emptyViews, prefsFor, scopeOf, withDownloads, withExtra, withLibrary } from "./views";
-import type { Addon, BuildInfo, Diagnostics, BrowseFile, BrowseItem, BrowseLibrary, BrowseResult, DeviceTransfer, DownloadDateField, DownloadPageSize, DownloadSort, DownloadStatusFilter, DownloadsViewPrefs, LibraryOp, LibraryOpsState, LibraryOrder, LibrarySort, LibraryView, LibraryViewPrefs, ProgressEntry, UserViews, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, DownloadSelection, Inspection, Meta, QueueHalt, ScanState, SearchableCatalog, Session, Settings as AppSettings, SettingsPatch, SiteLink, Stream, Subtitle, Trailer, Video } from "./types";
+import type { Addon, BuildInfo, Diagnostics, BrowseFile, BrowseItem, BrowseLibrary, BrowseResult, DeviceTransfer, DownloadDateField, DownloadPageSize, DownloadSort, DownloadStatusFilter, DownloadsViewPrefs, LibraryOp, LibraryOpsState, LibraryOrder, LibrarySort, LibraryView, LibraryViewPrefs, ProgressEntry, UserViews, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, DownloadSelection, Inspection, Meta, QueueHalt, ScanState, SearchableCatalog, Session, Settings as AppSettings, SettingsPatch, SiteLink, Stream, Subtitle, Trailer, Video, SearchState } from "./types";
 
 /** The names of the linked sites. They are trademarks, not interface text, so they are
  *  spelled the same in every language and live here rather than in the catalogues. */
@@ -586,6 +588,29 @@ export function App() {
   const liveRef = useRef<LiveSearch | null>(null);
   if (!liveRef.current) liveRef.current = createLiveSearch({ onCommit: setSubmittedQuery, onState: setLiveState });
   const live = liveRef.current;
+  const [searchState, setSearchState] = useState<SearchState | null>(null);
+  const searchStateRef = useRef<SearchState | null>(null); searchStateRef.current = searchState;
+  const liveSearchOn = searchState?.liveSearch !== false;
+  const loadSearchState = () => api.searchState().then(setSearchState).catch(() => undefined);
+  // A query is remembered once somebody acted on it -- Enter, a suggestion, an opened result --
+  // and only after its first page came back. Whatever was merely typed past is not.
+  const firstPageOk = useRef<string | null>(null); const recordIntent = useRef<string | null>(null); const recordedQuery = useRef<string | null>(null);
+  const recordSearch = (query: string) => {
+    if (!searchStateRef.current?.saveHistory || recordedQuery.current === query) return;
+    recordedQuery.current = query;
+    const key = query.toLowerCase();
+    api.recordSearch(query).then(() => setSearchState((current) => current?.saveHistory
+      ? { ...current, recent: [{ query, usedAt: new Date().toISOString() }, ...current.recent.filter((entry) => entry.query.toLowerCase() !== key)].slice(0, 20) }
+      : current)).catch(() => undefined);
+  };
+  const actOnSearch = (query: string) => {
+    if (firstPageOk.current === query) recordSearch(query);
+    else recordIntent.current = query;
+  };
+  const poolRef = useRef<CandidatePool | null>(null);
+  if (!poolRef.current) poolRef.current = new CandidatePool();
+  const pool = poolRef.current;
+  const [suggestOpen, setSuggestOpen] = useState(false); const [activeSuggestion, setActiveSuggestion] = useState(-1);
   const searchScope = parseSearchScope(searchScopeValue);
   const scopedCatalog = searchScope.catalogId ? searchable.find((item) => item.addonKey === searchScope.addonKey && item.type === searchScope.catalogType && item.id === searchScope.catalogId) : undefined;
   const effectiveTypeFilter = searchScope.catalogType ?? typeFilter;
@@ -1406,12 +1431,18 @@ export function App() {
         const gainedNothing = !reset && next.length === itemsRef.current.length;
         itemsRef.current = next; setItems(next);
         setSourceCount(result.sources); setCursor(result.cursor); setHasMore(result.hasMore && !gainedNothing);
+        pool.add(result.items, searchScope.addonKey);
+        if (reset) {
+          firstPageOk.current = submittedQuery;
+          if (recordIntent.current === submittedQuery) { recordIntent.current = null; recordSearch(submittedQuery); }
+        }
       } else if (virtualCatalog) {
         // The content is derived, so there is nothing to load here.
         setHasMore(false);
       } else {
         const metas = await api.catalog(currentCatalog!, "", from, activeGenre);
         if (stale()) return;
+        pool.add(metas, currentCatalog!.addonKey);
         const next = reset ? metas : merge(itemsRef.current, metas);
         const gainedNothing = !reset && next.length === itemsRef.current.length;
         itemsRef.current = next; setItems(next);
@@ -1420,23 +1451,40 @@ export function App() {
     } catch (e) {
       // A superseded search aborts the fetch in the browser; that is not a failure to report.
       if ((e as { name?: unknown } | null)?.name === "AbortError") return;
-      if (!stale()) { if (reset) { itemsRef.current = []; setItems([]); } fail(e); setHasMore(false); }
+      if (!stale()) { if (reset) { itemsRef.current = []; setItems([]); recordIntent.current = null; } fail(e); setHasMore(false); }
     }
     finally { if (!stale()) { loadingRef.current = false; setBusy(false); setLoadingMore(false); } }
   };
 
   // After Enter or a debounced commit the committed query changes, so the note is recomputed.
-  useEffect(() => { live.update(search, submittedQuery); }, [submittedQuery]);
+  useEffect(() => { if (liveSearchOn) live.update(search, submittedQuery); }, [submittedQuery]);
+  useEffect(() => { if (!liveSearchOn) live.cancel(); }, [liveSearchOn]);
+  useEffect(() => { if (ready) void loadSearchState(); }, [ready]);
+  // Grants or addons changed: titles seen under the old set may no longer be offered.
+  useEffect(() => { pool.clear(); }, [addons]);
   // Leaving the catalogue drops a pending commit instead of firing it from behind another view.
   useEffect(() => { if (view !== "catalog") live.cancel(); }, [view]);
   useEffect(() => () => live.cancel(), []);
-  const submitSearch = (event?: FormEvent) => { event?.preventDefault(); live.cancel(); setSubmittedQuery(search.trim()); };
+  const submitSearch = (event?: FormEvent) => {
+    event?.preventDefault(); live.cancel(); setSuggestOpen(false);
+    const query = search.trim();
+    if (query) actOnSearch(query);
+    setSubmittedQuery(query);
+  };
+  const chooseSuggestion = (suggestion: Suggestion) => {
+    setSearch(suggestion.text); live.cancel(); setSuggestOpen(false); setActiveSuggestion(-1);
+    actOnSearch(suggestion.text);
+    setSubmittedQuery(suggestion.text);
+  };
   // A changed catalogue, query or filter starts from the first page. The scope only
   // decides what a search asks for, so on its own it reloads nothing.
   useEffect(() => {
     const snapshot = { query: submittedQuery, scope: searchScopeValue, type: typeFilter, genre: activeGenre, virtual: virtualCatalog, catalog: `${currentCatalog?.addonKey}:${currentCatalog?.type}:${currentCatalog?.id}`, reset: catalogReset };
     const previous = loadedSearchRef.current;
     loadedSearchRef.current = snapshot;
+    firstPageOk.current = null;
+    if (recordIntent.current !== submittedQuery) recordIntent.current = null;
+    if (recordedQuery.current !== submittedQuery) recordedQuery.current = null;
     // Only a new query text inside the same search keeps the previous results on screen; every
     // other reset -- new scope, filter, catalogue or built-in list -- starts from nothing.
     const queryOnly = previous !== null && previous.query !== "" && snapshot.query !== "" && previous.query !== snapshot.query
@@ -1447,7 +1495,7 @@ export function App() {
   },
     [submittedQuery, submittedQuery && searchScopeValue, typeFilter, activeGenre, virtualCatalog, currentCatalog?.addonKey, currentCatalog?.type, currentCatalog?.id, catalogReset]);
   // Entering search starts from the addon order; browse keeps its own sort untouched.
-  useEffect(() => { setSearchSort("default"); }, [Boolean(submittedQuery)]);
+  useEffect(() => { setSearchSort(searchStateRef.current?.defaultOrder === "titleMatch" ? "titleMatch" : "default"); }, [Boolean(submittedQuery)]);
 
   // The grid scrolls on its own. A plain scroll listener works even where
   // IntersectionObserver stays quiet (a hidden document, power-saving modes).
@@ -1579,6 +1627,10 @@ export function App() {
     return list;
   }, [items, sort, searchSort, submittedQuery, settings.mergeByName, virtualCatalog]);
   const activeSort = submittedQuery ? searchSort : sort;
+  const suggestions = suggestOpen && view === "catalog"
+    ? suggest({ draft: search, recent: searchState?.saveHistory ? searchState.recent : [], candidates: pool.list(), addonKey: searchScope.addonKey, type: effectiveTypeFilter || undefined })
+    : [];
+  const activeOption = activeSuggestion < suggestions.length ? activeSuggestion : -1;
   const staleGrid = busy && items.length > 0;
   /** One addon's answer, with a failure turned into nothing. */
   const loadStreamPart = async (type: string, id: string, source: { key: string; name: string }) => {
@@ -1820,8 +1872,28 @@ export function App() {
           : <Onboarding onOpen={() => setView("addons")}/>) : <>
           {/* The head sits on the same columns as the panels below it: search spans both, so it ends
               with the sources panel, and the filters keep to the first, so they end with the results. */}
-          <div className="catalog-head"><div className={`fold${catalogCompact ? " closed" : ""}`}><form className="searchbar" onSubmit={submitSearch}>
-            <div className="search-input"><Search/><input value={search} onChange={(e) => { setSearch(e.target.value); live.update(e.target.value, submittedQuery); }} onCompositionStart={() => live.compositionStart()} onCompositionEnd={(e) => live.compositionEnd(e.currentTarget.value, submittedQuery)} placeholder={t("catalog.searchPlaceholder")}/></div>
+          <div className="catalog-head"><div className={`fold${catalogCompact ? " closed" : ""}${suggestions.length ? " suggesting" : ""}`}><form className="searchbar" onSubmit={submitSearch}>
+            <div className="search-input"><Search/><input value={search} role="combobox" aria-autocomplete="list" aria-expanded={suggestions.length > 0} aria-controls="search-suggestions" aria-activedescendant={activeOption >= 0 ? `search-suggestion-${activeOption}` : undefined}
+              onChange={(e) => { setSearch(e.target.value); setSuggestOpen(true); setActiveSuggestion(-1); if (liveSearchOn) live.update(e.target.value, submittedQuery); }}
+              onCompositionStart={() => live.compositionStart()} onCompositionEnd={(e) => { if (liveSearchOn) live.compositionEnd(e.currentTarget.value, submittedQuery); }}
+              onFocus={() => { setSuggestOpen(true); void loadSearchState(); }} onBlur={() => setSuggestOpen(false)}
+              onKeyDown={(e) => {
+                if (e.nativeEvent.isComposing) return;
+                if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                  if (!suggestions.length) { setSuggestOpen(true); return; }
+                  e.preventDefault();
+                  const step = e.key === "ArrowDown" ? 1 : -1;
+                  // The cycle passes through -1, the typed text itself, between the last row and the first.
+                  const next = activeOption + step;
+                  setActiveSuggestion(next >= suggestions.length ? -1 : next < -1 ? suggestions.length - 1 : next);
+                } else if (e.key === "Enter" && activeOption >= 0) { e.preventDefault(); chooseSuggestion(suggestions[activeOption]); }
+                else if (e.key === "Escape" && suggestions.length) { e.preventDefault(); setSuggestOpen(false); setActiveSuggestion(-1); }
+              }} placeholder={t("catalog.searchPlaceholder")}/>
+              {suggestions.length > 0 && <ul id="search-suggestions" role="listbox" aria-label={t("catalog.suggestions")} className="search-suggestions">{suggestions.map((suggestion, index) =>
+                <li key={`${suggestion.kind}:${suggestion.text}`} id={`search-suggestion-${index}`} role="option" aria-selected={index === activeOption} className={index === activeOption ? "active" : undefined}
+                  onPointerDown={(e) => e.preventDefault()} onMouseDown={(e) => e.preventDefault()} onClick={() => chooseSuggestion(suggestion)}>
+                  {suggestion.kind === "recent" ? <History/> : <Film/>}<span>{suggestion.text}</span><small>{t(suggestion.kind === "recent" ? "catalog.suggestRecent" : "catalog.suggestTitle")}</small></li>)}</ul>}
+            </div>
             <label className="scope-select"><span>{t("catalog.searchScopeIn")}</span><select aria-label={t("catalog.searchScope")} value={searchScopeValue} onChange={(e) => pickSearchScope(e.target.value)}>
               <option value="">{t("catalog.allAddons")}</option>
               {[...new Map(searchable.map((item) => [item.addonKey, { name: item.addonName, globalSearch: item.globalSearch }])).entries()].map(([key, group]) => <optgroup key={key} label={`${group.name}${group.globalSearch ? "" : " ·"}`} title={group.globalSearch ? undefined : t("catalog.onlyWhenPicked")}>
@@ -1884,7 +1956,7 @@ export function App() {
                 const metadata = episodeRow
                   ? [postup?.pending ? t("library.nextEpisode") : null, episodeRow].filter(Boolean).join(" · ")
                   : [item.releaseInfo || item.year, submittedQuery ? (item.sources ?? [item.addonName]).filter(Boolean).join(", ") : null].filter(Boolean).join(" · ") || item.type;
-                return <button key={klic} data-catalog-key={klic} className={`poster-card ${selected?.id === item.id ? "selected" : ""}`} onClick={() => openMeta(item, resumeRow?.episode)}>
+                return <button key={klic} data-catalog-key={klic} className={`poster-card ${selected?.id === item.id ? "selected" : ""}`} onClick={() => { if (submittedQuery) actOnSearch(submittedQuery); void openMeta(item, resumeRow?.episode); }}>
                   <span className="poster-wrap">
                     <TileArt shape={settings.catalogTileShape} poster={item.poster} wide={item.background} fallback={<div className="poster-fallback"><Film/></div>}/>
                     {vSeznamu && <i className="fav-mark"><Star/></i>}
@@ -2169,7 +2241,7 @@ export function App() {
       {view === "addons" && <AddonManager addons={addons} libraries={libraries} restricted={restricted} admin={admin} onChanged={refresh} onNotify={notify} onError={fail}/>} 
       {view === "downloads" && <Downloads jobs={downloads} deviceTransfers={deviceTransfers} libraries={libraries} halt={queueHalt} admin={session!.role === "admin"} refresh={loadDownloads} onError={fail} onReveal={revealInLibrary} prefs={views.downloads} onPrefs={persistDownloadPrefs}/>}
       {view === "stats" && <StatsPanel key={statsReset} onError={fail}/>}
-      {view === "settings" && <SettingsPage build={buildInfo} restricted={restricted} settings={settings} languages={languages} libraries={libraries} session={session!} onSession={setSession} onSave={saveSettings} onLibrariesChanged={refreshLibraries} onImported={async (backup) => {
+      {view === "settings" && <SettingsPage build={buildInfo} restricted={restricted} settings={settings} search={searchState} onSearch={(next) => { if (!next.saveHistory || !next.recent.length) recordIntent.current = null; setSearchState(next); }} languages={languages} libraries={libraries} session={session!} onSession={setSession} onSave={saveSettings} onLibrariesChanged={refreshLibraries} onImported={async (backup) => {
         const restored = await api.importSettings(backup);
         setSettings(restored.settings);
         setSelectedCatalog("");
@@ -2318,7 +2390,7 @@ const refreshIntervalLabel = (hours: number) =>
   : hours === 168 ? t("settings.addonRefreshWeekly")
   : t("settings.addonRefreshHoursOption", { count: hours });
 
-function SettingsPage({ build, restricted = false, settings, languages, libraries = [], session, onSession, onSave, onImported, onLibrariesChanged, onNotify, onError }: { build: BuildInfo | null; restricted?: boolean; settings: AppSettings; languages: Array<{ code: string; name: string }>; libraries?: LibraryView[]; session: Session; onSession: (session: Session) => void; onSave: (patch: SettingsPatch) => Promise<void>; onImported: (backup: unknown) => Promise<void>; onLibrariesChanged: () => void; onNotify: (message: string) => void; onError: (error: unknown) => void }) {
+function SettingsPage({ build, restricted = false, settings, search, onSearch, languages, libraries = [], session, onSession, onSave, onImported, onLibrariesChanged, onNotify, onError }: { build: BuildInfo | null; restricted?: boolean; settings: AppSettings; search: SearchState | null; onSearch: (state: SearchState) => void; languages: Array<{ code: string; name: string }>; libraries?: LibraryView[]; session: Session; onSession: (session: Session) => void; onSave: (patch: SettingsPatch) => Promise<void>; onImported: (backup: unknown) => Promise<void>; onLibrariesChanged: () => void; onNotify: (message: string) => void; onError: (error: unknown) => void }) {
   const { t, locale, setLocale } = useI18n();
   // An ordinary user decides only what is personal, and the panels the instance owns are
   // not rendered for one at all -- a disabled control still says what the instance runs.
@@ -2417,6 +2489,7 @@ function SettingsPage({ build, restricted = false, settings, languages, librarie
             if (!confirm(t("settings.historyConfirm"))) return;
             try { await api.clearProgress(); onNotify(t("settings.historyCleared")); } catch (error) { onError(error); }
           }}><Trash2/> {t("settings.clearHistory")}</button></SettingControl>}</section>
+      <SearchSettings state={search} onState={onSearch} onNotify={onNotify} onError={onError}/>
       <section className="panel settings-section language-section"><SettingsSectionHead icon={<Languages/>} title={t("settings.appearanceTitle")}/>
         <SettingControl title={t("settings.uiLanguage")} text={t("settings.uiLanguageHint")}>
           <select aria-label={t("settings.uiLanguage")} disabled={restricted} value={locale} onChange={(event) => {

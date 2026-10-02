@@ -1,6 +1,6 @@
 import { serverText, t } from "./i18n";
 import type { SaveTarget } from "./save-target";
-import type { StatsActivityPage, ActiveStream, Diagnostics, BuildInfo, AuthStatus, StatsSummary, Addon, AddonDownloadSettings, Capabilities, Catalog, Download, DownloadSelection, DownloadSnapshot, Inspection, BrowseResult, IdentityPreview, LibraryFolder, LibraryMatchResult, LibraryOp, LibraryOpsState, ProgressEntry, UserViews, WatchlistEntry, GrantBrowse, LibraryEstimate, LibraryGrant, LibrarySummary, LibraryType, LibraryView, Meta, PlaybackSession, ScanState, SearchResult, SearchableCatalog, SiteLink, SuggestionRow, Session, Settings, SettingsBackup, SettingsPatch, SettingsView, Stream, Subtitle, Trailer, UserAccount, UserPermissions, UserRole } from "./types";
+import type { StatsActivityPage, ActiveStream, Diagnostics, BuildInfo, AuthStatus, StatsSummary, Addon, AddonDownloadSettings, Capabilities, Catalog, Download, DownloadSelection, DownloadSnapshot, Inspection, BrowseResult, IdentityPreview, LibraryFolder, LibraryMatchResult, LibraryOp, LibraryOpsState, ProgressEntry, UserViews, WatchlistEntry, GrantBrowse, LibraryEstimate, LibraryGrant, LibrarySummary, LibraryType, LibraryView, Meta, PlaybackSession, ScanState, SearchPreferences, SearchResult, SearchState, SearchableCatalog, SiteLink, SuggestionRow, Session, Settings, SettingsBackup, SettingsPatch, SettingsView, Stream, Subtitle, Trailer, UserAccount, UserPermissions, UserRole } from "./types";
 
 /** The status code has to reach the top, or a sign-out is indistinguishable from an ordinary error. */
 export class ApiError extends Error {
@@ -74,6 +74,10 @@ export const api = {
   catalog: (catalog: Catalog, search = "", skip = 0, genre = "") => request<Meta[]>(`/api/catalog?${q({ addon: catalog.addonKey, type: catalog.type, id: catalog.id, search: search || undefined, skip: skip || undefined, genre: genre || undefined })}`),
   search: (query: string, options: { type?: string; cursor?: string; addonKey?: string; catalogType?: string; catalogId?: string; signal?: AbortSignal } = {}) => request<SearchResult>(`/api/search?${q({ query, type: options.type || undefined, cursor: options.cursor || undefined, addon: options.addonKey || undefined, catalogType: options.catalogType || undefined, catalogId: options.catalogId || undefined })}`, { signal: options.signal }),
   searchable: () => request<SearchableCatalog[]>("/api/searchable"),
+  searchState: () => request<SearchState>("/api/search/state"),
+  updateSearchPreferences: (patch: Partial<SearchPreferences>) => request<SearchState>("/api/search/preferences", { method: "PATCH", body: JSON.stringify(patch) }),
+  recordSearch: (query: string) => request<void>("/api/search/history", { method: "POST", body: JSON.stringify({ query }) }),
+  clearSearchHistory: () => request<SearchState>("/api/search/history", { method: "DELETE" }),
   meta: (type: string, id: string, language?: string) => request<Meta>(`/api/meta/${encodeURIComponent(type)}/${encodeURIComponent(id)}${language ? `?${q({ language })}` : ""}`),
   links: (type: string, id: string, language: string) => request<{ links: SiteLink[] }>(`/api/links/${encodeURIComponent(type)}/${encodeURIComponent(id)}?${q({ language })}`, { timeoutMs: 60_000 }),
   libraryLinks: (path: string, language: string) => request<{ links: SiteLink[] }>(`/api/library/links?${q({ path, language })}`, { timeoutMs: 60_000 }),
