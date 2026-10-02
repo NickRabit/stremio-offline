@@ -41,7 +41,8 @@ film. Audio playback prefers the requested language, then English, then an
 available default or first track. Embedded subtitle selection prefers a full
 track in the preferred language, then English. When the selected audio matches
 the preferred audio language, only a matching forced subtitle track is selected
-automatically; otherwise subtitles can remain off. See [Playback](playback.md#audio-tracks-and-subtitles).
+automatically; otherwise subtitles can remain off. See
+[Playback](playback.md#audio-tracks-and-subtitles).
 
 Addon titles and descriptions depend on what the provider returns. Translating
 the interface does not guarantee translated catalogue metadata. Server errors

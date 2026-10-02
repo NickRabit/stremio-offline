@@ -17,8 +17,9 @@ window, and only sign-in pages on `*.cloudflareaccess.com` are allowed there,
 so identity providers on other domains are refused by the window. The
 Cloudflare cookie is kept per server until Cloudflare's session duration ends,
 so the next launch connects without asking until then. Anything that fetches a
-media link without the app — AirPlay or an external player — needs a **Bypass**
-rule in Access.
+media link without the app — an external player, for example — needs a
+**Bypass** rule in Access. AirPlay is currently disabled in the custom player;
+see [Remote playback](../docs/playback.md#remote-playback).
 
 ## The menu, the settings window and the window geometry
 

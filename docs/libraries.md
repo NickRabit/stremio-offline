@@ -51,8 +51,13 @@ disk that has gone pauses the job rather than sending the file somewhere else.
 
 ## The library row
 
-Each row in **Settings → Libraries** carries the name, the type, the root and
-the counts, plus:
+Each card in **Settings → Libraries** summarizes the name, type, root and
+counts. **Edit library** opens the settings dialog. Changes to the name, type,
+availability, defaults and presentation are staged until **Save changes**;
+closing the dialog without saving discards them. Scan, folder-change and removal
+are separate actions. The cards also let you reorder libraries.
+
+The dialog contains these controls:
 
 | Control | What it does |
 | --- | --- |
@@ -61,9 +66,11 @@ the counts, plus:
 | Automatically look up metadata | Whether startup, periodic and filesystem-triggered scans search this library. Off skips automatic lookups and metadata refreshes; manual scans and item identification still work. The instance-wide automatic scan setting and `LIBRARY_AUTO_SCAN=0` also apply. |
 | Default for movies / Default for series | Where that kind lands when a save rule says *Default*. One library holds each kind, so switching it on here takes it from whoever had it, and switching it off leaves the kind to the fallback: the first enabled library of that type, then the first `mixed` one. The switch is locked on a library the kind cannot land in, and a type change that narrows the library out of a kind gives that default up. |
 | Write artwork next to the media | Where a poster or thumbnail we generate goes: beside the video, or under `DATA_PATH/artwork/<library id>/`. Off by default — a new library often points at a tree somebody else keeps, and a `poster.jpg` written into it cannot be taken back. Turn it on per library, for instance so a media server scanning the same folder finds the posters. Forced off and locked where the root cannot be written. A `poster.jpg` that is already in the folder is never touched or overwritten. |
-| Rename | The name in the app. Nothing on disk moves. |
+| Name | The name in the app. Nothing on disk moves. |
+| Show a mosaic of covers | Uses up to five title covers for the library card. Off uses plain folder artwork. Individual titles or folders can also be kept out of the mosaic from their item menu or a bulk selection. |
+| Show in Continue watching | Hides or shows this library in resume lists; stored playback positions are kept. |
 | Scan this library | Matches this one library now instead of waiting for the automatic scan. |
-| Change folder | Points the library at another folder. **It moves no files** — see below. |
+| Change folder | Choose whether to point at another folder only or move the content along — see below. |
 | Remove / Remove and forget | See *Removing a library*. |
 
 The browse root follows a simple rule: with exactly one **configured** library
@@ -73,6 +80,22 @@ configured library, and still counts.
 
 Sorting, the favourites-only filter and the grid/list layout are remembered per
 library and per account, so one person's choice does not follow another's.
+
+Continue watching groups episodes into one tile per series. A catalogue series
+that finishes an episode can offer **Next episode** with that episode
+preselected; this uses the addon's available episode list, not a subscription
+to future releases. Libraries and addons each have their own **Show in Continue
+watching** switch. Hiding a source preserves its resume positions.
+
+### Stored artwork galleries
+
+Titles with saved gallery pictures show a gallery button beside their item
+menu. It opens the full-size viewer with arrows and thumbnails. Downloads can
+retain the catalogue's gallery as well as portrait and landscape tile artwork;
+identification can also add TMDB gallery pictures. Galleries are stored under
+`DATA_PATH/artwork/<library id>/`, travel with a title when it is moved or copied,
+and are cleaned up with it. Gallery pictures are never written beside media,
+even when the library allows poster artwork there.
 
 ## Types, moves and the queue
 
@@ -113,6 +136,9 @@ Nothing is ever destroyed because something is absent. Only an explicit
 **Remove and forget** drops remembered data.
 
 ## Removing a library
+
+The last configured library cannot be removed; change its folder instead.
+With several libraries, the dialog offers two removal actions.
 
 Both actions leave every file on disk alone; the app never deletes media as a
 side effect of a library edit.
@@ -160,23 +186,30 @@ is ever copied twice, and the parent's own listing shrinks as it should.
 
 ### Re-root
 
-**Change folder** rewrites the library's record and **moves nothing**. That
-makes it right for a tree you have already moved yourself, and wrong for
-splitting a live one: while the server is running, a scan can catch the
-half-moved tree and read its files as new, unmatched titles.
+**Change folder** offers two choices:
 
-To push a library one level down:
+- **Only point at the new folder** is the default. It changes the library root
+  and moves no media. Use it when you have already moved the whole tree yourself.
+  Relative match, favourite and resume paths remain valid when the contents keep
+  the same layout. The picker can create a missing destination folder.
+- **Move the content along** queues a move into the selected folder. The library
+  switches its root only after every item has arrived. The job appears in the
+  operation strip with progress and cancellation; it waits for active playback
+  and unavailable disks. A cross-filesystem transfer copies before removing
+  the source rather than relying on a same-volume rename.
 
-1. Stop the container (or the server).
-2. Move the tree on disk, for example `downloads/Films` → `downloads/Video/Films`.
-3. Start it again and use **Change folder** to point the library at the new
-   location.
+Moving the content is refused when another library sits inside the source,
+when source and destination contain each other, when a destination name already
+exists, or when the source is empty. Use the point-only choice for an empty
+source or an already relocated tree.
 
-Paths are remembered relative to the library root, so the titles keep their
-matches as long as the contents of the folder move together. The media is
-exactly where you put it — re-root never copies, moves or deletes a file. The
-picker can create the destination folder if it does not exist yet; that is the
-only thing re-rooting writes.
+If a queued move fails or is cancelled, the library keeps its old root.
+Some items may already have reached the destination; inspect the operation
+results and both folders before retrying. Do not assume cancellation rolls
+back files already moved.
+
+For a manual relocation, stop the server, move the tree, restart it and choose
+**Only point at the new folder**. This avoids a scan seeing a half-moved tree.
 
 ## Where the state lives
 

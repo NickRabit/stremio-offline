@@ -51,7 +51,9 @@ Shipped and living in `main`. The list is here to stop settled questions from
 being reopened, not as a changelog.
 
 - Local library: browse and play downloaded files from disk, with continue
-  watching, favourites and clean-up when a title leaves.
+  watching grouped by series, favourites and clean-up when a title leaves.
+  Continue watching can offer the next available catalogue episode after one
+  finishes; this is separate from the proposed Follow show scheduler.
 - **Several libraries**: named roots with a type, managed from the interface,
   added inside a granted root, moved and copied between each other, removed
   against disabled, re-added with their identity intact, and split out of the
@@ -72,8 +74,10 @@ being reopened, not as a changelog.
   names and roots of the libraries. Addon URLs, the Real-Debrid token and the
   TMDB API key mean the file is a secret.
 - Playback: direct play vs. remux vs. transcode, on-demand timeline previews,
-  next/previous episode, embedded and addon subtitles, and the player volume
-  remembered on the device. See [Playback](playback.md).
+  next/previous episode, a cancellable five-second up-next countdown, embedded
+  and addon subtitles with timing adjustment, and volume remembered on the
+  device. Subtitle changes keep video playing; AirPlay is currently disabled.
+  See [Playback](playback.md).
 - Trailers from Cinemeta, with TMDB as a fallback: in-app when secure mode is
   off, an external tab when it is on. See [Trailers](trailers.md).
 - Download queue: survives a restart, resumes `.part` files with HTTP Range,
@@ -83,7 +87,9 @@ being reopened, not as a changelog.
   selection, verified audio language with fallback, and optional or required
   subtitles resolved per episode at the front of the queue.
 - Stats split by where the traffic comes from — a download, catalogue playback
-  or library playback — with library traffic kept out of the external figures.
+  or library playback — with library traffic kept out of the external figures,
+  active streams and an administrator-only per-user activity history. See
+  [Accounts](users.md#activity-history).
 - Diagnostics panel: levels, rotation, retention, redaction, client playback
   errors, grouped issues, and a per-host guard on outbound addon calls.
 - Ten interface languages throughout the web and desktop apps: English,
@@ -91,8 +97,15 @@ being reopened, not as a changelog.
   and Russian. Server messages travel as English text plus a catalogue key.
   A fresh local desktop server starts in the language picked in the shell. See
   [Languages](languages.md).
-- Tile size that follows the panel, portrait or landscape tiles per page, and
-  cached artwork sized for a tile.
+- Tile size that follows the panel, portrait or landscape tiles per page,
+  cached artwork sized for a tile and stored library galleries.
+- Search across all addons, one addon or one searchable catalogue, with
+  per-addon global-search inclusion and scheduled or manual manifest refresh.
+  Downloaded-title language can be chosen independently of the interface. See
+  [Addons and downloads](downloads.md#search-scopes-and-addon-settings).
+- Library settings in one staged dialog, per-library and per-path mosaic
+  controls, Continue watching visibility, library ordering and an optional
+  queued content move when changing a library root. See [Libraries](libraries.md).
 - Restricted / demo mode (`RESTRICTED_MODE=1`), English documentation, the
   community files, the GHCR image and the build and release workflows.
 - **Desktop apps** for macOS (Apple Silicon), Windows x64 and Linux x64

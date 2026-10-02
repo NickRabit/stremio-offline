@@ -7,8 +7,26 @@ movies, series, and metadata. A source manifest supplies streams or subtitles.
 One manifest can do both.
 
 On first start the official **Cinemeta** (catalog and metadata) and
-**OpenSubtitles v3** (subtitles) addons are installed. They can be disabled or
-removed; after a deliberate removal they are not restored on restart.
+**OpenSubtitles v3** (subtitles) addons are installed. Cinemeta supplies
+essential library metadata and cannot be removed, disabled or changed to a
+stream-only role. Other addons, including OpenSubtitles, can be disabled or
+removed; deliberately removed optional addons are not restored on restart.
+
+### Search scopes and addon settings
+
+The catalogue search can query all addons, one addon, or one searchable
+catalogue. **Include in search across all addons** in an addon's settings
+controls the default global search; turning it off still allows that addon to
+be selected explicitly. Choosing one catalogue as the search scope also
+selects it in the browse picker, so clearing the search returns to that
+catalogue. Library identification uses its own provider rules; see
+[Library identification](library-metadata.md).
+
+Each addon has one settings dialog for its role, visibility and storage rules.
+You can replace a configured manifest URL while keeping its order, enabled
+state and save rules. Enabled manifests refresh on the interval in
+**Settings → Addons**, and **Refresh manifest** or **Refresh manifests** runs
+that check on demand, including catalogues the provider added since setup.
 
 ### Real-Debrid and other debrid services
 
@@ -167,6 +185,11 @@ library are never moved by a change of rule; it applies to newly queued items.
 | Flat | Straight into the chosen subdirectory: `Movie.mkv`, `Show - S01E07 - Episode title.mkv`. |
 
 The change applies to newly queued items.
+
+**Settings → Downloaded title language** chooses the language used to name new
+movie and episode downloads. It defaults to the interface language and uses a
+matching configured metadata addon where available, otherwise keeping the
+catalogue title. Changing it does not rename files already saved.
 
 ### Choosing the place for one download
 
