@@ -66,7 +66,9 @@ can stay private and the login goes away. The image holds the app, not your data
 ## Releasing versions
 
 `:latest` does not say what is in the image. The commit SHA does, but nobody
-remembers it. For a readable history, tag a commit on `main`:
+remembers it. For a readable history, tag a commit on `main` whose manifests all
+carry that version (`node scripts/check-versions.mjs v0.4.0` says whether they do;
+the release refuses the tag otherwise, before building anything):
 
 ```bash
 git tag v0.4.0

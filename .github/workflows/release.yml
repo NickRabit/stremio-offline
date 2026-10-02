@@ -17,6 +17,10 @@ jobs:
       version: ${{ steps.v.outputs.version }}
       minor: ${{ steps.v.outputs.minor }}
     steps:
+      - uses: actions/checkout@v7
+      # Before anything is built or published: the desktop jobs refuse a tag their manifest
+      # does not carry, and by then the image and the release would already be out.
+      - run: node scripts/check-versions.mjs "${GITHUB_REF_NAME}"
       - id: v
         run: |
           version="${GITHUB_REF_NAME#v}"
