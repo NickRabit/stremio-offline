@@ -130,9 +130,12 @@ automatic scans:
   tree against the last one it acted on — file count, total size and newest
   modification time. An unchanged tree asks the catalogues nothing;
 - a filesystem watch makes that prompt where the platform delivers events. It is
-  an accelerator, never the guarantee: an SMB or NFS share sends none, and Linux
-  has no recursive watch. When the watch is inactive the periodic check carries
-  the feature alone.
+  an accelerator, never the guarantee: an SMB or NFS share sends none. On Linux
+  each watched path costs one of the system's inotify watches, so only folders
+  are watched (a folder reports its files) and the ones a NAS keeps for itself --
+  hidden folders, Synology's `@eaDir` with a folder per video, `#recycle` -- are
+  left out. When the watch is inactive the periodic check carries the feature
+  alone.
 
 A scan yields to playback and downloads rather than competing with them. A
 catalogue that does not answer leaves its titles unmatched and is retried later.
