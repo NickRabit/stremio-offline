@@ -309,6 +309,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   const [downloadState, setDownloadState] = useState<"idle" | "busy" | "done">("idle");
   const [deviceDownloadBusy, setDeviceDownloadBusy] = useState(false);
   const [resumedFrom, setResumedFrom] = useState(0);
+  const [seekKept, setSeekKept] = useState(false);
   const [subtitleText, setSubtitleText] = useState("");
   const [nativeSubtitles, setNativeSubtitles] = useState(false);
   // Hiding subtitles must not touch the session: switching the track on the server
@@ -353,6 +354,12 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     const timer = setTimeout(() => setResumedFrom(0), 5000);
     return () => clearTimeout(timer);
   }, [resumedFrom]);
+  // The film plays on where it was, so the refused seek is a notice, not an error over the picture.
+  useEffect(() => {
+    if (!seekKept) return;
+    const timer = setTimeout(() => setSeekKept(false), 5000);
+    return () => clearTimeout(timer);
+  }, [seekKept]);
   const reportRef = useRef<{ position: number; duration: number }>({ position: 0, duration: 0 });
   // A library file is already on disk, so offering to download it makes no sense.
   const isLocal = stream?.kind === "library";
@@ -643,7 +650,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     const autoplay = !video.paused;
     // Keep the last frame. The previous HLS generation stays served for a few
     // seconds, so destroying it here only produced a black screen and bufferStalledError.
-    seekInFlightRef.current = true; seekingRef.current = true; setBuffering(true); setError("");
+    seekInFlightRef.current = true; seekingRef.current = true; setBuffering(true); setError(""); setSeekKept(false);
     video.pause();
     // A session started to recover from one the server had forgotten. If the viewer closes the
     // film or moves on before it is taken up, nothing else knows about it, and it would convert
@@ -668,7 +675,13 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
         if (epoch !== seekEpochRef.current) return;
         // If the viewer picked another spot meanwhile, the old generation is never attached.
         if (pendingSeekRef.current !== null) continue;
-        applySession(next, autoplay);
+        if (next.seekRestored && session?.id === next.id && session.url === next.url) {
+          setSession(next);
+          showTime(next.offset + video.currentTime);
+          hlsRef.current?.startLoad(video.currentTime);
+          if (autoplay) void video.play().catch(() => undefined);
+        } else applySession(next, autoplay);
+        if (next.seekRestored) setSeekKept(true);
         if (recoveredDirectAt !== null) {
           const moveDirect = () => { const current = videoRef.current; if (current) current.currentTime = recoveredDirectAt!; showTime(recoveredDirectAt!); };
           if (videoRef.current && videoRef.current.readyState >= 1) moveDirect();
@@ -1090,6 +1103,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       </video>
       {subtitleText && <div className="player-subtitles" aria-live="off">{subtitleText}</div>}
       {resumedFrom > 0 && <div className="player-resumed">{t("player.resumedAt", { time: fmt(resumedFrom) })}<button onClick={() => { setResumedFrom(0); void seekTo(0); }}>{t("player.playFromStart")}</button></div>}
+      {seekKept && !resumedFrom && !error && <div className="player-resumed" role="status">{t("player.seekRestored")}</div>}
       {buffering && !error && <div className="player-buffer">{t("common.loading")}</div>}
       {error && <div className="player-error">{error}</div>}
       {qualityHint !== null && !error && <div className="player-hint">

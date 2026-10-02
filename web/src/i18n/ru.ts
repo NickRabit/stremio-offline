@@ -199,6 +199,7 @@ export const ru: Catalog = {
   "player.stalling": "Воспроизведение постоянно останавливается.",
   "player.lowerQualityTo": "Опуститься до {height}p",
   "player.hideHint": "Уволить",
+  "player.seekRestored": "Не удалось перемотать. Сохранена предыдущая позиция.",
   "player.playbackFailed": "Не удалось воспроизвести: {details} ({type})",
   "player.noHls": "Этот браузер не может воспроизводить HLS.",
   "player.browserRefused": "Браузеру не удалось воспроизвести этот поток.",

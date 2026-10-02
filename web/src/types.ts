@@ -148,6 +148,7 @@ export interface SettingsBackup {
 }
 export interface Capabilities { h264: boolean; hevc: boolean; hevc10: boolean; vp8: boolean; vp9: boolean; av1: boolean; aac: boolean; mp3: boolean; opus: boolean; vorbis: boolean; ac3: boolean; eac3: boolean; flac: boolean }
 export interface PlaybackSession {
+  seekRestored?: boolean;
   id: string; mode: PlaybackMode; url: string; offset: number; duration?: number; video?: string; audio?: string; hardware: boolean; acceleration: boolean;
   audioTracks: Track[]; subtitleTracks: Track[]; audioTrack: number; subtitleTrack: number | null;
   quality: number | null; sidecarUrl?: string; subtitleIds?: Record<string, string>;

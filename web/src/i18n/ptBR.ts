@@ -199,6 +199,7 @@ export const ptBR: Catalog = {
   "player.stalling": "A reprodução continua paralisada.",
   "player.lowerQualityTo": "Desça para {height}p",
   "player.hideHint": "Dispensar",
+  "player.seekRestored": "Não foi possível mudar de posição. A posição anterior foi mantida.",
   "player.playbackFailed": "Falha na reprodução: {details} ({type})",
   "player.noHls": "Este navegador não pode reproduzir HLS.",
   "player.browserRefused": "O navegador não conseguiu reproduzir esta transmissão.",

@@ -213,6 +213,7 @@ export const cs: Catalog = {
   "player.stalling": "Přehrávání se zadrhává.",
   "player.lowerQualityTo": "Snížit na {height}p",
   "player.hideHint": "Skrýt",
+  "player.seekRestored": "Nepodařilo se přeskočit. Zůstává předchozí pozice.",
   "player.playbackFailed": "Přehrávání selhalo: {details} ({type})",
   "player.noHls": "Tento prohlížeč neumí přehrát HLS.",
   "player.browserRefused": "Prohlížeč tenhle stream nepřehrál.",

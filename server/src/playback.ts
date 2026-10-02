@@ -54,6 +54,8 @@ export interface PlaybackOptions {
 }
 
 export interface PlaybackDescriptor {
+  /** A failed seek restored this generation; the client should resume it. */
+  seekRestored?: boolean;
   id: string; mode: PlaybackMode; url: string; offset: number;
   duration?: number; video?: string; audio?: string; hardware: boolean;
   /** Whether the server can transcode with hardware acceleration; unused in remux mode. */
@@ -122,6 +124,9 @@ export class SerialOperations {
 interface Session {
   id: string; stream: StreamItem; capabilities: ClientCapabilities; info?: MediaInfo;
   mode: PlaybackMode; generation: number; offset: number; hardware: boolean;
+  /** Failed attempts must not reuse output directories after a rollback. */
+  generationSequence?: number;
+  fallback?: { generation: number; directory: string };
   audioTrack: number; subtitleTrack: number | null; quality: number | null;
   process?: ChildProcess; directory?: string; error?: string; startedAt: number; lastAccess: number; pendingKill?: Promise<void>;
   operations: SerialOperations; stopped: boolean;
@@ -432,7 +437,7 @@ export class PlaybackManager {
   /** A seek outside the part already produced: FFmpeg restarts from the new position and the client shifts its timeline. */
   async seek(id: string, time: number) {
     const session = this.require(id);
-    return session.operations.run(() => this.restart(session, time, "Playback seek"));
+    return session.operations.run(() => this.restart(session, time, "Playback seek", true));
   }
 
   /** The browser refused what the server sent. Repeating it is pointless: the copy is dropped
@@ -477,17 +482,22 @@ export class PlaybackManager {
     });
   }
 
-  private async restart(session: Session, time: number, message: string) {
-    try { return await this.restartConversion(session, time, message); }
+  private async restart(session: Session, time: number, message: string, restoreSeek = false) {
+    const previous = session.process;
+    try { return await this.restartConversion(session, time, message, restoreSeek); }
     catch (error) {
       if (!session.stopped && session.subtitleTrack !== null) this.extractSidecar(session);
       throw error;
+    } finally {
+      session.fallback = undefined;
+      if (session.stopped) await this.killChild(previous);
     }
   }
 
-  private async restartConversion(session: Session, time: number, message: string) {
+  private async restartConversion(session: Session, time: number, message: string, restoreSeek = false) {
     this.assertActive(session);
     const id = session.id;
+    const requestedAt = Date.now();
     const limit = session.info?.duration ? Math.max(0, session.info.duration - 2) : Number.POSITIVE_INFINITY;
     const target = Math.max(0, Math.min(time, limit));
     // The source usually allows one connection at a time, so the subtitle reader lets
@@ -496,7 +506,8 @@ export class PlaybackManager {
     this.assertActive(session);
     // What is playing is worth more than the seek: the film keeps running while the new position
     // is opened, so a source that refuses the connection costs the viewer a jump, not the film.
-    const playing = { process: session.process, generation: session.generation, directory: session.directory, offset: session.offset, mode: session.mode, retired: session.retired };
+    const playing = { process: session.process, generation: session.generation, directory: session.directory, offset: session.offset, mode: session.mode, retired: session.retired, hardware: session.hardware, error: session.error };
+    if (playing.directory) session.fallback = { generation: playing.generation, directory: playing.directory };
     if (session.mode === "direct") session.mode = this.plan(session).copyVideo ? "remux" : "transcode";
     session.offset = target;
     let url: string;
@@ -513,22 +524,30 @@ export class PlaybackManager {
         if (playing.process && playing.process.exitCode === null && playing.process.signalCode === null) {
           Object.assign(session, playing);
           log("WARN", "The new position could not be opened, the film carries on where it was", { id, wanted: Math.round(target), playing: Math.round(playing.offset) });
+          if (restoreSeek && !session.stopped) {
+            if (session.subtitleTrack !== null) this.extractSidecar(session);
+            return { ...this.describe(session, this.currentUrl(session)), seekRestored: true };
+          }
         }
         throw again;
       }
     }
     // Only now is there something to play instead of it.
+    if (playing.directory) this.retire(session, playing.directory, playing.generation, playing.process);
     session.pendingKill = this.killChild(playing.process);
     if (session.subtitleTrack !== null) this.extractSidecar(session);
     // Whether the restart ended up on the GPU is worth knowing: a transcode that says
     // nothing looks the same in the log as one that quietly fell back to the processor.
-    log("INFO", message, { id, offset: Math.round(target), mode: session.mode, hardware: session.hardware, audioTrack: session.audioTrack, subtitleTrack: session.subtitleTrack });
+    log("INFO", message, { id, offset: Math.round(target), mode: session.mode, hardware: session.hardware, audioTrack: session.audioTrack, subtitleTrack: session.subtitleTrack, ms: Date.now() - requestedAt });
     return this.describe(session, url);
   }
 
   async preview(id: string, time: number, signal: AbortSignal) {
     const session = this.playing(id);
     if (!session || !Number.isFinite(time) || time < 0) return undefined;
+    // Each preview opens the file afresh, several connections at a time while the pointer moves:
+    // a remote host that counts them stops answering, and the film it is playing stops with it.
+    if (!session.stream.url?.startsWith("file://")) return undefined;
     const at = Math.min(time, Math.max(0, (session.info?.duration ?? time + 1) - 0.1));
     return this.previews.frame(id, this.localUrl(this.proxyPath(session.stream)), at, signal);
   }
@@ -596,7 +615,9 @@ export class PlaybackManager {
     const session = this.playing(id);
     if (!session) return undefined;
     const retired = session.retired;
-    const directory = String(session.generation) === generation ? session.directory
+    const fallback = session.fallback;
+    const directory = fallback && String(fallback.generation) === generation ? fallback.directory
+      : String(session.generation) === generation ? session.directory
       : retired && String(retired.generation) === generation && retired.until > Date.now() ? retired.directory
       : undefined;
     if (!directory) return undefined;
@@ -918,28 +939,31 @@ export class PlaybackManager {
     return { copyVideo, copyAudio: !session.copyRejected && Boolean(audioCapability && caps[audioCapability] === true) };
   }
 
+  private retire(session: Session, directory: string, generation: number, process?: ChildProcess) {
+    const retired = { generation, directory, until: Date.now() + RETIRED_MS };
+    session.retired = retired;
+    const exited = !process || process.exitCode !== null || process.signalCode !== null
+      ? Promise.resolve()
+      : new Promise<void>((resolve) => process.once("exit", () => resolve()));
+    void exited.then(async () => {
+      await sleep(Math.max(0, retired.until - Date.now()));
+      if (session.retired === retired) session.retired = undefined;
+      if (session.directory !== directory && session.fallback?.directory !== directory) {
+        await this.purge(directory, "a generation that was replaced");
+      }
+    });
+  }
+
   private async spawnAt(session: Session, offset: number): Promise<string> {
     this.assertActive(session);
-    const previous = session.directory;
-    session.generation += 1;
+    session.generationSequence = Math.max(session.generationSequence ?? 0, session.generation) + 1;
+    session.generation = session.generationSequence;
     session.offset = offset;
     const directory = path.join(this.root, session.id, String(session.generation));
     await mkdir(directory, { recursive: true });
     this.assertActive(session);
     session.directory = directory;
     session.lastAccess = Date.now();
-    // Cleanup can only follow the old process's real end, or the two reach into the same directory.
-    if (previous) {
-      const retired = { generation: session.generation - 1, directory: previous, until: Date.now() + RETIRED_MS };
-      session.retired = retired;
-      void (session.pendingKill ?? Promise.resolve()).then(async () => {
-        await sleep(Math.max(0, retired.until - Date.now()));
-        if (session.retired === retired) session.retired = undefined;
-        // Unless the film went back to it: a position that could not be opened leaves the
-        // old generation playing, and it is the one thing that must not be deleted.
-        if (session.directory !== previous) await this.purge(previous, "a generation that was replaced");
-      });
-    }
 
     const { copyVideo } = this.plan(session);
     session.mode = copyVideo ? "remux" : "transcode";
@@ -999,6 +1023,8 @@ export class PlaybackManager {
         }
       }
     }
+    await this.killChild(session.process);
+    await this.purge(directory, "a conversion that failed");
     throw new AppError(session.error || "The video conversion could not be started.", "err.conversionFailed");
   }
 
@@ -1038,7 +1064,12 @@ export class PlaybackManager {
     });
 
     const url = `/api/playback/${session.id}/${session.generation}/master.m3u8`;
-    const output = await waitForHlsOutput(directory, () => finished, () => session.stopped);
+    // A seek that hangs says nothing until it gives up 40 s later; by then the viewer has left.
+    const slow = setTimeout(() => {
+      if (finished || session.stopped) return;
+      log("WARN", "The new position is still not open", { id: session.id, generation, offset: Math.round(offset), ms: Date.now() - startedAt, stderr: redact(stderr).slice(-400) });
+    }, 10_000);
+    const output = await waitForHlsOutput(directory, () => finished, () => session.stopped).finally(() => clearTimeout(slow));
     if (session.stopped) {
       child.kill("SIGTERM");
       log("DEBUG", "Conversion abandoned, the session is gone", { id: session.id, generation: session.generation, ms: Date.now() - startedAt });

@@ -217,6 +217,7 @@ export const en = {
   "player.stalling": "Playback keeps stalling.",
   "player.lowerQualityTo": "Drop to {height}p",
   "player.hideHint": "Dismiss",
+  "player.seekRestored": "Could not seek. Kept the previous position.",
   "player.playbackFailed": "Playback failed: {details} ({type})",
   "player.noHls": "This browser cannot play HLS.",
   "player.browserRefused": "The browser could not play this stream.",

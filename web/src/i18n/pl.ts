@@ -199,6 +199,7 @@ export const pl: Catalog = {
   "player.stalling": "Odtwarzanie ciągle się zatrzymuje.",
   "player.lowerQualityTo": "Zejdź na {height} s",
   "player.hideHint": "Odrzuć",
+  "player.seekRestored": "Nie udało się przewinąć. Zachowano poprzednią pozycję.",
   "player.playbackFailed": "Odtwarzanie nie powiodło się: {details} ({type})",
   "player.noHls": "Ta przeglądarka nie może odtwarzać plików HLS.",
   "player.browserRefused": "Przeglądarka nie mogła odtworzyć tego strumienia.",

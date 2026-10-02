@@ -358,6 +358,20 @@ stream and is nothing of the sort. Cleanup therefore refuses a directory somethi
 still writing to, says so, and names what asked -- a generation that was replaced, a
 conversion attempt that failed, or a session that ended. A directory whose process has
 already died is still fair game, which the retry after a failed hardware attempt needs.
+The fallback stays addressable throughout both seek attempts. Only a successful
+replacement starts its 15-second retirement window and waits for its own writer to exit.
+Failed seeks schedule no retirement callbacks, and new attempts receive fresh generation
+numbers so partial output cannot be mistaken for a later attempt. Regression tests cover slow
+seeks, twelve consecutive failures followed by success, cleanup timing, and closing
+the player while the fallback is still running.
+
+A rejected seek with a live fallback returns that generation with `seekRestored`, so the
+client can resume the attached stream at its paused frame or attach the server's actual
+fallback after coalesced seeks. It preserves a user pause and shows a notice that leaves
+after five seconds: the film plays on, so it is never the error curtain over the picture.
+No recovery is inferred from a network error, a dead fallback, or a failed decode
+escalation. `player-seek-resume.spec.ts` exercises playback progress, pause preservation,
+a queued seek, a late response after closing, and an unconfirmed failure with real HLS.
 
 Every FFmpeg that opens a film reads the same two places before anything else: the header
 at the start and the index at the far end. With a conversion and a subtitle reader, both
