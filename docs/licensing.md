@@ -124,8 +124,10 @@ code altogether, and on Apple Silicon VideoToolbox is always present.
 
 The price: with the bundled FFmpeg, a transcode has no software encoder to fall
 back to. The server detects that and keeps the hardware path on, instead of
-switching it off after two failures. Remux and direct play are unaffected. A
-Windows build would take the same route with Media Foundation as the encoder.
+switching it off after two failures. Remux and direct play are unaffected.
+Windows uses NVENC or Media Foundation. On Linux, Settings can select a
+system FFmpeg built with libx264 when available; that copy is supplied by the
+user's distribution rather than bundled with the app.
 
 ## Web interface
 

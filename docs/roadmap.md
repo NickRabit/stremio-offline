@@ -47,63 +47,42 @@ proposed changes.
 
 ## Done
 
-Shipped and living in `main`. The list is here to stop settled questions from
-being reopened, not as a changelog.
+Shipped in `main`; implementation details live in the linked guides.
 
-- Local library: browse and play downloaded files from disk, with continue
-  watching, favourites and clean-up when a title leaves.
-- **Several libraries**: named roots with a type, managed from the interface,
-  added inside a granted root, moved and copied between each other, removed
-  against disabled, re-added with their identity intact, and split out of the
-  download directory without moving a file. See
+- **Libraries**: multiple roots, types, move/copy operations, optional content
+  moves when changing a root, staged settings, mosaics and galleries.
   [Libraries](libraries.md).
-- **Library identification**: a path parser and scorer turn folders into titles,
-  a durable scan job matches them against the catalogues, low-confidence hits
-  wait as suggestions, and Identify / Fix match / Unmatch are the manual
-  override. See [Library identification](library-metadata.md).
-- **Accounts**: more than one, an administrator and ordinary users, per-user
-  library and addon visibility, per-user download permissions, per-user addon
-  order and personal settings, session revocation when a right is taken away,
-  and the admin dashboard. See [Accounts](users.md).
-- Secure mode: artwork from addons is fetched and cached by the server, the page
-  gets an opaque link, and a Content-Security-Policy keeps the browser from
-  loading anything else.
-- Settings export/import, including installed addons, their save rules and the
-  names and roots of the libraries. Addon URLs, the Real-Debrid token and the
-  TMDB API key mean the file is a secret.
-- Playback: direct play vs. remux vs. transcode, on-demand timeline previews,
-  next/previous episode, embedded and addon subtitles, and the player volume
-  remembered on the device. See [Playback](playback.md).
-- Trailers from Cinemeta, with TMDB as a fallback: in-app when secure mode is
-  off, an external tab when it is on. See [Trailers](trailers.md).
-- Download queue: survives a restart, resumes `.part` files with HTTP Range,
-  pauses on ENOSPC and resumes when space returns, retries a dead source,
-  segmented transfers, and the torrent hand-off through Real-Debrid.
-- Smart season and whole-show downloads: ordered addons or largest-file
-  selection, verified audio language with fallback, and optional or required
-  subtitles resolved per episode at the front of the queue.
-- Stats split by where the traffic comes from — a download, catalogue playback
-  or library playback — with library traffic kept out of the external figures.
-- Diagnostics panel: levels, rotation, retention, redaction, client playback
-  errors, grouped issues, and a per-host guard on outbound addon calls.
-- English or Czech throughout, chosen on first run; server messages travel as
-  English text plus a catalogue key.
-- Tile size that follows the panel, portrait or landscape tiles per page, and
-  cached artwork sized for a tile.
-- Restricted / demo mode (`RESTRICTED_MODE=1`), English documentation, the
-  community files, the GHCR image and the build and release workflows.
-- **Desktop apps** for macOS (Apple Silicon) and Windows x64, attached unsigned
-  to every release. Each runs the server on the computer, with bundled FFmpeg,
-  hardware conversion (VideoToolbox, Media Foundation) and a download-folder
-  step at setup, or opens a server elsewhere through named profiles. They share
-  the local server with the home network on request, save to the device through
-  the native dialog, stay running when the window closes, keep the computer
-  awake while downloading, open at login, check GitHub for a newer release and
-  reset themselves from Settings. The Electron Fuse V1 hardening is applied at
-  package time and read back from the built app. See
-  [Installing the macOS app](install-mac.md),
-  [Installing the Windows app](install-windows.md) and
-  [desktop/README.md](../desktop/README.md).
+- **Identification**: automatic scans, suggestions and manual matching, with
+  TMDB/Cinemeta metadata and artwork. [Library identification](library-metadata.md).
+- **Accounts**: administrator and user roles, per-user libraries, addons,
+  download permissions, preferences and session revocation. [Accounts](users.md).
+- **Playback**: direct play, remux, hardware transcode, timeline previews,
+  subtitle timing, next-episode countdown and device volume memory. AirPlay is
+  disabled. [Playback](playback.md).
+- **Continue watching**: series grouping, the next available catalogue episode
+  and per-library/addon visibility. [Libraries](libraries.md#the-library-row).
+- **Downloads**: restart recovery, Range resume, retries, disk-full pausing,
+  segmented transfers, device saves, smart season/show selection and
+  Real-Debrid torrent hand-off. [Addons and downloads](downloads.md).
+- **Addons**: scoped search, scheduled/manual manifest refresh, storage rules
+  and downloaded-title language. [Addons and downloads](downloads.md).
+- **Trailers**: Cinemeta/TMDB, in-app with secure mode off and an external tab
+  with it on. [Trailers](trailers.md).
+- **Languages**: ten in both web and desktop clients, with per-account
+  preferences. [Languages](languages.md).
+- **Desktop apps**: macOS arm64, Windows x64 and Linux x64; bundled FFmpeg,
+  local/remote servers, LAN sharing, login startup and update notices.
+  [Desktop guide](../desktop/README.md).
+- **Cloudflare Access**: desktop email-PIN sign-in.
+  [Supported sign-in](../desktop/README.md#cloudflare-access).
+- **Phones and tablets**: responsive layouts and Home Screen setup.
+  [Mobile guide](mobile.md).
+- **Statistics and diagnostics**: traffic by source, active streams, admin
+  activity history, grouped errors and redacted logs.
+  [Activity history](users.md#activity-history), [Diagnostics](troubleshooting.md).
+- **Security and distribution**: secure-mode artwork proxying, restricted mode,
+  configuration export/import, GHCR images and unsigned desktop releases.
+  [README](../README.md), [Configuration backup](downloads.md#backing-up-the-configuration).
 
 ## Next (daily friction)
 

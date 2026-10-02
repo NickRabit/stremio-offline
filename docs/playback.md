@@ -1,7 +1,8 @@
 # Playback
 
-The Docker image includes FFmpeg. The player always picks the cheapest path: the
-browser reports which codecs it can handle, and the server decides.
+The Docker image and desktop apps include FFmpeg. The player always picks the
+cheapest path: the browser reports which codecs it can handle, and the server
+decides.
 
 | Source | Mode | NAS load |
 | --- | --- | --- |
@@ -45,6 +46,14 @@ Playback, seeking, subtitle visibility, settings and fullscreen are available
 from the bottom controls. Playback settings contain quality, audio and subtitle
 track selection, source codecs, and downloads to the library or device.
 Controls stay visible while settings are open or a control has keyboard focus.
+Double-click the picture to toggle fullscreen. Hovering or dragging on the
+timeline shows preview frames. Volume is remembered on the current device.
+
+For a series with a next episode available, finishing an episode offers a
+five-second countdown, **Play now** and **Cancel**. The next episode carries
+your audio and subtitle choices and prefers the current provider while it still
+has a source. The library also offers previous/next-file navigation. Finishing
+a movie leaves the player open.
 
 ## Keyboard
 
@@ -54,6 +63,7 @@ Controls stay visible while settings are open or a control has keyboard focus.
 | <kbd>←</kbd> <kbd>→</kbd> | ±10 s |
 | <kbd>f</kbd> | fullscreen |
 | <kbd>c</kbd> | hide / show subtitles |
+| <kbd>,</kbd> / <kbd>.</kbd> | move subtitles earlier / later by 0.25 s |
 
 ## Audio tracks and subtitles
 
@@ -67,17 +77,29 @@ two places:
 Downloaded language-tagged `.srt` and `.vtt` sidecars are discovered beside
 library videos and offered in the player as external tracks.
 
-Switching a track remaps FFmpeg, so conversion restarts at the current position,
-same as a seek. Bitmap subtitles (PGS, VobSub) are not offered; they cannot be
-turned into WebVTT.
+Audio or quality changes restart conversion at the current position. Subtitle
+changes keep video playing; **Off** stops the subtitle reader. Bitmap subtitles
+(PGS, VobSub) are not offered because they cannot become WebVTT.
 
 The subtitle icon in the controls (or <kbd>c</kbd>) does not change the track: it
 only stops drawing the text. Playback and conversion keep going, and turning
-subtitles back on is instant, even mid-line. **Off** in the list really drops the
-track from the conversion, so that *does* restart it.
+subtitles back on is instant, even mid-line.
 
-**Settings** pick preferred audio and subtitle languages — Czech then English by
-default. The player selects a track on start from that list.
+**Subtitle delay** in playback settings adjusts embedded and addon subtitles
+in 0.25-second steps, from −30 to +30 seconds. Positive delay makes text appear
+later; **Back in step** resets it. The adjustment lasts for this playback session.
+
+**Settings** pick preferred audio and subtitle languages. The first-run
+interface language seeds both preferences. Audio selection prefers that
+language, then English, then a default or first available track. Embedded
+subtitles prefer a full track in the chosen language or English; if the audio
+already matches your preferred audio language, only a matching forced subtitle
+track is selected automatically. See [Languages](languages.md).
 
 In the source list, language is guessed from the title the addon sent. The
 selected source also shows the real languages found by probing the file.
+
+## Remote playback
+
+AirPlay is currently disabled in the custom player following playback and seek
+regressions. There is no route picker; use the browser or desktop player.

@@ -86,9 +86,10 @@ image: ghcr.io/nickrabit/stremio-offline:0.4.0
 
 ## Other hosts
 
-A Mac or a Windows PC normally runs the desktop app instead, which needs no
-Docker — see [Installing the macOS app](install-mac.md) and
-[Installing the Windows app](install-windows.md), and
+A Mac, Windows PC or Linux desktop can run the desktop app instead, which
+needs no Docker — see [Installing the macOS app](install-mac.md),
+[Installing the Windows app](install-windows.md),
+[Installing the Linux app](install-linux.md), and
 [desktop/README.md](../desktop/README.md) for building it. Docker on those
 machines still works, as below.
 

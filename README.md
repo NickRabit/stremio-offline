@@ -9,13 +9,15 @@ It reads catalog and stream manifests, aggregates streams and subtitles, plays
 HTTP sources through a compatible HLS layer, and saves direct streams into a
 persistent download queue and a local library.
 
-It runs in three ways:
+It runs in four ways:
 
 - **Docker**, the primary target — a host that is always on, a Synology NAS in
   particular — used from a browser on any device on the home network.
 - **A macOS app** for Apple Silicon, which runs the server on the Mac or opens
   one elsewhere, such as the NAS.
 - **A Windows app** for Windows 10 and 11 (x64), which does the same.
+- **A Linux app** for x64 PCs with glibc 2.35 or newer, distributed as a
+  `.deb` and an AppImage, with the same local and remote server modes.
 
 > Unofficial. Not affiliated with Stremio or Smart Code Ltd.
 > The app provides, hosts and searches no content: everything it shows comes
@@ -30,7 +32,8 @@ It runs in three ways:
 - **Playback that costs what it has to.** Direct play when the browser can
   handle the file, remux when only the container is wrong, a real transcode only
   as a last resort — in hardware when there is some: Intel QuickSync on a NAS,
-  VideoToolbox on a Mac, Media Foundation on Windows.
+  VAAPI on Intel/AMD Linux hosts, NVENC on NVIDIA Linux/Windows hosts,
+  VideoToolbox on a Mac, and Media Foundation on other Windows PCs.
 - **Audio tracks and subtitles**, both embedded in the file and from subtitle
   addons, with preferred languages picked in settings.
 - **A download queue that survives a restart**, resumes partial files with HTTP
@@ -44,8 +47,10 @@ It runs in three ways:
 - **Several libraries** — another disk, films and series kept apart, a friend's
   folder mounted read-only — and a metadata scan that turns a folder of files
   into titles with posters and descriptions.
-- **English or Czech**, chosen on first run and changeable in Settings. The
-  choice at setup also seeds the preferred audio and subtitle languages.
+- **Ten interface languages** in the web and desktop apps: English, Czech,
+  Slovak, German, Spanish, French, Italian, Polish, Brazilian Portuguese and
+  Russian. Choose on first run or in Settings; the setup choice also seeds
+  preferred audio and subtitle languages. See [Languages](docs/languages.md).
 - **Accounts, created on first run.** No default password, no anonymous access.
   An administrator adds one per person and decides which libraries and addons
   each of them sees.
@@ -116,8 +121,9 @@ PGID=100
 ### The desktop apps
 
 Every [release](https://github.com/NickRabit/stremio-offline/releases/latest)
-carries a macOS disk image (Apple Silicon, M1 or newer) and a Windows installer
-and portable zip (x64). Neither needs Docker: FFmpeg is bundled. On first launch
+carries a macOS disk image (Apple Silicon, M1 or newer), a Windows installer
+and portable zip (x64), and Linux `.deb` and AppImage packages (x64, glibc
+2.35+). All three apps bundle FFmpeg and run without Docker. On first launch
 choose whether the server runs on this computer — you then pick where downloads
 go — or whether the app opens a server already running elsewhere, and switch
 between the two at any time.
@@ -125,9 +131,15 @@ between the two at any time.
 The apps are not code-signed, so macOS and Windows ask once before the first
 launch. The steps are in
 **[Installing the macOS app](docs/install-mac.md)** and
-**[Installing the Windows app](docs/install-windows.md)**. Both check GitHub for
+**[Installing the Windows app](docs/install-windows.md)**. Linux setup is in
+**[Installing the Linux app](docs/install-linux.md)**. All three check GitHub for
 a newer release and say when one is out; updating means installing the new one
 over the old, and libraries, accounts and settings stay.
+
+Named server profiles can also connect through Cloudflare Access using its
+email one-time PIN inside the app. See
+[Cloudflare Access](desktop/README.md#cloudflare-access) for supported sign-in
+and external-player limitations.
 
 ### On phones and tablets
 
@@ -158,13 +170,14 @@ on demand, so a catalogue the provider adds later still shows up. See
 | [Addons and downloads](docs/downloads.md) | Debrid addons, the queue, save rules, saving to a device, config backup |
 | [Libraries](docs/libraries.md) | Several roots, types, artwork per library, splitting the download folder |
 | [Library identification](docs/library-metadata.md) | How folders become titles, the scan, suggestions and Identify |
+| [Languages](docs/languages.md) | Ten web and desktop languages, first-run detection, audio and subtitle preferences |
 | [Accounts](docs/users.md) | Roles, per-user libraries and addons, passwords, recovery |
-| [Hardware acceleration](docs/hardware-acceleration.md) | QuickSync and VAAPI, VideoToolbox, Media Foundation, and how to tell it is really running |
+| [Hardware acceleration](docs/hardware-acceleration.md) | QuickSync and VAAPI, NVENC, VideoToolbox, Media Foundation, and how to tell it is really running |
 | [Diagnostics and troubleshooting](docs/troubleshooting.md) | The log, the addon guard, symptom-to-page index |
 | [Installing the macOS app](docs/install-mac.md) | Download, the first launch of an unsigned app, updating and removing it |
 | [Installing the Windows app](docs/install-windows.md) | SmartScreen, the notification area, firewall, updating and removing it |
 | [Installing the Linux app](docs/install-linux.md) | .deb or AppImage, VA-API/NVENC or the system's FFmpeg, firewall, updating and removing it |
-| [Building and releasing](docs/building.md) | Local builds, GHCR, version tags, Windows and macOS hosts |
+| [Building and releasing](docs/building.md) | Local builds, GHCR, version tags, macOS, Windows and Linux hosts |
 | [Licensing](docs/licensing.md) | What each distribution contains, FFmpeg's licence and source |
 | [Testing](docs/testing.md) | What belongs in which test layer, and how to run each |
 | [Roadmap](docs/roadmap.md) | What is done, what is next, what is out of scope |

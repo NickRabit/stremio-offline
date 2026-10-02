@@ -7,8 +7,23 @@ movies, series, and metadata. A source manifest supplies streams or subtitles.
 One manifest can do both.
 
 On first start the official **Cinemeta** (catalog and metadata) and
-**OpenSubtitles v3** (subtitles) addons are installed. They can be disabled or
-removed; after a deliberate removal they are not restored on restart.
+**OpenSubtitles v3** (subtitles) addons are installed. Cinemeta supplies
+essential library metadata and cannot be removed, disabled or changed to a
+stream-only role. Other addons, including OpenSubtitles, can be disabled or
+removed; deliberately removed optional addons are not restored on restart.
+
+### Search scopes and addon settings
+
+Search all addons, one addon or one searchable catalogue. Turning off
+**Include in search across all addons** excludes an addon from global search;
+you can still select it explicitly. Selecting a catalogue also selects it for
+browsing after the search is cleared.
+
+The addon settings dialog holds its role, visibility and storage rules.
+Replacing its manifest URL preserves order, enabled state and save rules.
+Enabled manifests refresh on the interval in **Settings → Addons**, or on demand
+with **Refresh manifest** or **Refresh manifests**. Identification has separate
+[provider rules](library-metadata.md).
 
 ### Real-Debrid and other debrid services
 
@@ -167,6 +182,11 @@ library are never moved by a change of rule; it applies to newly queued items.
 | Flat | Straight into the chosen subdirectory: `Movie.mkv`, `Show - S01E07 - Episode title.mkv`. |
 
 The change applies to newly queued items.
+
+**Settings → Downloaded title language** chooses the language used to name new
+movie and episode downloads. It defaults to the interface language and uses a
+matching configured metadata addon where available, otherwise keeping the
+catalogue title. Changing it does not rename files already saved.
 
 ### Choosing the place for one download
 
