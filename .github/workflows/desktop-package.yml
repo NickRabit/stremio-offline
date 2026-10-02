@@ -54,7 +54,7 @@ jobs:
   # Builds the LGPL FFmpeg for Linux x64 inside a pinned ubuntu:22.04 container, with VAAPI for
   # Intel and AMD GPUs and NVENC for NVIDIA. The artifact is consumed by the Linux packaging job.
   ffmpeg-linux:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       # The LGPL FFmpeg takes minutes to build; the result only changes with the script.
@@ -148,7 +148,7 @@ jobs:
   # Packages the Linux x64 AppImage and .deb. Unsigned like the macOS and Windows jobs.
   package-linux:
     needs: ffmpeg-linux
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -200,7 +200,7 @@ jobs:
   # Plays the desktop scenarios against the development app on a screen of its own. Only the
   # Linux branch of the close behaviour runs here; the others are skipped by the tests.
   desktop-e2e:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
