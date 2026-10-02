@@ -47,7 +47,8 @@ from the bottom controls. Playback settings contain quality, audio and subtitle
 track selection, source codecs, and downloads to the library or device.
 Controls stay visible while settings are open or a control has keyboard focus.
 Double-click the picture to toggle fullscreen. Hovering or dragging on the
-timeline shows preview frames. Volume is remembered on the current device.
+timeline shows preview frames for library files; a remote source gets none, because
+each frame opens the file afresh and hosts that count connections stop answering. Volume is remembered on the current device.
 
 For a series with a next episode available, finishing an episode offers a
 five-second countdown, **Play now** and **Cancel**. The next episode carries

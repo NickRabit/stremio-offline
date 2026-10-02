@@ -497,6 +497,7 @@ export class PlaybackManager {
   private async restartConversion(session: Session, time: number, message: string, restoreSeek = false) {
     this.assertActive(session);
     const id = session.id;
+    const requestedAt = Date.now();
     const limit = session.info?.duration ? Math.max(0, session.info.duration - 2) : Number.POSITIVE_INFINITY;
     const target = Math.max(0, Math.min(time, limit));
     // The source usually allows one connection at a time, so the subtitle reader lets
@@ -537,13 +538,16 @@ export class PlaybackManager {
     if (session.subtitleTrack !== null) this.extractSidecar(session);
     // Whether the restart ended up on the GPU is worth knowing: a transcode that says
     // nothing looks the same in the log as one that quietly fell back to the processor.
-    log("INFO", message, { id, offset: Math.round(target), mode: session.mode, hardware: session.hardware, audioTrack: session.audioTrack, subtitleTrack: session.subtitleTrack });
+    log("INFO", message, { id, offset: Math.round(target), mode: session.mode, hardware: session.hardware, audioTrack: session.audioTrack, subtitleTrack: session.subtitleTrack, ms: Date.now() - requestedAt });
     return this.describe(session, url);
   }
 
   async preview(id: string, time: number, signal: AbortSignal) {
     const session = this.playing(id);
     if (!session || !Number.isFinite(time) || time < 0) return undefined;
+    // Each preview opens the file afresh, several connections at a time while the pointer moves:
+    // a remote host that counts them stops answering, and the film it is playing stops with it.
+    if (!session.stream.url?.startsWith("file://")) return undefined;
     const at = Math.min(time, Math.max(0, (session.info?.duration ?? time + 1) - 0.1));
     return this.previews.frame(id, this.localUrl(this.proxyPath(session.stream)), at, signal);
   }
@@ -1060,7 +1064,12 @@ export class PlaybackManager {
     });
 
     const url = `/api/playback/${session.id}/${session.generation}/master.m3u8`;
-    const output = await waitForHlsOutput(directory, () => finished, () => session.stopped);
+    // A seek that hangs says nothing until it gives up 40 s later; by then the viewer has left.
+    const slow = setTimeout(() => {
+      if (finished || session.stopped) return;
+      log("WARN", "The new position is still not open", { id: session.id, generation, offset: Math.round(offset), ms: Date.now() - startedAt, stderr: redact(stderr).slice(-400) });
+    }, 10_000);
+    const output = await waitForHlsOutput(directory, () => finished, () => session.stopped).finally(() => clearTimeout(slow));
     if (session.stopped) {
       child.kill("SIGTERM");
       log("DEBUG", "Conversion abandoned, the session is gone", { id: session.id, generation: session.generation, ms: Date.now() - startedAt });

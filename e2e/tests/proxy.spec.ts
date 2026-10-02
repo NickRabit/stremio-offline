@@ -230,15 +230,12 @@ test("local playback and device downloads use opaque resources", async ({ reques
 });
 
 
-test("timeline previews return private JPEG frames and expire with playback", async ({ request }) => {
+test("a remote source gets no timeline previews, and the answer expires with playback", async ({ request }) => {
+  // Every preview opens the file afresh at the source; a host that counts connections stops
+  // answering and takes the film down with it. Library files still get frames (next-episode spec).
   const playback = await start(request);
   const url = `/api/playback/${playback.id}/preview?time=0`;
-  const frame = await request.get(url);
-  expect(frame.status()).toBe(200);
-  expect(frame.headers()["content-type"]).toContain("image/jpeg");
-  expect(frame.headers()["cache-control"]).toContain("no-store");
-  expect((await frame.body()).subarray(0, 3)).toEqual(Buffer.from([0xff, 0xd8, 0xff]));
-  expect(await (await request.get(url)).body()).toEqual(await frame.body());
+  expect((await request.get(url)).status()).toBe(204);
   expect((await request.get(`/api/playback/${playback.id}/preview?time=-1`)).status()).toBe(204);
   await request.delete(`/api/playback/${playback.id}`);
   expect((await request.get(url)).status()).toBe(404);

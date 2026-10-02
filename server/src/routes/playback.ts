@@ -54,6 +54,8 @@ export interface PlaybackDeps extends RouteContext {
   SOURCE_QUIET_HEADER_MS: number;
 }
 
+const openTransfers = new Map<string, number>();
+
 export function registerPlaybackRoutes(app: express.Application, deps: PlaybackDeps): void {
   const { airplayAccess, airplayRequest, answerHeaders, countBytes, currentSession, currentUser, httpSourceOf, internalMediaRequest, libraryTarget, noteSourceQuiet, ownerOf, playback, playbackMeta, playbackOwners, playbackResponse, prefsOf, quietSources, rangeCache, requireAccess, safeInspection, sleep, sourceIsQuiet, stats, subtitleDelay, trackMedia, SOURCE_ATTEMPTS, SOURCE_RETRY_MS, SOURCE_RESUMES, SOURCE_HEADER_MS, SOURCE_QUIET_HEADER_MS } = deps;
 
@@ -255,6 +257,17 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
     // Handed on from where the cached start left off, so the source is asked only for the rest.
     if (alreadySent) headers.range = `bytes=${Number(/bytes=(\d*)-/.exec(askedRange)?.[1] || 0) + alreadySent}-${/bytes=\d*-(\d+)/.exec(askedRange)?.[1] ?? ""}`;
     const controller = new AbortController();
+    // How many reads one film has open at the source at once is what a host that counts
+    // connections reacts to, and nothing else in the log says it.
+    const sourceKey = resource.parent ?? resource.id;
+    openTransfers.set(sourceKey, (openTransfers.get(sourceKey) ?? 0) + 1);
+    res.once("close", () => {
+      const left = (openTransfers.get(sourceKey) ?? 1) - 1;
+      if (left > 0) openTransfers.set(sourceKey, left); else openTransfers.delete(sourceKey);
+    });
+    const open = () => openTransfers.get(sourceKey) ?? 0;
+    const openedAt = Date.now();
+    log("DEBUG", "Asking the source", { req: req.id, range: headers.range ?? "whole file", open: open() });
     let headerTimedOut = false;
     const quiet = sourceIsQuiet(resource.parent ?? resource.id);
     const headerTimeout = setTimeout(() => { headerTimedOut = true; controller.abort(); }, quiet ? SOURCE_QUIET_HEADER_MS : SOURCE_HEADER_MS);
@@ -271,7 +284,8 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
     // readily as on the first byte. Handing that straight to FFmpeg ends the conversion and
     // the viewer's seek with it, so a dropped request is asked again before it is given up on.
     let upstream: Response;
-    for (let attempt = 1; ; attempt += 1) {
+    let attempt = 1;
+    for (; ; attempt += 1) {
       try { upstream = await safeFetch(raw, { method: req.method === "HEAD" ? "HEAD" : "GET", headers, signal: controller.signal }); break; }
       catch (error) {
         if (res.destroyed || res.writableEnded) {
@@ -284,14 +298,15 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
         if (attempt >= (quiet ? 1 : SOURCE_ATTEMPTS) || headerTimedOut || controller.signal.aborted) {
           clearTimeout(headerTimeout);
           noteSourceQuiet(resource.parent ?? resource.id);
-          log("WARN", "The source did not respond", { req: req.id, url: raw, range: req.headers.range, reason, attempts: attempt, quiet });
+          log("WARN", "The source did not respond", { req: req.id, url: raw, range: req.headers.range, reason, attempts: attempt, quiet, open: open(), ms: Date.now() - openedAt });
           throw error;
         }
-        log("WARN", "The source dropped the request, asking again", { req: req.id, url: raw, range: req.headers.range, reason, attempt });
+        log("WARN", "The source dropped the request, asking again", { req: req.id, url: raw, range: req.headers.range, reason, attempt, open: open() });
         await sleep(SOURCE_RETRY_MS * attempt);
       }
     }
     clearTimeout(headerTimeout);
+    if (attempt > 1) log("INFO", "The source answered after dropping the request", { req: req.id, range: req.headers.range, attempts: attempt, open: open(), ms: Date.now() - openedAt });
     // It answered, so it is not the host that has stopped talking to us.
     quietSources.delete(resource.parent ?? resource.id);
     if (res.destroyed || res.writableEnded) {
