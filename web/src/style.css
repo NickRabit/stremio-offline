@@ -893,7 +893,6 @@ img.broken{visibility:hidden}
   main.view-catalog>.catalog-view:has(.catalog-layout)>.heading{display:none}
   .detail-panel.series-sources-layout .hero{height:auto;min-height:0;padding:10px 16px}
   .detail-panel.series-sources-layout .series-hero .detail-copy>:is(.title-chips,.catalog-description){display:none}
-  .detail-panel.series-sources-layout .hero:not(.series-hero) .description-preview{display:none}
   .detail-panel.series-sources-layout .source-footer{margin-top:6px;padding-top:8px;padding-bottom:12px}
   .detail-panel.series-sources-layout .source-footer .actions{grid-template-columns:1.2fr 1fr 1fr;gap:6px}
   .detail-panel.series-sources-layout .source-footer .actions .primary{grid-column:auto;order:0}
