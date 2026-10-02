@@ -98,12 +98,13 @@ test.describe("catalog", () => {
     await expect(detail.getByRole("button", { name: /První díl/ })).toBeVisible();
 
     await detail.getByRole("button", { name: /První díl/ }).click();
-    await expect(detail.getByRole("heading", { name: "Zdroje" })).toBeVisible();
+    // The chosen episode heads the source list in place of a "Sources" heading.
+    await expect(detail.locator(".sources .episode-current")).toContainText("První díl");
     await expect(detail.getByRole("button", { name: /E2E 1080p/ })).toBeVisible();
 
     await detail.getByRole("button", { name: "Změnit" }).click();
     await expect(detail.getByRole("heading", { name: "Epizody" })).toBeVisible();
-    await expect(detail.getByRole("heading", { name: "Zdroje" })).toHaveCount(0);
+    await expect(detail.locator(".sources")).toHaveCount(0);
     await expect(detail.getByRole("button", { name: /E2E 1080p/ })).toHaveCount(0);
   });
 

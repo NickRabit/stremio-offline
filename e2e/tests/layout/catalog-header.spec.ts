@@ -104,13 +104,13 @@ test("mobile source view returns to the episode picker", async ({ page }, testIn
 
   const detail = page.locator(".detail-panel");
   await detail.getByRole("button", { name: /První díl/ }).click();
-  await expect(detail.getByRole("heading", { name: "Zdroje" })).toBeVisible();
+  await expect(detail.locator(".sources .episode-current")).toContainText("První díl");
   const episodesBack = detail.locator(".mobile-detail-head").getByRole("button", { name: "Epizody" });
   await expect(episodesBack).toBeVisible();
   await episodesBack.click();
 
   await expect(detail.getByRole("heading", { name: "Epizody" })).toBeVisible();
-  await expect(detail.getByRole("heading", { name: "Zdroje" })).toHaveCount(0);
+  await expect(detail.locator(".sources")).toHaveCount(0);
   await expect(detail.locator(".mobile-detail-head").getByRole("button", { name: "Výsledky" })).toBeVisible();
 });
 

@@ -34,6 +34,7 @@ test.describe("auth", () => {
     await form.getByLabel("Heslo", { exact: true }).fill("e2e-password");
     await form.getByRole("button", { name: "Přihlásit se" }).click();
 
-    await expect(page.getByRole("heading", { name: "Co chcete sledovat?" })).toBeVisible();
+    // Short screens hide the catalog heading, so look for the catalog itself.
+    await expect(page.getByRole("combobox", { name: "Procházet katalog" })).toBeVisible();
   });
 });
