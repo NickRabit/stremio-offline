@@ -478,10 +478,13 @@ export class PlaybackManager {
   }
 
   private async restart(session: Session, time: number, message: string) {
+    const previous = session.process;
     try { return await this.restartConversion(session, time, message); }
     catch (error) {
       if (!session.stopped && session.subtitleTrack !== null) this.extractSidecar(session);
       throw error;
+    } finally {
+      if (session.stopped) await this.killChild(previous);
     }
   }
 
@@ -921,6 +924,7 @@ export class PlaybackManager {
   private async spawnAt(session: Session, offset: number): Promise<string> {
     this.assertActive(session);
     const previous = session.directory;
+    const previousProcess = session.process;
     session.generation += 1;
     session.offset = offset;
     const directory = path.join(this.root, session.id, String(session.generation));
@@ -932,7 +936,12 @@ export class PlaybackManager {
     if (previous) {
       const retired = { generation: session.generation - 1, directory: previous, until: Date.now() + RETIRED_MS };
       session.retired = retired;
-      void (session.pendingKill ?? Promise.resolve()).then(async () => {
+      // pendingKill can belong to an earlier seek; this writer stays alive until its
+      // replacement is ready, which may take longer than the retirement grace period.
+      const exited = !previousProcess || previousProcess.exitCode !== null || previousProcess.signalCode !== null
+        ? Promise.resolve()
+        : new Promise<void>((resolve) => previousProcess.once("exit", () => resolve()));
+      void exited.then(async () => {
         await sleep(Math.max(0, retired.until - Date.now()));
         if (session.retired === retired) session.retired = undefined;
         // Unless the film went back to it: a position that could not be opened leaves the

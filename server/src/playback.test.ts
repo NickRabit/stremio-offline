@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { EventEmitter } from "node:events";
 import { writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -1310,4 +1311,50 @@ test("a busy NVIDIA card does not count against NVENC", () => {
   assert.equal(nvencBusy("[h264_nvenc @ 0x1] No capable devices found"), true);
   assert.equal(nvencBusy("[h264_nvenc @ 0x1] Cannot load libcuda.so.1"), false);
   assert.equal(nvencBusy(undefined), false);
+});
+
+
+test("retirement waits for the previous writer even when the next seek exceeds the grace period", async (t) => {
+  const manager = new PlaybackManager(tmp("test-slow-seek-retirement")) as any;
+  const previous = Object.assign(new EventEmitter(), { exitCode: null as number | null, signalCode: null });
+  const session = remuxSession(manager, {
+    directory: tmp("test-slow-seek-retirement/escalated/1"), process: previous,
+    pendingKill: Promise.resolve(),
+  });
+  const oldDirectory = session.directory;
+  const deleted: string[] = [];
+  manager.purgeNow = async (directory: string) => { deleted.push(directory); };
+  manager.run = async () => {
+    session.process = { exitCode: null, signalCode: null };
+    return "/new-playlist";
+  };
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  await manager.spawnAt(session, 1200);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  t.mock.timers.tick(15_001);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(deleted, [], "a prior seek's pendingKill does not belong to the writer still running");
+
+  previous.exitCode = 0;
+  previous.emit("exit", 0, null);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  t.mock.timers.tick(1);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(deleted, [oldDirectory], "the retired directory is removed after its own writer exits");
+});
+
+test("closing during a seek also stops the preserved fallback conversion", async () => {
+  const manager = new PlaybackManager(tmp("test-close-pending-seek")) as any;
+  const previous = { exitCode: null, signalCode: null };
+  const replacement = { exitCode: null, signalCode: null };
+  const session = remuxSession(manager, { process: previous });
+  const killed: unknown[] = [];
+  manager.killChild = async (child: unknown) => { killed.push(child); };
+  manager.spawnAt = async () => {
+    session.process = replacement;
+    session.stopped = true;
+    throw new Error("closed while opening the new source");
+  };
+  await assert.rejects(manager.seek(session.id, 1200), /no longer exists/);
+  assert.ok(killed.includes(previous), "the fallback process must not outlive a closed player");
 });

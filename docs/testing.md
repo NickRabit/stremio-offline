@@ -358,6 +358,9 @@ stream and is nothing of the sort. Cleanup therefore refuses a directory somethi
 still writing to, says so, and names what asked -- a generation that was replaced, a
 conversion attempt that failed, or a session that ended. A directory whose process has
 already died is still fair game, which the retry after a failed hardware attempt needs.
+Retirement also waits for that directory's own writer to exit: a slow replacement can
+outlast the 15-second grace period while the fallback still runs. Regression tests cover
+that wait, eventual cleanup, and stopping the fallback when the player closes mid-seek.
 
 Every FFmpeg that opens a film reads the same two places before anything else: the header
 at the start and the index at the far end. With a conversion and a subtitle reader, both
