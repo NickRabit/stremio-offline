@@ -1,7 +1,11 @@
 # Enhanced catalog search: research and implementation specification
 
-Status: proposed; no behavior in this document is implemented by this change.
-Research date: 2026-10-02. Baseline: main, commit b67ce84.
+Status: implemented in 0.5.0 (#283), following the delivery sequence below in
+one release. Research date: 2026-10-02. Baseline: main, commit b67ce84.
+
+Beyond this text, the four `/search/*` routes are also listed in
+`USER_ALLOWED` in `server/src/roles.ts`, the gate that admits ordinary accounts
+only to listed routes; without that, history worked for administrators alone.
 
 ## Outcome and scope
 
