@@ -73,7 +73,8 @@ Shipped in `main`; implementation details live in the linked guides.
 - **Following**: follow a series for its new episodes in the Library, with
   opt-in automatic downloads that queue each episode once, retry a missing
   source on a ladder and treat a removed job as a skip. Lazy jobs fall back to
-  a torrent through Real-Debrid. [Downloads](downloads.md#following-a-series).
+  a torrent through Real-Debrid. [Downloads](downloads.md#following-a-series),
+  [design](follow-show-analysis.md).
 - **Continue watching**: series grouping, the next available catalogue episode
   and per-library/addon visibility. [Libraries](libraries.md#the-library-row).
 - **Downloads**: restart recovery, Range resume, retries, disk-full pausing,
@@ -172,7 +173,8 @@ date when a key is set (otherwise the catalogue's date, marked approximate),
 and whether each is set to download, waiting or downloaded. Optionally an
 authenticated, revocable `.ics` feed per account. Follow-ups to following:
 a grace period that waits for preferred audio before taking the fallback,
-downloading N episodes ahead of viewing, and opt-in retention.
+downloading N episodes ahead of viewing, and opt-in retention; the
+[design analysis](follow-show-analysis.md) covers them.
 
 ### Queue robustness
 
