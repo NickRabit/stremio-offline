@@ -25,6 +25,99 @@ test("the season number is recognised in the different folder spellings", () => 
   assert.equal(parseSeason("Film 2"), null);
 });
 
+test("a season written as a Roman numeral or behind the show's name is recognised too", () => {
+  assert.equal(parseSeason("I. SERIE"), 1);
+  assert.equal(parseSeason("II. série"), 2);
+  assert.equal(parseSeason("IV. SERIE"), 4);
+  assert.equal(parseSeason("Season IV"), 4);
+  assert.equal(parseSeason("III řada"), 3);
+  assert.equal(parseSeason("XX. série"), 20);
+  assert.equal(parseSeason("TRUE BLOOD - 1. serie"), 1);
+  assert.equal(parseSeason("Show - Season 2"), 2);
+  assert.equal(parseSeason("Show - S03"), 3);
+  assert.equal(parseSeason("Show - II. série"), 2);
+  // A bare Roman numeral is a film's title, not a season.
+  assert.equal(parseSeason("I"), null);
+  assert.equal(parseSeason("IV"), null);
+  assert.equal(parseSeason("Rocky IV"), null);
+});
+
+test("a season form followed by a language or note is still that season", () => {
+  assert.equal(parseSeason("10. serie - ENG"), 10);
+  assert.equal(parseSeason("8. serie CZ"), 8);
+  assert.equal(parseSeason("11. serie CZ"), 11);
+  assert.equal(parseSeason("9. serie - ENG"), 9);
+  // A bare number behind the show's name is the name, not a season.
+  assert.equal(parseSeason("Hawaii Five - 0"), null);
+  assert.equal(parseSeason("Blade Runner - 2049"), null);
+  // None of these is a season either.
+  assert.equal(parseSeason("2012"), null);
+  assert.equal(parseSeason("Malá velká Británie USA"), null);
+  assert.equal(parseSeason("2 Broke Girls"), null);
+  assert.equal(parseSeason("300 Rise of an Empire"), null);
+  // An unrelated word starting with the same letter as a Roman numeral is not one.
+  assert.equal(parseSeason("Svět pod hlavou"), null);
+});
+
+test("an episode is numbered the way the show lays its files out", () => {
+  const numbered = (relative: string) => numberedEpisode(relative);
+  const loose = (relative: string) => numberedEpisode(relative, { loose: true });
+  const both = (relative: string, numbers: { season: number; episode: number }) => {
+    assert.deepEqual(numbered(relative), numbers, `without loose: ${relative}`);
+    assert.deepEqual(loose(relative), numbers, `loose: ${relative}`);
+  };
+  const onlyLoose = (relative: string, numbers: { season: number; episode: number }) => {
+    assert.equal(numbered(relative), undefined, `without loose: ${relative}`);
+    assert.deepEqual(loose(relative), numbers, `loose: ${relative}`);
+  };
+
+  // Flat NxNN folders: the season and the episode are both in the file name.
+  both("Čarodějky/Čarodějky-4x16-Páté-kolo-u-vozu.avi", { season: 4, episode: 16 });
+  both("Jiste pane ministře/jiste.pane.ministre.1x01.celem.k.volicum.dvb.xvid-bb.avi", { season: 1, episode: 1 });
+  both("Bratrsto neohrožených/Bratrstvo neohrozenych 1x01.avi", { season: 1, episode: 1 });
+
+  // A compact SEE and a padded number behind the title only count for a series unit.
+  onlyLoose("Moonlight/Moonlight - 101.avi", { season: 1, episode: 1 });
+  onlyLoose("Moonlight/Moonlight - 102 - Out of the Past.avi", { season: 1, episode: 2 });
+  onlyLoose("Okupace - Jo Nesbo/Okupace-01-Duben-2015-cz-Dansky-serial.avi", { season: 1, episode: 1 });
+
+  // An episode word carries the number, and the season comes from the folder, or from season 1.
+  both("Labyrint/Labyrint E01.avi", { season: 1, episode: 1 });
+  both("Labyrint/Labyrint E02.avi", { season: 1, episode: 2 });
+  both("Show/I. SERIE/E03.mkv", { season: 1, episode: 3 });
+  both("Show - Season 2/Ep. 4.mkv", { season: 2, episode: 4 });
+  both("Show - Season 2/Ep04.mkv", { season: 2, episode: 4 });
+  both("Show - Season 2/Episode 3.mkv", { season: 2, episode: 3 });
+  both("Show - Season 2/díl 3.mkv", { season: 2, episode: 3 });
+  both("Show - Season 2/dil 3.mkv", { season: 2, episode: 3 });
+
+  both(
+    "The Vampire Diaries/I. SERIE/the-vampire-diaries-s01e01-pilot-hdtv-xvid-fqm-avi/the-vampire-diaries-s01e01-pilot-hdtv-xvid-fqm.avi",
+    { season: 1, episode: 1 },
+  );
+  both("The Vampire Diaries/II. SERIE/The.Vampire.Diaries.S02E01.HDTV.XviD-LOL.avi", { season: 2, episode: 1 });
+  both("True Blood/TRUE BLOOD - 1. serie/1x01 - Strange Love (Divná láska)/1x01 - Strange Love.avi", { season: 1, episode: 1 });
+  both("True Blood/TRUE BLOOD - 4. serie/True.Blood.S04E01.HDTV.XviD-LOL.avi", { season: 4, episode: 1 });
+  both("Rizzoli and Isles/3. serie/Rizzoli.and.Isles.S03E01.HDTV.x264-LOL.mp4", { season: 3, episode: 1 });
+
+  // An episode folder is stepped over: the season is the folder above it.
+  both("Show/I. SERIE/Show.S02E03/05 - Name.avi", { season: 1, episode: 5 });
+
+  // The separator between S and E may be a dot, and an episode word carries a number behind it.
+  both("Show/S05.E04.mkv", { season: 5, episode: 4 });
+  both("Svět pod hlavou/Svět pod hlavou_E10 1983.mkv", { season: 1, episode: 10 });
+
+  // A leading-zero four-digit token is a season and an episode, never a year.
+  onlyLoose("True Blood/true.blood.0302.avi", { season: 3, episode: 2 });
+  onlyLoose("True Blood/true.blood.0208.avi", { season: 2, episode: 8 });
+  // Once more the season the folder names, in front of the episode.
+  onlyLoose("6. serie/Sberatele kosti 6-15 Zabijak.avi", { season: 6, episode: 15 });
+  // A leading number when the show keeps no season folder at all.
+  onlyLoose("Show/01-Velký plán (The Grand Design).avi", { season: 1, episode: 1 });
+  // An unpadded episode number at the end of the name.
+  onlyLoose("Show/Malá Velká Británie v USA 3.avi", { season: 1, episode: 3 });
+});
+
 test("the episode number and the title split out of the file name", () => {
   assert.deepEqual(parseEpisode("07 - Vánoce.mkv"), { episode: 7, title: "Vánoce" });
   assert.deepEqual(parseEpisode("S01E06 The Date.mkv"), { episode: 6, title: "The Date" });
@@ -476,6 +569,21 @@ test("a browsed file is numbered from its own name, not only from a season folde
     assert.equal(file?.season, 2);
     assert.equal(file?.episode, 3);
     assert.deepEqual(numberedEpisode(path.join("Ted", "Ted.S02E03.mkv")), { season: 2, episode: 3 });
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("a film is not numbered from a number that only looks like an episode code", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "stremio-browse-"));
+  try {
+    await mkdir(path.join(root, "Room 237"), { recursive: true });
+    await writeFile(path.join(root, "Room 237", "Room 237.mkv"), "x");
+    const film = await browseDirectory(root, "Room 237");
+    assert.equal(film.items.find((item) => item.kind === "file")?.season, null, "a film has no season");
+    assert.equal(film.items.find((item) => item.kind === "file")?.episode, null);
+    // The same folder inside a series unit is numbered by the show's own style.
+    const series = await browseDirectory(root, "Room 237", "", 0, 60, "name", false, "", undefined, undefined, true);
+    assert.equal(series.items.find((item) => item.kind === "file")?.season, 2);
+    assert.equal(series.items.find((item) => item.kind === "file")?.episode, 37);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

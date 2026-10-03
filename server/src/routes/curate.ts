@@ -70,7 +70,8 @@ export function registerCurateRoutes(app: express.Application, deps: CurateDeps)
     if (needsBackfill(known, undefined, wantedLanguage)) scheduleMetaBackfill(known!.type, known!.id, language);
     const suggestion = suggestionForUnit(unit, suggestions, resolved.key);
     const isFile = isVideo(posixBase(resolved.key));
-    const numbers = episodeNumberOf(resolved.key, ownRecord(resolved.key, records));
+    // A file of a series unit is numbered by the show's own style as well, not only by a tag.
+    const numbers = episodeNumberOf(resolved.key, ownRecord(resolved.key, records), { loose: unit?.kind === "series" });
     const bound = known ? { type: known.type, id: known.id, name: known.name, season: known.season, episode: known.episode } : undefined;
     res.json({
       path: relative,

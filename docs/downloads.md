@@ -178,7 +178,7 @@ library are never moved by a change of rule; it applies to newly queued items.
 
 | Mode | Result |
 | --- | --- |
-| Structured | A folder named after the movie, or show and season folders for a series. |
+| Structured | The layout the matcher reads best: `Heat (1995)/Heat (1995).mkv` for a film once the year is known, and `Show/01 serie/Show - S01E07 - Episode title.mkv` for an episode (no season: `Show/Show - E07 - Episode title.mkv`; no title: the ` - Episode title` part is dropped). |
 | Flat | Straight into the chosen subdirectory: `Movie.mkv`, `Show - S01E07 - Episode title.mkv`. |
 
 The change applies to newly queued items.

@@ -822,6 +822,7 @@ export const cs: Catalog = {
   "addons.layoutFlat": "Plochá struktura – jen soubory",
   "addons.example": "Příklad:",
   "addons.sampleMovie": "Název filmu",
+  "addons.sampleYear": "2024",
   "addons.sampleShow": "Název seriálu",
   "addons.sampleEpisode": "Název dílu",
   "addons.sampleSeasonFolder": "serie",

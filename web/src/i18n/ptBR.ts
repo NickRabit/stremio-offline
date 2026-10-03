@@ -784,6 +784,7 @@ export const ptBR: Catalog = {
   "addons.layoutFlat": "Simples – apenas arquivos",
   "addons.example": "Exemplo:",
   "addons.sampleMovie": "Título do filme",
+  "addons.sampleYear": "2024",
   "addons.sampleShow": "Título da série",
   "addons.sampleEpisode": "Título do episódio",
   "addons.sampleSeasonFolder": "temporada",

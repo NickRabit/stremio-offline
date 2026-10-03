@@ -784,6 +784,7 @@ export const es: Catalog = {
   "addons.layoutFlat": "Plano: solo archivos",
   "addons.example": "Ejemplo:",
   "addons.sampleMovie": "Título de la película",
+  "addons.sampleYear": "2024",
   "addons.sampleShow": "Título de la serie",
   "addons.sampleEpisode": "Título del episodio",
   "addons.sampleSeasonFolder": "temporada",

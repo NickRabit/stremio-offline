@@ -193,6 +193,14 @@ test("a name is compared and searched in every form worth trying", () => {
     "a half that is only an installment marker is not a form of the name");
 });
 
+test("an ampersand and the word 'and' are the same name", () => {
+  assert.deepEqual(
+    titleVariants(parseMediaName("Lilo & Stitch - Lilo and Stitch")).map((variant) => variant.text),
+    ["Lilo & Stitch - Lilo and Stitch", "Lilo & Stitch"],
+    "the two spellings of one half fold into one variant",
+  );
+});
+
 test("only a release-group folder is packaging, never a title or a season", () => {
   assert.equal(isPackagingFolderName("REFF"), true);
   assert.equal(isPackagingFolderName("SPARKS"), true);

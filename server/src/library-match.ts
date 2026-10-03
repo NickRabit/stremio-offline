@@ -1,4 +1,4 @@
-import { isPathWithin, isVideo, numberedEpisode, parseSeason, remapPath, type FoundFile } from "./library.js";
+import { episodeTag, isPathWithin, isVideo, numberedEpisode, parseSeason, remapPath, type FoundFile } from "./library.js";
 import { LIBRARY_ID, parseLibraryPath, posixBase, type LibraryType } from "./libraries.js";
 import { isPackagingFolderName, parseMediaName, parseMediaPath, partSignature, stripPartMarkers, titleSides, titleVariants, type ParsedMedia } from "./library-parse.js";
 import type { MetaItem } from "./types.js";
@@ -131,7 +131,7 @@ const EXTRA_TOKENS = new Set(["trailer", "sample", "extra", "bonus", "deleted", 
 const ARTICLES = /^(the|a|an)\s+/;
 /** The matching rules that wrote a suggestion or a remembered miss. Bumped whenever a
  *  decision changes meaning, so old rows are reconsidered exactly once. */
-export const MATCH_RULE_VERSION = 6;
+export const MATCH_RULE_VERSION = 7;
 
 /** The lowest score a single candidate can carry and still be bound without a person's word. */
 export const AUTO_ACCEPT_MIN_SCORE = 85;
@@ -161,6 +161,8 @@ export function normalizeTitle(value: string | undefined): string {
     .normalize("NFD")
     .replace(/\p{M}/gu, "")
     .toLowerCase()
+    // " & " is the word "and": "Rizzoli & Isles" is "Rizzoli and Isles" under another spelling.
+    .replace(/ & /g, " and ")
     // Every script keeps its own letters: "नरसिंहा Avatar" is not the name "Avatar".
     .replace(/[^\p{L}\p{N}\s]/gu, " ")
     .replace(ARTICLES, "")
@@ -798,9 +800,23 @@ export function pendingSuggestionKeys(
     .map(([key]) => key);
 }
 
-/** The saved proposals a finished scan may drop: their library is here now, and no title
- *  unit covers the key any more. A library that is away keeps its rows, so an unplugged
- *  disk never reads as a library that lost everything. */
+/** A row an automatic pass wrote for a path, rather than a person: a record somebody kept
+ *  by hand -- locked, or the source "user" -- is never one, and neither is a download. */
+export function isAutomaticRecord(record: LibraryMetaRecord): boolean {
+  if (record.locked === true) return false;
+  return record.source === "scan" || (record.source == null && record.locked === false);
+}
+
+/** Whether a path sits strictly below a series unit: the show folder owns it, so its own
+ *  binding or proposal is a relic of the folder that used to be a unit. */
+function insideSeriesUnit(key: string, units: TitleUnit[]): boolean {
+  return units.some((unit) => unit.kind === "series" && unit.key !== key && isPathWithin(key, unit.key));
+}
+
+/** The saved proposals a finished scan may drop: their library is here now, and either no
+ *  title unit covers the key any more or the key sits inside a series that does. A library
+ *  that is away keeps its rows, so an unplugged disk never reads as a library that lost
+ *  everything; a film unit's inner keys are its own, untouched. */
 export function staleSuggestionKeys(
   suggestions: Record<string, LibrarySuggestion>,
   units: TitleUnit[],
@@ -809,8 +825,30 @@ export function staleSuggestionKeys(
   return Object.keys(suggestions).filter((key) => {
     const libraryId = parseLibraryPath(key)?.libraryId;
     if (!libraryId || !reachableLibraryIds.has(libraryId)) return false;
-    return !units.some((unit) => isPathWithin(key, unit.key));
+    return insideSeriesUnit(key, units) || !units.some((unit) => isPathWithin(key, unit.key));
   });
+}
+
+/** The automatic bindings a finished scan drops for the same reason: the rows under a title
+ *  that owns its whole folder are what the folders below it used to say. A person's rows and
+ *  a film unit's inner keys stay. */
+export function staleScanRecordKeys(
+  meta: Record<string, LibraryMetaRecord>,
+  units: TitleUnit[],
+  reachableLibraryIds: ReadonlySet<string>,
+): string[] {
+  return Object.entries(meta).filter(([key, record]) => {
+    const libraryId = parseLibraryPath(key)?.libraryId;
+    if (!libraryId || !reachableLibraryIds.has(libraryId)) return false;
+    return isAutomaticRecord(record) && insideSeriesUnit(key, units);
+  }).map(([key]) => key);
+}
+
+/** Drops the automatic records strictly inside `key`, keeping the key's own row: the title
+ *  bound there owns everything below it, so nothing inside has an identity of its own. */
+export function dropAutomaticInside(records: Record<string, LibraryMetaRecord>, key: string): Record<string, LibraryMetaRecord> {
+  return Object.fromEntries(Object.entries(records).filter(([path, record]) =>
+    path === key || !isPathWithin(path, key) || !isAutomaticRecord(record)));
 }
 
 /** Cut on a word boundary. The stored text is what the detail view shows, so a
@@ -871,11 +909,16 @@ export function episodesFromMeta(meta: MetaItem | null | undefined, limit = MAX_
   return out;
 }
 
-/** Which episode a file holds: an explicit binding wins, then S01E02 in the name,
- *  then a plain number inside a season folder. */
-export function episodeNumberOf(relative: string, record?: LibraryMetaRecord): { season: number; episode: number } | undefined {
+/** Which episode a file holds: an explicit binding wins, then the number in its own name,
+ *  then a plain number inside a season folder. `loose` is for a caller that knows the file
+ *  belongs to a series unit, so the numbering a whole show writes counts too. */
+export function episodeNumberOf(
+  relative: string,
+  record?: LibraryMetaRecord,
+  options: { loose?: boolean } = {},
+): { season: number; episode: number } | undefined {
   if (record?.episode != null) return { season: record.season ?? 1, episode: record.episode };
-  return numberedEpisode(relative);
+  return numberedEpisode(relative, options);
 }
 
 /** A bound series nobody re-read for the TTL. Only series: their episode list is what
@@ -956,7 +999,8 @@ export function browseMeta(
   const named = (value?: string) => (value && normalizeTitle(value) !== normalizeTitle(label) ? value : undefined);
 
   if (known.type === "series" && isVideo(posixBase(relative))) {
-    const numbers = episodeNumberOf(relative, records[relative]?.id ? records[relative] : undefined);
+    // The row belongs to a bound series, so the show's own numbering style counts too.
+    const numbers = episodeNumberOf(relative, records[relative]?.id ? records[relative] : undefined, { loose: true });
     // Without the episode text the series plot would repeat on every row, which
     // says nothing about the file in front of the user.
     const found = numbers ? episodes[episodeKey(known.type, known.id, numbers.season, numbers.episode)] : undefined;
@@ -1050,10 +1094,6 @@ function parentOf(relative: string): string {
   return index < 0 ? "" : relative.slice(0, index);
 }
 
-function isTaggedEpisode(filename: string): boolean {
-  return /s\d{1,3}[\s._-]*e\d{1,4}/i.test(filename);
-}
-
 export function isExtraName(filename: string): boolean {
   const title = parseMediaPath(filename).title.toLowerCase();
   return title.split(/[\s-]+/).filter(Boolean).some((token) => EXTRA_TOKENS.has(token));
@@ -1122,28 +1162,104 @@ function emit(out: TitleUnit[], key: string, kind: TitleKind, samples: string[])
   out.push({ key, kind, relative: key, sampleFiles: samples });
 }
 
-/** "Navstevnici.01" is an episode of one series; a plain "Toy Story 2" is a film of its own. */
-const LOOSE_EPISODE_TAIL = /[\s._-](?:(\d{2,})|(?:e|ep|dil|díl|epizoda|episode)[\s._-]*\d{1,4})$/i;
+/** A loose episode number stands on its own between separators: "Moonlight - 101",
+ *  "Okupace-01-Duben-2015". A year and a glued suffix ("1080p") are not one. */
+const COMPACT_EPISODE_TOKEN = /(?:^|[\s._-])(\d{3})(?=$|[\s._-])/;
+const LOOSE_EPISODE_TOKEN = /(?:^|[\s._-])(\d{2,})(?=$|[\s._-])/;
+const YEAR_NUMBER = /^(?:19|20)\d{2}$/;
 
-function looseEpisodeTitle(filename: string): string | undefined {
-  const stem = filename.replace(/\.[^.]+$/, "");
-  const match = LOOSE_EPISODE_TAIL.exec(stem);
-  if (!match || (match[1] && /^(?:19|20)\d{2}$/.test(match[1]))) return undefined;
-  const title = normalizeTitle(stem.slice(0, match.index));
+/** The title written in front of the token at `match`, or nothing when there is none. */
+function tokenTitle(stem: string, match: RegExpExecArray, digits: string): string | undefined {
+  const start = match.index + match[0].length - digits.length;
+  const title = normalizeTitle(stem.slice(0, start));
   return title || undefined;
 }
 
-function hasSharedLooseEpisodes(videos: FoundFile[]): boolean {
-  const groups = new Map<string, number>();
-  for (const file of videos) {
-    if (isExtraName(posixBase(file.relative))) continue;
-    const title = looseEpisodeTitle(posixBase(file.relative));
-    if (!title) continue;
-    const count = (groups.get(title) ?? 0) + 1;
-    groups.set(title, count);
-    if (count >= 2 && count * 2 > videos.length) return true;
+/** The title in front of a compact SEE token (101 -> S1E01), when the token is one. */
+function compactEpisodeTitle(stem: string): string | undefined {
+  const match = COMPACT_EPISODE_TOKEN.exec(stem);
+  if (!match) return undefined;
+  const value = Number(match[1]);
+  if (value < 101 || value > 999 || value % 100 < 1) return undefined;
+  return tokenTitle(stem, match, match[1]!);
+}
+
+/** The title in front of a zero-padded number, wherever the number stands. */
+function looseEpisodeTitle(stem: string): string | undefined {
+  const pattern = new RegExp(LOOSE_EPISODE_TOKEN.source, "g");
+  for (let match = pattern.exec(stem); match; match = pattern.exec(stem)) {
+    const digits = match[1]!;
+    if (YEAR_NUMBER.test(digits)) continue;
+    const title = tokenTitle(stem, match, digits);
+    if (title) return title;
   }
-  return false;
+  return undefined;
+}
+
+/** The titles at least two files of the folder write in front of their number: a lone
+ *  "Moonlight - 101" is a film, two of them are the episodes of one show. */
+function sharedEpisodeTitles(videos: FoundFile[], titleOf: (stem: string) => string | undefined): Set<string> {
+  const counts = new Map<string, number>();
+  for (const file of videos) {
+    const title = titleOf(posixBase(file.relative).replace(/\.[^.]+$/, ""));
+    if (!title) continue;
+    counts.set(title, (counts.get(title) ?? 0) + 1);
+  }
+  return new Set([...counts].filter(([, count]) => count >= 2).map(([title]) => title));
+}
+
+/** Whether one file of a folder is an episode: a tag in its own name, or a number the
+ *  whole show writes behind a title its siblings share. */
+function looksLikeEpisode(name: string, compactTitles: Set<string>, looseTitles: Set<string>): boolean {
+  if (episodeTag(name)) return true;
+  const stem = name.replace(/\.[^.]+$/, "");
+  const compact = compactEpisodeTitle(stem);
+  if (compact && compactTitles.has(compact)) return true;
+  const loose = looseEpisodeTitle(stem);
+  return Boolean(loose && looseTitles.has(loose));
+}
+
+/** Whether one folder holds nothing but one episode: the numbering may sit in the file's
+ *  name or in the folder's own name. */
+function isEpisodeFolder(index: DirIndex, dir: string): boolean {
+  const videos = (index.videos.get(dir) ?? []).filter((file) => !isExtraName(posixBase(file.relative)));
+  if (videos.length !== 1) return false;
+  return Boolean(episodeTag(posixBase(videos[0]!.relative))) || Boolean(episodeTag(posixBase(dir)));
+}
+
+/** The walk root and a library root sort the tree; they are never a title of their own. */
+function isLibraryRoot(dir: string): boolean {
+  return !dir || LIBRARY_ID.test(posixBase(dir));
+}
+
+/** Whether a child folder is a show on its own: it holds a season folder, or the mixed rules
+ *  classify the whole subtree as one series at that folder. A season or an episode folder is
+ *  part of the show above it, so it never counts as one here. */
+function isShowFolder(index: DirIndex, dir: string): boolean {
+  if (parseSeason(posixBase(dir)) != null || isEpisodeFolder(index, dir)) return false;
+  const children = [...(index.children.get(dir) ?? [])];
+  if (children.some((child) => parseSeason(posixBase(child)) != null)) return true;
+  const temp: TitleUnit[] = [];
+  classifyFolder(index, dir, temp);
+  return temp.length === 1 && temp[0]!.key === dir && temp[0]!.kind === "series";
+}
+
+/** A folder that only sorts shows: no videos of its own and only shows below it. */
+function isGroupingFolder(index: DirIndex, dir: string): boolean {
+  if ((index.videos.get(dir) ?? []).length) return false;
+  const children = [...(index.children.get(dir) ?? [])];
+  return children.length > 0 && children.every((child) => isGroupingFolder(index, child) || isShowFolder(index, child));
+}
+
+/** A `series` library decides the shape, as Jellyfin and Plex do: every folder directly under
+ *  the root is one show holding everything below it. Only a folder that sorts shows is walked
+ *  through, so a category of shows does not become a show of its own. */
+function walkSeries(index: DirIndex, dir: string, out: TitleUnit[]) {
+  for (const video of index.videos.get(dir) ?? []) emit(out, video.relative, "series", [video.relative]);
+  for (const child of index.children.get(dir) ?? []) {
+    if (isLibraryRoot(child) || isGroupingFolder(index, child)) walkSeries(index, child, out);
+    else emit(out, child, "series", filesUnder(index, child));
+  }
 }
 
 /** A folder of loose files: one film when its non-extra files reduce to one identity,
@@ -1151,12 +1267,10 @@ function hasSharedLooseEpisodes(videos: FoundFile[]): boolean {
 function classifyVideosOnly(dir: string, videos: FoundFile[], out: TitleUnit[]) {
   const nonExtra = videos.filter((file) => !isExtraName(posixBase(file.relative)));
   if (!nonExtra.length) return;
-  const tagged = videos.filter((file) => isTaggedEpisode(posixBase(file.relative)));
-  if (tagged.length * 2 > videos.length) {
-    emit(out, dir, "series", videos.map((file) => file.relative));
-    return;
-  }
-  if (hasSharedLooseEpisodes(videos)) {
+  const compactTitles = sharedEpisodeTitles(nonExtra, compactEpisodeTitle);
+  const looseTitles = sharedEpisodeTitles(nonExtra, looseEpisodeTitle);
+  const episodes = nonExtra.filter((file) => looksLikeEpisode(posixBase(file.relative), compactTitles, looseTitles));
+  if (episodes.length * 2 > nonExtra.length) {
     emit(out, dir, "series", videos.map((file) => file.relative));
     return;
   }
@@ -1181,6 +1295,12 @@ function classifyVideosOnly(dir: string, videos: FoundFile[], out: TitleUnit[]) 
 }
 
 function classifyFolder(index: DirIndex, dir: string, out: TitleUnit[]) {
+  // A library root and the walk root sort the tree; a top-level folder whose own name reads
+  // as a season ("Hawaii Five - 0") must not fold the whole library into one unit.
+  if (isLibraryRoot(dir)) {
+    walkContainer(index, dir, out);
+    return;
+  }
   const videos = index.videos.get(dir) ?? [];
   const children = [...(index.children.get(dir) ?? [])];
   // A folder that only holds one packaging folder is named by its parent: the release group
@@ -1202,6 +1322,13 @@ function classifyFolder(index: DirIndex, dir: string, out: TitleUnit[]) {
     emit(out, dir, "series", filesUnder(index, dir));
     return;
   }
+  // A show that keeps every episode in a folder of its own is the folder above them, exactly
+  // as one with season folders is: the episode folders are what its unit holds, not units.
+  const episodeFolders = children.filter((child) => isEpisodeFolder(index, child));
+  if (episodeFolders.length * 2 > children.length) {
+    emit(out, dir, "series", filesUnder(index, dir));
+    return;
+  }
   if (children.length) {
     walkContainer(index, dir, out);
     return;
@@ -1216,12 +1343,18 @@ function walkContainer(index: DirIndex, dir: string, out: TitleUnit[]) {
   for (const child of index.children.get(dir) ?? []) classifyFolder(index, child, out);
 }
 
-/** Unit boundaries never depend on the library type -- only the kind does. A tree
- *  typed `movie` keeps every unit, including one holding a season folder, and a tree
- *  typed `series` emits no movie at all; `mixed` is the structure-driven default. */
+/** In a `mixed` or `movie` library the structure decides the unit boundaries and the type
+ *  decides only the kind. A `series` library decides the shape itself, as Jellyfin and Plex
+ *  do: every folder directly under the root is one show holding everything below it, and a
+ *  folder that only sorts shows is walked through. Loose root videos stay units of their own. */
 export function titleUnits(files: FoundFile[], type: LibraryType = "mixed"): TitleUnit[] {
   const out: TitleUnit[] = [];
-  walkContainer(indexFiles(files), "", out);
+  const index = indexFiles(files);
+  if (type === "series") {
+    walkSeries(index, "", out);
+    return out;
+  }
+  walkContainer(index, "", out);
   if (type === "mixed") return out;
   return out.map((unit) => ({ ...unit, kind: type }));
 }

@@ -845,7 +845,7 @@ test("a smart job stores selected addon subtitles beside the completed episode",
     } }, { kind: "episode", title: "Show", season: 1, episode: 1 });
     await waitFor(queue, () => queue.list()[0].status === "completed" || queue.list()[0].status === "failed");
     assert.equal(queue.list()[0].status, "completed", queue.list()[0].error);
-    assert.match(await readFile(path.join(downloads, "Show", "01 serie", "01.cs.vtt"), "utf8"), /WEBVTT[\s\S]*00:00:01\.000[\s\S]*Ahoj/);
+    assert.match(await readFile(path.join(downloads, "Show", "01 serie", "Show - S01E01.cs.vtt"), "utf8"), /WEBVTT[\s\S]*00:00:01\.000[\s\S]*Ahoj/);
   } finally {
     await queue.stop(); server.close(); await rm(directory, { recursive: true, force: true });
   }

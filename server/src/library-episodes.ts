@@ -52,7 +52,8 @@ function spread<T>(items: T[], limit: number): T[] {
 export function diskEpisodes(files: string[], limit = 40): DiskEpisode[] {
   const found: DiskEpisode[] = [];
   for (const file of files) {
-    const numbers = numberedEpisode(file);
+    // Every file here belongs to one series unit, so the numbering a whole show writes counts.
+    const numbers = numberedEpisode(file, { loose: true });
     if (!numbers) continue;
     const title = episodeTitle(file);
     found.push({ ...numbers, ...(title ? { title } : {}) });

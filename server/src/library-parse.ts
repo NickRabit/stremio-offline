@@ -365,6 +365,8 @@ function variantKey(value: string): string {
     .normalize("NFD")
     .replace(/\p{M}/gu, "")
     .toLowerCase()
+    // " & " is the word "and", so the two spellings of one name dedupe to one variant.
+    .replace(/ & /g, " and ")
     .replace(/[^\p{L}\p{N}\s]/gu, " ")
     .replace(/\s+/g, " ")
     .trim();

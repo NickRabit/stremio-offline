@@ -603,6 +603,33 @@ test("a wrong kind or a year off by more than two is never auto-bound", async ()
   } finally { await wrongYear.close(); }
 });
 
+test("binding a series removes the automatic rows and proposals inside it, keeping a person's", async () => {
+  const show: TitleUnit = {
+    key: "Show",
+    kind: "series",
+    relative: "Show",
+    sampleFiles: ["Show/01 serie/01.mkv", "Show/01 serie/02.mkv"],
+  };
+  const h = await harness({
+    units: async () => [show],
+    search: async () => [{ id: "tt1", type: "series", name: "Show" }],
+    metadata: async (_addons, _type, id) => ({ id, type: "series", name: "Show" }),
+  });
+  try {
+    // What the folders inside the show used to be units for: the scan's own rows and proposal.
+    h.store.meta["Show/01 serie"] = { type: "series", id: "tt-old", source: "scan", locked: false };
+    h.store.suggestions["Show/01 serie"] = { type: "series", id: "tt-old", name: "Show", score: 90 };
+    // A row a person made inside the show stays.
+    h.store.meta["Show/01 serie/02.mkv"] = { type: "series", id: "tt-old", source: "user", locked: true };
+    await h.scan.start();
+    await waitFor(() => h.scan.snapshot().status === "completed");
+    assert.equal(h.store.meta.Show?.id, "tt1");
+    assert.equal(h.store.meta["Show/01 serie"], undefined);
+    assert.equal(h.store.suggestions["Show/01 serie"], undefined);
+    assert.equal(h.store.meta["Show/01 serie/02.mkv"]?.id, "tt-old", "a person's own row is not the scan's to drop");
+  } finally { await h.close(); }
+});
+
 test("a namesake series is bound when its episodes are the ones on disk", async () => {
   const blue = {
     key: "Blue",
