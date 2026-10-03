@@ -1,11 +1,16 @@
 # Automatic downloads for followed series
 
-Status: proposal, not implemented. Research date: 2026-10-03.
+Status: proposal, not implemented. Research and review date: 2026-10-03.
+
+This document refines the [Follow show delivery contract](roadmap-delivery-spec.md#follow-show).
+Discovery-only remains the default; the download behavior below applies after
+explicit opt-in. The delivery contract owns product scope and delivery order.
 
 ## Recommendation
 
-Build a small owner-bound subscription service above the existing lazy download
-queue. Refresh episode metadata separately from looking for a usable source.
+Build a small owner-bound discovery service with optional automatic downloads
+above the existing lazy download queue. Refresh episode metadata separately from
+looking for a usable source.
 Persist episode decisions independently of queue history. Start with future
 episodes over HTTP, explicit language/subtitle rules and a pinned destination.
 Raw torrent automation should follow only after the lazy resolver supports it.
@@ -28,15 +33,63 @@ events. The [Stremio metadata contract](https://github.com/Stremio/stremio-addon
 provides video IDs and release dates, with season/episode numbers when applicable.
 An air date is scheduling information, not proof that a usable source exists.
 
-An external Sonarr installation remains an option for users who already operate
-indexers and download clients. It would add a separate management stack and would
-not directly reuse our addon source selection or account permissions. A cron job
-calling the bulk endpoint is a useful disposable prototype, but is not a reliable
-product feature: it lacks durable decisions, recovery and user-facing state.
+### Relationship to the planned Sonarr/Radarr bridge
+
+The repository already proposes an [HTTP Sonarr/Radarr bridge](arr-integration-spec.md)
+and has a protocol probe, not a shipped integration. It explicitly reuses installed
+addons, owner permissions and the download queue through Newznab/SAB-compatible
+adapters. The bridge is therefore a related delivery path, not an unrelated external
+stack. Its specification remains authoritative for its protocol and lifecycle.
+
+Native following is P2a in the roadmap; the bridge is P3. Keep that order because
+household users need discovery on Home and optional downloads without configuring
+another application, machine credentials, shared staging mounts and import rules.
+Sonarr can own monitoring and release selection for users who want it. However,
+the first bridge milestone supports interactive and *arr-initiated search commands;
+it explicitly defers continuous release discovery/RSS. It does not by itself replace
+native discovery. Choosing bridge-only would defer the household feature and require
+bringing that later release-discovery milestone forward.
+
+| Responsibility | Native following | Sonarr through the bridge |
+| --- | --- | --- |
+| Monitoring and selection | Follow service discovers episodes; lazy resolver applies saved rules | Sonarr owns monitoring/quality policy and requests a specific release; initial bridge offers search, not a continuous feed |
+| Destination | Explicit local library | Integration staging, then *arr imports/renames the final file |
+| Durable identity | Owner + episode + destination, with an intent ledger | Integration + category + release + attempt; intentional re-download may need a new attempt ID |
+| Shared services | Owner-scoped metadata, source access, outbound limits, admission and transfer recovery | The same primitives, with integration rights intersected with the owner's rights |
+
+Keep discovery independent of download intent so a later bridge feed can reuse its
+bounded metadata refresh and normalized episode identities. Episode discovery is
+not release discovery: an RSS milestone still needs source fingerprints, stable
+release first-seen times and release-level deduplication. Do not build a second HTTP
+downloader or silently substitute another release for the one *arr selected.
+
+Proposed coexistence rule for the later bridge milestone: use one download authority
+per series and intended final library: native automation
+or Sonarr. Native discovery-only can coexist with Sonarr. Bridge setup must explain
+this choice and record externally managed series/targets where known; enabling
+native automation for a known external assignment is rejected until that assignment
+is explicitly changed. If the bridge cannot know Sonarr's monitoring set or final
+import target, setup must require that assignment from the administrator rather
+than claim automatic overlap detection. Do not enable a second automatic discovery
+path for an unmapped assignment. Existing accepted jobs retain their owner and
+lifecycle when management changes.
+
+Share queue admission infrastructure, but preserve library versus staging destination
+identity and native intent versus bridge attempt semantics. A native file must not
+silently satisfy an *arr-selected release, and removing bridge history must not
+create a native skip. Web history cleanup must retain unacknowledged bridge attempts,
+as the bridge contract requires. Add coexistence tests for discovery-only plus
+Sonarr, a conflicting automatic assignment, separate destinations and bridge import
+acknowledgement before enabling both integrations in one instance.
+
+A cron job calling the bulk endpoint remains only a disposable prototype: it lacks
+durable decisions, recovery and user-facing state.
 
 ## Existing code and actual gaps
 
-Verified against origin/main at `8f09b4c4`; recheck symbols before implementation.
+Reverified against origin/main at `5ecfd67` after external review; recheck symbols
+before implementation. The change since `8f09b4c4` only affects screenshot tests
+and baselines, not these application paths.
 
 - `server/src/routes/downloads.ts::registerDownloadRoutes` validates bulk source,
   audio and subtitle choices, snapshots destination settings and creates lazy jobs.
@@ -52,6 +105,13 @@ Verified against origin/main at `8f09b4c4`; recheck symbols before implementatio
   scope this check by owner, media type or destination. It does not prove that an
   episode is already on disk. Reusing it unchanged would permit repeated downloads
   after completion and wrongly suppress some independent users' requests.
+- `DownloadQueue.add` and `addDebrid` also have global duplicate checks, by HTTP
+  URL and `sameTorrent` respectively. For two owners receiving the same source,
+  these checks can suppress an otherwise permitted request; `add` can return
+  `err.sourceDownloaded` based on a completed file in a library the caller cannot
+  see. This is an existing isolation defect, not merely a missing follow feature.
+  Fix all three admission paths in a separate focused prerequisite with two-owner
+  regressions; retain collision protection without exposing private activity.
 - `server/src/index.ts::queue.setResolver` filters candidates to `stream.url`;
   `DownloadQueue.resolve` requires a URL. Manual `add` can enter `addDebrid`, but
   lazy raw-torrent resolution is not implemented. An addon returning a ready
@@ -61,10 +121,20 @@ Verified against origin/main at `8f09b4c4`; recheck symbols before implementatio
   `cachedMeta` without one can consult all addons. Its current cache lasts six hours.
   On current main, supplying a viewer also enables interactive outbound retries;
   separate authorization scope from interactive priority before using it on a timer.
-- `MetaItem.videos` is `Array<Record<string, unknown>>`; introduce a validated
-  episode representation, including the existing `episode ?? number` compatibility
-  convention where unambiguous. `metadata` fills missing fields rather than merging
-  episode lists from every provider, so choose and retain metadata provenance.
+  Always pass `store.prefs(ownerUserId).uiLanguage` explicitly; omitted language
+  falls back to the first account through `prefsOf()`. Read current owner settings
+  per check and retain owner/grant/language scoping in refreshed cache entries.
+- `MetaItem.videos` is `Array<Record<string, unknown>>`, but
+  `library-match.ts::episodesFromMeta` already normalizes episode fields and
+  `episodeKey` keys standard numbered episodes. Extract/extend these shared helpers
+  rather than writing another parser. Preserve `episode ?? number`,
+  `released ?? firstAired` and existing name/description aliases. The current parser
+  accepts finite numbers and date strings; follow scheduling additionally needs
+  integer/range and date validation, original video ID, provider provenance and
+  ambiguity detection. Its default 1,000-entry truncation must be explicit and
+  resumable for discovery, not silently lose later episodes. `episodeKey` is usable
+  for verified standard numbering, not proof that different providers agree.
+  `metadata` fills missing fields rather than merging provider episode lists.
 - Library parsing and metadata bindings can help identify existing episodes, but
   `episodes.json` is metadata, not an authoritative inventory of downloaded files.
 - `LibraryAutoScan` demonstrates bounded background lifecycle management; it is
@@ -73,20 +143,26 @@ Verified against origin/main at `8f09b4c4`; recheck symbols before implementatio
 
 ## User behavior for the first release
 
-On a series detail, offer an action to automatically download new episodes. Its
-form reuses the bulk selection controls and adds the start boundary and destination.
+On a series detail, following defaults to discovery-only, with new episodes shown
+on Home and no queue jobs. Enabling automatic downloads is a separate action with
+current download permission and explicit source/destination choices. Its form
+reuses the bulk selection controls and adds the start boundary and destination.
+The MVP covers standard numbered episodes; season packs, absolute anime numbering,
+date-based episodes and specials are outside this first release.
 All interface strings must be catalogue keys in both English and Czech. Reuse
 `SeriesDownloadDialog`, `SaveTargetDialog` and the documented UI conventions
 rather than introducing a separate form system.
 
-Default to episodes released after activation; include later seasons, exclude
+For automatic downloads, default to episodes released after download opt-in, not
+the earlier discovery-only follow date; include later seasons, exclude
 specials, and never download the entire historical catalogue on activation.
 Offer an explicit starting episode as an alternative, with a preview of the
 currently eligible missing episodes before saving. A future follow can be saved
 before any episode airs. If initial metadata cannot be read, keep setup pending
 and do not silently establish an empty baseline.
 
-Store the activation instant and the initial episode snapshot. Every refresh
+Store the download opt-in instant and its initial episode snapshot. Discovery-only
+records retain their own creation time; enabling downloads previews any catch-up. Every refresh
 re-evaluates all known IDs against the start boundary, including IDs discovered
 late. A valid release date before activation remains historical even if newly
 added to the provider. Future-dated episodes wait. Invalid or absent dates require
@@ -103,7 +179,12 @@ rule-based destination after a delay. Current main already supports
 the timeout instead of redirecting. Reuse that flag and translate this failure
 into a subscription requiring destination repair; do not repeatedly requeue it.
 
-Default source strategy is addon priority. Show the existing audio modes honestly:
+For a new automatic-download policy, explicitly seed the reused controls with
+`sourceStrategy: "priority"`. `SeriesDownloadDialog` currently defaults to
+`"largest"`; keep that default for existing manual bulk downloads and allow the
+follow caller to supply its own initial policy. Editing an existing follow restores
+its saved choice, including `"largest"`, rather than resetting it.
+Show the existing audio modes honestly:
 strict verifies tracks, listed can trust addon language declarations, preferred
 can accept other languages. Preserve the selected mode in the subscription.
 Fallback in the first release has the same immediate semantics as bulk downloads;
@@ -141,7 +222,8 @@ separate from preferences and ephemeral queue history. It is single-server state
 multiple processes sharing the data directory are outside this first design.
 
 Subscription fields: ID, ownerUserId, metadata provider/namespace and series ID,
-start mode/boundary, initial snapshot, specials policy, selection snapshot,
+start mode/boundary, initial snapshot, autoDownload flag, specials policy,
+selection snapshot (when downloads are enabled),
 resolved destination, enabled state, createdAt, lastCheckedAt, lastSuccessfulCheckAt,
 nextCheckAt, configuration revision and last error code.
 
@@ -167,12 +249,16 @@ Deduplication has three distinct layers:
    request attention rather than generating another copy. Never disclose another
    account's private library or queue activity to justify a decision.
 
+Discovery records exist without download intents. Persist a download intent only
+when automatic downloads are enabled and the episode is eligible. Keep a reserved
+intent distinct from a durably accepted queue job.
+
 Reserve the intent in the ledger, persist the idempotency key on the job, then link
 its ID back to the ledger. Startup reconciliation repairs the gap after a crash at
 any point. Completion evidence must reach durable follow state before completed
 queue history can be cleared; persist an acknowledgement or durable completion
 event for that handshake. Do not claim two independent JSON writes are a transaction.
-Queue integration must extend both `add` and `addPending`: a manual single-episode
+Queue integration must cover `add`, `addDebrid` and `addPending`: a manual single-episode
 job currently has `media.id`, season and episode but no `source.videoId`. Resolve a
 shared canonical episode key where possible and propagate explicit provider/video
 identity through the manual request where it is missing. Keep unknown/contradictory
@@ -190,6 +276,29 @@ identity and completion evidence, durably settle both stores, and only then allo
 execution and history cleanup. A file merely existing is not sufficient evidence.
 A corrupt follow ledger must stop automation and surface recovery, never start empty.
 
+### Removal and recovery protocol
+
+`DownloadQueue.remove()` has no removal hook today. Add an awaited pre-removal
+boundary or a shared removal service that every authorized removal path uses,
+including administrator removal of another user's automatic job. Serialize it
+against admission, retry and completion for that intent. Before queue mutation,
+persist a tombstone with intent key, job ID, reason and revision: user removal of
+an unfinished automatic job means skipped; acknowledged completed-history cleanup
+means completed. Preserve tombstones independently of queue history. A failed
+ledger write refuses removal and leaves the queue row intact.
+
+After the tombstone is durable, remove/cancel the queue job. A crash before queue
+removal leaves a recoverable cancellation that startup finishes before pumping;
+a crash after removal retains the same skip. If completion wins the race, preserve
+its verified completion evidence and file rather than making it downloadable again.
+A crash after intent reservation but before acceptance leaves a nonterminal reserved
+intent with no tombstone: only this verified case may be admitted again under the
+same key. A previously accepted job that disappears without a removal/completion
+record is unresolved and requires reconciliation or attention, not blind requeueing.
+History cleanup requires durable completion acknowledgement before deleting rows.
+Explicit user retry/reset advances the tombstone revision under the same lock;
+stale removals and scheduler results cannot undo it.
+
 Shared-destination collisions across owners need serialized path admission and a
 recheck of accessible files when execution starts; sharing another owner's job is
 not necessary for the first release.
@@ -198,43 +307,70 @@ not necessary for the first release.
 
 Proposed defaults, to tune from real addon latency and NAS load:
 
-- Refresh followed-show metadata every six hours, with jitter; decrease to daily
-  when no near-term episode is known. Refresh ended shows weekly because metadata
-  can change. Do not rely solely on the series being labelled ended.
+- Follow the delivery contract: refresh metadata once per enabled show per 24 hours,
+  staggered across the day. A later adaptive six-hour interval near release dates
+  is a tuning option, not a conflicting MVP default. Keep checking ended shows
+  because metadata can change. Metadata failures retain the last successful state
+  and retry after 15 minutes, one hour, then six hours, respecting longer Retry-After.
 - For a newly eligible episode, try once, then after roughly 1 hour, 6 hours and
   24 hours; subsequently daily up to 30 days and weekly afterwards. Keep it visible
-  as waiting; do not silently abandon it. User-triggered checks are rate limited.
+  as waiting; do not silently abandon it. A user-triggered check coalesces with an
+  in-flight check and observes the delivery contract's one-minute cooldown.
 - Persist nextCheckAt and nextAttemptAt; on restart perform one bounded catch-up,
   not every missed timer tick. Reconcile the whole eligible set, not just episodes
   newer than the latest seen episode, so gaps and delayed metadata are recovered.
-- Serialize discovery initially and limit pending automatic admissions (for example,
-  20 globally). Give manual work priority and drain a season release incrementally.
+- Serialize discovery initially (within the delivery contract's maximum of two
+  metadata checks). Process at most 20 new intents per show per pass with a durable
+  continuation cursor, and cap outstanding automatic admissions at 20 globally.
+  Give manual work priority and drain a season release incrementally.
   The queue remains responsible for transfer concurrency and disk pressure.
 - Respect the outbound host guard and Retry-After. Bound probes through the current
-  selection budget. Cache refresh policy must agree with metadata scheduling;
-  a manual refresh must not misleadingly promise fresh results from a stale cache.
+  selection budget. Add an explicit freshness option, separate from viewer and
+  interactive priority: a due metadata check bypasses the six-hour metadata cache,
+  coalesces identical authorized in-flight work and updates the scoped cache.
+  A due source retry bypasses the five-minute stream cache at lazy resolution;
+  it does not fetch streams for every discovered episode. A rate-limited Check now
+  refreshes metadata and marks relevant waiting intents to request fresh streams
+  when admitted, including bypass of cached empty results. If admission is delayed,
+  say so rather than claiming sources were already checked. Deduplicate refreshes
+  per authorized scope and honor host cooldowns; freshness never bypasses permissions,
+  circuit breakers or rate limits. Routine browsing may keep its existing cache.
 
-Discovery only produces intents and lightweight lazy jobs. It must not ffprobe
-all episodes every tick. Source resolution runs with a bounded budget when admitted.
-A structured outcome must distinguish not-yet-available from provider/network
-failure, permission loss, invalid settings and storage trouble. Existing
-`SourceError` cannot reliably express all of these through message parsing.
+Discovery records episodes; opt-in automation reserves intents and admits lightweight
+lazy jobs. Neither path may ffprobe all episodes every tick. Source resolution runs with a bounded budget when admitted.
+Extend the existing `download-policy.ts::classifyFailure` contract rather than
+introducing a parallel error taxonomy. It already declares transient/source/storage/
+pause classes and recognizes structured `HttpSourceError` and `StorageError`, with
+message parsing as a fallback. The narrower gap is that `resolve()` throws a
+`SourceError` for an absent matching source, and `classifyFailure` classifies it as
+a source failure, ending the attempt when there is no selected stream to replace.
+Add a typed resolution reason for not-yet-available and preserve typed provider,
+authentication, configuration and storage causes through addon/resolver boundaries.
+The follow policy maps unavailable to a delayed retry and actionable configuration
+or permission problems to attention/pause; transport retries keep the existing
+bounded transfer policy. Carry stable reason codes and catalogue keys, never infer
+these decisions from English text.
 Retry must reuse the existing failed job through a controlled `queue.retry(jobId)`
 path after checking eligibility; repeated `addPending` calls create failed copies.
-If the job is genuinely missing, re-admit through the stable intent key after
-reconciliation. A user skip must be durable before queue removal. Changing rules
-applies to future intents; accepted jobs keep their snapshot unless explicitly
+If a reserved intent never reached durable acceptance, re-admit under its stable
+key only after reconciliation proves the removal/recovery protocol permits it.
+A missing previously accepted job is not sufficient evidence for re-admission.
+Changing rules applies to future intents; accepted jobs keep their snapshot unless explicitly
 retried with updated rules. Reject stale outcomes from an earlier revision.
 A cancelled attempt, a reconfigured follow and an old in-flight refresh must not
 race into a new job: recheck enabled state and configuration revision after awaits.
 
 ## Permissions and operational limits
 
-Every subscription has a real owner. Check current download permission, addon
-grants and destination visibility before metadata/source access, admission and
+Every subscription has a real owner. Check current account/content grants before
+discovery. Automatic downloads additionally require current download permission,
+source grants and destination visibility before source access, admission and
 execution, and again after network awaits. Never impersonate the first account.
-Disabling or deleting an account stops its automation. Revoking an addon/library
-pauses affected work; it must not broaden access or choose another destination.
+Disabling or deleting an account stops its automation. Revoked download permission
+pauses downloads while permitted discovery-only checks may continue; revoked content
+rights stop the affected discovery too. Child accounts cannot enable automatic
+downloads under the delivery contract. Revoking an addon/library pauses affected
+work; it must not broaden access or choose another destination.
 
 Bound subscriptions per user, outstanding automatic intents and per-run work;
 expose administrator limits without introducing a billing/quota subsystem. Do not
@@ -254,16 +390,25 @@ settings import must not silently activate downloads under a different owner.
 
 ## Implementation slices and validation
 
-1. Durable follow model, episode normalization, inventory reconciliation and queue
+0. Fix the existing cross-owner admission defect across `add`, `addDebrid` and
+   `addPending` separately, with shared-source/private-library regression coverage.
+1. Durable follow model, shared episode normalization, inventory reconciliation and queue
    idempotency/completion handshake. Domain tests cover concurrent admission,
    completion-history cleanup, file deletion, skips, inaccessible libraries,
-   provider aliases and every crash boundary.
+   provider aliases and every crash boundary, including both sides of tombstone
+   persistence and queue removal, completion racing removal, and an unexplained
+   missing accepted job. Assert it cannot be automatically recreated.
 2. Owner-bound scheduler and structured source outcomes. Fake-clock tests cover
    future and invalid dates, late metadata, changed dates, outages, restart catch-up,
    bounded season batches, retries, pause/configuration races and revocation during
-   an awaited request. HTTP sources only, including ready debrid URLs.
+   an awaited request. Test explicit owner language, due-check cache bypass,
+   empty stream results followed by an available source, request coalescing and
+   preserved host cooldowns. Extend the existing failure-classification tests.
+   HTTP sources only, including ready debrid URLs.
 3. Localized detail form and followed-series management. API tests prove isolation
-   between two users and cross-owner same-video behavior. A small Docker e2e flow
+   between two users and cross-owner same-video behavior. Verify that discovery-only
+   creates no jobs, a new follow defaults to priority, manual bulk still defaults
+   to largest, and editing restores the saved policy. A small Docker e2e flow
    uses a controllable addon: discover, no matching source, later source, one file,
    restart, no duplicate. Run visual verification once functional behavior is stable.
 4. Optional extensions: language grace period, real quality/size profiles, explicit
@@ -277,7 +422,8 @@ changes documentation only; no application behavior or version changes are made.
 
 ## Decision before implementation
 
-Recommended first scope: future episodes plus an explicit starting episode,
+Recommended first scope: discovery-only by default with opt-in downloads of
+future episodes or an explicit starting episode,
 HTTP sources, current audio/subtitle rules, concrete destination, pause/skip,
 visible waiting reasons and no upgrades or automatic re-download after deletion.
 The primary product choice to revisit is whether delayed Czech audio is essential
@@ -297,3 +443,12 @@ clear are administrator-only through `server/src/roles.ts::roleMiddleware`, even
 though the route bodies do not repeat the guard. Preserve those restrictions.
 Provider payload compatibility still needs fixture and real-addon checks during
 implementation; no live addon credentials or production downloads were used here.
+
+External review was also checked against the current code and the existing *arr
+and delivery specifications. This revision documents the bridge relationship and
+coexistence boundary, strengthens the removal protocol, flags all three admission
+paths, extends existing normalization/error contracts and defines freshness,
+owner-language and form-default behavior. The earlier text already required a
+skip before removal; the missing detail was an enforceable boundary and crash
+recovery, not a requirement to re-add every missing job. Existing classification
+is structured; preserve it and add the missing resolution reasons.
