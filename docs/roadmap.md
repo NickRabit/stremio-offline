@@ -150,6 +150,8 @@ episodes are an additive row, not a reason to block the home screen. See the
 
 ### Follow show
 
+Design proposal: [Automatic downloads for followed series](follow-show-analysis.md).
+
 Let a user follow a series and optionally download new episodes automatically.
 Run a daily check and enqueue new episodes as lazy jobs; the lazy-job plumbing
 exists, but the watch list and scheduler do not. Torrent sources should enqueue
