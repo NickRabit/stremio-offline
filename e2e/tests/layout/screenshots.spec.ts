@@ -96,13 +96,13 @@ test.describe("screenshots", () => {
     // the whole page two pixels taller. A mask does not help: it is drawn over the element's
     // own box, so it changes size along with the text. The baseline gets a fixed path instead.
     await page.locator(".library-admin-root, .storage-path code").evaluateAll((paths) => paths.forEach((path) => { path.textContent = "/library"; }));
+    // Inline code in two paragraphs leaves the page on a fractional height (.375 px), and the
+    // CI runner rounded the full-page shot up and down on alternate takes, so it never settled.
+    await page.locator(".settings-page").evaluate((element) => { element.style.height = `${Math.ceil(element.getBoundingClientRect().height)}px`; });
     await expect(page).toHaveScreenshot("settings.png", {
       fullPage: true,
       // Version, uptime and free disk space are different on every run.
       mask: [page.locator(".diagnostics-section"), page.locator(".storage-path")],
-      // Even with the fixed path, the masked row came out 42 and 44 px on alternate shots on
-      // the CI runner, so the page never settled. Its content is masked; only its size counts.
-      style: ".storage-path{height:42px;overflow:hidden}",
     });
   });
 });
