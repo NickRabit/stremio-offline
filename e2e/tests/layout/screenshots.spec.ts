@@ -100,6 +100,9 @@ test.describe("screenshots", () => {
       fullPage: true,
       // Version, uptime and free disk space are different on every run.
       mask: [page.locator(".diagnostics-section"), page.locator(".storage-path")],
+      // Even with the fixed path, the masked row came out 42 and 44 px on alternate shots on
+      // the CI runner, so the page never settled. Its content is masked; only its size counts.
+      style: ".storage-path{height:42px;overflow:hidden}",
     });
   });
 });
