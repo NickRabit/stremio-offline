@@ -66,6 +66,9 @@ Shipped in `main`; implementation details live in the linked guides.
   Real-Debrid torrent hand-off. [Addons and downloads](downloads.md).
 - **Addons**: scoped search, scheduled/manual manifest refresh, storage rules
   and downloaded-title language. [Addons and downloads](downloads.md).
+- **Search**: search while typing, title-match order of loaded results,
+  per-account history that can be cleared or turned off, and suggestions from
+  recent searches and titles already seen. [Enhanced search](enhanced-search-spec.md).
 - **Trailers**: Cinemeta/TMDB, in-app with secure mode off and an external tab
   with it on. [Trailers](trailers.md).
 - **Languages**: ten in both web and desktop clients, with per-account
@@ -164,13 +167,6 @@ to discovery only; automatic downloads are a separate opt-in. See
 Optional later: a night-only window, a speed limit, and a notice when the queue
 drains. The in-app notice is shared with the debrid waiting state; push out of
 the browser is later.
-
-### Search
-
-Live input (~400 ms debounce), recent queries, suggestions from already loaded
-catalogs, and an optional rank-by-title-match. Per-account history must be
-clearable and its storage can be disabled in Settings. See the proposed
-[research and implementation specification](enhanced-search-spec.md).
 
 ### Desktop
 
