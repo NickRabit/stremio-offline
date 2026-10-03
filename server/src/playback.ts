@@ -10,6 +10,7 @@ import { PlayerPreviews } from "./player-previews.js";
 import { PlayerSidecars } from "./player-sidecars.js";
 import { INTERNAL_TOKEN } from "./auth.js";
 import { log } from "./logger.js";
+import { ConversionMonitor, sourcePace } from "./conversion-pace.js";
 import { pickByLanguage } from "./language.js";
 import { ffmpegPath, trackMedia } from "./media-tools.js";
 import { playlistArgs, probe, type MediaInfo, type Track } from "./probe.js";
@@ -1043,9 +1044,17 @@ export class PlaybackManager {
     // FFmpeg places the fMP4 init file next to the playlist by cutting the playlist path at its
     // last "/". A Windows path has none, so there init.mp4 landed in FFmpeg's working folder and
     // the start waited for it in vain. Working in the output folder puts it where it belongs.
-    const child = trackMedia(spawn(ffmpegPath(), args, { cwd: directory, stdio: ["ignore", "ignore", "pipe"] }));
+    const child = trackMedia(spawn(ffmpegPath(), args, { cwd: directory, stdio: ["ignore", "pipe", "pipe"] }));
     session.process = child; session.hardware = hardware; session.error = undefined;
     const generation = session.generation;
+    const monitor = new ConversionMonitor({
+      id: session.id, generation, offset, mode: session.mode, hardware, pid: child.pid,
+      source: () => sourcePace.read(session.id),
+    });
+    this.monitors.set(session.id, monitor);
+    monitor.start();
+    child.stdout?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk: string) => monitor.push(chunk));
     let stderr = ""; let finished = false; let exitCode: number | null = null; let handedToClient = false;
     child.stderr?.on("data", (chunk) => { stderr = `${stderr}${String(chunk)}`.slice(-16_000); });
     child.once("error", (error) => { finished = true; session.error = error.message; });
@@ -1055,6 +1064,8 @@ export class PlaybackManager {
       // Our own SIGTERM comes back as a plain exit, and taking it for a failure would leave the
       // session carrying an error that never happened -- and the log claiming one.
       const asked = this.stopping.has(child);
+      monitor.finish(asked || signal !== null ? "stopped" : code === 0 ? "finished" : "failed");
+      if (this.monitors.get(session.id) === monitor) this.monitors.delete(session.id);
       if (code !== 0 && signal === null && !asked) session.error = describeFailure(stderr, code);
       // A conversion that died after the client attached would otherwise stay silent until
       // the player reports a stall, with no clue whether the source or FFmpeg was at fault.
@@ -1110,7 +1121,7 @@ export class PlaybackManager {
     // VAAPI CQP and libx264 CRF are different modes. Compatibility with the single original
     // value stays, but new installs can tune them independently.
     const vaapiQp = process.env.VAAPI_QP ?? crf;
-    const args = ["-hide_banner", "-loglevel", "warning", "-nostdin"];
+    const args = ["-hide_banner", "-loglevel", "warning", "-nostdin", "-progress", "pipe:1"];
     // -ss before -i seeks over HTTP Range, so nothing before the wanted position is transferred.
     // With a copied video the audio must start on a keyframe too (noaccurate_seek): trimming the
     // audio exactly would leave the video ahead, and the player answers that gap with drifting sync.
@@ -1260,6 +1271,10 @@ export class PlaybackManager {
   /** FFmpeg answers SIGTERM by exiting 255 without a word, which is indistinguishable from a
    *  conversion that died on its own unless we remember that we asked. */
   private stopping = new WeakSet<ChildProcess>();
+  /** The pace of the run each session is playing from, for a player that reports a stall. */
+  private monitors = new Map<string, ConversionMonitor>();
+
+  pace(id: string) { return this.monitors.get(id)?.snapshot(); }
 
   private kill(session: Session): Promise<void> {
     const child = session.process;

@@ -41,6 +41,32 @@ between.
 `LOG_LEVEL=DEBUG` adds request and conversion detail, and the scores that
 decided a library title was left unmatched.
 
+## When playback keeps stalling
+
+A stall means the player emptied its buffer faster than the server filled it.
+For a conversion (remux or transcode) the server measures its own pace every
+ten seconds, and when it produces less than about one second of film per second
+it logs `The conversion is falling behind playback` (`WARN`, repeated at most
+once a minute). The same figures are attached under `server` to every report
+the player sends about that session, such as `Playback keeps stalling`:
+
+| Field | Meaning |
+| --- | --- |
+| `pace` | Seconds of film produced per second over the last check. Below 1 the player will catch up and stall. |
+| `position` | How far into the film the conversion has got. |
+| `lead` | `position` minus where the player is: how far ahead the server is. |
+| `sourceMBps` | How fast the source sent data to FFmpeg. |
+| `waitingOnSource` | Share of the proxy's time spent waiting for the source rather than for FFmpeg to take the data, in percent. |
+| `ffmpegCpu` | FFmpeg's CPU use, 100 per fully busy core. Linux only. |
+| `load` | System load per core. |
+| `likelyCause` | `source` (the source sends too slowly), `ffmpeg` (FFmpeg cannot keep up: CPU, or a disk too slow for the segments), `unclear`, or `keeping up`. |
+
+When a conversion ends, `Conversion ended` sums up the whole run. It is `INFO`
+when the run fell behind at least once, otherwise `DEBUG`.
+
+`bufferFullError` from hls.js is the opposite case: the browser has no room
+left for more of a high-bitrate stream. The player trims and carries on.
+
 ## When an addon stops answering
 
 Addon requests — catalog, metadata, streams, subtitles, artwork — go through a
@@ -135,6 +161,7 @@ losing the accounts as well. Per-library match history lives beside it in
 | --- | --- |
 | Downloads fail to write | [Install on Synology → When writes fail](install-synology.md#when-writes-fail) |
 | Transcode pegs the CPU | [Hardware acceleration](hardware-acceleration.md) |
+| Playback keeps stalling | [When playback keeps stalling](#when-playback-keeps-stalling) |
 | The NAS freezes during playback | [Keeping the NAS responsive](install-synology.md#keeping-the-nas-responsive) |
 | `unknown libva error` | [When the driver does not start](hardware-acceleration.md#when-the-driver-does-not-start) |
 | A stream is listed but will not play | A raw torrent needs a Real-Debrid token, or it is still leeching on their side; see [Real-Debrid](downloads.md#real-debrid-and-other-debrid-services) |

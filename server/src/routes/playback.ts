@@ -6,6 +6,7 @@ import type { AirPlayAccess } from "../airplay-access.js";
 import { INTERNAL_TOKEN } from "../auth.js";
 import { normalizeLanguage } from "../language.js";
 import type { Viewer } from "../libraries.js";
+import { sourcePace } from "../conversion-pace.js";
 import { log } from "../logger.js";
 import { mediaChildPath, mediaResources, openMediaUrl, ResourceError, safeSourceText, type ResourceOwner } from "../media-resources.js";
 import { contentOf } from "../revocation.js";
@@ -23,7 +24,7 @@ export interface PlaybackDeps extends RouteContext {
   airplayAccess: AirPlayAccess;
   airplayRequest(req: express.Request): ReturnType<AirPlayAccess["authorize"]>;
   answerHeaders(upstream: Response): Record<string, string>;
-  countBytes(res: express.Response, meta: TrafficMeta, session?: string): void;
+  countBytes(res: express.Response, meta: TrafficMeta, session?: string | (() => string | undefined)): void;
   httpSourceOf(req: express.Request): Promise<StreamItem>;
   internalMediaRequest(req: express.Request): boolean;
   libraryTarget(value: string, viewer: Viewer | undefined): Promise<string>;
@@ -216,7 +217,12 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
       stream = { ...stream, url: child.toString(), behaviorHints: { ...stream.behaviorHints, proxyHeaders: { request: Object.fromEntries(headers) } } };
     }
     const raw = stream.url!;
-    const ownedSession = [...playbackOwners].find(([, value]) => value.resourceId === (resource.parent ?? resource.id))?.[0];
+    const findOwner = () => [...playbackOwners].find(([, value]) => value.resourceId === (resource.parent ?? resource.id))?.[0];
+    const ownedSession = findOwner();
+    // A conversion's read is opened before the route that started it has registered the session,
+    // and it lasts the whole film. Asked once up front, it would never be credited to anyone.
+    let owner = ownedSession;
+    const ownerNow = () => owner ??= findOwner();
     if (ownedSession) {
       playback.touch(ownedSession);
       const heartbeat = setInterval(() => playback.touch(ownedSession), 30_000);
@@ -227,13 +233,13 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
       // FFmpeg and AirPlay read this without a cookie, so the request names no viewer: the
       // path was resolved for a session before the resource the read follows existed.
       const target = await libraryTarget(relative, currentUser(req));
-      countBytes(res, { source: "library", provider: "knihovna", title: path.basename(relative), kind: "other" }, ownedSession);
+      countBytes(res, { source: "library", provider: "knihovna", title: path.basename(relative), kind: "other" }, ownerNow);
       return void res.sendFile(path.basename(target), { root: path.dirname(target), acceptRanges: true, dotfiles: "deny" }, (error) => {
         if (error && !res.headersSent) res.status(404).end();
       });
     }
     await validateRemoteUrl(raw);
-    countBytes(res, playbackMeta(stream), ownedSession);
+    countBytes(res, playbackMeta(stream), ownerNow);
     const cacheKey = `${resource.parent ?? resource.id}:${typeof req.params.signed === "string" ? req.params.signed : ""}`;
     const askedRange = String(req.headers.range ?? "");
     const held = req.method === "HEAD" ? undefined : rangeCache.get(cacheKey, askedRange);
@@ -362,8 +368,10 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
     let body: ReadableStream | null = upstream.body;
     for (let resumed = 0; ; ) {
       let broke: unknown;
+      let waitingSince = performance.now();
       try {
         for await (const chunk of Readable.fromWeb(body as never)) {
+          const arrived = performance.now();
           // Never more than was asked for: a source picking the transfer up runs to the end of the
           // file, and a body longer than the length already promised breaks the response itself.
           const piece = expected === undefined ? chunk as Buffer : (chunk as Buffer).subarray(0, expected - delivered);
@@ -373,6 +381,11 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
             if (kept > rangeCache.limit) keep = undefined; else keep.push(Buffer.from(piece));
           }
           if (piece.length && !res.write(piece)) await once(res, "drain");
+          // Which side this transfer waits on tells a slow source from an FFmpeg that cannot keep up.
+          const taken = performance.now();
+          const paced = ownerNow();
+          if (paced) sourcePace.note(paced, arrived - waitingSince, taken - arrived, piece.length);
+          waitingSince = taken;
           if (expected !== undefined && delivered >= expected) break;
         }
       } catch (error) { broke = error; }

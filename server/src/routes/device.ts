@@ -19,7 +19,7 @@ import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
 /** Saving a stream on the device that asked for it, without handing out the source address. */
 export interface DeviceDeps extends RouteContext {
   stats: StatsLog;
-  countBytes(res: express.Response, meta: TrafficMeta, session?: string): void;
+  countBytes(res: express.Response, meta: TrafficMeta, session?: string | (() => string | undefined)): void;
   deviceDownloadTickets: Map<string, {
     owner: ResourceOwner;
     expiresAt: number;

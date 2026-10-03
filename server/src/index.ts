@@ -14,6 +14,7 @@ import { DeviceTransfers } from "./device-transfers.js";
 import { selectDownloadSource } from "./download-selection.js";
 import { StatsLog, type TrafficEvent, type TrafficMeta } from "./stats.js";
 import { Throughput } from "./throughput.js";
+import { sourcePace } from "./conversion-pace.js";
 import { build } from "./build.js";
 import { PlaybackManager, sourceTitle } from "./playback.js";
 import { publicAddon, publicAddonRestricted } from "./security.js";
@@ -172,6 +173,7 @@ const queue = new DownloadQueue(() => store.settings().concurrentDownloads, () =
   playbackOwners.delete(id);
   airplayAccess.remove(id);
   throughput.forget(id);
+  sourcePace.forget(id);
 });
 const stats = new StatsLog();
 let libraryOpsWriting = false;
@@ -458,12 +460,13 @@ app.use("/api", (req, res, next) => {
 /** Measures how much the response actually sends and reports it to the statistics.
  * It counts at write time, so what the client asked for and then abandoned by closing
  * playback never reaches the total. */
-const countBytes = (res: express.Response, meta: TrafficMeta, session?: string) => {
+const countBytes = (res: express.Response, meta: TrafficMeta, session?: string | (() => string | undefined)) => {
   const measure = (chunk: unknown) => {
     if (typeof chunk !== "string" && !(chunk instanceof Uint8Array)) return;
     const bytes = Buffer.byteLength(chunk);
     stats.add(meta, bytes);
-    if (session) throughput.add(session, bytes);
+    const key = typeof session === "function" ? session() : session;
+    if (key) throughput.add(key, bytes);
   };
   const write = res.write.bind(res) as (...args: unknown[]) => boolean;
   const end = res.end.bind(res) as (...args: unknown[]) => express.Response;

@@ -87,7 +87,12 @@ export function registerDiagnosticsRoutes(app: express.Application, deps: Diagno
     const sent = req.body?.context && typeof req.body.context === "object" && !Array.isArray(req.body.context)
       ? req.body.context as Record<string, unknown> : {};
     const context = Object.fromEntries(Object.entries(sent).slice(0, CLIENT_LOG_KEYS));
-    log(level, `[web] ${message}`, { client: context, req: req.id, user: currentUser(req)?.username, ua: String(req.headers["user-agent"] ?? "").slice(0, 160) });
+    // A player report about a running conversion carries the server's view of the same moment:
+    // how far ahead of the player the conversion is, and whether the source or FFmpeg holds it back.
+    const pace = typeof context.session === "string" ? playback.pace(context.session) : undefined;
+    const lead = pace?.position !== undefined && typeof context.position === "number" ? Math.round(pace.position - context.position) : undefined;
+    const server = pace ? { ...pace, ...(lead !== undefined ? { lead } : {}) } : undefined;
+    log(level, `[web] ${message}`, { client: context, ...(server ? { server } : {}), req: req.id, user: currentUser(req)?.username, ua: String(req.headers["user-agent"] ?? "").slice(0, 160) });
     res.status(204).end();
   });
 
