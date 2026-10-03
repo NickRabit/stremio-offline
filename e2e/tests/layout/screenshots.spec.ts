@@ -96,15 +96,18 @@ test.describe("screenshots", () => {
     // the whole page two pixels taller. A mask does not help: it is drawn over the element's
     // own box, so it changes size along with the text. The baseline gets a fixed path instead.
     await page.locator(".library-admin-root, .storage-path code").evaluateAll((paths) => paths.forEach((path) => { path.textContent = "/library"; }));
-    // On the CI runner the masked storage row came out 42 and 44 px on alternate takes, and
-    // inline code in two paragraphs leaves the page on a fractional height that was rounded
-    // either way. The row's content is masked, so it gets a fixed size, and the page a whole one.
-    await page.locator(".storage-path").evaluateAll((rows) => rows.forEach((row) => { (row as HTMLElement).style.height = "44px"; (row as HTMLElement).style.overflow = "hidden"; }));
+    // Version, uptime, free disk space and the checkout path differ on every run. They used
+    // to be masked, but a mask is drawn at the element's box, and these boxes sit on fractional
+    // pixels (inline code in two paragraphs leaves .375 px), so on the CI runner the overlay's
+    // edge row -- and the storage row's own height -- changed between consecutive takes. The
+    // content is hidden in place instead, inside boxes of fixed whole-pixel height.
+    await page.locator(".diagnostics-section, .storage-path").evaluateAll((boxes) => boxes.forEach((box) => {
+      const element = box as HTMLElement;
+      element.style.height = element.classList.contains("storage-path") ? "44px" : `${Math.ceil(element.getBoundingClientRect().height)}px`;
+      element.style.overflow = "hidden";
+      for (const child of element.children) (child as HTMLElement).style.visibility = "hidden";
+    }));
     await page.locator(".settings-page").evaluate((element) => { element.style.height = `${Math.ceil(element.getBoundingClientRect().height)}px`; });
-    await expect(page).toHaveScreenshot("settings.png", {
-      fullPage: true,
-      // Version, uptime and free disk space are different on every run.
-      mask: [page.locator(".diagnostics-section"), page.locator(".storage-path")],
-    });
+    await expect(page).toHaveScreenshot("settings.png", { fullPage: true });
   });
 });
