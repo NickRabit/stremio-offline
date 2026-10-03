@@ -44,6 +44,8 @@ export interface UserData {
   addonOrder?: string[];
   /** Per-account library / queue browse chrome. Shape pinned in views.ts. */
   views?: Record<string, unknown>;
+  /** Per-account catalog search history and preferences. Shape pinned in search-state.ts. */
+  search?: Record<string, unknown>;
   favorites: string[];
   watchlist: Record<string, unknown>;
   progress: Record<string, unknown>;

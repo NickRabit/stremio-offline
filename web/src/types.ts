@@ -315,6 +315,16 @@ export interface DownloadsViewPrefs {
   sort: DownloadSort; direction: LibraryOrder; status: DownloadStatusFilter;
   dateField: DownloadDateField; pageSize: DownloadPageSize;
 }
+export type SearchOrder = "source" | "titleMatch";
+/** Per-account search history and preferences; `recent` is empty while saving is off. */
+export interface SearchState {
+  saveHistory: boolean;
+  liveSearch: boolean;
+  defaultOrder: SearchOrder;
+  recent: Array<{ query: string; usedAt: string }>;
+}
+export type SearchPreferences = Pick<SearchState, "saveHistory" | "liveSearch" | "defaultOrder">;
+
 export interface UserViews {
   libraries: Record<string, LibraryViewPrefs>;
   extras: Partial<Record<ExtraView, LibraryViewPrefs>>;

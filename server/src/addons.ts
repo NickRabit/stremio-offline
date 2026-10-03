@@ -180,7 +180,7 @@ export async function searchAll(addons: AddonRecord[], query: string, type: stri
     const { addon, definition } = targets[index];
     const key = `${addon.key}:${definition.type}:${definition.id}`;
     if (result.status === "rejected") {
-      log("WARN", "Addon request failed", { operation: "search", addon: addon.manifest.name, catalog: definition.id, query, reason: reasonOf(result.reason) });
+      log("WARN", "Addon request failed", { operation: "search", addon: addon.manifest.name, catalog: definition.id, reason: reasonOf(result.reason) });
       nextOffsets[key] = -1;
       return;
     }

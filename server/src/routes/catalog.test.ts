@@ -130,6 +130,20 @@ test("GET /api/searchable reports globalSearch per addon", async (t) => {
   assert.deepEqual(body.map((item) => [item.type, item.id, item.name]), [["movie", "search", "search"], ["movie", "search", "search"]]);
 });
 
+test("GET /api/search tells the browser not to store the answer", async (t) => {
+  const records = [addon("alpha", [{ type: "movie", id: "top", extra: [{ name: "search" }] }])];
+  const harness = await mount(records);
+  t.after(harness.close);
+
+  await withStubbedAddons(() => json({ metas: [{ id: "tt1", type: "movie", name: "Dune" }] }), async () => {
+    const response = await api(harness.base, "/api/search?query=dune");
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    const body = await response.json() as { items: Array<{ id: string }> };
+    assert.deepEqual(body.items.map((item) => item.id), ["tt1"]);
+  });
+});
+
 test("GET /api/meta/:type/:id falls back to the caller's uiLanguage", async (t) => {
   const harness = await mount([], { id: "tt1", type: "movie", name: "Film" });
   t.after(harness.close);

@@ -38,6 +38,32 @@ test.describe("catalog", () => {
     await expect(page.getByRole("button", { name: /Zkušební film/ })).toHaveCount(0);
   });
 
+  // The debounce fires on its own; nothing is clicked, so this also guards that the timer
+  // survives the browser's own event handling.
+  test("searches while typing, without pressing Search", async ({ page }) => {
+    await page.goto("/");
+    await page.getByPlaceholder("Hledat ve všech doplňcích naráz…").fill("Zkušební");
+
+    await expect(page.getByRole("heading", { name: "Hledání: Zkušební" })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Zkušební seriál/ })).toBeVisible();
+  });
+
+  // Only a search somebody acted on is remembered; it then comes back as a suggestion.
+  test("offers a submitted search again from the history", async ({ page }) => {
+    await page.goto("/");
+    const box = page.getByRole("combobox", { name: "Hledat ve všech doplňcích naráz…" });
+    await box.fill("Zkušební");
+    await box.press("Enter");
+    await expect(page.getByRole("heading", { name: "Hledání: Zkušební" })).toBeVisible();
+
+    await page.getByRole("button", { name: "Zrušit" }).click();
+    await box.focus();
+    const recent = page.getByRole("listbox", { name: "Návrhy" }).getByRole("option", { name: /Zkušební/ }).first();
+    await expect(recent).toContainText("Nedávné hledání");
+    await recent.click();
+    await expect(page.getByRole("heading", { name: "Hledání: Zkušební" })).toBeVisible();
+  });
+
   test("searches inside one selected catalogue", async ({ page }) => {
     await page.goto("/");
     const scope = page.getByRole("combobox", { name: "Kde hledat" });
