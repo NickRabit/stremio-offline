@@ -13,7 +13,14 @@ above the existing lazy download queue. Refresh episode metadata separately from
 looking for a usable source.
 Persist episode decisions independently of queue history. Start with future
 episodes over HTTP, explicit language/subtitle rules and a pinned destination.
-Raw torrent automation should follow only after the lazy resolver supports it.
+Deliberate proposed deviation from the delivery contract's "HTTP or Real-Debrid
+handling": the first shipping slice accepts HTTP, including ready debrid URLs
+returned by addons, but defers raw `infoHash`/magnet hand-off to Real-Debrid to the
+separate raw-torrent milestone below. Current lazy resolution cannot perform that
+hand-off. This proposal records the narrower scope; it does not claim to satisfy
+the full Real-Debrid delivery gate. Before implementation, either adopt this staged
+scope in the delivery contract or include the raw-torrent milestone before calling
+that contract complete.
 
 This is a medium-sized feature involving persistence, queue semantics and account
 isolation, rather than a timer around the bulk-download endpoint.
@@ -32,6 +39,26 @@ bounded polling of due episodes, not an assumption that an addon emits new-relea
 events. The [Stremio metadata contract](https://github.com/Stremio/stremio-addon-sdk/blob/master/docs/api/responses/meta.md)
 provides video IDs and release dates, with season/episode numbers when applicable.
 An air date is scheduling information, not proof that a usable source exists.
+
+### Viewer-oriented prior art
+
+These sources describe useful behavior, not a claim that every current app/platform
+supports the same controls. Links were checked on the review date.
+
+| Source | Observed behavior | Design implication |
+| --- | --- | --- |
+| [Plex user request](https://forums.plex.tv/t/request-to-restore-smart-episode-downloads/934312) | Users describe a previous next-N-unwatched download mode and request its return; the thread is demand evidence, not proof of present availability. | Catching up from viewing progress is distinct from downloading newly released episodes. |
+| [Netflix Download Next Episode](https://help.netflix.com/en/node/101262) | Deletes a watched downloaded episode and fetches the next over Wi-Fi on supported mobile devices. | Consider a separate progress-driven refill policy; do not copy device deletion semantics directly onto a shared NAS. |
+| [Pocket Casts auto downloads](https://support.pocketcasts.com/knowledge-base/auto-downloading-episodes/) and [archiving](https://blog.pocketcasts.com/2019/11/26/archiving/) | Download limits and archiving after playback or by episode limit; archiving preserves play status. | Keep acquisition, retained files and watched history separate. |
+| [Stremio episode notifications](https://blog.stremio.com/how-to-use-episode-notifications-in-stremio/) | The published design counts releases since the last viewing interaction, rather than all unseen historical episodes. | Discovery-only/Home is useful independently of downloads; label new-release counts separately from unwatched counts. |
+
+Historical Sonarr reports illustrate both edges we must test:
+[#7401](https://github.com/Sonarr/Sonarr/issues/7401) reports missed newly added
+episodes within a monitored season, while
+[#3619](https://github.com/Sonarr/Sonarr/issues/3619) reports historical episodes
+being downloaded after metadata changes. These are regression scenarios, not
+claims about current Sonarr defects: late metadata must neither lose an eligible
+episode nor implicitly opt the user into the entire back catalogue.
 
 ### Relationship to the planned Sonarr/Radarr bridge
 
@@ -240,7 +267,8 @@ Deduplication has three distinct layers:
 
 1. Per-subscription durable ledger prevents rediscovery after restart, queue-history
    cleanup, file deletion, or an explicit skip.
-2. Queue admission uses an atomic idempotency key under a shared admission lock.
+2. Queue admission uses an atomic idempotency key under one shared in-process
+   admission lock for manual and automatic callers, not a cross-process lock.
    Same-owner manual and automatic requests for the same episode/destination must
    reconcile, including already running jobs. Different owners must not be silently
    merged solely because their provider video IDs match.
@@ -280,24 +308,58 @@ A corrupt follow ledger must stop automation and surface recovery, never start e
 
 `DownloadQueue.remove()` has no removal hook today. Add an awaited pre-removal
 boundary or a shared removal service that every authorized removal path uses,
-including administrator removal of another user's automatic job. Serialize it
-against admission, retry and completion for that intent. Before queue mutation,
+including administrator removal of another user's automatic job. The complete
+current mutation surface is:
+
+| Entry point | Required durable behavior |
+| --- | --- |
+| `remove(id)` / user or administrator removal | Record the intent's skip/removal request before changing the row. |
+| `removeMatching(predicate)` / `Revocations.deleteUser` | Use the same per-job cancellation boundary for every unfinished job, with reason `ownerDeleted`. |
+| `clearCompleted()` / administrator history cleanup | Check durable completion acknowledgement per row before filtering it out; this method currently bypasses `remove`. Preserve unacknowledged native and bridge records. |
+
+On account deletion, prevent admission immediately once the owner is absent and
+durably mark its follows as deleting before cancelling unfinished jobs. Startup
+also detects orphaned follows if deletion crashed before that marker. Retain a
+minimal cleanup record until job cancellation and ledger cleanup finish; then remove
+that owner's follows and intents. Do not recreate them or transfer them to another
+account. Completed library media stays, consistent with current account deletion.
+A ledger-write failure blocks rescheduling and leaves recoverable cleanup pending;
+it must not let a deleted user's running work continue unchecked.
+
+Serialize removal against admission, retry and completion for that intent. Before queue mutation,
 persist a tombstone with intent key, job ID, reason and revision: user removal of
 an unfinished automatic job means skipped; acknowledged completed-history cleanup
 means completed. Preserve tombstones independently of queue history. A failed
 ledger write refuses removal and leaves the queue row intact.
 
-After the tombstone is durable, remove/cancel the queue job. A crash before queue
-removal leaves a recoverable cancellation that startup finishes before pumping;
-a crash after removal retains the same skip. If completion wins the race, preserve
+After the tombstone is durable, mark cancellation pending and block new admission,
+retry and publication for that intent. Clear its debrid poll timer, abort active work
+and await the actual per-job transfer/resolver/debrid task settling, including its
+final state writes, before partial cleanup, row removal and a durable removal-finished
+acknowledgement. `remove()` currently only aborts; `pause()` polls for at most 2.5
+seconds, which is not proof of termination. Add a per-job completion handle or
+an equivalent definitive acknowledgement. A bounded wait that expires leaves
+cancellation pending and visible; it must not report removal complete or free the
+intent for reuse. In-flight debrid responses must recheck cancellation before they
+schedule another poll or mutate/publish a result. This does not implicitly delete
+remote debrid data. Do not hold a lock across an await that requires the same lock
+in the task's finalizer: persist the state under the lock, wait outside it, then
+reacquire and recheck the revision to finalize removal.
+
+A crash before queue removal leaves a recoverable cancellation that startup
+finishes before pumping; a crash after removal retains the same skip. If completion wins the race, preserve
 its verified completion evidence and file rather than making it downloadable again.
 A crash after intent reservation but before acceptance leaves a nonterminal reserved
 intent with no tombstone: only this verified case may be admitted again under the
 same key. A previously accepted job that disappears without a removal/completion
 record is unresolved and requires reconciliation or attention, not blind requeueing.
 History cleanup requires durable completion acknowledgement before deleting rows.
-Explicit user retry/reset advances the tombstone revision under the same lock;
-stale removals and scheduler results cannot undo it.
+A follow-level retry/reset service owns both retry paths and advances the revision
+under the same admission lock after checking current permissions and policy. An
+existing failed job uses `queue.retry(jobId)`; a skipped episode whose removal has
+fully finished creates a new queue attempt linked to the same episode intent key
+and new revision. Never pass a removed job ID to `queue.retry`. Stale removals,
+completion callbacks and scheduler results cannot undo the new revision.
 
 Shared-destination collisions across owners need serialized path admission and a
 recheck of accessible files when execution starts; sharing another owner's job is
@@ -317,12 +379,17 @@ Proposed defaults, to tune from real addon latency and NAS load:
   as waiting; do not silently abandon it. A user-triggered check coalesces with an
   in-flight check and observes the delivery contract's one-minute cooldown.
 - Persist nextCheckAt and nextAttemptAt; on restart perform one bounded catch-up,
-  not every missed timer tick. Reconcile the whole eligible set, not just episodes
+  not every missed timer tick. Desktop sleep/offline periods take this same path
+  on wake/reconnect; elapsed timers must not replay as a burst. A remote server
+  continues independently while its desktop client sleeps. Store all schedule,
+  release, ledger and tombstone instants in UTC; render them in the viewer's local
+  timezone. Reconcile the whole eligible set, not just episodes
   newer than the latest seen episode, so gaps and delayed metadata are recovered.
 - Serialize discovery initially (within the delivery contract's maximum of two
   metadata checks). Process at most 20 new intents per show per pass with a durable
   continuation cursor, and cap outstanding automatic admissions at 20 globally.
   Give manual work priority and drain a season release incrementally.
+  The global cap is an additional proposed safeguard beyond the delivery contract.
   The queue remains responsible for transfer concurrency and disk pressure.
 - Respect the outbound host guard and Retry-After. Bound probes through the current
   selection budget. Add an explicit freshness option, separate from viewer and
@@ -368,8 +435,12 @@ source grants and destination visibility before source access, admission and
 execution, and again after network awaits. Never impersonate the first account.
 Disabling or deleting an account stops its automation. Revoked download permission
 pauses downloads while permitted discovery-only checks may continue; revoked content
-rights stop the affected discovery too. Child accounts cannot enable automatic
-downloads under the delivery contract. Revoking an addon/library pauses affected
+rights stop the affected discovery too. The delivery contract's prohibition on
+child accounts enabling automatic downloads depends on the planned P1b child-mode
+policy. Current `Role` is only `admin | user`; no child role is implemented. Once
+P1b lands, enforce its server-side child restriction here as well. Before then,
+use current download permissions and do not claim to enforce a child distinction
+that the server does not represent. Revoking an addon/library pauses affected
 work; it must not broaden access or choose another destination.
 
 Bound subscriptions per user, outstanding automatic intents and per-run work;
@@ -388,6 +459,54 @@ Document backup scope: current settings export does not automatically include ne
 follow data. Initially preserve it in a full data-directory backup; a portable
 settings import must not silently activate downloads under a different owner.
 
+## Later: download ahead of viewing and retention
+
+Keep the first release unchanged. Model the start boundary separately from a
+versioned acquisition policy so a later `aheadOfViewing` mode can coexist with the
+initial release-based policy. Its promise is "keep N released, unwatched episodes
+ready from my chosen viewing position", including older seasons. Preview and
+explicitly authorize this mode: it must not reuse the future-release boundary to
+exclude the very historical episodes the user wants to catch up on.
+
+Reevaluate that window on verified completion/progress changes and metadata refresh,
+with the same due-work bounds and admission service. Count matching accessible files
+and accepted intents toward N so repeated progress events cannot overfill it. Missing
+release dates still need resolution; unavailable sources remain visible holes rather
+than triggering an unbounded search through the catalogue. The later design must
+specify whether it can fill beyond such a hole, without treating the hole as watched.
+
+Existing `progress-series.ts::seriesOf`, `next-episode.ts::nextEpisodeOf` and
+`routes/personal.ts` provide useful identity, ordering and completion signals.
+They are not a complete watched ledger: completed positions are removed, only a
+bounded recent series-marker set survives, and the user can clear that state.
+Reuse those signals with a durable owner-specific anchor/revision and any required
+episode-completion evidence. Missing or cleared progress pauses window advancement
+until an explicit anchor is selected; it must not silently reset to season one.
+Watching an episode out of order does not establish that every earlier one was seen.
+
+Retention is a separate, explicit later policy: keep the latest N managed files,
+or remove managed files after watching. Neither follows automatically from selecting
+N-ahead acquisition, and the MVP does not cap total retained media. Keep semantic
+completion/skip history independent of file residency, with a removal reason such
+as `retention` distinct from manual deletion, cancellation and external import.
+Retention removal must not reset an episode to missing and start a download/delete
+loop; deliberate re-download remains an explicit revision of the intent.
+
+Automatic deletion on a shared NAS needs its own authorization and recovery gate.
+Default retention to off. Initially restrict it to a dedicated administrator-approved
+managed destination, or require an explicit shared-library retention agreement before
+a viewer's completion can remove a household file. A follow's creator does not own
+every matching file: preserve manually imported files, other owners' requirements,
+active playback/transfers and *arr-managed imports. Use existing authorized library
+operations with durable deletion provenance; stop when ownership or current use is
+uncertain. A NAS policy should use the NAS's network state, not infer Wi-Fi safety
+from a remote phone's connection.
+
+An upcoming-episodes view or authenticated, revocable calendar export is another
+later discovery feature. It should reuse dates and per-owner visibility; an .ics
+feed is not assumed to be a free implementation detail or an existing Stremio
+Offline capability.
+
 ## Implementation slices and validation
 
 0. Fix the existing cross-owner admission defect across `add`, `addDebrid` and
@@ -397,13 +516,17 @@ settings import must not silently activate downloads under a different owner.
    completion-history cleanup, file deletion, skips, inaccessible libraries,
    provider aliases and every crash boundary, including both sides of tombstone
    persistence and queue removal, completion racing removal, and an unexplained
-   missing accepted job. Assert it cannot be automatically recreated.
+   missing accepted job. Cover `remove`, `removeMatching` during account deletion,
+   and `clearCompleted` explicitly. A delayed abort/finalizer, expired cancellation
+   wait, or in-flight debrid response must not publish or admit replacement work;
+   repeat recovery twice and assert no automatic recreation.
 2. Owner-bound scheduler and structured source outcomes. Fake-clock tests cover
    future and invalid dates, late metadata, changed dates, outages, restart catch-up,
    bounded season batches, retries, pause/configuration races and revocation during
    an awaited request. Test explicit owner language, due-check cache bypass,
    empty stream results followed by an available source, request coalescing and
-   preserved host cooldowns. Extend the existing failure-classification tests.
+   preserved host cooldowns, desktop wake/offline catch-up and UTC/local rendering.
+   Extend the existing failure-classification tests.
    HTTP sources only, including ready debrid URLs.
 3. Localized detail form and followed-series management. API tests prove isolation
    between two users and cross-owner same-video behavior. Verify that discovery-only
@@ -411,10 +534,15 @@ settings import must not silently activate downloads under a different owner.
    to largest, and editing restores the saved policy. A small Docker e2e flow
    uses a controllable addon: discover, no matching source, later source, one file,
    restart, no duplicate. Run visual verification once functional behavior is stable.
-4. Optional extensions: language grace period, real quality/size profiles, explicit
-   historical backfill, notifications and raw-torrent lazy resolution via Real-Debrid.
-   Torrent support needs deterministic episode-file selection, waiting-state
-   recovery and season-pack tests; it is not just removing the URL filter.
+4. Separate raw-torrent/Real-Debrid milestone closes the stated delivery-contract
+   deviation. It needs deterministic episode-file selection, waiting-state recovery,
+   cancellation tests and safe rejection of unsupported season-pack ambiguity;
+   it is not just removing the URL filter or promising general season-pack support.
+5. Optional extensions: language grace period, real quality/size profiles, explicit
+   historical backfill, N-ahead viewing, opt-in keep-last-N/delete-after-watched
+   retention, notifications and calendar. Before retention ships, test two viewers,
+   out-of-order or cleared progress, protected/imported files, active playback,
+   restart during deletion and prevention of re-download loops.
 
 For implementation PRs, run the project build and unit suites, relevant Docker e2e,
 and local Docker deployment/health verification required by AGENTS.md. This proposal
@@ -426,8 +554,9 @@ Recommended first scope: discovery-only by default with opt-in downloads of
 future episodes or an explicit starting episode,
 HTTP sources, current audio/subtitle rules, concrete destination, pause/skip,
 visible waiting reasons and no upgrades or automatic re-download after deletion.
-The primary product choice to revisit is whether delayed Czech audio is essential
-for the first release; if so, specify the grace period and clock origin explicitly.
+Before implementation, resolve the explicit staged Real-Debrid scope against the
+delivery contract. Also decide whether delayed Czech audio is essential for the
+first release; if so, specify the grace period and clock origin explicitly.
 
 ## Independent review
 
@@ -452,3 +581,11 @@ owner-language and form-default behavior. The earlier text already required a
 skip before removal; the missing detail was an enforceable boundary and crash
 recovery, not a requirement to re-add every missing job. Existing classification
 is structured; preserve it and add the missing resolution reasons.
+
+The second supplied review was verified against queue removal, revocation and
+progress code. Its removal/lifecycle and delivery-scope clarifications are included;
+viewer-oriented sources were checked directly before adding later acquisition and
+retention options. Moving the follow ledger into `store.ts` alone would not make
+queue acceptance transactional because downloads still use a separate state file.
+The admission lock is within one process and prevents interleaving across awaits;
+no distributed lock or new persistence engine is proposed.
