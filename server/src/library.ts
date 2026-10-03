@@ -35,14 +35,55 @@ export interface LibraryEntry {
 
 const SEASON_PREFIX = "s(?:eason)?|serie|série|series|sezona|sezóna|řada|rada";
 const SEASON_SUFFIX = "serie|série|series|season|sezona|sezóna|řada|rada";
+/** The season words on their own, without the bare "s" of an S-number: "Svět" must not be
+ *  read as the Roman "v" behind that "S". */
+const SEASON_WORD_PREFIX = "season|serie|série|series|sezona|sezóna|řada|rada";
+/** A language or note a season form may carry: "8. serie CZ", "10. serie - ENG". */
+const SEASON_NOTE = "(?:\\s*[-–]?\\s*\\p{L}[^\\d]*)?";
+/** Season numbers written as Roman numerals, the way an older library spells them. */
+const ROMAN_SEASONS: Array<[string, number]> = [
+  ["xviii", 18], ["xiii", 13], ["xvii", 17], ["xix", 19], ["xvi", 16], ["xiv", 14], ["xii", 12],
+  ["vii", 7], ["iii", 3], ["xx", 20], ["xi", 11], ["xv", 15], ["iv", 4], ["ii", 2], ["ix", 9],
+  ["vi", 6], ["x", 10], ["v", 5], ["i", 1],
+];
+const ROMAN_SEASON = ROMAN_SEASONS.map(([word]) => word).join("|");
+const ROMAN_SEASON_VALUE = new Map(ROMAN_SEASONS);
 
-/** "01 serie", "Season 2", "S03" -- the queue writes the season folder, but hand-copied files differ. */
+/** A season written with a season word or an S-form: "01 serie", "Season 2", "S03",
+ *  "II. série", "Season IV". A bare number is not one of these, so the show folder
+ *  "Hawaii Five - 0" is not read as season zero; a Roman numeral only counts beside a
+ *  season word, because a bare one is a film's title ("Rocky IV"). */
+function seasonWordForm(form: string): number | null {
+  const prefixed = new RegExp(`^(?:${SEASON_PREFIX})[\\s._-]*(\\d{1,3})(?:[\\s._-]*(?:${SEASON_SUFFIX}))?${SEASON_NOTE}$`, "iu").exec(form);
+  if (prefixed) return Number(prefixed[1]);
+  const suffixed = new RegExp(`^(\\d{1,3})[\\s._-]*(?:${SEASON_SUFFIX})${SEASON_NOTE}$`, "iu").exec(form);
+  if (suffixed) return Number(suffixed[1]);
+  const romanPrefixed = new RegExp(`^(?:${SEASON_WORD_PREFIX})[\\s._-]*(${ROMAN_SEASON})(?:[\\s._-]*(?:${SEASON_SUFFIX}))?${SEASON_NOTE}$`, "iu").exec(form);
+  if (romanPrefixed) return ROMAN_SEASON_VALUE.get(romanPrefixed[1]!.toLowerCase()) ?? null;
+  const romanSuffixed = new RegExp(`^(${ROMAN_SEASON})[\\s._-]*(?:${SEASON_SUFFIX})${SEASON_NOTE}$`, "iu").exec(form);
+  if (romanSuffixed) return ROMAN_SEASON_VALUE.get(romanSuffixed[1]!.toLowerCase()) ?? null;
+  const legacy = /(?:^|\D)s(\d{1,3})(?:\D|$)/i.exec(form);
+  return legacy ? Number(legacy[1]) : null;
+}
+
+/** A season form that is only a number: "3", "12". A note is not read onto one of these,
+ *  because "2 Broke Girls" and "300 Rise of an Empire" are titles, not seasons. */
+function seasonBareNumber(form: string): number | null {
+  const match = /^(\d{1,3})$/.exec(form);
+  return match ? Number(match[1]) : null;
+}
+
+/** "01 serie", "Season 2", "S03" -- the queue writes the season folder, but hand-copied files
+ *  differ. "I. SERIE" and "TRUE BLOOD - 1. serie" are the same season under another spelling:
+ *  the part after the last " - " is the season form, whatever the show's name in front of it. */
 export function parseSeason(folder: string): number | null {
   const name = folder.trim();
-  const match = new RegExp(`^(?:${SEASON_PREFIX})?[\\s._-]*(\\d{1,3})(?:[\\s._-]*(?:${SEASON_SUFFIX}))?$`, "i").exec(name)
-    ?? /(?:^|\D)s(\d{1,3})(?:\D|$)/i.exec(name);
-  const season = match ? Number(match[1]) : NaN;
-  return Number.isFinite(season) ? season : null;
+  const direct = seasonWordForm(name) ?? seasonBareNumber(name);
+  if (direct != null) return direct;
+  // A bare number behind the show's name is the name itself ("Hawaii Five - 0",
+  // "Blade Runner - 2049"); only a season word or an S-form makes it a season.
+  const dash = name.lastIndexOf(" - ");
+  return dash >= 0 ? seasonWordForm(name.slice(dash + 3).trim()) : null;
 }
 
 /** "07 - Name", "S01E07 Name", "7." -- the episode number comes first, the rest is the name. */
@@ -60,17 +101,101 @@ export function parseEpisode(filename: string): { episode: number | null; title:
 
 const TAGGED_EPISODE = /\bs(\d{1,3})[\s._-]*e(\d{1,4})\b/i;
 const CROSS_EPISODE = /\b(\d{1,2})x(\d{1,3})\b/i;
+/** "E10", "Ep. 1", "Episode 3", "díl 3" -- a separator is what tells the word from a title
+ *  ("Svět pod hlavou_E10" keeps its E after the underscore). */
+const WORDED_EPISODE = /(?:^|[\s._-])(?:episode|epizoda|ep|e|d[íi]l)[\s._-]*(\d{1,4})(?=$|[\s._-])/i;
+/** A zero-padded number standing on its own, the way a whole show writes its episodes. */
+const LOOSE_EPISODE = /(?:^|[\s._-])(\d{2,})(?=$|[\s._-])/;
+const COMPACT_EPISODE = /(?:^|[\s._-])(\d{3})(?=$|[\s._-])/;
+/** A four-digit token whose leading zero rules out a year: "0302" is season 3, episode 2. */
+const COMPACT_FOUR_EPISODE = /(?:^|[\s._-])(0\d)(\d{2})(?=$|[\s._-])/;
+/** "6-15" -- the season number again in front of the episode, as in "Sberatele kosti 6-15". */
+const PAIRED_EPISODE = /(?:^|[\s._-])(\d{1,2})-(\d{1,3})(?=$|[\s._-])/;
+/** "Malá Velká Británie v USA 3" -- an unpadded episode number at the end of the name. */
+const TRAILING_EPISODE = /(?:^|[\s._-])(\d{1,4})$/;
+const YEAR_NUMBER = /^(?:19|20)\d{2}$/;
 
-/** Season and episode of a video file: "S01E02" or "1x02" in its own name first,
- *  then a plain leading number inside a season folder. */
-export function numberedEpisode(relative: string): { season: number; episode: number } | undefined {
+/** The episode number a name states in the spellings a series library uses: "S01E02",
+ *  "1x02", "E02", "Ep. 2", "Episode 3", "díl 3". `season` is set only when the name itself
+ *  carries it; a word form such as "E02" takes the season from the folder it sits in. */
+export function episodeTag(name: string): { season?: number; episode: number } | undefined {
+  // Only a video's own extension is dropped: a folder named "Ep. 1" is not a file.
+  const stem = isVideo(name) ? name.replace(/\.[^.]+$/, "") : name;
+  const tagged = TAGGED_EPISODE.exec(stem) ?? CROSS_EPISODE.exec(stem);
+  if (tagged) return { season: Number(tagged[1]), episode: Number(tagged[2]) };
+  const worded = WORDED_EPISODE.exec(stem);
+  return worded ? { episode: Number(worded[1]) } : undefined;
+}
+
+/** A folder named for the one episode it holds: "1x01 - Strange Love", "Show.S02E03", "Ep 5". */
+function isEpisodeFolderName(name: string): boolean {
+  return episodeTag(name) !== undefined;
+}
+
+/** The season the folder above a file states. An episode folder is not a season folder, so
+ *  it is stepped over and the season read from the folder above it. */
+function seasonFolderOf(relative: string): number | null {
+  const folder = posixDir(relative);
+  if (!folder) return null;
+  if (!isEpisodeFolderName(posixBase(folder))) return parseSeason(posixBase(folder));
+  const above = posixDir(folder);
+  return above ? parseSeason(posixBase(above)) : null;
+}
+
+/** The season and episode a whole-show file name writes without a season folder or an
+ *  episode word: "Moonlight - 101" (compact SEE), "Okupace-01-Duben-2015" (a padded number
+ *  behind the title), "true.blood.0302" and "01-Velký plán" (leading numbers). Years are
+ *  never episode numbers. */
+function looseEpisodeNumbers(name: string, seasonFolder: number | null): { season?: number; episode: number } | undefined {
+  const compact = COMPACT_EPISODE.exec(name);
+  if (compact) {
+    const value = Number(compact[1]);
+    if (value >= 101 && value <= 999 && value % 100 >= 1) return { season: Math.floor(value / 100), episode: value % 100 };
+  }
+  const compactFour = COMPACT_FOUR_EPISODE.exec(name);
+  if (compactFour) {
+    const episode = Number(compactFour[2]);
+    if (episode >= 1) return { season: Number(compactFour[1]), episode };
+  }
+  // Only inside the season folder it repeats: a bare "6-15" elsewhere is not a number.
+  if (seasonFolder != null) {
+    const pair = PAIRED_EPISODE.exec(name);
+    if (pair && Number(pair[1]) === seasonFolder && Number(pair[2]) >= 1) return { season: seasonFolder, episode: Number(pair[2]) };
+  }
+  const pattern = new RegExp(LOOSE_EPISODE.source, "g");
+  for (let match = pattern.exec(name); match; match = pattern.exec(name)) {
+    const digits = match[1]!;
+    if (YEAR_NUMBER.test(digits)) continue;
+    const start = match.index + match[0].length - digits.length;
+    // The token has to follow a title, or "01 - Name" would read as its own title. In a show
+    // that keeps no season folder a leading number counts instead ("01-Velký plán").
+    if (/[\p{L}\p{N}]/u.test(name.slice(0, start)) || (start === 0 && seasonFolder == null)) {
+      return { episode: Number(digits) };
+    }
+  }
+  // "Malá Velká Británie v USA 3": the episode number at the end need not be padded.
+  const trailing = TRAILING_EPISODE.exec(name);
+  const trailingStart = trailing ? trailing.index + trailing[0].length - trailing[1]!.length : 0;
+  if (trailing && /[\p{L}\p{N}]/u.test(name.slice(0, trailingStart)) && !YEAR_NUMBER.test(trailing[1]!)) {
+    return { episode: Number(trailing[1]) };
+  }
+  return undefined;
+}
+
+/** Season and episode of a video file: "S01E02", "1x02" or "E02" in its own name first,
+ *  then a plain leading number inside a season folder. `loose` also reads the numbering a
+ *  whole show writes with no season or episode word at all, which only a caller that knows
+ *  the file belongs to a series unit may ask for. */
+export function numberedEpisode(relative: string, options: { loose?: boolean } = {}): { season: number; episode: number } | undefined {
   const base = posixBase(relative);
   if (!isVideo(base)) return undefined;
-  const name = base.replace(/\.[^.]+$/, "");
-  const tagged = TAGGED_EPISODE.exec(name) ?? CROSS_EPISODE.exec(name);
-  if (tagged) return { season: Number(tagged[1]), episode: Number(tagged[2]) };
-  const folder = posixDir(relative);
-  const season = folder ? parseSeason(posixBase(folder)) : null;
+  const season = seasonFolderOf(relative);
+  const tag = episodeTag(base);
+  if (tag) return { season: tag.season ?? season ?? 1, episode: tag.episode };
+  if (options.loose) {
+    const loose = looseEpisodeNumbers(base.replace(/\.[^.]+$/, ""), season);
+    if (loose) return { season: loose.season ?? season ?? 1, episode: loose.episode };
+  }
   const { episode } = parseEpisode(base);
   if (season != null && episode != null) return { season, episode };
   return undefined;
@@ -462,7 +587,7 @@ function writeBrowseCache(key: string, entry: BrowseCacheEntry): void {
 /** The folder's own entries as one unsorted list. `cheap` skips every aggregate a sort by
  *  name does not read, and leaves `size` and `modified` for the page that actually shows them. */
 async function readMixed(root: string, relative: string, entries: Dirent[], needle: string,
-  exclude: ReadonlySet<string> | undefined, cheap: boolean): Promise<MixedItem[]> {
+  exclude: ReadonlySet<string> | undefined, cheap: boolean, looseEpisodes: boolean): Promise<MixedItem[]> {
   const folders: BrowseFolder[] = [];
   const files: LibraryFile[] = [];
 
@@ -489,7 +614,9 @@ async function readMixed(root: string, relative: string, entries: Dirent[], need
     if (!entry.isFile() || !isVideo(entry.name)) continue;
     const label = entry.name.replace(/\.[^.]+$/, "");
     if (needle && !label.toLowerCase().includes(needle)) continue;
-    const numbers = numberedEpisode(childRelative);
+    // Only the files of a series are numbered the way a whole show writes; a film's own number
+    // is its own, and reading "Room 237" as season 2 episode 37 would be nonsense.
+    const numbers = numberedEpisode(childRelative, { loose: looseEpisodes });
     if (cheap) {
       files.push({
         path: childRelative, label,
@@ -517,7 +644,7 @@ async function readMixed(root: string, relative: string, entries: Dirent[], need
 /** The contents of one folder: its subfolders and videos. It does not descend; that is what opening a folder is for. */
 export async function browseDirectory(root: string, relative: string, query = "", skip = 0, limit = 60,
   sort: LibrarySort = "name", descending = false, seed = "", onlyPaths?: ReadonlySet<string>,
-  exclude?: ReadonlySet<string>): Promise<BrowseResult> {
+  exclude?: ReadonlySet<string>, looseEpisodes = false): Promise<BrowseResult> {
   const target = resolveInside(root, relative);
   if (!target) return { path: relative, items: [], total: 0 };
   let entries: Dirent[] | undefined;
@@ -529,7 +656,7 @@ export async function browseDirectory(root: string, relative: string, query = ""
   // rely on the cache instead. A name and a random order read only the label and the path, so
   // they can leave the walk to the page that is actually returned.
   const cheap = sort === "name" || sort === "random";
-  const key = browseCacheKey(root, relative, query, exclude);
+  const key = `${browseCacheKey(root, relative, query, exclude)}\u0000${looseEpisodes ? "series" : ""}`;
   const signature = entries ? browseSignature(entries) : "";
   const cached = readBrowseCache(key, info?.mtimeMs, signature);
 
@@ -542,7 +669,7 @@ export async function browseDirectory(root: string, relative: string, query = ""
     if (!entries) {
       try { entries = await readdir(target, { withFileTypes: true }); } catch { return { path: relative, items: [], total: 0 }; }
     }
-    mixed = await readMixed(root, relative, entries, query.trim().toLowerCase(), exclude, cheap);
+    mixed = await readMixed(root, relative, entries, query.trim().toLowerCase(), exclude, cheap, looseEpisodes);
     complete = !cheap;
     writeBrowseCache(key, { complete, mtimeMs: info?.mtimeMs, signature, builtAt: Date.now(), mixed });
   }

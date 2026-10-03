@@ -3,7 +3,7 @@ import { test } from "node:test";
 import {
   autoAccept, browseMeta, cacheFieldsFromMeta, clipText, dropKeyed, episodeKey, episodeNumberOf, episodesFromMeta, isExtraName,
   folderMosaicUnits, knownEntryForUnit, knownTitleOf, knownTitleForUnit, lookupSkipped, mosaicSkipped, matchKeyFor, mosaicIdentities, needsReevaluation, parseUnit, pendingSuggestionKeys, pinInherited, matchStatus, needsBackfill, needsEpisodes, needsRefresh, pickSuggestion, remapKeyed, scanMiss, unitFor,
-  scannedRecently, scanSkipReason, scoreHit, staleSuggestionKeys, suggestionFor, suggestionForUnit, titlePartConflict, titleUnits, unmatchAt, viewMeta, withSkipFlag,
+  scannedRecently, scanSkipReason, scoreHit, normalizeTitle, dropAutomaticInside, staleSuggestionKeys, staleScanRecordKeys, suggestionFor, suggestionForUnit, titlePartConflict, titleUnits, unmatchAt, viewMeta, withSkipFlag,
   MATCH_RULE_VERSION, type LibraryMetaRecord, type LibrarySuggestion, type TitleUnit,
 } from "./library-match.js";
 import { fileMayUseFolderArtwork } from "./artwork.js";
@@ -101,11 +101,150 @@ test("loose numbered episodes are one series, while sequels and disc halves are 
     "zero-padded episode numbers sharing one title are one series");
   assert.deepEqual(units(["Show díl 01.avi", "Show díl 02.avi"]), ["series:Folder"],
     "an episode word says the same");
+  assert.deepEqual(units(["Show-4x16-Name.avi", "Show-4x18-Name.avi"]), ["series:Folder"],
+    "the NxNN spelling says the same too");
+  assert.deepEqual(units(["Show E01.avi", "Show E02.avi"]), ["series:Folder"],
+    "a plain episode word and number is enough");
+  assert.deepEqual(units(["Show Ep. 1.avi", "Show Ep. 2.avi"]), ["series:Folder"],
+    "so is the abbreviated one");
+  assert.deepEqual(units(["Moonlight - 101.avi", "Moonlight - 102 - Out of the Past.avi"]), ["series:Folder"],
+    "a compact SEE number behind a shared title says the same");
+  assert.deepEqual(units(["Moonlight - 101.avi"]), ["movie:Folder"],
+    "a lone compact SEE number is a film, not an episode: two files have to share the title");
+  assert.deepEqual(units(["Okupace-01-Duben.avi", "Okupace-02-Kveten.avi"]), ["series:Folder"],
+    "a padded number behind a shared title says the same, however many words follow");
   assert.deepEqual(units(["Toy Story 1.mkv", "Toy Story 2.mkv", "Toy Story 3.mkv"]), [
     "movie:Folder/Toy Story 1.mkv", "movie:Folder/Toy Story 2.mkv", "movie:Folder/Toy Story 3.mkv",
   ], "padded sequels are separate films");
   assert.deepEqual(units(["Film CD1.avi", "Film CD2.avi"]), ["movie:Folder"],
     "the two halves of one film stay one film");
+});
+
+/** The layouts a real series library was found in, one show each. Every one of them is one
+ *  series at its show folder: the episodes are numbered, not units of their own. */
+const SHOW_LAYOUTS: Array<{ show: string; files: string[] }> = [
+  {
+    show: "Čarodějky",
+    files: ["Čarodějky/Čarodějky-4x16-Páté-kolo-u-vozu.avi", "Čarodějky/Carodejky-4x18 by k8.avi"],
+  },
+  {
+    show: "Jiste pane ministře",
+    files: ["Jiste pane ministře/jiste.pane.ministre.1x01.celem.k.volicum.dvb.xvid-bb.avi", "Jiste pane ministře/jiste.pane.ministre.1x02.celem.moralka.avi"],
+  },
+  {
+    show: "Bratrsto neohrožených",
+    files: ["Bratrsto neohrožených/Bratrstvo neohrozenych 1x01.avi", "Bratrsto neohrožených/Bratrstvo neohrozenych 1x02.avi"],
+  },
+  {
+    show: "Moonlight",
+    files: ["Moonlight/Moonlight - 101.avi", "Moonlight/Moonlight - 102 - Out of the Past.avi"],
+  },
+  {
+    show: "Labyrint",
+    files: ["Labyrint/Labyrint E01.avi", "Labyrint/Labyrint E02.avi"],
+  },
+  {
+    show: "Okupace - Jo Nesbo",
+    files: [
+      "Okupace - Jo Nesbo/Okupace-01-Duben-2015-cz-Dansky-serial.avi",
+      "Okupace - Jo Nesbo/Okupace-02-Kveten-2015-cz-Dansky-serial.avi",
+    ],
+  },
+  {
+    show: "The Vampire Diaries",
+    files: [
+      "The Vampire Diaries/I. SERIE/the-vampire-diaries-s01e01-pilot-hdtv-xvid-fqm-avi/the-vampire-diaries-s01e01-pilot-hdtv-xvid-fqm.avi",
+      "The Vampire Diaries/II. SERIE/The.Vampire.Diaries.S02E01.HDTV.XviD-LOL.avi",
+      "The Vampire Diaries/IV. SERIE/The.Vampire.Diaries.S04E01.HDTV.XviD-LOL.avi",
+    ],
+  },
+  {
+    show: "True Blood",
+    files: [
+      "True Blood/TRUE BLOOD - 1. serie/1x01 - Strange Love (Divná láska)/1x01 - Strange Love.avi",
+      "True Blood/TRUE BLOOD - 4. serie/True.Blood.S04E01.HDTV.XviD-LOL.avi",
+    ],
+  },
+  {
+    show: "Rizzoli and Isles",
+    files: ["Rizzoli and Isles/3. serie/Rizzoli.and.Isles.S03E01.HDTV.x264-LOL.mp4"],
+  },
+];
+
+test("every real show layout is one series unit at its show folder", () => {
+  for (const layout of SHOW_LAYOUTS) {
+    for (const type of ["series", "mixed"] as const) {
+      const units = titleUnits(layout.files.map(file), type);
+      assert.deepEqual(units.map((unit) => `${unit.kind}:${unit.key}`), [`series:${layout.show}`], `${layout.show} (${type})`);
+      assert.deepEqual([...units[0]!.sampleFiles].sort(), [...layout.files].sort(), `${layout.show} holds every file (${type})`);
+    }
+  }
+});
+
+test("a series library makes each top-level folder one show, and never the library root", () => {
+  // The qualified keys the server builds, where the library itself is the top-level folder.
+  const files = [
+    "lib_aaaaaaaa/Hawaii Five - 0/Hawaii Five - 0 S01E01.avi",
+    "lib_aaaaaaaa/Hawaii Five - 0/Hawaii Five - 0 S01E02.avi",
+    "lib_aaaaaaaa/Chuck/4. serie/Chuck.S04E01.avi",
+  ].map(file);
+  for (const type of ["mixed", "series"] as const) {
+    assert.deepEqual(
+      titleUnits(files, type).map((unit) => `${unit.kind}:${unit.key}`).sort(),
+      ["series:lib_aaaaaaaa/Chuck", "series:lib_aaaaaaaa/Hawaii Five - 0"],
+      `${type}: one unit per show, none for the root`,
+    );
+  }
+});
+
+test("a series library walks a category of shows and keeps a stray extra with its show", () => {
+  const kids = [
+    "Kids/Peppa Pig/01 serie/Peppa Pig - S01E01.mkv",
+    "Kids/Bluey/Season 1/Bluey - S01E01.mkv",
+  ].map(file);
+  assert.deepEqual(titleUnits(kids, "series").map((unit) => unit.key).sort(), ["Kids/Bluey", "Kids/Peppa Pig"],
+    "the category is walked, each show is one unit");
+
+  const stray = ["Chicago Fire/4. serie/Cross over dil/Chicago.PD.S03E10.avi"].map(file);
+  const units = titleUnits(stray, "series");
+  assert.deepEqual(units.map((unit) => `${unit.kind}:${unit.key}`), ["series:Chicago Fire"],
+    "a stray episode folder does not split the show");
+  assert.deepEqual(units[0]!.sampleFiles, ["Chicago Fire/4. serie/Cross over dil/Chicago.PD.S03E10.avi"]);
+});
+
+test("an episode rule never turns sequels, disc halves or a two-film folder into a series", () => {
+  const units = (names: string[]) => titleUnits(names.map((name) => file(`Folder/${name}`))).map((unit) => `${unit.kind}:${unit.key}`).sort();
+  assert.deepEqual(units(["Toy Story 1.mkv", "Toy Story 2.mkv", "Toy Story 3.mkv"]), [
+    "movie:Folder/Toy Story 1.mkv", "movie:Folder/Toy Story 2.mkv", "movie:Folder/Toy Story 3.mkv",
+  ], "sequels without padding or an episode word stay separate films");
+  assert.deepEqual(units(["Film CD1.avi", "Film CD2.avi"]), ["movie:Folder"],
+    "the two halves of one film stay one film");
+  assert.deepEqual(units(["Heat (1995).mkv", "Ronin (1998).mkv"]), [
+    "movie:Folder/Heat (1995).mkv", "movie:Folder/Ronin (1998).mkv",
+  ], "two films in one folder stay two films");
+});
+
+test("a show that keeps every episode in a folder of its own is one series too", () => {
+  const tagged = [
+    "Fallout/1x01 - The End/Fallout.S01E01.mkv",
+    "Fallout/1x02 - The Target/Fallout.S01E02.mkv",
+    "Fallout/2x01 - Pilot/Fallout.S02E01.mkv",
+  ].map(file);
+  const units = titleUnits(tagged);
+  assert.deepEqual(units.map((unit) => `${unit.kind}:${unit.key}`), ["series:Fallout"]);
+  assert.equal(units[0]!.sampleFiles.length, 3, "the unit holds the files inside the episode folders");
+
+  // The episode folder's own name may be the only place the tag sits.
+  const named = titleUnits(["Show/1x01 - One/one.mkv", "Show/1x02 - Two/two.mkv"].map(file));
+  assert.deepEqual(named.map((unit) => `${unit.kind}:${unit.key}`), ["series:Show"]);
+});
+
+test("an ampersand reads as the word 'and' in a title", () => {
+  assert.equal(normalizeTitle("Rizzoli & Isles"), normalizeTitle("Rizzoli and Isles"));
+  assert.equal(normalizeTitle("Lilo & Stitch"), normalizeTitle("Lilo and Stitch"));
+  assert.equal(normalizeTitle("Lilo & Stitch"), normalizeTitle("Lilo & Stitch"));
+  const hit = scoreHit(parseMediaPath("Rizzoli and Isles"), meta("Rizzoli & Isles", 2010, "series", "tt1"), "series");
+  assert.equal(hit.titleSimilarity, 1);
 });
 
 test("a typed library keeps the boundaries and changes only the kind", () => {
@@ -786,7 +925,7 @@ test("a correction of an unlocked automatic binding is a pending key, an ordinar
   assert.deepEqual(pendingSuggestionKeys(records, suggestions), ["Films/Ronin"]);
 });
 
-test("a finished scan drops the proposals whose title unit is gone, and only those", () => {
+test("a finished scan drops the proposals whose title unit is gone or is owned by a series", () => {
   const units: TitleUnit[] = [
     { key: "lib_aaaaaaaa/Films/Ronin", kind: "movie", relative: "Films/Ronin", sampleFiles: [] },
     { key: "lib_aaaaaaaa/Shows/Ted", kind: "series", relative: "Shows/Ted", sampleFiles: [] },
@@ -795,18 +934,62 @@ test("a finished scan drops the proposals whose title unit is gone, and only tho
     "lib_aaaaaaaa/Films/Ronin": { type: "movie", id: "tt0122690", name: "Ronin", score: 88 },
     "lib_aaaaaaaa/Films/Removed": { type: "movie", id: "tt999", name: "Removed", score: 99 },
     "lib_aaaaaaaa/Shows/Ted/01.mkv": { type: "series", id: "tt0111958", name: "Father Ted", score: 91 },
+    // A film's own file may carry its own proposal on purpose, so a movie unit leaves it alone.
+    "lib_aaaaaaaa/Films/Ronin/copy.mkv": { type: "movie", id: "tt0122690", name: "Ronin", score: 88 },
     // A library that is away keeps everything it remembers.
     "lib_bbbbbbbb/Films/Gone": { type: "movie", id: "tt1", name: "Gone", score: 90 },
   };
 
   assert.deepEqual(
     staleSuggestionKeys(suggestions, units, new Set(["lib_aaaaaaaa"])),
-    ["lib_aaaaaaaa/Films/Removed"],
+    ["lib_aaaaaaaa/Films/Removed", "lib_aaaaaaaa/Shows/Ted/01.mkv"],
   );
   assert.deepEqual(
     staleSuggestionKeys(suggestions, [], new Set(["lib_aaaaaaaa", "lib_bbbbbbbb"])).sort(),
-    ["lib_aaaaaaaa/Films/Removed", "lib_aaaaaaaa/Films/Ronin", "lib_aaaaaaaa/Shows/Ted/01.mkv", "lib_bbbbbbbb/Films/Gone"],
+    ["lib_aaaaaaaa/Films/Removed", "lib_aaaaaaaa/Films/Ronin", "lib_aaaaaaaa/Films/Ronin/copy.mkv", "lib_aaaaaaaa/Shows/Ted/01.mkv", "lib_bbbbbbbb/Films/Gone"],
     "the scan speaks about a library it can reach, and about nothing else",
+  );
+});
+
+test("the prune drops the rows strictly inside a series unit, and a movie unit keeps its own", () => {
+  const units: TitleUnit[] = [
+    { key: "lib_aaaaaaaa/Shows/Ted", kind: "series", relative: "Shows/Ted", sampleFiles: [] },
+    { key: "lib_aaaaaaaa/Films/Ronin", kind: "movie", relative: "Films/Ronin", sampleFiles: [] },
+  ];
+  const here = new Set(["lib_aaaaaaaa"]);
+  const suggestions: Record<string, LibrarySuggestion> = {
+    "lib_aaaaaaaa/Shows/Ted": { type: "series", id: "tt2", name: "Ted", score: 90 },
+    "lib_aaaaaaaa/Shows/Ted/01 serie/01.mkv": { type: "series", id: "tt2", name: "Ted", score: 90 },
+    "lib_aaaaaaaa/Films/Ronin": { type: "movie", id: "tt1", name: "Ronin", score: 90 },
+    "lib_aaaaaaaa/Films/Ronin/copy.mkv": { type: "movie", id: "tt1", name: "Ronin", score: 90 },
+  };
+  assert.deepEqual(staleSuggestionKeys(suggestions, units, here), ["lib_aaaaaaaa/Shows/Ted/01 serie/01.mkv"],
+    "the series unit's own proposal stays, its episodes' do not, and a film's own file does");
+
+  const meta: Record<string, LibraryMetaRecord> = {
+    "lib_aaaaaaaa/Shows/Ted": { type: "series", id: "tt2", source: "scan", locked: false },
+    "lib_aaaaaaaa/Shows/Ted/01 serie": { type: "series", id: "tt2", source: "scan", locked: false },
+    "lib_aaaaaaaa/Shows/Ted/01 serie/01.mkv": { type: "series", id: "tt2" },
+    "lib_aaaaaaaa/Shows/Ted/01 serie/02.mkv": { type: "series", id: "tt2", source: "scan", locked: true },
+    "lib_aaaaaaaa/Shows/Ted/01 serie/03.mkv": { type: "series", id: "tt2", source: "user" },
+    "lib_aaaaaaaa/Films/Ronin/copy.mkv": { type: "movie", id: "tt1", source: "scan", locked: false },
+  };
+  assert.deepEqual(staleScanRecordKeys(meta, units, here), ["lib_aaaaaaaa/Shows/Ted/01 serie"],
+    "only the unlocked automatic rows inside the series go");
+});
+
+test("binding a folder drops the automatic records inside it and keeps a person's", () => {
+  const records: Record<string, LibraryMetaRecord> = {
+    "Shows/Ted": { type: "series", id: "tt1", source: "scan", locked: false },
+    "Shows/Ted/01 serie": { type: "series", id: "tt1", source: "scan", locked: false },
+    "Shows/Ted/01 serie/01.mkv": { type: "series", id: "tt1", source: "scan", locked: false },
+    "Shows/Ted/01 serie/02.mkv": { type: "series", id: "tt9", source: "user", locked: true },
+    "Shows/Ted/03 serie": { type: "series", id: "tt2", source: "user" },
+    "Films/Ronin": { type: "movie", id: "tt3", source: "scan", locked: false },
+  };
+  assert.deepEqual(
+    Object.keys(dropAutomaticInside(records, "Shows/Ted")).sort(),
+    ["Films/Ronin", "Shows/Ted", "Shows/Ted/01 serie/02.mkv", "Shows/Ted/03 serie"],
   );
 });
 

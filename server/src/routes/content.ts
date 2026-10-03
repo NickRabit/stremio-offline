@@ -3,7 +3,7 @@ import path from "node:path";
 import { mkdir, rename, stat } from "node:fs/promises";
 import { artworks } from "../artwork-cache.js";
 import type { ArtShape } from "../artwork.js";
-import { folderMosaicUnits, pendingSuggestionKeys, type GalleryEntry, type LibraryMetaRecord, type LibrarySuggestion, type TitleUnit } from "../library-match.js";
+import { folderMosaicUnits, pendingSuggestionKeys, unitFor, type GalleryEntry, type LibraryMetaRecord, type LibrarySuggestion, type TitleUnit } from "../library-match.js";
 import { AppError } from "../errors.js";
 import { assertStillAdmin } from "../roles.js";
 import { libraryFor, libraryPath, libraryVisible, parseLibraryPath, posixBase, posixDir, posixJoin, resolveLibraryPath, sameFile, visibleLibraries, type LibraryRecord, type Viewer } from "../libraries.js";
@@ -133,10 +133,15 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     const onlyPaths = favoritePaths && unconfirmedPaths
       ? new Set([...favoritePaths].filter((path) => unconfirmedPaths.has(path)))
       : favoritePaths ?? unconfirmedPaths;
+    // A file is numbered the way its whole show writes it only inside a series: every file of
+    // a series library sits in one, while a film in a mixed library is a title of its own.
+    const seriesTyped = library.type === "series";
+    const units = seriesTyped ? [] : await libraryUnits({ stale: true });
+    const relative = resolved?.relative ?? "";
+    const looseEpisodes = seriesTyped || unitFor(libraryPath(library.id, relative), units)?.kind === "series";
     const result = await browseDirectory(library.root, resolved?.relative ?? "", String(req.query.query ?? ""),
       Math.max(0, Number(req.query.skip) || 0), limit, sort, req.query.order === "desc", String(req.query.seed ?? ""), onlyPaths,
-      carveOutsOf(library));
-    const units = result.items.some((item) => item.kind === "folder") ? await libraryUnits({ stale: true }) : [];
+      carveOutsOf(library), looseEpisodes);
     // Missing thumbnails are produced in the background; the client asks for the page again shortly.
     const items = await Promise.all(result.items.map(async (item) => {
       const key = inLibrary(item.path);

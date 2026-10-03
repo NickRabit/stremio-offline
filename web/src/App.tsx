@@ -1769,9 +1769,14 @@ export function App() {
   };
   const selectedMedia = () => {
     const art = { ...gridArt(selectedSummary, selected), gallery: galleryPayload(galleryImages) };
+    // The catalogue's year, first four digits: it names the film's folder and file the way the
+    // matcher reads a remake apart from the original. An episode's file carries no year.
+    const rawYear = String(selectedSummary?.releaseInfo ?? selectedSummary?.year ?? selected?.releaseInfo ?? selected?.year ?? "").slice(0, 4);
+    const year = Number(rawYear);
+    const movieYear = rawYear && year >= 1900 && year <= 2100 ? year : undefined;
     return selectedVideo
       ? { kind: "episode", title: baseDownloadTitle, season: selectedVideo.season, episode: selectedVideo.episode, episodeTitle: selectedVideo.title || selectedVideo.name, id: selected?.id, metaType: selected?.type, ...art }
-      : { kind: "movie", title: baseDownloadTitle, id: selected?.id, metaType: selected?.type, ...art };
+      : { kind: "movie", title: baseDownloadTitle, ...(movieYear ? { year: movieYear } : {}), id: selected?.id, metaType: selected?.type, ...art };
   };
   const canPlay = Boolean(selectedStream?.playable);
   const enqueue = async (target?: SaveTarget) => {

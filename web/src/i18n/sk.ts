@@ -784,6 +784,7 @@ export const sk: Catalog = {
   "addons.layoutFlat": "Ploché – iba súbory",
   "addons.example": "Príklad:",
   "addons.sampleMovie": "Názov filmu",
+  "addons.sampleYear": "2024",
   "addons.sampleShow": "Názov série",
   "addons.sampleEpisode": "Názov epizódy",
   "addons.sampleSeasonFolder": "sezóna",

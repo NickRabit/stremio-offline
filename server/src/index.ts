@@ -37,7 +37,7 @@ import { InFlight } from "./in-flight.js";
 import { WalkCache } from "./walk-cache.js";
 import { killRunningMedia } from "./media-tools.js";
 import { browseDirectory, describePath, emptiedFolders, entryDirectory, holdsLibraryRoot, isPathWithin, isVideo, listVideos, moveDestination, orphanedCatalogKeys, pageFiles, remapPath, summarize, buildLibrary, type FoundFile, type LibraryEntry } from "./library.js";
-import { browseMeta, cacheFieldsFromMeta, episodeKey, episodeNumberOf, episodesFromMeta, dropKeyed, folderMosaicUnits, knownEntryForUnit, knownTitleEntry, knownTitleOf, knownTitleForUnit, matchKeyFor, mosaicIdentities, mosaicSkipped, needsBackfill, needsEpisodes, staleSuggestionKeys, titleUnits, unitFor, unmatchAt, withSkipFlag, type GalleryEntry, type LibraryMetaRecord, type TitleKind, type TitleUnit } from "./library-match.js";
+import { browseMeta, cacheFieldsFromMeta, dropAutomaticInside, episodeKey, episodeNumberOf, episodesFromMeta, dropKeyed, folderMosaicUnits, knownEntryForUnit, knownTitleEntry, knownTitleOf, knownTitleForUnit, matchKeyFor, mosaicIdentities, mosaicSkipped, needsBackfill, needsEpisodes, staleScanRecordKeys, staleSuggestionKeys, titleUnits, unitFor, unmatchAt, withSkipFlag, type GalleryEntry, type LibraryMetaRecord, type TitleKind, type TitleUnit } from "./library-match.js";
 import { LibraryScan } from "./library-scan.js";
 import { probe } from "./probe.js";
 import { createLibraryProbe, type LibraryHealth } from "./library-probe.js";
@@ -546,11 +546,14 @@ const posterOf = (value: unknown): string | undefined => {
 const mediaSource = (value: unknown): MediaInfo | undefined => {
   const media = value as MediaInfo | undefined;
   if (!media) return undefined;
+  const { year: rawYear, ...rest } = media;
+  const year = Number(rawYear);
+  const safeYear = Number.isFinite(year) && year >= 1900 && year <= 2100 ? Math.trunc(year) : undefined;
   const gallery = (Array.isArray(media.gallery) ? media.gallery : [])
     .map((picture) => ({ ...picture, url: posterOf(picture?.url) }))
     .filter((picture): picture is { url: string; kind: "poster" | "background" | "logo" | "still" } => Boolean(picture.url))
     .slice(0, GALLERY_SIZE);
-  return { ...media, poster: posterOf(media.poster), background: posterOf(media.background), ...(gallery.length ? { gallery } : {}) };
+  return { ...rest, ...(safeYear ? { year: safeYear } : {}), poster: posterOf(media.poster), background: posterOf(media.background), ...(gallery.length ? { gallery } : {}) };
 };
 
 /** The catalogue poster travels with the queued job and with library metadata as well. */
@@ -1305,7 +1308,10 @@ const attachBrowseMeta = async <T extends { path: string; kind: string; name?: s
     ? { ...extra, suggestion: { ...suggestion, poster: images.proxied(suggestion.poster) } }
     : extra;
   const known = item.kind === "folder" && !unit ? undefined : knownTitleForUnit(unit, records, item.kind === "file" ? key : undefined);
-  const numbers = item.kind === "file" ? episodeNumberOf(key, ownRecord(key, records)) : undefined;
+  // A file of a bound series may carry the numbering its whole show writes, and no season word.
+  const numbers = item.kind === "file"
+    ? episodeNumberOf(key, ownRecord(key, records), { loose: known?.type === "series" })
+    : undefined;
   // Only a key can answer with a better language; without one every record stays wanted as it is.
   const wantedLanguage = store.settings().tmdbApiKey ? language : undefined;
   const wanted = needsBackfill(known, undefined, wantedLanguage) || needsEpisodes(known, numbers, episodes);
@@ -1323,7 +1329,7 @@ async function catalogPosterIfBound(key: string, target: string) {
   const known = knownTitleOf(key, records);
   if (!known) return false;
   if (known.type === "series" && isVideo(posixBase(key))) {
-    const numbers = episodeNumberOf(key, ownRecord(key, records));
+    const numbers = episodeNumberOf(key, ownRecord(key, records), { loose: true });
     const row = numbers ? metaStore.episodes()[episodeKey(known.type, known.id, numbers.season, numbers.episode)] : undefined;
     if (!row?.thumbnail) return false;
     if (await savePosterReport(key, target, await takePicture(row.thumbnail), "The episode still")) {
@@ -1895,8 +1901,9 @@ const pruneStaleSuggestions = async () => {
   const here = new Set(store.libraries()
     .filter((library) => library.enabled && !libraryHealth.get(library.id)?.unreachable)
     .map((library) => library.id));
-  await metaStore.updateQualified((_meta, suggestions) => {
+  await metaStore.updateQualified((meta, suggestions) => {
     for (const key of staleSuggestionKeys(suggestions, units, here)) delete suggestions[key];
+    for (const key of staleScanRecordKeys(meta, units, here)) delete meta[key];
   });
 };
 const libraryScan = new LibraryScan({
@@ -2093,6 +2100,13 @@ const matchLibraryItem = async (body: LibraryMatchRequest, language = prefsOf().
     const unit = relativeKeyIn(target.libraryId, unitKey);
     if (!boundId) file.meta = unmatchAt(file.meta, request ?? target.relative);
     else {
+      // A title bound on a folder owns everything inside it: the records and proposals the
+      // folders below it carried described the units this binding has just replaced. A record
+      // a person wrote inside it stays.
+      if (body.scope !== "file") {
+        file.meta = dropAutomaticInside(file.meta, target.relative);
+        file.suggestions = dropKeyed(file.suggestions, target.relative);
+      }
       file.meta[target.relative] = {
         type, id: boundId, source: "user", locked: true, skipLookup: false,
         matchedAt: at, backfilledAt: at,

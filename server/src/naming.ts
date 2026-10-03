@@ -19,6 +19,9 @@ export interface MediaInfo {
   kind?: "movie" | "episode";
   /** The film's name, or the series name for an episode. */
   title?: string;
+  /** The film's release year, when the catalogue names one. It makes the folder and file
+   *  unambiguous ("Heat (1995)"); an episode's file carries no year. */
+  year?: number;
   season?: number;
   episode?: number;
   episodeTitle?: string;
@@ -131,12 +134,19 @@ export function targetPath(media: MediaInfo | undefined, fallbackTitle: string, 
       const base = [series, episodeCode, name].filter(Boolean).join(" - ") || safeName(fallbackTitle);
       return { directory: prefix, base };
     }
+    // The matcher reads a series by its show prefix and its SxxEyy code; the season folder keeps
+    // the spelling existing libraries already use.
+    const episodeCode = media.season == null ? `E${number || "00"}` : `S${pad(media.season)}E${number || "00"}`;
     const directory = path.join(prefix, series, ...(media.season == null ? [] : [`${pad(media.season)} serie`]));
-    const base = [number, name].filter(Boolean).join(" - ") || safeName(fallbackTitle);
+    const base = [series, episodeCode, name].filter(Boolean).join(" - ") || safeName(fallbackTitle);
     return { directory, base };
   }
   const title = safeName(media?.title?.trim() || fallbackTitle);
-  return { directory: settings.layout === "flat" ? prefix : path.join(prefix, title), base: title };
+  if (settings.layout === "flat") return { directory: prefix, base: title };
+  // A film's folder and file carry the year the catalogue named, so a remake of the same
+  // name does not land in the folder of the original.
+  const named = media?.year == null ? title : `${title} (${media.year})`;
+  return { directory: path.join(prefix, named), base: named };
 }
 
 export const joinTarget = (directory: string, base: string, extension: string, copy = 1) =>

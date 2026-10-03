@@ -826,6 +826,7 @@ export const en = {
   "addons.layoutFlat": "Flat – files only",
   "addons.example": "Example:",
   "addons.sampleMovie": "Movie title",
+  "addons.sampleYear": "2024",
   "addons.sampleShow": "Series title",
   "addons.sampleEpisode": "Episode title",
   "addons.sampleSeasonFolder": "season",

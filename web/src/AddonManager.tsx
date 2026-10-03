@@ -274,8 +274,14 @@ function AddonEditDialog({ addon, libraries, onClose, onChanged, onNotify, onErr
     const rule = draft.downloadSettings[kind];
     const folder = rule.subfolder.trim().replaceAll("\\", "/").replace(/^\/+|\/+$/g, "");
     const root = `${(libraries.find((library) => library.id === rule.libraryId) ?? defaultLibrary(kind))?.root ?? t("addons.noLibraryRoot")}${folder ? `/${folder}` : ""}`;
-    if (kind === "movie") return rule.layout === "flat" ? `${root}/${t("addons.sampleMovie")}.mkv` : `${root}/${t("addons.sampleMovie")}/${t("addons.sampleMovie")}.mkv`;
-    return rule.layout === "flat" ? `${root}/${t("addons.sampleShow")} - S01E01 - ${t("addons.sampleEpisode")}.mkv` : `${root}/${t("addons.sampleShow")}/01 ${t("addons.sampleSeasonFolder")}/01 - ${t("addons.sampleEpisode")}.mkv`;
+    if (kind === "movie") {
+      const movie = `${t("addons.sampleMovie")} (${t("addons.sampleYear")})`;
+      return rule.layout === "flat" ? `${root}/${t("addons.sampleMovie")}.mkv` : `${root}/${movie}/${movie}.mkv`;
+    }
+    const show = t("addons.sampleShow");
+    return rule.layout === "flat"
+      ? `${root}/${show} - S01E01 - ${t("addons.sampleEpisode")}.mkv`
+      : `${root}/${show}/01 ${t("addons.sampleSeasonFolder")}/${show} - S01E01 - ${t("addons.sampleEpisode")}.mkv`;
   };
 
   const check = (key: "globalSearch" | "showInContinueWatching", labelText: string, hint: string) =>

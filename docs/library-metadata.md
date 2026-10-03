@@ -12,10 +12,17 @@ above the path.
 
 ## What gets matched
 
-The unit is a **title**, not a file. A folder with season folders inside it is
-one series; a folder holding a single film is one film; a loose video at the top
-of the library is its own film. Grouping folders that exist only to sort the
-tree — `Webshare`, `Movies`, `Films` — are walked through rather than matched.
+The unit is a **title**, not a file. In a `series` library the type decides the
+shape, as Jellyfin and Plex do: every folder directly under the library root is
+one show holding every video below it, whatever it looks like inside. A folder
+that only sorts shows — a category such as `Kids` — is walked through, and so is
+a `mixed` library's grouping folder.
+
+In a `mixed` or `movie` library the structure decides: a folder with season
+folders inside it is one series; a folder holding a single film is one film; a
+loose video at the top of the library is its own film. Grouping folders that
+exist only to sort the tree — `Webshare`, `Movies`, `Films` — are walked through
+rather than matched.
 
 Concretely:
 

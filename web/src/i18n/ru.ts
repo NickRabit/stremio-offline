@@ -784,6 +784,7 @@ export const ru: Catalog = {
   "addons.layoutFlat": "Плоский формат – только файлы",
   "addons.example": "Пример:",
   "addons.sampleMovie": "Название фильма",
+  "addons.sampleYear": "2024",
   "addons.sampleShow": "Название серии",
   "addons.sampleEpisode": "Название серии",
   "addons.sampleSeasonFolder": "сезон",

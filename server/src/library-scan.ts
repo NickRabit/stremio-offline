@@ -5,7 +5,7 @@ import { log } from "./logger.js";
 import {
   autoAccept, cacheFieldsFromMeta, episodesFromMeta, knownTitleForUnit, lookupSkipped, needsRefresh, pickSuggestion, scanMiss,
   scannedRecently, scanSkipReason, scoreHit, viewMeta, yearFromMeta, MATCH_RULE_VERSION, needsReevaluation, parseUnit,
-  runtimeRivals, isExtraName, SUGGESTION_MIN_SCORE,
+  runtimeRivals, isAutomaticRecord, isExtraName, SUGGESTION_MIN_SCORE,
   type LibraryEpisodeRecord, type LibraryMetaRecord, type LibrarySuggestion, type SuggestionReason, type TitleKind, type TitleUnit,
   type ScoredHit,
 } from "./library-match.js";
@@ -465,6 +465,14 @@ export class LibraryScan {
             type: item.type, id: item.id, source: "scan", locked: false,
             matchedAt: nowIso(), backfilledAt: nowIso(), ...fields,
           };
+          // A bound series owns its whole folder: the rows and proposals the folders inside it
+          // used to carry described the units this binding has just replaced.
+          if (unit.kind === "series") {
+            for (const path of Object.keys(metaMap)) {
+              if (path !== key && isPathWithin(path, key) && isAutomaticRecord(metaMap[path]!)) delete metaMap[path];
+            }
+            for (const path of Object.keys(suggestions)) if (isPathWithin(path, key)) delete suggestions[path];
+          }
           Object.assign(episodes, episodeRows);
           delete suggestions[key];
           wrote = true;

@@ -13,17 +13,18 @@ test("a film goes into a folder of its own with the same name", () => {
 test("an episode goes into the series and season folders", () => {
   const { directory, base } = targetPath(
     { kind: "episode", title: "Simpsonovi", season: 1, episode: 7, episodeTitle: "Vánoce u Simpsonových" }, "x", ".mp4");
-  assert.equal(joinTarget(directory, base, ".mp4"), path.join("Simpsonovi", "01 serie", "07 - Vánoce u Simpsonových.mp4"));
+  assert.equal(joinTarget(directory, base, ".mp4"), path.join("Simpsonovi", "01 serie", "Simpsonovi - S01E07 - Vánoce u Simpsonových.mp4"));
 });
 
 test("two-digit season and episode numbers are left as they are", () => {
   const { directory, base } = targetPath({ kind: "episode", title: "Seriál", season: 12, episode: 134, episodeTitle: "Díl" }, "x", ".mkv");
-  assert.equal(joinTarget(directory, base, ".mkv"), path.join("Seriál", "12 serie", "134 - Díl.mkv"));
+  assert.equal(joinTarget(directory, base, ".mkv"), path.join("Seriál", "12 serie", "Seriál - S12E134 - Díl.mkv"));
 });
 
 test("an episode with no name keeps at least its number", () => {
   const { directory, base } = targetPath({ kind: "episode", title: "Seriál", season: 2, episode: 3 }, "x", ".mkv");
-  assert.equal(joinTarget(directory, base, ".mkv"), path.join("Seriál", "02 serie", "03.mkv"));
+  assert.equal(joinTarget(directory, base, ".mkv"), path.join("Seriál", "02 serie", "Seriál - S02E03.mkv"),
+    "no title drops the - title part");
 });
 
 test("specials in season zero get a folder of their own", () => {
@@ -33,12 +34,20 @@ test("specials in season zero get a folder of their own", () => {
 
 test("with no season number the episode stays directly in the series folder", () => {
   const { directory, base } = targetPath({ kind: "episode", title: "Seriál", episode: 5, episodeTitle: "Díl" }, "x", ".mkv");
-  assert.equal(joinTarget(directory, base, ".mkv"), path.join("Seriál", "05 - Díl.mkv"));
+  assert.equal(joinTarget(directory, base, ".mkv"), path.join("Seriál", "Seriál - E05 - Díl.mkv"));
 });
 
 test("with no show details the given name is used", () => {
   const { directory, base } = targetPath(undefined, "Nějaké video", ".avi");
   assert.equal(joinTarget(directory, base, ".avi"), path.join("Nějaké video", "Nějaké video.avi"));
+});
+
+test("a film's folder and file carry the year the catalogue names", () => {
+  const { directory, base } = targetPath({ kind: "movie", title: "Heat", year: 1995 }, "x", ".mkv");
+  assert.equal(joinTarget(directory, base, ".mkv"), path.join("Heat (1995)", "Heat (1995).mkv"));
+  // Without a year the shape is what it always was.
+  const dated = targetPath({ kind: "movie", title: "Heat" }, "x", ".mkv");
+  assert.equal(joinTarget(dated.directory, dated.base, ".mkv"), path.join("Heat", "Heat.mkv"));
 });
 
 test("a copy gets a running number and the folder stays the same", () => {
@@ -79,11 +88,11 @@ test("an over-long name is trimmed", () => {
 test("a download name gives way so a win32 path stays usable", () => {
   const root = "C:\\Media\\Filmy";
   const { directory } = targetPath({ kind: "episode", title: "Seriál", season: 1, episode: 7 }, "x", ".mkv");
-  const base = `07 - ${"Vánoce u Simpsonových ".repeat(20)}`.trim();
+  const base = `Seriál - S01E07 - ${"Vánoce u Simpsonových ".repeat(20)}`.trim();
   const fitted = fitTargetName(root, directory, base, ".mkv", 1, "win32");
   assert.ok(fitted.length < base.length, "the stem had to give way");
   assert.ok(path.join(root, directory, `${fitted}.mkv`).length <= 240, "the absolute path is inside the cap");
-  assert.ok(fitted.startsWith("07 - "), "the episode number stays");
+  assert.ok(fitted.startsWith("Seriál - S01E07 - "), "the show and episode code stay");
   assert.ok(!fitted.endsWith(".") && !fitted.endsWith(" "), "no dangling dot or space");
   assert.ok(path.join(root, directory, `${fitted}.mkv`).startsWith(`${path.join(root, directory)}${path.sep}`), "the folder the user chose is untouched");
 });
@@ -132,7 +141,7 @@ test("a series can be saved flat without episode names colliding", () => {
 
 test("structured saving puts the subfolder before the usual structure", () => {
   const target = targetPath({ kind: "episode", title: "Simpsonovi", season: 2, episode: 3, episodeTitle: "Díl" }, "x", ".mkv", { subfolder: "Streamy/Seriály", layout: "structured" });
-  assert.equal(joinTarget(target.directory, target.base, ".mkv"), path.join("Streamy", "Seriály", "Simpsonovi", "02 serie", "03 - Díl.mkv"));
+  assert.equal(joinTarget(target.directory, target.base, ".mkv"), path.join("Streamy", "Seriály", "Simpsonovi", "02 serie", "Simpsonovi - S02E03 - Díl.mkv"));
 });
 
 test("the default settings migrate to the base folder and structure", () => {
@@ -176,7 +185,7 @@ test("device downloads use the same filename as the library", () => {
   const media = { kind: "episode" as const, title: "Seriál", season: 2, episode: 3, episodeTitle: "Díl" };
   const settings = { subfolder: "Provider/Seriály", layout: "structured" as const };
   assert.equal(streamExtension(stream), ".mkv");
-  assert.equal(deviceFilename(stream, media, "fallback", settings), "03 - Díl.mkv");
+  assert.equal(deviceFilename(stream, media, "fallback", settings), "Seriál - S02E03 - Díl.mkv");
 });
 
 test("URL extensions do not include the debrid query string", () => {
