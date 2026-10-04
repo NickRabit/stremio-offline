@@ -511,7 +511,7 @@ test("listVideosChecked agrees with listVideos and reports a complete walk", asy
 });
 
 test("a directory that cannot be read leaves the walk incomplete but the rest listed",
-  { skip: process.getuid?.() === 0 && "root ignores the permission bits" }, async () => {
+  { skip: (process.getuid?.() === 0 && "root ignores the permission bits") || (process.platform === "win32" && "NTFS has no permission bits to close a directory with") }, async () => {
     const root = await mkdtemp(path.join(tmpdir(), "stremio-videos-"));
     const closed = path.join(root, "Closed");
     try {
