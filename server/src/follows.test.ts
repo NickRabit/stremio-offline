@@ -317,7 +317,7 @@ test("a null answer is recorded as a failure", async (t) => {
   assert.equal(after.lastErrorKey, "err.followMetaUnavailable");
 });
 
-test("an edit while the metadata is in flight discards the result", async (t) => {
+test("an edit while the metadata is in flight keeps the episodes it brought", async (t) => {
   const dir = temp();
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const store = await loaded(dir);
@@ -329,8 +329,23 @@ test("an edit while the metadata is in flight discards the result", async (t) =>
   await store.update(follow.id, (entry) => { entry.revision += 1; });
   release(meta([{ id: "tt1:1:1", season: 1, episode: 1 }]));
   await run;
-  assert.deepEqual(store.get(follow.id)!.episodes, {});
-  assert.equal(store.get(follow.id)!.lastCheckedAt, undefined);
+  assert.deepEqual(Object.keys(store.get(follow.id)!.episodes), ["1:1"], "switching downloads on after following must not lose the first check");
+  assert.ok(store.get(follow.id)!.lastCheckedAt);
+});
+
+test("a follow removed while the metadata is in flight records nothing", async (t) => {
+  const dir = temp();
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const store = await loaded(dir);
+  const follow = await store.create({ ownerUserId: "u1", type: "series", metaId: "tt1", name: "Show" }, 0);
+  let release!: (value: MetaItem | null) => void;
+  const pending = new Promise<MetaItem | null>((resolve) => { release = resolve; });
+  const service = new FollowService({ store, now: () => 1_000, owner: () => ({ id: "u1", role: "user" }), queue: fakeQueue().queue, mayDownload: () => true, meta: () => pending });
+  const run = service.check(follow.id, "manual");
+  await store.remove(follow.id);
+  release(meta([{ id: "tt1:1:1", season: 1, episode: 1 }]));
+  await run;
+  assert.equal(store.get(follow.id), undefined);
 });
 
 test("a manual check is refused inside the cooldown and answered after it", async (t) => {

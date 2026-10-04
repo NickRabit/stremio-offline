@@ -1083,7 +1083,6 @@ export class FollowService {
     if (!follow) return;
     const owner = this.deps.owner(follow.ownerUserId);
     if (!owner || owner.disabled) return;
-    const revision = follow.revision;
     let result: { episodes: FollowEpisode[]; now: number } | { errorKey: string; now: number };
     try {
       const meta = await this.deps.meta({ id: owner.id, role: owner.role }, follow.type, follow.metaId);
@@ -1095,10 +1094,11 @@ export class FollowService {
       result = { errorKey: "err.followMetaUnavailable", now: this.deps.now() };
       log("WARN", "A followed series could not be checked", { follow: followId, reason });
     }
-    // A removal or an edit while the addons answered must not be overwritten by this
-    // run's older picture.
+    // The episodes are the provider's facts, not the person's choices: an edit while the
+    // addons answered (switching downloads on right after following) keeps them. Only a
+    // follow that was removed meanwhile drops the result.
     const current = this.deps.store.get(followId);
-    if (!current || current.revision !== revision) return;
+    if (!current) return;
     await this.deps.store.recordCheck(followId, result);
     if ("episodes" in result) {
       try { await this.admit(followId); }
