@@ -72,7 +72,7 @@
 .title-chips .watch-star.on svg{fill:#f0d089}
 .title-chips .follow-chip{padding:0 9px}
 .title-chips .follow-chip svg{width:13px;height:13px}
-.title-chips .follow-chip.on{color:#f0d089;border-color:#f0d08955;background:#f0d0890f}
+.title-chips .follow-chip.on{color:#17120a;border-color:#f0d089;background:#f0d089;font-weight:700}.title-chips .follow-chip.on:hover{background:#f5dca6}
 .title-chips .follow-chip-download{display:inline-flex;align-items:center}
 .detail-copy>.title-chips{margin:0 0 7px}
 /* In a menu the row sits above the actions, so it keeps the separator the buttons do not need. */

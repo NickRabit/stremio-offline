@@ -47,6 +47,14 @@ queue.
 - Without a token, torrent rows are hidden and the empty list points at
   Settings.
 
+A season, a whole show or a followed series is queued as lazy jobs (see
+below), and those use a torrent only as a fallback: when no HTTP source matches
+and a token is set, the job picks a torrent from the listing, waits for
+Real-Debrid the same way, then downloads the link it returns. Strict audio is
+never satisfied by a torrent, because its tracks cannot be read before the file
+exists; an episode needs a torrent that names its file, and a file Real-Debrid
+reports as a different episode is rejected and the next source tried.
+
 AllDebrid, Premiumize, and scraping the token out of a Torrentio URL are out
 of scope.
 
@@ -101,6 +109,37 @@ the slower deep probe instead of retrying it. Resolving one episode also gives
 up after checking 15 candidates rather than working through an addon's whole
 list, so an obscure title with mostly dead or wrong-language sources still
 fails in bounded time instead of stalling the queue.
+
+### Following a series
+
+**Follow** on a series detail checks the series once a day, through your own
+addons and in your own language. Episodes released since you followed it, and
+not yet watched past, appear under **New episodes** in the Library, next to the
+list of followed series. Following downloads nothing, and the series does not
+need to be in a library.
+
+In the follow dialog you can pause it, check it now (once a minute at most) and
+switch on **automatic downloads**. The setup is the season dialog above, with
+addon priority as the default and one more choice: start with episodes released
+from now on, or from a chosen episode, with a count of what would download
+straight away. The library is pinned when you save, so a later change to an
+addon's rule does not move the series.
+
+- Each episode is queued once. At most 20 are admitted per series per pass and
+  20 wait across all follows, so a new season drains gradually.
+- An episode with no matching source yet waits and is retried: after an hour,
+  six hours, then daily for a month, then weekly. It stays listed as waiting.
+- Removing an automatic job from the queue skips that episode for good; **Retry**
+  in the follow dialog brings it back. Deleting a downloaded file does not
+  download it again, and clearing the queue history keeps the record.
+- An episode with no release date, or with providers that disagree about it, is
+  not guessed at; it is listed as needing attention.
+- Pausing stops new episodes; jobs already queued carry on. Unfollowing leaves
+  files and queued jobs alone. Losing the download permission blocks automatic
+  downloads until it is back, and deleting an account drops its follows.
+
+Follows live in `follows.json` in the data directory. A full data-directory
+backup includes it; the settings export does not.
 
 ### Segmented downloads
 

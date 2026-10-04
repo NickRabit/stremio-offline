@@ -43,7 +43,11 @@ export function FollowListDialog({ follows, languages, libraries, addons, audioL
               <span className="follow-row-art">{follow.poster ? <img src={follow.poster} alt="" loading="lazy"/> : <Film/>}</span>
               <span className="follow-row-copy">
                 <strong>{follow.name}{!follow.enabled && <em className="follow-badge">{t("follow.pausedBadge")}</em>}{follow.autoDownload && <Download aria-hidden="true"/>}</strong>
-                <small>{follow.nextEpisode ? t("follow.nextEpisode", { code: episodeCode(follow.nextEpisode.season, follow.nextEpisode.episode), date: follow.nextEpisode.released ? new Date(follow.nextEpisode.released).toLocaleDateString(localeTag()) : "" }) : t("follow.noNextEpisode")}</small>
+                <small>{follow.nextEpisode
+                  ? t("follow.nextEpisode", { code: episodeCode(follow.nextEpisode.season, follow.nextEpisode.episode), date: follow.nextEpisode.released ? new Date(follow.nextEpisode.released).toLocaleDateString(localeTag()) : "" })
+                  : follow.latestEpisode
+                    ? t("follow.latestEpisode", { code: episodeCode(follow.latestEpisode.season, follow.latestEpisode.episode), date: follow.latestEpisode.released ? new Date(follow.latestEpisode.released).toLocaleDateString(localeTag()) : "" })
+                    : t("follow.noNextEpisode")}</small>
                 {follow.downloads.attention > 0 && <small className="follow-attention">{t("follow.stateAttention")} · {follow.downloads.attention}</small>}
               </span>
             </button>)}

@@ -315,6 +315,7 @@ export const ptBR: Catalog = {
   "follow.statusHeading": "Status",
   "follow.nextEpisode": "Próximo episódio: {code} · {date}",
   "follow.noNextEpisode": "Nenhum próximo episódio anunciado",
+  "follow.latestEpisode": "Último episódio: {code} · {date}",
   "follow.lastChecked": "Última verificação {time}",
   "follow.neverChecked": "Ainda não verificado",
   "follow.paused": "Pausar o acompanhamento",

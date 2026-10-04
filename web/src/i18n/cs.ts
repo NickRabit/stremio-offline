@@ -339,6 +339,7 @@ export const cs: Catalog = {
   "follow.statusHeading": "Stav",
   "follow.nextEpisode": "Další díl: {code} · {date}",
   "follow.noNextEpisode": "Další díl zatím není ohlášen",
+  "follow.latestEpisode": "Poslední díl: {code} · {date}",
   "follow.lastChecked": "Naposledy zkontrolováno {time}",
   "follow.neverChecked": "Zatím nezkontrolováno",
   "follow.paused": "Pozastavit sledování",

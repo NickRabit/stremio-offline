@@ -315,6 +315,7 @@ export const sk: Catalog = {
   "follow.statusHeading": "Stav",
   "follow.nextEpisode": "Ďalší diel: {code} · {date}",
   "follow.noNextEpisode": "Ďalší diel zatiaľ nie je ohlásený",
+  "follow.latestEpisode": "Posledný diel: {code} · {date}",
   "follow.lastChecked": "Naposledy skontrolované {time}",
   "follow.neverChecked": "Zatiaľ neskontrolované",
   "follow.paused": "Pozastaviť sledovanie",

@@ -315,6 +315,7 @@ export const fr: Catalog = {
   "follow.statusHeading": "Statut",
   "follow.nextEpisode": "Prochain épisode : {code} · {date}",
   "follow.noNextEpisode": "Aucun prochain épisode annoncé",
+  "follow.latestEpisode": "Dernier épisode : {code} · {date}",
   "follow.lastChecked": "Dernière vérification {time}",
   "follow.neverChecked": "Pas encore vérifié",
   "follow.paused": "Suspendre le suivi",

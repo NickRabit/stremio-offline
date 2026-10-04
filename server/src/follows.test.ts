@@ -36,6 +36,7 @@ const fakeQueue = () => {
   const jobs: FakeJob[] = [];
   const added: Array<{ title: string; source: { type: string; videoId: string; selection?: DownloadSelection }; ownerUserId: string; follow: { followId: string; episodeKey: string; intent: string } }> = [];
   const retried: string[] = [];
+  const retriedWith: DownloadSelection[] = [];
   const removed: string[] = [];
   const hooks: { remove?: (job: FakeJob) => Promise<void> } = {};
   let nextId = 1;
@@ -52,7 +53,7 @@ const fakeQueue = () => {
     findActiveEpisode: (_ownerUserId, type, videoId) => jobs.find((job) => job.source?.type === type && job.source?.videoId === videoId && job.status !== "completed" && job.status !== "failed"),
     followJobs: () => jobs.map((job) => ({ id: job.id, status: job.status, ...(job.errorKey ? { errorKey: job.errorKey } : {}), ...(job.follow ? { follow: job.follow } : {}) })),
     get: (id) => { const job = jobs.find((item) => item.id === id); return job ? { id: job.id, status: job.status, ...(job.errorKey ? { errorKey: job.errorKey } : {}) } : undefined; },
-    retry: async (id) => { retried.push(id); const job = jobs.find((item) => item.id === id); if (job) job.status = "queued"; },
+    retry: async (id, selection) => { retried.push(id); if (selection) retriedWith.push(selection); const job = jobs.find((item) => item.id === id); if (job) job.status = "queued"; },
     remove: async (id) => {
       const index = jobs.findIndex((job) => job.id === id);
       if (index < 0) throw new Error("not found");
@@ -62,7 +63,7 @@ const fakeQueue = () => {
     },
   };
   return {
-    queue, jobs, added, retried, removed, hooks,
+    queue, jobs, added, retried, retriedWith, removed, hooks,
     failNextAdd: () => { failAdd = true; },
     complete: (id: string) => { const job = jobs.find((item) => item.id === id); if (job) job.status = "completed"; },
     fail: (id: string, errorKey?: string) => { const job = jobs.find((item) => item.id === id); if (job) { job.status = "failed"; job.errorKey = errorKey; } },
@@ -587,6 +588,59 @@ test("removing a job records a skip that is never re-admitted", async (t) => {
   await service.admit(id);
   assert.equal(store.get(id)!.episodes["1:1"].download?.state, "skipped");
   assert.equal(q.added.length, 1);
+});
+
+test("clearing a failed job keeps the episode waiting and queues a fresh one when due", async (t) => {
+  const { store } = await withStore(t);
+  const q = fakeQueue();
+  let now = NOW;
+  const service = buildService(store, q, { now: () => now });
+  q.hooks.remove = (job) => service.jobRemoving(job, "user");
+  const id = await seedSeries(store, [episode(1, 1, "v1", RELEASED)], rule());
+  await service.admit(id);
+  q.fail(q.jobs[0].id, "err.noMatchingSource");
+  await service.sync();
+  await q.queue.remove(q.jobs[0].id);
+
+  let download = store.get(id)!.episodes["1:1"].download!;
+  assert.equal(download.state, "waiting", "a cleared failure is not a skip");
+  assert.equal(download.jobId, undefined);
+  assert.equal(download.reasonKey, "err.noMatchingSource");
+  await service.sync();
+  assert.equal(q.added.length, 1, "nothing before the next attempt is due");
+
+  now += 3_600_000;
+  await service.sync();
+  download = store.get(id)!.episodes["1:1"].download!;
+  assert.equal(download.state, "queued");
+  assert.equal(download.generation, 2);
+  assert.equal(q.added.length, 2, "exactly one fresh job");
+});
+
+test("changing the rules retries waiting episodes at once with the new selection", async (t) => {
+  const { store } = await withStore(t);
+  const q = fakeQueue();
+  const service = buildService(store, q);
+  q.hooks.remove = (job) => service.jobRemoving(job, "user");
+  const id = await seedSeries(store, [episode(1, 1, "v1", RELEASED), episode(1, 2, "v2", RELEASED), episode(1, 3, "v3", RELEASED)], rule());
+  await service.admit(id);
+  q.fail(q.jobs[0].id, "err.noMatchingSource");
+  q.fail(q.jobs[1].id, "err.noMatchingSource");
+  await service.sync();
+  await q.queue.remove(q.jobs[1].id);
+  await q.queue.remove(q.jobs[1].id);
+
+  const current = store.get(id)!.autoDownload!;
+  const selection = { ...current.selection, audioMode: "preferred" as const };
+  await service.setAutoDownload(id, "u1", { startMode: current.startMode, startSeason: current.startSeason, startEpisode: current.startEpisode, selection });
+
+  const episodes = store.get(id)!.episodes;
+  assert.equal(episodes["1:1"].download?.state, "queued", "the failed job is retried in place");
+  assert.deepEqual(q.retriedWith.map((item) => item.audioMode), ["preferred"]);
+  assert.equal(episodes["1:2"].download?.state, "queued", "a cleared failure gets a fresh job now");
+  assert.equal(episodes["1:2"].download?.generation, 2);
+  assert.equal(episodes["1:3"].download?.state, "skipped", "a skip stays a skip");
+  assert.equal(q.added.length, 4);
 });
 
 test("a removal guard that cannot write refuses the removal", async (t) => {

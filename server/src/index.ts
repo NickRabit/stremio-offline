@@ -1597,7 +1597,7 @@ const followService = new FollowService({
     findActiveEpisode: (ownerUserId, type, videoId) => queue.findActiveEpisode(ownerUserId, type, videoId),
     followJobs: () => queue.followJobs(),
     get: (id) => queue.get(id),
-    retry: (id) => queue.retry(id),
+    retry: (id, selection) => queue.retry(id, selection),
     remove: (id) => queue.remove(id),
   },
   // The owner may queue into the pinned library right now: the account, its rights, the

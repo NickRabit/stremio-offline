@@ -315,6 +315,7 @@ export const ru: Catalog = {
   "follow.statusHeading": "Статус",
   "follow.nextEpisode": "Следующий эпизод: {code} · {date}",
   "follow.noNextEpisode": "Следующий эпизод не объявлен",
+  "follow.latestEpisode": "Последний эпизод: {code} · {date}",
   "follow.lastChecked": "Последняя проверка {time}",
   "follow.neverChecked": "Ещё не проверялось",
   "follow.paused": "Приостановить отслеживание",

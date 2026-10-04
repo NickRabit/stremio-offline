@@ -369,7 +369,7 @@ export interface FollowQueue {
   findActiveEpisode(ownerUserId: string, type: string, videoId: string): { id: string } | undefined;
   followJobs(): FollowJob[];
   get(id: string): { id: string; status: string; errorKey?: string } | undefined;
-  retry(id: string): Promise<unknown>;
+  retry(id: string, selection?: DownloadSelection): Promise<unknown>;
   remove(id: string): Promise<void>;
 }
 
@@ -717,6 +717,9 @@ export class FollowService {
           await this.setDownload(follow.id, episodeKey, { ...download, state: "queued", jobId: job.id, reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
         } else if (job && job.status === "completed") {
           await this.setDownload(follow.id, episodeKey, { ...download, state: "completed", reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
+        } else if (!job && !download.jobId) {
+          // The failed job was cleared from the queue on purpose; the episode is still wanted.
+          await this.enqueueLocked(follow.id, revision, episodeKey, download.generation + 1);
         } else {
           await this.setDownload(follow.id, episodeKey, { ...download, state: "attention", jobId: undefined, reasonKey: "err.followJobMissing", nextAttemptAt: undefined, updatedAt: "" });
         }
@@ -779,8 +782,33 @@ export class FollowService {
         }
         current.revision += 1;
       });
-      if (value !== null) await this.admitLocked(followId);
+      if (value !== null) {
+        await this.retryUnderNewRules(followId);
+        await this.admitLocked(followId);
+      }
     });
+  }
+
+  /** New rules are the user's answer to an episode that found nothing: everything still
+   *  waiting for a source, or lost from the queue, is tried again now with them. */
+  private async retryUnderNewRules(followId: string): Promise<void> {
+    const follow = this.admittable(followId, this.deps.store.get(followId)?.revision ?? -1);
+    if (!follow || !this.mayQueue(follow)) return;
+    const revision = follow.revision;
+    for (const episode of Object.values(follow.episodes)) {
+      const download = episode.download;
+      if (!download) continue;
+      const lost = download.state === "attention" && download.reasonKey === "err.followJobMissing";
+      if (download.state !== "waiting" && !lost) continue;
+      const job = download.jobId ? this.deps.queue.get(download.jobId) : undefined;
+      if (job && job.status === "failed") {
+        await this.deps.queue.retry(job.id, follow.autoDownload!.selection);
+        if (!this.admittable(followId, revision)) return;
+        await this.setDownload(followId, episode.key, { ...download, state: "queued", attempts: 0, reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
+      } else if (!job) {
+        await this.enqueueLocked(followId, revision, episode.key, download.generation + 1);
+      }
+    }
   }
 
   async skipEpisode(followId: string, ownerUserId: string, episodeKey: string): Promise<void> {
@@ -839,6 +867,17 @@ export class FollowService {
       if (job.status === "completed") {
         if (download.state === "completed") return;
         await this.setDownload(ref.followId, ref.episodeKey, { ...download, state: "completed", reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
+        return;
+      }
+      if (job.status === "failed") {
+        // Clearing a failure tidies the queue; it does not say the episode is unwanted, so it
+        // keeps waiting and a fresh job is queued at its next attempt.
+        const attempts = Math.max(1, download.attempts);
+        await this.setDownload(ref.followId, ref.episodeKey, {
+          ...download, state: "waiting", jobId: undefined, attempts,
+          reasonKey: job.errorKey ?? download.reasonKey ?? "err.followDownloadFailed",
+          nextAttemptAt: new Date(this.deps.now() + downloadLadderMs(attempts)).toISOString(), updatedAt: "",
+        });
         return;
       }
       await this.setDownload(ref.followId, ref.episodeKey, { ...download, state: "skipped", reasonKey: "err.followSkipped", nextAttemptAt: undefined, updatedAt: "" });

@@ -70,6 +70,10 @@ Shipped in `main`; implementation details live in the linked guides.
   tallest rendition, and a conversion that falls behind playback says whether
   the source or FFmpeg is waiting. AirPlay is disabled.
   [Playback](playback.md), [Troubleshooting](troubleshooting.md).
+- **Following**: follow a series for its new episodes in the Library, with
+  opt-in automatic downloads that queue each episode once, retry a missing
+  source on a ladder and treat a removed job as a skip. Lazy jobs fall back to
+  a torrent through Real-Debrid. [Downloads](downloads.md#following-a-series).
 - **Continue watching**: series grouping, the next available catalogue episode
   and per-library/addon visibility. [Libraries](libraries.md#the-library-row).
 - **Downloads**: restart recovery, Range resume, retries, disk-full pausing,
@@ -160,21 +164,15 @@ episodes are an additive row, not a reason to block the home screen. See the
 - Bulk rename by pattern. Deliberately out of the first multi-library release;
   the operations queue is shaped to take it without a migration.
 
-### Follow show
+### Release calendar
 
-Let a user follow a series and optionally download new episodes automatically.
-Run a daily check and enqueue new episodes as lazy jobs; the lazy-job plumbing
-exists, but the watch list and scheduler do not. Torrent sources should enqueue
-the same way.
-
-The feature should build on the existing source ordering, preferred audio
-language, subtitle policy and library selection rather than inventing another
-download path. Surface new episodes on the home screen and make duplicate
-detection explicit so a repeated scheduler run is harmless. Following defaults
-to discovery only; automatic downloads are a separate opt-in. See
-[Follow show](roadmap-delivery-spec.md#follow-show). Its prerequisite, judging a
-duplicate download against the caller's own jobs rather than anyone's, is a
-focused fix of its own.
+Show when followed episodes and watchlist films come out: upcoming episodes
+from the dates following already stores, films with TMDB's digital release
+date when a key is set (otherwise the catalogue's date, marked approximate),
+and whether each is set to download, waiting or downloaded. Optionally an
+authenticated, revocable `.ics` feed per account. Follow-ups to following:
+a grace period that waits for preferred audio before taking the fallback,
+downloading N episodes ahead of viewing, and opt-in retention.
 
 ### Queue robustness
 

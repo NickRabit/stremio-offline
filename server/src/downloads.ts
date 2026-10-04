@@ -784,12 +784,15 @@ export class DownloadQueue {
     this.pump();
   }
 
-  async retry(id: string) {
+  /** A lazy job may be retried under new rules: the selection is swapped before the next
+   *  resolve, so a follow whose settings changed does not leave a stale failed copy behind. */
+  async retry(id: string, selection?: DownloadSelection) {
     const job = this.require(id);
     if (job.status !== "failed") throw new AppError("Only a failed download can be retried.", "err.retryOnlyFailed");
     job.retryCount = 0;
     job.notBefore = undefined;
     if (job.source) {
+      if (selection && !job.stream) job.source.selection = selection;
       job.source.tried = [];
       if (!job.stream) { job.target = ""; job.received = 0; job.total = undefined; }
     }

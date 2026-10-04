@@ -343,6 +343,7 @@ export const en = {
   "follow.statusHeading": "Status",
   "follow.nextEpisode": "Next episode: {code} · {date}",
   "follow.noNextEpisode": "No upcoming episode announced",
+  "follow.latestEpisode": "Latest: {code} · {date}",
   "follow.lastChecked": "Last checked {time}",
   "follow.neverChecked": "Not checked yet",
   "follow.paused": "Pause following",

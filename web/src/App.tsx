@@ -1078,6 +1078,9 @@ export function App() {
   const startFollow = async (item: Meta) => {
     try {
       const follow = await api.follow({ type: item.type || "series", id: item.id, name: item.name, poster: item.poster });
+      // The chip of the title on screen switches at once; `applyFollowChange` only replaces a
+      // follow the detail already holds, and this one did not exist a moment ago.
+      if (selectedIdRef.current === item.id) setDetailFollow(follow);
       applyFollowChange(follow.id, follow);
       notify(t("follow.followed"));
       // The server checks a new follow straight away; its episodes land a moment later.
