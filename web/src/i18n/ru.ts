@@ -267,6 +267,7 @@ export const ru: Catalog = {
   "catalog.suggestions": "Подсказки",
   "catalog.suggestRecent": "Недавний поиск",
   "catalog.suggestTitle": "Название",
+  "catalog.forgetRecent": "Удалить из истории",
   "catalog.searchHeading": "Поиск: {query}",
   "catalog.results": "Результаты",
   "catalog.itemCount": { one: "1 предмет", other: "{count} предметов", few: "{count} предмета", many: "{count} предметов" },

@@ -289,6 +289,7 @@ export const en = {
   "catalog.suggestions": "Suggestions",
   "catalog.suggestRecent": "Recent search",
   "catalog.suggestTitle": "Title",
+  "catalog.forgetRecent": "Remove from history",
   "catalog.searchHeading": "Search: {query}",
   "catalog.results": "Results",
   "catalog.itemCount": { one: "1 item", other: "{count} items" },

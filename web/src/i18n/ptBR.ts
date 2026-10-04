@@ -267,6 +267,7 @@ export const ptBR: Catalog = {
   "catalog.suggestions": "Sugestões",
   "catalog.suggestRecent": "Pesquisa recente",
   "catalog.suggestTitle": "Título",
+  "catalog.forgetRecent": "Remover do histórico",
   "catalog.searchHeading": "Pesquisa: {query}",
   "catalog.results": "Resultados",
   "catalog.itemCount": { one: "1 artigo", other: "{count} itens" },

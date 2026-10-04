@@ -64,6 +64,26 @@ test.describe("catalog", () => {
     await expect(page.getByRole("heading", { name: "Hledání: Zkušební" })).toBeVisible();
   });
 
+  test("removes one search from the history without running it", async ({ page }) => {
+    await page.goto("/");
+    const box = page.getByRole("combobox", { name: "Hledat ve všech doplňcích naráz…" });
+    await box.fill("seriál");
+    await box.press("Enter");
+    await expect(page.getByRole("heading", { name: "Hledání: seriál" })).toBeVisible();
+
+    await page.getByRole("button", { name: "Zrušit" }).click();
+    await box.focus();
+    const suggestions = page.getByRole("listbox", { name: "Návrhy" });
+    const recent = suggestions.getByRole("option", { name: /^seriál/ });
+    await expect(recent).toContainText("Nedávné hledání");
+    await recent.getByRole("button", { name: "Odebrat z historie" }).click();
+    await expect(recent).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "Hledání: seriál" })).toHaveCount(0);
+    await page.reload();
+    await box.focus();
+    await expect(page.getByRole("listbox", { name: "Návrhy" }).getByRole("option", { name: /^seriál/ })).toHaveCount(0);
+  });
+
   test("searches inside one selected catalogue", async ({ page }) => {
     await page.goto("/");
     const scope = page.getByRole("combobox", { name: "Kde hledat" });

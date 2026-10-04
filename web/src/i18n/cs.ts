@@ -285,6 +285,7 @@ export const cs: Catalog = {
   "catalog.suggestions": "Návrhy",
   "catalog.suggestRecent": "Nedávné hledání",
   "catalog.suggestTitle": "Titul",
+  "catalog.forgetRecent": "Odebrat z historie",
   "catalog.searchHeading": "Hledání: {query}",
   "catalog.results": "Výsledky",
   "catalog.itemCount": { one: "1 položka", few: "{count} položky", other: "{count} položek" },

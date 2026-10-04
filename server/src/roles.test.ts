@@ -28,6 +28,7 @@ const ALLOWED: Array<[string, string]> = [
   ["GET", "/search/state"],
   ["PATCH", "/search/preferences"],
   ["POST", "/search/history"],
+  ["POST", "/search/history/forget"],
   ["DELETE", "/search/history"],
   ["GET", "/library"],
   ["GET", "/library/browse"],

@@ -469,6 +469,64 @@ test("DELETE /api/search/history empties recent, keeps preferences and is idempo
   assert.deepEqual(await again.json(), kept, "a second clear changes nothing");
 });
 
+test("POST /api/search/history/forget drops one query and keeps the rest in order", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+
+  for (const query of ["Heat", "Ronin", "Alien"]) {
+    await api(harness.base, "/api/search/history", { method: "POST", user: ALICE, body: { query } });
+  }
+
+  const forgotten = await api(harness.base, "/api/search/history/forget", { method: "POST", user: ALICE, body: { query: "Ronin" } });
+  assert.equal(forgotten.status, 200);
+  assert.equal(forgotten.headers.get("cache-control"), "no-store");
+
+  const body = await (await api(harness.base, "/api/search/state", { user: ALICE })).json() as { recent: Array<{ query: string }> };
+  assert.deepEqual(body.recent.map((entry) => entry.query), ["Alien", "Heat"], "newest first, the middle entry gone");
+});
+
+test("forgetting a query as one account leaves the other account's history alone", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+
+  await api(harness.base, "/api/search/history", { method: "POST", user: ALICE, body: { query: "Heat" } });
+  await api(harness.base, "/api/search/history", { method: "POST", user: BOB, body: { query: "Ronin" } });
+
+  const response = await api(harness.base, "/api/search/history/forget", { method: "POST", user: ALICE, body: { query: "Heat" } });
+  assert.equal(response.status, 200);
+
+  const alice = await (await api(harness.base, "/api/search/state", { user: ALICE })).json() as { recent: unknown[] };
+  const bob = await (await api(harness.base, "/api/search/state", { user: BOB })).json() as { recent: Array<{ query: string }> };
+  assert.deepEqual(alice.recent, []);
+  assert.deepEqual(bob.recent.map((entry) => entry.query), ["Ronin"], "Bob's history is his own");
+});
+
+test("forgetting an unknown query answers 200 and changes nothing", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+
+  await api(harness.base, "/api/search/history", { method: "POST", user: ALICE, body: { query: "Heat" } });
+
+  const response = await api(harness.base, "/api/search/history/forget", { method: "POST", user: ALICE, body: { query: "unknown" } });
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  const body = await response.json() as { recent: Array<{ query: string }> };
+  assert.deepEqual(body.recent.map((entry) => entry.query), ["Heat"]);
+  assert.deepEqual(searchOf(harness, ALICE)?.recent.map((entry) => entry.query), ["Heat"]);
+});
+
+test("bad forget bodies are refused with err.invalidRequest and store nothing", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+
+  for (const body of [{}, { query: "Heat", extra: 1 }, { query: "   " }]) {
+    const response = await api(harness.base, "/api/search/history/forget", { method: "POST", user: ALICE, body });
+    assert.equal(response.status, 400, JSON.stringify(body));
+    assert.equal((await response.json() as { messageKey?: string }).messageKey, "err.invalidRequest");
+  }
+  assert.deepEqual(harness.data(ALICE).search, undefined, "a refused body never reaches the store");
+});
+
 test("bad search bodies are refused with err.invalidRequest and store nothing", async (t) => {
   const harness = await mount();
   t.after(harness.close);

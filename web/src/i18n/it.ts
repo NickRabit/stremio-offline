@@ -267,6 +267,7 @@ export const it: Catalog = {
   "catalog.suggestions": "Suggerimenti",
   "catalog.suggestRecent": "Ricerca recente",
   "catalog.suggestTitle": "Titolo",
+  "catalog.forgetRecent": "Rimuovi dalla cronologia",
   "catalog.searchHeading": "Cerca: {query}",
   "catalog.results": "Risultati",
   "catalog.itemCount": { one: "1 articolo", other: "{count} articoli" },

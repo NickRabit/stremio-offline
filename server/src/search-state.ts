@@ -128,6 +128,14 @@ export function withRecorded(state: SearchState, query: string, now: number): Se
   return { ...state, recent };
 }
 
+/** Pure: drops every entry whose historyKey equals historyKey(query); the rest
+ *  keep their order. Preferences are untouched. */
+export function withoutQuery(state: SearchState, query: string): SearchState {
+  const key = historyKey(query);
+  const recent = state.recent.filter((item) => historyKey(item.query) !== key);
+  return { ...state, recent };
+}
+
 /** What the API returns: recent is [] when saveHistory is false. */
 export function publicSearchState(state: SearchState): SearchState {
   return { ...state, recent: state.saveHistory ? state.recent : [] };

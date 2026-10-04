@@ -267,6 +267,7 @@ export const de: Catalog = {
   "catalog.suggestions": "Vorschläge",
   "catalog.suggestRecent": "Letzte Suche",
   "catalog.suggestTitle": "Titel",
+  "catalog.forgetRecent": "Aus dem Verlauf entfernen",
   "catalog.searchHeading": "Suche: {query}",
   "catalog.results": "Ergebnisse",
   "catalog.itemCount": { one: "1 Artikel", other: "{count} Artikel" },
