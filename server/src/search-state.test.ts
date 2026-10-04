@@ -4,7 +4,7 @@ import { messageKeyOf } from "./errors.js";
 import {
   SEARCH_HISTORY_LIMIT, SEARCH_HISTORY_MAX_AGE_MS, SEARCH_QUERY_MAX_LENGTH,
   defaultSearchState, historyKey, parseRecordBody, parseSearchPreferencesPatch, parseSearchState,
-  publicSearchState, withRecorded, type SearchEntry, type SearchState,
+  publicSearchState, withRecorded, withoutQuery, type SearchEntry, type SearchState,
 } from "./search-state.js";
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -114,6 +114,27 @@ test("withRecorded prunes expired entries and caps the list", () => {
   assert.equal(capped.recent.length, SEARCH_HISTORY_LIMIT);
   assert.equal(capped.recent[0]!.query, "new");
   assert.equal(capped.recent.at(-1)!.query, `q${SEARCH_HISTORY_LIMIT - 2}`);
+});
+
+test("withoutQuery drops the entry matched by historyKey and keeps the rest in order", () => {
+  const state: SearchState = { ...defaultSearchState(), recent: [
+    { query: "Pes", usedAt: at(DAY) },
+    { query: "Peš", usedAt: at(2 * DAY) },
+    { query: "Ronin", usedAt: at(3 * DAY) },
+  ] };
+  const next = withoutQuery(state, "  pes ");
+  assert.deepEqual(next.recent.map((entry) => entry.query), ["Peš", "Ronin"]);
+  assert.equal(next.saveHistory, state.saveHistory, "the preferences are carried over");
+  assert.deepEqual(next.liveSearch, state.liveSearch);
+  assert.deepEqual(next.defaultOrder, state.defaultOrder);
+});
+
+test("withoutQuery returns the same list for an unknown query", () => {
+  const state: SearchState = { ...defaultSearchState(), recent: [
+    { query: "Heat", usedAt: at(DAY) },
+    { query: "Ronin", usedAt: at(2 * DAY) },
+  ] };
+  assert.deepEqual(withoutQuery(state, "unknown").recent, state.recent);
 });
 
 test("publicSearchState hides recent while saving is off", () => {

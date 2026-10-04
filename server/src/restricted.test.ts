@@ -62,6 +62,7 @@ test("ALLOWED_MUTATIONS covers the demo writes and omits configuration", () => {
   assert.equal(isAllowedMutation("PATCH", "/views"), true);
   assert.equal(isAllowedMutation("PATCH", "/search/preferences"), true);
   assert.equal(isAllowedMutation("POST", "/search/history"), true);
+  assert.equal(isAllowedMutation("POST", "/search/history/forget"), true);
   assert.equal(isAllowedMutation("DELETE", "/search/history"), true);
   assert.equal(isAllowedMutation("POST", "/progress"), true);
   assert.equal(isAllowedMutation("DELETE", "/progress/movie:tt1"), true);

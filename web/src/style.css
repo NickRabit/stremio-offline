@@ -1565,3 +1565,7 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
 .search-suggestions li svg{position:static;transform:none;flex:0 0 auto;width:14px;height:14px;color:var(--muted)}
 .search-suggestions li span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .search-suggestions li small{margin-left:auto;padding-left:8px;flex:0 0 auto;font-size:10px;color:var(--muted)}
+.searchbar .search-suggestions .forget-recent{flex:0 0 auto;display:grid;place-items:center;width:26px;height:26px;min-height:0;margin:-4px -4px -4px 2px;padding:0;border:0;border-radius:6px;background:transparent;color:var(--muted)}
+.searchbar .search-suggestions .forget-recent:hover{background:#ffffff14;color:var(--text)}
+.searchbar .search-suggestions .forget-recent svg{width:14px;height:14px}
+@media(pointer:coarse){.searchbar .search-suggestions .forget-recent{width:36px;height:36px;margin:-8px -6px -8px 0}}

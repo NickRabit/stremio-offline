@@ -36,6 +36,7 @@ export const USER_ALLOWED: Rule[] = [
   { method: "GET", pattern: /^\/search\/state$/ },
   { method: "PATCH", pattern: /^\/search\/preferences$/ },
   { method: "POST", pattern: /^\/search\/history$/ },
+  { method: "POST", pattern: /^\/search\/history\/forget$/ },
   { method: "DELETE", pattern: /^\/search\/history$/ },
   // Browsing and playing.
   { method: "GET", pattern: /^\/library$/ },

@@ -267,6 +267,7 @@ export const sk: Catalog = {
   "catalog.suggestions": "Návrhy",
   "catalog.suggestRecent": "Nedávne hľadanie",
   "catalog.suggestTitle": "Titul",
+  "catalog.forgetRecent": "Odstrániť z histórie",
   "catalog.searchHeading": "Hľadať: {query}",
   "catalog.results": "Výsledky",
   "catalog.itemCount": { one: "1 položka", other: "{count} položiek", few: "{count} položky" },

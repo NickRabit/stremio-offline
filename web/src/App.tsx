@@ -604,6 +604,13 @@ export function App() {
       ? { ...current, recent: [{ query, usedAt: new Date().toISOString() }, ...current.recent.filter((entry) => entry.query.toLowerCase() !== key)].slice(0, 20) }
       : current)).catch(() => undefined);
   };
+  /** Drops one query at once, then takes what the server holds; a failure puts it back. */
+  const forgetSearch = (query: string) => {
+    const key = query.toLowerCase();
+    setSearchState((current) => current && { ...current, recent: current.recent.filter((entry) => entry.query.toLowerCase() !== key) });
+    if (recordedQuery.current === query) recordedQuery.current = null;
+    api.forgetSearch(query).then(setSearchState).catch((error) => { fail(error); void loadSearchState(); });
+  };
   const actOnSearch = (query: string) => {
     if (firstPageOk.current === query) recordSearch(query);
     else recordIntent.current = query;
@@ -1893,6 +1900,8 @@ export function App() {
                   const next = activeOption + step;
                   setActiveSuggestion(next >= suggestions.length ? -1 : next < -1 ? suggestions.length - 1 : next);
                 } else if (e.key === "Enter" && activeOption >= 0) { e.preventDefault(); chooseSuggestion(suggestions[activeOption]); }
+                // Shift+Delete removes the highlighted recent search, as browsers do in their own lists.
+                else if (e.key === "Delete" && e.shiftKey && suggestions[activeOption]?.kind === "recent") { e.preventDefault(); forgetSearch(suggestions[activeOption].text); }
                 else if (e.key === "Escape" && suggestions.length) { e.preventDefault(); setSuggestOpen(false); setActiveSuggestion(-1); }
               }} placeholder={t("catalog.searchPlaceholder")}/>
 
@@ -1911,7 +1920,10 @@ export function App() {
             {suggestions.length > 0 && <ul id="search-suggestions" role="listbox" aria-label={t("catalog.suggestions")} className="search-suggestions">{suggestions.map((suggestion, index) =>
                 <li key={`${suggestion.kind}:${suggestion.text}`} id={`search-suggestion-${index}`} role="option" aria-selected={index === activeOption} className={index === activeOption ? "active" : undefined}
                   onPointerDown={(e) => e.preventDefault()} onMouseDown={(e) => e.preventDefault()} onClick={() => chooseSuggestion(suggestion)}>
-                  {suggestion.kind === "recent" ? <History/> : <Film/>}<span>{suggestion.text}</span><small>{t(suggestion.kind === "recent" ? "catalog.suggestRecent" : "catalog.suggestTitle")}</small></li>)}</ul>}
+                  {suggestion.kind === "recent" ? <History/> : <Film/>}<span>{suggestion.text}</span><small>{t(suggestion.kind === "recent" ? "catalog.suggestRecent" : "catalog.suggestTitle")}</small>
+                  {/* Outside the tab order: the list is reached through the field, and Shift+Delete does the same. */}
+                  {suggestion.kind === "recent" && <button type="button" className="forget-recent" tabIndex={-1} aria-label={t("catalog.forgetRecent")} title={t("catalog.forgetRecent")}
+                    onPointerDown={(e) => e.preventDefault()} onMouseDown={(e) => e.preventDefault()} onClick={(e) => { e.stopPropagation(); forgetSearch(suggestion.text); }}><X/></button>}</li>)}</ul>}
           </form></div>
           <div className="filter-slot"><div className="filterbar">
             {submittedQuery

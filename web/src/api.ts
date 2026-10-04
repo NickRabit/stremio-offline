@@ -78,6 +78,7 @@ export const api = {
   updateSearchPreferences: (patch: Partial<SearchPreferences>) => request<SearchState>("/api/search/preferences", { method: "PATCH", body: JSON.stringify(patch) }),
   recordSearch: (query: string) => request<void>("/api/search/history", { method: "POST", body: JSON.stringify({ query }) }),
   clearSearchHistory: () => request<SearchState>("/api/search/history", { method: "DELETE" }),
+  forgetSearch: (query: string) => request<SearchState>("/api/search/history/forget", { method: "POST", body: JSON.stringify({ query }) }),
   meta: (type: string, id: string, language?: string) => request<Meta>(`/api/meta/${encodeURIComponent(type)}/${encodeURIComponent(id)}${language ? `?${q({ language })}` : ""}`),
   links: (type: string, id: string, language: string) => request<{ links: SiteLink[] }>(`/api/links/${encodeURIComponent(type)}/${encodeURIComponent(id)}?${q({ language })}`, { timeoutMs: 60_000 }),
   libraryLinks: (path: string, language: string) => request<{ links: SiteLink[] }>(`/api/library/links?${q({ path, language })}`, { timeoutMs: 60_000 }),

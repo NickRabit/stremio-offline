@@ -11,7 +11,7 @@ import { log } from "../logger.js";
 import { markersOwingRow, nextEpisodeOf } from "../next-episode.js";
 import { groupSeriesProgress, seriesOf, type ProgressSeries } from "../progress-series.js";
 import { groupResumeRows } from "../resume-group.js";
-import { defaultSearchState, parseRecordBody, parseSearchPreferencesPatch, parseSearchState, publicSearchState, withRecorded, type SearchState } from "../search-state.js";
+import { defaultSearchState, parseRecordBody, parseSearchPreferencesPatch, parseSearchState, publicSearchState, withRecorded, withoutQuery, type SearchState } from "../search-state.js";
 import type { StoredProgress, UserPrefs, WatchedMarker, WatchlistEntry } from "../store.js";
 import type { MetaItem } from "../types.js";
 import type { UserData } from "../users.js";
@@ -122,6 +122,18 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
       data.search = withRecorded(current, query, now);
     });
     res.set("Cache-Control", "no-store").status(204).end();
+  }));
+  app.post("/api/search/history/forget", asyncRoute(async (req, res) => {
+    const query = parseRecordBody(req.body);
+    const now = Date.now();
+    let written = defaultSearchState();
+    await updateData(req, (data) => {
+      const current = parseSearchState(data.search, now);
+      const next = withoutQuery(current, query);
+      data.search = next;
+      written = next;
+    });
+    res.set("Cache-Control", "no-store").json(publicSearchState(written));
   }));
   app.delete("/api/search/history", asyncRoute(async (req, res) => {
     const now = Date.now();

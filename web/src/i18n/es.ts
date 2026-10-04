@@ -267,6 +267,7 @@ export const es: Catalog = {
   "catalog.suggestions": "Sugerencias",
   "catalog.suggestRecent": "Búsqueda reciente",
   "catalog.suggestTitle": "Título",
+  "catalog.forgetRecent": "Quitar del historial",
   "catalog.searchHeading": "Buscar: {query}",
   "catalog.results": "Resultados",
   "catalog.itemCount": { one: "1 artículo", other: "{count} artículos" },
