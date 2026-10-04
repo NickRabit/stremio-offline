@@ -10,6 +10,7 @@ import { DownloadQueue, isPlaylist } from "./downloads.js";
 import { AppError } from "./errors.js";
 import { relativeWithin, type LibraryRecord } from "./libraries.js";
 import { defaultDownloadSettings } from "./naming.js";
+import { torrentKey } from "./download-selection.js";
 
 const MB = 1024 * 1024;
 const GiB = 1024 ** 3;
@@ -1406,5 +1407,217 @@ test("a lazy job that finds no source fails with the no-matching-source key", as
   } finally {
     await queue.stop();
     await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a lazy job falls back to a torrent and downloads it through Real-Debrid", async () => {
+  const payload = Buffer.alloc(16 * 1024, 3);
+  const { server, port } = await listen((_req, res) => {
+    res.writeHead(200, { "content-length": String(payload.length), "content-type": "video/mp4" });
+    res.end(payload);
+  });
+  let ready = false;
+  const { directory, queue, downloads } = await tempQueue({
+    debridPollMs: 20,
+    debrid: {
+      configured: () => true,
+      advance: async () => ready
+        ? { ready: true, torrentId: "rd1", url: `http://127.0.0.1:${port}/movie.mp4`, filename: "Film.mkv" }
+        : { ready: false, torrentId: "rd1", progress: 10, status: "downloading" },
+    },
+  });
+  queue.setResolver(async () => ({ stream: { infoHash: HASH, fileIdx: 0, title: "Film 1080p" }, settings: defaultDownloadSettings() }));
+  try {
+    await queue.addPending("Film", { type: "movie", videoId: "tt9" }, { kind: "movie", title: "Film" });
+    await waitFor(queue, () => (queue.list()[0]?.debridProgress ?? 0) > 0, 30_000);
+    assert.equal(queue.list()[0].status, "waiting", "the torrent waits for Real-Debrid before any transfer");
+    ready = true;
+    await waitFor(queue, () => queue.list()[0]?.status === "completed", 30_000);
+    const job = queue.list()[0];
+    assert.equal(job.status, "completed");
+    assert.equal(job.debridProgress, 100);
+    assert.equal((await stat(queuedFile(downloads, job.target))).size, payload.length);
+  } finally {
+    await queue.stop();
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a failing torrent on a lazy job tries the next source and finally fails", async () => {
+  const first = { infoHash: HASH, fileIdx: 0, title: "Show CZ" };
+  const second = { infoHash: "1111111111111111111111111111111111111111", fileIdx: 0, title: "Show CZ" };
+  let calls = 0;
+  const { directory, queue } = await tempQueue({
+    debridPollMs: 20,
+    debrid: { configured: () => true, advance: async () => { calls += 1; throw new Error("Real-Debrid refused this torrent."); } },
+  });
+  queue.setResolver(async ({ tried }) => {
+    const next = [first, second].find((stream) => !tried.includes(torrentKey(stream)));
+    return next ? { stream: next, settings: defaultDownloadSettings() } : undefined;
+  });
+  try {
+    await queue.addPending("Show", { type: "series", videoId: "tt1" }, { kind: "episode", title: "Show", season: 1, episode: 1 });
+    await waitFor(queue, () => queue.list()[0]?.status === "failed", 30_000);
+    const job = queue.list()[0];
+    assert.equal(job.status, "failed");
+    assert.equal(job.errorKey, "err.noMatchingSource");
+    assert.equal(calls, 2, "both torrents were handed to Real-Debrid before the job gave up");
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("the Real-Debrid timeout counts from debridStartedAt rather than createdAt", async () => {
+  const payload = Buffer.alloc(8 * 1024, 5);
+  const { server, port } = await listen((_req, res) => {
+    res.writeHead(200, { "content-length": String(payload.length), "content-type": "video/mp4" });
+    res.end(payload);
+  });
+  const longAgo = new Date(Date.now() - 30 * 24 * 3600_000).toISOString();
+  const waiting = (debridStartedAt?: string) => [{
+    id: "rd-timeout", title: "Film", status: "waiting", target: "Film/Film.mkv", received: 0, speed: 0,
+    stream: { infoHash: HASH, fileIdx: 0 }, media: { kind: "movie", title: "Film" },
+    debrid: {}, createdAt: longAgo, updatedAt: longAgo, ...(debridStartedAt ? { debridStartedAt } : {}),
+  }];
+  const boot = async (seeded: unknown[]) => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-dl-"));
+    const downloads = path.join(directory, "downloads");
+    const data = path.join(directory, "data");
+    await mkdir(data, { recursive: true });
+    await writeFile(path.join(data, "downloads.json"), JSON.stringify(seeded));
+    const queue = new DownloadQueue(() => 1, () => 1, data, downloads, {
+      libraries: () => [downloadLibrary(downloads)], defaultLibrary: () => downloadLibrary(downloads),
+      debridPollMs: 20, debridTimeoutMs: 3_600_000,
+      debrid: { configured: () => true, advance: async () => ({ ready: true, torrentId: "rd1", url: `http://127.0.0.1:${port}/movie.mp4`, filename: "Film.mkv" }) },
+    });
+    await queue.load();
+    return { directory, queue, downloads };
+  };
+  try {
+    const fresh = await boot(waiting(new Date().toISOString()));
+    try {
+      await waitFor(fresh.queue, () => fresh.queue.list()[0]?.status === "completed", 30_000);
+      assert.equal(fresh.queue.list()[0].status, "completed", "a recent debridStartedAt keeps a job whose createdAt is old");
+      assert.equal((await stat(path.join(fresh.downloads, "Film", "Film.mkv"))).size, payload.length);
+    } finally {
+      await fresh.queue.stop();
+      await rm(fresh.directory, { recursive: true, force: true });
+    }
+    const stale = await boot(waiting());
+    try {
+      await waitFor(stale.queue, () => stale.queue.list()[0]?.status === "failed", 30_000);
+      assert.equal(stale.queue.list()[0].errorKey, "err.debridTimeout", "without debridStartedAt the old createdAt times it out");
+    } finally {
+      await stale.queue.stop();
+      await rm(stale.directory, { recursive: true, force: true });
+    }
+  } finally {
+    server.close();
+  }
+});
+
+test("a manual torrent job still fails when Real-Debrid refuses it", async () => {
+  const { directory, queue } = await tempQueue({
+    debridPollMs: 20,
+    debrid: { configured: () => true, advance: async () => { throw new Error("Real-Debrid refused this torrent."); } },
+  });
+  try {
+    await queue.add("Film", { infoHash: HASH, fileIdx: 0 });
+    await waitFor(queue, () => queue.list()[0]?.status === "failed", 30_000);
+    const job = queue.list()[0];
+    assert.equal(job.status, "failed");
+    assert.match(job.error ?? "", /refused/);
+    assert.equal(queue.list().length, 1, "a manual torrent is not turned back into a pending lazy job");
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a season pack file that names another episode is rejected", async () => {
+  const payload = Buffer.alloc(4 * 1024, 4);
+  const { server, port } = await listen((_req, res) => {
+    res.writeHead(200, { "content-length": String(payload.length), "content-type": "video/mp4" });
+    res.end(payload);
+  });
+  const first = { infoHash: HASH, fileIdx: 3, title: "Show CZ" };
+  const second = { infoHash: "2222222222222222222222222222222222222222", fileIdx: 4, title: "Show CZ" };
+  const filenames = ["Show.S01E05.mkv", "Show.S01E02.mkv"];
+  let calls = 0;
+  const { directory, queue, downloads } = await tempQueue({
+    debridPollMs: 20,
+    debrid: {
+      configured: () => true,
+      advance: async () => {
+        const filename = filenames[calls];
+        calls += 1;
+        return { ready: true, torrentId: "rd1", url: `http://127.0.0.1:${port}/show.mp4`, filename };
+      },
+    },
+  });
+  queue.setResolver(async ({ tried }) => {
+    const next = [first, second].find((stream) => !tried.includes(torrentKey(stream)));
+    return next ? { stream: next, settings: defaultDownloadSettings() } : undefined;
+  });
+  try {
+    await queue.addPending("Show", { type: "series", videoId: "tt1:1:2" }, { kind: "episode", title: "Show", season: 1, episode: 2 });
+    await waitFor(queue, () => queue.list()[0]?.status === "completed", 30_000);
+    const job = queue.list()[0];
+    assert.equal(calls, 2, "the wrong episode is rejected before its link is downloaded");
+    assert.equal((await stat(queuedFile(downloads, job.target))).size, payload.length);
+  } finally {
+    await queue.stop();
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a lazy torrent job that is waiting resumes polling after a restart", async () => {
+  const payload = Buffer.alloc(8 * 1024, 9);
+  const { server, port } = await listen((_req, res) => {
+    res.writeHead(200, { "content-length": String(payload.length), "content-type": "video/mp4" });
+    res.end(payload);
+  });
+  let ready = false;
+  let directory = "";
+  let downloads = "";
+  const boot = async () => {
+    const queue = new DownloadQueue(() => 1, () => 1, path.join(directory, "data"), downloads, {
+      libraries: () => [downloadLibrary(downloads)], defaultLibrary: () => downloadLibrary(downloads),
+      debridPollMs: 20,
+      debrid: {
+        configured: () => true,
+        advance: async () => ready
+          ? { ready: true, torrentId: "rd1", url: `http://127.0.0.1:${port}/show.mp4`, filename: "Show.S01E01.mkv" }
+          : { ready: false, torrentId: "rd1", progress: 5, status: "downloading" },
+      },
+    });
+    await queue.load();
+    return queue;
+  };
+  try {
+    directory = await mkdtemp(path.join(os.tmpdir(), "stremio-dl-"));
+    downloads = path.join(directory, "downloads");
+    const first = await boot();
+    first.setResolver(async () => ({ stream: { infoHash: HASH, fileIdx: 0, title: "Show CZ" }, settings: defaultDownloadSettings() }));
+    await first.addPending("Show", { type: "series", videoId: "tt1:1:1" }, { kind: "episode", title: "Show", season: 1, episode: 1 });
+    await waitFor(first, () => first.list()[0]?.status === "waiting", 30_000);
+    await first.stop();
+    const reopened = await boot();
+    try {
+      await waitFor(reopened, () => reopened.list()[0]?.status === "waiting", 5_000);
+      ready = true;
+      await waitFor(reopened, () => reopened.list()[0]?.status === "completed", 30_000);
+      const job = reopened.list()[0];
+      assert.equal(job.status, "completed");
+      assert.equal((await stat(queuedFile(downloads, job.target))).size, payload.length);
+    } finally {
+      await reopened.stop();
+    }
+  } finally {
+    server.close();
+    if (directory) await rm(directory, { recursive: true, force: true });
   }
 });

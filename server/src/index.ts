@@ -11,7 +11,7 @@ import { autoRefreshEnabled, refreshDue, refreshManifests, type RefreshOutcome }
 import { rankStreams } from "./ranking.js";
 import { DownloadQueue, ownerMayDownload, type DownloadJob } from "./downloads.js";
 import { DeviceTransfers } from "./device-transfers.js";
-import { selectDownloadSource } from "./download-selection.js";
+import { selectDownloadSource, selectTorrentSource } from "./download-selection.js";
 import { StatsLog, type TrafficEvent, type TrafficMeta } from "./stats.js";
 import { Throughput } from "./throughput.js";
 import { sourcePace } from "./conversion-pace.js";
@@ -242,14 +242,26 @@ queue.setResolver(async (source, ownerUserId) => {
   if (ownerUserId && !owner) return undefined;
   const usable = owner ? allowedAddons(store.addons(), { id: owner.id, role: owner.role }) : store.addons();
   const priority = new Map(usable.map((addon, index) => [addon.key, index]));
-  const candidates = (await cachedStreams(usable, source.type, source.videoId)).filter((stream) => stream.url);
+  const listed = await cachedStreams(usable, source.type, source.videoId);
+  const candidates = listed.filter((stream) => stream.url);
   if (source.selection) {
     await serverReady;
     const external = source.selection.subtitleMode === "off" ? [] : await subtitles(usable, source.type, source.videoId);
     const selected = await selectDownloadSource({ candidates, subtitles: external, selection: source.selection, tried: source.tried, inspect: (stream) => playback.inspect(stream) });
-    if (!selected) return undefined;
-    const addon = usable.find((item) => item.key === selected.stream.addonKey);
-    return { ...selected, settings: addon?.downloadSettings ?? defaultDownloadSettings() };
+    if (selected) {
+      const addon = usable.find((item) => item.key === selected.stream.addonKey);
+      return { ...selected, settings: addon?.downloadSettings ?? defaultDownloadSettings() };
+    }
+    // HTTP always wins, so a torrent is considered only when no direct source was chosen and
+    // Real-Debrid is there to fetch it.
+    if (store.settings().realDebridToken) {
+      const torrent = selectTorrentSource({ candidates: listed, subtitles: external, selection: source.selection, tried: source.tried, episode: source.type === "series" });
+      if (torrent) {
+        const addon = usable.find((item) => item.key === torrent.stream.addonKey);
+        return { ...torrent, settings: addon?.downloadSettings ?? defaultDownloadSettings() };
+      }
+    }
+    return undefined;
   }
   // The queue picks a source with no request in hand, so the language is the owner's.
   const ranked = rankStreams(candidates, store.prefs(ownerUserId).audioLanguage, priority);

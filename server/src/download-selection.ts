@@ -24,6 +24,10 @@ interface RankedChoice { choice: Choice; subtitleRank: number }
 
 const normalizedSubtitleLanguage = (subtitle: SubtitleItem) => subtitle.lang?.toLowerCase().split(/[-_]/)[0];
 
+/** A torrent is identified by its infoHash and the file inside it, because the same release can
+ *  carry several episodes. This is what `tried` remembers about a source that failed. */
+export const torrentKey = (stream: StreamItem) => `torrent:${stream.infoHash}:${stream.fileIdx ?? ""}`;
+
 function subtitlesFor(info: MediaInfo, stream: StreamItem, external: SubtitleItem[], selection: DownloadSelection) {
   if (selection.subtitleMode === "off") return { rank: 0 };
   const wanted = [selection.subtitleLanguage, selection.fallbackSubtitleLanguage].filter(Boolean) as string[];
@@ -34,6 +38,94 @@ function subtitlesFor(info: MediaInfo, stream: StreamItem, external: SubtitleIte
     if (addon) return { rank, language, subtitle: addon, source: "addon" as const };
   }
   return { rank: 2 };
+}
+
+/** The subtitle half of `subtitlesFor` for a source that has no file to read yet: only the
+ *  addon listings can be searched, and the one that is chosen is the answer. */
+function externalSubtitle(subtitles: SubtitleItem[], selection: DownloadSelection) {
+  if (selection.subtitleMode === "off") return { rank: 0 };
+  const wanted = [selection.subtitleLanguage, selection.fallbackSubtitleLanguage].filter(Boolean) as string[];
+  for (const [rank, language] of wanted.entries()) {
+    const addon = subtitles.find((subtitle) => normalizedSubtitleLanguage(subtitle) === language);
+    if (addon) return { rank, language, subtitle: addon, source: "addon" as const };
+  }
+  return { rank: 2 };
+}
+
+/**
+ * A torrent source for a lazy job, when no direct HTTP one was chosen. Nothing can be probed
+ * before Real-Debrid has the file, so the addon's own listing is all there is: it names the
+ * language, or it does not. The order is the same strategy `selectDownloadSource` uses, and the
+ * first stream of the best tier wins.
+ */
+export function selectTorrentSource(input: {
+  candidates: StreamItem[];
+  subtitles: SubtitleItem[];
+  selection: DownloadSelection;
+  tried: string[];
+  episode: boolean;
+}): Choice | undefined {
+  const { selection } = input;
+  const mode = selection.audioMode ?? "strict";
+  // The audio of a torrent is only known once it is downloaded, so a strict job cannot judge it.
+  if (mode === "strict") return undefined;
+  const priority = new Map(selection.addonKeys.map((key, index) => [key, index]));
+  const available = input.candidates.filter((stream) =>
+    Boolean(stream.infoHash) && !stream.url
+    && priority.has(stream.addonKey ?? "")
+    && !input.tried.includes(torrentKey(stream))
+    && (!input.episode || typeof stream.fileIdx === "number"));
+  const bySpokenLanguage = (stream: StreamItem) => streamLanguages(stream, selection.titleLanguage).includes(selection.audioLanguage) ? 0 : 1;
+  const candidates = selection.sourceStrategy === "largest"
+    ? [...available].sort((left, right) => {
+      const byLanguage = bySpokenLanguage(left) - bySpokenLanguage(right);
+      if (byLanguage) return byLanguage;
+      const leftSize = streamSize(left), rightSize = streamSize(right);
+      if (leftSize === undefined || rightSize === undefined) {
+        if (leftSize !== rightSize) return leftSize === undefined ? 1 : -1;
+      } else if (leftSize !== rightSize) return rightSize - leftSize;
+      return (priority.get(left.addonKey ?? "") ?? Number.MAX_SAFE_INTEGER)
+        - (priority.get(right.addonKey ?? "") ?? Number.MAX_SAFE_INTEGER);
+    })
+    : selection.addonKeys.flatMap((addonKey) => rankStreams(
+      available.filter((stream) => stream.addonKey === addonKey), selection.audioLanguage, priority, selection.titleLanguage));
+
+  let best: Choice | undefined;
+  let bestTier = 4;
+  for (const stream of candidates) {
+    const listed = streamLanguages(stream, selection.titleLanguage);
+    let tier: number;
+    let audioLanguage: string | undefined = selection.audioLanguage;
+    let fallbackUsed = false;
+    if (listed.includes(selection.audioLanguage)) {
+      tier = 0;
+    } else if (selection.fallbackAudioLanguage && listed.includes(selection.fallbackAudioLanguage)) {
+      tier = 1; audioLanguage = selection.fallbackAudioLanguage; fallbackUsed = true;
+    } else if (mode === "preferred") {
+      tier = 2; audioLanguage = listed[0]; fallbackUsed = true;
+    } else continue;
+    if (tier >= bestTier) continue;
+    const subtitle = externalSubtitle(input.subtitles, selection);
+    if (selection.subtitleMode === "required" && !subtitle.language) continue;
+    best = {
+      stream,
+      subtitle: subtitle.subtitle,
+      resolution: {
+        checkedCandidates: 0,
+        audioLanguage,
+        audioTrack: 0,
+        fallbackUsed,
+        audioEvidence: tier === 2 ? "none" : "listing",
+        subtitleLanguage: subtitle.language,
+        subtitleTrack: undefined,
+        subtitleSource: subtitle.source,
+        subtitleStatus: subtitle.language ? "ready" : selection.subtitleMode === "optional" ? "missing" : undefined,
+      },
+    };
+    bestTier = tier;
+    if (tier === 0) break;
+  }
+  return best;
 }
 
 export async function selectDownloadSource(input: {

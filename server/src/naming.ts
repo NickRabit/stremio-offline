@@ -182,10 +182,20 @@ export function fitTargetName(
   return cut || base.slice(0, room).replace(/[\s.]+$/, "") || "video".slice(0, room);
 }
 
+/** The extensions a video file is expected to carry. A release name has dots of its own
+ *  ("Movie.2020.1080p.x264-GROUP"), so only one of these counts as an extension there. */
+const MEDIA_EXTENSIONS = new Set([".mkv", ".mp4", ".avi", ".m4v", ".mov", ".wmv", ".ts", ".m2ts", ".webm", ".mpg", ".mpeg", ".flv"]);
+
 /** Derive extensions in one place for both library and device downloads. */
 export function streamExtension(stream: StreamItem): string {
-  const hinted = stream.behaviorHints?.filename;
-  const source = hinted ?? (stream.url ? new URL(stream.url).pathname : "");
+  // A torrent has no address to read a name from: it comes from the addon's own file name, or
+  // from the title the release is written into, and falls back to Matroska.
+  if (!stream.url) {
+    const extension = path.extname(stream.behaviorHints?.filename ?? stream.title ?? "").toLowerCase();
+    return MEDIA_EXTENSIONS.has(extension) ? extension : ".mkv";
+  }
+  // A direct source always has a URL and keeps the `.mp4` a nameless path has always been given.
+  const source = stream.behaviorHints?.filename ?? new URL(stream.url).pathname;
   const extension = path.extname(source).toLowerCase();
   // A playlist is assembled into one MP4, so that is what lands in the library;
   // naming the file after the list would leave something nothing can open.

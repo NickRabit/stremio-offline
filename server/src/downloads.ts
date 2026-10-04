@@ -8,6 +8,8 @@ import { pipeline } from "node:stream/promises";
 import { addonAllowed } from "./addons.js";
 import type { AddonDownloadSettings, AddonRecord, StreamItem, SubtitleItem } from "./types.js";
 import { defaultDownloadSettings, fitTargetName, joinTarget, streamExtension, targetPath, type MediaInfo } from "./naming.js";
+import { torrentKey } from "./download-selection.js";
+import { episodeTag } from "./library.js";
 import type { DownloadTargetSettings } from "./types.js";
 import { safeFetch } from "./security.js";
 import { renameWithRetry } from "./fs-retry.js";
@@ -97,6 +99,9 @@ export interface DownloadJob {
   errorVars?: Record<string, string | number>;
   retryCount?: number; pauseReason?: PauseReason; notBefore?: number;
   debrid?: { torrentId?: string; progress?: number; status?: string };
+  /** When Real-Debrid was first asked to fetch this source; the timeout counts from here so a
+   *  job that waits a long time in the queue is not failed before its torrent even started. */
+  debridStartedAt?: string;
   /** Present only while a segmented transfer is unfinished; it is what lets each connection
    *  pick up at its own offset after a restart. */
   segments?: Segment[];
@@ -804,14 +809,52 @@ export class DownloadQueue {
     this.debridTimers.set(id, timer);
   }
 
+  /** The torrent Real-Debrid could not deliver. A lazy job has other sources left, so it goes
+   *  back to the queue and the next resolve picks one; a manual job was queued for this very
+   *  torrent and fails, as it always has. */
+  private async debridSourceFailed(job: DownloadJob, message: string, key?: string) {
+    if (!job.source) {
+      job.status = "failed";
+      this.setError(job, message, key);
+      job.updatedAt = new Date(this.now()).toISOString();
+      log("ERROR", "Real-Debrid job failed", { id: job.id, title: job.title, reason: message });
+      await this.save();
+      return;
+    }
+    if (job.stream) job.source.tried.push(torrentKey(job.stream));
+    job.stream = undefined;
+    job.subtitle = undefined;
+    job.resolution = undefined;
+    job.target = "";
+    job.debrid = undefined;
+    job.debridStartedAt = undefined;
+    job.received = 0; job.total = undefined; job.segments = undefined; job.rangesIgnored = undefined; job.retryCount = 0; job.notBefore = undefined;
+    job.status = "queued";
+    this.setError(job, `Source failed (${message}), trying the next one\u2026`, "err.sourceFailedTryingNext", { reason: message });
+    job.updatedAt = new Date(this.now()).toISOString();
+    log("WARN", "The torrent failed, trying the next source", { id: job.id, title: job.title, reason: message, tried: job.source.tried.length });
+    await this.save();
+    this.pump();
+  }
+
+  /** The file Real-Debrid resolved has to be the episode the job asked for. A season pack lists
+   *  every episode, and a wrong pick would save one episode under another's name. */
+  private debridWrongEpisode(job: DownloadJob, filename: string | undefined): boolean {
+    if (job.media?.kind !== "episode" || !filename) return false;
+    const marker = episodeTag(filename);
+    if (!marker) return false;
+    const media = job.media;
+    return (media.episode != null && marker.episode !== media.episode)
+      || (media.season != null && marker.season != null && marker.season !== media.season);
+  }
+
   private async pollDebrid(id: string) {
     const job = this.jobs.find((item) => item.id === id);
     if (!job || job.status !== "waiting" || this.debridBusy.has(id)) return;
     this.debridBusy.add(id);
     try {
-      if (this.now() - Date.parse(job.createdAt) > this.debridTimeoutMs) {
-        job.status = "failed"; this.setError(job, "Real-Debrid did not finish the torrent in time.", "err.debridTimeout"); job.updatedAt = new Date().toISOString();
-        await this.save();
+      if (this.now() - Date.parse(job.debridStartedAt ?? job.createdAt) > this.debridTimeoutMs) {
+        await this.debridSourceFailed(job, "Real-Debrid did not finish the torrent in time.", "err.debridTimeout");
         return;
       }
       if (!this.debrid?.configured()) {
@@ -829,6 +872,11 @@ export class DownloadQueue {
       job.debrid = { torrentId: result.torrentId, progress: result.ready ? 100 : result.progress, status: result.ready ? "downloaded" : result.status };
       job.updatedAt = new Date().toISOString();
       if (result.ready) {
+        const filename = result.filename ?? job.stream?.behaviorHints?.filename;
+        if (this.debridWrongEpisode(job, filename)) {
+          await this.debridSourceFailed(job, "Real-Debrid resolved a different episode.", "err.debridWrongEpisode");
+          return;
+        }
         job.stream = {
           ...job.stream,
           url: result.url,
@@ -852,9 +900,7 @@ export class DownloadQueue {
         this.scheduleDebrid(job.id, Math.max(this.debridPollMs, this.debridRetryMs));
         return;
       }
-      job.status = "failed";
-      log("ERROR", "Real-Debrid job failed", { id: job.id, title: job.title, reason: job.error });
-      await this.save();
+      await this.debridSourceFailed(job, error instanceof Error ? error.message : String(error));
     } finally {
       this.debridBusy.delete(id);
     }
@@ -1054,7 +1100,10 @@ export class DownloadQueue {
     const startedAt = this.now();
     const resolved = await this.resolver(job.source, this.ownerOf(job));
     const selectionMs = this.now() - startedAt;
-    if (!resolved?.stream.url) {
+    // A torrent is a resolved source too: it has an infoHash and no URL yet, and the queue turns
+    // it into a Real-Debrid wait. Only a stream with neither -- or none at all -- means nothing
+    // was found.
+    if (!resolved?.stream || (!resolved.stream.url && !resolved.stream.infoHash)) {
       const selection = job.source.selection;
       const requested = selection
         ? selection.audioMode === "preferred"
@@ -1308,6 +1357,20 @@ export class DownloadQueue {
           this.pauseForPermission(job);
           return;
         }
+      }
+      // A lazy job whose chosen source is a torrent has nothing to download yet: the magnet has
+      // to be fetched by Real-Debrid first, and the resulting HTTP link arrives later. This is
+      // the same wait a manual torrent job goes through, entered from the resolve instead of
+      // from `add`. The `finally` releases the slot and saves exactly as any other early return.
+      if (job.stream && job.stream.infoHash && !job.stream.url) {
+        const startedAt = new Date(this.now()).toISOString();
+        job.status = "waiting";
+        job.debrid = {};
+        job.debridStartedAt = startedAt;
+        job.updatedAt = startedAt;
+        await this.save();
+        this.scheduleDebrid(job.id);
+        return;
       }
       if (controller.signal.aborted) throw new Error("The download was stopped.");
       job.status = "downloading";

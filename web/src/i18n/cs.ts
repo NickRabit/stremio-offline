@@ -1179,6 +1179,7 @@ export const cs: Catalog = {
   "err.debridNotConfigured": "Nejdřív nastavte Real-Debrid v Nastavení.",
   "err.debridTimeout": "Real-Debrid torrent nedokončil včas.",
   "err.debridTokenMissing": "Chybí token Real-Debrid.",
+  "err.debridWrongEpisode": "Real-Debrid vyřešil jiný díl.",
   "err.jobNoInfoHash": "Torrent nemá infoHash.",
   "err.noFreeName": "Nepodařilo se najít volné jméno souboru.",
   "err.pathTooLong": "Cesta ke složce je pro Windows příliš dlouhá. Vyberte knihovnu s kratší cestou, třeba D:\\Filmy.",

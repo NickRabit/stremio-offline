@@ -1131,6 +1131,7 @@ export const ru: Catalog = {
   "err.debridNotConfigured": "Сначала настройте Real-Debrid в настройках.",
   "err.debridTimeout": "Реал-Дебрид не успел закончить торрент.",
   "err.debridTokenMissing": "Токен Real-Debrid отсутствует.",
+  "err.debridWrongEpisode": "Реал-Дебрид вернул другой эпизод.",
   "err.jobNoInfoHash": "Торрент не имеет infoHash.",
   "err.noFreeName": "Не удалось найти свободное имя файла.",
   "err.pathTooLong": "Путь к папке слишком длинный для Windows. Выберите библиотеку с более коротким путем, например D:\\Films.",
