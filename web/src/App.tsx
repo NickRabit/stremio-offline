@@ -143,6 +143,7 @@ export function App() {
   const [storedGallery, setStoredGallery] = useState<GalleryImage[] | null>(null);
   const [detailCompact, setDetailCompact] = useState(false);
   const [catalogCompact, setCatalogCompact] = useState(false);
+  const quietFocus = useRef(false);
   const [libraryCompact, setLibraryCompact] = useState(false);
   const scrollDirection = useRef(new WeakMap<HTMLElement, { top: number; travel: number; until: number }>());
   // A tap does not end the scroll: Safari's momentum runs on for a while afterwards, and those
@@ -1881,7 +1882,7 @@ export function App() {
             <div className="search-input"><Search/><input value={search} role="combobox" aria-autocomplete="list" aria-expanded={suggestions.length > 0} aria-controls="search-suggestions" aria-activedescendant={activeOption >= 0 ? `search-suggestion-${activeOption}` : undefined}
               onChange={(e) => { setSearch(e.target.value); setSuggestOpen(true); setActiveSuggestion(-1); if (liveSearchOn) live.update(e.target.value, submittedQuery); }}
               onCompositionStart={() => live.compositionStart()} onCompositionEnd={(e) => { if (liveSearchOn) live.compositionEnd(e.currentTarget.value, submittedQuery); }}
-              onFocus={() => { setSuggestOpen(true); void loadSearchState(); }} onBlur={() => setSuggestOpen(false)}
+              onFocus={() => { if (!quietFocus.current) setSuggestOpen(true); void loadSearchState(); }} onBlur={() => setSuggestOpen(false)}
               onKeyDown={(e) => {
                 if (e.nativeEvent.isComposing) return;
                 if (e.key === "ArrowDown" || e.key === "ArrowUp") {
@@ -1941,7 +1942,12 @@ export function App() {
               // rather than for a guessed number of milliseconds. The timer is the way out when
               // there is no transition to wait for, as with reduced motion.
               const bar = event.currentTarget.closest(".catalog-view")?.querySelector(".searchbar");
-              const focus = () => bar?.querySelector<HTMLInputElement>(".search-input input")?.focus();
+              const focus = () => {
+                // The caret is handed over for typing; the list of past searches waits for a keystroke.
+                quietFocus.current = true;
+                bar?.querySelector<HTMLInputElement>(".search-input input")?.focus();
+                quietFocus.current = false;
+              };
               const onEnd = (ended: Event) => {
                 if ((ended as TransitionEvent).propertyName !== "max-height") return;
                 bar?.removeEventListener("transitionend", onEnd);
