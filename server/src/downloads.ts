@@ -669,6 +669,14 @@ export class DownloadQueue {
     return job ? this.publicJob(job) : undefined;
   }
 
+  /** Ties a job the owner queued by hand to the follow that now wants the same episode. */
+  async adopt(id: string, follow: NonNullable<DownloadJob["follow"]>) {
+    const job = this.jobs.find((item) => item.id === id);
+    if (!job) return;
+    job.follow = follow;
+    await this.save();
+  }
+
   /** The public shape of the jobs that carry a follow, for reconciliation. */
   followJobs() {
     return this.jobs.filter((job) => job.follow).map((job) => this.publicJob(job));
@@ -1555,6 +1563,9 @@ export class DownloadQueue {
       } else if (job.source && job.stream?.url) {
         // A lazy job tries the next source in order; the address of the failed one is never used again.
         job.source.tried.push(job.stream.url);
+        // A link Real-Debrid produced keeps its torrent identity; without it the same torrent
+        // would be chosen again on the next resolve.
+        if (job.stream.infoHash) job.source.tried.push(torrentKey(job.stream));
         const abandoned = this.jobPath(job);
         if (job.target && abandoned) await unlink(`${abandoned}.part`).catch(() => undefined);
         const subtitleFiles = this.subtitleFiles(job);

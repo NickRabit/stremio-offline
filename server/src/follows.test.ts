@@ -51,6 +51,7 @@ const fakeQueue = () => {
       return { id: job.id };
     },
     findActiveEpisode: (_ownerUserId, type, videoId) => jobs.find((job) => job.source?.type === type && job.source?.videoId === videoId && job.status !== "completed" && job.status !== "failed"),
+    adopt: async (id, follow) => { const job = jobs.find((item) => item.id === id); if (job) job.follow = follow; },
     followJobs: () => jobs.map((job) => ({ id: job.id, status: job.status, ...(job.errorKey ? { errorKey: job.errorKey } : {}), ...(job.follow ? { follow: job.follow } : {}) })),
     get: (id) => { const job = jobs.find((item) => item.id === id); return job ? { id: job.id, status: job.status, ...(job.errorKey ? { errorKey: job.errorKey } : {}) } : undefined; },
     retry: async (id, selection) => { retried.push(id); if (selection) retriedWith.push(selection); const job = jobs.find((item) => item.id === id); if (job) job.status = "queued"; },
@@ -641,6 +642,65 @@ test("changing the rules retries waiting episodes at once with the new selection
   assert.equal(episodes["1:2"].download?.generation, 2);
   assert.equal(episodes["1:3"].download?.state, "skipped", "a skip stays a skip");
   assert.equal(q.added.length, 4);
+});
+
+test("switching automatic downloads off frees the shared budget for other follows", async (t) => {
+  const { store } = await withStore(t);
+  const q = fakeQueue();
+  const service = buildService(store, q);
+  const many = Array.from({ length: 20 }, (_, index) => episode(1, index + 1, `a${index}`, RELEASED));
+  const first = await seedSeries(store, many, rule());
+  await service.admit(first);
+  for (const job of q.jobs) q.fail(job.id, "err.noMatchingSource");
+  await service.sync();
+  const other = await store.create({ ownerUserId: "u1", type: "series", metaId: "tt2", name: "Other" }, 0);
+  await store.recordCheck(other.id, { episodes: [episode(1, 1, "b1", RELEASED)], now: 0 });
+  await store.update(other.id, (current) => { current.autoDownload = rule(); });
+  await service.admit(other.id);
+  assert.equal(store.get(other.id)!.episodes["1:1"].download, undefined, "twenty waiting episodes hold the budget");
+
+  await service.setAutoDownload(first, "u1", null);
+  await service.admit(other.id);
+  assert.equal(store.get(other.id)!.episodes["1:1"].download?.state, "queued", "a switched-off follow no longer holds it");
+});
+
+test("removing a failed job keeps a skip the person already chose", async (t) => {
+  const { store } = await withStore(t);
+  const q = fakeQueue();
+  const service = buildService(store, q);
+  q.hooks.remove = (job) => service.jobRemoving(job, "user");
+  const id = await seedSeries(store, [episode(1, 1, "v1", RELEASED)], rule());
+  await service.admit(id);
+  q.fail(q.jobs[0].id, "err.noMatchingSource");
+  await service.sync();
+  await service.skipEpisode(id, "u1", "1:1");
+  assert.equal(store.get(id)!.episodes["1:1"].download?.state, "skipped");
+  await q.queue.remove(q.jobs[0].id);
+  assert.equal(store.get(id)!.episodes["1:1"].download?.state, "skipped", "tidying the queue does not undo the skip");
+  await service.sync();
+  await service.admit(id);
+  assert.equal(q.added.length, 1, "never queued again");
+});
+
+test("an episode already queued by hand is adopted and followed to completion", async (t) => {
+  const { store } = await withStore(t);
+  const q = fakeQueue();
+  const service = buildService(store, q);
+  const manual: (typeof q.jobs)[number] = { id: "manual-1", status: "queued", source: { type: "series", videoId: "v1" } };
+  q.jobs.push(manual);
+  const id = await seedSeries(store, [episode(1, 1, "v1", RELEASED)], rule());
+  await service.admit(id);
+
+  let download = store.get(id)!.episodes["1:1"].download!;
+  assert.equal(download.state, "queued");
+  assert.equal(download.jobId, manual.id);
+  assert.equal(manual.follow?.intent, download.intent, "the manual job carries the follow's intent now");
+  await service.sync();
+  assert.equal(store.get(id)!.episodes["1:1"].download?.state, "queued", "sync finds it instead of calling it lost");
+  q.complete(manual.id);
+  await service.sync();
+  download = store.get(id)!.episodes["1:1"].download!;
+  assert.equal(download.state, "completed");
 });
 
 test("a removal guard that cannot write refuses the removal", async (t) => {

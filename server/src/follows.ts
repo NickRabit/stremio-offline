@@ -367,6 +367,7 @@ export interface FollowQueue {
     follow: { followId: string; episodeKey: string; intent: string },
   ): Promise<{ id: string } | undefined>;
   findActiveEpisode(ownerUserId: string, type: string, videoId: string): { id: string } | undefined;
+  adopt(id: string, follow: { followId: string; episodeKey: string; intent: string }): Promise<void>;
   followJobs(): FollowJob[];
   get(id: string): { id: string; status: string; errorKey?: string } | undefined;
   retry(id: string, selection?: DownloadSelection): Promise<unknown>;
@@ -579,6 +580,9 @@ export class FollowService {
   private outstanding(): number {
     let count = 0;
     for (const follow of this.deps.store.all()) {
+      // A follow that was paused or switched off no longer admits anything, so what it left
+      // behind must not hold the shared budget away from every other follow.
+      if (!follow.enabled || !follow.autoDownload) continue;
       for (const episode of Object.values(follow.episodes)) {
         const state = episode.download?.state;
         if (state === "reserved" || state === "queued" || state === "waiting") count += 1;
@@ -653,7 +657,11 @@ export class FollowService {
     );
     follow = this.admittable(followId, revision);
     if (!follow) return;
-    const linked = job ?? this.deps.queue.findActiveEpisode(follow.ownerUserId, follow.type, episode.videoId);
+    const existing = job ? undefined : this.deps.queue.findActiveEpisode(follow.ownerUserId, follow.type, episode.videoId);
+    // The owner had already queued this episode by hand: the job takes this intent, so the
+    // reconciliation, its completion and its removal all find it like one the follow queued.
+    if (existing) await this.deps.queue.adopt(existing.id, { followId, episodeKey, intent });
+    const linked = job ?? existing;
     await this.setDownload(followId, episodeKey, linked
       ? { state: "queued", intent, generation, jobId: linked.id, attempts: 0, updatedAt: "" }
       : { state: "attention", intent, generation, attempts: 0, reasonKey: "err.followJobMissing", updatedAt: "" });
@@ -864,6 +872,8 @@ export class FollowService {
       if (reason !== "user" || !ref) return;
       const download = this.deps.store.get(ref.followId)?.episodes[ref.episodeKey]?.download;
       if (!download || download.intent !== ref.intent) return;
+      // A skip the person already chose stands; removing the job afterwards only tidies the queue.
+      if (download.state === "skipped") return;
       if (job.status === "completed") {
         if (download.state === "completed") return;
         await this.setDownload(ref.followId, ref.episodeKey, { ...download, state: "completed", reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });

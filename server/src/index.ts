@@ -1595,6 +1595,7 @@ const followService = new FollowService({
   queue: {
     addPending: (title, source, media, ownerUserId, follow) => queue.addPending(title, source, media, ownerUserId, follow),
     findActiveEpisode: (ownerUserId, type, videoId) => queue.findActiveEpisode(ownerUserId, type, videoId),
+    adopt: (id, follow) => queue.adopt(id, follow),
     followJobs: () => queue.followJobs(),
     get: (id) => queue.get(id),
     retry: (id, selection) => queue.retry(id, selection),

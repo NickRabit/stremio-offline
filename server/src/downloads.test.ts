@@ -1469,6 +1469,34 @@ test("a failing torrent on a lazy job tries the next source and finally fails", 
   }
 });
 
+test("a Real-Debrid link that fails over HTTP rules its torrent out, not only its address", async () => {
+  const { server, port } = await listen((_req, res) => { res.writeHead(404); res.end(); });
+  const first = { infoHash: HASH, fileIdx: 0, title: "Show CZ" };
+  const second = { infoHash: "1111111111111111111111111111111111111111", fileIdx: 0, title: "Show CZ" };
+  const handed: string[] = [];
+  const { directory, queue } = await tempQueue({
+    debridPollMs: 20,
+    debrid: { configured: () => true, advance: async ({ infoHash }) => {
+      handed.push(infoHash);
+      return { ready: true, torrentId: `rd-${handed.length}`, url: `http://127.0.0.1:${port}/gone-${handed.length}.mkv`, filename: "Show.S01E01.mkv" };
+    } },
+  });
+  queue.setResolver(async ({ tried }) => {
+    const next = [first, second].find((stream) => !tried.includes(torrentKey(stream)));
+    return next ? { stream: next, settings: defaultDownloadSettings() } : undefined;
+  });
+  try {
+    await queue.addPending("Show", { type: "series", videoId: "tt1" }, { kind: "episode", title: "Show", season: 1, episode: 1 });
+    await waitFor(queue, () => queue.list()[0]?.status === "failed", 30_000);
+    assert.equal(queue.list()[0].errorKey, "err.noMatchingSource");
+    assert.deepEqual(handed, [first.infoHash, second.infoHash], "each torrent is tried once, then the job gives up");
+  } finally {
+    await queue.stop();
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("the Real-Debrid timeout counts from debridStartedAt rather than createdAt", async () => {
   const payload = Buffer.alloc(8 * 1024, 5);
   const { server, port } = await listen((_req, res) => {

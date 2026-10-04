@@ -41,6 +41,7 @@ const mount = async (): Promise<Harness> => {
       return { id: job.id };
     },
     findActiveEpisode: () => undefined,
+    adopt: async () => undefined,
     followJobs: () => jobs,
     get: (id: string) => jobs.find((job) => job.id === id),
     retry: async () => undefined,
