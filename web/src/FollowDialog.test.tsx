@@ -101,4 +101,16 @@ describe("FollowDialog", () => {
     await act(async () => { button(rowFor("S01E02")!, "Retry")!.click(); await Promise.resolve(); await Promise.resolve(); });
     expect(fetchMock.mock.calls.some((call) => decodeURIComponent(String(call[0])).endsWith("/episodes/1:2/retry"))).toBe(true);
   });
+
+  it("a followed film shows its digital release and its download, with no episode list", async () => {
+    await render({ ...follow, type: "movie", metaId: "tt9", name: "Film", autoDownload: undefined, movie: { released: "2026-11-20T23:59:59.999Z", releaseKind: "digital", state: "waiting", nextAttemptAt: "2026-11-21T10:00:00.000Z" } }, []);
+    expect(host.textContent).toContain("Digital release:");
+    expect(host.querySelector(".state-pill")!.textContent).toBe("Waiting for a source");
+    expect([...host.querySelectorAll("h3")].some((heading) => heading.textContent === "Episodes")).toBe(false);
+  });
+
+  it("a film only in cinemas says the digital release is not announced", async () => {
+    await render({ ...follow, type: "movie", metaId: "tt9", name: "Film", autoDownload: undefined, movie: { releaseKind: "theatrical", theatricalAt: "2026-09-25T23:59:59.999Z", dateUncertain: true } }, []);
+    expect(host.textContent).toContain("digital release not announced yet");
+  });
 });

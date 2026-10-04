@@ -26,6 +26,8 @@ const TAB_LABEL = { overview: "following.tabOverview", calendar: "following.tabC
 
 const pad2 = (value: number) => String(Math.max(0, Math.trunc(value))).padStart(2, "0");
 const episodeCode = (season: number, episode: number) => `S${pad2(season)}E${pad2(episode)}`;
+/** A film shows itself as a film; a series episode by its code. */
+const codeOf = (item: { type: string; season: number; episode: number }): string => item.type === "movie" ? t("follow.movieBadge") : episodeCode(item.season, item.episode);
 const formatDay = (value?: string) => value ? new Date(value).toLocaleDateString(localeTag()) : "";
 const formatWhen = (value?: string) => value ? new Date(value).toLocaleString(localeTag(), { dateStyle: "short", timeStyle: "short" }) : "";
 
@@ -96,7 +98,10 @@ function Overview({ follows, onOpen }: { follows: FollowView[]; onOpen: (id: str
   if (!follows.length) return <div className="empty"><i><BellRing/></i><h3>{t("following.emptyTitle")}</h3><p>{t("following.emptyText")}</p></div>;
   return <div className="following-grid">
     {sortFollows(follows).map((follow) => {
-      const line = follow.nextEpisode
+      const line = follow.type === "movie"
+        ? follow.movie?.released ? t("follow.movieRelease", { date: formatDay(follow.movie.released) })
+          : follow.movie?.theatricalAt ? t("follow.movieTheatrical", { date: formatDay(follow.movie.theatricalAt) }) : t("follow.movieUnannounced")
+        : follow.nextEpisode
         ? t("follow.nextEpisode", { code: episodeCode(follow.nextEpisode.season, follow.nextEpisode.episode), date: formatDay(follow.nextEpisode.released) })
         : follow.latestEpisode
           ? t("follow.latestEpisode", { code: episodeCode(follow.latestEpisode.season, follow.latestEpisode.episode), date: formatDay(follow.latestEpisode.released) })
@@ -136,7 +141,7 @@ function EpisodeRow({ item, onOpen }: { item: CalendarItem | UndatedCalendarItem
     <span className="following-episode-art">{item.poster ? <img src={item.poster} alt="" loading="lazy"/> : <Film/>}</span>
     <span className="following-episode-copy">
       <strong>{item.name}</strong>
-      <small>{`${item.dateUncertain ? "≈ " : ""}${episodeCode(item.season, item.episode)}${item.title ? ` · ${item.title}` : ""}`}</small>
+      <small>{`${item.dateUncertain ? "≈ " : ""}${codeOf(item)}${item.title && item.type !== "movie" ? ` · ${item.title}` : ""}`}</small>
     </span>
     <StatePill state={item.state}/>
   </button>;
@@ -259,7 +264,7 @@ function CalendarTab({ onOpenSeries }: { onOpenSeries: FollowingPageProps["onOpe
           const key = dayKey(date);
           const dayItems = byDay.get(key) ?? [];
           const classes = ["following-day", date.getMonth() !== cursor.getMonth() ? "outside" : "", key === today ? "today" : "", key === selected ? "selected" : "", dayItems.length ? "busy" : ""].filter(Boolean).join(" ");
-          const label = `${new Intl.DateTimeFormat(localeTag(), { weekday: "long", day: "numeric", month: "long" }).format(date)}${dayItems.length ? `: ${dayItems.map((item) => `${item.name} ${episodeCode(item.season, item.episode)}`).join(", ")}` : ""}`;
+          const label = `${new Intl.DateTimeFormat(localeTag(), { weekday: "long", day: "numeric", month: "long" }).format(date)}${dayItems.length ? `: ${dayItems.map((item) => `${item.name} ${codeOf(item)}`).join(", ")}` : ""}`;
           return <div key={key} className={classes}>
             <button type="button" className="following-day-hit" aria-label={label} aria-pressed={key === selected} onClick={() => setSelected(key)}>
               <span className="following-day-num">{date.getDate()}</span>
@@ -269,9 +274,9 @@ function CalendarTab({ onOpenSeries }: { onOpenSeries: FollowingPageProps["onOpe
               </span>}
             </button>
             {dayItems.length > 0 && <div className="following-day-items">
-              {dayItems.slice(0, 3).map((item) => <button type="button" key={itemKey(item)} className={`following-event state-${item.state}`} title={item.dateUncertain ? t("following.dateUncertainHint") : `${item.name} ${episodeCode(item.season, item.episode)}${item.title ? ` · ${item.title}` : ""}`} onClick={() => openOf(item)}>
+              {dayItems.slice(0, 3).map((item) => <button type="button" key={itemKey(item)} className={`following-event state-${item.state}`} title={item.dateUncertain ? t("following.dateUncertainHint") : `${item.name} ${codeOf(item)}${item.title ? ` · ${item.title}` : ""}`} onClick={() => openOf(item)}>
                 {item.poster ? <img src={item.poster} alt="" loading="lazy"/> : null}
-                <span><strong>{item.name}</strong><small>{`${item.dateUncertain ? "≈ " : ""}${episodeCode(item.season, item.episode)}`}</small></span>
+                <span><strong>{item.name}</strong><small>{`${item.dateUncertain ? "≈ " : ""}${codeOf(item)}`}</small></span>
               </button>)}
               {dayItems.length > 3 && <button type="button" className="following-event-more" onClick={() => setSelected(key)}>{t("following.more", { count: dayItems.length - 3 })}</button>}
             </div>}
@@ -324,7 +329,7 @@ function ActivityTab({ onNotify }: { onNotify: (text: string) => void }) {
       const canRetry = item.state === "waiting" || item.state === "attention" || item.state === "skipped";
       return <div className="following-activity-row" key={`${item.followId}:${key}`}>
         <span className="following-activity-art">{item.poster ? <img src={item.poster} alt="" loading="lazy"/> : <Film/>}</span>
-        <span className="following-activity-copy"><strong>{`${item.name} · ${episodeCode(item.season, item.episode)}${item.title ? ` · ${item.title}` : ""}`}</strong>
+        <span className="following-activity-copy"><strong>{`${item.name} · ${codeOf(item)}${item.title ? ` · ${item.title}` : ""}`}</strong>
           <span className="following-activity-meta"><StatePill state={item.state}/>{item.reasonKey && item.state !== "skipped" ? <small>{serverText(item.reasonKey, "")}</small> : null}{item.state === "waiting" && item.nextAttemptAt ? <small>{t("follow.nextAttempt", { time: formatWhen(item.nextAttemptAt) })}</small> : null}</span>
         </span>
         <small className="following-activity-time">{formatWhen(item.updatedAt)}</small>

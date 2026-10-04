@@ -145,4 +145,15 @@ describe("SeriesDownloadDialog", () => {
     await act(async () => { save.click(); await Promise.resolve(); await Promise.resolve(); });
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/follows/defaults"))).toBe(false);
   });
+
+  it("following a film asks no start episode and uses the film wording", async () => {
+    fetchMock.mockImplementation(async (url: string) => new Response(JSON.stringify(String(url).includes("/api/follows") ? { defaults: null } : [{ key: "first", name: "First" }]), { status: 200, headers: { "content-type": "application/json" } }));
+    await act(async () => { root.render(<SeriesDownloadDialog type="movie" label="Film" title="Film" libraries={[]} addons={[]} episodes={[{ id: "tt9" }]} audioLanguage="cs" subtitleLanguage="cs" languages={[{ code: "cs", name: "Čeština" }]} follow={{ create: { metaId: "tt9", name: "Film" }, onFollowed: () => undefined }} onClose={() => undefined}/>); });
+    await act(async () => { await Promise.resolve(); });
+    expect(host.querySelector("h2")!.textContent).toBe("Follow film");
+    expect(host.textContent).toContain("Only tell me when it comes out");
+    await act(async () => { host.querySelector<HTMLInputElement>('input[name="follow-mode"][value="download"]')!.click(); });
+    expect(host.querySelector('input[name="follow-start"]'), "no where-to-start for a film").toBeNull();
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/stream-sources/movie/tt9"))).toBe(true);
+  });
 });

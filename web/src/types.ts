@@ -392,7 +392,13 @@ export interface FollowEpisodeRow {
 }
 export interface FollowDownloads { queued: number; waiting: number; completed: number; skipped: number; attention: number }
 /** One followed series as the follow routes answer it. */
+/** A followed film's single record, as the follow view carries it. */
+export interface FollowMovie {
+  released?: string; releaseKind?: "digital" | "physical" | "theatrical" | "catalog"; theatricalAt?: string; dateUncertain?: boolean;
+  state?: CalendarEpisodeState; reasonKey?: string; nextAttemptAt?: string;
+}
 export interface FollowView {
+  movie?: FollowMovie;
   id: string; ownerUserId: string; type: string; metaId: string; name: string; poster?: string;
   createdAt: string; updatedAt: string; enabled: boolean; revision: number;
   lastCheckedAt?: string; lastSuccessfulCheckAt?: string; nextCheckAt: string; failures: number; lastErrorKey?: string;

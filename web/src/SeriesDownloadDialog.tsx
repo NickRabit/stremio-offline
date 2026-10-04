@@ -64,6 +64,8 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
   const [startEpisode, setStartEpisode] = useState<number | undefined>(initial?.startEpisode);
   const [preview, setPreview] = useState<FollowPreview | null>(null);
   const creating = Boolean(follow?.create);
+  // A film has no episodes to start from and is saved by the film rules.
+  const isMovie = type === "movie";
   const [followMode, setFollowMode] = useState<"notify" | "download">("notify");
   const downloading = !creating || followMode === "download";
   const [busy, setBusy] = useState(false);
@@ -152,7 +154,7 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
   const languageOptions = () => languages.map(({ code }) => <option key={code} value={code}>{languageName(code)}</option>);
   const startSeasons = [...new Set(episodes.map((episode) => episode.season).filter((value): value is number => typeof value === "number"))].sort((a, b) => a - b);
   const startSeasonEpisodes = episodes.filter((episode) => episode.season === startSeason && typeof episode.episode === "number").sort((a, b) => (a.episode ?? 0) - (b.episode ?? 0));
-  const startMissing = follow && startMode === "from" && (startSeason == null || startEpisode == null);
+  const startMissing = follow && !isMovie && startMode === "from" && (startSeason == null || startEpisode == null);
   const chooseFrom = () => {
     setStartMode("from");
     if (startSeason == null) {
@@ -212,18 +214,18 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
 
   return <div className="identify-overlay" role="dialog" aria-modal="true" aria-labelledby="bulk-dialog-title" onChangeCapture={() => { touched.current = true; }} onClick={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }}>
     <div className="panel identify-card dialog-split bulk-card">
-      <div className="identify-head bulk-head"><div><span className="bulk-eyebrow">{label}</span><h2 id="bulk-dialog-title">{creating ? t("follow.createTitle") : follow ? t("follow.setupTitle") : t("bulk.title")}</h2></div><button className="icon-button" aria-label={t("common.cancel")} disabled={busy} onClick={onClose}><X/></button></div>
+      <div className="identify-head bulk-head"><div><span className="bulk-eyebrow">{label}</span><h2 id="bulk-dialog-title">{creating ? t(isMovie ? "follow.createTitleMovie" : "follow.createTitle") : follow ? t("follow.setupTitle") : t("bulk.title")}</h2></div><button className="icon-button" aria-label={t("common.cancel")} disabled={busy} onClick={onClose}><X/></button></div>
       <div className="dialog-body bulk-body">
         {creating && <section className="bulk-section">
           <div className="bulk-section-head"><Bell/><div><h3>{t("follow.howHeading")}</h3></div></div>
           <div className="bulk-strategy" role="radiogroup" aria-label={t("follow.howHeading")}>
             {(["notify", "download"] as const).map((mode) => <label key={mode} className={followMode === mode ? "selected" : ""}>
               <input type="radio" name="follow-mode" value={mode} checked={followMode === mode} onChange={() => setFollowMode(mode)}/>
-              <span><strong>{t(mode === "notify" ? "follow.modeNotify" : "follow.modeDownload")}</strong><small>{t(mode === "notify" ? "follow.modeNotifyHint" : "follow.modeDownloadHint")}</small></span>
+              <span><strong>{t(mode === "notify" ? (isMovie ? "follow.movieNotify" : "follow.modeNotify") : (isMovie ? "follow.movieDownload" : "follow.modeDownload"))}</strong><small>{t(mode === "notify" ? (isMovie ? "follow.movieNotifyHint" : "follow.modeNotifyHint") : (isMovie ? "follow.movieDownloadHint" : "follow.modeDownloadHint"))}</small></span>
             </label>)}
           </div>
         </section>}
-        {follow && downloading && <section className="bulk-section">
+        {follow && downloading && !isMovie && <section className="bulk-section">
           <div className="bulk-section-head"><CalendarClock/><div><h3>{t("follow.startHeading")}</h3></div></div>
           <div className="bulk-strategy" role="radiogroup" aria-label={t("follow.startHeading")}>
             <label className={startMode === "new" ? "selected" : ""}>
@@ -282,12 +284,12 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
         </section>
         <section className="bulk-section">
           <div className="bulk-section-head"><FolderOpen/><div><h3>{t("saveTarget.where")}</h3><p>{t("saveTarget.whereHint")}</p></div></div>
-          <SaveTargetFields kind="series" title={title} libraries={libraries} rule={rule} value={target} onChange={setTarget}/>
+          <SaveTargetFields kind={isMovie ? "movie" : "series"} title={title} libraries={libraries} rule={rule} value={target} onChange={setTarget}/>
         </section>
         </>}
         {error && <p className="login-error" role="alert">{error}</p>}
       </div>
-      <footer className="dialog-foot"><p className="identify-hint">{creating && !downloading ? t("follow.modeNotifyHint") : follow ? t("follow.setupHint") : t("bulk.queueHint")}</p><button type="button" disabled={busy} onClick={onClose}>{t("common.cancel")}</button><button type="button" className="primary" disabled={busy || (downloading && (!chosen.length || !sources.length || startMissing))} onClick={() => void submit()}>{busy ? t("save.adding") : creating ? t(downloading ? "follow.followAndDownload" : "follow.followSave") : follow ? t("follow.setupSave") : t("bulk.add")}</button></footer>
+      <footer className="dialog-foot"><p className="identify-hint">{creating && !downloading ? t(isMovie ? "follow.movieNotifyHint" : "follow.modeNotifyHint") : follow ? t("follow.setupHint") : t("bulk.queueHint")}</p><button type="button" disabled={busy} onClick={onClose}>{t("common.cancel")}</button><button type="button" className="primary" disabled={busy || (downloading && (!chosen.length || !sources.length || startMissing))} onClick={() => void submit()}>{busy ? t("save.adding") : creating ? t(downloading ? "follow.followAndDownload" : "follow.followSave") : follow ? t("follow.setupSave") : t("bulk.add")}</button></footer>
     </div>
   </div>;
 }
