@@ -1,12 +1,26 @@
 import { useEffect, useState } from "react";
-import { ArrowDown, ArrowUp, CalendarClock, FolderOpen, Languages, ListFilter, Subtitles, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Bell, CalendarClock, FolderOpen, Languages, ListFilter, Subtitles, X } from "lucide-react";
 import { api, describeError } from "./api";
 import { languageName, t, useI18n } from "./i18n";
 import { SaveTargetFields } from "./SaveTargetFields";
 import type { SaveTarget } from "./save-target";
-import type { Addon, AudioMode, DownloadSelection, DownloadSourceStrategy, FollowAutoDownload, FollowPreview, FollowStartMode, LibraryView, SubtitleMode } from "./types";
+import type { Addon, AudioMode, DownloadSelection, DownloadSourceStrategy, FollowAutoDownload, FollowPreview, FollowStartMode, FollowView, LibraryView, SubtitleMode } from "./types";
 
-interface Episode { id: string; season?: number; episode?: number; title?: string }
+interface Episode { id: string; season?: number; episode?: number; title?: string; released?: string }
+
+/** What a proposed start would fetch at once, worked out from the episodes on screen while
+ *  the follow does not exist yet and the server cannot be asked. */
+const localPreview = (episodes: Episode[], startMode: FollowStartMode, startSeason?: number, startEpisode?: number): FollowPreview => {
+  if (startMode === "new") return { count: 0, episodes: [] };
+  const now = Date.now();
+  const due = episodes.filter((episode) => {
+    if (episode.season == null || episode.episode == null || !episode.released) return false;
+    const released = Date.parse(episode.released);
+    if (!Number.isFinite(released) || released > now) return false;
+    return episode.season > (startSeason ?? 0) || (episode.season === startSeason && episode.episode >= (startEpisode ?? 0));
+  });
+  return { count: due.length, episodes: [] };
+};
 
 const pad2 = (value: number) => String(Math.max(0, Math.trunc(value))).padStart(2, "0");
 
@@ -20,8 +34,10 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
   languages: Array<{ code: string; name: string }>;
   libraries: LibraryView[];
   addons: Addon[];
-  /** Set when the dialog edits a follow's automatic rule instead of queueing a batch. */
-  follow?: { followId: string; initial?: FollowAutoDownload };
+  /** Set when the dialog edits a follow's automatic rule instead of queueing a batch. Without
+   *  `followId` it is the first step of following: how to follow comes first, and the follow
+   *  is created only when the person confirms. */
+  follow?: { followId?: string; initial?: FollowAutoDownload; create?: { metaId: string; name: string; poster?: string }; onFollowed?: (follow: FollowView) => void };
   onClose: () => void;
   onSubmit?: (selection: DownloadSelection, target?: SaveTarget) => Promise<void>;
 }) {
@@ -47,6 +63,9 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
   const [startSeason, setStartSeason] = useState<number | undefined>(initial?.startSeason);
   const [startEpisode, setStartEpisode] = useState<number | undefined>(initial?.startEpisode);
   const [preview, setPreview] = useState<FollowPreview | null>(null);
+  const creating = Boolean(follow?.create);
+  const [followMode, setFollowMode] = useState<"notify" | "download">("notify");
+  const downloading = !creating || followMode === "download";
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -72,14 +91,16 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
   useEffect(() => {
     if (!follow) return;
     if (startMode === "from" && (startSeason == null || startEpisode == null)) { setPreview(null); return; }
+    const followId = follow.followId;
+    if (!followId) { setPreview(localPreview(episodes, startMode, startSeason, startEpisode)); return; }
     let stale = false;
     const timer = window.setTimeout(() => {
-      api.followPreview(follow.followId, { startMode, startSeason, startEpisode })
+      api.followPreview(followId, { startMode, startSeason, startEpisode })
         .then((answer) => { if (!stale) setPreview(answer); })
         .catch(() => { if (!stale) setPreview(null); });
     }, 300);
     return () => { stale = true; window.clearTimeout(timer); };
-  }, [follow, startMode, startSeason, startEpisode]);
+  }, [follow, episodes, startMode, startSeason, startEpisode]);
 
   const toggle = (key: string) => setChosen((current) => current.includes(key) ? current.filter((item) => item !== key) : [...current, key]);
   const move = (key: string, direction: -1 | 1) => setChosen((current) => {
@@ -108,9 +129,14 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
   };
 
   const submit = async () => {
-    if (!chosen.length) return;
+    if (downloading && !chosen.length) return;
     setBusy(true); setError("");
     try {
+      if (follow?.create && followMode === "notify") {
+        follow.onFollowed?.(await api.follow({ type, id: follow.create.metaId, name: follow.create.name, poster: follow.create.poster }));
+        onClose();
+        return;
+      }
       const selection: DownloadSelection = {
         addonKeys: chosen, sourceStrategy, audioLanguage: audio,
         fallbackAudioLanguage: audioFallback && audioFallback !== audio ? audioFallback : undefined,
@@ -120,12 +146,15 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
         fallbackSubtitleLanguage: subtitleMode !== "off" && subtitleFallback !== subtitle ? subtitleFallback || undefined : undefined,
       };
       if (follow) {
-        await api.updateFollow(follow.followId, { autoDownload: {
+        const created = follow.create ? await api.follow({ type, id: follow.create.metaId, name: follow.create.name, poster: follow.create.poster }) : undefined;
+        const followId = created?.id ?? follow.followId!;
+        const updated = await api.updateFollow(followId, { autoDownload: {
           startMode,
           ...(startMode === "from" && startSeason != null && startEpisode != null ? { startSeason, startEpisode } : {}),
           selection,
           ...(target ? { target } : {}),
         } });
+        if (created) follow.onFollowed?.(updated);
       } else if (onSubmit) {
         await onSubmit(selection, target ?? undefined);
       }
@@ -136,9 +165,18 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
 
   return <div className="identify-overlay" role="dialog" aria-modal="true" aria-labelledby="bulk-dialog-title" onClick={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }}>
     <div className="panel identify-card dialog-split bulk-card">
-      <div className="identify-head bulk-head"><div><span className="bulk-eyebrow">{label}</span><h2 id="bulk-dialog-title">{follow ? t("follow.setupTitle") : t("bulk.title")}</h2></div><button className="icon-button" aria-label={t("common.cancel")} disabled={busy} onClick={onClose}><X/></button></div>
+      <div className="identify-head bulk-head"><div><span className="bulk-eyebrow">{label}</span><h2 id="bulk-dialog-title">{creating ? t("follow.createTitle") : follow ? t("follow.setupTitle") : t("bulk.title")}</h2></div><button className="icon-button" aria-label={t("common.cancel")} disabled={busy} onClick={onClose}><X/></button></div>
       <div className="dialog-body bulk-body">
-        {follow && <section className="bulk-section">
+        {creating && <section className="bulk-section">
+          <div className="bulk-section-head"><Bell/><div><h3>{t("follow.howHeading")}</h3></div></div>
+          <div className="bulk-strategy" role="radiogroup" aria-label={t("follow.howHeading")}>
+            {(["notify", "download"] as const).map((mode) => <label key={mode} className={followMode === mode ? "selected" : ""}>
+              <input type="radio" name="follow-mode" value={mode} checked={followMode === mode} onChange={() => setFollowMode(mode)}/>
+              <span><strong>{t(mode === "notify" ? "follow.modeNotify" : "follow.modeDownload")}</strong><small>{t(mode === "notify" ? "follow.modeNotifyHint" : "follow.modeDownloadHint")}</small></span>
+            </label>)}
+          </div>
+        </section>}
+        {follow && downloading && <section className="bulk-section">
           <div className="bulk-section-head"><CalendarClock/><div><h3>{t("follow.startHeading")}</h3></div></div>
           <div className="bulk-strategy" role="radiogroup" aria-label={t("follow.startHeading")}>
             <label className={startMode === "new" ? "selected" : ""}>
@@ -156,6 +194,7 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
           </div>}
           <p className="identify-hint" aria-live="polite">{preview && preview.count ? t("follow.previewCount", { count: preview.count }) : t("follow.previewNone")}</p>
         </section>}
+        {downloading && <>
         <section className="bulk-section">
           <div className="bulk-section-head"><ListFilter/><div><h3>{t("bulk.sourceStrategy")}</h3><p>{t("bulk.sourceStrategyHint")}</p></div></div>
           <div className="bulk-strategy" role="radiogroup" aria-label={t("bulk.sourceStrategy")}>
@@ -198,9 +237,10 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
           <div className="bulk-section-head"><FolderOpen/><div><h3>{t("saveTarget.where")}</h3><p>{t("saveTarget.whereHint")}</p></div></div>
           <SaveTargetFields kind="series" title={title} libraries={libraries} rule={rule} value={target} onChange={setTarget}/>
         </section>
+        </>}
         {error && <p className="login-error" role="alert">{error}</p>}
       </div>
-      <footer className="dialog-foot"><p className="identify-hint">{follow ? t("follow.setupHint") : t("bulk.queueHint")}</p><button type="button" disabled={busy} onClick={onClose}>{t("common.cancel")}</button><button type="button" className="primary" disabled={busy || !chosen.length || !sources.length || startMissing} onClick={() => void submit()}>{busy ? t("save.adding") : follow ? t("follow.setupSave") : t("bulk.add")}</button></footer>
+      <footer className="dialog-foot"><p className="identify-hint">{creating && !downloading ? t("follow.modeNotifyHint") : follow ? t("follow.setupHint") : t("bulk.queueHint")}</p><button type="button" disabled={busy} onClick={onClose}>{t("common.cancel")}</button><button type="button" className="primary" disabled={busy || (downloading && (!chosen.length || !sources.length || startMissing))} onClick={() => void submit()}>{busy ? t("save.adding") : creating ? t(downloading ? "follow.followAndDownload" : "follow.followSave") : follow ? t("follow.setupSave") : t("bulk.add")}</button></footer>
     </div>
   </div>;
 }

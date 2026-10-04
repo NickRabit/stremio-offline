@@ -260,6 +260,14 @@ test.describe("layout invariants", () => {
     try {
       const detail = await openSeries(page);
       await detail.getByRole("button", { name: "Sledovat" }).click();
+      const start = page.getByRole("dialog", { name: "Sledovat seriál" });
+      await start.getByRole("radio", { name: /Automaticky stahovat nové díly/ }).check();
+      const wizard = await horizontalOverflow(page);
+      expect(wizard.offenders, "elements past the right edge of the follow wizard").toEqual([]);
+      expect(wizard.scrollWidth, "the follow wizard overflows horizontally").toBeLessThanOrEqual(wizard.clientWidth + 1);
+      await expect(start.getByRole("button", { name: "Sledovat a stahovat" })).toBeInViewport();
+      await start.getByRole("radio", { name: /Jen upozorňovat na nové díly/ }).check();
+      await start.getByRole("button", { name: "Sledovat", exact: true }).click();
       const chip = detail.getByRole("button", { name: "Sledujete" });
       await expect(chip).toBeVisible();
       await chip.click();

@@ -5,14 +5,14 @@ import { localeTag, serverText, t, useI18n } from "./i18n";
 import { SeriesDownloadDialog } from "./SeriesDownloadDialog";
 import type { Addon, FollowEpisodeRow, FollowView, LibraryView, Video } from "./types";
 
-interface SetupEpisode { id: string; season?: number; episode?: number; title?: string }
+interface SetupEpisode { id: string; season?: number; episode?: number; title?: string; released?: string }
 
 /** The episodes a title carries, in the shape the download setup expects. Rows without a
  *  whole season and episode are not episodes of a series and are dropped. */
-const toEpisodes = (videos?: Video[]): SetupEpisode[] => (videos ?? []).flatMap((video) => {
-  if (!video.id || typeof video.season !== "number" || typeof video.episode !== "number") return [];
+export const toEpisodes = (videos?: Video[]): SetupEpisode[] => (videos ?? []).flatMap((video) => {
+  if (!video.id || typeof video.season !== "number" || typeof video.episode !== "number" || video.season < 1) return [];
   const title = video.title ?? video.name;
-  return [{ id: video.id, season: video.season, episode: video.episode, ...(title ? { title } : {}) }];
+  return [{ id: video.id, season: video.season, episode: video.episode, ...(title ? { title } : {}), ...(video.released ? { released: video.released } : {}) }];
 });
 
 const pad2 = (value: number) => String(Math.max(0, Math.trunc(value))).padStart(2, "0");

@@ -39,6 +39,11 @@ const openSeries = async (page: Page): Promise<Locator> => {
 test("following from the detail and pausing it through the chip dialog", async ({ page, request }) => {
   const detail = await openSeries(page);
   await detail.getByRole("button", { name: "Sledovat" }).click();
+  // Following asks how first; the default only tells about new episodes and downloads nothing.
+  const start = page.getByRole("dialog", { name: "Sledovat seriál" });
+  await expect(start.getByRole("radio", { name: /Jen upozorňovat na nové díly/ })).toBeChecked();
+  await start.getByRole("button", { name: "Sledovat", exact: true }).click();
+  await expect(start).toBeHidden();
 
   const chip = detail.getByRole("button", { name: "Sledujete" });
   await expect(chip).toBeVisible();
