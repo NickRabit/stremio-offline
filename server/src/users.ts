@@ -35,6 +35,26 @@ export interface UserRecord {
   permissionsVersion: number;
 }
 
+/** The choices the follow wizard remembers for one account, so its next run opens where
+ *  the last one left off. A suggestion, never a grant: what the account may still use is
+ *  decided when the defaults are read. */
+export interface FollowDefaults {
+  mode: "notify" | "download";
+  /** "from" is remembered as a mode only, never an episode. */
+  startMode?: "new" | "from";
+  selection?: {
+    addonKeys: string[];
+    sourceStrategy: "largest" | "priority";
+    audioLanguage: string;
+    fallbackAudioLanguage?: string;
+    audioMode: "listed" | "preferred" | "strict";
+    subtitleMode: "off" | "optional" | "required";
+    subtitleLanguage?: string;
+    fallbackSubtitleLanguage?: string;
+  };
+  target?: { libraryId: string; subfolder?: string; layout?: "structured" | "flat" };
+}
+
 /** The personal half of the state, one record per user. */
 export interface UserData {
   /** The personal slice of Settings. A missing key falls back to the instance default. */
@@ -46,6 +66,8 @@ export interface UserData {
   views?: Record<string, unknown>;
   /** Per-account catalog search history and preferences. Shape pinned in search-state.ts. */
   search?: Record<string, unknown>;
+  /** What the follow wizard last chose. Shape pinned in follows.ts. */
+  followDefaults?: FollowDefaults;
   favorites: string[];
   watchlist: Record<string, unknown>;
   progress: Record<string, unknown>;

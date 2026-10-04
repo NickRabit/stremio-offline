@@ -5,7 +5,7 @@ import path from "node:path";
 import { test } from "node:test";
 import type { DownloadSelection } from "./downloads.js";
 import type { AppError } from "./errors.js";
-import { downloadEligibility, FollowService, FollowStore, followStaggerMs, normalizeFollowEpisodes, type Follow, type FollowAutoDownload, type FollowDeps, type FollowEpisode, type FollowJob, type FollowQueue } from "./follows.js";
+import { activityItems, calendarItems, downloadEligibility, FollowService, FollowStore, followStaggerMs, normalizeFollowEpisodes, type EpisodeDownload, type Follow, type FollowAutoDownload, type FollowDeps, type FollowEpisode, type FollowJob, type FollowQueue } from "./follows.js";
 import type { MediaInfo } from "./naming.js";
 import type { MetaItem } from "./types.js";
 
@@ -823,4 +823,75 @@ test("a check keeps the download an episode already carries", async (t) => {
   await store.recordCheck(follow.id, { episodes: [episode(1, 1, "v1", "2024-03-02T00:00:00.000Z")], now: 1_000 });
   assert.deepEqual(store.get(follow.id)!.episodes["1:1"].download, download);
   assert.equal(store.get(follow.id)!.episodes["1:1"].released, "2024-03-02T00:00:00.000Z");
+});
+
+const calendarFollow = (over: Partial<Follow> = {}): Follow => ({
+  id: "f1", ownerUserId: "u1", type: "series", metaId: "tt1", name: "Show",
+  createdAt: "2024-01-01T00:00:00.000Z", updatedAt: "2024-01-01T00:00:00.000Z",
+  enabled: true, revision: 1, nextCheckAt: "2024-01-01T00:00:00.000Z", failures: 0,
+  episodes: {}, ...over,
+});
+const download = (over: Partial<EpisodeDownload> = {}): EpisodeDownload =>
+  ({ state: "queued", intent: "i", generation: 1, attempts: 0, updatedAt: "2024-03-15T00:00:00.000Z", ...over });
+
+test("calendarItems keeps [from, to) and maps the episode state", () => {
+  const from = Date.parse("2024-03-01T00:00:00.000Z");
+  const to = Date.parse("2024-04-01T00:00:00.000Z");
+  const now = Date.parse("2024-03-18T00:00:00.000Z");
+  const follow = calendarFollow({ episodes: {
+    "before": { ...episode(1, 1, "v1", "2024-02-29T23:59:59.999Z") },
+    "at-from": { ...episode(1, 2, "v2", "2024-03-01T00:00:00.000Z") },
+    "past": { ...episode(1, 3, "v3", "2024-03-15T00:00:00.000Z") },
+    "future": { ...episode(1, 4, "v4", "2024-03-25T00:00:00.000Z") },
+    "at-to": { ...episode(1, 5, "v5", "2024-04-01T00:00:00.000Z") },
+    "no-date": { ...episode(1, 6, "v6") },
+    "waiting": { ...episode(1, 7, "v7", "2024-03-20T00:00:00.000Z"), download: download({ state: "waiting", attempts: 2, reasonKey: "err.noMatchingSource", nextAttemptAt: "2024-03-21T00:00:00.000Z" }) },
+    "ambiguous": { ...episode(1, 8, "v8", "2024-03-10T00:00:00.000Z", true) },
+  } });
+  const items = calendarItems([follow], from, to, now);
+  assert.deepEqual(items.map((item) => item.episode), [2, 8, 3, 7, 4]);
+  const byEpisode = new Map(items.map((item) => [item.episode, item]));
+  assert.equal(byEpisode.get(2)!.state, "released", "released at `from` is included");
+  assert.equal(byEpisode.get(3)!.state, "released", "a past episode with no download is released");
+  assert.equal(byEpisode.get(4)!.state, "upcoming", "a future episode with no download is upcoming");
+  assert.equal(byEpisode.get(7)!.state, "waiting", "a download state wins over the clock");
+  assert.equal(byEpisode.get(7)!.reasonKey, "err.noMatchingSource");
+  assert.equal(byEpisode.get(7)!.nextAttemptAt, "2024-03-21T00:00:00.000Z");
+  assert.equal(byEpisode.get(8)!.ambiguous, true);
+});
+
+test("calendarItems orders equal releases by name, then season and episode", () => {
+  const from = Date.parse("2024-03-01T00:00:00.000Z");
+  const to = Date.parse("2024-04-01T00:00:00.000Z");
+  const released = "2024-03-15T00:00:00.000Z";
+  const one = calendarFollow({ id: "a", name: "Beta", episodes: { x: { ...episode(1, 2, "x", released) } } });
+  const two = calendarFollow({ id: "b", name: "Alpha", episodes: { y: { ...episode(1, 5, "y", released) } } });
+  const three = calendarFollow({ id: "c", name: "Alpha", episodes: { z: { ...episode(2, 1, "z", released) } } });
+  assert.deepEqual(calendarItems([one, two, three], from, to, 0).map((item) => item.followId), ["b", "c", "a"]);
+});
+
+test("calendarItems stops at five hundred items", () => {
+  const base = Date.parse("2024-01-01T00:00:00.000Z");
+  const episodes: Record<string, FollowEpisode> = {};
+  for (let index = 1; index <= 501; index += 1) episodes[`1:${index}`] = episode(1, index, `v${index}`, new Date(base + index * 60_000).toISOString());
+  const items = calendarItems([calendarFollow({ episodes })], base, base + 1_000 * 60_000, base);
+  assert.equal(items.length, 500);
+  assert.equal(items[0]!.episode, 1);
+  assert.equal(items[499]!.episode, 500);
+});
+
+test("activityItems keeps only episodes with a download, newest first and capped", () => {
+  const first = calendarFollow({ id: "f1", name: "One", episodes: {
+    "1:1": { ...episode(1, 1, "v1", RELEASED), download: download({ state: "completed", updatedAt: "2024-05-03T00:00:00.000Z" }) },
+    "1:2": { ...episode(1, 2, "v2", RELEASED), download: download({ state: "queued", updatedAt: "2024-05-01T00:00:00.000Z" }) },
+    "1:3": { ...episode(1, 3, "v3", RELEASED) },
+  } });
+  const second = calendarFollow({ id: "f2", name: "Two", episodes: {
+    "1:1": { ...episode(1, 1, "w1", RELEASED), download: download({ state: "waiting", updatedAt: "2024-05-02T00:00:00.000Z" }) },
+  } });
+  const items = activityItems([first, second], 50);
+  assert.deepEqual(items.map((item) => [item.followId, item.episode, item.state]), [
+    ["f1", 1, "completed"], ["f2", 1, "waiting"], ["f1", 2, "queued"],
+  ]);
+  assert.deepEqual(activityItems([first, second], 2).map((item) => item.followId), ["f1", "f2"]);
 });

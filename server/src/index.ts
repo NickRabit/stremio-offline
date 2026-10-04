@@ -1614,7 +1614,7 @@ const followService = new FollowService({
 queue.setRemovalGuard((job, reason) => followService.jobRemoving(job, reason));
 queue.setClearCompletedGuard((jobs) => followService.jobsClearing(jobs));
 
-registerFollowRoutes(app, { ...routeContext, follows: followService, followStore, prefsOf, markersOf, dataOf, posterOf, cachedMeta });
+registerFollowRoutes(app, { ...routeContext, follows: followService, followStore, prefsOf, markersOf, dataOf, updateData, posterOf, cachedMeta });
 
 // Deleting, renaming and moving touch real files, hence the path and root checks.
 

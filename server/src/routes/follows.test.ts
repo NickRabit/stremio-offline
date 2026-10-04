@@ -62,7 +62,12 @@ const mount = async (): Promise<Harness> => {
     mayDownload: (ownerUserId) => Boolean(Object.values(users).find((entry) => entry.id === ownerUserId)?.permissions.downloadToLibrary),
   });
   const libraries: LibraryRecord[] = [{ id: "lib_shows", name: "Shows", type: "series", root: dir, enabled: true, order: 0, addedAt: "2026-01-01T00:00:00.000Z", writeArtwork: false }];
-  const addons = [{ key: "stream-addon", enabled: true, role: "source", allowedUsers: [BOB], manifest: { id: "stream-addon", name: "Stream" }, downloadSettings: defaultDownloadSettings() }];
+  const addons = [
+    { key: "stream-addon", enabled: true, role: "source", allowedUsers: [BOB], manifest: { id: "stream-addon", name: "Stream" }, downloadSettings: defaultDownloadSettings() },
+    { key: "admin-addon", enabled: true, role: "source", allowedUsers: [ADA], manifest: { id: "admin-addon", name: "Admin" }, downloadSettings: defaultDownloadSettings() },
+  ];
+  const userData: Record<string, UserData> = {};
+  const keyOfReq = (req: express.Request | undefined) => String(req?.header("x-as") ?? "A");
   const deps: FollowDeps = {
     store: { addons: () => addons, libraries: () => libraries, settings: () => ({}) } as unknown as Store,
     needsSetup: () => false,
@@ -77,7 +82,13 @@ const mount = async (): Promise<Harness> => {
     followStore: store,
     prefsOf: () => ({ uiLanguage: "en" }) as UserPrefs,
     markersOf: () => ({}),
-    dataOf: () => ({}) as UserData,
+    dataOf: (req) => userData[keyOfReq(req)] ?? ({} as UserData),
+    updateData: async (req, mutate) => {
+      const key = keyOfReq(req);
+      const data = userData[key] ?? ({} as UserData);
+      mutate(data);
+      userData[key] = data;
+    },
     posterOf: (value) => (value === undefined || value === null ? undefined : String(value)),
     cachedMeta: async () => null,
   };
@@ -216,5 +227,128 @@ test("another account's follow answers 404 on every new route", async () => {
       const response = await api(h.base, route.path, { method: route.method, as: "B" });
       assert.equal(response.status, 404, `${route.method} ${route.path}`);
     }
+  } finally { await h.close(); }
+});
+
+test("follow defaults round-trip and drop unknown keys", async () => {
+  const h = await mount();
+  try {
+    const empty = await (await api(h.base, "/api/follows/defaults", { as: "A" })).json() as { defaults: unknown };
+    assert.equal(empty.defaults, null, "nothing stored yet");
+
+    const put = await api(h.base, "/api/follows/defaults", {
+      method: "PUT", as: "A",
+      body: {
+        mode: "download", startMode: "from", unknownTop: "dropped",
+        selection: {
+          addonKeys: ["stream-addon"], sourceStrategy: "largest", audioLanguage: " en ",
+          audioMode: "preferred", subtitleMode: "optional", subtitleLanguage: "cs", unknownInner: 1,
+        },
+        target: { libraryId: " lib_shows ", subfolder: "Shows", layout: "flat", explicit: true },
+      },
+    });
+    assert.equal(put.status, 204);
+
+    const read = await (await api(h.base, "/api/follows/defaults", { as: "A" })).json() as { defaults: Record<string, unknown> };
+    assert.deepEqual(read.defaults, {
+      mode: "download", startMode: "from",
+      selection: { addonKeys: ["stream-addon"], sourceStrategy: "largest", audioLanguage: "en", audioMode: "preferred", subtitleMode: "optional", subtitleLanguage: "cs" },
+      target: { libraryId: "lib_shows", subfolder: "Shows", layout: "flat" },
+    });
+  } finally { await h.close(); }
+});
+
+test("a stale addon key and an invisible library are dropped on read", async () => {
+  const h = await mount();
+  try {
+    const body = {
+      mode: "download", startMode: "new",
+      selection: { addonKeys: ["stream-addon", "admin-addon", "gone-addon"], sourceStrategy: "priority", audioLanguage: "en", audioMode: "listed", subtitleMode: "off" },
+      target: { libraryId: "lib_shows", layout: "structured" },
+    };
+    assert.equal((await api(h.base, "/api/follows/defaults", { method: "PUT", as: "B", body })).status, 204);
+    assert.equal((await api(h.base, "/api/follows/defaults", { method: "PUT", as: "A", body })).status, 204);
+
+    const theirs = await (await api(h.base, "/api/follows/defaults", { as: "B" })).json() as { defaults: { selection: { addonKeys: string[] }; target?: unknown } };
+    assert.deepEqual(theirs.defaults.selection.addonKeys, ["stream-addon"], "an addon they may not use and one that is gone are dropped");
+    assert.equal(theirs.defaults.target, undefined, "a library they may not see is dropped");
+
+    const admins = await (await api(h.base, "/api/follows/defaults", { as: "A" })).json() as { defaults: { selection: { addonKeys: string[] }; target?: { libraryId: string } } };
+    assert.deepEqual(admins.defaults.selection.addonKeys, ["stream-addon", "admin-addon"], "an administrator may use both addons");
+    assert.equal(admins.defaults.target?.libraryId, "lib_shows", "an administrator sees the library");
+  } finally { await h.close(); }
+});
+
+test("an invalid defaults body answers 400", async () => {
+  const h = await mount();
+  try {
+    const bodies = [
+      {},
+      { mode: "sometimes" },
+      { mode: "download", startMode: "later" },
+      { mode: "download", selection: { addonKeys: ["stream-addon"] } },
+      { mode: "download", target: {} },
+      { mode: "download", selection: { addonKeys: Array.from({ length: 51 }, (_unused, index) => `addon-${index}`), sourceStrategy: "priority", audioLanguage: "en", audioMode: "listed", subtitleMode: "off" } },
+    ];
+    for (const body of bodies) {
+      const response = await api(h.base, "/api/follows/defaults", { method: "PUT", as: "A", body });
+      assert.equal(response.status, 400, JSON.stringify(body));
+      assert.equal(await keyOf(response), "err.followInvalid");
+    }
+  } finally { await h.close(); }
+});
+
+test("GET /api/follows/defaults is not read as a follow id", async () => {
+  const h = await mount();
+  try {
+    assert.equal((await api(h.base, "/api/follows/defaults", { as: "A" })).status, 200);
+    assert.equal((await api(h.base, "/api/follows/defaults", { method: "PUT", as: "A", body: { mode: "notify" } })).status, 204);
+    const read = await (await api(h.base, "/api/follows/defaults", { as: "A" })).json() as { defaults: { mode: string } };
+    assert.equal(read.defaults.mode, "notify");
+    // The `:id` routes still treat `defaults` as an id, which is why the two new verbs are registered first.
+    assert.equal((await api(h.base, "/api/follows/defaults", { method: "PATCH", as: "A", body: { enabled: false } })).status, 404);
+  } finally { await h.close(); }
+});
+
+test("the calendar window is validated", async () => {
+  const h = await mount();
+  try {
+    const missing = await api(h.base, "/api/follows/calendar", { as: "A" });
+    assert.equal(missing.status, 400);
+    assert.equal(await keyOf(missing), "err.followInvalid");
+
+    const reversed = await api(h.base, "/api/follows/calendar?from=2024-04-01&to=2024-03-01", { as: "A" });
+    assert.equal(reversed.status, 400);
+    assert.equal(await keyOf(reversed), "err.followInvalid");
+
+    const tooWide = await api(h.base, "/api/follows/calendar?from=2024-01-01&to=2024-04-01", { as: "A" });
+    assert.equal(tooWide.status, 400, "ninety-one days is more than the window allows");
+
+    const atLimit = await api(h.base, "/api/follows/calendar?from=2024-01-01&to=2024-03-03", { as: "A" });
+    assert.equal(atLimit.status, 200, "sixty-two days is allowed");
+    assert.deepEqual(((await atLimit.json()) as { items: unknown[] }).items, []);
+  } finally { await h.close(); }
+});
+
+test("another account never sees A's calendar or activity", async () => {
+  const h = await mount();
+  try {
+    const follow = await (await api(h.base, "/api/follows", { method: "POST", as: "A", body: { type: "series", id: "tt1", name: "Show" } })).json() as { id: string };
+    assert.equal((await api(h.base, `/api/follows/${follow.id}/check`, { method: "POST", as: "A" })).status, 200);
+    const rule = await api(h.base, `/api/follows/${follow.id}`, {
+      method: "PATCH", as: "A",
+      body: { autoDownload: { startMode: "from", startSeason: 1, startEpisode: 1, selection: { addonKeys: ["stream-addon"], audioLanguage: "en" } } },
+    });
+    assert.equal(rule.status, 200, "the followed episode is queued so it has a download state");
+
+    const mine = await (await api(h.base, "/api/follows/calendar?from=2024-03-01&to=2024-04-01", { as: "A" })).json() as { items: Array<{ followId: string; season: number; episode: number; state: string }> };
+    assert.deepEqual(mine.items.map((item) => [item.followId, item.season, item.episode, item.state]), [[follow.id, 1, 1, "queued"]]);
+    const theirs = await (await api(h.base, "/api/follows/calendar?from=2024-03-01&to=2024-04-01", { as: "B" })).json() as { items: unknown[] };
+    assert.deepEqual(theirs.items, []);
+
+    const mineActivity = await (await api(h.base, "/api/follows/activity", { as: "A" })).json() as { items: Array<{ episode: number; state: string }> };
+    assert.deepEqual(mineActivity.items.map((item) => [item.episode, item.state]), [[1, "queued"]]);
+    const theirActivity = await (await api(h.base, "/api/follows/activity", { as: "B" })).json() as { items: unknown[] };
+    assert.deepEqual(theirActivity.items, []);
   } finally { await h.close(); }
 });

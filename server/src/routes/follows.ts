@@ -1,12 +1,13 @@
 import type express from "express";
+import { allowedAddons } from "../addons.js";
 import type { DownloadSelection } from "../downloads.js";
 import { AppError } from "../errors.js";
 import { images } from "../images.js";
-import { downloadEligibility, type Follow, type FollowAutoDownload, type FollowEpisode, type FollowService, type FollowStore } from "../follows.js";
-import { defaultLibrary, type DefaultLibrarySettings, type LibraryRecord, type Viewer } from "../libraries.js";
+import { activityItems, calendarItems, CALENDAR_MAX_SPAN_MS, downloadEligibility, parseFollowDefaults, type Follow, type FollowAutoDownload, type FollowEpisode, type FollowService, type FollowStore } from "../follows.js";
+import { defaultLibrary, libraryVisible, type DefaultLibrarySettings, type LibraryRecord, type Viewer } from "../libraries.js";
 import type { UserPrefs, WatchedMarker } from "../store.js";
 import type { DownloadTargetSettings, MetaItem } from "../types.js";
-import type { UserData } from "../users.js";
+import type { FollowDefaults, UserData } from "../users.js";
 import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
 import { createSelectionParser } from "./downloads.js";
 
@@ -16,6 +17,7 @@ export interface FollowDeps extends RouteContext {
   prefsOf(req?: express.Request): UserPrefs;
   markersOf(data: UserData): Record<string, WatchedMarker>;
   dataOf(req: express.Request): UserData;
+  updateData(req: express.Request | undefined, mutate: (data: UserData) => void): Promise<void>;
   posterOf(value: unknown): string | undefined;
   cachedMeta(type: string, id: string, language?: string, viewer?: Viewer): Promise<MetaItem | null>;
 }
@@ -107,7 +109,7 @@ const pinnedTarget = (selection: DownloadSelection, libraries: LibraryRecord[], 
 };
 
 export function registerFollowRoutes(app: express.Application, deps: FollowDeps): void {
-  const { store, followStore, follows, currentUser, dataOf, markersOf, posterOf, cachedMeta, prefsOf } = deps;
+  const { store, followStore, follows, currentUser, dataOf, updateData, markersOf, posterOf, cachedMeta, prefsOf } = deps;
   const parseSelection = createSelectionParser({ store, currentUser, cachedMeta, prefsOf });
 
   /** The follow the caller owns, or nothing. A follow owned by somebody else answers
@@ -123,6 +125,58 @@ export function registerFollowRoutes(app: express.Application, deps: FollowDeps)
     const owner = viewerOf(currentUser(req));
     const now = Date.now();
     res.json({ follows: followStore.listForOwner(owner.id).map((follow) => followView(follow, now)) });
+  });
+
+  /** The stored wizard choices as the caller may still use them: addon keys they can no
+   *  longer reach and a target library they can no longer see are dropped. What is left is a
+   *  suggestion the wizard opens with, never a grant. */
+  const visibleFollowDefaults = (req: express.Request): FollowDefaults | null => {
+    const stored = dataOf(req).followDefaults;
+    if (!stored) return null;
+    const viewer = viewerOf(currentUser(req));
+    const allowed = new Set(allowedAddons(store.addons(), viewer).filter((addon) => addon.enabled && addon.role !== "catalog").map((addon) => addon.key));
+    const libraries = store.libraries();
+    const { selection, target, ...rest } = stored;
+    const targetVisible = target && libraries.some((library) => library.id === target.libraryId && libraryVisible(library, viewer));
+    return {
+      ...rest,
+      ...(selection ? { selection: { ...selection, addonKeys: selection.addonKeys.filter((key) => allowed.has(key)) } } : {}),
+      ...(target && targetVisible ? { target } : {}),
+    };
+  };
+
+  // Registered before any `/api/follows/:id`, so `defaults`, `calendar` and `activity`
+  // are never read as an id.
+  app.get("/api/follows/defaults", (req, res) => {
+    res.json({ defaults: visibleFollowDefaults(req) });
+  });
+
+  app.put("/api/follows/defaults", asyncRoute(async (req, res) => {
+    const defaults = parseFollowDefaults(req.body);
+    if (!defaults) throw new AppError("The follow defaults are not valid.", "err.followInvalid");
+    await updateData(req, (data) => { data.followDefaults = defaults; });
+    res.status(204).end();
+  }));
+
+  app.get("/api/follows/calendar", (req, res) => {
+    const owner = viewerOf(currentUser(req));
+    const from = Date.parse(String(req.query.from ?? ""));
+    const to = Date.parse(String(req.query.to ?? ""));
+    if (!Number.isFinite(from) || !Number.isFinite(to) || !(to > from) || to - from > CALENDAR_MAX_SPAN_MS) {
+      throw new AppError("The calendar window is not valid.", "err.followInvalid");
+    }
+    const items = calendarItems(followStore.listForOwner(owner.id), from, to, Date.now())
+      .map((item) => ({ ...item, poster: images.proxied(item.poster) }));
+    res.json({ items });
+  });
+
+  app.get("/api/follows/activity", (req, res) => {
+    const owner = viewerOf(currentUser(req));
+    const requested = Number(req.query.limit);
+    const limit = Number.isFinite(requested) ? Math.min(100, Math.max(1, Math.trunc(requested))) : 50;
+    const items = activityItems(followStore.listForOwner(owner.id), limit)
+      .map((item) => ({ ...item, poster: images.proxied(item.poster) }));
+    res.json({ items });
   });
 
   app.post("/api/follows", asyncRoute(async (req, res) => {

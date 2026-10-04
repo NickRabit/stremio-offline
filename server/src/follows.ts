@@ -8,6 +8,7 @@ import type { Viewer } from "./libraries.js";
 import { log } from "./logger.js";
 import type { MediaInfo } from "./naming.js";
 import type { MetaItem } from "./types.js";
+import type { FollowDefaults } from "./users.js";
 
 export interface FollowEpisode {
   key: string;
@@ -182,6 +183,177 @@ export function downloadEligibility(follow: Follow, episode: FollowEpisode, now:
   if (!episode.released) return "attention-no-date";
   if (Date.parse(episode.released) > now) return "upcoming";
   return "eligible";
+}
+
+const FOLLOW_ADDON_LIMIT = 50;
+/** How far a calendar window may reach: a page reads two months, not a library dump. */
+export const CALENDAR_MAX_SPAN_MS = 62 * DAY_MS;
+const CALENDAR_LIMIT = 500;
+
+const invalidFollowDefaults = (): AppError =>
+  new AppError("The follow defaults are not valid.", "err.followInvalid");
+
+const asDefaultsRecord = (value: unknown): Record<string, unknown> | undefined =>
+  value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+
+const enumValue = <T extends string>(allowed: readonly T[], value: unknown): T | undefined =>
+  typeof value === "string" && (allowed as readonly string[]).includes(value) ? value as T : undefined;
+
+const parseFollowDefaultsSelection = (value: unknown): NonNullable<FollowDefaults["selection"]> => {
+  const source = asDefaultsRecord(value);
+  if (!source) throw invalidFollowDefaults();
+  if (!Array.isArray(source.addonKeys)) throw invalidFollowDefaults();
+  const addonKeys = [...new Set(source.addonKeys
+    .filter((key): key is string => typeof key === "string")
+    .map((key) => key.trim())
+    .filter(Boolean))];
+  if (addonKeys.length > FOLLOW_ADDON_LIMIT) throw invalidFollowDefaults();
+  const sourceStrategy = enumValue(["largest", "priority"] as const, source.sourceStrategy);
+  const audioLanguage = text(source.audioLanguage);
+  const audioMode = enumValue(["listed", "preferred", "strict"] as const, source.audioMode);
+  const subtitleMode = enumValue(["off", "optional", "required"] as const, source.subtitleMode);
+  if (!sourceStrategy || !audioLanguage || !audioMode || !subtitleMode) throw invalidFollowDefaults();
+  const fallbackAudioLanguage = text(source.fallbackAudioLanguage);
+  // A subtitle language is only meaningful while subtitles are wanted at all.
+  const subtitleLanguage = subtitleMode === "off" ? undefined : text(source.subtitleLanguage);
+  const fallbackSubtitleLanguage = subtitleMode === "off" ? undefined : text(source.fallbackSubtitleLanguage);
+  return {
+    addonKeys, sourceStrategy, audioLanguage,
+    ...(fallbackAudioLanguage ? { fallbackAudioLanguage } : {}),
+    audioMode, subtitleMode,
+    ...(subtitleLanguage ? { subtitleLanguage } : {}),
+    ...(fallbackSubtitleLanguage ? { fallbackSubtitleLanguage } : {}),
+  };
+};
+
+const parseFollowDefaultsTarget = (value: unknown): NonNullable<FollowDefaults["target"]> => {
+  const source = asDefaultsRecord(value);
+  if (!source) throw invalidFollowDefaults();
+  const libraryId = text(source.libraryId);
+  if (!libraryId) throw invalidFollowDefaults();
+  const subfolder = text(source.subfolder);
+  const layout = source.layout === undefined || source.layout === null
+    ? undefined : enumValue(["structured", "flat"] as const, source.layout);
+  if (source.layout !== undefined && source.layout !== null && !layout) throw invalidFollowDefaults();
+  return {
+    libraryId,
+    ...(subfolder ? { subfolder } : {}),
+    ...(layout ? { layout } : {}),
+  };
+};
+
+/** Reads a follow-wizard body into the shape `UserData.followDefaults` stores. Unknown keys
+ *  are dropped and strings trimmed; a missing or wrong-typed field is a validation failure,
+ *  which the caller answers as `err.followInvalid`. */
+export function parseFollowDefaults(value: unknown): FollowDefaults | undefined {
+  const source = asDefaultsRecord(value);
+  if (!source) return undefined;
+  const mode = enumValue(["notify", "download"] as const, source.mode);
+  if (!mode) throw invalidFollowDefaults();
+  const startMode = source.startMode === undefined || source.startMode === null
+    ? undefined : enumValue(["new", "from"] as const, source.startMode);
+  if (source.startMode !== undefined && source.startMode !== null && !startMode) throw invalidFollowDefaults();
+  const selection = source.selection === undefined || source.selection === null
+    ? undefined : parseFollowDefaultsSelection(source.selection);
+  const target = source.target === undefined || source.target === null
+    ? undefined : parseFollowDefaultsTarget(source.target);
+  return {
+    mode,
+    ...(startMode ? { startMode } : {}),
+    ...(selection ? { selection } : {}),
+    ...(target ? { target } : {}),
+  };
+}
+
+export type CalendarEpisodeState = "upcoming" | "released" | EpisodeDownloadState;
+
+export interface CalendarItem {
+  followId: string;
+  type: string;
+  metaId: string;
+  name: string;
+  poster?: string;
+  videoId: string;
+  season: number;
+  episode: number;
+  title?: string;
+  released: string;
+  state: CalendarEpisodeState;
+  reasonKey?: string;
+  nextAttemptAt?: string;
+  ambiguous?: boolean;
+}
+
+/** The episodes of the caller's follows that fall in `[from, to)`, ordered by when they air.
+ *  An episode the service has touched carries its download state; the rest are simply past
+ *  or still to come. */
+export function calendarItems(follows: Follow[], from: number, to: number, now: number): CalendarItem[] {
+  const items: CalendarItem[] = [];
+  for (const follow of follows) {
+    for (const episode of Object.values(follow.episodes)) {
+      if (!episode.released) continue;
+      const released = Date.parse(episode.released);
+      if (!(released >= from && released < to)) continue;
+      const download = episode.download;
+      items.push({
+        followId: follow.id, type: follow.type, metaId: follow.metaId, name: follow.name,
+        ...(follow.poster ? { poster: follow.poster } : {}),
+        videoId: episode.videoId, season: episode.season, episode: episode.episode,
+        ...(episode.title ? { title: episode.title } : {}),
+        released: episode.released,
+        state: download ? download.state : released > now ? "upcoming" : "released",
+        ...(download?.reasonKey ? { reasonKey: download.reasonKey } : {}),
+        ...(download?.nextAttemptAt ? { nextAttemptAt: download.nextAttemptAt } : {}),
+        ...(episode.ambiguous ? { ambiguous: true } : {}),
+      });
+    }
+  }
+  items.sort((a, b) => a.released.localeCompare(b.released)
+    || a.name.localeCompare(b.name)
+    || a.season - b.season
+    || a.episode - b.episode);
+  return items.slice(0, CALENDAR_LIMIT);
+}
+
+export interface ActivityItem {
+  followId: string;
+  type: string;
+  metaId: string;
+  name: string;
+  poster?: string;
+  season: number;
+  episode: number;
+  title?: string;
+  state: EpisodeDownloadState;
+  reasonKey?: string;
+  nextAttemptAt?: string;
+  jobId?: string;
+  updatedAt: string;
+}
+
+/** Every episode of the caller's follows that the download service has touched, the most
+ *  recently changed first. */
+export function activityItems(follows: Follow[], limit: number): ActivityItem[] {
+  const items: ActivityItem[] = [];
+  for (const follow of follows) {
+    for (const episode of Object.values(follow.episodes)) {
+      const download = episode.download;
+      if (!download) continue;
+      items.push({
+        followId: follow.id, type: follow.type, metaId: follow.metaId, name: follow.name,
+        ...(follow.poster ? { poster: follow.poster } : {}),
+        season: episode.season, episode: episode.episode,
+        ...(episode.title ? { title: episode.title } : {}),
+        state: download.state,
+        ...(download.reasonKey ? { reasonKey: download.reasonKey } : {}),
+        ...(download.nextAttemptAt ? { nextAttemptAt: download.nextAttemptAt } : {}),
+        ...(download.jobId ? { jobId: download.jobId } : {}),
+        updatedAt: download.updatedAt,
+      });
+    }
+  }
+  items.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  return items.slice(0, Math.max(0, limit));
 }
 
 /** The followed series, on disk in `<dataDir>/follows.json`. A file that cannot be read
