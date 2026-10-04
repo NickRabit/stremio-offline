@@ -1,6 +1,6 @@
 import { serverText, t } from "./i18n";
 import type { SaveTarget } from "./save-target";
-import type { StatsActivityPage, ActiveStream, Diagnostics, BuildInfo, AuthStatus, StatsSummary, Addon, AddonDownloadSettings, Capabilities, Catalog, Download, DownloadSelection, DownloadSnapshot, FollowEpisodeRow, FollowPreview, FollowStartMode, FollowView, Inspection, BrowseResult, IdentityPreview, LibraryFolder, LibraryMatchResult, LibraryOp, LibraryOpsState, NewEpisode, ProgressEntry, UserViews, WatchlistEntry, GrantBrowse, LibraryEstimate, LibraryGrant, LibrarySummary, LibraryType, LibraryView, Meta, PlaybackSession, ScanState, SearchPreferences, SearchResult, SearchState, SearchableCatalog, SiteLink, SuggestionRow, Session, Settings, SettingsBackup, SettingsPatch, SettingsView, Stream, Subtitle, Trailer, UserAccount, UserPermissions, UserRole } from "./types";
+import type { StatsActivityPage, ActiveStream, ActivityItem, CalendarItem, UndatedCalendarItem, Diagnostics, BuildInfo, AuthStatus, StatsSummary, Addon, AddonDownloadSettings, Capabilities, Catalog, Download, DownloadSelection, DownloadSnapshot, FollowDefaults, FollowEpisodeRow, FollowPreview, FollowStartMode, FollowView, Inspection, BrowseResult, IdentityPreview, LibraryFolder, LibraryMatchResult, LibraryOp, LibraryOpsState, NewEpisode, ProgressEntry, UserViews, WatchlistEntry, GrantBrowse, LibraryEstimate, LibraryGrant, LibrarySummary, LibraryType, LibraryView, Meta, PlaybackSession, ScanState, SearchPreferences, SearchResult, SearchState, SearchableCatalog, SiteLink, SuggestionRow, Session, Settings, SettingsBackup, SettingsPatch, SettingsView, Stream, Subtitle, Trailer, UserAccount, UserPermissions, UserRole } from "./types";
 
 /** The status code has to reach the top, or a sign-out is indistinguishable from an ordinary error. */
 export class ApiError extends Error {
@@ -165,6 +165,14 @@ export const api = {
   skipFollowEpisode: (id: string, key: string) => request<void>(`/api/follows/${encodeURIComponent(id)}/episodes/${encodeURIComponent(key)}/skip`, { method: "POST" }),
   retryFollowEpisode: (id: string, key: string) => request<void>(`/api/follows/${encodeURIComponent(id)}/episodes/${encodeURIComponent(key)}/retry`, { method: "POST" }),
   newEpisodes: () => request<{ items: NewEpisode[] }>("/api/follows/new-episodes").then((answer) => answer.items),
+  /** The episodes of the caller's follows releasing inside `[from, to)`; the route reads ISO dates. */
+  followCalendar: (from: number, to: number) =>
+    request<{ items: CalendarItem[]; undated?: UndatedCalendarItem[] }>(`/api/follows/calendar?${q({ from: new Date(from).toISOString(), to: new Date(to).toISOString() })}`)
+      .then((answer) => ({ items: answer.items, undated: answer.undated ?? [] })),
+  followActivity: (limit?: number) =>
+    request<{ items: ActivityItem[] }>(`/api/follows/activity${limit ? `?${q({ limit })}` : ""}`).then((answer) => answer.items),
+  followDefaults: () => request<{ defaults: FollowDefaults | null }>("/api/follows/defaults").then((answer) => answer.defaults),
+  saveFollowDefaults: (defaults: FollowDefaults) => request<void>("/api/follows/defaults", { method: "PUT", body: JSON.stringify(defaults) }),
   progressList: () => request<ProgressEntry[]>("/api/progress"),
   /** The page itself is going away -- a closed tab, a reload, the browser being quit. A
    *  keepalive request outlives the page that sent it, so the server hears that the film is

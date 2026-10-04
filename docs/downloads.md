@@ -110,28 +110,49 @@ up after checking 15 candidates rather than working through an addon's whole
 list, so an obscure title with mostly dead or wrong-language sources still
 fails in bounded time instead of stalling the queue.
 
-### Following a series
+### Following series and films
 
-**Follow** on a series detail checks the series once a day, through your own
-addons and in your own language. Episodes released since you followed it, and
-not yet watched past, appear under **New episodes** in the Library, next to the
-list of followed series. Following downloads nothing, and the series does not
-need to be in a library.
+**Follow** on a series or film detail first asks how: only tell me about new
+releases (the default), or download them automatically. The answer, with the
+sources, languages and library chosen, is remembered for the next follow.
+A followed title is checked once a day, through your own addons and in your own
+language; nothing has to be in a library for that.
 
-In the follow dialog you can pause it, check it now (once a minute at most) and
-switch on **automatic downloads**. The setup is the season dialog above, with
-addon priority as the default and one more choice: start with episodes released
-from now on, or from a chosen episode, with a count of what would download
-straight away. The library is pinned when you save, so a later change to an
-addon's rule does not move the series.
+Episodes released since you followed a series, and not yet watched past, appear
+under **New episodes** in the Library. Everything you follow lives on the
+**Following** page:
+
+- **Overview** -- one card per title, with what needs resolving first.
+- **Calendar** -- a month, or a list grouped by day (the default on a phone),
+  coloured by state: upcoming, released, queued, waiting for a source,
+  downloaded, needing attention, skipped. Choosing a day lists its releases.
+- **Activity** -- what automatic downloads did lately, with skip and retry.
+
+Release dates come from the catalogue, corrected by TMDB when a key is set.
+A catalogue tends to give every unaired episode of a new season the season's
+premiere; TMDB's per-episode air dates win when the day differs, and a shared
+date TMDB cannot confirm is dropped, so the episode waits as "date not
+announced" instead of being chased. Without TMDB such dates are marked ≈.
+A film's date is its **digital release** (when sources usually appear); a film
+only in cinemas waits until one is announced.
+
+The follow dialog pauses a title, checks it now (once a minute at most) and
+switches **automatic downloads** on or off. For a series the setup is the
+season dialog above, with addon priority as the default and one more choice:
+start with episodes released from now on, or from a chosen episode, with a
+count of what would download straight away. The library is pinned when you
+save, so a later change to an addon's rule does not move the title.
 
 - Each episode is queued once. At most 20 are admitted per series per pass and
   20 wait across all follows, so a new season drains gradually.
 - An episode with no matching source yet waits and is retried: after an hour,
-  six hours, then daily for a month, then weekly. It stays listed as waiting.
-- Removing an automatic job from the queue skips that episode for good; **Retry**
-  in the follow dialog brings it back. Deleting a downloaded file does not
-  download it again, and clearing the queue history keeps the record.
+  six hours, then daily for a month, then weekly. It stays listed as waiting,
+  and it is not tried before its release date.
+- Removing a queued or running automatic job skips that episode for good;
+  **Retry** brings it back. Clearing a *failed* job only tidies the queue: the
+  episode keeps waiting. Saving new rules retries waiting episodes at once.
+  Deleting a downloaded file does not download it again, and clearing the
+  queue history keeps the record.
 - An episode with no release date, or with providers that disagree about it, is
   not guessed at; it is listed as needing attention.
 - Pausing stops new episodes; jobs already queued carry on. Unfollowing leaves

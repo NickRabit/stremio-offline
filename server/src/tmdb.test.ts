@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { AppError } from "./errors.js";
 import { flushLog, initLogger } from "./logger.js";
-import { clearTmdbCache, clearTmdbSearchPause, tmdbExternalId, tmdbGallery, tmdbImage, tmdbMeta, tmdbSearch, tmdbTrailer, verifyTmdbKey, type TmdbConfig } from "./tmdb.js";
+import { clearTmdbCache, clearTmdbSearchPause, tmdbExternalId, tmdbGallery, tmdbImage, tmdbMeta, tmdbMovieReleases, tmdbSearch, tmdbSeasonAirDates, tmdbTrailer, verifyTmdbKey, type TmdbConfig } from "./tmdb.js";
 import type { FetchLike } from "./debrid.js";
 
 const json = (body: unknown, status = 200) =>
@@ -368,6 +368,39 @@ test("a gallery request that fails leaves the title without a gallery rather tha
   assert.deepEqual(await tmdbGallery("series", "tmdb:1396", config, async () => { throw new Error("offline"); }), []);
 });
 
+test("TMDB season air dates are read per episode and cached for the next check", async () => {
+  clearTmdbCache();
+  const calls: string[] = [];
+  const fetchImpl: FetchLike = async (url) => {
+    calls.push(url);
+    if (url.includes("/find/")) return json({ movie_results: [], tv_results: [{ id: 1396 }] });
+    return json({ episodes: [
+      { episode_number: 1, air_date: "2026-09-01" },
+      { episode_number: 2, air_date: "" },
+      { episode_number: "3", air_date: "2026-09-15" },
+    ] });
+  };
+
+  const dates = await tmdbSeasonAirDates("tt0903747", [3], config, fetchImpl);
+  assert.equal(dates.get("3:1"), "2026-09-01");
+  assert.equal(dates.get("3:2"), null, "an episode TMDB carries without a date is present and null");
+  assert.equal(dates.has("3:3"), false, "a row that is not a whole episode number is dropped");
+  assert.match(calls[1]!, /\/tv\/1396\/season\/3\?/);
+
+  const before = calls.length;
+  const again = await tmdbSeasonAirDates("tt0903747", [3], config, fetchImpl);
+  assert.equal(calls.length, before, "a season read minutes apart is served from the cache");
+  assert.equal(again.get("3:1"), "2026-09-01");
+});
+
+test("a season TMDB cannot answer is simply absent", async () => {
+  clearTmdbCache();
+  const dates = await tmdbSeasonAirDates("tmdb:1396", [2, 5], config, async (url) =>
+    url.includes("/season/2") ? json({}, 500) : json({ episodes: [{ episode_number: 1, air_date: "2000-01-01" }] }));
+  assert.equal(dates.has("2:1"), false, "a failed season contributes nothing");
+  assert.equal(dates.get("5:1"), "2000-01-01", "the season that answered is still read");
+});
+
 test("neither the log nor the answered metadata carries the API key", async () => {
   clearTmdbCache();
   clearTmdbSearchPause();
@@ -390,4 +423,29 @@ test("neither the log nor the answered metadata carries the API key", async () =
     if (previous === undefined) delete process.env.LOG_STDOUT; else process.env.LOG_STDOUT = previous;
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test("a film's earliest release of each kind is read across countries and cached", async () => {
+  clearTmdbCache();
+  const calls: string[] = [];
+  const fetchImpl: FetchLike = async (url) => {
+    calls.push(url);
+    if (url.includes("/find/")) return json(findMovie);
+    return json({ results: [
+      { iso_3166_1: "US", release_dates: [{ type: 3, release_date: "2026-07-18T00:00:00.000Z" }, { type: 4, release_date: "2026-09-12T00:00:00.000Z" }] },
+      { iso_3166_1: "CZ", release_dates: [{ type: 3, release_date: "2026-07-10T00:00:00.000Z" }, { type: 4, release_date: "2026-09-20T00:00:00.000Z" }, { type: 5, release_date: "2026-10-30T00:00:00.000Z" }] },
+    ] });
+  };
+  const releases = await tmdbMovieReleases("tt0088763", config, fetchImpl);
+  assert.deepEqual(releases, { theatrical: "2026-07-10", digital: "2026-09-12", physical: "2026-10-30" });
+  assert.match(calls[1]!, /\/movie\/31410\/release_dates\?/);
+  const before = calls.length;
+  await tmdbMovieReleases("tt0088763", config, fetchImpl);
+  assert.equal(calls.length, before, "served from the cache");
+});
+
+test("a film TMDB cannot answer has no release dates", async () => {
+  clearTmdbCache();
+  const fetchImpl: FetchLike = async (url) => url.includes("/find/") ? json(findMovie) : json({}, 500);
+  assert.equal(await tmdbMovieReleases("tt0088763", config, fetchImpl), null);
 });

@@ -1,12 +1,13 @@
 import type express from "express";
+import { allowedAddons } from "../addons.js";
 import type { DownloadSelection } from "../downloads.js";
 import { AppError } from "../errors.js";
 import { images } from "../images.js";
-import { downloadEligibility, type Follow, type FollowAutoDownload, type FollowEpisode, type FollowService, type FollowStore } from "../follows.js";
-import { defaultLibrary, type DefaultLibrarySettings, type LibraryRecord, type Viewer } from "../libraries.js";
+import { activityItems, calendarItems, CALENDAR_MAX_SPAN_MS, downloadEligibility, parseFollowDefaults, undatedCalendarItems, type Follow, type FollowAutoDownload, type FollowEpisode, type FollowService, type FollowStore } from "../follows.js";
+import { defaultLibrary, libraryVisible, type DefaultLibrarySettings, type LibraryRecord, type Viewer } from "../libraries.js";
 import type { UserPrefs, WatchedMarker } from "../store.js";
 import type { DownloadTargetSettings, MetaItem } from "../types.js";
-import type { UserData } from "../users.js";
+import type { FollowDefaults, UserData } from "../users.js";
 import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
 import { createSelectionParser } from "./downloads.js";
 
@@ -16,11 +17,12 @@ export interface FollowDeps extends RouteContext {
   prefsOf(req?: express.Request): UserPrefs;
   markersOf(data: UserData): Record<string, WatchedMarker>;
   dataOf(req: express.Request): UserData;
+  updateData(req: express.Request | undefined, mutate: (data: UserData) => void): Promise<void>;
   posterOf(value: unknown): string | undefined;
   cachedMeta(type: string, id: string, language?: string, viewer?: Viewer): Promise<MetaItem | null>;
 }
 
-interface FollowEpisodeView { season: number; episode: number; title?: string; released?: string }
+interface FollowEpisodeView { season: number; episode: number; title?: string; released?: string; releasedSource?: "addon" | "tmdb"; dateUncertain?: boolean }
 interface FollowDownloads { queued: number; waiting: number; completed: number; skipped: number; attention: number }
 interface FollowView {
   id: string;
@@ -43,12 +45,15 @@ interface FollowView {
   latestEpisode?: FollowEpisodeView;
   autoDownload?: FollowAutoDownload;
   downloads: FollowDownloads;
+  movie?: { released?: string; releaseKind?: FollowEpisode["releaseKind"]; theatricalAt?: string; dateUncertain?: boolean; state?: string; reasonKey?: string; nextAttemptAt?: string };
 }
 
 const episodeView = (episode: FollowEpisode): FollowEpisodeView => ({
   season: episode.season, episode: episode.episode,
   ...(episode.title ? { title: episode.title } : {}),
   ...(episode.released ? { released: episode.released } : {}),
+  ...(episode.releasedSource ? { releasedSource: episode.releasedSource } : {}),
+  ...(episode.dateUncertain ? { dateUncertain: true } : {}),
 });
 
 /** `reserved` is an episode being queued, so it counts as queued for the summary. */
@@ -77,8 +82,11 @@ const followView = (follow: Follow, now: number): FollowView => {
     if (!episode.released) continue;
     const released = Date.parse(episode.released);
     if (released > now) {
-      if (!next || released < Date.parse(next.released!)) next = episode;
-    } else if (!latest || released > Date.parse(latest.released!)) {
+      if (!next || released < Date.parse(next.released!)
+        || (released === Date.parse(next.released!) && (episode.season < next.season || (episode.season === next.season && episode.episode < next.episode)))) next = episode;
+    } else if (!latest || released > Date.parse(latest.released!)
+      // A season dropped in one day answers with its last episode, not its first.
+      || (released === Date.parse(latest.released!) && (episode.season > latest.season || (episode.season === latest.season && episode.episode > latest.episode)))) {
       latest = episode;
     }
   }
@@ -91,23 +99,35 @@ const followView = (follow: Follow, now: number): FollowView => {
     downloads: downloadsSummary(follow),
     ...(next ? { nextEpisode: episodeView(next) } : {}),
     ...(latest ? { latestEpisode: episodeView(latest) } : {}),
+    // A film is one record; the dialog and the card read its release and download from here.
+    ...(follow.type === "movie" && follow.episodes["1:1"] ? { movie: movieView(follow.episodes["1:1"]) } : {}),
   };
 };
+
+const movieView = (episode: FollowEpisode) => ({
+  ...(episode.released ? { released: episode.released } : {}),
+  ...(episode.releaseKind ? { releaseKind: episode.releaseKind } : {}),
+  ...(episode.theatricalAt ? { theatricalAt: episode.theatricalAt } : {}),
+  ...(episode.dateUncertain ? { dateUncertain: true } : {}),
+  ...(episode.download ? { state: episode.download.state, ...(episode.download.reasonKey ? { reasonKey: episode.download.reasonKey } : {}), ...(episode.download.nextAttemptAt ? { nextAttemptAt: episode.download.nextAttemptAt } : {}) } : {}),
+});
 
 /** The pinned destination a follow stores. An explicit choice is already concrete; a rule
  *  that names no library is resolved to the queue's own default series library, and a rule
  *  naming one that is gone falls back the same way. No library taking series is refused. */
-const pinnedTarget = (selection: DownloadSelection, libraries: LibraryRecord[], settings: DefaultLibrarySettings): DownloadTargetSettings => {
+const pinnedTarget = (selection: DownloadSelection, libraries: LibraryRecord[], settings: DefaultLibrarySettings, kind: "movie" | "series"): DownloadTargetSettings => {
   const rule = selection.targetSettings;
   if (rule.explicit) return rule;
   const named = rule.libraryId ? libraries.find((library) => library.id === rule.libraryId) : undefined;
-  const library = named ?? defaultLibrary(libraries, settings, "episode");
-  if (!library) throw new AppError("No library takes series.", "err.noLibraryForSeries");
+  const library = named ?? defaultLibrary(libraries, settings, kind === "movie" ? "movie" : "episode");
+  if (!library) throw kind === "movie"
+    ? new AppError("No library takes films.", "err.noLibraryForMovies")
+    : new AppError("No library takes series.", "err.noLibraryForSeries");
   return { libraryId: library.id, subfolder: rule.subfolder, layout: rule.layout, explicit: true };
 };
 
 export function registerFollowRoutes(app: express.Application, deps: FollowDeps): void {
-  const { store, followStore, follows, currentUser, dataOf, markersOf, posterOf, cachedMeta, prefsOf } = deps;
+  const { store, followStore, follows, currentUser, dataOf, updateData, markersOf, posterOf, cachedMeta, prefsOf } = deps;
   const parseSelection = createSelectionParser({ store, currentUser, cachedMeta, prefsOf });
 
   /** The follow the caller owns, or nothing. A follow owned by somebody else answers
@@ -125,12 +145,66 @@ export function registerFollowRoutes(app: express.Application, deps: FollowDeps)
     res.json({ follows: followStore.listForOwner(owner.id).map((follow) => followView(follow, now)) });
   });
 
+  /** The stored wizard choices as the caller may still use them: addon keys they can no
+   *  longer reach and a target library they can no longer see are dropped. What is left is a
+   *  suggestion the wizard opens with, never a grant. */
+  const visibleFollowDefaults = (req: express.Request): FollowDefaults | null => {
+    const stored = dataOf(req).followDefaults;
+    if (!stored) return null;
+    const viewer = viewerOf(currentUser(req));
+    const allowed = new Set(allowedAddons(store.addons(), viewer).filter((addon) => addon.enabled && addon.role !== "catalog").map((addon) => addon.key));
+    const libraries = store.libraries();
+    const { selection, target, ...rest } = stored;
+    const targetVisible = target && libraries.some((library) => library.id === target.libraryId && libraryVisible(library, viewer));
+    return {
+      ...rest,
+      ...(selection ? { selection: { ...selection, addonKeys: selection.addonKeys.filter((key) => allowed.has(key)) } } : {}),
+      ...(target && targetVisible ? { target } : {}),
+    };
+  };
+
+  // Registered before any `/api/follows/:id`, so `defaults`, `calendar` and `activity`
+  // are never read as an id.
+  app.get("/api/follows/defaults", (req, res) => {
+    res.json({ defaults: visibleFollowDefaults(req) });
+  });
+
+  app.put("/api/follows/defaults", asyncRoute(async (req, res) => {
+    const defaults = parseFollowDefaults(req.body);
+    if (!defaults) throw new AppError("The follow defaults are not valid.", "err.followInvalid");
+    await updateData(req, (data) => { data.followDefaults = defaults; });
+    res.status(204).end();
+  }));
+
+  app.get("/api/follows/calendar", (req, res) => {
+    const owner = viewerOf(currentUser(req));
+    const from = Date.parse(String(req.query.from ?? ""));
+    const to = Date.parse(String(req.query.to ?? ""));
+    if (!Number.isFinite(from) || !Number.isFinite(to) || !(to > from) || to - from > CALENDAR_MAX_SPAN_MS) {
+      throw new AppError("The calendar window is not valid.", "err.followInvalid");
+    }
+    const items = calendarItems(followStore.listForOwner(owner.id), from, to, Date.now())
+      .map((item) => ({ ...item, poster: images.proxied(item.poster) }));
+    const undated = undatedCalendarItems(followStore.listForOwner(owner.id), 100)
+      .map((item) => ({ ...item, poster: images.proxied(item.poster) }));
+    res.json({ items, undated });
+  });
+
+  app.get("/api/follows/activity", (req, res) => {
+    const owner = viewerOf(currentUser(req));
+    const requested = Number(req.query.limit);
+    const limit = Number.isFinite(requested) ? Math.min(100, Math.max(1, Math.trunc(requested))) : 50;
+    const items = activityItems(followStore.listForOwner(owner.id), limit)
+      .map((item) => ({ ...item, poster: images.proxied(item.poster) }));
+    res.json({ items });
+  });
+
   app.post("/api/follows", asyncRoute(async (req, res) => {
     const owner = viewerOf(currentUser(req));
     const type = String(req.body?.type ?? "").trim();
     const metaId = String(req.body?.id ?? "").trim();
     const name = String(req.body?.name ?? "").trim();
-    if (!type || !metaId || !name) throw new AppError("The followed series is missing a type, an id or a name.", "err.followInvalid");
+    if (!type || !metaId || !name || (type !== "series" && type !== "movie")) throw new AppError("The followed series is missing a type, an id or a name.", "err.followInvalid");
     const follow = await followStore.create({ ownerUserId: owner.id, type, metaId, name, poster: posterOf(req.body?.poster) }, Date.now());
     // The first check runs now rather than at the next tick, so the episodes are known
     // while the person who just followed is still looking.
@@ -148,11 +222,12 @@ export function registerFollowRoutes(app: express.Application, deps: FollowDeps)
         await follows.setAutoDownload(follow.id, owner.id, null);
       } else {
         const item = typeof raw === "object" && raw ? raw as Record<string, unknown> : {};
-        const startMode = item.startMode === "from" ? "from" : item.startMode === "new" ? "new" : undefined;
+        // A film has no episodes to start from; it downloads whenever it comes out.
+        const startMode = follow.type === "movie" ? "new" : item.startMode === "from" ? "from" : item.startMode === "new" ? "new" : undefined;
         if (!startMode) throw new AppError("The followed series is missing a type, an id or a name.", "err.followInvalid");
         let startSeason: number | undefined;
         let startEpisode: number | undefined;
-        if (startMode === "from") {
+        if (startMode === "from" && follow.type !== "movie") {
           startSeason = Number(item.startSeason);
           startEpisode = Number(item.startEpisode);
           if (!Number.isInteger(startSeason) || startSeason < 1 || !Number.isInteger(startEpisode) || startEpisode < 1) {
@@ -160,7 +235,7 @@ export function registerFollowRoutes(app: express.Application, deps: FollowDeps)
           }
         }
         const selection = await parseSelection(req, { selection: item.selection, target: item.target, metaType: follow.type, parentId: follow.metaId });
-        const targetSettings = pinnedTarget(selection, store.libraries(), store.settings());
+        const targetSettings = pinnedTarget(selection, store.libraries(), store.settings(), follow.type === "movie" ? "movie" : "series");
         const value: Omit<FollowAutoDownload, "enabledAt" | "blockedKey"> = {
           startMode,
           ...(startSeason != null ? { startSeason } : {}),
@@ -214,6 +289,8 @@ export function registerFollowRoutes(app: express.Application, deps: FollowDeps)
         key: episode.key, season: episode.season, episode: episode.episode,
         ...(episode.title ? { title: episode.title } : {}),
         ...(episode.released ? { released: episode.released } : {}),
+        ...(episode.releasedSource ? { releasedSource: episode.releasedSource } : {}),
+        ...(episode.dateUncertain ? { dateUncertain: true } : {}),
         ...(episode.ambiguous ? { ambiguous: true } : {}),
         eligibility: downloadEligibility(follow, episode, now),
         ...(episode.download ? { download: episode.download } : {}),

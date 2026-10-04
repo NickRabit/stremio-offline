@@ -5,7 +5,7 @@ import path from "node:path";
 import { test } from "node:test";
 import type { DownloadSelection } from "./downloads.js";
 import type { AppError } from "./errors.js";
-import { downloadEligibility, FollowService, FollowStore, followStaggerMs, normalizeFollowEpisodes, type Follow, type FollowAutoDownload, type FollowDeps, type FollowEpisode, type FollowJob, type FollowQueue } from "./follows.js";
+import { activityItems, calendarItems, downloadEligibility, FollowService, FollowStore, followStaggerMs, movieEpisode, normalizeFollowEpisodes, reconcileReleaseDates, seasonsForReconcile, undatedCalendarItems, type EpisodeDownload, type Follow, type FollowAutoDownload, type FollowDeps, type FollowEpisode, type FollowJob, type FollowQueue } from "./follows.js";
 import type { MediaInfo } from "./naming.js";
 import type { MetaItem } from "./types.js";
 
@@ -113,6 +113,81 @@ test("two ids claiming one slot keep the first and mark it ambiguous", () => {
   ]));
   assert.equal(repeated.length, 1);
   assert.equal(repeated[0].ambiguous, undefined);
+});
+
+test("reconcileReleaseDates takes a differing TMDB day and keeps an addon day TMDB agrees with", () => {
+  const episodes = [episode(3, 1, "v1", "2026-09-01T20:30:00.000Z"), episode(3, 2, "v2", "2026-09-01T20:30:00.000Z")];
+  const tmdb = new Map<string, string | null>([["3:1", "2026-09-01"], ["3:2", "2026-09-08"]]);
+
+  const out = reconcileReleaseDates(episodes, tmdb, Date.parse("2026-08-01T00:00:00.000Z"));
+
+  assert.equal(out[0].released, "2026-09-01T20:30:00.000Z", "the same day keeps the addon's time");
+  assert.equal(out[0].releasedSource, "addon");
+  assert.equal(out[0].dateUncertain, undefined);
+  assert.equal(out[1].released, "2026-09-08T23:59:59.999Z", "a different day takes TMDB's, at the end of that day");
+  assert.equal(out[1].releasedSource, "tmdb");
+  assert.equal(out[1].dateUncertain, undefined);
+});
+
+test("reconcileReleaseDates drops a placeholder cluster TMDB cannot date", () => {
+  const episodes = [episode(3, 1, "v1", "2026-09-01T20:30:00.000Z"), episode(3, 2, "v2", "2026-09-01T20:30:00.000Z")];
+  const tmdb = new Map<string, string | null>([["3:1", null], ["3:2", null]]);
+
+  const out = reconcileReleaseDates(episodes, tmdb, Date.parse("2026-08-01T00:00:00.000Z"));
+
+  for (const item of out) {
+    assert.equal(item.released, undefined);
+    assert.equal(item.releasedSource, undefined);
+    assert.equal(item.dateUncertain, true);
+  }
+});
+
+test("reconcileReleaseDates marks the later episodes of a fresh shared date uncertain without TMDB", () => {
+  const now = Date.parse("2024-06-01T00:00:00.000Z");
+  const episodes = [episode(3, 1, "v1", "2024-05-25T00:00:00.000Z"), episode(3, 2, "v2", "2024-05-25T00:00:00.000Z"), episode(3, 3, "v3", "2024-05-25T00:00:00.000Z")];
+
+  const out = reconcileReleaseDates(episodes, undefined, now);
+
+  assert.equal(out[0].dateUncertain, undefined, "the first episode genuinely premieres then");
+  assert.equal(out[0].released, "2024-05-25T00:00:00.000Z");
+  assert.equal(out[1].dateUncertain, true);
+  assert.equal(out[2].dateUncertain, true);
+});
+
+test("reconcileReleaseDates leaves an old shared date alone without TMDB", () => {
+  const now = Date.parse("2024-06-01T00:00:00.000Z");
+  const episodes = [episode(3, 1, "v1", "2024-04-01T00:00:00.000Z"), episode(3, 2, "v2", "2024-04-01T00:00:00.000Z")];
+
+  const out = reconcileReleaseDates(episodes, undefined, now);
+
+  assert.deepEqual(out.map((item) => item.dateUncertain), [undefined, undefined]);
+  assert.equal(out[0].released, "2024-04-01T00:00:00.000Z");
+});
+
+test("reconcileReleaseDates keeps a genuine binge TMDB confirms", () => {
+  const released = "2026-03-01T00:00:00.000Z";
+  const episodes = [episode(1, 1, "v1", released), episode(1, 2, "v2", released), episode(1, 3, "v3", released)];
+  const tmdb = new Map<string, string | null>([["1:1", "2026-03-01"], ["1:2", "2026-03-01"], ["1:3", "2026-03-01"]]);
+
+  const out = reconcileReleaseDates(episodes, tmdb, Date.parse("2026-02-01T00:00:00.000Z"));
+
+  assert.deepEqual(out.map((item) => item.released), [released, released, released]);
+  assert.deepEqual(out.map((item) => item.dateUncertain), [undefined, undefined, undefined]);
+  assert.deepEqual(out.map((item) => item.releasedSource), ["addon", "addon", "addon"]);
+});
+
+test("seasonsForReconcile keeps undated and recent seasons plus the download's, newest three", () => {
+  const now = Date.parse("2024-06-01T00:00:00.000Z");
+  const episodes = [
+    { season: 1, released: "2024-05-25T00:00:00.000Z" },
+    { season: 2, released: "2020-01-01T00:00:00.000Z" },
+    { season: 4, released: "2024-04-15T00:00:00.000Z" },
+    { season: 5 },
+    { season: 6, released: "2024-05-01T00:00:00.000Z" },
+  ];
+  const stored: Record<string, FollowEpisode> = { "7:1": { ...episode(7, 1, "v7", "2020-01-01T00:00:00.000Z"), download: download({ state: "waiting" }) } };
+
+  assert.deepEqual(seasonsForReconcile(episodes, stored, now), [7, 6, 5]);
 });
 
 test("creating the same series twice returns the follow already there", async (t) => {
@@ -317,7 +392,7 @@ test("a null answer is recorded as a failure", async (t) => {
   assert.equal(after.lastErrorKey, "err.followMetaUnavailable");
 });
 
-test("an edit while the metadata is in flight discards the result", async (t) => {
+test("an edit while the metadata is in flight keeps the episodes it brought", async (t) => {
   const dir = temp();
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const store = await loaded(dir);
@@ -329,8 +404,23 @@ test("an edit while the metadata is in flight discards the result", async (t) =>
   await store.update(follow.id, (entry) => { entry.revision += 1; });
   release(meta([{ id: "tt1:1:1", season: 1, episode: 1 }]));
   await run;
-  assert.deepEqual(store.get(follow.id)!.episodes, {});
-  assert.equal(store.get(follow.id)!.lastCheckedAt, undefined);
+  assert.deepEqual(Object.keys(store.get(follow.id)!.episodes), ["1:1"], "switching downloads on after following must not lose the first check");
+  assert.ok(store.get(follow.id)!.lastCheckedAt);
+});
+
+test("a follow removed while the metadata is in flight records nothing", async (t) => {
+  const dir = temp();
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const store = await loaded(dir);
+  const follow = await store.create({ ownerUserId: "u1", type: "series", metaId: "tt1", name: "Show" }, 0);
+  let release!: (value: MetaItem | null) => void;
+  const pending = new Promise<MetaItem | null>((resolve) => { release = resolve; });
+  const service = new FollowService({ store, now: () => 1_000, owner: () => ({ id: "u1", role: "user" }), queue: fakeQueue().queue, mayDownload: () => true, meta: () => pending });
+  const run = service.check(follow.id, "manual");
+  await store.remove(follow.id);
+  release(meta([{ id: "tt1:1:1", season: 1, episode: 1 }]));
+  await run;
+  assert.equal(store.get(follow.id), undefined);
 });
 
 test("a manual check is refused inside the cooldown and answered after it", async (t) => {
@@ -410,6 +500,16 @@ const withStore = async (t: { after: (fn: () => void) => void }) => {
   return { dir, store: await loaded(dir) };
 };
 
+test("TMDB corrections leave the seasons it was not asked about alone", () => {
+  const old = [1, 2, 3].map((n) => ({ key: `1:${n}`, videoId: `v${n}`, season: 1, episode: n, released: "2019-05-01T08:00:00.000Z", firstSeenAt: "2026-01-01T00:00:00.000Z" }));
+  const fresh = { key: "2:1", videoId: "w1", season: 2, episode: 1, released: "2026-09-01T20:30:00.000Z", firstSeenAt: "2026-01-01T00:00:00.000Z" };
+  const result = reconcileReleaseDates([...old, fresh], new Map([["2:1", "2026-09-01"]]), Date.parse("2026-10-04T00:00:00Z"));
+  for (const episode of result.filter((item) => item.season === 1)) {
+    assert.equal(episode.released, "2019-05-01T08:00:00.000Z", "an old binge season keeps its shared date");
+    assert.equal(episode.dateUncertain, undefined);
+  }
+});
+
 test("downloadEligibility follows the start rule, the clock and the episode's facts", () => {
   const follow = (auto?: FollowAutoDownload): Follow => ({
     id: "f", ownerUserId: "u1", type: "series", metaId: "tt1", name: "Show", createdAt: "2024-01-01T00:00:00.000Z",
@@ -425,6 +525,8 @@ test("downloadEligibility follows the start rule, the clock and the episode's fa
   assert.equal(downloadEligibility(follow(rule({ enabledAt: "2024-03-01T00:00:00.000Z" })), ep(), NOW), "outside", "first seen before the rule");
   assert.equal(downloadEligibility(follow(rule()), ep({ released: RELEASED, ambiguous: true }), NOW), "attention-ambiguous");
   assert.equal(downloadEligibility(follow(rule()), ep({ released: "2024-07-01T00:00:00.000Z" }), NOW), "upcoming");
+  assert.equal(downloadEligibility(follow(rule()), ep({ dateUncertain: true }), NOW), "upcoming", "an uncertain episode with no date waits rather than asking to be resolved");
+  assert.equal(downloadEligibility(follow(rule()), ep({ released: RELEASED, dateUncertain: true }), NOW), "eligible", "an uncertain episode with a past date still downloads");
 
   const from = rule({ startMode: "from", startSeason: 2, startEpisode: 3 });
   assert.equal(downloadEligibility(follow(from), ep({ season: 2, episode: 3, released: RELEASED }), NOW), "eligible");
@@ -823,4 +925,159 @@ test("a check keeps the download an episode already carries", async (t) => {
   await store.recordCheck(follow.id, { episodes: [episode(1, 1, "v1", "2024-03-02T00:00:00.000Z")], now: 1_000 });
   assert.deepEqual(store.get(follow.id)!.episodes["1:1"].download, download);
   assert.equal(store.get(follow.id)!.episodes["1:1"].released, "2024-03-02T00:00:00.000Z");
+});
+
+test("a successful check drops a date the provider no longer has", async (t) => {
+  const dir = temp();
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const store = await loaded(dir);
+  const follow = await store.create({ ownerUserId: "u1", type: "series", metaId: "tt1", name: "Show" }, 0);
+  await store.recordCheck(follow.id, { episodes: [{ ...episode(1, 1, "v1", RELEASED), releasedSource: "addon" }], now: 0 });
+  assert.equal(store.get(follow.id)!.episodes["1:1"].released, RELEASED);
+
+  await store.recordCheck(follow.id, { episodes: [{ ...episode(1, 1, "v1"), dateUncertain: true }], now: 1_000 });
+
+  const after = store.get(follow.id)!.episodes["1:1"];
+  assert.equal(after.released, undefined, "the stale date is gone");
+  assert.equal(after.releasedSource, undefined, "the stale source is gone");
+  assert.equal(after.dateUncertain, true);
+  assert.equal(after.firstSeenAt, "2024-01-01T00:00:00.000Z", "the first sighting is kept");
+});
+
+const calendarFollow = (over: Partial<Follow> = {}): Follow => ({
+  id: "f1", ownerUserId: "u1", type: "series", metaId: "tt1", name: "Show",
+  createdAt: "2024-01-01T00:00:00.000Z", updatedAt: "2024-01-01T00:00:00.000Z",
+  enabled: true, revision: 1, nextCheckAt: "2024-01-01T00:00:00.000Z", failures: 0,
+  episodes: {}, ...over,
+});
+const download = (over: Partial<EpisodeDownload> = {}): EpisodeDownload =>
+  ({ state: "queued", intent: "i", generation: 1, attempts: 0, updatedAt: "2024-03-15T00:00:00.000Z", ...over });
+
+test("calendarItems keeps [from, to) and maps the episode state", () => {
+  const from = Date.parse("2024-03-01T00:00:00.000Z");
+  const to = Date.parse("2024-04-01T00:00:00.000Z");
+  const now = Date.parse("2024-03-18T00:00:00.000Z");
+  const follow = calendarFollow({ episodes: {
+    "before": { ...episode(1, 1, "v1", "2024-02-29T23:59:59.999Z") },
+    "at-from": { ...episode(1, 2, "v2", "2024-03-01T00:00:00.000Z") },
+    "past": { ...episode(1, 3, "v3", "2024-03-15T00:00:00.000Z") },
+    "future": { ...episode(1, 4, "v4", "2024-03-25T00:00:00.000Z") },
+    "at-to": { ...episode(1, 5, "v5", "2024-04-01T00:00:00.000Z") },
+    "no-date": { ...episode(1, 6, "v6") },
+    "waiting": { ...episode(1, 7, "v7", "2024-03-20T00:00:00.000Z"), download: download({ state: "waiting", attempts: 2, reasonKey: "err.noMatchingSource", nextAttemptAt: "2024-03-21T00:00:00.000Z" }) },
+    "ambiguous": { ...episode(1, 8, "v8", "2024-03-10T00:00:00.000Z", true) },
+  } });
+  const items = calendarItems([follow], from, to, now);
+  assert.deepEqual(items.map((item) => item.episode), [2, 8, 3, 7, 4]);
+  const byEpisode = new Map(items.map((item) => [item.episode, item]));
+  assert.equal(byEpisode.get(2)!.state, "released", "released at `from` is included");
+  assert.equal(byEpisode.get(3)!.state, "released", "a past episode with no download is released");
+  assert.equal(byEpisode.get(4)!.state, "upcoming", "a future episode with no download is upcoming");
+  assert.equal(byEpisode.get(7)!.state, "waiting", "a download state wins over the clock");
+  assert.equal(byEpisode.get(7)!.reasonKey, "err.noMatchingSource");
+  assert.equal(byEpisode.get(7)!.nextAttemptAt, "2024-03-21T00:00:00.000Z");
+  assert.equal(byEpisode.get(8)!.ambiguous, true);
+});
+
+test("calendarItems orders equal releases by name, then season and episode", () => {
+  const from = Date.parse("2024-03-01T00:00:00.000Z");
+  const to = Date.parse("2024-04-01T00:00:00.000Z");
+  const released = "2024-03-15T00:00:00.000Z";
+  const one = calendarFollow({ id: "a", name: "Beta", episodes: { x: { ...episode(1, 2, "x", released) } } });
+  const two = calendarFollow({ id: "b", name: "Alpha", episodes: { y: { ...episode(1, 5, "y", released) } } });
+  const three = calendarFollow({ id: "c", name: "Alpha", episodes: { z: { ...episode(2, 1, "z", released) } } });
+  assert.deepEqual(calendarItems([one, two, three], from, to, 0).map((item) => item.followId), ["b", "c", "a"]);
+});
+
+test("calendarItems stops at five hundred items", () => {
+  const base = Date.parse("2024-01-01T00:00:00.000Z");
+  const episodes: Record<string, FollowEpisode> = {};
+  for (let index = 1; index <= 501; index += 1) episodes[`1:${index}`] = episode(1, index, `v${index}`, new Date(base + index * 60_000).toISOString());
+  const items = calendarItems([calendarFollow({ episodes })], base, base + 1_000 * 60_000, base);
+  assert.equal(items.length, 500);
+  assert.equal(items[0]!.episode, 1);
+  assert.equal(items[499]!.episode, 500);
+});
+
+test("undatedCalendarItems lists only uncertain episodes with no date", () => {
+  const follow = calendarFollow({ episodes: {
+    "1:1": { ...episode(1, 1, "v1"), dateUncertain: true },
+    "1:2": { ...episode(1, 2, "v2", "2024-03-15T00:00:00.000Z"), dateUncertain: true },
+    "1:3": { ...episode(1, 3, "v3") },
+  } });
+
+  const items = undatedCalendarItems([follow], 100);
+
+  assert.deepEqual(items.map((item) => item.episode), [1]);
+  assert.equal(items[0]!.state, "upcoming");
+  assert.equal(items[0]!.dateUncertain, true);
+  assert.equal("released" in items[0]!, false);
+});
+
+test("activityItems keeps only episodes with a download, newest first and capped", () => {
+  const first = calendarFollow({ id: "f1", name: "One", episodes: {
+    "1:1": { ...episode(1, 1, "v1", RELEASED), download: download({ state: "completed", updatedAt: "2024-05-03T00:00:00.000Z" }) },
+    "1:2": { ...episode(1, 2, "v2", RELEASED), download: download({ state: "queued", updatedAt: "2024-05-01T00:00:00.000Z" }) },
+    "1:3": { ...episode(1, 3, "v3", RELEASED) },
+  } });
+  const second = calendarFollow({ id: "f2", name: "Two", episodes: {
+    "1:1": { ...episode(1, 1, "w1", RELEASED), download: download({ state: "waiting", updatedAt: "2024-05-02T00:00:00.000Z" }) },
+  } });
+  const items = activityItems([first, second], 50);
+  assert.deepEqual(items.map((item) => [item.followId, item.episode, item.state]), [
+    ["f1", 1, "completed"], ["f2", 1, "waiting"], ["f1", 2, "queued"],
+  ]);
+  assert.deepEqual(activityItems([first, second], 2).map((item) => item.followId), ["f1", "f2"]);
+});
+
+const FILM_NOW = Date.parse("2026-10-04T12:00:00Z");
+const film = { id: "tt9", type: "movie", name: "Film" } as MetaItem;
+
+test("a film's date is its digital release, else the disc, never the premiere", () => {
+  const digital = movieEpisode(film, "tt9", { theatrical: "2026-07-01", digital: "2026-09-10", physical: "2026-10-20" }, FILM_NOW);
+  assert.equal(digital.released, "2026-09-10T23:59:59.999Z");
+  assert.equal(digital.releaseKind, "digital");
+  assert.equal(digital.key, "1:1");
+  assert.equal(digital.videoId, "tt9");
+  const disc = movieEpisode(film, "tt9", { theatrical: "2026-07-01", physical: "2026-10-20" }, FILM_NOW);
+  assert.equal(disc.releaseKind, "physical");
+  const cinema = movieEpisode(film, "tt9", { theatrical: "2026-09-25" }, FILM_NOW);
+  assert.equal(cinema.released, undefined, "a film only in cinemas has no download date yet");
+  assert.equal(cinema.dateUncertain, true);
+  assert.equal(cinema.theatricalAt, "2026-09-25T23:59:59.999Z");
+});
+
+test("without TMDB a film keeps the catalogue date, doubted while it is recent", () => {
+  const recent = movieEpisode({ ...film, released: "2026-09-01T00:00:00.000Z" } as MetaItem, "tt9", null, FILM_NOW);
+  assert.equal(recent.releaseKind, "catalog");
+  assert.equal(recent.dateUncertain, true);
+  const old = movieEpisode({ ...film, released: "2020-01-01T00:00:00.000Z" } as MetaItem, "tt9", null, FILM_NOW);
+  assert.equal(old.dateUncertain, undefined);
+  const none = movieEpisode(film, "tt9", null, FILM_NOW);
+  assert.equal(none.released, undefined);
+  assert.equal(none.dateUncertain, true);
+});
+
+test("a followed film is downloaded once when it comes out, whatever the start rule", async (t) => {
+  const { store } = await withStore(t);
+  const q = fakeQueue();
+  let now = FILM_NOW;
+  const service = buildService(store, q, { now: () => now });
+  const follow = await store.create({ ownerUserId: "u1", type: "movie", metaId: "tt9", name: "Film" }, 0);
+  const upcoming = { ...movieEpisode(film, "tt9", { digital: "2026-10-10" }, now), firstSeenAt: new Date(0).toISOString() };
+  await store.recordCheck(follow.id, { episodes: [upcoming], now: 0 });
+  // Switched on long after following, with the series default of "new episodes only".
+  await store.update(follow.id, (current) => { current.autoDownload = rule({ enabledAt: new Date(now).toISOString() }); });
+  assert.equal(downloadEligibility(store.get(follow.id)!, store.get(follow.id)!.episodes["1:1"], now), "upcoming");
+  await service.admit(follow.id);
+  assert.equal(q.added.length, 0, "not before its digital release");
+
+  now = Date.parse("2026-10-11T12:00:00Z");
+  await service.admit(follow.id);
+  assert.equal(q.added.length, 1);
+  assert.deepEqual(q.added[0].source.type, "movie");
+  assert.equal(q.added[0].source.videoId, "tt9");
+  assert.equal(q.added[0].title, "Film");
+  await service.admit(follow.id);
+  assert.equal(q.added.length, 1, "exactly one download");
 });

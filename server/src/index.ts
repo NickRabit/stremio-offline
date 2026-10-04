@@ -27,7 +27,7 @@ import { Store, type State, type UserPrefs, type WatchlistEntry, type StoredProg
 import { emptyUserData, findUserById, forEachUserData, type UserData, type UserRecord } from "./users.js";
 import type { ProgressSeries } from "./progress-series.js";
 import { advanceTorrent } from "./debrid.js";
-import { tmdbGallery, tmdbMeta, type TmdbConfig } from "./tmdb.js";
+import { tmdbGallery, tmdbMeta, tmdbMovieReleases, tmdbSeasonAirDates, type TmdbConfig } from "./tmdb.js";
 import { createLibraryCandidates } from "./library-candidates.js";
 import { ExternalIdStore } from "./external-ids.js";
 import { FollowService, FollowStore } from "./follows.js";
@@ -1592,6 +1592,19 @@ const followService = new FollowService({
     return user ? { id: user.id, role: user.role, disabled: user.disabled } : undefined;
   },
   meta: (owner, type, metaId) => cachedMeta(type, metaId, store.prefs(owner.id).uiLanguage, owner, { fresh: true, interactive: false }),
+  // TMDB keeps per-episode air dates, so a check trusts them over a catalogue that stamps the
+  // premiere on a whole season. Only series, and only while a key is configured.
+  airDates: async (type, metaId, seasons, owner) => {
+    if (type !== "series") return undefined;
+    const config = tmdbConfigOf(store.prefs(owner.id).uiLanguage);
+    if (!config) return undefined;
+    const dates = await tmdbSeasonAirDates(metaId, seasons, config);
+    return dates.size ? dates : undefined;
+  },
+  movieReleases: async (metaId, owner) => {
+    const config = tmdbConfigOf(store.prefs(owner.id).uiLanguage);
+    return config ? tmdbMovieReleases(metaId, config) : null;
+  },
   queue: {
     addPending: (title, source, media, ownerUserId, follow) => queue.addPending(title, source, media, ownerUserId, follow),
     findActiveEpisode: (ownerUserId, type, videoId) => queue.findActiveEpisode(ownerUserId, type, videoId),
@@ -1614,7 +1627,7 @@ const followService = new FollowService({
 queue.setRemovalGuard((job, reason) => followService.jobRemoving(job, reason));
 queue.setClearCompletedGuard((jobs) => followService.jobsClearing(jobs));
 
-registerFollowRoutes(app, { ...routeContext, follows: followService, followStore, prefsOf, markersOf, dataOf, posterOf, cachedMeta });
+registerFollowRoutes(app, { ...routeContext, follows: followService, followStore, prefsOf, markersOf, dataOf, updateData, posterOf, cachedMeta });
 
 // Deleting, renaming and moving touch real files, hence the path and root checks.
 

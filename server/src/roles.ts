@@ -41,6 +41,10 @@ export const USER_ALLOWED: Rule[] = [
   // The series they follow, and the new episodes those turn up.
   { method: "GET", pattern: /^\/follows$/ },
   { method: "POST", pattern: /^\/follows$/ },
+  { method: "GET", pattern: /^\/follows\/defaults$/ },
+  { method: "PUT", pattern: /^\/follows\/defaults$/ },
+  { method: "GET", pattern: /^\/follows\/calendar$/ },
+  { method: "GET", pattern: /^\/follows\/activity$/ },
   { method: "GET", pattern: /^\/follows\/new-episodes$/ },
   { method: "GET", pattern: /^\/follows\/by-meta\/[^/]+\/[^/]+$/ },
   { method: "PATCH", pattern: /^\/follows\/[^/]+$/ },

@@ -342,8 +342,24 @@ export interface ProgressEntry { key: string; position: number; duration: number
 export interface WatchlistEntry { key: string; type: string; id: string; name: string; poster?: string; addedAt: string }
 
 /** One episode of a followed series as the follow route names it: the slot on either side of now. */
-export interface FollowEpisodeView { season: number; episode: number; title?: string; released?: string }
+export interface FollowEpisodeView { season: number; episode: number; title?: string; released?: string; releasedSource?: "addon" | "tmdb"; dateUncertain?: boolean }
 export type FollowStartMode = "new" | "from";
+/** The wizard choices carried over from the last follow, as `GET /api/follows/defaults` answers them. */
+export interface FollowDefaults {
+  mode: "notify" | "download";
+  startMode?: FollowStartMode;
+  selection?: {
+    addonKeys: string[];
+    sourceStrategy: DownloadSourceStrategy;
+    audioLanguage: string;
+    fallbackAudioLanguage?: string;
+    audioMode: AudioMode;
+    subtitleMode: SubtitleMode;
+    subtitleLanguage?: string;
+    fallbackSubtitleLanguage?: string;
+  };
+  target?: { libraryId: string; subfolder?: string; layout: DownloadLayout };
+}
 /** The rule a follow queues new episodes by. Mirrors `FollowAutoDownload` on the server. */
 export interface FollowAutoDownload {
   enabledAt: string;
@@ -370,12 +386,19 @@ export type FollowEligibility = "eligible" | "upcoming" | "outside" | "attention
 /** One row of `GET /api/follows/:id/episodes`. */
 export interface FollowEpisodeRow {
   key: string; season: number; episode: number; title?: string; released?: string; ambiguous?: boolean;
+  releasedSource?: "addon" | "tmdb"; dateUncertain?: boolean;
   eligibility: FollowEligibility;
   download?: FollowEpisodeDownload;
 }
 export interface FollowDownloads { queued: number; waiting: number; completed: number; skipped: number; attention: number }
 /** One followed series as the follow routes answer it. */
+/** A followed film's single record, as the follow view carries it. */
+export interface FollowMovie {
+  released?: string; releaseKind?: "digital" | "physical" | "theatrical" | "catalog"; theatricalAt?: string; dateUncertain?: boolean;
+  state?: CalendarEpisodeState; reasonKey?: string; nextAttemptAt?: string;
+}
 export interface FollowView {
+  movie?: FollowMovie;
   id: string; ownerUserId: string; type: string; metaId: string; name: string; poster?: string;
   createdAt: string; updatedAt: string; enabled: boolean; revision: number;
   lastCheckedAt?: string; lastSuccessfulCheckAt?: string; nextCheckAt: string; failures: number; lastErrorKey?: string;
@@ -389,6 +412,22 @@ export interface FollowView {
 export interface NewEpisode {
   followId: string; type: string; metaId: string; name: string; poster?: string;
   videoId: string; season: number; episode: number; title?: string; released: string;
+}
+/** One episode in the calendar window; the state adds the released/upcoming verdict to the queue's own. */
+export type CalendarEpisodeState = "upcoming" | "released" | FollowDownloadState;
+export interface CalendarItem {
+  followId: string; type: string; metaId: string; name: string; poster?: string;
+  videoId: string; season: number; episode: number; title?: string; released: string;
+  state: CalendarEpisodeState; reasonKey?: string; nextAttemptAt?: string; ambiguous?: boolean;
+  dateUncertain?: boolean; releasedSource?: "addon" | "tmdb";
+}
+/** A calendar item with no date: the calendar lists these apart, under its grid. */
+export type UndatedCalendarItem = Omit<CalendarItem, "released">;
+/** One episode the download service has touched, as `GET /api/follows/activity` answers it. */
+export interface ActivityItem {
+  followId: string; type: string; metaId: string; name: string; poster?: string;
+  season: number; episode: number; title?: string; state: FollowDownloadState;
+  reasonKey?: string; nextAttemptAt?: string; jobId?: string; updatedAt: string;
 }
 /** How many episodes a proposed start rule would queue right now. */
 export interface FollowPreview { count: number; episodes: Array<{ key: string; season: number; episode: number; title?: string }> }

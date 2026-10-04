@@ -76,6 +76,15 @@ describe("FollowDialog", () => {
     expect(text).toContain("1 queued");
   });
 
+  it("shows an uncertain date with the marker and the hint", async () => {
+    await render(follow, [
+      { key: "1:1", season: 1, episode: 1, title: "Maybe", released: "2024-01-01", eligibility: "upcoming", dateUncertain: true },
+    ]);
+    const small = rowFor("S01E01")!.querySelector("small")!;
+    expect(small.textContent).toContain("≈");
+    expect(small.getAttribute("title")).toBe("The exact date is not announced yet; this is the season's start.");
+  });
+
   it("pauses the follow as soon as the switch changes", async () => {
     await render();
     const pause = host.querySelector<HTMLInputElement>(".follow-pause input[type=checkbox]")!;
@@ -91,5 +100,17 @@ describe("FollowDialog", () => {
     expect(fetchMock.mock.calls.some((call) => decodeURIComponent(String(call[0])).endsWith("/episodes/1:1/skip"))).toBe(true);
     await act(async () => { button(rowFor("S01E02")!, "Retry")!.click(); await Promise.resolve(); await Promise.resolve(); });
     expect(fetchMock.mock.calls.some((call) => decodeURIComponent(String(call[0])).endsWith("/episodes/1:2/retry"))).toBe(true);
+  });
+
+  it("a followed film shows its digital release and its download, with no episode list", async () => {
+    await render({ ...follow, type: "movie", metaId: "tt9", name: "Film", autoDownload: undefined, movie: { released: "2026-11-20T23:59:59.999Z", releaseKind: "digital", state: "waiting", nextAttemptAt: "2026-11-21T10:00:00.000Z" } }, []);
+    expect(host.textContent).toContain("Digital release:");
+    expect(host.querySelector(".state-pill")!.textContent).toBe("Waiting for a source");
+    expect([...host.querySelectorAll("h3")].some((heading) => heading.textContent === "Episodes")).toBe(false);
+  });
+
+  it("a film only in cinemas says the digital release is not announced", async () => {
+    await render({ ...follow, type: "movie", metaId: "tt9", name: "Film", autoDownload: undefined, movie: { releaseKind: "theatrical", theatricalAt: "2026-09-25T23:59:59.999Z", dateUncertain: true } }, []);
+    expect(host.textContent).toContain("digital release not announced yet");
   });
 });

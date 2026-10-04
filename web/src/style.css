@@ -1579,16 +1579,17 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
 .follow-warning{color:#e7b867}
 .follow-pause{display:flex;align-items:center;gap:9px;font-size:12px;color:var(--text)}
 .follow-actions{display:flex;flex-wrap:wrap;gap:8px}
-.follow-episode{display:grid;grid-template-columns:64px minmax(0,1fr) auto auto auto;gap:10px;align-items:center;padding:8px 2px;border-bottom:1px solid #29313e99;font-size:12px}
+.follow-episode{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"main actions" "meta actions";gap:6px 12px;align-items:center;padding:10px 2px;border-bottom:1px solid #29313e99;font-size:12px}
 .follow-episode:last-child{border-bottom:0}
-.follow-episode b{color:var(--accent);font-size:11px}
+.follow-episode-main{grid-area:main;display:flex;align-items:baseline;gap:10px;min-width:0}
+.follow-episode-main b{flex:0 0 auto;color:var(--accent);font-size:11px;font-variant-numeric:tabular-nums}
 .follow-episode-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.follow-episode small{color:var(--muted);font-size:10px}
-.follow-state{font-size:10px;font-weight:800;color:var(--muted);white-space:nowrap}
-.follow-state.waiting,.follow-state.attention{color:#e7b867}
-.follow-state.completed{color:var(--green)}
-.follow-episode-actions{display:flex;gap:4px}
-.follow-episode-actions button{font-size:10px;padding:5px 8px}
+.follow-episode-meta{grid-area:meta;display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;min-width:0}
+.follow-episode-meta small{color:var(--muted);font-size:11px}
+.follow-episode-actions{grid-area:actions;display:flex;gap:6px;justify-content:flex-end}
+.follow-episode-actions button{font-size:11px;padding:6px 10px;white-space:nowrap}
+.follow-actions{display:flex;flex-wrap:wrap;gap:8px}
+.follow-actions button{font-size:12px;padding:7px 12px}
 .follow-list{display:grid;gap:6px}
 .follow-row{display:grid;grid-template-columns:44px minmax(0,1fr);gap:12px;align-items:center;text-align:left;padding:9px;width:100%}
 .follow-row-art{display:grid;place-items:center;width:44px;aspect-ratio:2/3;border-radius:7px;background:#252d39;color:var(--muted);overflow:hidden}
@@ -1602,4 +1603,170 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
 .follow-badge{font-style:normal;font-size:9px;font-weight:800;color:#e7b867;border:1px solid #e7b86755;border-radius:5px;padding:1px 6px}
 .queue-job-title{display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:0}
 .follow-job-pill{font-size:9px;font-weight:800;color:var(--accent2);border:1px solid #ff5b3848;background:#ff5b3818;border-radius:5px;padding:1px 6px;white-space:nowrap}
-@media(max-width:700px){.follow-episode{grid-template-columns:56px minmax(0,1fr) auto}.follow-episode small,.follow-episode-actions{grid-column:2/-1}}
+@media(max-width:520px){.follow-episode{grid-template-columns:minmax(0,1fr);grid-template-areas:"main" "meta" "actions"}.follow-episode-actions{justify-content:flex-start}}
+
+/* The Following page: the overview cards, the month calendar and the activity list. */
+.following-page{max-width:1240px;display:flex;flex-direction:column;gap:16px}
+.following-page .heading{margin-bottom:0}
+/* A segmented control rather than page-sized tab headings: three short views of one thing. */
+.following-tabs{display:inline-flex;align-self:flex-start;gap:2px;padding:3px;border:1px solid var(--line);border-radius:11px;background:var(--panel);max-width:100%;overflow-x:auto;scrollbar-width:none}
+.following-tabs::-webkit-scrollbar{display:none}
+.following-tabs [role=tab]{flex:0 0 auto;border:0;border-radius:8px;background:transparent;color:var(--muted);padding:7px 16px;font-size:12px;font-weight:700;white-space:nowrap}
+.following-tabs [role=tab]:hover{color:var(--text)}
+.following-tabs [role=tab].active{background:var(--panel2);color:var(--text);box-shadow:0 1px 3px #0006}
+.following-panel{outline:none;min-width:0;container-type:inline-size;container-name:following}
+
+/* One pill per state, shared by the calendar, the day panel, the activity and the follow dialog.
+   It never truncates: the row around it wraps instead. */
+.state-pill{display:inline-flex;align-items:center;gap:4px;flex:0 0 auto;padding:3px 8px;border-radius:999px;font-size:10px;font-weight:800;line-height:1.3;white-space:nowrap;color:#a4adba;background:#a4adba1a}
+.state-pill.state-released{color:var(--accent2);background:#ff5b381a}
+.state-pill.state-queued,.state-pill.state-reserved{color:#6cb4ff;background:#5aa9ff1f}
+.state-pill.state-waiting{color:#e7b867;background:#e7b8671f}
+.state-pill.state-completed{color:var(--green);background:#3ecf8e1f}
+.state-pill.state-attention{color:var(--red);background:#f06a761f}
+.state-pill.state-skipped{color:#8b95a5;background:#8b95a514;text-decoration:line-through}
+.following-legend i,.following-day-dots i{display:inline-block;border-radius:50%;background:#8b95a5;flex:0 0 auto}
+.following-legend i.state-released,.following-day-dots i.state-released,.following-event.state-released{--state:var(--accent2)}
+.following-legend i.state-queued,.following-legend i.state-reserved,.following-day-dots i.state-queued,.following-day-dots i.state-reserved{--state:#5aa9ff}
+.following-legend i.state-waiting,.following-day-dots i.state-waiting{--state:#e7b867}
+.following-legend i.state-completed,.following-day-dots i.state-completed{--state:var(--green)}
+.following-legend i.state-attention,.following-day-dots i.state-attention{--state:var(--red)}
+.following-legend i.state-skipped,.following-day-dots i.state-skipped{--state:#5d6674}
+.following-legend i,.following-day-dots i{background:var(--state,#8b95a5)}
+.following-event.state-queued,.following-event.state-reserved{--state:#5aa9ff}
+.following-event.state-waiting{--state:#e7b867}
+.following-event.state-completed{--state:var(--green)}
+.following-event.state-attention{--state:var(--red)}
+.following-event.state-skipped{--state:#5d6674}
+
+/* Overview */
+.following-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;align-items:stretch}
+.following-card{display:grid;grid-template-columns:76px minmax(0,1fr);gap:14px;align-items:start;text-align:left;padding:12px;border:1px solid var(--line);border-radius:14px;background:var(--panel);min-width:0;transition:border-color .15s,background .15s}
+.following-card:hover{border-color:var(--accent);background:var(--panel2)}
+.following-card-art{display:grid;place-items:center;width:76px;aspect-ratio:2/3;border-radius:9px;background:#252d39;color:var(--muted);overflow:hidden}
+.following-card-art img{width:100%;height:100%;object-fit:cover}
+.following-card-art svg{width:24px;height:24px}
+.following-card-copy{min-width:0;display:flex;flex-direction:column;gap:6px;padding-top:2px}
+.following-card-copy strong{font-size:14px;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.following-card-line{font-size:12px;color:var(--text);opacity:.8}
+.following-counts{font-size:11px;color:var(--muted)}
+.following-chips{display:flex;flex-wrap:wrap;gap:5px}
+.following-chip{font-size:10px;font-weight:800;border-radius:999px;padding:2px 8px;color:#a4adba;background:#a4adba1a;white-space:nowrap}
+.following-chip.paused{color:#e7b867;background:#e7b8671f}
+.following-chip.attention{color:var(--red);background:#f06a761f}
+
+/* Calendar: the month and the chosen day side by side when there is room, stacked otherwise. */
+.following-calendar-view{display:grid;grid-template-columns:minmax(0,1fr);grid-template-areas:"head" "month" "legend" "day" "undated";gap:12px;min-width:0}
+.following-cal-head{grid-area:head;display:flex;align-items:center;justify-content:space-between;gap:12px}
+.following-cal-title{margin:0;font-size:18px;font-weight:800}
+.following-cal-nav{display:inline-flex;align-items:center;gap:2px;padding:3px;border:1px solid var(--line);border-radius:10px;background:var(--panel)}
+.following-cal-nav button{display:grid;place-items:center;min-width:32px;height:30px;padding:0 10px;border:0;border-radius:7px;background:transparent;color:var(--text);font-size:12px;font-weight:700}
+.following-cal-nav button:hover{background:var(--panel2)}
+.following-cal-nav button svg{width:16px;height:16px}
+.following-month{grid-area:month;container-type:inline-size;container-name:month;min-width:0}
+.following-calendar{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px}
+.following-weekday{font-size:10px;font-weight:700;color:var(--muted);text-align:center;padding:2px 0 4px;text-transform:uppercase;letter-spacing:.04em;white-space:nowrap;overflow:hidden}
+.following-day{position:relative;display:flex;flex-direction:column;min-width:0;border:1px solid transparent;border-radius:10px;background:var(--panel)}
+.following-day.outside{opacity:.38}
+.following-day.selected{border-color:var(--accent)}
+.following-day-hit{display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:5px;width:100%;min-height:50px;padding:7px 2px 6px;border:0;border-radius:10px;background:transparent;color:var(--text)}
+.following-day-hit:hover{background:#ffffff08}
+.following-day-num{display:grid;place-items:center;min-width:24px;height:24px;padding:0 4px;border-radius:999px;font-size:12px;font-weight:700;line-height:1}
+.following-day.today .following-day-num{background:var(--accent);color:#fff}
+.following-day-dots{display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:3px;max-width:100%;padding:0 3px}
+.following-day-dots i{width:6px;height:6px}
+.following-day-dots b{font-size:9px;line-height:6px;color:var(--muted)}
+.following-day-items{display:none}
+/* With room for text the cells carry the episodes themselves, poster first. */
+@container month (min-width: 640px){
+  .following-calendar{gap:6px}
+  .following-day{min-height:118px;padding:6px;gap:5px}
+  .following-day-hit{flex-direction:row;justify-content:flex-start;min-height:0;padding:0;border-radius:999px;width:auto;align-self:flex-start}
+  .following-day-dots{display:none}
+  .following-day-items{display:flex;flex-direction:column;gap:4px;min-width:0}
+  .following-event{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:6px;width:100%;min-width:0;padding:3px 6px 3px 3px;border:0;border-left:3px solid var(--state,#8b95a5);border-radius:6px;background:#0d1117;text-align:left;color:var(--text)}
+  .following-event:hover{background:#151b24}
+  .following-event img{width:18px;height:27px;border-radius:3px;object-fit:cover}
+  .following-event span{display:flex;flex-direction:column;min-width:0}
+  .following-event strong{font-size:11px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .following-event small{font-size:10px;color:var(--muted);white-space:nowrap}
+  .following-event.state-skipped strong{text-decoration:line-through;color:var(--muted)}
+  .following-event-more{align-self:flex-start;font-size:10px;padding:2px 6px;border:0;background:transparent;color:var(--accent2)}
+}
+.following-legend{grid-area:legend;display:flex;align-items:center;flex-wrap:wrap;gap:4px 14px;font-size:11px;color:var(--muted)}
+.following-legend span{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.following-legend i{width:8px;height:8px}
+.following-day-panel{grid-area:day;container-type:inline-size;display:flex;flex-direction:column;gap:4px;padding:12px;border:1px solid var(--line);border-radius:14px;background:var(--panel);min-width:0}
+.following-day-panel h4{margin:0 0 6px;font-size:13px;font-weight:800}
+.following-undated{grid-area:undated}
+.following-undated h4{color:var(--muted)}
+.following-episode-row{display:grid;grid-template-columns:40px minmax(0,1fr) auto;grid-template-areas:"art copy state";gap:4px 12px;align-items:center;width:100%;min-width:0;padding:8px;border:0;border-radius:10px;background:transparent;text-align:left;color:var(--text)}
+.following-episode-row:hover{background:var(--panel2)}
+.following-episode-art{grid-area:art;display:grid;place-items:center;width:40px;aspect-ratio:2/3;border-radius:6px;background:#252d39;color:var(--muted);overflow:hidden}
+.following-episode-art img{width:100%;height:100%;object-fit:cover}
+.following-episode-art svg{width:16px;height:16px}
+.following-episode-copy{grid-area:copy;min-width:0;display:flex;flex-direction:column;gap:3px}
+.following-episode-copy strong{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.following-episode-copy small{font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.following-episode-row .state-pill{grid-area:state}
+/* A narrow panel moves the state under the title instead of squeezing either. */
+@container (max-width: 420px){
+  .following-episode-row{grid-template-columns:40px minmax(0,1fr);grid-template-areas:"art copy" "art state"}
+  .following-episode-row .state-pill{justify-self:start}
+}
+@container following (min-width: 1000px){
+  .following-calendar-view{grid-template-columns:minmax(0,1fr) 320px;grid-template-areas:"head head" "month day" "legend undated";align-items:start}
+}
+
+.following-cal-head{flex-wrap:wrap}
+.following-cal-mode{display:inline-flex;gap:2px;padding:3px;margin-left:auto;border:1px solid var(--line);border-radius:10px;background:var(--panel)}
+.following-cal-mode button{height:30px;padding:0 12px;border:0;border-radius:7px;background:transparent;color:var(--muted);font-size:12px;font-weight:700}
+.following-cal-mode button.active{background:var(--panel2);color:var(--text)}
+.following-cal-title{flex:1 1 auto}
+/* The list keeps one column at any width; the side panel belongs to the month. */
+.following-calendar-view.agenda{grid-template-columns:minmax(0,1fr)!important;grid-template-areas:"head" "month" "undated"!important}
+.following-agenda{grid-area:month;display:flex;flex-direction:column;gap:6px;min-width:0}
+.following-agenda-day{display:grid;grid-template-columns:52px minmax(0,1fr);gap:10px;align-items:start;padding:6px 0;border-top:1px solid #29313e80}
+.following-agenda-day:first-child{border-top:0}
+.following-agenda-day.past{opacity:.55}
+.following-agenda-date{display:flex;flex-direction:column;align-items:center;gap:2px;padding-top:8px}
+.following-agenda-date small{font-size:10px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.following-agenda-date b{display:grid;place-items:center;width:34px;height:34px;border-radius:50%;font-size:18px;font-weight:800}
+.following-agenda-day.today .following-agenda-date b{background:var(--accent);color:#fff}
+.following-agenda-day.today .following-agenda-date small{color:var(--accent2)}
+.following-agenda-items{container-type:inline-size;display:flex;flex-direction:column;gap:2px;min-width:0}
+.following-agenda-items .following-episode-row{background:var(--panel);border:1px solid var(--line)}
+.following-agenda-items .following-episode-row:hover{border-color:var(--accent);background:var(--panel2)}
+.following-agenda-now{display:flex;align-items:center;gap:10px;margin:2px 0;color:var(--accent2);font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em}
+.following-agenda-now::before{content:"";width:8px;height:8px;margin-left:22px;border-radius:50%;background:var(--accent)}
+.following-agenda-now::after{content:"";flex:1;height:2px;background:var(--accent);opacity:.6}
+.visually-hidden{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+@media(max-width:700px){.following-cal-head{gap:8px}.following-cal-title{flex-basis:100%}.following-cal-mode{margin-left:0}.following-cal-nav{margin-left:auto}}
+
+/* Activity */
+.following-activity{display:flex;flex-direction:column;gap:8px}
+.following-activity-row{display:grid;grid-template-columns:44px minmax(0,1fr) auto;grid-template-areas:"art copy actions" "art time actions";gap:4px 12px;align-items:center;padding:10px;border:1px solid var(--line);border-radius:12px;background:var(--panel);min-width:0}
+.following-activity-art{grid-area:art;display:grid;place-items:center;width:44px;aspect-ratio:2/3;border-radius:6px;background:#252d39;color:var(--muted);overflow:hidden}
+.following-activity-art img{width:100%;height:100%;object-fit:cover}
+.following-activity-art svg{width:18px;height:18px}
+.following-activity-copy{grid-area:copy;min-width:0;display:flex;flex-direction:column;gap:6px}
+.following-activity-copy strong{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.following-activity-meta{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;min-width:0}
+.following-activity-meta small{font-size:11px;color:var(--muted)}
+.following-activity-time{grid-area:time;font-size:10px;color:var(--muted);white-space:nowrap}
+.following-activity-actions{grid-area:actions;display:flex;gap:6px}
+.following-activity-actions button{font-size:11px;padding:6px 10px}
+.following-empty{margin:0;color:var(--muted);font-size:12px}
+
+@media(max-width:700px){
+  .following-page{gap:12px}
+  .following-tabs{align-self:stretch}
+  .following-tabs [role=tab]{flex:1 1 0}
+  .following-cal-title{font-size:16px}
+  .following-activity-row{grid-template-columns:40px minmax(0,1fr);grid-template-areas:"art copy" "art time" "actions actions"}
+  .following-activity-actions{justify-content:flex-start;padding-top:4px}
+}
+
+/* Seven items on the phone bottom bar still fit at 360px; below 420px their labels would not,
+   so the text collapses to zero width and the label lives on in the button's aria-label and title. */
+@media(max-width:420px){.sidebar nav button>span{font-size:0}}

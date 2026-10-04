@@ -21,7 +21,7 @@ export function NewEpisodesRow({ follows, episodes, onOpen, onManage }: {
       ? <div className="resume-strip">{episodes.slice(0, 12).map((episode) => <button className="browse-item" key={`${episode.followId}:${episode.videoId}`} onClick={() => onOpen(episode)}>
           <span className="browse-art">{episode.poster ? <img src={episode.poster} alt="" loading="lazy"/> : <Film/>}</span>
           <strong>{episode.name}</strong>
-          <small>{`S${pad2(episode.season)}E${pad2(episode.episode)}`}{episode.title ? ` · ${episode.title}` : ""}</small>
+          <small>{episode.type === "movie" ? t("follow.movieBadge") : `S${pad2(episode.season)}E${pad2(episode.episode)}${episode.title ? ` · ${episode.title}` : ""}`}</small>
           <small>{new Date(episode.released).toLocaleDateString(localeTag())}</small>
         </button>)}</div>
       : <p className="identify-hint">{t("follow.noNewEpisodes")}</p>}
