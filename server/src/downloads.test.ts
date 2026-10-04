@@ -905,6 +905,108 @@ test("the same infoHash is not queued twice", async () => {
   }
 });
 
+test("a queued source owned by another account does not refuse the caller", async () => {
+  const { directory, queue } = await tempQueue();
+  try {
+    const url = "http://127.0.0.1:1/film.mkv";
+    const first = await queue.add("Film", { url }, undefined, undefined, "user1");
+    await queue.pause(first.id);
+    const second = await queue.add("Film", { url }, undefined, undefined, "user2");
+    await queue.pause(second.id);
+    assert.equal(queue.list().length, 2, "each account holds its own job for the same source");
+    await assert.rejects(() => queue.add("Film", { url }, undefined, undefined, "user1"), /already in the queue/, "the owner is still refused its own source");
+    await assert.rejects(() => queue.add("Film", { url }, undefined, undefined, "user2"), /already in the queue/, "and so is the other owner against its own job");
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("the same infoHash owned by another account does not refuse the caller", async () => {
+  const { directory, queue } = await tempQueue({
+    debrid: { configured: () => true, advance: async () => ({ ready: false, torrentId: "rd1", progress: 1, status: "queued" }) },
+  });
+  try {
+    await queue.add("Film", { infoHash: HASH, fileIdx: 0 }, undefined, undefined, "user1");
+    await queue.add("Film", { infoHash: HASH, fileIdx: 0 }, undefined, undefined, "user2");
+    assert.equal(queue.list().length, 2, "each account holds its own torrent for the same infoHash");
+    await assert.rejects(() => queue.add("Film", { infoHash: HASH, fileIdx: 0 }, undefined, undefined, "user1"), /already in the queue/);
+    await assert.rejects(() => queue.add("Film", { infoHash: HASH, fileIdx: 0 }, undefined, undefined, "user2"), /already in the queue/);
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a pending source owned by another account does not refuse the caller", async () => {
+  const { directory, queue } = await tempQueue();
+  try {
+    const first = await queue.addPending("Show", { type: "series", videoId: "tt1:1:1" }, undefined, "user1");
+    await queue.pause(first!.id);
+    const second = await queue.addPending("Show", { type: "series", videoId: "tt1:1:1" }, undefined, "user2");
+    await queue.pause(second!.id);
+    assert.equal(queue.list().length, 2, "each account holds its own pending job");
+    assert.equal(await queue.addPending("Show", { type: "series", videoId: "tt1:1:1" }, undefined, "user1"), undefined, "the same account repeating the same source is skipped");
+    const typed = await queue.addPending("Show", { type: "movie", videoId: "tt1:1:1" }, undefined, "user1");
+    assert.ok(typed, "a different type is a different source, even for the same account");
+    assert.equal(queue.list().length, 3);
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a completed file refuses another account only when it can see the library", async () => {
+  const size = 4096;
+  const { server, port } = await listen((_req, res) => {
+    res.writeHead(200, { "content-length": String(size), "content-type": "video/mp4" });
+    void send(res, size).then(() => res.end());
+  });
+  const url = `http://127.0.0.1:${port}/film.mp4`;
+  try {
+    let visible = false;
+    const { directory, queue } = await tempQueue({ ownerSeesLibrary: () => visible });
+    try {
+      const first = await queue.add("Film", { url }, undefined, undefined, "user1");
+      await waitFor(queue, () => queue.list().find((job) => job.id === first.id)?.status === "completed", 30_000);
+      assert.ok(await queue.add("Film", { url }, undefined, undefined, "user2"), "a file the asker cannot see does not refuse the other account");
+      visible = true;
+      await assert.rejects(() => queue.add("Film", { url }, undefined, undefined, "user3"), /already in the library/, "a file the asker can see does refuse the other account");
+    } finally {
+      await queue.stop();
+      await rm(directory, { recursive: true, force: true });
+    }
+
+    // Without the hook the safe answer stands on its own: the other account is never told.
+    const { directory: plain, queue: without } = await tempQueue();
+    try {
+      const first = await without.add("Film", { url }, undefined, undefined, "user1");
+      await waitFor(without, () => without.list().find((job) => job.id === first.id)?.status === "completed", 30_000);
+      assert.ok(await without.add("Film", { url }, undefined, undefined, "user2"), "without the hook the other account is not refused");
+    } finally {
+      await without.stop();
+      await rm(plain, { recursive: true, force: true });
+    }
+  } finally {
+    server.close();
+  }
+});
+
+test("a legacy job without an owner belongs to the migrated administrator", async () => {
+  const { directory, queue } = await tempQueue({ legacyOwnerId: () => "admin1" });
+  try {
+    const url = "http://127.0.0.1:1/film.mkv";
+    const legacy = await queue.add("Film", { url });
+    await queue.pause(legacy.id);
+    assert.equal(queue.list().find((job) => job.id === legacy.id)?.ownerUserId, "admin1", "the job resolves to the migrated administrator");
+    await assert.rejects(() => queue.add("Film", { url }, undefined, undefined, "admin1"), /already in the queue/, "the migrated administrator is refused its own legacy job");
+    assert.ok(await queue.add("Film", { url }, undefined, undefined, "user2"), "another account is not refused by the legacy job");
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("a dropped Real-Debrid call is retried instead of failing the job", async () => {
   let calls = 0;
   const { directory, queue } = await tempQueue({

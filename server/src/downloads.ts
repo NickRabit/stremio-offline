@@ -200,6 +200,9 @@ export interface QueueHooks {
    *  A refusal pauses the job instead of failing it, so its place is kept for when the
    *  permission comes back. Absent in a queue built without accounts: nothing gates it. */
   ownerAllowed?: (job: DownloadJob) => boolean | Promise<boolean>;
+  /** Whether an account can see a library. Lets a duplicate in another account's finished
+   *  job be reported only when the asker could find that file anyway. */
+  ownerSeesLibrary?: (ownerUserId: string | undefined, libraryId: string) => boolean;
 }
 
 const exists = async (file: string) => { try { await stat(file); return true; } catch { return false; } };
@@ -297,6 +300,7 @@ export class DownloadQueue {
   private readonly debridTimeoutMs: number;
   private readonly legacyOwnerId?: () => string | undefined;
   private readonly ownerAllowed?: (job: DownloadJob) => boolean | Promise<boolean>;
+  private readonly ownerSeesLibrary?: (ownerUserId: string | undefined, libraryId: string) => boolean;
   private debridTimers = new Map<string, NodeJS.Timeout>();
   private debridBusy = new Set<string>();
   /** Called after a successful finish, so the library can produce a thumbnail straight away. */
@@ -333,6 +337,7 @@ export class DownloadQueue {
     this.debridTimeoutMs = hooks.debridTimeoutMs ?? 72 * 60 * 60_000;
     this.legacyOwnerId = hooks.legacyOwnerId;
     this.ownerAllowed = hooks.ownerAllowed;
+    this.ownerSeesLibrary = hooks.ownerSeesLibrary;
   }
 
   /** index.ts owns source selection for lazy jobs, because it needs the addons and the settings. */
@@ -399,6 +404,12 @@ export class DownloadQueue {
   ownerOf(job: Pick<DownloadJob, "ownerUserId">): string | undefined {
     if (!job.ownerUserId) job.ownerUserId = this.legacyOwnerId?.();
     return job.ownerUserId;
+  }
+
+  /** Whether a queued job belongs to the account now asking. A job from before ownership
+   *  existed belongs to the migrated administrator, the same as `ownerOf` says. */
+  private ownedBy(job: DownloadJob, ownerUserId: string | undefined): boolean {
+    return this.ownerOf(job) === (ownerUserId ?? this.legacyOwnerId?.());
   }
 
   /** The library a new job writes into. A rule that names a library nobody can write to right
@@ -560,10 +571,19 @@ export class DownloadQueue {
     if (!stream.url) throw new AppError("Only a direct HTTP stream can be downloaded.", "err.downloadNeedsHttp");
     // Without this check a double click on Download yields the same film twice, because
     // uniqueTarget happily hands the second job a name with "(2)".
-    const duplicate = this.jobs.find((job) => job.stream?.url === stream.url && job.status !== "failed");
-    if (duplicate && duplicate.status !== "completed") throw new AppError("This source is already in the queue.", "err.sourceQueued");
-    const duplicatePath = duplicate ? this.jobPath(duplicate) : undefined;
-    if (duplicatePath && await exists(duplicatePath)) throw new AppError("This source is already in the library.", "err.sourceDownloaded");
+    if (this.jobs.some((job) => job.stream?.url === stream.url && job.status !== "failed" && job.status !== "completed" && this.ownedBy(job, ownerUserId)))
+      throw new AppError("This source is already in the queue.", "err.sourceQueued");
+    // Another account's finished file refuses only when the asker can see its library anyway;
+    // otherwise the refusal would tell them what someone else downloaded.
+    for (const job of this.jobs) {
+      if (job.stream?.url !== stream.url || job.status !== "completed") continue;
+      const libraryId = jobLibraryId(job);
+      const reachable = this.ownedBy(job, ownerUserId)
+        || (libraryId !== undefined && (this.ownerSeesLibrary?.(ownerUserId ?? this.legacyOwnerId?.(), libraryId) ?? false));
+      if (!reachable) continue;
+      const duplicatePath = this.jobPath(job);
+      if (duplicatePath && await exists(duplicatePath)) throw new AppError("This source is already in the library.", "err.sourceDownloaded");
+    }
     const extension = streamExtension(stream);
     const kind = media?.kind === "episode" ? "series" : "movie";
     const now = new Date().toISOString();
@@ -589,8 +609,8 @@ export class DownloadQueue {
 
   private async addDebrid(title: string, stream: StreamItem, media: MediaInfo | undefined, targetSettings: DownloadTargetSettings, ownerUserId?: string) {
     if (!this.debrid?.configured()) throw new AppError("Set up Real-Debrid in Settings first.", "err.debridNotConfigured");
-    const duplicate = this.jobs.find((job) => this.sameTorrent(job.stream, stream) && job.status !== "failed");
-    if (duplicate && duplicate.status !== "completed") throw new AppError("This torrent is already in the queue.", "err.torrentQueued");
+    if (this.jobs.some((job) => this.sameTorrent(job.stream, stream) && job.status !== "failed" && job.status !== "completed" && this.ownedBy(job, ownerUserId)))
+      throw new AppError("This torrent is already in the queue.", "err.torrentQueued");
     const now = new Date().toISOString();
     const job: DownloadJob = {
       id: crypto.randomUUID(), ownerUserId, title, stream, media, status: "waiting", target: "", received: 0, speed: 0,
@@ -615,7 +635,7 @@ export class DownloadQueue {
 
   /** A lazy job: both target and source are filled in when the download starts. A duplicate episode is not added. */
   async addPending(title: string, source: { type: string; videoId: string; selection?: DownloadSelection }, media?: MediaInfo, ownerUserId?: string) {
-    if (this.jobs.some((job) => job.source?.videoId === source.videoId && job.status !== "completed" && job.status !== "failed")) return undefined;
+    if (this.jobs.some((job) => job.source?.videoId === source.videoId && job.source?.type === source.type && job.status !== "completed" && job.status !== "failed" && this.ownedBy(job, ownerUserId))) return undefined;
     const now = new Date().toISOString();
     const job: DownloadJob = { id: crypto.randomUUID(), ownerUserId, title, media, source: { ...source, tried: [] }, status: "queued", target: "", received: 0, speed: 0, createdAt: now, updatedAt: now };
     this.jobs.push(job); await this.save(); this.pump(); return this.publicJob(job);

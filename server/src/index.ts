@@ -157,6 +157,11 @@ const queue = new DownloadQueue(() => store.settings().concurrentDownloads, () =
   defaultLibrary: downloadDefaultLibrary,
   legacyOwnerId: migratedAdminId,
   ownerAllowed: ownerMayUseQueue,
+  ownerSeesLibrary: (ownerUserId, libraryId) => {
+    const owner = ownerUserId ? findUserById(store.users(), ownerUserId) : undefined;
+    const library = store.libraries().find((item) => item.id === libraryId);
+    return Boolean(owner && !owner.disabled && library && libraryVisible(library, { id: owner.id, role: owner.role }));
+  },
   // A job paused for a library asks whether it is back; the probe is refreshed first so a
   // disk that was plugged in is seen within the queue's own retry, not the cache's.
   libraryState: async (libraryId) => { await refreshLibraryHealth(); return libraryFor(store.libraries(), libraryId); },
