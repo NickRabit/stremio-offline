@@ -209,7 +209,7 @@ export const en = {
   "player.hideSubtitles": "Hide subtitles",
   "player.showSubtitlesKey": "Show subtitles (C)",
   "player.hideSubtitlesKey": "Hide subtitles (C)",
-  "player.stretchPicture": "Stretch picture",
+  "player.fillScreen": "Fill screen",
   "player.fullscreenUnavailable": "Fullscreen is unavailable. Try again once the video is playing.",
   "player.fullscreen": "Fullscreen",
   "player.exitFullscreen": "Leave fullscreen",

@@ -46,7 +46,7 @@ test("player keeps its picture stable and its overlay controls reachable", async
   const fullscreenButton = await overlay.locator(".fullscreen-action").count() ? await overlay.locator(".fullscreen-action").boundingBox() : null;
   if (fullscreenButton) expect(fullscreenButton.x - settingsButton!.x - settingsButton!.width).toBeLessThanOrEqual(8);
   const viewItems = await overlay.locator(".player-view-controls button").all();
-  expect(await viewItems[0].getAttribute("aria-label")).toBe("Roztáhnout obraz");
+  expect(await viewItems[0].getAttribute("aria-label")).toBe("Vyplnit obrazovku");
   expect(await viewItems[1].getAttribute("aria-label")).toBe("Nastavení přehrávání");
   const viewBoxes = await Promise.all(viewItems.map((button) => button.boundingBox()));
   expect(viewBoxes.map((box) => box!.x)).toEqual(viewBoxes.map((box) => box!.x).sort((a, b) => a - b));
@@ -69,7 +69,7 @@ test("player keeps its picture stable and its overlay controls reachable", async
   await expect(overlay).toHaveCount(0);
 });
 
-test("stretch toggle is presentation-only, reversible and resets when the player closes", async ({ page, request }) => {
+test("fill-screen toggle is presentation-only, reversible and resets when the player closes", async ({ page, request }) => {
   await request.get(new URL("/proxy-control?mode=browser", addonManifest).href);
   await page.goto("/");
   await page.getByRole("button", { name: "Katalog", exact: true }).click();
@@ -89,11 +89,11 @@ test("stretch toggle is presentation-only, reversible and resets when the player
   await video.evaluate((element: HTMLVideoElement) => { element.loop = true; });
   await overlay.dispatchEvent("pointermove");
 
-  const stretch = overlay.getByRole("button", { name: "Roztáhnout obraz", exact: true });
+  const fillScreen = overlay.getByRole("button", { name: "Vyplnit obrazovku", exact: true });
   await expect(video).toHaveCSS("object-fit", "contain");
-  await expect(stretch).toHaveAttribute("aria-pressed", "false");
+  await expect(fillScreen).toHaveAttribute("aria-pressed", "false");
 
-  // Subtitles sit on their own layer and must not move when the picture stretches.
+  // Subtitles sit on their own layer and must not move when the picture zooms.
   await video.evaluate((element: HTMLVideoElement) => {
     const track = element.addTextTrack("subtitles", "Layout", "cs");
     track.addCue(new VTTCue(0, 3600, "First subtitle line\nSecond subtitle line"));
@@ -103,33 +103,35 @@ test("stretch toggle is presentation-only, reversible and resets when the player
   await expect(cues).toBeVisible();
   const cueBox = await cues.boundingBox();
 
-  await video.evaluate((element: HTMLVideoElement) => { element.dataset.stretchMarker = "kept"; });
+  await video.evaluate((element: HTMLVideoElement) => { element.dataset.fillMarker = "kept"; });
   const requestsBefore = [...playbackRequests];
   const playingBefore = await video.evaluate((element: HTMLVideoElement) => element.currentTime);
-  await stretch.click();
-  await expect(video).toHaveCSS("object-fit", "fill");
-  await expect(stretch).toHaveAttribute("aria-pressed", "true");
+  await fillScreen.click();
+  await expect(video).toHaveCSS("object-fit", "cover");
+  await expect(video).toHaveCSS("object-position", "50% 50%");
+  await expect(overlay.locator(".player-host")).toHaveCSS("overflow", "hidden");
+  await expect(fillScreen).toHaveAttribute("aria-pressed", "true");
   // The toggle only restyles the picture: the same media element keeps playing.
-  expect(await video.evaluate((element: HTMLVideoElement) => element.dataset.stretchMarker)).toBe("kept");
+  expect(await video.evaluate((element: HTMLVideoElement) => element.dataset.fillMarker)).toBe("kept");
   await expect.poll(() => video.evaluate((element: HTMLVideoElement) => element.currentTime)).toBeGreaterThan(playingBefore);
   await expect(cues).toBeVisible();
   await overlay.dispatchEvent("pointermove");
   await expect(overlay).not.toHaveClass(/controls-hidden/);
   expect(await cues.boundingBox()).toEqual(cueBox);
 
-  await stretch.click();
+  await fillScreen.click();
   await expect(video).toHaveCSS("object-fit", "contain");
-  await expect(stretch).toHaveAttribute("aria-pressed", "false");
+  await expect(fillScreen).toHaveAttribute("aria-pressed", "false");
   expect(playbackRequests).toEqual(requestsBefore);
 
-  await stretch.click();
-  await expect(stretch).toHaveAttribute("aria-pressed", "true");
+  await fillScreen.click();
+  await expect(fillScreen).toHaveAttribute("aria-pressed", "true");
   await overlay.getByRole("button", { name: "Zavřít přehrávač", exact: true }).click();
   await expect(overlay).toHaveCount(0);
   await play.click();
   await expect(overlay.locator("video")).toHaveCSS("object-fit", "contain");
   await overlay.dispatchEvent("pointermove");
-  await expect(overlay.getByRole("button", { name: "Roztáhnout obraz", exact: true })).toHaveAttribute("aria-pressed", "false");
+  await expect(overlay.getByRole("button", { name: "Vyplnit obrazovku", exact: true })).toHaveAttribute("aria-pressed", "false");
   await overlay.getByRole("button", { name: "Zavřít přehrávač", exact: true }).click();
 });
 

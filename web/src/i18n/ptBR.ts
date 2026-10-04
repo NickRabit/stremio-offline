@@ -191,7 +191,7 @@ export const ptBR: Catalog = {
   "player.hideSubtitles": "Ocultar legendas",
   "player.showSubtitlesKey": "Mostrar legendas (C)",
   "player.hideSubtitlesKey": "Ocultar legendas (C)",
-  "player.stretchPicture": "Esticar imagem",
+  "player.fillScreen": "Preencher tela",
   "player.fullscreenUnavailable": "Tela cheia não está disponível. Tente novamente quando o vídeo estiver sendo reproduzido.",
   "player.fullscreen": "Tela cheia",
   "player.exitFullscreen": "Sair da tela cheia",
