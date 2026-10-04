@@ -24,9 +24,13 @@ export interface MediaInfo {
   audio?: { codec: string; channels?: number };
   audioTracks: Track[];
   subtitleTracks: Track[];
+  /** An HLS master offers the same film several times over; these are the absolute stream
+   *  indexes of the one rendition the conversion reads. */
+  variant?: { video: number; audio?: number };
 }
 
 interface ProbeStream {
+  index?: number;
   codec_type?: string;
   codec_name?: string;
   profile?: string;
@@ -37,6 +41,19 @@ interface ProbeStream {
   disposition?: Record<string, number>;
   tags?: Record<string, string>;
   side_data_list?: Array<Record<string, unknown>>;
+}
+
+/** FFmpeg lists every rendition of an HLS master as its own program, the smallest first, so the
+ *  first video stream is the 144p one. The tallest is taken; a lower quality is still the
+ *  viewer's choice in the player. */
+export function pickVariant(streams: ProbeStream[]): { video: ProbeStream; audio?: ProbeStream } | undefined {
+  const videos = streams.filter((item) => item.codec_type === "video" && item.tags?.variant_bitrate !== undefined && item.index !== undefined);
+  if (videos.length < 2) return undefined;
+  const bitrate = (item: ProbeStream) => Number(item.tags?.variant_bitrate) || 0;
+  const height = (item: ProbeStream) => item.height ?? 0;
+  const video = videos.reduce((best, item) => height(item) > height(best) || (height(item) === height(best) && bitrate(item) > bitrate(best)) ? item : best);
+  const audio = streams.find((item) => item.codec_type === "audio" && item.tags?.variant_bitrate === video.tags?.variant_bitrate);
+  return { video, audio };
 }
 
 // The browser cannot show image subtitles and they cannot be converted to WebVTT.
@@ -133,11 +150,13 @@ async function inspect(input: string, limits: string[], timeout: number, stage: 
     ], { timeout, maxBuffer: 8 * 1024 * 1024 });
     const data = JSON.parse(stdout) as { format?: { format_name?: string; duration?: string }; streams?: ProbeStream[] };
     const streams = data.streams ?? [];
-    const video = streams.find((item) => item.codec_type === "video" && !item.disposition?.attached_pic);
-    const audioTracks = streams.filter((item) => item.codec_type === "audio").map(toTrack);
+    const variant = pickVariant(streams);
+    const video = variant?.video ?? streams.find((item) => item.codec_type === "video" && !item.disposition?.attached_pic);
+    // One rendition's audio, not six copies of the same track in the picker.
+    const audioTracks = variant ? (variant.audio ? [toTrack(variant.audio, 0)] : []) : streams.filter((item) => item.codec_type === "audio").map(toTrack);
     const subtitleTracks = streams.filter((item) => item.codec_type === "subtitle").map(toTrack)
       .filter((track) => !BITMAP_SUBTITLES.has(track.codec));
-    const audio = streams.find((item) => item.codec_type === "audio");
+    const audio = variant ? variant.audio : streams.find((item) => item.codec_type === "audio");
     const duration = Number(data.format?.duration);
     return {
       unreachable: false,
@@ -154,6 +173,7 @@ async function inspect(input: string, limits: string[], timeout: number, stage: 
         } : undefined,
         audio: audio?.codec_name ? { codec: audio.codec_name, channels: audio.channels } : undefined,
         audioTracks, subtitleTracks,
+        variant: variant ? { video: variant.video.index!, audio: variant.audio?.index } : undefined,
       },
     };
   } catch (error) {

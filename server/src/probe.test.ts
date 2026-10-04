@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { hasDolbyVisionEnhancementLayer, looksUnreachable, playlistArgsFrom } from "./probe.js";
+import { hasDolbyVisionEnhancementLayer, looksUnreachable, pickVariant, playlistArgsFrom } from "./probe.js";
 
 test("the picky segment options are passed only to a build that has them", () => {
   assert.deepEqual(
@@ -39,4 +39,18 @@ test("Dolby Vision enhancement layer is recognised from ffprobe side data", () =
     side_data_list: [{ side_data_type: "DOVI configuration record", el_present_flag: 0 }],
   }), false);
   assert.equal(hasDolbyVisionEnhancementLayer({ side_data_list: [] }), false);
+});
+
+test("an HLS master is read as one rendition: the tallest, with its own audio", () => {
+  const rendition = (index: number, height: number, bitrate: number) => [
+    { index, codec_type: "video", codec_name: "h264", height, tags: { variant_bitrate: String(bitrate) } },
+    { index: index + 1, codec_type: "audio", codec_name: "aac", tags: { variant_bitrate: String(bitrate) } },
+    { index: index + 2, codec_type: "data", tags: { variant_bitrate: String(bitrate) } },
+  ];
+  const ladder = [...rendition(0, 144, 105384), ...rendition(3, 720, 819686), ...rendition(6, 1080, 2151645), ...rendition(9, 2160, 11504545)];
+  const picked = pickVariant(ladder);
+  assert.equal(picked?.video.index, 9, "the 4K, not the 144p FFmpeg lists first");
+  assert.equal(picked?.audio?.index, 10, "the audio of that same rendition");
+  assert.equal(pickVariant(rendition(0, 720, 1)), undefined, "a single rendition needs no choosing");
+  assert.equal(pickVariant([{ index: 0, codec_type: "video", height: 1080 }, { index: 1, codec_type: "video", height: 720 }]), undefined, "a file, not a playlist");
 });
