@@ -5,7 +5,7 @@ import path from "node:path";
 import { test } from "node:test";
 import type { DownloadSelection } from "./downloads.js";
 import type { AppError } from "./errors.js";
-import { activityItems, calendarItems, downloadEligibility, FollowService, FollowStore, followStaggerMs, normalizeFollowEpisodes, reconcileReleaseDates, seasonsForReconcile, undatedCalendarItems, type EpisodeDownload, type Follow, type FollowAutoDownload, type FollowDeps, type FollowEpisode, type FollowJob, type FollowQueue } from "./follows.js";
+import { activityItems, calendarItems, downloadEligibility, FollowService, FollowStore, followStaggerMs, movieEpisode, normalizeFollowEpisodes, reconcileReleaseDates, seasonsForReconcile, undatedCalendarItems, type EpisodeDownload, type Follow, type FollowAutoDownload, type FollowDeps, type FollowEpisode, type FollowJob, type FollowQueue } from "./follows.js";
 import type { MediaInfo } from "./naming.js";
 import type { MetaItem } from "./types.js";
 
@@ -1028,4 +1028,56 @@ test("activityItems keeps only episodes with a download, newest first and capped
     ["f1", 1, "completed"], ["f2", 1, "waiting"], ["f1", 2, "queued"],
   ]);
   assert.deepEqual(activityItems([first, second], 2).map((item) => item.followId), ["f1", "f2"]);
+});
+
+const FILM_NOW = Date.parse("2026-10-04T12:00:00Z");
+const film = { id: "tt9", type: "movie", name: "Film" } as MetaItem;
+
+test("a film's date is its digital release, else the disc, never the premiere", () => {
+  const digital = movieEpisode(film, "tt9", { theatrical: "2026-07-01", digital: "2026-09-10", physical: "2026-10-20" }, FILM_NOW);
+  assert.equal(digital.released, "2026-09-10T23:59:59.999Z");
+  assert.equal(digital.releaseKind, "digital");
+  assert.equal(digital.key, "1:1");
+  assert.equal(digital.videoId, "tt9");
+  const disc = movieEpisode(film, "tt9", { theatrical: "2026-07-01", physical: "2026-10-20" }, FILM_NOW);
+  assert.equal(disc.releaseKind, "physical");
+  const cinema = movieEpisode(film, "tt9", { theatrical: "2026-09-25" }, FILM_NOW);
+  assert.equal(cinema.released, undefined, "a film only in cinemas has no download date yet");
+  assert.equal(cinema.dateUncertain, true);
+  assert.equal(cinema.theatricalAt, "2026-09-25T23:59:59.999Z");
+});
+
+test("without TMDB a film keeps the catalogue date, doubted while it is recent", () => {
+  const recent = movieEpisode({ ...film, released: "2026-09-01T00:00:00.000Z" } as MetaItem, "tt9", null, FILM_NOW);
+  assert.equal(recent.releaseKind, "catalog");
+  assert.equal(recent.dateUncertain, true);
+  const old = movieEpisode({ ...film, released: "2020-01-01T00:00:00.000Z" } as MetaItem, "tt9", null, FILM_NOW);
+  assert.equal(old.dateUncertain, undefined);
+  const none = movieEpisode(film, "tt9", null, FILM_NOW);
+  assert.equal(none.released, undefined);
+  assert.equal(none.dateUncertain, true);
+});
+
+test("a followed film is downloaded once when it comes out, whatever the start rule", async (t) => {
+  const { store } = await withStore(t);
+  const q = fakeQueue();
+  let now = FILM_NOW;
+  const service = buildService(store, q, { now: () => now });
+  const follow = await store.create({ ownerUserId: "u1", type: "movie", metaId: "tt9", name: "Film" }, 0);
+  const upcoming = { ...movieEpisode(film, "tt9", { digital: "2026-10-10" }, now), firstSeenAt: new Date(0).toISOString() };
+  await store.recordCheck(follow.id, { episodes: [upcoming], now: 0 });
+  // Switched on long after following, with the series default of "new episodes only".
+  await store.update(follow.id, (current) => { current.autoDownload = rule({ enabledAt: new Date(now).toISOString() }); });
+  assert.equal(downloadEligibility(store.get(follow.id)!, store.get(follow.id)!.episodes["1:1"], now), "upcoming");
+  await service.admit(follow.id);
+  assert.equal(q.added.length, 0, "not before its digital release");
+
+  now = Date.parse("2026-10-11T12:00:00Z");
+  await service.admit(follow.id);
+  assert.equal(q.added.length, 1);
+  assert.deepEqual(q.added[0].source.type, "movie");
+  assert.equal(q.added[0].source.videoId, "tt9");
+  assert.equal(q.added[0].title, "Film");
+  await service.admit(follow.id);
+  assert.equal(q.added.length, 1, "exactly one download");
 });

@@ -45,6 +45,7 @@ interface FollowView {
   latestEpisode?: FollowEpisodeView;
   autoDownload?: FollowAutoDownload;
   downloads: FollowDownloads;
+  movie?: { released?: string; releaseKind?: FollowEpisode["releaseKind"]; theatricalAt?: string; dateUncertain?: boolean; state?: string; reasonKey?: string; nextAttemptAt?: string };
 }
 
 const episodeView = (episode: FollowEpisode): FollowEpisodeView => ({
@@ -98,18 +99,30 @@ const followView = (follow: Follow, now: number): FollowView => {
     downloads: downloadsSummary(follow),
     ...(next ? { nextEpisode: episodeView(next) } : {}),
     ...(latest ? { latestEpisode: episodeView(latest) } : {}),
+    // A film is one record; the dialog and the card read its release and download from here.
+    ...(follow.type === "movie" && follow.episodes["1:1"] ? { movie: movieView(follow.episodes["1:1"]) } : {}),
   };
 };
+
+const movieView = (episode: FollowEpisode) => ({
+  ...(episode.released ? { released: episode.released } : {}),
+  ...(episode.releaseKind ? { releaseKind: episode.releaseKind } : {}),
+  ...(episode.theatricalAt ? { theatricalAt: episode.theatricalAt } : {}),
+  ...(episode.dateUncertain ? { dateUncertain: true } : {}),
+  ...(episode.download ? { state: episode.download.state, ...(episode.download.reasonKey ? { reasonKey: episode.download.reasonKey } : {}), ...(episode.download.nextAttemptAt ? { nextAttemptAt: episode.download.nextAttemptAt } : {}) } : {}),
+});
 
 /** The pinned destination a follow stores. An explicit choice is already concrete; a rule
  *  that names no library is resolved to the queue's own default series library, and a rule
  *  naming one that is gone falls back the same way. No library taking series is refused. */
-const pinnedTarget = (selection: DownloadSelection, libraries: LibraryRecord[], settings: DefaultLibrarySettings): DownloadTargetSettings => {
+const pinnedTarget = (selection: DownloadSelection, libraries: LibraryRecord[], settings: DefaultLibrarySettings, kind: "movie" | "series"): DownloadTargetSettings => {
   const rule = selection.targetSettings;
   if (rule.explicit) return rule;
   const named = rule.libraryId ? libraries.find((library) => library.id === rule.libraryId) : undefined;
-  const library = named ?? defaultLibrary(libraries, settings, "episode");
-  if (!library) throw new AppError("No library takes series.", "err.noLibraryForSeries");
+  const library = named ?? defaultLibrary(libraries, settings, kind === "movie" ? "movie" : "episode");
+  if (!library) throw kind === "movie"
+    ? new AppError("No library takes films.", "err.noLibraryForMovies")
+    : new AppError("No library takes series.", "err.noLibraryForSeries");
   return { libraryId: library.id, subfolder: rule.subfolder, layout: rule.layout, explicit: true };
 };
 
@@ -191,7 +204,7 @@ export function registerFollowRoutes(app: express.Application, deps: FollowDeps)
     const type = String(req.body?.type ?? "").trim();
     const metaId = String(req.body?.id ?? "").trim();
     const name = String(req.body?.name ?? "").trim();
-    if (!type || !metaId || !name) throw new AppError("The followed series is missing a type, an id or a name.", "err.followInvalid");
+    if (!type || !metaId || !name || (type !== "series" && type !== "movie")) throw new AppError("The followed series is missing a type, an id or a name.", "err.followInvalid");
     const follow = await followStore.create({ ownerUserId: owner.id, type, metaId, name, poster: posterOf(req.body?.poster) }, Date.now());
     // The first check runs now rather than at the next tick, so the episodes are known
     // while the person who just followed is still looking.
@@ -209,11 +222,12 @@ export function registerFollowRoutes(app: express.Application, deps: FollowDeps)
         await follows.setAutoDownload(follow.id, owner.id, null);
       } else {
         const item = typeof raw === "object" && raw ? raw as Record<string, unknown> : {};
-        const startMode = item.startMode === "from" ? "from" : item.startMode === "new" ? "new" : undefined;
+        // A film has no episodes to start from; it downloads whenever it comes out.
+        const startMode = follow.type === "movie" ? "new" : item.startMode === "from" ? "from" : item.startMode === "new" ? "new" : undefined;
         if (!startMode) throw new AppError("The followed series is missing a type, an id or a name.", "err.followInvalid");
         let startSeason: number | undefined;
         let startEpisode: number | undefined;
-        if (startMode === "from") {
+        if (startMode === "from" && follow.type !== "movie") {
           startSeason = Number(item.startSeason);
           startEpisode = Number(item.startEpisode);
           if (!Number.isInteger(startSeason) || startSeason < 1 || !Number.isInteger(startEpisode) || startEpisode < 1) {
@@ -221,7 +235,7 @@ export function registerFollowRoutes(app: express.Application, deps: FollowDeps)
           }
         }
         const selection = await parseSelection(req, { selection: item.selection, target: item.target, metaType: follow.type, parentId: follow.metaId });
-        const targetSettings = pinnedTarget(selection, store.libraries(), store.settings());
+        const targetSettings = pinnedTarget(selection, store.libraries(), store.settings(), follow.type === "movie" ? "movie" : "series");
         const value: Omit<FollowAutoDownload, "enabledAt" | "blockedKey"> = {
           startMode,
           ...(startSeason != null ? { startSeason } : {}),

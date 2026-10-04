@@ -82,7 +82,9 @@ export function createSelectionParser(deps: SelectionDeps): (req: express.Reques
     // The rights are asked before the body is read, so an account that may not queue is
     // refused with 403 rather than a body-validation error it could never satisfy.
     assertMayQueue(req);
-    const explicit = await explicitTarget(req, input.target, "series");
+    // A followed film is saved by the film rules; everything else this parses is a series.
+    const kind = input.metaType === "movie" ? "movie" : "series";
+    const explicit = await explicitTarget(req, input.target, kind);
     const rawSelection = input.selection && typeof input.selection === "object" ? input.selection as Record<string, unknown> : {};
     // The caller's own addons, so a disallowed key cannot be smuggled in by naming it here.
     const usable = allowedAddons(store.addons(), viewerOf(currentUser(req)));
@@ -110,7 +112,7 @@ export function createSelectionParser(deps: SelectionDeps): (req: express.Reques
       titleLanguage: metaLanguage,
       subtitleMode, subtitleLanguage,
       fallbackSubtitleLanguage: fallbackSubtitleLanguage === subtitleLanguage ? undefined : fallbackSubtitleLanguage,
-      targetSettings: explicit ?? (firstAddon?.downloadSettings.series ?? defaultDownloadSettings().series),
+      targetSettings: explicit ?? (firstAddon?.downloadSettings[kind] ?? defaultDownloadSettings()[kind]),
     };
     assertMayQueue(req, { libraryId: selection.targetSettings.libraryId });
     return selection;

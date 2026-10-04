@@ -21,6 +21,10 @@ export interface FollowEpisode {
   releasedSource?: "addon" | "tmdb";
   /** The date is not trustworthy: a placeholder, or a season-wide shared date with no TMDB answer. */
   dateUncertain?: boolean;
+  /** A film's single record: which kind of release `released` is, and the cinema date shown
+   *  while the digital one is not announced. */
+  releaseKind?: "digital" | "physical" | "theatrical" | "catalog";
+  theatricalAt?: string;
   firstSeenAt: string;
   ambiguous?: boolean;
   download?: EpisodeDownload;
@@ -274,9 +278,36 @@ export type DownloadEligibility = "eligible" | "upcoming" | "outside" | "attenti
 
 /** Whether one episode of a followed series should be queued automatically, as the current
  *  clock and the follow's rule see it. Pure, so the setup dialog and the admission agree. */
+export interface MovieReleases { theatrical?: string; digital?: string; physical?: string }
+
+const MOVIE_CATALOG_DOUBT_MS = 120 * DAY_MS;
+
+/** A film as the one record the follow machinery tracks. Its date is when it can be
+ *  downloaded -- the digital release, else the disc -- because a premiere says nothing about
+ *  sources. A film only in cinemas waits undated; without TMDB the catalogue's date stands,
+ *  doubted while it is recent, since for a new film it is usually the premiere. */
+export function movieEpisode(meta: MetaItem, metaId: string, releases: MovieReleases | null, now: number): Omit<FollowEpisode, "firstSeenAt"> {
+  const base = { key: "1:1", videoId: metaId, season: 1, episode: 1, ...(text(meta.name) ? { title: text(meta.name)! } : {}) };
+  const digital = releasedAt(releases?.digital);
+  if (digital) return { ...base, released: digital, releasedSource: "tmdb", releaseKind: "digital" };
+  const physical = releasedAt(releases?.physical);
+  if (physical) return { ...base, released: physical, releasedSource: "tmdb", releaseKind: "physical" };
+  const theatrical = releasedAt(releases?.theatrical);
+  if (theatrical) return { ...base, dateUncertain: true, releaseKind: "theatrical", theatricalAt: theatrical };
+  const catalog = releasedAt((meta as { released?: unknown }).released);
+  if (!catalog) return { ...base, dateUncertain: true };
+  const doubtful = Date.parse(catalog) > now - MOVIE_CATALOG_DOUBT_MS;
+  return { ...base, released: catalog, releasedSource: "addon", releaseKind: "catalog", ...(doubtful ? { dateUncertain: true } : {}) };
+}
+
 export function downloadEligibility(follow: Follow, episode: FollowEpisode, now: number): DownloadEligibility {
   const auto = follow.autoDownload;
   if (!auto) return "outside";
+  // A film is one download whenever it comes out; the start rule is about a series' episodes.
+  if (follow.type === "movie") {
+    if (!episode.released) return episode.dateUncertain ? "upcoming" : "attention-no-date";
+    return Date.parse(episode.released) > now ? "upcoming" : "eligible";
+  }
   if (auto.startMode === "from") {
     const startSeason = auto.startSeason ?? 1;
     const startEpisode = auto.startEpisode ?? 1;
@@ -640,6 +671,8 @@ export class FollowStore {
         if (episode.released === undefined) delete merged.released;
         if (episode.releasedSource === undefined) delete merged.releasedSource;
         if (episode.dateUncertain === undefined) delete merged.dateUncertain;
+        if (episode.releaseKind === undefined) delete merged.releaseKind;
+        if (episode.theatricalAt === undefined) delete merged.theatricalAt;
         if (!episode.ambiguous) delete merged.ambiguous;
         follow.episodes[episode.key] = merged;
       }
@@ -709,6 +742,8 @@ export interface FollowDeps {
   /** Per-episode TMDB air dates for the seasons worth checking, keyed `${season}:${episode}`.
    *  Undefined when TMDB is not configured or does not know the series. */
   airDates?: (type: string, metaId: string, seasons: number[], owner: Viewer) => Promise<Map<string, string | null> | undefined>;
+  /** A film's release dates by kind, from TMDB; undefined when no key is set. */
+  movieReleases?: (metaId: string, owner: Viewer) => Promise<MovieReleases | null>;
   /** The download queue the followed series queue into. */
   queue: FollowQueue;
   /** The owner may queue into this selection's library right now. */
@@ -891,10 +926,14 @@ export class FollowService {
   }
 
   private jobTitle(follow: Follow, episode: FollowEpisode): string {
+    if (follow.type === "movie") return follow.name;
     return `${follow.name} · S${pad2(episode.season)}E${pad2(episode.episode)}`;
   }
 
   private episodeMedia(follow: Follow, episode: FollowEpisode): MediaInfo {
+    if (follow.type === "movie") {
+      return { kind: "movie", title: follow.name, id: follow.metaId, metaType: "movie", ...(follow.poster ? { poster: follow.poster } : {}) };
+    }
     return {
       kind: "episode", title: follow.name, season: episode.season, episode: episode.episode,
       ...(episode.title ? { episodeTitle: episode.title } : {}),
@@ -1249,16 +1288,25 @@ export class FollowService {
       if (!meta) throw new Error("no metadata");
       const now = this.deps.now();
       const at = new Date(now).toISOString();
-      const episodes: FollowEpisode[] = normalizeFollowEpisodes(meta).map((episode) => ({ ...episode, firstSeenAt: at }));
-      let tmdb: Map<string, string | null> | undefined;
-      if (this.deps.airDates) {
-        const seasons = seasonsForReconcile(episodes, this.deps.store.get(followId)?.episodes, now);
-        if (seasons.length) {
-          try { tmdb = await this.deps.airDates(follow.type, follow.metaId, seasons, { id: owner.id, role: owner.role }); }
-          catch (error) { log("WARN", "TMDB air dates could not be read", { follow: followId, error: error instanceof Error ? error.message : String(error) }); }
+      if (follow.type === "movie") {
+        let releases: MovieReleases | null = null;
+        if (this.deps.movieReleases) {
+          try { releases = await this.deps.movieReleases(follow.metaId, { id: owner.id, role: owner.role }); }
+          catch (error) { log("WARN", "TMDB release dates could not be read", { follow: followId, error: error instanceof Error ? error.message : String(error) }); }
         }
+        result = { episodes: [{ ...movieEpisode(meta, follow.metaId, releases, now), firstSeenAt: at }], now };
+      } else {
+        const episodes: FollowEpisode[] = normalizeFollowEpisodes(meta).map((episode) => ({ ...episode, firstSeenAt: at }));
+        let tmdb: Map<string, string | null> | undefined;
+        if (this.deps.airDates) {
+          const seasons = seasonsForReconcile(episodes, this.deps.store.get(followId)?.episodes, now);
+          if (seasons.length) {
+            try { tmdb = await this.deps.airDates(follow.type, follow.metaId, seasons, { id: owner.id, role: owner.role }); }
+            catch (error) { log("WARN", "TMDB air dates could not be read", { follow: followId, error: error instanceof Error ? error.message : String(error) }); }
+          }
+        }
+        result = { episodes: reconcileReleaseDates(episodes, tmdb, now), now };
       }
-      result = { episodes: reconcileReleaseDates(episodes, tmdb, now), now };
     } catch {
       result = { errorKey: "err.followMetaUnavailable", now: this.deps.now() };
       log("WARN", "A followed series could not be checked", { follow: followId, reason });

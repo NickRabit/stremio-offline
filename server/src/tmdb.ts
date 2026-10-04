@@ -50,7 +50,7 @@ interface SeasonCacheEntry { at: number; episodes: Map<string, string | null> }
 const seasonCache = new Map<string, SeasonCacheEntry>();
 
 /** Test seam only: forgets the imdb -> tmdb id map and the cached season air dates. */
-export function clearTmdbCache(): void { idCache.clear(); seasonCache.clear(); }
+export function clearTmdbCache(): void { movieReleaseCache.clear(); idCache.clear(); seasonCache.clear(); }
 
 /** A refused title search turns into a wait rather than a retry per title: the scan
  *  asks about hundreds of them, and a 429 answered hundreds of times is what got it
@@ -320,6 +320,51 @@ export async function tmdbSeasonAirDates(
     for (const [episodeKey, airDate] of episodes) out.set(episodeKey, airDate);
   }));
   return out;
+}
+
+interface TmdbReleaseDates { results?: Array<{ iso_3166_1?: string; release_dates?: Array<{ type?: number; release_date?: string }> }> }
+export interface TmdbMovieReleases { theatrical?: string; digital?: string; physical?: string }
+const movieReleaseCache = new Map<number, { at: number; releases: TmdbMovieReleases }>();
+
+/** A film's earliest release of each kind across every country, as `YYYY-MM-DD`. Sources
+ *  follow the first digital release anywhere, so no region is preferred. TMDB types: 1-3 are
+ *  premieres and cinemas, 4 digital, 5 physical. Null when TMDB cannot answer. */
+export async function tmdbMovieReleases(movieId: string, config: TmdbConfig, fetchImpl: FetchLike = guardedFetch): Promise<TmdbMovieReleases | null> {
+  const tmdbId = await resolveId("movie", movieId, config, fetchImpl);
+  if (tmdbId == null) return null;
+  const cached = movieReleaseCache.get(tmdbId);
+  if (cached && Date.now() - cached.at < SEASON_CACHE_TTL_MS) return cached.releases;
+  let response: Response;
+  try {
+    response = await request(`/movie/${tmdbId}/release_dates`, { api_key: config.apiKey }, fetchImpl);
+  } catch (error) {
+    log("WARN", "TMDB release dates lookup failed", { operation: "release_dates", id: movieId, reason: reasonOf(error, config.apiKey) });
+    return null;
+  }
+  if (!response.ok) {
+    log("WARN", "TMDB release dates lookup failed", { operation: "release_dates", id: movieId, status: response.status });
+    return null;
+  }
+  let body: TmdbReleaseDates;
+  try { body = await response.json() as TmdbReleaseDates; }
+  catch (error) {
+    log("WARN", "TMDB answered with malformed JSON", { operation: "release_dates", id: movieId, reason: reasonOf(error, config.apiKey) });
+    return null;
+  }
+  const releases: TmdbMovieReleases = {};
+  const keep = (kind: keyof TmdbMovieReleases, value: string) => { if (!releases[kind] || value < releases[kind]!) releases[kind] = value; };
+  for (const country of body.results ?? []) {
+    for (const row of country.release_dates ?? []) {
+      const day = typeof row.release_date === "string" ? row.release_date.slice(0, 10) : "";
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) continue;
+      if (row.type === 4) keep("digital", day);
+      else if (row.type === 5) keep("physical", day);
+      else if (row.type === 1 || row.type === 2 || row.type === 3) keep("theatrical", day);
+    }
+  }
+  if (movieReleaseCache.size > SEASON_CACHE_LIMIT) movieReleaseCache.clear();
+  movieReleaseCache.set(tmdbId, { at: Date.now(), releases });
+  return releases;
 }
 
 interface TmdbDetail {

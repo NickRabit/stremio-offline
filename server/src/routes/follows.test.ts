@@ -371,3 +371,14 @@ test("another account never sees A's calendar or activity", async () => {
     assert.deepEqual(theirActivity.items, []);
   } finally { await h.close(); }
 });
+
+test("only a series or a film can be followed", async () => {
+  const h = await mount();
+  try {
+    const film = await api(h.base, "/api/follows", { method: "POST", as: "A", body: { type: "movie", id: "tt9", name: "Film" } });
+    assert.equal(film.status, 201);
+    const other = await api(h.base, "/api/follows", { method: "POST", as: "A", body: { type: "channel", id: "c1", name: "Channel" } });
+    assert.equal(other.status, 400);
+    assert.equal(await keyOf(other), "err.followInvalid");
+  } finally { await h.close(); }
+});
