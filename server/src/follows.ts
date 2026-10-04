@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { DownloadSelection } from "./downloads.js";
 import { AppError } from "./errors.js";
 import { renameWithRetry } from "./fs-retry.js";
 import type { Viewer } from "./libraries.js";
 import { log } from "./logger.js";
+import type { MediaInfo } from "./naming.js";
 import type { MetaItem } from "./types.js";
 
 export interface FollowEpisode {
@@ -16,6 +18,34 @@ export interface FollowEpisode {
   released?: string;
   firstSeenAt: string;
   ambiguous?: boolean;
+  download?: EpisodeDownload;
+}
+
+export interface FollowAutoDownload {
+  /** Set when automatic downloads were switched on, kept when the rule is edited. */
+  enabledAt: string;
+  startMode: "new" | "from";
+  startSeason?: number;
+  startEpisode?: number;
+  selection: DownloadSelection;
+  /** The catalogue key of the reason nothing is admitted, while the owner may not download. */
+  blockedKey?: string;
+}
+
+export type EpisodeDownloadState = "reserved" | "queued" | "waiting" | "completed" | "skipped" | "attention";
+
+export interface EpisodeDownload {
+  state: EpisodeDownloadState;
+  /** `${followId}:${episodeKey}:${generation}`, matched against the queue across restarts. */
+  intent: string;
+  /** Starts at 1, bumped on every explicit retry of a finished state. */
+  generation: number;
+  jobId?: string;
+  attempts: number;
+  /** ISO UTC, only meaningful in `waiting`. */
+  nextAttemptAt?: string;
+  reasonKey?: string;
+  updatedAt: string;
 }
 
 export interface Follow {
@@ -34,6 +64,7 @@ export interface Follow {
   nextCheckAt: string;
   failures: number;
   lastErrorKey?: string;
+  autoDownload?: FollowAutoDownload;
   episodes: Record<string, FollowEpisode>;
 }
 
@@ -128,6 +159,31 @@ export function followStaggerMs(id: string): number {
 const failureBackoffMs = (failures: number): number =>
   failures <= 1 ? FIRST_FAILURE_MS : failures === 2 ? SECOND_FAILURE_MS : LATER_FAILURE_MS;
 
+export type DownloadEligibility = "eligible" | "upcoming" | "outside" | "attention-no-date" | "attention-ambiguous";
+
+/** Whether one episode of a followed series should be queued automatically, as the current
+ *  clock and the follow's rule see it. Pure, so the setup dialog and the admission agree. */
+export function downloadEligibility(follow: Follow, episode: FollowEpisode, now: number): DownloadEligibility {
+  const auto = follow.autoDownload;
+  if (!auto) return "outside";
+  if (auto.startMode === "from") {
+    const startSeason = auto.startSeason ?? 1;
+    const startEpisode = auto.startEpisode ?? 1;
+    const atOrAfter = episode.season > startSeason || (episode.season === startSeason && episode.episode >= startEpisode);
+    if (!atOrAfter) return "outside";
+  } else {
+    const enabledAt = Date.parse(auto.enabledAt);
+    const released = episode.released ? Date.parse(episode.released) : undefined;
+    const seen = released ?? Date.parse(episode.firstSeenAt);
+    if (!(seen > enabledAt)) return "outside";
+  }
+  if (episode.ambiguous) return "attention-ambiguous";
+  // An unknown date is not proof the episode exists, so it is neither upcoming nor eligible.
+  if (!episode.released) return "attention-no-date";
+  if (Date.parse(episode.released) > now) return "upcoming";
+  return "eligible";
+}
+
 /** The followed series, on disk in `<dataDir>/follows.json`. A file that cannot be read
  *  is left where it is: writing over it would throw away series nobody can follow again. */
 export class FollowStore {
@@ -170,6 +226,11 @@ export class FollowStore {
 
   listForOwner(ownerUserId: string): Follow[] {
     return this.unreadable ? [] : this.follows.filter((follow) => follow.ownerUserId === ownerUserId);
+  }
+
+  /** Every follow, for the reconciliation that counts outstanding episodes across owners. */
+  all(): Follow[] {
+    return this.unreadable ? [] : this.follows.slice();
   }
 
   get(id: string): Follow | undefined {
@@ -287,6 +348,31 @@ export class FollowStore {
   }
 }
 
+/** One job of the queue as the follow service reads it: enough to reconcile an episode
+ *  with what became of its download. */
+export interface FollowJob {
+  id: string;
+  status: string;
+  errorKey?: string;
+  follow?: { followId: string; episodeKey: string; intent: string };
+}
+
+/** The slice of the download queue the follow service drives. */
+export interface FollowQueue {
+  addPending(
+    title: string,
+    source: { type: string; videoId: string; selection?: DownloadSelection },
+    media: MediaInfo | undefined,
+    ownerUserId: string,
+    follow: { followId: string; episodeKey: string; intent: string },
+  ): Promise<{ id: string } | undefined>;
+  findActiveEpisode(ownerUserId: string, type: string, videoId: string): { id: string } | undefined;
+  followJobs(): FollowJob[];
+  get(id: string): { id: string; status: string; errorKey?: string } | undefined;
+  retry(id: string): Promise<unknown>;
+  remove(id: string): Promise<void>;
+}
+
 export interface FollowDeps {
   store: FollowStore;
   now: () => number;
@@ -294,6 +380,10 @@ export interface FollowDeps {
   owner: (userId: string) => { id: string; role: "admin" | "user"; disabled?: boolean } | undefined;
   /** Metadata as the owner may see it, in the owner's language, bypassing the cache. */
   meta: (owner: Viewer, type: string, metaId: string) => Promise<MetaItem | null>;
+  /** The download queue the followed series queue into. */
+  queue: FollowQueue;
+  /** The owner may queue into this selection's library right now. */
+  mayDownload: (ownerUserId: string, selection: DownloadSelection) => boolean;
   tickMs?: number;
   concurrency?: number;
 }
@@ -303,6 +393,17 @@ const FIRST_TICK_MS = 30_000;
 const COOLDOWN_MS = 60_000;
 const NEW_EPISODE_WINDOW_MS = 30 * 24 * 60 * 60_000;
 const MAX_NEW_EPISODES = 50;
+const HOUR_MS = 60 * 60_000;
+/** How many episodes one call admits for a single follow, and how many may be outstanding
+ *  across every follow: a long season is picked up over several passes, not in one burst. */
+const ADMIT_PER_CALL = 20;
+const OUTSTANDING_LIMIT = 20;
+
+/** When a failed download is tried again: an hour, six hours, then a day, then a week. */
+const downloadLadderMs = (attempts: number): number =>
+  attempts <= 1 ? HOUR_MS : attempts === 2 ? 6 * HOUR_MS : attempts <= 32 ? DAY_MS : 7 * DAY_MS;
+
+const pad2 = (value: number): string => String(Math.max(0, Math.trunc(value))).padStart(2, "0");
 
 const afterMarker = (episode: { season: number; episode: number }, marker: { season: number; episode: number }): boolean =>
   episode.season > marker.season || (episode.season === marker.season && episode.episode > marker.episode);
@@ -315,6 +416,10 @@ export class FollowService {
   private startupTimer?: ReturnType<typeof setTimeout>;
   private readonly running = new Map<string, Promise<void>>();
   private readonly lastStarted = new Map<string, number>();
+  /** One chain for every download mutation, so admission, sync, skip, retry and the queue
+   *  hooks never interleave across an await. Reentrant, because a skip calls the queue whose
+   *  guard calls back into the service. */
+  private chain: Promise<unknown> = Promise.resolve();
 
   constructor(private readonly deps: FollowDeps) {
     this.tickMs = deps.tickMs ?? DEFAULT_TICK_MS;
@@ -353,6 +458,16 @@ export class FollowService {
       }
     });
     await Promise.all(workers);
+    await this.maintain();
+  }
+
+  /** Runs `fn` under the one download mutex. Nothing inside it may wait for a queue call
+   *  that comes back through a guard, or it would wait on itself: a skip therefore removes
+   *  the job after leaving the mutex, and the removal guard takes it on its own. */
+  private locked<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.chain.then(fn);
+    this.chain = run.then(() => undefined, () => undefined);
+    return run;
   }
 
   /** A second call for the same follow while one is in flight joins it rather than
@@ -406,6 +521,342 @@ export class FollowService {
     return items.slice(0, MAX_NEW_EPISODES);
   }
 
+  /** The follow as it must still stand after an await: present, switched on, still automatic
+   *  and on the revision this run started from. */
+  private admittable(followId: string, revision: number): Follow | undefined {
+    const follow = this.deps.store.get(followId);
+    if (!follow || !follow.enabled || !follow.autoDownload || follow.revision !== revision) return undefined;
+    return follow;
+  }
+
+  /** Like `admittable`, but a paused follow still reconciles: existing jobs are recorded,
+   *  only new admissions and the retry ladder wait for it to be switched on. */
+  private fresh(followId: string, revision: number): Follow | undefined {
+    const follow = this.deps.store.get(followId);
+    if (!follow || !follow.autoDownload || follow.revision !== revision) return undefined;
+    return follow;
+  }
+
+  private mayQueue(follow: Follow): boolean {
+    const owner = this.deps.owner(follow.ownerUserId);
+    if (!owner || owner.disabled || !follow.autoDownload) return false;
+    return this.deps.mayDownload(follow.ownerUserId, follow.autoDownload.selection);
+  }
+
+  private requireOwn(followId: string, ownerUserId: string): Follow {
+    const follow = this.deps.store.get(followId);
+    if (!follow || follow.ownerUserId !== ownerUserId) throw new AppError("The item was not found.", "err.itemNotFound", 404);
+    return follow;
+  }
+
+  private intentOf(followId: string, episodeKey: string, generation: number): string {
+    return `${followId}:${episodeKey}:${generation}`;
+  }
+
+  private async setDownload(followId: string, episodeKey: string, download: EpisodeDownload): Promise<void> {
+    await this.deps.store.update(followId, (current) => {
+      const episode = current.episodes[episodeKey];
+      if (!episode) return;
+      episode.download = { ...download, updatedAt: new Date(this.deps.now()).toISOString() };
+    });
+  }
+
+  private jobTitle(follow: Follow, episode: FollowEpisode): string {
+    return `${follow.name} · S${pad2(episode.season)}E${pad2(episode.episode)}`;
+  }
+
+  private episodeMedia(follow: Follow, episode: FollowEpisode): MediaInfo {
+    return {
+      kind: "episode", title: follow.name, season: episode.season, episode: episode.episode,
+      ...(episode.title ? { episodeTitle: episode.title } : {}),
+      id: follow.metaId, metaType: follow.type,
+      ...(follow.poster ? { poster: follow.poster } : {}),
+    };
+  }
+
+  /** How many episodes are spoken for across every follow, so a new burst never runs past
+   *  the queue's patience. */
+  private outstanding(): number {
+    let count = 0;
+    for (const follow of this.deps.store.all()) {
+      for (const episode of Object.values(follow.episodes)) {
+        const state = episode.download?.state;
+        if (state === "reserved" || state === "queued" || state === "waiting") count += 1;
+      }
+    }
+    return count;
+  }
+
+  /** Every eligible, unspoken-for episode of one follow, in order, capped per call and by the
+   *  outstanding budget. A follow switch that is missing a date or disagreeing goes to
+   *  attention instead of being guessed at. */
+  private async admitLocked(followId: string): Promise<void> {
+    const start = this.deps.store.get(followId);
+    if (!start) return;
+    const revision = start.revision;
+    let follow = this.admittable(followId, revision);
+    if (!follow) return;
+    if (!this.mayQueue(follow)) {
+      if (follow.autoDownload!.blockedKey !== "err.downloadLibraryNotAllowed") {
+        await this.deps.store.update(followId, (current) => { if (current.autoDownload) current.autoDownload.blockedKey = "err.downloadLibraryNotAllowed"; });
+      }
+      return;
+    }
+    if (follow.autoDownload!.blockedKey) {
+      await this.deps.store.update(followId, (current) => { if (current.autoDownload) delete current.autoDownload.blockedKey; });
+      follow = this.admittable(followId, revision);
+      if (!follow) return;
+    }
+    const jobs = new Set(this.deps.queue.followJobs().flatMap((job) => job.follow ? [job.follow.intent] : []));
+    const ordered = Object.values(follow.episodes).sort((a, b) => a.season - b.season || a.episode - b.episode);
+    let admitted = 0;
+    for (const episode of ordered) {
+      follow = this.admittable(followId, revision);
+      if (!follow) return;
+      const current = follow.episodes[episode.key];
+      if (!current) continue;
+      const verdict = downloadEligibility(follow, current, this.deps.now());
+      if (verdict === "attention-ambiguous" || verdict === "attention-no-date") {
+        if (!current.download) {
+          const reasonKey = verdict === "attention-ambiguous" ? "err.followEpisodeAmbiguous" : "err.followNoReleaseDate";
+          await this.setDownload(followId, episode.key, { state: "attention", intent: this.intentOf(followId, episode.key, 1), generation: 1, attempts: 0, reasonKey, updatedAt: "" });
+        }
+        continue;
+      }
+      if (verdict !== "eligible") continue;
+      const download = current.download;
+      // A reserved episode whose job is already there is left for sync to link; only one
+      // whose job never landed is admitted again.
+      if (download && (download.state !== "reserved" || jobs.has(download.intent))) continue;
+      if (admitted >= ADMIT_PER_CALL) return;
+      if (this.outstanding() >= OUTSTANDING_LIMIT) return;
+      await this.enqueueLocked(followId, revision, episode.key, download?.generation ?? 1);
+      admitted += 1;
+    }
+  }
+
+  /** The admission of one episode: reserve, queue the lazy job, then link or fall to attention. */
+  private async enqueueLocked(followId: string, revision: number, episodeKey: string, generation: number): Promise<void> {
+    const before = this.admittable(followId, revision);
+    const episode = before?.episodes[episodeKey];
+    if (!before || !episode) return;
+    const intent = this.intentOf(followId, episodeKey, generation);
+    await this.setDownload(followId, episodeKey, { state: "reserved", intent, generation, attempts: 0, updatedAt: "" });
+    let follow = this.admittable(followId, revision);
+    if (!follow) return;
+    const job = await this.deps.queue.addPending(
+      this.jobTitle(follow, episode),
+      { type: follow.type, videoId: episode.videoId, selection: follow.autoDownload!.selection },
+      this.episodeMedia(follow, episode),
+      follow.ownerUserId,
+      { followId, episodeKey, intent },
+    );
+    follow = this.admittable(followId, revision);
+    if (!follow) return;
+    const linked = job ?? this.deps.queue.findActiveEpisode(follow.ownerUserId, follow.type, episode.videoId);
+    await this.setDownload(followId, episodeKey, linked
+      ? { state: "queued", intent, generation, jobId: linked.id, attempts: 0, updatedAt: "" }
+      : { state: "attention", intent, generation, attempts: 0, reasonKey: "err.followJobMissing", updatedAt: "" });
+  }
+
+  /** Records a job's own verdict on the episode it was queued for. */
+  private async linkLocked(followId: string, revision: number, episodeKey: string, job: FollowJob, now: number): Promise<void> {
+    const follow = this.fresh(followId, revision);
+    const download = follow?.episodes[episodeKey]?.download;
+    if (!follow || !download) return;
+    if (job.status === "completed") {
+      await this.setDownload(followId, episodeKey, { ...download, state: "completed", jobId: job.id, reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
+    } else if (job.status === "failed") {
+      await this.setWaiting(followId, episodeKey, { ...download, jobId: job.id }, job, now);
+    } else {
+      await this.setDownload(followId, episodeKey, { ...download, state: "queued", jobId: job.id, reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
+    }
+  }
+
+  private async setWaiting(followId: string, episodeKey: string, download: EpisodeDownload, job: FollowJob, now: number): Promise<void> {
+    const attempts = download.attempts + 1;
+    await this.setDownload(followId, episodeKey, {
+      ...download, state: "waiting", attempts,
+      reasonKey: job.errorKey ?? "err.followDownloadFailed",
+      nextAttemptAt: new Date(now + downloadLadderMs(attempts)).toISOString(),
+      updatedAt: "",
+    });
+  }
+
+  /** Reconciles every episode that has a download with what the queue now says about it. */
+  private async syncLocked(): Promise<void> {
+    const now = this.deps.now();
+    const jobs = new Map<string, FollowJob>();
+    for (const job of this.deps.queue.followJobs()) if (job.follow) jobs.set(job.follow.intent, job);
+    for (const snapshot of this.deps.store.all()) {
+      const revision = snapshot.revision;
+      for (const episodeKey of Object.keys(snapshot.episodes)) {
+        const follow = this.fresh(snapshot.id, revision);
+        if (!follow) break;
+        const download = follow.episodes[episodeKey]?.download;
+        if (!download) continue;
+        if (download.state === "reserved") {
+          const job = jobs.get(download.intent);
+          if (job) await this.linkLocked(follow.id, revision, episodeKey, job, now);
+          continue;
+        }
+        if (download.state === "queued") {
+          const job = jobs.get(download.intent);
+          if (!job) await this.setDownload(follow.id, episodeKey, { ...download, state: "attention", jobId: undefined, reasonKey: "err.followJobMissing", nextAttemptAt: undefined, updatedAt: "" });
+          else if (job.status === "completed") await this.setDownload(follow.id, episodeKey, { ...download, state: "completed", reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
+          else if (job.status === "failed") await this.setWaiting(follow.id, episodeKey, download, job, now);
+          continue;
+        }
+        if (download.state !== "waiting") continue;
+        if (!download.nextAttemptAt || Date.parse(download.nextAttemptAt) > now) continue;
+        if (!follow.enabled || !this.mayQueue(follow)) continue;
+        const job = jobs.get(download.intent);
+        if (job && job.status === "failed") {
+          await this.deps.queue.retry(job.id);
+          if (!this.fresh(follow.id, revision)) return;
+          await this.setDownload(follow.id, episodeKey, { ...download, state: "queued", jobId: job.id, reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
+        } else if (job && job.status === "completed") {
+          await this.setDownload(follow.id, episodeKey, { ...download, state: "completed", reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
+        } else {
+          await this.setDownload(follow.id, episodeKey, { ...download, state: "attention", jobId: undefined, reasonKey: "err.followJobMissing", nextAttemptAt: undefined, updatedAt: "" });
+        }
+      }
+    }
+  }
+
+  /** The episodes a proposed rule would queue right now, for the setup dialog's count. */
+  preview(follow: Follow, start: { startMode: "new" | "from"; startSeason?: number; startEpisode?: number }): FollowEpisode[] {
+    const now = this.deps.now();
+    const proposed: Follow = {
+      ...follow,
+      autoDownload: {
+        enabledAt: follow.autoDownload?.enabledAt ?? new Date(now).toISOString(),
+        startMode: start.startMode,
+        ...(start.startSeason != null ? { startSeason: start.startSeason } : {}),
+        ...(start.startEpisode != null ? { startEpisode: start.startEpisode } : {}),
+        // `downloadEligibility` reads the start rule only, never the selection.
+        selection: follow.autoDownload?.selection ?? ({} as DownloadSelection),
+      },
+    };
+    return Object.values(follow.episodes)
+      .filter((episode) => downloadEligibility(proposed, episode, now) === "eligible")
+      .sort((a, b) => a.season - b.season || a.episode - b.episode);
+  }
+
+  private async maintain(): Promise<void> {
+    try {
+      await this.locked(async () => {
+        await this.syncLocked();
+        for (const follow of this.deps.store.all()) {
+          if (follow.autoDownload && follow.enabled) await this.admitLocked(follow.id);
+        }
+      });
+    } catch (error) {
+      log("WARN", "The automatic downloads could not be reconciled", { error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  admit(followId: string): Promise<void> { return this.locked(() => this.admitLocked(followId)); }
+  sync(): Promise<void> { return this.locked(() => this.syncLocked()); }
+  reconcile(): Promise<void> { return this.sync(); }
+
+  setAutoDownload(followId: string, ownerUserId: string, value: Omit<FollowAutoDownload, "enabledAt" | "blockedKey"> | null): Promise<void> {
+    return this.locked(async () => {
+      this.requireOwn(followId, ownerUserId);
+      const at = new Date(this.deps.now()).toISOString();
+      await this.deps.store.update(followId, (current) => {
+        if (value === null) {
+          delete current.autoDownload;
+        } else {
+          const previous = current.autoDownload;
+          current.autoDownload = {
+            enabledAt: previous ? previous.enabledAt : at,
+            startMode: value.startMode,
+            ...(value.startSeason != null ? { startSeason: value.startSeason } : {}),
+            ...(value.startEpisode != null ? { startEpisode: value.startEpisode } : {}),
+            selection: value.selection,
+          };
+        }
+        current.revision += 1;
+      });
+      if (value !== null) await this.admitLocked(followId);
+    });
+  }
+
+  async skipEpisode(followId: string, ownerUserId: string, episodeKey: string): Promise<void> {
+    const running = await this.locked(async () => {
+      const follow = this.requireOwn(followId, ownerUserId);
+      const download = follow.episodes[episodeKey]?.download;
+      if (!download) return undefined;
+      const job = download.jobId ? this.deps.queue.get(download.jobId) : undefined;
+      if (job && job.status !== "completed" && job.status !== "failed") return job.id;
+      await this.setDownload(followId, episodeKey, { ...download, state: "skipped", reasonKey: "err.followSkipped", nextAttemptAt: undefined, updatedAt: "" });
+      return undefined;
+    });
+    // Outside the mutex: the removal guard records the skip under it before the row goes.
+    if (running) await this.deps.queue.remove(running);
+  }
+
+  retryEpisode(followId: string, ownerUserId: string, episodeKey: string): Promise<void> {
+    return this.locked(async () => {
+      const follow = this.requireOwn(followId, ownerUserId);
+      const revision = follow.revision;
+      const download = follow.episodes[episodeKey]?.download;
+      if (!download) return;
+      if (!["waiting", "attention", "skipped"].includes(download.state)) return;
+      const job = download.jobId ? this.deps.queue.get(download.jobId) : undefined;
+      if (job && job.status === "failed") {
+        await this.deps.queue.retry(job.id);
+        if (!this.fresh(followId, revision)) return;
+        await this.setDownload(followId, episodeKey, { ...download, state: "queued", reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
+        return;
+      }
+      if (!follow.autoDownload) return;
+      if (!this.mayQueue(follow)) {
+        await this.deps.store.update(followId, (current) => { if (current.autoDownload) current.autoDownload.blockedKey = "err.downloadLibraryNotAllowed"; });
+        return;
+      }
+      // An explicit retry does not re-apply the start rule: the episode was asked for.
+      await this.enqueueLocked(followId, revision, episodeKey, download.generation + 1);
+    });
+  }
+
+  jobCompleted(job: Readonly<FollowJob>): Promise<void> {
+    return this.locked(async () => {
+      const ref = job.follow;
+      const download = ref ? this.deps.store.get(ref.followId)?.episodes[ref.episodeKey]?.download : undefined;
+      if (!ref || !download || download.intent !== ref.intent || download.state === "completed") return;
+      await this.setDownload(ref.followId, ref.episodeKey, { ...download, state: "completed", reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
+    });
+  }
+
+  jobRemoving(job: Readonly<FollowJob>, reason: "user" | "account"): Promise<void> {
+    return this.locked(async () => {
+      const ref = job.follow;
+      if (reason !== "user" || !ref) return;
+      const download = this.deps.store.get(ref.followId)?.episodes[ref.episodeKey]?.download;
+      if (!download || download.intent !== ref.intent) return;
+      if (job.status === "completed") {
+        if (download.state === "completed") return;
+        await this.setDownload(ref.followId, ref.episodeKey, { ...download, state: "completed", reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
+        return;
+      }
+      await this.setDownload(ref.followId, ref.episodeKey, { ...download, state: "skipped", reasonKey: "err.followSkipped", nextAttemptAt: undefined, updatedAt: "" });
+    });
+  }
+
+  jobsClearing(jobs: ReadonlyArray<Readonly<FollowJob>>): Promise<void> {
+    return this.locked(async () => {
+      for (const job of jobs) {
+        const ref = job.follow;
+        if (!ref || job.status !== "completed") continue;
+        const download = this.deps.store.get(ref.followId)?.episodes[ref.episodeKey]?.download;
+        if (!download || download.intent !== ref.intent || download.state === "completed") continue;
+        await this.setDownload(ref.followId, ref.episodeKey, { ...download, state: "completed", reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
+      }
+    });
+  }
+
   private async runCheck(followId: string, reason: "schedule" | "manual"): Promise<void> {
     const follow = this.deps.store.get(followId);
     if (!follow) return;
@@ -429,5 +880,9 @@ export class FollowService {
     const current = this.deps.store.get(followId);
     if (!current || current.revision !== revision) return;
     await this.deps.store.recordCheck(followId, result);
+    if ("episodes" in result) {
+      try { await this.admit(followId); }
+      catch (error) { log("WARN", "A followed series could not queue its new episodes", { follow: followId, error: error instanceof Error ? error.message : String(error) }); }
+    }
   }
 }

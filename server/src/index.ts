@@ -1580,9 +1580,28 @@ const followService = new FollowService({
     return user ? { id: user.id, role: user.role, disabled: user.disabled } : undefined;
   },
   meta: (owner, type, metaId) => cachedMeta(type, metaId, store.prefs(owner.id).uiLanguage, owner, { fresh: true, interactive: false }),
+  queue: {
+    addPending: (title, source, media, ownerUserId, follow) => queue.addPending(title, source, media, ownerUserId, follow),
+    findActiveEpisode: (ownerUserId, type, videoId) => queue.findActiveEpisode(ownerUserId, type, videoId),
+    followJobs: () => queue.followJobs(),
+    get: (id) => queue.get(id),
+    retry: (id) => queue.retry(id),
+    remove: (id) => queue.remove(id),
+  },
+  // The owner may queue into the pinned library right now: the account, its rights, the
+  // addons and the library are read again on every ask, never from when the rule was saved.
+  mayDownload: (ownerUserId, selection) => ownerMayDownload({
+    owner: findUserById(store.users(), ownerUserId),
+    addons: store.addons(),
+    libraries: store.libraries(),
+  }, { targetSettings: selection.targetSettings }),
 });
 
-registerFollowRoutes(app, { ...routeContext, follows: followService, followStore, prefsOf, markersOf, dataOf, posterOf });
+// The queue is built before the follow service, so its guards are wired afterwards.
+queue.setRemovalGuard((job, reason) => followService.jobRemoving(job, reason));
+queue.setClearCompletedGuard((jobs) => followService.jobsClearing(jobs));
+
+registerFollowRoutes(app, { ...routeContext, follows: followService, followStore, prefsOf, markersOf, dataOf, posterOf, cachedMeta });
 
 // Deleting, renaming and moving touch real files, hence the path and root checks.
 
@@ -2051,7 +2070,7 @@ const rememberTitle = async (target: string, media: MediaInfo | undefined, flat:
 // item came of it. An interrupted download therefore stays in the statistics -- the data
 // went through the line even though no file was kept.
 queue.onProgress = (job, bytes) => stats.add(statMeta({ url: job.stream?.url, addonKey: job.stream?.addonKey, addonName: job.stream?.addonName, title: job.title, kind: job.media?.kind }), bytes);
-queue.onCompleted = async (job) => {
+const noteQueueCompletion = async (job: Readonly<DownloadJob>) => {
   invalidateLibrary();
   const user = store.users().find((user) => user.id === job.ownerUserId);
   stats.activity.record({ kind: "library", title: job.title, filename: path.basename(job.target), userId: job.ownerUserId, username: user?.username, bytes: job.received });
@@ -2062,6 +2081,13 @@ queue.onCompleted = async (job) => {
   const targetSettings = job.source.selection?.targetSettings ?? (job.media.kind === "episode" ? settings.series : settings.movie);
   await rememberTitle(job.target, job.media, targetSettings.layout === "flat");
 };
+// A finished job records itself on the follow that queued it. The follow writes after the
+// library work above, and a failure there is logged rather than past the queue.
+queue.onCompleted = async (job) => {
+  await noteQueueCompletion(job);
+  try { await followService.jobCompleted(job); }
+  catch (error) { log("WARN", "The follow could not record a finished download", { id: job.id, reason: error instanceof Error ? error.message : String(error) }); }
+};
 queue.setDebrid({
   configured: () => Boolean(store.settings().realDebridToken),
   advance: (input) => advanceTorrent(store.settings().realDebridToken, input.infoHash, input.fileIdx, input.torrentId),
@@ -2069,6 +2095,7 @@ queue.setDebrid({
 await stats.load();
 await queue.load();
 await libraryScan.load();
+await followService.reconcile();
 if (autoScanAllowed) {
   libraryAutoScan.start();
 }

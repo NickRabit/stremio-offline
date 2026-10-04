@@ -1,4 +1,4 @@
-import { AppError } from "./errors.js";
+import { AppError, messageKeyOf } from "./errors.js";
 import { spawn } from "node:child_process";
 import { createWriteStream as fsCreateWriteStream } from "node:fs";
 import { mkdir, open, readFile, rename, stat, statfs, unlink, writeFile, type FileHandle } from "node:fs/promises";
@@ -75,6 +75,9 @@ export interface DownloadJob {
    *  the administrator the state migrated into. */
   ownerUserId?: string;
   source?: { type: string; videoId: string; tried: string[]; selection?: DownloadSelection };
+  /** Present when a followed series queued the job, so the follow can be reconciled
+   *  with the queue across restarts. */
+  follow?: { followId: string; episodeKey: string; intent: string };
   subtitle?: SubtitleItem;
   resolution?: DownloadResolution;
   status: DownloadStatus; target: string; received: number; total?: number; speed: number;
@@ -203,6 +206,11 @@ export interface QueueHooks {
   /** Whether an account can see a library. Lets a duplicate in another account's finished
    *  job be reported only when the asker could find that file anyway. */
   ownerSeesLibrary?: (ownerUserId: string | undefined, libraryId: string) => boolean;
+  /** A job is about to be dropped. A throw refuses the removal, so a follow can record the
+   *  skip before the row is touched. */
+  beforeRemove?: (job: Readonly<DownloadJob>, reason: "user" | "account") => Promise<void>;
+  /** The finished rows that `clearCompleted` is about to drop, before they go. */
+  beforeClearCompleted?: (jobs: ReadonlyArray<Readonly<DownloadJob>>) => Promise<void>;
 }
 
 const exists = async (file: string) => { try { await stat(file); return true; } catch { return false; } };
@@ -301,6 +309,8 @@ export class DownloadQueue {
   private readonly legacyOwnerId?: () => string | undefined;
   private readonly ownerAllowed?: (job: DownloadJob) => boolean | Promise<boolean>;
   private readonly ownerSeesLibrary?: (ownerUserId: string | undefined, libraryId: string) => boolean;
+  private beforeRemove?: (job: Readonly<DownloadJob>, reason: "user" | "account") => Promise<void>;
+  private beforeClearCompleted?: (jobs: ReadonlyArray<Readonly<DownloadJob>>) => Promise<void>;
   private debridTimers = new Map<string, NodeJS.Timeout>();
   private debridBusy = new Set<string>();
   /** Called after a successful finish, so the library can produce a thumbnail straight away. */
@@ -338,11 +348,16 @@ export class DownloadQueue {
     this.legacyOwnerId = hooks.legacyOwnerId;
     this.ownerAllowed = hooks.ownerAllowed;
     this.ownerSeesLibrary = hooks.ownerSeesLibrary;
+    this.beforeRemove = hooks.beforeRemove;
+    this.beforeClearCompleted = hooks.beforeClearCompleted;
   }
 
   /** index.ts owns source selection for lazy jobs, because it needs the addons and the settings. */
   setResolver(resolver: StreamResolver) { this.resolver = resolver; }
   setDebrid(engine: DebridEngine) { this.debrid = engine; }
+  /** Wired after construction because the follow service that answers these is built later. */
+  setRemovalGuard(guard: (job: Readonly<DownloadJob>, reason: "user" | "account") => Promise<void>) { this.beforeRemove = guard; }
+  setClearCompletedGuard(guard: (jobs: ReadonlyArray<Readonly<DownloadJob>>) => Promise<void>) { this.beforeClearCompleted = guard; }
   haltInfo() { return this.halt ? { ...this.halt } : null; }
   /** Aborts everything and resolves once the transfers have written their last state.
    *  Callers that delete the data directory afterwards have to await it, or a straggling
@@ -634,11 +649,30 @@ export class DownloadQueue {
   }
 
   /** A lazy job: both target and source are filled in when the download starts. A duplicate episode is not added. */
-  async addPending(title: string, source: { type: string; videoId: string; selection?: DownloadSelection }, media?: MediaInfo, ownerUserId?: string) {
+  async addPending(title: string, source: { type: string; videoId: string; selection?: DownloadSelection }, media?: MediaInfo, ownerUserId?: string, follow?: DownloadJob["follow"]) {
     if (this.jobs.some((job) => job.source?.videoId === source.videoId && job.source?.type === source.type && job.status !== "completed" && job.status !== "failed" && this.ownedBy(job, ownerUserId))) return undefined;
     const now = new Date().toISOString();
-    const job: DownloadJob = { id: crypto.randomUUID(), ownerUserId, title, media, source: { ...source, tried: [] }, status: "queued", target: "", received: 0, speed: 0, createdAt: now, updatedAt: now };
+    const job: DownloadJob = { id: crypto.randomUUID(), ownerUserId, title, media, source: { ...source, tried: [] }, ...(follow ? { follow } : {}), status: "queued", target: "", received: 0, speed: 0, createdAt: now, updatedAt: now };
     this.jobs.push(job); await this.save(); this.pump(); return this.publicJob(job);
+  }
+
+  /** The caller's own unfinished lazy job for a source, or nothing. A job from another account
+   *  or one that already failed or finished does not answer. */
+  findActiveEpisode(ownerUserId: string | undefined, type: string, videoId: string) {
+    const job = this.jobs.find((job) => job.source?.type === type && job.source?.videoId === videoId
+      && job.status !== "completed" && job.status !== "failed" && this.ownedBy(job, ownerUserId));
+    return job ? this.publicJob(job) : undefined;
+  }
+
+  /** The public shape of the jobs that carry a follow, for reconciliation. */
+  followJobs() {
+    return this.jobs.filter((job) => job.follow).map((job) => this.publicJob(job));
+  }
+
+  /** One job by id, in the shape the interface sees, or nothing. */
+  get(id: string) {
+    const job = this.jobs.find((item) => item.id === id);
+    return job ? this.publicJob(job) : undefined;
   }
 
   /** History can be cleared, but the files stay. A free name therefore has to be looked for on
@@ -697,7 +731,7 @@ export class DownloadQueue {
    *  completed stays: it is in the library and belongs to nobody's access any more. */
   async removeMatching(match: (job: DownloadJob) => boolean): Promise<number> {
     const ids = this.jobs.filter((job) => job.status !== "completed" && match(job)).map((job) => job.id);
-    for (const id of ids) await this.remove(id);
+    for (const id of ids) await this.remove(id, "account");
     return ids.length;
   }
 
@@ -826,10 +860,14 @@ export class DownloadQueue {
     }
   }
 
-  async remove(id: string) {
+  async remove(id: string, reason: "user" | "account" = "user") {
     const index = this.jobs.findIndex((job) => job.id === id);
     if (index < 0) throw new AppError("The item was not found.", "err.itemNotFound");
-    const [job] = this.jobs.splice(index, 1);
+    // A guard that throws refuses the removal: the row is left as it was.
+    await this.beforeRemove?.(this.jobs[index], reason);
+    const at = this.jobs.findIndex((job) => job.id === id);
+    if (at < 0) return;
+    const [job] = this.jobs.splice(at, 1);
     this.active.get(id)?.abort();
     if (job.status !== "completed" && job.target) {
       const partial = this.jobPath(job);
@@ -856,7 +894,12 @@ export class DownloadQueue {
       addonName: job.stream?.addonName, title: job.title, kind: job.media?.kind,
     }));
   }
-  async clearCompleted() { this.jobs = this.jobs.filter((job) => job.status !== "completed"); await this.save(); }
+  async clearCompleted() {
+    const completed = this.jobs.filter((job) => job.status === "completed");
+    await this.beforeClearCompleted?.(completed);
+    this.jobs = this.jobs.filter((job) => job.status !== "completed");
+    await this.save();
+  }
   changed() { this.pump(); }
   /** The key travels with the text so the interface can render a stored failure in
    *  whatever language is set now, not the one that was set when it failed. */
@@ -1021,7 +1064,7 @@ export class DownloadQueue {
       log("WARN", "No download source could be resolved", { id: job.id, title: job.title, selectionMs, previouslyTried: job.source.tried.length });
       throw new SourceError(job.source.tried.length
         ? `Every available source failed (${job.source.tried.length}).`
-        : requested);
+        : requested, "err.noMatchingSource");
     }
     job.stream = resolved.stream;
     job.subtitle = resolved.subtitle;
@@ -1456,7 +1499,7 @@ export class DownloadQueue {
         if (this.retryTimer) clearTimeout(this.retryTimer);
         this.retryTimer = setTimeout(() => { this.retryTimer = undefined; this.pump(); }, 2000);
       } else {
-        job.status = "failed"; this.setError(job, message);
+        job.status = "failed"; this.setError(job, message, messageKeyOf(error));
         log("ERROR", "Download failed", { id: job.id, reason: message, received: job.received, total: job.total });
       }
     } finally {

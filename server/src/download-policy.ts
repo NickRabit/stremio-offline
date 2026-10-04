@@ -25,7 +25,7 @@ export class IncompleteDownloadError extends Error {
 }
 
 export class SourceError extends Error {
-  constructor(message: string) {
+  constructor(message: string, readonly messageKey?: string) {
     super(message);
     this.name = "SourceError";
   }

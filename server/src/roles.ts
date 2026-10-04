@@ -46,6 +46,9 @@ export const USER_ALLOWED: Rule[] = [
   { method: "PATCH", pattern: /^\/follows\/[^/]+$/ },
   { method: "DELETE", pattern: /^\/follows\/[^/]+$/ },
   { method: "POST", pattern: /^\/follows\/[^/]+\/check$/ },
+  { method: "GET", pattern: /^\/follows\/[^/]+\/episodes$/ },
+  { method: "GET", pattern: /^\/follows\/[^/]+\/preview$/ },
+  { method: "POST", pattern: /^\/follows\/[^/]+\/episodes\/[^/]+\/(skip|retry)$/ },
   // Browsing and playing.
   { method: "GET", pattern: /^\/library$/ },
   { method: "GET", pattern: /^\/library\/browse$/ },

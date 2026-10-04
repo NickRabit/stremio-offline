@@ -8,16 +8,19 @@ import { test } from "node:test";
 import express from "express";
 import { messageKeyOf } from "../errors.js";
 import { FollowService, FollowStore } from "../follows.js";
+import type { LibraryRecord } from "../libraries.js";
+import { defaultDownloadSettings } from "../naming.js";
 import type { Store, UserPrefs } from "../store.js";
 import type { UserData, UserRecord } from "../users.js";
 import { registerFollowRoutes, type FollowDeps } from "./follows.js";
 
 const ADA = "usr_00000001";
 const BOB = "usr_00000002";
+const CARL = "usr_00000003";
 
-const account = (id: string, role: "admin" | "user"): UserRecord => ({
+const account = (id: string, role: "admin" | "user", downloadToLibrary = true): UserRecord => ({
   id, username: role === "admin" ? "ada" : "bob", role, createdAt: "2026-01-01T00:00:00.000Z",
-  permissions: { downloadToLibrary: true, downloadToDevice: true }, permissionsVersion: 0,
+  permissions: { downloadToLibrary, downloadToDevice: true }, permissionsVersion: 0,
 } as unknown as UserRecord);
 
 interface Harness { base: string; close(): Promise<void> }
@@ -28,7 +31,21 @@ const mount = async (): Promise<Harness> => {
   const dir = mkdtempSync(path.join(tmpdir(), "routes-follows-"));
   const store = new FollowStore(dir);
   await store.load();
-  const users: Record<string, UserRecord> = { A: account(ADA, "admin"), B: account(BOB, "user") };
+  const users: Record<string, UserRecord> = { A: account(ADA, "admin"), B: account(BOB, "user"), C: account(CARL, "user", false) };
+  const jobs: Array<{ id: string; status: string; follow?: { followId: string; episodeKey: string; intent: string }; source?: { type: string; videoId: string } }> = [];
+  let nextId = 1;
+  const queue = {
+    addPending: async (_title: string, source: { type: string; videoId: string }, _media: unknown, _ownerUserId: string, follow: { followId: string; episodeKey: string; intent: string }) => {
+      const job = { id: `job-${nextId++}`, status: "queued", follow, source: { type: source.type, videoId: source.videoId } };
+      jobs.push(job);
+      return { id: job.id };
+    },
+    findActiveEpisode: () => undefined,
+    followJobs: () => jobs,
+    get: (id: string) => jobs.find((job) => job.id === id),
+    retry: async () => undefined,
+    remove: async () => undefined,
+  };
   const service = new FollowService({
     store,
     now: () => Date.now(),
@@ -40,9 +57,13 @@ const mount = async (): Promise<Harness> => {
       id: metaId, type, name: "Show",
       videos: [{ id: `${metaId}:1:1`, season: 1, episode: 1, name: "Pilot", released: "2024-03-01" }],
     }),
+    queue,
+    mayDownload: (ownerUserId) => Boolean(Object.values(users).find((entry) => entry.id === ownerUserId)?.permissions.downloadToLibrary),
   });
+  const libraries: LibraryRecord[] = [{ id: "lib_shows", name: "Shows", type: "series", root: dir, enabled: true, order: 0, addedAt: "2026-01-01T00:00:00.000Z", writeArtwork: false }];
+  const addons = [{ key: "stream-addon", enabled: true, role: "source", allowedUsers: [BOB], manifest: { id: "stream-addon", name: "Stream" }, downloadSettings: defaultDownloadSettings() }];
   const deps: FollowDeps = {
-    store: {} as Store,
+    store: { addons: () => addons, libraries: () => libraries, settings: () => ({}) } as unknown as Store,
     needsSetup: () => false,
     currentSession: () => undefined,
     currentUser: (req) => users[String(req.header("x-as") ?? "A")],
@@ -57,6 +78,7 @@ const mount = async (): Promise<Harness> => {
     markersOf: () => ({}),
     dataOf: () => ({}) as UserData,
     posterOf: (value) => (value === undefined || value === null ? undefined : String(value)),
+    cachedMeta: async () => null,
   };
   const app = express();
   app.use(express.json());
@@ -140,5 +162,58 @@ test("a check is throttled and its episodes show up behind the view", async () =
 
     const episodes = await (await api(h.base, "/api/follows/new-episodes", { as: "A" })).json() as { items: unknown[] };
     assert.deepEqual(episodes.items, []);
+  } finally { await h.close(); }
+});
+
+test("switching a follow to automatic needs the right to queue", async () => {
+  const h = await mount();
+  try {
+    const follow = await (await api(h.base, "/api/follows", { method: "POST", as: "C", body: { type: "series", id: "tt1", name: "Show" } })).json() as { id: string };
+    const denied = await api(h.base, `/api/follows/${follow.id}`, {
+      method: "PATCH", as: "C",
+      body: { autoDownload: { startMode: "new", selection: { addonKeys: ["stream-addon"], audioLanguage: "en" } } },
+    });
+    assert.equal(denied.status, 403);
+    assert.equal(await keyOf(denied), "err.downloadLibraryNotAllowed");
+
+    const allowed = await api(h.base, `/api/follows/${follow.id}`, {
+      method: "PATCH", as: "B",
+      body: { autoDownload: { startMode: "new", selection: { addonKeys: ["stream-addon"], audioLanguage: "en" } } },
+    });
+    assert.equal(allowed.status, 404, "the follow belongs to another account");
+  } finally { await h.close(); }
+});
+
+test("an automatic rule stores an explicit, concrete target", async () => {
+  const h = await mount();
+  try {
+    const follow = await (await api(h.base, "/api/follows", { method: "POST", as: "B", body: { type: "series", id: "tt1", name: "Show" } })).json() as { id: string };
+    const response = await api(h.base, `/api/follows/${follow.id}`, {
+      method: "PATCH", as: "B",
+      body: { autoDownload: { startMode: "new", selection: { addonKeys: ["stream-addon"], audioLanguage: "en" } } },
+    });
+    assert.equal(response.status, 200);
+    const view = await response.json() as { autoDownload?: { enabledAt: string; startMode: string; selection: { addonKeys: string[]; targetSettings: Record<string, unknown> } } };
+    assert.ok(view.autoDownload?.enabledAt);
+    assert.equal(view.autoDownload?.startMode, "new");
+    assert.deepEqual(view.autoDownload?.selection.addonKeys, ["stream-addon"]);
+    assert.deepEqual(view.autoDownload?.selection.targetSettings, { libraryId: "lib_shows", subfolder: "", layout: "structured", explicit: true });
+  } finally { await h.close(); }
+});
+
+test("another account's follow answers 404 on every new route", async () => {
+  const h = await mount();
+  try {
+    const follow = await (await api(h.base, "/api/follows", { method: "POST", as: "A", body: { type: "series", id: "tt1", name: "Show" } })).json() as { id: string };
+    const routes: Array<{ method: string; path: string }> = [
+      { method: "GET", path: `/api/follows/${follow.id}/episodes` },
+      { method: "GET", path: `/api/follows/${follow.id}/preview?startMode=new` },
+      { method: "POST", path: `/api/follows/${follow.id}/episodes/1:1/skip` },
+      { method: "POST", path: `/api/follows/${follow.id}/episodes/1:1/retry` },
+    ];
+    for (const route of routes) {
+      const response = await api(h.base, route.path, { method: route.method, as: "B" });
+      assert.equal(response.status, 404, `${route.method} ${route.path}`);
+    }
   } finally { await h.close(); }
 });

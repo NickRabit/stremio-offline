@@ -6,7 +6,7 @@ import { ownerMayDownload, type AudioMode, type DownloadQueue, type DownloadSele
 import { AppError } from "../errors.js";
 import { normalizeLanguage } from "../language.js";
 import { log } from "../logger.js";
-import { libraryVisible, resolveLibraryPath } from "../libraries.js";
+import { libraryVisible, resolveLibraryPath, type Viewer } from "../libraries.js";
 import { defaultDownloadSettings, exactSubfolder, targetLibrary, type MediaInfo } from "../naming.js";
 import { titleLanguage } from "../ranking.js";
 import type { UserPrefs } from "../store.js";
@@ -24,51 +24,105 @@ export interface DownloadsDeps extends RouteContext {
   titleKey(target: string, media: MediaInfo | undefined, flat: boolean): string;
   saveCatalogPoster(key: string, url?: string, fallback?: string, backdrop?: string): void;
   libraryKey(value: string): string;
-  cachedMeta(type: string, id: string, language?: string): Promise<MetaItem | null>;
+  cachedMeta(type: string, id: string, language?: string, viewer?: Viewer): Promise<MetaItem | null>;
   prefsOf(req?: express.Request): UserPrefs;
 }
 
-export function registerDownloadRoutes(app: express.Application, deps: DownloadsDeps): void {
-  const { store, currentUser, queue, deviceTransfers, jobView, sourceOf, mediaSource, posterOf, rememberTitle, titleKey, saveCatalogPoster, libraryKey, cachedMeta, prefsOf } = deps;
+/** The deps the body-validation of a lazy download selection needs, shared by the bulk route
+ *  and the follow routes so both parse audio, subtitles and the pinned target the same way. */
+type SelectionDeps = Pick<DownloadsDeps, "store" | "currentUser" | "cachedMeta" | "prefsOf">;
 
-  /** The owner-bound check where a failure reaches the caller instead of pausing a job. The
-   *  rights are asked before the body is read; the source and the library the rule names are
-   *  asked again once they are known. */
-  const assertMayQueue = (req: express.Request, job: { stream?: StreamItem; libraryId?: string } = {}) => {
-    const owner = currentUser(req);
-    if (owner && ownerMayDownload({ owner, addons: store.addons(), libraries: store.libraries() }, job)) return;
-    throw new AppError("This account may not download to the library.", "err.downloadLibraryNotAllowed", 403);
+/** The owner-bound check where a failure reaches the caller instead of pausing a job. The
+ *  rights are asked before the body is read; the source and the library the rule names are
+ *  asked again once they are known. */
+const mayQueueGuard = (deps: SelectionDeps) => (req: express.Request, job: { stream?: StreamItem; libraryId?: string } = {}) => {
+  const owner = deps.currentUser(req);
+  if (owner && ownerMayDownload({ owner, addons: deps.store.addons(), libraries: deps.store.libraries() }, job)) return;
+  throw new AppError("This account may not download to the library.", "err.downloadLibraryNotAllowed", 403);
+};
+
+/** The library the caller picked, checked here so an unusable one is refused rather than
+ *  queued. A missing library and one the caller may not see answer the same, so the route
+ *  gives nothing away about libraries that are not theirs. */
+const explicitTargetFor = (deps: SelectionDeps) => async (req: express.Request, value: unknown, kind: "movie" | "series"): Promise<DownloadTargetSettings | undefined> => {
+  if (value === undefined || value === null) return undefined;
+  const item = typeof value === "object" ? value as Record<string, unknown> : undefined;
+  const libraryId = typeof item?.libraryId === "string" ? item.libraryId.trim() : "";
+  if (!libraryId) throw new AppError("Invalid download destination.", "err.invalidDownloadTarget");
+  const libraries = deps.store.libraries();
+  const library = libraries.find((entry) => entry.id === libraryId);
+  if (!library || !libraryVisible(library, viewerOf(deps.currentUser(req)))) {
+    throw new AppError("That library does not exist.", "err.libraryNotFound");
+  }
+  targetLibrary(libraryId, kind, libraries);
+  // The folder was picked from the library, so it is checked as it is and has to be there:
+  // tidying its name would put the title in a folder next to the one the user chose.
+  const subfolder = exactSubfolder(item!.subfolder);
+  if (subfolder) {
+    const resolved = await resolveLibraryPath([library], subfolder);
+    const info = resolved ? await stat(resolved.absolute).catch(() => undefined) : undefined;
+    if (!info?.isDirectory()) throw new AppError("That folder is not in the library.", "err.targetFolderMissing");
+  }
+  return {
+    subfolder,
+    layout: item!.layout === "flat" ? "flat" : "structured",
+    libraryId,
+    explicit: true,
   };
+};
 
-  /** The library the caller picked, checked here so an unusable one is refused rather than
-   *  queued. A missing library and one the caller may not see answer the same, so the route
-   *  gives nothing away about libraries that are not theirs. */
-  const explicitTarget = async (req: express.Request, value: unknown, kind: "movie" | "series"): Promise<DownloadTargetSettings | undefined> => {
-    if (value === undefined || value === null) return undefined;
-    const item = typeof value === "object" ? value as Record<string, unknown> : undefined;
-    const libraryId = typeof item?.libraryId === "string" ? item.libraryId.trim() : "";
-    if (!libraryId) throw new AppError("Invalid download destination.", "err.invalidDownloadTarget");
-    const libraries = store.libraries();
-    const library = libraries.find((entry) => entry.id === libraryId);
-    if (!library || !libraryVisible(library, viewerOf(currentUser(req)))) {
-      throw new AppError("That library does not exist.", "err.libraryNotFound");
-    }
-    targetLibrary(libraryId, kind, libraries);
-    // The folder was picked from the library, so it is checked as it is and has to be there:
-    // tidying its name would put the title in a folder next to the one the user chose.
-    const subfolder = exactSubfolder(item!.subfolder);
-    if (subfolder) {
-      const resolved = await resolveLibraryPath([library], subfolder);
-      const info = resolved ? await stat(resolved.absolute).catch(() => undefined) : undefined;
-      if (!info?.isDirectory()) throw new AppError("That folder is not in the library.", "err.targetFolderMissing");
-    }
-    return {
-      subfolder,
-      layout: item!.layout === "flat" ? "flat" : "structured",
-      libraryId,
-      explicit: true,
+/** Parses the lazy download body of a series into a `DownloadSelection`: the addon keys the
+ *  caller may use, the strategy, the audio and subtitle rules, the title language and a
+ *  concrete target. Shared so the bulk route and a follow's automatic rule cannot drift. */
+export function createSelectionParser(deps: SelectionDeps): (req: express.Request, input: { selection: unknown; target: unknown; metaType: string; parentId?: string }) => Promise<DownloadSelection> {
+  const { store, currentUser, cachedMeta, prefsOf } = deps;
+  const assertMayQueue = mayQueueGuard(deps);
+  const explicitTarget = explicitTargetFor(deps);
+  return async (req, input) => {
+    // The rights are asked before the body is read, so an account that may not queue is
+    // refused with 403 rather than a body-validation error it could never satisfy.
+    assertMayQueue(req);
+    const explicit = await explicitTarget(req, input.target, "series");
+    const rawSelection = input.selection && typeof input.selection === "object" ? input.selection as Record<string, unknown> : {};
+    // The caller's own addons, so a disallowed key cannot be smuggled in by naming it here.
+    const usable = allowedAddons(store.addons(), viewerOf(currentUser(req)));
+    const addonKeys = Array.isArray(rawSelection.addonKeys)
+      ? [...new Set(rawSelection.addonKeys.map(String))].filter((key) => usable.some((addon) => addon.key === key && addon.enabled && addon.role !== "catalog"))
+      : [];
+    if (!addonKeys.length) throw new AppError("Pick at least one stream addon.", "err.missingDownloadSources");
+    const sourceStrategy = String(rawSelection.sourceStrategy) === "largest" ? "largest" : "priority";
+    const audioLanguage = normalizeLanguage(String(rawSelection.audioLanguage ?? ""));
+    if (!audioLanguage) throw new AppError("Pick an audio language.", "err.missingAudioLanguage");
+    const fallbackAudioLanguage = normalizeLanguage(String(rawSelection.fallbackAudioLanguage ?? ""));
+    const audioMode: AudioMode = ["strict", "preferred"].includes(String(rawSelection.audioMode)) ? String(rawSelection.audioMode) as AudioMode : "listed";
+    const subtitleMode: SubtitleMode = ["optional", "required"].includes(String(rawSelection.subtitleMode)) ? String(rawSelection.subtitleMode) as SubtitleMode : "off";
+    const subtitleLanguage = subtitleMode === "off" ? undefined : normalizeLanguage(String(rawSelection.subtitleLanguage ?? ""));
+    if (subtitleMode !== "off" && !subtitleLanguage) throw new AppError("Pick a subtitle language.", "err.missingSubtitleLanguage");
+    const fallbackSubtitleLanguage = subtitleMode === "off" ? undefined : normalizeLanguage(String(rawSelection.fallbackSubtitleLanguage ?? ""));
+    const firstAddon = store.addons().find((addon) => addon.key === addonKeys[0]);
+    // A source whose addon found no language falls back to the one the title's own metadata
+    // names. The viewer is the caller: what they may see decides what that metadata says.
+    const metaLanguage = input.parentId ? titleLanguage((await cachedMeta(input.metaType, input.parentId, prefsOf(req).uiLanguage, viewerOf(currentUser(req))))?.language) : undefined;
+    const selection: DownloadSelection = {
+      addonKeys, sourceStrategy, audioLanguage,
+      fallbackAudioLanguage: fallbackAudioLanguage === audioLanguage ? undefined : fallbackAudioLanguage,
+      audioMode,
+      titleLanguage: metaLanguage,
+      subtitleMode, subtitleLanguage,
+      fallbackSubtitleLanguage: fallbackSubtitleLanguage === subtitleLanguage ? undefined : fallbackSubtitleLanguage,
+      targetSettings: explicit ?? (firstAddon?.downloadSettings.series ?? defaultDownloadSettings().series),
     };
+    assertMayQueue(req, { libraryId: selection.targetSettings.libraryId });
+    return selection;
   };
+}
+
+export function registerDownloadRoutes(app: express.Application, deps: DownloadsDeps): void {
+  const { store, currentUser, queue, deviceTransfers, jobView, sourceOf, mediaSource, posterOf, rememberTitle, titleKey, saveCatalogPoster, libraryKey } = deps;
+
+  const assertMayQueue = mayQueueGuard(deps);
+  const explicitTarget = explicitTargetFor(deps);
+  const parseSelection = createSelectionParser(deps);
 
   /** A job the caller does not own is answered exactly like one that is not there: 403 would
    *  tell the caller that the id exists. */
@@ -123,35 +177,7 @@ export function registerDownloadRoutes(app: express.Application, deps: Downloads
     const episodes = Array.isArray(req.body.episodes) ? req.body.episodes as Array<Record<string, unknown>> : [];
     if (!episodes.length) throw new AppError("Missing episode list.", "err.missingEpisodes");
     if (episodes.length > 500) throw new AppError("At most 500 episodes at a time.", "err.tooManyEpisodes");
-    const rawSelection = req.body.selection && typeof req.body.selection === "object" ? req.body.selection as Record<string, unknown> : {};
-    // The caller's own addons, so a disallowed key cannot be smuggled in by naming it here.
-    const usable = allowedAddons(store.addons(), viewerOf(currentUser(req)));
-    const addonKeys = Array.isArray(rawSelection.addonKeys)
-      ? [...new Set(rawSelection.addonKeys.map(String))].filter((key) => usable.some((addon) => addon.key === key && addon.enabled && addon.role !== "catalog"))
-      : [];
-    if (!addonKeys.length) throw new AppError("Pick at least one stream addon.", "err.missingDownloadSources");
-    const sourceStrategy = String(rawSelection.sourceStrategy) === "largest" ? "largest" : "priority";
-    const audioLanguage = normalizeLanguage(String(rawSelection.audioLanguage ?? ""));
-    if (!audioLanguage) throw new AppError("Pick an audio language.", "err.missingAudioLanguage");
-    const fallbackAudioLanguage = normalizeLanguage(String(rawSelection.fallbackAudioLanguage ?? ""));
-    const audioMode: AudioMode = ["strict", "preferred"].includes(String(rawSelection.audioMode)) ? String(rawSelection.audioMode) as AudioMode : "listed";
-    const subtitleMode: SubtitleMode = ["optional", "required"].includes(String(rawSelection.subtitleMode)) ? String(rawSelection.subtitleMode) as SubtitleMode : "off";
-    const subtitleLanguage = subtitleMode === "off" ? undefined : normalizeLanguage(String(rawSelection.subtitleLanguage ?? ""));
-    if (subtitleMode !== "off" && !subtitleLanguage) throw new AppError("Pick a subtitle language.", "err.missingSubtitleLanguage");
-    const fallbackSubtitleLanguage = subtitleMode === "off" ? undefined : normalizeLanguage(String(rawSelection.fallbackSubtitleLanguage ?? ""));
-    const firstAddon = store.addons().find((addon) => addon.key === addonKeys[0]);
-    // A source whose addon found no language falls back to the one the title's own metadata names.
-    const metaLanguage = parentId ? titleLanguage((await cachedMeta(metaType, parentId, prefsOf(req).uiLanguage))?.language) : undefined;
-    const selection: DownloadSelection = {
-      addonKeys, sourceStrategy, audioLanguage,
-      fallbackAudioLanguage: fallbackAudioLanguage === audioLanguage ? undefined : fallbackAudioLanguage,
-      audioMode,
-      titleLanguage: metaLanguage,
-      subtitleMode, subtitleLanguage,
-      fallbackSubtitleLanguage: fallbackSubtitleLanguage === subtitleLanguage ? undefined : fallbackSubtitleLanguage,
-      targetSettings: explicit ?? (firstAddon?.downloadSettings.series ?? defaultDownloadSettings().series),
-    };
-    assertMayQueue(req, { libraryId: selection.targetSettings.libraryId });
+    const selection = await parseSelection(req, { selection: req.body.selection, target: req.body.target, metaType, parentId });
     let added = 0, skipped = 0;
     for (const episode of episodes) {
       const videoId = String(episode.id ?? "").trim();

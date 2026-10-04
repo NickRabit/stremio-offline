@@ -3,8 +3,10 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
+import type { DownloadSelection } from "./downloads.js";
 import type { AppError } from "./errors.js";
-import { FollowService, FollowStore, followStaggerMs, normalizeFollowEpisodes, type FollowEpisode } from "./follows.js";
+import { downloadEligibility, FollowService, FollowStore, followStaggerMs, normalizeFollowEpisodes, type Follow, type FollowAutoDownload, type FollowDeps, type FollowEpisode, type FollowJob, type FollowQueue } from "./follows.js";
+import type { MediaInfo } from "./naming.js";
 import type { MetaItem } from "./types.js";
 
 const temp = () => mkdtempSync(path.join(tmpdir(), "follows-"));
@@ -19,6 +21,53 @@ const episode = (season: number, number: number, videoId: string, released?: str
 });
 const loaded = async (dir: string) => { const store = new FollowStore(dir); await store.load(); return store; };
 const messageKeyOf = (error: unknown) => (error as { messageKey?: string }).messageKey;
+
+interface FakeJob {
+  id: string;
+  status: string;
+  errorKey?: string;
+  follow?: { followId: string; episodeKey: string; intent: string };
+  source?: { type: string; videoId: string };
+}
+
+/** A lazy queue kept in memory: it admits one job per unfinished source, records what it was
+ *  asked to do, and can be told to complete, fail, drop or refuse a job. */
+const fakeQueue = () => {
+  const jobs: FakeJob[] = [];
+  const added: Array<{ title: string; source: { type: string; videoId: string; selection?: DownloadSelection }; ownerUserId: string; follow: { followId: string; episodeKey: string; intent: string } }> = [];
+  const retried: string[] = [];
+  const removed: string[] = [];
+  const hooks: { remove?: (job: FakeJob) => Promise<void> } = {};
+  let nextId = 1;
+  let failAdd = false;
+  const queue: FollowQueue = {
+    addPending: async (title, source, _media: MediaInfo | undefined, ownerUserId, follow) => {
+      if (failAdd) { failAdd = false; throw new Error("addPending failed"); }
+      if (jobs.some((job) => job.source?.type === source.type && job.source?.videoId === source.videoId && job.status !== "completed" && job.status !== "failed")) return undefined;
+      const job: FakeJob = { id: `job-${nextId++}`, status: "queued", follow, source: { type: source.type, videoId: source.videoId } };
+      jobs.push(job);
+      added.push({ title, source, ownerUserId, follow });
+      return { id: job.id };
+    },
+    findActiveEpisode: (_ownerUserId, type, videoId) => jobs.find((job) => job.source?.type === type && job.source?.videoId === videoId && job.status !== "completed" && job.status !== "failed"),
+    followJobs: () => jobs.map((job) => ({ id: job.id, status: job.status, ...(job.errorKey ? { errorKey: job.errorKey } : {}), ...(job.follow ? { follow: job.follow } : {}) })),
+    get: (id) => { const job = jobs.find((item) => item.id === id); return job ? { id: job.id, status: job.status, ...(job.errorKey ? { errorKey: job.errorKey } : {}) } : undefined; },
+    retry: async (id) => { retried.push(id); const job = jobs.find((item) => item.id === id); if (job) job.status = "queued"; },
+    remove: async (id) => {
+      const index = jobs.findIndex((job) => job.id === id);
+      if (index < 0) throw new Error("not found");
+      if (hooks.remove) await hooks.remove(jobs[index]);
+      jobs.splice(index, 1);
+      removed.push(id);
+    },
+  };
+  return {
+    queue, jobs, added, retried, removed, hooks,
+    failNextAdd: () => { failAdd = true; },
+    complete: (id: string) => { const job = jobs.find((item) => item.id === id); if (job) job.status = "completed"; },
+    fail: (id: string, errorKey?: string) => { const job = jobs.find((item) => item.id === id); if (job) { job.status = "failed"; job.errorKey = errorKey; } },
+  };
+};
 
 test("normalizeFollowEpisodes reads the aliases the episode reader does", () => {
   const episodes = normalizeFollowEpisodes(meta([
@@ -231,6 +280,7 @@ test("a second check joins the one already in flight", async (t) => {
   const pending = new Promise<MetaItem | null>((resolve) => { release = resolve; });
   const service = new FollowService({
     store, now: () => 0, owner: () => ({ id: "u1", role: "user" }),
+    queue: fakeQueue().queue, mayDownload: () => true,
     meta: () => { calls += 1; return pending; },
   });
   const first = service.check(follow.id, "manual");
@@ -248,8 +298,8 @@ test("a deleted or switched-off owner is never asked for metadata", async (t) =>
   const follow = await store.create({ ownerUserId: "u1", type: "series", metaId: "tt1", name: "Show" }, 0);
   let calls = 0;
   const metaStub = async () => { calls += 1; return meta([]); };
-  await new FollowService({ store, now: () => 0, owner: () => undefined, meta: metaStub }).check(follow.id, "schedule");
-  await new FollowService({ store, now: () => 0, owner: () => ({ id: "u1", role: "user", disabled: true }), meta: metaStub }).check(follow.id, "schedule");
+  await new FollowService({ store, now: () => 0, owner: () => undefined, queue: fakeQueue().queue, mayDownload: () => true, meta: metaStub }).check(follow.id, "schedule");
+  await new FollowService({ store, now: () => 0, owner: () => ({ id: "u1", role: "user", disabled: true }), queue: fakeQueue().queue, mayDownload: () => true, meta: metaStub }).check(follow.id, "schedule");
   assert.equal(calls, 0);
   assert.equal(store.get(follow.id)!.lastCheckedAt, undefined);
 });
@@ -259,7 +309,7 @@ test("a null answer is recorded as a failure", async (t) => {
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const store = await loaded(dir);
   const follow = await store.create({ ownerUserId: "u1", type: "series", metaId: "tt1", name: "Show" }, 0);
-  await new FollowService({ store, now: () => 100, owner: () => ({ id: "u1", role: "user" }), meta: async () => null }).check(follow.id, "schedule");
+  await new FollowService({ store, now: () => 100, owner: () => ({ id: "u1", role: "user" }), queue: fakeQueue().queue, mayDownload: () => true, meta: async () => null }).check(follow.id, "schedule");
   const after = store.get(follow.id)!;
   assert.equal(after.failures, 1);
   assert.equal(after.lastErrorKey, "err.followMetaUnavailable");
@@ -272,7 +322,7 @@ test("an edit while the metadata is in flight discards the result", async (t) =>
   const follow = await store.create({ ownerUserId: "u1", type: "series", metaId: "tt1", name: "Show" }, 0);
   let release!: (value: MetaItem | null) => void;
   const pending = new Promise<MetaItem | null>((resolve) => { release = resolve; });
-  const service = new FollowService({ store, now: () => 1_000, owner: () => ({ id: "u1", role: "user" }), meta: () => pending });
+  const service = new FollowService({ store, now: () => 1_000, owner: () => ({ id: "u1", role: "user" }), queue: fakeQueue().queue, mayDownload: () => true, meta: () => pending });
   const run = service.check(follow.id, "manual");
   await store.update(follow.id, (entry) => { entry.revision += 1; });
   release(meta([{ id: "tt1:1:1", season: 1, episode: 1 }]));
@@ -287,7 +337,7 @@ test("a manual check is refused inside the cooldown and answered after it", asyn
   const store = await loaded(dir);
   const follow = await store.create({ ownerUserId: "u1", type: "series", metaId: "tt1", name: "Show" }, 0);
   let now = 0;
-  const service = new FollowService({ store, now: () => now, owner: () => ({ id: "u1", role: "user" }), meta: async () => meta([]) });
+  const service = new FollowService({ store, now: () => now, owner: () => ({ id: "u1", role: "user" }), queue: fakeQueue().queue, mayDownload: () => true, meta: async () => meta([]) });
   await service.checkNow(follow.id, "u1");
   await assert.rejects(service.checkNow(follow.id, "u1"), (error) => messageKeyOf(error) === "err.followCooldown");
   await assert.rejects(service.checkNow(follow.id, "u2"), (error) => (error as AppError).status === 404);
@@ -321,6 +371,7 @@ test("new episodes are the owner's own, inside the window and after the marker",
     store,
     now: () => Date.parse("2024-04-30T00:00:00.000Z"),
     owner: () => ({ id: "u1", role: "user" }),
+    queue: fakeQueue().queue, mayDownload: () => true,
     meta: async () => null,
   });
   const items = service.newEpisodes("u1", (metaId) => metaId === "tt1" ? { season: 1, episode: 1 } : undefined);
@@ -329,4 +380,333 @@ test("new episodes are the owner's own, inside the window and after the marker",
   assert.equal(items[1].name, "Show");
   assert.equal(items[1].type, "series");
   assert.equal(items[1].videoId, "tt1:1:3");
+});
+
+const NOW = Date.parse("2024-06-01T00:00:00.000Z");
+const RELEASED = "2024-03-01T00:00:00.000Z";
+
+const selection = (): DownloadSelection => ({
+  addonKeys: ["addon"], sourceStrategy: "priority", audioLanguage: "en", audioMode: "listed",
+  subtitleMode: "off", targetSettings: { subfolder: "", layout: "structured" },
+});
+const rule = (over: Partial<FollowAutoDownload> = {}): FollowAutoDownload => ({
+  enabledAt: "2024-01-01T00:00:00.000Z", startMode: "new", selection: selection(), ...over,
+});
+const buildService = (store: FollowStore, q: ReturnType<typeof fakeQueue>, over: Partial<FollowDeps> = {}) => new FollowService({
+  store, now: () => NOW, owner: () => ({ id: "u1", role: "user" }), meta: async () => null,
+  queue: q.queue, mayDownload: () => true, ...over,
+});
+const seedSeries = async (store: FollowStore, episodes: FollowEpisode[], auto: FollowAutoDownload, now = 0): Promise<string> => {
+  const follow = await store.create({ ownerUserId: "u1", type: "series", metaId: "tt1", name: "Show" }, now);
+  await store.recordCheck(follow.id, { episodes, now });
+  await store.update(follow.id, (current) => { current.autoDownload = auto; });
+  return follow.id;
+};
+const withStore = async (t: { after: (fn: () => void) => void }) => {
+  const dir = temp();
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  return { dir, store: await loaded(dir) };
+};
+
+test("downloadEligibility follows the start rule, the clock and the episode's facts", () => {
+  const follow = (auto?: FollowAutoDownload): Follow => ({
+    id: "f", ownerUserId: "u1", type: "series", metaId: "tt1", name: "Show", createdAt: "2024-01-01T00:00:00.000Z",
+    updatedAt: "2024-01-01T00:00:00.000Z", enabled: true, revision: 1, nextCheckAt: "2024-01-01T00:00:00.000Z", failures: 0,
+    ...(auto ? { autoDownload: auto } : {}), episodes: {},
+  });
+  const ep = (over: Partial<FollowEpisode> = {}): FollowEpisode => ({ key: "1:1", videoId: "v1", season: 1, episode: 1, firstSeenAt: "2024-02-01T00:00:00.000Z", ...over });
+
+  assert.equal(downloadEligibility(follow(), ep({ released: RELEASED }), NOW), "outside", "no rule is never automatic");
+  assert.equal(downloadEligibility(follow(rule()), ep({ released: RELEASED }), NOW), "eligible");
+  assert.equal(downloadEligibility(follow(rule({ enabledAt: "2024-04-01T00:00:00.000Z" })), ep({ released: RELEASED }), NOW), "outside", "released before the rule");
+  assert.equal(downloadEligibility(follow(rule()), ep(), NOW), "attention-no-date", "an unseen date is not proof");
+  assert.equal(downloadEligibility(follow(rule({ enabledAt: "2024-03-01T00:00:00.000Z" })), ep(), NOW), "outside", "first seen before the rule");
+  assert.equal(downloadEligibility(follow(rule()), ep({ released: RELEASED, ambiguous: true }), NOW), "attention-ambiguous");
+  assert.equal(downloadEligibility(follow(rule()), ep({ released: "2024-07-01T00:00:00.000Z" }), NOW), "upcoming");
+
+  const from = rule({ startMode: "from", startSeason: 2, startEpisode: 3 });
+  assert.equal(downloadEligibility(follow(from), ep({ season: 2, episode: 3, released: RELEASED }), NOW), "eligible");
+  assert.equal(downloadEligibility(follow(from), ep({ season: 2, episode: 2, released: RELEASED }), NOW), "outside", "before the start episode");
+  assert.equal(downloadEligibility(follow(from), ep({ season: 1, episode: 9, released: RELEASED }), NOW), "outside", "season is compared first");
+});
+
+test("admission queues in season order and stops at the caps", async (t) => {
+  const { store } = await withStore(t);
+  const q = fakeQueue();
+  const service = buildService(store, q);
+  const id = await seedSeries(store, [episode(1, 3, "v3", RELEASED), episode(1, 1, "v1", RELEASED), episode(1, 2, "v2", RELEASED)], rule());
+  await service.admit(id);
+  assert.deepEqual(q.added.map((entry) => entry.follow.episodeKey), ["1:1", "1:2", "1:3"]);
+  assert.equal(q.added[0].title, "Show · S01E01");
+  assert.equal(store.get(id)!.episodes["1:1"].download?.state, "queued");
+});
+
+test("a long season is admitted over several passes, never more than twenty at once", async (t) => {
+  const { store } = await withStore(t);
+  const q = fakeQueue();
+  const service = buildService(store, q);
+  const episodes = Array.from({ length: 25 }, (_unused, index) => episode(1, index + 1, `v${index + 1}`, RELEASED));
+  const id = await seedSeries(store, episodes, rule());
+  await service.admit(id);
+  assert.equal(q.added.length, 20);
+  await service.admit(id);
+  assert.equal(q.added.length, 20, "twenty are already outstanding, so a second pass adds nothing");
+  for (const job of q.jobs) q.complete(job.id);
+  await service.sync();
+  await service.admit(id);
+  assert.equal(q.added.length, 25);
+  assert.equal(store.get(id)!.episodes["1:25"].download?.state, "queued");
+});
+
+test("the outstanding budget is shared across every follow", async (t) => {
+  const { store } = await withStore(t);
+  const q = fakeQueue();
+  const service = buildService(store, q);
+  const many = Array.from({ length: 15 }, (_unused, index) => episode(1, index + 1, `a${index + 1}`, RELEASED));
+  const first = await seedSeries(store, many, rule());
+  const second = await store.create({ ownerUserId: "u1", type: "series", metaId: "tt2", name: "Other" }, 0);
+  await store.recordCheck(second.id, { episodes: many.map((entry, index) => ({ ...entry, key: `2:${index + 1}`, videoId: `b${index + 1}` })), now: 0 });
+  await store.update(second.id, (current) => { current.autoDownload = rule(); });
+  await service.admit(first);
+  assert.equal(q.added.length, 15);
+  await service.admit(second.id);
+  assert.equal(q.added.length, 20, "only the room left in the budget is used");
+  assert.equal(store.get(second.id)!.episodes["2:6"].download, undefined);
+});
+
+test("a crash between reserving and queueing is re-admitted once", async (t) => {
+  const { store } = await withStore(t);
+  const q = fakeQueue();
+  const service = buildService(store, q);
+  const id = await seedSeries(store, [episode(1, 1, "v1", RELEASED)], rule());
+  q.failNextAdd();
+  await assert.rejects(service.admit(id));
+  assert.equal(store.get(id)!.episodes["1:1"].download?.state, "reserved");
+  assert.equal(q.added.length, 0);
+  await service.admit(id);
+  assert.equal(store.get(id)!.episodes["1:1"].download?.state, "queued");
+  assert.equal(q.added.length, 1, "re-admitted exactly once");
+  assert.equal(store.get(id)!.episodes["1:1"].download?.generation, 1, "the same generation is reused");
+  await service.admit(id);
+  assert.equal(q.added.length, 1, "a third pass adds nothing");
+});
+
+test("a crash between queueing and linking is linked by sync without a second job", async (t) => {
+  const { store } = await withStore(t);
+  const q = fakeQueue();
+  const service = buildService(store, q);
+  const id = await seedSeries(store, [episode(1, 1, "v1", RELEASED)], rule());
+  await service.admit(id);
+  const job = q.jobs[0];
+  // Simulate the crash: the job landed, but the episode was never moved off `reserved`.
+  await store.update(id, (current) => { current.episodes["1:1"].download = { state: "reserved", intent: job.follow!.intent, generation: 1, attempts: 0, updatedAt: RELEASED }; });
+  await service.sync();
+  const download = store.get(id)!.episodes["1:1"].download!;
+  assert.equal(download.state, "queued");
+  assert.equal(download.jobId, job.id);
+  assert.equal(q.added.length, 1, "sync links the existing job rather than queueing another");
+});
+
+test("a failed job waits on the ladder and is retried in place", async (t) => {
+  const { store } = await withStore(t);
+  const q = fakeQueue();
+  let now = NOW;
+  const service = buildService(store, q, { now: () => now });
+  const id = await seedSeries(store, [episode(1, 1, "v1", RELEASED)], rule());
+  await service.admit(id);
+  const jobId = q.jobs[0].id;
+
+  q.fail(jobId, "err.noMatchingSource");
+  await service.sync();
+  let download = store.get(id)!.episodes["1:1"].download!;
+  assert.equal(download.state, "waiting");
+  assert.equal(download.attempts, 1);
+  assert.equal(download.reasonKey, "err.noMatchingSource");
+  assert.equal(download.nextAttemptAt, new Date(now + 3_600_000).toISOString());
+
+  await service.sync();
+  assert.deepEqual(q.retried, [], "not due yet");
+  now += 3_600_000;
+  await service.sync();
+  download = store.get(id)!.episodes["1:1"].download!;
+  assert.equal(download.state, "queued");
+  assert.deepEqual(q.retried, [jobId]);
+  assert.equal(q.added.length, 1, "the same job is retried, never a second one");
+
+  q.fail(jobId, "err.noMatchingSource");
+  await service.sync();
+  download = store.get(id)!.episodes["1:1"].download!;
+  assert.equal(download.attempts, 2);
+  assert.equal(download.nextAttemptAt, new Date(now + 6 * 3_600_000).toISOString());
+
+  now += 6 * 3_600_000;
+  await service.sync();
+  q.fail(jobId);
+  await service.sync();
+  download = store.get(id)!.episodes["1:1"].download!;
+  assert.equal(download.attempts, 3);
+  assert.equal(download.reasonKey, "err.followDownloadFailed", "a job with no key uses the fallback");
+  assert.equal(download.nextAttemptAt, new Date(now + 24 * 3_600_000).toISOString());
+});
+
+test("a vanished accepted job goes to attention and only an explicit retry re-queues it", async (t) => {
+  const { store } = await withStore(t);
+  const q = fakeQueue();
+  const service = buildService(store, q);
+  const id = await seedSeries(store, [episode(1, 1, "v1", RELEASED)], rule());
+  await service.admit(id);
+  q.jobs.splice(0, 1);
+
+  await service.sync();
+  let download = store.get(id)!.episodes["1:1"].download!;
+  assert.equal(download.state, "attention");
+  assert.equal(download.reasonKey, "err.followJobMissing");
+  await service.admit(id);
+  assert.equal(store.get(id)!.episodes["1:1"].download?.state, "attention", "never re-admitted blindly");
+  assert.equal(q.added.length, 1);
+
+  await service.retryEpisode(id, "u1", "1:1");
+  download = store.get(id)!.episodes["1:1"].download!;
+  assert.equal(download.state, "queued");
+  assert.equal(download.generation, 2);
+  assert.equal(download.intent, `${id}:1:1:2`);
+  assert.equal(q.added.length, 2, "exactly one new job");
+  assert.equal(q.added[1].follow.intent, `${id}:1:1:2`);
+});
+
+test("removing a job records a skip that is never re-admitted", async (t) => {
+  const { store } = await withStore(t);
+  const q = fakeQueue();
+  const service = buildService(store, q);
+  q.hooks.remove = (job) => service.jobRemoving(job, "user");
+  const id = await seedSeries(store, [episode(1, 1, "v1", RELEASED)], rule());
+  await service.admit(id);
+  await q.queue.remove(q.jobs[0].id);
+  assert.equal(store.get(id)!.episodes["1:1"].download?.state, "skipped");
+  assert.equal(store.get(id)!.episodes["1:1"].download?.reasonKey, "err.followSkipped");
+  await service.admit(id);
+  assert.equal(store.get(id)!.episodes["1:1"].download?.state, "skipped");
+  assert.equal(q.added.length, 1);
+});
+
+test("a removal guard that cannot write refuses the removal", async (t) => {
+  const { store } = await withStore(t);
+  const q = fakeQueue();
+  const service = buildService(store, q);
+  const id = await seedSeries(store, [episode(1, 1, "v1", RELEASED)], rule());
+  await service.admit(id);
+  const job = q.jobs[0];
+  const original = store.update.bind(store);
+  store.update = async () => { throw new Error("disk full"); };
+  try {
+    await assert.rejects(service.jobRemoving(job, "user"));
+  } finally { store.update = original; }
+  assert.equal(store.get(id)!.episodes["1:1"].download?.state, "queued", "the write failed, so nothing moved");
+  await service.jobRemoving(job, "account");
+  assert.equal(store.get(id)!.episodes["1:1"].download?.state, "queued", "an account removal changes nothing");
+});
+
+test("removing a completed job keeps the episode completed", async (t) => {
+  const { store } = await withStore(t);
+  const q = fakeQueue();
+  const service = buildService(store, q);
+  const id = await seedSeries(store, [episode(1, 1, "v1", RELEASED)], rule());
+  await service.admit(id);
+  const job = q.jobs[0];
+  q.complete(job.id);
+  await service.sync();
+  await service.jobRemoving(job, "user");
+  assert.equal(store.get(id)!.episodes["1:1"].download?.state, "completed");
+});
+
+test("clearing finished rows records completion before they go", async (t) => {
+  const { store } = await withStore(t);
+  const q = fakeQueue();
+  const service = buildService(store, q);
+  const id = await seedSeries(store, [episode(1, 1, "v1", RELEASED)], rule());
+  await service.admit(id);
+  const job = q.jobs[0];
+  assert.equal(store.get(id)!.episodes["1:1"].download?.state, "queued");
+  await service.jobsClearing([{ id: job.id, status: "completed", follow: job.follow }]);
+  assert.equal(store.get(id)!.episodes["1:1"].download?.state, "completed");
+});
+
+test("a completed episode whose file is deleted stays completed", async (t) => {
+  const { store } = await withStore(t);
+  const q = fakeQueue();
+  const service = buildService(store, q);
+  const id = await seedSeries(store, [episode(1, 1, "v1", RELEASED)], rule());
+  await service.admit(id);
+  const job = q.jobs[0];
+  await service.jobCompleted({ id: job.id, status: "completed", follow: job.follow });
+  assert.equal(store.get(id)!.episodes["1:1"].download?.state, "completed");
+  q.jobs.splice(0, 1);
+  await service.sync();
+  await service.admit(id);
+  assert.equal(store.get(id)!.episodes["1:1"].download?.state, "completed", "a deleted file does not re-download");
+});
+
+test("a rule that changes while a job is being queued is not admitted", async (t) => {
+  const mutations: Array<[string, (follow: Follow) => void]> = [
+    ["autoDownload removed", (follow) => { delete follow.autoDownload; }],
+    ["paused", (follow) => { follow.enabled = false; }],
+    ["revision changed", (follow) => { follow.revision += 1; }],
+  ];
+  for (const [name, mutate] of mutations) {
+    const { store } = await withStore(t);
+    const q = fakeQueue();
+    const original = store.update.bind(store);
+    const service = buildService(store, q, {});
+    const id = await seedSeries(store, [episode(1, 1, "v1", RELEASED)], rule());
+    let reached!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>((resolve) => { reached = resolve; });
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let held = true;
+    store.update = async (target, mutator) => { if (held) { held = false; reached(); await gate; } return original(target, mutator); };
+    const admitting = service.admit(id);
+    await entered;
+    await original(id, mutate);
+    release();
+    await admitting;
+    store.update = original;
+    assert.equal(q.added.length, 0, name);
+    assert.equal(store.get(id)!.episodes["1:1"].download?.state, "reserved", name);
+  }
+});
+
+test("an owner who may not download is blocked and unblocked", async (t) => {
+  const { store } = await withStore(t);
+  const q = fakeQueue();
+  let allowed = false;
+  const service = buildService(store, q, { mayDownload: () => allowed });
+  const id = await seedSeries(store, [episode(1, 1, "v1", RELEASED)], rule());
+  await service.admit(id);
+  assert.equal(store.get(id)!.autoDownload?.blockedKey, "err.downloadLibraryNotAllowed");
+  assert.equal(q.added.length, 0, "nothing is queued while blocked");
+  allowed = true;
+  await service.admit(id);
+  assert.equal(store.get(id)!.autoDownload?.blockedKey, undefined, "the block is cleared");
+  assert.equal(q.added.length, 1);
+});
+
+test("an owner that no longer exists is blocked", async (t) => {
+  const { store } = await withStore(t);
+  const q = fakeQueue();
+  const service = buildService(store, q, { owner: () => undefined });
+  const id = await seedSeries(store, [episode(1, 1, "v1", RELEASED)], rule());
+  await service.admit(id);
+  assert.equal(store.get(id)!.autoDownload?.blockedKey, "err.downloadLibraryNotAllowed");
+  assert.equal(q.added.length, 0);
+});
+
+test("a check keeps the download an episode already carries", async (t) => {
+  const { store } = await withStore(t);
+  const follow = await store.create({ ownerUserId: "u1", type: "series", metaId: "tt1", name: "Show" }, 0);
+  await store.recordCheck(follow.id, { episodes: [episode(1, 1, "v1", RELEASED)], now: 0 });
+  const download = { state: "queued" as const, intent: "keep-me", generation: 1, attempts: 0, updatedAt: RELEASED };
+  await store.update(follow.id, (current) => { current.episodes["1:1"].download = download; });
+  await store.recordCheck(follow.id, { episodes: [episode(1, 1, "v1", "2024-03-02T00:00:00.000Z")], now: 1_000 });
+  assert.deepEqual(store.get(follow.id)!.episodes["1:1"].download, download);
+  assert.equal(store.get(follow.id)!.episodes["1:1"].released, "2024-03-02T00:00:00.000Z");
 });

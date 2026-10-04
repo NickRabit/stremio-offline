@@ -1329,3 +1329,82 @@ test("a playlist is told apart from a file, whatever the segments are named", ()
   assert.equal(isPlaylist("https://cdn.example/m3u8/clip.mp4"), false);
   assert.equal(isPlaylist("not a url"), false);
 });
+
+test("a removal guard that throws refuses the removal and keeps the row", async () => {
+  const { directory, queue } = await tempQueue({ beforeRemove: async () => { throw new Error("no removal"); } });
+  try {
+    const job = await queue.addPending("Show", { type: "series", videoId: "tt1:1:1" }, undefined, "u1");
+    await assert.rejects(queue.remove(job!.id), /no removal/);
+    assert.ok(queue.get(job!.id), "the row is still there");
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("removeMatching tells the guard the removal is an account's", async () => {
+  const reasons: string[] = [];
+  const { directory, queue } = await tempQueue({ beforeRemove: async (_job, reason) => { reasons.push(reason); } });
+  try {
+    await queue.addPending("Show", { type: "series", videoId: "tt1:1:1" }, undefined, "u1");
+    await queue.removeMatching(() => true);
+    assert.deepEqual(reasons, ["account"]);
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a clear guard that throws clears nothing", async () => {
+  const size = 128;
+  const { server, port } = await listen((_req, res) => {
+    res.writeHead(200, { "content-length": String(size), "content-type": "video/mp4" });
+    void send(res, size).then(() => res.end());
+  });
+  const { directory, queue } = await tempQueue({ beforeClearCompleted: async () => { throw new Error("no clear"); } });
+  try {
+    const job = await queue.add("Film", { url: `http://127.0.0.1:${port}/film.mp4` });
+    await waitFor(queue, () => queue.list().find((item) => item.id === job.id)?.status === "completed", 30_000);
+    await assert.rejects(queue.clearCompleted(), /no clear/);
+    assert.equal(queue.list().length, 1, "the finished row is kept");
+    assert.equal(queue.list()[0].status, "completed");
+  } finally {
+    await queue.stop();
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a job's follow survives a save and a load", async () => {
+  const { directory, queue } = await tempQueue();
+  try {
+    const job = await queue.addPending("Show", { type: "series", videoId: "tt1:1:1" }, undefined, "u1", { followId: "f1", episodeKey: "1:1", intent: "f1:1:1:1" });
+    await queue.stop();
+    const downloads = path.join(directory, "downloads");
+    const reopened = new DownloadQueue(() => 1, () => 1, path.join(directory, "data"), downloads, {
+      libraries: () => [downloadLibrary(downloads)],
+      defaultLibrary: () => downloadLibrary(downloads),
+    });
+    await reopened.load();
+    try {
+      assert.deepEqual(reopened.get(job!.id)?.follow, { followId: "f1", episodeKey: "1:1", intent: "f1:1:1:1" });
+    } finally {
+      await reopened.stop();
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a lazy job that finds no source fails with the no-matching-source key", async () => {
+  const { directory, queue } = await tempQueue();
+  queue.setResolver(async () => undefined);
+  try {
+    await queue.addPending("Show", { type: "series", videoId: "tt1:1:1" }, { kind: "episode", title: "Show", season: 1, episode: 1 });
+    await waitFor(queue, () => queue.list()[0]?.status === "failed");
+    assert.equal(queue.list()[0].errorKey, "err.noMatchingSource");
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
