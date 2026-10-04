@@ -782,6 +782,10 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .player-overlay .player-controls button,.player-settings button{display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;min-width:44px;min-height:44px;padding:8px}
 .player-controls .player-settings-toggle{margin-left:auto}
 .player-overlay .player-controls .fullscreen-action{order:0}
+.player-controls .player-view-controls{display:flex;align-items:center;flex-wrap:nowrap;flex:0 0 auto;gap:inherit;margin-left:auto}
+.player-controls .player-view-controls .player-settings-toggle{margin-left:0}
+.player-overlay .player-controls .player-stretch-toggle[aria-pressed="true"]{color:var(--accent);border-color:#ff5b3855;background:#ff5b381f}
+.player-overlay.picture-stretched .player-host video{object-fit:fill}
 .player-controls .player-action span,.player-controls .player-star span{display:none}
 .player-overlay .player-subtitles{bottom:calc(var(--player-bottom-height,120px) + 12px);transition:bottom .18s ease}
 .player-overlay.controls-hidden .player-subtitles{bottom: max(24px,env(safe-area-inset-bottom))}
@@ -858,7 +862,7 @@ img.broken{visibility:hidden}
 .timeline-preview{display:grid;gap:4px;text-align:center;max-width:160px;white-space:normal}.timeline-preview img{display:block;width:144px;max-height:90px;object-fit:contain;border-radius:3px}
 
 .transport-controls{display:contents}
-@media(max-width:700px){.player-overlay .player-controls{flex-wrap:wrap}.player-controls .seek-step{padding:6px;gap:2px;font-size:10px}.player-controls .seek-step svg{width:20px}}
+@media(max-width:700px){.player-overlay .player-controls{flex-wrap:wrap}.player-overlay .transport-controls{display:flex;flex:0 0 auto;flex-wrap:nowrap;gap:inherit}.player-controls .seek-step{padding:6px;gap:2px;font-size:10px}.player-controls .seek-step svg{width:20px}}
 
 .player-overlay.cursor-hidden,.player-overlay.cursor-hidden *{cursor:none!important}
 .fullscreen-notice{position:absolute;z-index:13;bottom:calc(var(--player-bottom-height,120px) + 16px);left:16px;right:16px;text-align:center;padding:8px;border-radius:8px;background:#141922ed;font-size:12px;pointer-events:none}

@@ -191,6 +191,7 @@ export const pl: Catalog = {
   "player.hideSubtitles": "Ukryj napisy",
   "player.showSubtitlesKey": "Pokaż napisy (C)",
   "player.hideSubtitlesKey": "Ukryj napisy (C)",
+  "player.stretchPicture": "Rozciągnij obraz",
   "player.fullscreenUnavailable": "Pełny ekran jest niedostępny. Spróbuj ponownie po odtworzeniu filmu.",
   "player.fullscreen": "Pełny ekran",
   "player.exitFullscreen": "Opuść tryb pełnoekranowy",

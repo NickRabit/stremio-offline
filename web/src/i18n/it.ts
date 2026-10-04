@@ -191,6 +191,7 @@ export const it: Catalog = {
   "player.hideSubtitles": "Nascondi i sottotitoli",
   "player.showSubtitlesKey": "Mostra sottotitoli (C)",
   "player.hideSubtitlesKey": "Nascondi sottotitoli (C)",
+  "player.stretchPicture": "Estendi immagine",
   "player.fullscreenUnavailable": "Lo schermo intero non è disponibile. Riprova una volta avviato il video.",
   "player.fullscreen": "Schermo intero",
   "player.exitFullscreen": "Lascia lo schermo intero",

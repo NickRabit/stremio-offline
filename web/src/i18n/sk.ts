@@ -191,6 +191,7 @@ export const sk: Catalog = {
   "player.hideSubtitles": "Skryť titulky",
   "player.showSubtitlesKey": "Zobraziť titulky (C)",
   "player.hideSubtitlesKey": "Skryť titulky (C)",
+  "player.stretchPicture": "Roztiahnuť obraz",
   "player.fullscreenUnavailable": "Celá obrazovka nie je k dispozícii. Skúste to znova po prehrávaní videa.",
   "player.fullscreen": "Celá obrazovka",
   "player.exitFullscreen": "Nechajte celú obrazovku",
