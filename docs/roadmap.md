@@ -24,7 +24,7 @@ metadata store or scheduler for each platform.
 
 | Order | Outcome | Scope / release gate |
 | --- | --- | --- |
-| P0a | Files and acknowledged work survive failure | Fix queue admission/write failures and journal loss; prove recoverable operations and evaluate transactional SQLite migration |
+| P0a | Files and acknowledged work survive failure | Fix queue admission/write failures and journal loss; journal cross-store operations so a restart can replay them |
 | P0b | Playback and mobile controls are dependable | Session lifecycle tests and physical iOS verification |
 | P1a | Home is useful immediately | Permission-filtered personal rows from existing state; no scheduler dependency |
 | P1b | Children can use the app safely | Restricted child account, server-enforced policy, parent-authenticated exit |
@@ -201,8 +201,8 @@ does not claim that the work below has shipped. The old local development
 checkout was substantially behind `main` and was not used as the audit baseline.
 
 Keep the modular monolith, explicit dependencies and one-command deployment.
-The immediate order is **data-safety fixes → SQLite decision experiment and
-recoverable operations → gated migration and bounded structural refactoring**. Small isolated extractions may proceed
+The immediate order is **data-safety fixes → journalled, recoverable
+operations → bounded structural refactoring**. Small isolated extractions may proceed
 alongside safety work. CSS splitting is useful, but does not outrank a confirmed
 persistence or destination-collision defect. Each item below is a separate PR
 unless its invariant requires an inseparable change.
@@ -221,7 +221,7 @@ unless its invariant requires an inseparable change.
 | Follow-show scheduling needs auditing | **Now shipped, audit its real implementation.** PR #297 landed during this review: `follows.ts` persists daily discovery, episode intent, automatic downloads and queue reconciliation. The personal watchlist is a separate existing feature. |
 | Desktop and Sonarr/Radarr are API consumers | **Different maturity.** Desktop ships and has a local backend lifecycle. The *arr adapter is a feasibility probe and specification, not a production integration. Keep its existing [delivery gate](arr-integration-spec.md). |
 | Network restrictions and redaction need review | **Existing protections, targeted gaps to investigate.** `security.ts` validates addresses and redirects, strips sensitive cross-origin headers, and has tests; logger redaction and resource ownership exist too. DNS validation and fetch connection resolution are separate, so rebinding deserves a focused test; this audit did not demonstrate an exploit. |
-| Defer SQLite migration for now | **Disagree.** Cross-library relocation updates two metadata files plus personal state, separately from the filesystem and operations journal. That is already a cross-store invariant. Local SQLite is now the recommended target, subject to a tested migration/runtime gate below. |
+| Defer SQLite migration for now | **Agree.** Cross-library relocation is a real cross-store invariant, but it also moves files, so it needs a journal and replay that no SQL transaction replaces. The confirmed defects are fixable in the existing stores and the state is small. `node:sqlite` loads in both shipped runtimes, so the reason is cost, not feasibility. See the [decision and its revisit triggers](roadmap-delivery-spec.md#local-sqlite-migration). |
 | Formalize adversarial review and retain layered tests | **Useful, partly documented already.** Layered tests and an adversarial recovery campaign exist. Add missing failure cases and a focused high-risk review checklist to the existing workflow. |
 
 File sizes measure physical lines, not complexity or performance. This audit
@@ -281,51 +281,56 @@ semantics and injection tests, not a claim that all current recovery is broken.
    fail-closed behavior already present in `FollowStore.load` rather than
    inventing another corruption policy.
 
-These fixes must not wait for the database migration. They become adapter
-contract tests that protect the SQLite implementation as well.
+Each fix lands with a store-level contract test: a failed commit reaches the
+caller, an unreadable file is preserved, and two concurrent admissions get
+distinct targets. Those tests stay valid whatever storage sits underneath.
 
-### P1 — Local database and recoverable filesystem operations
+### P1 — Recoverable filesystem and cross-store operations
 
-**Prefer SQLite for the transactional core, subject to a measured decision gate.** The concrete
-reason is transactional consistency and enforceable uniqueness, not a dislike
-of JSON syntax. The [migration design](roadmap-delivery-spec.md#local-sqlite-migration)
-compares hardened JSON, transactional SQLite and a blanket migration, and defines
-the scope, cutover, rollback, NAS constraints and runtime experiment. Performance
-benefits have not been measured; do not migrate independent stores for uniformity.
-Keep JSON for human-readable settings import/export and independent desktop
-preferences; do not put video or artwork blobs in the database.
+The rule: when the app cannot tell **"the library is empty"** from **"the
+library could not be read"**, it must not clean anything up. Uncertainty stops.
+The cross-library artwork loss had exactly this shape; the library lifecycle
+paths and the orphan sweep have been through it, the rest of the destructive
+surface has not.
+
+Keep the JSON stores. A [local SQLite migration](roadmap-delivery-spec.md#local-sqlite-migration)
+was evaluated and deferred; its revisit triggers are recorded there. Cross-store
+consistency comes from recording intent before effects and replaying it, which
+filesystem work needs anyway.
 
 Deliver in these boundaries:
 
-1. **Persistence interfaces and runtime experiment.** Narrow repositories for
-   queue admission, operation records and account/library state; record the
-   chosen driver and supported runtimes. Prove container and packaged desktop
-   compatibility, backup/restore and bounded event-loop latency against hardened
-   JSON. Proceed with migration only if the [decision gate](roadmap-delivery-spec.md#alternatives-and-the-reason-to-choose)
-   passes; otherwise keep the JSON repairs. No rollout yet.
-2. **Schema and offline importer.** Versioned schema, ownership and uniqueness
-   constraints, sanitized validation report, resumable migration decision and
-   immutable source backup. Import into an isolated database and compare logical
-   records before switching any production reads or writes.
-3. **One authoritative cutover.** Move accounts/grants, libraries, personal
-   state, metadata, follows and operational journals together where their invariants span
-   stores. Development can be incremental; production must not dual-write those
-   invariants across JSON and SQL. Reject unsupported future schemas and detect
-   attempts to run two backend writers on the same data directory.
-4. **Durable transfer phases and reconciliation.** Store operation ownership,
-   staging identity, publication and source-cleanup phases in the same database.
-   Filesystem effects remain outside SQL transactions. Follow the existing
+1. **Commit-aware store updates.** Give `Store`, `DownloadQueue`, `FollowStore`
+   and `LibraryMetaStore` one explicit contract: a mutation is acknowledged
+   only after its write succeeds, and memory never runs ahead of a failed
+   write unnoticed. Keep high-frequency progress coalesced and best-effort.
+2. **Durable transfer phases.** Record operation ownership, staging identity,
+   publication and source-cleanup phases in `library-ops.json` before each
+   effect. Follow the existing
    [recovery contract](roadmap-delivery-spec.md#filesystem-safety-and-restart-recovery),
    including same-filesystem renames, cross-mount copies, partial failures and
    replay twice. Never delete an unproven destination or an unknown `.part` file.
-5. **Operational backup/restore.** Test a consistent database backup together
-   with the documented media recovery procedure and unresolved operations.
-   Continue to distinguish configuration export from a full-instance backup.
+3. **Journalled relocation.** A library relocation writes one intent record
+   naming the source and destination keys, then updates both metadata files
+   and every affected account's favourites and progress. Startup replays an
+   unfinished record idempotently instead of leaving half the references moved.
+4. **Remaining destructive paths.** File rename, move, copy, delete, bulk and
+   cross-library operations across filesystems; artwork generation,
+   replacement and cleanup; metadata binding after an external rename or a
+   vanished file. Explicit preconditions, no swallowed errors, no success shown
+   for a failure, and a domain-layer regression test for each case found.
+5. **Backup scope, written down.** `backup.ts` exports settings and addons and
+   remaps library roots; it deliberately carries neither accounts nor media.
+   Document which state must be preserved (favourites, resume state, metadata
+   bindings, download settings), which is verified rebuildable cache, and how
+   addon URL secrets are handled. The target is a restore preview that
+   validates before mutation. A full-instance restore remains a separate,
+   undesigned operation.
 
 **Follow/queue reconciliation:** preserve the newly shipped owner-aware policy,
 reserved episode intents, adoption of manual jobs and completion/removal guards.
-Move `follows.json` and `downloads.json` into one database transaction boundary
-for intent-to-job linkage. Test a crash after reserving, enqueueing, adopting,
+The follow intent and its queue job commit to separate files; make the intent
+carry the job ID it reserved and reconcile both sides on startup. Test a crash after reserving, enqueueing, adopting,
 completing and clearing history, plus revocation during discovery. Reuse the
 existing follow tests; do not rebuild a scheduler or reopen the fixed H4.
 
@@ -335,21 +340,21 @@ table alongside these tests. Removing a download is not a persisted `cancelled`
 state; library operations have their own different status model. Cancellation,
 clear-history and deleting media must remain distinct.
 
-### Persistent-state inventory and transaction boundaries
+### Persistent-state inventory and consistency boundaries
 
 Paths below are relative to server `DATA_DIR`. Eleven JSON path families currently
 exist in these stores, including two cache indexes; `library/<id>.json` expands
 per library. This is not a count of all files on disk.
 
-| Path / implementation | Meaning and migration treatment |
+| Path / implementation | Meaning and recovery treatment |
 | --- | --- |
-| `state.json` / `Store` | Accounts, secrets, grants, libraries, settings, per-account favourites/progress/watchlist/search. Authoritative; migrate, preserve identifiers and permissions. |
-| `downloads.json` / `DownloadQueue` | Owned jobs, sources, destinations and recovery state; contains private URLs. Migrate with queue identity and status semantics intact. |
-| `follows.json` / `FollowStore` | Series subscriptions, discovered episodes and durable automatic-download intents. Migrate together with queue linkage and skip/retry state. |
-| `library-ops.json` / `LibraryOps` | Mutating operation intent and results. Migrate, then add per-item recovery phases. |
-| `library-scan.json` / `LibraryScan` | Scan progress and remaining work. Migrate or explicitly reconcile interrupted work; do not silently declare it complete. |
+| `state.json` / `Store` | Accounts, secrets, grants, libraries, settings, per-account favourites/progress/watchlist/search. Authoritative; never replaced by an empty state on a read failure. |
+| `downloads.json` / `DownloadQueue` | Owned jobs, sources, destinations and recovery state; contains private URLs. Admission and status changes must be acknowledged only once written. |
+| `follows.json` / `FollowStore` | Series subscriptions, discovered episodes and durable automatic-download intents. Reconcile with the queue on startup, including skip/retry state. |
+| `library-ops.json` / `LibraryOps` | Mutating operation intent and results. Add per-item recovery phases; preserve on a malformed read. |
+| `library-scan.json` / `LibraryScan` | Scan progress and remaining work. Explicitly reconcile interrupted work; do not silently declare it complete. |
 | `library/<id>.json` / `LibraryMetaStore` | Manual/automatic matches and suggestions. Preserve manual decisions and library-relative keys. |
-| `library/episodes.json` / `LibraryMetaStore` | Shared episode metadata. Preserve during migration; separately establish which fields are rebuildable. |
+| `library/episodes.json` / `LibraryMetaStore` | Shared episode metadata. Establish which fields are rebuildable before treating any as cache. |
 | `stats.json` / `Stats` | Historical traffic aggregates. Preserve; coalesce high-frequency updates. |
 | `activity.json` / `ActivityLog` | Bounded per-user activity history. Preserve retention and access rules. |
 | `images/index.json` / `ImageProxy` | Remote-image URL mapping/cache index. Separate from authoritative state; audit secret handling and rebuild behavior. |
@@ -357,16 +362,16 @@ per library. This is not a count of all files on disk.
 
 Desktop also owns `connection.json`, `local-settings.json`, `shell-prefs.json`
 and `window-state.json`, plus Electron-managed session storage. Those settings
-are independent of server transactions and need not migrate to SQLite. Remote
-desktop clients use the server API, never a shared database file.
+are independent of server state. Remote desktop clients use the server API,
+never shared state files.
 
-Required transaction/reconciliation cases: a library relocation changes source
+Required reconciliation cases: a library relocation changes source
 and destination bindings plus all affected users' favourites/progress; account
 or grant changes invalidate sessions and queued work; a completed download
 publishes a file and triggers metadata/statistics; reroot/disable/remove changes
 library state while workers may still hold paths; follow intent and queue jobs
-currently commit separately. Define the database commit
-and external-effect recovery for each before replacing its current store.
+currently commit separately. Define the journal record and the replay for each
+before changing its store.
 
 ### P1 — Security, playback and lifecycle boundaries
 
