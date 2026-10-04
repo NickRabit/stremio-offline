@@ -21,6 +21,7 @@ function harness(jobs: DownloadJob[] = []) {
   const removed: string[] = [];
   const destroyed: string[] = [];
   const stopped: string[] = [];
+  const followsRemoved: string[] = [];
   const activeMedia = new Set<ActiveTransfer>();
   const deviceTickets = new Map<string, DeviceDownloadTicket>();
   const playbackOwners = new Map<string, { owner: ResourceOwner; resourceId: string }>();
@@ -32,6 +33,7 @@ function harness(jobs: DownloadJob[] = []) {
     activeMedia,
     deviceTickets,
     stopPlayback: async (id) => { stopped.push(id); return undefined; },
+    follows: { removeOwner: async (userId) => { followsRemoved.push(userId); return 0; } },
     queue: {
       ownerOf: (candidate) => candidate.ownerUserId,
       pauseMatching: async (match) => {
@@ -47,7 +49,7 @@ function harness(jobs: DownloadJob[] = []) {
     },
   };
   const track = (transfer: ActiveTransfer) => { activeMedia.add(transfer); return transfer; };
-  return { deps, revocations: new Revocations(deps), paused, removed, destroyed, stopped, activeMedia, deviceTickets, playbackOwners, track };
+  return { deps, revocations: new Revocations(deps), paused, removed, destroyed, stopped, followsRemoved, activeMedia, deviceTickets, playbackOwners, track };
 }
 
 const transfer = (who: ResourceOwner, extra: Partial<ActiveTransfer> = {}): ActiveTransfer => {
@@ -89,6 +91,15 @@ test("deleting an account cancels its unfinished work rather than pausing it", a
 
   assert.deepEqual(h.removed, ["one"]);
   assert.deepEqual(h.paused, [], "a deleted account has nothing to come back to");
+});
+
+test("deleting an account also drops the series it followed", async () => {
+  const jobs = [job("one", "usr_a"), job("two", "usr_b")];
+  const h = harness(jobs);
+
+  await h.revocations.deleteUser("usr_a");
+
+  assert.deepEqual(h.followsRemoved, ["usr_a"], "only the deleted account's follows go with it");
 });
 
 test("losing the library permission pauses downloads and leaves playback running", async () => {

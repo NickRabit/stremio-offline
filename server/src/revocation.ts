@@ -120,6 +120,8 @@ export interface RevocationDeps {
   /** Stops one playback session, through the same release hook a player's own stop uses. */
   stopPlayback(id: string): Promise<unknown>;
   queue: RevocationQueue;
+  /** The followed series of the account, dropped with the account itself. */
+  follows?: { removeOwner(userId: string): Promise<unknown> };
 }
 
 /** The two causes that are not a user or a piece of content: one library or addon, held by
@@ -155,6 +157,10 @@ export class Revocations {
     await this.stopUserTransfers(userId);
     const removed = await this.deps.queue.removeMatching((job) => this.deps.queue.ownerOf(job) === userId);
     if (removed) log("INFO", "Unfinished downloads cancelled with the account", { user: userId, jobs: removed });
+    // An unreadable follow file must not keep the account alive; its follows name an
+    // owner who no longer exists, and the scheduler skips those.
+    await this.deps.follows?.removeOwner(userId).catch((error: unknown) =>
+      log("WARN", "The followed series of a deleted account were not removed", { user: userId, reason: error instanceof Error ? error.message : String(error) }));
   }
 
   /** Everything one account is *holding open* -- its media, playback, tickets and AirPlay
