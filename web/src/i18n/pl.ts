@@ -387,6 +387,9 @@ export const pl: Catalog = {
   "following.stateReleased": "Wydane",
   "following.calendarEmpty": "W tym miesiącu nic się nie pojawia.",
   "following.dayEmpty": "Tego dnia nic się nie ukazuje.",
+  "following.calendarMode": "Widok kalendarza",
+  "following.modeAgenda": "Lista",
+  "following.modeMonth": "Miesiąc",
   "following.activityEmpty": "Automatyczne pobieranie nie zrobiło jeszcze nic.",
 
   "following.dateUncertainHint": "Dokładna data nie została jeszcze ogłoszona; to początek sezonu.",

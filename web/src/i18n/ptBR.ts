@@ -387,6 +387,9 @@ export const ptBR: Catalog = {
   "following.stateReleased": "Lançado",
   "following.calendarEmpty": "Nada é lançado neste mês.",
   "following.dayEmpty": "Nada é lançado neste dia.",
+  "following.calendarMode": "Visualização do calendário",
+  "following.modeAgenda": "Lista",
+  "following.modeMonth": "Mês",
   "following.activityEmpty": "Os downloads automáticos ainda não fizeram nada.",
 
   "following.dateUncertainHint": "A data exata ainda não foi anunciada; é o início da temporada.",

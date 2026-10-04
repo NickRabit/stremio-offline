@@ -20,8 +20,12 @@ let fetchMock: ReturnType<typeof vi.fn>;
 let root: Root;
 let host: HTMLDivElement;
 
-const stubMatchMedia = (wide: boolean) => vi.stubGlobal("matchMedia", (query: string) => ({
-  matches: wide, media: query, onchange: null,
+/** A screen of the given width answering min-/max-width queries the way a browser would. */
+const stubMatchMedia = (width: number) => vi.stubGlobal("matchMedia", (query: string) => ({
+  matches: (() => {
+    const bound = Number(/(\d+)px/.exec(query)?.[1] ?? 0);
+    return query.includes("max-width") ? width <= bound : width >= bound;
+  })(), media: query, onchange: null,
   addEventListener: () => undefined, removeEventListener: () => undefined,
   addListener: () => undefined, removeListener: () => undefined, dispatchEvent: () => false,
 }));
@@ -41,7 +45,7 @@ const clickTab = async (label: string) => {
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   setLocale("en");
-  stubMatchMedia(true);
+  stubMatchMedia(1280);
   fetchMock = vi.fn().mockResolvedValue(json({ items: [] }));
   vi.stubGlobal("fetch", fetchMock);
   host = document.createElement("div"); document.body.appendChild(host); root = createRoot(host);
@@ -101,6 +105,22 @@ describe("FollowingPage", () => {
     await act(async () => { day.querySelector<HTMLButtonElement>(".following-day-hit")!.click(); });
     expect(day.className).toContain("selected");
     expect(host.querySelector(".following-day-panel .state-pill")!.textContent).toBe("Waiting for a source");
+  });
+
+  it("a phone opens the calendar as a list grouped by day", async () => {
+    stubMatchMedia(390);
+    fetchMock.mockImplementation(async (url: string) => String(url).includes("/api/follows/calendar")
+      ? json({ items: [{ followId: "f1", type: "series", metaId: "tt1", name: "Show", videoId: "v1", season: 1, episode: 2, title: "Pilot", released: new Date().toISOString(), state: "waiting" }], undated: [] })
+      : json({ items: [] }));
+    await render([]);
+    await clickTab("Calendar");
+    expect(host.querySelector(".following-calendar"), "no month grid on a phone by default").toBeNull();
+    const day = host.querySelector(".following-agenda-day.today")!;
+    expect(day.querySelector(".following-agenda-date b")!.textContent).toBe(String(new Date().getDate()));
+    expect(day.querySelector(".following-episode-copy small")!.textContent).toBe("S01E02 · Pilot");
+    const month = [...host.querySelectorAll<HTMLButtonElement>(".following-cal-mode button")].find((button) => button.textContent === "Month")!;
+    await act(async () => { month.click(); });
+    expect(host.querySelector(".following-calendar")).not.toBeNull();
   });
 
   it("marks an uncertain date and lists undated episodes apart", async () => {

@@ -142,10 +142,23 @@ function EpisodeRow({ item, onOpen }: { item: CalendarItem | UndatedCalendarItem
   </button>;
 }
 
+type CalendarMode = "agenda" | "month";
+const MODE_KEY = "following-calendar-mode";
+/** A phone opens on the list, anything wider on the month, until the viewer picks one. */
+const initialMode = (): CalendarMode => {
+  try { const stored = localStorage.getItem(MODE_KEY); if (stored === "agenda" || stored === "month") return stored; } catch { /* no storage */ }
+  return typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(max-width: 700px)").matches ? "agenda" : "month";
+};
+
 function CalendarTab({ onOpenSeries }: { onOpenSeries: FollowingPageProps["onOpenSeries"] }) {
   useI18n();
   const [cursor, setCursor] = useState(() => new Date());
   const [selected, setSelected] = useState(() => dayKey(new Date()));
+  const [mode, setMode] = useState<CalendarMode>(initialMode);
+  const chooseMode = (next: CalendarMode) => {
+    setMode(next);
+    try { localStorage.setItem(MODE_KEY, next); } catch { /* the choice only lives for this visit */ }
+  };
   const [items, setItems] = useState<CalendarItem[]>([]);
   const [undated, setUndated] = useState<UndatedCalendarItem[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -193,6 +206,17 @@ function CalendarTab({ onOpenSeries }: { onOpenSeries: FollowingPageProps["onOpe
     if (first) setSelected(first);
   }, [byDay]);
 
+  const monthPrefix = dayKey(monthStart).slice(0, 7);
+  type AgendaEntry = { kind: "day"; key: string; date: Date; items: CalendarItem[] } | { kind: "today" };
+  const agendaDays: AgendaEntry[] = [...byDay.entries()]
+    .filter(([key]) => key.startsWith(monthPrefix))
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, dayItems]) => ({ kind: "day" as const, key, date: new Date(`${key}T12:00:00`), items: dayItems }));
+  // Today with nothing out still gets its place in the list, so "now" is never lost.
+  if (today.startsWith(monthPrefix) && !byDay.has(today) && agendaDays.length) {
+    const at = agendaDays.findIndex((entry) => entry.kind === "day" && entry.key > today);
+    agendaDays.splice(at < 0 ? agendaDays.length : at, 0, { kind: "today" });
+  }
   const openOf = (item: { type: string; metaId: string; name: string; poster?: string }) => onOpenSeries({ type: item.type, id: item.metaId, name: item.name, poster: item.poster });
   const monthLabel = sentence(new Intl.DateTimeFormat(localeTag(), { month: "long", year: "numeric" }).format(cursor));
   const selectedDate = new Date(`${selected}T12:00:00`);
@@ -200,15 +224,33 @@ function CalendarTab({ onOpenSeries }: { onOpenSeries: FollowingPageProps["onOpe
   const dayHeading = selected === today ? `${t("following.todayLabel")} · ${longDay}` : selected === tomorrow ? `${t("following.tomorrowLabel")} · ${longDay}` : sentence(longDay);
   const selectedItems = byDay.get(selected) ?? [];
 
-  return <div className="following-calendar-view">
+  return <div className={`following-calendar-view ${mode}`}>
     <div className="following-cal-head">
       <h3 className="following-cal-title">{monthLabel}</h3>
+      <div className="following-cal-mode" role="group" aria-label={t("following.calendarMode")}>
+        {(["agenda", "month"] as const).map((value) => <button key={value} type="button" aria-pressed={mode === value} className={mode === value ? "active" : ""} onClick={() => chooseMode(value)}>{t(value === "agenda" ? "following.modeAgenda" : "following.modeMonth")}</button>)}
+      </div>
       <div className="following-cal-nav" role="group" aria-label={monthLabel}>
         <button type="button" aria-label={t("following.prevMonth")} onClick={() => goMonth(-1)}><ChevronLeft/></button>
         <button type="button" onClick={goToday}>{t("following.today")}</button>
         <button type="button" aria-label={t("following.nextMonth")} onClick={() => goMonth(1)}><ChevronRight/></button>
       </div>
     </div>
+    {mode === "agenda" ? <div className="following-agenda" aria-label={monthLabel}>
+      {agendaDays.length ? agendaDays.map((entry) => entry.kind === "today"
+        ? <div key="today-marker" className="following-agenda-now"><span>{t("following.todayLabel")}</span></div>
+        : <section key={entry.key} className={`following-agenda-day${entry.key < today ? " past" : ""}${entry.key === today ? " today" : ""}`}>
+          <div className="following-agenda-date" aria-hidden="true">
+            <small>{new Intl.DateTimeFormat(localeTag(), { weekday: "short" }).format(entry.date)}</small>
+            <b>{entry.date.getDate()}</b>
+          </div>
+          <div className="following-agenda-items">
+            <h4 className="visually-hidden">{sentence(new Intl.DateTimeFormat(localeTag(), { weekday: "long", day: "numeric", month: "long" }).format(entry.date))}</h4>
+            {entry.items.map((item) => <EpisodeRow key={itemKey(item)} item={item} onOpen={() => openOf(item)}/>)}
+          </div>
+        </section>)
+        : loaded && <p className="following-empty">{t("following.calendarEmpty")}</p>}
+    </div> : <>
     <div className="following-month">
       <div className="following-calendar">
         {Array.from({ length: 7 }, (_, index) => <span className="following-weekday" key={index} aria-hidden="true">{new Intl.DateTimeFormat(localeTag(), { weekday: "short" }).format(addDays(gridStart, index))}</span>)}
@@ -246,6 +288,7 @@ function CalendarTab({ onOpenSeries }: { onOpenSeries: FollowingPageProps["onOpe
         ? selectedItems.map((item) => <EpisodeRow key={itemKey(item)} item={item} onOpen={() => openOf(item)}/>)
         : <p className="following-empty">{loaded && !items.some((item) => dayKey(new Date(item.released)).startsWith(dayKey(monthStart).slice(0, 7))) ? t("following.calendarEmpty") : t("following.dayEmpty")}</p>}
     </section>
+    </>}
     {undated.length > 0 && <section className="following-day-panel following-undated">
       <h4>{t("following.dateUnknown")}</h4>
       {undated.map((item) => <EpisodeRow key={itemKey(item)} item={item} onOpen={() => openOf(item)}/>)}
