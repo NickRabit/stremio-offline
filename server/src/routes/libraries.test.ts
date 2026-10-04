@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import express from "express";
+import { artworks } from "../artwork-cache.js";
 import { messageKeyOf } from "../errors.js";
 import { mergeGrants } from "../library-grants.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
@@ -234,6 +235,48 @@ test("DELETE /api/libraries/:id refuses to remove the last library", async (t) =
   assert.equal(response.status, 409);
   assert.equal((await failure(response)).messageKey, "err.libraryLast");
   assert.deepEqual(harness.stored().map((record) => record.id), ["only"]);
+});
+
+test("DELETE /api/libraries/:id keeps the thumbnails, and forget drops the directory and its index", async (t) => {
+  const keep = "lib_aaaaaaaa";
+  const gone = "lib_bbbbbbbb";
+  // A third library stays behind: the last one cannot be removed, and both actions here are
+  // removals.
+  const harness = await mount([library(keep, 0), library(gone, 1), library("lib_cccccccc", 2)]);
+  const dataDir = await mkdtemp(path.join(tmpdir(), "libraries-artwork-"));
+  // The route reads the artwork cache singleton, so this test points it at a temp directory
+  // and puts it back afterwards; the harness itself does not expose a cache handle.
+  const singleton = artworks as unknown as { dir: string };
+  const previousDir = singleton.dir;
+  singleton.dir = dataDir;
+  t.after(async () => {
+    singleton.dir = previousDir;
+    await harness.close();
+    await rm(dataDir, { recursive: true, force: true });
+  });
+
+  const put = async (libraryId: string) => {
+    const file = artworks.file(`${libraryId}/Films/Film/Film.mkv`);
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, "thumbnail");
+    await artworks.written(file);
+    return file;
+  };
+  const index = async (): Promise<Record<string, unknown>> =>
+    JSON.parse(await readFile(path.join(dataDir, "index.json"), "utf8")) as Record<string, unknown>;
+
+  const kept = await put(keep);
+  const dropped = await put(gone);
+  await artworks.flush();
+
+  assert.equal((await api(harness.base, `/api/libraries/${keep}`, { method: "DELETE" })).status, 204);
+  assert.ok((await stat(kept)).isFile(), "removing keeps the thumbnails for a later reattachment");
+  assert.ok(Object.keys(await index()).some((name) => name.startsWith(`${keep}${path.sep}`)), "and their index entries");
+
+  assert.equal((await api(harness.base, `/api/libraries/${gone}?forget=1`, { method: "DELETE" })).status, 204);
+  await artworks.flush();
+  await assert.rejects(stat(dropped), "forgetting removes the library's thumbnail directory");
+  assert.ok(!Object.keys(await index()).some((name) => name.startsWith(`${gone}${path.sep}`)), "and its index entries");
 });
 
 /** A root the picker would accept: inside the grant, and a real folder. */
