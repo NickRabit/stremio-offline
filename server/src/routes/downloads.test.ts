@@ -289,15 +289,15 @@ test("POST /api/downloads/:id/move passes -1 for a negative direction and +1 for
   const harness = await mount();
   t.after(harness.close);
   for (const direction of [-1, -5, 1, 7, undefined]) {
-    const response = await api(harness.base, "/api/downloads/job-9/move", { method: "POST", body: { direction } });
+    const response = await api(harness.base, "/api/downloads/job-1/move", { method: "POST", body: { direction } });
     assert.equal(response.status, 204, String(direction));
   }
   assert.deepEqual(harness.moves, [
-    { id: "job-9", direction: -1 },
-    { id: "job-9", direction: -1 },
-    { id: "job-9", direction: 1 },
-    { id: "job-9", direction: 1 },
-    { id: "job-9", direction: 1 },
+    { id: "job-1", direction: -1 },
+    { id: "job-1", direction: -1 },
+    { id: "job-1", direction: 1 },
+    { id: "job-1", direction: 1 },
+    { id: "job-1", direction: 1 },
   ]);
 });
 
@@ -318,20 +318,37 @@ test("GET /api/downloads shows an administrator every job and a user only their 
 test("acting on somebody else's job answers exactly like an id that is not there", async (t) => {
   const harness = await mount(undefined, { viewer: ordinary, jobs: [{ id: "job-1", ownerUserId: ADA }] });
   t.after(harness.close);
-  const actions = [
+  const actions: Array<{ method: string; path: string; body?: unknown }> = [
     { method: "POST", path: "/api/downloads/job-1/pause" },
     { method: "POST", path: "/api/downloads/job-1/resume" },
     { method: "POST", path: "/api/downloads/job-1/retry" },
+    { method: "POST", path: "/api/downloads/job-1/move", body: { direction: 1 } },
     { method: "DELETE", path: "/api/downloads/job-1" },
   ];
-  for (const { method, path } of actions) {
-    const foreign = await api(harness.base, path, { method });
-    const unknown = await api(harness.base, path.replace("job-1", "job-not-here"), { method });
+  for (const { method, path, body } of actions) {
+    const foreign = await api(harness.base, path, { method, body });
+    const unknown = await api(harness.base, path.replace("job-1", "job-not-here"), { method, body });
     assert.equal(foreign.status, 404, `${method} ${path}`);
     assert.equal(foreign.status, unknown.status, `${method} ${path} answers with the same status`);
-    assert.deepEqual(await foreign.json(), await unknown.json(), `${method} ${path} gives nothing away`);
+    const foreignBody = await foreign.json() as { messageKey?: string };
+    assert.equal(foreignBody.messageKey, "err.itemNotFound", `${method} ${path}`);
+    assert.deepEqual(foreignBody, await unknown.json(), `${method} ${path} gives nothing away`);
   }
   assert.deepEqual(harness.actions, [], "the queue is never asked to act on a job the caller does not own");
+  assert.deepEqual(harness.moves, [], "a foreign job is never reordered");
+});
+
+test("POST /api/downloads/:id/move reorders the caller's own job, and an administrator may reorder anyone's", async (t) => {
+  const jobs = [{ id: "job-ada", ownerUserId: ADA }, { id: "job-bob", ownerUserId: BOB }];
+  const user = await mount(undefined, { viewer: ordinary, jobs });
+  t.after(user.close);
+  assert.equal((await api(user.base, "/api/downloads/job-bob/move", { method: "POST", body: { direction: -1 } })).status, 204);
+  assert.deepEqual(user.moves, [{ id: "job-bob", direction: -1 }]);
+
+  const administrator = await mount(undefined, { viewer: admin, jobs });
+  t.after(administrator.close);
+  assert.equal((await api(administrator.base, "/api/downloads/job-bob/move", { method: "POST", body: { direction: 1 } })).status, 204);
+  assert.deepEqual(administrator.moves, [{ id: "job-bob", direction: 1 }]);
 });
 
 test("POST /api/downloads refuses an account without the library permission and queues nothing", async (t) => {

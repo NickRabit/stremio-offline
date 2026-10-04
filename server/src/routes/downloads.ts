@@ -170,7 +170,7 @@ export function registerDownloadRoutes(app: express.Application, deps: Downloads
   app.post("/api/downloads/:id/pause", asyncRoute(async (req, res) => { await queue.pause(requireOwnJob(req, String(req.params.id))); res.status(204).end(); }));
   app.post("/api/downloads/:id/resume", asyncRoute(async (req, res) => { await queue.resume(requireOwnJob(req, String(req.params.id))); res.status(204).end(); }));
   app.post("/api/downloads/:id/retry", asyncRoute(async (req, res) => { await queue.retry(requireOwnJob(req, String(req.params.id))); res.status(204).end(); }));
-  app.post("/api/downloads/:id/move", asyncRoute(async (req, res) => { await queue.move(String(req.params.id), Number(req.body.direction) < 0 ? -1 : 1); res.status(204).end(); }));
+  app.post("/api/downloads/:id/move", asyncRoute(async (req, res) => { await queue.move(requireOwnJob(req, String(req.params.id)), Number(req.body.direction) < 0 ? -1 : 1); res.status(204).end(); }));
   app.delete("/api/downloads/:id", asyncRoute(async (req, res) => { await queue.remove(requireOwnJob(req, String(req.params.id))); res.status(204).end(); }));
   app.delete("/api/downloads", asyncRoute(async (_req, res) => { await queue.clearCompleted(); res.status(204).end(); }));
 }
