@@ -191,6 +191,7 @@ export const es: Catalog = {
   "player.hideSubtitles": "Ocultar subtítulos",
   "player.showSubtitlesKey": "Mostrar subtítulos (C)",
   "player.hideSubtitlesKey": "Ocultar subtítulos (C)",
+  "player.fillScreen": "Rellenar pantalla",
   "player.fullscreenUnavailable": "La pantalla completa no está disponible. Inténtalo de nuevo una vez que se esté reproduciendo el vídeo.",
   "player.fullscreen": "Pantalla completa",
   "player.exitFullscreen": "Salir en pantalla completa",

@@ -191,6 +191,7 @@ export const fr: Catalog = {
   "player.hideSubtitles": "Masquer les sous-titres",
   "player.showSubtitlesKey": "Afficher les sous-titres (C)",
   "player.hideSubtitlesKey": "Masquer les sous-titres (C)",
+  "player.fillScreen": "Remplir l’écran",
   "player.fullscreenUnavailable": "Le plein écran n'est pas disponible. Réessayez une fois la vidéo en cours de lecture.",
   "player.fullscreen": "Plein écran",
   "player.exitFullscreen": "Quitter le mode plein écran",

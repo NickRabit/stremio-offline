@@ -1,7 +1,7 @@
 import { enterPlayerFullscreen, exitPlayerFullscreen, playerIsFullscreen, supportsPlayerFullscreen } from "./player-fullscreen";
 import Hls from "hls.js";
 import { useEffect, useRef, useState } from "react";
-import { AudioLines, Captions, CaptionsOff, Check, Download, HardDrive, Star, Gauge, Maximize, Minimize, Pause, Play, RotateCcw, RotateCw, Settings, SlidersHorizontal, SkipBack, SkipForward, Volume2, X } from "lucide-react";
+import { AudioLines, Captions, CaptionsOff, Check, Download, HardDrive, Star, Gauge, Maximize, Minimize, Pause, Play, RectangleHorizontal, RotateCcw, RotateCw, Settings, SlidersHorizontal, SkipBack, SkipForward, Volume2, X } from "lucide-react";
 import { ApiError, api, describeError, subtitleUrl } from "./api";
 import { watchSidecar } from "./player-sidecar";
 import { label, pickAddonSubtitle } from "./languages";
@@ -201,6 +201,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   const overlayRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [pictureFilled, setPictureFilled] = useState(false);
   const [browserFullscreen, setBrowserFullscreen] = useState(false);
   const [volume, setVolume] = useState(readVolume);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -326,7 +327,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   const controlsTimerRef = useRef<number | undefined>(undefined);
   const automaticFullscreenRef = useRef(false);
   useEffect(() => {
-    if (!open) { setSettingsOpen(false); setBrowserFullscreen(false); setFullscreenUnavailable(false); return; }
+    if (!open) { setSettingsOpen(false); setBrowserFullscreen(false); setFullscreenUnavailable(false); setPictureFilled(false); return; }
     const bottom = bottomRef.current;
     if (!bottom) return;
     const measure = () => overlayRef.current?.style.setProperty("--player-bottom-height", `${bottom.getBoundingClientRect().height}px`);
@@ -1043,7 +1044,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     ? `embedded:${session.subtitleTrack}`
     : addonSubtitle ? `addon:${addonSubtitles.indexOf(addonSubtitle)}` : "off";
 
-  return <div ref={overlayRef} className={`player-overlay${nativeSubtitles ? " native-subtitles" : ""}${mobileLandscape ? " mobile-landscape" : ""}${controlsVisible ? "" : " controls-hidden"}${cursorHidden ? " cursor-hidden" : ""}`} role="dialog" aria-modal="true" onPointerMove={(event) => { if (event.pointerType !== "touch") revealControls(); }} onPointerDown={(event) => { if (!(event.target as HTMLElement).closest(".player-host")) revealControls(); }} onFocusCapture={revealControls} onBlurCapture={revealControls}>
+  return <div ref={overlayRef} className={`player-overlay${nativeSubtitles ? " native-subtitles" : ""}${mobileLandscape ? " mobile-landscape" : ""}${pictureFilled ? " picture-filled" : ""}${controlsVisible ? "" : " controls-hidden"}${cursorHidden ? " cursor-hidden" : ""}`} role="dialog" aria-modal="true" onPointerMove={(event) => { if (event.pointerType !== "touch") revealControls(); }} onPointerDown={(event) => { if (!(event.target as HTMLElement).closest(".player-host")) revealControls(); }} onFocusCapture={revealControls} onBlurCapture={revealControls}>
     <div className="player-head">
       <div><small>{t(session ? MODE_KEY[session.mode] : "player.mode.preparing")}{session?.mode === "transcode" ? ` · ${t(session.hardware ? "player.hardware" : "player.software")}` : ""}</small><strong>{title}</strong></div>
       {onToggleFavorite && <button className={`player-star ${favorite ? "on" : ""}`} aria-label={favorite ? t("favorite.remove") : t("favorite.add")} aria-pressed={Boolean(favorite)} title={favorite ? t("favorite.remove") : t("favorite.add")} onClick={onToggleFavorite}>
@@ -1140,8 +1141,11 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
           onChange={(event) => { const next = clampVolume(Number(event.target.value) / 100); setVolume(next); writeVolume(next); }} />
 
         {((session?.subtitleTracks.length ?? 0) > 0 || addonSubtitles.length > 0 || session?.sidecarUrl) && <button disabled={subtitleValue === "off" && !session?.sidecarUrl} aria-label={subtitlesHidden ? t("player.showSubtitles") : t("player.hideSubtitles")} title={subtitlesHidden ? t("player.showSubtitlesKey") : t("player.hideSubtitlesKey")} aria-pressed={!subtitlesHidden} onClick={() => setSubtitlesHidden(!subtitlesHidden)}>{subtitlesHidden ? <CaptionsOff /> : <Captions />}</button>}
-        <button className="player-settings-toggle" aria-label={t("player.settings")} title={t("player.settings")} aria-expanded={settingsOpen} aria-controls="player-settings" onClick={() => setSettingsOpen(!settingsOpen)}><Settings /></button>
-        {fullscreenSupported && <button className="player-action fullscreen-action" onClick={() => void toggleFullscreen()} title={t(browserFullscreen ? "player.exitFullscreen" : "player.fullscreen")} aria-label={t(browserFullscreen ? "player.exitFullscreen" : "player.fullscreen")}>{browserFullscreen ? <Minimize/> : <Maximize/>} <span>{t(browserFullscreen ? "player.exitFullscreen" : "player.fullscreen")}</span></button>}
+        <div className="player-view-controls">
+          <button className="player-fill-toggle" aria-label={t("player.fillScreen")} title={t("player.fillScreen")} aria-pressed={pictureFilled} onClick={() => setPictureFilled(!pictureFilled)}><RectangleHorizontal /></button>
+          <button className="player-settings-toggle" aria-label={t("player.settings")} title={t("player.settings")} aria-expanded={settingsOpen} aria-controls="player-settings" onClick={() => setSettingsOpen(!settingsOpen)}><Settings /></button>
+          {fullscreenSupported && <button className="player-action fullscreen-action" onClick={() => void toggleFullscreen()} title={t(browserFullscreen ? "player.exitFullscreen" : "player.fullscreen")} aria-label={t(browserFullscreen ? "player.exitFullscreen" : "player.fullscreen")}>{browserFullscreen ? <Minimize/> : <Maximize/>} <span>{t(browserFullscreen ? "player.exitFullscreen" : "player.fullscreen")}</span></button>}
+        </div>
       </div>
     </div>
     {fullscreenUnavailable && <div className="fullscreen-notice" role="status">{t("player.fullscreenUnavailable")}</div>}

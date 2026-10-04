@@ -20,10 +20,11 @@ test("local player previews a frame and plays the next naturally sorted file", a
     await expect(next).toHaveAttribute("title", "Další díl: Episode 2.webm");
     expect(await overlay.locator(".player-controls").evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(false);
     // Reserve the optional subtitle toggle even for the subtitle-free fixture.
-    await overlay.locator(".player-settings-toggle").evaluate((element) => {
-      const toggle = element.cloneNode(true) as HTMLElement;
+    await overlay.locator(".player-view-controls").evaluate((element) => {
+      const toggle = element.querySelector(".player-settings-toggle")!.cloneNode(true) as HTMLElement;
       toggle.className = "subtitle-layout-placeholder";
       toggle.removeAttribute("id");
+      toggle.removeAttribute("aria-label");
       element.before(toggle);
     });
     expect(await overlay.locator(".player-controls").evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(false);
@@ -37,18 +38,25 @@ test("local player previews a frame and plays the next naturally sorted file", a
     await expect(overlay.locator(".timeline-preview img")).toBeVisible({ timeout: 15_000 });
     await timeline.dispatchEvent("pointercancel", { pointerId: 42, pointerType: "touch" });
     await expect(overlay.locator(".timeline-preview")).toHaveCount(0);
+    const fillScreen = overlay.getByRole("button", { name: "Vyplnit obrazovku", exact: true });
+    await expect(overlay.locator("video")).toHaveCSS("object-fit", "contain");
+    await fillScreen.click();
+    await expect(overlay.locator("video")).toHaveCSS("object-fit", "cover");
     await next.click();
     await expect(overlay.locator(".player-head strong")).toContainText("Episode 2.webm");
     await expect(next).toHaveAttribute("title", "Další díl: Episode 10.webm");
     await expect(previous).toHaveAttribute("title", "Předchozí díl: Episode 1.webm");
+    await expect(overlay.locator("video")).toHaveCSS("object-fit", "cover");
+    await expect(fillScreen).toHaveAttribute("aria-pressed", "true");
     expect(await overlay.locator(".player-controls").evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(false);
     const transport = overlay.locator(".transport-controls");
     const boxes = await Promise.all((await transport.locator("button").all()).map((button) => button.boundingBox()));
     expect(new Set(boxes.map((box) => Math.round(box!.y))).size).toBe(1);
     expect(boxes.map((box) => box!.x)).toEqual(boxes.map((box) => box!.x).sort((a, b) => a - b));
     if (page.viewportSize()!.width >= 350 && page.viewportSize()!.width <= 700) {
-      const allButtons = await Promise.all((await overlay.locator(".player-controls button").all()).map((button) => button.boundingBox()));
-      expect(new Set(allButtons.map((box) => Math.round(box!.y))).size).toBe(1);
+      // The toolbar may wrap onto a second row, but neither group may be split across rows.
+      const viewBoxes = await Promise.all((await overlay.locator(".player-view-controls button").all()).map((button) => button.boundingBox()));
+      expect(new Set(viewBoxes.map((box) => Math.round(box!.y))).size).toBe(1);
     }
     await page.screenshot({ path: `test-results/episode-controls-${test.info().project.name}.png` });
     await previous.click();

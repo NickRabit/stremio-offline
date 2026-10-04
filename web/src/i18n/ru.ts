@@ -191,6 +191,7 @@ export const ru: Catalog = {
   "player.hideSubtitles": "Скрыть субтитры",
   "player.showSubtitlesKey": "Показать субтитры (С)",
   "player.hideSubtitlesKey": "Скрыть субтитры (С)",
+  "player.fillScreen": "Заполнить экран",
   "player.fullscreenUnavailable": "Полноэкранный режим недоступен. Попробуйте еще раз, когда видео начнет воспроизводиться.",
   "player.fullscreen": "Полноэкранный режим",
   "player.exitFullscreen": "Выйти из полноэкранного режима",

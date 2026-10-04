@@ -191,6 +191,7 @@ export const de: Catalog = {
   "player.hideSubtitles": "Untertitel ausblenden",
   "player.showSubtitlesKey": "Untertitel anzeigen (C)",
   "player.hideSubtitlesKey": "Untertitel ausblenden (C)",
+  "player.fillScreen": "Bildschirm ausfüllen",
   "player.fullscreenUnavailable": "Vollbild ist nicht verfügbar. Versuchen Sie es erneut, sobald das Video abgespielt wird.",
   "player.fullscreen": "Vollbild",
   "player.exitFullscreen": "Vollbildmodus verlassen",
