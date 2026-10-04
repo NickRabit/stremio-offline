@@ -36,7 +36,9 @@ import { loopbackHostCheck } from "./host-check.js";
 import { InFlight } from "./in-flight.js";
 import { WalkCache } from "./walk-cache.js";
 import { killRunningMedia } from "./media-tools.js";
-import { browseDirectory, describePath, emptiedFolders, entryDirectory, holdsLibraryRoot, isPathWithin, isVideo, listVideos, moveDestination, orphanedCatalogKeys, pageFiles, remapPath, summarize, buildLibrary, type FoundFile, type LibraryEntry } from "./library.js";
+import { browseDirectory, describePath, emptiedFolders, entryDirectory, holdsLibraryRoot, isPathWithin, isVideo, listVideos, listVideosChecked, moveDestination, orphanedCatalogKeys, pageFiles, remapPath, summarize, buildLibrary, type FoundFile, type LibraryEntry } from "./library.js";
+import { createArtworkSweep, type SweepDeps, type SweepLibrary } from "./artwork-sweep.js";
+import { createMaintenance } from "./maintenance.js";
 import { browseMeta, cacheFieldsFromMeta, dropAutomaticInside, episodeKey, episodeNumberOf, episodesFromMeta, dropKeyed, folderMosaicUnits, knownEntryForUnit, knownTitleEntry, knownTitleOf, knownTitleForUnit, matchKeyFor, mosaicIdentities, mosaicSkipped, needsBackfill, needsEpisodes, staleScanRecordKeys, staleSuggestionKeys, titleUnits, unitFor, unmatchAt, withSkipFlag, type GalleryEntry, type LibraryMetaRecord, type TitleKind, type TitleUnit } from "./library-match.js";
 import { LibraryScan } from "./library-scan.js";
 import { probe } from "./probe.js";
@@ -842,7 +844,61 @@ const libraryCache = new WalkCache<LibraryEntry[]>(async () => {
   entries.sort((a, b) => b.modified.localeCompare(a.modified));
   return entries;
 }, 30_000);
-const invalidateLibrary = () => { videoCache.invalidate(); unitCache.invalidate(); libraryCache.invalidate(); };
+/** Every library mutation -- a move, a rename, a delete, a finished download, a watcher
+ *  event, a reroot -- bumps this, so a thumbnail sweep that raced one knows its `valid` set
+ *  may predate the change and stops. */
+let libraryEpoch = 0;
+const invalidateLibrary = () => { libraryEpoch += 1; videoCache.invalidate(); unitCache.invalidate(); libraryCache.invalidate(); };
+
+const rootReadable = async (root: string) => { try { await access(root, constants.R_OK); return true; } catch { return false; } };
+
+/** The sweep's collaborators. Several are wrapped in an arrow on purpose: `storeArt` and
+ *  `removeArtwork` are declared further down, and a read before their declaration would pass
+ *  tsc and fail the bundle at start-up. */
+const sweepDeps: SweepDeps = {
+  libraries: async () => {
+    await refreshLibraryHealth();
+    const sweepable: SweepLibrary[] = [];
+    for (const library of walkableLibraries()) {
+      // A mount that is down must never cost the user the thumbnails stored on it, so a root
+      // that cannot be read is left alone with a word in the log. A read-only root is
+      // readable, so it is swept: the thumbnails live under `data/artwork/<libraryId>/`.
+      if (!await rootReadable(library.root)) {
+        log("WARN", "The library root could not be read, its thumbnails are left alone", { library: library.name, root: library.root });
+        continue;
+      }
+      sweepable.push({ id: library.id, name: library.name, root: library.root, exclude: carveOutsOf(library) });
+    }
+    return sweepable;
+  },
+  scan: (library) => listVideosChecked(library.root, library.exclude),
+  // The poster is saved when the job is queued, while the source does not exist yet.
+  // Without this the sweep would delete it before the download finishes.
+  queuedKeys: () => queue.list().flatMap((job) => {
+    const key = queuedArtworkKey(job);
+    return key ? [key] : [];
+  }),
+  artNames: (key) => ART_VARIANTS.flatMap((variant) => {
+    const file = storeArt(key, variant);
+    return file ? [path.basename(file)] : [];
+  }),
+  directoryOf: (libraryId) => artworks.dirOf(libraryId),
+  remove: (file) => removeArtwork(file),
+  busy: () => libraryOpsWriting || libraryOps.activeItems().length > 0,
+  epoch: () => libraryEpoch,
+  now: () => Date.now(),
+  signal: new AbortController().signal,
+};
+const artworkSweep = createArtworkSweep(sweepDeps);
+const maintenance = createMaintenance({
+  tasks: [
+    { name: "images", run: () => images.maintain() },
+    { name: "artworks", run: () => artworks.maintain() },
+    // The pass signal is swapped in here: the sweep is built once so its empty-library
+    // memory survives between passes, and the signal only exists while a pass is running.
+    { name: "artwork-sweep", run: (signal) => { sweepDeps.signal = signal; return artworkSweep().then(() => undefined); } },
+  ],
+});
 registerCatalogRoutes(app, { ...routeContext, tmdbProvider, cachedMeta, prefsOf, libraryTarget, ownerOf, trackMedia, libraryKey, metaStore, externalIds, subtitleDelay });
 /** `stale` is for a caller that only renders what it gets: it may be answered with the last
  *  walk while the next one runs. Anything that acts on the tree asks for a current one. */
@@ -1462,70 +1518,15 @@ function scheduleFolderArtwork(key: string, shape: ArtShape = "poster") {
   });
 }
 
-/** Thumbnails in the data directory outlive the video. After a scan the ones whose source
- *  is gone are removed. Saving next to the video has no such problem: the picture goes with
- *  the folder. Each library is swept on its own, and only while its root can actually be
- *  read: a mount that is down must never cost the user the thumbnails stored on it.
- *  A read-only root is readable, so the valid set is computable and the sweep runs: the
- *  thumbnails it deletes live in `data/artwork/<libraryId>/`, which is writable anyway. */
-let lastArtworkSweep = 0;
+/** Browsing a library also drives the maintenance pass -- the same non-overlapping path the
+ *  interval uses -- but at most once an hour, so a burst of page loads cannot turn into a
+ *  burst of disk walks. */
+const BROWSE_SWEEP_MIN_MS = 60 * 60_000;
+let lastBrowseSweep = 0;
 async function sweepArtwork() {
-  if (Date.now() - lastArtworkSweep < 10 * 60_000) return;
-  lastArtworkSweep = Date.now();
-  // The poster is saved when the job is queued, while the source does not exist yet.
-  // Without this the sweep would delete it before the download finishes.
-  const queued = queue.list().flatMap((job) => {
-    const key = queuedArtworkKey(job);
-    return key ? [key] : [];
-  });
-  const rootReadable = async (root: string) => { try { await access(root, constants.R_OK); return true; } catch { return false; } };
-  await refreshLibraryHealth();
-  const health = (library: LibraryRecord) => libraryHealth.get(library.id);
-  let removed = 0;
-  for (const library of store.libraries()) {
-    if (!library.enabled || health(library)?.unreachable) continue;
-    if (!await rootReadable(library.root)) {
-      log("WARN", "The library root could not be read, its thumbnails are left alone", { library: library.name, root: library.root });
-      continue;
-    }
-    const valid = new Set<string>();
-    // The ancestor rows matter: a folder is keyed `dir:<path>` for paths that appear in
-    // no file and in no binding, because a folder is not a file.
-    const rememberArt = (key: string) => {
-      for (const variant of ART_VARIANTS) {
-        const file = storeArt(key, variant);
-        if (file) valid.add(path.basename(file));
-      }
-    };
-    const remember = (key: string) => {
-      rememberArt(key);
-      const parts = key.split("/");
-      for (let depth = 1; depth < parts.length; depth += 1) {
-        rememberArt(`dir:${parts.slice(0, depth).join("/")}`);
-      }
-    };
-    const own = (await libraryEntries()).filter((entry) => parseLibraryPath(entry.key)?.libraryId === library.id);
-    // The walk is shared and may predate the readability check above: an empty answer is as
-    // likely a root that was away a moment ago as a library with nothing in it.
-    if (!own.length) continue;
-    for (const entry of own) {
-      rememberArt(entry.key);
-      for (const file of entry.files) remember(file.path);
-    }
-    for (const key of queued) if (parseLibraryPath(key)?.libraryId === library.id) remember(key);
-
-    const dir = artworks.dirOf(library.id);
-    for (const name of await readdir(dir).catch(() => [] as string[])) {
-      if (valid.has(name)) continue;
-      const file = path.join(dir, name);
-      // Second safeguard: anything fresh is kept. Its source may still be on its way.
-      const info = await stat(file).catch(() => undefined);
-      if (!info?.isFile() || Date.now() - info.mtimeMs < 60 * 60_000) continue;
-      await removeArtwork(file);
-      removed += 1;
-    }
-  }
-  if (removed) log("INFO", "Orphaned thumbnails deleted", { removed });
+  if (Date.now() - lastBrowseSweep < BROWSE_SWEEP_MIN_MS) return;
+  lastBrowseSweep = Date.now();
+  await maintenance.run();
 }
 
 // A favourite is only a flag on a path. Nothing is moved anywhere.
@@ -2313,6 +2314,8 @@ const listenTarget = resolveListenTarget();
 try {
   const bound = await startServer({ app, ...listenTarget });
   markServerReady();
+  // Scheduled without a wait: the first pass fills the caches after the server is already up.
+  maintenance.start();
   log("INFO", "Stremio Offline is listening", { port: bound.port, address: bound.address });
   // Readiness is announced first: the warm-up only fills the walks, and nothing waits on it.
   void warmLibraryCaches();
@@ -2346,6 +2349,7 @@ const shutDown = async (signal: NodeJS.Signals) => {
   log("INFO", "Shutting down", { signal });
   const deadline = Date.now() + SHUTDOWN_DRAIN_MS;
   await inFlight.drained(SHUTDOWN_QUIET_MS, SHUTDOWN_DRAIN_MS);
+  await maintenance.stop(1_000);
   // A conversion or an assembly nobody is reading any more would run on without its parent.
   const killed = killRunningMedia();
   if (killed) log("INFO", "Stopped FFmpeg processes still running at shutdown", { count: killed });

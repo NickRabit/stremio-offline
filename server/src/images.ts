@@ -109,17 +109,30 @@ const days = (value: string | undefined) => {
   return (Number.isFinite(parsed) && parsed > 0 ? parsed : 0) * 24 * 60 * 60 * 1000;
 };
 
+/**
+ * How long an unused link is kept before it is forgotten. Unlike `days()` an
+ * unset or empty value is 90 days rather than "off"; `0` is the only way to keep links forever.
+ */
+const indexDays = (value: string | undefined) => {
+  const parsed = Number(value);
+  return (!value?.trim() || !Number.isFinite(parsed) || parsed < 0 ? 90 : parsed) * 24 * 60 * 60 * 1000;
+};
+
 export class ImageProxy {
   private index = new Map<string, Entry>();
   private inflight = new Map<string, Promise<Entry | undefined>>();
   private saveTimer?: NodeJS.Timeout;
   private dirty = false;
+  private maintenance?: Promise<void>;
+  private chain: Promise<unknown> = Promise.resolve();
 
   constructor(
     private dir = path.join(process.env.DATA_DIR ?? "/data", "images"),
     private cap = megabytes(process.env.IMAGE_CACHE_MB, 512),
     private ttlMs = days(process.env.IMAGE_CACHE_TTL_DAYS),
     private fetcher: (url: string, init: RequestInit) => Promise<Response> = guardedFetch,
+    private indexTtlMs = indexDays(process.env.IMAGE_CACHE_INDEX_TTL_DAYS),
+    private now: () => number = Date.now,
   ) {}
 
   private get indexFile() { return path.join(this.dir, "index.json"); }
@@ -137,12 +150,56 @@ export class ImageProxy {
     const files = new Set((await readdir(this.dir).catch(() => [])).filter((name) => name !== "index.json"));
     for (const [id, entry] of Object.entries(stored)) {
       if (!entry?.url) continue;
+      const at = Number.isFinite(entry.at) && entry.at > 0 ? entry.at : this.now();
       const onDisk = entry.ext && files.has(`${id}.${entry.ext}`);
-      this.index.set(id, onDisk ? entry : { url: entry.url, at: entry.at || Date.now() });
+      this.index.set(id, onDisk ? { ...entry, at } : { url: entry.url, at });
       if (onDisk) files.delete(`${id}.${entry.ext}`);
     }
     // Anything the index does not know about cannot be served, so it is only waste.
     for (const orphan of files) await rm(path.join(this.dir, orphan), { force: true });
+    // A lowered cap, or an index nobody has touched for a long time, is dealt with here
+    // as well, so the first paint after a restart already sees the enforcement.
+    if (await this.enforce()) await this.writeIndex();
+  }
+
+  /** Removals run one at a time: each candidate is a snapshot, and two passes must never
+   *  interleave the read of an entry with its removal. */
+  private exclusively<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.chain.then(fn);
+    this.chain = run.then(() => undefined, () => undefined);
+    return run;
+  }
+
+  private async enforce(): Promise<boolean> {
+    const evicted = await this.evict();
+    // Retirement always runs, whatever the byte pass decided.
+    return this.retireMappings() > 0 || evicted;
+  }
+
+  /** An explicit pass: bytes past their age or over the cap go, then links nobody used. */
+  maintain(): Promise<void> {
+    if (!this.maintenance) {
+      this.maintenance = this.enforce().then(
+        () => undefined,
+        (error) => { log("WARN", "Image cache maintenance failed", { reason: String(error).slice(0, 120) }); },
+      ).finally(() => { this.maintenance = undefined; });
+    }
+    return this.maintenance;
+  }
+
+  /** A link nobody used for `indexTtlMs` and with no bytes behind it is forgotten. Entries
+   *  with bytes are left alone: byte expiry turns them into links first, and they retire later. */
+  private retireMappings(): number {
+    if (!(this.indexTtlMs > 0)) return 0;
+    let removed = 0;
+    for (const [id, entry] of [...this.index.entries()]) {
+      if (entry.ext || this.inflight.has(id)) continue;
+      if (this.now() - entry.at <= this.indexTtlMs) continue;
+      this.index.delete(id);
+      removed += 1;
+    }
+    if (removed) { log("INFO", "Unused image links dropped", { removed }); this.save(); }
+    return removed;
   }
 
   private save() {
@@ -179,8 +236,8 @@ export class ImageProxy {
     if (!secureMode() || !/^https?:\/\//i.test(value)) return value;
     const id = imageId(value);
     const known = this.index.get(id);
-    if (known) known.at = Date.now();
-    else this.index.set(id, { url: value, at: Date.now() });
+    if (known) known.at = this.now();
+    else this.index.set(id, { url: value, at: this.now() });
     this.save();
     return `${PREFIX}${id}`;
   }
@@ -255,7 +312,7 @@ export class ImageProxy {
     const entry = this.index.get(id);
     if (!entry) { log("DEBUG", "An unknown image id was requested", { id }); return undefined; }
     if (entry.ext) {
-      entry.at = Date.now();
+      entry.at = this.now();
       this.save();
       return { file: this.path(id, entry.ext), type: TYPES[entry.ext]!, etag: `"${id}-${entry.bytes ?? 0}"` };
     }
@@ -292,44 +349,71 @@ export class ImageProxy {
       await renameWithRetry(temp, target);
       entry.ext = storedExt;
       entry.bytes = data.length;
-      entry.at = Date.now();
+      entry.at = this.now();
       this.save();
       await this.evict();
-      return entry;
+      // Eviction may have taken this very picture; never hand out a path it just deleted.
+      return entry.ext ? entry : undefined;
     } catch (error) {
       return rejected(String(error).slice(0, 120));
     }
   }
 
+  private evict(): Promise<boolean> { return this.exclusively(() => this.evictOnce()); }
+
   /** Oldest first, down to four fifths of the cap so this does not run on every write.
    *  `IMAGE_CACHE_TTL_DAYS` also drops the bytes of anything not served for that long,
    *  while the cache still sits under its cap. */
-  private async evict() {
+  private async evictOnce(): Promise<boolean> {
     let total = 0;
     for (const entry of this.index.values()) total += entry.bytes ?? 0;
-    // The address stays, only the bytes go: the id the client holds keeps working.
-    const drop = async ([id, entry]: [string, Entry]) => {
-      await rm(this.path(id, entry.ext!), { force: true });
-      total -= entry.bytes ?? 0;
-      entry.ext = undefined;
-      entry.bytes = undefined;
-    };
+    let changed = false;
     const aged = this.ttlMs
-      ? [...this.index.entries()].filter(([, entry]) => entry.ext && Date.now() - entry.at > this.ttlMs)
+      ? [...this.index.entries()].filter(([id, entry]) => entry.ext && !this.inflight.has(id) && this.now() - entry.at > this.ttlMs)
       : [];
-    for (const entry of aged) await drop(entry);
-    if (aged.length) log("INFO", "Cached images dropped past their age", { removed: aged.length });
+    let agedRemoved = 0;
+    for (const [id, snapshot] of aged) {
+      const bytes = await this.dropBytes(id, snapshot);
+      if (bytes === undefined) continue;
+      total -= bytes;
+      agedRemoved += 1;
+      changed = true;
+    }
+    if (agedRemoved) log("INFO", "Cached images dropped past their age", { removed: agedRemoved });
 
-    const stored = [...this.index.entries()].filter(([, entry]) => entry.ext).sort((a, b) => a[1].at - b[1].at);
+    const stored = [...this.index.entries()]
+      .filter(([id, entry]) => entry.ext && !this.inflight.has(id))
+      .sort((a, b) => a[1].at - b[1].at);
     const target = this.cap * 0.8;
     let removed = 0;
-    for (const entry of total > this.cap ? stored : []) {
+    for (const [id, snapshot] of total > this.cap ? stored : []) {
       if (total <= target) break;
-      await drop(entry);
+      const bytes = await this.dropBytes(id, snapshot);
+      if (bytes === undefined) continue;
+      total -= bytes;
       removed += 1;
+      changed = true;
     }
     if (removed) log("INFO", "Cached images dropped to stay under the limit", { removed });
-    if (removed || aged.length) this.save();
+    if (changed) this.save();
+    return changed;
+  }
+
+  /** Removes one snapshot's bytes, unless the entry was served or replaced meanwhile. The
+   *  address stays; only the bytes go, so the id the client holds keeps working. */
+  private async dropBytes(id: string, snapshot: Entry): Promise<number | undefined> {
+    const current = this.index.get(id);
+    if (!current?.ext || current.ext !== snapshot.ext || current.at !== snapshot.at) return undefined;
+    try {
+      await rm(this.path(id, current.ext), { force: true });
+    } catch (error) {
+      log("WARN", "A cached image could not be removed", { reason: String(error).slice(0, 120) });
+      return undefined;
+    }
+    const bytes = current.bytes ?? 0;
+    current.ext = undefined;
+    current.bytes = undefined;
+    return bytes;
   }
 
   get size() { return this.index.size; }

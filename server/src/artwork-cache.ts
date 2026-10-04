@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { renameWithRetry } from "./fs-retry.js";
 import { parseLibraryPath } from "./libraries.js";
@@ -33,6 +33,8 @@ export class ArtworkCache {
   private entries = new Map<string, Entry>();
   private timer?: NodeJS.Timeout;
   private dirty = false;
+  private maintenance?: Promise<void>;
+  private chain: Promise<unknown> = Promise.resolve();
 
   constructor(
     private dir = path.join(process.env.DATA_DIR ?? "/data", "artwork"),
@@ -84,20 +86,52 @@ export class ArtworkCache {
 
   async load() {
     await mkdir(this.dir, { recursive: true });
-    let stored: Record<string, Entry> = {};
-    try { stored = JSON.parse(await readFile(this.indexFile, "utf8")) as Record<string, Entry>; }
-    catch { stored = {}; }
-    // A size is needed to enforce the ceiling, so an entry from before the index, or one
-    // whose file the sweep took, is dropped rather than trusted.
-    for (const [name, entry] of Object.entries(stored)) {
-      const info = await stat(path.join(this.dir, name)).catch(() => undefined);
-      if (info?.isFile()) this.entries.set(name, { bytes: entry?.bytes || info.size, at: entry?.at || Date.now() });
+    let stored: Record<string, { at?: unknown }> = {};
+    try {
+      const parsed: unknown = JSON.parse(await readFile(this.indexFile, "utf8"));
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) stored = parsed as Record<string, { at?: unknown }>;
+    } catch { stored = {}; }
+    // The index is rebuilt from what is actually on disk: a stored size is not trusted,
+    // and anything the sweep took, or that was never recorded, is measured afresh.
+    this.entries.clear();
+    for (const library of await readdir(this.dir, { withFileTypes: true }).catch(() => [])) {
+      if (!library.isDirectory()) continue;
+      for (const file of await readdir(path.join(this.dir, library.name), { withFileTypes: true }).catch(() => [])) {
+        if (!file.isFile() || !/^[0-9a-f]{40}\.jpg$/.test(file.name)) continue;
+        const name = path.join(library.name, file.name);
+        const info = await lstat(path.join(this.dir, name)).catch(() => undefined);
+        if (!info?.isFile()) continue;
+        const prior = stored[name]?.at;
+        const at = typeof prior === "number" && Number.isFinite(prior) && prior > 0 ? prior : info.mtimeMs;
+        this.entries.set(name, { bytes: info.size, at });
+      }
     }
+    await this.writeIndex();
+    await this.evict();
   }
 
   async flush() {
     if (this.timer) { clearTimeout(this.timer); this.timer = undefined; }
     if (this.dirty) { this.dirty = false; await this.writeIndex(); }
+  }
+
+  /** Removals run one at a time: each candidate is a snapshot, and two passes must never
+   *  interleave the read of an entry with its removal. */
+  private exclusively<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.chain.then(fn);
+    this.chain = run.then(() => undefined, () => undefined);
+    return run;
+  }
+
+  /** One explicit pass over the ceiling; never throws, and concurrent calls share the run. */
+  maintain(): Promise<void> {
+    if (!this.maintenance) {
+      this.maintenance = this.evict().then(
+        () => undefined,
+        (error) => { log("WARN", "Artwork cache maintenance failed", { reason: String(error).slice(0, 120) }); },
+      ).finally(() => { this.maintenance = undefined; });
+    }
+    return this.maintenance;
   }
 
   /** A thumbnail just landed in the cache. */
@@ -193,19 +227,37 @@ export class ArtworkCache {
     this.save();
   }
 
+  private evict(): Promise<void> { return this.exclusively(() => this.evictOnce()); }
+
   /** Oldest first, down to four fifths of the cap so this does not run on every write. */
-  private async evict() {
+  private async evictOnce() {
     let total = 0;
     for (const entry of this.entries.values()) total += entry.bytes;
     if (total <= this.cap) return;
     const stored = [...this.entries.entries()].sort((a, b) => a[1].at - b[1].at);
     const target = this.cap * 0.8;
     let removed = 0;
-    for (const [name, entry] of stored) {
+    for (const [name, snapshot] of stored) {
       if (total <= target) break;
-      await rm(path.join(this.dir, name), { force: true });
+      const current = this.entries.get(name);
+      // Served or rewritten between the snapshot and now: leave it for the next pass.
+      if (!current || current.at !== snapshot.at || current.bytes !== snapshot.bytes) continue;
+      const file = path.join(this.dir, name);
+      try {
+        await stat(file);
+      } catch (error) {
+        // The file is already gone, so the entry only has to stop counting.
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") { this.entries.delete(name); total -= current.bytes; removed += 1; }
+        continue;
+      }
+      try {
+        await rm(file, { force: true });
+      } catch (error) {
+        log("WARN", "A cached thumbnail could not be removed", { reason: String(error).slice(0, 120) });
+        continue;
+      }
       this.entries.delete(name);
-      total -= entry.bytes;
+      total -= current.bytes;
       removed += 1;
     }
     if (removed) log("INFO", "Cached thumbnails dropped to stay under the limit", { removed });

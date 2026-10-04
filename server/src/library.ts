@@ -371,21 +371,36 @@ export async function listVideos(root: string, relative = "", depth = 0, exclude
   return found;
 }
 
+export interface CheckedWalk { files: FoundFile[]; complete: boolean }
+
+/** The same walk as `listVideos`, reporting whether the whole tree could be read. A
+ *  directory that could not be listed -- whatever the reason -- leaves `complete` false, so
+ *  a caller that decides from absence knows the answer is not the whole library. A video
+ *  gone between the listing and its stat is a normal race and simply absent. */
+export async function listVideosChecked(root: string, exclude?: ReadonlySet<string>): Promise<CheckedWalk> {
+  const report = { complete: true };
+  const files = await walkVideos(root, "", 0, exclude, limiter(WALK_CONCURRENCY), report);
+  return { files, complete: report.complete };
+}
+
 /** The unbounded walk, several calls in flight, answering in the order a sequential one would. */
-async function walkVideos(root: string, relative: string, depth: number, exclude: ReadonlySet<string> | undefined, slot: ReturnType<typeof limiter>): Promise<FoundFile[]> {
+async function walkVideos(root: string, relative: string, depth: number, exclude: ReadonlySet<string> | undefined, slot: ReturnType<typeof limiter>, report?: { complete: boolean }): Promise<FoundFile[]> {
   if (depth > 8) return [];
   let entries;
   try { entries = await slot(() => readdir(path.join(root, toFs(relative)), { withFileTypes: true })); }
-  catch { return []; }
+  catch { if (report) report.complete = false; return []; }
   const parts = entries.map(async (entry): Promise<FoundFile[]> => {
     if (entry.name.startsWith(".")) return [];
     const next = posixJoin(relative, entry.name);
-    if (entry.isDirectory()) return exclude?.has(next) ? [] : walkVideos(root, next, depth + 1, exclude, slot);
+    if (entry.isDirectory()) return exclude?.has(next) ? [] : walkVideos(root, next, depth + 1, exclude, slot, report);
     if (!entry.isFile() || !isVideo(entry.name)) return [];
     try {
       const info = await slot(() => stat(path.join(root, toFs(next))));
       return [{ relative: next, size: info.size, modified: info.mtime.toISOString() }];
-    } catch { return []; /* the file disappeared meanwhile */ }
+    } catch (error) {
+      if (report && (error as NodeJS.ErrnoException).code !== "ENOENT") report.complete = false;
+      return []; /* the file disappeared meanwhile */
+    }
   });
   return (await Promise.all(parts)).flat();
 }

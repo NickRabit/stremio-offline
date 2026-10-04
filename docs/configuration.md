@@ -42,6 +42,16 @@ load artwork straight from the provider again.
 | --- | --- | --- |
 | `IMAGE_CACHE_MB` | `512` | Disk the cached artwork may take before the oldest images are dropped. |
 | `IMAGE_CACHE_TTL_DAYS` | `0` | Age at which a cached image is dropped even while the cache is under its limit. `0` keeps the limit as the only rule. |
+| `IMAGE_CACHE_INDEX_TTL_DAYS` | `90` | Days after which an unused link to a remote image, with no cached bytes, is forgotten. `0` keeps links forever. |
+
+The byte limit and `IMAGE_CACHE_TTL_DAYS` govern the cached **image data**;
+`IMAGE_CACHE_INDEX_TTL_DAYS` governs the **link** behind an id. `0` for the byte
+TTL is deliberate: the cap is the rule, and a value such as `30` would free disk
+earlier at the cost of refetching. A link idle longer than
+`IMAGE_CACHE_INDEX_TTL_DAYS` is forgotten, so a page left open that long may have
+to be reloaded, while anything the server stored keeps its original address and
+is linked again when it is next shown. The cache is checked at start and every
+six hours, not only when an image is downloaded.
 
 The first visit to a catalogue is slower, because the server is fetching those
 posters; after that they are served from the cache. Dropping an image only frees
@@ -52,13 +62,21 @@ the bytes, never the link the page already holds.
 A picture that sits next to the media (`poster.jpg`, `folder.jpg`) is never
 touched: it belongs to the folder. What is capped here are the thumbnails the
 server generates itself — a frame out of the video, or the poster of the title a
-path is matched to. They live under `DATA_PATH/artwork/<library id>/`, so deleting
-a library deletes its thumbnails and nothing else.
+path is matched to. They live under `DATA_PATH/artwork/<library id>/`. Removing a
+library keeps them for a month, so adding the same folder again restores its
+thumbnails; **remove and forget** deletes them.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `ARTWORK_CACHE_MB` | `256` | Disk those thumbnails may take before the least recently used are dropped. |
 | `LIBRARY_META_TTL_DAYS` | `14` | Age at which the scan re-reads a bound series, so its episode titles stay current. `0` switches the pass off. Only libraries the interface opened are refreshed. |
+
+The ceiling counts the generated image files, not the `index.json` beside them,
+so the directory can be slightly larger than `ARTWORK_CACHE_MB`. Thumbnails of
+videos that no longer exist are cleaned every six hours and when the library is
+browsed, at most hourly — but only after the library has been read completely.
+A library that looks empty is cleaned only when it is still empty on the next
+pass, so a share that is not mounted does not cost its thumbnails.
 
 A dropped thumbnail is generated again on the next visit; nothing else is lost.
 

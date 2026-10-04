@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { browseDirectory, buildLibrary, clearBrowseCache, describePath, emptiedFolders, hasVideo, holdsLibraryRoot, listFolders, moveDestination, libraryFingerprint, numberedEpisode, isPathWithin, isVideo, listVideos, orphanedCatalogKeys, pageFiles, parseEpisode, parseSeason, remapPath, resolveInside, sortFiles, summarize, type BrowseResult } from "./library.js";
+import { browseDirectory, buildLibrary, clearBrowseCache, describePath, emptiedFolders, hasVideo, holdsLibraryRoot, listFolders, moveDestination, libraryFingerprint, numberedEpisode, isPathWithin, isVideo, listVideos, listVideosChecked, orphanedCatalogKeys, pageFiles, parseEpisode, parseSeason, remapPath, resolveInside, sortFiles, summarize, type BrowseResult } from "./library.js";
 
 const file = (relative: string, size = 100, modified = "2026-01-01T00:00:00.000Z") => ({ relative, size, modified });
 
@@ -490,6 +490,64 @@ test("listVideos walks the same tree scanLibrary uses", async () => {
     await writeFile(path.join(root, "note.txt"), "");
     const found = await listVideos(root);
     assert.deepEqual(found.map((item) => item.relative), ["Show/01 serie/01.mkv"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("listVideosChecked agrees with listVideos and reports a complete walk", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "stremio-videos-"));
+  try {
+    await mkdir(path.join(root, "Film"), { recursive: true });
+    await writeFile(path.join(root, "Film", "film.mkv"), "12345");
+    await writeFile(path.join(root, "note.txt"), "");
+    const walked = await listVideosChecked(root);
+    assert.equal(walked.complete, true);
+    assert.deepEqual(walked.files, await listVideos(root));
+    assert.deepEqual(walked.files.map((file) => file.relative), ["Film/film.mkv"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a directory that cannot be read leaves the walk incomplete but the rest listed",
+  { skip: (process.getuid?.() === 0 && "root ignores the permission bits") || (process.platform === "win32" && "NTFS has no permission bits to close a directory with") }, async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "stremio-videos-"));
+    const closed = path.join(root, "Closed");
+    try {
+      await mkdir(path.join(root, "Open"), { recursive: true });
+      await mkdir(closed, { recursive: true });
+      await writeFile(path.join(root, "Open", "a.mkv"), "");
+      await writeFile(path.join(closed, "b.mkv"), "");
+      await chmod(closed, 0o000);
+      const walked = await listVideosChecked(root);
+      assert.equal(walked.complete, false, "an unreadable directory makes the walk incomplete");
+      assert.deepEqual(walked.files.map((file) => file.relative), ["Open/a.mkv"]);
+    } finally {
+      await chmod(closed, 0o755).catch(() => undefined);
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+test("a root that is not there reports an incomplete walk", async () => {
+  const root = path.join(tmpdir(), `stremio-videos-missing-${process.pid}-${Date.now()}`);
+  const walked = await listVideosChecked(root);
+  assert.equal(walked.complete, false);
+  assert.deepEqual(walked.files, []);
+});
+
+test("the depth cap and a carved-out folder are not incompleteness", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "stremio-videos-"));
+  try {
+    let deep = root;
+    for (let level = 0; level < 10; level += 1) deep = path.join(deep, `d${level}`);
+    await mkdir(deep, { recursive: true });
+    await writeFile(path.join(deep, "deep.mkv"), "");
+    await mkdir(path.join(root, "Skipped"), { recursive: true });
+    await writeFile(path.join(root, "Skipped", "x.mkv"), "");
+    const walked = await listVideosChecked(root, new Set(["Skipped"]));
+    assert.equal(walked.complete, true);
+    assert.deepEqual(walked.files, [], "the depth cap defines the library, and a carve-out is not ours");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
