@@ -9,8 +9,9 @@ needs VAAPI. See [Hardware acceleration](hardware-acceleration.md) for the setup
 
 ## Direction and delivery order
 
-Reviewed against PR #260 (`11f1759`) and `main` (`14f7beb`) on 2026-09-29.
-This is a proposed delivery sequence, not a statement that the work below has
+The order was set against PR #260 (`11f1759`) on 2026-09-29. **Done** and
+**Next** were last reconciled with `main` (`2686fc2`, 0.5.6) on 2026-10-04. This
+is a proposed delivery sequence, not a statement that the work below has
 shipped.
 
 Make the NAS a dependable family media library: a useful home screen, a
@@ -53,21 +54,33 @@ Shipped in `main`; implementation details live in the linked guides.
   moves when changing a root, staged settings, mosaics and galleries.
   [Libraries](libraries.md).
 - **Identification**: automatic scans, suggestions and manual matching, with
-  TMDB/Cinemeta metadata and artwork. [Library identification](library-metadata.md).
+  TMDB/Cinemeta metadata and artwork. A series library is one show per
+  top-level folder, with season and episode folders read the way people name
+  them. [Library identification](library-metadata.md).
+- **Library upkeep**: image caches and the orphaned-artwork sweep run on a
+  schedule rather than on browsing; the sweep decides from a complete walk and
+  deletes nothing under an unreadable folder. On Linux the folder watch skips
+  the NAS's own system folders. [Libraries](libraries.md).
 - **Accounts**: administrator and user roles, per-user libraries, addons,
   download permissions, preferences and session revocation. [Accounts](users.md).
-- **Playback**: direct play, remux, hardware transcode, timeline previews,
-  subtitle timing, next-episode countdown and device volume memory. AirPlay is
-  disabled. [Playback](playback.md).
+- **Playback**: direct play, remux, hardware transcode (VAAPI, NVENC,
+  VideoToolbox), timeline previews, subtitle timing, next-episode countdown,
+  device volume memory and a Fill screen toggle. A seek that is slow or refused
+  keeps the stream alive, an HLS source named `.mp4` is converted from its
+  tallest rendition, and a conversion that falls behind playback says whether
+  the source or FFmpeg is waiting. AirPlay is disabled.
+  [Playback](playback.md), [Troubleshooting](troubleshooting.md).
 - **Continue watching**: series grouping, the next available catalogue episode
   and per-library/addon visibility. [Libraries](libraries.md#the-library-row).
 - **Downloads**: restart recovery, Range resume, retries, disk-full pausing,
-  segmented transfers, device saves, smart season/show selection and
+  segmented transfers, device saves shown in the Downloads view, Save to library
+  into another library, folder and layout, smart season/show selection and
   Real-Debrid torrent hand-off. [Addons and downloads](downloads.md).
 - **Addons**: scoped search, scheduled/manual manifest refresh, storage rules
   and downloaded-title language. [Addons and downloads](downloads.md).
 - **Search**: search while typing, title-match order of loaded results,
-  per-account history that can be cleared or turned off, and suggestions from
+  per-account history that can be cleared, trimmed one entry at a time or turned
+  off, and suggestions from
   recent searches and titles already seen. [Enhanced search](enhanced-search-spec.md).
 - **Trailers**: Cinemeta/TMDB, in-app with secure mode off and an external tab
   with it on. [Trailers](trailers.md).
@@ -135,9 +148,8 @@ episodes are an additive row, not a reason to block the home screen. See the
 ### Player and mobile chrome
 
 - Improve Safari landscape chrome behavior on a physical iPhone/iPad; WebKit
-  automation cannot emulate browser chrome, so this needs a device.
-- Catalog actions **To library** / **To device** are clipped at the bottom of the
-  sheet.
+  automation cannot emulate browser chrome, so this needs a device. The same goes
+  for the native iOS fullscreen with the Fill screen toggle.
 
 ### Library
 
@@ -160,7 +172,9 @@ language, subtitle policy and library selection rather than inventing another
 download path. Surface new episodes on the home screen and make duplicate
 detection explicit so a repeated scheduler run is harmless. Following defaults
 to discovery only; automatic downloads are a separate opt-in. See
-[Follow show](roadmap-delivery-spec.md#follow-show).
+[Follow show](roadmap-delivery-spec.md#follow-show). Its prerequisite, judging a
+duplicate download against the caller's own jobs rather than anyone's, is a
+focused fix of its own.
 
 ### Queue robustness
 
@@ -197,7 +211,9 @@ The cross-library artwork loss was exactly this shape — a swallowed `ENOENT`, 
 file orphaned under the old key, and an hour later the sweep took it for good. The
 library add / remove / forget / disable / re-enable / re-root / reconnect / type
 change paths have been through it since, and the sweep and the migration check
-the root before deleting. Walk the rest of the same surface: file rename, move,
+the root before deleting. The orphan sweep now decides from a complete walk, so
+an unreadable folder or an unmounted share stops it instead of emptying the
+artwork. Walk the rest of the same surface: file rename, move,
 copy, delete, bulk and cross-library operations, including across filesystems;
 artwork generation, replacement, cleanup and orphan detection; metadata binding
 after an external rename or a vanished file. A destructive path gets explicit
@@ -228,7 +244,9 @@ and testable rather than discovered per stream. What needs checking: byte ranges
 and seeking on direct play; the fragmented MP4 lifecycle and audio-only
 conversion on remux; cancellation, client disconnect and concurrent sessions on
 transcode — every FFmpeg process must belong to a live session or bounded
-cleanup, rather than to an individual HLS segment request; and the VAAPI failure
+cleanup, rather than to an individual HLS segment request (the seek fallback
+and the timeline previews have been through this; the rest of the surface has
+not); and the VAAPI failure
 counter turning into a clean software fallback instead of a failed playback. A
 failed playback should tell us the source, the mode chosen, hardware or software,
 and the stage that failed, without a token or a full private stream URL reaching
