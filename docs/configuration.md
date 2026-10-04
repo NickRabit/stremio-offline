@@ -42,6 +42,7 @@ load artwork straight from the provider again.
 | --- | --- | --- |
 | `IMAGE_CACHE_MB` | `512` | Disk the cached artwork may take before the oldest images are dropped. |
 | `IMAGE_CACHE_TTL_DAYS` | `0` | Age at which a cached image is dropped even while the cache is under its limit. `0` keeps the limit as the only rule. |
+| `IMAGE_CACHE_INDEX_TTL_DAYS` | `90` | Days after which an unused link to a remote image, with no cached bytes, is forgotten. `0` keeps links forever. |
 
 The first visit to a catalogue is slower, because the server is fetching those
 posters; after that they are served from the cache. Dropping an image only frees
