@@ -1,6 +1,8 @@
 # Automatic downloads for followed series
 
-Status: proposal, not implemented. Research and review date: 2026-10-03.
+Status: implemented in 0.5.7 ([#297](https://github.com/NickRabit/stremio-offline/pull/297));
+user-facing behavior is in [Downloads](downloads.md#following-a-series). This
+document stays as the design record. Research and review date: 2026-10-03.
 
 This document refines the [Follow show delivery contract](roadmap-delivery-spec.md#follow-show).
 Discovery-only remains the default; the download behavior below applies after
@@ -13,14 +15,11 @@ above the existing lazy download queue. Refresh episode metadata separately from
 looking for a usable source.
 Persist episode decisions independently of queue history. Start with future
 episodes over HTTP, explicit language/subtitle rules and a pinned destination.
-Deliberate proposed deviation from the delivery contract's "HTTP or Real-Debrid
-handling": the first shipping slice accepts HTTP, including ready debrid URLs
-returned by addons, but defers raw `infoHash`/magnet hand-off to Real-Debrid to the
-separate raw-torrent milestone below. Current lazy resolution cannot perform that
-hand-off. This proposal records the narrower scope; it does not claim to satisfy
-the full Real-Debrid delivery gate. Before implementation, either adopt this staged
-scope in the delivery contract or include the raw-torrent milestone before calling
-that contract complete.
+Raw torrents were proposed as a later milestone; the owner chose to ship them in
+the first release instead. A lazy job falls back to a torrent through Real-Debrid
+when no HTTP source matches: strict audio is never satisfied by a torrent, an
+episode needs a file index, and a file Real-Debrid reports as another episode is
+rejected and the next source tried. HTTP always wins.
 
 This is a medium-sized feature involving persistence, queue semantics and account
 isolation, rather than a timer around the bulk-download endpoint.
@@ -554,9 +553,9 @@ Recommended first scope: discovery-only by default with opt-in downloads of
 future episodes or an explicit starting episode,
 HTTP sources, current audio/subtitle rules, concrete destination, pause/skip,
 visible waiting reasons and no upgrades or automatic re-download after deletion.
-Before implementation, resolve the explicit staged Real-Debrid scope against the
-delivery contract. Also decide whether delayed Czech audio is essential for the
-first release; if so, specify the grace period and clock origin explicitly.
+Decided by the owner: Real-Debrid torrents ship in the first release (see the
+recommendation above), and there is no preferred-audio grace period yet; the
+fallback applies immediately, as in bulk downloads.
 
 ## Independent review
 
