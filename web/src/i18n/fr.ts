@@ -386,6 +386,7 @@ export const fr: Catalog = {
   "following.stateUpcoming": "À venir",
   "following.stateReleased": "Diffusé",
   "following.calendarEmpty": "Rien ne sort ce mois-ci.",
+  "following.dayEmpty": "Rien ne sort ce jour-là.",
   "following.activityEmpty": "Les téléchargements automatiques n'ont encore rien fait.",
 
   "following.dateUncertainHint": "La date exacte n'est pas encore annoncée ; il s'agit du début de la saison.",

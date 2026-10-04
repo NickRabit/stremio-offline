@@ -158,19 +158,19 @@ export function FollowDialog({ follow, videos, languages, libraries, addons, aud
               const state = row.download?.state;
               const canSkip = state === "reserved" || state === "queued" || state === "waiting";
               const canRetry = state === "waiting" || state === "attention" || state === "skipped";
+              const pillState = state ?? (row.eligibility === "upcoming" ? "upcoming" : undefined);
               return <div className="follow-episode" key={row.key}>
-                <b>{episodeCode(row.season, row.episode)}</b>
-                <span className="follow-episode-title">{row.title ?? ""}</span>
-                <small title={row.dateUncertain ? t("following.dateUncertainHint") : undefined}>{episodeDate(row)}</small>
-                <span className={`follow-state ${state ?? row.eligibility}`}>
-                  {state === "waiting" ? t("follow.stateWaiting") : state === "completed" ? t("follow.stateCompleted") : state === "skipped" ? t("follow.stateSkipped") : state === "attention" ? t("follow.stateAttention") : state === "reserved" || state === "queued" ? t("follow.stateQueued") : row.eligibility === "upcoming" ? t("follow.stateUpcoming") : ""}
-                  {state === "waiting" && row.download?.nextAttemptAt ? ` · ${t("follow.nextAttempt", { time: formatWhen(row.download.nextAttemptAt) })}` : ""}
-                  {state === "attention" && row.download?.reasonKey ? ` · ${serverText(row.download.reasonKey, row.download.reasonKey)}` : ""}
-                </span>
-                <span className="follow-episode-actions">
+                <div className="follow-episode-main"><b>{episodeCode(row.season, row.episode)}</b><span className="follow-episode-title">{row.title ?? ""}</span></div>
+                <div className="follow-episode-meta">
+                  <small title={row.dateUncertain ? t("following.dateUncertainHint") : undefined}>{episodeDate(row)}</small>
+                  {pillState && <span className={`state-pill state-${pillState}`}>{state === "waiting" ? t("follow.stateWaiting") : state === "completed" ? t("follow.stateCompleted") : state === "skipped" ? t("follow.stateSkipped") : state === "attention" ? t("follow.stateAttention") : state === "reserved" || state === "queued" ? t("follow.stateQueued") : t("follow.stateUpcoming")}</span>}
+                  {state === "waiting" && row.download?.nextAttemptAt && <small>{t("follow.nextAttempt", { time: formatWhen(row.download.nextAttemptAt) })}</small>}
+                  {state === "attention" && row.download?.reasonKey && <small>{serverText(row.download.reasonKey, row.download.reasonKey)}</small>}
+                </div>
+                {(canSkip || canRetry) && <span className="follow-episode-actions">
                   {canSkip && <button type="button" onClick={() => void runAction(() => api.skipFollowEpisode(current.id, row.key))}>{t("follow.skip")}</button>}
                   {canRetry && <button type="button" onClick={() => void runAction(() => api.retryFollowEpisode(current.id, row.key))}>{t("follow.retry")}</button>}
-                </span>
+                </span>}
               </div>;
             })}
           </section>}

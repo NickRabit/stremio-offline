@@ -410,6 +410,7 @@ export const cs: Catalog = {
   "following.stateUpcoming": "Chystá se",
   "following.stateReleased": "Vyšlo",
   "following.calendarEmpty": "Tento měsíc nic nevychází.",
+  "following.dayEmpty": "Tento den nic nevychází.",
   "following.activityEmpty": "Automatické stahování zatím nic neudělalo.",
 
   "following.dateUncertainHint": "Přesné datum zatím není oznámené, jde o začátek řady.",

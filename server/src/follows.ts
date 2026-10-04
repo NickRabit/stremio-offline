@@ -1045,6 +1045,10 @@ export class FollowService {
         }
         if (download.state !== "waiting") continue;
         if (!download.nextAttemptAt || Date.parse(download.nextAttemptAt) > now) continue;
+        // An episode whose date moved into the future (a corrected placeholder) is not looked
+        // for again before it airs.
+        const airs = follow.episodes[episodeKey]?.released;
+        if (airs && Date.parse(airs) > now) continue;
         if (!follow.enabled || !this.mayQueue(follow)) continue;
         const job = jobs.get(download.intent);
         if (job && job.status === "failed") {

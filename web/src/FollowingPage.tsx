@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { BellRing, ChevronLeft, ChevronRight, Film } from "lucide-react";
 import { api, describeError } from "./api";
 import { FollowDialog } from "./FollowDialog";
@@ -123,33 +123,39 @@ function Overview({ follows, onOpen }: { follows: FollowView[]; onOpen: (id: str
   </div>;
 }
 
+/** "neděle 4. října", never "Neděle 4. Října": only a sentence's first letter is raised. */
+const sentence = (text: string) => text ? text[0]!.toLocaleUpperCase(localeTag()) + text.slice(1) : text;
+const itemKey = (item: { followId: string; season: number; episode: number }) => `${item.followId}:${item.season}:${item.episode}`;
+
+function StatePill({ state, children }: { state: CalendarEpisodeState; children?: ReactNode }) {
+  return <span className={`state-pill state-${state}`}>{stateLabel(state)}{children}</span>;
+}
+
+function EpisodeRow({ item, onOpen }: { item: CalendarItem | UndatedCalendarItem; onOpen: () => void }) {
+  return <button type="button" className="following-episode-row" title={item.dateUncertain ? t("following.dateUncertainHint") : undefined} onClick={onOpen}>
+    <span className="following-episode-art">{item.poster ? <img src={item.poster} alt="" loading="lazy"/> : <Film/>}</span>
+    <span className="following-episode-copy">
+      <strong>{item.name}</strong>
+      <small>{`${item.dateUncertain ? "≈ " : ""}${episodeCode(item.season, item.episode)}${item.title ? ` · ${item.title}` : ""}`}</small>
+    </span>
+    <StatePill state={item.state}/>
+  </button>;
+}
+
 function CalendarTab({ onOpenSeries }: { onOpenSeries: FollowingPageProps["onOpenSeries"] }) {
   useI18n();
   const [cursor, setCursor] = useState(() => new Date());
+  const [selected, setSelected] = useState(() => dayKey(new Date()));
   const [items, setItems] = useState<CalendarItem[]>([]);
   const [undated, setUndated] = useState<UndatedCalendarItem[]>([]);
   const [loaded, setLoaded] = useState(false);
-  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
-  const [wide, setWide] = useState(() => typeof window !== "undefined" && typeof window.matchMedia === "function" ? window.matchMedia("(min-width: 900px)").matches : true);
-
-  useEffect(() => {
-    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
-    const query = window.matchMedia("(min-width: 900px)");
-    const update = () => setWide(query.matches);
-    update();
-    query.addEventListener("change", update);
-    return () => query.removeEventListener("change", update);
-  }, []);
 
   const monthStart = new Date(cursor.getFullYear(), cursor.getMonth(), 1);
-  const monthEnd = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
   const gridStart = addDays(monthStart, -mondayIndex(monthStart));
   const daysInMonth = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0).getDate();
   const cells = Math.ceil((mondayIndex(monthStart) + daysInMonth) / 7) * 7;
-  const rangeFrom = wide ? gridStart.getTime() : monthStart.getTime();
-  const rangeTo = wide ? addDays(gridStart, cells).getTime() : monthEnd.getTime();
-
-  useEffect(() => { setExpanded(new Set()); }, [cursor, wide]);
+  const rangeFrom = gridStart.getTime();
+  const rangeTo = addDays(gridStart, cells).getTime();
 
   useEffect(() => {
     let stale = false;
@@ -171,62 +177,80 @@ function CalendarTab({ onOpenSeries }: { onOpenSeries: FollowingPageProps["onOpe
     return map;
   }, [items]);
 
-  const openOf = (item: { type: string; metaId: string; name: string; poster?: string }) => onOpenSeries({ type: item.type, id: item.metaId, name: item.name, poster: item.poster });
-  const uncertain = (item: { dateUncertain?: boolean }) => item.dateUncertain ? t("following.dateUncertainHint") : undefined;
-  const monthLabel = new Intl.DateTimeFormat(localeTag(), { month: "long", year: "numeric" }).format(cursor);
   const today = dayKey(new Date());
   const tomorrow = dayKey(addDays(new Date(), 1));
+  const goMonth = (offset: number) => {
+    const next = new Date(cursor.getFullYear(), cursor.getMonth() + offset, 1);
+    setCursor(next);
+    // A month that holds today opens on today; any other on its first day with an episode.
+    const holdsToday = next.getFullYear() === new Date().getFullYear() && next.getMonth() === new Date().getMonth();
+    setSelected(holdsToday ? today : dayKey(next));
+  };
+  const goToday = () => { setCursor(new Date()); setSelected(today); };
+  useEffect(() => {
+    if (selected !== dayKey(monthStart) || byDay.has(selected)) return;
+    const first = [...byDay.keys()].filter((key) => key.startsWith(selected.slice(0, 7))).sort()[0];
+    if (first) setSelected(first);
+  }, [byDay]);
 
-  return <>
+  const openOf = (item: { type: string; metaId: string; name: string; poster?: string }) => onOpenSeries({ type: item.type, id: item.metaId, name: item.name, poster: item.poster });
+  const monthLabel = sentence(new Intl.DateTimeFormat(localeTag(), { month: "long", year: "numeric" }).format(cursor));
+  const selectedDate = new Date(`${selected}T12:00:00`);
+  const longDay = new Intl.DateTimeFormat(localeTag(), { weekday: "long", day: "numeric", month: "long" }).format(selectedDate);
+  const dayHeading = selected === today ? `${t("following.todayLabel")} · ${longDay}` : selected === tomorrow ? `${t("following.tomorrowLabel")} · ${longDay}` : sentence(longDay);
+  const selectedItems = byDay.get(selected) ?? [];
+
+  return <div className="following-calendar-view">
     <div className="following-cal-head">
-      <div className="following-cal-nav">
-        <button type="button" className="icon-button" aria-label={t("following.prevMonth")} onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() - 1, 1))}><ChevronLeft/></button>
-        <button type="button" onClick={() => setCursor(new Date())}>{t("following.today")}</button>
-        <button type="button" className="icon-button" aria-label={t("following.nextMonth")} onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1))}><ChevronRight/></button>
-      </div>
       <h3 className="following-cal-title">{monthLabel}</h3>
+      <div className="following-cal-nav" role="group" aria-label={monthLabel}>
+        <button type="button" aria-label={t("following.prevMonth")} onClick={() => goMonth(-1)}><ChevronLeft/></button>
+        <button type="button" onClick={goToday}>{t("following.today")}</button>
+        <button type="button" aria-label={t("following.nextMonth")} onClick={() => goMonth(1)}><ChevronRight/></button>
+      </div>
+    </div>
+    <div className="following-month">
+      <div className="following-calendar">
+        {Array.from({ length: 7 }, (_, index) => <span className="following-weekday" key={index} aria-hidden="true">{new Intl.DateTimeFormat(localeTag(), { weekday: "short" }).format(addDays(gridStart, index))}</span>)}
+        {Array.from({ length: cells }, (_, index) => {
+          const date = addDays(gridStart, index);
+          const key = dayKey(date);
+          const dayItems = byDay.get(key) ?? [];
+          const classes = ["following-day", date.getMonth() !== cursor.getMonth() ? "outside" : "", key === today ? "today" : "", key === selected ? "selected" : "", dayItems.length ? "busy" : ""].filter(Boolean).join(" ");
+          const label = `${new Intl.DateTimeFormat(localeTag(), { weekday: "long", day: "numeric", month: "long" }).format(date)}${dayItems.length ? `: ${dayItems.map((item) => `${item.name} ${episodeCode(item.season, item.episode)}`).join(", ")}` : ""}`;
+          return <div key={key} className={classes}>
+            <button type="button" className="following-day-hit" aria-label={label} aria-pressed={key === selected} onClick={() => setSelected(key)}>
+              <span className="following-day-num">{date.getDate()}</span>
+              {dayItems.length > 0 && <span className="following-day-dots" aria-hidden="true">
+                {dayItems.slice(0, 4).map((item) => <i key={itemKey(item)} className={`state-${item.state}`}/>)}
+                {dayItems.length > 4 && <b>+</b>}
+              </span>}
+            </button>
+            {dayItems.length > 0 && <div className="following-day-items">
+              {dayItems.slice(0, 3).map((item) => <button type="button" key={itemKey(item)} className={`following-event state-${item.state}`} title={item.dateUncertain ? t("following.dateUncertainHint") : `${item.name} ${episodeCode(item.season, item.episode)}${item.title ? ` · ${item.title}` : ""}`} onClick={() => openOf(item)}>
+                {item.poster ? <img src={item.poster} alt="" loading="lazy"/> : null}
+                <span><strong>{item.name}</strong><small>{`${item.dateUncertain ? "≈ " : ""}${episodeCode(item.season, item.episode)}`}</small></span>
+              </button>)}
+              {dayItems.length > 3 && <button type="button" className="following-event-more" onClick={() => setSelected(key)}>{t("following.more", { count: dayItems.length - 3 })}</button>}
+            </div>}
+          </div>;
+        })}
+      </div>
     </div>
     <div className="following-legend" role="group" aria-label={t("following.legend")}>
-      {LEGEND.map((state) => <span key={state}><i className={`cal-${state}`}/>{stateLabel(state)}</span>)}
+      {LEGEND.map((state) => <span key={state}><i className={`state-${state}`}/>{stateLabel(state)}</span>)}
     </div>
-    {wide
-      ? <div className="following-calendar">
-          {Array.from({ length: 7 }, (_, index) => <span className="following-weekday" key={index}>{new Intl.DateTimeFormat(localeTag(), { weekday: "short" }).format(addDays(gridStart, index))}</span>)}
-          {Array.from({ length: cells }, (_, index) => {
-            const date = addDays(gridStart, index);
-            const key = dayKey(date);
-            const dayItems = byDay.get(key) ?? [];
-            const open = expanded.has(key);
-            const shown = open ? dayItems : dayItems.slice(0, 3);
-            return <div key={key} className={`following-day${date.getMonth() !== cursor.getMonth() ? " outside" : ""}${key === today ? " today" : ""}`}>
-              <span className="following-day-num">{date.getDate()}</span>
-              <div className="following-day-items">
-                {shown.map((item) => <button type="button" key={`${item.followId}:${item.season}:${item.episode}`} className={`following-cal-item cal-${item.state}`} title={uncertain(item)} onClick={() => openOf(item)}>{`${item.dateUncertain ? "≈ " : ""}${item.name} ${episodeCode(item.season, item.episode)}`}</button>)}
-                {!open && dayItems.length > 3 && <button type="button" className="following-cal-more" onClick={() => setExpanded((current) => new Set(current).add(key))}>{t("following.more", { count: dayItems.length - 3 })}</button>}
-              </div>
-            </div>;
-          })}
-        </div>
-      : <div className="following-agenda">
-          {[...byDay.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([key, dayItems]) => <div className="following-agenda-day" key={key}>
-            <h4>{key === today ? t("following.todayLabel") : key === tomorrow ? t("following.tomorrowLabel") : new Intl.DateTimeFormat(localeTag(), { weekday: "long", day: "numeric", month: "long" }).format(new Date(dayItems[0].released))}</h4>
-            {dayItems.map((item) => <button type="button" className="following-agenda-row" key={`${item.followId}:${item.season}:${item.episode}`} title={uncertain(item)} onClick={() => openOf(item)}>
-              <span className="following-agenda-art">{item.poster ? <img src={item.poster} alt="" loading="lazy"/> : <Film/>}</span>
-              <span className="following-agenda-copy"><strong>{`${item.dateUncertain ? "≈ " : ""}${item.name}`}</strong><small>{`${episodeCode(item.season, item.episode)}${item.title ? ` · ${item.title}` : ""}`}</small></span>
-              <span className={`following-state cal-${item.state}`}>{stateLabel(item.state)}</span>
-            </button>)}
-          </div>)}
-        </div>}
-    {undated.length > 0 && <div className="following-undated">
+    <section className="following-day-panel" aria-live="polite">
+      <h4>{dayHeading}</h4>
+      {selectedItems.length
+        ? selectedItems.map((item) => <EpisodeRow key={itemKey(item)} item={item} onOpen={() => openOf(item)}/>)
+        : <p className="following-empty">{loaded && !items.some((item) => dayKey(new Date(item.released)).startsWith(dayKey(monthStart).slice(0, 7))) ? t("following.calendarEmpty") : t("following.dayEmpty")}</p>}
+    </section>
+    {undated.length > 0 && <section className="following-day-panel following-undated">
       <h4>{t("following.dateUnknown")}</h4>
-      {undated.map((item) => <button type="button" className="following-agenda-row" key={`${item.followId}:${item.season}:${item.episode}`} title={uncertain(item)} onClick={() => openOf(item)}>
-        <span className="following-agenda-art">{item.poster ? <img src={item.poster} alt="" loading="lazy"/> : <Film/>}</span>
-        <span className="following-agenda-copy"><strong>{`≈ ${item.name}`}</strong><small>{`${episodeCode(item.season, item.episode)}${item.title ? ` · ${item.title}` : ""}`}</small></span>
-        <span className={`following-state cal-${item.state}`}>{stateLabel(item.state)}</span>
-      </button>)}
-    </div>}
-    {loaded && !items.length && !undated.length && <p className="following-empty">{t("following.calendarEmpty")}</p>}
-  </>;
+      {undated.map((item) => <EpisodeRow key={itemKey(item)} item={item} onOpen={() => openOf(item)}/>)}
+    </section>}
+  </div>;
 }
 
 function ActivityTab({ onNotify }: { onNotify: (text: string) => void }) {
@@ -258,7 +282,7 @@ function ActivityTab({ onNotify }: { onNotify: (text: string) => void }) {
       return <div className="following-activity-row" key={`${item.followId}:${key}`}>
         <span className="following-activity-art">{item.poster ? <img src={item.poster} alt="" loading="lazy"/> : <Film/>}</span>
         <span className="following-activity-copy"><strong>{`${item.name} · ${episodeCode(item.season, item.episode)}${item.title ? ` · ${item.title}` : ""}`}</strong>
-          <span className={`following-state cal-${item.state}`}>{stateLabel(item.state)}{item.reasonKey ? ` · ${serverText(item.reasonKey, "")}` : ""}{item.state === "waiting" && item.nextAttemptAt ? ` · ${t("follow.nextAttempt", { time: formatWhen(item.nextAttemptAt) })}` : ""}</span>
+          <span className="following-activity-meta"><StatePill state={item.state}/>{item.reasonKey && item.state !== "skipped" ? <small>{serverText(item.reasonKey, "")}</small> : null}{item.state === "waiting" && item.nextAttemptAt ? <small>{t("follow.nextAttempt", { time: formatWhen(item.nextAttemptAt) })}</small> : null}</span>
         </span>
         <small className="following-activity-time">{formatWhen(item.updatedAt)}</small>
         <span className="following-activity-actions">

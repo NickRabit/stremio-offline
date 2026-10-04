@@ -71,27 +71,36 @@ describe("FollowingPage", () => {
     expect(host.querySelector(".following-chip.attention")!.textContent).toBe("2 to resolve");
   });
 
-  it("places an episode on its day in the month grid", async () => {
+  it("places an episode on its day in the month grid and lists it for the chosen day", async () => {
     fetchMock.mockImplementation(async (url: string) => String(url).includes("/api/follows/calendar")
-      ? json({ items: [{ followId: "f1", type: "series", metaId: "tt1", name: "Show", videoId: "v1", season: 1, episode: 2, released: new Date().toISOString(), state: "released" }] })
+      ? json({ items: [{ followId: "f1", type: "series", metaId: "tt1", name: "Show", videoId: "v1", season: 1, episode: 2, title: "Pilot", released: new Date().toISOString(), state: "released" }], undated: [] })
       : json({ items: [] }));
     await render([]);
     await clickTab("Calendar");
-    const item = host.querySelector<HTMLButtonElement>(".following-cal-item")!;
-    expect(item.textContent).toBe("Show S01E02");
-    expect(item.className).toContain("cal-released");
-    expect(host.querySelector(".following-day.today")!.contains(item)).toBe(true);
+    const today = host.querySelector(".following-day.today")!;
+    const event = today.querySelector<HTMLButtonElement>(".following-event")!;
+    expect(event.className).toContain("state-released");
+    expect(event.textContent).toBe("ShowS01E02");
+    expect(today.querySelector(".following-day-dots i.state-released"), "the narrow layout shows a dot").not.toBeNull();
+    // Today is the chosen day when the calendar opens.
+    const panel = host.querySelector(".following-day-panel")!;
+    expect(panel.querySelector("h4")!.textContent).toMatch(/^Today · /);
+    expect(panel.querySelector(".following-episode-copy small")!.textContent).toBe("S01E02 · Pilot");
+    expect(panel.querySelector(".state-pill")!.textContent).toBe("Released");
   });
 
-  it("groups an episode under its day in the agenda", async () => {
-    stubMatchMedia(false);
+  it("choosing another day lists that day's episodes", async () => {
+    const other = new Date(); other.setDate(other.getDate() === 15 ? 16 : 15); other.setHours(20, 0, 0, 0);
     fetchMock.mockImplementation(async (url: string) => String(url).includes("/api/follows/calendar")
-      ? json({ items: [{ followId: "f1", type: "series", metaId: "tt1", name: "Show", videoId: "v1", season: 1, episode: 2, title: "Pilot", released: new Date().toISOString(), state: "released" }] })
+      ? json({ items: [{ followId: "f1", type: "series", metaId: "tt1", name: "Show", videoId: "v1", season: 1, episode: 5, released: other.toISOString(), state: "waiting" }], undated: [] })
       : json({ items: [] }));
     await render([]);
     await clickTab("Calendar");
-    expect(host.querySelector(".following-agenda-day h4")!.textContent).toBe("Today");
-    expect(host.querySelector(".following-agenda-row small")!.textContent).toBe("S01E02 · Pilot");
+    expect(host.querySelector(".following-day-panel .following-episode-row")).toBeNull();
+    const day = [...host.querySelectorAll(".following-day.busy")][0]!;
+    await act(async () => { day.querySelector<HTMLButtonElement>(".following-day-hit")!.click(); });
+    expect(day.className).toContain("selected");
+    expect(host.querySelector(".following-day-panel .state-pill")!.textContent).toBe("Waiting for a source");
   });
 
   it("marks an uncertain date and lists undated episodes apart", async () => {
@@ -104,13 +113,13 @@ describe("FollowingPage", () => {
     await render([]);
     await clickTab("Calendar");
 
-    const item = host.querySelector<HTMLButtonElement>(".following-cal-item")!;
-    expect(item.textContent).toBe("≈ Show S01E02");
-    expect(item.getAttribute("title")).toBe("The exact date is not announced yet; this is the season's start.");
+    const event = host.querySelector<HTMLButtonElement>(".following-event")!;
+    expect(event.querySelector("small")!.textContent).toBe("≈ S01E02");
+    expect(event.getAttribute("title")).toBe("The exact date is not announced yet; this is the season's start.");
 
     const block = host.querySelector(".following-undated")!;
     expect(block.querySelector("h4")!.textContent).toBe("Date not announced");
-    expect(block.querySelector(".following-agenda-row")!.textContent).toContain("≈ Show");
+    expect(block.querySelector(".following-episode-copy small")!.textContent).toBe("≈ S01E03");
   });
 
   it("retries a waiting episode from the activity tab", async () => {

@@ -81,8 +81,11 @@ const followView = (follow: Follow, now: number): FollowView => {
     if (!episode.released) continue;
     const released = Date.parse(episode.released);
     if (released > now) {
-      if (!next || released < Date.parse(next.released!)) next = episode;
-    } else if (!latest || released > Date.parse(latest.released!)) {
+      if (!next || released < Date.parse(next.released!)
+        || (released === Date.parse(next.released!) && (episode.season < next.season || (episode.season === next.season && episode.episode < next.episode)))) next = episode;
+    } else if (!latest || released > Date.parse(latest.released!)
+      // A season dropped in one day answers with its last episode, not its first.
+      || (released === Date.parse(latest.released!) && (episode.season > latest.season || (episode.season === latest.season && episode.episode > latest.episode)))) {
       latest = episode;
     }
   }

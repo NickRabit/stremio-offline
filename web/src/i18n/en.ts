@@ -414,6 +414,7 @@ export const en = {
   "following.stateUpcoming": "Upcoming",
   "following.stateReleased": "Released",
   "following.calendarEmpty": "Nothing comes out this month.",
+  "following.dayEmpty": "Nothing comes out on this day.",
   "following.activityEmpty": "Automatic downloads have not done anything yet.",
 
   "following.dateUncertainHint": "The exact date is not announced yet; this is the season's start.",

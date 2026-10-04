@@ -386,6 +386,7 @@ export const it: Catalog = {
   "following.stateUpcoming": "In arrivo",
   "following.stateReleased": "Uscito",
   "following.calendarEmpty": "Questo mese non esce nulla.",
+  "following.dayEmpty": "In questo giorno non esce nulla.",
   "following.activityEmpty": "I download automatici non hanno ancora fatto nulla.",
 
   "following.dateUncertainHint": "La data esatta non è ancora annunciata; è l'inizio della stagione.",
