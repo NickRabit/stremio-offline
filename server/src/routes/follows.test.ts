@@ -128,15 +128,15 @@ test("a follow belongs to the account that made it", async () => {
     assert.equal((await api(h.base, `/api/follows/${follow.id}`, { method: "PATCH", as: "B", body: { enabled: false } })).status, 404);
     assert.equal((await api(h.base, `/api/follows/${follow.id}`, { method: "DELETE", as: "B" })).status, 404);
     assert.equal((await api(h.base, `/api/follows/${follow.id}/check`, { method: "POST", as: "B" })).status, 404);
-    assert.equal((await api(h.base, "/api/follows/by-meta/series/tt1", { as: "B" })).status, 404);
+    assert.equal(((await (await api(h.base, "/api/follows/by-meta/series/tt1", { as: "B" })).json()) as { follow: unknown }).follow, null);
 
     const patch = await api(h.base, `/api/follows/${follow.id}`, { method: "PATCH", as: "A", body: { enabled: false } });
     assert.equal(patch.status, 200);
     assert.equal(((await patch.json()) as { enabled: boolean }).enabled, false);
-    assert.equal((await api(h.base, "/api/follows/by-meta/series/tt1", { as: "A" })).status, 200);
+    assert.ok(((await (await api(h.base, "/api/follows/by-meta/series/tt1", { as: "A" })).json()) as { follow: unknown }).follow);
 
     assert.equal((await api(h.base, `/api/follows/${follow.id}`, { method: "DELETE", as: "A" })).status, 204);
-    assert.equal((await api(h.base, "/api/follows/by-meta/series/tt1", { as: "A" })).status, 404);
+    assert.equal(((await (await api(h.base, "/api/follows/by-meta/series/tt1", { as: "A" })).json()) as { follow: unknown }).follow, null);
   } finally { await h.close(); }
 });
 

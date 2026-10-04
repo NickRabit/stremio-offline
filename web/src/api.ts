@@ -151,8 +151,8 @@ export const api = {
     request<{ key: string; favorite: boolean }>("/api/watchlist", { method: "POST", body: JSON.stringify(payload) }),
   follows: () => request<{ follows: FollowView[] }>("/api/follows").then((answer) => answer.follows),
   /** The follow of one title, or nothing. A title nobody follows answers 404, which is not an error. */
-  followByMeta: (type: string, id: string) => request<FollowView>(`/api/follows/by-meta/${encodeURIComponent(type)}/${encodeURIComponent(id)}`)
-    .then((follow) => follow, (error: unknown) => { if (error instanceof ApiError && error.status === 404) return null; throw error; }),
+  followByMeta: (type: string, id: string) => request<{ follow: FollowView | null }>(`/api/follows/by-meta/${encodeURIComponent(type)}/${encodeURIComponent(id)}`)
+    .then((answer) => answer.follow),
   follow: (payload: { type: string; id: string; name: string; poster?: string }) =>
     request<FollowView>("/api/follows", { method: "POST", body: JSON.stringify(payload) }),
   updateFollow: (id: string, patch: { enabled?: boolean; autoDownload?: { startMode: FollowStartMode; startSeason?: number; startEpisode?: number; selection: DownloadSelection; target?: SaveTarget } | null }) =>

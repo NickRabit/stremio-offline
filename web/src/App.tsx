@@ -1080,6 +1080,8 @@ export function App() {
       const follow = await api.follow({ type: item.type || "series", id: item.id, name: item.name, poster: item.poster });
       applyFollowChange(follow.id, follow);
       notify(t("follow.followed"));
+      // The server checks a new follow straight away; its episodes land a moment later.
+      setTimeout(() => { void api.followByMeta(follow.type, follow.metaId).then((fresh) => { if (fresh) applyFollowChange(fresh.id, fresh); }).catch(() => undefined); }, 5000);
     } catch (error) { fail(error); }
   };
   const [setupNeeded, setSetupNeeded] = useState(false);

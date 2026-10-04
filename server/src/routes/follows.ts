@@ -1,6 +1,7 @@
 import type express from "express";
 import type { DownloadSelection } from "../downloads.js";
 import { AppError } from "../errors.js";
+import { images } from "../images.js";
 import { downloadEligibility, type Follow, type FollowAutoDownload, type FollowEpisode, type FollowService, type FollowStore } from "../follows.js";
 import { defaultLibrary, type DefaultLibrarySettings, type LibraryRecord, type Viewer } from "../libraries.js";
 import type { UserPrefs, WatchedMarker } from "../store.js";
@@ -81,9 +82,11 @@ const followView = (follow: Follow, now: number): FollowView => {
       latest = episode;
     }
   }
-  const { episodes: _episodes, ...rest } = follow;
+  const { episodes: _episodes, poster, ...rest } = follow;
   return {
     ...rest,
+    // Stored as the provider's address; the page only ever loads our own proxy.
+    ...(poster ? { poster: images.proxied(poster) } : {}),
     episodeCount: episodes.length,
     downloads: downloadsSummary(follow),
     ...(next ? { nextEpisode: episodeView(next) } : {}),
@@ -129,6 +132,9 @@ export function registerFollowRoutes(app: express.Application, deps: FollowDeps)
     const name = String(req.body?.name ?? "").trim();
     if (!type || !metaId || !name) throw new AppError("The followed series is missing a type, an id or a name.", "err.followInvalid");
     const follow = await followStore.create({ ownerUserId: owner.id, type, metaId, name, poster: posterOf(req.body?.poster) }, Date.now());
+    // The first check runs now rather than at the next tick, so the episodes are known
+    // while the person who just followed is still looking.
+    void follows.check(follow.id, "schedule").catch(() => undefined);
     res.status(201).json(followView(follow, Date.now()));
   }));
 
@@ -190,14 +196,14 @@ export function registerFollowRoutes(app: express.Application, deps: FollowDeps)
     res.json({ items: follows.newEpisodes(owner.id, (metaId) => {
       const marker = markers[metaId];
       return marker ? { season: marker.season, episode: marker.episode } : undefined;
-    }) });
+    }).map((item) => ({ ...item, poster: images.proxied(item.poster) })) });
   });
 
   app.get("/api/follows/by-meta/:type/:id", (req, res) => {
     const owner = viewerOf(currentUser(req));
     const follow = followStore.findByMeta(owner.id, String(req.params.type), String(req.params.id));
-    if (!follow) throw new AppError("The item was not found.", "err.itemNotFound", 404);
-    res.json(followView(follow, Date.now()));
+    // Not following is an ordinary answer for every series detail, not a failure to log.
+    res.json({ follow: follow ? followView(follow, Date.now()) : null });
   });
 
   app.get("/api/follows/:id/episodes", (req, res) => {

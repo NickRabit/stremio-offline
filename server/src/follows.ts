@@ -862,7 +862,6 @@ export class FollowService {
     if (!follow) return;
     const owner = this.deps.owner(follow.ownerUserId);
     if (!owner || owner.disabled) return;
-    this.lastStarted.set(followId, this.deps.now());
     const revision = follow.revision;
     let result: { episodes: FollowEpisode[]; now: number } | { errorKey: string; now: number };
     try {
