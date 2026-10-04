@@ -740,6 +740,10 @@ export class PlaybackManager {
     const video = info.video?.codec ?? "";
     if ((tokens.has("webm") || tokens.has("matroska")) && WEBM_VIDEO.has(video)) return "webm";
     if (tokens.has("matroska") || tokens.has("webm")) return "other";
+    // An addon may name a playlist "film.mp4". Handed to the browser, a playlist whose segments
+    // neither start on a keyframe nor repeat the stream headers -- xHamster's do both -- plays from
+    // the first segment and never after a seek. FFmpeg reads the headers once and copies through.
+    if (tokens.has("hls") || tokens.has("applehttp")) return "other";
     if (DIRECT_MP4.has(extension)) return "mp4";
     if (extension === ".webm") return "webm";
     return "other";
@@ -1176,8 +1180,14 @@ export class PlaybackManager {
     // conversion reads the same playlists and needs them just as much.
     args.push(...playlist);
     args.push("-i", this.localUrl(this.proxyPath(session.stream)));
-    args.push("-map", "0:v:0?");
-    if (hasAudio) args.push("-map", `0:a:${audioIndex}?`);
+    const variant = session.info?.variant;
+    if (variant) {
+      args.push("-map", `0:${variant.video}`);
+      if (hasAudio && variant.audio !== undefined) args.push("-map", `0:${variant.audio}`);
+    } else {
+      args.push("-map", "0:v:0?");
+      if (hasAudio) args.push("-map", `0:a:${audioIndex}?`);
+    }
     args.push("-map_metadata", "-1", "-map_chapters", "-1", "-dn");
     // A copied video after -ss starts at the keyframe before the target, so its timestamps are negative.
     // fMP4 cannot write those and would shift each track on its own -- the audio would drift by the

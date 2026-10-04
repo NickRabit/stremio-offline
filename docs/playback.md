@@ -8,8 +8,14 @@ decides.
 | --- | --- | --- |
 | MP4/WebM the browser can play | direct play, FFmpeg never starts | none |
 | MKV with H.264 or HEVC | remux to fMP4, video and audio copied | negligible |
+| HLS playlist, whatever the addon names it | remux of the tallest rendition, copied | negligible |
 | AC3, DTS, or TrueHD audio | remux, audio only converted to AAC | low |
 | MPEG-4 ASP, VC-1, and similar | real transcode to H.264 | high |
+
+A playlist is never handed to the browser as it is: some hosts cut segments that
+neither start on a keyframe nor repeat the stream headers, and the browser can then
+play from the start but not after a seek. FFmpeg reads the headers once and copies
+the picture through.
 
 The current mode is shown in the player header; the real source codecs appear
 in playback settings.

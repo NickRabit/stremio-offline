@@ -817,6 +817,8 @@ test("incompatible codecs, HLS and notWebReady still force a conversion", () => 
   assert.equal(manager.directPlay({ url: "https://cdn.example/a.mp4" }, hevc10, { ...playCaps, hevc10: false }).ok, false);
   const hls = { container: "hls,applehttp", video: { codec: "h264" }, audio: { codec: "aac" } };
   assert.equal(manager.directPlay({ url: "https://cdn.example/a.m3u8" }, hls, playCaps).ok, false);
+  // The probe wins over a filename the addon made up for the playlist.
+  assert.equal(manager.directPlay({ url: "https://cdn.example/master.m3u8", behaviorHints: { filename: "Film.mp4" } }, { container: "hls", video: { codec: "h264" }, audio: { codec: "aac" } }, playCaps).ok, false);
   const avi = { container: "avi", video: { codec: "mpeg4" }, audio: { codec: "mp3" } };
   assert.equal(manager.directPlay({ url: "https://cdn.example/a.avi" }, avi, playCaps).ok, false);
 });
@@ -1456,3 +1458,15 @@ for (const scenario of ["dead fallback", "decode recovery"] as const) {
     await rejected;
   });
 }
+
+test("a conversion of an HLS master maps the chosen rendition, not the first one listed", () => {
+  const manager = new PlaybackManager(tmp("test-variant-map")) as any;
+  const session = {
+    id: "v", stream: { url: "https://cdn.example/master.m3u8" }, capabilities: { h264: true, aac: true },
+    info: { container: "hls", video: { codec: "h264" }, audio: { codec: "aac" }, audioTracks: [{ index: 0, codec: "aac" }], subtitleTracks: [], variant: { video: 12, audio: 13 } },
+    mode: "remux", generation: 1, offset: 0, hardware: false, audioTrack: 0, subtitleTrack: null, quality: null,
+  };
+  const args: string[] = manager.args(session, 0, "/tmp/out", false);
+  const maps = args.flatMap((value, index) => value === "-map" ? [args[index + 1]] : []);
+  assert.deepEqual(maps.slice(0, 2), ["0:12", "0:13"]);
+});
