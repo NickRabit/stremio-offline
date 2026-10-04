@@ -47,4 +47,20 @@ describe("SeriesDownloadDialog", () => {
     await act(async () => { add.click(); await Promise.resolve(); });
     expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ audioMode: "preferred" }), undefined);
   });
+
+  it("defaults a follow rule to priority and saves through updateFollow", async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    await act(async () => { root.render(<SeriesDownloadDialog type="series" label="Show" title="Show" libraries={[]} addons={[]} episodes={[{ id: "tt1:1:1" }]} audioLanguage="cs" subtitleLanguage="cs" languages={[{ code: "cs", name: "Čeština" }, { code: "en", name: "English" }]} follow={{ followId: "f1" }} onClose={() => undefined} onSubmit={onSubmit}/>); });
+    await act(async () => { await Promise.resolve(); });
+    expect(host.querySelector<HTMLInputElement>('input[name="source-strategy"][value="priority"]')!.checked).toBe(true);
+    expect(host.querySelector<HTMLInputElement>('input[name="source-strategy"][value="largest"]')!.checked).toBe(false);
+    const save = [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("Turn on"))!;
+    await act(async () => { save.click(); await Promise.resolve(); });
+    const patch = fetchMock.mock.calls.find((call) => (call[1] as RequestInit | undefined)?.method === "PATCH");
+    expect(String(patch?.[0])).toContain("/api/follows/f1");
+    const body = JSON.parse(String((patch?.[1] as RequestInit).body));
+    expect(body.autoDownload.startMode).toBe("new");
+    expect(body.autoDownload.selection.sourceStrategy).toBe("priority");
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
 });

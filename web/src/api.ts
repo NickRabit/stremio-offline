@@ -1,6 +1,6 @@
 import { serverText, t } from "./i18n";
 import type { SaveTarget } from "./save-target";
-import type { StatsActivityPage, ActiveStream, Diagnostics, BuildInfo, AuthStatus, StatsSummary, Addon, AddonDownloadSettings, Capabilities, Catalog, Download, DownloadSelection, DownloadSnapshot, Inspection, BrowseResult, IdentityPreview, LibraryFolder, LibraryMatchResult, LibraryOp, LibraryOpsState, ProgressEntry, UserViews, WatchlistEntry, GrantBrowse, LibraryEstimate, LibraryGrant, LibrarySummary, LibraryType, LibraryView, Meta, PlaybackSession, ScanState, SearchPreferences, SearchResult, SearchState, SearchableCatalog, SiteLink, SuggestionRow, Session, Settings, SettingsBackup, SettingsPatch, SettingsView, Stream, Subtitle, Trailer, UserAccount, UserPermissions, UserRole } from "./types";
+import type { StatsActivityPage, ActiveStream, Diagnostics, BuildInfo, AuthStatus, StatsSummary, Addon, AddonDownloadSettings, Capabilities, Catalog, Download, DownloadSelection, DownloadSnapshot, FollowEpisodeRow, FollowPreview, FollowStartMode, FollowView, Inspection, BrowseResult, IdentityPreview, LibraryFolder, LibraryMatchResult, LibraryOp, LibraryOpsState, NewEpisode, ProgressEntry, UserViews, WatchlistEntry, GrantBrowse, LibraryEstimate, LibraryGrant, LibrarySummary, LibraryType, LibraryView, Meta, PlaybackSession, ScanState, SearchPreferences, SearchResult, SearchState, SearchableCatalog, SiteLink, SuggestionRow, Session, Settings, SettingsBackup, SettingsPatch, SettingsView, Stream, Subtitle, Trailer, UserAccount, UserPermissions, UserRole } from "./types";
 
 /** The status code has to reach the top, or a sign-out is indistinguishable from an ordinary error. */
 export class ApiError extends Error {
@@ -149,6 +149,22 @@ export const api = {
   watchlist: () => request<WatchlistEntry[]>("/api/watchlist"),
   setWatchlist: (payload: { type: string; id: string; name?: string; poster?: string; favorite: boolean }) =>
     request<{ key: string; favorite: boolean }>("/api/watchlist", { method: "POST", body: JSON.stringify(payload) }),
+  follows: () => request<{ follows: FollowView[] }>("/api/follows").then((answer) => answer.follows),
+  /** The follow of one title, or nothing. A title nobody follows answers 404, which is not an error. */
+  followByMeta: (type: string, id: string) => request<FollowView>(`/api/follows/by-meta/${encodeURIComponent(type)}/${encodeURIComponent(id)}`)
+    .then((follow) => follow, (error: unknown) => { if (error instanceof ApiError && error.status === 404) return null; throw error; }),
+  follow: (payload: { type: string; id: string; name: string; poster?: string }) =>
+    request<FollowView>("/api/follows", { method: "POST", body: JSON.stringify(payload) }),
+  updateFollow: (id: string, patch: { enabled?: boolean; autoDownload?: { startMode: FollowStartMode; startSeason?: number; startEpisode?: number; selection: DownloadSelection; target?: SaveTarget } | null }) =>
+    request<FollowView>(`/api/follows/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  unfollow: (id: string) => request<void>(`/api/follows/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  checkFollow: (id: string) => request<FollowView>(`/api/follows/${encodeURIComponent(id)}/check`, { method: "POST" }),
+  followEpisodes: (id: string) => request<{ episodes: FollowEpisodeRow[] }>(`/api/follows/${encodeURIComponent(id)}/episodes`).then((answer) => answer.episodes),
+  followPreview: (id: string, start: { startMode: FollowStartMode; startSeason?: number; startEpisode?: number }) =>
+    request<FollowPreview>(`/api/follows/${encodeURIComponent(id)}/preview?${q({ startMode: start.startMode, startSeason: start.startSeason, startEpisode: start.startEpisode })}`),
+  skipFollowEpisode: (id: string, key: string) => request<void>(`/api/follows/${encodeURIComponent(id)}/episodes/${encodeURIComponent(key)}/skip`, { method: "POST" }),
+  retryFollowEpisode: (id: string, key: string) => request<void>(`/api/follows/${encodeURIComponent(id)}/episodes/${encodeURIComponent(key)}/retry`, { method: "POST" }),
+  newEpisodes: () => request<{ items: NewEpisode[] }>("/api/follows/new-episodes").then((answer) => answer.items),
   progressList: () => request<ProgressEntry[]>("/api/progress"),
   /** The page itself is going away -- a closed tab, a reload, the browser being quit. A
    *  keepalive request outlives the page that sent it, so the server hears that the film is
