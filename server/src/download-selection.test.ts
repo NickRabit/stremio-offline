@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { selectDownloadSource } from "./download-selection.js";
+import { selectDownloadSource, selectTorrentSource, torrentKey } from "./download-selection.js";
 import type { DownloadSelection } from "./downloads.js";
 import type { MediaInfo } from "./probe.js";
 import type { StreamItem } from "./types.js";
@@ -10,6 +10,9 @@ const selection = (overrides: Partial<DownloadSelection> = {}): DownloadSelectio
   subtitleMode: "off", targetSettings: { subfolder: "", layout: "structured" }, ...overrides,
 });
 const stream = (url: string, addonKey: string, size?: number): StreamItem => ({ url, addonKey, behaviorHints: { filename: "episode.mkv", videoSize: size } });
+const torrent = (infoHash: string, addonKey: string, extra: Partial<StreamItem> = {}): StreamItem => ({ infoHash, addonKey, ...extra });
+const HASH_A = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const HASH_B = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const info = (languages: Array<string | undefined>, subtitleLanguages: Array<string | undefined> = []): MediaInfo => ({
   container: "matroska", video: { codec: "h264" },
   audioTracks: languages.map((language, index) => ({ index, codec: "aac", language })),
@@ -261,4 +264,68 @@ test("the listing cannot speak for a file that names its own audio languages", a
     candidates, subtitles: [], selection: selection({ audioMode: "listed", fallbackAudioLanguage: undefined }), tried: [], inspect,
   });
   assert.equal(noFallback, undefined);
+});
+
+test("a torrent is never chosen when the audio mode is strict", () => {
+  const chosen = selectTorrentSource({
+    candidates: [torrent(HASH_A, "first", { title: "Film CZ dabing" })], subtitles: [],
+    selection: selection({ audioMode: "strict" }), tried: [], episode: false,
+  });
+  assert.equal(chosen, undefined);
+});
+
+test("a torrent whose listing names the language is chosen", () => {
+  const candidates = [torrent(HASH_A, "first"), torrent(HASH_B, "second", { title: "Film CZ dabing" })];
+  const chosen = selectTorrentSource({ candidates, subtitles: [], selection: selection({ audioMode: "listed" }), tried: [], episode: false });
+  assert.equal(chosen?.stream.infoHash, HASH_B);
+  assert.equal(chosen?.resolution.audioLanguage, "cs");
+  assert.equal(chosen?.resolution.audioEvidence, "listing");
+  assert.equal(chosen?.resolution.fallbackUsed, false);
+  assert.equal(chosen?.resolution.audioTrack, 0);
+  assert.equal(chosen?.resolution.checkedCandidates, 0);
+});
+
+test("an episode torrent without a file index is skipped", () => {
+  const untagged = torrent(HASH_B, "first", { title: "Film CZ dabing" });
+  const indexed = torrent(HASH_A, "first", { fileIdx: 2, title: "Film CZ dabing" });
+  const asEpisode = selectTorrentSource({ candidates: [untagged, indexed], subtitles: [], selection: selection({ audioMode: "listed" }), tried: [], episode: true });
+  assert.equal(asEpisode?.stream.infoHash, HASH_A);
+  assert.equal(selectTorrentSource({ candidates: [untagged], subtitles: [], selection: selection({ audioMode: "listed" }), tried: [], episode: true }), undefined);
+  const asFilm = selectTorrentSource({ candidates: [untagged], subtitles: [], selection: selection({ audioMode: "listed" }), tried: [], episode: false });
+  assert.equal(asFilm?.stream.infoHash, HASH_B);
+});
+
+test("a torrent that was already tried is skipped", () => {
+  const first = torrent(HASH_A, "first", { title: "Film CZ dabing" });
+  const second = torrent(HASH_B, "first", { title: "Film CZ dabing" });
+  const chosen = selectTorrentSource({ candidates: [first, second], subtitles: [], selection: selection({ audioMode: "listed" }), tried: [torrentKey(first)], episode: false });
+  assert.equal(chosen?.stream.infoHash, HASH_B);
+});
+
+test("a torrent is only chosen when a required subtitle is offered", () => {
+  const candidate = torrent(HASH_A, "first", { title: "Film CZ dabing" });
+  const required = { audioMode: "listed" as const, subtitleMode: "required" as const, subtitleLanguage: "cs" };
+  assert.equal(selectTorrentSource({ candidates: [candidate], subtitles: [], selection: selection(required), tried: [], episode: false }), undefined);
+  const chosen = selectTorrentSource({
+    candidates: [candidate], subtitles: [{ url: "https://subs.test/film.srt", lang: "cs" }],
+    selection: selection(required), tried: [], episode: false,
+  });
+  assert.equal(chosen?.resolution.subtitleSource, "addon");
+  assert.equal(chosen?.resolution.subtitleLanguage, "cs");
+  assert.equal(chosen?.resolution.subtitleStatus, "ready");
+  assert.equal(chosen?.subtitle?.url, "https://subs.test/film.srt");
+});
+
+test("addon priority decides between two torrents that name the language", () => {
+  const second = torrent(HASH_B, "second", { title: "Film CZ dabing" });
+  const first = torrent(HASH_A, "first", { title: "Film CZ dabing" });
+  const chosen = selectTorrentSource({ candidates: [second, first], subtitles: [], selection: selection({ audioMode: "listed" }), tried: [], episode: false });
+  assert.equal(chosen?.stream.infoHash, HASH_A);
+});
+
+test("the largest strategy picks the bigger torrent", () => {
+  const small = torrent(HASH_B, "first", { title: "Film CZ dabing 1 GB" });
+  const large = torrent(HASH_A, "second", { title: "Film CZ dabing 6 GB" });
+  const chosen = selectTorrentSource({ candidates: [small, large], subtitles: [], selection: selection({ audioMode: "listed", sourceStrategy: "largest" }), tried: [], episode: false });
+  assert.equal(chosen?.stream.infoHash, HASH_A);
 });

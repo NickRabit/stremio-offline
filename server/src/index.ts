@@ -11,7 +11,7 @@ import { autoRefreshEnabled, refreshDue, refreshManifests, type RefreshOutcome }
 import { rankStreams } from "./ranking.js";
 import { DownloadQueue, ownerMayDownload, type DownloadJob } from "./downloads.js";
 import { DeviceTransfers } from "./device-transfers.js";
-import { selectDownloadSource } from "./download-selection.js";
+import { selectDownloadSource, selectTorrentSource } from "./download-selection.js";
 import { StatsLog, type TrafficEvent, type TrafficMeta } from "./stats.js";
 import { Throughput } from "./throughput.js";
 import { sourcePace } from "./conversion-pace.js";
@@ -30,6 +30,7 @@ import { advanceTorrent } from "./debrid.js";
 import { tmdbGallery, tmdbMeta, type TmdbConfig } from "./tmdb.js";
 import { createLibraryCandidates } from "./library-candidates.js";
 import { ExternalIdStore } from "./external-ids.js";
+import { FollowService, FollowStore } from "./follows.js";
 import { currentLevel, flushLog, initLogger, log, parseLevel, startLogMaintenance, setLevel } from "./logger.js";
 import { resolveListenTarget, startServer, utilityParentPort } from "./server-start.js";
 import { loopbackHostCheck } from "./host-check.js";
@@ -70,6 +71,7 @@ import { registerCurateRoutes } from "./routes/curate.js";
 import { registerDeviceRoutes } from "./routes/device.js";
 import { registerDiagnosticsRoutes } from "./routes/diagnostics.js";
 import { registerDownloadRoutes } from "./routes/downloads.js";
+import { registerFollowRoutes } from "./routes/follows.js";
 import { registerLibrariesRoutes } from "./routes/libraries.js";
 import { registerPersonalRoutes } from "./routes/personal.js";
 import { registerPlaybackRoutes } from "./routes/playback.js";
@@ -86,11 +88,14 @@ const app = express(); const store = new Store(DATA_DIR, DOWNLOAD_DIR);
 const metaStore = new LibraryMetaStore(DATA_DIR);
 /** The Wikidata ids behind the site links, one answer per title and kept on disk. */
 const externalIds = new ExternalIdStore(DATA_DIR);
+/** The series each account follows, kept outside the personal state so it survives it. */
+const followStore = new FollowStore(DATA_DIR);
 let markServerReady!: () => void;
 const serverReady = new Promise<void>((resolve) => { markServerReady = resolve; });
 await store.load();
 await metaStore.load();
 await externalIds.load();
+await followStore.load();
 if (libraryMigration.migrated) log("INFO", "State migrated to libraries", { libraryId: libraryMigration.libraryId, paths: libraryMigration.paths, artwork: libraryMigration.artwork });
 if (libraryMigration.metadata) log("INFO", "Library metadata moved out of the state", { rows: libraryMigration.metadata });
 if (libraryMigration.artworkSetting) log("INFO", "The global artwork location was retired", { libraries: libraryMigration.artworkSetting });
@@ -157,6 +162,11 @@ const queue = new DownloadQueue(() => store.settings().concurrentDownloads, () =
   defaultLibrary: downloadDefaultLibrary,
   legacyOwnerId: migratedAdminId,
   ownerAllowed: ownerMayUseQueue,
+  ownerSeesLibrary: (ownerUserId, libraryId) => {
+    const owner = ownerUserId ? findUserById(store.users(), ownerUserId) : undefined;
+    const library = store.libraries().find((item) => item.id === libraryId);
+    return Boolean(owner && !owner.disabled && library && libraryVisible(library, { id: owner.id, role: owner.role }));
+  },
   // A job paused for a library asks whether it is back; the probe is refreshed first so a
   // disk that was plugged in is seen within the queue's own retry, not the cache's.
   libraryState: async (libraryId) => { await refreshLibraryHealth(); return libraryFor(store.libraries(), libraryId); },
@@ -232,14 +242,26 @@ queue.setResolver(async (source, ownerUserId) => {
   if (ownerUserId && !owner) return undefined;
   const usable = owner ? allowedAddons(store.addons(), { id: owner.id, role: owner.role }) : store.addons();
   const priority = new Map(usable.map((addon, index) => [addon.key, index]));
-  const candidates = (await cachedStreams(usable, source.type, source.videoId)).filter((stream) => stream.url);
+  const listed = await cachedStreams(usable, source.type, source.videoId);
+  const candidates = listed.filter((stream) => stream.url);
   if (source.selection) {
     await serverReady;
     const external = source.selection.subtitleMode === "off" ? [] : await subtitles(usable, source.type, source.videoId);
     const selected = await selectDownloadSource({ candidates, subtitles: external, selection: source.selection, tried: source.tried, inspect: (stream) => playback.inspect(stream) });
-    if (!selected) return undefined;
-    const addon = usable.find((item) => item.key === selected.stream.addonKey);
-    return { ...selected, settings: addon?.downloadSettings ?? defaultDownloadSettings() };
+    if (selected) {
+      const addon = usable.find((item) => item.key === selected.stream.addonKey);
+      return { ...selected, settings: addon?.downloadSettings ?? defaultDownloadSettings() };
+    }
+    // HTTP always wins, so a torrent is considered only when no direct source was chosen and
+    // Real-Debrid is there to fetch it.
+    if (store.settings().realDebridToken) {
+      const torrent = selectTorrentSource({ candidates: listed, subtitles: external, selection: source.selection, tried: source.tried, episode: source.type === "series" });
+      if (torrent) {
+        const addon = usable.find((item) => item.key === torrent.stream.addonKey);
+        return { ...torrent, settings: addon?.downloadSettings ?? defaultDownloadSettings() };
+      }
+    }
+    return undefined;
   }
   // The queue picks a source with no request in hand, so the language is the owner's.
   const ranked = rankStreams(candidates, store.prefs(ownerUserId).audioLanguage, priority);
@@ -407,6 +429,7 @@ const revocations = new Revocations({
   deviceTickets: deviceDownloadTickets,
   stopPlayback: (id) => playback.stop(id),
   queue,
+  follows: followStore,
 });
 /** One session: what signing out one device drops. */
 const stopOwnedPlayback = (sid: string) => revocations.stopSession(sid);
@@ -783,15 +806,23 @@ const metaCache = new Map<string, { value: MetaItem | null; at: number }>();
 /** A lookup with no request in hand -- the artwork queue, a backfill, a job that has just
  *  finished -- reads the language of the one account. A caller that knows which person is
  *  asking passes that person's language. */
-const cachedMeta = async (type: string, id: string, language: string = prefsOf().uiLanguage, viewer?: Viewer) => {
+const cachedMeta = async (
+  type: string,
+  id: string,
+  language: string = prefsOf().uiLanguage,
+  viewer?: Viewer,
+  opts: { fresh?: boolean; interactive?: boolean } = {},
+) => {
   // The answer is merged from every candidate addon, so it cannot be filtered after the
   // fact: the allowance is part of the key, or one person's grants would decide what
   // another sees. A caller with no viewer reads every addon, as the background work needs.
   const sources = viewer ? allowedAddons(store.addons(), viewer) : store.addons();
   const key = `${type}:${id}:${language}:${viewer ? sources.map((addon) => addon.key).join(",") : "*"}`;
-  const hit = metaCache.get(key);
+  // `fresh` reads past the cache but still records its answer, so a scheduled check sees
+  // what the providers say now without leaving the next reader to ask again.
+  const hit = opts.fresh ? undefined : metaCache.get(key);
   if (hit && Date.now() - hit.at < 6 * 60 * 60_000) return hit.value;
-  const value = await metadata(sources, type, id, language, tmdbProvider(language), viewer !== undefined).catch(() => null);
+  const value = await metadata(sources, type, id, language, tmdbProvider(language), opts.interactive ?? viewer !== undefined).catch(() => null);
   if (metaCache.size > 300) metaCache.clear();
   // A failed lookup is not an answer: caching it would hold a title empty for six hours.
   if (value) metaCache.set(key, { value, at: Date.now() });
@@ -1551,6 +1582,40 @@ const setLibraryFavorite = async (relative: string, wanted: boolean, userId: str
 
 registerPersonalRoutes(app, { ...routeContext, attachBrowseMeta, cachedMeta, dataOf, describeLibraryPath, libraryKey, libraryOfKey, locateFileArtwork, locateFolderArtworkPair, markersOf, metaStore, posterOf, prefsOf, progressOf, scheduleFileArtwork, scheduleFolderArtwork, setLibraryFavorite, thumbUrl, updateData, watchlistOf, wirePath });
 
+/** The followed series: the daily check reads the owner's addons in the owner's language,
+ *  past the cache, so a new episode is seen the day it appears. */
+const followService = new FollowService({
+  store: followStore,
+  now: () => Date.now(),
+  owner: (userId) => {
+    const user = findUserById(store.users(), userId);
+    return user ? { id: user.id, role: user.role, disabled: user.disabled } : undefined;
+  },
+  meta: (owner, type, metaId) => cachedMeta(type, metaId, store.prefs(owner.id).uiLanguage, owner, { fresh: true, interactive: false }),
+  queue: {
+    addPending: (title, source, media, ownerUserId, follow) => queue.addPending(title, source, media, ownerUserId, follow),
+    findActiveEpisode: (ownerUserId, type, videoId) => queue.findActiveEpisode(ownerUserId, type, videoId),
+    adopt: (id, follow) => queue.adopt(id, follow),
+    followJobs: () => queue.followJobs(),
+    get: (id) => queue.get(id),
+    retry: (id, selection) => queue.retry(id, selection),
+    remove: (id) => queue.remove(id),
+  },
+  // The owner may queue into the pinned library right now: the account, its rights, the
+  // addons and the library are read again on every ask, never from when the rule was saved.
+  mayDownload: (ownerUserId, selection) => ownerMayDownload({
+    owner: findUserById(store.users(), ownerUserId),
+    addons: store.addons(),
+    libraries: store.libraries(),
+  }, { targetSettings: selection.targetSettings }),
+});
+
+// The queue is built before the follow service, so its guards are wired afterwards.
+queue.setRemovalGuard((job, reason) => followService.jobRemoving(job, reason));
+queue.setClearCompletedGuard((jobs) => followService.jobsClearing(jobs));
+
+registerFollowRoutes(app, { ...routeContext, follows: followService, followStore, prefsOf, markersOf, dataOf, posterOf, cachedMeta });
+
 // Deleting, renaming and moving touch real files, hence the path and root checks.
 
 /** Everything the store remembers about a path, dropped in one go. Returns the catalogue
@@ -2018,7 +2083,7 @@ const rememberTitle = async (target: string, media: MediaInfo | undefined, flat:
 // item came of it. An interrupted download therefore stays in the statistics -- the data
 // went through the line even though no file was kept.
 queue.onProgress = (job, bytes) => stats.add(statMeta({ url: job.stream?.url, addonKey: job.stream?.addonKey, addonName: job.stream?.addonName, title: job.title, kind: job.media?.kind }), bytes);
-queue.onCompleted = async (job) => {
+const noteQueueCompletion = async (job: Readonly<DownloadJob>) => {
   invalidateLibrary();
   const user = store.users().find((user) => user.id === job.ownerUserId);
   stats.activity.record({ kind: "library", title: job.title, filename: path.basename(job.target), userId: job.ownerUserId, username: user?.username, bytes: job.received });
@@ -2029,6 +2094,13 @@ queue.onCompleted = async (job) => {
   const targetSettings = job.source.selection?.targetSettings ?? (job.media.kind === "episode" ? settings.series : settings.movie);
   await rememberTitle(job.target, job.media, targetSettings.layout === "flat");
 };
+// A finished job records itself on the follow that queued it. The follow writes after the
+// library work above, and a failure there is logged rather than past the queue.
+queue.onCompleted = async (job) => {
+  await noteQueueCompletion(job);
+  try { await followService.jobCompleted(job); }
+  catch (error) { log("WARN", "The follow could not record a finished download", { id: job.id, reason: error instanceof Error ? error.message : String(error) }); }
+};
 queue.setDebrid({
   configured: () => Boolean(store.settings().realDebridToken),
   advance: (input) => advanceTorrent(store.settings().realDebridToken, input.infoHash, input.fileIdx, input.torrentId),
@@ -2036,9 +2108,11 @@ queue.setDebrid({
 await stats.load();
 await queue.load();
 await libraryScan.load();
+await followService.reconcile();
 if (autoScanAllowed) {
   libraryAutoScan.start();
 }
+followService.start();
 // History comes from the queue so the statistics do not start empty; finished jobs can
 // be deleted, though, so from now on a record of our own is kept. Only what predates that
 // record is filled in -- anything newer is already in it.
@@ -2350,6 +2424,7 @@ const shutDown = async (signal: NodeJS.Signals) => {
   const deadline = Date.now() + SHUTDOWN_DRAIN_MS;
   await inFlight.drained(SHUTDOWN_QUIET_MS, SHUTDOWN_DRAIN_MS);
   await maintenance.stop(1_000);
+  followService.stop();
   // A conversion or an assembly nobody is reading any more would run on without its parent.
   const killed = killRunningMedia();
   if (killed) log("INFO", "Stopped FFmpeg processes still running at shutdown", { count: killed });

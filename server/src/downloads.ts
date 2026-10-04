@@ -1,4 +1,4 @@
-import { AppError } from "./errors.js";
+import { AppError, messageKeyOf } from "./errors.js";
 import { spawn } from "node:child_process";
 import { createWriteStream as fsCreateWriteStream } from "node:fs";
 import { mkdir, open, readFile, rename, stat, statfs, unlink, writeFile, type FileHandle } from "node:fs/promises";
@@ -8,6 +8,8 @@ import { pipeline } from "node:stream/promises";
 import { addonAllowed } from "./addons.js";
 import type { AddonDownloadSettings, AddonRecord, StreamItem, SubtitleItem } from "./types.js";
 import { defaultDownloadSettings, fitTargetName, joinTarget, streamExtension, targetPath, type MediaInfo } from "./naming.js";
+import { torrentKey } from "./download-selection.js";
+import { episodeTag } from "./library.js";
 import type { DownloadTargetSettings } from "./types.js";
 import { safeFetch } from "./security.js";
 import { renameWithRetry } from "./fs-retry.js";
@@ -75,6 +77,9 @@ export interface DownloadJob {
    *  the administrator the state migrated into. */
   ownerUserId?: string;
   source?: { type: string; videoId: string; tried: string[]; selection?: DownloadSelection };
+  /** Present when a followed series queued the job, so the follow can be reconciled
+   *  with the queue across restarts. */
+  follow?: { followId: string; episodeKey: string; intent: string };
   subtitle?: SubtitleItem;
   resolution?: DownloadResolution;
   status: DownloadStatus; target: string; received: number; total?: number; speed: number;
@@ -94,6 +99,9 @@ export interface DownloadJob {
   errorVars?: Record<string, string | number>;
   retryCount?: number; pauseReason?: PauseReason; notBefore?: number;
   debrid?: { torrentId?: string; progress?: number; status?: string };
+  /** When Real-Debrid was first asked to fetch this source; the timeout counts from here so a
+   *  job that waits a long time in the queue is not failed before its torrent even started. */
+  debridStartedAt?: string;
   /** Present only while a segmented transfer is unfinished; it is what lets each connection
    *  pick up at its own offset after a restart. */
   segments?: Segment[];
@@ -200,6 +208,14 @@ export interface QueueHooks {
    *  A refusal pauses the job instead of failing it, so its place is kept for when the
    *  permission comes back. Absent in a queue built without accounts: nothing gates it. */
   ownerAllowed?: (job: DownloadJob) => boolean | Promise<boolean>;
+  /** Whether an account can see a library. Lets a duplicate in another account's finished
+   *  job be reported only when the asker could find that file anyway. */
+  ownerSeesLibrary?: (ownerUserId: string | undefined, libraryId: string) => boolean;
+  /** A job is about to be dropped. A throw refuses the removal, so a follow can record the
+   *  skip before the row is touched. */
+  beforeRemove?: (job: Readonly<DownloadJob>, reason: "user" | "account") => Promise<void>;
+  /** The finished rows that `clearCompleted` is about to drop, before they go. */
+  beforeClearCompleted?: (jobs: ReadonlyArray<Readonly<DownloadJob>>) => Promise<void>;
 }
 
 const exists = async (file: string) => { try { await stat(file); return true; } catch { return false; } };
@@ -297,6 +313,9 @@ export class DownloadQueue {
   private readonly debridTimeoutMs: number;
   private readonly legacyOwnerId?: () => string | undefined;
   private readonly ownerAllowed?: (job: DownloadJob) => boolean | Promise<boolean>;
+  private readonly ownerSeesLibrary?: (ownerUserId: string | undefined, libraryId: string) => boolean;
+  private beforeRemove?: (job: Readonly<DownloadJob>, reason: "user" | "account") => Promise<void>;
+  private beforeClearCompleted?: (jobs: ReadonlyArray<Readonly<DownloadJob>>) => Promise<void>;
   private debridTimers = new Map<string, NodeJS.Timeout>();
   private debridBusy = new Set<string>();
   /** Called after a successful finish, so the library can produce a thumbnail straight away. */
@@ -333,11 +352,17 @@ export class DownloadQueue {
     this.debridTimeoutMs = hooks.debridTimeoutMs ?? 72 * 60 * 60_000;
     this.legacyOwnerId = hooks.legacyOwnerId;
     this.ownerAllowed = hooks.ownerAllowed;
+    this.ownerSeesLibrary = hooks.ownerSeesLibrary;
+    this.beforeRemove = hooks.beforeRemove;
+    this.beforeClearCompleted = hooks.beforeClearCompleted;
   }
 
   /** index.ts owns source selection for lazy jobs, because it needs the addons and the settings. */
   setResolver(resolver: StreamResolver) { this.resolver = resolver; }
   setDebrid(engine: DebridEngine) { this.debrid = engine; }
+  /** Wired after construction because the follow service that answers these is built later. */
+  setRemovalGuard(guard: (job: Readonly<DownloadJob>, reason: "user" | "account") => Promise<void>) { this.beforeRemove = guard; }
+  setClearCompletedGuard(guard: (jobs: ReadonlyArray<Readonly<DownloadJob>>) => Promise<void>) { this.beforeClearCompleted = guard; }
   haltInfo() { return this.halt ? { ...this.halt } : null; }
   /** Aborts everything and resolves once the transfers have written their last state.
    *  Callers that delete the data directory afterwards have to await it, or a straggling
@@ -399,6 +424,12 @@ export class DownloadQueue {
   ownerOf(job: Pick<DownloadJob, "ownerUserId">): string | undefined {
     if (!job.ownerUserId) job.ownerUserId = this.legacyOwnerId?.();
     return job.ownerUserId;
+  }
+
+  /** Whether a queued job belongs to the account now asking. A job from before ownership
+   *  existed belongs to the migrated administrator, the same as `ownerOf` says. */
+  private ownedBy(job: DownloadJob, ownerUserId: string | undefined): boolean {
+    return this.ownerOf(job) === (ownerUserId ?? this.legacyOwnerId?.());
   }
 
   /** The library a new job writes into. A rule that names a library nobody can write to right
@@ -560,10 +591,19 @@ export class DownloadQueue {
     if (!stream.url) throw new AppError("Only a direct HTTP stream can be downloaded.", "err.downloadNeedsHttp");
     // Without this check a double click on Download yields the same film twice, because
     // uniqueTarget happily hands the second job a name with "(2)".
-    const duplicate = this.jobs.find((job) => job.stream?.url === stream.url && job.status !== "failed");
-    if (duplicate && duplicate.status !== "completed") throw new AppError("This source is already in the queue.", "err.sourceQueued");
-    const duplicatePath = duplicate ? this.jobPath(duplicate) : undefined;
-    if (duplicatePath && await exists(duplicatePath)) throw new AppError("This source is already in the library.", "err.sourceDownloaded");
+    if (this.jobs.some((job) => job.stream?.url === stream.url && job.status !== "failed" && job.status !== "completed" && this.ownedBy(job, ownerUserId)))
+      throw new AppError("This source is already in the queue.", "err.sourceQueued");
+    // Another account's finished file refuses only when the asker can see its library anyway;
+    // otherwise the refusal would tell them what someone else downloaded.
+    for (const job of this.jobs) {
+      if (job.stream?.url !== stream.url || job.status !== "completed") continue;
+      const libraryId = jobLibraryId(job);
+      const reachable = this.ownedBy(job, ownerUserId)
+        || (libraryId !== undefined && (this.ownerSeesLibrary?.(ownerUserId ?? this.legacyOwnerId?.(), libraryId) ?? false));
+      if (!reachable) continue;
+      const duplicatePath = this.jobPath(job);
+      if (duplicatePath && await exists(duplicatePath)) throw new AppError("This source is already in the library.", "err.sourceDownloaded");
+    }
     const extension = streamExtension(stream);
     const kind = media?.kind === "episode" ? "series" : "movie";
     const now = new Date().toISOString();
@@ -589,8 +629,8 @@ export class DownloadQueue {
 
   private async addDebrid(title: string, stream: StreamItem, media: MediaInfo | undefined, targetSettings: DownloadTargetSettings, ownerUserId?: string) {
     if (!this.debrid?.configured()) throw new AppError("Set up Real-Debrid in Settings first.", "err.debridNotConfigured");
-    const duplicate = this.jobs.find((job) => this.sameTorrent(job.stream, stream) && job.status !== "failed");
-    if (duplicate && duplicate.status !== "completed") throw new AppError("This torrent is already in the queue.", "err.torrentQueued");
+    if (this.jobs.some((job) => this.sameTorrent(job.stream, stream) && job.status !== "failed" && job.status !== "completed" && this.ownedBy(job, ownerUserId)))
+      throw new AppError("This torrent is already in the queue.", "err.torrentQueued");
     const now = new Date().toISOString();
     const job: DownloadJob = {
       id: crypto.randomUUID(), ownerUserId, title, stream, media, status: "waiting", target: "", received: 0, speed: 0,
@@ -614,11 +654,38 @@ export class DownloadQueue {
   }
 
   /** A lazy job: both target and source are filled in when the download starts. A duplicate episode is not added. */
-  async addPending(title: string, source: { type: string; videoId: string; selection?: DownloadSelection }, media?: MediaInfo, ownerUserId?: string) {
-    if (this.jobs.some((job) => job.source?.videoId === source.videoId && job.status !== "completed" && job.status !== "failed")) return undefined;
+  async addPending(title: string, source: { type: string; videoId: string; selection?: DownloadSelection }, media?: MediaInfo, ownerUserId?: string, follow?: DownloadJob["follow"]) {
+    if (this.jobs.some((job) => job.source?.videoId === source.videoId && job.source?.type === source.type && job.status !== "completed" && job.status !== "failed" && this.ownedBy(job, ownerUserId))) return undefined;
     const now = new Date().toISOString();
-    const job: DownloadJob = { id: crypto.randomUUID(), ownerUserId, title, media, source: { ...source, tried: [] }, status: "queued", target: "", received: 0, speed: 0, createdAt: now, updatedAt: now };
+    const job: DownloadJob = { id: crypto.randomUUID(), ownerUserId, title, media, source: { ...source, tried: [] }, ...(follow ? { follow } : {}), status: "queued", target: "", received: 0, speed: 0, createdAt: now, updatedAt: now };
     this.jobs.push(job); await this.save(); this.pump(); return this.publicJob(job);
+  }
+
+  /** The caller's own unfinished lazy job for a source, or nothing. A job from another account
+   *  or one that already failed or finished does not answer. */
+  findActiveEpisode(ownerUserId: string | undefined, type: string, videoId: string) {
+    const job = this.jobs.find((job) => job.source?.type === type && job.source?.videoId === videoId
+      && job.status !== "completed" && job.status !== "failed" && this.ownedBy(job, ownerUserId));
+    return job ? this.publicJob(job) : undefined;
+  }
+
+  /** Ties a job the owner queued by hand to the follow that now wants the same episode. */
+  async adopt(id: string, follow: NonNullable<DownloadJob["follow"]>) {
+    const job = this.jobs.find((item) => item.id === id);
+    if (!job) return;
+    job.follow = follow;
+    await this.save();
+  }
+
+  /** The public shape of the jobs that carry a follow, for reconciliation. */
+  followJobs() {
+    return this.jobs.filter((job) => job.follow).map((job) => this.publicJob(job));
+  }
+
+  /** One job by id, in the shape the interface sees, or nothing. */
+  get(id: string) {
+    const job = this.jobs.find((item) => item.id === id);
+    return job ? this.publicJob(job) : undefined;
   }
 
   /** History can be cleared, but the files stay. A free name therefore has to be looked for on
@@ -677,7 +744,7 @@ export class DownloadQueue {
    *  completed stays: it is in the library and belongs to nobody's access any more. */
   async removeMatching(match: (job: DownloadJob) => boolean): Promise<number> {
     const ids = this.jobs.filter((job) => job.status !== "completed" && match(job)).map((job) => job.id);
-    for (const id of ids) await this.remove(id);
+    for (const id of ids) await this.remove(id, "account");
     return ids.length;
   }
 
@@ -725,12 +792,15 @@ export class DownloadQueue {
     this.pump();
   }
 
-  async retry(id: string) {
+  /** A lazy job may be retried under new rules: the selection is swapped before the next
+   *  resolve, so a follow whose settings changed does not leave a stale failed copy behind. */
+  async retry(id: string, selection?: DownloadSelection) {
     const job = this.require(id);
     if (job.status !== "failed") throw new AppError("Only a failed download can be retried.", "err.retryOnlyFailed");
     job.retryCount = 0;
     job.notBefore = undefined;
     if (job.source) {
+      if (selection && !job.stream) job.source.selection = selection;
       job.source.tried = [];
       if (!job.stream) { job.target = ""; job.received = 0; job.total = undefined; }
     }
@@ -750,14 +820,52 @@ export class DownloadQueue {
     this.debridTimers.set(id, timer);
   }
 
+  /** The torrent Real-Debrid could not deliver. A lazy job has other sources left, so it goes
+   *  back to the queue and the next resolve picks one; a manual job was queued for this very
+   *  torrent and fails, as it always has. */
+  private async debridSourceFailed(job: DownloadJob, message: string, key?: string) {
+    if (!job.source) {
+      job.status = "failed";
+      this.setError(job, message, key);
+      job.updatedAt = new Date(this.now()).toISOString();
+      log("ERROR", "Real-Debrid job failed", { id: job.id, title: job.title, reason: message });
+      await this.save();
+      return;
+    }
+    if (job.stream) job.source.tried.push(torrentKey(job.stream));
+    job.stream = undefined;
+    job.subtitle = undefined;
+    job.resolution = undefined;
+    job.target = "";
+    job.debrid = undefined;
+    job.debridStartedAt = undefined;
+    job.received = 0; job.total = undefined; job.segments = undefined; job.rangesIgnored = undefined; job.retryCount = 0; job.notBefore = undefined;
+    job.status = "queued";
+    this.setError(job, `Source failed (${message}), trying the next one\u2026`, "err.sourceFailedTryingNext", { reason: message });
+    job.updatedAt = new Date(this.now()).toISOString();
+    log("WARN", "The torrent failed, trying the next source", { id: job.id, title: job.title, reason: message, tried: job.source.tried.length });
+    await this.save();
+    this.pump();
+  }
+
+  /** The file Real-Debrid resolved has to be the episode the job asked for. A season pack lists
+   *  every episode, and a wrong pick would save one episode under another's name. */
+  private debridWrongEpisode(job: DownloadJob, filename: string | undefined): boolean {
+    if (job.media?.kind !== "episode" || !filename) return false;
+    const marker = episodeTag(filename);
+    if (!marker) return false;
+    const media = job.media;
+    return (media.episode != null && marker.episode !== media.episode)
+      || (media.season != null && marker.season != null && marker.season !== media.season);
+  }
+
   private async pollDebrid(id: string) {
     const job = this.jobs.find((item) => item.id === id);
     if (!job || job.status !== "waiting" || this.debridBusy.has(id)) return;
     this.debridBusy.add(id);
     try {
-      if (this.now() - Date.parse(job.createdAt) > this.debridTimeoutMs) {
-        job.status = "failed"; this.setError(job, "Real-Debrid did not finish the torrent in time.", "err.debridTimeout"); job.updatedAt = new Date().toISOString();
-        await this.save();
+      if (this.now() - Date.parse(job.debridStartedAt ?? job.createdAt) > this.debridTimeoutMs) {
+        await this.debridSourceFailed(job, "Real-Debrid did not finish the torrent in time.", "err.debridTimeout");
         return;
       }
       if (!this.debrid?.configured()) {
@@ -775,6 +883,11 @@ export class DownloadQueue {
       job.debrid = { torrentId: result.torrentId, progress: result.ready ? 100 : result.progress, status: result.ready ? "downloaded" : result.status };
       job.updatedAt = new Date().toISOString();
       if (result.ready) {
+        const filename = result.filename ?? job.stream?.behaviorHints?.filename;
+        if (this.debridWrongEpisode(job, filename)) {
+          await this.debridSourceFailed(job, "Real-Debrid resolved a different episode.", "err.debridWrongEpisode");
+          return;
+        }
         job.stream = {
           ...job.stream,
           url: result.url,
@@ -798,18 +911,20 @@ export class DownloadQueue {
         this.scheduleDebrid(job.id, Math.max(this.debridPollMs, this.debridRetryMs));
         return;
       }
-      job.status = "failed";
-      log("ERROR", "Real-Debrid job failed", { id: job.id, title: job.title, reason: job.error });
-      await this.save();
+      await this.debridSourceFailed(job, error instanceof Error ? error.message : String(error));
     } finally {
       this.debridBusy.delete(id);
     }
   }
 
-  async remove(id: string) {
+  async remove(id: string, reason: "user" | "account" = "user") {
     const index = this.jobs.findIndex((job) => job.id === id);
     if (index < 0) throw new AppError("The item was not found.", "err.itemNotFound");
-    const [job] = this.jobs.splice(index, 1);
+    // A guard that throws refuses the removal: the row is left as it was.
+    await this.beforeRemove?.(this.jobs[index], reason);
+    const at = this.jobs.findIndex((job) => job.id === id);
+    if (at < 0) return;
+    const [job] = this.jobs.splice(at, 1);
     this.active.get(id)?.abort();
     if (job.status !== "completed" && job.target) {
       const partial = this.jobPath(job);
@@ -836,7 +951,12 @@ export class DownloadQueue {
       addonName: job.stream?.addonName, title: job.title, kind: job.media?.kind,
     }));
   }
-  async clearCompleted() { this.jobs = this.jobs.filter((job) => job.status !== "completed"); await this.save(); }
+  async clearCompleted() {
+    const completed = this.jobs.filter((job) => job.status === "completed");
+    await this.beforeClearCompleted?.(completed);
+    this.jobs = this.jobs.filter((job) => job.status !== "completed");
+    await this.save();
+  }
   changed() { this.pump(); }
   /** The key travels with the text so the interface can render a stored failure in
    *  whatever language is set now, not the one that was set when it failed. */
@@ -991,7 +1111,10 @@ export class DownloadQueue {
     const startedAt = this.now();
     const resolved = await this.resolver(job.source, this.ownerOf(job));
     const selectionMs = this.now() - startedAt;
-    if (!resolved?.stream.url) {
+    // A torrent is a resolved source too: it has an infoHash and no URL yet, and the queue turns
+    // it into a Real-Debrid wait. Only a stream with neither -- or none at all -- means nothing
+    // was found.
+    if (!resolved?.stream || (!resolved.stream.url && !resolved.stream.infoHash)) {
       const selection = job.source.selection;
       const requested = selection
         ? selection.audioMode === "preferred"
@@ -1001,7 +1124,7 @@ export class DownloadQueue {
       log("WARN", "No download source could be resolved", { id: job.id, title: job.title, selectionMs, previouslyTried: job.source.tried.length });
       throw new SourceError(job.source.tried.length
         ? `Every available source failed (${job.source.tried.length}).`
-        : requested);
+        : requested, "err.noMatchingSource");
     }
     job.stream = resolved.stream;
     job.subtitle = resolved.subtitle;
@@ -1246,6 +1369,20 @@ export class DownloadQueue {
           return;
         }
       }
+      // A lazy job whose chosen source is a torrent has nothing to download yet: the magnet has
+      // to be fetched by Real-Debrid first, and the resulting HTTP link arrives later. This is
+      // the same wait a manual torrent job goes through, entered from the resolve instead of
+      // from `add`. The `finally` releases the slot and saves exactly as any other early return.
+      if (job.stream && job.stream.infoHash && !job.stream.url) {
+        const startedAt = new Date(this.now()).toISOString();
+        job.status = "waiting";
+        job.debrid = {};
+        job.debridStartedAt = startedAt;
+        job.updatedAt = startedAt;
+        await this.save();
+        this.scheduleDebrid(job.id);
+        return;
+      }
       if (controller.signal.aborted) throw new Error("The download was stopped.");
       job.status = "downloading";
       // The provider is known only after a source is picked. If it is busy, the job goes back to
@@ -1426,6 +1563,9 @@ export class DownloadQueue {
       } else if (job.source && job.stream?.url) {
         // A lazy job tries the next source in order; the address of the failed one is never used again.
         job.source.tried.push(job.stream.url);
+        // A link Real-Debrid produced keeps its torrent identity; without it the same torrent
+        // would be chosen again on the next resolve.
+        if (job.stream.infoHash) job.source.tried.push(torrentKey(job.stream));
         const abandoned = this.jobPath(job);
         if (job.target && abandoned) await unlink(`${abandoned}.part`).catch(() => undefined);
         const subtitleFiles = this.subtitleFiles(job);
@@ -1436,7 +1576,7 @@ export class DownloadQueue {
         if (this.retryTimer) clearTimeout(this.retryTimer);
         this.retryTimer = setTimeout(() => { this.retryTimer = undefined; this.pump(); }, 2000);
       } else {
-        job.status = "failed"; this.setError(job, message);
+        job.status = "failed"; this.setError(job, message, messageKeyOf(error));
         log("ERROR", "Download failed", { id: job.id, reason: message, received: job.received, total: job.total });
       }
     } finally {

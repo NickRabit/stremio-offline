@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 
 // Assertions that hold in every viewport, checked without stored baselines. They
 // catch the class of bug this project keeps shipping -- content escaping the
@@ -14,6 +14,19 @@ const openView = async (page: Page, name: string) => {
   // measurements below honest.
   await page.waitForTimeout(150);
 };
+
+const openSeries = async (page: Page) => {
+  await openView(page, "Katalog");
+  const select = page.getByRole("combobox", { name: "Procházet katalog" });
+  const labels = await select.locator("option").allTextContents();
+  await select.selectOption({ label: labels.find((text) => /Seriály/.test(text))! });
+  await page.getByRole("button", { name: /Zkušební seriál/ }).click();
+  return page.locator(".detail-panel");
+};
+
+const apiFollows = (request: APIRequestContext) =>
+  request.get("/api/follows").then((response) => response.json() as Promise<{ follows: Array<{ id: string }> }>)
+    .then((body) => body.follows ?? []);
 
 const horizontalOverflow = (page: Page) => page.evaluate(() => {
   const root = document.documentElement;
@@ -238,6 +251,61 @@ test.describe("layout invariants", () => {
           .map(({ target, box }) => `${target.tagName} "${target.textContent?.trim().slice(0, 20)}": ${Math.round(box.width)}x${Math.round(box.height)}`);
       });
       expect(tooSmall, "controls below the 24px minimum in the users dialog").toEqual([]);
+    }
+  });
+
+  // Both follow dialogs and the Library row they feed: a follow is the newest surface, and
+  // its setup dialog is the tallest thing the catalogue can open on a phone held sideways.
+  test("the follow dialogs and the Library row stay inside the viewport", async ({ page, request }, testInfo) => {
+    try {
+      const detail = await openSeries(page);
+      await detail.getByRole("button", { name: "Sledovat" }).click();
+      const start = page.getByRole("dialog", { name: "Sledovat seriál" });
+      await start.getByRole("radio", { name: /Automaticky stahovat nové díly/ }).check();
+      const wizard = await horizontalOverflow(page);
+      expect(wizard.offenders, "elements past the right edge of the follow wizard").toEqual([]);
+      expect(wizard.scrollWidth, "the follow wizard overflows horizontally").toBeLessThanOrEqual(wizard.clientWidth + 1);
+      await expect(start.getByRole("button", { name: "Sledovat a stahovat" })).toBeInViewport();
+      await start.getByRole("radio", { name: /Jen upozorňovat na nové díly/ }).check();
+      await start.getByRole("button", { name: "Sledovat", exact: true }).click();
+      const chip = detail.getByRole("button", { name: "Sledujete" });
+      await expect(chip).toBeVisible();
+      await chip.click();
+
+      const dialog = page.getByRole("dialog", { name: "Sledování seriálu" });
+      await expect(dialog).toBeVisible();
+      const dialogPrimary = dialog.locator("footer.dialog-foot .primary");
+      await expect(dialogPrimary, `${testInfo.project.name}: the follow dialog footer is off screen`).toBeInViewport();
+      await dialogPrimary.click({ trial: true });
+      const dialogOverflow = await horizontalOverflow(page);
+      expect(dialogOverflow.offenders, "elements past the right edge in the follow dialog").toEqual([]);
+      expect(dialogOverflow.scrollWidth, "the follow dialog overflows horizontally").toBeLessThanOrEqual(dialogOverflow.clientWidth + 1);
+
+      await dialog.getByRole("button", { name: "Automaticky stahovat nové díly…" }).click();
+      const setup = page.getByRole("dialog", { name: "Automatické stahování nových dílů" });
+      await expect(setup).toBeVisible();
+      const setupPrimary = setup.locator("footer.dialog-foot .primary");
+      await expect(setupPrimary).toBeEnabled();
+      await expect(setupPrimary, `${testInfo.project.name}: the setup dialog footer is off screen`).toBeInViewport();
+      await setupPrimary.click({ trial: true });
+      const setupOverflow = await horizontalOverflow(page);
+      expect(setupOverflow.offenders, "elements past the right edge in the setup dialog").toEqual([]);
+      expect(setupOverflow.scrollWidth, "the setup dialog overflows horizontally").toBeLessThanOrEqual(setupOverflow.clientWidth + 1);
+
+      await setup.locator("footer.dialog-foot").getByRole("button", { name: "Zrušit" }).click();
+      await expect(setup).toHaveCount(0);
+      await dialogPrimary.click();
+      await expect(dialog).toHaveCount(0);
+
+      await openView(page, "Knihovna");
+      const row = page.locator(".resume-row", { hasText: "Nové díly" });
+      await expect(row).toBeVisible();
+      await expect(row).toContainText("Sledované seriály (1)");
+      const libraryOverflow = await horizontalOverflow(page);
+      expect(libraryOverflow.offenders, "elements past the right edge in the Library row").toEqual([]);
+      expect(libraryOverflow.scrollWidth, "the Library row overflows horizontally").toBeLessThanOrEqual(libraryOverflow.clientWidth + 1);
+    } finally {
+      for (const follow of await apiFollows(request).catch(() => [])) await request.delete(`/api/follows/${follow.id}`);
     }
   });
 });

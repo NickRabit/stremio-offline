@@ -42,6 +42,8 @@ export interface Download {
   target: string; received: number; total?: number; speed: number; order: number;
   error?: string; errorKey?: string; errorVars?: Record<string, string | number>;
   pauseReason?: "user" | "storage" | "library"; pending?: boolean; debridProgress?: number;
+  /** Present when a followed series queued the job, matched against the follow across restarts. */
+  follow?: { followId: string; episodeKey: string; intent: string };
   /** How many connections the file is being split across; missing while it runs over one. */
   segments?: number;
   resolution?: { checkedCandidates: number; audioLanguage?: string; fallbackUsed?: boolean; audioEvidence?: "probe" | "listing" | "none"; subtitleLanguage?: string; subtitleSource?: "embedded" | "addon"; subtitleStatus?: "ready" | "missing" };
@@ -56,9 +58,13 @@ export interface DownloadSelection {
   audioLanguage: string;
   fallbackAudioLanguage?: string;
   audioMode?: AudioMode;
+  /** The language of the title itself, where its metadata names one. */
+  titleLanguage?: string;
   subtitleMode: SubtitleMode;
   subtitleLanguage?: string;
   fallbackSubtitleLanguage?: string;
+  /** The pinned destination of a stored rule. Absent on a selection the interface submits. */
+  targetSettings?: DownloadTargetSettings;
 }
 export interface DeviceTransfer {
   id: string; userId: string; username?: string; filename: string;
@@ -334,6 +340,58 @@ export interface UserViews {
  *  not yet started. It carries no position and draws no progress bar. */
 export interface ProgressEntry { key: string; position: number; duration: number; title: string; path?: string; poster?: string; addonKey?: string; series?: { id: string; name: string; season: number; episode: number }; pending?: true; updatedAt: string }
 export interface WatchlistEntry { key: string; type: string; id: string; name: string; poster?: string; addedAt: string }
+
+/** One episode of a followed series as the follow route names it: the slot on either side of now. */
+export interface FollowEpisodeView { season: number; episode: number; title?: string; released?: string }
+export type FollowStartMode = "new" | "from";
+/** The rule a follow queues new episodes by. Mirrors `FollowAutoDownload` on the server. */
+export interface FollowAutoDownload {
+  enabledAt: string;
+  startMode: FollowStartMode;
+  startSeason?: number;
+  startEpisode?: number;
+  selection: DownloadSelection;
+  /** Catalogue key of the reason nothing is admitted while the account may not download. */
+  blockedKey?: string;
+}
+export type FollowDownloadState = "reserved" | "queued" | "waiting" | "completed" | "skipped" | "attention";
+/** The queue's own verdict on one followed episode. */
+export interface FollowEpisodeDownload {
+  state: FollowDownloadState;
+  intent: string;
+  generation: number;
+  jobId?: string;
+  attempts: number;
+  nextAttemptAt?: string;
+  reasonKey?: string;
+  updatedAt: string;
+}
+export type FollowEligibility = "eligible" | "upcoming" | "outside" | "attention-no-date" | "attention-ambiguous";
+/** One row of `GET /api/follows/:id/episodes`. */
+export interface FollowEpisodeRow {
+  key: string; season: number; episode: number; title?: string; released?: string; ambiguous?: boolean;
+  eligibility: FollowEligibility;
+  download?: FollowEpisodeDownload;
+}
+export interface FollowDownloads { queued: number; waiting: number; completed: number; skipped: number; attention: number }
+/** One followed series as the follow routes answer it. */
+export interface FollowView {
+  id: string; ownerUserId: string; type: string; metaId: string; name: string; poster?: string;
+  createdAt: string; updatedAt: string; enabled: boolean; revision: number;
+  lastCheckedAt?: string; lastSuccessfulCheckAt?: string; nextCheckAt: string; failures: number; lastErrorKey?: string;
+  episodeCount: number;
+  nextEpisode?: FollowEpisodeView;
+  latestEpisode?: FollowEpisodeView;
+  autoDownload?: FollowAutoDownload;
+  downloads: FollowDownloads;
+}
+/** One episode of a followed series released recently and not yet watched. */
+export interface NewEpisode {
+  followId: string; type: string; metaId: string; name: string; poster?: string;
+  videoId: string; season: number; episode: number; title?: string; released: string;
+}
+/** How many episodes a proposed start rule would queue right now. */
+export interface FollowPreview { count: number; episodes: Array<{ key: string; season: number; episode: number; title?: string }> }
 
 export interface StatsActivity {
   id: number; at: string; kind: "playback" | "library" | "device";

@@ -38,6 +38,17 @@ export const USER_ALLOWED: Rule[] = [
   { method: "POST", pattern: /^\/search\/history$/ },
   { method: "POST", pattern: /^\/search\/history\/forget$/ },
   { method: "DELETE", pattern: /^\/search\/history$/ },
+  // The series they follow, and the new episodes those turn up.
+  { method: "GET", pattern: /^\/follows$/ },
+  { method: "POST", pattern: /^\/follows$/ },
+  { method: "GET", pattern: /^\/follows\/new-episodes$/ },
+  { method: "GET", pattern: /^\/follows\/by-meta\/[^/]+\/[^/]+$/ },
+  { method: "PATCH", pattern: /^\/follows\/[^/]+$/ },
+  { method: "DELETE", pattern: /^\/follows\/[^/]+$/ },
+  { method: "POST", pattern: /^\/follows\/[^/]+\/check$/ },
+  { method: "GET", pattern: /^\/follows\/[^/]+\/episodes$/ },
+  { method: "GET", pattern: /^\/follows\/[^/]+\/preview$/ },
+  { method: "POST", pattern: /^\/follows\/[^/]+\/episodes\/[^/]+\/(skip|retry)$/ },
   // Browsing and playing.
   { method: "GET", pattern: /^\/library$/ },
   { method: "GET", pattern: /^\/library\/browse$/ },

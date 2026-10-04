@@ -1,0 +1,263 @@
+import type express from "express";
+import type { DownloadSelection } from "../downloads.js";
+import { AppError } from "../errors.js";
+import { images } from "../images.js";
+import { downloadEligibility, type Follow, type FollowAutoDownload, type FollowEpisode, type FollowService, type FollowStore } from "../follows.js";
+import { defaultLibrary, type DefaultLibrarySettings, type LibraryRecord, type Viewer } from "../libraries.js";
+import type { UserPrefs, WatchedMarker } from "../store.js";
+import type { DownloadTargetSettings, MetaItem } from "../types.js";
+import type { UserData } from "../users.js";
+import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
+import { createSelectionParser } from "./downloads.js";
+
+export interface FollowDeps extends RouteContext {
+  follows: FollowService;
+  followStore: FollowStore;
+  prefsOf(req?: express.Request): UserPrefs;
+  markersOf(data: UserData): Record<string, WatchedMarker>;
+  dataOf(req: express.Request): UserData;
+  posterOf(value: unknown): string | undefined;
+  cachedMeta(type: string, id: string, language?: string, viewer?: Viewer): Promise<MetaItem | null>;
+}
+
+interface FollowEpisodeView { season: number; episode: number; title?: string; released?: string }
+interface FollowDownloads { queued: number; waiting: number; completed: number; skipped: number; attention: number }
+interface FollowView {
+  id: string;
+  ownerUserId: string;
+  type: string;
+  metaId: string;
+  name: string;
+  poster?: string;
+  createdAt: string;
+  updatedAt: string;
+  enabled: boolean;
+  revision: number;
+  lastCheckedAt?: string;
+  lastSuccessfulCheckAt?: string;
+  nextCheckAt: string;
+  failures: number;
+  lastErrorKey?: string;
+  episodeCount: number;
+  nextEpisode?: FollowEpisodeView;
+  latestEpisode?: FollowEpisodeView;
+  autoDownload?: FollowAutoDownload;
+  downloads: FollowDownloads;
+}
+
+const episodeView = (episode: FollowEpisode): FollowEpisodeView => ({
+  season: episode.season, episode: episode.episode,
+  ...(episode.title ? { title: episode.title } : {}),
+  ...(episode.released ? { released: episode.released } : {}),
+});
+
+/** `reserved` is an episode being queued, so it counts as queued for the summary. */
+const downloadsSummary = (follow: Follow): FollowDownloads => {
+  const counts: FollowDownloads = { queued: 0, waiting: 0, completed: 0, skipped: 0, attention: 0 };
+  for (const episode of Object.values(follow.episodes)) {
+    switch (episode.download?.state) {
+      case "reserved":
+      case "queued": counts.queued += 1; break;
+      case "waiting": counts.waiting += 1; break;
+      case "completed": counts.completed += 1; break;
+      case "skipped": counts.skipped += 1; break;
+      case "attention": counts.attention += 1; break;
+    }
+  }
+  return counts;
+};
+
+/** The follow as the interface reads it: the episode map is replaced by a count and
+ *  the nearest episode on either side of now. */
+const followView = (follow: Follow, now: number): FollowView => {
+  const episodes = Object.values(follow.episodes);
+  let next: FollowEpisode | undefined;
+  let latest: FollowEpisode | undefined;
+  for (const episode of episodes) {
+    if (!episode.released) continue;
+    const released = Date.parse(episode.released);
+    if (released > now) {
+      if (!next || released < Date.parse(next.released!)) next = episode;
+    } else if (!latest || released > Date.parse(latest.released!)) {
+      latest = episode;
+    }
+  }
+  const { episodes: _episodes, poster, ...rest } = follow;
+  return {
+    ...rest,
+    // Stored as the provider's address; the page only ever loads our own proxy.
+    ...(poster ? { poster: images.proxied(poster) } : {}),
+    episodeCount: episodes.length,
+    downloads: downloadsSummary(follow),
+    ...(next ? { nextEpisode: episodeView(next) } : {}),
+    ...(latest ? { latestEpisode: episodeView(latest) } : {}),
+  };
+};
+
+/** The pinned destination a follow stores. An explicit choice is already concrete; a rule
+ *  that names no library is resolved to the queue's own default series library, and a rule
+ *  naming one that is gone falls back the same way. No library taking series is refused. */
+const pinnedTarget = (selection: DownloadSelection, libraries: LibraryRecord[], settings: DefaultLibrarySettings): DownloadTargetSettings => {
+  const rule = selection.targetSettings;
+  if (rule.explicit) return rule;
+  const named = rule.libraryId ? libraries.find((library) => library.id === rule.libraryId) : undefined;
+  const library = named ?? defaultLibrary(libraries, settings, "episode");
+  if (!library) throw new AppError("No library takes series.", "err.noLibraryForSeries");
+  return { libraryId: library.id, subfolder: rule.subfolder, layout: rule.layout, explicit: true };
+};
+
+export function registerFollowRoutes(app: express.Application, deps: FollowDeps): void {
+  const { store, followStore, follows, currentUser, dataOf, markersOf, posterOf, cachedMeta, prefsOf } = deps;
+  const parseSelection = createSelectionParser({ store, currentUser, cachedMeta, prefsOf });
+
+  /** The follow the caller owns, or nothing. A follow owned by somebody else answers
+   *  exactly like one that does not exist, so the route never confirms it is there. */
+  const owned = (req: express.Request, id: string): Follow => {
+    const owner = viewerOf(currentUser(req));
+    const follow = followStore.get(id);
+    if (!follow || follow.ownerUserId !== owner.id) throw new AppError("The item was not found.", "err.itemNotFound", 404);
+    return follow;
+  };
+
+  app.get("/api/follows", (req, res) => {
+    const owner = viewerOf(currentUser(req));
+    const now = Date.now();
+    res.json({ follows: followStore.listForOwner(owner.id).map((follow) => followView(follow, now)) });
+  });
+
+  app.post("/api/follows", asyncRoute(async (req, res) => {
+    const owner = viewerOf(currentUser(req));
+    const type = String(req.body?.type ?? "").trim();
+    const metaId = String(req.body?.id ?? "").trim();
+    const name = String(req.body?.name ?? "").trim();
+    if (!type || !metaId || !name) throw new AppError("The followed series is missing a type, an id or a name.", "err.followInvalid");
+    const follow = await followStore.create({ ownerUserId: owner.id, type, metaId, name, poster: posterOf(req.body?.poster) }, Date.now());
+    // The first check runs now rather than at the next tick, so the episodes are known
+    // while the person who just followed is still looking.
+    void follows.check(follow.id, "schedule").catch(() => undefined);
+    res.status(201).json(followView(follow, Date.now()));
+  }));
+
+  app.patch("/api/follows/:id", asyncRoute(async (req, res) => {
+    const owner = viewerOf(currentUser(req));
+    const follow = owned(req, String(req.params.id));
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    if ("autoDownload" in body) {
+      const raw = body.autoDownload;
+      if (raw === null) {
+        await follows.setAutoDownload(follow.id, owner.id, null);
+      } else {
+        const item = typeof raw === "object" && raw ? raw as Record<string, unknown> : {};
+        const startMode = item.startMode === "from" ? "from" : item.startMode === "new" ? "new" : undefined;
+        if (!startMode) throw new AppError("The followed series is missing a type, an id or a name.", "err.followInvalid");
+        let startSeason: number | undefined;
+        let startEpisode: number | undefined;
+        if (startMode === "from") {
+          startSeason = Number(item.startSeason);
+          startEpisode = Number(item.startEpisode);
+          if (!Number.isInteger(startSeason) || startSeason < 1 || !Number.isInteger(startEpisode) || startEpisode < 1) {
+            throw new AppError("The followed series is missing a type, an id or a name.", "err.followInvalid");
+          }
+        }
+        const selection = await parseSelection(req, { selection: item.selection, target: item.target, metaType: follow.type, parentId: follow.metaId });
+        const targetSettings = pinnedTarget(selection, store.libraries(), store.settings());
+        const value: Omit<FollowAutoDownload, "enabledAt" | "blockedKey"> = {
+          startMode,
+          ...(startSeason != null ? { startSeason } : {}),
+          ...(startEpisode != null ? { startEpisode } : {}),
+          selection: { ...selection, targetSettings },
+        };
+        await follows.setAutoDownload(follow.id, owner.id, value);
+      }
+    }
+    const updated = await followStore.update(follow.id, (current) => {
+      if (typeof body.enabled === "boolean") current.enabled = body.enabled;
+      current.revision += 1;
+    });
+    res.json(followView(updated, Date.now()));
+  }));
+
+  app.delete("/api/follows/:id", asyncRoute(async (req, res) => {
+    const follow = owned(req, String(req.params.id));
+    await followStore.remove(follow.id);
+    res.status(204).end();
+  }));
+
+  app.post("/api/follows/:id/check", asyncRoute(async (req, res) => {
+    const owner = viewerOf(currentUser(req));
+    const follow = owned(req, String(req.params.id));
+    const checked = await follows.checkNow(follow.id, owner.id);
+    res.json(followView(checked ?? follow, Date.now()));
+  }));
+
+  app.get("/api/follows/new-episodes", (req, res) => {
+    const owner = viewerOf(currentUser(req));
+    const markers = markersOf(dataOf(req));
+    res.json({ items: follows.newEpisodes(owner.id, (metaId) => {
+      const marker = markers[metaId];
+      return marker ? { season: marker.season, episode: marker.episode } : undefined;
+    }).map((item) => ({ ...item, poster: images.proxied(item.poster) })) });
+  });
+
+  app.get("/api/follows/by-meta/:type/:id", (req, res) => {
+    const owner = viewerOf(currentUser(req));
+    const follow = followStore.findByMeta(owner.id, String(req.params.type), String(req.params.id));
+    // Not following is an ordinary answer for every series detail, not a failure to log.
+    res.json({ follow: follow ? followView(follow, Date.now()) : null });
+  });
+
+  app.get("/api/follows/:id/episodes", (req, res) => {
+    const follow = owned(req, String(req.params.id));
+    const now = Date.now();
+    const episodes = Object.values(follow.episodes)
+      .map((episode) => ({
+        key: episode.key, season: episode.season, episode: episode.episode,
+        ...(episode.title ? { title: episode.title } : {}),
+        ...(episode.released ? { released: episode.released } : {}),
+        ...(episode.ambiguous ? { ambiguous: true } : {}),
+        eligibility: downloadEligibility(follow, episode, now),
+        ...(episode.download ? { download: episode.download } : {}),
+      }))
+      .sort((left, right) => left.season - right.season || left.episode - right.episode);
+    res.json({ episodes });
+  });
+
+  app.get("/api/follows/:id/preview", (req, res) => {
+    const follow = owned(req, String(req.params.id));
+    const startMode = req.query.startMode === "from" ? "from" : req.query.startMode === "new" ? "new" : undefined;
+    if (!startMode) throw new AppError("The followed series is missing a type, an id or a name.", "err.followInvalid");
+    let startSeason: number | undefined;
+    let startEpisode: number | undefined;
+    if (startMode === "from") {
+      startSeason = Number(req.query.startSeason);
+      startEpisode = Number(req.query.startEpisode);
+      if (!Number.isInteger(startSeason) || startSeason < 1 || !Number.isInteger(startEpisode) || startEpisode < 1) {
+        throw new AppError("The followed series is missing a type, an id or a name.", "err.followInvalid");
+      }
+    }
+    const eligible = follows.preview(follow, {
+      startMode,
+      ...(startSeason != null ? { startSeason } : {}),
+      ...(startEpisode != null ? { startEpisode } : {}),
+    });
+    const episodes = eligible.slice(0, 50).map((episode) => ({
+      key: episode.key, season: episode.season, episode: episode.episode,
+      ...(episode.title ? { title: episode.title } : {}),
+    }));
+    res.json({ count: eligible.length, episodes });
+  });
+
+  app.post("/api/follows/:id/episodes/:key/skip", asyncRoute(async (req, res) => {
+    const owner = viewerOf(currentUser(req));
+    const follow = owned(req, String(req.params.id));
+    await follows.skipEpisode(follow.id, owner.id, String(req.params.key));
+    res.status(204).end();
+  }));
+
+  app.post("/api/follows/:id/episodes/:key/retry", asyncRoute(async (req, res) => {
+    const owner = viewerOf(currentUser(req));
+    const follow = owned(req, String(req.params.id));
+    await follows.retryEpisode(follow.id, owner.id, String(req.params.key));
+    res.status(204).end();
+  }));
+}
