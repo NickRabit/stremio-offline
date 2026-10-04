@@ -387,6 +387,9 @@ export const fr: Catalog = {
   "following.stateReleased": "Diffusé",
   "following.calendarEmpty": "Rien ne sort ce mois-ci.",
   "following.activityEmpty": "Les téléchargements automatiques n'ont encore rien fait.",
+
+  "following.dateUncertainHint": "La date exacte n'est pas encore annoncée ; il s'agit du début de la saison.",
+  "following.dateUnknown": "Date pas encore annoncée",
   "episodes.heading": "Épisodes",
   "episodes.one": "Épisode",
   "episodes.part": "Partie",

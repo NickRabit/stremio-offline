@@ -387,6 +387,9 @@ export const sk: Catalog = {
   "following.stateReleased": "Vydané",
   "following.calendarEmpty": "Tento mesiac nič nevychádza.",
   "following.activityEmpty": "Automatické sťahovanie zatiaľ nič neurobilo.",
+
+  "following.dateUncertainHint": "Presný dátum zatiaľ nie je oznámený, ide o začiatok série.",
+  "following.dateUnknown": "Dátum zatiaľ nie je oznámený",
   "episodes.heading": "Epizódy",
   "episodes.one": "epizóda",
   "episodes.part": "Časť",

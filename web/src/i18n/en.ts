@@ -416,6 +416,9 @@ export const en = {
   "following.calendarEmpty": "Nothing comes out this month.",
   "following.activityEmpty": "Automatic downloads have not done anything yet.",
 
+  "following.dateUncertainHint": "The exact date is not announced yet; this is the season's start.",
+  "following.dateUnknown": "Date not announced",
+
   // Episodes.
   "episodes.heading": "Episodes",
   "episodes.one": "Episode",

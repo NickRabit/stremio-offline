@@ -342,7 +342,7 @@ export interface ProgressEntry { key: string; position: number; duration: number
 export interface WatchlistEntry { key: string; type: string; id: string; name: string; poster?: string; addedAt: string }
 
 /** One episode of a followed series as the follow route names it: the slot on either side of now. */
-export interface FollowEpisodeView { season: number; episode: number; title?: string; released?: string }
+export interface FollowEpisodeView { season: number; episode: number; title?: string; released?: string; releasedSource?: "addon" | "tmdb"; dateUncertain?: boolean }
 export type FollowStartMode = "new" | "from";
 /** The wizard choices carried over from the last follow, as `GET /api/follows/defaults` answers them. */
 export interface FollowDefaults {
@@ -386,6 +386,7 @@ export type FollowEligibility = "eligible" | "upcoming" | "outside" | "attention
 /** One row of `GET /api/follows/:id/episodes`. */
 export interface FollowEpisodeRow {
   key: string; season: number; episode: number; title?: string; released?: string; ambiguous?: boolean;
+  releasedSource?: "addon" | "tmdb"; dateUncertain?: boolean;
   eligibility: FollowEligibility;
   download?: FollowEpisodeDownload;
 }
@@ -412,7 +413,10 @@ export interface CalendarItem {
   followId: string; type: string; metaId: string; name: string; poster?: string;
   videoId: string; season: number; episode: number; title?: string; released: string;
   state: CalendarEpisodeState; reasonKey?: string; nextAttemptAt?: string; ambiguous?: boolean;
+  dateUncertain?: boolean; releasedSource?: "addon" | "tmdb";
 }
+/** A calendar item with no date: the calendar lists these apart, under its grid. */
+export type UndatedCalendarItem = Omit<CalendarItem, "released">;
 /** One episode the download service has touched, as `GET /api/follows/activity` answers it. */
 export interface ActivityItem {
   followId: string; type: string; metaId: string; name: string; poster?: string;

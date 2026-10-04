@@ -94,6 +94,25 @@ describe("FollowingPage", () => {
     expect(host.querySelector(".following-agenda-row small")!.textContent).toBe("S01E02 · Pilot");
   });
 
+  it("marks an uncertain date and lists undated episodes apart", async () => {
+    fetchMock.mockImplementation(async (url: string) => String(url).includes("/api/follows/calendar")
+      ? json({
+          items: [{ followId: "f1", type: "series", metaId: "tt1", name: "Show", videoId: "v1", season: 1, episode: 2, released: new Date().toISOString(), state: "upcoming", dateUncertain: true }],
+          undated: [{ followId: "f1", type: "series", metaId: "tt1", name: "Show", videoId: "v2", season: 1, episode: 3, state: "upcoming", dateUncertain: true }],
+        })
+      : json({ items: [] }));
+    await render([]);
+    await clickTab("Calendar");
+
+    const item = host.querySelector<HTMLButtonElement>(".following-cal-item")!;
+    expect(item.textContent).toBe("≈ Show S01E02");
+    expect(item.getAttribute("title")).toBe("The exact date is not announced yet; this is the season's start.");
+
+    const block = host.querySelector(".following-undated")!;
+    expect(block.querySelector("h4")!.textContent).toBe("Date not announced");
+    expect(block.querySelector(".following-agenda-row")!.textContent).toContain("≈ Show");
+  });
+
   it("retries a waiting episode from the activity tab", async () => {
     fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
       if (!String(url).includes("/api/follows/activity")) return new Response(null, { status: 204 });

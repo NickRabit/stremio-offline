@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { AppError } from "./errors.js";
 import { flushLog, initLogger } from "./logger.js";
-import { clearTmdbCache, clearTmdbSearchPause, tmdbExternalId, tmdbGallery, tmdbImage, tmdbMeta, tmdbSearch, tmdbTrailer, verifyTmdbKey, type TmdbConfig } from "./tmdb.js";
+import { clearTmdbCache, clearTmdbSearchPause, tmdbExternalId, tmdbGallery, tmdbImage, tmdbMeta, tmdbSearch, tmdbSeasonAirDates, tmdbTrailer, verifyTmdbKey, type TmdbConfig } from "./tmdb.js";
 import type { FetchLike } from "./debrid.js";
 
 const json = (body: unknown, status = 200) =>
@@ -366,6 +366,39 @@ test("a gallery request that fails leaves the title without a gallery rather tha
   clearTmdbCache();
   assert.deepEqual(await tmdbGallery("movie", "tmdb:31410", config, async () => json({}, 500)), []);
   assert.deepEqual(await tmdbGallery("series", "tmdb:1396", config, async () => { throw new Error("offline"); }), []);
+});
+
+test("TMDB season air dates are read per episode and cached for the next check", async () => {
+  clearTmdbCache();
+  const calls: string[] = [];
+  const fetchImpl: FetchLike = async (url) => {
+    calls.push(url);
+    if (url.includes("/find/")) return json({ movie_results: [], tv_results: [{ id: 1396 }] });
+    return json({ episodes: [
+      { episode_number: 1, air_date: "2026-09-01" },
+      { episode_number: 2, air_date: "" },
+      { episode_number: "3", air_date: "2026-09-15" },
+    ] });
+  };
+
+  const dates = await tmdbSeasonAirDates("tt0903747", [3], config, fetchImpl);
+  assert.equal(dates.get("3:1"), "2026-09-01");
+  assert.equal(dates.get("3:2"), null, "an episode TMDB carries without a date is present and null");
+  assert.equal(dates.has("3:3"), false, "a row that is not a whole episode number is dropped");
+  assert.match(calls[1]!, /\/tv\/1396\/season\/3\?/);
+
+  const before = calls.length;
+  const again = await tmdbSeasonAirDates("tt0903747", [3], config, fetchImpl);
+  assert.equal(calls.length, before, "a season read minutes apart is served from the cache");
+  assert.equal(again.get("3:1"), "2026-09-01");
+});
+
+test("a season TMDB cannot answer is simply absent", async () => {
+  clearTmdbCache();
+  const dates = await tmdbSeasonAirDates("tmdb:1396", [2, 5], config, async (url) =>
+    url.includes("/season/2") ? json({}, 500) : json({ episodes: [{ episode_number: 1, air_date: "2000-01-01" }] }));
+  assert.equal(dates.has("2:1"), false, "a failed season contributes nothing");
+  assert.equal(dates.get("5:1"), "2000-01-01", "the season that answered is still read");
 });
 
 test("neither the log nor the answered metadata carries the API key", async () => {

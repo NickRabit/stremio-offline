@@ -3,7 +3,7 @@ import { allowedAddons } from "../addons.js";
 import type { DownloadSelection } from "../downloads.js";
 import { AppError } from "../errors.js";
 import { images } from "../images.js";
-import { activityItems, calendarItems, CALENDAR_MAX_SPAN_MS, downloadEligibility, parseFollowDefaults, type Follow, type FollowAutoDownload, type FollowEpisode, type FollowService, type FollowStore } from "../follows.js";
+import { activityItems, calendarItems, CALENDAR_MAX_SPAN_MS, downloadEligibility, parseFollowDefaults, undatedCalendarItems, type Follow, type FollowAutoDownload, type FollowEpisode, type FollowService, type FollowStore } from "../follows.js";
 import { defaultLibrary, libraryVisible, type DefaultLibrarySettings, type LibraryRecord, type Viewer } from "../libraries.js";
 import type { UserPrefs, WatchedMarker } from "../store.js";
 import type { DownloadTargetSettings, MetaItem } from "../types.js";
@@ -22,7 +22,7 @@ export interface FollowDeps extends RouteContext {
   cachedMeta(type: string, id: string, language?: string, viewer?: Viewer): Promise<MetaItem | null>;
 }
 
-interface FollowEpisodeView { season: number; episode: number; title?: string; released?: string }
+interface FollowEpisodeView { season: number; episode: number; title?: string; released?: string; releasedSource?: "addon" | "tmdb"; dateUncertain?: boolean }
 interface FollowDownloads { queued: number; waiting: number; completed: number; skipped: number; attention: number }
 interface FollowView {
   id: string;
@@ -51,6 +51,8 @@ const episodeView = (episode: FollowEpisode): FollowEpisodeView => ({
   season: episode.season, episode: episode.episode,
   ...(episode.title ? { title: episode.title } : {}),
   ...(episode.released ? { released: episode.released } : {}),
+  ...(episode.releasedSource ? { releasedSource: episode.releasedSource } : {}),
+  ...(episode.dateUncertain ? { dateUncertain: true } : {}),
 });
 
 /** `reserved` is an episode being queued, so it counts as queued for the summary. */
@@ -167,7 +169,9 @@ export function registerFollowRoutes(app: express.Application, deps: FollowDeps)
     }
     const items = calendarItems(followStore.listForOwner(owner.id), from, to, Date.now())
       .map((item) => ({ ...item, poster: images.proxied(item.poster) }));
-    res.json({ items });
+    const undated = undatedCalendarItems(followStore.listForOwner(owner.id), 100)
+      .map((item) => ({ ...item, poster: images.proxied(item.poster) }));
+    res.json({ items, undated });
   });
 
   app.get("/api/follows/activity", (req, res) => {
@@ -268,6 +272,8 @@ export function registerFollowRoutes(app: express.Application, deps: FollowDeps)
         key: episode.key, season: episode.season, episode: episode.episode,
         ...(episode.title ? { title: episode.title } : {}),
         ...(episode.released ? { released: episode.released } : {}),
+        ...(episode.releasedSource ? { releasedSource: episode.releasedSource } : {}),
+        ...(episode.dateUncertain ? { dateUncertain: true } : {}),
         ...(episode.ambiguous ? { ambiguous: true } : {}),
         eligibility: downloadEligibility(follow, episode, now),
         ...(episode.download ? { download: episode.download } : {}),

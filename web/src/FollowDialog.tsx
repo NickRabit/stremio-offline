@@ -19,6 +19,9 @@ const pad2 = (value: number) => String(Math.max(0, Math.trunc(value))).padStart(
 const episodeCode = (season: number, episode: number) => `S${pad2(season)}E${pad2(episode)}`;
 const formatWhen = (value?: string) => value ? new Date(value).toLocaleString(localeTag(), { dateStyle: "short", timeStyle: "short" }) : "";
 const formatDay = (value?: string) => value ? new Date(value).toLocaleDateString(localeTag()) : "";
+/** An uncertain date is shown with the marker the calendar uses; without a date at all it says so. */
+const episodeDate = (row: { released?: string; dateUncertain?: boolean }) =>
+  row.dateUncertain ? `≈ ${row.released ? formatDay(row.released) : t("following.dateUnknown")}` : formatDay(row.released);
 
 export function FollowDialog({ follow, videos, languages, libraries, addons, audioLanguage, subtitleLanguage, onChanged, onClose, onNotify }: {
   follow: FollowView;
@@ -158,7 +161,7 @@ export function FollowDialog({ follow, videos, languages, libraries, addons, aud
               return <div className="follow-episode" key={row.key}>
                 <b>{episodeCode(row.season, row.episode)}</b>
                 <span className="follow-episode-title">{row.title ?? ""}</span>
-                <small>{formatDay(row.released)}</small>
+                <small title={row.dateUncertain ? t("following.dateUncertainHint") : undefined}>{episodeDate(row)}</small>
                 <span className={`follow-state ${state ?? row.eligibility}`}>
                   {state === "waiting" ? t("follow.stateWaiting") : state === "completed" ? t("follow.stateCompleted") : state === "skipped" ? t("follow.stateSkipped") : state === "attention" ? t("follow.stateAttention") : state === "reserved" || state === "queued" ? t("follow.stateQueued") : row.eligibility === "upcoming" ? t("follow.stateUpcoming") : ""}
                   {state === "waiting" && row.download?.nextAttemptAt ? ` · ${t("follow.nextAttempt", { time: formatWhen(row.download.nextAttemptAt) })}` : ""}

@@ -23,7 +23,7 @@ const account = (id: string, role: "admin" | "user", downloadToLibrary = true): 
   permissions: { downloadToLibrary, downloadToDevice: true }, permissionsVersion: 0,
 } as unknown as UserRecord);
 
-interface Harness { base: string; close(): Promise<void> }
+interface Harness { base: string; store: FollowStore; close(): Promise<void> }
 
 /** Real express over a real store: the routes take everything from the context, and the
  *  account each request speaks for is named by a header so one server can hold two. */
@@ -104,6 +104,7 @@ const mount = async (): Promise<Harness> => {
   const { port } = server.address() as AddressInfo;
   return {
     base: `http://127.0.0.1:${port}`,
+    store,
     close: async () => {
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -326,7 +327,25 @@ test("the calendar window is validated", async () => {
 
     const atLimit = await api(h.base, "/api/follows/calendar?from=2024-01-01&to=2024-03-03", { as: "A" });
     assert.equal(atLimit.status, 200, "sixty-two days is allowed");
-    assert.deepEqual(((await atLimit.json()) as { items: unknown[] }).items, []);
+    const window = await atLimit.json() as { items: unknown[]; undated: unknown[] };
+    assert.deepEqual(window.items, []);
+    assert.deepEqual(window.undated, []);
+  } finally { await h.close(); }
+});
+
+test("the calendar reports an uncertain episode without a date apart", async () => {
+  const h = await mount();
+  try {
+    const follow = await (await api(h.base, "/api/follows", { method: "POST", as: "A", body: { type: "series", id: "tt1", name: "Show" } })).json() as { id: string };
+    // Let the first check settle, then replace its episode with the shape a TMDB placeholder leaves.
+    await api(h.base, `/api/follows/${follow.id}/check`, { method: "POST", as: "A" });
+    await h.store.update(follow.id, (current) => {
+      current.episodes["1:1"] = { key: "1:1", videoId: "tt1:1:1", season: 1, episode: 1, firstSeenAt: new Date().toISOString(), dateUncertain: true };
+    });
+
+    const body = await (await api(h.base, "/api/follows/calendar?from=2024-03-01&to=2024-04-01", { as: "A" })).json() as { items: unknown[]; undated: Array<{ season: number; episode: number; dateUncertain?: boolean }> };
+    assert.deepEqual(body.items, []);
+    assert.deepEqual(body.undated.map((item) => [item.season, item.episode, item.dateUncertain]), [[1, 1, true]]);
   } finally { await h.close(); }
 });
 

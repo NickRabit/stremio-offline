@@ -387,6 +387,9 @@ export const ru: Catalog = {
   "following.stateReleased": "Вышло",
   "following.calendarEmpty": "В этом месяце ничего не выходит.",
   "following.activityEmpty": "Автоматические загрузки пока ничего не сделали.",
+
+  "following.dateUncertainHint": "Точная дата ещё не объявлена; это начало сезона.",
+  "following.dateUnknown": "Дата ещё не объявлена",
   "episodes.heading": "Эпизоды",
   "episodes.one": "Эпизод",
   "episodes.part": "Часть",

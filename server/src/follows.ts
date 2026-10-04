@@ -17,6 +17,10 @@ export interface FollowEpisode {
   episode: number;
   title?: string;
   released?: string;
+  /** Where the released instant came from, when a TMDB check decided it. */
+  releasedSource?: "addon" | "tmdb";
+  /** The date is not trustworthy: a placeholder, or a season-wide shared date with no TMDB answer. */
+  dateUncertain?: boolean;
   firstSeenAt: string;
   ambiguous?: boolean;
   download?: EpisodeDownload;
@@ -94,6 +98,13 @@ const FIRST_FAILURE_MS = 15 * 60_000;
 const SECOND_FAILURE_MS = 60 * 60_000;
 const LATER_FAILURE_MS = 6 * 60 * 60_000;
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+/** A season is worth verifying against TMDB while it has an undated episode or one that airs
+ *  soon; older seasons are settled. */
+const RECONCILE_HORIZON_MS = 60 * DAY_MS;
+/** How many of the newest such seasons one check reads, so a long-running series stays cheap. */
+const RECONCILE_SEASON_LIMIT = 3;
+/** Without TMDB, a shared date counts as a placeholder only while it is still ahead. */
+const PLACEHOLDER_WINDOW_MS = 14 * DAY_MS;
 
 const number = (value: unknown): number | undefined => {
   const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
@@ -147,6 +158,105 @@ export function normalizeFollowEpisodes(meta: MetaItem | null | undefined): Norm
   return out;
 }
 
+/** The UTC calendar day a value names, when the first ten characters are a real day. */
+const utcDay = (value: string | undefined): string | undefined => {
+  const raw = value?.slice(0, 10);
+  return raw && DATE_ONLY.test(raw) ? raw : undefined;
+};
+
+/** The releases a season repeats across two or more episodes: the placeholder a catalogue
+ *  uses when it does not know the real weekly dates and stamps the premiere on each. */
+const sharedReleases = (episodes: ReadonlyArray<FollowEpisode>): Map<number, Set<string>> => {
+  const counts = new Map<number, Map<string, number>>();
+  for (const episode of episodes) {
+    if (!episode.released) continue;
+    const bySeason = counts.get(episode.season) ?? new Map<string, number>();
+    bySeason.set(episode.released, (bySeason.get(episode.released) ?? 0) + 1);
+    counts.set(episode.season, bySeason);
+  }
+  const shared = new Map<number, Set<string>>();
+  for (const [season, byReleased] of counts) {
+    const repeated = new Set<string>();
+    for (const [released, count] of byReleased) if (count >= 2) repeated.add(released);
+    if (repeated.size) shared.set(season, repeated);
+  }
+  return shared;
+};
+
+/** The release dates one check trusts. TMDB wins where it names a day of its own; where it is
+ *  silent, a date several episodes of a season share is the placeholder and is dropped rather
+ *  than kept as an invented premiere. Without TMDB the shared date stays, but every episode
+ *  after the first in the season is marked uncertain. Pure, so a test can drive it directly. */
+export function reconcileReleaseDates(episodes: FollowEpisode[], tmdb: Map<string, string | null> | undefined, now: number): FollowEpisode[] {
+  const out = episodes.map((episode) => ({ ...episode }));
+  if (tmdb) {
+    const repeated = sharedReleases(out);
+    // TMDB was only asked about a few recent seasons; the others keep what the addon said.
+    const asked = new Set([...tmdb.keys()].map((key) => Number(key.split(":")[0])));
+    for (const episode of out) {
+      if (!asked.has(episode.season)) continue;
+      const tmdbDay = utcDay(tmdb.get(`${episode.season}:${episode.episode}`) ?? undefined);
+      if (tmdbDay) {
+        if (utcDay(episode.released) !== tmdbDay) {
+          episode.released = new Date(Date.parse(`${tmdbDay}T23:59:59.999Z`)).toISOString();
+          episode.releasedSource = "tmdb";
+        } else {
+          episode.releasedSource = "addon";
+        }
+        delete episode.dateUncertain;
+        continue;
+      }
+      if (episode.released && repeated.get(episode.season)?.has(episode.released)) {
+        delete episode.released;
+        delete episode.releasedSource;
+        episode.dateUncertain = true;
+      } else {
+        delete episode.releasedSource;
+        delete episode.dateUncertain;
+      }
+    }
+    return out;
+  }
+  const clusters = new Map<number, Map<string, FollowEpisode[]>>();
+  for (const episode of out) {
+    if (!episode.released || !(Date.parse(episode.released) > now - PLACEHOLDER_WINDOW_MS)) continue;
+    const byReleased = clusters.get(episode.season) ?? new Map<string, FollowEpisode[]>();
+    const list = byReleased.get(episode.released) ?? [];
+    list.push(episode);
+    byReleased.set(episode.released, list);
+    clusters.set(episode.season, byReleased);
+  }
+  for (const byReleased of clusters.values()) {
+    for (const list of byReleased.values()) {
+      if (list.length < 2) continue;
+      list.sort((a, b) => a.season - b.season || a.episode - b.episode);
+      for (const episode of list.slice(1)) episode.dateUncertain = true;
+    }
+  }
+  return out;
+}
+
+/** The seasons whose dates one check verifies against TMDB: any with an undated episode or one
+ *  that airs within the horizon, plus the season of an episode the download service is waiting
+ *  on. Only the newest few, so a long-running series never fans out into every season. */
+export function seasonsForReconcile(
+  episodes: ReadonlyArray<{ season: number; released?: string }>,
+  stored: Record<string, FollowEpisode> | undefined,
+  now: number,
+): number[] {
+  const floor = now - RECONCILE_HORIZON_MS;
+  const seasons = new Set<number>();
+  for (const episode of episodes) {
+    if (episode.season < 1) continue;
+    if (!episode.released || Date.parse(episode.released) > floor) seasons.add(episode.season);
+  }
+  for (const episode of Object.values(stored ?? {})) {
+    const state = episode.download?.state;
+    if (state === "waiting" || state === "attention") seasons.add(episode.season);
+  }
+  return [...seasons].sort((a, b) => b - a).slice(0, RECONCILE_SEASON_LIMIT);
+}
+
 /** 0..6 h from the id, so follows created together do not all check at the same minute. */
 export function followStaggerMs(id: string): number {
   let hash = 2166136261;
@@ -180,7 +290,9 @@ export function downloadEligibility(follow: Follow, episode: FollowEpisode, now:
   }
   if (episode.ambiguous) return "attention-ambiguous";
   // An unknown date is not proof the episode exists, so it is neither upcoming nor eligible.
-  if (!episode.released) return "attention-no-date";
+  // A date we know is only the season's placeholder is different: the next check usually
+  // brings the real one, so the episode waits rather than asking to be resolved.
+  if (!episode.released) return episode.dateUncertain ? "upcoming" : "attention-no-date";
   if (Date.parse(episode.released) > now) return "upcoming";
   return "eligible";
 }
@@ -282,7 +394,12 @@ export interface CalendarItem {
   reasonKey?: string;
   nextAttemptAt?: string;
   ambiguous?: boolean;
+  dateUncertain?: boolean;
+  releasedSource?: "addon" | "tmdb";
 }
+
+/** A calendar item that carries no date: the shape of a `CalendarItem` without `released`. */
+export type CalendarUndatedItem = Omit<CalendarItem, "released">;
 
 /** The episodes of the caller's follows that fall in `[from, to)`, ordered by when they air.
  *  An episode the service has touched carries its download state; the rest are simply past
@@ -305,6 +422,8 @@ export function calendarItems(follows: Follow[], from: number, to: number, now: 
         ...(download?.reasonKey ? { reasonKey: download.reasonKey } : {}),
         ...(download?.nextAttemptAt ? { nextAttemptAt: download.nextAttemptAt } : {}),
         ...(episode.ambiguous ? { ambiguous: true } : {}),
+        ...(episode.dateUncertain ? { dateUncertain: true } : {}),
+        ...(episode.releasedSource ? { releasedSource: episode.releasedSource } : {}),
       });
     }
   }
@@ -313,6 +432,33 @@ export function calendarItems(follows: Follow[], from: number, to: number, now: 
     || a.season - b.season
     || a.episode - b.episode);
   return items.slice(0, CALENDAR_LIMIT);
+}
+
+/** The uncertain episodes of the caller's follows that carry no date: there is no day to place
+ *  them on, but the calendar still lists them once under its grid. */
+export function undatedCalendarItems(follows: Follow[], limit: number): CalendarUndatedItem[] {
+  const items: CalendarUndatedItem[] = [];
+  for (const follow of follows) {
+    for (const episode of Object.values(follow.episodes)) {
+      if (episode.released || !episode.dateUncertain) continue;
+      const download = episode.download;
+      items.push({
+        followId: follow.id, type: follow.type, metaId: follow.metaId, name: follow.name,
+        ...(follow.poster ? { poster: follow.poster } : {}),
+        videoId: episode.videoId, season: episode.season, episode: episode.episode,
+        ...(episode.title ? { title: episode.title } : {}),
+        state: download ? download.state : "upcoming",
+        ...(download?.reasonKey ? { reasonKey: download.reasonKey } : {}),
+        ...(download?.nextAttemptAt ? { nextAttemptAt: download.nextAttemptAt } : {}),
+        ...(episode.ambiguous ? { ambiguous: true } : {}),
+        dateUncertain: true,
+      });
+    }
+  }
+  items.sort((a, b) => a.name.localeCompare(b.name)
+    || a.season - b.season
+    || a.episode - b.episode);
+  return items.slice(0, Math.max(0, limit));
 }
 
 export interface ActivityItem {
@@ -483,12 +629,19 @@ export class FollowStore {
     if ("episodes" in result) {
       for (const episode of result.episodes) {
         const existing = follow.episodes[episode.key];
-        // A key already seen keeps the moment it was first seen; everything else the
-        // provider now says about it wins, so a title or a date can be corrected.
-        follow.episodes[episode.key] = existing
-          ? { ...existing, ...episode, ambiguous: episode.ambiguous, firstSeenAt: existing.firstSeenAt }
-          : episode;
-        if (!follow.episodes[episode.key].ambiguous) delete follow.episodes[episode.key].ambiguous;
+        if (!existing) {
+          follow.episodes[episode.key] = episode;
+          continue;
+        }
+        // A key already seen keeps the moment it was first seen and the download it carries;
+        // everything else the provider now says about it wins. A field the new check leaves out
+        // is cleared rather than inherited, so a corrected date or a dropped flag does not linger.
+        const merged: FollowEpisode = { ...existing, ...episode, firstSeenAt: existing.firstSeenAt };
+        if (episode.released === undefined) delete merged.released;
+        if (episode.releasedSource === undefined) delete merged.releasedSource;
+        if (episode.dateUncertain === undefined) delete merged.dateUncertain;
+        if (!episode.ambiguous) delete merged.ambiguous;
+        follow.episodes[episode.key] = merged;
       }
       follow.lastCheckedAt = at;
       follow.lastSuccessfulCheckAt = at;
@@ -553,6 +706,9 @@ export interface FollowDeps {
   owner: (userId: string) => { id: string; role: "admin" | "user"; disabled?: boolean } | undefined;
   /** Metadata as the owner may see it, in the owner's language, bypassing the cache. */
   meta: (owner: Viewer, type: string, metaId: string) => Promise<MetaItem | null>;
+  /** Per-episode TMDB air dates for the seasons worth checking, keyed `${season}:${episode}`.
+   *  Undefined when TMDB is not configured or does not know the series. */
+  airDates?: (type: string, metaId: string, seasons: number[], owner: Viewer) => Promise<Map<string, string | null> | undefined>;
   /** The download queue the followed series queue into. */
   queue: FollowQueue;
   /** The owner may queue into this selection's library right now. */
@@ -1087,9 +1243,18 @@ export class FollowService {
     try {
       const meta = await this.deps.meta({ id: owner.id, role: owner.role }, follow.type, follow.metaId);
       if (!meta) throw new Error("no metadata");
-      const at = new Date(this.deps.now()).toISOString();
+      const now = this.deps.now();
+      const at = new Date(now).toISOString();
       const episodes: FollowEpisode[] = normalizeFollowEpisodes(meta).map((episode) => ({ ...episode, firstSeenAt: at }));
-      result = { episodes, now: this.deps.now() };
+      let tmdb: Map<string, string | null> | undefined;
+      if (this.deps.airDates) {
+        const seasons = seasonsForReconcile(episodes, this.deps.store.get(followId)?.episodes, now);
+        if (seasons.length) {
+          try { tmdb = await this.deps.airDates(follow.type, follow.metaId, seasons, { id: owner.id, role: owner.role }); }
+          catch (error) { log("WARN", "TMDB air dates could not be read", { follow: followId, error: error instanceof Error ? error.message : String(error) }); }
+        }
+      }
+      result = { episodes: reconcileReleaseDates(episodes, tmdb, now), now };
     } catch {
       result = { errorKey: "err.followMetaUnavailable", now: this.deps.now() };
       log("WARN", "A followed series could not be checked", { follow: followId, reason });

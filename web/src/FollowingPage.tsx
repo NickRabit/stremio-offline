@@ -4,7 +4,7 @@ import { api, describeError } from "./api";
 import { FollowDialog } from "./FollowDialog";
 import { Heading } from "./settings-ui";
 import { localeTag, serverText, t, useI18n } from "./i18n";
-import type { ActivityItem, Addon, CalendarEpisodeState, CalendarItem, FollowView, LibraryView, NewEpisode } from "./types";
+import type { ActivityItem, Addon, CalendarEpisodeState, CalendarItem, UndatedCalendarItem, FollowView, LibraryView, NewEpisode } from "./types";
 
 interface FollowingPageProps {
   follows: FollowView[];
@@ -127,6 +127,7 @@ function CalendarTab({ onOpenSeries }: { onOpenSeries: FollowingPageProps["onOpe
   useI18n();
   const [cursor, setCursor] = useState(() => new Date());
   const [items, setItems] = useState<CalendarItem[]>([]);
+  const [undated, setUndated] = useState<UndatedCalendarItem[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const [wide, setWide] = useState(() => typeof window !== "undefined" && typeof window.matchMedia === "function" ? window.matchMedia("(min-width: 900px)").matches : true);
@@ -155,8 +156,8 @@ function CalendarTab({ onOpenSeries }: { onOpenSeries: FollowingPageProps["onOpe
     // The server windows in UTC and the days here are local, so a day either side keeps an
     // episode near midnight from falling between the two; the buckets drop what is off-screen.
     api.followCalendar(rangeFrom - DAY_MS, rangeTo + DAY_MS)
-      .then((rows) => { if (!stale) { setItems(rows); setLoaded(true); } })
-      .catch(() => { if (!stale) { setItems([]); setLoaded(true); } });
+      .then((rows) => { if (!stale) { setItems(rows.items); setUndated(rows.undated); setLoaded(true); } })
+      .catch(() => { if (!stale) { setItems([]); setUndated([]); setLoaded(true); } });
     return () => { stale = true; };
   }, [rangeFrom, rangeTo]);
 
@@ -170,7 +171,8 @@ function CalendarTab({ onOpenSeries }: { onOpenSeries: FollowingPageProps["onOpe
     return map;
   }, [items]);
 
-  const openOf = (item: CalendarItem) => onOpenSeries({ type: item.type, id: item.metaId, name: item.name, poster: item.poster });
+  const openOf = (item: { type: string; metaId: string; name: string; poster?: string }) => onOpenSeries({ type: item.type, id: item.metaId, name: item.name, poster: item.poster });
+  const uncertain = (item: { dateUncertain?: boolean }) => item.dateUncertain ? t("following.dateUncertainHint") : undefined;
   const monthLabel = new Intl.DateTimeFormat(localeTag(), { month: "long", year: "numeric" }).format(cursor);
   const today = dayKey(new Date());
   const tomorrow = dayKey(addDays(new Date(), 1));
@@ -199,7 +201,7 @@ function CalendarTab({ onOpenSeries }: { onOpenSeries: FollowingPageProps["onOpe
             return <div key={key} className={`following-day${date.getMonth() !== cursor.getMonth() ? " outside" : ""}${key === today ? " today" : ""}`}>
               <span className="following-day-num">{date.getDate()}</span>
               <div className="following-day-items">
-                {shown.map((item) => <button type="button" key={`${item.followId}:${item.season}:${item.episode}`} className={`following-cal-item cal-${item.state}`} onClick={() => openOf(item)}>{`${item.name} ${episodeCode(item.season, item.episode)}`}</button>)}
+                {shown.map((item) => <button type="button" key={`${item.followId}:${item.season}:${item.episode}`} className={`following-cal-item cal-${item.state}`} title={uncertain(item)} onClick={() => openOf(item)}>{`${item.dateUncertain ? "≈ " : ""}${item.name} ${episodeCode(item.season, item.episode)}`}</button>)}
                 {!open && dayItems.length > 3 && <button type="button" className="following-cal-more" onClick={() => setExpanded((current) => new Set(current).add(key))}>{t("following.more", { count: dayItems.length - 3 })}</button>}
               </div>
             </div>;
@@ -208,14 +210,22 @@ function CalendarTab({ onOpenSeries }: { onOpenSeries: FollowingPageProps["onOpe
       : <div className="following-agenda">
           {[...byDay.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([key, dayItems]) => <div className="following-agenda-day" key={key}>
             <h4>{key === today ? t("following.todayLabel") : key === tomorrow ? t("following.tomorrowLabel") : new Intl.DateTimeFormat(localeTag(), { weekday: "long", day: "numeric", month: "long" }).format(new Date(dayItems[0].released))}</h4>
-            {dayItems.map((item) => <button type="button" className="following-agenda-row" key={`${item.followId}:${item.season}:${item.episode}`} onClick={() => openOf(item)}>
+            {dayItems.map((item) => <button type="button" className="following-agenda-row" key={`${item.followId}:${item.season}:${item.episode}`} title={uncertain(item)} onClick={() => openOf(item)}>
               <span className="following-agenda-art">{item.poster ? <img src={item.poster} alt="" loading="lazy"/> : <Film/>}</span>
-              <span className="following-agenda-copy"><strong>{item.name}</strong><small>{`${episodeCode(item.season, item.episode)}${item.title ? ` · ${item.title}` : ""}`}</small></span>
+              <span className="following-agenda-copy"><strong>{`${item.dateUncertain ? "≈ " : ""}${item.name}`}</strong><small>{`${episodeCode(item.season, item.episode)}${item.title ? ` · ${item.title}` : ""}`}</small></span>
               <span className={`following-state cal-${item.state}`}>{stateLabel(item.state)}</span>
             </button>)}
           </div>)}
         </div>}
-    {loaded && !items.length && <p className="following-empty">{t("following.calendarEmpty")}</p>}
+    {undated.length > 0 && <div className="following-undated">
+      <h4>{t("following.dateUnknown")}</h4>
+      {undated.map((item) => <button type="button" className="following-agenda-row" key={`${item.followId}:${item.season}:${item.episode}`} title={uncertain(item)} onClick={() => openOf(item)}>
+        <span className="following-agenda-art">{item.poster ? <img src={item.poster} alt="" loading="lazy"/> : <Film/>}</span>
+        <span className="following-agenda-copy"><strong>{`≈ ${item.name}`}</strong><small>{`${episodeCode(item.season, item.episode)}${item.title ? ` · ${item.title}` : ""}`}</small></span>
+        <span className={`following-state cal-${item.state}`}>{stateLabel(item.state)}</span>
+      </button>)}
+    </div>}
+    {loaded && !items.length && !undated.length && <p className="following-empty">{t("following.calendarEmpty")}</p>}
   </>;
 }
 

@@ -76,6 +76,15 @@ describe("FollowDialog", () => {
     expect(text).toContain("1 queued");
   });
 
+  it("shows an uncertain date with the marker and the hint", async () => {
+    await render(follow, [
+      { key: "1:1", season: 1, episode: 1, title: "Maybe", released: "2024-01-01", eligibility: "upcoming", dateUncertain: true },
+    ]);
+    const small = rowFor("S01E01")!.querySelector("small")!;
+    expect(small.textContent).toContain("≈");
+    expect(small.getAttribute("title")).toBe("The exact date is not announced yet; this is the season's start.");
+  });
+
   it("pauses the follow as soon as the switch changes", async () => {
     await render();
     const pause = host.querySelector<HTMLInputElement>(".follow-pause input[type=checkbox]")!;

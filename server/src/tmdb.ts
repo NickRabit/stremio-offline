@@ -20,6 +20,9 @@ const TIMEOUT_MS = 12_000;
  *  than a detail lookup whose answer nobody is waiting on. */
 const SEARCH_TIMEOUT_MS = 5_000;
 const ID_CACHE_LIMIT = 500;
+const SEASON_CACHE_LIMIT = 500;
+/** One season's per-episode air dates, read once per catalogue check. */
+const SEASON_CACHE_TTL_MS = 6 * 60 * 60_000;
 
 /** How many pictures a stored gallery may hold. The artwork store owns the same cap. */
 export const TMDB_GALLERY_LIMIT = 18;
@@ -40,8 +43,14 @@ export function tmdbImage(path: string | null | undefined, size: TmdbImageSize):
 /** IMDb id against the TMDB id it resolves to, so a title is looked up through /find once. */
 const idCache = new Map<string, number | null>();
 
-/** Test seam only: forgets the imdb -> tmdb id map. */
-export function clearTmdbCache(): void { idCache.clear(); }
+interface SeasonCacheEntry { at: number; episodes: Map<string, string | null> }
+
+/** `${tmdbId}:${season}` against the per-episode `air_date`s it answered, so a check that
+ *  runs every few minutes does not ask TMDB again for a season it just read. */
+const seasonCache = new Map<string, SeasonCacheEntry>();
+
+/** Test seam only: forgets the imdb -> tmdb id map and the cached season air dates. */
+export function clearTmdbCache(): void { idCache.clear(); seasonCache.clear(); }
 
 /** A refused title search turns into a wait rather than a retry per title: the scan
  *  asks about hundreds of them, and a 429 answered hundreds of times is what got it
@@ -255,6 +264,61 @@ export async function tmdbGallery(
   take(body.posters, "poster", "w500");
   take(body.backdrops, "background", "w1280");
   take(body.logos, "logo", "w500");
+  return out;
+}
+
+interface TmdbSeasonEpisode { episode_number?: number; air_date?: string | null }
+interface TmdbSeason { episodes?: TmdbSeasonEpisode[] }
+
+/** The per-episode `air_date`s of the named seasons, keyed `${season}:${episode}`. A value is
+ *  the raw date or null when TMDB carries the episode without one; a season that cannot be
+ *  read is simply absent, so the caller keeps whatever the addon said. */
+export async function tmdbSeasonAirDates(
+  seriesId: string,
+  seasons: number[],
+  config: TmdbConfig,
+  fetchImpl: FetchLike = guardedFetch,
+): Promise<Map<string, string | null>> {
+  const out = new Map<string, string | null>();
+  const wanted = [...new Set(seasons)].filter((season) => Number.isInteger(season) && season >= 1);
+  if (!wanted.length) return out;
+  const tmdbId = await resolveId("series", seriesId, config, fetchImpl);
+  if (tmdbId == null) return out;
+  await Promise.all(wanted.map(async (season) => {
+    const key = `${tmdbId}:${season}`;
+    const cached = seasonCache.get(key);
+    let episodes: Map<string, string | null>;
+    if (cached && Date.now() - cached.at < SEASON_CACHE_TTL_MS) {
+      episodes = cached.episodes;
+    } else {
+      let response: Response;
+      try {
+        response = await request(`/tv/${tmdbId}/season/${season}`, { api_key: config.apiKey, language: config.language }, fetchImpl);
+      } catch (error) {
+        log("WARN", "TMDB season lookup failed", { operation: "season", season, reason: reasonOf(error, config.apiKey) });
+        return;
+      }
+      if (!response.ok) {
+        log("WARN", "TMDB season lookup failed", { operation: "season", season, status: response.status });
+        return;
+      }
+      let body: TmdbSeason;
+      try { body = await response.json() as TmdbSeason; }
+      catch (error) {
+        log("WARN", "TMDB answered with malformed JSON", { operation: "season", season, reason: reasonOf(error, config.apiKey) });
+        return;
+      }
+      episodes = new Map();
+      for (const row of body.episodes ?? []) {
+        const episode = row.episode_number;
+        if (typeof episode !== "number" || !Number.isInteger(episode) || episode < 1) continue;
+        episodes.set(`${season}:${episode}`, typeof row.air_date === "string" && row.air_date.trim() ? row.air_date.trim() : null);
+      }
+      if (seasonCache.size > SEASON_CACHE_LIMIT) seasonCache.clear();
+      seasonCache.set(key, { at: Date.now(), episodes });
+    }
+    for (const [episodeKey, airDate] of episodes) out.set(episodeKey, airDate);
+  }));
   return out;
 }
 

@@ -412,6 +412,9 @@ export const cs: Catalog = {
   "following.calendarEmpty": "Tento měsíc nic nevychází.",
   "following.activityEmpty": "Automatické stahování zatím nic neudělalo.",
 
+  "following.dateUncertainHint": "Přesné datum zatím není oznámené, jde o začátek řady.",
+  "following.dateUnknown": "Datum zatím není oznámené",
+
   // Epizody.
   "episodes.heading": "Epizody",
   "episodes.one": "Epizoda",
