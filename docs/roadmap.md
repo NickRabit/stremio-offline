@@ -70,10 +70,12 @@ Shipped in `main`; implementation details live in the linked guides.
   tallest rendition, and a conversion that falls behind playback says whether
   the source or FFmpeg is waiting. AirPlay is disabled.
   [Playback](playback.md), [Troubleshooting](troubleshooting.md).
-- **Following**: follow a series for its new episodes in the Library, with
+- **Following**: follow a series or a film for its releases, on a Following
+  page with an overview, a release calendar and download activity, with
   opt-in automatic downloads that queue each episode once, retry a missing
-  source on a ladder and treat a removed job as a skip. Lazy jobs fall back to
-  a torrent through Real-Debrid. [Downloads](downloads.md#following-a-series),
+  source on a ladder and treat a removed job as a skip. Episode dates are
+  corrected from TMDB. Lazy jobs fall back to a torrent through Real-Debrid.
+  [Downloads](downloads.md#following-series-and-films),
   [design](follow-show-analysis.md).
 - **Continue watching**: series grouping, the next available catalogue episode
   and per-library/addon visibility. [Libraries](libraries.md#the-library-row).
@@ -165,16 +167,12 @@ episodes are an additive row, not a reason to block the home screen. See the
 - Bulk rename by pattern. Deliberately out of the first multi-library release;
   the operations queue is shaped to take it without a migration.
 
-### Release calendar
+### Following follow-ups
 
-Show when followed episodes and watchlist films come out: upcoming episodes
-from the dates following already stores, films with TMDB's digital release
-date when a key is set (otherwise the catalogue's date, marked approximate),
-and whether each is set to download, waiting or downloaded. Optionally an
-authenticated, revocable `.ics` feed per account. Follow-ups to following:
-a grace period that waits for preferred audio before taking the fallback,
-downloading N episodes ahead of viewing, and opt-in retention; the
-[design analysis](follow-show-analysis.md) covers them.
+A grace period that waits for preferred audio before taking the fallback,
+downloading N episodes ahead of viewing, opt-in retention, and an
+authenticated, revocable `.ics` feed of the calendar per account; the
+[design analysis](follow-show-analysis.md) covers the first three.
 
 ### Queue robustness
 

@@ -1,7 +1,7 @@
 # Automatic downloads for followed series
 
 Status: implemented in 0.5.7 ([#297](https://github.com/NickRabit/stremio-offline/pull/297));
-user-facing behavior is in [Downloads](downloads.md#following-a-series). This
+user-facing behavior is in [Downloads](downloads.md#following-series-and-films). This
 document stays as the design record. Research and review date: 2026-10-03.
 
 This document refines the [Follow show delivery contract](roadmap-delivery-spec.md#follow-show).
