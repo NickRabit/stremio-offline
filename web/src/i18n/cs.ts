@@ -165,6 +165,7 @@ export const cs: Catalog = {
   "nav.addons": "Doplňky",
   "nav.settings": "Nastavení",
   "nav.stats": "Statistiky",
+  "nav.following": "Sledované",
 
   // Přehrávač.
   "player.settings": "Nastavení přehrávání",
@@ -391,6 +392,25 @@ export const cs: Catalog = {
   "follow.noNewEpisodes": "Ve sledovaných seriálech nejsou žádné nové díly.",
   "follow.listTitle": "Sledované seriály",
   "follow.autoJob": "Automaticky",
+  "following.eyebrow": "Sledované seriály",
+  "following.title": "Sledované",
+  "following.tabOverview": "Přehled",
+  "following.tabCalendar": "Kalendář",
+  "following.tabActivity": "Aktivita",
+  "following.attentionCount": "{count} k vyřešení",
+  "following.emptyTitle": "Zatím nic nesledujete",
+  "following.emptyText": "Otevřete seriál a stiskněte Sledovat, nové díly pak uvidíte tady.",
+  "following.today": "Dnes",
+  "following.prevMonth": "Předchozí měsíc",
+  "following.nextMonth": "Další měsíc",
+  "following.more": "+{count}",
+  "following.todayLabel": "Dnes",
+  "following.tomorrowLabel": "Zítra",
+  "following.legend": "Legenda",
+  "following.stateUpcoming": "Chystá se",
+  "following.stateReleased": "Vyšlo",
+  "following.calendarEmpty": "Tento měsíc nic nevychází.",
+  "following.activityEmpty": "Automatické stahování zatím nic neudělalo.",
 
   // Epizody.
   "episodes.heading": "Epizody",

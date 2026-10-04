@@ -169,6 +169,7 @@ export const en = {
   "nav.addons": "Addons",
   "nav.settings": "Settings",
   "nav.stats": "Statistics",
+  "nav.following": "Following",
 
   // Player overlay.
   "player.settings": "Playback settings",
@@ -395,6 +396,25 @@ export const en = {
   "follow.noNewEpisodes": "No new episodes of your followed series.",
   "follow.listTitle": "Followed series",
   "follow.autoJob": "Automatic",
+  "following.eyebrow": "Series you follow",
+  "following.title": "Following",
+  "following.tabOverview": "Overview",
+  "following.tabCalendar": "Calendar",
+  "following.tabActivity": "Activity",
+  "following.attentionCount": "{count} to resolve",
+  "following.emptyTitle": "You do not follow anything yet",
+  "following.emptyText": "Open a series and press Follow to see its new episodes here.",
+  "following.today": "Today",
+  "following.prevMonth": "Previous month",
+  "following.nextMonth": "Next month",
+  "following.more": "+{count}",
+  "following.todayLabel": "Today",
+  "following.tomorrowLabel": "Tomorrow",
+  "following.legend": "Legend",
+  "following.stateUpcoming": "Upcoming",
+  "following.stateReleased": "Released",
+  "following.calendarEmpty": "Nothing comes out this month.",
+  "following.activityEmpty": "Automatic downloads have not done anything yet.",
 
   // Episodes.
   "episodes.heading": "Episodes",

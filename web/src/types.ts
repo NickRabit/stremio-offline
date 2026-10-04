@@ -344,6 +344,22 @@ export interface WatchlistEntry { key: string; type: string; id: string; name: s
 /** One episode of a followed series as the follow route names it: the slot on either side of now. */
 export interface FollowEpisodeView { season: number; episode: number; title?: string; released?: string }
 export type FollowStartMode = "new" | "from";
+/** The wizard choices carried over from the last follow, as `GET /api/follows/defaults` answers them. */
+export interface FollowDefaults {
+  mode: "notify" | "download";
+  startMode?: FollowStartMode;
+  selection?: {
+    addonKeys: string[];
+    sourceStrategy: DownloadSourceStrategy;
+    audioLanguage: string;
+    fallbackAudioLanguage?: string;
+    audioMode: AudioMode;
+    subtitleMode: SubtitleMode;
+    subtitleLanguage?: string;
+    fallbackSubtitleLanguage?: string;
+  };
+  target?: { libraryId: string; subfolder?: string; layout: DownloadLayout };
+}
 /** The rule a follow queues new episodes by. Mirrors `FollowAutoDownload` on the server. */
 export interface FollowAutoDownload {
   enabledAt: string;
@@ -389,6 +405,19 @@ export interface FollowView {
 export interface NewEpisode {
   followId: string; type: string; metaId: string; name: string; poster?: string;
   videoId: string; season: number; episode: number; title?: string; released: string;
+}
+/** One episode in the calendar window; the state adds the released/upcoming verdict to the queue's own. */
+export type CalendarEpisodeState = "upcoming" | "released" | FollowDownloadState;
+export interface CalendarItem {
+  followId: string; type: string; metaId: string; name: string; poster?: string;
+  videoId: string; season: number; episode: number; title?: string; released: string;
+  state: CalendarEpisodeState; reasonKey?: string; nextAttemptAt?: string; ambiguous?: boolean;
+}
+/** One episode the download service has touched, as `GET /api/follows/activity` answers it. */
+export interface ActivityItem {
+  followId: string; type: string; metaId: string; name: string; poster?: string;
+  season: number; episode: number; title?: string; state: FollowDownloadState;
+  reasonKey?: string; nextAttemptAt?: string; jobId?: string; updatedAt: string;
 }
 /** How many episodes a proposed start rule would queue right now. */
 export interface FollowPreview { count: number; episodes: Array<{ key: string; season: number; episode: number; title?: string }> }

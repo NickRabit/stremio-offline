@@ -77,12 +77,13 @@ describe("SeriesDownloadDialog", () => {
     await act(async () => { await Promise.resolve(); });
     expect(host.querySelector<HTMLInputElement>('input[name="follow-mode"][value="notify"]')!.checked).toBe(true);
     expect(host.querySelector('input[name="source-strategy"]'), "download settings stay hidden for notify-only").toBeNull();
-    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/follows")), "nothing is saved before confirming").toBe(false);
+    const writes = fetchMock.mock.calls.filter(([url, init]) => String(url).includes("/api/follows") && (init as RequestInit | undefined)?.method !== undefined);
+    expect(writes, "nothing is saved before confirming").toEqual([]);
 
     const follow = [...host.querySelectorAll("button")].find((button) => button.textContent === "Follow")!;
     await act(async () => { follow.click(); await Promise.resolve(); await Promise.resolve(); });
     const calls = fetchMock.mock.calls.filter(([url]) => String(url).includes("/api/follows"));
-    expect(calls.map(([, init]) => (init as RequestInit | undefined)?.method)).toEqual(["POST"]);
+    expect(calls.map(([, init]) => (init as RequestInit | undefined)?.method ?? "GET")).toEqual(["GET", "POST", "PUT"]);
     expect(onFollowed).toHaveBeenCalledWith(expect.objectContaining({ id: "f9" }));
   });
 
@@ -101,6 +102,47 @@ describe("SeriesDownloadDialog", () => {
     const confirm = [...host.querySelectorAll("button")].find((button) => button.textContent === "Follow and download")!;
     await act(async () => { confirm.click(); await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); });
     const calls = fetchMock.mock.calls.filter(([url]) => String(url).includes("/api/follows"));
-    expect(calls.map(([url, init]) => `${(init as RequestInit | undefined)?.method} ${String(url)}`)).toEqual(["POST /api/follows", "PATCH /api/follows/f9"]);
+    expect(calls.map(([url, init]) => `${(init as RequestInit | undefined)?.method ?? "GET"} ${String(url)}`)).toEqual([
+      "GET /api/follows/defaults", "POST /api/follows", "PATCH /api/follows/f9", "PUT /api/follows/defaults",
+    ]);
+    const put = fetchMock.mock.calls.find(([, init]) => (init as RequestInit | undefined)?.method === "PUT")!;
+    expect(JSON.parse(String((put[1] as RequestInit).body))).toMatchObject({ mode: "download", startMode: "new" });
+  });
+
+  it("prefills a new follow from the stored defaults", async () => {
+    fetchMock.mockImplementation(async (url: string) => String(url).includes("/api/follows/defaults")
+      ? new Response(JSON.stringify({ defaults: { mode: "download", startMode: "from", selection: { addonKeys: ["second"], sourceStrategy: "priority", audioLanguage: "en", audioMode: "preferred", subtitleMode: "off" } } }), { status: 200, headers: { "content-type": "application/json" } })
+      : new Response(JSON.stringify([{ key: "first", name: "First" }, { key: "second", name: "Second" }]), { status: 200, headers: { "content-type": "application/json" } }));
+    await act(async () => { root.render(<SeriesDownloadDialog type="series" label="Show" title="Show" libraries={[]} addons={[]} episodes={[{ id: "tt1:1:1", season: 1, episode: 1 }]} audioLanguage="en" subtitleLanguage="en" languages={[{ code: "en", name: "English" }]} follow={{ create: { metaId: "tt1", name: "Show" }, onFollowed: () => undefined }} onClose={() => undefined}/>); });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); });
+    expect(host.querySelector<HTMLInputElement>('input[name="follow-mode"][value="download"]')!.checked).toBe(true);
+    expect(host.querySelector<HTMLInputElement>('input[name="follow-start"][value="from"]')!.checked).toBe(true);
+    expect(host.querySelector<HTMLInputElement>('input[name="source-strategy"][value="priority"]')!.checked).toBe(true);
+    const sources = [...host.querySelectorAll<HTMLElement>(".bulk-sources label")];
+    expect(sources.find((label) => label.textContent?.includes("Second"))!.querySelector("input")!.checked).toBe(true);
+    expect(sources.find((label) => label.textContent?.includes("First"))!.querySelector("input")!.checked).toBe(false);
+  });
+
+  it("keeps a control the user changed before the defaults arrive", async () => {
+    let release: (body: unknown) => void = () => undefined;
+    const pending = new Promise<Response>((resolve) => { release = (body) => resolve(new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } })); });
+    fetchMock.mockImplementation(async (url: string) => String(url).includes("/api/follows/defaults")
+      ? pending
+      : new Response(JSON.stringify([{ key: "first", name: "First" }]), { status: 200, headers: { "content-type": "application/json" } }));
+    await act(async () => { root.render(<SeriesDownloadDialog type="series" label="Show" title="Show" libraries={[]} addons={[]} episodes={[{ id: "tt1:1:1", season: 1, episode: 1 }]} audioLanguage="cs" subtitleLanguage="cs" languages={[{ code: "cs", name: "Čeština" }]} follow={{ create: { metaId: "tt1", name: "Show" }, onFollowed: () => undefined }} onClose={() => undefined}/>); });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    await act(async () => { host.querySelector<HTMLInputElement>('input[name="follow-mode"][value="download"]')!.click(); });
+    await act(async () => { release({ defaults: { mode: "notify" } }); await Promise.resolve(); await Promise.resolve(); });
+    expect(host.querySelector<HTMLInputElement>('input[name="follow-mode"][value="download"]')!.checked).toBe(true);
+  });
+
+  it("neither reads nor writes defaults while editing a follow", async () => {
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify([{ key: "first", name: "First" }]), { status: 200, headers: { "content-type": "application/json" } }));
+    await act(async () => { root.render(<SeriesDownloadDialog type="series" label="Show" title="Show" libraries={[]} addons={[]} episodes={[{ id: "tt1:1:1", season: 1, episode: 1 }]} audioLanguage="cs" subtitleLanguage="cs" languages={[{ code: "cs", name: "Čeština" }]} follow={{ followId: "f1" }} onClose={() => undefined}/>); });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/follows/defaults"))).toBe(false);
+    const save = [...host.querySelectorAll("button")].find((button) => button.textContent === "Turn on")!;
+    await act(async () => { save.click(); await Promise.resolve(); await Promise.resolve(); });
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/follows/defaults"))).toBe(false);
   });
 });

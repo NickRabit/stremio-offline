@@ -1,10 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ArrowDown, ArrowUp, Bell, CalendarClock, FolderOpen, Languages, ListFilter, Subtitles, X } from "lucide-react";
 import { api, describeError } from "./api";
 import { languageName, t, useI18n } from "./i18n";
 import { SaveTargetFields } from "./SaveTargetFields";
 import type { SaveTarget } from "./save-target";
-import type { Addon, AudioMode, DownloadSelection, DownloadSourceStrategy, FollowAutoDownload, FollowPreview, FollowStartMode, FollowView, LibraryView, SubtitleMode } from "./types";
+import type { Addon, AudioMode, DownloadSelection, DownloadSourceStrategy, FollowAutoDownload, FollowDefaults, FollowPreview, FollowStartMode, FollowView, LibraryView, SubtitleMode } from "./types";
 
 interface Episode { id: string; season?: number; episode?: number; title?: string; released?: string }
 
@@ -68,6 +68,9 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
   const downloading = !creating || followMode === "download";
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  /** Set by any control the user changes: a defaults answer that lands later is then dropped. */
+  const touched = useRef(false);
+  const [defaults, setDefaults] = useState<FollowDefaults | null>(null);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => { if (event.key === "Escape" && !busy) onClose(); };
@@ -87,6 +90,37 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
     }).catch((value) => { if (!cancelled) setError(describeError(value)); });
     return () => { cancelled = true; };
   }, [type, episodes, initial]);
+
+  // Create mode opens with the choices of the previous follow. The source list decides which
+  // addon keys are still usable, so the answer waits for it before it is applied.
+  useEffect(() => {
+    if (!creating) return;
+    let stale = false;
+    api.followDefaults()
+      .then((answer) => { if (!stale && answer && !touched.current) setDefaults(answer); })
+      .catch(() => undefined);
+    return () => { stale = true; };
+  }, [creating]);
+
+  useEffect(() => {
+    if (!defaults || touched.current || !sources.length) return;
+    setDefaults(null);
+    setFollowMode(defaults.mode);
+    if (defaults.mode !== "download") return;
+    if (defaults.startMode) setStartMode(defaults.startMode);
+    if (defaults.selection) {
+      const keys = defaults.selection.addonKeys.filter((key) => sources.some((item) => item.key === key));
+      if (keys.length) setChosen(keys);
+      setSourceStrategy(defaults.selection.sourceStrategy);
+      setAudio(defaults.selection.audioLanguage);
+      setAudioFallback(defaults.selection.fallbackAudioLanguage ?? (defaults.selection.audioLanguage === "en" ? "" : "en"));
+      setAudioMode(defaults.selection.audioMode);
+      setSubtitleMode(defaults.selection.subtitleMode);
+      if (defaults.selection.subtitleLanguage) setSubtitle(defaults.selection.subtitleLanguage);
+      setSubtitleFallback(defaults.selection.fallbackSubtitleLanguage ?? (defaults.selection.subtitleLanguage !== "en" ? "en" : ""));
+    }
+    if (defaults.target) setTarget({ libraryId: defaults.target.libraryId, subfolder: defaults.target.subfolder ?? "", layout: defaults.target.layout ?? "structured" });
+  }, [defaults, sources]);
 
   useEffect(() => {
     if (!follow) return;
@@ -134,6 +168,7 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
     try {
       if (follow?.create && followMode === "notify") {
         follow.onFollowed?.(await api.follow({ type, id: follow.create.metaId, name: follow.create.name, poster: follow.create.poster }));
+        void api.saveFollowDefaults({ mode: "notify" }).catch(() => undefined);
         onClose();
         return;
       }
@@ -158,12 +193,24 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
       } else if (onSubmit) {
         await onSubmit(selection, target ?? undefined);
       }
+      // Remembering the choices is a courtesy; a refusal here must never block the follow.
+      if (creating && followMode === "download") void api.saveFollowDefaults({
+        mode: "download", startMode,
+        selection: {
+          addonKeys: selection.addonKeys, sourceStrategy: selection.sourceStrategy, audioLanguage: selection.audioLanguage,
+          ...(selection.fallbackAudioLanguage ? { fallbackAudioLanguage: selection.fallbackAudioLanguage } : {}),
+          audioMode, subtitleMode: selection.subtitleMode,
+          ...(selection.subtitleLanguage ? { subtitleLanguage: selection.subtitleLanguage } : {}),
+          ...(selection.fallbackSubtitleLanguage ? { fallbackSubtitleLanguage: selection.fallbackSubtitleLanguage } : {}),
+        },
+        ...(target ? { target } : {}),
+      }).catch(() => undefined);
       onClose();
     } catch (value) { setError(describeError(value)); }
     finally { setBusy(false); }
   };
 
-  return <div className="identify-overlay" role="dialog" aria-modal="true" aria-labelledby="bulk-dialog-title" onClick={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }}>
+  return <div className="identify-overlay" role="dialog" aria-modal="true" aria-labelledby="bulk-dialog-title" onChangeCapture={() => { touched.current = true; }} onClick={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }}>
     <div className="panel identify-card dialog-split bulk-card">
       <div className="identify-head bulk-head"><div><span className="bulk-eyebrow">{label}</span><h2 id="bulk-dialog-title">{creating ? t("follow.createTitle") : follow ? t("follow.setupTitle") : t("bulk.title")}</h2></div><button className="icon-button" aria-label={t("common.cancel")} disabled={busy} onClick={onClose}><X/></button></div>
       <div className="dialog-body bulk-body">

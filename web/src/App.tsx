@@ -19,7 +19,7 @@ import type { SaveTarget } from "./save-target";
 import { SuggestionsDialog } from "./SuggestionsDialog";
 import { SeriesDownloadDialog } from "./SeriesDownloadDialog";
 import { FollowDialog, toEpisodes } from "./FollowDialog";
-import { FollowListDialog } from "./FollowListDialog";
+import { FollowingPage } from "./FollowingPage";
 import { NewEpisodesRow } from "./NewEpisodesRow";
 import { StatsPanel } from "./Stats";
 import { copyText } from "./clipboard";
@@ -64,7 +64,7 @@ const legacyLibraryView = (): LibraryViewPrefs | null => {
 };
 const forgetLegacy = () => { try { for (const key of LEGACY_KEYS) localStorage.removeItem(`library-${key}`); } catch { /* storage may be unavailable */ } };
 
-type View = "catalog" | "library" | "downloads" | "stats" | "addons" | "settings";
+type View = "catalog" | "library" | "following" | "downloads" | "stats" | "addons" | "settings";
 type PlaybackAnchor = { kind: "catalog" | "library"; key: string };
 /** What a list is looking at, in terms the layout cannot invalidate: the item on top and
  *  how far it sits into the view. A rotation rewrites every pixel offset; this survives. */
@@ -274,7 +274,6 @@ export function App() {
   const [newEpisodes, setNewEpisodes] = useState<NewEpisode[]>([]);
   const [detailFollow, setDetailFollow] = useState<FollowView | null>(null);
   const [followDialogOpen, setFollowDialogOpen] = useState(false);
-  const [followListOpen, setFollowListOpen] = useState(false);
   /** The series whose Follow chip was pressed: how to follow it is asked before anything is saved. */
   const [followStart, setFollowStart] = useState<Meta | null>(null);
   const [libraryFavorites, setLibraryFavorites] = useState<string[]>([]);
@@ -1916,6 +1915,7 @@ export function App() {
     <aside className="sidebar"><nav>
       <Nav icon={<Library/>} label={t("nav.catalog")} active={view === "catalog"} onClick={() => openView("catalog")}/>
       <Nav icon={<HardDrive/>} label={t("nav.library")} active={view === "library"} onClick={() => openView("library")}/>
+      <Nav icon={<BellRing/>} label={t("nav.following")} active={view === "following"} badge={(newEpisodes.length + follows.reduce((sum, follow) => sum + follow.downloads.attention, 0)) || undefined} onClick={() => openView("following")}/>
       <Nav icon={<Download/>} label={t("nav.downloads")} active={view === "downloads"} badge={downloads.filter((job) => job.status === "checking" || job.status === "downloading" || job.status === "queued" || job.status === "waiting").length} onClick={() => openView("downloads")}/>
       <Nav icon={<PackagePlus/>} label={t("nav.addons")} active={view === "addons"} badge={addons.length} onClick={() => openView("addons")}/>
       <Nav icon={<Settings/>} label={t("nav.settings")} active={view === "settings"} onClick={() => openView("settings")}/>
@@ -2230,7 +2230,7 @@ export function App() {
             </button>)}
           </div>
         </div>}
-        {!browsePath && !onlyFavorites && <NewEpisodesRow follows={follows} episodes={newEpisodes} onManage={() => setFollowListOpen(true)} onOpen={(episode) => void openFromCatalog({ type: episode.type, id: episode.metaId, name: episode.name, poster: episode.poster })}/>}
+        {!browsePath && !onlyFavorites && <NewEpisodesRow follows={follows} episodes={newEpisodes} onManage={() => openView("following")} onOpen={(episode) => void openFromCatalog({ type: episode.type, id: episode.metaId, name: episode.name, poster: episode.poster })}/>}
         {!browsePath && !scanHintDismissed && !libraryScan?.finishedAt && (browse?.total ?? 0) >= 10 && <div className="library-scan-hint" role="status">
           <span>{t("library.scanHint")}</span>
           <button type="button" onClick={dismissScanHint}>{t("library.dismissHint")}</button>
@@ -2317,6 +2317,7 @@ export function App() {
       {view === "addons" && <AddonManager addons={addons} libraries={libraries} restricted={restricted} admin={admin} onChanged={refresh} onNotify={notify} onError={fail}/>} 
       {view === "downloads" && <Downloads jobs={downloads} deviceTransfers={deviceTransfers} libraries={libraries} halt={queueHalt} admin={session!.role === "admin"} refresh={loadDownloads} onError={fail} onReveal={revealInLibrary} prefs={views.downloads} onPrefs={persistDownloadPrefs}/>}
       {view === "stats" && <StatsPanel key={statsReset} onError={fail}/>}
+      {view === "following" && <FollowingPage follows={follows} newEpisodes={newEpisodes} languages={languages} libraries={libraries} addons={addons} audioLanguage={settings.audioLanguage} subtitleLanguage={settings.subtitleLanguage} onChanged={applyFollowChange} onOpenSeries={(item) => void openFromCatalog(item)} onNotify={notify}/>}
       {view === "settings" && <SettingsPage build={buildInfo} restricted={restricted} settings={settings} search={searchState} onSearch={(next) => { if (!next.saveHistory || !next.recent.length) recordIntent.current = null; setSearchState(next); }} languages={languages} libraries={libraries} session={session!} onSession={setSession} onSave={saveSettings} onLibrariesChanged={refreshLibraries} onImported={async (backup) => {
         const restored = await api.importSettings(backup);
         setSettings(restored.settings);
@@ -2364,7 +2365,6 @@ export function App() {
     {followDialogOpen && detailFollow && <FollowDialog follow={detailFollow} videos={selected?.videos} languages={languages} libraries={libraries} addons={addons} audioLanguage={settings.audioLanguage} subtitleLanguage={settings.subtitleLanguage} onChanged={(updated) => applyFollowChange(detailFollow.id, updated)} onClose={() => setFollowDialogOpen(false)} onNotify={notify}/>}
     {followStart && <SeriesDownloadDialog type={followStart.type || "series"} label={followStart.name} title={followStart.name} episodes={toEpisodes(followStart.videos)} audioLanguage={settings.audioLanguage} subtitleLanguage={settings.subtitleLanguage} languages={languages} libraries={libraries} addons={addons}
       follow={{ create: { metaId: followStart.id, name: followStart.name, poster: followStart.poster }, onFollowed: (follow) => followed(followStart, follow) }} onClose={() => setFollowStart(null)}/>}
-    {followListOpen && <FollowListDialog follows={follows} languages={languages} libraries={libraries} addons={addons} audioLanguage={settings.audioLanguage} subtitleLanguage={settings.subtitleLanguage} onChanged={applyFollowChange} onClose={() => setFollowListOpen(false)} onNotify={notify}/>}
     {galleryIndex !== null && shownGallery[galleryIndex] && <MediaGallery images={shownGallery} index={galleryIndex} onIndex={setGalleryIndex} onClose={closeGallery}/>}
     {(message || error) && <div className={`toast ${error ? "error" : ""}`}>{error || message}<button onClick={() => {setError("");setMessage("");}}><X/></button></div>}
   </div>;
