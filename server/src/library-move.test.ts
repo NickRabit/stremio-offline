@@ -130,6 +130,12 @@ before(async () => {
   await put(filmsRoot, "Volne/Film.mkv");
   await put(mixedRoot, "Document.mkv");
   await mkdir(filmsRoot, { recursive: true });
+  // A folder of its own, so the state a move or a copy carries can be read without touching
+  // a fixture another test relies on.
+  await put(showsRoot, "Carried Show/Season 1/01 - Carried.mkv");
+  await put(showsRoot, "Carried Show/Season 1/02 - Within.mkv");
+  await put(showsRoot, "Carried Show/Season 1/03 - Copied.mkv");
+  await mkdir(path.join(showsRoot, "Carried Show", "Season 2"), { recursive: true });
 
   server = await spawnServer({
     DATA_DIR: dataDir,
@@ -370,4 +376,148 @@ test("a folder beside the aliased library is not part of it", async (t) => {
   assert.equal(deleted.status, 204, "the guard engages on the nested library, not on the folder that holds it");
   assert.equal(await exists(path.join(boxRoot, "Archiv", "Loose")), false);
   assert.equal(await exists(aliasedFile()), true, "the aliased library is untouched");
+});
+
+/** The folder this block drives in its own tests, so no assertion below sees another test's
+ *  fixtures. `01` moves across libraries, `02` moves inside `shows`, `03` is copied. */
+const carried = (name: string) => `Carried Show/Season 1/${name}`;
+const carriedWire = (name: string) => `${shows}/${carried(name)}`;
+
+/** One library's match file, read the way the route debounces it to disk. */
+const libraryMeta = async (libraryId: string) => {
+  try {
+    return JSON.parse(await readFile(path.join(dataDir, "library", `${libraryId}.json`), "utf8")) as {
+      version: number; meta: Record<string, { id?: string }>; suggestions: Record<string, unknown>;
+    };
+  } catch { return undefined; }
+};
+
+/** The relative key the manual match wrote for an item at `relative` -- the file's own path,
+ *  or the folder unit that covers it. */
+const matchedRow = (libraryId: string, relative: string) =>
+  waitFor(`the match row for ${relative} in ${libraryId}`, async () => {
+    const file = await libraryMeta(libraryId);
+    return file && Object.keys(file.meta).find((key) => key === relative || relative.startsWith(`${key}/`));
+  }, 10_000);
+
+const starItem = (target: string, wanted: boolean) =>
+  api("/api/library/favorite", { method: "POST", body: { path: target, favorite: wanted } });
+
+const favouritePaths = async () =>
+  ((await (await api("/api/library/favorites")).json()) as { items: Array<{ path: string }> }).items.map((item) => item.path);
+
+const reportProgress = (target: string) =>
+  api("/api/progress", { method: "POST", body: { key: `file:${target}`, path: target, position: 120, duration: 3600, title: "Carried" } });
+
+const progressAt = async (key: string) => (await api(`/api/progress/${encodeURIComponent(key)}`)).json();
+
+const identify = (target: string) =>
+  api("/api/library/match", { method: "POST", body: { path: target, type: "series", id: "tt0000001" } });
+
+/** What the server says the item is bound to, read back through the identity route. */
+const identityOf = async (target: string) =>
+  (await (await api(`/api/library/identity?path=${encodeURIComponent(target)}`)).json()) as { match?: string; bound?: { id?: string } };
+
+test("a queued move into another library carries the item's state", async () => {
+  const from = carriedWire("01 - Carried.mkv");
+  const relative = carried("01 - Carried.mkv");
+  assert.equal((await starItem(from, true)).status, 200);
+  assert.equal((await reportProgress(from)).status, 204);
+  const identified = await identify(from);
+  const sourceRow = await matchedRow(shows, relative);
+
+  const job = await enqueue({ op: "move", items: [from], target: archive });
+  assert.equal(job.status, "completed");
+  assert.equal(job.done, 1);
+  const to = job.results[0]!.to!;
+  assert.equal(to, `${archive}/01 - Carried.mkv`, "the item keeps its name across libraries");
+
+  assert.equal(await exists(path.join(archiveRoot, "01 - Carried.mkv")), true, "the file is at the new place");
+  assert.equal(await exists(path.join(showsRoot, relative)), false, "the file left the old place");
+
+  const stars = await favouritePaths();
+  assert.ok(stars.includes(to), "the star follows the item");
+  assert.ok(!stars.includes(from), "the old path is not a favourite any more");
+
+  assert.notEqual(await progressAt(`file:${to}`), null, "the position is under the new key");
+  assert.equal(await progressAt(`file:${from}`), null, "the old key holds nothing");
+
+  assert.equal(identified.status, 200, "the manual match is accepted");
+  assert.ok(sourceRow, "the match row reached the source library file");
+  const destination = await waitFor(`the row in ${archive}`, async () => {
+    const found = await libraryMeta(archive);
+    return found?.meta["01 - Carried.mkv"]?.id === "tt0000001" ? found : undefined;
+  });
+  assert.ok(destination, "the match row is in the archive library under the new relative key");
+  const source = await libraryMeta(shows);
+  assert.equal(source?.meta[relative], undefined, "the row is no longer at the item's old path");
+  assert.ok(source?.meta[sourceRow], "the row the item inherited from its folder stays with the folder");
+  assert.equal((await identityOf(to)).bound?.id, "tt0000001", "the moved item resolves to the matched title");
+});
+
+test("a queued move inside one library carries the item's state", async () => {
+  const from = carriedWire("02 - Within.mkv");
+  const relative = carried("02 - Within.mkv");
+  const movedRelative = "Carried Show/Season 2/02 - Within.mkv";
+  assert.equal((await starItem(from, true)).status, 200);
+  assert.equal((await reportProgress(from)).status, 204);
+  const identified = await identify(from);
+  const sourceRow = await matchedRow(shows, relative);
+
+  const job = await enqueue({ op: "move", items: [from], target: `${shows}/Carried Show/Season 2` });
+  assert.equal(job.status, "completed");
+  assert.equal(job.done, 1);
+  const to = job.results[0]!.to!;
+  assert.equal(to, `${shows}/${movedRelative}`);
+
+  assert.equal(await exists(path.join(showsRoot, movedRelative)), true, "the file is at the new folder");
+  assert.equal(await exists(path.join(showsRoot, relative)), false, "the file left the old folder");
+
+  const stars = await favouritePaths();
+  assert.ok(stars.includes(to), "the star follows the item");
+  assert.ok(!stars.includes(from), "the old path is not a favourite any more");
+
+  assert.notEqual(await progressAt(`file:${to}`), null, "the position is under the new key");
+  assert.equal(await progressAt(`file:${from}`), null, "the old key holds nothing");
+
+  assert.equal(identified.status, 200, "the manual match is accepted");
+  assert.ok(sourceRow, "the match row reached the source library file");
+  const source = await libraryMeta(shows);
+  assert.equal(source?.meta[relative], undefined, "no row is left at the item's old path");
+  assert.equal(source?.meta[movedRelative], undefined, "the row did not move: the folder still covers the new path");
+  assert.ok(source?.meta[sourceRow], "the row the item inherited from its folder stays with the folder");
+  assert.equal((await identityOf(to)).bound?.id, "tt0000001", "the moved item still resolves to the matched title");
+});
+
+test("a queued copy into another library leaves the original's state behind", async () => {
+  const from = carriedWire("03 - Copied.mkv");
+  const relative = carried("03 - Copied.mkv");
+  assert.equal((await starItem(from, true)).status, 200);
+  assert.equal((await reportProgress(from)).status, 204);
+  const identified = await identify(from);
+  const sourceRow = await matchedRow(shows, relative);
+
+  const job = await enqueue({ op: "copy", items: [from], target: archive });
+  assert.equal(job.status, "completed");
+  assert.equal(job.done, 1);
+  const to = job.results[0]!.to!;
+  assert.equal(to, `${archive}/03 - Copied.mkv`, "the copy keeps its name across libraries");
+
+  assert.equal(await exists(path.join(archiveRoot, "03 - Copied.mkv")), true, "the copy is at the new place");
+  assert.equal(await exists(path.join(showsRoot, relative)), true, "the original stays where it was");
+
+  const stars = await favouritePaths();
+  assert.ok(stars.includes(from), "the original is still a favourite");
+  assert.ok(!stars.includes(to), "the copy is not added as a favourite");
+
+  assert.notEqual(await progressAt(`file:${from}`), null, "the original keeps its position");
+  assert.equal(await progressAt(`file:${to}`), null, "the copy has no position of its own");
+
+  assert.equal(identified.status, 200, "the manual match is accepted");
+  assert.ok(sourceRow, "the match row reached the source library file");
+  const source = await libraryMeta(shows);
+  const destination = await libraryMeta(archive);
+  assert.ok(source?.meta[sourceRow], "the original's row stays in the source library");
+  assert.equal(destination?.meta["03 - Copied.mkv"], undefined, "the copy is not bound in the destination library");
+  assert.equal((await identityOf(to)).bound, undefined, "the copy resolves to no title");
 });
