@@ -228,9 +228,14 @@ landscape rail squeezes seven icons into about 229 px, roughly 32 px each.
 - **Wide** (the labelled sidebar on desktop and tablet landscape): every allowed
   destination, with the Following and Downloads badges. In its collapsed state it
   stays labelled by icon and tooltip as today.
-- **Compact** (the existing compact group: up to 700 px, a tablet held upright,
-  a phone on its side): exactly five slots, **Home, Catalogue, Library,
-  Downloads, More**. Icon and label in every slot, including the landscape rail.
+- **Tablet held upright** (701-980 px portrait): the existing collapsed sidebar
+  rail, 76 px wide, with every destination and the label under the icon. Eight
+  items at about 49 px fit the 1180 px height, so nothing needs a More menu.
+- **Compact** (up to 700 px, and a phone on its side, the short-landscape rule):
+  exactly five slots, **Home, Catalogue, Library, Downloads, More**. Icon and
+  label in every slot. Today the phone bar hides its labels at 420 px and below
+  because seven items do not fit; with five they do (about 59 px each at 320 px),
+  so the labels come back at 10 px.
 - **More** holds Following, Addons, Settings and, for an administrator,
   Statistics. It is marked active while one of them is open and says which. It
   carries the new-episodes and attention indicator that Following shows, built
@@ -248,7 +253,7 @@ ships first and on its own.
 | Viewport | Navigation | Cards |
 | --- | --- | --- |
 | Desktop 1440x900, 1280x760 | Labelled sidebar | Queue ~264 px wide, media 16:9 ~208 px |
-| Tablet upright 820x1180 | Compact, collapsed sidebar | Queue ~264 px, media ~184 px |
+| Tablet upright 820x1180 | Collapsed rail, all destinations | Queue ~264 px, media ~184 px |
 | Tablet landscape 1180x820 | Labelled sidebar | As desktop |
 | Phone upright 390x844 (and 320) | Five-slot bottom bar | 16 px gutters, 12 px gaps, media ~144 px (about 2.3 cards at 390, 1.9 at 320), queue ~244 px |
 | Phone landscape 844x390 and 802x293 | Five-slot rail | 12 px gutters, media 144-168 px, queue ~232 px |
@@ -260,6 +265,25 @@ artwork the resume strip already generates, with the existing fit rules as a
 fallback. Leave safe-area space at the rail, the bottom bar and the content
 edges, and include the bottom bar in the scroll padding. At 200% zoom a heading
 wraps rather than forcing a heading, a count and Show all onto one line.
+
+### Tile shape
+
+Catalogue and Library each have their own portrait or landscape tile setting
+(`catalogTileShape`, `libraryTileShape`). Home gets the same choice for its
+shelves, `homeTileShape`, in the same place in Settings, defaulting to landscape.
+The existing Continue watching strip in the library is always 16:9 and ignores the
+setting; Home deliberately does not.
+
+- Landscape: 16:9 tiles, 208 px on desktop and tablet landscape, 184 px on a
+  tablet held upright, 144 px on a phone.
+- Portrait: 2:3 tiles, 148 px on desktop, 132 px on a tablet, 120 px on a phone,
+  with the caption allowed two lines instead of one. `TileArt` already letterboxes
+  the other artwork variant over a blurred copy, so a title with only one picture
+  still fills its tile.
+- **Short landscape forces 16:9 whatever the setting.** A 2:3 tile with its caption
+  needs about 240 px, and that band has 231 px for everything. Say so beside the
+  setting.
+- The queue cards are not tiles and ignore the setting.
 
 ### Short landscape (802x293, 844x390)
 
@@ -281,6 +305,25 @@ This is where the page can break, so it is designed first.
   wide card with a two-line caption fits in the same band.
 - Show the right edge of the next card (a fraction of a card) so the shelf reads
   as scrollable.
+
+### Measured
+
+A prototype built on the real `style.css` and markup (not committed; it would go
+stale) was measured in a browser at the sizes below. None had page-level
+horizontal overflow.
+
+| Viewport | Measured |
+| --- | --- |
+| 802x293 | Rail 64 px wide, five items at 46 px; queue card 232x116; first row ends near 231 px and the next heading starts at 265 px; portrait setting correctly forced to 16:9 art (152x86) |
+| 844x390 | Same geometry, the second shelf also reaches the screen |
+| 320x640 | Bar slots 59 px; queue card 244 px, media 144 px (about 1.9 cards); action button 129x44 |
+| 390x844 | Three shelves and the bar visible; More sheet 366 px wide above the bar; the More slot carries the Following count |
+| 820x1180 | Rail 76 px, eight items at 49 px; queue 264 px, media 184 px |
+| 1180x820 | Labelled sidebar 226 px; media 208 px, a little under four cards |
+
+Two phone details came out of it: "Show all" is borderless and the count sits under
+the heading, because a bordered button wrapped onto its own line and cost a whole
+row; and the heading row must not wrap at all below 700 px.
 
 ### What was taken from the mockups, and what was not
 
@@ -340,9 +383,10 @@ failed and revoked states.
 
 ## Slices
 
-0. **Compact navigation with More.** Its own PR: the five-slot navigation, the
-   More sheet and menu, and the updated layout tests. It fixes today's squeeze and
-   changes chrome for everyone, so it does not travel with Home.
+0. **Compact navigation with More.** Its own PR: the five-slot navigation for
+   phones and short landscape, the labelled tablet rail, the More sheet and menu,
+   and the updated layout tests. It fixes today's squeeze and changes chrome for
+   everyone, so it does not travel with Home.
 1. **Home shell and Downloads.** The view, the queue row from existing client
    state with the owner filter, and the type additions. No new server code.
 2. **Continue watching.** Fix stored-addon visibility first. Then either the
@@ -364,6 +408,8 @@ failed and revoked states.
 - Should Home ever be the landing view? Recommended: no, until slice 6 and then
   only as an opt-in.
 - Cancel on a queue card? Recommended: no, cancel stays in Downloads.
+- A `homeTileShape` setting, default landscape, forced to landscape on a short
+  screen. Recommended; the alternative is a fixed 16:9, which is simpler.
 - Should Continue watching ship with the full identity contract, or with the two
   labelled groups first? The groups are smaller and honest; the contract gives
   the merged row the mockups show.
