@@ -24,7 +24,7 @@ metadata store or scheduler for each platform.
 
 | Order | Outcome | Scope / release gate |
 | --- | --- | --- |
-| P0a | Files survive failure | Audit destructive paths; recover transfers without overwrites or lost evidence |
+| P0a | Files and acknowledged work survive failure | Fix queue admission/write failures and journal loss; journal cross-store operations so a restart can replay them |
 | P0b | Playback and mobile controls are dependable | Session lifecycle tests and physical iOS verification |
 | P1a | Home is useful immediately | Permission-filtered personal rows from existing state; no scheduler dependency |
 | P1b | Children can use the app safely | Restricted child account, server-enforced policy, parent-authenticated exit |
@@ -190,119 +190,275 @@ release, and keep the Windows checklist in
 
 ## Engineering health
 
-Feature work is cheap now; long-lived complexity is not. These items are about
-keeping the code changeable and the data safe, and they are worth taking in this
-order. Each one is independently mergeable — do not fold two of them into one
-refactor, and do not carry a feature along with one.
+Reviewed on 2026-10-04 against `main` at `b4b4c2a` (0.5.7). This section
+validates the proposed refactoring/hardening plan against that revision; it
+does not claim that the work below has shipped. The old local development
+checkout was substantially behind `main` and was not used as the audit baseline.
+On 2026-10-05 the PR was rebased onto `3b613fc` (0.5.8), the other agent's
+JSON-first revision was reviewed and retained, and H1–H3 were reproduced again.
+The file sizes and inventory counts below remain the dated audit snapshot.
 
-### Make destructive filesystem paths fail safe
+Keep the modular monolith, explicit dependencies and one-command deployment.
+The immediate order is **data-safety fixes → journalled, recoverable
+operations → bounded structural refactoring**. Small isolated extractions may proceed
+alongside safety work. CSS splitting is useful, but does not outrank a confirmed
+persistence or destination-collision defect. Each item below is a separate PR
+unless its invariant requires an inseparable change.
 
-The rule: when the app cannot tell **"the library is empty"** from **"the library
-could not be read"**, it must not clean anything up. Uncertainty stops.
+### What the proposed plan gets right, and what needs correction
 
-The cross-library artwork loss was exactly this shape — a swallowed `ENOENT`, a
-file orphaned under the old key, and an hour later the sweep took it for good. The
-library add / remove / forget / disable / re-enable / re-root / reconnect / type
-change paths have been through it since, and the sweep and the migration check
-the root before deleting. The orphan sweep now decides from a complete walk, so
-an unreadable folder or an unmounted share stops it instead of emptying the
-artwork. Walk the rest of the same surface: file rename, move,
-copy, delete, bulk and cross-library operations, including across filesystems;
-artwork generation, replacement, cleanup and orphan detection; metadata binding
-after an external rename or a vanished file. A destructive path gets explicit
-preconditions and never swallows an error, a failure never leaves a success
-showing in the interface, and each case found gets a regression test at the
-domain layer.
+| Claim or proposal | Verdict and repository evidence |
+| --- | --- |
+| `App.tsx` carries too much feature logic | **Confirmed.** 2,880 lines, including catalogue/search state, library workflows, queue UI, settings and diagnostics. `Player.tsx` (1,202 lines) and feature dialogs already exist; this is an incremental extraction, not a missing component architecture. |
+| `style.css` is monolithic | **Confirmed.** 1,605 lines with interleaved overrides, Safari/safe-area rules and reduced-motion handling. Preserve cascade order as well as selectors; moving rules by feature can change behavior even without editing them. |
+| `index.ts` should become a composition root | **Confirmed, partially underway.** 2,449 lines. Routes already live in `server/src/routes/`, and `server-start.ts` already binds the listener. Library mutation, artwork coordination, source resolution and lifecycle logic remain in the entry point. Extract those responsibilities; do not merely move route registration into another file. |
+| Shared API contracts are needed | **Confirmed by drift.** `server/src/downloads.ts:PauseReason` includes `permission`; `web/src/types.ts:Download.pauseReason` omits it. Public jobs already strip private source fields in `publicJob`; share that DTO, not the persisted `DownloadJob`. No shared contracts workspace exists. |
+| Download mutations need ownership review | **Largely covered already.** `routes/downloads.ts:requireOwnJob` guards pause/resume/retry/move/delete, with cross-owner and nonexistent-ID tests. Administrators deliberately act across owners. `DELETE /api/downloads` clears global completed history and is admin-only through `roles.ts`; it does not delete media. |
+| Existing route tests prove the whole authorization boundary | **Only partly.** Download route harnesses exercise handlers; ordinary-user reorder passes that harness, while the full `roles.ts` allowlist excludes `/downloads/:id/move`. Decide and test the intended product policy through the real middleware before opening that route. |
+| Queue restart/retry and filesystem safety need to be added | **Already partly implemented.** Restart resets checking/downloading jobs to queued; Range resume, storage/permission pauses, retry policy, destination reservation and random copy staging exist. Missing durability at side-effect boundaries is the issue. See `downloads.ts`, `library-transfer.ts`, `library-ops.ts` and their tests. |
+| Follow-show scheduling needs auditing | **Now shipped, audit its real implementation.** PR #297 landed during this review: `follows.ts` persists daily discovery, episode intent, automatic downloads and queue reconciliation. The personal watchlist is a separate existing feature. |
+| Desktop and Sonarr/Radarr are API consumers | **Different maturity.** Desktop ships and has a local backend lifecycle. The *arr adapter is a feasibility probe and specification, not a production integration. Keep its existing [delivery gate](arr-integration-spec.md). |
+| Network restrictions and redaction need review | **Existing protections, targeted gaps to investigate.** `security.ts` validates addresses and redirects, strips sensitive cross-origin headers, and has tests; logger redaction and resource ownership exist too. DNS validation and fetch connection resolution are separate, so rebinding deserves a focused test; this audit did not demonstrate an exploit. |
+| Defer SQLite migration for now | **Agree.** Cross-library relocation is a real cross-store invariant, but it also moves files, so it needs a journal and replay that no SQL transaction replaces. The confirmed defects are fixable in the existing stores; sample state sizes do not establish performance pressure. Runtime probes are encouraging but do not certify packaged desktop support. The migration's benefit has not been shown to outweigh its cost. See the [decision and its revisit triggers](roadmap-delivery-spec.md#local-sqlite-migration). |
+| Formalize adversarial review and retain layered tests | **Useful, partly documented already.** Layered tests and an adversarial recovery campaign exist. Add missing failure cases and a focused high-risk review checklist to the existing workflow. |
 
-### Give interrupted operations a defined restart
+File sizes measure physical lines, not complexity or performance. This audit
+found no evidence requiring a DI framework, Redux, a CSS framework, services,
+a broker or an external database.
 
-Downloads have `.part` files and a resume, and a library scan or bulk job
-survives a restart through `library-scan.json` and `library-ops.json`. That does not yet prove recovery at every side-effect boundary. Artwork
-and metadata bulk jobs already use the operations queue; individual generation,
-metadata writes and playback sessions need explicit recovery contracts too.
-Cross-mount copies already use random-suffixed staging paths, destination
-reservations and flushes; persist their ownership and publication phase so a
-restart can distinguish an unfinished copy from a completed move.
+### Confirmed failures and reproducibility
 
-After a restart every interrupted operation should end up resumed, retried,
-marked failed, cleaned up, or shown to the user — never displayed as finished
-while the disk holds half a file. Temporary and staging files need durable
-ownership, collision-safe names and a conservative cleanup rule. A partial
-destination must never be scannable as complete media.
+The following probes ran against the real queue/store classes in disposable
+local directories. Download scheduling was stopped after `load()` to isolate
+admission and persistence from network transfers. No real media or live instance
+state was touched. These are observed behaviors, not hypothetical vulnerabilities.
 
-### Playback hardening
+| ID | Reproduction and observed result | Consequence / priority |
+| --- | --- | --- |
+| H1 | Run two `DownloadQueue.add` calls with the same owner/title/source via `Promise.all`, with an empty library. Both return distinct jobs with exactly the same target (`lib_d10ad10a/Race/Race.mp4`). | **P0:** admission checks span awaits without reserving the target. This proves duplicate destination allocation, not an end-to-end overwrite; add the transfer-level regression before claiming its exact damage. |
+| H2 | Make `downloads.json.tmp` a directory, then call `addPending` for a new episode. The method returns a job, but `downloads.json` lacks it. Remove the obstacle and enqueue again: subsequent writes succeed. | **P0:** `save()` logs and swallows a failed write, so an acknowledged job can disappear after restart. The save chain is **not** permanently poisoned. |
+| H3 | Write malformed JSON to the operations journal, then call `LibraryOps.load()`. The same file becomes `{ "version": 1, "jobs": [] }`. | **P0:** startup destroys recovery evidence. The existing corrupt-state test explicitly accepts continuing with an empty queue; it must change with the intended contract. |
 
-Direct play → remux → transcode stays the order, and it should be deterministic
-and testable rather than discovered per stream. What needs checking: byte ranges
-and seeking on direct play; the fragmented MP4 lifecycle and audio-only
-conversion on remux; cancellation, client disconnect and concurrent sessions on
-transcode — every FFmpeg process must belong to a live session or bounded
-cleanup, rather than to an individual HLS segment request (the seek fallback
-and the timeline previews have been through this; the rest of the surface has
-not); and the VAAPI failure
-counter turning into a clean software fallback instead of a failed playback. A
-failed playback should tell us the source, the mode chosen, hardware or software,
-and the stage that failed, without a token or a full private stream URL reaching
-the log.
+The initial audit at `47f3f41` also reproduced cross-account deduplication (H4).
+**Resolved in the final baseline:** PR #297 introduced owner-scoped direct, lazy
+and torrent checks. Repeated direct/lazy probes now admit Bob's job independently;
+the merged unit tests cover torrents, visibility and legacy ownership. Do not
+reopen H4 as an outstanding fix. H1–H3 were reproduced again after the rebase.
 
-### Backup scope, written down
+Further **code-supported risks, not reproduced crash outcomes**: metadata
+relocation is debounced across files, transfer publication precedes metadata
+commit, and the operations journal does not record the staging path/publication
+phase. `Store.update` rejects failed writes but has already changed memory;
+its recovery test intentionally saves that earlier change on the next write.
+The shutdown path flushes several stores but does not call `queue.stop()` or
+explicitly settle scan persistence; `followService.stop()` clears timers without
+awaiting an in-flight check or follow-store write. These need defined failure
+semantics and injection tests, not a claim that all current recovery is broken.
 
-`backup.ts` exports and imports settings and addons — the libraries' names and
-roots are remapped on the way back in — and it deliberately carries neither the
-accounts nor the media library. What a backup means beyond that is not written
-down: which data must be preserved (favourites, resume state, metadata bindings,
-download settings), which is genuinely rebuildable cache — verified, not
-assumed — and how secrets in addon URLs are handled. The target contract is a
-restore preview that validates before mutation,
-explains defaulted fields and unresolved mappings, and requires an explicit
-choice before redirecting downloads. Today the parser accepts versions 1/2,
-normalizes some fields and falls back to the default library for unresolved
-references; this is not a strict or transactional full-instance restore.
-A full-instance restore, accounts included, is a separate undesigned operation.
+### P0 — Stop false success and ambiguous recovery
 
-### A classification behind the errors
+Status update (2026-10-05): H1–H3 shipped in PR #304 (0.5.10). Queue admissions
+are serialized and reserve their target; `add`, `addPending`, `adopt`, removal
+and clearing history resolve only after their own write and change nothing when
+it fails (`err.queueNotSaved`); the queue, library operations, scan and
+match-history loaders copy unparsable bytes to `<name>.damaged-*` and never
+write over a file they could not read or preserve. `pause`, `resume`, `retry`
+and `move` stay best-effort because the next start re-derives them. The text
+below is the original contract, kept for reference.
 
-`AppError` already carries English text plus a catalogue key. What is missing is a
-stable code and a class — source, network, storage, library, playback, transcode,
-addon, authentication, configuration, internal — so the diagnostics panel can
-group failures, say whether the thing is still going, and say whether a retry
-helps, instead of showing a raw exception string. Redaction stays covered by
-tests.
+1. **H1: reserve download admission and publication.** Serialize or atomically
+   reserve the owner-scoped intent and library/target before asynchronous work.
+   Keep physical destination exclusion global even when logical deduplication
+   becomes per-user. Cover same-source double clicks, different sources with the
+   same name, simultaneous library moves/downloads and pre-existing media/parts.
+   Done when concurrent calls cannot share an unintended target and final
+   publication cannot overwrite a different owner's file. Preserve the existing
+   `library-transfer.ts` reservation rather than introducing a competing one.
+2. **H2: acknowledge only durable mutations.** Separate admission/cancel/retry
+   commits from best-effort progress snapshots. A failed commit must reach the
+   caller; define whether uncommitted memory is rolled back or blocks execution.
+   Cover failed write and rename, later recovery, response loss/repeated request,
+   restart and shutdown with a pending write. Do not require an fsync per progress
+   tick. Atomic rename alone is not a power-loss durability contract.
+3. **H3: preserve unreadable journals.** Distinguish absent, malformed,
+   unsupported-version and unreadable state. Preserve original bytes, block
+   affected mutations and surface an actionable diagnostic. Test repeated starts
+   without overwriting evidence. Audit download/scan/metadata loaders next;
+   downloads currently attempt a `.bak` rename but ignore its failure. Reuse the
+   fail-closed behavior already present in `FollowStore.load` rather than
+   inventing another corruption policy.
 
-### Exercise recovery as a first-class test surface
+Each fix lands with a store-level contract test: a failed commit reaches the
+caller, an unreadable file is preserved, and concurrent admissions cannot
+share an unintended target (duplicate intents may resolve to one job). Those tests stay valid whatever storage sits underneath.
 
-Add an adversarial recovery pass around operations that can leave durable state
-or files behind. Kill or restart the server while a download, cross-library
-copy, metadata update, scan, artwork job or transcode is in progress and verify
-that the next start reaches one defined state: resumed, retried, failed,
-cleaned up or explicitly shown to the user.
+### P1 — Recoverable filesystem and cross-store operations
 
-The goal is not another large end-to-end suite. Add the cheapest deterministic
-regression test for each failure that the campaign discovers, and keep a small
-number of full restart journeys for the boundaries that cannot be proven below
-E2E.
+The rule: when the app cannot tell **"the library is empty"** from **"the
+library could not be read"**, it must not clean anything up. Uncertainty stops.
+The cross-library artwork loss had exactly this shape; the library lifecycle
+paths and the orphan sweep have been through it, the rest of the destructive
+surface has not.
 
-### Measure the autonomous maintenance loop
+Keep the JSON stores. A [local SQLite migration](roadmap-delivery-spec.md#local-sqlite-migration)
+was evaluated and deferred; its revisit triggers are recorded there. Cross-store
+consistency comes from recording intent before effects and replaying it, which
+filesystem work needs anyway.
 
-GitHub issues are also the live test bed for the AI-assisted maintenance
-workflow. Keep the automation useful by measuring outcomes rather than the
-number of generated commits.
+Deliver in these boundaries:
 
-Track at least:
+1. **Commit-aware store updates.** Give `Store`, `DownloadQueue`, `FollowStore`
+   and `LibraryMetaStore` one explicit contract: a mutation is acknowledged
+   only after its write succeeds, and memory never runs ahead of a failed
+   write unnoticed. Keep high-frequency progress coalesced and best-effort.
+2. **Durable transfer phases.** Record operation ownership, staging identity,
+   publication and source-cleanup phases in `library-ops.json` before each
+   effect. Follow the existing
+   [recovery contract](roadmap-delivery-spec.md#filesystem-safety-and-restart-recovery),
+   including same-filesystem renames, cross-mount copies, partial failures and
+   replay twice. Never delete an unproven destination or an unknown `.part` file.
+3. **Journalled relocation.** A library relocation writes one intent record
+   naming the source and destination keys, then updates both metadata files
+   and every affected account's favourites and progress. Startup replays an
+   unfinished record idempotently instead of leaving half the references moved.
+4. **Remaining destructive paths.** File rename, move, copy, delete, bulk and
+   cross-library operations across filesystems; artwork generation,
+   replacement and cleanup; metadata binding after an external rename or a
+   vanished file. Explicit preconditions, no swallowed errors, no success shown
+   for a failure, and a domain-layer regression test for each case found.
+5. **Backup scope, written down.** `backup.ts` exports settings and addons and
+   remaps library roots; it deliberately carries neither accounts nor media.
+   Document which state must be preserved (favourites, resume state, metadata
+   bindings, download settings), which is verified rebuildable cache, and how
+   addon URL secrets are handled. The target is a restore preview that
+   validates before mutation. A full-instance restore remains a separate,
+   undesigned operation.
 
-- issues rejected as invalid, duplicate or not reproducible;
-- valid issues turned into a pull request without human implementation;
-- pull requests that needed a human technical decision before they were ready;
-- defects found by independent cross-review before merge;
-- regressions caused by an AI-generated fix;
-- flaky tests introduced or exposed by maintenance work;
-- number of agent iterations from accepted issue to a green, reviewable change.
+**Follow/queue reconciliation:** preserve the newly shipped owner-aware policy,
+reserved episode intents, adoption of manual jobs and completion/removal guards.
+The follow intent and its queue job commit to separate files. Preserve the
+existing stable intent key and reconcile its job linkage on startup; extend
+that mechanism where fault injection proves a gap. Test a crash after reserving, enqueueing, adopting,
+completing and clearing history, plus revocation during discovery. Reuse the
+existing follow tests; do not rebuild a scheduler or reopen the fixed H4.
 
-The implementer and the independent reviewer should not be treated as a voting
-system. A green CI run or agreement between models is evidence, not proof; the
-original behaviour and the regression test remain the source of truth. Use
-[the measurement contract](roadmap-delivery-spec.md#maintenance-measurement) to
-define denominators, human intervention and regression attribution.
+Document the queue's actual states (`queued`, `waiting`, `checking`,
+`downloading`, `paused`, `completed`, `failed`) and its transition/side-effect
+table alongside these tests. Removing a download is not a persisted `cancelled`
+state; library operations have their own different status model. Cancellation,
+clear-history and deleting media must remain distinct.
+
+### Persistent-state inventory and consistency boundaries
+
+Paths below are relative to server `DATA_DIR`. Eleven JSON path families currently
+exist in these stores, including two cache indexes; `library/<id>.json` expands
+per library. This is not a count of all files on disk.
+
+| Path / implementation | Meaning and recovery treatment |
+| --- | --- |
+| `state.json` / `Store` | Accounts, secrets, grants, libraries, settings, per-account favourites/progress/watchlist/search. Authoritative; never replaced by an empty state on a read failure. |
+| `downloads.json` / `DownloadQueue` | Owned jobs, sources, destinations and recovery state; contains private URLs. Admission and status changes must be acknowledged only once written. |
+| `follows.json` / `FollowStore` | Series subscriptions, discovered episodes and durable automatic-download intents. Reconcile with the queue on startup, including skip/retry state. |
+| `library-ops.json` / `LibraryOps` | Mutating operation intent and results. Add per-item recovery phases; preserve on a malformed read. |
+| `library-scan.json` / `LibraryScan` | Scan progress and remaining work. Explicitly reconcile interrupted work; do not silently declare it complete. |
+| `library/<id>.json` / `LibraryMetaStore` | Manual/automatic matches and suggestions. Preserve manual decisions and library-relative keys. |
+| `library/episodes.json` / `LibraryMetaStore` | Shared episode metadata. Establish which fields are rebuildable before treating any as cache. |
+| `stats.json` / `Stats` | Historical traffic aggregates. Preserve; coalesce high-frequency updates. |
+| `activity.json` / `ActivityLog` | Bounded per-user activity history. Preserve retention and access rules. |
+| `images/index.json` / `ImageProxy` | Remote-image URL mapping/cache index. Separate from authoritative state; audit secret handling and rebuild behavior. |
+| `artwork/index.json` / `ArtworkCache` | Artwork cache bookkeeping. Do not infer that user-provided or local artwork itself is disposable. |
+
+Desktop also owns `connection.json`, `local-settings.json`, `shell-prefs.json`
+and `window-state.json`, plus Electron-managed session storage. Those settings
+are independent of server state. Remote desktop clients use the server API,
+never shared state files.
+
+Required reconciliation cases: a library relocation changes source
+and destination bindings plus all affected users' favourites/progress; account
+or grant changes invalidate sessions and queued work; a completed download
+publishes a file and triggers metadata/statistics; reroot/disable/remove changes
+library state while workers may still hold paths; follow intent and queue jobs
+currently commit separately. Define the journal record and the replay for each
+before changing its store.
+
+### P1 — Security, playback and lifecycle boundaries
+
+Audit the full authentication/role/ownership chain, including read routes that
+serve private data, not just mutation verbs. Preserve indistinguishable foreign
+and missing IDs, administrator policy and post-await permission checks. Cover
+account deletion/revocation during work and library removal during transfers.
+Use the existing `assertStillAdmin` and queue owner checks; do not reject the
+state-reconciliation half of a filesystem operation after its files moved.
+
+Network work should test address changes between validation and connection,
+redirects, allowed-private-host configuration, timeouts and credential
+redaction. Path work should test symlink changes and missing/unmounted roots at
+the actual mutation boundary. This is a focused audit backlog, not a security
+certification or an assertion that every route is vulnerable.
+
+Playback already has serialized operations, orphan cleanup and seek recovery.
+Extend tests around owner revocation, disconnect, hardware fallback and shutdown.
+FFmpeg belongs to a session or a bounded cleanup period; closing one HLS segment
+request must not kill a healthy conversion. Test desktop switch/quit with the
+local backend as well as server shutdown. Keep physical iOS/Synology checks for
+behavior that browser mocks and the local test machine cannot prove.
+
+### P2 — Bounded refactoring
+
+| Separate PR | Boundary and acceptance gate |
+| --- | --- |
+| Extract settings/diagnostics from `App.tsx` | Start with existing named subcomponents; move their state and polling with them. Preserve refresh/cancel behavior and translated wording. No large prop bag exposing unrelated app state. |
+| Extract catalogue/search orchestration | Reuse `live-search.ts`, `search-suggestions.ts` and `search-scope.ts`; move feature state/effects next. Test stale responses, cancellation on navigation and per-account history before moving the next feature. |
+| Split CSS by responsibility | Move one coherent block at a time with explicit import order. Preserve overriding rules, feature media queries, Safari comments, safe areas and reduced motion. Run the existing visual matrix once after functional checks; no framework or redesign. |
+| Extract library application operations from `index.ts` | Give move/delete/artwork/reconciliation explicit dependencies and domain tests. Reuse route modules. Then extract lifecycle/configuration composition with startup/shutdown tests; avoid import-time environment surprises in the desktop backend. |
+| Pilot shared download API contracts | Share public request/response DTOs and runtime input validation for this boundary. Resolve the `permission` pause reason drift. Prove private URLs/tokens cannot serialize and update container/desktop staging to include the workspace. No blanket move of domain models or mandatory validation framework. |
+| Extend error classification | Reuse `AppError.messageKey` and existing `ResourceError.code`; add compatible categories/retry disposition per the [error contract](roadmap-delivery-spec.md#errors). Do not change HTTP behavior silently in an extraction. |
+
+Desktop `main.ts` (1,802 lines), `playback.ts` (1,329), `downloads.ts` (1,600)
+and `library-match.ts` (1,443) also deserve boundary reviews when touched.
+Do not turn file size into a requirement to split working code arbitrarily.
+
+### Verification and maintenance gates
+
+Rebase verification on 2026-10-05 (`3b613fc`): `npm test` passed (server 1,414
+passed / 3 skipped, web 431, desktop 270); `npm run build`, H1–H3 probes and
+relative documentation links also passed.
+
+Baseline verification on the original audit checkout: `npm test` passed (server 1,385
+passed / 3 skipped, web 418 passed, desktop 270 passed); `npm run build` passed
+with the existing large-chunk warning. Node was 26.8.1 on this machine, not the
+Node 22 container runtime. The isolated probes above also passed their
+assertions about current failure behavior. E2E, Docker deployment, power-loss,
+physical NAS/iOS and packaged Electron validation were not run for this docs-only
+audit; passing unit tests does not prove those environments.
+
+For implementation, keep the [existing test layers](testing.md). Add a failing
+regression at the lowest useful layer, then verify the fixed invariant. Use
+controlled barriers/fault injection, with only a few real process-restart
+journeys for boundaries unit tests cannot establish. Runtime changes still
+require build, applicable tests, local Docker startup and `/api/status`; UI
+changes get visual verification at the end. Follow repository version/PR rules.
+
+A high-risk change needs a recorded adversarial review after implementation:
+actor/resource authorization, two concurrent callers, failure before/after each
+side effect, repeat request, restart/replay, secrets and abort/cleanup ownership.
+Add this focused checklist to the existing contribution/review workflow in a
+separate rules PR. It need not require five agents or five reviews.
+
+Add a lightweight, report-only complexity script after the safety work. Baseline:
+131 `app.get/post/put/patch/delete/head/options` registrations across production
+server source (including the SPA fallback, so **not 131 API endpoints**);
+92 server, 43 web and 23 desktop unit-test files; 48 web/desktop E2E spec files;
+1/4/0 direct runtime dependencies in server/web/desktop manifests respectively
+(Electron is a packaged runtime listed under dev dependencies). Report largest
+production TS/TSX/CSS files and persistent-state families, then compare trends;
+exclude generated output and translation catalogues from complexity alarms.
+Do not fail CI on arbitrary LOC/test-count thresholds. Measure scan latency,
+FFmpeg concurrency and render cost before proposing performance changes.
+
+Keep the existing [maintenance measurement contract](roadmap-delivery-spec.md#maintenance-measurement):
+track invalid/duplicate issues, independently caught defects, human decisions,
+regressions and flaky tests. Green CI and model agreement are evidence, not proof.
 
 ## Later
 

@@ -1,7 +1,8 @@
 # Roadmap delivery specification
 
 Status: proposed implementation contracts; no feature in this document is
-claimed as delivered. Reviewed on 2026-09-29 against PR #260 (`11f1759`) and `main` (`14f7beb`).
+claimed as delivered solely by being specified here; implementation updates are
+marked where noted. Reviewed on 2026-09-29 against PR #260 (`11f1759`) and `main` (`14f7beb`).
 The [roadmap](roadmap.md) owns prioritization. Existing feature documentation
 owns current behavior. The [bridge specification](arr-integration-spec.md)
 remains authoritative for Sonarr/Radarr.
@@ -17,9 +18,10 @@ remains authoritative for Sonarr/Radarr.
 | `downloads.ts:addPending` suppresses active duplicates by video ID | Add durable, permission-aware episode intent; completed jobs and cleared history cannot be the watch list's memory |
 | The *arr probe uses a disposable adapter | Keep protocol feasibility distinct from production queue/authentication/import evidence |
 
-Keep the existing TypeScript services and persistence model unless measured
-requirements justify a change. No database migration, microservice split or
-whole-application rewrite is required by this roadmap. Extract narrow service
+Keep the existing TypeScript services, persistence model and deployment
+model. The 2026-10-04 audit evaluated a local SQLite migration and deferred it;
+see [Local SQLite migration](#local-sqlite-migration). No database migration,
+microservice split or whole-application rewrite is required. Extract narrow service
 boundaries when a feature needs them. Test invariants at the domain layer and
 use a small number of end-to-end scenarios for wiring and user interaction.
 
@@ -182,6 +184,97 @@ Suggested PRs: destructive-path audit and focused fixes; durable transfer
 phases and replay; metadata/artwork reconciliation. Each includes its own
 regression tests. This gate precedes bulk rename and external staging.
 
+## Local SQLite migration
+
+Status: **deferred.** Evaluated on 2026-10-04 against `b4b4c2a`; keep the JSON
+stores and harden them. This replaces the audit's first draft, which preferred
+a staged migration. The [engineering roadmap](roadmap.md#engineering-health)
+owns delivery order and the persistent-state inventory.
+
+### Runtime feasibility is not the obstacle
+
+Built-in `node:sqlite` needs no third-party native addon or new package. The
+2026-10-04 follow-up review (commit `7a0ea8d`) reported these probes; this
+2026-10-05 documentation review did not independently repeat them:
+
+| Runtime | Result |
+| --- | --- |
+| Docker `node:22-trixie-slim`, amd64 (Node 22.23.2) | Opens, WAL works, SQLite 3.51.3; prints `ExperimentalWarning` |
+| Same image, arm64 | Opens |
+| Electron 44.4.3 (Node 24.21.0), `ELECTRON_RUN_AS_NODE` | Opens, WAL works, SQLite 3.53.4 |
+
+Not proven: the packaged `utilityProcess`, Windows, and power-loss behaviour on
+a Synology volume. The module is still experimental on Node 22, and the two
+shipped runtimes carry different Node and SQLite versions. A native driver such
+as `better-sqlite3` would add ABI rebuilds that desktop deliberately avoids
+(`npmRebuild: false`); do not choose one.
+
+### Why it is deferred
+
+- **It fixes none of the confirmed defects.** H1 is an in-process admission
+  race, H2 a swallowed write error, H3 a loader that overwrites a malformed
+  journal. Each can be addressed in the existing stores without migration
+  ([roadmap](roadmap.md#p0--stop-false-success-and-ambiguous-recovery)).
+- **The real cross-store case still needs a journal.** Cross-library
+  relocation moves files as well as records, and no SQL transaction covers a
+  filesystem move. It needs a durable intent record and an idempotent replay
+  regardless; once that replay exists, it can also complete the metadata and
+  personal-state half. SQL could simplify that part, but the filesystem
+  journal remains; that benefit alone does not establish a worthwhile migration.
+- **No measured size or performance pressure was demonstrated.** The follow-up
+  review reported one used instance with `state.json` about 185 KB,
+  `library/episodes.json` about 650 KB and `stats.json` about 445 KB. These are
+  one installation's sample sizes, not a latency benchmark or a production-wide
+  upper bound. Measure write frequency, serialization and flush latency before
+  claiming that rewrites are cheap or that a database would be faster.
+- **The change surface is large.** `Store.update` takes a callback that mutates
+  live in-memory state; `LibraryMetaStore` debounces writes. A
+  migration that delivers the claimed benefit must replace those semantics,
+  add schema versions, an importer, a crash-safe cutover, a live-backup
+  procedure and a rollback story. Swapping `writeFile` for SQL underneath
+  them would keep today's false-success and stale-memory problems.
+- **Operation and recovery procedures would change.** State is readable and
+  inspectable today, as [libraries.md](libraries.md#where-the-state-lives)
+  documents. SQLite would require new inspection and backup procedures. Copying
+  the data folder while JSON writers are active can already produce an
+  inconsistent multi-file snapshot; use a stopped/drained instance or a verified
+  snapshot method now. SQLite could improve consistent state backup, but would
+  still need separate media backup and pending-operation reconciliation.
+
+### Revisit when
+
+Reopen the decision only with evidence, not on the format's reputation:
+
+- cross-store journal/replay logic repeatedly causes defects or demonstrably
+  costs more to maintain than a transactional alternative;
+- a feature needs relational queries across users or libraries that in-memory
+  maps cannot answer cheaply;
+- measured write latency, memory use or write amplification traces back to
+  whole-file rewrites at representative library sizes.
+
+A stable, verified driver in the shipped Node/Electron runtimes would reduce
+migration risk, but runtime stability or an arbitrary file-size threshold alone
+is not a reason to migrate. Reopening the decision is separate from this backlog.
+
+### Constraints if it is revisited
+
+- One embedded database for authoritative server state only; caches, desktop
+  preferences, media, sidecars and artwork stay outside it. Configuration
+  export stays human-readable JSON.
+- The data directory must be local to the machine running the backend. WAL
+  does not work over SMB/NFS; refuse such a configuration rather than hope.
+  [WAL](https://www.sqlite.org/wal.html)
+- `synchronous=FULL`, foreign keys on every connection, a bounded busy
+  timeout, short transactions, never one held across a file copy or a network
+  fetch. [Durability](https://www.sqlite.org/pragma.html#pragma_synchronous)
+- One authoritative cutover per invariant, from a stopped, backed-up snapshot;
+  never dual-write JSON and SQL. Malformed input blocks the import instead of
+  importing as empty state; a future schema is refused.
+- Live backups through the SQLite backup API, not a copy of the `.db` file,
+  and updated Synology/configuration guides.
+  [Backup API](https://www.sqlite.org/backup.html)
+- The adapter must pass the same contract tests that the H1–H3 fixes add.
+
 ## Playback and mobile usability
 
 Keep direct play, then remux, then transcode as the selection order. Record the
@@ -267,6 +360,11 @@ This is incremental work, not a prerequisite for fixing a concrete data-loss bug
 ## Follow show
 
 ### Scope and user experience
+
+Implementation status update (2026-10-04): following, daily discovery and opt-in
+automatic downloads shipped in PR #297. The [feature guide](downloads.md#following-series-and-films)
+owns current behavior; this section retains the proposed acceptance contract
+for comparison, not a claim that the entire feature remains unimplemented.
 
 A user follows a series from its detail view. Discovery-only is the default;
 automatic downloading is a separate opt-in requiring download rights and an
