@@ -403,6 +403,13 @@ export const sk: Catalog = {
 
   "following.dateUncertainHint": "Presný dátum zatiaľ nie je oznámený, ide o začiatok série.",
   "following.dateUnknown": "Dátum zatiaľ nie je oznámený",
+  "following.feedCreate": "Odoberať v aplikácii kalendára…",
+  "following.feedCopy": "Kopírovať odkaz",
+  "following.feedCopied": "Odkaz skopírovaný.",
+  "following.feedOpen": "Otvoriť v kalendári",
+  "following.feedRevoke": "Zneplatniť odkaz",
+  "following.feedRevokeConfirm": "Zneplatniť tento odkaz? Kalendáre, ktoré ho odoberajú, sa prestanú aktualizovať.",
+  "following.feedHint": "Kto má tento odkaz, vidí, čo sledujete. Ak unikne, zneplatnite ho.",
   "episodes.heading": "Epizódy",
   "episodes.one": "epizóda",
   "episodes.part": "Časť",

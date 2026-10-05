@@ -403,6 +403,13 @@ export const de: Catalog = {
 
   "following.dateUncertainHint": "Das genaue Datum ist noch nicht bekannt; dies ist der Staffelstart.",
   "following.dateUnknown": "Datum noch nicht bekannt",
+  "following.feedCreate": "In einer Kalender-App abonnieren…",
+  "following.feedCopy": "Link kopieren",
+  "following.feedCopied": "Link kopiert.",
+  "following.feedOpen": "Im Kalender öffnen",
+  "following.feedRevoke": "Link ungültig machen",
+  "following.feedRevokeConfirm": "Diesen Link ungültig machen? Abonnierte Kalender werden nicht mehr aktualisiert.",
+  "following.feedHint": "Wer diesen Link hat, sieht, was Sie abonnieren. Machen Sie ihn ungültig, wenn er weitergegeben wurde.",
   "episodes.heading": "Episoden",
   "episodes.one": "Folge",
   "episodes.part": "Teil",

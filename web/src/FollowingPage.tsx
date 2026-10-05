@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { BellRing, ChevronLeft, ChevronRight, Film } from "lucide-react";
 import { api, describeError } from "./api";
+import { copyText } from "./clipboard";
 import { FollowDialog } from "./FollowDialog";
 import { Heading } from "./settings-ui";
 import { localeTag, serverText, t, useI18n } from "./i18n";
@@ -76,7 +77,7 @@ export function FollowingPage({ follows, languages, libraries, addons, audioLang
     </div>
     <div className="following-panel" role="tabpanel" id={`following-panel-${tab}`} aria-labelledby={`following-tab-${tab}`} tabIndex={0}>
       {tab === "overview" && <Overview follows={follows} onOpen={setOpenId}/>}
-      {tab === "calendar" && <CalendarTab onOpenSeries={onOpenSeries}/>}
+      {tab === "calendar" && <CalendarTab onOpenSeries={onOpenSeries} onNotify={onNotify}/>}
       {tab === "activity" && <ActivityTab onNotify={onNotify}/>}
     </div>
     {open && <FollowDialog follow={open} languages={languages} libraries={libraries} addons={addons}
@@ -155,7 +156,45 @@ const initialMode = (): CalendarMode => {
   return typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(max-width: 700px)").matches ? "agenda" : "month";
 };
 
-function CalendarTab({ onOpenSeries }: { onOpenSeries: FollowingPageProps["onOpenSeries"] }) {
+/** The subscription link a calendar app reads. It carries a token instead of a session, so
+ *  the row only ever shows it to the account that created it and offers to replace or drop it. */
+function FeedRow({ onNotify }: { onNotify: (text: string) => void }) {
+  useI18n();
+  const [token, setToken] = useState<string | null>(null);
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    let stale = false;
+    api.followCalendarFeed()
+      .then((value) => { if (!stale) { setToken(value); setReady(true); } })
+      .catch(() => { if (!stale) setReady(true); });
+    return () => { stale = true; };
+  }, []);
+  const create = async () => {
+    try { setToken(await api.createFollowCalendarFeed()); }
+    catch (error) { onNotify(describeError(error)); }
+  };
+  const revoke = async () => {
+    if (!window.confirm(t("following.feedRevokeConfirm"))) return;
+    try { await api.revokeFollowCalendarFeed(); setToken(null); }
+    catch (error) { onNotify(describeError(error)); }
+  };
+  const url = token ? `${window.location.origin}/calendar/${token}.ics` : "";
+  const webcal = token ? `webcal://${window.location.host}/calendar/${token}.ics` : "";
+  const copy = () => { void copyText(url).then(() => onNotify(t("following.feedCopied"))).catch(() => undefined); };
+  return <section className="following-feed">
+    <p className="following-feed-hint">{t("following.feedHint")}</p>
+    {token
+      ? <div className="following-feed-row">
+          <input className="following-feed-url" readOnly value={url} onFocus={(event) => event.currentTarget.select()}/>
+          <button type="button" onClick={copy}>{t("following.feedCopy")}</button>
+          <a className="button" href={webcal}>{t("following.feedOpen")}</a>
+          <button type="button" className="danger" onClick={() => void revoke()}>{t("following.feedRevoke")}</button>
+        </div>
+      : <button type="button" className="following-feed-create" disabled={!ready} onClick={() => void create()}>{t("following.feedCreate")}</button>}
+  </section>;
+}
+
+function CalendarTab({ onOpenSeries, onNotify }: { onOpenSeries: FollowingPageProps["onOpenSeries"]; onNotify: (text: string) => void }) {
   useI18n();
   const [cursor, setCursor] = useState(() => new Date());
   const [selected, setSelected] = useState(() => dayKey(new Date()));
@@ -294,6 +333,7 @@ function CalendarTab({ onOpenSeries }: { onOpenSeries: FollowingPageProps["onOpe
         : <p className="following-empty">{loaded && !items.some((item) => dayKey(new Date(item.released)).startsWith(dayKey(monthStart).slice(0, 7))) ? t("following.calendarEmpty") : t("following.dayEmpty")}</p>}
     </section>
     </>}
+    <FeedRow onNotify={onNotify}/>
     {undated.length > 0 && <section className="following-day-panel following-undated">
       <h4>{t("following.dateUnknown")}</h4>
       {undated.map((item) => <EpisodeRow key={itemKey(item)} item={item} onOpen={() => openOf(item)}/>)}

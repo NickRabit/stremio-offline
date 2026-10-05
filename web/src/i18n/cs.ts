@@ -427,6 +427,13 @@ export const cs: Catalog = {
 
   "following.dateUncertainHint": "Přesné datum zatím není oznámené, jde o začátek řady.",
   "following.dateUnknown": "Datum zatím není oznámené",
+  "following.feedCreate": "Odebírat v aplikaci kalendáře…",
+  "following.feedCopy": "Kopírovat odkaz",
+  "following.feedCopied": "Odkaz zkopírován.",
+  "following.feedOpen": "Otevřít v kalendáři",
+  "following.feedRevoke": "Zneplatnit odkaz",
+  "following.feedRevokeConfirm": "Zneplatnit odkaz? Kalendáře, které ho odebírají, se přestanou aktualizovat.",
+  "following.feedHint": "Kdo má tento odkaz, vidí, co sledujete. Pokud unikne, zneplatněte ho.",
 
   // Epizody.
   "episodes.heading": "Epizody",

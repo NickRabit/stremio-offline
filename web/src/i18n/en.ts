@@ -431,6 +431,13 @@ export const en = {
 
   "following.dateUncertainHint": "The exact date is not announced yet; this is the season's start.",
   "following.dateUnknown": "Date not announced",
+  "following.feedCreate": "Subscribe in a calendar app…",
+  "following.feedCopy": "Copy link",
+  "following.feedCopied": "Link copied.",
+  "following.feedOpen": "Open in calendar",
+  "following.feedRevoke": "Revoke link",
+  "following.feedRevokeConfirm": "Revoke this link? Calendars subscribed to it stop updating.",
+  "following.feedHint": "Anyone with this link sees what you follow. Revoke it if it leaks.",
 
   // Episodes.
   "episodes.heading": "Episodes",

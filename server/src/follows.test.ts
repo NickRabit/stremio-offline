@@ -5,7 +5,7 @@ import path from "node:path";
 import { test } from "node:test";
 import type { DownloadSelection } from "./downloads.js";
 import type { AppError } from "./errors.js";
-import { activityItems, calendarItems, downloadEligibility, FollowService, FollowStore, followStaggerMs, movieEpisode, normalizeFollowEpisodes, reconcileReleaseDates, seasonsForReconcile, undatedCalendarItems, type EpisodeDownload, type Follow, type FollowAutoDownload, type FollowDeps, type FollowEpisode, type FollowJob, type FollowQueue } from "./follows.js";
+import { activityItems, calendarFeed, calendarItems, downloadEligibility, FollowService, FollowStore, followStaggerMs, movieEpisode, normalizeFollowEpisodes, reconcileReleaseDates, seasonsForReconcile, undatedCalendarItems, type EpisodeDownload, type Follow, type FollowAutoDownload, type FollowDeps, type FollowEpisode, type FollowJob, type FollowQueue } from "./follows.js";
 import type { MediaInfo } from "./naming.js";
 import type { MetaItem } from "./types.js";
 
@@ -1012,6 +1012,95 @@ test("undatedCalendarItems lists only uncertain episodes with no date", () => {
   assert.equal(items[0]!.state, "upcoming");
   assert.equal(items[0]!.dateUncertain, true);
   assert.equal("released" in items[0]!, false);
+});
+
+const DAY_MS = 24 * 60 * 60_000;
+const FEED_OPTIONS = { name: "Ada – Stremio Offline", language: "en" };
+
+test("calendarFeed writes a CRLF calendar with all-day dates and a next-day DTEND", () => {
+  const now = Date.parse("2024-03-18T00:00:00.000Z");
+  const follow = calendarFollow({ episodes: { "1:2": { ...episode(1, 2, "v2", "2024-03-20T21:30:00.000Z") } } });
+  const feed = calendarFeed([follow], now, FEED_OPTIONS);
+  assert.ok(feed.endsWith("END:VCALENDAR\r\n"));
+  assert.equal(feed.replace(/\r\n/g, "").includes("\n"), false, "every newline is a CRLF");
+  const lines = feed.split("\r\n");
+  for (const expected of [
+    "BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Stremio Offline//Following//EN", "CALSCALE:GREGORIAN",
+    "X-WR-CALNAME:Ada – Stremio Offline", "BEGIN:VEVENT", "UID:f1-1-2@stremio-offline", "DTSTAMP:20240318T000000Z",
+    "DTSTART;VALUE=DATE:20240320", "DTEND;VALUE=DATE:20240321", "SUMMARY:Show S01E02", "DESCRIPTION:upcoming", "END:VEVENT",
+  ]) assert.ok(lines.includes(expected), expected);
+});
+
+test("calendarFeed folds a summary with its title and marks an uncertain date", () => {
+  const now = Date.parse("2024-03-18T00:00:00.000Z");
+  const follow = calendarFollow({ episodes: {
+    "1:2": { ...episode(1, 2, "v2", "2024-03-20T00:00:00.000Z"), title: "Pilot" },
+    "1:3": { ...episode(1, 3, "v3", "2024-03-21T00:00:00.000Z"), title: "Second", dateUncertain: true },
+  } });
+  const summaries = calendarFeed([follow], now, FEED_OPTIONS).split("\r\n").filter((line) => line.startsWith("SUMMARY:"));
+  assert.deepEqual(summaries, ["SUMMARY:Show S01E02 · Pilot", "SUMMARY:≈ Show S01E03 · Second"]);
+});
+
+test("calendarFeed summarises a film by its name alone", () => {
+  const now = Date.parse("2024-03-18T00:00:00.000Z");
+  const film = calendarFollow({ id: "f9", type: "movie", name: "Dune", episodes: {
+    "1:1": { key: "1:1", videoId: "tt9", season: 1, episode: 1, firstSeenAt: "2024-01-01T00:00:00.000Z", released: "2024-03-20T00:00:00.000Z" },
+  } });
+  const summaries = calendarFeed([film], now, FEED_OPTIONS).split("\r\n").filter((line) => line.startsWith("SUMMARY:"));
+  assert.deepEqual(summaries, ["SUMMARY:Dune"]);
+});
+
+test("calendarFeed escapes separators and newlines in a text value", () => {
+  const now = Date.parse("2024-03-18T00:00:00.000Z");
+  const follow = calendarFollow({ episodes: {
+    "1:2": { ...episode(1, 2, "v2", "2024-03-20T00:00:00.000Z"), title: "Pilot; part, one\\two\nnext" },
+  } });
+  const lines = calendarFeed([follow], now, { name: "Ada, Stremio; Offline", language: "en" }).split("\r\n");
+  assert.ok(lines.includes("SUMMARY:Show S01E02 · Pilot\\; part\\, one\\\\two\\nnext"));
+  assert.ok(lines.includes("X-WR-CALNAME:Ada\\, Stremio\\; Offline"));
+});
+
+test("calendarFeed folds long lines at 75 octets without splitting a character", () => {
+  const now = Date.parse("2024-03-18T00:00:00.000Z");
+  const title = "Příliš žluťoučký kůň 😀 漢字".repeat(8);
+  const follow = calendarFollow({ episodes: { "1:2": { ...episode(1, 2, "v2", "2024-03-20T00:00:00.000Z"), title } } });
+  const lines = calendarFeed([follow], now, FEED_OPTIONS).split("\r\n");
+  const start = lines.findIndex((line) => line.startsWith("SUMMARY:"));
+  let end = start;
+  let rebuilt = lines[start]!;
+  while (lines[end + 1]?.startsWith(" ")) { end += 1; rebuilt += lines[end]!.slice(1); }
+  assert.ok(end > start, "the long summary was folded");
+  assert.equal(rebuilt, `SUMMARY:Show S01E02 · ${title}`, "unfolding restores the line, so no character was split");
+  for (let index = start; index <= end; index += 1) {
+    assert.ok(Buffer.byteLength(lines[index]!, "utf8") <= 75, `${lines[index]} carries more than 75 octets`);
+  }
+});
+
+test("calendarFeed keeps the [now - 30 days, now + 180 days) window and drops undated episodes", () => {
+  const now = Date.parse("2024-06-15T00:00:00.000Z");
+  const at = (offset: number) => new Date(now + offset).toISOString();
+  const follow = calendarFollow({ episodes: {
+    "too-old": { ...episode(1, 1, "v1", at(-31 * DAY_MS)) },
+    "at-from": { ...episode(1, 2, "v2", at(-30 * DAY_MS)) },
+    "at-to": { ...episode(1, 3, "v3", at(180 * DAY_MS)) },
+    "before-to": { ...episode(1, 4, "v4", at(180 * DAY_MS - 1)) },
+    "undated": { ...episode(1, 5, "v5"), dateUncertain: true },
+  } });
+  const uids = calendarFeed([follow], now, FEED_OPTIONS).split("\r\n").filter((line) => line.startsWith("UID:"));
+  assert.deepEqual(uids, ["UID:f1-1-2@stremio-offline", "UID:f1-1-4@stremio-offline"]);
+});
+
+test("calendarFeed names each download state in English words", () => {
+  const now = Date.parse("2024-06-15T00:00:00.000Z");
+  const states = ["reserved", "waiting", "completed", "attention", "skipped"] as const;
+  const episodes: Record<string, FollowEpisode> = {};
+  states.forEach((state, index) => {
+    episodes[`1:${index + 1}`] = { ...episode(1, index + 1, `v${index + 1}`, new Date(now - DAY_MS + index * 60_000).toISOString()), download: download({ state }) };
+  });
+  const descriptions = calendarFeed([calendarFollow({ episodes })], now, FEED_OPTIONS).split("\r\n").filter((line) => line.startsWith("DESCRIPTION:"));
+  assert.deepEqual(descriptions, [
+    "DESCRIPTION:queued", "DESCRIPTION:waiting for a source", "DESCRIPTION:downloaded", "DESCRIPTION:needs attention", "DESCRIPTION:skipped",
+  ]);
 });
 
 test("activityItems keeps only episodes with a download, newest first and capped", () => {

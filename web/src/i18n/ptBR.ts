@@ -403,6 +403,13 @@ export const ptBR: Catalog = {
 
   "following.dateUncertainHint": "A data exata ainda não foi anunciada; é o início da temporada.",
   "following.dateUnknown": "Data ainda não anunciada",
+  "following.feedCreate": "Assinar em um app de calendário…",
+  "following.feedCopy": "Copiar link",
+  "following.feedCopied": "Link copiado.",
+  "following.feedOpen": "Abrir no calendário",
+  "following.feedRevoke": "Revogar link",
+  "following.feedRevokeConfirm": "Revogar este link? Os calendários inscritos deixarão de ser atualizados.",
+  "following.feedHint": "Quem tem este link vê o que você segue. Revogue-o se vazar.",
   "episodes.heading": "Episódios",
   "episodes.one": "Episódio",
   "episodes.part": "Parte",

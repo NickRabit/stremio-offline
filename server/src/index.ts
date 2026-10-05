@@ -71,7 +71,7 @@ import { registerCurateRoutes } from "./routes/curate.js";
 import { registerDeviceRoutes } from "./routes/device.js";
 import { registerDiagnosticsRoutes } from "./routes/diagnostics.js";
 import { registerDownloadRoutes } from "./routes/downloads.js";
-import { registerFollowRoutes } from "./routes/follows.js";
+import { calendarFeedHandler, registerFollowRoutes } from "./routes/follows.js";
 import { registerLibrariesRoutes } from "./routes/libraries.js";
 import { registerPersonalRoutes } from "./routes/personal.js";
 import { registerPlaybackRoutes } from "./routes/playback.js";
@@ -2346,6 +2346,14 @@ app.all(["/api/proxy", "/api/subtitle", "/api/library/file"], (_req, res) => {
 });
 
 const webRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../web");
+// The calendar feed is reached with a token, not a session, so it sits outside `/api` and
+// ahead of the static files and the SPA fallback below.
+app.get("/calendar/:token.ics", calendarFeedHandler({
+  users: () => store.users(),
+  userData: (id) => store.userData(id),
+  followsOf: (id) => followStore.listForOwner(id),
+  languageOf: (id) => store.prefs(id).uiLanguage,
+}));
 app.use(express.static(webRoot, { setHeaders: (res, file) => { if (file.endsWith("index.html")) res.setHeader("Cache-Control", "no-store"); } }));
 app.get("/{*path}", (_req, res) => { res.setHeader("Cache-Control", "no-store"); res.sendFile(path.join(webRoot, "index.html")); });
 app.use((error: unknown, req: express.Request, res: express.Response, _next: express.NextFunction) => {

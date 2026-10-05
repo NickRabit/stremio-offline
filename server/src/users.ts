@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { verifyPassword } from "./auth.js";
 import { AppError } from "./errors.js";
 
@@ -68,6 +68,8 @@ export interface UserData {
   search?: Record<string, unknown>;
   /** What the follow wizard last chose. Shape pinned in follows.ts. */
   followDefaults?: FollowDefaults;
+  /** The secret a calendar app subscribes to this account's feed with. Absent means no feed. */
+  calendarFeedToken?: string;
   favorites: string[];
   watchlist: Record<string, unknown>;
   progress: Record<string, unknown>;
@@ -318,3 +320,13 @@ export const newUserPermissions = (): UserPermissions =>
 
 export const emptyUserData = (): UserData =>
   ({ prefs: {}, favorites: [], watchlist: {}, progress: {}, watchedSeries: {} });
+
+/** Whether a stored feed token is the presented one. Equal-length bytes go through
+ *  `timingSafeEqual`; a token of another length is answered by that length alone, which is
+ *  not the secret, so the comparison never reads uninitialised memory. */
+export const feedTokenMatches = (stored: string | undefined, token: string): boolean => {
+  if (!stored) return false;
+  const left = Buffer.from(stored, "utf8");
+  const right = Buffer.from(token, "utf8");
+  return left.length === right.length && timingSafeEqual(left, right);
+};

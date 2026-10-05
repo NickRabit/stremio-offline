@@ -492,6 +492,86 @@ export function undatedCalendarItems(follows: Follow[], limit: number): Calendar
   return items.slice(0, Math.max(0, limit));
 }
 
+/** The window a feed carries: everything released in the last month, and the next half year. */
+const FEED_PAST_MS = 30 * DAY_MS;
+const FEED_FUTURE_MS = 180 * DAY_MS;
+/** RFC 5545 wants no logical line longer than 75 octets, the fold space included. */
+const ICS_LINE_OCTETS = 75;
+
+/** Escapes a text value the way RFC 5545 wants it: the backslash first, then the two
+ *  separators and any newline, since escaping the backslash first would double its escapes. */
+const icsText = (value: string): string =>
+  value.replace(/\\/g, "\\\\").replace(/;/g, "\\;").replace(/,/g, "\\,").replace(/\r\n|\r|\n/g, "\\n");
+
+/** Folds one logical line to the 75-octet budget, a continuation line spending one on its
+ *  leading space. Iterating by character never splits a multi-byte one. */
+const foldIcsLine = (line: string): string => {
+  const folded: string[] = [];
+  let current = "";
+  let octets = 0;
+  for (const character of line) {
+    const size = Buffer.byteLength(character, "utf8");
+    if (octets + size > (folded.length ? ICS_LINE_OCTETS - 1 : ICS_LINE_OCTETS)) {
+      folded.push(current);
+      current = "";
+      octets = 0;
+    }
+    current += character;
+    octets += size;
+  }
+  folded.push(current);
+  return folded.join("\r\n ");
+};
+
+/** The UTC calendar day a release names, as `YYYYMMDD`. */
+const icsDay = (iso: string): string => iso.slice(0, 10).replace(/-/g, "");
+/** The UTC day after the one a `YYYYMMDD` string names. */
+const icsNextDay = (day: string): string =>
+  icsDay(new Date(Date.parse(`${day.slice(0, 4)}-${day.slice(4, 6)}-${day.slice(6, 8)}T00:00:00Z`) + DAY_MS).toISOString());
+/** An instant as `YYYYMMDDTHHMMSSZ`, the form DTSTAMP wants. */
+const icsStamp = (ms: number): string => new Date(ms).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+
+/** Every state a feed can carry, in the English words its DESCRIPTION uses. */
+const FEED_STATE: Record<CalendarEpisodeState, string> = {
+  upcoming: "upcoming", released: "released", reserved: "queued", queued: "queued",
+  waiting: "waiting for a source", completed: "downloaded", attention: "needs attention", skipped: "skipped",
+};
+
+/** One episode's summary: a film is its title, a series episode its code and title, and an
+ *  uncertain date is marked so the reader knows the day may still move. */
+const feedSummary = (item: CalendarItem): string => {
+  const code = `S${String(item.season).padStart(2, "0")}E${String(item.episode).padStart(2, "0")}`;
+  const body = item.type === "movie" ? item.name : `${item.name} ${code}${item.title ? ` · ${item.title}` : ""}`;
+  return `${item.dateUncertain ? "≈ " : ""}${body}`;
+};
+
+/** The private calendar an account subscribes to, as one RFC 5545 document. Pure: the route
+ *  decides who may read it, and `now` fixes both DTSTAMP and the window that is written. */
+export function calendarFeed(follows: Follow[], now: number, options: { name: string; language: string }): string {
+  const lines = [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "PRODID:-//Stremio Offline//Following//EN",
+    "CALSCALE:GREGORIAN",
+    `X-WR-CALNAME:${icsText(options.name)}`,
+  ];
+  for (const item of calendarItems(follows, now - FEED_PAST_MS, now + FEED_FUTURE_MS, now)) {
+    const start = icsDay(item.released);
+    lines.push(
+      "BEGIN:VEVENT",
+      `UID:${item.followId}-${item.season}-${item.episode}@stremio-offline`,
+      `DTSTAMP:${icsStamp(now)}`,
+      `DTSTART;VALUE=DATE:${start}`,
+      `DTEND;VALUE=DATE:${icsNextDay(start)}`,
+      `SUMMARY:${icsText(feedSummary(item))}`,
+      `DESCRIPTION:${icsText(FEED_STATE[item.state])}`,
+      "END:VEVENT",
+    );
+  }
+  lines.push("END:VCALENDAR");
+  return `${lines.map(foldIcsLine).join("\r\n")}\r\n`;
+}
+
 export interface ActivityItem {
   followId: string;
   type: string;

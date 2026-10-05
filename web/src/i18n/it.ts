@@ -403,6 +403,13 @@ export const it: Catalog = {
 
   "following.dateUncertainHint": "La data esatta non è ancora annunciata; è l'inizio della stagione.",
   "following.dateUnknown": "Data non ancora annunciata",
+  "following.feedCreate": "Iscriviti in un'app di calendario…",
+  "following.feedCopy": "Copia link",
+  "following.feedCopied": "Link copiato.",
+  "following.feedOpen": "Apri nel calendario",
+  "following.feedRevoke": "Revoca link",
+  "following.feedRevokeConfirm": "Revocare questo link? I calendari iscritti smetteranno di aggiornarsi.",
+  "following.feedHint": "Chi ha questo link vede cosa segui. Revocalo se trapela.",
   "episodes.heading": "Episodi",
   "episodes.one": "Episodio",
   "episodes.part": "Parte",

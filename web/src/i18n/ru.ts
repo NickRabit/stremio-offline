@@ -403,6 +403,13 @@ export const ru: Catalog = {
 
   "following.dateUncertainHint": "Точная дата ещё не объявлена; это начало сезона.",
   "following.dateUnknown": "Дата ещё не объявлена",
+  "following.feedCreate": "Подписаться в приложении календаря…",
+  "following.feedCopy": "Копировать ссылку",
+  "following.feedCopied": "Ссылка скопирована.",
+  "following.feedOpen": "Открыть в календаре",
+  "following.feedRevoke": "Отозвать ссылку",
+  "following.feedRevokeConfirm": "Отозвать эту ссылку? Подписанные календари перестанут обновляться.",
+  "following.feedHint": "У кого есть эта ссылка, видит, что вы отслеживаете. Отзовите её, если она утечёт.",
   "episodes.heading": "Эпизоды",
   "episodes.one": "Эпизод",
   "episodes.part": "Часть",

@@ -154,4 +154,27 @@ describe("FollowingPage", () => {
     await act(async () => { retry.click(); await Promise.resolve(); await Promise.resolve(); });
     expect(fetchMock.mock.calls.some(([url]) => String(url) === "/api/follows/f1/episodes/1%3A2/retry")).toBe(true);
   });
+
+  it("creates a calendar feed link and clears it again on revoke", async () => {
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (!String(url).includes("/api/follows/calendar-feed")) return json({ items: [] });
+      if (init?.method === "POST") return json({ token: "tok123" });
+      if (init?.method === "DELETE") return new Response(null, { status: 204 });
+      return json({ token: null });
+    });
+    vi.stubGlobal("confirm", () => true);
+    await render([]);
+    await clickTab("Calendar");
+    const button = (label: string) => [...host.querySelectorAll<HTMLButtonElement>(".following-feed button")].find((item) => item.textContent === label);
+
+    await act(async () => { button("Subscribe in a calendar app…")!.click(); await Promise.resolve(); await Promise.resolve(); });
+    const input = host.querySelector<HTMLInputElement>(".following-feed-url")!;
+    expect(input.value).toBe(`${window.location.origin}/calendar/tok123.ics`);
+    expect(input.readOnly).toBe(true);
+    expect(host.querySelector<HTMLAnchorElement>(".following-feed a")!.getAttribute("href")).toBe(`webcal://${window.location.host}/calendar/tok123.ics`);
+
+    await act(async () => { button("Revoke link")!.click(); await Promise.resolve(); await Promise.resolve(); });
+    expect(host.querySelector(".following-feed-url")).toBeNull();
+    expect(button("Subscribe in a calendar app…")).toBeTruthy();
+  });
 });

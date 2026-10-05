@@ -171,6 +171,10 @@ export const api = {
       .then((answer) => ({ items: answer.items, undated: answer.undated ?? [] })),
   followActivity: (limit?: number) =>
     request<{ items: ActivityItem[] }>(`/api/follows/activity${limit ? `?${q({ limit })}` : ""}`).then((answer) => answer.items),
+  /** The token a calendar app subscribes to this account's feed with, or null while none exists. */
+  followCalendarFeed: () => request<{ token: string | null }>("/api/follows/calendar-feed").then((answer) => answer.token),
+  createFollowCalendarFeed: () => request<{ token: string }>("/api/follows/calendar-feed", { method: "POST" }).then((answer) => answer.token),
+  revokeFollowCalendarFeed: () => request<void>("/api/follows/calendar-feed", { method: "DELETE" }),
   followDefaults: () => request<{ defaults: FollowDefaults | null }>("/api/follows/defaults").then((answer) => answer.defaults),
   saveFollowDefaults: (defaults: FollowDefaults) => request<void>("/api/follows/defaults", { method: "PUT", body: JSON.stringify(defaults) }),
   progressList: () => request<ProgressEntry[]>("/api/progress"),

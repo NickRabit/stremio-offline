@@ -1,13 +1,14 @@
 import type express from "express";
+import { randomBytes } from "node:crypto";
 import { allowedAddons } from "../addons.js";
 import type { DownloadSelection } from "../downloads.js";
 import { AppError } from "../errors.js";
 import { images } from "../images.js";
-import { activityItems, calendarItems, CALENDAR_MAX_SPAN_MS, downloadEligibility, parseFollowDefaults, undatedCalendarItems, type Follow, type FollowAutoDownload, type FollowEpisode, type FollowService, type FollowStore } from "../follows.js";
+import { activityItems, calendarFeed, calendarItems, CALENDAR_MAX_SPAN_MS, downloadEligibility, parseFollowDefaults, undatedCalendarItems, type Follow, type FollowAutoDownload, type FollowEpisode, type FollowService, type FollowStore } from "../follows.js";
 import { defaultLibrary, libraryVisible, type DefaultLibrarySettings, type LibraryRecord, type Viewer } from "../libraries.js";
 import type { UserPrefs, WatchedMarker } from "../store.js";
 import type { DownloadTargetSettings, MetaItem } from "../types.js";
-import type { FollowDefaults, UserData } from "../users.js";
+import { feedTokenMatches, type FollowDefaults, type UserData, type UserRecord } from "../users.js";
 import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
 import { createSelectionParser } from "./downloads.js";
 
@@ -126,6 +127,37 @@ const pinnedTarget = (selection: DownloadSelection, libraries: LibraryRecord[], 
   return { libraryId: library.id, subfolder: rule.subfolder, layout: rule.layout, explicit: true };
 };
 
+export interface CalendarFeedDeps {
+  users(): UserRecord[];
+  userData(id: string): UserData;
+  followsOf(id: string): Follow[];
+  languageOf(id: string): string;
+}
+
+/** The public feed, reached with a token instead of a session. index.ts registers it outside
+ *  `/api`, ahead of the SPA fallback, so it carries no session middleware. An unknown token,
+ *  a gone account and a disabled one all answer the same bare 404, and the token is never
+ *  written to the log. */
+export function calendarFeedHandler(deps: CalendarFeedDeps): express.RequestHandler {
+  return (req, res) => {
+    const token = String(req.params.token ?? "");
+    let owner: UserRecord | undefined;
+    if (token) {
+      for (const user of deps.users()) {
+        if (!owner && feedTokenMatches(deps.userData(user.id).calendarFeedToken, token)) owner = user;
+      }
+    }
+    if (!owner || owner.disabled) { res.status(404).end(); return; }
+    const body = calendarFeed(deps.followsOf(owner.id), Date.now(), {
+      name: `${owner.username} – Stremio Offline`,
+      language: deps.languageOf(owner.id),
+    });
+    res.setHeader("content-type", "text/calendar; charset=utf-8");
+    res.setHeader("cache-control", "private, max-age=900");
+    res.send(body);
+  };
+}
+
 export function registerFollowRoutes(app: express.Application, deps: FollowDeps): void {
   const { store, followStore, follows, currentUser, dataOf, updateData, markersOf, posterOf, cachedMeta, prefsOf } = deps;
   const parseSelection = createSelectionParser({ store, currentUser, cachedMeta, prefsOf });
@@ -198,6 +230,23 @@ export function registerFollowRoutes(app: express.Application, deps: FollowDeps)
       .map((item) => ({ ...item, poster: images.proxied(item.poster) }));
     res.json({ items });
   });
+
+  // The private feed a calendar app subscribes to. Registered before `/api/follows/:id`, so
+  // `calendar-feed` is never read as an id.
+  app.get("/api/follows/calendar-feed", (req, res) => {
+    res.json({ token: dataOf(req).calendarFeedToken ?? null });
+  });
+
+  app.post("/api/follows/calendar-feed", asyncRoute(async (req, res) => {
+    const token = randomBytes(32).toString("base64url");
+    await updateData(req, (data) => { data.calendarFeedToken = token; });
+    res.json({ token });
+  }));
+
+  app.delete("/api/follows/calendar-feed", asyncRoute(async (req, res) => {
+    await updateData(req, (data) => { delete data.calendarFeedToken; });
+    res.status(204).end();
+  }));
 
   app.post("/api/follows", asyncRoute(async (req, res) => {
     const owner = viewerOf(currentUser(req));
