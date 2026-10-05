@@ -1211,6 +1211,67 @@ test("an admission that cannot be persisted is refused and leaves nothing behind
   }
 });
 
+test("a removal that cannot be saved keeps the row and its partial file", async () => {
+  let failing = false;
+  const { directory, queue, downloads } = await tempQueue({
+    writeState: async (file, data) => {
+      if (failing) throw Object.assign(new Error("no space left"), { code: "ENOSPC" });
+      await writeFile(file, data);
+    },
+  });
+  const stored = async () => JSON.parse(await readFile(path.join(directory, "data", "downloads.json"), "utf8")) as Array<{ id: string }>;
+  try {
+    const job = await queue.add("Film", { url: "http://127.0.0.1:1/film.mkv" });
+    await queue.pause(job.id);
+    const partial = `${queuedFile(downloads, job.target)}.part`;
+    await mkdir(path.dirname(partial), { recursive: true });
+    await writeFile(partial, "half a film");
+
+    failing = true;
+    await assert.rejects(queue.remove(job.id), (error: AppError) => error.messageKey === "err.queueNotSaved");
+    assert.ok(queue.get(job.id), "the row stays in the queue");
+    assert.equal(await readFile(partial, "utf8"), "half a film", "the partial file is still there to resume from");
+
+    failing = false;
+    await queue.remove(job.id);
+    assert.equal(queue.get(job.id), undefined);
+    assert.equal(existsSync(partial), false, "a removal that lands takes the partial file with it");
+    assert.deepEqual(await stored(), []);
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("clearing history that cannot be saved keeps the finished rows", async () => {
+  let failing = false;
+  const size = 128;
+  const { server, port } = await listen((_req, res) => {
+    res.writeHead(200, { "content-length": String(size), "content-type": "video/mp4" });
+    void send(res, size).then(() => res.end());
+  });
+  const { directory, queue } = await tempQueue({
+    writeState: async (file, data) => {
+      if (failing) throw Object.assign(new Error("no space left"), { code: "ENOSPC" });
+      await writeFile(file, data);
+    },
+  });
+  try {
+    const job = await queue.add("Film", { url: `http://127.0.0.1:${port}/film.mp4` });
+    await waitFor(queue, () => queue.get(job.id)?.status === "completed", 30_000);
+    failing = true;
+    await assert.rejects(queue.clearCompleted(), (error: AppError) => error.messageKey === "err.queueNotSaved");
+    assert.equal(queue.get(job.id)?.status, "completed", "the finished row is kept");
+    failing = false;
+    await queue.clearCompleted();
+    assert.deepEqual(queue.list(), []);
+  } finally {
+    await queue.stop();
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("a write queued after a failed admission does not store the refused job", async () => {
   let failOnce = false;
   let queue!: DownloadQueue;

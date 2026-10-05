@@ -159,3 +159,12 @@ test("a library revocation reaches a lazy job that names the library only in its
 
   assert.deepEqual(h.paused, ["lazy"], "only the job bound to the revoked library pauses");
 });
+
+test("a queue that cannot save the removal does not stop an account from being deleted", async () => {
+  const h = harness([job("one", "usr_a")]);
+  h.deps.queue.removeMatching = async () => { throw new Error("The download queue could not be saved."); };
+
+  await h.revocations.deleteUser("usr_a");
+
+  assert.deepEqual(h.followsRemoved, ["usr_a"], "the rest of the account still goes");
+});

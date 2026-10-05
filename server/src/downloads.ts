@@ -982,9 +982,16 @@ export class DownloadQueue {
     if (index < 0) throw new AppError("The item was not found.", "err.itemNotFound");
     // A guard that throws refuses the removal: the row is left as it was.
     await this.beforeRemove?.(this.jobs[index], reason);
-    const at = this.jobs.findIndex((job) => job.id === id);
+    const job = this.jobs.find((item) => item.id === id);
+    if (!job) return;
+    // The row leaves the file before its partial leaves the disk: a removal whose write fails
+    // keeps both, rather than coming back after a restart with nothing to resume from.
+    let at = -1;
+    await this.persist({
+      apply: () => { at = this.jobs.indexOf(job); if (at >= 0) this.jobs.splice(at, 1); },
+      revert: () => { if (at >= 0 && !this.jobs.includes(job)) this.jobs.splice(Math.min(at, this.jobs.length), 0, job); },
+    });
     if (at < 0) return;
-    const [job] = this.jobs.splice(at, 1);
     this.active.get(id)?.abort();
     if (job.status !== "completed" && job.target) {
       const partial = this.jobPath(job);
@@ -992,7 +999,6 @@ export class DownloadQueue {
       const subtitleFiles = this.subtitleFiles(job);
       if (subtitleFiles) await unlink(subtitleFiles.partial).catch(() => undefined);
     }
-    await this.save();
     this.pump();
   }
 
@@ -1014,8 +1020,11 @@ export class DownloadQueue {
   async clearCompleted() {
     const completed = this.jobs.filter((job) => job.status === "completed");
     await this.beforeClearCompleted?.(completed);
-    this.jobs = this.jobs.filter((job) => job.status !== "completed");
-    await this.save();
+    let before: DownloadJob[] = [];
+    await this.persist({
+      apply: () => { before = this.jobs; this.jobs = this.jobs.filter((job) => !completed.includes(job)); },
+      revert: () => { this.jobs = before.filter((job) => completed.includes(job) || this.jobs.includes(job)); },
+    });
   }
   changed() { this.pump(); }
   /** The key travels with the text so the interface can render a stored failure in
