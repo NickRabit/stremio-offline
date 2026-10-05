@@ -114,18 +114,23 @@ const releaseTarget = async (target: string, directory: boolean, reserved?: { in
 
 /** Renames onto the reserved placeholder. Windows cannot rename a folder over an existing
  *  folder, not even the empty placeholder of its own making, so the placeholder goes first
- *  there. The reservation has already kept a second caller out, which is what it was for. */
+ *  there, and for a moment the name is free. Another transfer that takes it in that moment
+ *  makes the rename fail; the name is then taken back with the same atomic create the
+ *  reservation used, or refused as taken if the other transfer still holds it. On Windows a
+ *  folder swap that throws never leaves this call holding a placeholder. */
 const swapInto = async (staged: string, target: string, directory: boolean): Promise<void> => {
   if (!directory || process.platform !== "win32") return rename(staged, target);
-  await rmdir(target).catch(() => undefined);
-  try {
-    await rename(staged, target);
-  } catch (error) {
-    // Between the rmdir and the rename the name was free for a moment. Another transfer that took
-    // it is a taken name, as the reservation would have said, not a raw EPERM.
-    const code = (error as NodeJS.ErrnoException).code;
-    if ((code === "EPERM" || code === "EEXIST" || code === "ENOTEMPTY") && await stat(target).then(() => true, () => false)) throw nameTaken();
-    throw error;
+  for (let attempt = 0; ; attempt += 1) {
+    await rmdir(target).catch(() => undefined);
+    try {
+      await rename(staged, target);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "EPERM" && code !== "EEXIST" && code !== "ENOTEMPTY" && code !== "EACCES") throw error;
+      if (attempt >= 2) throw nameTaken();
+      await reserveTarget(target, true);
+    }
   }
 };
 
@@ -137,7 +142,9 @@ const publish = async (temporary: string, target: string, directory: boolean): P
   try {
     await swapInto(temporary, target, directory);
   } catch (error) {
-    await releaseTarget(target, directory, reserved);
+    // A Windows folder swap has already given its placeholder up; removing the name now could
+    // take the placeholder of the transfer that won it.
+    if (!(directory && process.platform === "win32")) await releaseTarget(target, directory, reserved);
     throw error;
   }
 };
