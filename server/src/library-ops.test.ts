@@ -488,3 +488,125 @@ test("a journal with a version this build never wrote is copied aside, not overw
     assert.equal(await readFile(path.join(h.dataDir, damaged[0]!), "utf8"), original);
   } finally { await cleanup(h.dataDir, queues); }
 });
+
+test("record writes the step before it resolves, and the item's end clears it", async () => {
+  const h = await harness();
+  const queues: LibraryOps[] = [h.queue];
+  let sawStep: unknown;
+  try {
+    const file = path.join(h.dataDir, "record.json");
+    const queue = new LibraryOps({
+      file, retryMs: 10,
+      execute: async (_operation, item, _progress, journal) => {
+        await journal.record({ phase: "moving", from: item, to: `${item}-to` });
+        sawStep = JSON.parse(await readFile(file, "utf8")).jobs[0].step;
+        return { to: `${item}-to` };
+      },
+    });
+    queues.push(queue);
+    await queue.load();
+    await queue.enqueue({ op: "move", items: ["one"], target: "Archive" });
+    await waitFor(() => queue.snapshot().jobs[0]?.status === "completed");
+    await queue.settled();
+    assert.deepEqual(sawStep, { item: "one", data: { phase: "moving", from: "one", to: "one-to" } }, "the step is on disk before the item's work goes on");
+    const finished = JSON.parse(await readFile(file, "utf8")).jobs[0];
+    assert.equal(finished.status, "completed");
+    assert.equal("step" in finished, false, "the step is cleared once the item ends");
+  } finally { await cleanup(h.dataDir, queues); }
+});
+
+test("the step is cleared when the item fails", async () => {
+  const h = await harness();
+  const queues: LibraryOps[] = [h.queue];
+  try {
+    const file = path.join(h.dataDir, "record-failed.json");
+    const queue = new LibraryOps({
+      file, retryMs: 10,
+      execute: async (_operation, _item, _progress, journal) => {
+        await journal.record({ phase: "moving" });
+        throw new AppError("Missing", "err.pathMissing");
+      },
+    });
+    queues.push(queue);
+    await queue.load();
+    await queue.enqueue({ op: "move", items: ["one"], target: "Archive" });
+    await waitFor(() => queue.snapshot().jobs[0]?.status === "failed");
+    await queue.settled();
+    const finished = JSON.parse(await readFile(file, "utf8")).jobs[0];
+    assert.equal(finished.status, "failed");
+    assert.equal("step" in finished, false, "a failed item leaves no step behind");
+  } finally { await cleanup(h.dataDir, queues); }
+});
+
+test("a resumed item is handed its recorded step, and one naming another item is ignored", async () => {
+  const h = await harness();
+  const queues: LibraryOps[] = [h.queue];
+  const recorded: Array<[string, unknown]> = [];
+  const step = { phase: "moving", from: "a", to: "b" };
+  const job = (id: string, item: string, stored: unknown) => ({
+    id, operation: { op: "move", items: [item], target: "Archive" }, op: "move", status: "running",
+    total: 1, done: 0, failed: 0, bytes: 0, bytesTotal: 0, current: item,
+    startedAt: new Date().toISOString(), results: [], step: stored,
+  });
+  try {
+    const file = path.join(h.dataDir, "resumed.json");
+    await writeFile(file, JSON.stringify({ version: 1, jobs: [
+      job("mine", "one", { item: "one", data: step }),
+      job("other", "two", { item: "elsewhere", data: step }),
+    ] }));
+    const queue = new LibraryOps({
+      file, retryMs: 10,
+      execute: async (_operation, item, _progress, journal) => { recorded.push([item, journal.recorded]); return {}; },
+    });
+    queues.push(queue);
+    await queue.load();
+    await waitFor(() => recorded.length === 2);
+    assert.deepEqual(recorded.find(([item]) => item === "one")?.[1], step, "the step stored for the item under way is handed over");
+    assert.equal(recorded.find(([item]) => item === "two")?.[1], undefined, "a step naming another item is not");
+  } finally { await cleanup(h.dataDir, queues); }
+});
+
+test("snapshot never exposes the step", async () => {
+  const h = await harness();
+  const queues: LibraryOps[] = [h.queue];
+  try {
+    const file = path.join(h.dataDir, "hidden.json");
+    await writeFile(file, JSON.stringify({ version: 1, jobs: [{
+      id: "job", operation: { op: "move", items: ["one"], target: "Archive" }, op: "move", status: "running",
+      total: 1, done: 0, failed: 0, bytes: 0, bytesTotal: 0, current: "one",
+      startedAt: new Date().toISOString(), results: [],
+      step: { item: "one", data: { phase: "moving" } },
+    }] }));
+    const queue = new LibraryOps({ file, retryMs: 10, pause: () => "playback", execute: async () => ({}) });
+    queues.push(queue);
+    await queue.load();
+    await waitFor(() => queue.snapshot().jobs[0]?.pauseReason === "playback");
+    assert.ok(JSON.parse(await readFile(file, "utf8")).jobs[0].step, "the step is still on disk");
+    assert.equal("step" in queue.snapshot().jobs[0]!, false, "the step is not part of the public state");
+  } finally { await cleanup(h.dataDir, queues); }
+});
+
+// The write's temporary path is a directory, which no rename can replace on any platform
+// the suite runs on. The queue is otherwise idle, so nothing else is writing at the time.
+test("a record whose write fails rejects", async () => {
+  let outcome = "";
+  const h = await harness();
+  const queues: LibraryOps[] = [h.queue];
+  try {
+    const file = path.join(h.dataDir, "unwritable.json");
+    const queue = new LibraryOps({
+      file, retryMs: 10,
+      execute: async (_operation, _item, _progress, journal) => {
+        await mkdir(`${file}.tmp`, { recursive: true });
+        outcome = await journal.record({ phase: "moving" }).then(() => "resolved", () => "rejected");
+        await rm(`${file}.tmp`, { recursive: true, force: true });
+        return {};
+      },
+    });
+    queues.push(queue);
+    await queue.load();
+    await queue.enqueue({ op: "move", items: ["one"], target: "Archive" });
+    await queue.settled();
+    assert.equal(outcome, "rejected", "the executor hears that its record never reached the disk");
+  } finally { await cleanup(h.dataDir, queues); }
+});

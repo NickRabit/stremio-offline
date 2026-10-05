@@ -111,6 +111,17 @@ export class LibraryMetaStore {
   suggestions(libraryId: string) { return this.files.get(libraryId)?.suggestions ?? {}; }
   episodes() { return this.episodeMap; }
 
+  /** Whether the library that owns `key` remembers anything at or under it -- a match or a
+   *  suggestion row. A move into a path that already holds rows must not pin the inherited
+   *  identity over them, which is what a replay of a finished move would otherwise do. */
+  holds(key: string): boolean {
+    const parsed = parseLibraryPath(key);
+    const file = parsed ? this.files.get(parsed.libraryId) : undefined;
+    if (!parsed || !file) return false;
+    const within = (rows: Record<string, unknown>) => Object.keys(rows).some((row) => isPathWithin(row, parsed.relative));
+    return within(file.meta) || within(file.suggestions);
+  }
+
   /** Qualified-path view, what the path handling and the scan consume. Memoised: it is
    *  read per browse row, and rebuilding it there would walk every library. Read only --
    *  write through `update`. */

@@ -60,7 +60,7 @@ import { migrateStateFile } from "./library-migrate.js";
 import { LibraryMetaStore } from "./library-meta-store.js";
 import { artworks } from "./artwork-cache.js";
 import type { AddonRecord, MetaItem, StreamItem } from "./types.js";
-import { LibraryOps } from "./library-ops.js";
+import { LibraryOps, type OpsJournal } from "./library-ops.js";
 import { transferLibraryPath, type TransferProgress } from "./library-transfer.js";
 import { registerAddonsRoutes } from "./routes/addons.js";
 import { registerAuthRoutes } from "./routes/auth.js";
@@ -1677,15 +1677,10 @@ const forgetLibraryPath = async (key: string) => {
   return orphans;
 };
 
-/** Every stored binding uses the relative path, so a move has to keep them all consistent.
- *  `pin` is for a move into another folder: the identity an item inherited from the folder
- *  it is leaving has to become its own, or the destination's title would take over. */
-const relocateLibraryPath = async (key: string, nextKey: string, pin = false) => {
-  // The bindings live in one file per library, so a move into another library rewrites two
-  // of them and the store is the only place that can do both.
-  await metaStore.relocate(key, nextKey, pin);
-  // Every account, for the same reason a deletion reaches them all: the path moved for
-  // everybody who had stored anything against it.
+/** The personal rows a move carries: the star and the resume position of every account. A
+ *  deletion reaches them all for the same reason, and a replay of a move is harmless because
+ *  the remap is idempotent. */
+const remapPersonalState = async (key: string, nextKey: string) => {
   await updateEveryData((data) => {
     data.favorites = data.favorites.map((item) => remapPath(item, key, nextKey));
     data.progress = Object.fromEntries(Object.entries(progressOf(data)).map(([progressKey, value]) => {
@@ -1695,6 +1690,16 @@ const relocateLibraryPath = async (key: string, nextKey: string, pin = false) =>
       return [nextProgressKey, { ...value, path: nextPath }];
     }));
   });
+};
+
+/** Every stored binding uses the relative path, so a move has to keep them all consistent.
+ *  `pin` is for a move into another folder: the identity an item inherited from the folder
+ *  it is leaving has to become its own, or the destination's title would take over. */
+const relocateLibraryPath = async (key: string, nextKey: string, pin = false) => {
+  // The bindings live in one file per library, so a move into another library rewrites two
+  // of them and the store is the only place that can do both.
+  await metaStore.relocate(key, nextKey, pin);
+  await remapPersonalState(key, nextKey);
 };
 
 /** Moves the hashed thumbnails of an item and of everything under it to their new keys. The
@@ -1806,9 +1811,101 @@ const assertMoveType = async (key: string, destination: LibraryRecord, confirmed
   }
 };
 
-const transferLibraryItem = async (relative: string, folder: string, copy = false, progress?: TransferProgress, confirmTypeMismatch = false) => {
+/** What a queued move or copy is halfway through, written to the journal before the bytes
+ *  move so a crash can be finished from it. */
+type TransferStep = {
+  phase: "moving" | "published";
+  copy: boolean;
+  from: string;
+  to: string;
+  carried: string[];
+  cover?: string;
+};
+
+/** A record the journal kept, read back defensively: anything that does not match is a
+ *  record this build does not understand and is treated as no record at all. */
+const asTransferStep = (value: unknown): TransferStep | undefined => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const step = value as Partial<TransferStep>;
+  if (step.phase !== "moving" && step.phase !== "published") return undefined;
+  if (typeof step.copy !== "boolean" || typeof step.from !== "string" || typeof step.to !== "string") return undefined;
+  if (!Array.isArray(step.carried) || !step.carried.every((item) => typeof item === "string")) return undefined;
+  if (step.cover !== undefined && typeof step.cover !== "string") return undefined;
+  return {
+    phase: step.phase, copy: step.copy, from: step.from, to: step.to, carried: step.carried,
+    ...(step.cover !== undefined ? { cover: step.cover } : {}),
+  };
+};
+
+/** The metadata half of a transfer, everything after the bytes have landed, and the way a
+ *  record a crash left behind is finished. `sourceLeft` is the interrupted transfer's own
+ *  report, so a resumed move logs the same warning an in-process one does. */
+const finishTransfer = async (step: TransferStep, sourceLeft?: string, replay = false) => {
+  if (step.copy) {
+    await metaStore.copy(step.from, step.to);
+    // Both halves of a copy keep the picture: the item exists twice now.
+    await duplicateArtwork(step.carried, step.from, step.to);
+  }
+  else {
+    await relocateArtwork(step.carried, step.from, step.to);
+    if (step.cover) await carryCoveringArtwork(step.cover, step.to);
+    // A replay must not pin the folder's identity over the rows the first run already
+    // carried: once the source holds nothing and the destination does, only the personal
+    // rows are remapped. A first run always relocates, over any stale row at the target.
+    if (!replay || metaStore.holds(step.from) || !metaStore.holds(step.to)) await metaStore.relocate(step.from, step.to, true);
+    await remapPersonalState(step.from, step.to);
+  }
+  // Only the library the item left: the destination gained a folder, it did not lose one.
+  const pruned = step.copy ? [] : await pruneEmptiedFolders(step.from);
+  invalidateLibrary();
+  const moved = wirePath(step.to);
+  log("INFO", step.copy ? "Copied in the library" : "Moved in the library",
+    { from: step.from, to: moved, library: parseLibraryPath(step.from)?.libraryId, pruned, ...(sourceLeft ? { sourceLeft } : {}) });
+  // The item is not done while its metadata is still in the debounce.
+  await metaStore.flush();
+  return moved;
+};
+
+/** The `published` record is a shortcut for the next start, not a condition for finishing:
+ *  the bytes have moved, so a failed write is logged and the metadata half still runs. The
+ *  next start would read the `moving` record against the disk and land in the same place. */
+const recordPublished = async (step: TransferStep, journal?: OpsJournal) => {
+  await journal?.record({ ...step, phase: "published" }).catch((error: unknown) =>
+    log("WARN", "A finished transfer could not be recorded, finishing it anyway", { from: step.from, to: step.to, reason: error instanceof Error ? error.message : String(error) }));
+};
+
+/** Finishes an item a crash stopped in the middle of, from the record it left. Returns the
+ *  wire path when the record was enough, or undefined when the transfer never landed and the
+ *  normal path has to run from the start. */
+const resumeTransfer = async (step: TransferStep, journal?: OpsJournal): Promise<string | undefined> => {
+  const source = await resolveLibraryPath(store.libraries(), step.from);
+  const target = await resolveLibraryPath(store.libraries(), step.to);
+  const sourceExists = source ? await fileExists(source.absolute) : false;
+  const targetExists = target ? await fileExists(target.absolute) : false;
+  if (step.phase === "published") return finishTransfer(step, undefined, true);
+  // Neither end holds the bytes: nothing is guessed and nothing is deleted.
+  if (!sourceExists && !targetExists) throw new AppError("The file or folder does not exist.", "err.pathMissing");
+  // The transfer never landed: run the normal path from the start.
+  if (sourceExists && !targetExists) return undefined;
+  // The copy landed but the source was not removed: nothing is deleted, and the outcome is
+  // the one an interrupted transfer already reports.
+  const interrupted = sourceExists && !step.copy;
+  if (interrupted) log("WARN", "An interrupted move left its source behind", { from: step.from, to: step.to });
+  await recordPublished(step, journal);
+  return finishTransfer(step, interrupted ? "interrupted" : undefined, true);
+};
+
+const transferLibraryItem = async (relative: string, folder: string, copy = false, progress?: TransferProgress, confirmTypeMismatch = false, journal?: OpsJournal) => {
   const resolved = relative ? await resolveLibraryPath(store.libraries(), relative) : undefined;
   if (!resolved || !resolved.relative) throw new AppError("Invalid path.", "err.invalidPath");
+  // A record a crash left for this item is finished from what it says, before the source's
+  // absence is read as a missing item: a finished move leaves the source gone, which is
+  // exactly the state that resumes here.
+  const recorded = asTransferStep(journal?.recorded);
+  if (recorded && recorded.from === resolved.key) {
+    const resumed = await resumeTransfer(recorded, journal);
+    if (resumed !== undefined) return resumed;
+  }
   const info = await stat(resolved.absolute).catch(() => undefined);
   if (!info) throw new AppError("The file or folder does not exist.", "err.pathMissing");
   // Moving or copying the folder would take the nested library with it, and a copy would
@@ -1847,24 +1944,15 @@ const transferLibraryItem = async (relative: string, folder: string, copy = fals
   // The folder a title is bound through, when the item does not carry the binding itself: its
   // picture is the title's and has to travel with it.
   const cover = knownTitleEntry(resolved.key, metaStore.qualifiedMeta());
+  const step: TransferStep = {
+    phase: "moving", copy, from: resolved.key, to: target.key, carried,
+    ...(cover && cover.key !== resolved.key && isPathWithin(resolved.key, cover.key) ? { cover: cover.key } : {}),
+  };
+  // What is about to happen is on disk before the disk is touched.
+  await journal?.record(step);
   const transferred = await transferLibraryPath(resolved.absolute, target.absolute, !copy, progress);
-  if (copy) {
-    await metaStore.copy(resolved.key, target.key);
-    // Both halves of a copy keep the picture: the item exists twice now.
-    await duplicateArtwork(carried, resolved.key, target.key);
-  }
-  else {
-    await relocateArtwork(carried, resolved.key, target.key);
-    if (cover && cover.key !== resolved.key && isPathWithin(resolved.key, cover.key)) await carryCoveringArtwork(cover.key, target.key);
-    await relocateLibraryPath(resolved.key, target.key, true);
-  }
-  // Only the library the item left: the destination gained a folder, it did not lose one.
-  const pruned = copy ? [] : await pruneEmptiedFolders(resolved.key);
-  invalidateLibrary();
-  const moved = wirePath(target.key);
-  log("INFO", copy ? "Copied in the library" : "Moved in the library",
-    { from: relative, to: moved, library: resolved.library.id, pruned, ...(transferred.sourceLeft ? { sourceLeft: transferred.sourceLeft } : {}) });
-  return moved;
+  await recordPublished(step, journal);
+  return finishTransfer(step, transferred.sourceLeft);
 };
 
 // Manual binding of a title to a folder, for a file that did not arrive through the queue.
@@ -2281,7 +2369,7 @@ const libraryOps = new LibraryOps({
     }
     return undefined;
   },
-  execute: async (operation, item, progress) => {
+  execute: async (operation, item, progress, journal) => {
     // A `reroot` item is a bare name of the old root, not a library path: it is joined onto
     // both roots here, and resolving it as a key would throw before it ever moved.
     if (operation.op === "reroot") {
@@ -2299,7 +2387,7 @@ const libraryOps = new LibraryOps({
     try {
       if (operation.op === "move" || operation.op === "copy") {
         return {
-          to: await transferLibraryItem(item, operation.target, operation.op === "copy", progress, operation.confirmTypeMismatch === true),
+          to: await transferLibraryItem(item, operation.target, operation.op === "copy", progress, operation.confirmTypeMismatch === true, journal),
         };
       }
       if (operation.op === "delete") await deleteLibraryItem(item);

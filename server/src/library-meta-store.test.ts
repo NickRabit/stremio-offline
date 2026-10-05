@@ -281,3 +281,29 @@ test("a qualified write keeps a correction proposal's review fields", async () =
     });
   });
 });
+
+test("holds sees a file row, a folder above rows, and a suggestion", async () => {
+  await withStore(async (store, dataDir) => {
+    await seed(dataDir, libA,
+      { "Show/Season 1/01.mkv": record("tt1") },
+      { "Films/Heat": { type: "movie", id: "tt2", score: 80 } });
+    // A library with nothing but a suggestion: the proposal alone has to hold its path.
+    await seed(dataDir, libB, {}, { "Films/Ronin": { type: "movie", id: "tt3", score: 70 } });
+    await store.load();
+    assert.equal(store.holds(`${libA}/Show/Season 1/01.mkv`), true, "the row is at the key itself");
+    assert.equal(store.holds(`${libA}/Show`), true, "a folder holding rows holds them");
+    assert.equal(store.holds(`${libA}/Show/Season 1`), true, "the folder below the file row holds it");
+    assert.equal(store.holds(`${libA}/Films/Heat`), true, "a suggestion beside the match rows counts");
+    assert.equal(store.holds(`${libB}/Films/Ronin`), true, "a suggestion with no match row counts on its own");
+  });
+});
+
+test("holds is false for a path nothing remembered, an unknown library and a bare key", async () => {
+  await withStore(async (store, dataDir) => {
+    await seed(dataDir, libA, { "Show/01.mkv": record("tt1") });
+    await store.load();
+    assert.equal(store.holds(`${libA}/Other`), false, "an unrelated path holds nothing");
+    assert.equal(store.holds(`${libB}/Show/01.mkv`), false, "an unknown library holds nothing");
+    assert.equal(store.holds("Show/01.mkv"), false, "an unparsable key holds nothing");
+  });
+});
