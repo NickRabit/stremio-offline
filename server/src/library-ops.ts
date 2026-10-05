@@ -35,6 +35,14 @@ export interface OpsResult {
   errorKey?: string;
 }
 
+export interface OpsJournal {
+  /** What `record` stored for this same item before a restart, or undefined. */
+  recorded: unknown;
+  /** Stores `data` for the item now running and resolves once `library-ops.json` is
+   *  written. Rejects if the write fails. */
+  record(data: unknown): Promise<void>;
+}
+
 export interface OpsState {
   id: string;
   op: LibraryOp["op"];
@@ -53,6 +61,9 @@ export interface OpsState {
 
 interface StoredJob extends OpsState {
   operation: LibraryOp;
+  /** What the item currently under way is halfway through, written before it touches the
+   *  disk and cleared once it ends, so a crash can be finished on the next start. */
+  step?: { item: string; data: unknown };
   cancelRequested?: boolean;
   /** Set at enqueue and cleared once `finished` has run, so a job that went terminal
    *  without its hook (a crash in between) is picked up again by the next `load()`. */
@@ -63,7 +74,7 @@ interface StoredState { version: 1; jobs: StoredJob[] }
 
 export interface LibraryOpsOptions {
   file: string;
-  execute: (operation: LibraryOp, item: string, progress: (bytes: number, total?: number) => void) => Promise<{ to?: string }>;
+  execute: (operation: LibraryOp, item: string, progress: (bytes: number, total?: number) => void, journal: OpsJournal) => Promise<{ to?: string }>;
   pause?: (operation: LibraryOp, item: string) => Promise<OpsState["pauseReason"] | undefined> | OpsState["pauseReason"] | undefined;
   /** Called once when a job reaches a terminal state, after the state is saved.
    *  A throw is logged by the caller and never fails the job. */
@@ -71,7 +82,7 @@ export interface LibraryOpsOptions {
   retryMs?: number;
 }
 
-const publicJob = ({ operation: _operation, cancelRequested: _cancelRequested, notifyPending: _notifyPending, ...job }: StoredJob): OpsState => structuredClone(job);
+const publicJob = ({ operation: _operation, step: _step, cancelRequested: _cancelRequested, notifyPending: _notifyPending, ...job }: StoredJob): OpsState => structuredClone(job);
 
 const isTerminal = (status: OpsStatus) => status === "completed" || status === "failed" || status === "cancelled";
 
@@ -227,6 +238,16 @@ export class LibraryOps {
       job.status = "running";
       job.pauseReason = undefined;
       job.current = item;
+      // The journal is per item: `recorded` is what a run before the crash wrote for this
+      // same item, and `record` persists what this run is about to do before it touches
+      // the disk. Both hang off the item the pump is walking, not off the job.
+      const journal: OpsJournal = {
+        recorded: job.step?.item === item ? job.step.data : undefined,
+        record: async (data) => {
+          job.step = { item, data };
+          await this.save();
+        },
+      };
       const baseBytes = job.bytes;
       const baseTotal = job.bytesTotal;
       await this.save();
@@ -235,6 +256,7 @@ export class LibraryOps {
       // this job, so this is the call that reports it.
       if (job.cancelRequested) {
         job.current = undefined;
+        job.step = undefined;
         job.status = "cancelled";
         job.finishedAt = new Date().toISOString();
         await this.finish(job);
@@ -244,7 +266,7 @@ export class LibraryOps {
         const result = await this.options.execute(job.operation, item, (bytes, total = bytes) => {
           job.bytes = baseBytes + Math.max(0, bytes);
           job.bytesTotal = Math.max(baseTotal, baseBytes + Math.max(0, total));
-        });
+        }, journal);
         job.done += 1;
         job.results.push({ path: item, ok: true, ...result });
       } catch (error) {
@@ -252,6 +274,7 @@ export class LibraryOps {
         job.results.push({ path: item, ok: false, error: error instanceof Error ? error.message : String(error), errorKey: messageKeyOf(error) });
       }
       job.current = undefined;
+      job.step = undefined;
       if (job.cancelRequested) {
         job.status = "cancelled";
         job.finishedAt = new Date().toISOString();
