@@ -1,9 +1,10 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { messageKeyOf } from "./errors.js";
+import { AppError, messageKeyOf } from "./errors.js";
 import { renameWithRetry } from "./fs-retry.js";
 import { log } from "./logger.js";
+import { preserveDamaged, readStateFile } from "./state-file.js";
 
 /** Who asked for the operation. A job is carried out long after the request that queued it,
  *  and two of these write to somebody's own rows -- the star and the forgotten progress --
@@ -81,15 +82,44 @@ export class LibraryOps {
   private wakeTimer?: ReturnType<typeof setTimeout>;
   private pumped: Promise<void> = Promise.resolve();
   private notified = new Set<string>();
+  /** Set when the state file could not be read or was written by a newer version: work is
+   *  refused rather than overwriting a file the owner may still be able to fix. */
+  private unreadable = false;
 
   constructor(private readonly options: LibraryOpsOptions) {}
 
   async load() {
-    const saved = await readFile(this.options.file, "utf8").then((value) => {
-      try { return JSON.parse(value) as StoredState; } catch { return undefined; }
-    }, () => undefined);
-    if (saved?.version === 1 && Array.isArray(saved.jobs)) {
-      this.jobs = saved.jobs.filter((job) => Array.isArray(job.operation?.items) && typeof job.id === "string")
+    const state = await readStateFile(this.options.file);
+    if (state.kind === "unreadable") {
+      this.unreadable = true;
+      log("ERROR", "The library operations file could not be read, it is left as it is", { file: this.options.file, reason: state.error instanceof Error ? state.error.message : String(state.error) });
+      return;
+    }
+    let saved: unknown = undefined;
+    if (state.kind === "read") {
+      try { saved = JSON.parse(state.raw); } catch { saved = undefined; }
+      const object = saved !== null && typeof saved === "object" && !Array.isArray(saved);
+      const version = object ? (saved as { version?: unknown }).version : undefined;
+      if (object && typeof version === "number" && version > 1) {
+        this.unreadable = true;
+        log("ERROR", "The library operations file was written by a newer version, it is left as it is", { file: this.options.file, version });
+        return;
+      }
+      const shaped = object && version === 1 && Array.isArray((saved as { jobs?: unknown }).jobs);
+      if (!shaped) {
+        try {
+          const preserved = await preserveDamaged(this.options.file, state.raw);
+          log("ERROR", "The library operations file was damaged, it was copied aside and starts empty", { file: path.basename(preserved) });
+        } catch (error) {
+          this.unreadable = true;
+          log("ERROR", "The library operations file could not be read, it is left as it is", { file: this.options.file, reason: error instanceof Error ? error.message : String(error) });
+          return;
+        }
+        saved = undefined;
+      }
+    }
+    if ((saved as StoredState | undefined)?.version === 1 && Array.isArray((saved as StoredState).jobs)) {
+      this.jobs = (saved as StoredState).jobs.filter((job) => Array.isArray(job.operation?.items) && typeof job.id === "string")
         .map((job) => job.status === "running" || (job.status === "paused" && job.pauseReason !== "queue")
         ? { ...job, status: "paused", pauseReason: "queue", current: undefined }
         : job);
@@ -121,6 +151,7 @@ export class LibraryOps {
   async flush() { await this.saveTail; }
 
   async enqueue(operation: LibraryOp) {
+    if (this.unreadable) throw new AppError("The library operations file could not be read.", "err.libraryOpsUnreadable", 503);
     const now = new Date().toISOString();
     const job: StoredJob = {
       id: randomUUID(), operation, op: operation.op, status: "paused", pauseReason: "queue",
@@ -258,6 +289,7 @@ export class LibraryOps {
   }
 
   private save() {
+    if (this.unreadable) return Promise.resolve();
     const active = this.jobs.filter((job) => job.status === "running" || job.status === "paused");
     const finished = this.jobs.filter((job) => job.status !== "running" && job.status !== "paused").slice(-20);
     const state: StoredState = { version: 1, jobs: [...active, ...finished].sort((a, b) => a.startedAt.localeCompare(b.startedAt)) };

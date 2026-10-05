@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -1113,13 +1113,15 @@ test("a folder whose film is named differently is searched by the film's own nam
   } finally { await h.close(); }
 });
 
-test("a malformed scan state starts idle without throwing and its bytes survive today", async () => {
+test("a malformed scan state is copied aside and starts idle", async () => {
   const h = await harness();
   try {
     const file = path.join(h.dataDir, "library-scan.json");
     await writeFile(file, "{broken");
     await h.scan.load();
     assert.equal(h.scan.snapshot().status, "idle", "a state that cannot be parsed starts idle");
-    assert.equal(await readFile(file, "utf8"), "{broken", "the unreadable file is left as it is today");
+    const damaged = (await readdir(h.dataDir)).filter((name) => name.startsWith("library-scan.json.damaged-"));
+    assert.equal(damaged.length, 1, "the original bytes are copied aside");
+    assert.equal(await readFile(path.join(h.dataDir, damaged[0]!), "utf8"), "{broken");
   } finally { await h.close(); }
 });

@@ -1,7 +1,8 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { renameWithRetry } from "./fs-retry.js";
 import { log } from "./logger.js";
+import { preserveDamaged, readStateFile } from "./state-file.js";
 import {
   autoAccept, cacheFieldsFromMeta, episodesFromMeta, knownTitleForUnit, lookupSkipped, needsRefresh, pickSuggestion, scanMiss,
   scannedRecently, scanSkipReason, scoreHit, viewMeta, yearFromMeta, MATCH_RULE_VERSION, needsReevaluation, parseUnit,
@@ -216,12 +217,23 @@ export class LibraryScan {
 
   async load() {
     await mkdir(path.dirname(this.stateFile), { recursive: true });
-    try {
-      const loaded = JSON.parse(await readFile(this.stateFile, "utf8")) as ScanState;
-      if (loaded && typeof loaded === "object" && Array.isArray(loaded.remaining)) this.state = { ...idle(), ...loaded };
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        log("ERROR", "The library scan state was unreadable, starting idle", { reason: error instanceof Error ? error.message : String(error) });
+    const state = await readStateFile(this.stateFile);
+    if (state.kind === "unreadable") {
+      log("ERROR", "The library scan state could not be read, starting idle", { file: this.stateFile, reason: state.error instanceof Error ? state.error.message : String(state.error) });
+      this.state = idle();
+    } else if (state.kind === "read") {
+      let loaded: unknown = undefined;
+      try { loaded = JSON.parse(state.raw); } catch { loaded = undefined; }
+      const shaped = loaded !== null && typeof loaded === "object" && Array.isArray((loaded as ScanState).remaining);
+      if (shaped) {
+        this.state = { ...idle(), ...(loaded as ScanState) };
+      } else {
+        try {
+          const preserved = await preserveDamaged(this.stateFile, state.raw);
+          log("ERROR", "The library scan state was damaged, it was copied aside and starts idle", { file: path.basename(preserved) });
+        } catch (error) {
+          log("ERROR", "The damaged library scan state could not be copied aside, starting idle", { file: this.stateFile, reason: error instanceof Error ? error.message : String(error) });
+        }
         this.state = idle();
       }
     }

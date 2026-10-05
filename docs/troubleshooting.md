@@ -155,6 +155,29 @@ copy of the pre-libraries state. Rolling back a single version with it means
 losing the accounts as well. Per-library match history lives beside it in
 `library/<library id>.json` and is additive, so it survives either way.
 
+## When a state file is damaged
+
+The download queue (`downloads.json`), the library operations
+(`library-ops.json`), the scan progress (`library-scan.json`) and the match
+history (`library/<library id>.json`, `library/episodes.json`) are plain JSON in
+`DATA_DIR`. If one of them cannot be parsed at start, its exact bytes are first
+copied next to it as `<name>.damaged-<time>-<random>`, the log says so at
+`ERROR`, and that store starts empty. Nothing else is lost, and every later
+damaged file gets its own copy.
+
+A file that cannot be read at all (permissions, a disk error), or a library
+operations file written by a newer version, is left exactly as it is instead.
+The queue or the library operations then refuse new work with *The download
+queue file could not be read* or *The library operations file could not be
+read*. Fix the permissions or restore the file from a backup, and restart.
+
+To put a damaged file back, stop the server, repair the copy and move it over
+the original name:
+
+```sh
+cp data/downloads.json.damaged-2026-10-05T12-00-00-000Z-a1b2c3 data/downloads.json
+```
+
 ## Common situations
 
 | Symptom | Where to look |
@@ -165,4 +188,5 @@ losing the accounts as well. Per-library match history lives beside it in
 | The NAS freezes during playback | [Keeping the NAS responsive](install-synology.md#keeping-the-nas-responsive) |
 | `unknown libva error` | [When the driver does not start](hardware-acceleration.md#when-the-driver-does-not-start) |
 | A stream is listed but will not play | A raw torrent needs a Real-Debrid token, or it is still leeching on their side; see [Real-Debrid](downloads.md#real-debrid-and-other-debrid-services) |
+| A queue or library job list came up empty | [When a state file is damaged](#when-a-state-file-is-damaged) |
 | Locked out of the account | [Security → Forgotten password](../README.md#security) |
