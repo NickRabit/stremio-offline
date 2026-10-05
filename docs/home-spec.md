@@ -308,8 +308,8 @@ This is where the page can break, so it is designed first.
 
 ### Measured
 
-A prototype built on the real `style.css` and markup (not committed; it would go
-stale) was measured in a browser at the sizes below. None had page-level
+A prototype, [docs/home-prototype](home-prototype/README.md), built on the real
+`style.css` and markup, was measured in a browser at the sizes below. None had page-level
 horizontal overflow.
 
 | Viewport | Measured |
