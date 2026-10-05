@@ -1443,6 +1443,37 @@ test("closing during a seek also stops the preserved fallback conversion", async
   assert.ok(killed.includes(previous), "the fallback process must not outlive a closed player");
 });
 
+test("a player closed during a hardware seek does not count against the GPU", async () => {
+  const manager = new PlaybackManager(tmp("test-close-hardware-seek")) as any;
+  manager.vaapiDevice = "/dev/dri/renderD128";
+  manager.softwareEncoder = true;
+  manager.plan = () => ({ copyVideo: false, copyAudio: false });
+  manager.killChild = async () => {};
+  manager.purgeNow = async () => {};
+  let close = true;
+  let closing: Promise<void> | undefined;
+  manager.run = async (session: any) => {
+    session.process = { exitCode: null, signalCode: null };
+    if (close) { closing = manager.stop(session.id); return undefined; }
+    session.error = "Failed to initialise VAAPI connection";
+    return undefined;
+  };
+  for (const id of ["first", "second"]) {
+    const session = remuxSession(manager, { id, mode: "transcode", process: { exitCode: null, signalCode: null } });
+    await assert.rejects(manager.seek(session.id, 1200), /no longer exists/);
+    await closing;
+  }
+  assert.equal(manager.vaapiFailures, 0);
+  assert.equal(manager.vaapiDevice, "/dev/dri/renderD128");
+
+  // A seek whose hardware attempts really failed, once and once more on the retry, still switches it off.
+  close = false;
+  const failing = remuxSession(manager, { id: "failing", mode: "transcode", process: { exitCode: null, signalCode: null } });
+  assert.equal((await manager.seek(failing.id, 1200)).seekRestored, true);
+  assert.equal(manager.vaapiFailures, 2);
+  assert.equal(manager.vaapiDevice, undefined);
+});
+
 for (const scenario of ["dead fallback", "decode recovery"] as const) {
   test(`a failed restart does not report a recoverable seek for ${scenario}`, async (t) => {
     const { manager, session, previous } = retirementFixture();

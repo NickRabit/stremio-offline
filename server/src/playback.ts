@@ -988,6 +988,8 @@ export class PlaybackManager {
       firstAttempt = false;
       const url = await this.run(session, offset, directory, hardware);
       if (url) return url;
+      // Closed while this attempt was opening: nothing failed, and the path it ran on is not to blame.
+      if (session.stopped) break;
       // A source that answers 404 will answer the same to the software attempt.
       if (session.error === SOURCE_UNREACHABLE) break;
       if (hardware) {
@@ -1030,6 +1032,7 @@ export class PlaybackManager {
     }
     await this.killChild(session.process);
     await this.purge(directory, "a conversion that failed");
+    this.assertActive(session);
     throw new AppError(session.error || "The video conversion could not be started.", "err.conversionFailed");
   }
 
