@@ -26,6 +26,7 @@ interface FakeJob {
   id: string;
   status: string;
   errorKey?: string;
+  target?: string;
   follow?: { followId: string; episodeKey: string; intent: string };
   source?: { type: string; videoId: string };
 }
@@ -52,7 +53,7 @@ const fakeQueue = () => {
     },
     findActiveEpisode: (_ownerUserId, type, videoId) => jobs.find((job) => job.source?.type === type && job.source?.videoId === videoId && job.status !== "completed" && job.status !== "failed"),
     adopt: async (id, follow) => { const job = jobs.find((item) => item.id === id); if (job) job.follow = follow; },
-    followJobs: () => jobs.map((job) => ({ id: job.id, status: job.status, ...(job.errorKey ? { errorKey: job.errorKey } : {}), ...(job.follow ? { follow: job.follow } : {}) })),
+    followJobs: () => jobs.map((job) => ({ id: job.id, status: job.status, ...(job.errorKey ? { errorKey: job.errorKey } : {}), ...(job.target ? { target: job.target } : {}), ...(job.follow ? { follow: job.follow } : {}) })),
     get: (id) => { const job = jobs.find((item) => item.id === id); return job ? { id: job.id, status: job.status, ...(job.errorKey ? { errorKey: job.errorKey } : {}) } : undefined; },
     retry: async (id, selection) => { retried.push(id); if (selection) retriedWith.push(selection); const job = jobs.find((item) => item.id === id); if (job) job.status = "queued"; },
     remove: async (id) => {
@@ -1276,4 +1277,199 @@ test("a followed film is downloaded once when it comes out, whatever the start r
   assert.equal(q.added[0].title, "Film");
   await service.admit(follow.id);
   assert.equal(q.added.length, 1, "exactly one download");
+});
+
+/** The delay closes `afterWatchedDays` after the marker's own `updatedAt`, ISO. */
+const retentionMarker = (season: number, episode: number, updatedAt = "2024-05-01T00:00:00.000Z") =>
+  ({ season, episode, updatedAt });
+
+const doneDownload = (target?: string): EpisodeDownload =>
+  download({ state: "completed", ...(target ? { target } : {}) });
+
+/** Runs one retention pass: pushes every check out of the way, then ticks the service. */
+const runRetentionPass = async (service: FollowService, store: FollowStore) => {
+  for (const follow of store.all()) {
+    await store.update(follow.id, (current) => { current.nextCheckAt = new Date(NOW + 365 * DAY).toISOString(); });
+  }
+  await service.tick();
+};
+
+const adminDeps = (removedTargets: string[], watched: () => { season: number; episode: number; updatedAt?: string } | undefined): Partial<FollowDeps> => ({
+  owner: () => ({ id: "u1", role: "admin" }),
+  watched,
+  removeFile: async (target) => { removedTargets.push(target); return true; },
+});
+
+test("retention deletes only the completed, targeted, watched and delayed episodes", async (t) => {
+  const { store } = await withStore(t);
+  const q = fakeQueue();
+  const removedTargets: string[] = [];
+  const service = buildService(store, q, adminDeps(removedTargets, () => retentionMarker(1, 2)));
+  const id = await seedSeries(store, [
+    episode(1, 1, "v1", RELEASED),
+    episode(1, 2, "v2", RELEASED),
+    episode(1, 3, "v3", RELEASED),
+    episode(1, 4, "v4", RELEASED),
+  ], rule({ retention: { afterWatchedDays: 1 } }));
+  await store.update(id, (current) => {
+    current.episodes["1:1"].download = doneDownload("lib_shows/Show/S01E01.mkv");
+    current.episodes["1:2"].download = doneDownload("lib_shows/Show/S01E02.mkv");
+    current.episodes["1:3"].download = doneDownload();
+    current.episodes["1:4"].download = download({ state: "waiting" });
+  });
+
+  await runRetentionPass(service, store);
+
+  assert.deepEqual(removedTargets, ["lib_shows/Show/S01E01.mkv", "lib_shows/Show/S01E02.mkv"]);
+  const first = store.get(id)!.episodes["1:1"].download!;
+  assert.equal(first.state, "completed", "the state stays completed so it is never queued again");
+  assert.ok(first.removedAt);
+  assert.equal(first.removedReason, "retention");
+  assert.ok(store.get(id)!.episodes["1:2"].download!.removedAt);
+  assert.equal(store.get(id)!.episodes["1:3"].download!.removedAt, undefined, "no target was written by this follow");
+  assert.equal(store.get(id)!.episodes["1:4"].download!.removedAt, undefined, "an unfinished download is left alone");
+});
+
+test("retention waits for the delay and the marker", async (t) => {
+  const { store } = await withStore(t);
+  const q = fakeQueue();
+  const removedTargets: string[] = [];
+  let marker = retentionMarker(1, 2, "2024-05-31T23:00:00.000Z");
+  const service = buildService(store, q, adminDeps(removedTargets, () => marker));
+  const id = await seedSeries(store, [episode(1, 1, "v1", RELEASED), episode(1, 2, "v2", RELEASED)], rule({ retention: { afterWatchedDays: 7 } }));
+  await store.update(id, (current) => {
+    current.episodes["1:1"].download = doneDownload("lib_shows/S01E01.mkv");
+    current.episodes["1:2"].download = doneDownload("lib_shows/S01E02.mkv");
+  });
+
+  await runRetentionPass(service, store);
+  assert.deepEqual(removedTargets, [], "not before the delay has passed");
+
+  marker = retentionMarker(1, 0, "2024-01-01T00:00:00.000Z");
+  await runRetentionPass(service, store);
+  assert.deepEqual(removedTargets, [], "not when the marker is behind the episode");
+
+  marker = retentionMarker(1, 2);
+  await runRetentionPass(service, store);
+  assert.deepEqual(removedTargets, ["lib_shows/S01E01.mkv", "lib_shows/S01E02.mkv"]);
+});
+
+test("retention never runs for a follow a non-administrator owns", async (t) => {
+  const { store } = await withStore(t);
+  const q = fakeQueue();
+  const removedTargets: string[] = [];
+  const service = buildService(store, q, {
+    owner: () => ({ id: "u1", role: "user" }),
+    watched: () => retentionMarker(1, 2),
+    removeFile: async (target) => { removedTargets.push(target); return true; },
+  });
+  const id = await seedSeries(store, [episode(1, 1, "v1", RELEASED)], rule({ retention: { afterWatchedDays: 1 } }));
+  await store.update(id, (current) => { current.episodes["1:1"].download = doneDownload("lib_shows/S01E01.mkv"); });
+
+  await runRetentionPass(service, store);
+
+  assert.deepEqual(removedTargets, []);
+  assert.equal(store.get(id)!.episodes["1:1"].download!.removedAt, undefined);
+});
+
+test("retention never runs for a paused follow", async (t) => {
+  const { store } = await withStore(t);
+  const q = fakeQueue();
+  const removedTargets: string[] = [];
+  const service = buildService(store, q, adminDeps(removedTargets, () => retentionMarker(1, 2)));
+  const id = await seedSeries(store, [episode(1, 1, "v1", RELEASED)], rule({ retention: { afterWatchedDays: 1 } }));
+  await store.update(id, (current) => {
+    current.episodes["1:1"].download = doneDownload("lib_shows/S01E01.mkv");
+    current.enabled = false;
+  });
+
+  await runRetentionPass(service, store);
+
+  assert.deepEqual(removedTargets, []);
+  assert.equal(store.get(id)!.episodes["1:1"].download!.removedAt, undefined);
+});
+
+test("retention deletes at most ten per pass", async (t) => {
+  const { store } = await withStore(t);
+  const q = fakeQueue();
+  const removedTargets: string[] = [];
+  const service = buildService(store, q, adminDeps(removedTargets, () => retentionMarker(1, 12)));
+  const episodes = Array.from({ length: 12 }, (_unused, index) => episode(1, index + 1, `v${index + 1}`, RELEASED));
+  const id = await seedSeries(store, episodes, rule({ retention: { afterWatchedDays: 1 } }));
+  await store.update(id, (current) => {
+    for (const key of Object.keys(current.episodes)) current.episodes[key].download = doneDownload(`lib_shows/${key}.mkv`);
+  });
+
+  await runRetentionPass(service, store);
+  assert.equal(removedTargets.length, 10);
+  const afterFirst = Object.values(store.get(id)!.episodes).filter((entry) => entry.download?.removedAt);
+  assert.equal(afterFirst.length, 10);
+
+  await runRetentionPass(service, store);
+  assert.equal(removedTargets.length, 12, "the next pass clears what is left");
+});
+
+test("a refused removal records nothing", async (t) => {
+  const { store } = await withStore(t);
+  const q = fakeQueue();
+  let attempts = 0;
+  const service = buildService(store, q, {
+    owner: () => ({ id: "u1", role: "admin" }),
+    watched: () => retentionMarker(1, 1),
+    removeFile: async () => { attempts += 1; return false; },
+  });
+  const id = await seedSeries(store, [episode(1, 1, "v1", RELEASED)], rule({ retention: { afterWatchedDays: 1 } }));
+  await store.update(id, (current) => { current.episodes["1:1"].download = doneDownload("lib_shows/S01E01.mkv"); });
+
+  await runRetentionPass(service, store);
+
+  assert.equal(attempts, 1);
+  const download = store.get(id)!.episodes["1:1"].download!;
+  assert.equal(download.removedAt, undefined);
+  assert.equal(download.state, "completed");
+});
+
+test("a removed episode is never admitted or synced again", async (t) => {
+  const { store } = await withStore(t);
+  const q = fakeQueue();
+  const removedTargets: string[] = [];
+  const service = buildService(store, q, adminDeps(removedTargets, () => retentionMarker(1, 1)));
+  const id = await seedSeries(store, [episode(1, 1, "v1", RELEASED)], rule({ retention: { afterWatchedDays: 1 } }));
+  await store.update(id, (current) => { current.episodes["1:1"].download = doneDownload("lib_shows/S01E01.mkv"); });
+
+  await runRetentionPass(service, store);
+  assert.equal(store.get(id)!.episodes["1:1"].download!.removedAt !== undefined, true);
+
+  await service.admit(id);
+  await service.sync();
+  assert.equal(q.added.length, 0, "nothing is queued again");
+  assert.equal(removedTargets.length, 1, "the file is not deleted a second time");
+  assert.equal(store.get(id)!.episodes["1:1"].download!.state, "completed");
+});
+
+test("jobCompleted and sync remember the library key a finished download wrote", async (t) => {
+  const { store } = await withStore(t);
+  const q = fakeQueue();
+  const service = buildService(store, q);
+  const id = await seedSeries(store, [episode(1, 1, "v1", RELEASED)], rule());
+  await service.admit(id);
+  const job = q.jobs[0];
+  await service.jobCompleted({ id: job.id, status: "completed", follow: job.follow, target: "lib_shows/Show/S01E01.mkv" });
+  const download = store.get(id)!.episodes["1:1"].download!;
+  assert.equal(download.state, "completed");
+  assert.equal(download.target, "lib_shows/Show/S01E01.mkv");
+
+  // The same key is recorded when sync links a job that completed while unresolved.
+  const other = await store.create({ ownerUserId: "u1", type: "series", metaId: "tt2", name: "Other" }, 0);
+  await store.recordCheck(other.id, { episodes: [episode(2, 1, "w1", RELEASED)], now: 0 });
+  await store.update(other.id, (current) => { current.autoDownload = rule(); });
+  await service.admit(other.id);
+  const linked = q.jobs.at(-1)!;
+  linked.target = "lib_shows/Show/S02E01.mkv";
+  await store.update(other.id, (current) => { current.episodes["2:1"].download = { state: "reserved", intent: linked.follow!.intent, generation: 1, attempts: 0, updatedAt: RELEASED }; });
+  q.complete(linked.id);
+  await service.sync();
+  const synced = store.get(other.id)!.episodes["2:1"].download!;
+  assert.equal(synced.state, "completed");
+  assert.equal(synced.target, "lib_shows/Show/S02E01.mkv");
 });

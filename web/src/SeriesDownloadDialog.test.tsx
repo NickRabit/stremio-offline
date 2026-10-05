@@ -187,4 +187,26 @@ describe("SeriesDownloadDialog", () => {
     expect(host.querySelector('input[name="follow-start"]'), "no where-to-start for a film").toBeNull();
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/stream-sources/movie/tt9"))).toBe(true);
   });
+
+  it("shows the after-watching choice for an administrator's series and sends it", async () => {
+    const initial: FollowAutoDownload = { enabledAt: "2024-01-01T00:00:00.000Z", startMode: "new", selection: { addonKeys: ["first"], sourceStrategy: "priority", audioLanguage: "cs", audioMode: "listed", subtitleMode: "off" } };
+    await act(async () => { root.render(<SeriesDownloadDialog type="series" label="Show" title="Show" libraries={[]} addons={[]} episodes={[{ id: "tt1:1:1", season: 1, episode: 1 }]} audioLanguage="cs" subtitleLanguage="cs" languages={[{ code: "cs", name: "Čeština" }]} follow={{ followId: "f1", initial }} canRetain onClose={() => undefined}/>); });
+    await act(async () => { await Promise.resolve(); });
+    expect(host.textContent).toContain("After watching");
+    const select = [...host.querySelectorAll("select")].find((entry) => [...entry.options].some((option) => option.textContent === "Delete 30 days after watching"))!;
+    await act(async () => { select.value = "7"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+    const save = [...host.querySelectorAll("button")].find((button) => button.textContent === "Turn on")!;
+    await act(async () => { save.click(); await Promise.resolve(); });
+    const patch = fetchMock.mock.calls.find((call) => (call[1] as RequestInit | undefined)?.method === "PATCH")!;
+    expect(JSON.parse(String((patch[1] as RequestInit).body)).retention).toEqual({ afterWatchedDays: 7 });
+  });
+
+  it("hides the after-watching choice from a plain account and for a film", async () => {
+    await act(async () => { root.render(<SeriesDownloadDialog type="series" label="Show" title="Show" libraries={[]} addons={[]} episodes={[{ id: "tt1:1:1", season: 1, episode: 1 }]} audioLanguage="cs" subtitleLanguage="cs" languages={[{ code: "cs", name: "Čeština" }]} follow={{ followId: "f1" }} onClose={() => undefined}/>); });
+    await act(async () => { await Promise.resolve(); });
+    expect(host.textContent).not.toContain("After watching");
+    await act(async () => { root.render(<SeriesDownloadDialog type="movie" label="Film" title="Film" libraries={[]} addons={[]} episodes={[{ id: "tt9" }]} audioLanguage="cs" subtitleLanguage="cs" languages={[{ code: "cs", name: "Čeština" }]} follow={{ followId: "f1" }} canRetain onClose={() => undefined}/>); });
+    await act(async () => { await Promise.resolve(); });
+    expect(host.textContent).not.toContain("After watching");
+  });
 });

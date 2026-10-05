@@ -372,6 +372,8 @@ export interface FollowAutoDownload {
   selection: DownloadSelection;
   /** Days after release during which only the preferred audio is accepted. */
   graceDays?: number;
+  /** Delete downloaded episodes this long after the owner watched past them; absent keeps them. */
+  retention?: { afterWatchedDays: 1 | 7 | 30 };
   /** Catalogue key of the reason nothing is admitted while the account may not download. */
   blockedKey?: string;
 }
@@ -386,6 +388,9 @@ export interface FollowEpisodeDownload {
   nextAttemptAt?: string;
   /** ISO instant the preferred-audio window closes, while the row is waiting inside it. */
   graceUntil?: string;
+  /** ISO instant the file was deleted by retention; the state stays completed. */
+  removedAt?: string;
+  removedReason?: "retention";
   reasonKey?: string;
   updatedAt: string;
 }

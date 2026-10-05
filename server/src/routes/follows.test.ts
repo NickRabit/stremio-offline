@@ -542,3 +542,41 @@ test("each token only ever returns its own account's follows", async () => {
     assert.ok(!bFeed.includes("Alpha"), "B's feed never carries A's follows");
   } finally { await h.close(); }
 });
+
+test("an administrator may set, change and clear a retention delay", async () => {
+  const h = await mount();
+  try {
+    const follow = await (await api(h.base, "/api/follows", { method: "POST", as: "A", body: { type: "series", id: "tt1", name: "Show" } })).json() as { id: string };
+    await api(h.base, `/api/follows/${follow.id}`, { method: "PATCH", as: "A", body: { autoDownload: { startMode: "new", selection: { addonKeys: ["admin-addon"], audioLanguage: "en" } } } });
+
+    const set = await api(h.base, `/api/follows/${follow.id}`, { method: "PATCH", as: "A", body: { retention: { afterWatchedDays: 7 } } });
+    assert.equal(set.status, 200);
+    assert.equal(((await set.json()) as { autoDownload?: { retention?: { afterWatchedDays: number } } }).autoDownload?.retention?.afterWatchedDays, 7);
+
+    const cleared = await api(h.base, `/api/follows/${follow.id}`, { method: "PATCH", as: "A", body: { retention: null } });
+    assert.equal(cleared.status, 200);
+    assert.equal(((await cleared.json()) as { autoDownload?: { retention?: unknown } }).autoDownload?.retention, undefined);
+
+    for (const bad of [0, 2, "soon"]) {
+      const response = await api(h.base, `/api/follows/${follow.id}`, { method: "PATCH", as: "A", body: { retention: { afterWatchedDays: bad } } });
+      assert.equal(response.status, 400, String(bad));
+      assert.equal(await keyOf(response), "err.followInvalid");
+    }
+  } finally { await h.close(); }
+});
+
+test("a plain account cannot turn retention on, and a film has nothing to delete", async () => {
+  const h = await mount();
+  try {
+    const mine = await (await api(h.base, "/api/follows", { method: "POST", as: "B", body: { type: "series", id: "tt1", name: "Show" } })).json() as { id: string };
+    await api(h.base, `/api/follows/${mine.id}`, { method: "PATCH", as: "B", body: { autoDownload: { startMode: "new", selection: { addonKeys: ["stream-addon"], audioLanguage: "en" } } } });
+    const denied = await api(h.base, `/api/follows/${mine.id}`, { method: "PATCH", as: "B", body: { retention: { afterWatchedDays: 7 } } });
+    assert.equal(denied.status, 403);
+    assert.equal(await keyOf(denied), "err.followRetentionAdmin");
+
+    const film = await (await api(h.base, "/api/follows", { method: "POST", as: "A", body: { type: "movie", id: "tt9", name: "Film" } })).json() as { id: string };
+    const rejected = await api(h.base, `/api/follows/${film.id}`, { method: "PATCH", as: "A", body: { retention: { afterWatchedDays: 1 } } });
+    assert.equal(rejected.status, 400);
+    assert.equal(await keyOf(rejected), "err.followInvalid");
+  } finally { await h.close(); }
+});

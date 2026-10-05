@@ -1608,7 +1608,7 @@ const followService = new FollowService({
   // The marker key is the series meta id, the same one `newEpisodes` reads.
   watched: (ownerUserId, metaId) => {
     const marker = (store.userData(ownerUserId).watchedSeries as Record<string, WatchedMarker> | undefined)?.[metaId];
-    return marker ? { season: marker.season, episode: marker.episode } : undefined;
+    return marker ? { season: marker.season, episode: marker.episode, updatedAt: marker.updatedAt } : undefined;
   },
   queue: {
     addPending: (title, source, media, ownerUserId, follow) => queue.addPending(title, source, media, ownerUserId, follow),
@@ -1626,6 +1626,19 @@ const followService = new FollowService({
     addons: store.addons(),
     libraries: store.libraries(),
   }, { targetSettings: selection.targetSettings }),
+  // Retention deletes a single library file through the same operations queue that waits for
+  // playback, an unreachable disk and active downloads. Only a key that names a real library
+  // file is accepted; a folder, a sibling or an unqualified path is refused.
+  removeFile: async (target) => {
+    const parsed = parseLibraryPath(target);
+    if (!parsed || !parsed.relative) return false;
+    const resolved = await resolveLibraryPath(store.libraries(), target);
+    if (!resolved || !resolved.relative) return false;
+    const info = await stat(resolved.absolute).catch(() => undefined);
+    if (!info?.isFile()) return false;
+    await libraryOps.enqueue({ op: "delete", items: [target] });
+    return true;
+  },
 });
 
 // The queue is built before the follow service, so its guards are wired afterwards.

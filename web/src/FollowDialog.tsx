@@ -25,7 +25,7 @@ const futureGrace = (value?: string) => value && Date.parse(value) > Date.now() 
 const episodeDate = (row: { released?: string; dateUncertain?: boolean }) =>
   row.dateUncertain ? `≈ ${row.released ? formatDay(row.released) : t("following.dateUnknown")}` : formatDay(row.released);
 
-export function FollowDialog({ follow, videos, languages, libraries, addons, audioLanguage, subtitleLanguage, onChanged, onClose, onNotify }: {
+export function FollowDialog({ follow, videos, languages, libraries, addons, audioLanguage, subtitleLanguage, canRetain = false, onChanged, onClose, onNotify }: {
   follow: FollowView;
   videos?: Video[];
   languages: Array<{ code: string; name: string }>;
@@ -33,6 +33,8 @@ export function FollowDialog({ follow, videos, languages, libraries, addons, aud
   addons: Addon[];
   audioLanguage: string;
   subtitleLanguage: string;
+  /** Whether the account may delete watched episodes automatically; only administrators may. */
+  canRetain?: boolean;
   onChanged: (follow: FollowView | null) => void;
   onClose: () => void;
   onNotify: (text: string) => void;
@@ -122,7 +124,11 @@ export function FollowDialog({ follow, videos, languages, libraries, addons, aud
     : "";
   const graceLanguage = auto ? languageName(auto.selection.audioLanguage) : "";
   const autoSummary = auto
-    ? [t("follow.autoSummary", { start: autoStart, library: autoLibrary }), auto.graceDays ? t("follow.graceSummary", { count: auto.graceDays, language: graceLanguage }) : ""].filter(Boolean).join(" · ")
+    ? [
+        t("follow.autoSummary", { start: autoStart, library: autoLibrary }),
+        auto.graceDays ? t("follow.graceSummary", { count: auto.graceDays, language: graceLanguage }) : "",
+        auto.retention ? t("follow.retentionSummary", { count: auto.retention.afterWatchedDays }) : "",
+      ].filter(Boolean).join(" · ")
     : "";
   const countParts = [
     current.downloads.queued ? t("follow.countQueued", { count: current.downloads.queued }) : "",
@@ -185,7 +191,7 @@ export function FollowDialog({ follow, videos, languages, libraries, addons, aud
                 <div className="follow-episode-main"><b>{episodeCode(row.season, row.episode)}</b><span className="follow-episode-title">{row.title ?? ""}</span></div>
                 <div className="follow-episode-meta">
                   <small title={row.dateUncertain ? t("following.dateUncertainHint") : undefined}>{episodeDate(row)}</small>
-                  {pillState && <span className={`state-pill state-${pillState}`}>{state === "waiting" ? t("follow.stateWaiting") : state === "completed" ? t("follow.stateCompleted") : state === "skipped" ? t("follow.stateSkipped") : state === "attention" ? t("follow.stateAttention") : state === "reserved" || state === "queued" ? t("follow.stateQueued") : t("follow.stateUpcoming")}</span>}
+                  {pillState && <span className={`state-pill state-${pillState}`}>{state === "waiting" ? t("follow.stateWaiting") : state === "completed" ? (row.download?.removedAt ? t("follow.removedAfterWatching") : t("follow.stateCompleted")) : state === "skipped" ? t("follow.stateSkipped") : state === "attention" ? t("follow.stateAttention") : state === "reserved" || state === "queued" ? t("follow.stateQueued") : t("follow.stateUpcoming")}</span>}
                   {state === "waiting" && grace
                     ? <small>{t("follow.graceWaiting", { language: graceLanguage, date: formatDay(grace) })}</small>
                     : state === "waiting" && row.download?.nextAttemptAt ? <small>{t("follow.nextAttempt", { time: formatWhen(row.download.nextAttemptAt) })}</small> : null}
@@ -204,6 +210,7 @@ export function FollowDialog({ follow, videos, languages, libraries, addons, aud
     </div>
     {setupOpen && <SeriesDownloadDialog type={current.type} label={current.name} title={current.name} episodes={setupEpisodes}
       audioLanguage={audioLanguage} subtitleLanguage={subtitleLanguage} languages={languages} libraries={libraries} addons={addons}
+      canRetain={canRetain}
       follow={{ followId: current.id, ...(current.autoDownload ? { initial: current.autoDownload } : {}) }}
       onClose={closeSetup}/>}
   </>;

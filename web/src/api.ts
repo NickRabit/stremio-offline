@@ -155,7 +155,7 @@ export const api = {
     .then((answer) => answer.follow),
   follow: (payload: { type: string; id: string; name: string; poster?: string }) =>
     request<FollowView>("/api/follows", { method: "POST", body: JSON.stringify(payload) }),
-  updateFollow: (id: string, patch: { enabled?: boolean; autoDownload?: { startMode: FollowStartMode; startSeason?: number; startEpisode?: number; aheadCount?: number; graceDays?: number; selection: DownloadSelection; target?: SaveTarget } | null }) =>
+  updateFollow: (id: string, patch: { enabled?: boolean; retention?: { afterWatchedDays: number } | null; autoDownload?: { startMode: FollowStartMode; startSeason?: number; startEpisode?: number; aheadCount?: number; graceDays?: number; selection: DownloadSelection; target?: SaveTarget } | null }) =>
     request<FollowView>(`/api/follows/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(patch) }),
   unfollow: (id: string) => request<void>(`/api/follows/${encodeURIComponent(id)}`, { method: "DELETE" }),
   checkFollow: (id: string) => request<FollowView>(`/api/follows/${encodeURIComponent(id)}/check`, { method: "POST" }),

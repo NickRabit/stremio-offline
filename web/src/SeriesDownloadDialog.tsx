@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowDown, ArrowUp, Bell, CalendarClock, FolderOpen, Languages, ListFilter, Subtitles, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Bell, CalendarClock, FolderOpen, Languages, ListFilter, Subtitles, Trash2, X } from "lucide-react";
 import { api, describeError } from "./api";
 import { languageName, t, useI18n } from "./i18n";
 import { SaveTargetFields } from "./SaveTargetFields";
@@ -33,7 +33,7 @@ const localPreview = (episodes: Episode[], startMode: FollowStartMode, startSeas
 
 const pad2 = (value: number) => String(Math.max(0, Math.trunc(value))).padStart(2, "0");
 
-export function SeriesDownloadDialog({ type, label, title, episodes, audioLanguage, subtitleLanguage, languages, libraries, addons, follow, onClose, onSubmit }: {
+export function SeriesDownloadDialog({ type, label, title, episodes, audioLanguage, subtitleLanguage, languages, libraries, addons, follow, canRetain = false, onClose, onSubmit }: {
   type: string;
   label: string;
   title: string;
@@ -43,6 +43,8 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
   languages: Array<{ code: string; name: string }>;
   libraries: LibraryView[];
   addons: Addon[];
+  /** Administrators may delete watched episodes automatically; nobody else sees the choice. */
+  canRetain?: boolean;
   /** Set when the dialog edits a follow's automatic rule instead of queueing a batch. Without
    *  `followId` it is the first step of following: how to follow comes first, and the follow
    *  is created only when the person confirms. */
@@ -62,6 +64,7 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
   const [audioFallback, setAudioFallback] = useState(initial?.selection.fallbackAudioLanguage ?? (startAudio === "en" ? "" : "en"));
   const [audioMode, setAudioMode] = useState<AudioMode>(initial?.selection.audioMode ?? "listed");
   const [graceDays, setGraceDays] = useState(initial?.graceDays ?? 0);
+  const [retentionDays, setRetentionDays] = useState<number>(initial?.retention?.afterWatchedDays ?? 0);
   const [subtitleMode, setSubtitleMode] = useState<SubtitleMode>(initial?.selection.subtitleMode ?? "optional");
   const [subtitle, setSubtitle] = useState(startSubtitle);
   const [subtitleFallback, setSubtitleFallback] = useState(initial?.selection.fallbackSubtitleLanguage ?? (startSubtitle === "en" ? "" : "en"));
@@ -198,14 +201,17 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
       if (follow) {
         const created = follow.create ? await api.follow({ type, id: follow.create.metaId, name: follow.create.name, poster: follow.create.poster }) : undefined;
         const followId = created?.id ?? follow.followId!;
-        const updated = await api.updateFollow(followId, { autoDownload: {
-          startMode,
-          ...(startMode === "from" && startSeason != null && startEpisode != null ? { startSeason, startEpisode } : {}),
-          ...(startMode === "ahead" ? { aheadCount } : {}),
-          graceDays,
-          selection,
-          ...(target ? { target } : {}),
-        } });
+        const updated = await api.updateFollow(followId, {
+          ...(canRetain ? { retention: retentionDays > 0 ? { afterWatchedDays: retentionDays } : null } : {}),
+          autoDownload: {
+            startMode,
+            ...(startMode === "from" && startSeason != null && startEpisode != null ? { startSeason, startEpisode } : {}),
+            ...(startMode === "ahead" ? { aheadCount } : {}),
+            graceDays,
+            selection,
+            ...(target ? { target } : {}),
+          },
+        });
         if (created) follow.onFollowed?.(updated);
       } else if (onSubmit) {
         await onSubmit(selection, target ?? undefined);
@@ -303,6 +309,16 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
           </div>
           <p className="identify-hint">{t("follow.graceHint")}</p></>}
         </section>
+        {follow && downloading && !isMovie && canRetain && <section className="bulk-section">
+          <div className="bulk-section-head"><Trash2/><div><h3>{t("follow.retentionHeading")}</h3></div></div>
+          <div className="bulk-language-grid">
+            <label><select aria-label={t("follow.retentionHeading")} value={retentionDays} onChange={(event) => setRetentionDays(Number(event.target.value))}>
+              <option value={0}>{t("follow.retentionKeep")}</option>
+              {[1, 7, 30].map((days) => <option key={days} value={days}>{t("follow.retentionAfter", { count: days })}</option>)}
+            </select></label>
+          </div>
+          <p className="identify-hint">{t("follow.retentionHint")}</p>
+        </section>}
         <section className="bulk-section">
           <div className="bulk-section-head"><Subtitles/><div><h3>{t("bulk.subtitleSettings")}</h3><p>{t("bulk.subtitleSettingsHint")}</p></div></div>
           <div className="bulk-language-grid bulk-subtitle-grid">

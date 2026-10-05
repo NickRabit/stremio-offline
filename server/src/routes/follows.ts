@@ -25,6 +25,8 @@ export interface FollowDeps extends RouteContext {
 
 interface FollowEpisodeView { season: number; episode: number; title?: string; released?: string; releasedSource?: "addon" | "tmdb"; dateUncertain?: boolean }
 interface FollowDownloads { queued: number; waiting: number; completed: number; skipped: number; attention: number }
+/** The delays a follow may delete watched episodes after. */
+const RETENTION_DAYS = [1, 7, 30] as const;
 interface FollowView {
   id: string;
   ownerUserId: string;
@@ -309,8 +311,28 @@ export function registerFollowRoutes(app: express.Application, deps: FollowDeps)
         await follows.setAutoDownload(follow.id, owner.id, value);
       }
     }
+    // Retention opts the follow in on its own; a non-administrator may not turn it on, and a
+    // film has nothing to delete. `null` clears it and is allowed for anyone.
+    let retention: FollowAutoDownload["retention"] | null | undefined;
+    if ("retention" in body) {
+      if (body.retention === null) {
+        retention = null;
+      } else {
+        const item = typeof body.retention === "object" && body.retention ? body.retention as Record<string, unknown> : {};
+        const afterWatchedDays = Number(item.afterWatchedDays);
+        if (follow.type === "movie" || !RETENTION_DAYS.includes(afterWatchedDays as 1 | 7 | 30)) {
+          throw new AppError("The followed series is missing a type, an id or a name.", "err.followInvalid");
+        }
+        if (owner.role !== "admin") throw new AppError("Only an administrator can delete watched episodes automatically.", "err.followRetentionAdmin", 403);
+        retention = { afterWatchedDays: afterWatchedDays as 1 | 7 | 30 };
+      }
+    }
     const updated = await followStore.update(follow.id, (current) => {
       if (typeof body.enabled === "boolean") current.enabled = body.enabled;
+      if (retention !== undefined && current.autoDownload) {
+        if (retention === null) delete current.autoDownload.retention;
+        else current.autoDownload.retention = retention;
+      }
       current.revision += 1;
     });
     res.json(followView(updated, Date.now()));

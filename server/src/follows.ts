@@ -4,7 +4,7 @@ import path from "node:path";
 import type { DownloadSelection } from "./downloads.js";
 import { AppError } from "./errors.js";
 import { renameWithRetry } from "./fs-retry.js";
-import type { Viewer } from "./libraries.js";
+import { parseLibraryPath, type Viewer } from "./libraries.js";
 import { log } from "./logger.js";
 import type { MediaInfo } from "./naming.js";
 import type { MetaItem } from "./types.js";
@@ -41,6 +41,8 @@ export interface FollowAutoDownload {
   selection: DownloadSelection;
   /** Days after release during which only the preferred audio is admitted, 0..30. */
   graceDays?: number;
+  /** Delete downloaded episodes this long after the owner watched past them; absent keeps them. */
+  retention?: { afterWatchedDays: 1 | 7 | 30 };
   /** The catalogue key of the reason nothing is admitted, while the owner may not download. */
   blockedKey?: string;
 }
@@ -59,6 +61,11 @@ export interface EpisodeDownload {
   nextAttemptAt?: string;
   /** ISO UTC, the moment the preferred-audio window closes; only meaningful in `waiting`. */
   graceUntil?: string;
+  /** The library key the completed download wrote, remembered when the job finished. */
+  target?: string;
+  /** ISO UTC, set when the file was deleted by retention; the state stays `completed`. */
+  removedAt?: string;
+  removedReason?: "retention";
   reasonKey?: string;
   updatedAt: string;
 }
@@ -843,6 +850,8 @@ export interface FollowJob {
   id: string;
   status: string;
   errorKey?: string;
+  /** The library key the job wrote, once it has one. */
+  target?: string;
   follow?: { followId: string; episodeKey: string; intent: string };
 }
 
@@ -876,8 +885,12 @@ export interface FollowDeps {
   /** A film's release dates by kind, from TMDB; undefined when no key is set. */
   movieReleases?: (metaId: string, owner: Viewer) => Promise<MovieReleases | null>;
   /** The owner's watched marker for a series, keyed by the meta id; the last episode they
-   *  finished, or nothing when they never did. Drives the "ahead" window. */
-  watched?: (ownerUserId: string, metaId: string) => { season: number; episode: number } | undefined;
+   *  finished, or nothing when they never did. Drives the "ahead" window; `updatedAt` closes
+   *  the retention delay. */
+  watched?: (ownerUserId: string, metaId: string) => { season: number; episode: number; updatedAt?: string } | undefined;
+  /** Delete one file by its library key. Answers whether the deletion was queued; a key that
+   *  is not a library file is refused without touching anything. */
+  removeFile?: (target: string) => Promise<boolean>;
   /** The download queue the followed series queue into. */
   queue: FollowQueue;
   /** The owner may queue into this selection's library right now. */
@@ -896,6 +909,8 @@ const HOUR_MS = 60 * 60_000;
  *  across every follow: a long season is picked up over several passes, not in one burst. */
 const ADMIT_PER_CALL = 20;
 const OUTSTANDING_LIMIT = 20;
+/** How many files one retention pass may delete, so a bulk cleanup never storms the queue. */
+const RETENTION_PER_PASS = 10;
 
 /** When a failed download is tried again: an hour, six hours, then a day, then a week. */
 const downloadLadderMs = (attempts: number): number =>
@@ -1179,7 +1194,7 @@ export class FollowService {
     const download = follow?.episodes[episodeKey]?.download;
     if (!follow || !download) return;
     if (job.status === "completed") {
-      await this.setDownload(followId, episodeKey, { ...download, state: "completed", jobId: job.id, reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
+      await this.setDownload(followId, episodeKey, { ...download, ...(job.target ? { target: job.target } : {}), state: "completed", jobId: job.id, reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
     } else if (job.status === "failed") {
       await this.setWaiting(followId, episodeKey, { ...download, jobId: job.id }, job, now);
     } else {
@@ -1223,7 +1238,7 @@ export class FollowService {
         if (download.state === "queued") {
           const job = jobs.get(download.intent);
           if (!job) await this.setDownload(follow.id, episodeKey, { ...download, state: "attention", jobId: undefined, reasonKey: "err.followJobMissing", nextAttemptAt: undefined, updatedAt: "" });
-          else if (job.status === "completed") await this.setDownload(follow.id, episodeKey, { ...download, state: "completed", reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
+          else if (job.status === "completed") await this.setDownload(follow.id, episodeKey, { ...download, ...(job.target ? { target: job.target } : {}), state: "completed", reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
           else if (job.status === "failed") await this.setWaiting(follow.id, episodeKey, download, job, now);
           continue;
         }
@@ -1240,7 +1255,7 @@ export class FollowService {
           if (!this.fresh(follow.id, revision)) return;
           await this.setDownload(follow.id, episodeKey, { ...download, state: "queued", jobId: job.id, reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
         } else if (job && job.status === "completed") {
-          await this.setDownload(follow.id, episodeKey, { ...download, state: "completed", reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
+          await this.setDownload(follow.id, episodeKey, { ...download, ...(job.target ? { target: job.target } : {}), state: "completed", reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
         } else if (!job && !download.jobId) {
           // The failed job was cleared from the queue on purpose; the episode is still wanted.
           await this.enqueueLocked(follow.id, revision, episodeKey, download.generation + 1);
@@ -1279,9 +1294,43 @@ export class FollowService {
         for (const follow of this.deps.store.all()) {
           if (follow.autoDownload && follow.enabled) await this.admitLocked(follow.id);
         }
+        await this.applyRetention();
       });
     } catch (error) {
       log("WARN", "The automatic downloads could not be reconciled", { error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  /** Deletes the files of watched episodes once their follow's delay has passed. Only an
+   *  administrator's follow may hold a delay, and only an episode whose target the follow
+   *  itself recorded is ever touched; the state stays `completed`, so it is not queued again. */
+  private async applyRetention(): Promise<void> {
+    const removeFile = this.deps.removeFile;
+    if (!removeFile) return;
+    const now = this.deps.now();
+    let removed = 0;
+    for (const follow of this.deps.store.all()) {
+      const retention = follow.autoDownload?.retention;
+      if (!retention || !follow.enabled) continue;
+      const owner = this.deps.owner(follow.ownerUserId);
+      if (!owner || owner.disabled || owner.role !== "admin") continue;
+      const marker = this.deps.watched?.(follow.ownerUserId, follow.metaId);
+      if (!marker?.updatedAt) continue;
+      const dueAt = Date.parse(marker.updatedAt) + retention.afterWatchedDays * DAY_MS;
+      if (!(now >= dueAt)) continue;
+      const episodes = Object.values(follow.episodes).sort((a, b) => a.season - b.season || a.episode - b.episode);
+      for (const episode of episodes) {
+        if (removed >= RETENTION_PER_PASS) return;
+        const download = episode.download;
+        if (!download || download.state !== "completed" || !download.target || download.removedAt) continue;
+        const covered = marker.season > episode.season || (marker.season === episode.season && marker.episode >= episode.episode);
+        if (!covered) continue;
+        const accepted = await removeFile(download.target);
+        if (!accepted) continue;
+        log("INFO", "Deleting a watched episode", { follow: follow.id, episode: episode.key, library: parseLibraryPath(download.target)?.libraryId });
+        await this.setDownload(follow.id, episode.key, { ...download, removedAt: new Date(now).toISOString(), removedReason: "retention" });
+        removed += 1;
+      }
     }
   }
 
@@ -1305,6 +1354,7 @@ export class FollowService {
             ...(value.startEpisode != null ? { startEpisode: value.startEpisode } : {}),
             ...(value.aheadCount ? { aheadCount: value.aheadCount } : {}),
             ...(value.graceDays ? { graceDays: value.graceDays } : {}),
+            ...(value.retention ? { retention: value.retention } : previous?.retention ? { retention: previous.retention } : {}),
             selection: value.selection,
           };
         }
@@ -1382,7 +1432,7 @@ export class FollowService {
       const ref = job.follow;
       const download = ref ? this.deps.store.get(ref.followId)?.episodes[ref.episodeKey]?.download : undefined;
       if (!ref || !download || download.intent !== ref.intent || download.state === "completed") return;
-      await this.setDownload(ref.followId, ref.episodeKey, { ...download, state: "completed", reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
+      await this.setDownload(ref.followId, ref.episodeKey, { ...download, ...(job.target ? { target: job.target } : {}), state: "completed", reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
     });
   }
 
@@ -1396,7 +1446,7 @@ export class FollowService {
       if (download.state === "skipped") return;
       if (job.status === "completed") {
         if (download.state === "completed") return;
-        await this.setDownload(ref.followId, ref.episodeKey, { ...download, state: "completed", reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
+        await this.setDownload(ref.followId, ref.episodeKey, { ...download, ...(job.target ? { target: job.target } : {}), state: "completed", reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
         return;
       }
       if (job.status === "failed") {
@@ -1421,7 +1471,7 @@ export class FollowService {
         if (!ref || job.status !== "completed") continue;
         const download = this.deps.store.get(ref.followId)?.episodes[ref.episodeKey]?.download;
         if (!download || download.intent !== ref.intent || download.state === "completed") continue;
-        await this.setDownload(ref.followId, ref.episodeKey, { ...download, state: "completed", reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
+        await this.setDownload(ref.followId, ref.episodeKey, { ...download, ...(job.target ? { target: job.target } : {}), state: "completed", reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
       }
     });
   }
