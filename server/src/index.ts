@@ -71,7 +71,7 @@ import { registerCurateRoutes } from "./routes/curate.js";
 import { registerDeviceRoutes } from "./routes/device.js";
 import { registerDiagnosticsRoutes } from "./routes/diagnostics.js";
 import { registerDownloadRoutes } from "./routes/downloads.js";
-import { registerFollowRoutes } from "./routes/follows.js";
+import { calendarFeedHandler, registerFollowRoutes } from "./routes/follows.js";
 import { registerLibrariesRoutes } from "./routes/libraries.js";
 import { registerPersonalRoutes } from "./routes/personal.js";
 import { registerPlaybackRoutes } from "./routes/playback.js";
@@ -1605,6 +1605,11 @@ const followService = new FollowService({
     const config = tmdbConfigOf(store.prefs(owner.id).uiLanguage);
     return config ? tmdbMovieReleases(metaId, config) : null;
   },
+  // The marker key is the series meta id, the same one `newEpisodes` reads.
+  watched: (ownerUserId, metaId) => {
+    const marker = (store.userData(ownerUserId).watchedSeries as Record<string, WatchedMarker> | undefined)?.[metaId];
+    return marker ? { season: marker.season, episode: marker.episode, updatedAt: marker.updatedAt } : undefined;
+  },
   queue: {
     addPending: (title, source, media, ownerUserId, follow) => queue.addPending(title, source, media, ownerUserId, follow),
     findActiveEpisode: (ownerUserId, type, videoId) => queue.findActiveEpisode(ownerUserId, type, videoId),
@@ -1621,6 +1626,19 @@ const followService = new FollowService({
     addons: store.addons(),
     libraries: store.libraries(),
   }, { targetSettings: selection.targetSettings }),
+  // Retention deletes a single library file through the same operations queue that waits for
+  // playback, an unreachable disk and active downloads. Only a key that names a real library
+  // file is accepted; a folder, a sibling or an unqualified path is refused.
+  removeFile: async (target) => {
+    const parsed = parseLibraryPath(target);
+    if (!parsed || !parsed.relative) return false;
+    const resolved = await resolveLibraryPath(store.libraries(), target);
+    if (!resolved || !resolved.relative) return false;
+    const info = await stat(resolved.absolute).catch(() => undefined);
+    if (!info?.isFile()) return false;
+    await libraryOps.enqueue({ op: "delete", items: [target] });
+    return true;
+  },
 });
 
 // The queue is built before the follow service, so its guards are wired afterwards.
@@ -2346,6 +2364,14 @@ app.all(["/api/proxy", "/api/subtitle", "/api/library/file"], (_req, res) => {
 });
 
 const webRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../web");
+// The calendar feed is reached with a token, not a session, so it sits outside `/api` and
+// ahead of the static files and the SPA fallback below.
+app.get("/calendar/:token.ics", calendarFeedHandler({
+  users: () => store.users(),
+  userData: (id) => store.userData(id),
+  followsOf: (id) => followStore.listForOwner(id),
+  languageOf: (id) => store.prefs(id).uiLanguage,
+}));
 app.use(express.static(webRoot, { setHeaders: (res, file) => { if (file.endsWith("index.html")) res.setHeader("Cache-Control", "no-store"); } }));
 app.get("/{*path}", (_req, res) => { res.setHeader("Cache-Control", "no-store"); res.sendFile(path.join(webRoot, "index.html")); });
 app.use((error: unknown, req: express.Request, res: express.Response, _next: express.NextFunction) => {

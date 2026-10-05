@@ -1696,6 +1696,12 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
 .following-legend{grid-area:legend;display:flex;align-items:center;flex-wrap:wrap;gap:4px 14px;font-size:11px;color:var(--muted)}
 .following-legend span{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
 .following-legend i{width:8px;height:8px}
+.following-feed{grid-column:1/-1;display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid var(--line);border-radius:14px;background:var(--panel);min-width:0}
+.following-feed-hint{margin:0;font-size:11px;color:var(--muted)}
+.following-feed-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px;min-width:0}
+.following-feed-url{flex:1 1 220px;min-width:0;color:var(--muted);font-size:12px}
+.following-feed-row button,.following-feed-row a.button{flex:0 0 auto;padding:9px 12px;font-size:12px}
+.following-feed-create{align-self:flex-start}
 .following-day-panel{grid-area:day;container-type:inline-size;display:flex;flex-direction:column;gap:4px;padding:12px;border:1px solid var(--line);border-radius:14px;background:var(--panel);min-width:0}
 .following-day-panel h4{margin:0 0 6px;font-size:13px;font-weight:800}
 .following-undated{grid-area:undated}

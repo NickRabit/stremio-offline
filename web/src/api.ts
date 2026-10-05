@@ -155,13 +155,13 @@ export const api = {
     .then((answer) => answer.follow),
   follow: (payload: { type: string; id: string; name: string; poster?: string }) =>
     request<FollowView>("/api/follows", { method: "POST", body: JSON.stringify(payload) }),
-  updateFollow: (id: string, patch: { enabled?: boolean; autoDownload?: { startMode: FollowStartMode; startSeason?: number; startEpisode?: number; selection: DownloadSelection; target?: SaveTarget } | null }) =>
+  updateFollow: (id: string, patch: { enabled?: boolean; retention?: { afterWatchedDays: number } | null; autoDownload?: { startMode: FollowStartMode; startSeason?: number; startEpisode?: number; aheadCount?: number; graceDays?: number; selection: DownloadSelection; target?: SaveTarget } | null }) =>
     request<FollowView>(`/api/follows/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(patch) }),
   unfollow: (id: string) => request<void>(`/api/follows/${encodeURIComponent(id)}`, { method: "DELETE" }),
   checkFollow: (id: string) => request<FollowView>(`/api/follows/${encodeURIComponent(id)}/check`, { method: "POST" }),
   followEpisodes: (id: string) => request<{ episodes: FollowEpisodeRow[] }>(`/api/follows/${encodeURIComponent(id)}/episodes`).then((answer) => answer.episodes),
-  followPreview: (id: string, start: { startMode: FollowStartMode; startSeason?: number; startEpisode?: number }) =>
-    request<FollowPreview>(`/api/follows/${encodeURIComponent(id)}/preview?${q({ startMode: start.startMode, startSeason: start.startSeason, startEpisode: start.startEpisode })}`),
+  followPreview: (id: string, start: { startMode: FollowStartMode; startSeason?: number; startEpisode?: number; aheadCount?: number }) =>
+    request<FollowPreview>(`/api/follows/${encodeURIComponent(id)}/preview?${q({ startMode: start.startMode, startSeason: start.startSeason, startEpisode: start.startEpisode, aheadCount: start.aheadCount })}`),
   skipFollowEpisode: (id: string, key: string) => request<void>(`/api/follows/${encodeURIComponent(id)}/episodes/${encodeURIComponent(key)}/skip`, { method: "POST" }),
   retryFollowEpisode: (id: string, key: string) => request<void>(`/api/follows/${encodeURIComponent(id)}/episodes/${encodeURIComponent(key)}/retry`, { method: "POST" }),
   newEpisodes: () => request<{ items: NewEpisode[] }>("/api/follows/new-episodes").then((answer) => answer.items),
@@ -171,6 +171,10 @@ export const api = {
       .then((answer) => ({ items: answer.items, undated: answer.undated ?? [] })),
   followActivity: (limit?: number) =>
     request<{ items: ActivityItem[] }>(`/api/follows/activity${limit ? `?${q({ limit })}` : ""}`).then((answer) => answer.items),
+  /** The token a calendar app subscribes to this account's feed with, or null while none exists. */
+  followCalendarFeed: () => request<{ token: string | null }>("/api/follows/calendar-feed").then((answer) => answer.token),
+  createFollowCalendarFeed: () => request<{ token: string }>("/api/follows/calendar-feed", { method: "POST" }).then((answer) => answer.token),
+  revokeFollowCalendarFeed: () => request<void>("/api/follows/calendar-feed", { method: "DELETE" }),
   followDefaults: () => request<{ defaults: FollowDefaults | null }>("/api/follows/defaults").then((answer) => answer.defaults),
   saveFollowDefaults: (defaults: FollowDefaults) => request<void>("/api/follows/defaults", { method: "PUT", body: JSON.stringify(defaults) }),
   progressList: () => request<ProgressEntry[]>("/api/progress"),

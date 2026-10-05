@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { SeriesDownloadDialog } from "./SeriesDownloadDialog";
 import { setLocale } from "./i18n";
+import type { FollowAutoDownload } from "./types";
 
 let fetchMock: ReturnType<typeof vi.fn>;
 let root: Root;
@@ -64,6 +65,34 @@ describe("SeriesDownloadDialog", () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
+  it("prefills and sends the preferred-audio window", async () => {
+    const initial: FollowAutoDownload = { enabledAt: "2024-01-01T00:00:00.000Z", startMode: "new", graceDays: 14, selection: { addonKeys: ["first"], sourceStrategy: "priority", audioLanguage: "cs", audioMode: "preferred", subtitleMode: "off" } };
+    await act(async () => { root.render(<SeriesDownloadDialog type="series" label="Show" title="Show" libraries={[]} addons={[]} episodes={[{ id: "tt1:1:1" }]} audioLanguage="cs" subtitleLanguage="cs" languages={[{ code: "cs", name: "Čeština" }]} follow={{ followId: "f1", initial }} onClose={() => undefined}/>); });
+    await act(async () => { await Promise.resolve(); });
+    const grace = [...host.querySelectorAll("select")].find((select) => [...select.options].some((option) => option.value === "14"))!;
+    expect(grace.value).toBe("14");
+    const save = [...host.querySelectorAll("button")].find((button) => button.textContent === "Turn on")!;
+    await act(async () => { save.click(); await Promise.resolve(); });
+    const patch = fetchMock.mock.calls.find((call) => (call[1] as RequestInit | undefined)?.method === "PATCH")!;
+    expect(JSON.parse(String((patch[1] as RequestInit).body)).autoDownload.graceDays).toBe(14);
+  });
+
+  it("sends an ahead rule with its episode count", async () => {
+    await act(async () => { root.render(<SeriesDownloadDialog type="series" label="Show" title="Show" libraries={[]} addons={[]} episodes={[{ id: "tt1:1:1", season: 1, episode: 1 }]} audioLanguage="cs" subtitleLanguage="cs" languages={[{ code: "cs", name: "Čeština" }]} follow={{ followId: "f1" }} onClose={() => undefined}/>); });
+    await act(async () => { await Promise.resolve(); });
+    const ahead = host.querySelector<HTMLInputElement>('input[name="follow-start"][value="ahead"]')!;
+    await act(async () => { ahead.click(); });
+    const count = [...host.querySelectorAll("select")].find((select) => select.getAttribute("aria-label") === "Keep episodes ready from where I am watching")!;
+    expect(count.value).toBe("3");
+    await act(async () => { count.value = "5"; count.dispatchEvent(new Event("change", { bubbles: true })); await Promise.resolve(); });
+    const save = [...host.querySelectorAll("button")].find((button) => button.textContent === "Turn on")!;
+    await act(async () => { save.click(); await Promise.resolve(); });
+    const patch = fetchMock.mock.calls.find((call) => (call[1] as RequestInit | undefined)?.method === "PATCH")!;
+    const body = JSON.parse(String((patch[1] as RequestInit).body));
+    expect(body.autoDownload.startMode).toBe("ahead");
+    expect(body.autoDownload.aheadCount).toBe(5);
+  });
+
   it("asks how to follow first and only creates the follow on confirm", async () => {
     const onFollowed = vi.fn();
     fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
@@ -111,13 +140,15 @@ describe("SeriesDownloadDialog", () => {
 
   it("prefills a new follow from the stored defaults", async () => {
     fetchMock.mockImplementation(async (url: string) => String(url).includes("/api/follows/defaults")
-      ? new Response(JSON.stringify({ defaults: { mode: "download", startMode: "from", selection: { addonKeys: ["second"], sourceStrategy: "priority", audioLanguage: "en", audioMode: "preferred", subtitleMode: "off" } } }), { status: 200, headers: { "content-type": "application/json" } })
+      ? new Response(JSON.stringify({ defaults: { mode: "download", startMode: "from", graceDays: 7, selection: { addonKeys: ["second"], sourceStrategy: "priority", audioLanguage: "en", audioMode: "preferred", subtitleMode: "off" } } }), { status: 200, headers: { "content-type": "application/json" } })
       : new Response(JSON.stringify([{ key: "first", name: "First" }, { key: "second", name: "Second" }]), { status: 200, headers: { "content-type": "application/json" } }));
     await act(async () => { root.render(<SeriesDownloadDialog type="series" label="Show" title="Show" libraries={[]} addons={[]} episodes={[{ id: "tt1:1:1", season: 1, episode: 1 }]} audioLanguage="en" subtitleLanguage="en" languages={[{ code: "en", name: "English" }]} follow={{ create: { metaId: "tt1", name: "Show" }, onFollowed: () => undefined }} onClose={() => undefined}/>); });
     await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); });
     expect(host.querySelector<HTMLInputElement>('input[name="follow-mode"][value="download"]')!.checked).toBe(true);
     expect(host.querySelector<HTMLInputElement>('input[name="follow-start"][value="from"]')!.checked).toBe(true);
     expect(host.querySelector<HTMLInputElement>('input[name="source-strategy"][value="priority"]')!.checked).toBe(true);
+    const grace = [...host.querySelectorAll("select")].find((select) => [...select.options].some((option) => option.value === "14"))!;
+    expect(grace.value).toBe("7");
     const sources = [...host.querySelectorAll<HTMLElement>(".bulk-sources label")];
     expect(sources.find((label) => label.textContent?.includes("Second"))!.querySelector("input")!.checked).toBe(true);
     expect(sources.find((label) => label.textContent?.includes("First"))!.querySelector("input")!.checked).toBe(false);
@@ -155,5 +186,27 @@ describe("SeriesDownloadDialog", () => {
     await act(async () => { host.querySelector<HTMLInputElement>('input[name="follow-mode"][value="download"]')!.click(); });
     expect(host.querySelector('input[name="follow-start"]'), "no where-to-start for a film").toBeNull();
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/stream-sources/movie/tt9"))).toBe(true);
+  });
+
+  it("shows the after-watching choice for an administrator's series and sends it", async () => {
+    const initial: FollowAutoDownload = { enabledAt: "2024-01-01T00:00:00.000Z", startMode: "new", selection: { addonKeys: ["first"], sourceStrategy: "priority", audioLanguage: "cs", audioMode: "listed", subtitleMode: "off" } };
+    await act(async () => { root.render(<SeriesDownloadDialog type="series" label="Show" title="Show" libraries={[]} addons={[]} episodes={[{ id: "tt1:1:1", season: 1, episode: 1 }]} audioLanguage="cs" subtitleLanguage="cs" languages={[{ code: "cs", name: "Čeština" }]} follow={{ followId: "f1", initial }} canRetain onClose={() => undefined}/>); });
+    await act(async () => { await Promise.resolve(); });
+    expect(host.textContent).toContain("After watching");
+    const select = [...host.querySelectorAll("select")].find((entry) => [...entry.options].some((option) => option.textContent === "Delete 30 days after watching"))!;
+    await act(async () => { select.value = "7"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+    const save = [...host.querySelectorAll("button")].find((button) => button.textContent === "Turn on")!;
+    await act(async () => { save.click(); await Promise.resolve(); });
+    const patch = fetchMock.mock.calls.find((call) => (call[1] as RequestInit | undefined)?.method === "PATCH")!;
+    expect(JSON.parse(String((patch[1] as RequestInit).body)).retention).toEqual({ afterWatchedDays: 7 });
+  });
+
+  it("hides the after-watching choice from a plain account and for a film", async () => {
+    await act(async () => { root.render(<SeriesDownloadDialog type="series" label="Show" title="Show" libraries={[]} addons={[]} episodes={[{ id: "tt1:1:1", season: 1, episode: 1 }]} audioLanguage="cs" subtitleLanguage="cs" languages={[{ code: "cs", name: "Čeština" }]} follow={{ followId: "f1" }} onClose={() => undefined}/>); });
+    await act(async () => { await Promise.resolve(); });
+    expect(host.textContent).not.toContain("After watching");
+    await act(async () => { root.render(<SeriesDownloadDialog type="movie" label="Film" title="Film" libraries={[]} addons={[]} episodes={[{ id: "tt9" }]} audioLanguage="cs" subtitleLanguage="cs" languages={[{ code: "cs", name: "Čeština" }]} follow={{ followId: "f1" }} canRetain onClose={() => undefined}/>); });
+    await act(async () => { await Promise.resolve(); });
+    expect(host.textContent).not.toContain("After watching");
   });
 });

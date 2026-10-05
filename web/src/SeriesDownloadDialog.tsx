@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowDown, ArrowUp, Bell, CalendarClock, FolderOpen, Languages, ListFilter, Subtitles, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Bell, CalendarClock, FolderOpen, Languages, ListFilter, Subtitles, Trash2, X } from "lucide-react";
 import { api, describeError } from "./api";
 import { languageName, t, useI18n } from "./i18n";
 import { SaveTargetFields } from "./SaveTargetFields";
@@ -10,9 +10,18 @@ interface Episode { id: string; season?: number; episode?: number; title?: strin
 
 /** What a proposed start would fetch at once, worked out from the episodes on screen while
  *  the follow does not exist yet and the server cannot be asked. */
-const localPreview = (episodes: Episode[], startMode: FollowStartMode, startSeason?: number, startEpisode?: number): FollowPreview => {
+const localPreview = (episodes: Episode[], startMode: FollowStartMode, startSeason?: number, startEpisode?: number, aheadCount?: number): FollowPreview => {
   if (startMode === "new") return { count: 0, episodes: [] };
   const now = Date.now();
+  // With no marker on hand, "ahead" starts at the first regular episode: the first N fill the
+  // window, and the released ones among them would download now.
+  if (startMode === "ahead") {
+    const window = episodes
+      .filter((episode) => episode.season != null && episode.season >= 1 && episode.episode != null)
+      .sort((left, right) => (left.season ?? 0) - (right.season ?? 0) || (left.episode ?? 0) - (right.episode ?? 0))
+      .slice(0, Math.max(0, aheadCount ?? 0));
+    return { count: window.filter((episode) => episode.released && Date.parse(episode.released) <= now).length, episodes: [] };
+  }
   const due = episodes.filter((episode) => {
     if (episode.season == null || episode.episode == null || !episode.released) return false;
     const released = Date.parse(episode.released);
@@ -24,7 +33,7 @@ const localPreview = (episodes: Episode[], startMode: FollowStartMode, startSeas
 
 const pad2 = (value: number) => String(Math.max(0, Math.trunc(value))).padStart(2, "0");
 
-export function SeriesDownloadDialog({ type, label, title, episodes, audioLanguage, subtitleLanguage, languages, libraries, addons, follow, onClose, onSubmit }: {
+export function SeriesDownloadDialog({ type, label, title, episodes, audioLanguage, subtitleLanguage, languages, libraries, addons, follow, canRetain = false, onClose, onSubmit }: {
   type: string;
   label: string;
   title: string;
@@ -34,6 +43,8 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
   languages: Array<{ code: string; name: string }>;
   libraries: LibraryView[];
   addons: Addon[];
+  /** Administrators may delete watched episodes automatically; nobody else sees the choice. */
+  canRetain?: boolean;
   /** Set when the dialog edits a follow's automatic rule instead of queueing a batch. Without
    *  `followId` it is the first step of following: how to follow comes first, and the follow
    *  is created only when the person confirms. */
@@ -52,6 +63,8 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
   const [audio, setAudio] = useState(startAudio);
   const [audioFallback, setAudioFallback] = useState(initial?.selection.fallbackAudioLanguage ?? (startAudio === "en" ? "" : "en"));
   const [audioMode, setAudioMode] = useState<AudioMode>(initial?.selection.audioMode ?? "listed");
+  const [graceDays, setGraceDays] = useState(initial?.graceDays ?? 0);
+  const [retentionDays, setRetentionDays] = useState<number>(initial?.retention?.afterWatchedDays ?? 0);
   const [subtitleMode, setSubtitleMode] = useState<SubtitleMode>(initial?.selection.subtitleMode ?? "optional");
   const [subtitle, setSubtitle] = useState(startSubtitle);
   const [subtitleFallback, setSubtitleFallback] = useState(initial?.selection.fallbackSubtitleLanguage ?? (startSubtitle === "en" ? "" : "en"));
@@ -62,6 +75,7 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
   const [startMode, setStartMode] = useState<FollowStartMode>(initial?.startMode ?? "new");
   const [startSeason, setStartSeason] = useState<number | undefined>(initial?.startSeason);
   const [startEpisode, setStartEpisode] = useState<number | undefined>(initial?.startEpisode);
+  const [aheadCount, setAheadCount] = useState<number>(initial?.aheadCount ?? 3);
   const [preview, setPreview] = useState<FollowPreview | null>(null);
   const creating = Boolean(follow?.create);
   // A film has no episodes to start from and is saved by the film rules.
@@ -110,6 +124,8 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
     setFollowMode(defaults.mode);
     if (defaults.mode !== "download") return;
     if (defaults.startMode) setStartMode(defaults.startMode);
+    if (defaults.aheadCount) setAheadCount(defaults.aheadCount);
+    setGraceDays(defaults.graceDays ?? 0);
     if (defaults.selection) {
       const keys = defaults.selection.addonKeys.filter((key) => sources.some((item) => item.key === key));
       if (keys.length) setChosen(keys);
@@ -128,15 +144,15 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
     if (!follow) return;
     if (startMode === "from" && (startSeason == null || startEpisode == null)) { setPreview(null); return; }
     const followId = follow.followId;
-    if (!followId) { setPreview(localPreview(episodes, startMode, startSeason, startEpisode)); return; }
+    if (!followId) { setPreview(localPreview(episodes, startMode, startSeason, startEpisode, aheadCount)); return; }
     let stale = false;
     const timer = window.setTimeout(() => {
-      api.followPreview(followId, { startMode, startSeason, startEpisode })
+      api.followPreview(followId, { startMode, startSeason, startEpisode, aheadCount })
         .then((answer) => { if (!stale) setPreview(answer); })
         .catch(() => { if (!stale) setPreview(null); });
     }, 300);
     return () => { stale = true; window.clearTimeout(timer); };
-  }, [follow, episodes, startMode, startSeason, startEpisode]);
+  }, [follow, episodes, startMode, startSeason, startEpisode, aheadCount]);
 
   const toggle = (key: string) => setChosen((current) => current.includes(key) ? current.filter((item) => item !== key) : [...current, key]);
   const move = (key: string, direction: -1 | 1) => setChosen((current) => {
@@ -185,19 +201,24 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
       if (follow) {
         const created = follow.create ? await api.follow({ type, id: follow.create.metaId, name: follow.create.name, poster: follow.create.poster }) : undefined;
         const followId = created?.id ?? follow.followId!;
-        const updated = await api.updateFollow(followId, { autoDownload: {
-          startMode,
-          ...(startMode === "from" && startSeason != null && startEpisode != null ? { startSeason, startEpisode } : {}),
-          selection,
-          ...(target ? { target } : {}),
-        } });
+        const updated = await api.updateFollow(followId, {
+          ...(canRetain ? { retention: retentionDays > 0 ? { afterWatchedDays: retentionDays } : null } : {}),
+          autoDownload: {
+            startMode,
+            ...(startMode === "from" && startSeason != null && startEpisode != null ? { startSeason, startEpisode } : {}),
+            ...(startMode === "ahead" ? { aheadCount } : {}),
+            graceDays,
+            selection,
+            ...(target ? { target } : {}),
+          },
+        });
         if (created) follow.onFollowed?.(updated);
       } else if (onSubmit) {
         await onSubmit(selection, target ?? undefined);
       }
       // Remembering the choices is a courtesy; a refusal here must never block the follow.
       if (creating && followMode === "download") void api.saveFollowDefaults({
-        mode: "download", startMode,
+        mode: "download", startMode, ...(startMode === "ahead" ? { aheadCount } : {}), graceDays,
         selection: {
           addonKeys: selection.addonKeys, sourceStrategy: selection.sourceStrategy, audioLanguage: selection.audioLanguage,
           ...(selection.fallbackAudioLanguage ? { fallbackAudioLanguage: selection.fallbackAudioLanguage } : {}),
@@ -236,6 +257,14 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
               <input type="radio" name="follow-start" value="from" checked={startMode === "from"} onChange={chooseFrom}/>
               <span><strong>{t("follow.startFromLabel")}</strong></span>
             </label>
+            <label className={startMode === "ahead" ? "selected" : ""}>
+              <input type="radio" name="follow-start" value="ahead" checked={startMode === "ahead"} onChange={() => setStartMode("ahead")}/>
+              <span><strong>{t("follow.startAhead")}</strong>
+                <select aria-label={t("follow.startAhead")} value={aheadCount} onChange={(event) => { setStartMode("ahead"); setAheadCount(Number(event.target.value)); }}>
+                  {Array.from({ length: 10 }, (_unused, index) => index + 1).map((count) => <option key={count} value={count}>{t("follow.aheadCount", { count })}</option>)}
+                </select>
+              </span>
+            </label>
           </div>
           {startMode === "from" && <div className="bulk-language-grid">
             <label><span>{t("episodes.season")}</span><select value={startSeason ?? ""} onChange={(event) => { const season = Number(event.target.value); setStartSeason(season); setStartEpisode(episodes.find((episode) => episode.season === season)?.episode); }}>{startSeasons.map((season) => <option key={season} value={season}>{t("episodes.seasonNumber", { season })}</option>)}</select></label>
@@ -272,6 +301,13 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
             <label><span>{t("bulk.audioFallback")}</span><select value={audioFallback} onChange={(event) => setAudioFallback(event.target.value)}><option value="">{t("bulk.noFallback")}</option>{languageOptions()}</select></label>
           </div>
           <p className="identify-hint bulk-mode-hint">{t(audioMode === "listed" ? "bulk.audioModeHintListed" : audioMode === "preferred" ? "bulk.audioModeHintPreferred" : "bulk.audioModeHintStrict")}</p>
+          {follow && <><div className="bulk-language-grid">
+            <label><span>{t("follow.graceLabel")}</span><select value={graceDays} onChange={(event) => setGraceDays(Number(event.target.value))}>
+              <option value={0}>{t("follow.graceNone")}</option>
+              {[3, 7, 14].map((days) => <option key={days} value={days}>{t("follow.graceDays", { count: days })}</option>)}
+            </select></label>
+          </div>
+          <p className="identify-hint">{t("follow.graceHint")}</p></>}
         </section>
         <section className="bulk-section">
           <div className="bulk-section-head"><Subtitles/><div><h3>{t("bulk.subtitleSettings")}</h3><p>{t("bulk.subtitleSettingsHint")}</p></div></div>
@@ -286,6 +322,16 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
           <div className="bulk-section-head"><FolderOpen/><div><h3>{t("saveTarget.where")}</h3><p>{t("saveTarget.whereHint")}</p></div></div>
           <SaveTargetFields kind={isMovie ? "movie" : "series"} title={title} libraries={libraries} rule={rule} value={target} onChange={setTarget}/>
         </section>
+        {follow && downloading && !isMovie && canRetain && <section className="bulk-section">
+          <div className="bulk-section-head"><Trash2/><div><h3>{t("follow.retentionHeading")}</h3></div></div>
+          <div className="bulk-language-grid">
+            <label><select aria-label={t("follow.retentionHeading")} value={retentionDays} onChange={(event) => setRetentionDays(Number(event.target.value))}>
+              <option value={0}>{t("follow.retentionKeep")}</option>
+              {[1, 7, 30].map((days) => <option key={days} value={days}>{t("follow.retentionAfter", { count: days })}</option>)}
+            </select></label>
+          </div>
+          <p className="identify-hint">{t("follow.retentionHint")}</p>
+        </section>}
         </>}
         {error && <p className="login-error" role="alert">{error}</p>}
       </div>

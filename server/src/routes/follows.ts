@@ -1,13 +1,14 @@
 import type express from "express";
+import { randomBytes } from "node:crypto";
 import { allowedAddons } from "../addons.js";
 import type { DownloadSelection } from "../downloads.js";
 import { AppError } from "../errors.js";
 import { images } from "../images.js";
-import { activityItems, calendarItems, CALENDAR_MAX_SPAN_MS, downloadEligibility, parseFollowDefaults, undatedCalendarItems, type Follow, type FollowAutoDownload, type FollowEpisode, type FollowService, type FollowStore } from "../follows.js";
+import { activityItems, calendarFeed, calendarItems, CALENDAR_MAX_SPAN_MS, downloadEligibility, parseFollowDefaults, undatedCalendarItems, type Follow, type FollowAutoDownload, type FollowEpisode, type FollowService, type FollowStore } from "../follows.js";
 import { defaultLibrary, libraryVisible, type DefaultLibrarySettings, type LibraryRecord, type Viewer } from "../libraries.js";
 import type { UserPrefs, WatchedMarker } from "../store.js";
 import type { DownloadTargetSettings, MetaItem } from "../types.js";
-import type { FollowDefaults, UserData } from "../users.js";
+import { feedTokenMatches, type FollowDefaults, type UserData, type UserRecord } from "../users.js";
 import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
 import { createSelectionParser } from "./downloads.js";
 
@@ -24,6 +25,8 @@ export interface FollowDeps extends RouteContext {
 
 interface FollowEpisodeView { season: number; episode: number; title?: string; released?: string; releasedSource?: "addon" | "tmdb"; dateUncertain?: boolean }
 interface FollowDownloads { queued: number; waiting: number; completed: number; skipped: number; attention: number }
+/** The delays a follow may delete watched episodes after. */
+const RETENTION_DAYS = [1, 7, 30] as const;
 interface FollowView {
   id: string;
   ownerUserId: string;
@@ -45,7 +48,7 @@ interface FollowView {
   latestEpisode?: FollowEpisodeView;
   autoDownload?: FollowAutoDownload;
   downloads: FollowDownloads;
-  movie?: { released?: string; releaseKind?: FollowEpisode["releaseKind"]; theatricalAt?: string; dateUncertain?: boolean; state?: string; reasonKey?: string; nextAttemptAt?: string };
+  movie?: { released?: string; releaseKind?: FollowEpisode["releaseKind"]; theatricalAt?: string; dateUncertain?: boolean; state?: string; reasonKey?: string; nextAttemptAt?: string; graceUntil?: string };
 }
 
 const episodeView = (episode: FollowEpisode): FollowEpisodeView => ({
@@ -109,7 +112,7 @@ const movieView = (episode: FollowEpisode) => ({
   ...(episode.releaseKind ? { releaseKind: episode.releaseKind } : {}),
   ...(episode.theatricalAt ? { theatricalAt: episode.theatricalAt } : {}),
   ...(episode.dateUncertain ? { dateUncertain: true } : {}),
-  ...(episode.download ? { state: episode.download.state, ...(episode.download.reasonKey ? { reasonKey: episode.download.reasonKey } : {}), ...(episode.download.nextAttemptAt ? { nextAttemptAt: episode.download.nextAttemptAt } : {}) } : {}),
+  ...(episode.download ? { state: episode.download.state, ...(episode.download.reasonKey ? { reasonKey: episode.download.reasonKey } : {}), ...(episode.download.nextAttemptAt ? { nextAttemptAt: episode.download.nextAttemptAt } : {}), ...(episode.download.graceUntil ? { graceUntil: episode.download.graceUntil } : {}) } : {}),
 });
 
 /** The pinned destination a follow stores. An explicit choice is already concrete; a rule
@@ -125,6 +128,37 @@ const pinnedTarget = (selection: DownloadSelection, libraries: LibraryRecord[], 
     : new AppError("No library takes series.", "err.noLibraryForSeries");
   return { libraryId: library.id, subfolder: rule.subfolder, layout: rule.layout, explicit: true };
 };
+
+export interface CalendarFeedDeps {
+  users(): UserRecord[];
+  userData(id: string): UserData;
+  followsOf(id: string): Follow[];
+  languageOf(id: string): string;
+}
+
+/** The public feed, reached with a token instead of a session. index.ts registers it outside
+ *  `/api`, ahead of the SPA fallback, so it carries no session middleware. An unknown token,
+ *  a gone account and a disabled one all answer the same bare 404, and the token is never
+ *  written to the log. */
+export function calendarFeedHandler(deps: CalendarFeedDeps): express.RequestHandler {
+  return (req, res) => {
+    const token = String(req.params.token ?? "");
+    let owner: UserRecord | undefined;
+    if (token) {
+      for (const user of deps.users()) {
+        if (!owner && feedTokenMatches(deps.userData(user.id).calendarFeedToken, token)) owner = user;
+      }
+    }
+    if (!owner || owner.disabled) { res.status(404).end(); return; }
+    const body = calendarFeed(deps.followsOf(owner.id), Date.now(), {
+      name: `${owner.username} – Stremio Offline`,
+      language: deps.languageOf(owner.id),
+    });
+    res.setHeader("content-type", "text/calendar; charset=utf-8");
+    res.setHeader("cache-control", "private, max-age=900");
+    res.send(body);
+  };
+}
 
 export function registerFollowRoutes(app: express.Application, deps: FollowDeps): void {
   const { store, followStore, follows, currentUser, dataOf, updateData, markersOf, posterOf, cachedMeta, prefsOf } = deps;
@@ -199,6 +233,23 @@ export function registerFollowRoutes(app: express.Application, deps: FollowDeps)
     res.json({ items });
   });
 
+  // The private feed a calendar app subscribes to. Registered before `/api/follows/:id`, so
+  // `calendar-feed` is never read as an id.
+  app.get("/api/follows/calendar-feed", (req, res) => {
+    res.json({ token: dataOf(req).calendarFeedToken ?? null });
+  });
+
+  app.post("/api/follows/calendar-feed", asyncRoute(async (req, res) => {
+    const token = randomBytes(32).toString("base64url");
+    await updateData(req, (data) => { data.calendarFeedToken = token; });
+    res.json({ token });
+  }));
+
+  app.delete("/api/follows/calendar-feed", asyncRoute(async (req, res) => {
+    await updateData(req, (data) => { delete data.calendarFeedToken; });
+    res.status(204).end();
+  }));
+
   app.post("/api/follows", asyncRoute(async (req, res) => {
     const owner = viewerOf(currentUser(req));
     const type = String(req.body?.type ?? "").trim();
@@ -223,7 +274,8 @@ export function registerFollowRoutes(app: express.Application, deps: FollowDeps)
       } else {
         const item = typeof raw === "object" && raw ? raw as Record<string, unknown> : {};
         // A film has no episodes to start from; it downloads whenever it comes out.
-        const startMode = follow.type === "movie" ? "new" : item.startMode === "from" ? "from" : item.startMode === "new" ? "new" : undefined;
+        if (follow.type === "movie" && item.startMode === "ahead") throw new AppError("The followed series is missing a type, an id or a name.", "err.followInvalid");
+        const startMode = follow.type === "movie" ? "new" : item.startMode === "from" ? "from" : item.startMode === "new" ? "new" : item.startMode === "ahead" ? "ahead" : undefined;
         if (!startMode) throw new AppError("The followed series is missing a type, an id or a name.", "err.followInvalid");
         let startSeason: number | undefined;
         let startEpisode: number | undefined;
@@ -234,19 +286,53 @@ export function registerFollowRoutes(app: express.Application, deps: FollowDeps)
             throw new AppError("The followed series is missing a type, an id or a name.", "err.followInvalid");
           }
         }
+        let aheadCount: number | undefined;
+        if (startMode === "ahead") {
+          aheadCount = Number(item.aheadCount);
+          if (!Number.isInteger(aheadCount) || aheadCount < 1 || aheadCount > 10) {
+            throw new AppError("The followed series is missing a type, an id or a name.", "err.followInvalid");
+          }
+        }
+        let graceDays: number | undefined;
+        if (item.graceDays !== undefined && item.graceDays !== null) {
+          graceDays = Number(item.graceDays);
+          if (!Number.isInteger(graceDays) || graceDays < 0 || graceDays > 30) throw new AppError("The followed series is missing a type, an id or a name.", "err.followInvalid");
+        }
         const selection = await parseSelection(req, { selection: item.selection, target: item.target, metaType: follow.type, parentId: follow.metaId });
         const targetSettings = pinnedTarget(selection, store.libraries(), store.settings(), follow.type === "movie" ? "movie" : "series");
         const value: Omit<FollowAutoDownload, "enabledAt" | "blockedKey"> = {
           startMode,
           ...(startSeason != null ? { startSeason } : {}),
           ...(startEpisode != null ? { startEpisode } : {}),
+          ...(aheadCount != null ? { aheadCount } : {}),
+          ...(graceDays ? { graceDays } : {}),
           selection: { ...selection, targetSettings },
         };
         await follows.setAutoDownload(follow.id, owner.id, value);
       }
     }
+    // Retention opts the follow in on its own; a non-administrator may not turn it on, and a
+    // film has nothing to delete. `null` clears it and is allowed for anyone.
+    let retention: FollowAutoDownload["retention"] | null | undefined;
+    if ("retention" in body) {
+      if (body.retention === null) {
+        retention = null;
+      } else {
+        const item = typeof body.retention === "object" && body.retention ? body.retention as Record<string, unknown> : {};
+        const afterWatchedDays = Number(item.afterWatchedDays);
+        if (follow.type === "movie" || !RETENTION_DAYS.includes(afterWatchedDays as 1 | 7 | 30)) {
+          throw new AppError("The followed series is missing a type, an id or a name.", "err.followInvalid");
+        }
+        if (owner.role !== "admin") throw new AppError("Only an administrator can delete watched episodes automatically.", "err.followRetentionAdmin", 403);
+        retention = { afterWatchedDays: afterWatchedDays as 1 | 7 | 30 };
+      }
+    }
     const updated = await followStore.update(follow.id, (current) => {
       if (typeof body.enabled === "boolean") current.enabled = body.enabled;
+      if (retention !== undefined && current.autoDownload) {
+        if (retention === null) delete current.autoDownload.retention;
+        else current.autoDownload.retention = retention;
+      }
       current.revision += 1;
     });
     res.json(followView(updated, Date.now()));
@@ -284,6 +370,8 @@ export function registerFollowRoutes(app: express.Application, deps: FollowDeps)
   app.get("/api/follows/:id/episodes", (req, res) => {
     const follow = owned(req, String(req.params.id));
     const now = Date.now();
+    const marker = markersOf(dataOf(req))[follow.metaId];
+    const watched = marker ? { season: marker.season, episode: marker.episode } : undefined;
     const episodes = Object.values(follow.episodes)
       .map((episode) => ({
         key: episode.key, season: episode.season, episode: episode.episode,
@@ -292,7 +380,7 @@ export function registerFollowRoutes(app: express.Application, deps: FollowDeps)
         ...(episode.releasedSource ? { releasedSource: episode.releasedSource } : {}),
         ...(episode.dateUncertain ? { dateUncertain: true } : {}),
         ...(episode.ambiguous ? { ambiguous: true } : {}),
-        eligibility: downloadEligibility(follow, episode, now),
+        eligibility: downloadEligibility(follow, episode, now, watched),
         ...(episode.download ? { download: episode.download } : {}),
       }))
       .sort((left, right) => left.season - right.season || left.episode - right.episode);
@@ -301,7 +389,7 @@ export function registerFollowRoutes(app: express.Application, deps: FollowDeps)
 
   app.get("/api/follows/:id/preview", (req, res) => {
     const follow = owned(req, String(req.params.id));
-    const startMode = req.query.startMode === "from" ? "from" : req.query.startMode === "new" ? "new" : undefined;
+    const startMode = req.query.startMode === "from" ? "from" : req.query.startMode === "new" ? "new" : req.query.startMode === "ahead" ? "ahead" : undefined;
     if (!startMode) throw new AppError("The followed series is missing a type, an id or a name.", "err.followInvalid");
     let startSeason: number | undefined;
     let startEpisode: number | undefined;
@@ -312,10 +400,18 @@ export function registerFollowRoutes(app: express.Application, deps: FollowDeps)
         throw new AppError("The followed series is missing a type, an id or a name.", "err.followInvalid");
       }
     }
+    let aheadCount: number | undefined;
+    if (startMode === "ahead") {
+      aheadCount = Number(req.query.aheadCount);
+      if (!Number.isInteger(aheadCount) || aheadCount < 1 || aheadCount > 10) {
+        throw new AppError("The followed series is missing a type, an id or a name.", "err.followInvalid");
+      }
+    }
     const eligible = follows.preview(follow, {
       startMode,
       ...(startSeason != null ? { startSeason } : {}),
       ...(startEpisode != null ? { startEpisode } : {}),
+      ...(aheadCount != null ? { aheadCount } : {}),
     });
     const episodes = eligible.slice(0, 50).map((episode) => ({
       key: episode.key, season: episode.season, episode: episode.episode,

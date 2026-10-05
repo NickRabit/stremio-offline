@@ -343,11 +343,13 @@ export interface WatchlistEntry { key: string; type: string; id: string; name: s
 
 /** One episode of a followed series as the follow route names it: the slot on either side of now. */
 export interface FollowEpisodeView { season: number; episode: number; title?: string; released?: string; releasedSource?: "addon" | "tmdb"; dateUncertain?: boolean }
-export type FollowStartMode = "new" | "from";
+export type FollowStartMode = "new" | "from" | "ahead";
 /** The wizard choices carried over from the last follow, as `GET /api/follows/defaults` answers them. */
 export interface FollowDefaults {
   mode: "notify" | "download";
   startMode?: FollowStartMode;
+  aheadCount?: number;
+  graceDays?: number;
   selection?: {
     addonKeys: string[];
     sourceStrategy: DownloadSourceStrategy;
@@ -366,7 +368,12 @@ export interface FollowAutoDownload {
   startMode: FollowStartMode;
   startSeason?: number;
   startEpisode?: number;
+  aheadCount?: number;
   selection: DownloadSelection;
+  /** Days after release during which only the preferred audio is accepted. */
+  graceDays?: number;
+  /** Delete downloaded episodes this long after the owner watched past them; absent keeps them. */
+  retention?: { afterWatchedDays: 1 | 7 | 30 };
   /** Catalogue key of the reason nothing is admitted while the account may not download. */
   blockedKey?: string;
 }
@@ -379,6 +386,11 @@ export interface FollowEpisodeDownload {
   jobId?: string;
   attempts: number;
   nextAttemptAt?: string;
+  /** ISO instant the preferred-audio window closes, while the row is waiting inside it. */
+  graceUntil?: string;
+  /** ISO instant the file was deleted by retention; the state stays completed. */
+  removedAt?: string;
+  removedReason?: "retention";
   reasonKey?: string;
   updatedAt: string;
 }
@@ -395,7 +407,7 @@ export interface FollowDownloads { queued: number; waiting: number; completed: n
 /** A followed film's single record, as the follow view carries it. */
 export interface FollowMovie {
   released?: string; releaseKind?: "digital" | "physical" | "theatrical" | "catalog"; theatricalAt?: string; dateUncertain?: boolean;
-  state?: CalendarEpisodeState; reasonKey?: string; nextAttemptAt?: string;
+  state?: CalendarEpisodeState; reasonKey?: string; nextAttemptAt?: string; graceUntil?: string;
 }
 export interface FollowView {
   movie?: FollowMovie;

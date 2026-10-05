@@ -4,7 +4,7 @@ import path from "node:path";
 import type { DownloadSelection } from "./downloads.js";
 import { AppError } from "./errors.js";
 import { renameWithRetry } from "./fs-retry.js";
-import type { Viewer } from "./libraries.js";
+import { parseLibraryPath, type Viewer } from "./libraries.js";
 import { log } from "./logger.js";
 import type { MediaInfo } from "./naming.js";
 import type { MetaItem } from "./types.js";
@@ -33,10 +33,16 @@ export interface FollowEpisode {
 export interface FollowAutoDownload {
   /** Set when automatic downloads were switched on, kept when the rule is edited. */
   enabledAt: string;
-  startMode: "new" | "from";
+  startMode: "new" | "from" | "ahead";
   startSeason?: number;
   startEpisode?: number;
+  /** With `ahead`: how many regular episodes after the watched marker stay ready, 1..10. */
+  aheadCount?: number;
   selection: DownloadSelection;
+  /** Days after release during which only the preferred audio is admitted, 0..30. */
+  graceDays?: number;
+  /** Delete downloaded episodes this long after the owner watched past them; absent keeps them. */
+  retention?: { afterWatchedDays: 1 | 7 | 30 };
   /** The catalogue key of the reason nothing is admitted, while the owner may not download. */
   blockedKey?: string;
 }
@@ -53,6 +59,13 @@ export interface EpisodeDownload {
   attempts: number;
   /** ISO UTC, only meaningful in `waiting`. */
   nextAttemptAt?: string;
+  /** ISO UTC, the moment the preferred-audio window closes; only meaningful in `waiting`. */
+  graceUntil?: string;
+  /** The library key the completed download wrote, remembered when the job finished. */
+  target?: string;
+  /** ISO UTC, set when the file was deleted by retention; the state stays `completed`. */
+  removedAt?: string;
+  removedReason?: "retention";
   reasonKey?: string;
   updatedAt: string;
 }
@@ -300,7 +313,23 @@ export function movieEpisode(meta: MetaItem, metaId: string, releases: MovieRele
   return { ...base, released: catalog, releasedSource: "addon", releaseKind: "catalog", ...(doubtful ? { dateUncertain: true } : {}) };
 }
 
-export function downloadEligibility(follow: Follow, episode: FollowEpisode, now: number): DownloadEligibility {
+/** The episodes an "ahead" rule keeps ready: the next `aheadCount` regular episodes in
+ *  season/episode order after the marker -- or from the first one when there is no marker.
+ *  A slot is a slot, so an episode with no release date still spends one and the window never
+ *  reaches past it. Pure, so the setup dialog and the admission agree. */
+export function aheadWindow(follow: Follow, watched: { season: number; episode: number } | undefined): Set<string> {
+  const count = follow.autoDownload?.aheadCount ?? 0;
+  if (count <= 0) return new Set();
+  const ordered = Object.values(follow.episodes)
+    .filter((episode) => episode.season >= 1)
+    .sort((a, b) => a.season - b.season || a.episode - b.episode);
+  const after = watched
+    ? ordered.filter((episode) => afterMarker(episode, watched))
+    : ordered;
+  return new Set(after.slice(0, count).map((episode) => episode.key));
+}
+
+export function downloadEligibility(follow: Follow, episode: FollowEpisode, now: number, watched?: { season: number; episode: number }): DownloadEligibility {
   const auto = follow.autoDownload;
   if (!auto) return "outside";
   // A film is one download whenever it comes out; the start rule is about a series' episodes.
@@ -308,7 +337,9 @@ export function downloadEligibility(follow: Follow, episode: FollowEpisode, now:
     if (!episode.released) return episode.dateUncertain ? "upcoming" : "attention-no-date";
     return Date.parse(episode.released) > now ? "upcoming" : "eligible";
   }
-  if (auto.startMode === "from") {
+  if (auto.startMode === "ahead") {
+    if (!aheadWindow(follow, watched).has(episode.key)) return "outside";
+  } else if (auto.startMode === "from") {
     const startSeason = auto.startSeason ?? 1;
     const startEpisode = auto.startEpisode ?? 1;
     const atOrAfter = episode.season > startSeason || (episode.season === startSeason && episode.episode >= startEpisode);
@@ -326,6 +357,27 @@ export function downloadEligibility(follow: Follow, episode: FollowEpisode, now:
   if (!episode.released) return episode.dateUncertain ? "upcoming" : "attention-no-date";
   if (Date.parse(episode.released) > now) return "upcoming";
   return "eligible";
+}
+
+/** The instant a follow's preferred-audio window closes, or nothing when it never waits. The
+ *  clock runs from the episode's release, so a date the provider has not given leaves no window. */
+export function graceUntil(auto: FollowAutoDownload, episode: FollowEpisode): number | undefined {
+  const days = auto.graceDays;
+  if (!days || days <= 0 || !episode.released) return undefined;
+  const released = Date.parse(episode.released);
+  return Number.isFinite(released) ? released + days * DAY_MS : undefined;
+}
+
+/** The selection a follow hands to the queue right now: inside the window the fallback audio is
+ *  dropped and a preferred mode softens to listed, so only the preferred language is accepted.
+ *  A strict mode stays strict, and the window's end restores the saved rules unchanged. */
+export function effectiveSelection(auto: FollowAutoDownload, episode: FollowEpisode, now: number): DownloadSelection {
+  const until = graceUntil(auto, episode);
+  if (until === undefined || now >= until) return auto.selection;
+  const stripped: DownloadSelection = { ...auto.selection };
+  delete stripped.fallbackAudioLanguage;
+  if (stripped.audioMode === "preferred") stripped.audioMode = "listed";
+  return stripped;
 }
 
 const FOLLOW_ADDON_LIMIT = 50;
@@ -394,8 +446,12 @@ export function parseFollowDefaults(value: unknown): FollowDefaults | undefined 
   const mode = enumValue(["notify", "download"] as const, source.mode);
   if (!mode) throw invalidFollowDefaults();
   const startMode = source.startMode === undefined || source.startMode === null
-    ? undefined : enumValue(["new", "from"] as const, source.startMode);
+    ? undefined : enumValue(["new", "from", "ahead"] as const, source.startMode);
   if (source.startMode !== undefined && source.startMode !== null && !startMode) throw invalidFollowDefaults();
+  const aheadCount = source.aheadCount === undefined || source.aheadCount === null ? undefined : integer(source.aheadCount);
+  if (startMode === "ahead" && (aheadCount === undefined || aheadCount < 1 || aheadCount > 10)) throw invalidFollowDefaults();
+  const graceDays = source.graceDays === undefined || source.graceDays === null ? undefined : integer(source.graceDays);
+  if (source.graceDays !== undefined && source.graceDays !== null && (graceDays === undefined || graceDays < 0 || graceDays > 30)) throw invalidFollowDefaults();
   const selection = source.selection === undefined || source.selection === null
     ? undefined : parseFollowDefaultsSelection(source.selection);
   const target = source.target === undefined || source.target === null
@@ -403,6 +459,8 @@ export function parseFollowDefaults(value: unknown): FollowDefaults | undefined 
   return {
     mode,
     ...(startMode ? { startMode } : {}),
+    ...(startMode === "ahead" && aheadCount ? { aheadCount } : {}),
+    ...(graceDays ? { graceDays } : {}),
     ...(selection ? { selection } : {}),
     ...(target ? { target } : {}),
   };
@@ -490,6 +548,86 @@ export function undatedCalendarItems(follows: Follow[], limit: number): Calendar
     || a.season - b.season
     || a.episode - b.episode);
   return items.slice(0, Math.max(0, limit));
+}
+
+/** The window a feed carries: everything released in the last month, and the next half year. */
+const FEED_PAST_MS = 30 * DAY_MS;
+const FEED_FUTURE_MS = 180 * DAY_MS;
+/** RFC 5545 wants no logical line longer than 75 octets, the fold space included. */
+const ICS_LINE_OCTETS = 75;
+
+/** Escapes a text value the way RFC 5545 wants it: the backslash first, then the two
+ *  separators and any newline, since escaping the backslash first would double its escapes. */
+const icsText = (value: string): string =>
+  value.replace(/\\/g, "\\\\").replace(/;/g, "\\;").replace(/,/g, "\\,").replace(/\r\n|\r|\n/g, "\\n");
+
+/** Folds one logical line to the 75-octet budget, a continuation line spending one on its
+ *  leading space. Iterating by character never splits a multi-byte one. */
+const foldIcsLine = (line: string): string => {
+  const folded: string[] = [];
+  let current = "";
+  let octets = 0;
+  for (const character of line) {
+    const size = Buffer.byteLength(character, "utf8");
+    if (octets + size > (folded.length ? ICS_LINE_OCTETS - 1 : ICS_LINE_OCTETS)) {
+      folded.push(current);
+      current = "";
+      octets = 0;
+    }
+    current += character;
+    octets += size;
+  }
+  folded.push(current);
+  return folded.join("\r\n ");
+};
+
+/** The UTC calendar day a release names, as `YYYYMMDD`. */
+const icsDay = (iso: string): string => iso.slice(0, 10).replace(/-/g, "");
+/** The UTC day after the one a `YYYYMMDD` string names. */
+const icsNextDay = (day: string): string =>
+  icsDay(new Date(Date.parse(`${day.slice(0, 4)}-${day.slice(4, 6)}-${day.slice(6, 8)}T00:00:00Z`) + DAY_MS).toISOString());
+/** An instant as `YYYYMMDDTHHMMSSZ`, the form DTSTAMP wants. */
+const icsStamp = (ms: number): string => new Date(ms).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+
+/** Every state a feed can carry, in the English words its DESCRIPTION uses. */
+const FEED_STATE: Record<CalendarEpisodeState, string> = {
+  upcoming: "upcoming", released: "released", reserved: "queued", queued: "queued",
+  waiting: "waiting for a source", completed: "downloaded", attention: "needs attention", skipped: "skipped",
+};
+
+/** One episode's summary: a film is its title, a series episode its code and title, and an
+ *  uncertain date is marked so the reader knows the day may still move. */
+const feedSummary = (item: CalendarItem): string => {
+  const code = `S${String(item.season).padStart(2, "0")}E${String(item.episode).padStart(2, "0")}`;
+  const body = item.type === "movie" ? item.name : `${item.name} ${code}${item.title ? ` · ${item.title}` : ""}`;
+  return `${item.dateUncertain ? "≈ " : ""}${body}`;
+};
+
+/** The private calendar an account subscribes to, as one RFC 5545 document. Pure: the route
+ *  decides who may read it, and `now` fixes both DTSTAMP and the window that is written. */
+export function calendarFeed(follows: Follow[], now: number, options: { name: string; language: string }): string {
+  const lines = [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "PRODID:-//Stremio Offline//Following//EN",
+    "CALSCALE:GREGORIAN",
+    `X-WR-CALNAME:${icsText(options.name)}`,
+  ];
+  for (const item of calendarItems(follows, now - FEED_PAST_MS, now + FEED_FUTURE_MS, now)) {
+    const start = icsDay(item.released);
+    lines.push(
+      "BEGIN:VEVENT",
+      `UID:${item.followId}-${item.season}-${item.episode}@stremio-offline`,
+      `DTSTAMP:${icsStamp(now)}`,
+      `DTSTART;VALUE=DATE:${start}`,
+      `DTEND;VALUE=DATE:${icsNextDay(start)}`,
+      `SUMMARY:${icsText(feedSummary(item))}`,
+      `DESCRIPTION:${icsText(FEED_STATE[item.state])}`,
+      "END:VEVENT",
+    );
+  }
+  lines.push("END:VCALENDAR");
+  return `${lines.map(foldIcsLine).join("\r\n")}\r\n`;
 }
 
 export interface ActivityItem {
@@ -712,6 +850,8 @@ export interface FollowJob {
   id: string;
   status: string;
   errorKey?: string;
+  /** The library key the job wrote, once it has one. */
+  target?: string;
   follow?: { followId: string; episodeKey: string; intent: string };
 }
 
@@ -744,6 +884,13 @@ export interface FollowDeps {
   airDates?: (type: string, metaId: string, seasons: number[], owner: Viewer) => Promise<Map<string, string | null> | undefined>;
   /** A film's release dates by kind, from TMDB; undefined when no key is set. */
   movieReleases?: (metaId: string, owner: Viewer) => Promise<MovieReleases | null>;
+  /** The owner's watched marker for a series, keyed by the meta id; the last episode they
+   *  finished, or nothing when they never did. Drives the "ahead" window; `updatedAt` closes
+   *  the retention delay. */
+  watched?: (ownerUserId: string, metaId: string) => { season: number; episode: number; updatedAt?: string } | undefined;
+  /** Delete one file by its library key. Answers whether the deletion was queued; a key that
+   *  is not a library file is refused without touching anything. */
+  removeFile?: (target: string) => Promise<boolean>;
   /** The download queue the followed series queue into. */
   queue: FollowQueue;
   /** The owner may queue into this selection's library right now. */
@@ -762,6 +909,8 @@ const HOUR_MS = 60 * 60_000;
  *  across every follow: a long season is picked up over several passes, not in one burst. */
 const ADMIT_PER_CALL = 20;
 const OUTSTANDING_LIMIT = 20;
+/** How many files one retention pass may delete, so a bulk cleanup never storms the queue. */
+const RETENTION_PER_PASS = 10;
 
 /** When a failed download is tried again: an hour, six hours, then a day, then a week. */
 const downloadLadderMs = (attempts: number): number =>
@@ -907,6 +1056,11 @@ export class FollowService {
     return this.deps.mayDownload(follow.ownerUserId, follow.autoDownload.selection);
   }
 
+  /** Where the owner is watching one series, as the "ahead" window reads it. */
+  private watchedFor(follow: Follow): { season: number; episode: number } | undefined {
+    return this.deps.watched?.(follow.ownerUserId, follow.metaId);
+  }
+
   private requireOwn(followId: string, ownerUserId: string): Follow {
     const follow = this.deps.store.get(followId);
     if (!follow || follow.ownerUserId !== ownerUserId) throw new AppError("The item was not found.", "err.itemNotFound", 404);
@@ -986,7 +1140,7 @@ export class FollowService {
       if (!follow) return;
       const current = follow.episodes[episode.key];
       if (!current) continue;
-      const verdict = downloadEligibility(follow, current, this.deps.now());
+      const verdict = downloadEligibility(follow, current, this.deps.now(), this.watchedFor(follow));
       if (verdict === "attention-ambiguous" || verdict === "attention-no-date") {
         if (!current.download) {
           const reasonKey = verdict === "attention-ambiguous" ? "err.followEpisodeAmbiguous" : "err.followNoReleaseDate";
@@ -1017,7 +1171,7 @@ export class FollowService {
     if (!follow) return;
     const job = await this.deps.queue.addPending(
       this.jobTitle(follow, episode),
-      { type: follow.type, videoId: episode.videoId, selection: follow.autoDownload!.selection },
+      { type: follow.type, videoId: episode.videoId, selection: effectiveSelection(follow.autoDownload!, episode, this.deps.now()) },
       this.episodeMedia(follow, episode),
       follow.ownerUserId,
       { followId, episodeKey, intent },
@@ -1040,7 +1194,7 @@ export class FollowService {
     const download = follow?.episodes[episodeKey]?.download;
     if (!follow || !download) return;
     if (job.status === "completed") {
-      await this.setDownload(followId, episodeKey, { ...download, state: "completed", jobId: job.id, reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
+      await this.setDownload(followId, episodeKey, { ...download, ...(job.target ? { target: job.target } : {}), state: "completed", jobId: job.id, reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
     } else if (job.status === "failed") {
       await this.setWaiting(followId, episodeKey, { ...download, jobId: job.id }, job, now);
     } else {
@@ -1050,10 +1204,16 @@ export class FollowService {
 
   private async setWaiting(followId: string, episodeKey: string, download: EpisodeDownload, job: FollowJob, now: number): Promise<void> {
     const attempts = download.attempts + 1;
+    const follow = this.deps.store.get(followId);
+    const episode = follow?.episodes[episodeKey];
+    const window = follow?.autoDownload && episode ? graceUntil(follow.autoDownload, episode) : undefined;
+    const grace = window !== undefined && window > now ? window : undefined;
+    const ladder = now + downloadLadderMs(attempts);
     await this.setDownload(followId, episodeKey, {
       ...download, state: "waiting", attempts,
       reasonKey: job.errorKey ?? "err.followDownloadFailed",
-      nextAttemptAt: new Date(now + downloadLadderMs(attempts)).toISOString(),
+      nextAttemptAt: new Date(grace !== undefined ? Math.min(ladder, grace) : ladder).toISOString(),
+      graceUntil: grace !== undefined ? new Date(grace).toISOString() : undefined,
       updatedAt: "",
     });
   }
@@ -1078,7 +1238,7 @@ export class FollowService {
         if (download.state === "queued") {
           const job = jobs.get(download.intent);
           if (!job) await this.setDownload(follow.id, episodeKey, { ...download, state: "attention", jobId: undefined, reasonKey: "err.followJobMissing", nextAttemptAt: undefined, updatedAt: "" });
-          else if (job.status === "completed") await this.setDownload(follow.id, episodeKey, { ...download, state: "completed", reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
+          else if (job.status === "completed") await this.setDownload(follow.id, episodeKey, { ...download, ...(job.target ? { target: job.target } : {}), state: "completed", reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
           else if (job.status === "failed") await this.setWaiting(follow.id, episodeKey, download, job, now);
           continue;
         }
@@ -1091,11 +1251,11 @@ export class FollowService {
         if (!follow.enabled || !this.mayQueue(follow)) continue;
         const job = jobs.get(download.intent);
         if (job && job.status === "failed") {
-          await this.deps.queue.retry(job.id);
+          await this.deps.queue.retry(job.id, effectiveSelection(follow.autoDownload!, follow.episodes[episodeKey], now));
           if (!this.fresh(follow.id, revision)) return;
           await this.setDownload(follow.id, episodeKey, { ...download, state: "queued", jobId: job.id, reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
         } else if (job && job.status === "completed") {
-          await this.setDownload(follow.id, episodeKey, { ...download, state: "completed", reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
+          await this.setDownload(follow.id, episodeKey, { ...download, ...(job.target ? { target: job.target } : {}), state: "completed", reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
         } else if (!job && !download.jobId) {
           // The failed job was cleared from the queue on purpose; the episode is still wanted.
           await this.enqueueLocked(follow.id, revision, episodeKey, download.generation + 1);
@@ -1107,7 +1267,7 @@ export class FollowService {
   }
 
   /** The episodes a proposed rule would queue right now, for the setup dialog's count. */
-  preview(follow: Follow, start: { startMode: "new" | "from"; startSeason?: number; startEpisode?: number }): FollowEpisode[] {
+  preview(follow: Follow, start: { startMode: "new" | "from" | "ahead"; startSeason?: number; startEpisode?: number; aheadCount?: number }): FollowEpisode[] {
     const now = this.deps.now();
     const proposed: Follow = {
       ...follow,
@@ -1116,12 +1276,14 @@ export class FollowService {
         startMode: start.startMode,
         ...(start.startSeason != null ? { startSeason: start.startSeason } : {}),
         ...(start.startEpisode != null ? { startEpisode: start.startEpisode } : {}),
+        ...(start.startMode === "ahead" && start.aheadCount != null ? { aheadCount: start.aheadCount } : {}),
         // `downloadEligibility` reads the start rule only, never the selection.
         selection: follow.autoDownload?.selection ?? ({} as DownloadSelection),
       },
     };
+    const watched = this.watchedFor(follow);
     return Object.values(follow.episodes)
-      .filter((episode) => downloadEligibility(proposed, episode, now) === "eligible")
+      .filter((episode) => downloadEligibility(proposed, episode, now, watched) === "eligible")
       .sort((a, b) => a.season - b.season || a.episode - b.episode);
   }
 
@@ -1132,9 +1294,43 @@ export class FollowService {
         for (const follow of this.deps.store.all()) {
           if (follow.autoDownload && follow.enabled) await this.admitLocked(follow.id);
         }
+        await this.applyRetention();
       });
     } catch (error) {
       log("WARN", "The automatic downloads could not be reconciled", { error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  /** Deletes the files of watched episodes once their follow's delay has passed. Only an
+   *  administrator's follow may hold a delay, and only an episode whose target the follow
+   *  itself recorded is ever touched; the state stays `completed`, so it is not queued again. */
+  private async applyRetention(): Promise<void> {
+    const removeFile = this.deps.removeFile;
+    if (!removeFile) return;
+    const now = this.deps.now();
+    let removed = 0;
+    for (const follow of this.deps.store.all()) {
+      const retention = follow.autoDownload?.retention;
+      if (!retention || !follow.enabled) continue;
+      const owner = this.deps.owner(follow.ownerUserId);
+      if (!owner || owner.disabled || owner.role !== "admin") continue;
+      const marker = this.deps.watched?.(follow.ownerUserId, follow.metaId);
+      if (!marker?.updatedAt) continue;
+      const dueAt = Date.parse(marker.updatedAt) + retention.afterWatchedDays * DAY_MS;
+      if (!(now >= dueAt)) continue;
+      const episodes = Object.values(follow.episodes).sort((a, b) => a.season - b.season || a.episode - b.episode);
+      for (const episode of episodes) {
+        if (removed >= RETENTION_PER_PASS) return;
+        const download = episode.download;
+        if (!download || download.state !== "completed" || !download.target || download.removedAt) continue;
+        const covered = marker.season > episode.season || (marker.season === episode.season && marker.episode >= episode.episode);
+        if (!covered) continue;
+        const accepted = await removeFile(download.target);
+        if (!accepted) continue;
+        log("INFO", "Deleting a watched episode", { follow: follow.id, episode: episode.key, library: parseLibraryPath(download.target)?.libraryId });
+        await this.setDownload(follow.id, episode.key, { ...download, removedAt: new Date(now).toISOString(), removedReason: "retention" });
+        removed += 1;
+      }
     }
   }
 
@@ -1156,6 +1352,9 @@ export class FollowService {
             startMode: value.startMode,
             ...(value.startSeason != null ? { startSeason: value.startSeason } : {}),
             ...(value.startEpisode != null ? { startEpisode: value.startEpisode } : {}),
+            ...(value.aheadCount ? { aheadCount: value.aheadCount } : {}),
+            ...(value.graceDays ? { graceDays: value.graceDays } : {}),
+            ...(value.retention ? { retention: value.retention } : previous?.retention ? { retention: previous.retention } : {}),
             selection: value.selection,
           };
         }
@@ -1181,7 +1380,7 @@ export class FollowService {
       if (download.state !== "waiting" && !lost) continue;
       const job = download.jobId ? this.deps.queue.get(download.jobId) : undefined;
       if (job && job.status === "failed") {
-        await this.deps.queue.retry(job.id, follow.autoDownload!.selection);
+        await this.deps.queue.retry(job.id, effectiveSelection(follow.autoDownload!, episode, this.deps.now()));
         if (!this.admittable(followId, revision)) return;
         await this.setDownload(followId, episode.key, { ...download, state: "queued", attempts: 0, reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
       } else if (!job) {
@@ -1213,7 +1412,7 @@ export class FollowService {
       if (!["waiting", "attention", "skipped"].includes(download.state)) return;
       const job = download.jobId ? this.deps.queue.get(download.jobId) : undefined;
       if (job && job.status === "failed") {
-        await this.deps.queue.retry(job.id);
+        await this.deps.queue.retry(job.id, follow.autoDownload ? effectiveSelection(follow.autoDownload, follow.episodes[episodeKey], this.deps.now()) : undefined);
         if (!this.fresh(followId, revision)) return;
         await this.setDownload(followId, episodeKey, { ...download, state: "queued", reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
         return;
@@ -1233,7 +1432,7 @@ export class FollowService {
       const ref = job.follow;
       const download = ref ? this.deps.store.get(ref.followId)?.episodes[ref.episodeKey]?.download : undefined;
       if (!ref || !download || download.intent !== ref.intent || download.state === "completed") return;
-      await this.setDownload(ref.followId, ref.episodeKey, { ...download, state: "completed", reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
+      await this.setDownload(ref.followId, ref.episodeKey, { ...download, ...(job.target ? { target: job.target } : {}), state: "completed", reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
     });
   }
 
@@ -1247,7 +1446,7 @@ export class FollowService {
       if (download.state === "skipped") return;
       if (job.status === "completed") {
         if (download.state === "completed") return;
-        await this.setDownload(ref.followId, ref.episodeKey, { ...download, state: "completed", reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
+        await this.setDownload(ref.followId, ref.episodeKey, { ...download, ...(job.target ? { target: job.target } : {}), state: "completed", reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
         return;
       }
       if (job.status === "failed") {
@@ -1272,7 +1471,7 @@ export class FollowService {
         if (!ref || job.status !== "completed") continue;
         const download = this.deps.store.get(ref.followId)?.episodes[ref.episodeKey]?.download;
         if (!download || download.intent !== ref.intent || download.state === "completed") continue;
-        await this.setDownload(ref.followId, ref.episodeKey, { ...download, state: "completed", reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
+        await this.setDownload(ref.followId, ref.episodeKey, { ...download, ...(job.target ? { target: job.target } : {}), state: "completed", reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
       }
     });
   }

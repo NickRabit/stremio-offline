@@ -5,7 +5,7 @@ import path from "node:path";
 import { test } from "node:test";
 import type { DownloadSelection } from "./downloads.js";
 import type { AppError } from "./errors.js";
-import { activityItems, calendarItems, downloadEligibility, FollowService, FollowStore, followStaggerMs, movieEpisode, normalizeFollowEpisodes, reconcileReleaseDates, seasonsForReconcile, undatedCalendarItems, type EpisodeDownload, type Follow, type FollowAutoDownload, type FollowDeps, type FollowEpisode, type FollowJob, type FollowQueue } from "./follows.js";
+import { activityItems, aheadWindow, calendarFeed, calendarItems, downloadEligibility, effectiveSelection, FollowService, FollowStore, followStaggerMs, graceUntil, movieEpisode, normalizeFollowEpisodes, reconcileReleaseDates, seasonsForReconcile, undatedCalendarItems, type EpisodeDownload, type Follow, type FollowAutoDownload, type FollowDeps, type FollowEpisode, type FollowJob, type FollowQueue } from "./follows.js";
 import type { MediaInfo } from "./naming.js";
 import type { MetaItem } from "./types.js";
 
@@ -26,6 +26,7 @@ interface FakeJob {
   id: string;
   status: string;
   errorKey?: string;
+  target?: string;
   follow?: { followId: string; episodeKey: string; intent: string };
   source?: { type: string; videoId: string };
 }
@@ -52,7 +53,7 @@ const fakeQueue = () => {
     },
     findActiveEpisode: (_ownerUserId, type, videoId) => jobs.find((job) => job.source?.type === type && job.source?.videoId === videoId && job.status !== "completed" && job.status !== "failed"),
     adopt: async (id, follow) => { const job = jobs.find((item) => item.id === id); if (job) job.follow = follow; },
-    followJobs: () => jobs.map((job) => ({ id: job.id, status: job.status, ...(job.errorKey ? { errorKey: job.errorKey } : {}), ...(job.follow ? { follow: job.follow } : {}) })),
+    followJobs: () => jobs.map((job) => ({ id: job.id, status: job.status, ...(job.errorKey ? { errorKey: job.errorKey } : {}), ...(job.target ? { target: job.target } : {}), ...(job.follow ? { follow: job.follow } : {}) })),
     get: (id) => { const job = jobs.find((item) => item.id === id); return job ? { id: job.id, status: job.status, ...(job.errorKey ? { errorKey: job.errorKey } : {}) } : undefined; },
     retry: async (id, selection) => { retried.push(id); if (selection) retriedWith.push(selection); const job = jobs.find((item) => item.id === id); if (job) job.status = "queued"; },
     remove: async (id) => {
@@ -532,6 +533,113 @@ test("downloadEligibility follows the start rule, the clock and the episode's fa
   assert.equal(downloadEligibility(follow(from), ep({ season: 2, episode: 3, released: RELEASED }), NOW), "eligible");
   assert.equal(downloadEligibility(follow(from), ep({ season: 2, episode: 2, released: RELEASED }), NOW), "outside", "before the start episode");
   assert.equal(downloadEligibility(follow(from), ep({ season: 1, episode: 9, released: RELEASED }), NOW), "outside", "season is compared first");
+});
+
+test("aheadWindow is the next N regular episodes after the marker, or the first N", () => {
+  const series = (episodes: FollowEpisode[], aheadCount = 3): Follow => ({
+    id: "f", ownerUserId: "u1", type: "series", metaId: "tt1", name: "Show", createdAt: "2024-01-01T00:00:00.000Z",
+    updatedAt: "2024-01-01T00:00:00.000Z", enabled: true, revision: 1, nextCheckAt: "2024-01-01T00:00:00.000Z", failures: 0,
+    autoDownload: { enabledAt: "2024-01-01T00:00:00.000Z", startMode: "ahead", aheadCount, selection: selection() },
+    episodes: Object.fromEntries(episodes.map((episode) => [episode.key, episode])),
+  });
+  const numbered = (count: number): FollowEpisode[] =>
+    Array.from({ length: count }, (_unused, index) => episode(1, index + 1, `v1${index + 1}`, RELEASED));
+
+  assert.deepEqual([...aheadWindow(series(numbered(5)), undefined)].sort(), ["1:1", "1:2", "1:3"], "no marker starts at the first episode");
+  assert.deepEqual([...aheadWindow(series(numbered(5)), { season: 1, episode: 2 })].sort(), ["1:3", "1:4", "1:5"], "a mid-season marker slides the window on");
+
+  const across = [episode(1, 9, "v19", RELEASED), episode(1, 10, "v110", RELEASED), episode(2, 1, "v21", RELEASED), episode(2, 2, "v22", RELEASED)];
+  assert.deepEqual([...aheadWindow(series(across, 2), { season: 1, episode: 10 })].sort(), ["2:1", "2:2"], "the window crosses a season boundary");
+
+  const withSpecials = [episode(0, 1, "s1", RELEASED), episode(0, 2, "s2", RELEASED), episode(1, 1, "v11", RELEASED), episode(1, 2, "v12", RELEASED), episode(1, 3, "v13", RELEASED)];
+  assert.deepEqual([...aheadWindow(series(withSpecials, 2), undefined)].sort(), ["1:1", "1:2"], "specials are ignored");
+
+  const holed = [episode(1, 1, "v11", RELEASED), episode(1, 2, "v12"), episode(1, 3, "v13", RELEASED), episode(1, 4, "v14", RELEASED)];
+  const ahead = series(holed, 2);
+  assert.deepEqual([...aheadWindow(ahead, { season: 1, episode: 1 })].sort(), ["1:2", "1:3"], "an episode with no date still spends a slot");
+  assert.equal(downloadEligibility(ahead, ahead.episodes["1:1"], NOW, { season: 1, episode: 1 }), "outside", "the marker's own episode is behind the window");
+  assert.equal(downloadEligibility(ahead, ahead.episodes["1:3"], NOW, { season: 1, episode: 1 }), "eligible");
+  assert.equal(downloadEligibility(ahead, ahead.episodes["1:4"], NOW, { season: 1, episode: 1 }), "outside", "beyond the window nothing is automatic");
+  assert.equal(downloadEligibility(ahead, ahead.episodes["1:2"], NOW, { season: 1, episode: 1 }), "attention-no-date", "inside the window the usual checks still apply");
+});
+
+test("an ahead rule admits only its window, older seasons included, and slides with the marker", async (t) => {
+  const { store } = await withStore(t);
+  const episodes = [episode(1, 1, "v11", RELEASED), episode(1, 2, "v12", RELEASED), episode(2, 1, "v21", RELEASED), episode(2, 2, "v22", RELEASED)];
+  let marker: { season: number; episode: number } | undefined;
+  const q = fakeQueue();
+  const service = buildService(store, q, { watched: () => marker });
+  const id = await seedSeries(store, episodes, rule({ startMode: "ahead", aheadCount: 2 }));
+  await service.admit(id);
+  assert.deepEqual(q.added.map((item) => item.follow.episodeKey), ["1:1", "1:2"], "nothing beyond the window is queued");
+  marker = { season: 1, episode: 2 };
+  await service.admit(id);
+  assert.deepEqual(q.added.map((item) => item.follow.episodeKey), ["1:1", "1:2", "2:1", "2:2"], "the marker slides the window onto the next episodes");
+  assert.deepEqual(q.removed, [], "moving the window cancels nothing");
+});
+
+const DAY = 24 * 60 * 60_000;
+
+test("graceUntil opens for graceDays after release and never without one", () => {
+  const auto = rule({ graceDays: 7 });
+  assert.equal(graceUntil(auto, episode(1, 1, "v1", RELEASED)), Date.parse(RELEASED) + 7 * DAY);
+  assert.equal(graceUntil(auto, episode(1, 2, "v2")), undefined, "no release date, no window");
+  assert.equal(graceUntil(rule({ graceDays: 0 }), episode(1, 1, "v1", RELEASED)), undefined, "zero means no waiting");
+  assert.equal(graceUntil(rule(), episode(1, 1, "v1", RELEASED)), undefined, "absent means no waiting");
+});
+
+test("effectiveSelection strips the fallback inside the window and restores it after", () => {
+  const auto = rule({ graceDays: 7, selection: { ...selection(), fallbackAudioLanguage: "cs", audioMode: "preferred" } });
+  const film = episode(1, 1, "v1", RELEASED);
+  const until = Date.parse(RELEASED) + 7 * DAY;
+  const inside = effectiveSelection(auto, film, until - 1);
+  assert.equal(inside.fallbackAudioLanguage, undefined);
+  assert.equal(inside.audioMode, "listed");
+  assert.equal(inside.audioLanguage, "en", "the preferred language itself never changes");
+  const after = effectiveSelection(auto, film, until);
+  assert.equal(after, auto.selection, "at the boundary the saved rules stand");
+  assert.equal(after.fallbackAudioLanguage, "cs");
+  assert.equal(after.audioMode, "preferred");
+});
+
+test("effectiveSelection keeps a strict mode strict and an undated episode unchanged", () => {
+  const strict = rule({ graceDays: 7, selection: { ...selection(), fallbackAudioLanguage: "cs", audioMode: "strict" } });
+  const dated = episode(1, 1, "v1", RELEASED);
+  assert.equal(effectiveSelection(strict, dated, Date.parse(RELEASED) + 1).audioMode, "strict");
+  assert.equal(effectiveSelection(strict, dated, Date.parse(RELEASED) + 1).fallbackAudioLanguage, undefined, "the fallback is dropped whatever the mode");
+  assert.equal(effectiveSelection(strict, episode(1, 2, "v2"), NOW), strict.selection, "no date leaves the selection alone");
+  const noWindow = rule({ graceDays: 0 });
+  assert.equal(effectiveSelection(noWindow, dated, NOW), noWindow.selection, "no window leaves the selection alone");
+});
+
+test("admission inside the window passes the stripped selection, and the close restores it", async (t) => {
+  const { store } = await withStore(t);
+  const q = fakeQueue();
+  const released = "2024-05-25T00:00:00.000Z";
+  const until = Date.parse(released) + 7 * DAY;
+  let now = until - 30 * 60_000;
+  const service = buildService(store, q, { now: () => now });
+  const auto = rule({ graceDays: 7, selection: { ...selection(), fallbackAudioLanguage: "cs", audioMode: "preferred" } });
+  const id = await seedSeries(store, [episode(1, 1, "v1", released)], auto);
+
+  await service.admit(id);
+  assert.equal(q.added[0].source.selection?.fallbackAudioLanguage, undefined, "the fallback is dropped inside the window");
+  assert.equal(q.added[0].source.selection?.audioMode, "listed", "a preferred mode softens to listed");
+
+  q.fail(q.jobs[0].id, "err.noMatchingSource");
+  await service.sync();
+  let download = store.get(id)!.episodes["1:1"].download!;
+  assert.equal(download.state, "waiting");
+  assert.equal(download.nextAttemptAt, new Date(until).toISOString(), "the ladder never reaches past the window's close");
+  assert.equal(download.graceUntil, new Date(until).toISOString());
+
+  now = until + 60_000;
+  await service.sync();
+  const retried = q.retriedWith.at(-1)!;
+  assert.equal(retried.fallbackAudioLanguage, "cs", "after the window the full rules return");
+  assert.equal(retried.audioMode, "preferred");
+  download = store.get(id)!.episodes["1:1"].download!;
+  assert.equal(download.state, "queued");
 });
 
 test("admission queues in season order and stops at the caps", async (t) => {
@@ -1014,6 +1122,95 @@ test("undatedCalendarItems lists only uncertain episodes with no date", () => {
   assert.equal("released" in items[0]!, false);
 });
 
+const DAY_MS = 24 * 60 * 60_000;
+const FEED_OPTIONS = { name: "Ada – Stremio Offline", language: "en" };
+
+test("calendarFeed writes a CRLF calendar with all-day dates and a next-day DTEND", () => {
+  const now = Date.parse("2024-03-18T00:00:00.000Z");
+  const follow = calendarFollow({ episodes: { "1:2": { ...episode(1, 2, "v2", "2024-03-20T21:30:00.000Z") } } });
+  const feed = calendarFeed([follow], now, FEED_OPTIONS);
+  assert.ok(feed.endsWith("END:VCALENDAR\r\n"));
+  assert.equal(feed.replace(/\r\n/g, "").includes("\n"), false, "every newline is a CRLF");
+  const lines = feed.split("\r\n");
+  for (const expected of [
+    "BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Stremio Offline//Following//EN", "CALSCALE:GREGORIAN",
+    "X-WR-CALNAME:Ada – Stremio Offline", "BEGIN:VEVENT", "UID:f1-1-2@stremio-offline", "DTSTAMP:20240318T000000Z",
+    "DTSTART;VALUE=DATE:20240320", "DTEND;VALUE=DATE:20240321", "SUMMARY:Show S01E02", "DESCRIPTION:upcoming", "END:VEVENT",
+  ]) assert.ok(lines.includes(expected), expected);
+});
+
+test("calendarFeed folds a summary with its title and marks an uncertain date", () => {
+  const now = Date.parse("2024-03-18T00:00:00.000Z");
+  const follow = calendarFollow({ episodes: {
+    "1:2": { ...episode(1, 2, "v2", "2024-03-20T00:00:00.000Z"), title: "Pilot" },
+    "1:3": { ...episode(1, 3, "v3", "2024-03-21T00:00:00.000Z"), title: "Second", dateUncertain: true },
+  } });
+  const summaries = calendarFeed([follow], now, FEED_OPTIONS).split("\r\n").filter((line) => line.startsWith("SUMMARY:"));
+  assert.deepEqual(summaries, ["SUMMARY:Show S01E02 · Pilot", "SUMMARY:≈ Show S01E03 · Second"]);
+});
+
+test("calendarFeed summarises a film by its name alone", () => {
+  const now = Date.parse("2024-03-18T00:00:00.000Z");
+  const film = calendarFollow({ id: "f9", type: "movie", name: "Dune", episodes: {
+    "1:1": { key: "1:1", videoId: "tt9", season: 1, episode: 1, firstSeenAt: "2024-01-01T00:00:00.000Z", released: "2024-03-20T00:00:00.000Z" },
+  } });
+  const summaries = calendarFeed([film], now, FEED_OPTIONS).split("\r\n").filter((line) => line.startsWith("SUMMARY:"));
+  assert.deepEqual(summaries, ["SUMMARY:Dune"]);
+});
+
+test("calendarFeed escapes separators and newlines in a text value", () => {
+  const now = Date.parse("2024-03-18T00:00:00.000Z");
+  const follow = calendarFollow({ episodes: {
+    "1:2": { ...episode(1, 2, "v2", "2024-03-20T00:00:00.000Z"), title: "Pilot; part, one\\two\nnext" },
+  } });
+  const lines = calendarFeed([follow], now, { name: "Ada, Stremio; Offline", language: "en" }).split("\r\n");
+  assert.ok(lines.includes("SUMMARY:Show S01E02 · Pilot\\; part\\, one\\\\two\\nnext"));
+  assert.ok(lines.includes("X-WR-CALNAME:Ada\\, Stremio\\; Offline"));
+});
+
+test("calendarFeed folds long lines at 75 octets without splitting a character", () => {
+  const now = Date.parse("2024-03-18T00:00:00.000Z");
+  const title = "Příliš žluťoučký kůň 😀 漢字".repeat(8);
+  const follow = calendarFollow({ episodes: { "1:2": { ...episode(1, 2, "v2", "2024-03-20T00:00:00.000Z"), title } } });
+  const lines = calendarFeed([follow], now, FEED_OPTIONS).split("\r\n");
+  const start = lines.findIndex((line) => line.startsWith("SUMMARY:"));
+  let end = start;
+  let rebuilt = lines[start]!;
+  while (lines[end + 1]?.startsWith(" ")) { end += 1; rebuilt += lines[end]!.slice(1); }
+  assert.ok(end > start, "the long summary was folded");
+  assert.equal(rebuilt, `SUMMARY:Show S01E02 · ${title}`, "unfolding restores the line, so no character was split");
+  for (let index = start; index <= end; index += 1) {
+    assert.ok(Buffer.byteLength(lines[index]!, "utf8") <= 75, `${lines[index]} carries more than 75 octets`);
+  }
+});
+
+test("calendarFeed keeps the [now - 30 days, now + 180 days) window and drops undated episodes", () => {
+  const now = Date.parse("2024-06-15T00:00:00.000Z");
+  const at = (offset: number) => new Date(now + offset).toISOString();
+  const follow = calendarFollow({ episodes: {
+    "too-old": { ...episode(1, 1, "v1", at(-31 * DAY_MS)) },
+    "at-from": { ...episode(1, 2, "v2", at(-30 * DAY_MS)) },
+    "at-to": { ...episode(1, 3, "v3", at(180 * DAY_MS)) },
+    "before-to": { ...episode(1, 4, "v4", at(180 * DAY_MS - 1)) },
+    "undated": { ...episode(1, 5, "v5"), dateUncertain: true },
+  } });
+  const uids = calendarFeed([follow], now, FEED_OPTIONS).split("\r\n").filter((line) => line.startsWith("UID:"));
+  assert.deepEqual(uids, ["UID:f1-1-2@stremio-offline", "UID:f1-1-4@stremio-offline"]);
+});
+
+test("calendarFeed names each download state in English words", () => {
+  const now = Date.parse("2024-06-15T00:00:00.000Z");
+  const states = ["reserved", "waiting", "completed", "attention", "skipped"] as const;
+  const episodes: Record<string, FollowEpisode> = {};
+  states.forEach((state, index) => {
+    episodes[`1:${index + 1}`] = { ...episode(1, index + 1, `v${index + 1}`, new Date(now - DAY_MS + index * 60_000).toISOString()), download: download({ state }) };
+  });
+  const descriptions = calendarFeed([calendarFollow({ episodes })], now, FEED_OPTIONS).split("\r\n").filter((line) => line.startsWith("DESCRIPTION:"));
+  assert.deepEqual(descriptions, [
+    "DESCRIPTION:queued", "DESCRIPTION:waiting for a source", "DESCRIPTION:downloaded", "DESCRIPTION:needs attention", "DESCRIPTION:skipped",
+  ]);
+});
+
 test("activityItems keeps only episodes with a download, newest first and capped", () => {
   const first = calendarFollow({ id: "f1", name: "One", episodes: {
     "1:1": { ...episode(1, 1, "v1", RELEASED), download: download({ state: "completed", updatedAt: "2024-05-03T00:00:00.000Z" }) },
@@ -1080,4 +1277,199 @@ test("a followed film is downloaded once when it comes out, whatever the start r
   assert.equal(q.added[0].title, "Film");
   await service.admit(follow.id);
   assert.equal(q.added.length, 1, "exactly one download");
+});
+
+/** The delay closes `afterWatchedDays` after the marker's own `updatedAt`, ISO. */
+const retentionMarker = (season: number, episode: number, updatedAt = "2024-05-01T00:00:00.000Z") =>
+  ({ season, episode, updatedAt });
+
+const doneDownload = (target?: string): EpisodeDownload =>
+  download({ state: "completed", ...(target ? { target } : {}) });
+
+/** Runs one retention pass: pushes every check out of the way, then ticks the service. */
+const runRetentionPass = async (service: FollowService, store: FollowStore) => {
+  for (const follow of store.all()) {
+    await store.update(follow.id, (current) => { current.nextCheckAt = new Date(NOW + 365 * DAY).toISOString(); });
+  }
+  await service.tick();
+};
+
+const adminDeps = (removedTargets: string[], watched: () => { season: number; episode: number; updatedAt?: string } | undefined): Partial<FollowDeps> => ({
+  owner: () => ({ id: "u1", role: "admin" }),
+  watched,
+  removeFile: async (target) => { removedTargets.push(target); return true; },
+});
+
+test("retention deletes only the completed, targeted, watched and delayed episodes", async (t) => {
+  const { store } = await withStore(t);
+  const q = fakeQueue();
+  const removedTargets: string[] = [];
+  const service = buildService(store, q, adminDeps(removedTargets, () => retentionMarker(1, 2)));
+  const id = await seedSeries(store, [
+    episode(1, 1, "v1", RELEASED),
+    episode(1, 2, "v2", RELEASED),
+    episode(1, 3, "v3", RELEASED),
+    episode(1, 4, "v4", RELEASED),
+  ], rule({ retention: { afterWatchedDays: 1 } }));
+  await store.update(id, (current) => {
+    current.episodes["1:1"].download = doneDownload("lib_shows/Show/S01E01.mkv");
+    current.episodes["1:2"].download = doneDownload("lib_shows/Show/S01E02.mkv");
+    current.episodes["1:3"].download = doneDownload();
+    current.episodes["1:4"].download = download({ state: "waiting" });
+  });
+
+  await runRetentionPass(service, store);
+
+  assert.deepEqual(removedTargets, ["lib_shows/Show/S01E01.mkv", "lib_shows/Show/S01E02.mkv"]);
+  const first = store.get(id)!.episodes["1:1"].download!;
+  assert.equal(first.state, "completed", "the state stays completed so it is never queued again");
+  assert.ok(first.removedAt);
+  assert.equal(first.removedReason, "retention");
+  assert.ok(store.get(id)!.episodes["1:2"].download!.removedAt);
+  assert.equal(store.get(id)!.episodes["1:3"].download!.removedAt, undefined, "no target was written by this follow");
+  assert.equal(store.get(id)!.episodes["1:4"].download!.removedAt, undefined, "an unfinished download is left alone");
+});
+
+test("retention waits for the delay and the marker", async (t) => {
+  const { store } = await withStore(t);
+  const q = fakeQueue();
+  const removedTargets: string[] = [];
+  let marker = retentionMarker(1, 2, "2024-05-31T23:00:00.000Z");
+  const service = buildService(store, q, adminDeps(removedTargets, () => marker));
+  const id = await seedSeries(store, [episode(1, 1, "v1", RELEASED), episode(1, 2, "v2", RELEASED)], rule({ retention: { afterWatchedDays: 7 } }));
+  await store.update(id, (current) => {
+    current.episodes["1:1"].download = doneDownload("lib_shows/S01E01.mkv");
+    current.episodes["1:2"].download = doneDownload("lib_shows/S01E02.mkv");
+  });
+
+  await runRetentionPass(service, store);
+  assert.deepEqual(removedTargets, [], "not before the delay has passed");
+
+  marker = retentionMarker(1, 0, "2024-01-01T00:00:00.000Z");
+  await runRetentionPass(service, store);
+  assert.deepEqual(removedTargets, [], "not when the marker is behind the episode");
+
+  marker = retentionMarker(1, 2);
+  await runRetentionPass(service, store);
+  assert.deepEqual(removedTargets, ["lib_shows/S01E01.mkv", "lib_shows/S01E02.mkv"]);
+});
+
+test("retention never runs for a follow a non-administrator owns", async (t) => {
+  const { store } = await withStore(t);
+  const q = fakeQueue();
+  const removedTargets: string[] = [];
+  const service = buildService(store, q, {
+    owner: () => ({ id: "u1", role: "user" }),
+    watched: () => retentionMarker(1, 2),
+    removeFile: async (target) => { removedTargets.push(target); return true; },
+  });
+  const id = await seedSeries(store, [episode(1, 1, "v1", RELEASED)], rule({ retention: { afterWatchedDays: 1 } }));
+  await store.update(id, (current) => { current.episodes["1:1"].download = doneDownload("lib_shows/S01E01.mkv"); });
+
+  await runRetentionPass(service, store);
+
+  assert.deepEqual(removedTargets, []);
+  assert.equal(store.get(id)!.episodes["1:1"].download!.removedAt, undefined);
+});
+
+test("retention never runs for a paused follow", async (t) => {
+  const { store } = await withStore(t);
+  const q = fakeQueue();
+  const removedTargets: string[] = [];
+  const service = buildService(store, q, adminDeps(removedTargets, () => retentionMarker(1, 2)));
+  const id = await seedSeries(store, [episode(1, 1, "v1", RELEASED)], rule({ retention: { afterWatchedDays: 1 } }));
+  await store.update(id, (current) => {
+    current.episodes["1:1"].download = doneDownload("lib_shows/S01E01.mkv");
+    current.enabled = false;
+  });
+
+  await runRetentionPass(service, store);
+
+  assert.deepEqual(removedTargets, []);
+  assert.equal(store.get(id)!.episodes["1:1"].download!.removedAt, undefined);
+});
+
+test("retention deletes at most ten per pass", async (t) => {
+  const { store } = await withStore(t);
+  const q = fakeQueue();
+  const removedTargets: string[] = [];
+  const service = buildService(store, q, adminDeps(removedTargets, () => retentionMarker(1, 12)));
+  const episodes = Array.from({ length: 12 }, (_unused, index) => episode(1, index + 1, `v${index + 1}`, RELEASED));
+  const id = await seedSeries(store, episodes, rule({ retention: { afterWatchedDays: 1 } }));
+  await store.update(id, (current) => {
+    for (const key of Object.keys(current.episodes)) current.episodes[key].download = doneDownload(`lib_shows/${key}.mkv`);
+  });
+
+  await runRetentionPass(service, store);
+  assert.equal(removedTargets.length, 10);
+  const afterFirst = Object.values(store.get(id)!.episodes).filter((entry) => entry.download?.removedAt);
+  assert.equal(afterFirst.length, 10);
+
+  await runRetentionPass(service, store);
+  assert.equal(removedTargets.length, 12, "the next pass clears what is left");
+});
+
+test("a refused removal records nothing", async (t) => {
+  const { store } = await withStore(t);
+  const q = fakeQueue();
+  let attempts = 0;
+  const service = buildService(store, q, {
+    owner: () => ({ id: "u1", role: "admin" }),
+    watched: () => retentionMarker(1, 1),
+    removeFile: async () => { attempts += 1; return false; },
+  });
+  const id = await seedSeries(store, [episode(1, 1, "v1", RELEASED)], rule({ retention: { afterWatchedDays: 1 } }));
+  await store.update(id, (current) => { current.episodes["1:1"].download = doneDownload("lib_shows/S01E01.mkv"); });
+
+  await runRetentionPass(service, store);
+
+  assert.equal(attempts, 1);
+  const download = store.get(id)!.episodes["1:1"].download!;
+  assert.equal(download.removedAt, undefined);
+  assert.equal(download.state, "completed");
+});
+
+test("a removed episode is never admitted or synced again", async (t) => {
+  const { store } = await withStore(t);
+  const q = fakeQueue();
+  const removedTargets: string[] = [];
+  const service = buildService(store, q, adminDeps(removedTargets, () => retentionMarker(1, 1)));
+  const id = await seedSeries(store, [episode(1, 1, "v1", RELEASED)], rule({ retention: { afterWatchedDays: 1 } }));
+  await store.update(id, (current) => { current.episodes["1:1"].download = doneDownload("lib_shows/S01E01.mkv"); });
+
+  await runRetentionPass(service, store);
+  assert.equal(store.get(id)!.episodes["1:1"].download!.removedAt !== undefined, true);
+
+  await service.admit(id);
+  await service.sync();
+  assert.equal(q.added.length, 0, "nothing is queued again");
+  assert.equal(removedTargets.length, 1, "the file is not deleted a second time");
+  assert.equal(store.get(id)!.episodes["1:1"].download!.state, "completed");
+});
+
+test("jobCompleted and sync remember the library key a finished download wrote", async (t) => {
+  const { store } = await withStore(t);
+  const q = fakeQueue();
+  const service = buildService(store, q);
+  const id = await seedSeries(store, [episode(1, 1, "v1", RELEASED)], rule());
+  await service.admit(id);
+  const job = q.jobs[0];
+  await service.jobCompleted({ id: job.id, status: "completed", follow: job.follow, target: "lib_shows/Show/S01E01.mkv" });
+  const download = store.get(id)!.episodes["1:1"].download!;
+  assert.equal(download.state, "completed");
+  assert.equal(download.target, "lib_shows/Show/S01E01.mkv");
+
+  // The same key is recorded when sync links a job that completed while unresolved.
+  const other = await store.create({ ownerUserId: "u1", type: "series", metaId: "tt2", name: "Other" }, 0);
+  await store.recordCheck(other.id, { episodes: [episode(2, 1, "w1", RELEASED)], now: 0 });
+  await store.update(other.id, (current) => { current.autoDownload = rule(); });
+  await service.admit(other.id);
+  const linked = q.jobs.at(-1)!;
+  linked.target = "lib_shows/Show/S02E01.mkv";
+  await store.update(other.id, (current) => { current.episodes["2:1"].download = { state: "reserved", intent: linked.follow!.intent, generation: 1, attempts: 0, updatedAt: RELEASED }; });
+  q.complete(linked.id);
+  await service.sync();
+  const synced = store.get(other.id)!.episodes["2:1"].download!;
+  assert.equal(synced.state, "completed");
+  assert.equal(synced.target, "lib_shows/Show/S02E01.mkv");
 });

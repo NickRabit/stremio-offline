@@ -74,7 +74,9 @@ Shipped in `main`; implementation details live in the linked guides.
   page with an overview, a release calendar and download activity, with
   opt-in automatic downloads that queue each episode once, retry a missing
   source on a ladder and treat a removed job as a skip. Episode dates are
-  corrected from TMDB. Lazy jobs fall back to a torrent through Real-Debrid.
+  corrected from TMDB, a private calendar feed, a wait for the preferred audio,
+  episodes kept ahead of viewing and opt-in deletion after watching. Lazy jobs
+  fall back to a torrent through Real-Debrid.
   [Downloads](downloads.md#following-series-and-films),
   [design](follow-show-analysis.md).
 - **Continue watching**: series grouping, the next available catalogue episode
@@ -166,13 +168,6 @@ episodes are an additive row, not a reason to block the home screen. See the
   a wizard that offers it at the moment someone needs it.
 - Bulk rename by pattern. Deliberately out of the first multi-library release;
   the operations queue is shaped to take it without a migration.
-
-### Following follow-ups
-
-A grace period that waits for preferred audio before taking the fallback,
-downloading N episodes ahead of viewing, opt-in retention, and an
-authenticated, revocable `.ics` feed of the calendar per account; the
-[design analysis](follow-show-analysis.md) covers the first three.
 
 ### Queue robustness
 
