@@ -262,6 +262,15 @@ semantics and injection tests, not a claim that all current recovery is broken.
 
 ### P0 — Stop false success and ambiguous recovery
 
+Status update (2026-10-05): H1–H3 shipped in PR #304 (0.5.10). Queue admissions
+are serialized and reserve their target; `add`, `addPending`, `adopt`, removal
+and clearing history resolve only after their own write and change nothing when
+it fails (`err.queueNotSaved`); the queue, library operations, scan and
+match-history loaders copy unparsable bytes to `<name>.damaged-*` and never
+write over a file they could not read or preserve. `pause`, `resume`, `retry`
+and `move` stay best-effort because the next start re-derives them. The text
+below is the original contract, kept for reference.
+
 1. **H1: reserve download admission and publication.** Serialize or atomically
    reserve the owner-scoped intent and library/target before asynchronous work.
    Keep physical destination exclusion global even when logical deduplication
