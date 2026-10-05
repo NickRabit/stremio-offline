@@ -1125,3 +1125,16 @@ test("a malformed scan state is copied aside and starts idle", async () => {
     assert.equal(await readFile(path.join(h.dataDir, damaged[0]!), "utf8"), "{broken");
   } finally { await h.close(); }
 });
+
+test("a damaged scan state that cannot be copied aside is never written over", async () => {
+  const h = await harness({ preserveDamaged: async () => { throw Object.assign(new Error("read-only"), { code: "EROFS" }); } });
+  try {
+    const file = path.join(h.dataDir, "library-scan.json");
+    await writeFile(file, "{broken");
+    await h.scan.load();
+    await h.scan.start();
+    await waitFor(() => h.scan.snapshot().status === "completed");
+    await h.scan.stop();
+    assert.equal(await readFile(file, "utf8"), "{broken", "the only copy of the bytes is still there");
+  } finally { await h.close(); }
+});

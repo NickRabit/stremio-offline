@@ -1175,28 +1175,97 @@ test("two jobs resuming at once never take the same target name", async () => {
 });
 
 test("an admission that cannot be persisted is refused and leaves nothing behind", async () => {
-  const { directory, queue } = await tempQueue();
-  const tmp = path.join(directory, "data", "downloads.json.tmp");
+  let failing = false;
+  const { directory, queue } = await tempQueue({
+    writeState: async (file, data) => {
+      if (failing) throw Object.assign(new Error("no space left"), { code: "ENOSPC" });
+      await writeFile(file, data);
+    },
+  });
+  const stored = async () => JSON.parse(await readFile(path.join(directory, "data", "downloads.json"), "utf8")) as Array<{ id: string; follow?: unknown }>;
   try {
-    await mkdir(tmp);
-    await assert.rejects(queue.add("Film", { url: "http://example.test/film.mp4" }), (error: AppError) => error.messageKey === "err.queueNotSaved");
+    failing = true;
+    await assert.rejects(queue.add("Film", { url: "http://127.0.0.1:1/film.mkv" }), (error: AppError) => error.messageKey === "err.queueNotSaved");
     await assert.rejects(queue.addPending("Ep", { type: "series", videoId: "v1" }), (error: AppError) => error.messageKey === "err.queueNotSaved");
     assert.deepEqual(queue.list(), [], "a refused admission leaves no job in memory");
 
-    await rm(tmp, { recursive: true });
-    const again = await queue.add("Film", { url: "http://example.test/film.mp4" });
-    const saved = JSON.parse(await readFile(path.join(directory, "data", "downloads.json"), "utf8")) as { id: string }[];
-    assert.ok(saved.some((job) => job.id === again.id), "the job reaches the file once the write can land");
+    failing = false;
+    const again = await queue.add("Film", { url: "http://127.0.0.1:1/film.mkv" });
+    await queue.pause(again.id);
+    assert.ok((await stored()).some((job) => job.id === again.id), "the job reaches the file once the write can land");
 
     // A follow that cannot be saved is rolled back to the one the job already had.
-    const followed = await queue.addPending("Ep", { type: "series", videoId: "v2" }, undefined, undefined, { followId: "old", episodeKey: "s1e1", intent: "old" });
-    assert.ok(followed);
-    await mkdir(tmp);
+    await queue.adopt(again.id, { followId: "old", episodeKey: "s1e1", intent: "old" });
+    failing = true;
     await assert.rejects(
-      queue.adopt(followed!.id, { followId: "new", episodeKey: "s1e1", intent: "new" }),
+      queue.adopt(again.id, { followId: "new", episodeKey: "s1e1", intent: "new" }),
       (error: AppError) => error.messageKey === "err.queueNotSaved",
     );
-    assert.deepEqual(queue.get(followed!.id)!.follow, { followId: "old", episodeKey: "s1e1", intent: "old" }, "the old follow stays");
+    assert.deepEqual(queue.get(again.id)!.follow, { followId: "old", episodeKey: "s1e1", intent: "old" }, "the old follow stays");
+    failing = false;
+    await queue.stop();
+    assert.deepEqual((await stored()).find((job) => job.id === again.id)?.follow, { followId: "old", episodeKey: "s1e1", intent: "old" }, "and the file keeps it too");
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a write queued after a failed admission does not store the refused job", async () => {
+  let failOnce = false;
+  let queue!: DownloadQueue;
+  const setup = await tempQueue({
+    writeState: async (file, data) => {
+      if (failOnce) {
+        failOnce = false;
+        // Another mutation queues its own save while this one is failing.
+        void queue.clearCompleted();
+        throw Object.assign(new Error("no space left"), { code: "ENOSPC" });
+      }
+      await writeFile(file, data);
+    },
+  });
+  queue = setup.queue;
+  try {
+    failOnce = true;
+    await assert.rejects(queue.add("Film", { url: "http://127.0.0.1:1/film.mkv" }), (error: AppError) => error.messageKey === "err.queueNotSaved");
+    await queue.stop();
+    const stored = JSON.parse(await readFile(path.join(setup.directory, "data", "downloads.json"), "utf8")) as unknown[];
+    assert.deepEqual(stored, [], "the refused job never reaches the file");
+    assert.deepEqual(queue.list(), []);
+  } finally {
+    await queue.stop();
+    await rm(setup.directory, { recursive: true, force: true });
+  }
+});
+
+test("a write already waiting before an admission does not store the job if the admission fails", async () => {
+  const calls: Array<"hold" | "write" | "fail"> = [];
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const { directory, queue } = await tempQueue({
+    writeState: async (file, data) => {
+      const plan = calls.shift();
+      if (plan === "hold") await held;
+      if (plan === "fail") throw Object.assign(new Error("no space left"), { code: "ENOSPC" });
+      await writeFile(file, data);
+    },
+  });
+  try {
+    const existing = await queue.add("Other", { url: "http://127.0.0.1:1/other.mkv" });
+    await queue.pause(existing.id);
+    // The first save is held on the disk and a second one waits behind it; then the
+    // admission queues its own write, which fails.
+    calls.push("hold", "write", "fail");
+    const first = queue.pause(existing.id);
+    const second = queue.pause(existing.id);
+    const admission = queue.add("Film", { url: "http://127.0.0.1:1/film.mkv" });
+    release();
+    await assert.rejects(admission, (error: AppError) => error.messageKey === "err.queueNotSaved");
+    await Promise.all([first, second]);
+    await queue.stop();
+    const stored = JSON.parse(await readFile(path.join(directory, "data", "downloads.json"), "utf8")) as Array<{ id: string }>;
+    assert.deepEqual(stored.map((job) => job.id), [existing.id], "only the job that was admitted is on disk");
   } finally {
     await queue.stop();
     await rm(directory, { recursive: true, force: true });

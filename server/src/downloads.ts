@@ -192,6 +192,8 @@ export interface QueueHooks {
   libraryRetryMs?: number;
   freeSpace?: (dir: string) => Promise<{ freeBytes?: number; totalBytes?: number }>;
   createWriteStream?: (file: string, options: { flags: string }) => NodeJS.WritableStream;
+  /** Writes the queue's own state file; tests use it to fail one particular write. */
+  writeState?: (file: string, data: string) => Promise<void>;
   stallInitialMs?: number;
   stallTransferMs?: number;
   spaceCheckMs?: number;
@@ -313,6 +315,7 @@ export class DownloadQueue {
   private readonly now: () => number;
   private readonly freeSpace: (dir: string) => Promise<{ freeBytes?: number; totalBytes?: number }>;
   private readonly createWriteStream: (file: string, options: { flags: string }) => NodeJS.WritableStream;
+  private readonly writeState: (file: string, data: string) => Promise<void>;
   private readonly stallInitialMs: number;
   private readonly stallTransferMs: number;
   private readonly spaceCheckMs: number;
@@ -352,6 +355,7 @@ export class DownloadQueue {
     this.now = hooks.now ?? Date.now;
     this.freeSpace = hooks.freeSpace ?? volumeSpace;
     this.createWriteStream = hooks.createWriteStream ?? fsCreateWriteStream;
+    this.writeState = hooks.writeState ?? ((file, data) => writeFile(file, data, { mode: 0o600 }));
     this.stallInitialMs = hooks.stallInitialMs ?? 15_000;
     this.stallTransferMs = hooks.stallTransferMs ?? 30_000;
     this.spaceCheckMs = hooks.spaceCheckMs ?? 30_000;
@@ -725,14 +729,10 @@ export class DownloadQueue {
     const job = this.jobs.find((item) => item.id === id);
     if (!job) return;
     const previous = job.follow;
-    job.follow = follow;
-    try {
-      await this.persist();
-    } catch (error) {
-      if (previous === undefined) delete job.follow;
-      else job.follow = previous;
-      throw error;
-    }
+    await this.persist({
+      apply: () => { job.follow = follow; },
+      revert: () => { if (previous === undefined) delete job.follow; else job.follow = previous; },
+    });
   }
 
   /** The public shape of the jobs that carry a follow, for reconciliation. */
@@ -1032,13 +1032,21 @@ export class DownloadQueue {
   }
   /** Saves have to run one after another: concurrent writes share one .tmp and the second
    *  rename then has nothing to move. Each write reports its own failure, while the chain
-   *  itself swallows it so stop() and later writes carry on. */
-  private write(): Promise<void> {
+   *  itself swallows it so stop() and later writes carry on. A change handed in is made only
+   *  when this write's turn comes and undone before the next write runs, so no other write
+   *  ever stores a change whose own write failed. */
+  private write(change?: { apply: () => void; revert: () => void }): Promise<void> {
     const run = this.saveChain.then(async () => {
       if (this.unreadable) return;
-      const tmp = `${this.stateFile}.tmp`;
-      await writeFile(tmp, JSON.stringify(this.jobs, null, 2), { mode: 0o600 });
-      await renameWithRetry(tmp, this.stateFile);
+      change?.apply();
+      try {
+        const tmp = `${this.stateFile}.tmp`;
+        await this.writeState(tmp, JSON.stringify(this.jobs, null, 2));
+        await renameWithRetry(tmp, this.stateFile);
+      } catch (error) {
+        change?.revert();
+        throw error;
+      }
     });
     this.saveChain = run.catch(() => undefined);
     return run;
@@ -1050,10 +1058,11 @@ export class DownloadQueue {
     return this.write().catch((error) => { log("ERROR", "The queue state could not be saved", { reason: error instanceof Error ? error.message : String(error) }); });
   }
 
-  /** A save an admission waits on: the caller hears the failure and undoes its change. */
-  private async persist(): Promise<void> {
+  /** A save an admission waits on: the change lands with its own write or not at all, and
+   *  the caller hears the failure. */
+  private async persist(change: { apply: () => void; revert: () => void }): Promise<void> {
     try {
-      await this.write();
+      await this.write(change);
     } catch (error) {
       log("ERROR", "The queue state could not be saved", { reason: error instanceof Error ? error.message : String(error) });
       throw new AppError("The download queue could not be saved.", "err.queueNotSaved", 503);
@@ -1069,17 +1078,15 @@ export class DownloadQueue {
     return run;
   }
 
-  /** Pushes the job and waits for the write. A failed write takes the job straight back out,
-   *  so nothing is left only in memory to vanish on the next start. */
+  /** Adds the job with its own write. A failed write takes it straight back out, so nothing
+   *  is left only in memory, or only on disk, to surprise the next start. */
   private async admitJob(job: DownloadJob): Promise<void> {
     this.admitting.add(job.id);
-    this.jobs.push(job);
     try {
-      await this.persist();
-    } catch (error) {
-      const at = this.jobs.indexOf(job);
-      if (at >= 0) this.jobs.splice(at, 1);
-      throw error;
+      await this.persist({
+        apply: () => { this.jobs.push(job); },
+        revert: () => { const at = this.jobs.indexOf(job); if (at >= 0) this.jobs.splice(at, 1); },
+      });
     } finally {
       this.admitting.delete(job.id);
     }
