@@ -1649,3 +1649,134 @@ test("a lazy torrent job that is waiting resumes polling after a restart", async
     if (directory) await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("a file already on disk pushes a job of the same title to (2)", async () => {
+  const { directory, queue, downloads } = await tempQueue();
+  try {
+    // Only the disk holds the name: nothing in the queue does, so the collision is with the file.
+    const taken = queuedFile(downloads, `${LIBRARY_ID}/Disk Film/Disk Film.mkv`);
+    await mkdir(path.dirname(taken), { recursive: true });
+    await writeFile(taken, "");
+    const job = await queue.add("Disk Film", { url: "http://127.0.0.1:1/disk-film.mkv" });
+    await queue.pause(job.id);
+    assert.equal(job.target, `${LIBRARY_ID}/Disk Film/Disk Film (2).mkv`);
+    assert.ok(path.basename(queuedFile(downloads, job.target)).includes("(2)"), "the copy carries the suffix");
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a .part on disk takes the name so the next job gets (2)", async () => {
+  const { directory, queue, downloads } = await tempQueue();
+  try {
+    // An interrupted transfer leaves only the partial behind, and that is enough to keep the name.
+    const partial = queuedFile(downloads, `${LIBRARY_ID}/Part Film/Part Film.mkv`);
+    await mkdir(path.dirname(partial), { recursive: true });
+    await writeFile(`${partial}.part`, "");
+    const job = await queue.add("Part Film", { url: "http://127.0.0.1:1/part-film.mkv" });
+    await queue.pause(job.id);
+    assert.equal(job.target, `${LIBRARY_ID}/Part Film/Part Film (2).mkv`);
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a job already queued takes the name so the next one gets (2)", async () => {
+  const { directory, queue } = await tempQueue();
+  try {
+    const first = await queue.add("Film", { url: "http://127.0.0.1:1/first.mkv" });
+    await queue.pause(first.id);
+    const second = await queue.add("Film", { url: "http://127.0.0.1:1/second.mkv" });
+    await queue.pause(second.id);
+    assert.equal(first.target, `${LIBRARY_ID}/Film/Film.mkv`);
+    assert.equal(second.target, `${LIBRARY_ID}/Film/Film (2).mkv`);
+    assert.notEqual(first.target, second.target);
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("an added job is in downloads.json once add resolves, and so is a pending one", async () => {
+  const { directory, queue } = await tempQueue();
+  try {
+    const direct = await queue.add("Film", { url: "http://127.0.0.1:1/film.mkv" });
+    await queue.pause(direct.id);
+    const pending = await queue.addPending("Show", { type: "series", videoId: "tt1:1:1" });
+    await queue.pause(pending!.id);
+    await queue.stop();
+    const stored = JSON.parse(await readFile(path.join(directory, "data", "downloads.json"), "utf8")) as Array<Record<string, unknown> & { source?: { videoId?: string } }>;
+    const directRow = stored.find((row) => row.id === direct.id)!;
+    assert.ok(directRow, "the direct job is saved");
+    assert.equal(directRow.target, `${LIBRARY_ID}/Film/Film.mkv`);
+    assert.equal(directRow.libraryId, LIBRARY_ID);
+    const pendingRow = stored.find((row) => row.id === pending!.id)!;
+    assert.ok(pendingRow, "the pending job is saved");
+    assert.equal(pendingRow.source?.videoId, "tt1:1:1");
+    assert.equal(pendingRow.target, "");
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("addPending skips the owner's own duplicate", async () => {
+  const { directory, queue } = await tempQueue();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  queue.setResolver(async () => { await gate; return undefined; });
+  try {
+    const first = await queue.addPending("Show", { type: "series", videoId: "tt1:1:1" }, undefined, "u1");
+    const second = await queue.addPending("Show", { type: "series", videoId: "tt1:1:1" }, undefined, "u1");
+    assert.ok(first, "the first job is queued");
+    assert.equal(second, undefined, "the same owner repeating the same source is skipped");
+    assert.equal(queue.list().length, 1, "only one job is kept");
+  } finally {
+    release();
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("adopt writes the follow and it survives a save and a load", async () => {
+  const { directory, queue } = await tempQueue();
+  try {
+    const job = await queue.add("Film", { url: "http://127.0.0.1:1/film.mkv" });
+    await queue.pause(job.id);
+    await queue.adopt(job.id, { followId: "f1", episodeKey: "1:1", intent: "f1:1:1:1" });
+    await queue.stop();
+    const downloads = path.join(directory, "downloads");
+    const reopened = new DownloadQueue(() => 1, () => 1, path.join(directory, "data"), downloads, {
+      libraries: () => [downloadLibrary(downloads)],
+      defaultLibrary: () => downloadLibrary(downloads),
+    });
+    await reopened.load();
+    try {
+      assert.deepEqual(reopened.get(job.id)?.follow, { followId: "f1", episodeKey: "1:1", intent: "f1:1:1:1" });
+    } finally {
+      await reopened.stop();
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a queue file that is valid JSON but not a list is quarantined the way it is today", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-dl-"));
+  const data = path.join(directory, "data");
+  await mkdir(data, { recursive: true });
+  const state = path.join(data, "downloads.json");
+  const original = '{"jobs":[]}';
+  await writeFile(state, original);
+  const queue = new DownloadQueue(() => 1, () => 1, data, path.join(directory, "downloads"));
+  try {
+    await queue.load();
+    assert.deepEqual(queue.list(), [], "a state that is not a list loads as an empty queue");
+    assert.equal(await readFile(`${state}.bak`, "utf8"), original, "the original bytes are renamed aside today");
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});

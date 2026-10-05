@@ -411,3 +411,44 @@ test("activeItems holds a paused job, drops what ended, and names a reroot's lib
     assert.deepEqual(queue.activeItems(), [], "nothing stands once every job has ended");
   } finally { await cleanup(dataDir, queues); }
 });
+
+test("enqueue has written the journal when it resolves", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const h = await harness(async () => { await gate; return {}; });
+  try {
+    const job = await h.queue.enqueue({ op: "delete", items: ["one"] });
+    const saved = JSON.parse(await readFile(path.join(h.dataDir, "library-ops.json"), "utf8"));
+    assert.equal(saved.version, 1);
+    assert.ok(saved.jobs.some((row: { id: string }) => row.id === job.id), "the job is in the journal");
+  } finally {
+    release();
+    await h.close();
+  }
+});
+
+test("an absent journal file loads as an empty queue and is written out", async () => {
+  const h = await harness();
+  const queues = [h.queue];
+  try {
+    const file = path.join(h.dataDir, "fresh.json");
+    const queue = new LibraryOps({ file, retryMs: 10, execute: async () => ({}) });
+    queues.push(queue);
+    await queue.load();
+    assert.deepEqual(JSON.parse(await readFile(file, "utf8")), { version: 1, jobs: [] });
+  } finally { await cleanup(h.dataDir, queues); }
+});
+
+test("a journal with an unknown version loads as empty and is overwritten today", async () => {
+  const h = await harness();
+  const queues = [h.queue];
+  try {
+    const file = path.join(h.dataDir, "future.json");
+    await writeFile(file, JSON.stringify({ version: 2, jobs: [] }));
+    const queue = new LibraryOps({ file, retryMs: 10, execute: async () => ({}) });
+    queues.push(queue);
+    await queue.load();
+    assert.deepEqual(queue.snapshot().jobs, [], "an unknown version yields an empty queue");
+    assert.deepEqual(JSON.parse(await readFile(file, "utf8")), { version: 1, jobs: [] }, "the file is rewritten as a version 1 empty journal today");
+  } finally { await cleanup(h.dataDir, queues); }
+});

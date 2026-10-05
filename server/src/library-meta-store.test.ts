@@ -209,6 +209,29 @@ test("a broken file is skipped instead of failing the boot", async () => {
   });
 });
 
+test("a malformed episodes.json is skipped and the library files still load", async () => {
+  await withStore(async (store, dataDir) => {
+    await seed(dataDir, "lib_a", { "One.mkv": record("tt1") });
+    await writeFile(path.join(dataDir, "library", "episodes.json"), "{broken");
+    await store.load();
+    assert.deepEqual(Object.keys(store.qualifiedMeta()), ["lib_a/One.mkv"]);
+    assert.deepEqual(Object.keys(store.episodes()), [], "the unreadable episode rows are dropped");
+  });
+});
+
+test("a skipped broken library file is overwritten by the next write today", async () => {
+  await withStore(async (store, dataDir) => {
+    await seed(dataDir, "lib_a", { "One.mkv": record("tt1") });
+    await writeFile(libraryFile(dataDir, "lib_b"), "{ not json");
+    await store.load();
+    await store.update("lib_b", (file) => { file.meta["New.mkv"] = record("tt9"); });
+    await store.flush();
+    assert.deepEqual(JSON.parse(await readFile(libraryFile(dataDir, "lib_b"), "utf8")), {
+      version: 1, meta: { "New.mkv": record("tt9") }, suggestions: {},
+    }, "the broken bytes are gone, replaced by a fresh version 1 file today");
+  });
+});
+
 test("a suggestion written before the review fields existed still loads and round-trips", async () => {
   await withStore(async (store, dataDir) => {
     await seed(dataDir, "lib_a", {}, {

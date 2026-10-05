@@ -1112,3 +1112,14 @@ test("a folder whose film is named differently is searched by the film's own nam
     assert.equal(h.store.suggestions["Sherlock Holomes"], undefined);
   } finally { await h.close(); }
 });
+
+test("a malformed scan state starts idle without throwing and its bytes survive today", async () => {
+  const h = await harness();
+  try {
+    const file = path.join(h.dataDir, "library-scan.json");
+    await writeFile(file, "{broken");
+    await h.scan.load();
+    assert.equal(h.scan.snapshot().status, "idle", "a state that cannot be parsed starts idle");
+    assert.equal(await readFile(file, "utf8"), "{broken", "the unreadable file is left as it is today");
+  } finally { await h.close(); }
+});
