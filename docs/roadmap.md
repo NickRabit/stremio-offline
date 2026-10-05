@@ -148,7 +148,9 @@ with rows that can be derived from state the app already has:
 - completed downloads that are ready to play.
 
 Keep this personal per account and make the child-facing variant much smaller
-than the full adult home screen. Ship the existing-state rows first; followed
+than the full adult home screen. The adult page is specified in
+[Home page](home-spec.md): a Downloads row first, then Continue watching, Ready
+to play and Favourites, as an extra entry beside the catalogue and the library. Ship the existing-state rows first; followed
 episodes are an additive row, not a reason to block the home screen. See the
 [home contract](roadmap-delivery-spec.md#family-home-and-kids-mode).
 
