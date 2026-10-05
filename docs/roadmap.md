@@ -199,6 +199,9 @@ Reviewed on 2026-10-04 against `main` at `b4b4c2a` (0.5.7). This section
 validates the proposed refactoring/hardening plan against that revision; it
 does not claim that the work below has shipped. The old local development
 checkout was substantially behind `main` and was not used as the audit baseline.
+On 2026-10-05 the PR was rebased onto `3b613fc` (0.5.8), the other agent's
+JSON-first revision was reviewed and retained, and H1–H3 were reproduced again.
+The file sizes and inventory counts below remain the dated audit snapshot.
 
 Keep the modular monolith, explicit dependencies and one-command deployment.
 The immediate order is **data-safety fixes → journalled, recoverable
@@ -221,7 +224,7 @@ unless its invariant requires an inseparable change.
 | Follow-show scheduling needs auditing | **Now shipped, audit its real implementation.** PR #297 landed during this review: `follows.ts` persists daily discovery, episode intent, automatic downloads and queue reconciliation. The personal watchlist is a separate existing feature. |
 | Desktop and Sonarr/Radarr are API consumers | **Different maturity.** Desktop ships and has a local backend lifecycle. The *arr adapter is a feasibility probe and specification, not a production integration. Keep its existing [delivery gate](arr-integration-spec.md). |
 | Network restrictions and redaction need review | **Existing protections, targeted gaps to investigate.** `security.ts` validates addresses and redirects, strips sensitive cross-origin headers, and has tests; logger redaction and resource ownership exist too. DNS validation and fetch connection resolution are separate, so rebinding deserves a focused test; this audit did not demonstrate an exploit. |
-| Defer SQLite migration for now | **Agree.** Cross-library relocation is a real cross-store invariant, but it also moves files, so it needs a journal and replay that no SQL transaction replaces. The confirmed defects are fixable in the existing stores and the state is small. `node:sqlite` loads in both shipped runtimes, so the reason is cost, not feasibility. See the [decision and its revisit triggers](roadmap-delivery-spec.md#local-sqlite-migration). |
+| Defer SQLite migration for now | **Agree.** Cross-library relocation is a real cross-store invariant, but it also moves files, so it needs a journal and replay that no SQL transaction replaces. The confirmed defects are fixable in the existing stores; sample state sizes do not establish performance pressure. Runtime probes are encouraging but do not certify packaged desktop support. The migration's benefit has not been shown to outweigh its cost. See the [decision and its revisit triggers](roadmap-delivery-spec.md#local-sqlite-migration). |
 | Formalize adversarial review and retain layered tests | **Useful, partly documented already.** Layered tests and an adversarial recovery campaign exist. Add missing failure cases and a focused high-risk review checklist to the existing workflow. |
 
 File sizes measure physical lines, not complexity or performance. This audit
@@ -282,8 +285,8 @@ semantics and injection tests, not a claim that all current recovery is broken.
    inventing another corruption policy.
 
 Each fix lands with a store-level contract test: a failed commit reaches the
-caller, an unreadable file is preserved, and two concurrent admissions get
-distinct targets. Those tests stay valid whatever storage sits underneath.
+caller, an unreadable file is preserved, and concurrent admissions cannot
+share an unintended target (duplicate intents may resolve to one job). Those tests stay valid whatever storage sits underneath.
 
 ### P1 — Recoverable filesystem and cross-store operations
 
@@ -329,8 +332,9 @@ Deliver in these boundaries:
 
 **Follow/queue reconciliation:** preserve the newly shipped owner-aware policy,
 reserved episode intents, adoption of manual jobs and completion/removal guards.
-The follow intent and its queue job commit to separate files; make the intent
-carry the job ID it reserved and reconcile both sides on startup. Test a crash after reserving, enqueueing, adopting,
+The follow intent and its queue job commit to separate files. Preserve the
+existing stable intent key and reconcile its job linkage on startup; extend
+that mechanism where fault injection proves a gap. Test a crash after reserving, enqueueing, adopting,
 completing and clearing history, plus revocation during discovery. Reuse the
 existing follow tests; do not rebuild a scheduler or reopen the fixed H4.
 
@@ -412,7 +416,11 @@ Do not turn file size into a requirement to split working code arbitrarily.
 
 ### Verification and maintenance gates
 
-Baseline verification on the audit checkout: `npm test` passed (server 1,385
+Rebase verification on 2026-10-05 (`3b613fc`): `npm test` passed (server 1,414
+passed / 3 skipped, web 431, desktop 270); `npm run build`, H1–H3 probes and
+relative documentation links also passed.
+
+Baseline verification on the original audit checkout: `npm test` passed (server 1,385
 passed / 3 skipped, web 418 passed, desktop 270 passed); `npm run build` passed
 with the existing large-chunk warning. Node was 26.8.1 on this machine, not the
 Node 22 container runtime. The isolated probes above also passed their

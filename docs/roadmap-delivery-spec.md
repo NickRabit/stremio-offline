@@ -193,8 +193,9 @@ owns delivery order and the persistent-state inventory.
 
 ### Runtime feasibility is not the obstacle
 
-Built-in `node:sqlite` needs no native module and no new dependency. Probed on
-2026-10-04:
+Built-in `node:sqlite` needs no third-party native addon or new package. The
+2026-10-04 follow-up review (commit `7a0ea8d`) reported these probes; this
+2026-10-05 documentation review did not independently repeat them:
 
 | Runtime | Result |
 | --- | --- |
@@ -212,38 +213,48 @@ as `better-sqlite3` would add ABI rebuilds that desktop deliberately avoids
 
 - **It fixes none of the confirmed defects.** H1 is an in-process admission
   race, H2 a swallowed write error, H3 a loader that overwrites a malformed
-  journal. Each is a small, local change to the existing store
+  journal. Each can be addressed in the existing stores without migration
   ([roadmap](roadmap.md#p0--stop-false-success-and-ambiguous-recovery)).
 - **The real cross-store case still needs a journal.** Cross-library
   relocation moves files as well as records, and no SQL transaction covers a
   filesystem move. It needs a durable intent record and an idempotent replay
   regardless; once that replay exists, it can also complete the metadata and
-  personal-state half, so a transaction adds little.
-- **There is no size or performance pressure.** On a used instance
-  `state.json` is about 185 KB, `library/episodes.json` about 650 KB and
-  `stats.json` about 445 KB. Rewriting such files is cheap.
+  personal-state half. SQL could simplify that part, but the filesystem
+  journal remains; that benefit alone does not establish a worthwhile migration.
+- **No measured size or performance pressure was demonstrated.** The follow-up
+  review reported one used instance with `state.json` about 185 KB,
+  `library/episodes.json` about 650 KB and `stats.json` about 445 KB. These are
+  one installation's sample sizes, not a latency benchmark or a production-wide
+  upper bound. Measure write frequency, serialization and flush latency before
+  claiming that rewrites are cheap or that a database would be faster.
 - **The change surface is large.** `Store.update` takes a callback that mutates
-  live in-memory state (36 call sites); `LibraryMetaStore` debounces writes. A
+  live in-memory state; `LibraryMetaStore` debounces writes. A
   migration that delivers the claimed benefit must replace those semantics,
   add schema versions, an importer, a crash-safe cutover, a live-backup
   procedure and a rollback story. Swapping `writeFile` for SQL underneath
   them would keep today's false-success and stale-memory problems.
-- **Operability gets worse for this audience.** State is readable and
-  inspectable today, [libraries.md](libraries.md#where-the-state-lives)
-  promises that nothing is hidden in a database, and the Synology guide's
-  "copy the data folder" backup would stop being safe while the server runs.
+- **Operation and recovery procedures would change.** State is readable and
+  inspectable today, as [libraries.md](libraries.md#where-the-state-lives)
+  documents. SQLite would require new inspection and backup procedures. Copying
+  the data folder while JSON writers are active can already produce an
+  inconsistent multi-file snapshot; use a stopped/drained instance or a verified
+  snapshot method now. SQLite could improve consistent state backup, but would
+  still need separate media backup and pending-operation reconciliation.
 
 ### Revisit when
 
 Reopen the decision only with evidence, not on the format's reputation:
 
-- a torn cross-store update causes data loss that a journal and replay cannot
-  prevent or repair;
+- cross-store journal/replay logic repeatedly causes defects or demonstrably
+  costs more to maintain than a transactional alternative;
 - a feature needs relational queries across users or libraries that in-memory
   maps cannot answer cheaply;
-- authoritative state grows into tens of megabytes, or a measured write
-  latency or memory problem traces back to whole-file rewrites;
-- `node:sqlite` is stable in the Node line the Docker image ships.
+- measured write latency, memory use or write amplification traces back to
+  whole-file rewrites at representative library sizes.
+
+A stable, verified driver in the shipped Node/Electron runtimes would reduce
+migration risk, but runtime stability or an arbitrary file-size threshold alone
+is not a reason to migrate. Reopening the decision is separate from this backlog.
 
 ### Constraints if it is revisited
 
@@ -351,7 +362,7 @@ This is incremental work, not a prerequisite for fixing a concrete data-loss bug
 ### Scope and user experience
 
 Implementation status update (2026-10-04): following, daily discovery and opt-in
-automatic downloads shipped in PR #297. The [feature guide](downloads.md#following-a-series)
+automatic downloads shipped in PR #297. The [feature guide](downloads.md#following-series-and-films)
 owns current behavior; this section retains the proposed acceptance contract
 for comparison, not a claim that the entire feature remains unimplemented.
 
