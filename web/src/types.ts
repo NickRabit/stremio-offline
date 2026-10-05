@@ -343,11 +343,12 @@ export interface WatchlistEntry { key: string; type: string; id: string; name: s
 
 /** One episode of a followed series as the follow route names it: the slot on either side of now. */
 export interface FollowEpisodeView { season: number; episode: number; title?: string; released?: string; releasedSource?: "addon" | "tmdb"; dateUncertain?: boolean }
-export type FollowStartMode = "new" | "from";
+export type FollowStartMode = "new" | "from" | "ahead";
 /** The wizard choices carried over from the last follow, as `GET /api/follows/defaults` answers them. */
 export interface FollowDefaults {
   mode: "notify" | "download";
   startMode?: FollowStartMode;
+  aheadCount?: number;
   graceDays?: number;
   selection?: {
     addonKeys: string[];
@@ -367,6 +368,7 @@ export interface FollowAutoDownload {
   startMode: FollowStartMode;
   startSeason?: number;
   startEpisode?: number;
+  aheadCount?: number;
   selection: DownloadSelection;
   /** Days after release during which only the preferred audio is accepted. */
   graceDays?: number;

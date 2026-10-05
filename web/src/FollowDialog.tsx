@@ -115,7 +115,7 @@ export function FollowDialog({ follow, videos, languages, libraries, addons, aud
 
   const auto = current.autoDownload;
   const autoStart = auto
-    ? isMovie ? t("follow.movieDownload") : auto.startMode === "new" ? t("follow.startNew") : t("follow.startFrom", { code: episodeCode(auto.startSeason ?? 1, auto.startEpisode ?? 1) })
+    ? isMovie ? t("follow.movieDownload") : auto.startMode === "new" ? t("follow.startNew") : auto.startMode === "ahead" ? t("follow.startAheadSummary", { count: auto.aheadCount ?? 0 }) : t("follow.startFrom", { code: episodeCode(auto.startSeason ?? 1, auto.startEpisode ?? 1) })
     : "";
   const autoLibrary = auto
     ? (auto.selection.targetSettings?.libraryId && libraries.find((library) => library.id === auto.selection.targetSettings?.libraryId)?.name) || t("saveTarget.defaultLibrary")

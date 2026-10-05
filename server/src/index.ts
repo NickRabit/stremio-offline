@@ -1605,6 +1605,11 @@ const followService = new FollowService({
     const config = tmdbConfigOf(store.prefs(owner.id).uiLanguage);
     return config ? tmdbMovieReleases(metaId, config) : null;
   },
+  // The marker key is the series meta id, the same one `newEpisodes` reads.
+  watched: (ownerUserId, metaId) => {
+    const marker = (store.userData(ownerUserId).watchedSeries as Record<string, WatchedMarker> | undefined)?.[metaId];
+    return marker ? { season: marker.season, episode: marker.episode } : undefined;
+  },
   queue: {
     addPending: (title, source, media, ownerUserId, follow) => queue.addPending(title, source, media, ownerUserId, follow),
     findActiveEpisode: (ownerUserId, type, videoId) => queue.findActiveEpisode(ownerUserId, type, videoId),

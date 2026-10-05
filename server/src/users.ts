@@ -41,7 +41,9 @@ export interface UserRecord {
 export interface FollowDefaults {
   mode: "notify" | "download";
   /** "from" is remembered as a mode only, never an episode. */
-  startMode?: "new" | "from";
+  startMode?: "new" | "from" | "ahead";
+  /** With "ahead": how many episodes stay ready, 1..10. */
+  aheadCount?: number;
   /** Days after release during which only the preferred audio is accepted. */
   graceDays?: number;
   selection?: {

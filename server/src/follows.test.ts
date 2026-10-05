@@ -5,7 +5,7 @@ import path from "node:path";
 import { test } from "node:test";
 import type { DownloadSelection } from "./downloads.js";
 import type { AppError } from "./errors.js";
-import { activityItems, calendarFeed, calendarItems, downloadEligibility, effectiveSelection, FollowService, FollowStore, followStaggerMs, graceUntil, movieEpisode, normalizeFollowEpisodes, reconcileReleaseDates, seasonsForReconcile, undatedCalendarItems, type EpisodeDownload, type Follow, type FollowAutoDownload, type FollowDeps, type FollowEpisode, type FollowJob, type FollowQueue } from "./follows.js";
+import { activityItems, aheadWindow, calendarFeed, calendarItems, downloadEligibility, effectiveSelection, FollowService, FollowStore, followStaggerMs, graceUntil, movieEpisode, normalizeFollowEpisodes, reconcileReleaseDates, seasonsForReconcile, undatedCalendarItems, type EpisodeDownload, type Follow, type FollowAutoDownload, type FollowDeps, type FollowEpisode, type FollowJob, type FollowQueue } from "./follows.js";
 import type { MediaInfo } from "./naming.js";
 import type { MetaItem } from "./types.js";
 
@@ -532,6 +532,49 @@ test("downloadEligibility follows the start rule, the clock and the episode's fa
   assert.equal(downloadEligibility(follow(from), ep({ season: 2, episode: 3, released: RELEASED }), NOW), "eligible");
   assert.equal(downloadEligibility(follow(from), ep({ season: 2, episode: 2, released: RELEASED }), NOW), "outside", "before the start episode");
   assert.equal(downloadEligibility(follow(from), ep({ season: 1, episode: 9, released: RELEASED }), NOW), "outside", "season is compared first");
+});
+
+test("aheadWindow is the next N regular episodes after the marker, or the first N", () => {
+  const series = (episodes: FollowEpisode[], aheadCount = 3): Follow => ({
+    id: "f", ownerUserId: "u1", type: "series", metaId: "tt1", name: "Show", createdAt: "2024-01-01T00:00:00.000Z",
+    updatedAt: "2024-01-01T00:00:00.000Z", enabled: true, revision: 1, nextCheckAt: "2024-01-01T00:00:00.000Z", failures: 0,
+    autoDownload: { enabledAt: "2024-01-01T00:00:00.000Z", startMode: "ahead", aheadCount, selection: selection() },
+    episodes: Object.fromEntries(episodes.map((episode) => [episode.key, episode])),
+  });
+  const numbered = (count: number): FollowEpisode[] =>
+    Array.from({ length: count }, (_unused, index) => episode(1, index + 1, `v1${index + 1}`, RELEASED));
+
+  assert.deepEqual([...aheadWindow(series(numbered(5)), undefined)].sort(), ["1:1", "1:2", "1:3"], "no marker starts at the first episode");
+  assert.deepEqual([...aheadWindow(series(numbered(5)), { season: 1, episode: 2 })].sort(), ["1:3", "1:4", "1:5"], "a mid-season marker slides the window on");
+
+  const across = [episode(1, 9, "v19", RELEASED), episode(1, 10, "v110", RELEASED), episode(2, 1, "v21", RELEASED), episode(2, 2, "v22", RELEASED)];
+  assert.deepEqual([...aheadWindow(series(across, 2), { season: 1, episode: 10 })].sort(), ["2:1", "2:2"], "the window crosses a season boundary");
+
+  const withSpecials = [episode(0, 1, "s1", RELEASED), episode(0, 2, "s2", RELEASED), episode(1, 1, "v11", RELEASED), episode(1, 2, "v12", RELEASED), episode(1, 3, "v13", RELEASED)];
+  assert.deepEqual([...aheadWindow(series(withSpecials, 2), undefined)].sort(), ["1:1", "1:2"], "specials are ignored");
+
+  const holed = [episode(1, 1, "v11", RELEASED), episode(1, 2, "v12"), episode(1, 3, "v13", RELEASED), episode(1, 4, "v14", RELEASED)];
+  const ahead = series(holed, 2);
+  assert.deepEqual([...aheadWindow(ahead, { season: 1, episode: 1 })].sort(), ["1:2", "1:3"], "an episode with no date still spends a slot");
+  assert.equal(downloadEligibility(ahead, ahead.episodes["1:1"], NOW, { season: 1, episode: 1 }), "outside", "the marker's own episode is behind the window");
+  assert.equal(downloadEligibility(ahead, ahead.episodes["1:3"], NOW, { season: 1, episode: 1 }), "eligible");
+  assert.equal(downloadEligibility(ahead, ahead.episodes["1:4"], NOW, { season: 1, episode: 1 }), "outside", "beyond the window nothing is automatic");
+  assert.equal(downloadEligibility(ahead, ahead.episodes["1:2"], NOW, { season: 1, episode: 1 }), "attention-no-date", "inside the window the usual checks still apply");
+});
+
+test("an ahead rule admits only its window, older seasons included, and slides with the marker", async (t) => {
+  const { store } = await withStore(t);
+  const episodes = [episode(1, 1, "v11", RELEASED), episode(1, 2, "v12", RELEASED), episode(2, 1, "v21", RELEASED), episode(2, 2, "v22", RELEASED)];
+  let marker: { season: number; episode: number } | undefined;
+  const q = fakeQueue();
+  const service = buildService(store, q, { watched: () => marker });
+  const id = await seedSeries(store, episodes, rule({ startMode: "ahead", aheadCount: 2 }));
+  await service.admit(id);
+  assert.deepEqual(q.added.map((item) => item.follow.episodeKey), ["1:1", "1:2"], "nothing beyond the window is queued");
+  marker = { season: 1, episode: 2 };
+  await service.admit(id);
+  assert.deepEqual(q.added.map((item) => item.follow.episodeKey), ["1:1", "1:2", "2:1", "2:2"], "the marker slides the window onto the next episodes");
+  assert.deepEqual(q.removed, [], "moving the window cancels nothing");
 });
 
 const DAY = 24 * 60 * 60_000;

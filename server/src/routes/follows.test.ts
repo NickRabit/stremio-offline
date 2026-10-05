@@ -241,6 +241,51 @@ test("an automatic rule validates the preferred-audio window", async () => {
   } finally { await h.close(); }
 });
 
+test("an ahead rule validates the episode count and a film refuses it", async () => {
+  const h = await mount();
+  try {
+    const follow = await (await api(h.base, "/api/follows", { method: "POST", as: "A", body: { type: "series", id: "tt1", name: "Show" } })).json() as { id: string };
+    const body = (aheadCount: unknown) => ({ autoDownload: { startMode: "ahead", aheadCount, selection: { addonKeys: ["stream-addon"], audioLanguage: "en" } } });
+    for (const bad of [0, 11, 2.5, "later", undefined, null]) {
+      const response = await api(h.base, `/api/follows/${follow.id}`, { method: "PATCH", as: "A", body: body(bad) });
+      assert.equal(response.status, 400, String(bad));
+      assert.equal(await keyOf(response), "err.followInvalid");
+    }
+    const stored = await api(h.base, `/api/follows/${follow.id}`, { method: "PATCH", as: "A", body: body(5) });
+    assert.equal(stored.status, 200);
+    const view = await stored.json() as { autoDownload?: { startMode: string; aheadCount?: number } };
+    assert.equal(view.autoDownload?.startMode, "ahead");
+    assert.equal(view.autoDownload?.aheadCount, 5);
+
+    const film = await (await api(h.base, "/api/follows", { method: "POST", as: "A", body: { type: "movie", id: "tt9", name: "Film" } })).json() as { id: string };
+    const rejected = await api(h.base, `/api/follows/${film.id}`, {
+      method: "PATCH", as: "A",
+      body: { autoDownload: { startMode: "ahead", aheadCount: 3, selection: { addonKeys: ["stream-addon"], audioLanguage: "en" } } },
+    });
+    assert.equal(rejected.status, 400);
+    assert.equal(await keyOf(rejected), "err.followInvalid");
+  } finally { await h.close(); }
+});
+
+test("preview answers what an ahead rule would download now", async () => {
+  const h = await mount();
+  try {
+    const follow = await (await api(h.base, "/api/follows", { method: "POST", as: "A", body: { type: "series", id: "tt1", name: "Show" } })).json() as { id: string };
+    await h.store.recordCheck(follow.id, { episodes: [
+      { key: "1:1", videoId: "tt1:1:1", season: 1, episode: 1, released: "2024-03-01T23:59:59.999Z", firstSeenAt: "2024-01-01T00:00:00.000Z" },
+      { key: "2:1", videoId: "tt1:2:1", season: 2, episode: 1, released: "2024-04-01T23:59:59.999Z", firstSeenAt: "2024-01-01T00:00:00.000Z" },
+    ], now: Date.parse("2024-05-01T00:00:00.000Z") });
+    const response = await api(h.base, `/api/follows/${follow.id}/preview?startMode=ahead&aheadCount=2`, { as: "A" });
+    assert.equal(response.status, 200);
+    const view = await response.json() as { count: number; episodes: Array<{ key: string }> };
+    assert.equal(view.count, 2, "with no marker the first two episodes fill the window");
+    assert.deepEqual(view.episodes.map((episode) => episode.key), ["1:1", "2:1"]);
+    const bad = await api(h.base, `/api/follows/${follow.id}/preview?startMode=ahead&aheadCount=0`, { as: "A" });
+    assert.equal(bad.status, 400);
+    assert.equal(await keyOf(bad), "err.followInvalid");
+  } finally { await h.close(); }
+});
+
 test("the follow defaults remember the preferred-audio window", async () => {
   const h = await mount();
   try {

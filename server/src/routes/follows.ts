@@ -272,7 +272,8 @@ export function registerFollowRoutes(app: express.Application, deps: FollowDeps)
       } else {
         const item = typeof raw === "object" && raw ? raw as Record<string, unknown> : {};
         // A film has no episodes to start from; it downloads whenever it comes out.
-        const startMode = follow.type === "movie" ? "new" : item.startMode === "from" ? "from" : item.startMode === "new" ? "new" : undefined;
+        if (follow.type === "movie" && item.startMode === "ahead") throw new AppError("The followed series is missing a type, an id or a name.", "err.followInvalid");
+        const startMode = follow.type === "movie" ? "new" : item.startMode === "from" ? "from" : item.startMode === "new" ? "new" : item.startMode === "ahead" ? "ahead" : undefined;
         if (!startMode) throw new AppError("The followed series is missing a type, an id or a name.", "err.followInvalid");
         let startSeason: number | undefined;
         let startEpisode: number | undefined;
@@ -280,6 +281,13 @@ export function registerFollowRoutes(app: express.Application, deps: FollowDeps)
           startSeason = Number(item.startSeason);
           startEpisode = Number(item.startEpisode);
           if (!Number.isInteger(startSeason) || startSeason < 1 || !Number.isInteger(startEpisode) || startEpisode < 1) {
+            throw new AppError("The followed series is missing a type, an id or a name.", "err.followInvalid");
+          }
+        }
+        let aheadCount: number | undefined;
+        if (startMode === "ahead") {
+          aheadCount = Number(item.aheadCount);
+          if (!Number.isInteger(aheadCount) || aheadCount < 1 || aheadCount > 10) {
             throw new AppError("The followed series is missing a type, an id or a name.", "err.followInvalid");
           }
         }
@@ -294,6 +302,7 @@ export function registerFollowRoutes(app: express.Application, deps: FollowDeps)
           startMode,
           ...(startSeason != null ? { startSeason } : {}),
           ...(startEpisode != null ? { startEpisode } : {}),
+          ...(aheadCount != null ? { aheadCount } : {}),
           ...(graceDays ? { graceDays } : {}),
           selection: { ...selection, targetSettings },
         };
@@ -339,6 +348,8 @@ export function registerFollowRoutes(app: express.Application, deps: FollowDeps)
   app.get("/api/follows/:id/episodes", (req, res) => {
     const follow = owned(req, String(req.params.id));
     const now = Date.now();
+    const marker = markersOf(dataOf(req))[follow.metaId];
+    const watched = marker ? { season: marker.season, episode: marker.episode } : undefined;
     const episodes = Object.values(follow.episodes)
       .map((episode) => ({
         key: episode.key, season: episode.season, episode: episode.episode,
@@ -347,7 +358,7 @@ export function registerFollowRoutes(app: express.Application, deps: FollowDeps)
         ...(episode.releasedSource ? { releasedSource: episode.releasedSource } : {}),
         ...(episode.dateUncertain ? { dateUncertain: true } : {}),
         ...(episode.ambiguous ? { ambiguous: true } : {}),
-        eligibility: downloadEligibility(follow, episode, now),
+        eligibility: downloadEligibility(follow, episode, now, watched),
         ...(episode.download ? { download: episode.download } : {}),
       }))
       .sort((left, right) => left.season - right.season || left.episode - right.episode);
@@ -356,7 +367,7 @@ export function registerFollowRoutes(app: express.Application, deps: FollowDeps)
 
   app.get("/api/follows/:id/preview", (req, res) => {
     const follow = owned(req, String(req.params.id));
-    const startMode = req.query.startMode === "from" ? "from" : req.query.startMode === "new" ? "new" : undefined;
+    const startMode = req.query.startMode === "from" ? "from" : req.query.startMode === "new" ? "new" : req.query.startMode === "ahead" ? "ahead" : undefined;
     if (!startMode) throw new AppError("The followed series is missing a type, an id or a name.", "err.followInvalid");
     let startSeason: number | undefined;
     let startEpisode: number | undefined;
@@ -367,10 +378,18 @@ export function registerFollowRoutes(app: express.Application, deps: FollowDeps)
         throw new AppError("The followed series is missing a type, an id or a name.", "err.followInvalid");
       }
     }
+    let aheadCount: number | undefined;
+    if (startMode === "ahead") {
+      aheadCount = Number(req.query.aheadCount);
+      if (!Number.isInteger(aheadCount) || aheadCount < 1 || aheadCount > 10) {
+        throw new AppError("The followed series is missing a type, an id or a name.", "err.followInvalid");
+      }
+    }
     const eligible = follows.preview(follow, {
       startMode,
       ...(startSeason != null ? { startSeason } : {}),
       ...(startEpisode != null ? { startEpisode } : {}),
+      ...(aheadCount != null ? { aheadCount } : {}),
     });
     const episodes = eligible.slice(0, 50).map((episode) => ({
       key: episode.key, season: episode.season, episode: episode.episode,

@@ -33,9 +33,11 @@ export interface FollowEpisode {
 export interface FollowAutoDownload {
   /** Set when automatic downloads were switched on, kept when the rule is edited. */
   enabledAt: string;
-  startMode: "new" | "from";
+  startMode: "new" | "from" | "ahead";
   startSeason?: number;
   startEpisode?: number;
+  /** With `ahead`: how many regular episodes after the watched marker stay ready, 1..10. */
+  aheadCount?: number;
   selection: DownloadSelection;
   /** Days after release during which only the preferred audio is admitted, 0..30. */
   graceDays?: number;
@@ -304,7 +306,23 @@ export function movieEpisode(meta: MetaItem, metaId: string, releases: MovieRele
   return { ...base, released: catalog, releasedSource: "addon", releaseKind: "catalog", ...(doubtful ? { dateUncertain: true } : {}) };
 }
 
-export function downloadEligibility(follow: Follow, episode: FollowEpisode, now: number): DownloadEligibility {
+/** The episodes an "ahead" rule keeps ready: the next `aheadCount` regular episodes in
+ *  season/episode order after the marker -- or from the first one when there is no marker.
+ *  A slot is a slot, so an episode with no release date still spends one and the window never
+ *  reaches past it. Pure, so the setup dialog and the admission agree. */
+export function aheadWindow(follow: Follow, watched: { season: number; episode: number } | undefined): Set<string> {
+  const count = follow.autoDownload?.aheadCount ?? 0;
+  if (count <= 0) return new Set();
+  const ordered = Object.values(follow.episodes)
+    .filter((episode) => episode.season >= 1)
+    .sort((a, b) => a.season - b.season || a.episode - b.episode);
+  const after = watched
+    ? ordered.filter((episode) => afterMarker(episode, watched))
+    : ordered;
+  return new Set(after.slice(0, count).map((episode) => episode.key));
+}
+
+export function downloadEligibility(follow: Follow, episode: FollowEpisode, now: number, watched?: { season: number; episode: number }): DownloadEligibility {
   const auto = follow.autoDownload;
   if (!auto) return "outside";
   // A film is one download whenever it comes out; the start rule is about a series' episodes.
@@ -312,7 +330,9 @@ export function downloadEligibility(follow: Follow, episode: FollowEpisode, now:
     if (!episode.released) return episode.dateUncertain ? "upcoming" : "attention-no-date";
     return Date.parse(episode.released) > now ? "upcoming" : "eligible";
   }
-  if (auto.startMode === "from") {
+  if (auto.startMode === "ahead") {
+    if (!aheadWindow(follow, watched).has(episode.key)) return "outside";
+  } else if (auto.startMode === "from") {
     const startSeason = auto.startSeason ?? 1;
     const startEpisode = auto.startEpisode ?? 1;
     const atOrAfter = episode.season > startSeason || (episode.season === startSeason && episode.episode >= startEpisode);
@@ -419,8 +439,10 @@ export function parseFollowDefaults(value: unknown): FollowDefaults | undefined 
   const mode = enumValue(["notify", "download"] as const, source.mode);
   if (!mode) throw invalidFollowDefaults();
   const startMode = source.startMode === undefined || source.startMode === null
-    ? undefined : enumValue(["new", "from"] as const, source.startMode);
+    ? undefined : enumValue(["new", "from", "ahead"] as const, source.startMode);
   if (source.startMode !== undefined && source.startMode !== null && !startMode) throw invalidFollowDefaults();
+  const aheadCount = source.aheadCount === undefined || source.aheadCount === null ? undefined : integer(source.aheadCount);
+  if (startMode === "ahead" && (aheadCount === undefined || aheadCount < 1 || aheadCount > 10)) throw invalidFollowDefaults();
   const graceDays = source.graceDays === undefined || source.graceDays === null ? undefined : integer(source.graceDays);
   if (source.graceDays !== undefined && source.graceDays !== null && (graceDays === undefined || graceDays < 0 || graceDays > 30)) throw invalidFollowDefaults();
   const selection = source.selection === undefined || source.selection === null
@@ -430,6 +452,7 @@ export function parseFollowDefaults(value: unknown): FollowDefaults | undefined 
   return {
     mode,
     ...(startMode ? { startMode } : {}),
+    ...(startMode === "ahead" && aheadCount ? { aheadCount } : {}),
     ...(graceDays ? { graceDays } : {}),
     ...(selection ? { selection } : {}),
     ...(target ? { target } : {}),
@@ -852,6 +875,9 @@ export interface FollowDeps {
   airDates?: (type: string, metaId: string, seasons: number[], owner: Viewer) => Promise<Map<string, string | null> | undefined>;
   /** A film's release dates by kind, from TMDB; undefined when no key is set. */
   movieReleases?: (metaId: string, owner: Viewer) => Promise<MovieReleases | null>;
+  /** The owner's watched marker for a series, keyed by the meta id; the last episode they
+   *  finished, or nothing when they never did. Drives the "ahead" window. */
+  watched?: (ownerUserId: string, metaId: string) => { season: number; episode: number } | undefined;
   /** The download queue the followed series queue into. */
   queue: FollowQueue;
   /** The owner may queue into this selection's library right now. */
@@ -1015,6 +1041,11 @@ export class FollowService {
     return this.deps.mayDownload(follow.ownerUserId, follow.autoDownload.selection);
   }
 
+  /** Where the owner is watching one series, as the "ahead" window reads it. */
+  private watchedFor(follow: Follow): { season: number; episode: number } | undefined {
+    return this.deps.watched?.(follow.ownerUserId, follow.metaId);
+  }
+
   private requireOwn(followId: string, ownerUserId: string): Follow {
     const follow = this.deps.store.get(followId);
     if (!follow || follow.ownerUserId !== ownerUserId) throw new AppError("The item was not found.", "err.itemNotFound", 404);
@@ -1094,7 +1125,7 @@ export class FollowService {
       if (!follow) return;
       const current = follow.episodes[episode.key];
       if (!current) continue;
-      const verdict = downloadEligibility(follow, current, this.deps.now());
+      const verdict = downloadEligibility(follow, current, this.deps.now(), this.watchedFor(follow));
       if (verdict === "attention-ambiguous" || verdict === "attention-no-date") {
         if (!current.download) {
           const reasonKey = verdict === "attention-ambiguous" ? "err.followEpisodeAmbiguous" : "err.followNoReleaseDate";
@@ -1221,7 +1252,7 @@ export class FollowService {
   }
 
   /** The episodes a proposed rule would queue right now, for the setup dialog's count. */
-  preview(follow: Follow, start: { startMode: "new" | "from"; startSeason?: number; startEpisode?: number }): FollowEpisode[] {
+  preview(follow: Follow, start: { startMode: "new" | "from" | "ahead"; startSeason?: number; startEpisode?: number; aheadCount?: number }): FollowEpisode[] {
     const now = this.deps.now();
     const proposed: Follow = {
       ...follow,
@@ -1230,12 +1261,14 @@ export class FollowService {
         startMode: start.startMode,
         ...(start.startSeason != null ? { startSeason: start.startSeason } : {}),
         ...(start.startEpisode != null ? { startEpisode: start.startEpisode } : {}),
+        ...(start.startMode === "ahead" && start.aheadCount != null ? { aheadCount: start.aheadCount } : {}),
         // `downloadEligibility` reads the start rule only, never the selection.
         selection: follow.autoDownload?.selection ?? ({} as DownloadSelection),
       },
     };
+    const watched = this.watchedFor(follow);
     return Object.values(follow.episodes)
-      .filter((episode) => downloadEligibility(proposed, episode, now) === "eligible")
+      .filter((episode) => downloadEligibility(proposed, episode, now, watched) === "eligible")
       .sort((a, b) => a.season - b.season || a.episode - b.episode);
   }
 
@@ -1270,6 +1303,7 @@ export class FollowService {
             startMode: value.startMode,
             ...(value.startSeason != null ? { startSeason: value.startSeason } : {}),
             ...(value.startEpisode != null ? { startEpisode: value.startEpisode } : {}),
+            ...(value.aheadCount ? { aheadCount: value.aheadCount } : {}),
             ...(value.graceDays ? { graceDays: value.graceDays } : {}),
             selection: value.selection,
           };

@@ -10,9 +10,18 @@ interface Episode { id: string; season?: number; episode?: number; title?: strin
 
 /** What a proposed start would fetch at once, worked out from the episodes on screen while
  *  the follow does not exist yet and the server cannot be asked. */
-const localPreview = (episodes: Episode[], startMode: FollowStartMode, startSeason?: number, startEpisode?: number): FollowPreview => {
+const localPreview = (episodes: Episode[], startMode: FollowStartMode, startSeason?: number, startEpisode?: number, aheadCount?: number): FollowPreview => {
   if (startMode === "new") return { count: 0, episodes: [] };
   const now = Date.now();
+  // With no marker on hand, "ahead" starts at the first regular episode: the first N fill the
+  // window, and the released ones among them would download now.
+  if (startMode === "ahead") {
+    const window = episodes
+      .filter((episode) => episode.season != null && episode.season >= 1 && episode.episode != null)
+      .sort((left, right) => (left.season ?? 0) - (right.season ?? 0) || (left.episode ?? 0) - (right.episode ?? 0))
+      .slice(0, Math.max(0, aheadCount ?? 0));
+    return { count: window.filter((episode) => episode.released && Date.parse(episode.released) <= now).length, episodes: [] };
+  }
   const due = episodes.filter((episode) => {
     if (episode.season == null || episode.episode == null || !episode.released) return false;
     const released = Date.parse(episode.released);
@@ -63,6 +72,7 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
   const [startMode, setStartMode] = useState<FollowStartMode>(initial?.startMode ?? "new");
   const [startSeason, setStartSeason] = useState<number | undefined>(initial?.startSeason);
   const [startEpisode, setStartEpisode] = useState<number | undefined>(initial?.startEpisode);
+  const [aheadCount, setAheadCount] = useState<number>(initial?.aheadCount ?? 3);
   const [preview, setPreview] = useState<FollowPreview | null>(null);
   const creating = Boolean(follow?.create);
   // A film has no episodes to start from and is saved by the film rules.
@@ -111,6 +121,7 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
     setFollowMode(defaults.mode);
     if (defaults.mode !== "download") return;
     if (defaults.startMode) setStartMode(defaults.startMode);
+    if (defaults.aheadCount) setAheadCount(defaults.aheadCount);
     setGraceDays(defaults.graceDays ?? 0);
     if (defaults.selection) {
       const keys = defaults.selection.addonKeys.filter((key) => sources.some((item) => item.key === key));
@@ -130,15 +141,15 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
     if (!follow) return;
     if (startMode === "from" && (startSeason == null || startEpisode == null)) { setPreview(null); return; }
     const followId = follow.followId;
-    if (!followId) { setPreview(localPreview(episodes, startMode, startSeason, startEpisode)); return; }
+    if (!followId) { setPreview(localPreview(episodes, startMode, startSeason, startEpisode, aheadCount)); return; }
     let stale = false;
     const timer = window.setTimeout(() => {
-      api.followPreview(followId, { startMode, startSeason, startEpisode })
+      api.followPreview(followId, { startMode, startSeason, startEpisode, aheadCount })
         .then((answer) => { if (!stale) setPreview(answer); })
         .catch(() => { if (!stale) setPreview(null); });
     }, 300);
     return () => { stale = true; window.clearTimeout(timer); };
-  }, [follow, episodes, startMode, startSeason, startEpisode]);
+  }, [follow, episodes, startMode, startSeason, startEpisode, aheadCount]);
 
   const toggle = (key: string) => setChosen((current) => current.includes(key) ? current.filter((item) => item !== key) : [...current, key]);
   const move = (key: string, direction: -1 | 1) => setChosen((current) => {
@@ -190,6 +201,7 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
         const updated = await api.updateFollow(followId, { autoDownload: {
           startMode,
           ...(startMode === "from" && startSeason != null && startEpisode != null ? { startSeason, startEpisode } : {}),
+          ...(startMode === "ahead" ? { aheadCount } : {}),
           graceDays,
           selection,
           ...(target ? { target } : {}),
@@ -200,7 +212,7 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
       }
       // Remembering the choices is a courtesy; a refusal here must never block the follow.
       if (creating && followMode === "download") void api.saveFollowDefaults({
-        mode: "download", startMode, graceDays,
+        mode: "download", startMode, ...(startMode === "ahead" ? { aheadCount } : {}), graceDays,
         selection: {
           addonKeys: selection.addonKeys, sourceStrategy: selection.sourceStrategy, audioLanguage: selection.audioLanguage,
           ...(selection.fallbackAudioLanguage ? { fallbackAudioLanguage: selection.fallbackAudioLanguage } : {}),
@@ -238,6 +250,14 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
             <label className={startMode === "from" ? "selected" : ""}>
               <input type="radio" name="follow-start" value="from" checked={startMode === "from"} onChange={chooseFrom}/>
               <span><strong>{t("follow.startFromLabel")}</strong></span>
+            </label>
+            <label className={startMode === "ahead" ? "selected" : ""}>
+              <input type="radio" name="follow-start" value="ahead" checked={startMode === "ahead"} onChange={() => setStartMode("ahead")}/>
+              <span><strong>{t("follow.startAhead")}</strong>
+                <select aria-label={t("follow.startAhead")} value={aheadCount} onChange={(event) => { setStartMode("ahead"); setAheadCount(Number(event.target.value)); }}>
+                  {Array.from({ length: 10 }, (_unused, index) => index + 1).map((count) => <option key={count} value={count}>{t("follow.aheadCount", { count })}</option>)}
+                </select>
+              </span>
             </label>
           </div>
           {startMode === "from" && <div className="bulk-language-grid">
