@@ -37,6 +37,8 @@ export interface FollowAutoDownload {
   startSeason?: number;
   startEpisode?: number;
   selection: DownloadSelection;
+  /** Days after release during which only the preferred audio is admitted, 0..30. */
+  graceDays?: number;
   /** The catalogue key of the reason nothing is admitted, while the owner may not download. */
   blockedKey?: string;
 }
@@ -53,6 +55,8 @@ export interface EpisodeDownload {
   attempts: number;
   /** ISO UTC, only meaningful in `waiting`. */
   nextAttemptAt?: string;
+  /** ISO UTC, the moment the preferred-audio window closes; only meaningful in `waiting`. */
+  graceUntil?: string;
   reasonKey?: string;
   updatedAt: string;
 }
@@ -328,6 +332,27 @@ export function downloadEligibility(follow: Follow, episode: FollowEpisode, now:
   return "eligible";
 }
 
+/** The instant a follow's preferred-audio window closes, or nothing when it never waits. The
+ *  clock runs from the episode's release, so a date the provider has not given leaves no window. */
+export function graceUntil(auto: FollowAutoDownload, episode: FollowEpisode): number | undefined {
+  const days = auto.graceDays;
+  if (!days || days <= 0 || !episode.released) return undefined;
+  const released = Date.parse(episode.released);
+  return Number.isFinite(released) ? released + days * DAY_MS : undefined;
+}
+
+/** The selection a follow hands to the queue right now: inside the window the fallback audio is
+ *  dropped and a preferred mode softens to listed, so only the preferred language is accepted.
+ *  A strict mode stays strict, and the window's end restores the saved rules unchanged. */
+export function effectiveSelection(auto: FollowAutoDownload, episode: FollowEpisode, now: number): DownloadSelection {
+  const until = graceUntil(auto, episode);
+  if (until === undefined || now >= until) return auto.selection;
+  const stripped: DownloadSelection = { ...auto.selection };
+  delete stripped.fallbackAudioLanguage;
+  if (stripped.audioMode === "preferred") stripped.audioMode = "listed";
+  return stripped;
+}
+
 const FOLLOW_ADDON_LIMIT = 50;
 /** How far a calendar window may reach: a page reads two months, not a library dump. */
 export const CALENDAR_MAX_SPAN_MS = 62 * DAY_MS;
@@ -396,6 +421,8 @@ export function parseFollowDefaults(value: unknown): FollowDefaults | undefined 
   const startMode = source.startMode === undefined || source.startMode === null
     ? undefined : enumValue(["new", "from"] as const, source.startMode);
   if (source.startMode !== undefined && source.startMode !== null && !startMode) throw invalidFollowDefaults();
+  const graceDays = source.graceDays === undefined || source.graceDays === null ? undefined : integer(source.graceDays);
+  if (source.graceDays !== undefined && source.graceDays !== null && (graceDays === undefined || graceDays < 0 || graceDays > 30)) throw invalidFollowDefaults();
   const selection = source.selection === undefined || source.selection === null
     ? undefined : parseFollowDefaultsSelection(source.selection);
   const target = source.target === undefined || source.target === null
@@ -403,6 +430,7 @@ export function parseFollowDefaults(value: unknown): FollowDefaults | undefined 
   return {
     mode,
     ...(startMode ? { startMode } : {}),
+    ...(graceDays ? { graceDays } : {}),
     ...(selection ? { selection } : {}),
     ...(target ? { target } : {}),
   };
@@ -1097,7 +1125,7 @@ export class FollowService {
     if (!follow) return;
     const job = await this.deps.queue.addPending(
       this.jobTitle(follow, episode),
-      { type: follow.type, videoId: episode.videoId, selection: follow.autoDownload!.selection },
+      { type: follow.type, videoId: episode.videoId, selection: effectiveSelection(follow.autoDownload!, episode, this.deps.now()) },
       this.episodeMedia(follow, episode),
       follow.ownerUserId,
       { followId, episodeKey, intent },
@@ -1130,10 +1158,16 @@ export class FollowService {
 
   private async setWaiting(followId: string, episodeKey: string, download: EpisodeDownload, job: FollowJob, now: number): Promise<void> {
     const attempts = download.attempts + 1;
+    const follow = this.deps.store.get(followId);
+    const episode = follow?.episodes[episodeKey];
+    const window = follow?.autoDownload && episode ? graceUntil(follow.autoDownload, episode) : undefined;
+    const grace = window !== undefined && window > now ? window : undefined;
+    const ladder = now + downloadLadderMs(attempts);
     await this.setDownload(followId, episodeKey, {
       ...download, state: "waiting", attempts,
       reasonKey: job.errorKey ?? "err.followDownloadFailed",
-      nextAttemptAt: new Date(now + downloadLadderMs(attempts)).toISOString(),
+      nextAttemptAt: new Date(grace !== undefined ? Math.min(ladder, grace) : ladder).toISOString(),
+      graceUntil: grace !== undefined ? new Date(grace).toISOString() : undefined,
       updatedAt: "",
     });
   }
@@ -1171,7 +1205,7 @@ export class FollowService {
         if (!follow.enabled || !this.mayQueue(follow)) continue;
         const job = jobs.get(download.intent);
         if (job && job.status === "failed") {
-          await this.deps.queue.retry(job.id);
+          await this.deps.queue.retry(job.id, effectiveSelection(follow.autoDownload!, follow.episodes[episodeKey], now));
           if (!this.fresh(follow.id, revision)) return;
           await this.setDownload(follow.id, episodeKey, { ...download, state: "queued", jobId: job.id, reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
         } else if (job && job.status === "completed") {
@@ -1236,6 +1270,7 @@ export class FollowService {
             startMode: value.startMode,
             ...(value.startSeason != null ? { startSeason: value.startSeason } : {}),
             ...(value.startEpisode != null ? { startEpisode: value.startEpisode } : {}),
+            ...(value.graceDays ? { graceDays: value.graceDays } : {}),
             selection: value.selection,
           };
         }
@@ -1261,7 +1296,7 @@ export class FollowService {
       if (download.state !== "waiting" && !lost) continue;
       const job = download.jobId ? this.deps.queue.get(download.jobId) : undefined;
       if (job && job.status === "failed") {
-        await this.deps.queue.retry(job.id, follow.autoDownload!.selection);
+        await this.deps.queue.retry(job.id, effectiveSelection(follow.autoDownload!, episode, this.deps.now()));
         if (!this.admittable(followId, revision)) return;
         await this.setDownload(followId, episode.key, { ...download, state: "queued", attempts: 0, reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
       } else if (!job) {
@@ -1293,7 +1328,7 @@ export class FollowService {
       if (!["waiting", "attention", "skipped"].includes(download.state)) return;
       const job = download.jobId ? this.deps.queue.get(download.jobId) : undefined;
       if (job && job.status === "failed") {
-        await this.deps.queue.retry(job.id);
+        await this.deps.queue.retry(job.id, follow.autoDownload ? effectiveSelection(follow.autoDownload, follow.episodes[episodeKey], this.deps.now()) : undefined);
         if (!this.fresh(followId, revision)) return;
         await this.setDownload(followId, episodeKey, { ...download, state: "queued", reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
         return;

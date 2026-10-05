@@ -52,6 +52,7 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
   const [audio, setAudio] = useState(startAudio);
   const [audioFallback, setAudioFallback] = useState(initial?.selection.fallbackAudioLanguage ?? (startAudio === "en" ? "" : "en"));
   const [audioMode, setAudioMode] = useState<AudioMode>(initial?.selection.audioMode ?? "listed");
+  const [graceDays, setGraceDays] = useState(initial?.graceDays ?? 0);
   const [subtitleMode, setSubtitleMode] = useState<SubtitleMode>(initial?.selection.subtitleMode ?? "optional");
   const [subtitle, setSubtitle] = useState(startSubtitle);
   const [subtitleFallback, setSubtitleFallback] = useState(initial?.selection.fallbackSubtitleLanguage ?? (startSubtitle === "en" ? "" : "en"));
@@ -110,6 +111,7 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
     setFollowMode(defaults.mode);
     if (defaults.mode !== "download") return;
     if (defaults.startMode) setStartMode(defaults.startMode);
+    setGraceDays(defaults.graceDays ?? 0);
     if (defaults.selection) {
       const keys = defaults.selection.addonKeys.filter((key) => sources.some((item) => item.key === key));
       if (keys.length) setChosen(keys);
@@ -188,6 +190,7 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
         const updated = await api.updateFollow(followId, { autoDownload: {
           startMode,
           ...(startMode === "from" && startSeason != null && startEpisode != null ? { startSeason, startEpisode } : {}),
+          graceDays,
           selection,
           ...(target ? { target } : {}),
         } });
@@ -197,7 +200,7 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
       }
       // Remembering the choices is a courtesy; a refusal here must never block the follow.
       if (creating && followMode === "download") void api.saveFollowDefaults({
-        mode: "download", startMode,
+        mode: "download", startMode, graceDays,
         selection: {
           addonKeys: selection.addonKeys, sourceStrategy: selection.sourceStrategy, audioLanguage: selection.audioLanguage,
           ...(selection.fallbackAudioLanguage ? { fallbackAudioLanguage: selection.fallbackAudioLanguage } : {}),
@@ -272,6 +275,13 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
             <label><span>{t("bulk.audioFallback")}</span><select value={audioFallback} onChange={(event) => setAudioFallback(event.target.value)}><option value="">{t("bulk.noFallback")}</option>{languageOptions()}</select></label>
           </div>
           <p className="identify-hint bulk-mode-hint">{t(audioMode === "listed" ? "bulk.audioModeHintListed" : audioMode === "preferred" ? "bulk.audioModeHintPreferred" : "bulk.audioModeHintStrict")}</p>
+          {follow && <><div className="bulk-language-grid">
+            <label><span>{t("follow.graceLabel")}</span><select value={graceDays} onChange={(event) => setGraceDays(Number(event.target.value))}>
+              <option value={0}>{t("follow.graceNone")}</option>
+              {[3, 7, 14].map((days) => <option key={days} value={days}>{t("follow.graceDays", { count: days })}</option>)}
+            </select></label>
+          </div>
+          <p className="identify-hint">{t("follow.graceHint")}</p></>}
         </section>
         <section className="bulk-section">
           <div className="bulk-section-head"><Subtitles/><div><h3>{t("bulk.subtitleSettings")}</h3><p>{t("bulk.subtitleSettingsHint")}</p></div></div>

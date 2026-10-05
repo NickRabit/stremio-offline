@@ -85,6 +85,25 @@ describe("FollowDialog", () => {
     expect(small.getAttribute("title")).toBe("The exact date is not announced yet; this is the season's start.");
   });
 
+  it("the auto summary names the preferred-audio window", async () => {
+    await render({ ...follow, autoDownload: { ...follow.autoDownload!, graceDays: 7 } });
+    expect(host.textContent).toContain("waits 7 days for English");
+  });
+
+  it("a waiting episode inside the window says it is waiting for the preferred audio", async () => {
+    await render({ ...follow, autoDownload: { ...follow.autoDownload!, graceDays: 7 } }, [
+      { key: "1:2", season: 1, episode: 2, title: "Waiting", released: "2024-01-08", eligibility: "eligible", download: { state: "waiting", intent: "b", generation: 1, attempts: 1, nextAttemptAt: "2099-01-01T00:00:00.000Z", graceUntil: "2099-01-01T00:00:00.000Z", reasonKey: "err.followDownloadFailed", updatedAt: "" } },
+    ]);
+    const row = rowFor("S01E02")!;
+    expect(row.textContent).toContain("waiting for English until");
+    expect(row.textContent).not.toContain("next attempt");
+  });
+
+  it("a waiting film inside the window says it is waiting for the preferred audio", async () => {
+    await render({ ...follow, type: "movie", metaId: "tt9", name: "Film", autoDownload: { ...follow.autoDownload!, graceDays: 7 }, movie: { released: "2026-11-20T23:59:59.999Z", releaseKind: "digital", state: "waiting", nextAttemptAt: "2026-11-21T10:00:00.000Z", graceUntil: "2026-11-27T23:59:59.999Z" } }, []);
+    expect(host.textContent).toContain("waiting for English until");
+  });
+
   it("pauses the follow as soon as the switch changes", async () => {
     await render();
     const pause = host.querySelector<HTMLInputElement>(".follow-pause input[type=checkbox]")!;

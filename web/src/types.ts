@@ -348,6 +348,7 @@ export type FollowStartMode = "new" | "from";
 export interface FollowDefaults {
   mode: "notify" | "download";
   startMode?: FollowStartMode;
+  graceDays?: number;
   selection?: {
     addonKeys: string[];
     sourceStrategy: DownloadSourceStrategy;
@@ -367,6 +368,8 @@ export interface FollowAutoDownload {
   startSeason?: number;
   startEpisode?: number;
   selection: DownloadSelection;
+  /** Days after release during which only the preferred audio is accepted. */
+  graceDays?: number;
   /** Catalogue key of the reason nothing is admitted while the account may not download. */
   blockedKey?: string;
 }
@@ -379,6 +382,8 @@ export interface FollowEpisodeDownload {
   jobId?: string;
   attempts: number;
   nextAttemptAt?: string;
+  /** ISO instant the preferred-audio window closes, while the row is waiting inside it. */
+  graceUntil?: string;
   reasonKey?: string;
   updatedAt: string;
 }
@@ -395,7 +400,7 @@ export interface FollowDownloads { queued: number; waiting: number; completed: n
 /** A followed film's single record, as the follow view carries it. */
 export interface FollowMovie {
   released?: string; releaseKind?: "digital" | "physical" | "theatrical" | "catalog"; theatricalAt?: string; dateUncertain?: boolean;
-  state?: CalendarEpisodeState; reasonKey?: string; nextAttemptAt?: string;
+  state?: CalendarEpisodeState; reasonKey?: string; nextAttemptAt?: string; graceUntil?: string;
 }
 export interface FollowView {
   movie?: FollowMovie;

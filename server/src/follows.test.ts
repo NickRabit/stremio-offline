@@ -5,7 +5,7 @@ import path from "node:path";
 import { test } from "node:test";
 import type { DownloadSelection } from "./downloads.js";
 import type { AppError } from "./errors.js";
-import { activityItems, calendarFeed, calendarItems, downloadEligibility, FollowService, FollowStore, followStaggerMs, movieEpisode, normalizeFollowEpisodes, reconcileReleaseDates, seasonsForReconcile, undatedCalendarItems, type EpisodeDownload, type Follow, type FollowAutoDownload, type FollowDeps, type FollowEpisode, type FollowJob, type FollowQueue } from "./follows.js";
+import { activityItems, calendarFeed, calendarItems, downloadEligibility, effectiveSelection, FollowService, FollowStore, followStaggerMs, graceUntil, movieEpisode, normalizeFollowEpisodes, reconcileReleaseDates, seasonsForReconcile, undatedCalendarItems, type EpisodeDownload, type Follow, type FollowAutoDownload, type FollowDeps, type FollowEpisode, type FollowJob, type FollowQueue } from "./follows.js";
 import type { MediaInfo } from "./naming.js";
 import type { MetaItem } from "./types.js";
 
@@ -532,6 +532,70 @@ test("downloadEligibility follows the start rule, the clock and the episode's fa
   assert.equal(downloadEligibility(follow(from), ep({ season: 2, episode: 3, released: RELEASED }), NOW), "eligible");
   assert.equal(downloadEligibility(follow(from), ep({ season: 2, episode: 2, released: RELEASED }), NOW), "outside", "before the start episode");
   assert.equal(downloadEligibility(follow(from), ep({ season: 1, episode: 9, released: RELEASED }), NOW), "outside", "season is compared first");
+});
+
+const DAY = 24 * 60 * 60_000;
+
+test("graceUntil opens for graceDays after release and never without one", () => {
+  const auto = rule({ graceDays: 7 });
+  assert.equal(graceUntil(auto, episode(1, 1, "v1", RELEASED)), Date.parse(RELEASED) + 7 * DAY);
+  assert.equal(graceUntil(auto, episode(1, 2, "v2")), undefined, "no release date, no window");
+  assert.equal(graceUntil(rule({ graceDays: 0 }), episode(1, 1, "v1", RELEASED)), undefined, "zero means no waiting");
+  assert.equal(graceUntil(rule(), episode(1, 1, "v1", RELEASED)), undefined, "absent means no waiting");
+});
+
+test("effectiveSelection strips the fallback inside the window and restores it after", () => {
+  const auto = rule({ graceDays: 7, selection: { ...selection(), fallbackAudioLanguage: "cs", audioMode: "preferred" } });
+  const film = episode(1, 1, "v1", RELEASED);
+  const until = Date.parse(RELEASED) + 7 * DAY;
+  const inside = effectiveSelection(auto, film, until - 1);
+  assert.equal(inside.fallbackAudioLanguage, undefined);
+  assert.equal(inside.audioMode, "listed");
+  assert.equal(inside.audioLanguage, "en", "the preferred language itself never changes");
+  const after = effectiveSelection(auto, film, until);
+  assert.equal(after, auto.selection, "at the boundary the saved rules stand");
+  assert.equal(after.fallbackAudioLanguage, "cs");
+  assert.equal(after.audioMode, "preferred");
+});
+
+test("effectiveSelection keeps a strict mode strict and an undated episode unchanged", () => {
+  const strict = rule({ graceDays: 7, selection: { ...selection(), fallbackAudioLanguage: "cs", audioMode: "strict" } });
+  const dated = episode(1, 1, "v1", RELEASED);
+  assert.equal(effectiveSelection(strict, dated, Date.parse(RELEASED) + 1).audioMode, "strict");
+  assert.equal(effectiveSelection(strict, dated, Date.parse(RELEASED) + 1).fallbackAudioLanguage, undefined, "the fallback is dropped whatever the mode");
+  assert.equal(effectiveSelection(strict, episode(1, 2, "v2"), NOW), strict.selection, "no date leaves the selection alone");
+  const noWindow = rule({ graceDays: 0 });
+  assert.equal(effectiveSelection(noWindow, dated, NOW), noWindow.selection, "no window leaves the selection alone");
+});
+
+test("admission inside the window passes the stripped selection, and the close restores it", async (t) => {
+  const { store } = await withStore(t);
+  const q = fakeQueue();
+  const released = "2024-05-25T00:00:00.000Z";
+  const until = Date.parse(released) + 7 * DAY;
+  let now = until - 30 * 60_000;
+  const service = buildService(store, q, { now: () => now });
+  const auto = rule({ graceDays: 7, selection: { ...selection(), fallbackAudioLanguage: "cs", audioMode: "preferred" } });
+  const id = await seedSeries(store, [episode(1, 1, "v1", released)], auto);
+
+  await service.admit(id);
+  assert.equal(q.added[0].source.selection?.fallbackAudioLanguage, undefined, "the fallback is dropped inside the window");
+  assert.equal(q.added[0].source.selection?.audioMode, "listed", "a preferred mode softens to listed");
+
+  q.fail(q.jobs[0].id, "err.noMatchingSource");
+  await service.sync();
+  let download = store.get(id)!.episodes["1:1"].download!;
+  assert.equal(download.state, "waiting");
+  assert.equal(download.nextAttemptAt, new Date(until).toISOString(), "the ladder never reaches past the window's close");
+  assert.equal(download.graceUntil, new Date(until).toISOString());
+
+  now = until + 60_000;
+  await service.sync();
+  const retried = q.retriedWith.at(-1)!;
+  assert.equal(retried.fallbackAudioLanguage, "cs", "after the window the full rules return");
+  assert.equal(retried.audioMode, "preferred");
+  download = store.get(id)!.episodes["1:1"].download!;
+  assert.equal(download.state, "queued");
 });
 
 test("admission queues in season order and stops at the caps", async (t) => {

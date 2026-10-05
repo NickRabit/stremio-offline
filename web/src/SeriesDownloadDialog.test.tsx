@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { SeriesDownloadDialog } from "./SeriesDownloadDialog";
 import { setLocale } from "./i18n";
+import type { FollowAutoDownload } from "./types";
 
 let fetchMock: ReturnType<typeof vi.fn>;
 let root: Root;
@@ -64,6 +65,18 @@ describe("SeriesDownloadDialog", () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
+  it("prefills and sends the preferred-audio window", async () => {
+    const initial: FollowAutoDownload = { enabledAt: "2024-01-01T00:00:00.000Z", startMode: "new", graceDays: 14, selection: { addonKeys: ["first"], sourceStrategy: "priority", audioLanguage: "cs", audioMode: "preferred", subtitleMode: "off" } };
+    await act(async () => { root.render(<SeriesDownloadDialog type="series" label="Show" title="Show" libraries={[]} addons={[]} episodes={[{ id: "tt1:1:1" }]} audioLanguage="cs" subtitleLanguage="cs" languages={[{ code: "cs", name: "Čeština" }]} follow={{ followId: "f1", initial }} onClose={() => undefined}/>); });
+    await act(async () => { await Promise.resolve(); });
+    const grace = [...host.querySelectorAll("select")].find((select) => [...select.options].some((option) => option.value === "14"))!;
+    expect(grace.value).toBe("14");
+    const save = [...host.querySelectorAll("button")].find((button) => button.textContent === "Turn on")!;
+    await act(async () => { save.click(); await Promise.resolve(); });
+    const patch = fetchMock.mock.calls.find((call) => (call[1] as RequestInit | undefined)?.method === "PATCH")!;
+    expect(JSON.parse(String((patch[1] as RequestInit).body)).autoDownload.graceDays).toBe(14);
+  });
+
   it("asks how to follow first and only creates the follow on confirm", async () => {
     const onFollowed = vi.fn();
     fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
@@ -111,13 +124,15 @@ describe("SeriesDownloadDialog", () => {
 
   it("prefills a new follow from the stored defaults", async () => {
     fetchMock.mockImplementation(async (url: string) => String(url).includes("/api/follows/defaults")
-      ? new Response(JSON.stringify({ defaults: { mode: "download", startMode: "from", selection: { addonKeys: ["second"], sourceStrategy: "priority", audioLanguage: "en", audioMode: "preferred", subtitleMode: "off" } } }), { status: 200, headers: { "content-type": "application/json" } })
+      ? new Response(JSON.stringify({ defaults: { mode: "download", startMode: "from", graceDays: 7, selection: { addonKeys: ["second"], sourceStrategy: "priority", audioLanguage: "en", audioMode: "preferred", subtitleMode: "off" } } }), { status: 200, headers: { "content-type": "application/json" } })
       : new Response(JSON.stringify([{ key: "first", name: "First" }, { key: "second", name: "Second" }]), { status: 200, headers: { "content-type": "application/json" } }));
     await act(async () => { root.render(<SeriesDownloadDialog type="series" label="Show" title="Show" libraries={[]} addons={[]} episodes={[{ id: "tt1:1:1", season: 1, episode: 1 }]} audioLanguage="en" subtitleLanguage="en" languages={[{ code: "en", name: "English" }]} follow={{ create: { metaId: "tt1", name: "Show" }, onFollowed: () => undefined }} onClose={() => undefined}/>); });
     await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); });
     expect(host.querySelector<HTMLInputElement>('input[name="follow-mode"][value="download"]')!.checked).toBe(true);
     expect(host.querySelector<HTMLInputElement>('input[name="follow-start"][value="from"]')!.checked).toBe(true);
     expect(host.querySelector<HTMLInputElement>('input[name="source-strategy"][value="priority"]')!.checked).toBe(true);
+    const grace = [...host.querySelectorAll("select")].find((select) => [...select.options].some((option) => option.value === "7"))!;
+    expect(grace.value).toBe("7");
     const sources = [...host.querySelectorAll<HTMLElement>(".bulk-sources label")];
     expect(sources.find((label) => label.textContent?.includes("Second"))!.querySelector("input")!.checked).toBe(true);
     expect(sources.find((label) => label.textContent?.includes("First"))!.querySelector("input")!.checked).toBe(false);

@@ -42,6 +42,8 @@ export interface FollowDefaults {
   mode: "notify" | "download";
   /** "from" is remembered as a mode only, never an episode. */
   startMode?: "new" | "from";
+  /** Days after release during which only the preferred audio is accepted. */
+  graceDays?: number;
   selection?: {
     addonKeys: string[];
     sourceStrategy: "largest" | "priority";

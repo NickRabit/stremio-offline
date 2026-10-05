@@ -222,6 +222,38 @@ test("an automatic rule stores an explicit, concrete target", async () => {
   } finally { await h.close(); }
 });
 
+test("an automatic rule validates the preferred-audio window", async () => {
+  const h = await mount();
+  try {
+    const follow = await (await api(h.base, "/api/follows", { method: "POST", as: "A", body: { type: "series", id: "tt1", name: "Show" } })).json() as { id: string };
+    const body = (graceDays: unknown) => ({ autoDownload: { startMode: "new", graceDays, selection: { addonKeys: ["stream-addon"], audioLanguage: "en" } } });
+    for (const bad of [-1, 31, 2.5, "later"]) {
+      const response = await api(h.base, `/api/follows/${follow.id}`, { method: "PATCH", as: "A", body: body(bad) });
+      assert.equal(response.status, 400, String(bad));
+      assert.equal(await keyOf(response), "err.followInvalid");
+    }
+    const stored = await api(h.base, `/api/follows/${follow.id}`, { method: "PATCH", as: "A", body: body(7) });
+    assert.equal(stored.status, 200);
+    assert.equal(((await stored.json()) as { autoDownload?: { graceDays?: number } }).autoDownload?.graceDays, 7);
+    const off = await api(h.base, `/api/follows/${follow.id}`, { method: "PATCH", as: "A", body: body(0) });
+    assert.equal(off.status, 200);
+    assert.equal(((await off.json()) as { autoDownload?: { graceDays?: number } }).autoDownload?.graceDays, undefined, "zero is stored as no waiting at all");
+  } finally { await h.close(); }
+});
+
+test("the follow defaults remember the preferred-audio window", async () => {
+  const h = await mount();
+  try {
+    const put = await api(h.base, "/api/follows/defaults", { method: "PUT", as: "A", body: { mode: "download", graceDays: 14 } });
+    assert.equal(put.status, 204);
+    const read = await (await api(h.base, "/api/follows/defaults", { as: "A" })).json() as { defaults: { graceDays?: number } };
+    assert.equal(read.defaults.graceDays, 14);
+    const bad = await api(h.base, "/api/follows/defaults", { method: "PUT", as: "A", body: { mode: "download", graceDays: 40 } });
+    assert.equal(bad.status, 400);
+    assert.equal(await keyOf(bad), "err.followInvalid");
+  } finally { await h.close(); }
+});
+
 test("another account's follow answers 404 on every new route", async () => {
   const h = await mount();
   try {

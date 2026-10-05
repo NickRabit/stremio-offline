@@ -46,7 +46,7 @@ interface FollowView {
   latestEpisode?: FollowEpisodeView;
   autoDownload?: FollowAutoDownload;
   downloads: FollowDownloads;
-  movie?: { released?: string; releaseKind?: FollowEpisode["releaseKind"]; theatricalAt?: string; dateUncertain?: boolean; state?: string; reasonKey?: string; nextAttemptAt?: string };
+  movie?: { released?: string; releaseKind?: FollowEpisode["releaseKind"]; theatricalAt?: string; dateUncertain?: boolean; state?: string; reasonKey?: string; nextAttemptAt?: string; graceUntil?: string };
 }
 
 const episodeView = (episode: FollowEpisode): FollowEpisodeView => ({
@@ -110,7 +110,7 @@ const movieView = (episode: FollowEpisode) => ({
   ...(episode.releaseKind ? { releaseKind: episode.releaseKind } : {}),
   ...(episode.theatricalAt ? { theatricalAt: episode.theatricalAt } : {}),
   ...(episode.dateUncertain ? { dateUncertain: true } : {}),
-  ...(episode.download ? { state: episode.download.state, ...(episode.download.reasonKey ? { reasonKey: episode.download.reasonKey } : {}), ...(episode.download.nextAttemptAt ? { nextAttemptAt: episode.download.nextAttemptAt } : {}) } : {}),
+  ...(episode.download ? { state: episode.download.state, ...(episode.download.reasonKey ? { reasonKey: episode.download.reasonKey } : {}), ...(episode.download.nextAttemptAt ? { nextAttemptAt: episode.download.nextAttemptAt } : {}), ...(episode.download.graceUntil ? { graceUntil: episode.download.graceUntil } : {}) } : {}),
 });
 
 /** The pinned destination a follow stores. An explicit choice is already concrete; a rule
@@ -283,12 +283,18 @@ export function registerFollowRoutes(app: express.Application, deps: FollowDeps)
             throw new AppError("The followed series is missing a type, an id or a name.", "err.followInvalid");
           }
         }
+        let graceDays: number | undefined;
+        if (item.graceDays !== undefined && item.graceDays !== null) {
+          graceDays = Number(item.graceDays);
+          if (!Number.isInteger(graceDays) || graceDays < 0 || graceDays > 30) throw new AppError("The followed series is missing a type, an id or a name.", "err.followInvalid");
+        }
         const selection = await parseSelection(req, { selection: item.selection, target: item.target, metaType: follow.type, parentId: follow.metaId });
         const targetSettings = pinnedTarget(selection, store.libraries(), store.settings(), follow.type === "movie" ? "movie" : "series");
         const value: Omit<FollowAutoDownload, "enabledAt" | "blockedKey"> = {
           startMode,
           ...(startSeason != null ? { startSeason } : {}),
           ...(startEpisode != null ? { startEpisode } : {}),
+          ...(graceDays ? { graceDays } : {}),
           selection: { ...selection, targetSettings },
         };
         await follows.setAutoDownload(follow.id, owner.id, value);
