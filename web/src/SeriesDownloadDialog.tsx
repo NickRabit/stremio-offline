@@ -309,16 +309,6 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
           </div>
           <p className="identify-hint">{t("follow.graceHint")}</p></>}
         </section>
-        {follow && downloading && !isMovie && canRetain && <section className="bulk-section">
-          <div className="bulk-section-head"><Trash2/><div><h3>{t("follow.retentionHeading")}</h3></div></div>
-          <div className="bulk-language-grid">
-            <label><select aria-label={t("follow.retentionHeading")} value={retentionDays} onChange={(event) => setRetentionDays(Number(event.target.value))}>
-              <option value={0}>{t("follow.retentionKeep")}</option>
-              {[1, 7, 30].map((days) => <option key={days} value={days}>{t("follow.retentionAfter", { count: days })}</option>)}
-            </select></label>
-          </div>
-          <p className="identify-hint">{t("follow.retentionHint")}</p>
-        </section>}
         <section className="bulk-section">
           <div className="bulk-section-head"><Subtitles/><div><h3>{t("bulk.subtitleSettings")}</h3><p>{t("bulk.subtitleSettingsHint")}</p></div></div>
           <div className="bulk-language-grid bulk-subtitle-grid">
@@ -332,6 +322,16 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
           <div className="bulk-section-head"><FolderOpen/><div><h3>{t("saveTarget.where")}</h3><p>{t("saveTarget.whereHint")}</p></div></div>
           <SaveTargetFields kind={isMovie ? "movie" : "series"} title={title} libraries={libraries} rule={rule} value={target} onChange={setTarget}/>
         </section>
+        {follow && downloading && !isMovie && canRetain && <section className="bulk-section">
+          <div className="bulk-section-head"><Trash2/><div><h3>{t("follow.retentionHeading")}</h3></div></div>
+          <div className="bulk-language-grid">
+            <label><select aria-label={t("follow.retentionHeading")} value={retentionDays} onChange={(event) => setRetentionDays(Number(event.target.value))}>
+              <option value={0}>{t("follow.retentionKeep")}</option>
+              {[1, 7, 30].map((days) => <option key={days} value={days}>{t("follow.retentionAfter", { count: days })}</option>)}
+            </select></label>
+          </div>
+          <p className="identify-hint">{t("follow.retentionHint")}</p>
+        </section>}
         </>}
         {error && <p className="login-error" role="alert">{error}</p>}
       </div>
