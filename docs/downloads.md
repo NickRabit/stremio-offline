@@ -127,6 +127,9 @@ under **New episodes** in the Library. Everything you follow lives on the
   coloured by state: upcoming, released, queued, waiting for a source,
   downloaded, needing attention, skipped. Choosing a day lists its releases.
 - **Activity** -- what automatic downloads did lately, with skip and retry.
+- **Calendar feed** -- the Calendar tab can create a private `.ics` link to
+  subscribe to from a phone or desktop calendar. Anyone with the link sees what
+  you follow, so it can be rotated or revoked there at any time.
 
 Release dates come from the catalogue, corrected by TMDB when a key is set.
 A catalogue tends to give every unaired episode of a new season the season's
@@ -143,6 +146,17 @@ start with episodes released from now on, or from a chosen episode, with a
 count of what would download straight away. The library is pinned when you
 save, so a later change to an addon's rule does not move the title.
 
+- **Start**: episodes released from now on, from a chosen episode, or **N
+  episodes ahead of where you are watching** -- the next N episodes after the
+  one you last finished are kept downloaded (older seasons included) and the
+  window slides as you watch.
+- **Wait for the preferred audio**: for up to 3, 7 or 14 days after release
+  only a source with the preferred audio is taken; when the window closes the
+  episode is tried again with the fallback language too.
+- **After watching** (administrators only, off by default): delete the files
+  the follow downloaded 1, 7 or 30 days after you watched past them. It never
+  deletes anything else, waits while a file is playing, goes through the same
+  queue as library operations, and a deleted episode is never queued again.
 - Each episode is queued once. At most 20 are admitted per series per pass and
   20 wait across all follows, so a new season drains gradually.
 - An episode with no matching source yet waits and is retried: after an hour,

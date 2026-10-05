@@ -19,6 +19,8 @@ interface FollowingPageProps {
   onChanged: (id: string, follow: FollowView | null) => void;
   onOpenSeries: (item: { type: string; id: string; name: string; poster?: string }) => void;
   onNotify: (text: string) => void;
+  /** Only an administrator may delete library files, so only they see retention. */
+  canRetain?: boolean;
 }
 
 const TABS = ["overview", "calendar", "activity"] as const;
@@ -50,7 +52,7 @@ const LEGEND: CalendarEpisodeState[] = ["upcoming", "released", "queued", "waiti
 
 const DAY_MS = 24 * 60 * 60_000;
 
-export function FollowingPage({ follows, languages, libraries, addons, audioLanguage, subtitleLanguage, onChanged, onOpenSeries, onNotify }: FollowingPageProps) {
+export function FollowingPage({ follows, canRetain = false, languages, libraries, addons, audioLanguage, subtitleLanguage, onChanged, onOpenSeries, onNotify }: FollowingPageProps) {
   useI18n();
   const [tab, setTab] = useState<Tab>("overview");
   const [openId, setOpenId] = useState<string | null>(null);
@@ -80,7 +82,7 @@ export function FollowingPage({ follows, languages, libraries, addons, audioLang
       {tab === "calendar" && <CalendarTab onOpenSeries={onOpenSeries} onNotify={onNotify}/>}
       {tab === "activity" && <ActivityTab onNotify={onNotify}/>}
     </div>
-    {open && <FollowDialog follow={open} languages={languages} libraries={libraries} addons={addons}
+    {open && <FollowDialog follow={open} canRetain={canRetain} languages={languages} libraries={libraries} addons={addons}
       audioLanguage={audioLanguage} subtitleLanguage={subtitleLanguage}
       onChanged={(updated) => onChanged(open.id, updated)} onClose={() => setOpenId(null)} onNotify={onNotify}/>}
   </section>;
