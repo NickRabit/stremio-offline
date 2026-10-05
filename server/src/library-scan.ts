@@ -1,7 +1,8 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { renameWithRetry } from "./fs-retry.js";
 import { log } from "./logger.js";
+import { preserveDamaged, readStateFile } from "./state-file.js";
 import {
   autoAccept, cacheFieldsFromMeta, episodesFromMeta, knownTitleForUnit, lookupSkipped, needsRefresh, pickSuggestion, scanMiss,
   scannedRecently, scanSkipReason, scoreHit, viewMeta, yearFromMeta, MATCH_RULE_VERSION, needsReevaluation, parseUnit,
@@ -124,6 +125,8 @@ export interface LibraryScanOpts {
   onCompleted?: () => void | Promise<void>;
   gapMs?: number;
   wakeMs?: number;
+  /** Copies a damaged state file aside; tests replace it to make the copy fail. */
+  preserveDamaged?: (file: string, raw: string) => Promise<string>;
 }
 
 const idle = (): ScanState => ({
@@ -192,6 +195,9 @@ export class LibraryScan {
   private readonly wakeMs: number;
   private readonly metaTtlMs: number;
   private saveChain: Promise<void> = Promise.resolve();
+  /** The state file holds bytes that could not be read or copied aside: the scan runs, but
+   *  never writes over them. */
+  private stateProtected = false;
   private pumpScheduled = false;
   private cancelled = false;
   private readonly pathExists: (relative: string) => Promise<boolean>;
@@ -216,12 +222,25 @@ export class LibraryScan {
 
   async load() {
     await mkdir(path.dirname(this.stateFile), { recursive: true });
-    try {
-      const loaded = JSON.parse(await readFile(this.stateFile, "utf8")) as ScanState;
-      if (loaded && typeof loaded === "object" && Array.isArray(loaded.remaining)) this.state = { ...idle(), ...loaded };
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        log("ERROR", "The library scan state was unreadable, starting idle", { reason: error instanceof Error ? error.message : String(error) });
+    const state = await readStateFile(this.stateFile);
+    if (state.kind === "unreadable") {
+      log("ERROR", "The library scan state could not be read, starting idle", { file: this.stateFile, reason: state.error instanceof Error ? state.error.message : String(state.error) });
+      this.stateProtected = true;
+      this.state = idle();
+    } else if (state.kind === "read") {
+      let loaded: unknown = undefined;
+      try { loaded = JSON.parse(state.raw); } catch { loaded = undefined; }
+      const shaped = loaded !== null && typeof loaded === "object" && Array.isArray((loaded as ScanState).remaining);
+      if (shaped) {
+        this.state = { ...idle(), ...(loaded as ScanState) };
+      } else {
+        try {
+          const preserved = await (this.opts.preserveDamaged ?? preserveDamaged)(this.stateFile, state.raw);
+          log("ERROR", "The library scan state was damaged, it was copied aside and starts idle", { file: path.basename(preserved) });
+        } catch (error) {
+          log("ERROR", "The damaged library scan state could not be copied aside, starting idle", { file: this.stateFile, reason: error instanceof Error ? error.message : String(error) });
+          this.stateProtected = true;
+        }
         this.state = idle();
       }
     }
@@ -822,6 +841,7 @@ export class LibraryScan {
 
   private save() {
     this.state.updatedAt = nowIso();
+    if (this.stateProtected) return this.saveChain;
     const snapshot = this.snapshot();
     this.saveChain = this.saveChain.then(async () => {
       await mkdir(path.dirname(this.stateFile), { recursive: true });

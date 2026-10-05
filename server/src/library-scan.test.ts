@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -1110,5 +1110,31 @@ test("a folder whose film is named differently is searched by the film's own nam
     assert.equal(h.store.meta["Sherlock Holomes"]?.id, "tt-sherlock",
       "the folder misspells the name the file carries, so the film binds");
     assert.equal(h.store.suggestions["Sherlock Holomes"], undefined);
+  } finally { await h.close(); }
+});
+
+test("a malformed scan state is copied aside and starts idle", async () => {
+  const h = await harness();
+  try {
+    const file = path.join(h.dataDir, "library-scan.json");
+    await writeFile(file, "{broken");
+    await h.scan.load();
+    assert.equal(h.scan.snapshot().status, "idle", "a state that cannot be parsed starts idle");
+    const damaged = (await readdir(h.dataDir)).filter((name) => name.startsWith("library-scan.json.damaged-"));
+    assert.equal(damaged.length, 1, "the original bytes are copied aside");
+    assert.equal(await readFile(path.join(h.dataDir, damaged[0]!), "utf8"), "{broken");
+  } finally { await h.close(); }
+});
+
+test("a damaged scan state that cannot be copied aside is never written over", async () => {
+  const h = await harness({ preserveDamaged: async () => { throw Object.assign(new Error("read-only"), { code: "EROFS" }); } });
+  try {
+    const file = path.join(h.dataDir, "library-scan.json");
+    await writeFile(file, "{broken");
+    await h.scan.load();
+    await h.scan.start();
+    await waitFor(() => h.scan.snapshot().status === "completed");
+    await h.scan.stop();
+    assert.equal(await readFile(file, "utf8"), "{broken", "the only copy of the bytes is still there");
   } finally { await h.close(); }
 });

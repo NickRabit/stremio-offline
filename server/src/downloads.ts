@@ -1,7 +1,7 @@
 import { AppError, messageKeyOf } from "./errors.js";
 import { spawn } from "node:child_process";
 import { createWriteStream as fsCreateWriteStream } from "node:fs";
-import { mkdir, open, readFile, rename, stat, statfs, unlink, writeFile, type FileHandle } from "node:fs/promises";
+import { mkdir, open, rename, stat, statfs, unlink, writeFile, type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -29,6 +29,7 @@ import {
   planSegments, segmentCount, segmentedBytes, segmentSize, usableSegments, type Segment,
 } from "./download-segments.js";
 import { readMediaText } from "./media-playlist.js";
+import { preserveDamaged, readStateFile } from "./state-file.js";
 
 export type { QueueHalt };
 export type DownloadStatus = "queued" | "waiting" | "checking" | "downloading" | "paused" | "completed" | "failed";
@@ -191,6 +192,8 @@ export interface QueueHooks {
   libraryRetryMs?: number;
   freeSpace?: (dir: string) => Promise<{ freeBytes?: number; totalBytes?: number }>;
   createWriteStream?: (file: string, options: { flags: string }) => NodeJS.WritableStream;
+  /** Writes the queue's own state file; tests use it to fail one particular write. */
+  writeState?: (file: string, data: string) => Promise<void>;
   stallInitialMs?: number;
   stallTransferMs?: number;
   spaceCheckMs?: number;
@@ -289,6 +292,16 @@ export class DownloadQueue {
   private retryTimer?: NodeJS.Timeout;
   private spaceWatch?: NodeJS.Timeout;
   private saveChain: Promise<void> = Promise.resolve();
+  /** Set when the state file could not be read: the queue refuses new work rather than
+   *  overwriting a file the owner may still be able to fix. */
+  private unreadable = false;
+  /** Admissions run one after another, so two clicks cannot both pass a duplicate check. */
+  private admission: Promise<unknown> = Promise.resolve();
+  /** Targets chosen but not yet covered by the job list, so a name is never handed out twice. */
+  private targetsInFlight = new Set<string>();
+  /** Jobs pushed but not yet written: the pump leaves them alone, so a job whose write fails
+   *  is taken back out before anything started transferring it. */
+  private admitting = new Set<string>();
   private resolver?: StreamResolver;
   private halt?: QueueHalt;
   private readonly stateFile: string;
@@ -302,6 +315,7 @@ export class DownloadQueue {
   private readonly now: () => number;
   private readonly freeSpace: (dir: string) => Promise<{ freeBytes?: number; totalBytes?: number }>;
   private readonly createWriteStream: (file: string, options: { flags: string }) => NodeJS.WritableStream;
+  private readonly writeState: (file: string, data: string) => Promise<void>;
   private readonly stallInitialMs: number;
   private readonly stallTransferMs: number;
   private readonly spaceCheckMs: number;
@@ -341,6 +355,7 @@ export class DownloadQueue {
     this.now = hooks.now ?? Date.now;
     this.freeSpace = hooks.freeSpace ?? volumeSpace;
     this.createWriteStream = hooks.createWriteStream ?? fsCreateWriteStream;
+    this.writeState = hooks.writeState ?? ((file, data) => writeFile(file, data, { mode: 0o600 }));
     this.stallInitialMs = hooks.stallInitialMs ?? 15_000;
     this.stallTransferMs = hooks.stallTransferMs ?? 30_000;
     this.spaceCheckMs = hooks.spaceCheckMs ?? 30_000;
@@ -384,15 +399,31 @@ export class DownloadQueue {
   async load() {
     await mkdir(path.dirname(this.stateFile), { recursive: true });
     await mkdir(this.downloadDir, { recursive: true });
-    try {
-      const parsed: unknown = JSON.parse(await readFile(this.stateFile, "utf8"));
-      if (!Array.isArray(parsed)) throw new Error("Queue state is not a list.");
-      this.jobs = parsed as DownloadJob[];
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
-        log("ERROR", "The queue state was unreadable, starting empty", { reason: e instanceof Error ? e.message : String(e) });
-        await rename(this.stateFile, `${this.stateFile}.bak`).catch(() => undefined);
-        this.jobs = [];
+    const state = await readStateFile(this.stateFile);
+    if (state.kind === "unreadable") {
+      this.unreadable = true;
+      log("ERROR", "The queue state could not be read, it is left as it is", { file: this.stateFile, reason: state.error instanceof Error ? state.error.message : String(state.error) });
+      return;
+    }
+    if (state.kind === "read") {
+      let parsed: unknown = undefined;
+      let isList = false;
+      try {
+        parsed = JSON.parse(state.raw);
+        isList = Array.isArray(parsed);
+      } catch { isList = false; }
+      if (isList) {
+        this.jobs = parsed as DownloadJob[];
+      } else {
+        try {
+          const preserved = await preserveDamaged(this.stateFile, state.raw);
+          log("ERROR", "The queue state was damaged, it was copied aside and the queue starts empty", { file: path.basename(preserved) });
+          this.jobs = [];
+        } catch (error) {
+          this.unreadable = true;
+          log("ERROR", "The queue state could not be read, it is left as it is", { file: this.stateFile, reason: error instanceof Error ? error.message : String(error) });
+          return;
+        }
       }
     }
     for (const job of this.jobs) {
@@ -464,6 +495,9 @@ export class DownloadQueue {
     const extension = streamExtension(job.stream);
     const { directory, base } = targetPath(job.media, job.title, extension, job.targetSettings ?? defaultDownloadSettings().movie);
     job.target = await this.uniqueTarget(library, directory, base, extension);
+    // The job list covers this name once the job is in it; a name chosen for a job that is
+    // still being admitted stays reserved until that admission releases it.
+    if (this.jobs.includes(job)) this.targetsInFlight.delete(job.target);
   }
 
   private pauseForLibrary(job: DownloadJob, error: LibraryUnavailableError) {
@@ -587,6 +621,13 @@ export class DownloadQueue {
   }
 
   async add(title: string, stream: StreamItem, media?: MediaInfo, targetSettings: DownloadTargetSettings = defaultDownloadSettings().movie, ownerUserId?: string) {
+    if (this.unreadable) throw new AppError("The download queue file could not be read.", "err.queueUnreadable", 503);
+    return this.admit(() => this.admitDirect(title, stream, media, targetSettings, ownerUserId));
+  }
+
+  /** The body of `add`, run under the admission lock so two clicks cannot both pass the
+   *  duplicate check or the free-name search. A debrid source is delegated as it always was. */
+  private async admitDirect(title: string, stream: StreamItem, media: MediaInfo | undefined, targetSettings: DownloadTargetSettings, ownerUserId?: string) {
     if (!stream.url && stream.infoHash) return this.addDebrid(title, stream, media, targetSettings, ownerUserId);
     if (!stream.url) throw new AppError("Only a direct HTTP stream can be downloaded.", "err.downloadNeedsHttp");
     // Without this check a double click on Download yields the same film twice, because
@@ -609,18 +650,22 @@ export class DownloadQueue {
     const now = new Date().toISOString();
     const job: DownloadJob = { id: crypto.randomUUID(), ownerUserId, title, stream, media, status: "queued", target: "", received: 0, speed: 0, targetSettings, createdAt: now, updatedAt: now };
     try {
-      const library = await this.resolveLibrary(kind, targetSettings);
-      if (!library) throw new NoLibraryForKindError(kind);
-      await this.ensureTarget(job, library);
-      job.libraryId = library.id;
-    } catch (error) {
-      if (!(error instanceof LibraryUnavailableError)) throw error;
-      this.pauseForLibrary(job, error);
+      try {
+        const library = await this.resolveLibrary(kind, targetSettings);
+        if (!library) throw new NoLibraryForKindError(kind);
+        await this.ensureTarget(job, library);
+        job.libraryId = library.id;
+      } catch (error) {
+        if (!(error instanceof LibraryUnavailableError)) throw error;
+        this.pauseForLibrary(job, error);
+      }
+      await this.admitJob(job);
+      if (job.status === "paused") return this.publicJob(job);
+      this.pump();
+      return this.publicJob(job);
+    } finally {
+      this.targetsInFlight.delete(job.target);
     }
-    this.jobs.push(job); await this.save();
-    if (job.status === "paused") return this.publicJob(job);
-    this.pump();
-    return this.publicJob(job);
   }
 
   private sameTorrent(left: StreamItem | undefined, right: StreamItem) {
@@ -637,28 +682,37 @@ export class DownloadQueue {
       debrid: {}, targetSettings, createdAt: now, updatedAt: now,
     };
     try {
-      const kind = media?.kind === "episode" ? "series" : "movie";
-      const library = await this.resolveLibrary(kind, targetSettings);
-      if (!library) throw new NoLibraryForKindError(kind);
-      await this.ensureTarget(job, library);
-      job.libraryId = library.id;
-    } catch (error) {
-      if (!(error instanceof LibraryUnavailableError)) throw error;
-      this.pauseForLibrary(job, error);
+      try {
+        const kind = media?.kind === "episode" ? "series" : "movie";
+        const library = await this.resolveLibrary(kind, targetSettings);
+        if (!library) throw new NoLibraryForKindError(kind);
+        await this.ensureTarget(job, library);
+        job.libraryId = library.id;
+      } catch (error) {
+        if (!(error instanceof LibraryUnavailableError)) throw error;
+        this.pauseForLibrary(job, error);
+      }
+      await this.admitJob(job);
+      if (job.status === "paused") return this.publicJob(job);
+      log("INFO", "Waiting for Real-Debrid", { id: job.id, title: job.title, infoHash: stream.infoHash });
+      this.scheduleDebrid(job.id);
+      return this.publicJob(job);
+    } finally {
+      this.targetsInFlight.delete(job.target);
     }
-    this.jobs.push(job); await this.save();
-    if (job.status === "paused") return this.publicJob(job);
-    log("INFO", "Waiting for Real-Debrid", { id: job.id, title: job.title, infoHash: stream.infoHash });
-    this.scheduleDebrid(job.id);
-    return this.publicJob(job);
   }
 
   /** A lazy job: both target and source are filled in when the download starts. A duplicate episode is not added. */
   async addPending(title: string, source: { type: string; videoId: string; selection?: DownloadSelection }, media?: MediaInfo, ownerUserId?: string, follow?: DownloadJob["follow"]) {
-    if (this.jobs.some((job) => job.source?.videoId === source.videoId && job.source?.type === source.type && job.status !== "completed" && job.status !== "failed" && this.ownedBy(job, ownerUserId))) return undefined;
-    const now = new Date().toISOString();
-    const job: DownloadJob = { id: crypto.randomUUID(), ownerUserId, title, media, source: { ...source, tried: [] }, ...(follow ? { follow } : {}), status: "queued", target: "", received: 0, speed: 0, createdAt: now, updatedAt: now };
-    this.jobs.push(job); await this.save(); this.pump(); return this.publicJob(job);
+    if (this.unreadable) throw new AppError("The download queue file could not be read.", "err.queueUnreadable", 503);
+    return this.admit(async () => {
+      if (this.jobs.some((job) => job.source?.videoId === source.videoId && job.source?.type === source.type && job.status !== "completed" && job.status !== "failed" && this.ownedBy(job, ownerUserId))) return undefined;
+      const now = new Date().toISOString();
+      const job: DownloadJob = { id: crypto.randomUUID(), ownerUserId, title, media, source: { ...source, tried: [] }, ...(follow ? { follow } : {}), status: "queued", target: "", received: 0, speed: 0, createdAt: now, updatedAt: now };
+      await this.admitJob(job);
+      this.pump();
+      return this.publicJob(job);
+    });
   }
 
   /** The caller's own unfinished lazy job for a source, or nothing. A job from another account
@@ -671,10 +725,14 @@ export class DownloadQueue {
 
   /** Ties a job the owner queued by hand to the follow that now wants the same episode. */
   async adopt(id: string, follow: NonNullable<DownloadJob["follow"]>) {
+    if (this.unreadable) throw new AppError("The download queue file could not be read.", "err.queueUnreadable", 503);
     const job = this.jobs.find((item) => item.id === id);
     if (!job) return;
-    job.follow = follow;
-    await this.save();
+    const previous = job.follow;
+    await this.persist({
+      apply: () => { job.follow = follow; },
+      revert: () => { if (previous === undefined) delete job.follow; else job.follow = previous; },
+    });
   }
 
   /** The public shape of the jobs that carry a follow, for reconciliation. */
@@ -696,8 +754,10 @@ export class DownloadQueue {
       const relative = joinTarget(directory, fitTargetName(root, directory, base, extension, copy), extension, copy);
       const target = library ? libraryPath(library.id, relative) : relative;
       if (this.jobs.some((job) => job.target === target)) continue;
+      if (this.targetsInFlight.has(target)) continue;
+      this.targetsInFlight.add(target);
       const full = path.join(root, relative);
-      if (await exists(full) || await exists(`${full}.part`)) continue;
+      if (await exists(full) || await exists(`${full}.part`)) { this.targetsInFlight.delete(target); continue; }
       return target;
     }
     throw new AppError("Could not find a free file name.", "err.noFreeName");
@@ -922,9 +982,16 @@ export class DownloadQueue {
     if (index < 0) throw new AppError("The item was not found.", "err.itemNotFound");
     // A guard that throws refuses the removal: the row is left as it was.
     await this.beforeRemove?.(this.jobs[index], reason);
-    const at = this.jobs.findIndex((job) => job.id === id);
+    const job = this.jobs.find((item) => item.id === id);
+    if (!job) return;
+    // The row leaves the file before its partial leaves the disk: a removal whose write fails
+    // keeps both, rather than coming back after a restart with nothing to resume from.
+    let at = -1;
+    await this.persist({
+      apply: () => { at = this.jobs.indexOf(job); if (at >= 0) this.jobs.splice(at, 1); },
+      revert: () => { if (at >= 0 && !this.jobs.includes(job)) this.jobs.splice(Math.min(at, this.jobs.length), 0, job); },
+    });
     if (at < 0) return;
-    const [job] = this.jobs.splice(at, 1);
     this.active.get(id)?.abort();
     if (job.status !== "completed" && job.target) {
       const partial = this.jobPath(job);
@@ -932,7 +999,6 @@ export class DownloadQueue {
       const subtitleFiles = this.subtitleFiles(job);
       if (subtitleFiles) await unlink(subtitleFiles.partial).catch(() => undefined);
     }
-    await this.save();
     this.pump();
   }
 
@@ -954,8 +1020,11 @@ export class DownloadQueue {
   async clearCompleted() {
     const completed = this.jobs.filter((job) => job.status === "completed");
     await this.beforeClearCompleted?.(completed);
-    this.jobs = this.jobs.filter((job) => job.status !== "completed");
-    await this.save();
+    let before: DownloadJob[] = [];
+    await this.persist({
+      apply: () => { before = this.jobs; this.jobs = this.jobs.filter((job) => !completed.includes(job)); },
+      revert: () => { this.jobs = before.filter((job) => completed.includes(job) || this.jobs.includes(job)); },
+    });
   }
   changed() { this.pump(); }
   /** The key travels with the text so the interface can render a stored failure in
@@ -971,14 +1040,65 @@ export class DownloadQueue {
     return { ...rest, ownerUserId: this.ownerOf(job), pending: !stream && Boolean(source), debridProgress: debrid?.progress, segments: segments?.length };
   }
   /** Saves have to run one after another: concurrent writes share one .tmp and the second
-   *  rename then has nothing to move. A failed state write must not bring the server down either. */
-  private save() {
-    this.saveChain = this.saveChain.then(async () => {
-      const tmp = `${this.stateFile}.tmp`;
-      await writeFile(tmp, JSON.stringify(this.jobs, null, 2), { mode: 0o600 });
-      await renameWithRetry(tmp, this.stateFile);
-    }).catch((error) => { log("ERROR", "The queue state could not be saved", { reason: error instanceof Error ? error.message : String(error) }); });
-    return this.saveChain;
+   *  rename then has nothing to move. Each write reports its own failure, while the chain
+   *  itself swallows it so stop() and later writes carry on. A change handed in is made only
+   *  when this write's turn comes and undone before the next write runs, so no other write
+   *  ever stores a change whose own write failed. */
+  private write(change?: { apply: () => void; revert: () => void }): Promise<void> {
+    const run = this.saveChain.then(async () => {
+      if (this.unreadable) return;
+      change?.apply();
+      try {
+        const tmp = `${this.stateFile}.tmp`;
+        await this.writeState(tmp, JSON.stringify(this.jobs, null, 2));
+        await renameWithRetry(tmp, this.stateFile);
+      } catch (error) {
+        change?.revert();
+        throw error;
+      }
+    });
+    this.saveChain = run.catch(() => undefined);
+    return run;
+  }
+
+  /** A best-effort save: it logs and never rejects, so the many callers that do not wait for
+   *  it keep working and a failed write never brings the server down. */
+  private save(): Promise<void> {
+    return this.write().catch((error) => { log("ERROR", "The queue state could not be saved", { reason: error instanceof Error ? error.message : String(error) }); });
+  }
+
+  /** A save an admission waits on: the change lands with its own write or not at all, and
+   *  the caller hears the failure. */
+  private async persist(change: { apply: () => void; revert: () => void }): Promise<void> {
+    try {
+      await this.write(change);
+    } catch (error) {
+      log("ERROR", "The queue state could not be saved", { reason: error instanceof Error ? error.message : String(error) });
+      throw new AppError("The download queue could not be saved.", "err.queueNotSaved", 503);
+    }
+  }
+
+  /** Runs each admission after the previous one has settled, so two clicks cannot both pass a
+   *  duplicate check or a free-name search. A failure reaches its own caller and does not
+   *  block the next admission. */
+  private admit<T>(work: () => Promise<T>): Promise<T> {
+    const run = this.admission.then(work, work);
+    this.admission = run.catch(() => undefined);
+    return run;
+  }
+
+  /** Adds the job with its own write. A failed write takes it straight back out, so nothing
+   *  is left only in memory, or only on disk, to surprise the next start. */
+  private async admitJob(job: DownloadJob): Promise<void> {
+    this.admitting.add(job.id);
+    try {
+      await this.persist({
+        apply: () => { this.jobs.push(job); },
+        revert: () => { const at = this.jobs.indexOf(job); if (at >= 0) this.jobs.splice(at, 1); },
+      });
+    } finally {
+      this.admitting.delete(job.id);
+    }
   }
   private saveSoon() { if (this.saveTimer) return; this.saveTimer = setTimeout(() => { this.saveTimer = undefined; void this.save(); }, 1500); }
   /** The provider from the source address. Until a source is picked every job shares one
@@ -1086,7 +1206,7 @@ export class DownloadQueue {
         const job = this.jobs.find((item) => {
           const provider = this.provider(item);
           const providerLimit = provider === "?" ? 1 : perProvider;
-          return item.status === "queued" && !this.active.has(item.id) && (item.notBefore ?? 0) <= now && (taken.get(provider) ?? 0) < providerLimit;
+          return item.status === "queued" && !this.active.has(item.id) && !this.admitting.has(item.id) && (item.notBefore ?? 0) <= now && (taken.get(provider) ?? 0) < providerLimit;
         });
         if (!job) break;
         const key = this.provider(job); taken.set(key, (taken.get(key) ?? 0) + 1);

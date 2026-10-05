@@ -155,7 +155,12 @@ export class Revocations {
    *  partial files go with it. Completed files stay in the library. */
   async deleteUser(userId: string): Promise<void> {
     await this.stopUserTransfers(userId);
-    const removed = await this.deps.queue.removeMatching((job) => this.deps.queue.ownerOf(job) === userId);
+    // A queue that cannot save its removal must not keep the account alive either: the jobs
+    // it leaves name an owner who no longer exists, and the queue refuses to run those.
+    const removed = await this.deps.queue.removeMatching((job) => this.deps.queue.ownerOf(job) === userId).catch((error: unknown) => {
+      log("WARN", "The unfinished downloads of a deleted account were not removed", { user: userId, reason: error instanceof Error ? error.message : String(error) });
+      return 0;
+    });
     if (removed) log("INFO", "Unfinished downloads cancelled with the account", { user: userId, jobs: removed });
     // An unreadable follow file must not keep the account alive; its follows name an
     // owner who no longer exists, and the scheduler skips those.

@@ -1042,17 +1042,291 @@ test("a torrent without a token is refused", async () => {
   }
 });
 
-test("a damaged queue file is quarantined and the server still starts", async () => {
+test("a malformed queue file is copied aside and the queue starts empty", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-dl-"));
   const data = path.join(directory, "data");
+  const downloads = path.join(directory, "downloads");
   await mkdir(data, { recursive: true });
   const state = path.join(data, "downloads.json");
-  await writeFile(state, "{not-json");
-  const queue = new DownloadQueue(() => 1, () => 1, data, path.join(directory, "downloads"));
+  const original = "{not-json";
+  await writeFile(state, original);
+  const library = downloadLibrary(downloads);
+  const open = (dir: string) => new DownloadQueue(() => 1, () => 1, dir, downloads, { libraries: () => [library], defaultLibrary: () => library });
+  const queue = open(data);
   try {
     await queue.load();
-    assert.equal(queue.list().length, 0);
-    assert.equal(await readFile(`${state}.bak`, "utf8"), "{not-json");
+    assert.deepEqual(queue.list(), [], "a state that cannot be parsed loads as an empty queue");
+    const damaged = (await readdir(data)).filter((name) => name.startsWith("downloads.json.damaged-"));
+    assert.equal(damaged.length, 1, "the original bytes are copied aside under a unique name");
+    assert.equal(await readFile(path.join(data, damaged[0]!), "utf8"), original);
+    assert.deepEqual(JSON.parse(await readFile(state, "utf8")), [], "the queue file is now a valid empty list");
+
+    // A second malformed file makes a second copy and never touches the first.
+    await writeFile(state, "{still-broken");
+    const second = open(data);
+    try {
+      await second.load();
+      const copies = (await readdir(data)).filter((name) => name.startsWith("downloads.json.damaged-"));
+      assert.equal(copies.length, 2, "a later malformed file is copied aside too");
+      assert.equal(await readFile(path.join(data, damaged[0]!), "utf8"), original, "the first copy keeps its bytes");
+    } finally {
+      await second.stop();
+    }
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("an unreadable queue file blocks new work and is left as it is", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-dl-"));
+  const data = path.join(directory, "data");
+  const downloads = path.join(directory, "downloads");
+  await mkdir(data, { recursive: true });
+  const state = path.join(data, "downloads.json");
+  await mkdir(state);
+  const library = downloadLibrary(downloads);
+  const queue = new DownloadQueue(() => 1, () => 1, data, downloads, { libraries: () => [library], defaultLibrary: () => library });
+  try {
+    await queue.load();
+    assert.deepEqual(queue.list(), []);
+    await assert.rejects(queue.add("Film", { url: "http://example.test/film.mp4" }), (error: AppError) => error.messageKey === "err.queueUnreadable");
+    assert.equal((await stat(state)).isDirectory(), true, "the unreadable path is still the directory it was");
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("two downloads admitted at once get different target files", async () => {
+  const { directory, queue } = await tempQueue();
+  try {
+    const [first, second] = await Promise.all([
+      queue.add("Film", { url: "http://example.test/one.mp4" }),
+      queue.add("Film", { url: "http://example.test/two.mp4" }),
+    ]);
+    assert.equal(queue.list().length, 2, "both clicks land as one job each");
+    assert.notEqual(first.target, second.target, "the two jobs never carry the same name");
+    assert.ok(first.target && second.target);
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a double-click on the same source yields one job and one refusal", async () => {
+  const { directory, queue } = await tempQueue();
+  try {
+    const results = await Promise.allSettled([
+      queue.add("Film", { url: "http://example.test/same.mp4" }),
+      queue.add("Film", { url: "http://example.test/same.mp4" }),
+    ]);
+    const fulfilled = results.filter((result) => result.status === "fulfilled");
+    const rejected = results.filter((result): result is PromiseRejectedResult => result.status === "rejected");
+    assert.equal(fulfilled.length, 1, "exactly one click becomes a job");
+    assert.equal(rejected.length, 1, "the other is refused");
+    assert.equal((rejected[0]!.reason as AppError).messageKey, "err.sourceQueued");
+    assert.equal(queue.list().length, 1, "only one job is in the list");
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("two jobs resuming at once never take the same target name", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-dl-"));
+  const downloadDir = path.join(directory, "downloads");
+  const archiveRoot = path.join(directory, "archive");
+  const archive = { id: "lib_12345678", name: "Archive", type: "movie" as const, root: archiveRoot, enabled: true, order: 0, addedAt: "2026-01-01T00:00:00.000Z", writeArtwork: true };
+  let away = true;
+  const size = 4096;
+  const { server, port } = await listen((_req, res) => {
+    res.writeHead(200, { "content-length": String(size), "content-type": "video/mp4" });
+    void send(res, size).then(() => res.end());
+  });
+  const queue = new DownloadQueue(() => 1, () => 1, path.join(directory, "data"), downloadDir, {
+    stallInitialMs: 5_000, stallTransferMs: 5_000, libraryRetryMs: 60_000,
+    libraries: () => away ? [] : [archive],
+    defaultLibrary: () => archive,
+    libraryState: async (libraryId) => away ? undefined : (libraryId === archive.id ? archive : undefined),
+  });
+  await queue.load();
+  const settings = { subfolder: "", layout: "structured" as const, libraryId: archive.id };
+  try {
+    const first = await queue.add("Film", { url: `http://127.0.0.1:${port}/one.mp4` }, undefined, settings);
+    const second = await queue.add("Film", { url: `http://127.0.0.1:${port}/two.mp4` }, undefined, settings);
+    assert.equal(first.status, "paused");
+    assert.equal(second.status, "paused");
+    assert.equal(first.target, "");
+    assert.equal(second.target, "");
+
+    // The library is back, and both jobs resume in the same turn: the free-name search of one
+    // must see the name the other is about to claim.
+    away = false;
+    await Promise.all([queue.resume(first.id), queue.resume(second.id)]);
+    const [a, b] = queue.list();
+    assert.ok(a!.target && b!.target);
+    assert.notEqual(a!.target, b!.target, "the two names must differ");
+  } finally {
+    await queue.stop();
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("an admission that cannot be persisted is refused and leaves nothing behind", async () => {
+  let failing = false;
+  const { directory, queue } = await tempQueue({
+    writeState: async (file, data) => {
+      if (failing) throw Object.assign(new Error("no space left"), { code: "ENOSPC" });
+      await writeFile(file, data);
+    },
+  });
+  const stored = async () => JSON.parse(await readFile(path.join(directory, "data", "downloads.json"), "utf8")) as Array<{ id: string; follow?: unknown }>;
+  try {
+    failing = true;
+    await assert.rejects(queue.add("Film", { url: "http://127.0.0.1:1/film.mkv" }), (error: AppError) => error.messageKey === "err.queueNotSaved");
+    await assert.rejects(queue.addPending("Ep", { type: "series", videoId: "v1" }), (error: AppError) => error.messageKey === "err.queueNotSaved");
+    assert.deepEqual(queue.list(), [], "a refused admission leaves no job in memory");
+
+    failing = false;
+    const again = await queue.add("Film", { url: "http://127.0.0.1:1/film.mkv" });
+    await queue.pause(again.id);
+    assert.ok((await stored()).some((job) => job.id === again.id), "the job reaches the file once the write can land");
+
+    // A follow that cannot be saved is rolled back to the one the job already had.
+    await queue.adopt(again.id, { followId: "old", episodeKey: "s1e1", intent: "old" });
+    failing = true;
+    await assert.rejects(
+      queue.adopt(again.id, { followId: "new", episodeKey: "s1e1", intent: "new" }),
+      (error: AppError) => error.messageKey === "err.queueNotSaved",
+    );
+    assert.deepEqual(queue.get(again.id)!.follow, { followId: "old", episodeKey: "s1e1", intent: "old" }, "the old follow stays");
+    failing = false;
+    await queue.stop();
+    assert.deepEqual((await stored()).find((job) => job.id === again.id)?.follow, { followId: "old", episodeKey: "s1e1", intent: "old" }, "and the file keeps it too");
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a removal that cannot be saved keeps the row and its partial file", async () => {
+  let failing = false;
+  const { directory, queue, downloads } = await tempQueue({
+    writeState: async (file, data) => {
+      if (failing) throw Object.assign(new Error("no space left"), { code: "ENOSPC" });
+      await writeFile(file, data);
+    },
+  });
+  const stored = async () => JSON.parse(await readFile(path.join(directory, "data", "downloads.json"), "utf8")) as Array<{ id: string }>;
+  try {
+    const job = await queue.add("Film", { url: "http://127.0.0.1:1/film.mkv" });
+    await queue.pause(job.id);
+    const partial = `${queuedFile(downloads, job.target)}.part`;
+    await mkdir(path.dirname(partial), { recursive: true });
+    await writeFile(partial, "half a film");
+
+    failing = true;
+    await assert.rejects(queue.remove(job.id), (error: AppError) => error.messageKey === "err.queueNotSaved");
+    assert.ok(queue.get(job.id), "the row stays in the queue");
+    assert.equal(await readFile(partial, "utf8"), "half a film", "the partial file is still there to resume from");
+
+    failing = false;
+    await queue.remove(job.id);
+    assert.equal(queue.get(job.id), undefined);
+    assert.equal(existsSync(partial), false, "a removal that lands takes the partial file with it");
+    assert.deepEqual(await stored(), []);
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("clearing history that cannot be saved keeps the finished rows", async () => {
+  let failing = false;
+  const size = 128;
+  const { server, port } = await listen((_req, res) => {
+    res.writeHead(200, { "content-length": String(size), "content-type": "video/mp4" });
+    void send(res, size).then(() => res.end());
+  });
+  const { directory, queue } = await tempQueue({
+    writeState: async (file, data) => {
+      if (failing) throw Object.assign(new Error("no space left"), { code: "ENOSPC" });
+      await writeFile(file, data);
+    },
+  });
+  try {
+    const job = await queue.add("Film", { url: `http://127.0.0.1:${port}/film.mp4` });
+    await waitFor(queue, () => queue.get(job.id)?.status === "completed", 30_000);
+    failing = true;
+    await assert.rejects(queue.clearCompleted(), (error: AppError) => error.messageKey === "err.queueNotSaved");
+    assert.equal(queue.get(job.id)?.status, "completed", "the finished row is kept");
+    failing = false;
+    await queue.clearCompleted();
+    assert.deepEqual(queue.list(), []);
+  } finally {
+    await queue.stop();
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a write queued after a failed admission does not store the refused job", async () => {
+  let failOnce = false;
+  let queue!: DownloadQueue;
+  const setup = await tempQueue({
+    writeState: async (file, data) => {
+      if (failOnce) {
+        failOnce = false;
+        // Another mutation queues its own save while this one is failing.
+        void queue.clearCompleted();
+        throw Object.assign(new Error("no space left"), { code: "ENOSPC" });
+      }
+      await writeFile(file, data);
+    },
+  });
+  queue = setup.queue;
+  try {
+    failOnce = true;
+    await assert.rejects(queue.add("Film", { url: "http://127.0.0.1:1/film.mkv" }), (error: AppError) => error.messageKey === "err.queueNotSaved");
+    await queue.stop();
+    const stored = JSON.parse(await readFile(path.join(setup.directory, "data", "downloads.json"), "utf8")) as unknown[];
+    assert.deepEqual(stored, [], "the refused job never reaches the file");
+    assert.deepEqual(queue.list(), []);
+  } finally {
+    await queue.stop();
+    await rm(setup.directory, { recursive: true, force: true });
+  }
+});
+
+test("a write already waiting before an admission does not store the job if the admission fails", async () => {
+  const calls: Array<"hold" | "write" | "fail"> = [];
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const { directory, queue } = await tempQueue({
+    writeState: async (file, data) => {
+      const plan = calls.shift();
+      if (plan === "hold") await held;
+      if (plan === "fail") throw Object.assign(new Error("no space left"), { code: "ENOSPC" });
+      await writeFile(file, data);
+    },
+  });
+  try {
+    const existing = await queue.add("Other", { url: "http://127.0.0.1:1/other.mkv" });
+    await queue.pause(existing.id);
+    // The first save is held on the disk and a second one waits behind it; then the
+    // admission queues its own write, which fails.
+    calls.push("hold", "write", "fail");
+    const first = queue.pause(existing.id);
+    const second = queue.pause(existing.id);
+    const admission = queue.add("Film", { url: "http://127.0.0.1:1/film.mkv" });
+    release();
+    await assert.rejects(admission, (error: AppError) => error.messageKey === "err.queueNotSaved");
+    await Promise.all([first, second]);
+    await queue.stop();
+    const stored = JSON.parse(await readFile(path.join(directory, "data", "downloads.json"), "utf8")) as Array<{ id: string }>;
+    assert.deepEqual(stored.map((job) => job.id), [existing.id], "only the job that was admitted is on disk");
   } finally {
     await queue.stop();
     await rm(directory, { recursive: true, force: true });
@@ -1647,5 +1921,140 @@ test("a lazy torrent job that is waiting resumes polling after a restart", async
   } finally {
     server.close();
     if (directory) await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a file already on disk pushes a job of the same title to (2)", async () => {
+  const { directory, queue, downloads } = await tempQueue();
+  try {
+    // Only the disk holds the name: nothing in the queue does, so the collision is with the file.
+    const taken = queuedFile(downloads, `${LIBRARY_ID}/Disk Film/Disk Film.mkv`);
+    await mkdir(path.dirname(taken), { recursive: true });
+    await writeFile(taken, "");
+    const job = await queue.add("Disk Film", { url: "http://127.0.0.1:1/disk-film.mkv" });
+    await queue.pause(job.id);
+    assert.equal(job.target, `${LIBRARY_ID}/Disk Film/Disk Film (2).mkv`);
+    assert.ok(path.basename(queuedFile(downloads, job.target)).includes("(2)"), "the copy carries the suffix");
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a .part on disk takes the name so the next job gets (2)", async () => {
+  const { directory, queue, downloads } = await tempQueue();
+  try {
+    // An interrupted transfer leaves only the partial behind, and that is enough to keep the name.
+    const partial = queuedFile(downloads, `${LIBRARY_ID}/Part Film/Part Film.mkv`);
+    await mkdir(path.dirname(partial), { recursive: true });
+    await writeFile(`${partial}.part`, "");
+    const job = await queue.add("Part Film", { url: "http://127.0.0.1:1/part-film.mkv" });
+    await queue.pause(job.id);
+    assert.equal(job.target, `${LIBRARY_ID}/Part Film/Part Film (2).mkv`);
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a job already queued takes the name so the next one gets (2)", async () => {
+  const { directory, queue } = await tempQueue();
+  try {
+    const first = await queue.add("Film", { url: "http://127.0.0.1:1/first.mkv" });
+    await queue.pause(first.id);
+    const second = await queue.add("Film", { url: "http://127.0.0.1:1/second.mkv" });
+    await queue.pause(second.id);
+    assert.equal(first.target, `${LIBRARY_ID}/Film/Film.mkv`);
+    assert.equal(second.target, `${LIBRARY_ID}/Film/Film (2).mkv`);
+    assert.notEqual(first.target, second.target);
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("an added job is in downloads.json once add resolves, and so is a pending one", async () => {
+  const { directory, queue } = await tempQueue();
+  try {
+    const direct = await queue.add("Film", { url: "http://127.0.0.1:1/film.mkv" });
+    await queue.pause(direct.id);
+    const pending = await queue.addPending("Show", { type: "series", videoId: "tt1:1:1" });
+    await queue.pause(pending!.id);
+    await queue.stop();
+    const stored = JSON.parse(await readFile(path.join(directory, "data", "downloads.json"), "utf8")) as Array<Record<string, unknown> & { source?: { videoId?: string } }>;
+    const directRow = stored.find((row) => row.id === direct.id)!;
+    assert.ok(directRow, "the direct job is saved");
+    assert.equal(directRow.target, `${LIBRARY_ID}/Film/Film.mkv`);
+    assert.equal(directRow.libraryId, LIBRARY_ID);
+    const pendingRow = stored.find((row) => row.id === pending!.id)!;
+    assert.ok(pendingRow, "the pending job is saved");
+    assert.equal(pendingRow.source?.videoId, "tt1:1:1");
+    assert.equal(pendingRow.target, "");
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("addPending skips the owner's own duplicate", async () => {
+  const { directory, queue } = await tempQueue();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  queue.setResolver(async () => { await gate; return undefined; });
+  try {
+    const first = await queue.addPending("Show", { type: "series", videoId: "tt1:1:1" }, undefined, "u1");
+    const second = await queue.addPending("Show", { type: "series", videoId: "tt1:1:1" }, undefined, "u1");
+    assert.ok(first, "the first job is queued");
+    assert.equal(second, undefined, "the same owner repeating the same source is skipped");
+    assert.equal(queue.list().length, 1, "only one job is kept");
+  } finally {
+    release();
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("adopt writes the follow and it survives a save and a load", async () => {
+  const { directory, queue } = await tempQueue();
+  try {
+    const job = await queue.add("Film", { url: "http://127.0.0.1:1/film.mkv" });
+    await queue.pause(job.id);
+    await queue.adopt(job.id, { followId: "f1", episodeKey: "1:1", intent: "f1:1:1:1" });
+    await queue.stop();
+    const downloads = path.join(directory, "downloads");
+    const reopened = new DownloadQueue(() => 1, () => 1, path.join(directory, "data"), downloads, {
+      libraries: () => [downloadLibrary(downloads)],
+      defaultLibrary: () => downloadLibrary(downloads),
+    });
+    await reopened.load();
+    try {
+      assert.deepEqual(reopened.get(job.id)?.follow, { followId: "f1", episodeKey: "1:1", intent: "f1:1:1:1" });
+    } finally {
+      await reopened.stop();
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a queue file that is valid JSON but not a list is copied aside", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-dl-"));
+  const data = path.join(directory, "data");
+  const downloads = path.join(directory, "downloads");
+  await mkdir(data, { recursive: true });
+  const state = path.join(data, "downloads.json");
+  const original = '{"jobs":[]}';
+  await writeFile(state, original);
+  const library = downloadLibrary(downloads);
+  const queue = new DownloadQueue(() => 1, () => 1, data, downloads, { libraries: () => [library], defaultLibrary: () => library });
+  try {
+    await queue.load();
+    assert.deepEqual(queue.list(), [], "a state that is not a list loads as an empty queue");
+    const damaged = (await readdir(data)).filter((name) => name.startsWith("downloads.json.damaged-"));
+    assert.equal(damaged.length, 1);
+    assert.equal(await readFile(path.join(data, damaged[0]!), "utf8"), original, "the original bytes are copied aside");
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
   }
 });

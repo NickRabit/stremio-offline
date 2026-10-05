@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -134,7 +134,7 @@ test("persistence never trims unfinished jobs", async () => {
   } finally { await cleanup(h.dataDir, queues); }
 });
 
-test("a corrupt state file does not block startup or new work", async () => {
+test("a corrupt state file is copied aside and new work still runs", async () => {
   const h = await harness();
   const queues: LibraryOps[] = [h.queue];
   try {
@@ -143,9 +143,27 @@ test("a corrupt state file does not block startup or new work", async () => {
     const queue = new LibraryOps({ file, execute: async (_operation, item) => { h.seen.push(item); return {}; } });
     queues.push(queue);
     await queue.load();
+    const damaged = (await readdir(h.dataDir)).filter((name) => name.startsWith("corrupt.json.damaged-"));
+    assert.equal(damaged.length, 1, "the original bytes are copied aside");
+    assert.equal(await readFile(path.join(h.dataDir, damaged[0]!), "utf8"), "{broken");
     await queue.enqueue({ op: "delete", items: ["one"] });
     await waitFor(() => queue.snapshot().jobs[0]?.status === "completed");
     assert.deepEqual(h.seen, ["one"]);
+  } finally { await cleanup(h.dataDir, queues); }
+});
+
+test("an unreadable operations file blocks new work and is left as it is", async () => {
+  const h = await harness();
+  const queues: LibraryOps[] = [h.queue];
+  try {
+    const file = path.join(h.dataDir, "unreadable.json");
+    await mkdir(file);
+    const queue = new LibraryOps({ file, retryMs: 10, execute: async () => ({}) });
+    queues.push(queue);
+    await queue.load();
+    assert.deepEqual(queue.snapshot().jobs, []);
+    await assert.rejects(queue.enqueue({ op: "delete", items: ["one"] }), (error: AppError) => error.messageKey === "err.libraryOpsUnreadable");
+    assert.equal((await stat(file)).isDirectory(), true, "the directory is still there");
   } finally { await cleanup(h.dataDir, queues); }
 });
 
@@ -410,4 +428,63 @@ test("activeItems holds a paused job, drops what ended, and names a reroot's lib
     await waitFor(() => queue.snapshot().jobs.find((job) => job.id === reroot.id)?.status === "completed");
     assert.deepEqual(queue.activeItems(), [], "nothing stands once every job has ended");
   } finally { await cleanup(dataDir, queues); }
+});
+
+test("enqueue has written the journal when it resolves", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const h = await harness(async () => { await gate; return {}; });
+  try {
+    const job = await h.queue.enqueue({ op: "delete", items: ["one"] });
+    const saved = JSON.parse(await readFile(path.join(h.dataDir, "library-ops.json"), "utf8"));
+    assert.equal(saved.version, 1);
+    assert.ok(saved.jobs.some((row: { id: string }) => row.id === job.id), "the job is in the journal");
+  } finally {
+    release();
+    await h.close();
+  }
+});
+
+test("an absent journal file loads as an empty queue and is written out", async () => {
+  const h = await harness();
+  const queues = [h.queue];
+  try {
+    const file = path.join(h.dataDir, "fresh.json");
+    const queue = new LibraryOps({ file, retryMs: 10, execute: async () => ({}) });
+    queues.push(queue);
+    await queue.load();
+    assert.deepEqual(JSON.parse(await readFile(file, "utf8")), { version: 1, jobs: [] });
+  } finally { await cleanup(h.dataDir, queues); }
+});
+
+test("a journal with a newer version loads as empty and is left alone", async () => {
+  const h = await harness();
+  const queues = [h.queue];
+  try {
+    const file = path.join(h.dataDir, "future.json");
+    const original = JSON.stringify({ version: 2, jobs: [] });
+    await writeFile(file, original);
+    const queue = new LibraryOps({ file, retryMs: 10, execute: async () => ({}) });
+    queues.push(queue);
+    await queue.load();
+    assert.deepEqual(queue.snapshot().jobs, [], "an unknown version yields an empty queue");
+    assert.equal(await readFile(file, "utf8"), original, "a file a newer version wrote is never overwritten");
+    await assert.rejects(queue.enqueue({ op: "delete", items: ["one"] }), (error: AppError) => error.messageKey === "err.libraryOpsUnreadable");
+  } finally { await cleanup(h.dataDir, queues); }
+});
+
+test("a journal with a version this build never wrote is copied aside, not overwritten silently", async () => {
+  const h = await harness();
+  const queues = [h.queue];
+  try {
+    const file = path.join(h.dataDir, "zero.json");
+    const original = JSON.stringify({ version: 0, jobs: [] });
+    await writeFile(file, original);
+    const queue = new LibraryOps({ file, retryMs: 10, execute: async () => ({}) });
+    queues.push(queue);
+    await queue.load();
+    const damaged = (await readdir(h.dataDir)).filter((name) => name.startsWith("zero.json.damaged-"));
+    assert.equal(damaged.length, 1);
+    assert.equal(await readFile(path.join(h.dataDir, damaged[0]!), "utf8"), original);
+  } finally { await cleanup(h.dataDir, queues); }
 });

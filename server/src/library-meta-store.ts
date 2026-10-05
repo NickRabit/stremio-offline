@@ -5,6 +5,7 @@ import { dropKeyed, pinInherited, remapKeyed, type LibraryEpisodeRecord, type Li
 import { isPathWithin, remapPath } from "./library.js";
 import { libraryPath, parseLibraryPath } from "./libraries.js";
 import { log } from "./logger.js";
+import { preserveDamaged } from "./state-file.js";
 
 /** One library's remembered matches. Keys are library-relative, so the file reads on its
  *  own and stays valid if a library is ever re-identified. */
@@ -63,6 +64,9 @@ export class LibraryMetaStore {
   private timers = new Map<string, NodeJS.Timeout>();
   private dirty = new Set<string>();
   private episodesTouched = false;
+  /** Store names whose file could not be read or preserved: a later write must not put a
+   *  fresh file over bytes the owner may still be able to recover. */
+  private protectedNames = new Set<string>();
   /** Merging a row is what marks the shared file for a write; the map itself is live. */
   private readonly episodeMap = new Proxy(this.episodeRows, {
     set: (target, key, value) => { this.episodesTouched = true; Reflect.set(target, key, value); return true; },
@@ -79,13 +83,24 @@ export class LibraryMetaStore {
     await mkdir(dir, { recursive: true });
     const names = (await readdir(dir).catch(() => [])).filter((name) => name.endsWith(".json"));
     for (const name of names) {
+      const store = name === "episodes.json" ? "episodes" : name.slice(0, -".json".length);
       const raw = await readFile(path.join(dir, name), "utf8").catch(() => undefined);
-      if (raw === undefined) continue;
+      if (raw === undefined) {
+        this.protectedNames.add(store);
+        log("WARN", "Library metadata could not be read", { file: name });
+        continue;
+      }
       try {
         if (name === "episodes.json") this.episodeRows = records<LibraryEpisodeRecord>(JSON.parse(raw));
-        else this.files.set(name.slice(0, -".json".length), parseFile(raw));
+        else this.files.set(store, parseFile(raw));
       } catch (error) {
-        log("WARN", "Library metadata could not be read", { file: name, reason: String(error).slice(0, 120) });
+        try {
+          const preserved = await preserveDamaged(path.join(dir, name), raw);
+          log("WARN", "Damaged library metadata was copied aside", { file: name, preserved: path.basename(preserved), reason: String(error).slice(0, 120) });
+        } catch (preserveError) {
+          this.protectedNames.add(store);
+          log("WARN", "Library metadata could not be read or preserved", { file: name, reason: String(preserveError).slice(0, 120) });
+        }
       }
     }
     this.views = undefined;
@@ -249,6 +264,7 @@ export class LibraryMetaStore {
     if (timer) clearTimeout(timer);
     this.timers.delete(libraryId);
     this.dirty.delete(libraryId);
+    this.protectedNames.delete(libraryId);
     this.files.delete(libraryId);
     this.views = undefined;
     await rm(this.fileFor(libraryId), { force: true });
@@ -274,6 +290,10 @@ export class LibraryMetaStore {
 
   private async write(name: string) {
     if (!this.dirty.delete(name)) return;
+    if (this.protectedNames.has(name)) {
+      log("WARN", "Library metadata was not saved over a file that could not be read", { file: path.basename(this.fileFor(name)) });
+      return;
+    }
     const file = this.fileFor(name);
     const data = JSON.stringify(name === "episodes" ? this.episodeRows : (this.files.get(name) ?? emptyFile()), null, 2);
     try {

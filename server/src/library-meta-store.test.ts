@@ -209,6 +209,43 @@ test("a broken file is skipped instead of failing the boot", async () => {
   });
 });
 
+test("a malformed episodes.json is skipped and the library files still load", async () => {
+  await withStore(async (store, dataDir) => {
+    await seed(dataDir, "lib_a", { "One.mkv": record("tt1") });
+    await writeFile(path.join(dataDir, "library", "episodes.json"), "{broken");
+    await store.load();
+    assert.deepEqual(Object.keys(store.qualifiedMeta()), ["lib_a/One.mkv"]);
+    assert.deepEqual(Object.keys(store.episodes()), [], "the unreadable episode rows are dropped");
+  });
+});
+
+test("a broken library file is copied aside and the next write still lands", async () => {
+  await withStore(async (store, dataDir) => {
+    await seed(dataDir, "lib_a", { "One.mkv": record("tt1") });
+    await writeFile(libraryFile(dataDir, "lib_b"), "{ not json");
+    await store.load();
+    const damaged = (await readdir(path.join(dataDir, "library"))).filter((name) => name.startsWith("lib_b.json.damaged-"));
+    assert.equal(damaged.length, 1, "the original bytes are copied aside");
+    assert.equal(await readFile(path.join(dataDir, "library", damaged[0]!), "utf8"), "{ not json");
+    await store.update("lib_b", (file) => { file.meta["New.mkv"] = record("tt9"); });
+    await store.flush();
+    assert.deepEqual(JSON.parse(await readFile(libraryFile(dataDir, "lib_b"), "utf8")), {
+      version: 1, meta: { "New.mkv": record("tt9") }, suggestions: {},
+    }, "the fresh file is written once the original bytes are preserved");
+  });
+});
+
+test("a library file that cannot be read is never overwritten", async () => {
+  await withStore(async (store, dataDir) => {
+    await mkdir(path.join(dataDir, "library"), { recursive: true });
+    await mkdir(libraryFile(dataDir, "lib_c"));
+    await store.load();
+    await store.update("lib_c", (file) => { file.meta["New.mkv"] = record("tt9"); });
+    await store.flush();
+    assert.equal((await stat(libraryFile(dataDir, "lib_c"))).isDirectory(), true, "the unreadable path is still a directory");
+  });
+});
+
 test("a suggestion written before the review fields existed still loads and round-trips", async () => {
   await withStore(async (store, dataDir) => {
     await seed(dataDir, "lib_a", {}, {
