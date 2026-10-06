@@ -38,12 +38,16 @@ test("win32 waits out every locked code and lands the rename", async () => {
   }
 });
 
+/** A timer may fire a millisecond before Date.now() shows its full delay, so each wait is
+ *  allowed that much; a schedule that did not grow would still miss by tens of milliseconds. */
+const SLACK_MS = 2;
+
 test("the wait between attempts grows", async () => {
   const { calls, renameImpl } = sequence(["EPERM", "EPERM", "EPERM"]);
   const started = Date.now();
   await renameWithRetry("/a", "/b", { platform: "win32", attempts: 4, delayMs: 20, renameImpl });
   assert.equal(calls.length, 4);
-  assert.ok(Date.now() - started >= 20 + 40 + 80, "the waits double: 20, 40, 80");
+  assert.ok(Date.now() - started >= 20 + 40 + 80 - 3 * SLACK_MS, "the waits double: 20, 40, 80");
 });
 
 test("the last attempt throws rather than looping for ever", async () => {
@@ -56,5 +60,5 @@ test("the default schedule is the one the caller of the helper relies on", async
   const { renameImpl } = sequence(Array.from({ length: 5 }, () => "EPERM"));
   const started = Date.now();
   await assert.rejects(renameWithRetry("/a", "/b", { platform: "win32", renameImpl }), { code: "EPERM" });
-  assert.ok(Date.now() - started >= 750, "50 + 100 + 200 + 400 ms");
+  assert.ok(Date.now() - started >= 50 + 100 + 200 + 400 - 4 * SLACK_MS, "50 + 100 + 200 + 400 ms");
 });
