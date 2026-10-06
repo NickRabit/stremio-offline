@@ -326,7 +326,7 @@ Deliver in these boundaries:
    replacement and cleanup; metadata binding after an external rename or a
    vanished file. Explicit preconditions, no swallowed errors, no success shown
    for a failure, and a domain-layer regression test for each case found.
-5. **Backup scope, written down.** `backup.ts` exports settings and addons and
+5. **Backup scope, written down.** *(Instance backup guide shipped as [backup.md](backup.md); the settings import preview below is still open.)* `backup.ts` exports settings and addons and
    remaps library roots; it deliberately carries neither accounts nor media.
    Document which state must be preserved (favourites, resume state, metadata
    bindings, download settings), which is verified rebuildable cache, and how

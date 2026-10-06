@@ -294,7 +294,8 @@ and only those they can write to appear in the folder browser.
 
 **Settings** can export the configuration to JSON and import it later. The backup
 holds app settings, installed addon order and state, and their save rules. It
-does **not** hold the accounts, the media library, or watch history.
+does **not** hold the accounts, the media library, or watch history; for those
+see [Backing up and restoring](backup.md).
 
 It does carry the *names and roots* of the libraries, so a save rule that names
 one survives the trip: an import points it at a library with the same root, then

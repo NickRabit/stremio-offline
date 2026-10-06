@@ -168,6 +168,7 @@ on demand, so a catalogue the provider adds later still shows up. See
 | [Playback](docs/playback.md) | Direct play vs. remux vs. transcode, seeking, tracks, subtitles |
 | [Trailers](docs/trailers.md) | Where the trailer comes from, and how secure mode plays it |
 | [Addons and downloads](docs/downloads.md) | Debrid addons, the queue, save rules, saving to a device, config backup |
+| [Backing up and restoring](docs/backup.md) | What is in the data folder, what to copy, how to restore |
 | [Libraries](docs/libraries.md) | Several roots, types, artwork per library, splitting the download folder |
 | [Library identification](docs/library-metadata.md) | How folders become titles, the scan, suggestions and Identify |
 | [Languages](docs/languages.md) | Ten web and desktop languages, first-run detection, audio and subtitle preferences |
