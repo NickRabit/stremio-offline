@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import { mkdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { withholdUnloadProgress } from "./film-progress";
 
 const folder = path.resolve("e2e/.tmp/seek-cancel");
 test.beforeAll(async () => {
@@ -28,6 +29,7 @@ test("closing during the fourth seek does not start a replacement film", async (
   // The layout baselines are taken against the state the journeys leave behind, and a film
   // watched to a position resumes there. This one seeks minutes into a fixture two seconds
   // long, so what it would leave behind is a player that opens already at the end.
+  await withholdUnloadProgress(page);
   await page.route("**/api/progress", (route) => route.request().method() === "POST" ? route.fulfill({ status: 204 }) : route.continue());
   await page.route("**/api/progress/*", (route) => route.request().method() === "GET" ? route.fulfill({ json: null }) : route.continue());
   await page.route("**/api/playback", (route) => { starts++; return route.fulfill({ json: descriptor }); });

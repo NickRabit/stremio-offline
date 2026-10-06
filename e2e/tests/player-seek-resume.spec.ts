@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import { mkdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { withholdUnloadProgress } from "./film-progress";
 
 const folder = path.resolve("e2e/.tmp/seek-resume");
 test.beforeAll(async () => {
@@ -30,6 +31,7 @@ for (const scenario of ["playing", "paused", "queued", "closed", "unconfirmed"] 
       if (name.endsWith("m3u8")) playlists.push(pathname);
       await route.fulfill({ contentType: name.endsWith("m3u8") ? "application/vnd.apple.mpegurl" : "video/mp4", body: await readFile(path.join(folder, name)) });
     });
+    await withholdUnloadProgress(page);
     await page.route("**/api/progress", (route) => route.request().method() === "POST" ? route.fulfill({ status: 204 }) : route.continue());
     await page.route("**/api/progress/*", (route) => route.request().method() === "GET" ? route.fulfill({ json: null }) : route.continue());
     await page.route("**/api/playback", (route) => { starts++; return route.fulfill({ json: descriptor }); });
