@@ -685,6 +685,26 @@ test("the folder of the last deleted video is emptied up the tree", async () => 
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test("a folder that could not be read is never taken for empty", async (t) => {
+  // A permission bit is the portable way to make one folder unreadable; Windows ignores it and
+  // root reads through it, so the check would prove nothing there.
+  if (process.platform === "win32" || process.getuid?.() === 0) { t.skip("needs POSIX permissions and a non-root user"); return; }
+  const root = await mkdtemp(path.join(tmpdir(), "stremio-unreadable-"));
+  const locked = path.join(root, "Show", "02 serie");
+  try {
+    await mkdir(path.join(root, "Show", "01 serie"), { recursive: true });
+    await mkdir(locked, { recursive: true });
+    await writeFile(path.join(locked, "01.mkv"), "x");
+    await chmod(locked, 0o000);
+    // The last episode of season 1 is gone; season 2 is still there but cannot be read now.
+    assert.deepEqual(await emptiedFolders(root, "Show/01 serie/01.mkv"), ["Show/01 serie"],
+      "the show folder is kept: an unreadable season is not an empty one");
+  } finally {
+    await chmod(locked, 0o755).catch(() => undefined);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("a folder another library owns is carved out of every walk", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "stremio-carve-"));
   try {

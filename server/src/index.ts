@@ -4,7 +4,7 @@ import { isInternalMediaPath, mediaResources, ResourceError, safeSourceText, typ
 import { AirPlayAccess } from "./airplay-access.js";
 import path from "node:path";
 import { constants } from "node:fs";
-import { access, mkdir, readdir, realpath, rm, stat, statfs, writeFile } from "node:fs/promises";
+import { access, lstat, mkdir, readdir, realpath, rm, stat, statfs, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { allowedAddons, loadAddon, metadata, searchAll, searchableCatalogs, streams, subtitles, type MetaProvider } from "./addons.js";
 import { autoRefreshEnabled, refreshDue, refreshManifests, type RefreshOutcome } from "./addon-refresh.js";
@@ -1331,6 +1331,9 @@ const artworkTarget = async (key: string, shape: ArtShape) =>
 const artworkQueueKey = (key: string, shape: ArtShape) =>
   artVariantKey(isFileKey(key) ? `file:${key}` : `dir:${key}`, shape);
 const mediaArtExists = async (key: string, shape: ArtShape) => {
+  // A file's poster is written as its own `<episode>.jpg`; one already there is the user's
+  // still and wins exactly like the folder's picture does.
+  if (isFileKey(key) && shape !== "wide" && await fileExists(besideMediaTarget(key, shape))) return true;
   const folder = isFileKey(key) ? posixDir(key) : key;
   if (!folder) return false;
   return Boolean(await findArtwork(mediaPath(folder), artNames(shape)));
@@ -1837,6 +1840,30 @@ const asTransferStep = (value: unknown): TransferStep | undefined => {
   };
 };
 
+/** What a queued `reroot` is halfway through: the item's bare name joined onto both roots,
+ *  so the two ends are absolute paths rather than library keys. */
+type RerootStep = {
+  kind: "reroot";
+  phase: "moving" | "published";
+  from: string;
+  to: string;
+};
+
+/** A re-root record the journal kept, read back defensively: anything else is a record this
+ *  build does not understand and is treated as no record at all. */
+const asRerootStep = (value: unknown): RerootStep | undefined => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const step = value as Partial<RerootStep>;
+  if (step.kind !== "reroot") return undefined;
+  if (step.phase !== "moving" && step.phase !== "published") return undefined;
+  if (typeof step.from !== "string" || typeof step.to !== "string") return undefined;
+  return { kind: "reroot", phase: step.phase, from: step.from, to: step.to };
+};
+
+/** Plain existence, for the two absolute ends of a re-root: unlike `fileExists` a broken
+ *  symlink still counts, which is what the recovery has to see. */
+const pathPresent = async (target: string) => { try { await lstat(target); return true; } catch { return false; } };
+
 /** The metadata half of a transfer, everything after the bytes have landed, and the way a
  *  record a crash left behind is finished. `sourceLeft` is the interrupted transfer's own
  *  report, so a resumed move logs the same warning an in-process one does. */
@@ -1869,7 +1896,7 @@ const finishTransfer = async (step: TransferStep, sourceLeft?: string, replay = 
 /** The `published` record is a shortcut for the next start, not a condition for finishing:
  *  the bytes have moved, so a failed write is logged and the metadata half still runs. The
  *  next start would read the `moving` record against the disk and land in the same place. */
-const recordPublished = async (step: TransferStep, journal?: OpsJournal) => {
+const recordPublished = async (step: { from: string; to: string }, journal?: OpsJournal) => {
   await journal?.record({ ...step, phase: "published" }).catch((error: unknown) =>
     log("WARN", "A finished transfer could not be recorded, finishing it anyway", { from: step.from, to: step.to, reason: error instanceof Error ? error.message : String(error) }));
 };
@@ -2377,7 +2404,31 @@ const libraryOps = new LibraryOps({
       try {
         const source = path.join(operation.from, item);
         const target = path.join(operation.to, item);
+        // A record a crash left for this same item is finished from what it says, before the
+        // source's absence is read as a missing item: a finished re-root leaves the source
+        // gone, which is exactly the state that resumes here.
+        const recorded = asRerootStep(journal.recorded);
+        if (recorded && recorded.from === source && recorded.to === target) {
+          const sourceExists = await pathPresent(source);
+          const targetExists = await pathPresent(target);
+          if (recorded.phase === "published") return { to: toPosix(target) };
+          // The move landed: the source is gone and the target holds it.
+          if (!sourceExists && targetExists) return { to: toPosix(target) };
+          // Both ends hold it: nothing is deleted, and the outcome is the one an interrupted
+          // move already reports.
+          if (sourceExists && targetExists) {
+            log("WARN", "An interrupted re-root left its source behind", { from: source, to: target });
+            return { to: toPosix(target) };
+          }
+          // Neither end holds it: nothing is guessed and nothing is deleted.
+          if (!sourceExists && !targetExists) throw new AppError("The file or folder does not exist.", "err.pathMissing");
+          // The move never landed: run it from the start, below.
+        }
+        const step: RerootStep = { kind: "reroot", phase: "moving", from: source, to: target };
+        // What is about to happen is on disk before the disk is touched.
+        await journal.record(step);
         await transferLibraryPath(source, target, true, progress);
+        await recordPublished(step, journal);
         return { to: toPosix(target) };
       } finally { libraryOpsWriting = false; }
     }

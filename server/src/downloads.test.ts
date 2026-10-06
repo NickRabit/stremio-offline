@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createWriteStream, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import os from "node:os";
@@ -725,16 +725,15 @@ test("notBefore stops pump from retrying immediately", async () => {
   }
 });
 
-test("a commit the filesystem refuses leaves the job retryable", async () => {
+test("a name taken by a folder sends the finished download to (2)", async () => {
   const size = 4096;
   const { server, port } = await listen((_req, res) => {
     res.writeHead(200, { "content-length": String(size), "content-type": "video/mp4" });
     res.end(Buffer.alloc(size, 3));
   });
-  const { directory, queue } = await tempQueue({
-    retryDelay: () => 60_000,
-    // By the time the commit renames onto the target, the name is a folder holding a file.
-    // That is the shape an older copy of the film still open in a player makes on Windows.
+  const { directory, queue, downloads } = await tempQueue({
+    // By the time the commit looks for the name, it is a folder holding a file. That is the
+    // shape an older copy of the film still open in a player makes on Windows.
     createWriteStream: (file, options) => {
       if (file.endsWith(".part")) {
         const target = file.slice(0, -".part".length);
@@ -746,10 +745,11 @@ test("a commit the filesystem refuses leaves the job retryable", async () => {
   });
   try {
     await queue.add("Film", { url: `http://127.0.0.1:${port}/film.mp4` });
-    await waitFor(queue, () => (queue.list()[0]?.retryCount ?? 0) >= 1);
+    await waitFor(queue, () => queue.list()[0].status === "completed" || queue.list()[0].status === "failed");
     const job = queue.list()[0];
-    assert.notEqual(job.status, "failed", "a refused commit is not a dead end");
-    assert.equal(job.status, "queued", "the job goes back to the queue and is tried again");
+    assert.equal(job.status, "completed", job.error ?? "");
+    assert.equal(job.target, `${LIBRARY_ID}/Film/Film (2).mp4`, "the taken name sends it to the next one");
+    assert.equal(await readFile(path.join(downloads, "Film", "Film.mp4", "held.mkv"), "utf8"), "an older copy", "the older copy is untouched");
   } finally {
     await queue.stop();
     server.close();
@@ -1969,6 +1969,115 @@ test("a job already queued takes the name so the next one gets (2)", async () =>
     assert.notEqual(first.target, second.target);
   } finally {
     await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a download whose name was taken while it ran is published under (2)", async () => {
+  const size = 64 * 1024;
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const { server, port } = await listen(async (_req, res) => {
+    res.writeHead(200, { "content-length": String(size), "content-type": "video/mp4" });
+    res.write(Buffer.alloc(size / 2, 7));
+    await gate;
+    res.end(Buffer.alloc(size / 2, 9));
+  });
+  const { directory, queue, downloads } = await tempQueue();
+  try {
+    const job = await queue.add("Film", { url: `http://127.0.0.1:${port}/film.mkv` });
+    const taken = queuedFile(downloads, job.target);
+    // While the transfer runs only the .part exists, so the name looks free to a move that
+    // lands a file of its own there.
+    await waitFor(queue, () => existsSync(`${taken}.part`), 10_000);
+    const other = Buffer.from("a different film moved in meanwhile");
+    await writeFile(taken, other);
+    release();
+    await waitFor(queue, () => queue.list()[0].status === "completed" || queue.list()[0].status === "failed");
+    const done = queue.list()[0];
+    assert.equal(done.status, "completed", done.error ?? "");
+    assert.equal(done.target, `${LIBRARY_ID}/Film/Film (2).mkv`, "the name that was taken sends it to the next one");
+    assert.deepEqual(await readFile(taken), other, "the file that took the name keeps its own bytes");
+    assert.equal((await stat(queuedFile(downloads, done.target))).size, size, "and the download lands beside it");
+  } finally {
+    await queue.stop();
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("the empty placeholder a crash left at the name is taken back, not skipped", async () => {
+  const size = 64 * 1024;
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const { server, port } = await listen(async (_req, res) => {
+    res.writeHead(200, { "content-length": String(size), "content-type": "video/mp4" });
+    res.write(Buffer.alloc(size / 2, 7));
+    await gate;
+    res.end(Buffer.alloc(size / 2, 9));
+  });
+  const { directory, queue, downloads } = await tempQueue();
+  try {
+    const job = await queue.add("Film", { url: `http://127.0.0.1:${port}/film.mkv` });
+    const target = queuedFile(downloads, job.target);
+    await waitFor(queue, () => existsSync(`${target}.part`), 10_000);
+    // What a stop between the reservation and the rename leaves behind.
+    await writeFile(target, "");
+    release();
+    await waitFor(queue, () => queue.list()[0].status === "completed" || queue.list()[0].status === "failed");
+    const done = queue.list()[0];
+    assert.equal(done.status, "completed", done.error ?? "");
+    assert.equal(done.target, `${LIBRARY_ID}/Film/Film.mkv`, "the download keeps its own name");
+    assert.equal((await stat(target)).size, size);
+    assert.deepEqual(await readdir(path.dirname(target)), ["Film.mkv"], "no empty file is left beside a (2)");
+  } finally {
+    await queue.stop();
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a normal download keeps its own name and leaves no placeholder behind", async () => {
+  const size = 8192;
+  const { server, port } = await listen((_req, res) => {
+    res.writeHead(200, { "content-length": String(size), "content-type": "video/mp4" });
+    res.end(Buffer.alloc(size, 4));
+  });
+  const { directory, queue, downloads } = await tempQueue();
+  try {
+    const job = await queue.add("Film", { url: `http://127.0.0.1:${port}/film.mkv` });
+    await waitFor(queue, () => queue.list()[0].status === "completed" || queue.list()[0].status === "failed");
+    assert.equal(queue.list()[0].status, "completed", queue.list()[0].error ?? "");
+    assert.equal(queue.list()[0].target, `${LIBRARY_ID}/Film/Film.mkv`, "nothing took the name, so it keeps it");
+    const target = queuedFile(downloads, job.target);
+    assert.equal((await stat(target)).size, size);
+    assert.deepEqual(await readdir(path.dirname(target)), ["Film.mkv"], "no placeholder and no .part are left");
+  } finally {
+    await queue.stop();
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a failed final rename leaves no empty placeholder at the target", async () => {
+  const { directory, queue, downloads } = await tempQueue({ segments: () => 2, retryDelay: () => 20 });
+  // The file the commit would publish is gone the moment the last byte lands: every write is
+  // already done and the open handle keeps the unlinked file, but the rename has nothing to
+  // move. Deleting it there is deterministic, unlike racing the commit from outside the queue.
+  queue.onProgress = (progress) => {
+    if (!progress.target || !progress.total || progress.received < progress.total) return;
+    try { unlinkSync(`${queuedFile(downloads, progress.target)}.part`); } catch { /* already gone */ }
+  };
+  const { server, port } = await rangeServer({ total: 32 * MB });
+  try {
+    const job = await queue.add("Film", { url: `http://127.0.0.1:${port}/film.mkv` });
+    const target = queuedFile(downloads, job.target);
+    await waitFor(queue, () => queue.list()[0].status === "failed", 60_000);
+    await assert.rejects(stat(target), "the empty placeholder must not be left at the target");
+    await assert.rejects(stat(`${target}.part`));
+  } finally {
+    await queue.stop();
+    server.close();
     await rm(directory, { recursive: true, force: true });
   }
 });

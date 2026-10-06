@@ -3,6 +3,7 @@ import { copyFile, mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
+import { toPosix } from "./libraries.js";
 import { spawnServer, type SpawnedServer } from "./test-server.js";
 
 /** What a queued move does when the server stopped in the middle of it. The rules live in
@@ -26,6 +27,8 @@ const PASSWORD = "recover-password";
 const SEASON = "Show/Season 1";
 const ITEM = `${SEASON}/01 - X.mkv`;
 const TARGET_NAME = "01 - X.mkv";
+const SECOND = "Movie";
+const SECOND_ITEM = `${SECOND}/movie.mkv`;
 
 interface OpsJob {
   id: string; status: string; done: number; failed: number;
@@ -37,6 +40,7 @@ interface Env {
   dataDir: string;
   aRoot: string;
   bRoot: string;
+  cRoot: string;
   server?: SpawnedServer;
   base: string;
   cookie: string;
@@ -66,13 +70,15 @@ const newEnv = async (): Promise<Env> => {
   const workDir = await mkdtemp(path.join(tmpdir(), "stremio-recovery-"));
   const dataDir = path.join(workDir, "data");
   const roots = path.join(workDir, "roots");
-  const env: Env = { workDir, dataDir, aRoot: path.join(roots, "A"), bRoot: path.join(roots, "B"), base: "", cookie: "", a: "", b: "" };
+  const env: Env = { workDir, dataDir, aRoot: path.join(roots, "A"), bRoot: path.join(roots, "B"), cRoot: path.join(roots, "C"), base: "", cookie: "", a: "", b: "" };
   await mkdir(dataDir, { recursive: true });
   // Seeded the way the e2e fixture seeds it: without this the first boot reaches for the
   // default addons, which a unit suite must not do.
   await writeFile(path.join(dataDir, "state.json"), JSON.stringify({ addons: [], defaultsInstalled: true }, null, 2));
   await mkdir(path.dirname(path.join(env.aRoot, ITEM)), { recursive: true });
   await mkdir(env.bRoot, { recursive: true });
+  // The empty folder a re-root moves the whole tree into, under the same granted root.
+  await mkdir(env.cRoot, { recursive: true });
   await writeFile(path.join(env.aRoot, ITEM), "video");
   return env;
 };
@@ -132,6 +138,35 @@ const writeCrashJob = async (env: Env, data: Record<string, unknown>) => {
       startedAt: new Date().toISOString(), results: [], step: { item, data },
     }],
   }, null, 2));
+};
+
+/** A second top-level item in A, so a re-root has an item behind the one a crash stopped on. */
+const seedSecondItem = async (env: Env) => {
+  await mkdir(path.dirname(path.join(env.aRoot, SECOND_ITEM)), { recursive: true });
+  await writeFile(path.join(env.aRoot, SECOND_ITEM), "video");
+};
+
+/** What a crash left for a re-root: a running job that stopped on its first item, which had a
+ *  record written before the bytes moved. The roots and items are exactly what the route
+ *  enqueues: `from`/`to` absolute and `items` the bare names read from the old root. */
+const writeCrashReroot = async (env: Env, opts: { from: string; to: string; items: string[]; current: string; data: Record<string, unknown> }) => {
+  await writeFile(path.join(env.dataDir, "library-ops.json"), JSON.stringify({
+    version: 1,
+    jobs: [{
+      id: "recover-1",
+      operation: { op: "reroot", items: opts.items, libraryId: env.a, from: opts.from, to: opts.to },
+      op: "reroot",
+      status: "running", total: opts.items.length, done: 0, failed: 0, bytes: 0, bytesTotal: 0,
+      current: opts.current,
+      startedAt: new Date().toISOString(), results: [],
+      step: { item: opts.current, data: opts.data },
+    }],
+  }, null, 2));
+};
+
+const libraryRoot = async (env: Env, id: string) => {
+  const libraries = await (await api(env, "/api/libraries")).json() as Array<{ id: string; root?: string }>;
+  return libraries.find((library) => library.id === id)?.root;
 };
 
 const finishedJob = (env: Env) => waitFor("the recovered job to finish", async () => {
@@ -310,4 +345,56 @@ test("a first move over a stale row at the target still carries the item's own m
     assert.equal(job.done, 1, JSON.stringify(job.results));
     assert.equal((await identityOf(env, `${env.b}/${ITEM}`)).bound?.id, "tt0000001", "the arriving folder's own match replaces the stale one");
   });
+});
+
+/** A crashed re-root that stopped on its first item: restart it and every item must end under
+ *  the new root, with the library following once all of them are across. `prepare` leaves the
+ *  disk the way the crash would have. */
+const rerootRecovered = async (
+  env: Env,
+  prepare: (from: string, to: string, current: string) => Promise<void>,
+  phase: "moving" | "published",
+) => {
+  await bootFresh(env);
+  await env.server!.stop();
+  await seedSecondItem(env);
+  const from = env.aRoot;
+  const to = env.cRoot;
+  const items = [SECOND, "Show"];
+  const current = items[0]!;
+  await prepare(from, to, current);
+  await writeCrashReroot(env, {
+    from, to, items, current,
+    data: { kind: "reroot", phase, from: path.join(from, current), to: path.join(to, current) },
+  });
+  await bootAgain(env);
+  const job = await finishedJob(env);
+  assert.equal(job.status, "completed", JSON.stringify(job.results));
+  assert.equal(job.failed, 0, JSON.stringify(job.results));
+  assert.equal(job.done, items.length, JSON.stringify(job.results));
+  assert.ok(job.results.every((result) => result.ok), JSON.stringify(job.results));
+  for (const name of items) {
+    assert.equal(await exists(path.join(to, name)), true, `${name} is under the new root`);
+    assert.equal(await exists(path.join(from, name)), false, `${name} left the old root`);
+  }
+  const root = await waitFor("the library to follow its content", async () => {
+    const value = await libraryRoot(env, env.a);
+    return value === toPosix(to) ? value : undefined;
+  });
+  assert.equal(root, toPosix(to), "the library points at the new folder");
+};
+
+const movedAhead = (from: string, to: string, current: string) => rename(path.join(from, current), path.join(to, current));
+const nothingMoved = async () => undefined;
+
+test("a re-root whose first item landed before the crash finishes that item and moves the rest", async () => {
+  await withEnv((env) => rerootRecovered(env, movedAhead, "moving"));
+});
+
+test("a published re-root record finishes the item that already reached the new root", async () => {
+  await withEnv((env) => rerootRecovered(env, movedAhead, "published"));
+});
+
+test("a re-root whose first item never moved runs that item from the start", async () => {
+  await withEnv((env) => rerootRecovered(env, nothingMoved, "moving"));
 });
