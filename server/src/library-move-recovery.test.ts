@@ -127,9 +127,9 @@ const seedState = async (env: Env) => {
   });
 };
 
-/** What the crash left in the queue: a running move job whose item carried a record. */
-const writeCrashJob = async (env: Env, data: Record<string, unknown>) => {
-  const item = `${env.a}/${ITEM}`;
+/** What the crash left in the queue: a running move job whose item carried a record. The
+ *  item defaults to the file the other cases move; a folder move names the folder instead. */
+const writeCrashJob = async (env: Env, data: Record<string, unknown>, item = `${env.a}/${ITEM}`) => {
   await writeFile(path.join(env.dataDir, "library-ops.json"), JSON.stringify({
     version: 1,
     jobs: [{
@@ -299,6 +299,83 @@ test("a moving record with the bytes at both ends leaves both files and finishes
   });
 });
 
+test("a queued move of a file whose destination is the empty reservation runs from the start", async () => {
+  await withEnv(async (env) => {
+    await bootFresh(env);
+    await seedState(env);
+    await env.server!.stop();
+    // The crash fell between the reservation and the rename: the destination name exists as a
+    // zero-byte file while the source still holds the bytes.
+    await writeFile(path.join(env.bRoot, TARGET_NAME), "");
+    await writeCrashJob(env, {
+      phase: "moving", copy: false, from: `${env.a}/${ITEM}`, to: `${env.b}/${TARGET_NAME}`,
+      carried: [`${env.a}/${ITEM}`], cover: `${env.a}/Show`,
+    });
+    await bootAgain(env);
+    const job = await finishedJob(env);
+    assert.equal(job.status, "completed", JSON.stringify(job.results));
+    assert.equal(job.done, 1);
+    assert.equal(job.results[0]?.ok, true, JSON.stringify(job.results));
+    assert.equal(await readFile(path.join(env.bRoot, TARGET_NAME), "utf8"), "video", "the destination holds the source's bytes");
+    assert.equal(await exists(path.join(env.aRoot, ITEM)), false, "the source is gone");
+    await assertMovedState(env);
+  });
+});
+
+test("a queued move of a folder whose destination is the empty reservation runs from the start", async () => {
+  await withEnv(async (env) => {
+    await bootFresh(env);
+    await seedState(env);
+    const from = `${env.a}/Show`;
+    const to = `${env.b}/Show`;
+    await env.server!.stop();
+    // The reservation for a folder is an empty folder of the same name.
+    await mkdir(path.join(env.bRoot, "Show"), { recursive: true });
+    await writeCrashJob(env, {
+      phase: "moving", copy: false, from, to,
+      carried: [from], cover: from,
+    }, from);
+    await bootAgain(env);
+    const job = await finishedJob(env);
+    assert.equal(job.status, "completed", JSON.stringify(job.results));
+    assert.equal(job.done, 1);
+    assert.equal(job.results[0]?.ok, true, JSON.stringify(job.results));
+    assert.equal(await readFile(path.join(env.bRoot, ITEM), "utf8"), "video", "the folder arrived with its file");
+    assert.equal(await exists(path.join(env.aRoot, "Show")), false, "the source folder is gone");
+    const moved = `${env.b}/${ITEM}`;
+    const stars = await favouritePaths(env);
+    assert.ok(stars.includes(moved), "the star follows the item");
+    assert.ok(!stars.includes(`${env.a}/${ITEM}`), "the old path is not a favourite any more");
+    assert.notEqual(await progressAt(env, `file:${moved}`), null, "the position is under the new key");
+    assert.equal(await progressAt(env, `file:${env.a}/${ITEM}`), null, "the old key holds nothing");
+    assert.equal((await identityOf(env, moved)).bound?.id, "tt0000001", "the moved item resolves to the matched title");
+  });
+});
+
+test("a queued move over a destination that already holds real content keeps both ends", async () => {
+  await withEnv(async (env) => {
+    await bootFresh(env);
+    await seedState(env);
+    const from = `${env.a}/Show`;
+    const to = `${env.b}/Show`;
+    await env.server!.stop();
+    // A landed copy: the destination folder holds real content, so it is not a reservation.
+    await mkdir(path.dirname(path.join(env.bRoot, ITEM)), { recursive: true });
+    await writeFile(path.join(env.bRoot, ITEM), "video");
+    await writeCrashJob(env, {
+      phase: "moving", copy: false, from, to,
+      carried: [from], cover: from,
+    }, from);
+    await bootAgain(env);
+    const job = await finishedJob(env);
+    assert.equal(job.status, "completed", JSON.stringify(job.results));
+    assert.equal(job.done, 1);
+    assert.equal(job.results[0]?.ok, true, JSON.stringify(job.results));
+    assert.equal(await exists(path.join(env.aRoot, "Show")), true, "the interrupted move deletes nothing");
+    assert.equal(await readFile(path.join(env.bRoot, ITEM), "utf8"), "video", "the destination keeps what it holds");
+  });
+});
+
 test("a moving record with the bytes at neither end fails and leaves the old path alone", async () => {
   await withEnv(async (env) => {
     await bootFresh(env);
@@ -373,9 +450,13 @@ const rerootRecovered = async (
   assert.equal(job.failed, 0, JSON.stringify(job.results));
   assert.equal(job.done, items.length, JSON.stringify(job.results));
   assert.ok(job.results.every((result) => result.ok), JSON.stringify(job.results));
+  // The item's own file, so a name that exists but is empty does not pass for a landed item.
+  const inside: Record<string, string> = { [SECOND]: SECOND_ITEM, Show: ITEM };
   for (const name of items) {
     assert.equal(await exists(path.join(to, name)), true, `${name} is under the new root`);
     assert.equal(await exists(path.join(from, name)), false, `${name} left the old root`);
+    assert.equal(await readFile(path.join(to, inside[name]!), "utf8"), "video", `${name} carries its file`);
+    assert.equal(await exists(path.join(from, inside[name]!)), false, `${name}'s file left the old root`);
   }
   const root = await waitFor("the library to follow its content", async () => {
     const value = await libraryRoot(env, env.a);
@@ -386,6 +467,11 @@ const rerootRecovered = async (
 
 const movedAhead = (from: string, to: string, current: string) => rename(path.join(from, current), path.join(to, current));
 const nothingMoved = async () => undefined;
+/** The crash fell between the reservation and the rename: the destination name exists as the
+ *  empty folder the move made, with the item's data still in the old root. */
+const reservedFolder = async (from: string, to: string, current: string) => {
+  await mkdir(path.join(to, current), { recursive: true });
+};
 
 test("a re-root whose first item landed before the crash finishes that item and moves the rest", async () => {
   await withEnv((env) => rerootRecovered(env, movedAhead, "moving"));
@@ -397,4 +483,8 @@ test("a published re-root record finishes the item that already reached the new 
 
 test("a re-root whose first item never moved runs that item from the start", async () => {
   await withEnv((env) => rerootRecovered(env, nothingMoved, "moving"));
+});
+
+test("a re-root whose first item is only the reserved empty folder runs that item from the start", async () => {
+  await withEnv((env) => rerootRecovered(env, reservedFolder, "moving"));
 });

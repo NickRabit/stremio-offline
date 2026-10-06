@@ -1,6 +1,6 @@
 import { createReadStream, createWriteStream } from "node:fs";
 import { randomBytes } from "node:crypto";
-import { lstat, mkdir, open, readdir, rename, rmdir, rm, stat } from "node:fs/promises";
+import { lstat, mkdir, open, readdir, rename, rmdir, rm, stat, unlink } from "node:fs/promises";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { AppError } from "./errors.js";
@@ -110,6 +110,33 @@ const releaseTarget = async (target: string, directory: boolean, reserved?: { in
       target, reason: (error instanceof Error ? error.message : String(error)).slice(0, 120),
     });
   }
+};
+
+/** Whether the target holds nothing but the reservation a transfer leaves before its rename:
+ *  an empty folder for a folder source, an empty file for a non-empty file source. A zero-byte
+ *  source cannot be told from its own placeholder, so its target counts as landed. A symlink
+ *  target is somebody's own item, never a placeholder. */
+export const placeholderOnly = async (source: string, target: string): Promise<boolean> => {
+  const [sourceInfo, targetInfo] = await Promise.all([lstat(source), lstat(target)]).catch(() => [undefined, undefined] as const);
+  if (!sourceInfo || !targetInfo || targetInfo.isSymbolicLink()) return false;
+  if (sourceInfo.isDirectory()) return targetInfo.isDirectory() && (await readdir(target)).length === 0;
+  return sourceInfo.isFile() && sourceInfo.size > 0 && targetInfo.isFile() && targetInfo.size === 0;
+};
+
+/** Drops the placeholder a crashed transfer left at the target, so the transfer can run from
+ *  the start: a folder through `rmdir`, which refuses one that gained content, and an empty
+ *  file only after an immediate re-check that it is still empty. */
+export const removePlaceholder = async (source: string, target: string): Promise<void> => {
+  const info = await lstat(source).catch(() => undefined);
+  if (!info) return;
+  if (info.isDirectory()) {
+    await rmdir(target).catch(() => undefined);
+    return;
+  }
+  if (!info.isFile() || info.size === 0) return;
+  const now = await lstat(target).catch(() => undefined);
+  if (!now?.isFile() || now.size !== 0) return;
+  await unlink(target).catch(() => undefined);
 };
 
 /** Renames onto the reserved placeholder. Windows cannot rename a folder over an existing
