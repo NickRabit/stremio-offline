@@ -78,7 +78,8 @@ test("matching an episode writes the catalogue still beside it but never over th
     // The episode without a still of its own gets the catalogue's, which also shows the
     // writes have run by the time the other file is checked.
     await waitFor("the catalogue still beside 02.mkv", async () =>
-      (await readFile(path.join(season, "02.jpg"), "utf8")) === CATALOGUE ? true : undefined);
+      (await readFile(path.join(season, "02.jpg"), "utf8")) === CATALOGUE ? true : undefined)
+      .catch((error: Error) => { throw new Error(`${error.message}\n${server.log().slice(-4000)}`); });
     await new Promise((resolve) => setTimeout(resolve, 500));
     assert.equal(await readFile(path.join(season, "01.jpg"), "utf8"), OWN_STILL, "the user's own still is left alone");
     assert.ok(await stat(path.join(season, "01.mkv")));
