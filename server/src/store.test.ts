@@ -127,19 +127,63 @@ test("a stored language survives a reload", async () => {
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
-test("a failed write does not stop the next one from reaching the disk", async () => {
+test("a change whose write fails is taken back, and the next write lands on its own", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-store-"));
   try {
     const store = new Store(directory); await store.load();
-    // A directory where state.json.tmp belongs: the rename cannot happen, the write fails.
+    // A directory where state.json.tmp belongs: the write cannot happen, so the change is refused.
     await mkdir(path.join(directory, "state.json.tmp"));
     await assert.rejects(store.update((state) => { state.settings.logLevel = "DEBUG"; }));
+    assert.equal(store.settings().logLevel, undefined, "the refused change is not left in memory");
 
     await rm(path.join(directory, "state.json.tmp"), { recursive: true });
     await store.update((state) => { state.settings.addonRefreshHours = 6; });
 
     const reloaded = new Store(directory); await reloaded.load();
-    assert.equal(reloaded.settings().logLevel, "DEBUG", "the earlier change is in the state that was saved");
+    assert.equal(reloaded.settings().logLevel, undefined, "the change nobody could save never reached the disk");
+    assert.equal(reloaded.settings().addonRefreshHours, 6);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("a write queued before a failing one still lands, and the one after it lands without it", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-store-"));
+  // A failing writer, rather than a directory at state.json.tmp: the writes here queue up and
+  // only the middle one may fail, which the directory trick cannot tell apart.
+  const store = new Store(directory, undefined, {
+    writeState: async (file, data) => {
+      if (data.includes('"DEBUG"')) throw Object.assign(new Error("no space left"), { code: "ENOSPC" });
+      await writeFile(file, data, { mode: 0o600 });
+    },
+  });
+  try {
+    await store.load();
+    const first = store.update((state) => { state.settings.concurrentDownloads = 3; });
+    const second = store.update((state) => { state.settings.logLevel = "DEBUG"; });
+    const third = store.update((state) => { state.settings.addonRefreshHours = 6; });
+    await first;
+    await assert.rejects(second);
+    await third;
+
+    assert.equal(store.settings().concurrentDownloads, 3, "the change before the failure is in memory");
+    assert.equal(store.settings().logLevel, undefined, "the failed change is not left in memory");
+    assert.equal(store.settings().addonRefreshHours, 6, "the change after the failure is there too");
+
+    const reloaded = new Store(directory); await reloaded.load();
+    assert.equal(reloaded.settings().concurrentDownloads, 3, "the earlier change reached the disk");
+    assert.equal(reloaded.settings().logLevel, undefined, "the failed change never did");
+    assert.equal(reloaded.settings().addonRefreshHours, 6, "the later change did");
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("two awaited updates in a row both land", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-store-"));
+  try {
+    const store = new Store(directory); await store.load();
+    await store.update((state) => { state.settings.concurrentDownloads = 2; });
+    await store.update((state) => { state.settings.addonRefreshHours = 6; });
+
+    const reloaded = new Store(directory); await reloaded.load();
+    assert.equal(reloaded.settings().concurrentDownloads, 2);
     assert.equal(reloaded.settings().addonRefreshHours, 6);
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
