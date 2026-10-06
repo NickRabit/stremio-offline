@@ -391,6 +391,33 @@ test("stop waits for a check already asking the addons to write what it found", 
   assert.ok(Object.keys(reread.get(follow.id)?.episodes ?? {}).length, "what the check found is on disk when stop returns");
 });
 
+test("stop ends a scheduled pass: the next follow in its batch is never checked", async (t) => {
+  const dir = temp();
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const store = await loaded(dir);
+  await store.create({ ownerUserId: "u1", type: "series", metaId: "tt1", name: "One" }, 0);
+  await store.create({ ownerUserId: "u1", type: "series", metaId: "tt2", name: "Two" }, 0);
+  const asked: string[] = [];
+  let release!: (value: MetaItem | null) => void;
+  const pending = new Promise<MetaItem | null>((resolve) => { release = resolve; });
+  const service = new FollowService({
+    store, now: () => 10 ** 13, owner: () => ({ id: "u1", role: "user" }), concurrency: 1,
+    queue: fakeQueue().queue, mayDownload: () => true,
+    meta: (_owner, _type, metaId) => { asked.push(metaId); return pending; },
+  });
+  const pass = service.tick();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(asked.length, 1, "one check at a time");
+  let stopped = false;
+  const stopping = service.stop().then(() => { stopped = true; });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(stopped, false, "the check under way is waited for");
+  release(meta([]));
+  await stopping;
+  await pass;
+  assert.equal(asked.length, 1, "the second follow of the batch is not started after stop");
+});
+
 test("a deleted or switched-off owner is never asked for metadata", async (t) => {
   const dir = temp();
   t.after(() => rmSync(dir, { recursive: true, force: true }));

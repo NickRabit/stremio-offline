@@ -61,7 +61,7 @@ import { LibraryMetaStore } from "./library-meta-store.js";
 import { artworks } from "./artwork-cache.js";
 import type { AddonRecord, MetaItem, StreamItem } from "./types.js";
 import { LibraryOps, type OpsJournal } from "./library-ops.js";
-import { transferLibraryPath, type TransferProgress } from "./library-transfer.js";
+import { placeholderOnly, removePlaceholder, transferLibraryPath, type TransferProgress } from "./library-transfer.js";
 import { registerAddonsRoutes } from "./routes/addons.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerCatalogRoutes } from "./routes/catalog.js";
@@ -1923,6 +1923,13 @@ const resumeTransfer = async (step: TransferStep, journal?: OpsJournal): Promise
   if (!sourceExists && !targetExists) throw new AppError("The file or folder does not exist.", "err.pathMissing");
   // The transfer never landed: run the normal path from the start.
   if (sourceExists && !targetExists) return undefined;
+  // Both ends hold something, but a target that is only the destination's reservation is not
+  // a landed copy: the placeholder goes and the transfer runs from the start.
+  if (sourceExists && source && target && await placeholderOnly(source.absolute, target.absolute)) {
+    log("INFO", "A reserved destination held nothing, running the transfer again", { from: step.from, to: step.to });
+    await removePlaceholder(source.absolute, target.absolute);
+    return undefined;
+  }
   // The copy landed but the source was not removed: nothing is deleted, and the outcome is
   // the one an interrupted transfer already reports.
   const interrupted = sourceExists && !step.copy;
@@ -2426,8 +2433,15 @@ const libraryOps = new LibraryOps({
           // Both ends hold it: nothing is deleted, and the outcome is the one an interrupted
           // move already reports.
           if (sourceExists && targetExists) {
-            log("WARN", "An interrupted re-root left its source behind", { from: source, to: target });
-            return { to: toPosix(target) };
+            // A target that is only the destination's reservation is not a landed copy: the
+            // placeholder goes and the move runs from the start, below.
+            if (await placeholderOnly(source, target)) {
+              log("INFO", "A reserved re-root destination held nothing, running the move again", { from: source, to: target });
+              await removePlaceholder(source, target);
+            } else {
+              log("WARN", "An interrupted re-root left its source behind", { from: source, to: target });
+              return { to: toPosix(target) };
+            }
           }
           // Neither end holds it: nothing is guessed and nothing is deleted.
           if (!sourceExists && !targetExists) throw new AppError("The file or folder does not exist.", "err.pathMissing");

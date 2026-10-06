@@ -1336,9 +1336,13 @@ export class DownloadQueue {
   }
 
   private async commit(job: DownloadJob, partial: string, target: string) {
+    // The partial subtitle was written beside the name the episode had while it downloaded;
+    // the reservation may move the episode to "(2)", and the subtitle follows it there.
+    const written = this.subtitleFiles(job);
     const reserved = await this.reserveTarget(job, target);
     try {
-      const files = this.subtitleFiles(job);
+      const published = this.subtitleFiles(job);
+      const files = written && published ? { partial: written.partial, target: published.target } : undefined;
       const moveSubtitle = Boolean(files && await exists(files.partial));
       if (moveSubtitle && files) await rename(files.partial, files.target);
       try {
