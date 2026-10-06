@@ -1,4 +1,5 @@
 import type { Locale } from "./i18n";
+import type { DownloadSnapshot as ServerDownloadSnapshot, PublicDownload } from "../../server/src/api-types";
 export type DownloadLayout = "flat" | "structured";
 export interface DownloadTargetSettings {
   subfolder: string;
@@ -37,18 +38,8 @@ export interface Stream {
   behaviorHints?: { notWebReady?: boolean; filename?: string; videoSize?: number; bingeGroup?: string };
 }
 export interface QueueHalt { reason: "storage"; at: string; message: string; messageKey?: string }
-export interface Download {
-  id: string; title: string; status: "queued" | "waiting" | "checking" | "downloading" | "paused" | "completed" | "failed";
-  target: string; received: number; total?: number; speed: number; order: number;
-  error?: string; errorKey?: string; errorVars?: Record<string, string | number>;
-  pauseReason?: "user" | "storage" | "library"; pending?: boolean; debridProgress?: number;
-  /** Present when a followed series queued the job, matched against the follow across restarts. */
-  follow?: { followId: string; episodeKey: string; intent: string };
-  /** How many connections the file is being split across; missing while it runs over one. */
-  segments?: number;
-  resolution?: { checkedCandidates: number; audioLanguage?: string; fallbackUsed?: boolean; audioEvidence?: "probe" | "listing" | "none"; subtitleLanguage?: string; subtitleSource?: "embedded" | "addon"; subtitleStatus?: "ready" | "missing" };
-  createdAt: string; updatedAt: string; startedAt?: string; completedAt?: string;
-}
+/** One queued job as the server hands it out; the shape lives with the queue it describes. */
+export type Download = PublicDownload;
 export type SubtitleMode = "off" | "optional" | "required";
 export type AudioMode = "strict" | "listed" | "preferred";
 export type DownloadSourceStrategy = "priority" | "largest";
@@ -73,7 +64,7 @@ export interface DeviceTransfer {
   sent: number; total?: number; speed: number;
   startedAt: string; finishedAt?: string;
 }
-export interface DownloadSnapshot { jobs: Download[]; halt: QueueHalt | null; deviceTransfers?: DeviceTransfer[] }
+export type DownloadSnapshot = ServerDownloadSnapshot;
 
 export type PlaybackMode = "direct" | "remux" | "transcode";
 export type TileSize = "compact" | "small" | "medium" | "large";
