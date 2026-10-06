@@ -2551,7 +2551,9 @@ const shutDown = async (signal: NodeJS.Signals) => {
   const deadline = Date.now() + SHUTDOWN_DRAIN_MS;
   await inFlight.drained(SHUTDOWN_QUIET_MS, SHUTDOWN_DRAIN_MS);
   await maintenance.stop(1_000);
-  followService.stop();
+  // A check already asking the addons is given a moment to write what it found; one stuck
+  // on a slow provider is not allowed to eat the whole drain.
+  await Promise.race([followService.stop(), new Promise((resolve) => setTimeout(resolve, 1_000).unref())]);
   // A conversion or an assembly nobody is reading any more would run on without its parent.
   const killed = killRunningMedia();
   if (killed) log("INFO", "Stopped FFmpeg processes still running at shutdown", { count: killed });

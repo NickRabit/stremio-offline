@@ -369,6 +369,28 @@ test("a second check joins the one already in flight", async (t) => {
   assert.equal(calls, 1);
 });
 
+test("stop waits for a check already asking the addons to write what it found", async (t) => {
+  const dir = temp();
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const store = await loaded(dir);
+  const follow = await store.create({ ownerUserId: "u1", type: "series", metaId: "tt1", name: "Show" }, 0);
+  let release!: (value: MetaItem | null) => void;
+  const pending = new Promise<MetaItem | null>((resolve) => { release = resolve; });
+  const service = new FollowService({
+    store, now: () => 0, owner: () => ({ id: "u1", role: "user" }),
+    queue: fakeQueue().queue, mayDownload: () => true, meta: () => pending,
+  });
+  void service.check(follow.id, "schedule");
+  let stopped = false;
+  const stopping = service.stop().then(() => { stopped = true; });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(stopped, false, "the check is still asking, so stop has not returned");
+  release(meta([{ id: "tt1:1:1", season: 1, episode: 1 }]));
+  await stopping;
+  const reread = await loaded(dir);
+  assert.ok(Object.keys(reread.get(follow.id)?.episodes ?? {}).length, "what the check found is on disk when stop returns");
+});
+
 test("a deleted or switched-off owner is never asked for metadata", async (t) => {
   const dir = temp();
   t.after(() => rmSync(dir, { recursive: true, force: true }));

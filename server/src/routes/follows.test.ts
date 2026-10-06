@@ -116,11 +116,10 @@ const mount = async (): Promise<Harness> => {
     close: async () => {
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
-      // A check or an admission the last request started may still be writing follows.json;
-      // the service runs its work one job at a time, so a sync queued now settles after it.
-      service.stop();
-      await service.sync().catch(() => undefined);
-      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+      // Creating a follow starts its first check in the background, and it writes follows.json
+      // when it lands: the directory goes only once the service has settled.
+      await service.stop();
+      rmSync(dir, { recursive: true, force: true });
     },
   };
 };
