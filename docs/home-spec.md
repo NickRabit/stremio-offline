@@ -132,7 +132,7 @@ opens the same resolved, owner-scoped list, not the library root.
 | Card | Click | Notes |
 | --- | --- | --- |
 | Queue job | Title and Show all open Downloads | See the Downloads row. Pause, resume and retry are guarded by `requireOwnJob`. |
-| Library file in Continue watching | `playLocal`, resuming at the stored position | Menu: Show in library, Forget progress |
+| Library file in Continue watching | `playLocal`, resuming at the stored position | The overflow button is a sibling of the play control. Menu: Show in library, Forget progress |
 | Catalogue entry or next episode | `openMeta` on the remembered episode | The episode list is the alternative picker. Numbering is never guessed: `nextEpisodeOf` needs a season and an episode. |
 | Ready to play | `playLocal` on the resolved file | |
 | Favourite | Opens the folder or plays the file | |
@@ -235,15 +235,38 @@ landscape rail squeezes seven icons into about 229 px, roughly 32 px each.
   exactly five slots, **Home, Catalogue, Library, Downloads, More**. Icon and
   label in every slot. Today the phone bar hides its labels at 420 px and below
   because seven items do not fit; with five they do (about 59 px each at 320 px),
-  so the labels come back at 10 px.
+  so the labels come back at 10 px. A label may use two lines and then an
+  ellipsis. The accessible name is the full string, so a long translation
+  ("Herunterladen", "Stahování") does not have to fit. The bar does not scroll
+  sideways, and its outer height stays the existing `68px` plus the safe area.
+  Catalogue and Library already subtract that constant from `100dvh`; labels
+  must not make the bar taller.
 - **More** holds Following, Addons, Settings and, for an administrator,
   Statistics. It is marked active while one of them is open and says which. It
   carries the new-episodes and attention indicator that Following shows, built
   only from the account's visible data. On a phone it opens a sheet; on a rail it
   opens a menu anchored to the trigger. It uses the existing dialog focus
-  handling, closes on Escape or a choice, returns focus to the trigger and
-  scrolls itself in a short viewport. Account and sign-out stay reachable from
-  it wherever the top bar chrome is suppressed.
+  handling, closes on Escape, on a choice, or when the breakpoint changes
+  (rotation, resize, zoom), because a bottom sheet and a rail menu are not the
+  same anchor. It returns focus to the trigger and scrolls itself in a short
+  viewport. Account and sign-out stay reachable from it wherever the top bar
+  chrome is suppressed. The sign-out icon that the top bar already shows stays
+  there too.
+- **Wide and short** (wider than 980 px, height at most 500 px): a desktop
+  window dragged short. This is not the five-slot bar. Width can hold every
+  destination, so the labelled sidebar stays, scrolls inside itself if eight
+  items do not fit, and keeps the active item in view. While more destinations
+  sit below the fold, the trailing edge fades, and the fade goes away at the
+  end. The content rules of the
+  short band do apply at any width: a 54 px top bar, no page heading, no
+  addon-status block.
+- **Medium landscape** (wider than 700 px, height 501–680 px): an iPad in
+  Safari, a 1024×600 tablet, a window that is not maximised. Again not five
+  slots. Drop the eyebrow and the lead, keep a single-line title, and hide the
+  addon-status block before hiding a destination. The nav scrolls if it must.
+- **Narrow and tall** (width at most 700 px): the phone bar, even when the
+  device is a tablet in a split view. The pane is phone-shaped. The icon rail
+  starts only above 700 px.
 
 This changes the existing chrome for every account, not only for Home, so it
 ships first and on its own.
@@ -257,10 +280,17 @@ ships first and on its own.
 | Tablet landscape 1180x820 | Labelled sidebar | As desktop |
 | Phone upright 390x844 (and 320) | Five-slot bottom bar | 16 px gutters, 12 px gaps, media ~144 px (about 2.3 cards at 390, 1.9 at 320), queue ~244 px |
 | Phone landscape 844x390 and 802x293 | Five-slot rail | 12 px gutters, media 144-168 px, queue ~232 px |
+| Browser, wide and short, 1280x450 | Labelled sidebar, scrolling if needed | Desktop card sizes, no page heading |
+| Medium landscape 1024x640 | Labelled sidebar, no addon block, one-line title | Desktop card sizes while the content width allows them |
+| 200% of 1440x900, which is 720x450 | Five-slot rail | Phone-landscape sizes |
 
 Use the existing 700 px and 980 px breakpoints and the short-landscape rule, and
-use available width and height, never device detection. Every card action is at
-least 44x44 CSS px even when the artwork shrinks. Media cards use the wide
+use available width and height, never device detection. 200% zoom is a smaller
+CSS viewport, not its own layout: 1440×900 becomes 720×450 and takes the
+short-landscape rail, while 2560×1440 becomes 1280×720 and stays the labelled
+sidebar. Every card action is at
+least 44x44 CSS px even when the artwork shrinks, including Show all, whose
+narrow form is borderless text with the hit target in the padding. Media cards use the wide
 artwork the resume strip already generates, with the existing fit rules as a
 fallback. Leave safe-area space at the rail, the bottom bar and the content
 edges, and include the bottom bar in the scroll padding. At 200% zoom a heading
@@ -280,9 +310,12 @@ setting; Home deliberately does not.
   with the caption allowed two lines instead of one. `TileArt` already letterboxes
   the other artwork variant over a blurred copy, so a title with only one picture
   still fills its tile.
-- **Short landscape forces 16:9 whatever the setting.** A 2:3 tile with its caption
-  needs about 240 px, and that band has 231 px for everything. Say so beside the
-  setting.
+- **Short landscape under 981 px wide forces 16:9 whatever the setting.** A 2:3
+  tile with its caption needs about 240 px, and that band has about 231 px for
+  everything. Say so beside the setting. A wide short window keeps the portrait
+  setting when that shelf is the first row and the card still fits. Measured,
+  the card ends at 387 px, so 400 px of viewport height holds it. Below that the
+  same force to 16:9 applies, or the caption runs past the fold.
 - The queue cards are not tiles and ignore the setting.
 
 ### Short landscape (802x293, 844x390)
@@ -295,16 +328,64 @@ This is where the page can break, so it is designed first.
 - The rail needs 5 x 44 px plus 5 px padding at each end, about 230 px, against
   the 239 px below the top bar. In a Home Screen app the bottom inset takes about
   21 px more, so the targets may shrink to 40 px and the rail may scroll as a last
-  resort. That is the only place the 44 px rule gives way, and it is verified in
-  the standalone orientation.
-- A queue card is about 112 px tall: a title and a state line, a thin bar, and a
-  44 px action row. With a 28 px row heading, the first complete row ends near
-  210 px and the next heading shows beneath it. Lower rows scroll with the
-  document; nothing scrolls inside a nested box.
+  resort. Labels there stay one line. That is the only place the 44 px rule gives
+  way, and it is verified in the standalone orientation. The rail's own scroll
+  uses `overscroll-behavior: contain` so it does not drag the page.
+- A queue card stays text-only. A thumbnail beside the text squeezes the title,
+  and one above the text spends height this band does not have. The title's hit
+  target is 44 px, the state stays one line, the bar stays thin, and the action
+  stays one line at 44 px. The meta truncates before the action does; a long
+  translation ellipsizes inside the button rather than growing the card. Show all
+  is 44 px too, so the heading row is 44 px rather than 28. The first complete
+  row still ends inside the band and the next heading still peeks in. Lower rows
+  scroll with the document; nothing scrolls inside a nested box.
 - With an empty queue, Continue watching comes first: heading plus a ~152 px
   wide card with a two-line caption fits in the same band.
 - Show the right edge of the next card (a fraction of a card) so the shelf reads
-  as scrollable.
+  as scrollable. When the last visible card would otherwise end flush, add a
+  short fade on the trailing edge. A shelf that fits has neither.
+
+802×293 is a budget for the layout viewport after browser chrome, in CSS
+pixels, not a device name. The same queries decide a toolbar showing or hiding.
+On a phone both states stay inside this band. Safe-area insets follow `env()`
+on whichever edge they land, including after a rotation that moves the notch
+from the left to the right.
+
+### Shelves, the pointer and the keyboard
+
+A shelf is a horizontal scroller on a page that scrolls vertically. The axes
+stay separate, in a browser as on a tablet.
+
+- A vertical wheel scrolls the page, including while the pointer is over a
+  shelf. Home does not turn a vertical wheel into a horizontal scroll.
+- A horizontal wheel, or shift plus the wheel, scrolls the shelf.
+- A drag claims the shelf only once it is clearly horizontal. The browser's own
+  axis lock does this. There is no custom drag, and no `touch-action` that
+  blocks vertical panning: a finger that starts on a card must still scroll the
+  page.
+- `scroll-snap-type` stays `proximity`. Mandatory snap fights a vertical flick.
+- `overscroll-behavior-x: contain` on the shelf, so a trackpad swipe at the end
+  of a row does not navigate the browser history. The shelf does not run under
+  the screen edge. The gutter is at least 16 px, and in landscape the rail
+  already insets the content, which leaves the system back gesture its edge.
+- No long-press menu. A held finger is a scroll. The overflow control is a
+  sibling button of the primary control, always visible, at least 44×44, in the
+  caption row. It does not cover the progress bar and it is not revealed by
+  hover. The play glyph on the artwork is decorative; the artwork is the target.
+- Tab moves from Show all to the shelf, then to the next row. Inside the shelf,
+  Left and Right move a roving tabindex across cards, Home and End jump to the
+  ends, and Enter activates the focused card. Tab from the focused card reaches
+  that card's overflow button and the next Tab leaves the row. Focus does not
+  wrap and is not trapped. The focused card scrolls into view with its ring
+  unclipped.
+- `prefers-reduced-motion: reduce` disables smooth scrolling. Snap stays.
+- The page's vertical offset and each shelf's position survive rotation and a
+  resize that crosses a breakpoint. Restore a shelf by card identity. A stored
+  pixel offset is wrong once the card width changes. Closing More, above, is
+  the exception: the menu does not try to follow an anchor that moved.
+- The tablet-portrait rail is a presentation of the breakpoint. It does not
+  write the account's collapsed-sidebar preference, and rotating back to a wide
+  landscape restores that preference.
 
 ### Measured
 
@@ -314,16 +395,22 @@ horizontal overflow.
 
 | Viewport | Measured |
 | --- | --- |
-| 802x293 | Rail 64 px wide, five items at 46 px; queue card 232x116; first row ends near 231 px and the next heading starts at 265 px; portrait setting correctly forced to 16:9 art (152x86) |
-| 844x390 | Same geometry, the second shelf also reaches the screen |
-| 320x640 | Bar slots 59 px; queue card 244 px, media 144 px (about 1.9 cards); action button 129x44 |
-| 390x844 | Three shelves and the bar visible; More sheet 366 px wide above the bar; the More slot carries the Following count |
-| 820x1180 | Rail 76 px, eight items at 49 px; queue 264 px, media 184 px |
-| 1180x820 | Labelled sidebar 226 px; media 208 px, a little under four cards |
+| 802x293 | Rail 64 px, five items at about 46 px; queue card 232x127 with a 44 px title and a 44 px action; Show all 44 px; first row ends at 250 px and the next heading runs 276–293 px; portrait setting forced to 16:9 (152x86); the overflow control sits in the caption and misses the progress bar |
+| 844x390 | Same card geometry; the second shelf starts at 315 px, so it reaches the screen |
+| 320x640 | Bar stays 68 px; queue card 244 px, media 144 px; the long row heading stays one line and ellipsizes |
+| 390x844 | Three shelves clear of the 68 px bar; labels fit the five slots |
+| 720x450 | 200% of 1440x900. Same five-slot rail as a phone on its side |
+| 820x1180 | Rail 76 px, all eight destinations; queue 264 px, media 184 px |
+| 1024x640 | Medium landscape: 82 px top bar, one-line title, labelled sidebar, desktop card size |
+| 1180x820 | Labelled sidebar 226 px and all eight items fit without scrolling; media 208 px |
+| 1280x450 | Wide and short: 54 px top bar, no page heading, sidebar 226 px scrolls (Statistics sits below the fold); no page-level horizontal overflow |
+| 1280x320 | Same chrome, sidebar 266 px tall and scrolling; the queue row still ends at 250 px, so the next heading peeks |
+| 1280x400, empty queue, portrait tiles | Continue watching is first and the 2:3 card ends at 387 px, so it fits. At 360 px it does not, and the wide-short rule forces 16:9 |
 
 Two phone details came out of it: "Show all" is borderless and the count sits under
 the heading, because a bordered button wrapped onto its own line and cost a whole
-row; and the heading row must not wrap at all below 700 px.
+row, while the hit target stays 44 px; and the heading row must not wrap at all
+below 700 px, so a long Czech title ellipsizes instead.
 
 ### What was taken from the mockups, and what was not
 
@@ -376,17 +463,22 @@ changes under it.
 
 Visual and accessibility checks run once, after the functional gates are stable,
 across the viewport matrix above plus the existing WebKit landscape project: 44 px
-targets, keyboard access to a shelf's overflow, More focus and Escape, long German
-and Czech labels, 200% zoom, safe areas, no page-level horizontal overflow,
-restored offsets after playback and after rotation, and the busy, empty, partial,
-failed and revoked states.
+targets including Show all and the title of a queue card, the phone bar staying
+`68px` plus the safe area, keyboard access as the roving shelf above, More focus,
+Escape and dismissal when the breakpoint changes, long German and Czech labels
+on two lines inside the five slots, 200% zoom landing on the band its CSS
+viewport selects, a 1280×450 window keeping every destination, safe areas, no
+page-level horizontal overflow, a vertical wheel over a shelf scrolling the
+page, restored offsets after playback, rotation and a breakpoint resize, and
+the busy, empty, partial, failed and revoked states.
 
 ## Slices
 
 0. **Compact navigation with More.** Its own PR: the five-slot navigation for
-   phones and short landscape, the labelled tablet rail, the More sheet and menu,
-   and the updated layout tests. It fixes today's squeeze and changes chrome for
-   everyone, so it does not travel with Home.
+   phones and short landscape, the wide-short and medium-landscape chrome, the
+   labelled tablet rail, the More sheet and menu, and the updated layout tests.
+   It fixes today's squeeze and changes chrome for everyone, so it does not
+   travel with Home. The phone bar keeps its current outer height.
 1. **Home shell and Downloads.** The view, the queue row from existing client
    state with the owner filter, and the type additions. No new server code.
 2. **Continue watching.** Fix stored-addon visibility first. Then either the

@@ -35,12 +35,12 @@ document.getElementById('more').innerHTML=sec.map(([i,l,a,b])=>`<button>${svg(i)
 document.getElementById('moreBtn').onclick=e=>{e.stopPropagation();document.getElementById('more').classList.toggle('open')};
 document.addEventListener('click',()=>document.getElementById('more').classList.remove('open'));
 const grad=[['#7a4b22','#c98a4a'],['#14424a','#3d8a94'],['#2b4a3a','#6aa17f'],['#1d2540','#586aa8'],['#4a2340','#a0568f']];
-const media=(t,sub,i,o={})=>`<button class="browse-item"><span class="browse-art" style="background:linear-gradient(135deg,${grad[i%5][0]},${grad[i%5][1]})"><span class="t">${t}</span><i class="browse-play" style="position:absolute;right:8px;top:8px;width:34px;height:34px;display:grid;place-items:center;border-radius:50%;background:#0b0e1399">${svg(o.arrow?'go':'play',18)}</i>${o.p!=null?`<i class="resume-bar"><i style="width:${o.p}%"></i></i>`:''}</span><span class="browse-menu">${svg('vdots',18)}</span><strong>${t}</strong><small>${sub}</small></button>`;
+const media=(t,sub,i,o={})=>`<div class="browse-item"><button class="browse-open"><span class="browse-art" style="background:linear-gradient(135deg,${grad[i%5][0]},${grad[i%5][1]})"><span class="t">${t}</span><i class="browse-play" style="position:absolute;right:8px;top:8px;width:34px;height:34px;display:grid;place-items:center;border-radius:50%;background:#0b0e1399;pointer-events:none">${svg(o.arrow?'go':'play',18)}</i>${o.p!=null?`<i class="resume-bar"><i style="width:${o.p}%"></i></i>`:''}</span><strong>${t}</strong><small>${sub}</small></button><button class="browse-menu" aria-label="Další akce">${svg('vdots',18)}</button></div>`;
 const q=(t,state,cls,pct,meta,act,icon)=>`<div class="hq-card ${cls=='warn'?'attention':cls=='bad'?'failed':''}"><button class="hq-title">${t}</button><div class="hq-state ${cls}">${state}</div>${pct!=null?`<div class="hq-bar ${cls}"><i style="width:${pct}%"></i></div>`:'<div class="hq-bar"></div>'}<div class="hq-foot"><span class="hq-meta">${meta}</span><button>${icon?svg(icon,16):''}${act}</button></div></div>`;
 const sh=(h,extra,all)=>`<div class="subhead"><div class="home-head"><h3>${h}</h3>${extra?`<span class="count">${extra}</span>`:''}</div><button class="resume-show-all">${all} ${svg('chev',16)}</button></div>`;
 if(location.hash.includes('poster'))document.body.classList.add('shape-poster');
 const mb=document.getElementById('moreDot');mb.textContent='2';mb.style.display='';
-const busy=location.hash!=='#quiet';
+const busy=!location.hash.includes('quiet');
 let h='';
 if(busy)h+=`<section class="home-row">${sh('Stahování','3 úlohy · 1 vyžaduje pozornost','Zobrazit vše')}<div class="hq">`+
  q('Planeta Země III · E04','Pozastaveno · nedostatek místa','warn',34,'2,7 / 8 GB','Otevřít stahování')+
@@ -54,4 +54,9 @@ h+=`<section class="home-row">${sh('Oblíbené','','Otevřít knihovnu')}<div cl
  media('Modrá planeta','Seriál · v knihovně',1)+media('Severance','Seriál · v knihovně',4)+media('Duna','Film · v knihovně',0)+'</div></section>';
 document.getElementById('rows').innerHTML=h;
 if(location.hash==='#more')setTimeout(()=>document.getElementById('more').classList.add('open'),50);
+const side=document.querySelector('.sidebar');
+const markSide=()=>side.classList.toggle('more-below', side.scrollHeight-side.scrollTop-side.clientHeight>2);
+side.addEventListener('scroll', markSide, {passive:true});
+new ResizeObserver(markSide).observe(side);
+markSide();
 </script></body></html>
