@@ -2,7 +2,9 @@
 
 A static layout study for [the Home specification](../home-spec.md). It links the
 real `web/src/style.css`, so the chrome, tokens and tiles stay current, and adds
-only `home.css`. Open `home.html` straight from disk and resize the window.
+`home.css` plus `home.js`. The script is a separate file because a served copy
+sits behind `script-src 'self'`. Open `home.html` straight from disk and resize
+the window.
 
 - `#poster` switches the shelves to portrait tiles.
 - `#quiet` hides the Downloads row, as with an empty queue.
