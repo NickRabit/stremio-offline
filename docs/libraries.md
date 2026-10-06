@@ -220,8 +220,8 @@ Nothing about a library is hidden in a database:
 | `DATA_PATH/library-scan.json`, `library-ops.json` | An interrupted scan or bulk job, so it resumes instead of restarting. |
 
 Back up `DATA_PATH` and you have the accounts, the addons, the libraries and what
-they remember. The media is a separate question — see
-[downloads.md](downloads.md).
+they remember. The media is a separate question. What to copy, what to leave
+out and how to restore is in [Backing up and restoring](backup.md).
 
 With more than one account, a library is also something an administrator grants:
 it is visible only to the accounts ticked for it, and one that was not granted
