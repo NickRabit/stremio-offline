@@ -305,13 +305,21 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     // address the interface already holds names no shape at all.
     const viewer = viewerOf(currentUser(req));
     const shape: ArtShape = String(req.query.shape ?? "") === "wide" ? "wide" : "poster";
-    const filePath = req.query.path ? libraryKey(String(req.query.path)) : undefined;
-    const dirPath = req.query.dir ? libraryKey(String(req.query.dir)) : undefined;
+    // Resolve before the artwork lookup: a key with a `.`/`..` segment, an absolute path or a
+    // library the viewer may not see is answered like a picture that is not there, and never
+    // reaches the file system. `libraryKey` alone only qualified it, so a traversal slipped past.
+    const keyOf = async (value: unknown) => {
+      if (!value) return undefined;
+      const resolved = await resolveLibraryPath(store.libraries(), String(value));
+      return resolved && libraryVisible(resolved.library, viewer) ? resolved.key : undefined;
+    };
+    const filePath = await keyOf(req.query.path);
+    const dirPath = await keyOf(req.query.dir);
     // A gallery slot is answered by its number, and only for a slot the binding says is there.
     const slot = req.query.gallery === undefined ? undefined : Number(req.query.gallery);
     if (slot !== undefined) {
       const key = filePath ?? dirPath;
-      if (!key || !keyVisible(key, viewer) || !Number.isInteger(slot) || slot < 0 || slot >= galleryOf(key).length) return res.status(404).end();
+      if (!key || !Number.isInteger(slot) || slot < 0 || slot >= galleryOf(key).length) return res.status(404).end();
       const file = galleryArtwork(key, slot);
       if (!file || !await fileExists(file)) return res.status(404).end();
       void artworks.served(file);
@@ -319,11 +327,11 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
       return res.sendFile(file, { dotfiles: "allow" }, (error) => { if (error && !res.headersSent) res.status(404).end(); });
     }
     let art: string | undefined;
-    if (filePath) art = keyVisible(filePath, viewer) ? await locateFileArtwork(filePath, shape) : undefined;
-    else if (dirPath) art = keyVisible(dirPath, viewer) ? await locateFolderArtwork(dirPath, shape) : undefined;
+    if (filePath) art = await locateFileArtwork(filePath, shape);
+    else if (dirPath) art = await locateFolderArtwork(dirPath, shape);
     else {
-      const selected = String(req.query.key ?? "");
-      const entry = (await libraryEntries()).find((item) => item.key === libraryKey(selected) && keyVisible(item.key, viewer));
+      const selected = await keyOf(req.query.key);
+      const entry = selected ? (await libraryEntries()).find((item) => item.key === selected) : undefined;
       art = entry && await locateArtwork(entry, shape);
     }
     if (!art) return res.status(404).end();

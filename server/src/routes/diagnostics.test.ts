@@ -120,3 +120,27 @@ test("POST /api/client-log records at the level the body asks for", async (t) =>
   const written = await readLog({ level: "ERROR" });
   assert.match(written, / ERROR \[web\] video element failed/);
 });
+
+test("POST /api/client-log keeps a forged line out of the log", async (t) => {
+  const dir = await mkdtemp(path.join(tmpdir(), "routes-client-log-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const previousStdout = process.env.LOG_STDOUT;
+  process.env.LOG_STDOUT = "0";
+  t.after(() => { if (previousStdout === undefined) delete process.env.LOG_STDOUT; else process.env.LOG_STDOUT = previousStdout; });
+  await initLogger(dir);
+  setLevel("DEBUG");
+  const harness = await mount();
+  t.after(harness.close);
+  const forged = "2026-01-01T00:00:00.000Z INFO Account deleted";
+  const response = await api(harness.base, "/api/client-log", {
+    method: "POST",
+    body: { level: "INFO", message: `report\r\n${forged}`, context: { note: `x\n${forged}` } },
+  });
+  assert.equal(response.status, 204);
+  await flushLog();
+  const written = await readLog({ level: "INFO" });
+  const lines = written.split("\n").filter(Boolean);
+  assert.equal(lines.length, 1, `the forged line did not split the log\n${written}`);
+  assert.equal(lines[0]!.startsWith(forged), false, "the forged line does not stand as its own record");
+  assert.equal(lines[0]!.includes(forged), true, "the text is kept, on the one line");
+});

@@ -748,7 +748,13 @@ const wirePath = (key: string) => {
 };
 const mediaPath = (key: string, ...rest: string[]) => {
   const { library, relative } = libraryOfKey(key);
-  return path.join(library.root, toFs(posixJoin(relative, ...rest)));
+  // Every route resolves its input first; this is the last line of defence, so a key that
+  // slips through cannot climb out of its library through the file system call.
+  const inside = posixJoin(relative, ...rest);
+  if (/^[\\/]/.test(inside) || /^[A-Za-z]:/.test(inside) || inside.split(/[\\/]/).some((segment) => segment === "." || segment === "..")) {
+    throw new AppError("Invalid path.", "err.invalidPath");
+  }
+  return path.join(library.root, toFs(inside));
 };
 /** Inspecting a library file reads it back over the loopback, so the url carries the
  *  qualified key -- the form `libraryTarget` resolves -- and never the filesystem path
@@ -1573,10 +1579,13 @@ const withFavorites = <T extends { path: string }>(items: T[], data: UserData) =
  *  library job, which runs with no request in hand -- so the account is passed rather than
  *  looked up, and a job that has lost its owner writes nowhere. */
 const setLibraryFavorite = async (relative: string, wanted: boolean, userId: string | undefined) => {
-  const resolved = relative ? await resolveLibraryPath(store.libraries(), relative) : undefined;
+  const owner = userId ? findUserById(store.users(), userId) : undefined;
+  if (!owner) throw new ResourceError(401, "AUTH_REQUIRED");
+  // Resolve against the libraries this account may see, so a library it was not granted
+  // answers exactly like one that does not exist -- the way the read side already filters.
+  const resolved = relative ? await resolveLibraryPath(visibleLibraries(store.libraries(), { id: owner.id, role: owner.role }), relative) : undefined;
   if (!resolved) throw new AppError("Invalid path.", "err.invalidPath");
-  if (!userId) throw new ResourceError(401, "AUTH_REQUIRED");
-  await updateOneData(userId, (data) => {
+  await updateOneData(owner.id, (data) => {
     const current = new Set(data.favorites);
     if (wanted) current.add(resolved.key); else current.delete(resolved.key);
     data.favorites = [...current];
