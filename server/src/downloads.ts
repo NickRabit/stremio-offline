@@ -19,7 +19,6 @@ import { retryAfterMs } from "./outbound.js";
 import {
   classifyFailure, expectedSize, HttpSourceError, IncompleteDownloadError, parseContentRange,
   retryDelayMs, SourceError, StorageError, storageHeadroom, storageMessage, storageResumeNeed,
-  type QueueHalt,
 } from "./download-policy.js";
 import { isRetryableDebridFailure, type DebridAdvance } from "./debrid.js";
 import { playlistArgs } from "./probe.js";
@@ -30,14 +29,9 @@ import {
 } from "./download-segments.js";
 import { readMediaText } from "./media-playlist.js";
 import { preserveDamaged, readStateFile } from "./state-file.js";
+import type { DownloadSnapshot, DownloadStatus, PauseReason, PublicDownload, QueueHalt } from "./api-types.js";
 
-export type { QueueHalt };
-export type DownloadStatus = "queued" | "waiting" | "checking" | "downloading" | "paused" | "completed" | "failed";
-/** `library` is not a fault: the rule's library is switched off, read-only or away, and the job
- *  waits for it rather than landing somewhere the user did not ask for. `permission` is not a
- *  fault either: the account behind the job may no longer queue it, and the job keeps its
- *  place until the right is back. */
-export type PauseReason = "user" | "storage" | "library" | "permission";
+export type { DownloadStatus, PauseReason, QueueHalt };
 export type SubtitleMode = "off" | "optional" | "required";
 /** How hard the requested audio language is. `strict` trusts only what ffprobe reads out of the
  *  file; `listed` lets the addon's own listing say so, for files that carry no language tag at
@@ -442,8 +436,8 @@ export class DownloadQueue {
     if (this.jobs.some((job) => job.status === "paused" && job.pauseReason === "library")) this.watchLibraries();
   }
 
-  list() { return this.jobs.map((job, index) => ({ ...this.publicJob(job), order: index })); }
-  snapshot() { return { jobs: this.list(), halt: this.haltInfo() }; }
+  list(): PublicDownload[] { return this.jobs.map((job, index) => ({ ...this.publicJob(job), order: index })); }
+  snapshot(): DownloadSnapshot { return { jobs: this.list(), halt: this.haltInfo() }; }
   /** Whether any job is moving bytes right now, so the desktop shell can keep the Mac awake. */
   transferring(): boolean {
     return this.jobs.some((job) => job.status === "downloading" || job.status === "checking");
@@ -1035,7 +1029,7 @@ export class DownloadQueue {
 
   private require(id: string) { const job = this.jobs.find((item) => item.id === id); if (!job) throw new AppError("The item was not found.", "err.itemNotFound"); return job; }
   /** Source addresses (often carrying tokens) must not reach the interface; only the lazy flag goes out. */
-  private publicJob(job: DownloadJob) {
+  private publicJob(job: DownloadJob): Omit<PublicDownload, "order"> {
     const { stream, source, subtitle: _subtitle, notBefore: _notBefore, debrid, segments, ...rest } = job;
     return { ...rest, ownerUserId: this.ownerOf(job), pending: !stream && Boolean(source), debridProgress: debrid?.progress, segments: segments?.length };
   }

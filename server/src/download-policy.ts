@@ -1,12 +1,6 @@
 export type FailureClass = "transient" | "source" | "storage" | "pause";
 
-export interface QueueHalt {
-  reason: "storage";
-  at: string;
-  message: string;
-  /** Catalogue key for `message`; the interface renders it in the reader's language. */
-  messageKey?: string;
-}
+export type { QueueHalt } from "./api-types.js";
 
 export class HttpSourceError extends Error {
   constructor(readonly httpStatus: number, message: string, readonly retryAfterMs?: number) {

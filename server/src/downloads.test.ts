@@ -362,6 +362,21 @@ test("a job whose owner lost the right pauses with the permission reason and run
   }
 });
 
+test("the public job carries a permission pause reason unchanged", async () => {
+  const { directory, queue } = await tempQueue({ ownerAllowed: () => false });
+  try {
+    await queue.add("Film", { url: "http://127.0.0.1:1/film.mp4" });
+    await waitFor(queue, () => queue.list()[0]?.status === "paused");
+    await queue.stop();
+    const stored = JSON.parse(await readFile(path.join(directory, "data", "downloads.json"), "utf8")) as Array<{ pauseReason?: string }>;
+    assert.equal(stored[0]?.pauseReason, "permission", "the queue stored the permission reason");
+    assert.equal(queue.list()[0]?.pauseReason, stored[0]?.pauseReason, "publicJob passes the reason through unchanged");
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("an explicitly chosen library that never comes back fails the job instead of taking the default", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-dl-"));
   const downloadDir = path.join(directory, "downloads");
