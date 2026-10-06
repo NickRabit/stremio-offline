@@ -1,7 +1,7 @@
 {
   "name": "@stremio-offline/server",
   "private": true,
-  "version": "0.5.17",
+  "version": "0.5.18",
   "license": "MIT",
   "type": "module",
   "scripts": {
@@ -11,7 +11,8 @@
     "test": "tsx --test src/*.test.ts src/routes/*.test.ts"
   },
   "dependencies": {
-    "express": "5.1.0"
+    "express": "5.1.0",
+    "undici": "7.30.0"
   },
   "devDependencies": {
     "@types/express": "5.0.3",

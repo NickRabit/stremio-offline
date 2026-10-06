@@ -12,6 +12,7 @@ import type { Store, UserPrefs } from "../store.js";
 import type { AddonRecord, AddonRole, CatalogDefinition, MetaItem } from "../types.js";
 import type { UserRecord } from "../users.js";
 import { mediaResources } from "../media-resources.js";
+import { setFetchTransport } from "../security.js";
 import { registerCatalogRoutes, type CatalogDeps } from "./catalog.js";
 
 interface Harness {
@@ -246,19 +247,15 @@ test("GET /api/catalog answers a switched-off addon as an unknown one", async (t
 
 const json = (body: unknown) => new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
 
-/** Serves the addon requests from a stub instead of the network, and leaves the test's own
- *  calls to the loopback server alone. */
+/** Serves the addon requests from a stub instead of the network. The test's own calls to the
+ *  loopback server keep using the global fetch, because only `safeFetch` goes through the seam. */
 async function withStubbedAddons(handler: (url: string) => Response, run: () => Promise<void>) {
-  const originalFetch = globalThis.fetch;
   const originalFlag = process.env.ALLOW_PRIVATE_ADDONS;
   process.env.ALLOW_PRIVATE_ADDONS = "1";
-  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
-    const url = String(input);
-    return /^https?:\/\/(127\.0\.0\.1|localhost)\b/.test(url) ? originalFetch(input, init) : handler(url);
-  }) as typeof fetch;
+  setFetchTransport(async (url) => handler(url.href));
   try { await run(); }
   finally {
-    globalThis.fetch = originalFetch;
+    setFetchTransport();
     if (originalFlag === undefined) delete process.env.ALLOW_PRIVATE_ADDONS;
     else process.env.ALLOW_PRIVATE_ADDONS = originalFlag;
   }

@@ -1,11 +1,111 @@
 import assert from "node:assert/strict";
-import test from "node:test";
-import { privateAddressRefusal, publicAddon, publicAddonRestricted, redirectedHeaders, safeFetch, upstreamRequestHeaders, validateRemoteUrl } from "./security.js";
+import { createServer, type ServerResponse } from "node:http";
+import type { AddressInfo } from "node:net";
+import test, { type TestContext } from "node:test";
+import { privateAddressRefusal, publicAddon, publicAddonRestricted, redirectedHeaders, safeFetch, setDnsLookup, setFetchTransport, upstreamRequestHeaders, validateRemoteUrl } from "./security.js";
 import { defaultDownloadSettings } from "./naming.js";
 import type { AddonRecord } from "./types.js";
 
 const source = new URL("https://provider.test/media");
 const credentials = { Authorization: "Bearer secret", Cookie: "session=secret", "X-Api-Key": "secret", Referer: "https://provider.test/secret", Range: "bytes=10-20" };
+
+type Lookup = NonNullable<Parameters<typeof setDnsLookup>[0]>;
+
+/** A loopback server for the test's own traffic, counting the paths it was asked for. */
+async function loopbackServer(handler: (path: string, response: ServerResponse) => void) {
+  const hits: string[] = [];
+  const server = createServer((request, response) => {
+    hits.push(request.url ?? "");
+    handler(request.url ?? "", response);
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as AddressInfo;
+  return {
+    port,
+    hits,
+    close: async () => {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    },
+  };
+}
+
+/** Test seam: answers each host from its list, repeating the last answer for later questions. */
+function useLookup(t: TestContext, answers: Record<string, string[]>): void {
+  const asked = new Map<string, number>();
+  const lookup: Lookup = (hostname, options, callback) => {
+    const list = answers[hostname] ?? ["127.0.0.1"];
+    const index = Math.min(asked.get(hostname) ?? 0, list.length - 1);
+    asked.set(hostname, (asked.get(hostname) ?? 0) + 1);
+    const address = list[index]!;
+    if (options.all) callback(null, [{ address, family: 4 }]);
+    else callback(null, address, 4);
+  };
+  setDnsLookup(lookup);
+  t.after(() => setDnsLookup());
+}
+
+const withEnv = (t: TestContext, name: string, value: string) => {
+  process.env[name] = value;
+  t.after(() => { delete process.env[name]; });
+};
+
+test("a name that rebinds between the check and the connection is refused without a request", async (t) => {
+  const server = await loopbackServer((_path, response) => { response.writeHead(200); response.end("ok"); });
+  t.after(server.close);
+  useLookup(t, { "nas.example": ["93.184.216.34", "127.0.0.1"] });
+
+  await assert.rejects(safeFetch(`http://nas.example:${server.port}/admin`), (error: { messageKey?: string }) => {
+    assert.equal(error.messageKey, "err.privateAddon");
+    return true;
+  });
+  assert.deepEqual(server.hits, [], "the connection must not be opened at all");
+});
+
+test("an address the allow list covers still reaches the local server", async (t) => {
+  const server = await loopbackServer((_path, response) => { response.writeHead(200, { "content-type": "text/plain" }); response.end("ok"); });
+  t.after(server.close);
+  withEnv(t, "ALLOW_ADDON_HOSTS", "lan.example");
+  useLookup(t, { "lan.example": ["127.0.0.1"] });
+
+  const response = await safeFetch(`http://lan.example:${server.port}/manifest.json`);
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), "ok");
+  assert.deepEqual(server.hits, ["/manifest.json"]);
+});
+
+test("ALLOW_PRIVATE_ADDONS reaches a local server", async (t) => {
+  const server = await loopbackServer((_path, response) => { response.writeHead(200); response.end("ok"); });
+  t.after(server.close);
+  withEnv(t, "ALLOW_PRIVATE_ADDONS", "1");
+  useLookup(t, { "local.example": ["127.0.0.1"] });
+
+  assert.equal((await safeFetch(`http://local.example:${server.port}/manifest.json`)).status, 200);
+  assert.deepEqual(server.hits, ["/manifest.json"]);
+});
+
+test("a redirect to a name that rebinds is refused the same way", async (t) => {
+  let port = 0;
+  const server = await loopbackServer((path, response) => {
+    if (path === "/start") {
+      response.writeHead(302, { location: `http://nas.example:${port}/admin` });
+      response.end();
+      return;
+    }
+    response.writeHead(200);
+    response.end("ok");
+  });
+  port = server.port;
+  t.after(server.close);
+  withEnv(t, "ALLOW_ADDON_HOSTS", "start.example");
+  useLookup(t, { "start.example": ["127.0.0.1"], "nas.example": ["93.184.216.34", "127.0.0.1"] });
+
+  await assert.rejects(safeFetch(`http://start.example:${port}/start`), (error: { messageKey?: string }) => {
+    assert.equal(error.messageKey, "err.privateAddon");
+    return true;
+  });
+  assert.deepEqual(server.hits, ["/start"]);
+});
 
 test("redirects preserve source headers only within the same origin", () => {
   assert.equal(redirectedHeaders(credentials, source, new URL("/next", source)).get("authorization"), "Bearer secret");
@@ -19,13 +119,14 @@ test("redirect bodies are canceled and credentials cannot return after an origin
   t.after(() => { delete process.env.ALLOW_PRIVATE_ADDONS; });
   let canceled = 0;
   const calls: Headers[] = [];
-  t.mock.method(globalThis, "fetch", async (_url: URL, init: RequestInit) => {
+  setFetchTransport(async (_url, init) => {
     calls.push(new Headers(init.headers));
     if (calls.length === 3) return new Response("media");
     return new Response(new ReadableStream({ cancel() { canceled++; } }), {
       status: 302, headers: { location: calls.length === 1 ? "https://cdn.test/media" : source.href },
     });
   });
+  t.after(() => setFetchTransport());
   const response = await safeFetch(source.href, { headers: credentials });
   assert.equal(await response.text(), "media");
   assert.equal(canceled, 2);
@@ -39,14 +140,15 @@ test("redirect bodies are canceled and credentials cannot return after an origin
 test("invalid, missing and excessive redirects cancel their bodies before failing", async (t) => {
   process.env.ALLOW_PRIVATE_ADDONS = "1";
   t.after(() => { delete process.env.ALLOW_PRIVATE_ADDONS; });
+  t.after(() => setFetchTransport());
   for (const location of [undefined, "file:///secret", "https://cdn.test/loop"]) {
     let canceled = 0;
-    const mock = t.mock.method(globalThis, "fetch", async () => new Response(new ReadableStream({ cancel() { canceled++; } }), {
+    setFetchTransport(async () => new Response(new ReadableStream({ cancel() { canceled++; } }), {
       status: 302, headers: location ? { location } : {},
     }));
     await assert.rejects(safeFetch(source.href, {}, 1));
     assert.equal(canceled, location === "https://cdn.test/loop" ? 2 : 1);
-    mock.mock.restore();
+    setFetchTransport();
   }
 });
 
