@@ -1225,7 +1225,7 @@ const describeLibraryPath = async (key: string, read?: WalkRead) => {
  *  An episode still is a landscape frame, so it serves the wide shape as it is; the portrait
  *  one keeps its own slot. */
 async function locateFileArtwork(key: string, shape: ArtShape = "poster") {
-  const media = path.join(posixDir(mediaPath(key)), episodeArtName(posixBase(key)));
+  const media = path.join(path.dirname(mediaPath(key)), episodeArtName(posixBase(key)));
   const unit = unitFor(key, await libraryUnits());
   // The key that supplied the file's binding, not the folder's: a file the user bound on its
   // own path keeps that key, so the folder's picture is not mistaken for its own.
@@ -1310,7 +1310,7 @@ const removeGeneratedArt = async (key: string) => {
  *  keeps the name it has always had; the wide one is the backdrop Jellyfin and Emby read. */
 const besideMediaTarget = (key: string, shape: ArtShape) =>
   isFileKey(key)
-    ? path.join(posixDir(mediaPath(key)), shape === "wide" ? BACKDROP_OUTPUT : episodeArtName(posixBase(key)))
+    ? path.join(path.dirname(mediaPath(key)), shape === "wide" ? BACKDROP_OUTPUT : episodeArtName(posixBase(key)))
     : path.join(mediaPath(key), artOutput(shape));
 /** Whether a file's backdrop may be dropped next to the media. The backdrop of a folder is a
  *  title's picture only where the folder is the film's own -- the same gate the poster goes

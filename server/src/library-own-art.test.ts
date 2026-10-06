@@ -25,10 +25,7 @@ const waitFor = async <T>(what: string, read: () => Promise<T | undefined>, time
   throw new Error(`Timed out waiting for ${what}`);
 };
 
-// On the Windows CI runner the catalogue still is never written beside 02.mkv either, so the
-// control half times out; why is not known yet and is tracked on its own. The rule under test
-// is platform-independent.
-test("matching an episode writes the catalogue still beside it but never over the user's own", { skip: process.platform === "win32" && "the beside-media write does not land on the Windows runner" }, async () => {
+test("matching an episode writes the catalogue still beside it but never over the user's own", async () => {
   let base = "";
   const catalogue: Server = createServer((req, res) => {
     if ((req.url ?? "").startsWith("/meta/series/")) {
