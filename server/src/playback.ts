@@ -216,6 +216,9 @@ const ORPHAN_MS = 90_000;
 // Requests sent just before a transcode restart arrive at the new generation. hls.js treats a 404
 // on a playlist as fatal, so the old generation is kept around for a while.
 const RETIRED_MS = 15_000;
+// A kill we can only confirm through the child's own exit event; bounded so a stubborn child
+// cannot hold a seek open. The retry's purge needs the exit to see the process as dead.
+const KILLED_EXIT_MS = 2_000;
 // The version probe is retried once with more room: a loaded host can push the first exec past
 // the shorter limit, and losing the answer costs speed on every start and seek until a restart.
 const VERSION_TIMEOUTS_MS = [10_000, 30_000];
@@ -873,6 +876,15 @@ export class PlaybackManager {
     return this.mediafoundation ? "mediafoundation" : null;
   }
 
+  /** A hardware pass that opened the film clears its accelerator's streak: only *consecutive*
+   *  failures should switch a path off, so one bad file does not cost the GPU until restart. */
+  private clearFailures(accelerator: "vaapi" | "nvenc" | "videotoolbox" | "mediafoundation") {
+    if (accelerator === "videotoolbox") this.videotoolboxFailures = 0;
+    else if (accelerator === "mediafoundation") this.mediafoundationFailures = 0;
+    else if (accelerator === "nvenc") this.nvencFailures = 0;
+    else this.vaapiFailures = 0;
+  }
+
   private async checkVideotoolbox() {
     try {
       await this.runVideotoolboxProbe(["-q:v", "60"]);
@@ -987,7 +999,11 @@ export class PlaybackManager {
       }
       firstAttempt = false;
       const url = await this.run(session, offset, directory, hardware);
-      if (url) return url;
+      if (url) {
+        // The pass opened the film on that accelerator, which proves it works after all.
+        if (hardware && accelerator) this.clearFailures(accelerator);
+        return url;
+      }
       // Closed while this attempt was opening: nothing failed, and the path it ran on is not to blame.
       if (session.stopped) break;
       // A source that answers 404 will answer the same to the software attempt.
@@ -1099,7 +1115,13 @@ export class PlaybackManager {
       log("DEBUG", "FFmpeg is producing segments", { id: session.id, generation: session.generation, hardware, segments, ms: Date.now() - startedAt });
       return url;
     }
-    if (!finished) { child.kill("SIGKILL"); session.error ||= "The conversion did not get going within 40 seconds."; }
+    if (!finished) {
+      child.kill("SIGKILL");
+      // exitCode/signalCode stay null until the child's exit event, and the retry's purge reads
+      // them: without this wait the software pass reuses the failed pass's directory.
+      await this.awaitExit(child, KILLED_EXIT_MS);
+      session.error ||= "The conversion did not get going within 40 seconds.";
+    }
     session.error ||= describeFailure(stderr, exitCode);
     log("ERROR", "The conversion could not be started", {
       id: session.id, offset: Math.round(offset), mode: session.mode, hardware, exitCode,
@@ -1303,6 +1325,16 @@ export class PlaybackManager {
       const giveUp = setTimeout(() => resolve(), 6000);
       child.once("exit", () => { clearTimeout(force); clearTimeout(giveUp); resolve(); });
       child.kill("SIGTERM");
+    });
+  }
+
+  /** Resolves once the child really exited, or after `ms`. The purge guard cannot tell a killed
+   *  child from a live one until its exit event, so the retry has to wait here before purging. */
+  private awaitExit(child: ChildProcess, ms: number): Promise<void> {
+    if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
+    return new Promise((resolve) => {
+      const timer = setTimeout(resolve, ms);
+      child.once("exit", () => { clearTimeout(timer); resolve(); });
     });
   }
 

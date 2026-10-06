@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { EventEmitter } from "node:events";
-import { writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { PlaybackManager, SOURCE_UNREACHABLE, SerialOperations, describeFailure, hlsCanStart, hlsPlaylistFiles, isPlaylistSource, sourceReachable, nvencBusy } from "./playback.js";
@@ -1472,6 +1473,92 @@ test("a player closed during a hardware seek does not count against the GPU", as
   assert.equal((await manager.seek(failing.id, 1200)).seekRestored, true);
   assert.equal(manager.vaapiFailures, 2);
   assert.equal(manager.vaapiDevice, undefined);
+});
+
+test("a GPU failure, then a success, then another failure leaves the accelerator on", async () => {
+  const manager = new PlaybackManager(tmp("test-hardware-streak")) as any;
+  manager.vaapiDevice = "/dev/dri/renderD128";
+  manager.softwareEncoder = true;
+  manager.plan = () => ({ copyVideo: false, copyAudio: false });
+  manager.killChild = async () => {};
+  manager.purgeNow = async () => {};
+  // The software pass only runs when the hardware one fails, and always opens the film.
+  let gpuWorks = false;
+  manager.run = async (session: any, _offset: number, _directory: string, hardware: boolean) => {
+    session.process = { exitCode: hardware && !gpuWorks ? 1 : 0, signalCode: null };
+    if (hardware && !gpuWorks) { session.error = "Failed to initialise VAAPI connection"; return undefined; }
+    return "/hls";
+  };
+  const play = (id: string) => manager.spawnAt(remuxSession(manager, { id, mode: "transcode", generation: 0 }), 0);
+
+  await play("first");             // one bad file: the GPU fails once, software carries it
+  assert.equal(manager.vaapiFailures, 1);
+  gpuWorks = true;
+  await play("second");            // a GPU pass that opens the film resets the streak
+  assert.equal(manager.vaapiFailures, 0);
+  gpuWorks = false;
+  await play("third");             // one further failure is not a streak, so the GPU stays on
+  assert.equal(manager.vaapiFailures, 1);
+  assert.equal(manager.vaapiDevice, "/dev/dri/renderD128");
+});
+
+test("two consecutive GPU failures still switch the accelerator off", async () => {
+  const manager = new PlaybackManager(tmp("test-hardware-off")) as any;
+  manager.vaapiDevice = "/dev/dri/renderD128";
+  manager.softwareEncoder = true;
+  manager.plan = () => ({ copyVideo: false, copyAudio: false });
+  manager.killChild = async () => {};
+  manager.purgeNow = async () => {};
+  manager.run = async (session: any, _offset: number, _directory: string, hardware: boolean) => {
+    session.process = { exitCode: hardware ? 1 : 0, signalCode: null };
+    if (hardware) { session.error = "Failed to initialise VAAPI connection"; return undefined; }
+    return "/hls";
+  };
+  const play = (id: string) => manager.spawnAt(remuxSession(manager, { id, mode: "transcode", generation: 0 }), 0);
+
+  await play("first");
+  await play("second");
+  assert.equal(manager.vaapiFailures, 2);
+  assert.equal(manager.vaapiDevice, undefined);
+});
+
+test("a timed-out hardware pass is dead before the retry purges its directory", { timeout: 20_000 }, async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "playback-retry-"));
+  const fake = path.join(directory, "ffmpeg");
+  // A conversion that started and then stopped producing output, standing in for a timed-out pass.
+  await writeFile(fake, "#!/usr/bin/env node\nsetInterval(() => {}, 1000);\n");
+  await chmod(fake, 0o755);
+  const originalBinary = process.env.FFMPEG_PATH;
+  process.env.FFMPEG_PATH = fake;
+  t.after(() => { if (originalBinary === undefined) delete process.env.FFMPEG_PATH; else process.env.FFMPEG_PATH = originalBinary; });
+
+  const root = await mkdtemp(path.join(os.tmpdir(), "playback-retry-root-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const manager = new PlaybackManager(root) as any;
+  manager.vaapiDevice = "/dev/dri/renderD128";
+  manager.softwareEncoder = true;
+  // copyRejected forces a real transcode, so the first pass is the hardware one.
+  const session = remuxSession(manager, { id: "retry", mode: "transcode", generation: 0, copyRejected: true });
+  // What the failed hardware pass left behind; the software retry must not inherit it.
+  const generation = path.join(root, "playback", session.id, "1");
+  await mkdir(generation, { recursive: true });
+  await writeFile(path.join(generation, "index-0.m3u8"), "#EXTM3U\n#EXT-X-VERSION:7\n");
+
+  const seen: { hardware: boolean; playlist: boolean }[] = [];
+  const realArgs = manager.args.bind(manager);
+  manager.args = (target: any, offset: number, folder: string, hardware: boolean, playlist: string[]) => {
+    seen.push({ hardware, playlist: existsSync(path.join(folder, "index-0.m3u8")) });
+    return realArgs(target, offset, folder, hardware, playlist);
+  };
+
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  let done = false;
+  const failed = manager.spawnAt(session, 0).catch(() => undefined).finally(() => { done = true; });
+  while (!done) { await flushPlayback(); t.mock.timers.tick(100); }
+  await failed;
+  assert.deepEqual(seen.map((pass) => pass.hardware), [true, false], "a hardware pass, then a software retry");
+  assert.equal(seen[0].playlist, true, "the failed pass's playlist is in the directory to begin with");
+  assert.equal(seen[1].playlist, false, "the retry purged it before the software pass started");
 });
 
 for (const scenario of ["dead fallback", "decode recovery"] as const) {

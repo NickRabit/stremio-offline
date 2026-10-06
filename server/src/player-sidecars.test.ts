@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { Writable } from "node:stream";
 import test from "node:test";
-import { PlayerSidecars, SIDECAR_AHEAD_S, SIDECAR_LEAD_S, SIDECAR_RETRY_MS } from "./player-sidecars.js";
+import { extractInto, PlayerSidecars, SIDECAR_AHEAD_S, SIDECAR_LEAD_S, SIDECAR_RETRY_MS } from "./player-sidecars.js";
 
 /** A fake reader waits for its abort. The abort may already have fired while the fake was still
  *  starting -- the Windows runner is slow enough for that -- and a listener added then never hears
@@ -42,6 +43,31 @@ test("a seek past everything the reader has written starts one at the new positi
     while (starts.length < 2) await tick();
     assert.deepEqual(starts, [3000, 6600]);
   } finally { await sidecars.stop("session"); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("a sidecar write error takes the extraction FFmpeg with it", {
+  skip: process.platform === "win32" ? "needs a POSIX executable on PATH" : false,
+}, async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "sidecar-write-error-"));
+  const executable = path.join(directory, "ffmpeg");
+  const marker = path.join(directory, "reader.pid");
+  await writeFile(executable, `#!/usr/bin/env node\nrequire("node:fs").writeFileSync(${JSON.stringify(marker)}, String(process.pid));\nprocess.stdout.write("WEBVTT\\n\\n");\nsetInterval(() => {}, 1000);\n`);
+  await chmod(executable, 0o755);
+  const original = process.env.FFMPEG_PATH;
+  process.env.FFMPEG_PATH = executable;
+  try {
+    // A full disk: the file opens, then refuses the first cue FFmpeg writes through it.
+    const failing = new Writable({ write(_chunk, _encoding, next) { next(new Error("no space left on device")); } });
+    process.nextTick(() => failing.emit("open"));
+    await assert.rejects(extractInto(failing, [], false, new AbortController().signal), /no space left on device/);
+    const pid = Number(await readFile(marker, "utf8"));
+    const gone = () => { try { process.kill(pid, 0); return false; } catch { return true; } };
+    for (let waited = 0; !gone() && waited < 2000; waited += 20) await tick();
+    assert.ok(gone(), "the write error killed the child instead of leaving it to the backstop");
+  } finally {
+    if (original === undefined) delete process.env.FFMPEG_PATH; else process.env.FFMPEG_PATH = original;
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("seeking forward keeps the reader that is already writing those cues", async () => {
