@@ -216,9 +216,6 @@ const ORPHAN_MS = 90_000;
 // Requests sent just before a transcode restart arrive at the new generation. hls.js treats a 404
 // on a playlist as fatal, so the old generation is kept around for a while.
 const RETIRED_MS = 15_000;
-// A kill we can only confirm through the child's own exit event; bounded so a stubborn child
-// cannot hold a seek open. The retry's purge needs the exit to see the process as dead.
-const KILLED_EXIT_MS = 2_000;
 // The version probe is retried once with more room: a loaded host can push the first exec past
 // the shorter limit, and losing the answer costs speed on every start and seek until a restart.
 const VERSION_TIMEOUTS_MS = [10_000, 30_000];
@@ -242,6 +239,9 @@ export const describeFailure = (stderr: string, code: number | null) => {
 export class PlaybackManager {
   private previews = new PlayerPreviews();
   private sessions = new Map<string, Session>();
+  /** Conversions this manager SIGKILLed after they timed out. Their exit event can lag behind the
+   *  retry, and a process already sent SIGKILL is not one the purge has to protect. */
+  private readonly abandoned = new WeakSet<ChildProcess>();
   private inspected = new Map<string, { info?: MediaInfo; at: number }>();
   private inspecting = new Map<string, Promise<MediaInfo | undefined>>();
   private sidecars = new PlayerSidecars(undefined, (id, error) => {
@@ -1117,9 +1117,9 @@ export class PlaybackManager {
     }
     if (!finished) {
       child.kill("SIGKILL");
-      // exitCode/signalCode stay null until the child's exit event, and the retry's purge reads
-      // them: without this wait the software pass reuses the failed pass's directory.
-      await this.awaitExit(child, KILLED_EXIT_MS);
+      // exitCode/signalCode stay null until the child's exit event, which can come after the
+      // retry's purge: remembered here, the purge knows this one is no longer writing.
+      this.abandoned.add(child);
       session.error ||= "The conversion did not get going within 40 seconds.";
     }
     session.error ||= describeFailure(stderr, exitCode);
@@ -1328,16 +1328,6 @@ export class PlaybackManager {
     });
   }
 
-  /** Resolves once the child really exited, or after `ms`. The purge guard cannot tell a killed
-   *  child from a live one until its exit event, so the retry has to wait here before purging. */
-  private awaitExit(child: ChildProcess, ms: number): Promise<void> {
-    if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
-    return new Promise((resolve) => {
-      const timer = setTimeout(resolve, ms);
-      child.once("exit", () => { clearTimeout(timer); resolve(); });
-    });
-  }
-
   /** Deleting the directory a conversion is writing into takes the film down with it: the HLS
    *  muxer cannot rename its playlist and exits. Whoever asks, the one that is playing stays. */
   private async purge(directory: string, why = "cleanup") {
@@ -1345,7 +1335,8 @@ export class PlaybackManager {
     // a failed hardware attempt depends on that. Only a process still writing there is protected.
     const playing = [...this.sessions.values()].find((session) =>
       session.directory === directory && !session.stopped
-      && session.process !== undefined && session.process.exitCode === null && session.process.signalCode === null);
+      && session.process !== undefined && session.process.exitCode === null && session.process.signalCode === null
+      && !this.abandoned.has(session.process as ChildProcess));
     if (playing) {
       log("WARN", "Refused to delete the generation that is playing", { id: playing.id, generation: playing.generation, why });
       return;
