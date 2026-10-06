@@ -1,5 +1,8 @@
 import { expect, test } from "@playwright/test";
 import { addonManifest } from "../../../playwright.config";
+import { forgetFilm } from "../film-progress";
+
+test.beforeEach(async ({ request }) => { await forgetFilm(request); });
 
 test.afterEach(async ({ request }) => {
   await request.get(new URL("/proxy-control?mode=video", addonManifest).href);

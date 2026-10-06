@@ -1,4 +1,7 @@
 import { expect, test } from "@playwright/test";
+import { forgetFilm } from "./film-progress";
+
+test.beforeEach(async ({ request }) => { await forgetFilm(request); });
 
 test("Safari landscape keeps document scrolling available and restores its position", async ({ page }) => {
   await page.goto("/");
