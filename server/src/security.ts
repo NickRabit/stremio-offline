@@ -1,6 +1,7 @@
 import { AppError } from "./errors.js";
-import dns from "node:dns/promises";
-import net from "node:net";
+import nodeDns, { type LookupAddress, type LookupOptions } from "node:dns";
+import net, { type LookupFunction } from "node:net";
+import { Agent, fetch as undiciFetch } from "undici";
 import { log } from "./logger.js";
 
 /** Ranges the server must not reach on an outside request: its own machine, the LAN, and cloud metadata. */
@@ -30,7 +31,10 @@ function privateReason(ip: string): string | undefined {
   return undefined;
 }
 
-const allowedHosts = new Set((process.env.ALLOW_ADDON_HOSTS ?? "").split(",").map((host) => host.trim().toLowerCase()).filter(Boolean));
+/** Read at call time, not at load: a test points ALLOW_ADDON_HOSTS at a name it controls. */
+const privateAddressAllowed = (host: string): boolean =>
+  process.env.ALLOW_PRIVATE_ADDONS === "1" ||
+  (process.env.ALLOW_ADDON_HOSTS ?? "").split(",").map((entry) => entry.trim().toLowerCase()).includes(host);
 
 /** The desktop app's own backend has no environment its user can edit, so the way out it names
  *  is the switch on the app's connection screen. The reason stays in the log above. */
@@ -55,10 +59,10 @@ export async function validateRemoteUrl(raw: string): Promise<URL> {
   if (url.username || url.password) throw new AppError("The URL must not contain a username or password.", "err.credentialsInUrl");
 
   const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
-  if (process.env.ALLOW_PRIVATE_ADDONS === "1" || allowedHosts.has(host)) return url;
+  if (privateAddressAllowed(host)) return url;
 
-  let results: Array<{ address: string }>;
-  try { results = await dns.lookup(host, { all: true }); }
+  let results: LookupAddress[];
+  try { results = await lookupAll(host); }
   catch { throw new Error(`The name ${host} could not be resolved to an IP address.`); }
   if (!results.length) throw new Error(`The name ${host} has no IP address.`);
 
@@ -72,6 +76,73 @@ export async function validateRemoteUrl(raw: string): Promise<URL> {
   return url;
 }
 
+type LookupResult = (error: NodeJS.ErrnoException | null, address?: string | LookupAddress[], family?: number) => void;
+type DnsLookup = (hostname: string, options: LookupOptions, callback: LookupResult) => void;
+
+const systemLookup: DnsLookup = (hostname, options, callback) => {
+  (nodeDns.lookup as unknown as DnsLookup)(hostname, options, callback);
+};
+
+let dnsLookup: DnsLookup = systemLookup;
+
+/** Test seam: the resolver behind both the early URL check and the connection-time lookup.
+ *  Pass nothing to restore the system resolver. Production never calls it. */
+export function setDnsLookup(lookup?: DnsLookup): void {
+  dnsLookup = lookup ?? systemLookup;
+}
+
+const lookupAll = (host: string): Promise<LookupAddress[]> =>
+  new Promise((resolve, reject) => {
+    dnsLookup(host, { all: true }, (error, address) => {
+      if (error) reject(error);
+      else resolve(Array.isArray(address) ? address : []);
+    });
+  });
+
+/** The agent asks this at connection time, so a name whose first answer was public cannot
+ *  answer a private address when the socket is actually opened. */
+const checkedLookup: DnsLookup = (hostname, options, callback) => {
+  dnsLookup(hostname, options, (error, address, family) => {
+    if (error) { callback(error); return; }
+    const answers = Array.isArray(address) ? address : [{ address: address as string, family: family ?? 4 }];
+    for (const answer of answers) {
+      const reason = privateReason(answer.address);
+      if (!reason || privateAddressAllowed(hostname.toLowerCase())) continue;
+      log("WARN", "Blocked an address outside the public network", { host: hostname, ip: answer.address, reason });
+      callback(privateAddressRefusal(hostname, answer.address));
+      return;
+    }
+    if (options.all) callback(null, answers);
+    else callback(null, answers[0]?.address, answers[0]?.family);
+  });
+};
+
+const agent = new Agent({ connect: { lookup: checkedLookup as unknown as LookupFunction } });
+
+type FetchTransport = (url: URL, init: RequestInit) => Promise<Response>;
+
+const pinnedTransport: FetchTransport = (url, init) =>
+  undiciFetch(url, { ...init, dispatcher: agent } as Parameters<typeof undiciFetch>[1]) as unknown as Promise<Response>;
+
+let transport: FetchTransport = pinnedTransport;
+
+/** Test seam: what `safeFetch` sends through. Pass nothing to restore the pinned undici
+ *  transport. Production never calls it. */
+export function setFetchTransport(next?: FetchTransport): void {
+  transport = next ?? pinnedTransport;
+}
+
+/** A refused lookup surfaces as the fetch rejection's `cause`; the caller wants the AppError. */
+const send = async (url: URL, init: RequestInit): Promise<Response> => {
+  try {
+    return await transport(url, init);
+  } catch (error) {
+    if (error instanceof AppError) throw error;
+    if ((error as { cause?: unknown } | null)?.cause instanceof AppError) throw (error as { cause: AppError }).cause;
+    throw error;
+  }
+};
+
 const responseHeaders = new WeakMap<Response, Headers>();
 
 export function upstreamRequestHeaders(response: Response): Headers {
@@ -82,7 +153,7 @@ export async function safeFetch(raw: string, init: RequestInit = {}, maxRedirect
   let url = await validateRemoteUrl(raw);
   let headers = new Headers(init.headers);
   for (let redirect = 0; redirect <= maxRedirects; redirect += 1) {
-    const response = await fetch(url, { ...init, headers, redirect: "manual" });
+    const response = await send(url, { ...init, headers, redirect: "manual" });
     if (![301, 302, 303, 307, 308].includes(response.status)) {
       responseHeaders.set(response, headers);
       return response;

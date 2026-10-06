@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { clearTrailerCache, cinemetaTrailer, trailerFor } from "./trailers.js";
 import { defaultDownloadSettings } from "./naming.js";
+import { setFetchTransport } from "./security.js";
 import type { AddonRecord } from "./types.js";
 
 const cinemeta = (): AddonRecord => ({
@@ -13,13 +14,12 @@ const cinemeta = (): AddonRecord => ({
 const json = (body: unknown) => new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
 
 async function withFetch(handler: (url: string) => Response, run: () => Promise<void>) {
-  const original = globalThis.fetch;
   const allow = process.env.ALLOW_PRIVATE_ADDONS;
   process.env.ALLOW_PRIVATE_ADDONS = "1";
-  globalThis.fetch = (async (url: string | URL | Request) => handler(String(url))) as typeof fetch;
+  setFetchTransport(async (url) => handler(String(url)));
   try { await run(); }
   finally {
-    globalThis.fetch = original;
+    setFetchTransport();
     if (allow === undefined) delete process.env.ALLOW_PRIVATE_ADDONS;
     else process.env.ALLOW_PRIVATE_ADDONS = allow;
   }

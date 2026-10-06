@@ -6,6 +6,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises
 import os from "node:os";
 import path from "node:path";
 import { PlaybackManager, SOURCE_UNREACHABLE, SerialOperations, describeFailure, hlsCanStart, hlsPlaylistFiles, isPlaylistSource, sourceReachable, nvencBusy } from "./playback.js";
+import { setFetchTransport } from "./security.js";
 
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -724,14 +725,16 @@ test("concurrent inspect of the same URL runs ffprobe once", async () => {
 test("sourceReachable answers from a one-byte range request", async (t) => {
   process.env.ALLOW_PRIVATE_ADDONS = "1";
   t.after(() => { delete process.env.ALLOW_PRIVATE_ADDONS; });
-  t.mock.method(globalThis, "fetch", async () => new Response(null, { status: 206 }));
+  setFetchTransport(async () => new Response(null, { status: 206 }));
+  t.after(() => setFetchTransport());
   assert.equal(await sourceReachable({ url: "https://cdn.example/movie.mkv" }), true);
 });
 
 test("sourceReachable is false for a connection the source refuses", async (t) => {
   process.env.ALLOW_PRIVATE_ADDONS = "1";
   t.after(() => { delete process.env.ALLOW_PRIVATE_ADDONS; });
-  t.mock.method(globalThis, "fetch", async () => { throw new Error("connect ECONNREFUSED"); });
+  setFetchTransport(async () => { throw new Error("connect ECONNREFUSED"); });
+  t.after(() => setFetchTransport());
   assert.equal(await sourceReachable({ url: "https://cdn.example/movie.mkv" }), false);
 });
 
@@ -744,7 +747,8 @@ test("sourceReachable skips the check for a local file", async (t) => {
 test("an unreachable source is never handed to ffprobe", async (t) => {
   process.env.ALLOW_PRIVATE_ADDONS = "1";
   t.after(() => { delete process.env.ALLOW_PRIVATE_ADDONS; });
-  t.mock.method(globalThis, "fetch", async () => { throw new Error("connect ETIMEDOUT"); });
+  setFetchTransport(async () => { throw new Error("connect ETIMEDOUT"); });
+  t.after(() => setFetchTransport());
   const manager = new PlaybackManager(tmp("test-playback")) as any;
   const info = await manager.inspect({ url: "https://cdn.example/movie.mkv" });
   assert.equal(info, undefined);

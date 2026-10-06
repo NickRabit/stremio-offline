@@ -3,6 +3,7 @@ import test from "node:test";
 import { addonAllowed, addonMetadataLanguage, allowedAddons, metadata, orderedForUser, searchableCatalogs, streamCandidates } from "./addons.js";
 import type { Viewer } from "./libraries.js";
 import { defaultDownloadSettings } from "./naming.js";
+import { setFetchTransport } from "./security.js";
 import type { AddonRecord } from "./types.js";
 
 const addon = (key: string, globalSearch = true): AddonRecord => ({
@@ -109,13 +110,12 @@ const metaAddon = (key: string): AddonRecord => ({
 
 /** Serves the addon requests from a stub instead of the network. */
 async function withStubbedAddons(handler: (url: string) => Response, run: () => Promise<void>) {
-  const originalFetch = globalThis.fetch;
   const originalFlag = process.env.ALLOW_PRIVATE_ADDONS;
   process.env.ALLOW_PRIVATE_ADDONS = "1";
-  globalThis.fetch = (async (url: string | URL | Request) => handler(String(url))) as typeof fetch;
+  setFetchTransport(async (url) => handler(String(url)));
   try { await run(); }
   finally {
-    globalThis.fetch = originalFetch;
+    setFetchTransport();
     if (originalFlag === undefined) delete process.env.ALLOW_PRIVATE_ADDONS;
     else process.env.ALLOW_PRIVATE_ADDONS = originalFlag;
   }
