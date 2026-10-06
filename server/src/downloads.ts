@@ -1298,14 +1298,57 @@ export class DownloadQueue {
     }
   }
 
-  private async commit(job: DownloadJob, partial: string, target: string) {
-    const files = this.subtitleFiles(job);
-    const moveSubtitle = Boolean(files && await exists(files.partial));
-    if (moveSubtitle && files) await rename(files.partial, files.target);
+  /** A finished download never replaces what took its name while it was in flight: the final
+   *  name is claimed with an exclusive create, and a name already taken sends the file to the
+   *  next free one -- the same `(2)` naming a fresh download gets. The empty file this leaves
+   *  is what the rename below replaces, so nothing that was already there is ever lost. */
+  private async reserveTarget(job: DownloadJob, target: string): Promise<string> {
+    const libraryId = job.libraryId ?? parseLibraryPath(job.target)?.libraryId;
+    const library = libraryId ? this.libraries().find((item) => item.id === libraryId) : undefined;
+    const extension = job.stream ? streamExtension(job.stream) : path.extname(target);
+    const { directory, base } = targetPath(job.media, job.title, extension, job.targetSettings ?? defaultDownloadSettings().movie);
+    let reserved = target;
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      try {
+        const handle = await open(reserved, "wx");
+        await handle.close();
+        return reserved;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        // An empty file is this call's own placeholder from a run a crash stopped before the
+        // rename: taking it back replaces nothing.
+        const held = await stat(reserved).catch(() => undefined);
+        if (held?.isFile() && held.size === 0) return reserved;
+        job.target = await this.uniqueTarget(library, directory, base, extension);
+        this.targetsInFlight.delete(job.target);
+        reserved = this.jobPath(job) ?? target;
+        log("INFO", "The download's name was taken meanwhile, it was published under another", { id: job.id, title: job.title, target: job.target });
+      }
+    }
+    throw new AppError("Could not find a free file name.", "err.noFreeName");
+  }
+
+  /** The empty file `commit` made to claim the name. It goes only while nothing took its place. */
+  private async dropPlaceholder(file: string) {
     try {
-      await rename(partial, target);
+      if ((await stat(file)).size === 0) await unlink(file);
+    } catch { /* already gone */ }
+  }
+
+  private async commit(job: DownloadJob, partial: string, target: string) {
+    const reserved = await this.reserveTarget(job, target);
+    try {
+      const files = this.subtitleFiles(job);
+      const moveSubtitle = Boolean(files && await exists(files.partial));
+      if (moveSubtitle && files) await rename(files.partial, files.target);
+      try {
+        await rename(partial, reserved);
+      } catch (error) {
+        if (moveSubtitle && files) await rename(files.target, files.partial).catch(() => undefined);
+        throw error;
+      }
     } catch (error) {
-      if (moveSubtitle && files) await rename(files.target, files.partial).catch(() => undefined);
+      await this.dropPlaceholder(reserved);
       throw error;
     }
     job.status = "completed"; job.completedAt = new Date(this.now()).toISOString(); job.speed = 0; job.retryCount = 0; job.segments = undefined; this.setError(job);
