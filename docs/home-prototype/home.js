@@ -1,0 +1,51 @@
+const I={
+home:'<path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/><path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+lib:'<path d="m16 6 4 14"/><path d="M12 6v14"/><path d="M8 8v12"/><path d="M4 4v16"/>',
+hd:'<line x1="22" x2="2" y1="12" y2="12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/><line x1="6" x2="6.01" y1="16" y2="16"/><line x1="10" x2="10.01" y1="16" y2="16"/>',
+bell:'<path d="M10.268 21a2 2 0 0 0 3.464 0"/><path d="M22 8c0-2.3-.8-4.3-2-6"/><path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326"/><path d="M4 2C2.8 3.7 2 5.7 2 8"/>',
+dl:'<path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/>',
+pkg:'<path d="M21 10V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l2-1.14"/><path d="m7.5 4.27 9 5.15"/><polyline points="3.29 7 12 12 20.71 7"/><line x1="12" x2="12" y1="22" y2="12"/><path d="M16 16h6M19 13v6"/>',
+gear:'<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1 7 17M17 7l2.1-2.1"/>',
+bar:'<path d="M3 3v16a2 2 0 0 0 2 2h16"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/>',
+more:'<circle cx="5" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="19" cy="12" r="1.4"/>',
+play:'<circle cx="12" cy="12" r="10"/><path d="m10 8 6 4-6 4z"/>',
+go:'<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>',
+pause:'<rect x="14" y="3" width="5" height="18" rx="1"/><rect x="5" y="3" width="5" height="18" rx="1"/>',
+retry:'<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>',
+chev:'<path d="m9 18 6-6-6-6"/>',
+vdots:'<circle cx="12" cy="5" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="12" cy="19" r="1.4"/>',
+out:'<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/>'};
+const svg=(k,w=19)=>`<svg width="${w}" height="${w}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${I[k]}</svg>`;
+document.getElementById('i-play').innerHTML=svg('play',22);document.getElementById('i-out').innerHTML=svg('out',15);
+const nav=[['home','Domů',1,0],['lib','Katalog',0,0],['hd','Knihovna',0,0],['dl','Stahování',0,3],['bell','Sledované',0,2,1],['pkg','Doplňky',0,4,1],['gear','Nastavení',0,0,1],['bar','Statistiky',0,0,1]];
+const navEl=document.getElementById('nav');
+navEl.innerHTML=nav.map(([i,l,a,b,sec])=>`<button class="${a?'active':''} ${sec?'nav-secondary':''}">${svg(i)}<span>${l}</span>${b?`<b>${b}</b>`:''}</button>`).join('')+`<button class="nav-more" id="moreBtn" aria-haspopup="menu">${svg('more')}<span>Více</span><b id="moreDot" style="display:none"></b></button>`;
+const sec=nav.filter(n=>n[4]);
+document.getElementById('more').innerHTML=sec.map(([i,l,a,b])=>`<button>${svg(i)}<span>${l}</span>${i=='bell'?'<b>2</b>':''}</button>`).join('')+'<hr><button>'+svg('out')+'<span>Odhlásit se</span></button>';
+document.getElementById('moreBtn').onclick=e=>{e.stopPropagation();document.getElementById('more').classList.toggle('open')};
+document.addEventListener('click',()=>document.getElementById('more').classList.remove('open'));
+const grad=[['#7a4b22','#c98a4a'],['#14424a','#3d8a94'],['#2b4a3a','#6aa17f'],['#1d2540','#586aa8'],['#4a2340','#a0568f']];
+const media=(t,sub,i,o={})=>`<div class="browse-item"><button class="browse-open"><span class="browse-art" style="background:linear-gradient(135deg,${grad[i%5][0]},${grad[i%5][1]})"><span class="t">${t}</span><i class="browse-play" style="position:absolute;right:8px;top:8px;width:34px;height:34px;display:grid;place-items:center;border-radius:50%;background:#0b0e1399;pointer-events:none">${svg(o.arrow?'go':'play',18)}</i>${o.p!=null?`<i class="resume-bar"><i style="width:${o.p}%"></i></i>`:''}</span><strong>${t}</strong><small>${sub}</small></button><button class="browse-menu" aria-label="Další akce">${svg('vdots',18)}</button></div>`;
+const q=(t,state,cls,pct,meta,act,icon)=>`<div class="hq-card ${cls=='warn'?'attention':cls=='bad'?'failed':''}"><button class="hq-title">${t}</button><div class="hq-state ${cls}">${state}</div>${pct!=null?`<div class="hq-bar ${cls}"><i style="width:${pct}%"></i></div>`:'<div class="hq-bar"></div>'}<div class="hq-foot"><span class="hq-meta">${meta}</span><button>${icon?svg(icon,16):''}${act}</button></div></div>`;
+const sh=(h,extra,all)=>`<div class="subhead"><div class="home-head"><h3>${h}</h3>${extra?`<span class="count">${extra}</span>`:''}</div><button class="resume-show-all">${all} ${svg('chev',16)}</button></div>`;
+if(location.hash.includes('poster'))document.body.classList.add('shape-poster');
+const mb=document.getElementById('moreDot');mb.textContent='2';mb.style.display='';
+const busy=!location.hash.includes('quiet');
+let h='';
+if(busy)h+=`<section class="home-row">${sh('Stahování','3 úlohy · 1 vyžaduje pozornost','Zobrazit vše')}<div class="hq">`+
+ q('Planeta Země III · E04','Pozastaveno · nedostatek místa','warn',34,'2,7 / 8 GB','Otevřít stahování')+
+ q('Duna: Část druhá','Stahuje se · Filmy','run',68,'68 % · 12 MB/s','Pozastavit','pause')+
+ q('Severance · S02E04','Čeká na spuštění · Seriály','',null,'Ve frontě','Pozastavit','pause')+'</div></section>';
+h+=`<section class="home-row">${sh('Pokračovat ve sledování','','Zobrazit vše')}<div class="resume-strip">`+
+ media('Duna','Pokračovat · zbývá 42 min',0,{p:58})+media('Severance','S02E03 · pokračovat · zbývá 18 min',1,{p:40})+media('Planeta Země III','Další epizoda · S01E04',2,{arrow:1})+media('Modrá planeta','Otevřít epizodu · S01E02',3,{arrow:1})+'</div></section>';
+h+=`<section class="home-row">${sh('Připraveno k přehrání','','Zobrazit vše')}<div class="resume-strip">`+
+ media('Interstellar','Dnes · 2 h 49 min · 4,2 GB',3)+media('Modrá planeta','E01 · 58 min',1)+media('Duna','Včera · 2 h 35 min',0)+'</div></section>';
+h+=`<section class="home-row">${sh('Oblíbené','','Otevřít knihovnu')}<div class="resume-strip">`+
+ media('Modrá planeta','Seriál · v knihovně',1)+media('Severance','Seriál · v knihovně',4)+media('Duna','Film · v knihovně',0)+'</div></section>';
+document.getElementById('rows').innerHTML=h;
+if(location.hash==='#more')setTimeout(()=>document.getElementById('more').classList.add('open'),50);
+const side=document.querySelector('.sidebar');
+const markSide=()=>side.classList.toggle('more-below', side.scrollHeight-side.scrollTop-side.clientHeight>2);
+side.addEventListener('scroll', markSide, {passive:true});
+new ResizeObserver(markSide).observe(side);
+markSide();
