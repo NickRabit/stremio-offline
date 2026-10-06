@@ -250,11 +250,11 @@ reopen H4 as an outstanding fix. H1–H3 were reproduced again after the rebase.
 Further **code-supported risks, not reproduced crash outcomes**: metadata
 relocation is debounced across files, transfer publication precedes metadata
 commit, and the operations journal does not record the staging path/publication
-phase. `Store.update` rejects failed writes but has already changed memory;
-its recovery test intentionally saves that earlier change on the next write.
+phase. `Store.update` now applies a change and writes it in one turn, taking it
+back when the write fails, the way the download queue does since #304.
 The shutdown path flushes several stores but does not call `queue.stop()` or
-explicitly settle scan persistence; `followService.stop()` clears timers without
-awaiting an in-flight check or follow-store write. These need defined failure
+explicitly settle scan persistence; `followService.stop()` now waits for its
+running pass and the writes it queued (#311, #318). These need defined failure
 semantics and injection tests, not a claim that all current recovery is broken.
 
 ### P0 — Stop false success and ambiguous recovery

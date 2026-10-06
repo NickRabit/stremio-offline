@@ -135,13 +135,21 @@ export const defaultPrefs = (): UserPrefs => structuredClone(basePrefs);
 /** The flat default the settings backup falls back to, both halves in one object. */
 export const defaultSettings = (): Settings => ({ ...defaultInstanceSettings(), ...defaultPrefs() });
 
+/** The pieces a test replaces: the writer is here so one particular save can be made to fail
+ *  while the writes around it still land. */
+export interface StoreHooks {
+  writeState?: (file: string, data: string) => Promise<void>;
+}
+
 export class Store {
   private state: State;
   private readonly filename: string;
   private readonly downloadDir: string;
-  constructor(dataDir = process.env.DATA_DIR ?? "/data", downloadDir = process.env.DOWNLOAD_DIR ?? "/downloads") {
+  private readonly writeState: (file: string, data: string) => Promise<void>;
+  constructor(dataDir = process.env.DATA_DIR ?? "/data", downloadDir = process.env.DOWNLOAD_DIR ?? "/downloads", hooks: StoreHooks = {}) {
     this.filename = path.join(dataDir, "state.json");
     this.downloadDir = downloadDir;
+    this.writeState = hooks.writeState ?? ((file, data) => writeFile(file, data, { mode: 0o600 }));
     this.state = initialState(downloadDir);
   }
   async load() {
@@ -235,25 +243,39 @@ export class Store {
   grants() { return this.state.grants ?? []; }
   departed() { return this.state.departed ?? []; }
   private chain: Promise<void> = Promise.resolve();
-  /** Writes run one after another, or two concurrent saves would fight over the same .tmp file. */
+  /** Writes run one after another, or two concurrent saves would fight over the same .tmp file.
+   *
+   *  The change is made only when this write's turn comes and taken back if the write fails,
+   *  so a change nobody could save is not left in memory for a later write to carry to disk.
+   *  The caller still gets the rejection and the chain carries on past it. */
   async update(mutator: (state: State) => void) {
-    mutator(this.state);
     const write = this.chain.then(async () => {
-      const temp = `${this.filename}.tmp`;
-      await writeFile(temp, JSON.stringify(this.state, null, 2), { mode: 0o600 });
-      await renameWithRetry(temp, this.filename);
+      const before = structuredClone(this.state);
+      try {
+        mutator(this.state);
+      } catch (error) {
+        // A refusal is not a save failure: take the change back and let the caller hear it.
+        this.state = before;
+        throw error;
+      }
+      try {
+        const temp = `${this.filename}.tmp`;
+        await this.writeState(temp, JSON.stringify(this.state, null, 2));
+        await renameWithRetry(temp, this.filename);
+      } catch (error) {
+        this.state = before;
+        // The state carries the account and the addon tokens, so only the reason is recorded.
+        log("ERROR", "The state could not be saved", {
+          file: path.basename(this.filename),
+          code: (error as NodeJS.ErrnoException)?.code,
+          reason: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
     });
-    // The queue continues past a failed write. Chaining onto the rejection itself would
-    // skip every later save without a word, and the state would only live in memory until
-    // the next restart threw it away. The caller still gets the rejection.
-    this.chain = write.catch((error: unknown) => {
-      // The state carries the account and the addon tokens, so only the reason is recorded.
-      log("ERROR", "The state could not be saved", {
-        file: path.basename(this.filename),
-        code: (error as NodeJS.ErrnoException)?.code,
-        reason: error instanceof Error ? error.message : String(error),
-      });
-    });
+    // Chaining onto the rejection itself would skip every later save without a word, and the
+    // state would only live in memory until the next restart threw it away.
+    this.chain = write.catch(() => undefined);
     return write;
   }
   /** Settles once every write queued so far has landed or failed. */
