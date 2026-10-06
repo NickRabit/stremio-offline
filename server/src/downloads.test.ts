@@ -852,6 +852,49 @@ test("a smart job stores selected addon subtitles beside the completed episode",
   }
 });
 
+test("an episode published under (2) takes its subtitles along", async () => {
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const { server, port } = await listen(async (req, res) => {
+    if (req.url === "/episode.srt") {
+      res.writeHead(200, { "content-type": "application/x-subrip" });
+      res.end("1\n00:00:01,000 --> 00:00:02,000\nAhoj\n");
+      return;
+    }
+    res.writeHead(200, { "content-length": "4096", "content-type": "video/mp4" });
+    res.write(Buffer.alloc(2048, 1));
+    await gate;
+    res.end(Buffer.alloc(2048, 2));
+  });
+  const { directory, queue, downloads } = await tempQueue();
+  try {
+    queue.setResolver(async () => ({
+      stream: { url: `http://127.0.0.1:${port}/episode.mp4`, addonKey: "source" },
+      subtitle: { url: `http://127.0.0.1:${port}/episode.srt`, lang: "cs" },
+      resolution: { checkedCandidates: 1, audioLanguage: "cs", audioTrack: 0, subtitleLanguage: "cs", subtitleSource: "addon", subtitleStatus: "ready" },
+      settings: defaultDownloadSettings(),
+    }));
+    await queue.addPending("Díl", { type: "series", videoId: "tt1:1:1", selection: {
+      addonKeys: ["source"], sourceStrategy: "priority", audioLanguage: "cs", subtitleMode: "required",
+      subtitleLanguage: "cs", targetSettings: defaultDownloadSettings().series,
+    } }, { kind: "episode", title: "Show", season: 1, episode: 1 });
+    const season = path.join(downloads, "Show", "01 serie");
+    const taken = path.join(season, "Show - S01E01.mp4");
+    await waitFor(queue, () => existsSync(`${taken}.part`) && existsSync(path.join(season, "Show - S01E01.cs.vtt.part")), 10_000);
+    // Another file lands at the episode's name while it downloads.
+    await writeFile(taken, "somebody else's file");
+    release();
+    await waitFor(queue, () => queue.list()[0].status === "completed" || queue.list()[0].status === "failed");
+    assert.equal(queue.list()[0].status, "completed", queue.list()[0].error);
+    assert.match(queue.list()[0].target, /Show - S01E01 \(2\)\.mp4$/);
+    assert.match(await readFile(path.join(season, "Show - S01E01 (2).cs.vtt"), "utf8"), /Ahoj/, "the subtitles follow the episode to its new name");
+    assert.equal(existsSync(path.join(season, "Show - S01E01.cs.vtt.part")), false, "no partial subtitle is left behind");
+  } finally {
+    release();
+    await queue.stop(); server.close(); await rm(directory, { recursive: true, force: true });
+  }
+});
+
 const HASH = "59e11cef8c2152ac73681092844ebd3db19025bc";
 
 test("a torrent waits on Real-Debrid then downloads over HTTP without taking a slot", async () => {

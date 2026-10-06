@@ -928,6 +928,9 @@ export class FollowService {
   private timer?: ReturnType<typeof setInterval>;
   private startupTimer?: ReturnType<typeof setTimeout>;
   private readonly running = new Map<string, Promise<void>>();
+  /** Scheduled passes still under way, so stop() can wait for the whole pass. */
+  private readonly ticks = new Set<Promise<void>>();
+  private stopping = false;
   private readonly lastStarted = new Map<string, number>();
   /** One chain for every download mutation, so admission, sync, skip, retry and the queue
    *  hooks never interleave across an await. Reentrant, because a skip calls the queue whose
@@ -941,6 +944,7 @@ export class FollowService {
 
   start(): void {
     if (this.timer) return;
+    this.stopping = false;
     // Nobody is waiting for the first check, so it waits out the boot instead of
     // competing with the library scan for the same sleeping addons.
     this.startupTimer = setTimeout(() => { void this.tick(); }, FIRST_TICK_MS);
@@ -953,19 +957,29 @@ export class FollowService {
   /** Stops the schedule and resolves once the checks already running, and the work they
    *  queued, have written what they found: the caller can flush or remove the data after it. */
   async stop(): Promise<void> {
+    this.stopping = true;
     if (this.startupTimer) clearTimeout(this.startupTimer);
     if (this.timer) clearInterval(this.timer);
     this.startupTimer = undefined;
     this.timer = undefined;
-    await Promise.allSettled([...this.running.values()]);
+    // A pass already under way takes no further follow from its batch once stopping is set;
+    // waiting for the pass itself covers the check it is on and the maintenance after it.
+    await Promise.allSettled([...this.ticks, ...this.running.values()]);
     await this.locked(async () => undefined);
   }
 
-  async tick(): Promise<void> {
+  tick(): Promise<void> {
+    const pass = this.runTick().finally(() => { this.ticks.delete(pass); });
+    this.ticks.add(pass);
+    return pass;
+  }
+
+  private async runTick(): Promise<void> {
+    if (this.stopping) return;
     const due = this.deps.store.due(this.deps.now());
     let next = 0;
     const workers = Array.from({ length: Math.min(this.concurrency, due.length) }, async () => {
-      while (next < due.length) {
+      while (next < due.length && !this.stopping) {
         const follow = due[next++];
         try {
           await this.check(follow.id, "schedule");
@@ -975,6 +989,7 @@ export class FollowService {
       }
     });
     await Promise.all(workers);
+    if (this.stopping) return;
     await this.maintain();
   }
 
