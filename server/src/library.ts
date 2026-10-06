@@ -283,7 +283,11 @@ export async function emptiedFolders(
   while (folder) {
     if (!resolveInside(root, folder)) break;
     if (holdsLibraryRoot(exclude, folder, caseInsensitive)) break;
-    if ((await listVideos(root, folder, 0, exclude)).length) break;
+    // The prune deletes what this returns, so a folder it could not read in full is kept:
+    // an unreadable season is not an empty one.
+    const report = { complete: true };
+    const found = await walkVideos(root, folder, 0, exclude, limiter(WALK_CONCURRENCY), report);
+    if (found.length || !report.complete) break;
     gone.push(folder);
     folder = posixDir(folder);
   }

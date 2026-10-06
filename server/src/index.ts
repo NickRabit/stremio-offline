@@ -1331,6 +1331,9 @@ const artworkTarget = async (key: string, shape: ArtShape) =>
 const artworkQueueKey = (key: string, shape: ArtShape) =>
   artVariantKey(isFileKey(key) ? `file:${key}` : `dir:${key}`, shape);
 const mediaArtExists = async (key: string, shape: ArtShape) => {
+  // A file's poster is written as its own `<episode>.jpg`; one already there is the user's
+  // still and wins exactly like the folder's picture does.
+  if (isFileKey(key) && shape !== "wide" && await fileExists(besideMediaTarget(key, shape))) return true;
   const folder = isFileKey(key) ? posixDir(key) : key;
   if (!folder) return false;
   return Boolean(await findArtwork(mediaPath(folder), artNames(shape)));
