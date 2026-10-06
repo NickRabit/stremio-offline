@@ -55,6 +55,9 @@ const redactText = (value: string) => {
   const clean = value.replace(URL_PATTERN, shortenUrl).replace(/([?&]airplay=)[A-Za-z0-9_-]+/gi, "$1***");
   return clean.length > MAX_STRING ? `${clean.slice(0, MAX_STRING)}…` : clean;
 };
+/** A log line is one line: a newline in a message must not split it into a second record
+ *  that reads as though the server wrote it. */
+const singleLine = (value: string) => value.replace(/[\r\n]+/g, " ");
 
 function redactValue(value: unknown, depth: number): unknown {
   if (typeof value === "string") return redactText(value);
@@ -92,7 +95,9 @@ export function log(level: LogLevel, message: string, context?: Record<string, u
   if (ORDER[level] < threshold) return;
   const payload = context ? redactContext(context) : undefined;
   const details = payload && Object.keys(payload).length ? ` ${JSON.stringify(payload)}` : "";
-  const line = `${new Date().toISOString()} ${level} ${message}${details}\n`;
+  // The message is redacted exactly like a context value: it may carry a stream address with
+  // a token just as easily, and the log is what a user hands out when asking for help.
+  const line = `${new Date().toISOString()} ${level} ${singleLine(redactText(message))}${details}\n`;
   if (mirror) (level === "ERROR" ? process.stderr : process.stdout).write(line);
   chain = chain.then(() => write(line)).catch(() => undefined);
 }

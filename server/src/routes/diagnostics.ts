@@ -27,6 +27,10 @@ export interface DiagnosticsDeps extends RouteContext {
 const CLIENT_LOG_PER_MINUTE = 30;
 /** Enough for a stack frame and a few identifiers; a report is a hint, not a payload. */
 const CLIENT_LOG_KEYS = 20;
+/** A report is one line: control characters become spaces, so a message cannot smuggle a
+ *  second line that reads as though the server wrote it. */
+const CONTROL = /[\u0000-\u001f\u007f\u0085\u2028\u2029]/g;
+const oneLine = (value: string) => value.replace(CONTROL, " ");
 const clientReports = new Map<string, { count: number; resetAt: number }>();
 
 export function registerDiagnosticsRoutes(app: express.Application, deps: DiagnosticsDeps): void {
@@ -79,14 +83,15 @@ export function registerDiagnosticsRoutes(app: express.Application, deps: Diagno
     if (clientReports.size > 200) for (const [key, value] of clientReports) if (value.resetAt <= now) clientReports.delete(key);
 
     const level = parseLevel(req.body?.level) ?? "WARN";
-    const message = String(req.body?.message ?? "").slice(0, 200) || "client report";
+    const message = oneLine(String(req.body?.message ?? "")).slice(0, 200) || "client report";
     // Nested rather than spread. Every signed-in account may post here, and a spread let the
     // caller name any field it liked -- including the ones the server's own audit lines use,
     // such as `actor` and `userId`. Under one key it can still say anything, and nothing it
     // says can be mistaken for something the server recorded.
     const sent = req.body?.context && typeof req.body.context === "object" && !Array.isArray(req.body.context)
       ? req.body.context as Record<string, unknown> : {};
-    const context = Object.fromEntries(Object.entries(sent).slice(0, CLIENT_LOG_KEYS));
+    const context = Object.fromEntries(Object.entries(sent).slice(0, CLIENT_LOG_KEYS)
+      .map(([key, value]) => [key, typeof value === "string" ? oneLine(value) : value]));
     // A player report about a running conversion carries the server's view of the same moment:
     // how far ahead of the player the conversion is, and whether the source or FFmpeg holds it back.
     const pace = typeof context.session === "string" ? playback.pace(context.session) : undefined;

@@ -64,6 +64,29 @@ test("addresses lose their query string and sensitive keys are masked", async ()
   });
 });
 
+test("a message carries the same redaction as a context value", async () => {
+  await withLogger({}, async (directory) => {
+    const url = "http://user:pw@cdn.example/a.m3u8?token=SECRET";
+    log("INFO", `player failed on ${url}`);
+    log("INFO", "player failed", { url });
+    const text = await contents(directory);
+    assert.equal(text.includes("SECRET"), false);
+    assert.equal(text.includes("token="), false);
+    assert.equal(text.includes("user:pw"), false);
+    assert.match(text, /player failed on http:\/\/cdn\.example\/…/);
+    assert.match(text, /"url":"http:\/\/cdn\.example\/…"/, "the context value is shortened the same way");
+  });
+});
+
+test("a message cannot carry a newline into the log", async () => {
+  await withLogger({}, async (directory) => {
+    log("INFO", "first line\n2026-01-01T00:00:00.000Z INFO a forged line");
+    const lines = (await contents(directory)).split("\n").filter(Boolean);
+    assert.equal(lines.length, 1, "the forged line never becomes a line of its own");
+    assert.match(lines[0]!, /first line .*a forged line/);
+  });
+});
+
 test("the file rotates once it passes the size cap and history stays readable", async () => {
   await withLogger({ LOG_MAX_BYTES: "65536" }, async (directory) => {
     // Roughly 450 bytes per line, so a 64 KB cap rotates once somewhere past entry 140.

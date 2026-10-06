@@ -112,6 +112,14 @@ test("browsing into a library the user may not see answers like one that does no
   assert.deepEqual(await invisible.json(), await missing.json());
 });
 
+test("a favourite on a library the user was not granted answers like one that does not exist", async () => {
+  const foreign = await api("/api/library/favorite", { method: "POST", cookie: userCookie, body: { path: `${HIDDEN}/Secret.mkv`, favorite: true } });
+  const missing = await api("/api/library/favorite", { method: "POST", cookie: userCookie, body: { path: "lib_00000099/Secret.mkv", favorite: true } });
+  assert.equal(foreign.status, 400);
+  assert.equal(missing.status, 400);
+  assert.deepEqual(await foreign.json(), await missing.json());
+});
+
 test("the contents summary names only the libraries the caller may see", async () => {
   const user = await (await api("/api/library", { cookie: userCookie })).json() as Array<{ key: string }>;
   assert.ok(user.some((entry) => entry.key.startsWith(`${GRANTED}/`)), "the granted library is summarised");
