@@ -1473,3 +1473,202 @@ test("jobCompleted and sync remember the library key a finished download wrote",
   assert.equal(synced.state, "completed");
   assert.equal(synced.target, "lib_shows/Show/S02E01.mkv");
 });
+
+/** The restart the crash tests share: a fresh store over the same directory and a fresh service
+ *  over the same fake queue (its jobs are the part of downloads.json that survived), then the
+ *  sync and admission a start-up's maintenance pass runs. */
+const restart = async (dir: string, q: ReturnType<typeof fakeQueue>, followId: string, now: () => number = () => NOW) => {
+  const store = await loaded(dir);
+  const service = buildService(store, q, { now });
+  await service.sync();
+  await service.admit(followId);
+  return { store, service };
+};
+
+/** The record a crash between reserving and linking leaves behind: the reservation, no job id. */
+const reservedDownload = (intent: string): EpisodeDownload =>
+  ({ state: "reserved", intent, generation: 1, attempts: 0, updatedAt: RELEASED });
+
+test("stopped after reserving, before queueing: the restart queues the episode exactly once", async (t) => {
+  const { dir, store } = await withStore(t);
+  const q = fakeQueue();
+  const service = buildService(store, q);
+  const id = await seedSeries(store, [episode(1, 1, "v1", RELEASED)], rule());
+  // The process died after `reserved` was written: the queue write never happened.
+  q.failNextAdd();
+  await assert.rejects(service.admit(id));
+  assert.equal(store.get(id)!.episodes["1:1"].download!.state, "reserved");
+  assert.equal(q.jobs.length, 0);
+
+  const { store: restarted } = await restart(dir, q, id);
+  const download = restarted.get(id)!.episodes["1:1"].download!;
+  assert.equal(download.state, "queued");
+  assert.equal(download.jobId, q.jobs[0].id);
+  assert.equal(q.jobs.length, 1, "exactly one job exists for the episode");
+  assert.equal(q.added.length, 1, "and it was created once");
+});
+
+test("stopped after queueing, before the record moved: the restart links the job, never a second", async (t) => {
+  const { dir, store } = await withStore(t);
+  const q = fakeQueue();
+  const service = buildService(store, q);
+  const id = await seedSeries(store, [episode(1, 1, "v1", RELEASED)], rule());
+  await service.admit(id);
+  const job = q.jobs[0];
+  // The process died after the queue write and before the follow write that records `queued`.
+  await store.update(id, (current) => { current.episodes["1:1"].download = reservedDownload(job.follow!.intent); });
+
+  const { store: restarted } = await restart(dir, q, id);
+  const download = restarted.get(id)!.episodes["1:1"].download!;
+  assert.equal(download.state, "queued");
+  assert.equal(download.jobId, job.id);
+  assert.equal(q.jobs.length, 1, "sync links the job already there");
+  assert.equal(q.added.length, 1, "no second job is created");
+});
+
+test("stopped after adopting a hand-queued job: the restart links it, no duplicate", async (t) => {
+  const { dir, store } = await withStore(t);
+  const q = fakeQueue();
+  const service = buildService(store, q);
+  const manual: (typeof q.jobs)[number] = { id: "manual-1", status: "queued", source: { type: "series", videoId: "v1" } };
+  q.jobs.push(manual);
+  const id = await seedSeries(store, [episode(1, 1, "v1", RELEASED)], rule());
+  await service.admit(id);
+  const intent = store.get(id)!.episodes["1:1"].download!.intent;
+  assert.equal(manual.follow?.intent, intent, "adopt tied the hand-queued job to the follow");
+  // The process died after `adopt` and before the follow write that records `queued`.
+  await store.update(id, (current) => { current.episodes["1:1"].download = reservedDownload(intent); });
+
+  const { store: restarted } = await restart(dir, q, id);
+  const download = restarted.get(id)!.episodes["1:1"].download!;
+  assert.equal(download.state, "queued");
+  assert.equal(download.jobId, "manual-1");
+  assert.equal(q.jobs.length, 1, "the hand-queued job is the one used");
+  assert.equal(q.added.length, 0, "the queue never created a job of its own");
+});
+
+test("a job that completed while the server was down finishes the record", async (t) => {
+  const { dir, store } = await withStore(t);
+  const q = fakeQueue();
+  const service = buildService(store, q);
+  const id = await seedSeries(store, [episode(1, 1, "v1", RELEASED)], rule());
+  await service.admit(id);
+  const job = q.jobs[0];
+  job.target = "lib_shows/Show/S01E01.mkv";
+  q.complete(job.id);
+  assert.equal(store.get(id)!.episodes["1:1"].download!.state, "queued", "the record did not hear about it");
+
+  const { store: restarted } = await restart(dir, q, id);
+  const download = restarted.get(id)!.episodes["1:1"].download!;
+  assert.equal(download.state, "completed");
+  assert.equal(download.target, "lib_shows/Show/S01E01.mkv");
+});
+
+test("a job that failed while the server was down waits, then re-queues one job", async (t) => {
+  const { dir, store } = await withStore(t);
+  const q = fakeQueue();
+  let now = NOW;
+  const service = buildService(store, q, { now: () => now });
+  const id = await seedSeries(store, [episode(1, 1, "v1", RELEASED)], rule());
+  await service.admit(id);
+  const job = q.jobs[0];
+  q.fail(job.id, "err.noMatchingSource");
+
+  const { store: restarted, service: later } = await restart(dir, q, id, () => now);
+  let download = restarted.get(id)!.episodes["1:1"].download!;
+  assert.equal(download.state, "waiting");
+  assert.equal(download.attempts, 1);
+  assert.equal(download.reasonKey, "err.noMatchingSource");
+  assert.equal(download.nextAttemptAt, new Date(NOW + 3_600_000).toISOString());
+
+  await later.sync();
+  assert.equal(restarted.get(id)!.episodes["1:1"].download!.state, "waiting", "not due yet");
+  now += 3_600_000;
+  await later.sync();
+  download = restarted.get(id)!.episodes["1:1"].download!;
+  assert.equal(download.state, "queued");
+  assert.deepEqual(q.retried, [job.id], "the same job is put back, exactly once");
+  await later.admit(id);
+  assert.equal(q.jobs.length, 1, "and never a second job for the episode");
+  assert.equal(q.added.length, 1);
+});
+
+test("history cleared while the record was queued never downloads the episode again", async (t) => {
+  const { dir, store } = await withStore(t);
+  const q = fakeQueue();
+  const service = buildService(store, q);
+  const id = await seedSeries(store, [episode(1, 1, "v1", RELEASED)], rule());
+  await service.admit(id);
+  const job = q.jobs[0];
+  q.complete(job.id);      // the download finished ...
+  q.jobs.splice(0, 1);     // ... and the finished row was cleared before the record heard
+  assert.equal(store.get(id)!.episodes["1:1"].download!.state, "queued");
+
+  const { store: restarted } = await restart(dir, q, id);
+  const download = restarted.get(id)!.episodes["1:1"].download!;
+  assert.equal(q.added.length, 1, "the finished episode is not queued again");
+  assert.equal(q.jobs.length, 0, "no job is made for it either");
+  // jobsClearing records completion before the row goes; when that write was missed the
+  // reconciliation cannot see the job finished, so it asks for attention instead of guessing.
+  assert.equal(download.state, "attention");
+  assert.equal(download.reasonKey, "err.followJobMissing");
+});
+
+test("a removal whose queue write failed leaves the skip standing and queues nothing new", async (t) => {
+  const { dir, store } = await withStore(t);
+  const q = fakeQueue();
+  const service = buildService(store, q);
+  const id = await seedSeries(store, [episode(1, 1, "v1", RELEASED)], rule());
+  await service.admit(id);
+  const job = q.jobs[0];
+  // The owner removed the unfinished job: the removal guard recorded the skip, but the queue's
+  // own removal write failed, so the job is still in downloads.json after the restart.
+  await service.jobRemoving(job, "user");
+  assert.equal(store.get(id)!.episodes["1:1"].download!.state, "skipped");
+  assert.equal(q.jobs.length, 1, "the queue still holds the job");
+
+  const { store: restarted } = await restart(dir, q, id);
+  assert.equal(restarted.get(id)!.episodes["1:1"].download!.state, "skipped");
+  assert.equal(q.added.length, 1, "no second job is created");
+  assert.equal(q.jobs.length, 1, "the orphan job is left as it was");
+});
+
+test("a follow deleted while its job survives the restart re-links nothing and queues nothing", async (t) => {
+  const { dir, store } = await withStore(t);
+  const q = fakeQueue();
+  const service = buildService(store, q);
+  const id = await seedSeries(store, [episode(1, 1, "v1", RELEASED)], rule());
+  await service.admit(id);
+  await store.remove(id);
+  assert.equal(q.jobs.length, 1, "the job outlives the follow in the queue");
+
+  const { store: restarted } = await restart(dir, q, id);
+  assert.equal(restarted.get(id), undefined, "the follow is gone");
+  assert.equal(q.jobs.length, 1);
+  assert.equal(q.jobs[0].follow?.followId, id, "the job keeps pointing at the follow that made it");
+  assert.equal(q.added.length, 1, "no new job is created");
+});
+
+test("two restarts in a row keep exactly one job for both crash windows", async (t) => {
+  for (const window of ["reserved-before-queue", "queued-before-record"] as const) {
+    const { dir, store } = await withStore(t);
+    const q = fakeQueue();
+    const service = buildService(store, q);
+    const id = await seedSeries(store, [episode(1, 1, "v1", RELEASED)], rule());
+    if (window === "reserved-before-queue") {
+      q.failNextAdd();
+      await assert.rejects(service.admit(id));
+    } else {
+      await service.admit(id);
+      const job = q.jobs[0];
+      await store.update(id, (current) => { current.episodes["1:1"].download = reservedDownload(job.follow!.intent); });
+    }
+    const first = await restart(dir, q, id);
+    const second = await restart(dir, q, id);
+    assert.equal(q.jobs.length, 1, `${window}: still one job`);
+    assert.equal(q.added.length, 1, `${window}: created once`);
+    assert.equal(first.store.get(id)!.episodes["1:1"].download!.jobId, q.jobs[0].id, window);
+    assert.equal(second.store.get(id)!.episodes["1:1"].download!.state, "queued", window);
+    assert.equal(second.store.get(id)!.episodes["1:1"].download!.jobId, q.jobs[0].id, window);
+  }
+});
