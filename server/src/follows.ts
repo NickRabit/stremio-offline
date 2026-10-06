@@ -950,11 +950,15 @@ export class FollowService {
     log("INFO", "Followed series checks armed", { tickMs: this.tickMs });
   }
 
-  stop(): void {
+  /** Stops the schedule and resolves once the checks already running, and the work they
+   *  queued, have written what they found: the caller can flush or remove the data after it. */
+  async stop(): Promise<void> {
     if (this.startupTimer) clearTimeout(this.startupTimer);
     if (this.timer) clearInterval(this.timer);
     this.startupTimer = undefined;
     this.timer = undefined;
+    await Promise.allSettled([...this.running.values()]);
+    await this.locked(async () => undefined);
   }
 
   async tick(): Promise<void> {
