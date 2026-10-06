@@ -489,7 +489,7 @@ test("a queued move inside one library carries the item's state", async () => {
   assert.equal((await identityOf(to)).bound?.id, "tt0000001", "the moved item still resolves to the matched title");
 });
 
-test("a queued copy into another library leaves the original's state behind", async () => {
+test("a queued copy into another library carries the title and leaves the personal state behind", async () => {
   const from = carriedWire("03 - Copied.mkv");
   const relative = carried("03 - Copied.mkv");
   assert.equal((await starItem(from, true)).status, 200);
@@ -518,6 +518,6 @@ test("a queued copy into another library leaves the original's state behind", as
   const source = await libraryMeta(shows);
   const destination = await libraryMeta(archive);
   assert.ok(source?.meta[sourceRow], "the original's row stays in the source library");
-  assert.equal(destination?.meta["03 - Copied.mkv"], undefined, "the copy is not bound in the destination library");
-  assert.equal((await identityOf(to)).bound, undefined, "the copy resolves to no title");
+  assert.equal(destination?.meta["03 - Copied.mkv"]?.id, "tt0000001", "the copy carries the title it inherited from its folder");
+  assert.equal((await identityOf(to)).bound?.id, "tt0000001", "the copy resolves to the same title");
 });

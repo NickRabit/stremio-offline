@@ -131,6 +131,42 @@ test("copy duplicates metadata without changing the source", async () => {
   } finally { await rm(dataDir, { recursive: true, force: true }); }
 });
 
+test("a move into the same folder name in another library still pins the inherited title", async () => {
+  await withStore(async (store, dataDir) => {
+    // B has a "Show" folder of its own, unbound; A's "Show" binding says nothing about it.
+    await seed(dataDir, libA, { Show: record("tt1") });
+    await seed(dataDir, libB, {});
+    await store.load();
+    await store.relocate(`${libA}/Show/S1/01.mkv`, `${libB}/Show/S1/01.mkv`, true);
+    await store.flush();
+    assert.equal(store.meta(libB)["Show/S1/01.mkv"]?.id, "tt1", "the item keeps the title it inherited in A");
+    assert.deepEqual(Object.keys(store.meta(libA)), ["Show"]);
+  });
+});
+
+test("a copy into another library carries the title the item inherited from its folder", async () => {
+  await withStore(async (store, dataDir) => {
+    await seed(dataDir, libA, { Show: record("tt1") }, { Show: { type: "movie", id: "tt1", score: 90 } });
+    await seed(dataDir, libB, {});
+    await store.load();
+    await store.copy(`${libA}/Show/S1/01.mkv`, `${libB}/01.mkv`);
+    await store.flush();
+    assert.equal(store.meta(libB)["01.mkv"]?.id, "tt1", "the copy is the same title");
+    assert.deepEqual(Object.keys(store.meta(libA)), ["Show"], "the source library is not touched");
+    assert.deepEqual(Object.keys(store.suggestions(libA)), ["Show"]);
+  });
+});
+
+test("a copy that stays under the folder that binds it adds no row of its own", async () => {
+  await withStore(async (store, dataDir) => {
+    await seed(dataDir, libA, { Show: record("tt1") });
+    await store.load();
+    await store.copy(`${libA}/Show/S1/01.mkv`, `${libA}/Show/S2/01.mkv`);
+    await store.flush();
+    assert.deepEqual(Object.keys(store.meta(libA)), ["Show"], "the folder still covers the copy");
+  });
+});
+
 test("a write driven by catalogue identity walks every library", async () => {
   await withStore(async (store, dataDir) => {
     await seed(dataDir, "lib_a", { "One.mkv": record("tt1") });
