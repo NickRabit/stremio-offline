@@ -1044,9 +1044,11 @@ export function pinInherited(
   meta: Record<string, LibraryMetaRecord>,
   suggestions: Record<string, LibrarySuggestion>,
   relative: string,
-  nextRelative: string,
+  /** Undefined when the item leaves this library: no folder of it can cover the new place,
+   *  even one that happens to share the destination's path. */
+  nextRelative: string | undefined,
 ): { meta: Record<string, LibraryMetaRecord>; suggestions: Record<string, LibrarySuggestion> } {
-  const stillCovers = (key: string | undefined) => key !== undefined && (key === relative || isPathWithin(nextRelative, key));
+  const stillCovers = (key: string | undefined) => key !== undefined && (key === relative || (nextRelative !== undefined && isPathWithin(nextRelative, key)));
 
   const nextMeta = { ...meta };
   const bound = knownTitleEntry(relative, meta);

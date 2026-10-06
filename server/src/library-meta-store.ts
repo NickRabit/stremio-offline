@@ -198,7 +198,7 @@ export class LibraryMetaStore {
     const file = this.files.get(source.libraryId);
     if (!file) return;
     const pinned = pin
-      ? pinInherited(file.meta, file.suggestions, source.relative, target.relative)
+      ? pinInherited(file.meta, file.suggestions, source.relative, source.libraryId === target.libraryId ? target.relative : undefined)
       : { meta: file.meta, suggestions: file.suggestions };
     if (source.libraryId === target.libraryId) {
       file.meta = remapKeyed(pinned.meta, source.relative, target.relative);
@@ -230,12 +230,15 @@ export class LibraryMetaStore {
     if (!source || !target || !source.relative || !target.relative) return;
     const file = this.files.get(source.libraryId);
     if (!file) return;
+    // The copy is the same title as the original, including one the original only inherits
+    // from its folder. The pin is computed on the side: the source keeps its rows as they are.
+    const pinned = pinInherited(file.meta, file.suggestions, source.relative, source.libraryId === target.libraryId ? target.relative : undefined);
     const carried = <T,>(records: Record<string, T>) => Object.fromEntries(Object.entries(records)
       .filter(([key]) => isPathWithin(key, source.relative))
       .map(([key, value]) => [remapPath(key, source.relative, target.relative), structuredClone(value)]));
     const destination = this.file(target.libraryId);
-    destination.meta = { ...destination.meta, ...carried(file.meta) };
-    destination.suggestions = { ...destination.suggestions, ...carried(file.suggestions) };
+    destination.meta = { ...destination.meta, ...carried(pinned.meta) };
+    destination.suggestions = { ...destination.suggestions, ...carried(pinned.suggestions) };
     this.invalidate(target.libraryId);
     this.save(target.libraryId);
   }
