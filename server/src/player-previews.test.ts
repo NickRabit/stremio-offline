@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile, rm } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -41,4 +41,25 @@ test("previews are not made from a remote source", async () => {
   assert.equal(grabbed, 0);
   assert.ok(await manager.preview("local", 100, new AbortController().signal));
   assert.equal(grabbed, 1);
+});
+
+test("shutdown reaches a preview that is still running", {
+  skip: process.platform === "win32" ? "a kill is not a signal there" : false,
+}, async () => {
+  const { killRunningMedia } = await import("./media-tools.js");
+  const directory = await mkdtemp(path.join(os.tmpdir(), "preview-shutdown-"));
+  const script = path.join(directory, "ffmpeg");
+  const marker = path.join(directory, "pid");
+  await writeFile(script, `#!/usr/bin/env node\nrequire("node:fs").writeFileSync(${JSON.stringify(marker)}, String(process.pid));\nsetInterval(() => {}, 1000);\n`);
+  await chmod(script, 0o755);
+  try {
+    const grabbing = grabFrame([], new AbortController().signal, script);
+    let pid = 0;
+    while (!pid) { pid = Number(await readFile(marker, "utf8").catch(() => "0")); await new Promise((resolve) => setTimeout(resolve, 20)); }
+    assert.ok(killRunningMedia() >= 1, "the preview is registered with the shutdown");
+    await grabbing.catch(() => undefined);
+    assert.throws(() => process.kill(pid, 0), { code: "ESRCH" }, "the preview is gone");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });

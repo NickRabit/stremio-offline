@@ -239,6 +239,9 @@ export const describeFailure = (stderr: string, code: number | null) => {
 export class PlaybackManager {
   private previews = new PlayerPreviews();
   private sessions = new Map<string, Session>();
+  /** Conversions this manager SIGKILLed after they timed out. Their exit event can lag behind the
+   *  retry, and a process already sent SIGKILL is not one the purge has to protect. */
+  private readonly abandoned = new WeakSet<ChildProcess>();
   private inspected = new Map<string, { info?: MediaInfo; at: number }>();
   private inspecting = new Map<string, Promise<MediaInfo | undefined>>();
   private sidecars = new PlayerSidecars(undefined, (id, error) => {
@@ -873,6 +876,15 @@ export class PlaybackManager {
     return this.mediafoundation ? "mediafoundation" : null;
   }
 
+  /** A hardware pass that opened the film clears its accelerator's streak: only *consecutive*
+   *  failures should switch a path off, so one bad file does not cost the GPU until restart. */
+  private clearFailures(accelerator: "vaapi" | "nvenc" | "videotoolbox" | "mediafoundation") {
+    if (accelerator === "videotoolbox") this.videotoolboxFailures = 0;
+    else if (accelerator === "mediafoundation") this.mediafoundationFailures = 0;
+    else if (accelerator === "nvenc") this.nvencFailures = 0;
+    else this.vaapiFailures = 0;
+  }
+
   private async checkVideotoolbox() {
     try {
       await this.runVideotoolboxProbe(["-q:v", "60"]);
@@ -987,7 +999,11 @@ export class PlaybackManager {
       }
       firstAttempt = false;
       const url = await this.run(session, offset, directory, hardware);
-      if (url) return url;
+      if (url) {
+        // The pass opened the film on that accelerator, which proves it works after all.
+        if (hardware && accelerator) this.clearFailures(accelerator);
+        return url;
+      }
       // Closed while this attempt was opening: nothing failed, and the path it ran on is not to blame.
       if (session.stopped) break;
       // A source that answers 404 will answer the same to the software attempt.
@@ -1099,7 +1115,13 @@ export class PlaybackManager {
       log("DEBUG", "FFmpeg is producing segments", { id: session.id, generation: session.generation, hardware, segments, ms: Date.now() - startedAt });
       return url;
     }
-    if (!finished) { child.kill("SIGKILL"); session.error ||= "The conversion did not get going within 40 seconds."; }
+    if (!finished) {
+      child.kill("SIGKILL");
+      // exitCode/signalCode stay null until the child's exit event, which can come after the
+      // retry's purge: remembered here, the purge knows this one is no longer writing.
+      this.abandoned.add(child);
+      session.error ||= "The conversion did not get going within 40 seconds.";
+    }
     session.error ||= describeFailure(stderr, exitCode);
     log("ERROR", "The conversion could not be started", {
       id: session.id, offset: Math.round(offset), mode: session.mode, hardware, exitCode,
@@ -1313,7 +1335,8 @@ export class PlaybackManager {
     // a failed hardware attempt depends on that. Only a process still writing there is protected.
     const playing = [...this.sessions.values()].find((session) =>
       session.directory === directory && !session.stopped
-      && session.process !== undefined && session.process.exitCode === null && session.process.signalCode === null);
+      && session.process !== undefined && session.process.exitCode === null && session.process.signalCode === null
+      && !this.abandoned.has(session.process as ChildProcess));
     if (playing) {
       log("WARN", "Refused to delete the generation that is playing", { id: playing.id, generation: playing.generation, why });
       return;

@@ -1,9 +1,9 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createWriteStream } from "node:fs";
 import { mkdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
-import { Transform } from "node:stream";
+import { Transform, Writable } from "node:stream";
 import { log } from "./logger.js";
 import { ffmpegPath, trackMedia } from "./media-tools.js";
 import { completeVttBlocks, shiftVtt, vttCoverage } from "./vtt.js";
@@ -27,12 +27,16 @@ const withoutHeader = () => {
 
 /** Through a pipe, not "-y file": writing a file itself FFmpeg keeps the cues in its own
  *  buffer and the sidecar stays empty until the whole film has been read, which on a
- *  remote source is minutes. A pipe is written through, so the cues land as they come. */
-const extract: Extract = (args, file, append, signal) => new Promise<void>((resolve, reject) => {
-  const out = createWriteStream(file, append ? { flags: "a" } : {});
-  out.once("error", reject);
+ *  remote source is minutes. A pipe is written through, so the cues land as they come.
+ *  `out` is a parameter so a test can hand in an output whose writes fail. */
+export const extractInto = (out: Writable, args: string[], append: boolean, signal: AbortSignal): Promise<void> => new Promise<void>((resolve, reject) => {
+  let tracked: ChildProcess | undefined;
+  // A write error must take the child with it: rejecting alone would leave FFmpeg reading the
+  // source, blocked on its stdout pipe, until the 30-minute backstop.
+  out.once("error", (error) => { tracked?.kill("SIGKILL"); reject(error); });
   out.once("open", () => {
     const child = trackMedia(spawn(ffmpegPath(), args, { stdio: ["ignore", "pipe", "pipe"] }));
+    tracked = child;
     const cues = append ? child.stdout.pipe(withoutHeader()) : child.stdout;
     cues.pipe(out);
     let stderr = "";
@@ -54,6 +58,8 @@ const extract: Extract = (args, file, append, signal) => new Promise<void>((reso
     });
   });
 });
+
+const extract: Extract = (args, file, append, signal) => extractInto(createWriteStream(file, append ? { flags: "a" } : {}), args, append, signal);
 
 /** Cues only have to reach a little past the playhead to be worth attaching: on a slow
  *  source reading a couple of minutes ahead takes longer than the viewer's next seek, and

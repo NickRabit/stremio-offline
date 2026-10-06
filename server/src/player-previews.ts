@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { ffmpegPath } from "./media-tools.js";
+import { ffmpegPath, trackMedia } from "./media-tools.js";
 
 const PREVIEW_TIMEOUT_MS = 10_000;
 
@@ -10,11 +10,12 @@ type Grab = (args: string[], signal: AbortSignal) => Promise<Buffer>;
  *  the next preview starts beside it. So the kill is SIGKILL, and the grab settles only once the
  *  process is really gone. */
 export const grabFrame = (args: string[], signal: AbortSignal, binary = ffmpegPath()) => new Promise<Buffer>((resolve, reject) => {
-  const child = execFile(binary, args, { encoding: "buffer", maxBuffer: 256 * 1024 }, (error, stdout) => {
+  // Tracked so a shutdown's killRunningMedia() reaches a preview, not only the timeout below.
+  const child = trackMedia(execFile(binary, args, { encoding: "buffer", maxBuffer: 256 * 1024 }, (error, stdout) => {
     clearTimeout(timer);
     signal.removeEventListener("abort", kill);
     if (error) reject(error); else resolve(stdout);
-  });
+  }));
   const kill = () => { child.kill("SIGKILL"); };
   const timer = setTimeout(kill, PREVIEW_TIMEOUT_MS);
   if (signal.aborted) kill(); else signal.addEventListener("abort", kill, { once: true });
