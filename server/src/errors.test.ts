@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
 import { hashPassword } from "./auth.js";
-import { AppError, classifyError, type ErrorCategory } from "./errors.js";
+import { AppError, classifyError, explainedError, type ErrorCategory } from "./errors.js";
+import { DebridError } from "./debrid.js";
 import { ResourceError } from "./media-resources.js";
 import { RestrictedError } from "./restricted.js";
 import { spawnServer, type SpawnedServer } from "./test-server.js";
@@ -29,6 +30,21 @@ test("the table classifies a representative key into every category", () => {
       `${key} carries a known retry disposition`,
     );
   }
+});
+
+test("a Real-Debrid answer is explained and classified by its status", () => {
+  assert.deepEqual(classifyError(new DebridError("The Real-Debrid token is not valid.", 401, "bad_token")), { category: "configuration", retry: "action" });
+  assert.deepEqual(classifyError(new DebridError("The Real-Debrid account is not premium.")), { category: "source", retry: "manual" });
+  assert.deepEqual(classifyError(new DebridError("Real-Debrid is not answering right now, trying again.", 503, "service_unavailable")), { category: "network", retry: "automatic" });
+  assert.equal(explainedError(new DebridError("The Real-Debrid account is not premium.")), true, "a sentence the server wrote gets no reference");
+  assert.equal(explainedError(new Error("boom")), false);
+  assert.equal(explainedError(new AppError("The item was not found.", "err.itemNotFound")), true);
+});
+
+test("a key or code naming something on Object.prototype is not a classification", () => {
+  const result = classifyError({ messageKey: "toString", code: "constructor" });
+  assert.equal(typeof result.category, "string");
+  assert.equal(typeof result.retry, "string");
 });
 
 test("an unknown exception classifies as internal with a manual retry", () => {

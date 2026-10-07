@@ -6,7 +6,7 @@ import express from "express";
 import { messageKeyOf } from "../errors.js";
 import { defaultDownloadSettings } from "../naming.js";
 import { roleMiddleware } from "../roles.js";
-import { publicAddon } from "../security.js";
+import { publicAddon, setFetchTransport } from "../security.js";
 import type { Store } from "../store.js";
 import type { AddonRecord, AddonRole } from "../types.js";
 import { emptyUserData, type UserData, type UserRecord } from "../users.js";
@@ -360,4 +360,18 @@ test("a switched-off addon is listed for an administrator and not for anybody el
   // account has.
   const ordinary = await (await api(harness.base, "/api/addons", { user: BOB })).json() as Array<{ key: string }>;
   assert.deepEqual(ordinary.map((item) => item.key), ["alpha"]);
+});
+
+test("a PATCH naming an unknown account is refused before any manifest is fetched", async (t) => {
+  const harness = await mount([addon("alpha")]);
+  let fetched = 0;
+  setFetchTransport(async () => { fetched += 1; return new Response("{}", { status: 200 }); });
+  t.after(async () => { setFetchTransport(); await harness.close(); });
+  const response = await api(harness.base, "/api/addons/alpha", {
+    method: "PATCH",
+    body: { url: "https://alpha.example/other/manifest.json", allowedUsers: ["usr_00000099"] },
+  });
+  assert.equal(response.status, 400);
+  assert.equal(messageKeyOf(await response.json()), "err.unknownUser");
+  assert.equal(fetched, 0, "the manifest is not fetched for a request that is refused anyway");
 });

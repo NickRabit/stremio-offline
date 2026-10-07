@@ -53,7 +53,7 @@ import { RepeatFilter } from "./access-log.js";
 import { randomUUID } from "node:crypto";
 import type { MediaInfo } from "./naming.js";
 import { defaultDownloadSettings } from "./naming.js";
-import { AppError, classifyError, messageKeyOf } from "./errors.js";
+import { AppError, classifyError, explainedError, messageKeyOf } from "./errors.js";
 import { accessLost, contentOf, Revocations, type AccessClaim, type AccessNeed, type ActiveTransfer, type StopContentOptions } from "./revocation.js";
 import { automaticMetadataEnabled, carveOuts, queuedArtworkKey, defaultLibrary, isInside, libraryFor, libraryPath, libraryVisible, parseLibraryPath, playingUnder, posixBase, posixDir, posixJoin, realAncestor, relativeWithin, resolveLibraryPath, toFs, toPosix, visibleLibraries, type LibraryRecord, type LibraryType, type ResolvedPath, type RootGrant, type Viewer } from "./libraries.js";
 import { envGrants, grantView, mergeGrants } from "./library-grants.js";
@@ -2192,7 +2192,7 @@ app.use((error: unknown, req: express.Request, res: express.Response, _next: exp
   const { category, retry } = classifyError(error);
   // An unknown exception is not a sentence the interface can render, so it carries a tag the
   // person can quote. RestrictedError and GuardRejection extend AppError, so this covers them.
-  const reference = error instanceof AppError || error instanceof ResourceError ? undefined : req.id;
+  const reference = explainedError(error) ? undefined : req.id;
   if (error instanceof RestrictedError || messageKeyOf(error) === "err.restricted") {
     log("INFO", "Rejected a restricted-mode mutation", {
       req: req.id, method: req.method, path: req.path, status: 403, category, user: currentUser(req)?.username,

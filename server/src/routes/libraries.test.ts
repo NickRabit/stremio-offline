@@ -376,6 +376,32 @@ test("two creates that queued together take different display orders", async (t)
   assert.deepEqual(orders, [0, 1, 2], "the second create took the order the first one already had");
 });
 
+test("two creates of the same folder that queued together make one library, not two", async (t) => {
+  const { root, films } = await grantedRoot("twice");
+  const real = await realpath(films);
+  const harness = await mount(
+    [library("alpha", 0)],
+    [{ path: root, source: "env", grantedAt: "2024-01-01T00:00:00.000Z" }],
+    [{ id: "lib_deadbeef", root: real, removedAt: new Date().toISOString() }],
+  );
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+  harness.holdWrites();
+
+  const first = api(harness.base, "/api/libraries", { method: "POST", body: { name: "Back", type: "mixed", root: films } });
+  while (harness.pendingWrites() < 1) await new Promise((resolve) => setImmediate(resolve));
+  const second = api(harness.base, "/api/libraries", { method: "POST", body: { name: "Again", type: "mixed", root: films } });
+  while (harness.pendingWrites() < 2) await new Promise((resolve) => setImmediate(resolve));
+  harness.releaseWrites();
+  const answers = await Promise.all([first, second]);
+
+  assert.deepEqual(answers.map((answer) => answer.status).sort(), [201, 400]);
+  const refused = answers.find((answer) => answer.status === 400)!;
+  assert.equal(((await refused.json()) as { messageKey?: string }).messageKey, "err.libraryRootTaken");
+  const ids = harness.stored().map((record) => record.id);
+  assert.equal(ids.filter((id) => id === "lib_deadbeef").length, 1, "the remembered id is taken once");
+  assert.equal(harness.stored().length, 2, "alpha and the one re-added folder");
+});
+
 test("PATCH /api/libraries/:id persists the automatic metadata switch and invalidates it when it moves", async (t) => {
   const harness = await mount([library("alpha", 0)]);
   t.after(harness.close);

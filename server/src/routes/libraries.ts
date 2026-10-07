@@ -4,7 +4,7 @@ import { constants } from "node:fs";
 import { access, mkdir, readdir, realpath, rm, stat } from "node:fs/promises";
 import { artworks } from "../artwork-cache.js";
 import { AppError } from "../errors.js";
-import { activeDeparted, automaticMetadataEnabled, carveOuts, DEPARTED_MAX, departedIdFor, isInside, libraryPath, newLibraryId, parseLibraryPath, posixBase, sameFile, toPosix, visibleLibraries, type LibraryRecord, type RootGrant } from "../libraries.js";
+import { activeDeparted, automaticMetadataEnabled, carveOuts, DEPARTED_MAX, departedIdIn, isInside, rootForms, libraryPath, newLibraryId, parseLibraryPath, posixBase, sameFile, toPosix, visibleLibraries, type LibraryRecord, type RootGrant } from "../libraries.js";
 import { asLibraryType, checkLibraryRemoval, checkLibraryRoot, checkRerootItems, checkRerootPaths, libraryFlag } from "../library-admin.js";
 import { grantingRoot, insideGrant } from "../library-grants.js";
 import { listVideos, type WalkBudget } from "../library.js";
@@ -85,10 +85,12 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
     const health = await libraryProbe.cached(root);
     // A folder that was a library before and was removed without forgetting takes its identity
     // back, so its match history, artwork and favourite rows are its own again.
-    const departed = store.departed();
-    const resumedId = await departedIdFor(departed, root);
+    const forms = await rootForms(root);
+    let resumedId: string | undefined;
     const library: LibraryRecord = {
-      id: resumedId ?? newLibraryId(), name, type, root, enabled: true,
+      // Filled in below, when the write lands: the departed list it is taken from may change
+      // while this request waits.
+      id: newLibraryId(), name, type, root, enabled: true,
       // Filled in below, when the write lands.
       order: 0,
       addedAt: new Date().toISOString(),
@@ -106,6 +108,14 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
       // The next display order is read from the list the write lands on: a create that queued
       // behind another one must not take the same position.
       library.order = (state.libraries ?? []).reduce((next, item) => Math.max(next, item.order + 1), 0);
+      // A create of the same folder that landed first owns it now; the check before the probe
+      // could not see it.
+      if ((state.libraries ?? []).some((item) => sameFile(path.resolve(item.root), forms.real) || sameFile(path.resolve(item.root), forms.absolute))) {
+        throw new AppError("Another library already uses that folder.", "err.libraryRootTaken");
+      }
+      resumedId = departedIdIn(state.departed ?? [], forms);
+      if (resumedId && !(state.libraries ?? []).some((item) => item.id === resumedId)) library.id = resumedId;
+      else resumedId = undefined;
       state.libraries = [...(state.libraries ?? []), library];
       if (resumedId) state.departed = (state.departed ?? []).filter((entry) => entry.id !== resumedId);
     });

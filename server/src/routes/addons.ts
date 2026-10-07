@@ -140,6 +140,16 @@ export function registerAddonsRoutes(app: express.Application, deps: AddonsDeps)
       throw new AppError("The list of accounts has to be an array.", "err.invalidRequest", 400);
     }
     const requestedUsers = req.body.allowedUsers === undefined ? undefined : (req.body.allowedUsers as unknown[]).map(String);
+    // Checked here as well as inside the write, so a refused list never costs a manifest fetch
+    // and answers with its own reason; the write repeats it against the state it lands on.
+    if (requestedUsers !== undefined) {
+      const dormantNow = new Set(dormantGrants(store.users(), existing.allowedUsers));
+      for (const id of requestedUsers) {
+        const user = findUserById(store.users(), id);
+        if (!user) throw new AppError("That account does not exist.", "err.unknownUser");
+        if (user.role === "admin" && !dormantNow.has(id)) throw new AppError("An administrator can already use every addon.", "err.adminAlwaysUsesAddons");
+      }
+    }
     // The settings are validated before the write: the mutator changes state in place, so
     // an exception halfway through would leave changes in memory that are never persisted.
     // It also rejects a nonsensical request before fetching a manifest for it.

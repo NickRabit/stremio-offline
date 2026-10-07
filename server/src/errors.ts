@@ -152,11 +152,29 @@ const isResourceError = (error: unknown): boolean => {
   return typeof shaped?.code === "string" && typeof shaped.status === "number";
 };
 
+/** A Real-Debrid answer, by its status: the account or token needs the person, a busy or
+ *  silent service is retried, anything else is the source's own refusal. */
+const debridClass = (error: { status?: unknown }): ErrorClassification => {
+  const status = typeof error.status === "number" ? error.status : 400;
+  if (status === 401 || status === 403) return { category: "configuration", retry: "action" };
+  if (status === 408 || status === 429 || status === 503 || status === 509) return { category: "network", retry: "automatic" };
+  return { category: "source", retry: "manual" };
+};
+
 export const classifyError = (error: unknown): ErrorClassification => {
   const code = (error as { code?: unknown } | null | undefined)?.code;
-  if (typeof code === "string" && RESOURCE_CODES[code]) return RESOURCE_CODES[code];
+  // Own properties only: a key or code that names something on Object.prototype is not a class.
+  if (typeof code === "string" && Object.hasOwn(RESOURCE_CODES, code)) return RESOURCE_CODES[code]!;
   const key = messageKeyOf(error);
-  if (key !== undefined && TABLE[key]) return TABLE[key];
+  if (key !== undefined && Object.hasOwn(TABLE, key)) return TABLE[key]!;
+  if ((error as { name?: unknown } | null | undefined)?.name === "DebridError") return debridClass(error as { status?: unknown });
   if (isResourceError(error)) return RESOURCE_FALLBACK;
   return error instanceof AppError ? APP_ERROR_FALLBACK : UNKNOWN_FALLBACK;
 };
+
+/** Whether a failure is a sentence the server wrote on purpose -- an AppError, a media resource
+ *  refusal, a Real-Debrid answer, or anything carrying a catalogue key -- rather than an
+ *  exception nobody anticipated. Only the latter gets a reference to quote. */
+export const explainedError = (error: unknown): boolean =>
+  error instanceof AppError || messageKeyOf(error) !== undefined || isResourceError(error)
+  || (error as { name?: unknown } | null | undefined)?.name === "DebridError";
