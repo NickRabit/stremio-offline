@@ -5,7 +5,7 @@ import { access, mkdir, readdir, realpath, rm, stat } from "node:fs/promises";
 import { artworks } from "../artwork-cache.js";
 import { AppError } from "../errors.js";
 import { activeDeparted, automaticMetadataEnabled, carveOuts, DEPARTED_MAX, departedIdIn, isInside, rootForms, libraryPath, newLibraryId, parseLibraryPath, posixBase, sameFile, toPosix, visibleLibraries, type LibraryRecord, type RootGrant } from "../libraries.js";
-import { asLibraryType, checkLibraryRemoval, checkLibraryRoot, checkRerootItems, checkRerootPaths, libraryFlag } from "../library-admin.js";
+import { asLibraryType, checkLibraryRemoval, checkLibraryRoot, checkRerootItems, checkRerootPaths, libraryFlag, withLibraryRootLock } from "../library-admin.js";
 import { grantingRoot, insideGrant } from "../library-grants.js";
 import { listVideos, type WalkBudget } from "../library.js";
 import { knownTitleOf, titleUnits } from "../library-match.js";
@@ -35,6 +35,8 @@ export interface LibrariesDeps extends RouteContext {
   libraryOps: LibraryOps;
 }
 
+const runUnlocked = <T,>(work: () => Promise<T>): Promise<T> => work();
+
 export function registerLibrariesRoutes(app: express.Application, deps: LibrariesDeps): void {
   const { store, currentUser, grantRows, healthOf, invalidateAutoScan, invalidateLibrary, libraryGrants, libraryStats, libraryView, progressOf, refreshLibraryHealth, libraryProbe, metaStore, libraryOps, stopContentAccess } = deps;
 
@@ -43,31 +45,6 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
     const checked = await checkLibraryRoot({ grants: libraryGrants(), libraries: store.libraries(), root: value, ...opts });
     if (!checked.ok) throw new AppError(checked.message, checked.messageKey, checked.status);
     return checked.root;
-  }
-
-  /** The folder behind each root spelling this process has resolved. A root can be stored as
-   *  one spelling of a folder another library reaches through a symlink, or through /tmp and
-   *  /private/tmp on a Mac, and the write that compares them is synchronous: every spelling is
-   *  resolved before a write, including the one a write that lands meanwhile stores. */
-  const realOfSpelling = new Map<string, string>();
-  async function formsOf(root: string): Promise<{ real: string; absolute: string }> {
-    const forms = await rootForms(root);
-    realOfSpelling.set(forms.absolute, forms.real);
-    return forms;
-  }
-  async function resolveExistingRoots(): Promise<void> {
-    await Promise.all(store.libraries().map((item) => formsOf(item.root)));
-  }
-
-  /** Whether another library already uses the folder, judged inside the write against the
-   *  libraries it lands on, by both the spelling each one stored and the folder behind it. */
-  function rootTaken(libraries: LibraryRecord[], forms: { real: string; absolute: string }, exceptId?: string): boolean {
-    return libraries.some((item) => {
-      if (item.id === exceptId) return false;
-      const stored = path.resolve(item.root);
-      const spellings = [stored, realOfSpelling.get(stored)].filter((value): value is string => value !== undefined);
-      return spellings.some((spelling) => sameFile(spelling, forms.real) || sameFile(spelling, forms.absolute));
-    });
   }
 
   /** A grant edit and a global switch each reach only their own cause: the accounts that
@@ -90,7 +67,9 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
     res.json(libraries.map((library) => libraryView(library, healthOf(library), stats.get(library.id) ?? { titles: 0, files: 0, bytes: 0 }, admin)));
   }));
 
-  app.post("/api/libraries", asyncRoute(async (req, res) => {
+  // Under the root lock: the folder check in requireLibraryRoot sees every create, root edit
+  // and re-root that landed before it.
+  app.post("/api/libraries", asyncRoute((req, res) => withLibraryRootLock(async () => {
     // The actor as the request resolved it, captured before anything is awaited. Reading it
     // again inside the mutator would answer `undefined` in exactly the cases worth catching --
     // the account switched off, the secret rotated, the session revoked -- and comparing a
@@ -110,8 +89,7 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
     const health = await libraryProbe.cached(root);
     // A folder that was a library before and was removed without forgetting takes its identity
     // back, so its match history, artwork and favourite rows are its own again.
-    const forms = await formsOf(root);
-    await resolveExistingRoots();
+    const forms = await rootForms(root);
     let resumedId: string | undefined;
     const library: LibraryRecord = {
       // Filled in below, when the write lands: the departed list it is taken from may change
@@ -134,11 +112,6 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
       // The next display order is read from the list the write lands on: a create that queued
       // behind another one must not take the same position.
       library.order = (state.libraries ?? []).reduce((next, item) => Math.max(next, item.order + 1), 0);
-      // A create of the same folder that landed first owns it now; the check before the probe
-      // could not see it.
-      if (rootTaken(state.libraries ?? [], forms)) {
-        throw new AppError("Another library already uses that folder.", "err.libraryRootTaken");
-      }
       resumedId = departedIdIn(state.departed ?? [], forms);
       if (resumedId && !(state.libraries ?? []).some((item) => item.id === resumedId)) library.id = resumedId;
       else resumedId = undefined;
@@ -157,7 +130,7 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
     else log("INFO", "Library created", { library: library.id, root: library.root, type });
     // Creating a library is administrator-only, so the caller is one by the time this answers.
     res.status(201).json(libraryView(library, health, { titles: 0, files: 0, bytes: 0 }, true));
-  }));
+  })));
 
   app.get("/api/libraries/browse", asyncRoute(async (req, res) => {
     const requested = String(req.query.path ?? "").trim();
@@ -278,7 +251,8 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
 
   // The item routes come after every literal `/api/libraries/...` route: Express matches in
   // registration order, so a `:id` route above them would swallow `/libraries/grants`.
-  app.patch("/api/libraries/:id", asyncRoute(async (req, res) => {
+  // An edit that moves the root takes the root lock, like a create; any other edit does not wait for it.
+  app.patch("/api/libraries/:id", asyncRoute((req, res) => (req.body?.root !== undefined ? withLibraryRootLock : runUnlocked)(async () => {
     // The actor as the request resolved it, captured before anything is awaited. Reading it
     // again inside the mutator would answer `undefined` in exactly the cases worth catching --
     // the account switched off, the secret rotated, the session revoked -- and comparing a
@@ -322,8 +296,6 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
       if (user.role === "admin" && !dormantNow.has(id)) throw new AppError("An administrator already sees every library.", "err.adminAlwaysSees");
     }
     if (req.body?.root !== undefined) patch.root = await requireLibraryRoot(req.body.root, { exceptId: target.id, create: req.body?.create === true });
-    const rootSpellings = patch.root === undefined ? undefined : await formsOf(patch.root);
-    if (rootSpellings) await resolveExistingRoots();
     // The default lives in the settings -- one id per kind, so claiming it takes it from
     // whoever held it -- but it reads as a property of the library, and that is where the
     // form sets it. `undefined` leaves the current choice alone.
@@ -354,11 +326,6 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
       assertStillAdmin(state.users ?? [], actor);
       const library = (state.libraries ?? []).find((item) => item.id === target.id);
       if (!library) throw new AppError("The library was not found.", "err.libraryNotFound", 404);
-      // Another write that moved a library to the same folder may have landed while this one
-      // waited; the check before the probe could not see it.
-      if (rootSpellings && rootTaken(state.libraries ?? [], rootSpellings, target.id)) {
-        throw new AppError("Another library already uses that folder.", "err.libraryRootTaken");
-      }
       before = library;
       const resolved: Partial<LibraryRecord> = { ...patch };
       let bumped: string[] = [];
@@ -415,7 +382,7 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
     log("INFO", "Library updated", { library: after.id, root: after.root, type: after.type, enabled: after.enabled });
     // As with the create above: only an administrator reaches this route.
     res.json(libraryView(after, health, stats.get(after.id) ?? { titles: 0, files: 0, bytes: 0 }, true));
-  }));
+  })));
 
   app.delete("/api/libraries/:id", asyncRoute(async (req, res) => {
     // The actor as the request resolved it, captured before anything is awaited. Reading it

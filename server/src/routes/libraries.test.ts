@@ -32,6 +32,8 @@ interface Harness {
   /** How many writes are waiting for `releaseWrites`, so a test can interleave two of them. */
   pendingWrites(): number;
   holdWrites(): void;
+  /** Stops holding and lets everything held so far run. */
+  resumeWrites(): void;
   releaseWrites(): void;
   close(): Promise<void>;
 }
@@ -136,6 +138,7 @@ const mount = async (
     pendingWrites: () => held.length,
     holdWrites: () => { holding = true; },
     releaseWrites: () => { const waiting = held; held = []; for (const run of waiting) run(); },
+    resumeWrites: () => { holding = false; const waiting = held; held = []; for (const run of waiting) run(); },
     close: async () => {
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -368,8 +371,10 @@ test("two creates that queued together take different display orders", async (t)
   const first = api(harness.base, "/api/libraries", { method: "POST", body: { name: "Films", type: "movie", root: films } });
   while (harness.pendingWrites() < 1) await new Promise((resolve) => setImmediate(resolve));
   const second = api(harness.base, "/api/libraries", { method: "POST", body: { name: "Shows", type: "series", root: shows } });
-  while (harness.pendingWrites() < 2) await new Promise((resolve) => setImmediate(resolve));
-  harness.releaseWrites();
+  // The second one waits on the root lock, not on a held write: let it get there, then go.
+  for (let tick = 0; tick < 20; tick += 1) await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(harness.pendingWrites(), 1, "a second write that changes a root waits for the first");
+  harness.resumeWrites();
   await Promise.all([first, second]);
 
   const orders = harness.stored().map((record) => record.order).sort((a, b) => a - b);
@@ -390,8 +395,10 @@ test("two creates of the same folder that queued together make one library, not 
   const first = api(harness.base, "/api/libraries", { method: "POST", body: { name: "Back", type: "mixed", root: films } });
   while (harness.pendingWrites() < 1) await new Promise((resolve) => setImmediate(resolve));
   const second = api(harness.base, "/api/libraries", { method: "POST", body: { name: "Again", type: "mixed", root: films } });
-  while (harness.pendingWrites() < 2) await new Promise((resolve) => setImmediate(resolve));
-  harness.releaseWrites();
+  // The second one waits on the root lock, not on a held write: let it get there, then go.
+  for (let tick = 0; tick < 20; tick += 1) await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(harness.pendingWrites(), 1, "a second write that changes a root waits for the first");
+  harness.resumeWrites();
   const answers = await Promise.all([first, second]);
 
   assert.deepEqual(answers.map((answer) => answer.status).sort(), [201, 400]);
@@ -411,8 +418,10 @@ test("two edits that move two libraries to one folder together leave one of them
   const first = api(harness.base, "/api/libraries/alpha", { method: "PATCH", body: { root: films } });
   while (harness.pendingWrites() < 1) await new Promise((resolve) => setImmediate(resolve));
   const second = api(harness.base, "/api/libraries/beta", { method: "PATCH", body: { root: films } });
-  while (harness.pendingWrites() < 2) await new Promise((resolve) => setImmediate(resolve));
-  harness.releaseWrites();
+  // The second one waits on the root lock, not on a held write: let it get there, then go.
+  for (let tick = 0; tick < 20; tick += 1) await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(harness.pendingWrites(), 1, "a second write that changes a root waits for the first");
+  harness.resumeWrites();
   const answers = await Promise.all([first, second]);
 
   assert.deepEqual(answers.map((answer) => answer.status).sort(), [200, 400]);
@@ -433,8 +442,10 @@ test("two edits that reach one folder by two spellings together leave one librar
   const first = api(harness.base, "/api/libraries/alpha", { method: "PATCH", body: { root: alias } });
   while (harness.pendingWrites() < 1) await new Promise((resolve) => setImmediate(resolve));
   const second = api(harness.base, "/api/libraries/beta", { method: "PATCH", body: { root: films } });
-  while (harness.pendingWrites() < 2) await new Promise((resolve) => setImmediate(resolve));
-  harness.releaseWrites();
+  // The second one waits on the root lock, not on a held write: let it get there, then go.
+  for (let tick = 0; tick < 20; tick += 1) await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(harness.pendingWrites(), 1, "a second write that changes a root waits for the first");
+  harness.resumeWrites();
   const answers = await Promise.all([first, second]);
   assert.deepEqual(answers.map((answer) => answer.status).sort(), [200, 400], "the second spelling of the same folder is refused");
 });

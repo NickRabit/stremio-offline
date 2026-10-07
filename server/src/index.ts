@@ -41,6 +41,7 @@ import { browseDirectory, describePath, entryDirectory, isPathWithin, isVideo, l
 import { createArtworkSweep, type SweepDeps, type SweepLibrary } from "./artwork-sweep.js";
 import { createMaintenance } from "./maintenance.js";
 import { createShutdown, installSignalHandlers } from "./server-shutdown.js";
+import { libraryRootTaken, withLibraryRootLock } from "./library-admin.js";
 import { browseMeta, cacheFieldsFromMeta, dropAutomaticInside, episodeKey, episodeNumberOf, episodesFromMeta, dropKeyed, folderMosaicUnits, knownEntryForUnit, knownTitleOf, knownTitleForUnit, matchKeyFor, mosaicIdentities, mosaicSkipped, needsBackfill, needsEpisodes, staleScanRecordKeys, staleSuggestionKeys, titleUnits, unitFor, unmatchAt, withSkipFlag, type GalleryEntry, type LibraryMetaRecord, type TitleKind, type TitleUnit } from "./library-match.js";
 import { LibraryScan } from "./library-scan.js";
 import { probe } from "./probe.js";
@@ -2143,9 +2144,22 @@ const libraryOps = new LibraryOps({
   finished: async (job, operation) => {
     if (operation.op !== "reroot") return;
     if (job.status !== "completed" || job.failed > 0) return;
-    await store.update((state) => {
-      state.libraries = (state.libraries ?? []).map((library) => library.id === operation.libraryId ? { ...library, root: operation.to } : library);
+    // Under the root lock, with the folder checked afresh: a create or an edit that took the new
+    // folder while the content moved owns it, and two libraries over one folder is worse than a
+    // re-root that waits for somebody to look.
+    const switched = await withLibraryRootLock(async () => {
+      if (await libraryRootTaken(store.libraries(), operation.to, operation.libraryId)) return false;
+      await store.update((state) => {
+        state.libraries = (state.libraries ?? []).map((library) => library.id === operation.libraryId ? { ...library, root: operation.to } : library);
+      });
+      return true;
     });
+    if (!switched) {
+      log("WARN", "The re-rooted content is in place, but another library took the new folder meanwhile; the root was not switched", {
+        library: operation.libraryId, from: operation.from, to: operation.to,
+      });
+      return;
+    }
     invalidateLibrary();
     await refreshLibraryHealth();
     log("INFO", "Library re-rooted, the content came along", {

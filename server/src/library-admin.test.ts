@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readdir, realpath, rm, stat, symlink, writeFile } from 
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { asLibraryType, checkLibraryRemoval, checkLibraryRoot, checkRerootItems, checkRerootPaths, libraryFlag } from "./library-admin.js";
+import { asLibraryType, checkLibraryRemoval, checkLibraryRoot, checkRerootItems, checkRerootPaths, libraryFlag, libraryRootTaken, withLibraryRootLock } from "./library-admin.js";
 import { carveOuts, type LibraryRecord, type RootGrant } from "./libraries.js";
 import { flushLog } from "./logger.js";
 
@@ -318,4 +318,31 @@ test("one view resolved and one spelled misses a carve-out that the union of bot
     ]);
     assert.deepEqual([...union], ["Serialy"], "the union sees it whichever side has been probed");
   } finally { await rm(dataDir, { recursive: true, force: true }); }
+});
+
+test("root-changing work runs one at a time under the root lock", async () => {
+  const order: string[] = [];
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const first = withLibraryRootLock(async () => { order.push("first:start"); await gate; order.push("first:end"); });
+  const second = withLibraryRootLock(async () => { order.push("second"); });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(order, ["first:start"], "the second waits for the first");
+  release();
+  await Promise.all([first, second]);
+  assert.deepEqual(order, ["first:start", "first:end", "second"]);
+  await assert.rejects(withLibraryRootLock(async () => { throw new Error("refused"); }));
+  assert.equal(await withLibraryRootLock(async () => "next"), "next", "a refusal does not block the lock");
+});
+
+test("a folder reached through a symlink is the folder another library already uses", async (t) => {
+  if (process.platform === "win32") { t.skip("a symlink needs developer mode on Windows"); return; }
+  const dir = await mkdtemp(path.join(tmpdir(), "stremio-root-taken-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const films = path.join(dir, "films");
+  await mkdir(films);
+  await symlink(films, path.join(dir, "alias"));
+  const libraries = [{ id: "lib_a", name: "A", type: "movie", root: path.join(dir, "alias"), enabled: true, order: 0, addedAt: "2026-01-01T00:00:00.000Z", writeArtwork: false }] as LibraryRecord[];
+  assert.equal(await libraryRootTaken(libraries, films), true);
+  assert.equal(await libraryRootTaken(libraries, films, "lib_a"), false, "the library itself is not another library");
 });
