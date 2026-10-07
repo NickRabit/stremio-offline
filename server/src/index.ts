@@ -52,7 +52,7 @@ import { RepeatFilter } from "./access-log.js";
 import { randomUUID } from "node:crypto";
 import type { MediaInfo } from "./naming.js";
 import { defaultDownloadSettings } from "./naming.js";
-import { AppError, messageKeyOf } from "./errors.js";
+import { AppError, classifyError, messageKeyOf } from "./errors.js";
 import { accessLost, contentOf, Revocations, type AccessClaim, type AccessNeed, type ActiveTransfer, type StopContentOptions } from "./revocation.js";
 import { automaticMetadataEnabled, carveOuts, queuedArtworkKey, defaultLibrary, isInside, libraryFor, libraryPath, libraryVisible, parseLibraryPath, playingUnder, posixBase, posixDir, posixJoin, realAncestor, relativeWithin, resolveLibraryPath, toFs, toPosix, visibleLibraries, type LibraryRecord, type LibraryType, type ResolvedPath, type RootGrant, type Viewer } from "./libraries.js";
 import { envGrants, grantView, mergeGrants } from "./library-grants.js";
@@ -468,10 +468,10 @@ const inFlight = new InFlight();
 app.use(inFlight.middleware());
 app.use(loopbackHostCheck());
 app.use(securityHeaders());
-app.use(express.json({ limit: "256kb" }));
 
 // Every request gets a short tag, so an error reported from the browser and its cause
-// on the server can be tied together without hunting through the log by timestamp.
+// on the server can be tied together without hunting through the log by timestamp. It is
+// assigned before the body is parsed, so a malformed body is tagged too.
 declare global { namespace Express { interface Request { id?: string } } }
 app.use("/api", (req, res, next) => {
   const id = randomUUID().slice(0, 8);
@@ -482,6 +482,7 @@ app.use("/api", (req, res, next) => {
   res.on("finish", () => log("DEBUG", "API request", { req: id, method: req.method, path: req.path, status: res.statusCode, ms: Date.now() - startedAt }));
   next();
 });
+app.use(express.json({ limit: "256kb" }));
 /** Measures how much the response actually sends and reports it to the statistics.
  * It counts at write time, so what the client asked for and then abandoned by closing
  * playback never reaches the total. */
@@ -2187,9 +2188,13 @@ app.use((error: unknown, req: express.Request, res: express.Response, _next: exp
   // and changing that now would be a behaviour change, not a diagnostic one.
   const status = typeof (error as { status?: unknown }).status === "number" ? (error as { status: number }).status : 400;
   const message = error instanceof Error ? error.message : String(error);
+  const { category, retry } = classifyError(error);
+  // An unknown exception is not a sentence the interface can render, so it carries a tag the
+  // person can quote. RestrictedError and GuardRejection extend AppError, so this covers them.
+  const reference = error instanceof AppError || error instanceof ResourceError ? undefined : req.id;
   if (error instanceof RestrictedError || messageKeyOf(error) === "err.restricted") {
     log("INFO", "Rejected a restricted-mode mutation", {
-      req: req.id, method: req.method, path: req.path, status: 403, user: currentUser(req)?.username,
+      req: req.id, method: req.method, path: req.path, status: 403, category, user: currentUser(req)?.username,
     });
   } else if (error instanceof ResourceError && error.status === 410 && /^(?:\/api)?\/media\//.test(req.path)) {
     // A player that has just been closed is still reading the ranges it had open. The
@@ -2198,7 +2203,7 @@ app.use((error: unknown, req: express.Request, res: express.Response, _next: exp
   } else {
     log("ERROR", "Request failed", {
       req: req.id, method: req.method, path: req.path, status,
-      user: currentUser(req)?.username, reason: message,
+      user: currentUser(req)?.username, category, reason: message,
       stack: error instanceof Error ? error.stack : undefined,
     });
   }
@@ -2215,6 +2220,9 @@ app.use((error: unknown, req: express.Request, res: express.Response, _next: exp
     code: error instanceof ResourceError ? error.code : undefined,
     messageKey: hideDetails ? undefined : messageKeyOf(error),
     ...(vars ? { vars } : {}),
+    category,
+    retry,
+    ...(reference ? { reference } : {}),
   });
 });
 process.on("unhandledRejection", (reason) => {
