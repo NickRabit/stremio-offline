@@ -26,7 +26,8 @@
     "test:e2e:snapshots": "npm run build && docker build -t stremio-offline-e2e -f e2e/Dockerfile . && docker run --rm -v \"$PWD\":/work -w /work -e CI=1 stremio-offline-e2e npx playwright test --update-snapshots",
     "dev:server": "npm run dev -w server",
     "dev:web": "npm run dev -w web",
-    "dev:desktop": "npm run dev -w desktop"
+    "dev:desktop": "npm run dev -w desktop",
+    "complexity": "node scripts/complexity-report.mjs"
   },
   "engines": {
     "node": ">=22"

@@ -72,6 +72,69 @@ is moving again, the retry budget is restored.
 one source. Providers usually cap concurrent connections and kill or starve the
 extras, so one transfer per source is the safest default.
 
+### How a download moves through the queue
+
+These are the states the server actually stores (`DownloadStatus` in
+`server/src/api-types.ts`, driven by `server/src/downloads.ts`), not a wish
+list. A job is in exactly one of them at a time; `paused` carries a reason that
+says who or what is holding it.
+
+| State | What it means |
+| --- | --- |
+| `queued` | Admitted, waiting for a free slot or for its retry delay. The source and the file name are chosen when it starts. |
+| `waiting` | A raw torrent, or a lazy job that resolved to one: Real-Debrid is fetching it. Waiting jobs do not take an HTTP slot. |
+| `checking` | A lazy job (a season, a whole show or a follow rule) resolving its source: asking the chosen addons and probing candidates. Only a job that has no source yet starts here. |
+| `downloading` | Bytes are moving: an HTTP transfer, single or segmented, or a playlist being assembled with FFmpeg. |
+| `paused` (`user`) | Paused by a person, or a pause that was requested while a transfer was in flight. |
+| `paused` (`storage`) | A disk filled up. The whole queue halts until every halted job's disk has room again. |
+| `paused` (`library`) | The library the rule or the chosen destination names is switched off, read-only or away; a removed library waits with a deadline. |
+| `paused` (`permission`) | The account behind the job may no longer queue downloads. Its place is kept for when the right returns. |
+| `completed` | The transfer finished and the file was published into the library. |
+| `failed` | The job gave up: an error that will not get better, or the retry budget is spent. |
+
+| From | To | Trigger | Side effects |
+| --- | --- | --- | --- |
+| — | `queued` | **To library** on an HTTP source; a lazy job (season, show or follow) is admitted | The job is written to `downloads.json`; a direct job claims its file name now, a lazy one when it resolves. |
+| — | `waiting` | **To library** on a raw torrent (magnet or `infoHash`), with a Real-Debrid token set | Caching starts on Real-Debrid; nothing is downloaded yet. |
+| — | `paused` (`library`) | The rule names a library that is off, read-only or away at admission | The job is stored paused instead of failing; it resumes by itself when the library is back. |
+| `queued` | `checking` | The queue reaches a lazy job that has no source yet | The addons are asked and the candidates are probed. |
+| `queued` | `downloading` | The queue reaches a job whose source is already known (a direct job), or `checking` just resolved one | The transfer opens; a `.part` file is created to receive it. |
+| `checking` | `downloading` | Source resolved to an HTTP stream | The `.part` is opened and the name is claimed. |
+| `checking` | `waiting` | Source resolved to a torrent (an `infoHash` with no URL) | The job waits for Real-Debrid like a manual torrent. |
+| `checking` | `failed` | No usable source, or every candidate failed | Nothing is on disk yet; the job stays for Retry. |
+| `waiting` | `queued` | Real-Debrid reports the file downloaded | The unrestricted URL fills in; the job becomes a normal HTTP download. |
+| `waiting` | `queued` | Real-Debrid gave up but the job is a lazy rule with more sources | The source and target are cleared and the `.part` and subtitle `.part` are deleted; the next source is tried. |
+| `waiting` | `failed` | Real-Debrid is missing the token, the torrent has no `infoHash`, it resolved a different episode, or it timed out (a manual torrent) | The job stays, with the reason, for Retry. |
+| `downloading` | `completed` | The transfer finished intact | The `.part` is renamed into the library (the subtitle `.part` becomes a `.vtt` sidecar); the file is published; the failure and retry fields are cleared; the library caches are refreshed and a follow that queued the job is told it finished. |
+| `downloading` | `queued` | Dropped connection, within the retry budget | The `.part` is kept and the job waits out a delay; the budget is restored once 50 MiB has moved again. |
+| `downloading` | `queued` | The source advertised byte ranges and then ignored them | The segment plan is abandoned and its `.part` deleted; the next attempt runs over one stream. |
+| `downloading` | `queued` | A lazy job's source failed and other candidates remain | The `.part` and subtitle `.part` are deleted, the source and target cleared, and the next source tried. |
+| `downloading` | `paused` (`user`) | **Pause** on the row, or a pause requested mid-transfer | The transfer is aborted; the `.part` is kept and resumes from its offset. |
+| `downloading` | `paused` (`storage`) | A write hits a full disk | The whole queue halts, and the halted rows resume together once every disk they write to has room. |
+| `downloading` | `paused` (`library`) | The target library went away or its record is gone | The transfer stops; the `.part` is kept and the job waits for the library, with a deadline for a removed one. |
+| `downloading`/`checking` | `paused` (`permission`) | The account behind the job is disabled, or loses the right to queue it (its download permission revoked, or a source addon or library it used withdrawn) | The job drops out of the running set but keeps its place; Resume re-checks the right. |
+| `downloading`/`checking` | `failed` | An error that will not get better, or the retries are spent | The `.part` is kept, so Retry can resume where it stopped. |
+| `paused` (`user`) / `failed` | `queued` (or `waiting` for a torrent) | **Resume** / **Retry** | The job re-enters the queue; Retry clears the retry counter and re-reads the rule's selection. |
+| `paused` (`permission`) | `queued` | **Resume** once the right is back | The right is read again; a job that is still refused stays paused. |
+| `paused` (`library`) | `queued`/`waiting` | The library is usable again (checked on a timer) | The job continues where it was; a removed library past its deadline falls back to the default for its kind. |
+| `paused` (`library`) | `failed` | A chosen destination library is gone past its deadline, or no library takes the kind | A destination picked by hand is never redirected; a rule with no home fails rather than landing somewhere unasked for. |
+| `paused` (`storage`) | `queued` | The disk has room again | The whole halted group resumes. |
+| `queued`/`waiting`/`checking`/`downloading`/`paused`/`failed` | — | **Remove** on an unfinished job | It leaves the queue; its `.part` and subtitle `.part` are deleted; a follow that queued it records a skip. |
+| `completed` | — | **Remove** on a finished row | Only the history row goes; the published file stays. |
+| any unfinished | — | The owning account is deleted | Its unfinished jobs and their `.part` files are removed; completed files stay in the library. |
+
+Three things are easy to confuse with a state but are not:
+
+- **Removing a job is not a state.** The row leaves the queue; an unfinished
+  job's `.part` (and any subtitle `.part`) is deleted with it. There is no
+  persisted `cancelled` state.
+- **Clearing history removes only `completed` rows** and never touches the
+  media already in the library.
+- **A restart turns `checking` and `downloading` back into `queued`.** A
+  `waiting` job resumes polling Real-Debrid, a `paused` job keeps its reason (a
+  storage halt is rebuilt), and every `.part` is kept, so the transfer resumes
+  by Range from where it stopped.
+
 ### Seasons and whole shows
 
 Downloading a season or a whole show opens a selection dialog. Choose one or
