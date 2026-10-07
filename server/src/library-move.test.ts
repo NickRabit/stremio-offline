@@ -172,15 +172,17 @@ test("a move of another kind is refused, and carries the two kinds back", async 
     error: "A movie library does not take series.",
     messageKey: "err.libraryTypeMismatch",
     vars: { type: "movie", kind: "series" },
+    category: "library",
+    retry: "action",
   });
   assert.equal(await exists(path.join(filmsRoot, "01 - Refused.mkv")), false, "nothing was written");
   assert.equal(await exists(path.join(showsRoot, item)), true, "nothing left the source library");
 });
 
-test("an error without variables answers exactly as it did before", async () => {
+test("an error without variables carries no vars field", async () => {
   const response = await move({ path: "nikde/nic.mkv", folder: films });
   assert.equal(response.status, 400);
-  assert.deepEqual(await response.json(), { error: "Invalid path.", messageKey: "err.invalidPath" });
+  assert.deepEqual(await response.json(), { error: "Invalid path.", messageKey: "err.invalidPath", category: "library", retry: "action" });
 });
 
 test("the same move goes through when the request confirms it", async () => {
@@ -270,6 +272,8 @@ test("a delete that would take another library with it is refused, and nothing i
   assert.deepEqual(await response.json(), {
     error: "This folder holds another library. Move that library out first.",
     messageKey: "err.libraryHoldsAnother",
+    category: "library",
+    retry: "action",
   });
   assert.equal(await exists(path.join(archiveRoot, "Archiv")), true, "the folder is still there");
   assert.equal(await exists(nestedFile()), true, "the nested library's file is still there");
@@ -281,6 +285,8 @@ test("a move and a copy of a folder holding another library are refused", async 
   assert.deepEqual(await moved.json(), {
     error: "This folder holds another library. Move that library out first.",
     messageKey: "err.libraryHoldsAnother",
+    category: "library",
+    retry: "action",
   });
 
   const copied = await move({ path: holding(), folder: films, copy: true });
@@ -307,6 +313,8 @@ test("a rename of a folder holding another library is refused", async () => {
   assert.deepEqual(await response.json(), {
     error: "This folder holds another library. Move that library out first.",
     messageKey: "err.libraryHoldsAnother",
+    category: "library",
+    retry: "action",
   });
   assert.equal(await exists(path.join(archiveRoot, "Archiv jiny")), false, "nothing was renamed");
   assert.equal(await exists(nestedFile()), true, "the nested library's file is still there");
@@ -354,6 +362,8 @@ test("a delete, a move and a rename of the folder holding the aliased library ar
   assert.deepEqual(await deleted.json(), {
     error: "This folder holds another library. Move that library out first.",
     messageKey: "err.libraryHoldsAnother",
+    category: "library",
+    retry: "action",
   });
   assert.equal(await exists(aliasedFile()), true, "the aliased library's file is still there");
 
