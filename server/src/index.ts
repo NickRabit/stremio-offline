@@ -41,6 +41,7 @@ import { browseDirectory, describePath, entryDirectory, isPathWithin, isVideo, l
 import { createArtworkSweep, type SweepDeps, type SweepLibrary } from "./artwork-sweep.js";
 import { createMaintenance } from "./maintenance.js";
 import { createShutdown, installSignalHandlers } from "./server-shutdown.js";
+import { libraryRootTaken, withLibraryRootLock } from "./library-admin.js";
 import { browseMeta, cacheFieldsFromMeta, dropAutomaticInside, episodeKey, episodeNumberOf, episodesFromMeta, dropKeyed, folderMosaicUnits, knownEntryForUnit, knownTitleOf, knownTitleForUnit, matchKeyFor, mosaicIdentities, mosaicSkipped, needsBackfill, needsEpisodes, staleScanRecordKeys, staleSuggestionKeys, titleUnits, unitFor, unmatchAt, withSkipFlag, type GalleryEntry, type LibraryMetaRecord, type TitleKind, type TitleUnit } from "./library-match.js";
 import { LibraryScan } from "./library-scan.js";
 import { probe } from "./probe.js";
@@ -53,7 +54,7 @@ import { RepeatFilter } from "./access-log.js";
 import { randomUUID } from "node:crypto";
 import type { MediaInfo } from "./naming.js";
 import { defaultDownloadSettings } from "./naming.js";
-import { AppError, classifyError, messageKeyOf } from "./errors.js";
+import { AppError, classifyError, explainedError, messageKeyOf } from "./errors.js";
 import { accessLost, contentOf, Revocations, type AccessClaim, type AccessNeed, type ActiveTransfer, type StopContentOptions } from "./revocation.js";
 import { automaticMetadataEnabled, carveOuts, queuedArtworkKey, defaultLibrary, isInside, libraryFor, libraryPath, libraryVisible, parseLibraryPath, playingUnder, posixBase, posixDir, posixJoin, realAncestor, relativeWithin, resolveLibraryPath, toFs, toPosix, visibleLibraries, type LibraryRecord, type LibraryType, type ResolvedPath, type RootGrant, type Viewer } from "./libraries.js";
 import { envGrants, grantView, mergeGrants } from "./library-grants.js";
@@ -2143,9 +2144,22 @@ const libraryOps = new LibraryOps({
   finished: async (job, operation) => {
     if (operation.op !== "reroot") return;
     if (job.status !== "completed" || job.failed > 0) return;
-    await store.update((state) => {
-      state.libraries = (state.libraries ?? []).map((library) => library.id === operation.libraryId ? { ...library, root: operation.to } : library);
+    // Under the root lock, with the folder checked afresh: a create or an edit that took the new
+    // folder while the content moved owns it, and two libraries over one folder is worse than a
+    // re-root that waits for somebody to look.
+    const switched = await withLibraryRootLock(async () => {
+      if (await libraryRootTaken(store.libraries(), operation.to, operation.libraryId)) return false;
+      await store.update((state) => {
+        state.libraries = (state.libraries ?? []).map((library) => library.id === operation.libraryId ? { ...library, root: operation.to } : library);
+      });
+      return true;
     });
+    if (!switched) {
+      log("WARN", "The re-rooted content is in place, but another library took the new folder meanwhile; the root was not switched", {
+        library: operation.libraryId, from: operation.from, to: operation.to,
+      });
+      return;
+    }
     invalidateLibrary();
     await refreshLibraryHealth();
     log("INFO", "Library re-rooted, the content came along", {
@@ -2192,7 +2206,7 @@ app.use((error: unknown, req: express.Request, res: express.Response, _next: exp
   const { category, retry } = classifyError(error);
   // An unknown exception is not a sentence the interface can render, so it carries a tag the
   // person can quote. RestrictedError and GuardRejection extend AppError, so this covers them.
-  const reference = error instanceof AppError || error instanceof ResourceError ? undefined : req.id;
+  const reference = explainedError(error) ? undefined : req.id;
   if (error instanceof RestrictedError || messageKeyOf(error) === "err.restricted") {
     log("INFO", "Rejected a restricted-mode mutation", {
       req: req.id, method: req.method, path: req.path, status: 403, category, user: currentUser(req)?.username,

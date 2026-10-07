@@ -70,11 +70,21 @@ export function activeDeparted(departed: DepartedLibrary[], now = Date.now()): D
 /** The id a re-added folder takes back: the newest departed entry for the same folder, both
  *  sides through `realpath`, so two mounts of one disk are the same library. */
 export async function departedIdFor(departed: DepartedLibrary[], root: string, now = Date.now()): Promise<string | undefined> {
+  return departedIdIn(departed, await rootForms(root), now);
+}
+
+/** Both spellings of a root a departed entry may have been recorded under. Resolved before a
+ *  state write, so the match itself can run inside one. */
+export async function rootForms(root: string): Promise<{ real: string; absolute: string }> {
   const absolute = path.resolve(root);
-  const real = await realpath(absolute).catch(() => absolute);
-  // A root that is away when it is removed can only be recorded as it was spelled, so both
-  // forms count: the resolved one and the lexical one.
-  return [...activeDeparted(departed, now)].reverse().find((entry) => sameFile(entry.root, real) || sameFile(entry.root, absolute))?.id;
+  return { real: await realpath(absolute).catch(() => absolute), absolute };
+}
+
+/** The synchronous half of `departedIdFor`, for a mutator that must match against the state
+ *  it lands on. A root that is away when it is removed can only be recorded as it was spelled,
+ *  so both forms count: the resolved one and the lexical one. */
+export function departedIdIn(departed: DepartedLibrary[], forms: { real: string; absolute: string }, now = Date.now()): string | undefined {
+  return [...activeDeparted(departed, now)].reverse().find((entry) => sameFile(entry.root, forms.real) || sameFile(entry.root, forms.absolute))?.id;
 }
 
 /** The part of `Settings` a default lookup needs. Kept structural so this module

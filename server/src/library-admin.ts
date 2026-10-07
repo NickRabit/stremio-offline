@@ -130,3 +130,25 @@ export function checkLibraryRemoval(libraries: LibraryRecord[], id: string): Rem
   }
   return { ok: true, library };
 }
+
+/** Every write that gives a library a folder -- a create, an edit of the root, the end of a
+ *  re-root -- runs one after another under this lock, and checks the folder afresh inside it.
+ *  A check before the lock could not see a folder another write was about to take, and a
+ *  check inside a state write cannot resolve a symlink. */
+let rootChain: Promise<unknown> = Promise.resolve();
+export function withLibraryRootLock<T>(work: () => Promise<T>): Promise<T> {
+  const run = rootChain.then(work, work);
+  rootChain = run.catch(() => undefined);
+  return run;
+}
+
+/** Whether another library already uses the folder, through realpath on both sides. */
+export async function libraryRootTaken(libraries: LibraryRecord[], root: string, exceptId?: string): Promise<boolean> {
+  const real = await realpath(root).catch(() => path.resolve(root));
+  for (const library of libraries) {
+    if (library.id === exceptId) continue;
+    const other = await realpath(library.root).catch(() => path.resolve(library.root));
+    if (sameFile(other, real)) return true;
+  }
+  return false;
+}
