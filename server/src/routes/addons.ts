@@ -46,8 +46,11 @@ export function registerAddonsRoutes(app: express.Application, deps: AddonsDeps)
   // which stays the administrator's `move` below.
   app.put("/api/addons/order", asyncRoute(async (req, res) => {
     const viewer = viewerOf(currentUser(req));
-    const order = visibleOrder(req.body?.order, new Set(allowedAddons(store.addons(), viewer).map((addon) => addon.key)));
+    if (!Array.isArray(req.body?.order)) throw new AppError("The order has to be a list of addon keys.", "err.invalidRequest", 400);
     await store.update((state) => {
+      // The keys the caller may see are read from the state the write lands on: an addon that
+      // became visible or invisible while this waited decides what the list holds now.
+      const order = visibleOrder(req.body.order, new Set(allowedAddons(state.addons, viewer).map((addon) => addon.key)));
       const data = state.userData?.[viewer.id] ?? emptyUserData();
       data.addonOrder = order;
       state.userData = { ...(state.userData ?? {}), [viewer.id]: data };
@@ -121,7 +124,11 @@ export function registerAddonsRoutes(app: express.Application, deps: AddonsDeps)
     const actor = currentUser(req);
     const existing = store.addons().find((a) => a.key === req.params.key);
     if (!existing) throw new AppError("The addon was not found.", "err.addonNotFound");
-    const role = ["catalog", "source", "both"].includes(req.body.role) ? req.body.role as AddonRole : existing.role;
+    // Only a role the request names is written; a role it leaves out keeps whatever the record
+    // holds when the write lands. The defaulted one is still needed for the checks below and
+    // for the manifest fetch.
+    const namedRole = ["catalog", "source", "both"].includes(req.body.role) ? req.body.role as AddonRole : undefined;
+    const role = namedRole ?? existing.role;
     // Switching it off, or down to a stream-only role, would take the metadata with it.
     if (essentialAddon(existing) && (req.body.enabled === false || role === "source")) {
       throw new AppError("Cinemeta provides the library metadata and cannot be switched off.", "err.essentialAddon");
@@ -129,49 +136,55 @@ export function registerAddonsRoutes(app: express.Application, deps: AddonsDeps)
     // A different address means reloading the manifest. The key, the order and the save
     // rules stay, so a reconfigured addon need not be removed and added again.
     const url = req.body.url === undefined ? undefined : String(req.body.url).trim();
-    let allowedUsers: string[] | undefined;
-    if (req.body.allowedUsers !== undefined) {
-      if (!Array.isArray(req.body.allowedUsers)) throw new AppError("The list of accounts has to be an array.", "err.invalidRequest", 400);
-      // What an account held before it was promoted stays on the addon, unreadable by the
-      // dashboard and unwritable by it: the request carries the ordinary accounts only.
-      const wanted = new Set<string>(dormantGrants(store.users(), existing.allowedUsers));
-      for (const value of req.body.allowedUsers) {
-        const id = String(value);
-        const user = findUserById(store.users(), id);
-        if (!user) throw new AppError("That account does not exist.", "err.unknownUser");
-        // An administrator uses every addon by role, so granting it would read as though
-        // removing it took the addon away. An id already lying dormant there is not a grant
-        // being made and passes.
-        if (user.role === "admin" && !wanted.has(id)) throw new AppError("An administrator can already use every addon.", "err.adminAlwaysUsesAddons");
-        wanted.add(id);
-      }
-      allowedUsers = [...wanted];
+    if (req.body.allowedUsers !== undefined && !Array.isArray(req.body.allowedUsers)) {
+      throw new AppError("The list of accounts has to be an array.", "err.invalidRequest", 400);
     }
+    const requestedUsers = req.body.allowedUsers === undefined ? undefined : (req.body.allowedUsers as unknown[]).map(String);
     // The settings are validated before the write: the mutator changes state in place, so
     // an exception halfway through would leave changes in memory that are never persisted.
     // It also rejects a nonsensical request before fetching a manifest for it.
     const downloadSettings = req.body.downloadSettings === undefined ? undefined : normalizeDownloadSettings(req.body.downloadSettings, store.libraries());
     const reloaded = url && url !== existing.manifestUrl ? await loadAddon(url, role) : undefined;
-    // Read before the write: the mutator changes the live record, and the sweep needs the
-    // switch as it was on either side of it.
-    const before = { enabled: existing.enabled, allowedUsers: existing.allowedUsers };
-    // A grant edit is a permission change on both sides: the accounts just removed are the
-    // ones whose in-flight requests most need to fail their re-check.
-    const bumped = allowedUsers === undefined ? [] : usersToBump(before.allowedUsers, allowedUsers);
+    // The switch and the grant list on either side of the write, taken from the state the write
+    // lands on: the sweep below needs the transition that really happened, not an earlier read.
+    let before: { enabled: boolean; allowedUsers?: string[] } = { enabled: existing.enabled, allowedUsers: existing.allowedUsers };
+    let result: AddonRecord | undefined;
     await store.update((state) => {
       assertStillAdmin(state.users ?? [], actor!);
       const addon = state.addons.find((a) => a.key === req.params.key);
       if (!addon) throw new AppError("The addon was not found.", "err.addonNotFound");
+      before = { enabled: addon.enabled, allowedUsers: addon.allowedUsers };
+      // The grant list is merged over what lies dormant on the record now: only the accounts
+      // the request names change, and the ones it leaves out keep the value they hold.
+      let allowedUsers: string[] | undefined;
+      let bumped: string[] = [];
+      if (requestedUsers !== undefined) {
+        const wanted = new Set<string>(dormantGrants(state.users ?? [], addon.allowedUsers));
+        for (const id of requestedUsers) {
+          const user = findUserById(state.users ?? [], id);
+          if (!user) throw new AppError("That account does not exist.", "err.unknownUser");
+          // An administrator uses every addon by role, so granting it would read as though
+          // removing it took the addon away. An id already lying dormant there is not a grant
+          // being made and passes.
+          if (user.role === "admin" && !wanted.has(id)) throw new AppError("An administrator can already use every addon.", "err.adminAlwaysUsesAddons");
+          wanted.add(id);
+        }
+        allowedUsers = [...wanted];
+        // A grant edit is a permission change on both sides: the accounts just removed are the
+        // ones whose in-flight requests most need to fail their re-check.
+        bumped = usersToBump(addon.allowedUsers, allowedUsers);
+      }
       if (typeof req.body.enabled === "boolean") addon.enabled = req.body.enabled;
       if (typeof req.body.globalSearch === "boolean") addon.globalSearch = req.body.globalSearch;
       if (typeof req.body.showInContinueWatching === "boolean") addon.showInContinueWatching = req.body.showInContinueWatching;
       if (downloadSettings) addon.downloadSettings = downloadSettings;
-      if (allowedUsers) addon.allowedUsers = allowedUsers;
+      if (allowedUsers !== undefined) addon.allowedUsers = allowedUsers;
       if (bumped.length) state.users = bumpPermissions(state.users ?? [], bumped);
-      addon.role = role;
+      if (namedRole) addon.role = namedRole;
       if (reloaded) { addon.manifestUrl = reloaded.manifestUrl; addon.manifest = reloaded.manifest; }
+      result = addon;
     });
-    const after = store.addons().find((a) => a.key === req.params.key);
+    const after = result;
     if (after) {
       // Switching it off takes it from everybody, which no counter records.
       if (before.enabled && !after.enabled) await stopContentAccess({ addonKey: after.key });
@@ -180,7 +193,7 @@ export function registerAddonsRoutes(app: express.Application, deps: AddonsDeps)
         for (const userId of removed) await stopContentAccess({ userId, addonKey: after.key });
       }
     }
-    if (reloaded) log("INFO", "Addon reconfigured", { name: reloaded.manifest.name, role });
+    if (reloaded) log("INFO", "Addon reconfigured", { name: reloaded.manifest.name, role: after?.role ?? role });
     res.json(publicAddonView(store.addons().find((a) => a.key === req.params.key)!));
   }));
 }

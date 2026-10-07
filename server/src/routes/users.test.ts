@@ -485,6 +485,27 @@ test("PATCH /api/users/:id keeps a key the body does not name and bumps the vers
   assert.equal(findUserById(harness.store.users(), BOB)?.permissionsVersion, 1);
 });
 
+test("a PATCH that names one permission leaves another a queued PATCH set", async (t) => {
+  const harness = await mount({ users: [admin, bob] });
+  t.after(harness.close);
+  harness.holdWrites();
+
+  // Both requests read the account before either write runs, so the second patch must not carry
+  // the first one's untouched permission back over it.
+  const queue = api(harness.base, `/api/users/${BOB}`, { method: "PATCH", body: { permissions: { downloadToLibrary: true } } });
+  while (harness.pendingWrites() < 1) await new Promise((resolve) => setImmediate(resolve));
+  const device = api(harness.base, `/api/users/${BOB}`, { method: "PATCH", body: { permissions: { downloadToDevice: false } } });
+  while (harness.pendingWrites() < 2) await new Promise((resolve) => setImmediate(resolve));
+  harness.releaseWrites();
+  const [first, second] = await Promise.all([queue, device]);
+
+  assert.equal(first.status, 200);
+  assert.equal(second.status, 200);
+  const record = findUserById(harness.store.users(), BOB)!;
+  assert.equal(record.permissions.downloadToLibrary, true, "a permission the second request never named was written over");
+  assert.equal(record.permissions.downloadToDevice, false);
+});
+
 test("losing the right to queue pauses that account's downloads and leaves the film playing", async (t) => {
   const harness = await mount({ users: [admin, account({ id: BOB, username: "bob", permissions: { downloadToLibrary: true, downloadToDevice: true } })], jobs: [job("job-bob", BOB, { status: "downloading" })] });
   t.after(harness.close);

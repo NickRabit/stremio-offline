@@ -89,7 +89,8 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
     const resumedId = await departedIdFor(departed, root);
     const library: LibraryRecord = {
       id: resumedId ?? newLibraryId(), name, type, root, enabled: true,
-      order: store.libraries().reduce((next, item) => Math.max(next, item.order + 1), 0),
+      // Filled in below, when the write lands.
+      order: 0,
       addedAt: new Date().toISOString(),
       ...(health.unreachable ? { unreachable: true } : {}),
       ...(health.readOnly ? { readOnly: true } : {}),
@@ -102,6 +103,9 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
     // Probing the folder takes long enough for the gate's answer to go stale.
     await store.update((state) => {
       assertStillAdmin(state.users ?? [], actor);
+      // The next display order is read from the list the write lands on: a create that queued
+      // behind another one must not take the same position.
+      library.order = (state.libraries ?? []).reduce((next, item) => Math.max(next, item.order + 1), 0);
       state.libraries = [...(state.libraries ?? []), library];
       if (resumedId) state.departed = (state.departed ?? []).filter((entry) => entry.id !== resumedId);
     });
@@ -186,9 +190,13 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
     }
     // Revoking disables the libraries under it. Nothing is deleted -- the media, the metadata
     // file and the artwork directory all stay, so granting the root again brings them back.
-    const affected = store.libraries().filter((library) => isInside(path.resolve(library.root), root));
+    // The libraries under the root are read from the state the write lands on: one added or
+    // moved under it while this waited is disabled with the rest, and the sweep below follows
+    // the switch that really happened.
+    let affected: LibraryRecord[] = [];
     await store.update((state) => {
       assertStillAdmin(state.users ?? [], actor);
+      affected = (state.libraries ?? []).filter((library) => isInside(path.resolve(library.root), root));
       state.grants = (state.grants ?? []).filter((grant) => !sameFile(path.resolve(grant.path), root));
       state.libraries = (state.libraries ?? []).map((library) =>
         affected.some((item) => item.id === library.id) ? { ...library, enabled: false } : library);
@@ -264,22 +272,18 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
     if (req.body?.showInContinueWatching !== undefined) patch.showInContinueWatching = req.body.showInContinueWatching !== false;
     if (req.body?.order !== undefined && Number.isFinite(Number(req.body.order))) patch.order = Number(req.body.order);
     if (req.body?.writeArtwork !== undefined) patch.writeArtwork = req.body.writeArtwork === true;
-    if (req.body?.visibleTo !== undefined) {
-      if (!Array.isArray(req.body.visibleTo)) throw new AppError("The list of accounts has to be an array.", "err.invalidRequest", 400);
-      // What an account held before it was promoted stays on the library, unreadable by the
-      // dashboard and unwritable by it: the request carries the ordinary accounts only.
-      const wanted = new Set<string>(dormantGrants(store.users(), target.visibleTo));
-      for (const value of req.body.visibleTo) {
-        const id = String(value);
-        const user = findUserById(store.users(), id);
-        if (!user) throw new AppError("That account does not exist.", "err.unknownUser");
-        // An administrator sees every library by role, so granting it would read as though
-        // removing it took the library away. An id already lying dormant there is not a
-        // grant being made and passes.
-        if (user.role === "admin" && !wanted.has(id)) throw new AppError("An administrator already sees every library.", "err.adminAlwaysSees");
-        wanted.add(id);
-      }
-      patch.visibleTo = [...wanted];
+    if (req.body?.visibleTo !== undefined && !Array.isArray(req.body.visibleTo)) throw new AppError("The list of accounts has to be an array.", "err.invalidRequest", 400);
+    // The accounts the request names are refused here, before a root can be created for it; the
+    // grant list itself is merged over the record's own inside the mutator, where the dormant
+    // entries it has to carry over are read.
+    const requestedVisibleTo = req.body?.visibleTo === undefined ? undefined : (req.body.visibleTo as unknown[]).map(String);
+    // Checked here as well as inside the write, so a refused request never creates a root first;
+    // the write repeats both checks against the state it lands on, and that one decides.
+    const dormantNow = new Set(dormantGrants(store.users(), target.visibleTo));
+    for (const id of requestedVisibleTo ?? []) {
+      const user = findUserById(store.users(), id);
+      if (!user) throw new AppError("That account does not exist.", "err.unknownUser");
+      if (user.role === "admin" && !dormantNow.has(id)) throw new AppError("An administrator already sees every library.", "err.adminAlwaysSees");
     }
     if (req.body?.root !== undefined) patch.root = await requireLibraryRoot(req.body.root, { exceptId: target.id, create: req.body?.create === true });
     // The default lives in the settings -- one id per kind, so claiming it takes it from
@@ -290,57 +294,84 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
       return value === undefined ? undefined : value === true;
     };
 
-    const next = { ...target, ...patch };
-    if (patch.root !== undefined) libraryProbe.invalidate(next.root);
+    const probeRoot = patch.root ?? target.root;
+    if (patch.root !== undefined) libraryProbe.invalidate(probeRoot);
     await refreshLibraryHealth();
-    const health = await libraryProbe.cached(next.root);
-    const record: LibraryRecord = { ...next, writeArtwork: next.writeArtwork && !health.readOnly };
-    // The probe answers for the root as it is now; a stale `unreachable` on a disk that came
-    // back would keep the library out of every walk.
-    if (health.unreachable) record.unreachable = true; else delete record.unreachable;
-    if (health.readOnly) record.readOnly = true; else delete record.readOnly;
+    const health = await libraryProbe.cached(probeRoot);
     for (const kind of ["movie", "series"] as const) {
       if (claimsDefault(kind) !== true) continue;
       // Judged on the type the library ends the request with, so widening it and claiming the
       // default in one call is allowed, and narrowing it out of the kind is not.
-      if (record.type !== kind && record.type !== "mixed") {
-        throw new AppError(`A ${record.type} library cannot be the default for ${kind === "movie" ? "movies" : "series"}.`, "err.libraryDefaultType");
+      const type = patch.type ?? target.type;
+      if (type !== kind && type !== "mixed") {
+        throw new AppError(`A ${type} library cannot be the default for ${kind === "movie" ? "movies" : "series"}.`, "err.libraryDefaultType");
       }
     }
-    // A visibleTo edit is a permission change for everybody it named, on both sides: the
-    // accounts just removed are the ones whose in-flight requests most need to fail their
-    // re-check, and a naive "everyone now listed" would miss exactly them.
-    const bumped = patch.visibleTo === undefined ? [] : usersToBump(target.visibleTo, patch.visibleTo);
+    // The record on either side of the write, read from the state the write lands on: only the
+    // fields the request names are applied, and the sweep below needs the transition that
+    // really happened, not an earlier read.
+    let before!: LibraryRecord;
+    let after!: LibraryRecord;
     await store.update((state) => {
       assertStillAdmin(state.users ?? [], actor);
-      state.libraries = (state.libraries ?? []).map((library) => library.id === record.id ? record : library);
+      const library = (state.libraries ?? []).find((item) => item.id === target.id);
+      if (!library) throw new AppError("The library was not found.", "err.libraryNotFound", 404);
+      before = library;
+      const resolved: Partial<LibraryRecord> = { ...patch };
+      let bumped: string[] = [];
+      if (requestedVisibleTo !== undefined) {
+        // What an account held before it was promoted stays on the library, unreadable by the
+        // dashboard and unwritable by it: the request carries the ordinary accounts only.
+        const wanted = new Set<string>(dormantGrants(state.users ?? [], library.visibleTo));
+        for (const id of requestedVisibleTo) {
+          const user = findUserById(state.users ?? [], id);
+          if (!user) throw new AppError("That account does not exist.", "err.unknownUser");
+          // An administrator sees every library by role, so granting it would read as though
+          // removing it took the library away. An id already lying dormant there is not a
+          // grant being made and passes.
+          if (user.role === "admin" && !wanted.has(id)) throw new AppError("An administrator already sees every library.", "err.adminAlwaysSees");
+          wanted.add(id);
+        }
+        resolved.visibleTo = [...wanted];
+        // A visibleTo edit is a permission change for everybody it named, on both sides: the
+        // accounts just removed are the ones whose in-flight requests most need to fail their
+        // re-check, and a naive "everyone now listed" would miss exactly them.
+        bumped = usersToBump(library.visibleTo, resolved.visibleTo);
+      }
+      const changed: LibraryRecord = { ...library, ...resolved, writeArtwork: (resolved.writeArtwork ?? library.writeArtwork) && !health.readOnly };
+      // The probe answers for the root as it is now; a stale `unreachable` on a disk that came
+      // back would keep the library out of every walk.
+      if (health.unreachable) changed.unreachable = true; else delete changed.unreachable;
+      if (health.readOnly) changed.readOnly = true; else delete changed.readOnly;
+      state.libraries = (state.libraries ?? []).map((item) => item.id === library.id ? changed : item);
       if (bumped.length) state.users = bumpPermissions(state.users ?? [], bumped);
       // The default pickers resolve at use, so a type change only strands the kinds the new
       // type no longer serves.
       if (state.settings) {
-        const serves = (kind: "movie" | "series") => record.type === kind || record.type === "mixed";
-        if (!serves("movie") && state.settings.defaultMovieLibrary === record.id) state.settings.defaultMovieLibrary = "";
-        if (!serves("series") && state.settings.defaultSeriesLibrary === record.id) state.settings.defaultSeriesLibrary = "";
+        const serves = (kind: "movie" | "series") => changed.type === kind || changed.type === "mixed";
+        if (!serves("movie") && state.settings.defaultMovieLibrary === changed.id) state.settings.defaultMovieLibrary = "";
+        if (!serves("series") && state.settings.defaultSeriesLibrary === changed.id) state.settings.defaultSeriesLibrary = "";
         for (const kind of ["movie", "series"] as const) {
           const field = kind === "movie" ? "defaultMovieLibrary" : "defaultSeriesLibrary";
           const wanted = claimsDefault(kind);
-          if (wanted === true) state.settings[field] = record.id;
-          else if (wanted === false && state.settings[field] === record.id) state.settings[field] = "";
+          if (wanted === true) state.settings[field] = changed.id;
+          else if (wanted === false && state.settings[field] === changed.id) state.settings[field] = "";
         }
       }
+      after = changed;
     });
-    await sweepLibraryLoss(target, record);
+    await sweepLibraryLoss(before, after);
     invalidateLibrary();
     // Only a real change to either switch drops the fingerprint: re-enabling a library whose
     // files never moved must still be walked, and a rename must not buy a run of its own.
-    if (automaticMetadataEnabled(target) !== automaticMetadataEnabled(record) || target.enabled !== record.enabled) {
-      invalidateAutoScan(record.id);
+    if (automaticMetadataEnabled(before) !== automaticMetadataEnabled(after) || before.enabled !== after.enabled) {
+      invalidateAutoScan(after.id);
     }
     await refreshLibraryHealth();
     const stats = await libraryStats();
-    log("INFO", "Library updated", { library: record.id, root: record.root, type: record.type, enabled: record.enabled });
+    log("INFO", "Library updated", { library: after.id, root: after.root, type: after.type, enabled: after.enabled });
     // As with the create above: only an administrator reaches this route.
-    res.json(libraryView(record, health, stats.get(record.id) ?? { titles: 0, files: 0, bytes: 0 }, true));
+    res.json(libraryView(after, health, stats.get(after.id) ?? { titles: 0, files: 0, bytes: 0 }, true));
   }));
 
   app.delete("/api/libraries/:id", asyncRoute(async (req, res) => {

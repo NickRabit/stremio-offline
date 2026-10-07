@@ -29,6 +29,10 @@ interface Harness {
   stored: () => LibraryRecord[];
   userGrants: () => RootGrant[];
   allGrants: () => RootGrant[];
+  /** How many writes are waiting for `releaseWrites`, so a test can interleave two of them. */
+  pendingWrites(): number;
+  holdWrites(): void;
+  releaseWrites(): void;
   close(): Promise<void>;
 }
 
@@ -58,12 +62,23 @@ const mount = async (
   const viewed: Harness["viewed"] = [];
   const enqueued: unknown[] = [];
   const invalidated: string[] = [];
+  // A write can be held, so two requests can both read the state before either mutator runs.
+  let held: Array<() => void> = [];
+  let holding = false;
   const store = {
     libraries: () => state.libraries,
     users: () => state.users,
     grants: () => state.grants,
     departed: () => state.departed,
-    update: async (mutate: (value: typeof state) => void) => { mutate(state); },
+    update: async (mutate: (value: typeof state) => void) => {
+      if (holding) {
+        await new Promise<void>((resolve, reject) => {
+          held.push(() => { try { mutate(state); resolve(); } catch (error) { reject(error); } });
+        });
+        return;
+      }
+      mutate(state);
+    },
   } as unknown as Store;
   const deps: LibrariesDeps = {
     store,
@@ -118,6 +133,9 @@ const mount = async (
     loseSession: (after: number) => { sessionReads = after; },
     disable: (id: string) => { state.users = state.users.map((user) => user.id === id ? { ...user, disabled: true } : user); },
     allGrants: () => mergeGrants(env, state.grants),
+    pendingWrites: () => held.length,
+    holdWrites: () => { holding = true; },
+    releaseWrites: () => { const waiting = held; held = []; for (const run of waiting) run(); },
     close: async () => {
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -228,6 +246,26 @@ test("PATCH /api/libraries/:id refuses an unknown id", async (t) => {
   assert.equal(body.error, "The library was not found.");
 });
 
+test("a PATCH that names one field leaves another a queued PATCH set", async (t) => {
+  const harness = await mount([library("alpha", 0)]);
+  t.after(harness.close);
+  harness.holdWrites();
+
+  // Both requests read the record before either write runs, so the second patch must not carry
+  // the first one's untouched fields back over it.
+  const renamed = api(harness.base, "/api/libraries/alpha", { method: "PATCH", body: { name: "Renamed" } });
+  while (harness.pendingWrites() < 1) await new Promise((resolve) => setImmediate(resolve));
+  const typed = api(harness.base, "/api/libraries/alpha", { method: "PATCH", body: { type: "movie" } });
+  while (harness.pendingWrites() < 2) await new Promise((resolve) => setImmediate(resolve));
+  harness.releaseWrites();
+
+  const [first, second] = await Promise.all([renamed, typed]);
+  assert.equal(first.status, 200);
+  assert.equal(second.status, 200);
+  assert.equal(harness.stored()[0]!.name, "Renamed", "a field the second request never named was written over");
+  assert.equal(harness.stored()[0]!.type, "movie");
+});
+
 test("DELETE /api/libraries/:id refuses to remove the last library", async (t) => {
   const harness = await mount([library("only", 0)]);
   t.after(harness.close);
@@ -321,6 +359,23 @@ test("POST /api/libraries hands a re-added folder's remembered id to the scanner
   assert.deepEqual(harness.invalidated, ["lib_deadbeef"]);
 });
 
+test("two creates that queued together take different display orders", async (t) => {
+  const { root, films, shows } = await grantedRoot("order");
+  const harness = await mount([library("alpha", 0)], [{ path: root, source: "env", grantedAt: "2024-01-01T00:00:00.000Z" }]);
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+  harness.holdWrites();
+
+  const first = api(harness.base, "/api/libraries", { method: "POST", body: { name: "Films", type: "movie", root: films } });
+  while (harness.pendingWrites() < 1) await new Promise((resolve) => setImmediate(resolve));
+  const second = api(harness.base, "/api/libraries", { method: "POST", body: { name: "Shows", type: "series", root: shows } });
+  while (harness.pendingWrites() < 2) await new Promise((resolve) => setImmediate(resolve));
+  harness.releaseWrites();
+  await Promise.all([first, second]);
+
+  const orders = harness.stored().map((record) => record.order).sort((a, b) => a - b);
+  assert.deepEqual(orders, [0, 1, 2], "the second create took the order the first one already had");
+});
+
 test("PATCH /api/libraries/:id persists the automatic metadata switch and invalidates it when it moves", async (t) => {
   const harness = await mount([library("alpha", 0)]);
   t.after(harness.close);
@@ -387,6 +442,22 @@ test("DELETE /api/libraries/grants cannot remove an operator grant", async (t) =
   assert.equal((await failure(response)).messageKey, "err.grantNotFound");
   assert.deepEqual(harness.userGrants(), [], "the operator's grant is not the store's to drop");
   assert.deepEqual(harness.allGrants().map((grant) => grant.path), ["/media"], "the operator's grant is still in force");
+});
+
+test("revoking a grant disables only the libraries the write finds under it", async (t) => {
+  const harness = await mount([{ ...library("alpha", 0), root: "/srv/media/films" }]);
+  t.after(harness.close);
+  harness.userGrants().push({ path: "/srv/media", source: "user", grantedAt: "2024-01-01T00:00:00.000Z" });
+  harness.holdWrites();
+
+  const revoking = api(harness.base, "/api/libraries/grants", { method: "DELETE", body: { path: "/srv/media" } });
+  while (harness.pendingWrites() < 1) await new Promise((resolve) => setImmediate(resolve));
+  // The library moves out of the revoked root while the revocation waits.
+  harness.stored()[0]!.root = "/elsewhere/films";
+  harness.releaseWrites();
+
+  assert.equal((await revoking).status, 200);
+  assert.equal(harness.stored()[0]!.enabled, true, "a library the write no longer finds under the root was switched off anyway");
 });
 
 test("POST /api/libraries/:id/reroot refuses without moveContent", async (t) => {

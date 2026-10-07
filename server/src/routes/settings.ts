@@ -78,13 +78,6 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
     }
     const backup = { ...parsed, libraries: [] };
     // Manifests are loaded before a single write, so a broken backup changes no part of the configuration.
-    // A backup carries the instance's configuration, not its accounts: the ids in a grant
-    // list belong to this install and would mean nothing in a backup taken from another. So
-    // the grants are not read from the file -- they are kept from the record this instance
-    // already holds for the same manifest, which is what stops an import of one's own backup
-    // quietly taking every addon away from every ordinary account. The key is kept for the
-    // same reason: it is what a grant and a personal order both point at.
-    const existing = new Map(store.addons().map((addon) => [`${addon.manifest.id}\n${addon.manifestUrl}`, addon]));
     const loaded = await Promise.all(backup.addons.map(async (saved, index) => {
       try {
         const addon = await loadAddon(saved.manifestUrl, saved.role);
@@ -92,11 +85,6 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
         addon.globalSearch = saved.globalSearch;
         addon.addedAt = saved.addedAt;
         addon.downloadSettings = saved.downloadSettings;
-        const held = existing.get(`${addon.manifest.id}\n${addon.manifestUrl}`);
-        if (held) {
-          addon.key = held.key;
-          if (held.allowedUsers) addon.allowedUsers = held.allowedUsers;
-        }
         return addon;
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
@@ -109,13 +97,28 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
       if (identities.has(identity)) throw new Error(`The backup holds the addon "${addon.manifest.name}" more than once.`);
       identities.add(identity);
     }
-    // Read before the write: the store hands out the live records, and the sweep below needs
-    // the list as it was.
-    const before = store.addons().map((addon) => ({ key: addon.key, enabled: addon.enabled }));
+    // The list as it is on either side of the write, read from the state the write lands on:
+    // the sweep below needs the transition that really happened, not an earlier read.
+    let before: Array<{ key: string; enabled: boolean }> = [];
     await store.update((state) => {
       // Every manifest was fetched before this point, which is ample time for the gate's
       // answer to go stale.
       assertStillAdmin(state.users ?? [], actor);
+      before = state.addons.map((addon) => ({ key: addon.key, enabled: addon.enabled }));
+      // A backup carries the instance's configuration, not its accounts: the ids in a grant
+      // list belong to this install and would mean nothing in a backup taken from another. So
+      // the grants are not read from the file -- they are kept from the record this state holds
+      // for the same manifest right now, which is what stops an import of one's own backup
+      // quietly taking every addon away from every ordinary account, and what keeps a grant an
+      // edit changed while the manifests were fetched. The key is kept for the same reason: it
+      // is what a grant and a personal order both point at.
+      const held = new Map(state.addons.map((addon) => [`${addon.manifest.id}\n${addon.manifestUrl}`, addon]));
+      for (const addon of loaded) {
+        const record = held.get(`${addon.manifest.id}\n${addon.manifestUrl}`);
+        if (!record) continue;
+        addon.key = record.key;
+        if (record.allowedUsers) addon.allowedUsers = record.allowedUsers;
+      }
       const split = splitSettings(backup.settings);
       state.settings = split.instance;
       state.addons = loaded;

@@ -140,18 +140,28 @@ export function registerUsersRoutes(app: express.Application, deps: UsersDeps): 
   app.patch("/api/users/:id", asyncRoute(async (req, res) => {
     const actor = actorOf(req);
     const id = String(req.params.id);
-    const before = requireUser(id);
+    requireUser(id);
     const role = req.body?.role === undefined ? undefined : roleOf(req.body.role);
     const disabled = req.body?.disabled === undefined ? undefined : flagOf(req.body.disabled, "disabled");
-    const permissions = permissionsOf(req.body?.permissions, before.permissions);
+    // The body's rights are refused here; a key it leaves out keeps the value the record has
+    // when the write lands, so the fallback is taken from the record inside the mutator.
+    if (req.body?.permissions !== undefined) permissionsOf(req.body.permissions, newUserPermissions());
     let changed = false;
+    // The record on either side of the write, read from the state the write lands on: the
+    // sweep below needs the transition that really happened, not an earlier read.
+    let before!: UserRecord;
+    let after!: UserRecord;
     await store.update((state) => {
+      const current = findUserById(state.users ?? [], id);
+      if (!current) throw new AppError("That account does not exist.", "err.unknownUser", 404);
+      before = current;
       // Inside the mutator, where the list cannot move under the count: checking before the
       // await would let two concurrent demotions each see two administrators and each take
       // one away.
       if (role === "user") assertAdminRemains(state.users ?? [], { kind: "demote", id });
-      if (disabled ?? Boolean(before.disabled)) assertAdminRemains(state.users ?? [], { kind: "disable", id });
+      if (disabled ?? Boolean(current.disabled)) assertAdminRemains(state.users ?? [], { kind: "disable", id });
       withUser(state, id, (user) => {
+        const permissions = permissionsOf(req.body?.permissions, user.permissions);
         // Switching an account off rotates its secret, so every token it holds stops working
         // for good. Without that the refusal lasts exactly as long as the switch: the old
         // cookie starts answering again the moment somebody switches the account back on, and
@@ -170,13 +180,13 @@ export function registerUsersRoutes(app: express.Application, deps: UsersDeps): 
           || next.permissions.downloadToDevice !== user.permissions.downloadToDevice;
         return changed ? { ...next, permissionsVersion: user.permissionsVersion + 1 } : user;
       });
+      after = findUserById(state.users ?? [], id)!;
     });
-    const after = requireUser(id);
     if (!changed) return res.json(view(after));
     await permissionsChanged(before, after);
     if (role && role !== before.role) audit("Account role changed", actor, after, { from: before.role, to: after.role });
     if (disabled !== undefined && disabled !== Boolean(before.disabled)) audit(disabled ? "Account disabled" : "Account enabled", actor, after);
-    if (permissions.downloadToLibrary !== before.permissions.downloadToLibrary || permissions.downloadToDevice !== before.permissions.downloadToDevice) {
+    if (after.permissions.downloadToLibrary !== before.permissions.downloadToLibrary || after.permissions.downloadToDevice !== before.permissions.downloadToDevice) {
       audit("Account permissions changed", actor, after, { permissions: after.permissions });
     }
     res.json(view(after));

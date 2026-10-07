@@ -18,6 +18,10 @@ interface Harness {
   viewed: AddonRecord[];
   stored: () => AddonRecord[];
   data: (id: string) => UserData | undefined;
+  /** How many writes are waiting for `releaseWrites`, so a test can interleave two of them. */
+  pendingWrites(): number;
+  holdWrites(): void;
+  releaseWrites(): void;
   close(): Promise<void>;
 }
 
@@ -50,12 +54,23 @@ const mount = async (records: AddonRecord[] = [addon("alpha")]): Promise<Harness
   const viewed: AddonRecord[] = [];
   const userOf = (req: express.Request) =>
     req.header("x-user") === BOB ? ordinary : req.header("x-user") === CAROL ? other : admin;
+  // A write can be held, so two requests can both read the state before either mutator runs.
+  let held: Array<() => void> = [];
+  let holding = false;
   const store = {
     addons: () => state.addons,
     libraries: () => [],
     users: () => state.users,
     userData: (id: string) => state.userData[id] ?? emptyUserData(),
-    update: async (mutate: (value: typeof state) => void) => { mutate(state); },
+    update: async (mutate: (value: typeof state) => void) => {
+      if (holding) {
+        await new Promise<void>((resolve, reject) => {
+          held.push(() => { try { mutate(state); resolve(); } catch (error) { reject(error); } });
+        });
+        return;
+      }
+      mutate(state);
+    },
   } as unknown as Store;
   const deps: AddonsDeps = {
     store,
@@ -93,6 +108,9 @@ const mount = async (records: AddonRecord[] = [addon("alpha")]): Promise<Harness
     stored: () => state.addons,
     demote: (id: string) => { state.users = state.users.map((user) => user.id === id ? { ...user, role: "user" } as UserRecord : user); },
     data: (id: string) => state.userData[id],
+    pendingWrites: () => held.length,
+    holdWrites: () => { holding = true; },
+    releaseWrites: () => { const waiting = held; held = []; for (const run of waiting) run(); },
     close: async () => {
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -177,6 +195,41 @@ test("PATCH /api/addons/:key refuses an administrator's id", async (t) => {
   assert.equal(response.status, 400);
   assert.equal((await failure(response)).messageKey, "err.adminAlwaysUsesAddons");
   assert.equal(harness.stored()[0]!.allowedUsers, undefined);
+});
+
+test("a PATCH that names only globalSearch leaves the role a queued PATCH set", async (t) => {
+  const harness = await mount([addon("alpha")]);
+  t.after(harness.close);
+  harness.holdWrites();
+
+  // Both requests read the record before either write runs. The second names only
+  // globalSearch, so the role the first set has to survive it.
+  const role = api(harness.base, "/api/addons/alpha", { method: "PATCH", body: { role: "source" } });
+  while (harness.pendingWrites() < 1) await new Promise((resolve) => setImmediate(resolve));
+  const search = api(harness.base, "/api/addons/alpha", { method: "PATCH", body: { globalSearch: false } });
+  while (harness.pendingWrites() < 2) await new Promise((resolve) => setImmediate(resolve));
+  harness.releaseWrites();
+
+  const [first, second] = await Promise.all([role, search]);
+  assert.equal(first.status, 200);
+  assert.equal(second.status, 200);
+  assert.equal(harness.stored()[0]!.role, "source", "a field the second request never named was written over");
+  assert.equal(harness.stored()[0]!.globalSearch, false);
+});
+
+test("PUT /api/addons/order filters the list against the visibility the write lands on", async (t) => {
+  const harness = await mount([granted("alpha"), granted("beta")]);
+  t.after(harness.close);
+  harness.holdWrites();
+
+  const writing = api(harness.base, "/api/addons/order", { method: "PUT", user: BOB, body: { order: ["alpha", "beta"] } });
+  while (harness.pendingWrites() < 1) await new Promise((resolve) => setImmediate(resolve));
+  // Bob loses beta while the order waits, so a key read before the write must not reach it.
+  harness.stored()[1]!.allowedUsers = [];
+  harness.releaseWrites();
+
+  assert.equal((await writing).status, 204);
+  assert.deepEqual(harness.data(BOB)?.addonOrder, ["alpha"], "a key the caller lost while the write waited was written anyway");
 });
 
 test("DELETE /api/addons/:key removes only the named key", async (t) => {
