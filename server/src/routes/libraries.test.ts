@@ -402,6 +402,25 @@ test("two creates of the same folder that queued together make one library, not 
   assert.equal(harness.stored().length, 2, "alpha and the one re-added folder");
 });
 
+test("two edits that move two libraries to one folder together leave one of them there", async (t) => {
+  const { root, films } = await grantedRoot("both");
+  const harness = await mount([library("alpha", 0), library("beta", 1)], [{ path: root, source: "env", grantedAt: "2024-01-01T00:00:00.000Z" }]);
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+  harness.holdWrites();
+
+  const first = api(harness.base, "/api/libraries/alpha", { method: "PATCH", body: { root: films } });
+  while (harness.pendingWrites() < 1) await new Promise((resolve) => setImmediate(resolve));
+  const second = api(harness.base, "/api/libraries/beta", { method: "PATCH", body: { root: films } });
+  while (harness.pendingWrites() < 2) await new Promise((resolve) => setImmediate(resolve));
+  harness.releaseWrites();
+  const answers = await Promise.all([first, second]);
+
+  assert.deepEqual(answers.map((answer) => answer.status).sort(), [200, 400]);
+  const real = await realpath(films);
+  const onFilms = harness.stored().filter((record) => record.root === films || record.root === real);
+  assert.equal(onFilms.length, 1, "one library over the folder, not two");
+});
+
 test("PATCH /api/libraries/:id persists the automatic metadata switch and invalidates it when it moves", async (t) => {
   const harness = await mount([library("alpha", 0)]);
   t.after(harness.close);

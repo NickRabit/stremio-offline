@@ -41,6 +41,12 @@ test("a Real-Debrid answer is explained and classified by its status", () => {
   assert.equal(explainedError(new AppError("The item was not found.", "err.itemNotFound")), true);
 });
 
+test("a body-parser failure shaped like a resource refusal still gets a reference", () => {
+  const inflate = Object.assign(new Error("incorrect header check"), { code: "Z_DATA_ERROR", status: 400 });
+  assert.equal(explainedError(inflate), false);
+  assert.equal(explainedError(new ResourceError(410, "RESOURCE_EXPIRED")), true);
+});
+
 test("a key or code naming something on Object.prototype is not a classification", () => {
   const result = classifyError({ messageKey: "toString", code: "constructor" });
   assert.equal(typeof result.category, "string");

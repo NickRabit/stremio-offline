@@ -296,6 +296,7 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
       if (user.role === "admin" && !dormantNow.has(id)) throw new AppError("An administrator already sees every library.", "err.adminAlwaysSees");
     }
     if (req.body?.root !== undefined) patch.root = await requireLibraryRoot(req.body.root, { exceptId: target.id, create: req.body?.create === true });
+    const rootSpellings = patch.root === undefined ? undefined : await rootForms(patch.root);
     // The default lives in the settings -- one id per kind, so claiming it takes it from
     // whoever held it -- but it reads as a property of the library, and that is where the
     // form sets it. `undefined` leaves the current choice alone.
@@ -326,6 +327,12 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
       assertStillAdmin(state.users ?? [], actor);
       const library = (state.libraries ?? []).find((item) => item.id === target.id);
       if (!library) throw new AppError("The library was not found.", "err.libraryNotFound", 404);
+      // Another write that moved a library to the same folder may have landed while this one
+      // waited; the check before the probe could not see it.
+      if (rootSpellings && (state.libraries ?? []).some((item) => item.id !== target.id
+        && (sameFile(path.resolve(item.root), rootSpellings.real) || sameFile(path.resolve(item.root), rootSpellings.absolute)))) {
+        throw new AppError("Another library already uses that folder.", "err.libraryRootTaken");
+      }
       before = library;
       const resolved: Partial<LibraryRecord> = { ...patch };
       let bumped: string[] = [];

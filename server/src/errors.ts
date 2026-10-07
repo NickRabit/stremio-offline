@@ -175,6 +175,11 @@ export const classifyError = (error: unknown): ErrorClassification => {
 /** Whether a failure is a sentence the server wrote on purpose -- an AppError, a media resource
  *  refusal, a Real-Debrid answer, or anything carrying a catalogue key -- rather than an
  *  exception nobody anticipated. Only the latter gets a reference to quote. */
-export const explainedError = (error: unknown): boolean =>
-  error instanceof AppError || messageKeyOf(error) !== undefined || isResourceError(error)
-  || (error as { name?: unknown } | null | undefined)?.name === "DebridError";
+export const explainedError = (error: unknown): boolean => {
+  if (error instanceof AppError || messageKeyOf(error) !== undefined) return true;
+  if ((error as { name?: unknown } | null | undefined)?.name === "DebridError") return true;
+  // A media resource refusal by its own codes, not by its shape: express' body errors carry a
+  // string code beside a numeric status too, and nobody wrote a sentence for those.
+  const code = (error as { code?: unknown } | null | undefined)?.code;
+  return isResourceError(error) && typeof code === "string" && Object.hasOwn(RESOURCE_CODES, code);
+};
