@@ -1258,6 +1258,7 @@ export const ru: Catalog = {
   "err.retryOnlyFailed": "Повторить можно только неудачную загрузку.",
   "err.itemNotFound": "Товар не найден.",
   "err.followsUnreadable": "Не удалось прочитать отслеживаемые сериалы.",
+  "error.reference": "Код для сообщения: {reference}",
   "err.queueNotSaved": "Не удалось сохранить очередь загрузок.",
   "err.queueUnreadable": "Не удалось прочитать файл очереди загрузок.",
   "err.libraryOpsUnreadable": "Не удалось прочитать файл операций библиотеки.",

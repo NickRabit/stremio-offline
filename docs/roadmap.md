@@ -192,6 +192,18 @@ release, and keep the Windows checklist in
 
 ## Engineering health
 
+Status (2026-10-07): the items below shipped in #304–#324 and this branch —
+P0 H1–H3; P1 recoverable moves, copies and re-roots, the destructive-path,
+security and playback audits with their fixes, DNS pinning, commit-aware
+`state.json`, follow/queue crash tests and the backup guide; P2 the shared
+download types, the library-operations and shutdown modules, the settings,
+diagnostics and queue pages out of `App.tsx`, error categories with a
+reference the interface shows, the complexity report and the review checklist.
+Deliberately not done: moving the catalogue search out of `App.tsx` (search and
+browsing share one loader, so a clean move would change request order) and
+splitting `style.css` (its rules interleave by area). The text below is the
+plan as it was written.
+
 Reviewed on 2026-10-04 against `main` at `b4b4c2a` (0.5.7). This section
 validates the proposed refactoring/hardening plan against that revision; it
 does not claim that the work below has shipped. The old local development

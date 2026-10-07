@@ -1258,6 +1258,7 @@ export const ptBR: Catalog = {
   "err.retryOnlyFailed": "Somente um download com falha pode ser tentado novamente.",
   "err.itemNotFound": "O item não foi encontrado.",
   "err.followsUnreadable": "Não foi possível ler as séries seguidas.",
+  "error.reference": "Referência para relatar: {reference}",
   "err.queueNotSaved": "Não foi possível salvar a fila de downloads.",
   "err.queueUnreadable": "Não foi possível ler o arquivo da fila de downloads.",
   "err.libraryOpsUnreadable": "Não foi possível ler o arquivo de operações da biblioteca.",

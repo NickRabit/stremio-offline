@@ -1258,6 +1258,7 @@ export const de: Catalog = {
   "err.retryOnlyFailed": "Nur ein fehlgeschlagener Download kann wiederholt werden.",
   "err.itemNotFound": "Der Artikel wurde nicht gefunden.",
   "err.followsUnreadable": "Die gefolgten Serien konnten nicht gelesen werden.",
+  "error.reference": "Referenz für eine Meldung: {reference}",
   "err.queueNotSaved": "Die Download-Warteschlange konnte nicht gespeichert werden.",
   "err.queueUnreadable": "Die Datei der Download-Warteschlange konnte nicht gelesen werden.",
   "err.libraryOpsUnreadable": "Die Datei mit den Bibliotheksvorgängen konnte nicht gelesen werden.",

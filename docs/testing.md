@@ -408,6 +408,21 @@ Screenshot baselines are refreshed through a separate manually triggered
 workflow that regenerates them in the container and pushes the result to the
 pull request branch, so updating them is not a local-environment chore.
 
+## Complexity report
+
+`npm run complexity` (plain Node, no dependencies) prints a short Markdown
+snapshot: the largest production source files, route registrations in the
+server (registrations, not endpoints), unit-test files per workspace and e2e
+spec files, direct runtime dependencies per manifest, and the persistent-state
+files the server writes under `DATA_DIR`. `--json` prints the same data as
+JSON.
+
+It is **report-only and never a CI gate**: it always exits 0 and no threshold
+fails a build. To read a trend, run it on a branch and again after the change
+lands and compare the numbers; a sudden jump in a file's line count, the route
+count or the state-file list is the signal worth looking at, not the absolute
+values. Its own test is run with `node --test scripts/complexity-report.test.mjs`.
+
 ## Phases
 
 | Phase | Content | Status |

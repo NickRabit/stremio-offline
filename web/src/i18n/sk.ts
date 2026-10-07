@@ -1258,6 +1258,7 @@ export const sk: Catalog = {
   "err.retryOnlyFailed": "Opakovať je možné iba neúspešné sťahovanie.",
   "err.itemNotFound": "Tovar sa nenašiel.",
   "err.followsUnreadable": "Sledované seriály sa nepodarilo načítať.",
+  "error.reference": "Kód na nahlásenie: {reference}",
   "err.queueNotSaved": "Poradie sťahovania sa nepodarilo uložiť.",
   "err.queueUnreadable": "Súbor poradia sťahovania sa nepodarilo načítať.",
   "err.libraryOpsUnreadable": "Súbor operácií s knižnicou sa nepodarilo načítať.",

@@ -1258,6 +1258,7 @@ export const es: Catalog = {
   "err.retryOnlyFailed": "Sólo se puede volver a intentar una descarga fallida.",
   "err.itemNotFound": "El artículo no fue encontrado.",
   "err.followsUnreadable": "No se pudieron leer las series seguidas.",
+  "error.reference": "Referencia para informar: {reference}",
   "err.queueNotSaved": "No se pudo guardar la cola de descargas.",
   "err.queueUnreadable": "No se pudo leer el archivo de la cola de descargas.",
   "err.libraryOpsUnreadable": "No se pudo leer el archivo de operaciones de la biblioteca.",

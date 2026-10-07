@@ -1258,6 +1258,7 @@ export const pl: Catalog = {
   "err.retryOnlyFailed": "Można ponowić tylko nieudane pobieranie.",
   "err.itemNotFound": "Nie znaleziono elementu.",
   "err.followsUnreadable": "Nie udało się odczytać obserwowanych seriali.",
+  "error.reference": "Numer do zgłoszenia: {reference}",
   "err.queueNotSaved": "Nie udało się zapisać kolejki pobierania.",
   "err.queueUnreadable": "Nie udało się odczytać pliku kolejki pobierania.",
   "err.libraryOpsUnreadable": "Nie udało się odczytać pliku operacji biblioteki.",

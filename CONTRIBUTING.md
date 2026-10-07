@@ -68,8 +68,35 @@ how you verified it. Run `npm test` and, for anything that affects runtime
 behaviour, rebuild the local container and hit `/api/status`.
 
 User-facing features and fixes bump the patch version in the same PR
-(`package.json`, `server/package.json`, `web/package.json`, and
-`package-lock.json`). Docs and other non-shipping work do not.
+(`package.json`, `server/package.json`, `web/package.json`,
+`desktop/package.json`, and `package-lock.json`). Docs and other non-shipping
+work do not.
+
+### Reviewing a high-risk change
+
+A change that deletes or moves files, writes persistent state, checks who may
+do what, reaches the network on a user's behalf, or runs a child process gets
+one adversarial read after it is implemented, by someone (or an agent) who did
+not write it. Ask of it, and answer in the pull request:
+
+- **Actor and resource.** Whose rows or files does this read or write? Is the
+  owner taken from the session, never from the request? Does a resource the
+  caller may not see answer exactly like one that does not exist?
+- **Two at once.** What happens when two requests, a request and a queued job,
+  or a job and a download reach the same row or path together?
+- **Before and after each side effect.** If the process stops between any two
+  steps, what does the next start find, and does it finish, retry or refuse,
+  never delete something it is unsure about?
+- **Asked twice.** Is a repeated request or a replayed journal entry harmless?
+- **Stale reads.** Is every value written inside a state update read from the
+  state the write lands on, not from a read before an `await`?
+- **Secrets.** Can a token, a password, a private URL or a backup payload
+  reach a log line, an error answer or another account?
+- **Abort and cleanup.** Who owns every process, timer, temporary file and
+  placeholder this starts, and what ends it on failure, cancel and shutdown?
+
+Each finding gets a regression test that fails before the fix. A green CI run
+and agreement between reviewers are evidence, not proof.
 
 Issues and pull requests are the right place for bugs, small features, and
 documentation. Larger product questions belong in the [roadmap](docs/roadmap.md).
