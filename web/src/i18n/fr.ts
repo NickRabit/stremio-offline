@@ -1258,6 +1258,7 @@ export const fr: Catalog = {
   "err.retryOnlyFailed": "Seul un téléchargement ayant échoué peut être réessayé.",
   "err.itemNotFound": "L'élément n'a pas été trouvé.",
   "err.followsUnreadable": "Les séries suivies n'ont pas pu être lues.",
+  "error.reference": "Référence à signaler : {reference}",
   "err.queueNotSaved": "La file d'attente des téléchargements n'a pas pu être enregistrée.",
   "err.queueUnreadable": "Le fichier de la file d'attente des téléchargements n'a pas pu être lu.",
   "err.libraryOpsUnreadable": "Le fichier des opérations de bibliothèque n'a pas pu être lu.",

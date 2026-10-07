@@ -1258,6 +1258,7 @@ export const it: Catalog = {
   "err.retryOnlyFailed": "È possibile ritentare solo un download non riuscito.",
   "err.itemNotFound": "L'articolo non è stato trovato.",
   "err.followsUnreadable": "Non è stato possibile leggere le serie seguite.",
+  "error.reference": "Riferimento da segnalare: {reference}",
   "err.queueNotSaved": "Non è stato possibile salvare la coda dei download.",
   "err.queueUnreadable": "Non è stato possibile leggere il file della coda dei download.",
   "err.libraryOpsUnreadable": "Non è stato possibile leggere il file delle operazioni della libreria.",

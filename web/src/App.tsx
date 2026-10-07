@@ -695,7 +695,8 @@ export function App() {
   const notify = (text: string) => { setMessage(text); setTimeout(() => setMessage(""), 3200); };
   const fail = (value: unknown) => {
     if (value instanceof ApiError && value.status === 401) { setSession(null); return; }
-    setError(describeError(value)); setTimeout(() => setError(""), 6000);
+    // A failure with a reference stays long enough to copy the reference down.
+    setError(describeError(value)); setTimeout(() => setError(""), value instanceof ApiError && value.reference ? 15000 : 6000);
   };
   /** Writes wait for the hand to stop: one PATCH per gesture, not per click of a shape
    *  someone is flipping through. The latest patch wins, and nothing here runs on its own --

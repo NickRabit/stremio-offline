@@ -1313,6 +1313,7 @@ export const en = {
   "err.retryOnlyFailed": "Only a failed download can be retried.",
   "err.itemNotFound": "The item was not found.",
   "err.followsUnreadable": "The followed series could not be read.",
+  "error.reference": "Reference for a report: {reference}",
   "err.queueNotSaved": "The download queue could not be saved.",
   "err.queueUnreadable": "The download queue file could not be read.",
   "err.libraryOpsUnreadable": "The library operations file could not be read.",

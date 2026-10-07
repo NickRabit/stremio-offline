@@ -1308,6 +1308,7 @@ export const cs: Catalog = {
   "err.retryOnlyFailed": "Opakovat lze jen chybné stahování.",
   "err.itemNotFound": "Položka nebyla nalezena.",
   "err.followsUnreadable": "Sledované seriály se nepodařilo načíst.",
+  "error.reference": "Kód pro nahlášení: {reference}",
   "err.queueNotSaved": "Frontu stahování se nepodařilo uložit.",
   "err.queueUnreadable": "Soubor fronty stahování se nepodařilo načíst.",
   "err.libraryOpsUnreadable": "Soubor operací s knihovnou se nepodařilo načíst.",

@@ -6,14 +6,21 @@ import type { StatsActivityPage, ActiveStream, ActivityItem, CalendarItem, Undat
 export class ApiError extends Error {
   constructor(message: string, readonly status: number, readonly code?: string,
     /** Catalogue key for the message, so it can be shown in the reader's language. */
-    readonly messageKey?: string, readonly vars?: Record<string, string | number>) { super(message); }
+    readonly messageKey?: string, readonly vars?: Record<string, string | number>,
+    /** What kind of failure it is and whether trying again helps, as the server classified it. */
+    readonly category?: string, readonly retry?: string,
+    /** The request id of a failure the server could not explain, to quote when reporting it. */
+    readonly reference?: string) { super(message); }
 }
 
 /** Every failure the interface shows goes through here: a known key wins, the
- *  server's English text is the fallback. */
-export const describeError = (error: unknown): string => error instanceof ApiError
-  ? serverText(error.messageKey, error.message, error.vars)
-  : error instanceof Error ? error.message : String(error);
+ *  server's English text is the fallback. A failure the server could not explain carries the
+ *  reference that finds it in the log. */
+export const describeError = (error: unknown): string => {
+  if (!(error instanceof ApiError)) return error instanceof Error ? error.message : String(error);
+  const text = serverText(error.messageKey, error.message, error.vars);
+  return error.reference ? `${text} ${t("error.reference", { reference: error.reference })}` : text;
+};
 
 export interface ProgressPayload { key: string; position: number; duration: number; title?: string; path?: string; poster?: string; addonKey?: string }
 
@@ -38,8 +45,8 @@ async function request<T>(url: string, options?: RequestInit & { timeoutMs?: num
       headers: { "content-type": "application/json", ...init.headers },
     });
     if (!response.ok) {
-      const body = await response.json().catch(() => ({} as { error?: string; code?: string; messageKey?: string; vars?: Record<string, string | number> }));
-      throw new ApiError(body.error ?? `HTTP ${response.status}`, response.status, body.code, body.messageKey, body.vars);
+      const body = await response.json().catch(() => ({} as { error?: string; code?: string; messageKey?: string; vars?: Record<string, string | number>; category?: string; retry?: string; reference?: string }));
+      throw new ApiError(body.error ?? `HTTP ${response.status}`, response.status, body.code, body.messageKey, body.vars, body.category, body.retry, body.reference);
     }
     return response.status === 204 ? undefined as T : await response.json();
   } catch (error) {

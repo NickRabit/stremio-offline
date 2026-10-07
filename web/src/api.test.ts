@@ -40,6 +40,22 @@ describe("request", () => {
     expect(optionsOf(2).method).toBe("POST");
   });
 
+  it("carries the server's classification and shows the reference of an unexplained failure", async () => {
+    fetchMock.mockResolvedValue(json({ error: "Something broke.", category: "internal", retry: "manual", reference: "3157a2f8" }, 400));
+    const error = await api.addons().catch((caught: unknown) => caught) as ApiError;
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error.category).toBe("internal");
+    expect(error.retry).toBe("manual");
+    expect(error.reference).toBe("3157a2f8");
+    expect(describeError(error)).toContain("3157a2f8");
+  });
+
+  it("adds no reference to a failure the server explained", async () => {
+    fetchMock.mockResolvedValue(json({ error: "The item was not found.", messageKey: "err.itemNotFound", category: "configuration", retry: "action" }, 400));
+    const error = await api.addons().catch((caught: unknown) => caught) as ApiError;
+    expect(describeError(error)).not.toMatch(/Reference|Kód/);
+  });
+
   it("does not try to parse an empty response", async () => {
     fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
     await expect(api.deleteAddon("alpha")).resolves.toBeUndefined();
