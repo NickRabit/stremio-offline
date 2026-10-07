@@ -20,6 +20,10 @@ interface Harness {
   base: string;
   state: State;
   onStopContent?: (opts: { userId?: string; libraryId?: string; addonKey?: string }) => void;
+  /** How many writes are waiting for `releaseWrites`, so a test can interleave two of them. */
+  pendingWrites(): number;
+  holdWrites(): void;
+  releaseWrites(): void;
   close(): Promise<void>;
 }
 
@@ -56,13 +60,24 @@ const mount = async (): Promise<Harness> => {
 
   // Declared before the routes so a test can hook the sweep after mounting.
   const harness = { state } as Harness;
+  // A write can be held, so a request that awaits before its write can be interleaved.
+  let held: Array<() => void> = [];
+  let holding = false;
   const deps: SettingsDeps = {
     store: {
       settings: () => state.settings,
       addons: () => state.addons,
       users: () => state.users,
       libraries: () => state.libraries,
-      update: async (mutate: (state: State) => void) => { mutate(state); },
+      update: async (mutate: (value: State) => void) => {
+        if (holding) {
+          await new Promise<void>((resolve, reject) => {
+            held.push(() => { try { mutate(state); resolve(); } catch (error) { reject(error); } });
+          });
+          return;
+        }
+        mutate(state);
+      },
     } as unknown as Store,
     needsSetup: () => false,
     currentSession: () => undefined,
@@ -100,6 +115,9 @@ const mount = async (): Promise<Harness> => {
   await once(server, "listening");
   const { port } = server.address() as AddressInfo;
   harness.base = `http://127.0.0.1:${port}`;
+  harness.pendingWrites = () => held.length;
+  harness.holdWrites = () => { holding = true; };
+  harness.releaseWrites = () => { const waiting = held; held = []; for (const run of waiting) run(); };
   harness.close = async () => {
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -300,6 +318,49 @@ test("an import keeps the grants and the keys of the addons this instance alread
   assert.equal(restored?.key, "alpha-key", "the key a grant and a personal order both point at was replaced");
   // The addon the backup does not carry is gone for everybody, which no counter records.
   assert.deepEqual(stopped, [{ addonKey: "beta-key" }]);
+});
+
+test("an import carries the grant list the state holds when the write lands", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const originalFlag = process.env.ALLOW_PRIVATE_ADDONS;
+  process.env.ALLOW_PRIVATE_ADDONS = "1";
+  t.after(() => { if (originalFlag === undefined) delete process.env.ALLOW_PRIVATE_ADDONS; else process.env.ALLOW_PRIVATE_ADDONS = originalFlag; });
+  const manifests = createServer((_req, res) => {
+    res.writeHead(200, { "content-type": "application/json" })
+      .end(JSON.stringify({ id: "alpha", name: "Addon alpha", version: "1.0.0", resources: ["stream"], types: ["movie"], catalogs: [] }));
+  });
+  manifests.listen(0, "127.0.0.1");
+  await once(manifests, "listening");
+  t.after(() => new Promise<void>((resolve) => manifests.close(() => resolve())));
+  const alphaUrl = `http://127.0.0.1:${(manifests.address() as AddressInfo).port}/alpha/manifest.json`;
+
+  const kept = {
+    key: "alpha-key", manifestUrl: alphaUrl, role: "both" as const, enabled: true, globalSearch: true,
+    addedAt: "2026-01-01T00:00:00.000Z", allowedUsers: [CAROL],
+    manifest: { id: "alpha", name: "Addon alpha", version: "1.0.0" },
+    downloadSettings: { movie: { subfolder: "", layout: "flat" as const }, series: { subfolder: "", layout: "flat" as const } },
+  };
+  harness.state.addons = [kept] as State["addons"];
+  harness.holdWrites();
+
+  const importing = api(harness.base, "/api/settings/import", {
+    method: "POST",
+    user: "ada",
+    body: {
+      format: "stremio-offline-settings", version: 2, exportedAt: new Date().toISOString(),
+      settings: { concurrentDownloads: 3 },
+      addons: [{ manifestUrl: alphaUrl, role: "both", enabled: true, globalSearch: true, addedAt: "2026-01-01T00:00:00.000Z" }],
+      libraries: [],
+    },
+  });
+  while (harness.pendingWrites() < 1) await new Promise((resolve) => setImmediate(resolve));
+  // A grant edit lands while the manifest is being fetched and the import's write waits.
+  harness.state.addons = [{ ...harness.state.addons[0]!, allowedUsers: [CAROL, BOB] }];
+  harness.releaseWrites();
+
+  assert.equal((await importing).status, 200);
+  assert.deepEqual(harness.state.addons[0]!.allowedUsers, [CAROL, BOB], "the import wrote a grant list it read before the manifest was fetched");
 });
 
 test("PATCH /api/settings lets an ordinary user change only their own preferences", async (t) => {
