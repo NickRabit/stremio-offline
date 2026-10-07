@@ -44,6 +44,7 @@ test("a Real-Debrid answer is explained and classified by its status", () => {
 test("a body-parser failure shaped like a resource refusal still gets a reference", () => {
   const inflate = Object.assign(new Error("incorrect header check"), { code: "Z_DATA_ERROR", status: 400 });
   assert.equal(explainedError(inflate), false);
+  assert.deepEqual(classifyError(inflate), { category: "internal", retry: "manual" }, "and it is not filed as a source's refusal");
   assert.equal(explainedError(new ResourceError(410, "RESOURCE_EXPIRED")), true);
 });
 

@@ -138,7 +138,6 @@ const RESOURCE_CODES: Record<string, ErrorClassification> = {
   INVALID_SUBTITLES: { category: "configuration", retry: "action" },
 };
 
-const RESOURCE_FALLBACK: ErrorClassification = { category: "source", retry: "manual" };
 /** An `AppError` is a sentence the server wrote for the interface: an unlisted one is almost
  *  always a precondition the person has to resolve, so `configuration`/`action` is the least
  *  wrong guess. Unknown exceptions are a bug, not a state the person can change. */
@@ -168,7 +167,6 @@ export const classifyError = (error: unknown): ErrorClassification => {
   const key = messageKeyOf(error);
   if (key !== undefined && Object.hasOwn(TABLE, key)) return TABLE[key]!;
   if ((error as { name?: unknown } | null | undefined)?.name === "DebridError") return debridClass(error as { status?: unknown });
-  if (isResourceError(error)) return RESOURCE_FALLBACK;
   return error instanceof AppError ? APP_ERROR_FALLBACK : UNKNOWN_FALLBACK;
 };
 

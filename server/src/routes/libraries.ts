@@ -45,6 +45,31 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
     return checked.root;
   }
 
+  /** The folder behind each root spelling this process has resolved. A root can be stored as
+   *  one spelling of a folder another library reaches through a symlink, or through /tmp and
+   *  /private/tmp on a Mac, and the write that compares them is synchronous: every spelling is
+   *  resolved before a write, including the one a write that lands meanwhile stores. */
+  const realOfSpelling = new Map<string, string>();
+  async function formsOf(root: string): Promise<{ real: string; absolute: string }> {
+    const forms = await rootForms(root);
+    realOfSpelling.set(forms.absolute, forms.real);
+    return forms;
+  }
+  async function resolveExistingRoots(): Promise<void> {
+    await Promise.all(store.libraries().map((item) => formsOf(item.root)));
+  }
+
+  /** Whether another library already uses the folder, judged inside the write against the
+   *  libraries it lands on, by both the spelling each one stored and the folder behind it. */
+  function rootTaken(libraries: LibraryRecord[], forms: { real: string; absolute: string }, exceptId?: string): boolean {
+    return libraries.some((item) => {
+      if (item.id === exceptId) return false;
+      const stored = path.resolve(item.root);
+      const spellings = [stored, realOfSpelling.get(stored)].filter((value): value is string => value !== undefined);
+      return spellings.some((spelling) => sameFile(spelling, forms.real) || sameFile(spelling, forms.absolute));
+    });
+  }
+
   /** A grant edit and a global switch each reach only their own cause: the accounts that
    *  just lost sight of this library, or everybody it was switched off for. Called after
    *  the write, never before -- a request that slips between the two fails its own check. */
@@ -85,7 +110,8 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
     const health = await libraryProbe.cached(root);
     // A folder that was a library before and was removed without forgetting takes its identity
     // back, so its match history, artwork and favourite rows are its own again.
-    const forms = await rootForms(root);
+    const forms = await formsOf(root);
+    await resolveExistingRoots();
     let resumedId: string | undefined;
     const library: LibraryRecord = {
       // Filled in below, when the write lands: the departed list it is taken from may change
@@ -110,7 +136,7 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
       library.order = (state.libraries ?? []).reduce((next, item) => Math.max(next, item.order + 1), 0);
       // A create of the same folder that landed first owns it now; the check before the probe
       // could not see it.
-      if ((state.libraries ?? []).some((item) => sameFile(path.resolve(item.root), forms.real) || sameFile(path.resolve(item.root), forms.absolute))) {
+      if (rootTaken(state.libraries ?? [], forms)) {
         throw new AppError("Another library already uses that folder.", "err.libraryRootTaken");
       }
       resumedId = departedIdIn(state.departed ?? [], forms);
@@ -296,7 +322,8 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
       if (user.role === "admin" && !dormantNow.has(id)) throw new AppError("An administrator already sees every library.", "err.adminAlwaysSees");
     }
     if (req.body?.root !== undefined) patch.root = await requireLibraryRoot(req.body.root, { exceptId: target.id, create: req.body?.create === true });
-    const rootSpellings = patch.root === undefined ? undefined : await rootForms(patch.root);
+    const rootSpellings = patch.root === undefined ? undefined : await formsOf(patch.root);
+    if (rootSpellings) await resolveExistingRoots();
     // The default lives in the settings -- one id per kind, so claiming it takes it from
     // whoever held it -- but it reads as a property of the library, and that is where the
     // form sets it. `undefined` leaves the current choice alone.
@@ -329,8 +356,7 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
       if (!library) throw new AppError("The library was not found.", "err.libraryNotFound", 404);
       // Another write that moved a library to the same folder may have landed while this one
       // waited; the check before the probe could not see it.
-      if (rootSpellings && (state.libraries ?? []).some((item) => item.id !== target.id
-        && (sameFile(path.resolve(item.root), rootSpellings.real) || sameFile(path.resolve(item.root), rootSpellings.absolute)))) {
+      if (rootSpellings && rootTaken(state.libraries ?? [], rootSpellings, target.id)) {
         throw new AppError("Another library already uses that folder.", "err.libraryRootTaken");
       }
       before = library;

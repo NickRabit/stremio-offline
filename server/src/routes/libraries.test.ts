@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -419,6 +419,24 @@ test("two edits that move two libraries to one folder together leave one of them
   const real = await realpath(films);
   const onFilms = harness.stored().filter((record) => record.root === films || record.root === real);
   assert.equal(onFilms.length, 1, "one library over the folder, not two");
+});
+
+test("two edits that reach one folder by two spellings together leave one library there", async (t) => {
+  if (process.platform === "win32") { t.skip("a symlink needs developer mode on Windows"); return; }
+  const { root, films } = await grantedRoot("alias");
+  const alias = path.join(root, "alias");
+  await symlink(films, alias);
+  const harness = await mount([library("alpha", 0), library("beta", 1)], [{ path: root, source: "env", grantedAt: "2024-01-01T00:00:00.000Z" }]);
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+  harness.holdWrites();
+
+  const first = api(harness.base, "/api/libraries/alpha", { method: "PATCH", body: { root: alias } });
+  while (harness.pendingWrites() < 1) await new Promise((resolve) => setImmediate(resolve));
+  const second = api(harness.base, "/api/libraries/beta", { method: "PATCH", body: { root: films } });
+  while (harness.pendingWrites() < 2) await new Promise((resolve) => setImmediate(resolve));
+  harness.releaseWrites();
+  const answers = await Promise.all([first, second]);
+  assert.deepEqual(answers.map((answer) => answer.status).sort(), [200, 400], "the second spelling of the same folder is refused");
 });
 
 test("PATCH /api/libraries/:id persists the automatic metadata switch and invalidates it when it moves", async (t) => {
