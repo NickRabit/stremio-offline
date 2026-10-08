@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { goToView } from "../nav";
 
 test("catalogue search controls fit every supported viewport", async ({ page }) => {
   await page.goto("/");
@@ -22,7 +23,7 @@ test("catalogue search controls fit every supported viewport", async ({ page }) 
 
 test("global search setting remains readable and touchable", async ({ page }, testInfo) => {
   await page.goto("/");
-  await page.getByRole("button", { name: "Doplňky", exact: true }).click();
+  await goToView(page, "Doplňky");
   const card = page.locator(".addon-card").filter({ hasText: "E2E doplněk" });
   await card.getByRole("button", { name: "Upravit doplněk" }).click();
 

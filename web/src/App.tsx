@@ -1,5 +1,5 @@
 import { FormEvent, ReactNode, TouchEvent as ReactTouchEvent, UIEvent, WheelEvent as ReactWheelEvent, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, BarChart3, Bell, BellRing, History, ArrowUp, Check, RectangleHorizontal, RectangleVertical, Copy, FolderInput, FolderOpen, ImageOff, Images, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, ShieldQuestion, SlidersHorizontal, Sparkles, Star, Link2, LogOut, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, Film, FolderCog, HardDrive, Library, PackagePlus, Play, Plus, RefreshCw, Search, SearchX, Settings, Subtitles, Trash2, X } from "lucide-react";
+import { ArrowDown, BarChart3, Bell, BellRing, History, ArrowUp, Check, RectangleHorizontal, RectangleVertical, Copy, FolderInput, FolderOpen, Home as HomeIcon, ImageOff, Images, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, ShieldQuestion, SlidersHorizontal, Sparkles, Star, Link2, LogOut, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, Film, FolderCog, HardDrive, Library, PackagePlus, Play, Plus, RefreshCw, Search, SearchX, Settings, Subtitles, Trash2, X } from "lucide-react";
 import { preloadLibraryPosters, scheduleIdle } from "./library-preload";
 import { api, ApiError, describeError, saveToDevice } from "./api";
 import { LoginScreen, PasswordChangeRequired } from "./Login";
@@ -17,7 +17,7 @@ import { SuggestionsDialog } from "./SuggestionsDialog";
 import { SeriesDownloadDialog } from "./SeriesDownloadDialog";
 import { FollowDialog, toEpisodes } from "./FollowDialog";
 import { FollowingPage } from "./FollowingPage";
-import { NewEpisodesRow } from "./NewEpisodesRow";
+import { LibraryShelf } from "./LibraryShelf";
 import { StatsPanel } from "./Stats";
 import { report } from "./diagnostics";
 import { label, titleLanguage } from "./languages";
@@ -34,9 +34,15 @@ import { trailerAction } from "./trailers";
 import { emptyViews, prefsFor, scopeOf, withDownloads, withExtra, withLibrary } from "./views";
 import { Empty, Nav, Onboarding } from "./app-chrome";
 import { Downloads } from "./DownloadsPage";
+import { Home } from "./Home";
+import { useHome } from "./useHome";
+import type { ShowAllTarget } from "./home-cards";
+import type { HomeCard } from "../../server/src/home";
+import { MoreMenu, type MoreItem } from "./MoreMenu";
 import { fmtEta } from "./download-format";
 import { MediaGallery, type GalleryImage, type GalleryKind } from "./MediaGallery";
 import { SettingsPage } from "./SettingsPage";
+import { resolveStartView } from "./start-view";
 import type { Addon, BuildInfo, BrowseFile, BrowseItem, BrowseLibrary, BrowseResult, DeviceTransfer, DownloadsViewPrefs, FollowView, LibraryOp, LibraryOpsState, LibrarySort, LibraryView, LibraryViewPrefs, NewEpisode, ProgressEntry, UserViews, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, DownloadSelection, Inspection, Meta, QueueHalt, ScanState, SearchableCatalog, Session, Settings as AppSettings, SettingsPatch, SiteLink, Stream, Subtitle, Trailer, Video, SearchState } from "./types";
 
 /** The names of the linked sites. They are trademarks, not interface text, so they are
@@ -63,7 +69,7 @@ const legacyLibraryView = (): LibraryViewPrefs | null => {
 };
 const forgetLegacy = () => { try { for (const key of LEGACY_KEYS) localStorage.removeItem(`library-${key}`); } catch { /* storage may be unavailable */ } };
 
-type View = "catalog" | "library" | "following" | "downloads" | "stats" | "addons" | "settings";
+type View = "home" | "catalog" | "library" | "following" | "downloads" | "stats" | "addons" | "settings";
 type PlaybackAnchor = { kind: "catalog" | "library"; key: string };
 /** What a list is looking at, in terms the layout cannot invalidate: the item on top and
  *  how far it sits into the view. A rotation rewrites every pixel offset; this survives. */
@@ -137,6 +143,9 @@ export function App() {
   const libraryPrewarmStarted = useRef(false);
   const restoringScroll = useRef(false);
   const viewRef = useRef<View>("catalog");
+  /** True once the person has chosen a view themselves, so the start-page switch never
+   *  drags them away from where they went on purpose. Reset on a fresh sign-in. */
+  const navigated = useRef(false);
   const [galleryIndex, setGalleryIndex] = useState<number | null>(null);
   /** A library item's saved pictures, which take the overlay over while it is open. */
   const [storedGallery, setStoredGallery] = useState<GalleryImage[] | null>(null);
@@ -206,10 +215,11 @@ export function App() {
   const [bulkDownload, setBulkDownload] = useState<{ label: string; title: string; type: string; episodes: Array<{ id: string; season?: number; episode?: number; title?: string }>; media: { id?: string; metaType?: string; poster?: string; background?: string; gallery?: Array<{ url: string; kind: GalleryKind }> } } | null>(null);
   const [downloads, setDownloads] = useState<DownloadJob[]>([]); const [queueHalt, setQueueHalt] = useState<QueueHalt | null>(null); const [busy, setBusy] = useState(false); const [message, setMessage] = useState(""); const [error, setError] = useState(""); const [playerOpen, setPlayerOpen] = useState(false);
   const [deviceTransfers, setDeviceTransfers] = useState<DeviceTransfer[]>([]);
-  const [settings, setSettings] = useState<AppSettings>({ concurrentDownloads: 1, parallelPerProvider: 1, downloadSegments: 2, uiLanguage: locale(), audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui", mergeByName: true, streamSort: "recommended", trackProgress: true, showResumeRow: true, libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, addonRefreshHours: 24, catalogTileSize: "medium", libraryTileSize: "medium", catalogTileShape: "poster", libraryTileShape: "poster", realDebridConfigured: false, tmdbConfigured: false });
+  const [settings, setSettings] = useState<AppSettings>({ concurrentDownloads: 1, parallelPerProvider: 1, downloadSegments: 2, uiLanguage: locale(), audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui", mergeByName: true, streamSort: "recommended", trackProgress: true, showResumeRow: true, libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, addonRefreshHours: 24, catalogTileSize: "medium", libraryTileSize: "medium", catalogTileShape: "poster", libraryTileShape: "poster", homeTileShape: "wide", startView: "catalog", libraryShelf: "resume", realDebridConfigured: false, tmdbConfigured: false });
   const [languages, setLanguages] = useState<Array<{ code: string; name: string }>>([]);
   const [inspection, setInspection] = useState<Inspection | null>(null);
   const [session, setSession] = useState<Session | null | undefined>(undefined);
+  const home = useHome({ active: view === "home", account: session?.username ?? null, admin: session?.role === "admin", playerOpen });
   const [resumePreview, setResumePreview] = useState<BrowseResult | null>(null);
   const [favoritePreview, setFavoritePreview] = useState<BrowseResult | null>(null);
   const [browse, setBrowse] = useState<BrowseResult | null>(null);
@@ -384,6 +394,7 @@ export function App() {
 
   /** Opens a catalogue title; the resume position then follows from the key on its own. */
   const openFromCatalog = async (entry: { type: string; id: string; name: string; poster?: string }) => {
+    navigated.current = true;
     setView("catalog");
     await openMeta({ id: entry.id, type: entry.type, name: entry.name, poster: entry.poster } as Meta);
   };
@@ -999,6 +1010,7 @@ export function App() {
   }, [selected]);
 
   const resetCatalog = () => {
+    navigated.current = true;
     live.cancel();
     setCatalogCompact(false);
     const firstCatalog = catalogs[0];
@@ -1019,6 +1031,7 @@ export function App() {
   /** Clicking the section we are already in resets it; otherwise the last filters
    * and the page position are restored. */
   const openView = (target: View) => {
+    navigated.current = true;
     if (target !== view) { setView(target); return; }
     scrollByView.current[target] = 0;
     if (target === "catalog") resetCatalog();
@@ -1035,6 +1048,8 @@ export function App() {
     try { localStorage.setItem("sidebar-collapsed", next ? "1" : "0"); } catch { /* private mode may forbid storage */ }
     return next;
   });
+  /** The top bar and the More menu sign out through the same call. */
+  const signOut = async () => { try { await api.logout(); } finally { location.reload(); } };
 
   const refresh = async (selectFirst = false) => {
     const [nextAddons, nextCatalogs] = await Promise.all([api.addons(), api.catalogs()]); setAddons(nextAddons); setCatalogs(nextCatalogs);
@@ -1052,6 +1067,9 @@ export function App() {
         }
         if (previous && previous !== "completed" && job.status === "completed") {
           notify(t("downloads.inLibrary", { title: job.title }));
+          // Ready to play and Recently added gained a card; Home refreshes only those rows, and
+          // only while it is the view on screen -- the answer would otherwise land behind another view.
+          if (viewRef.current === "home") home.refresh(["completed", "recent"]);
         }
       }
     }
@@ -1062,6 +1080,11 @@ export function App() {
     setDeviceTransfers(Array.isArray(snapshot) ? [] : snapshot.deviceTransfers ?? []);
   };
   const loadDownloads = () => api.downloads().then(applyDownloads).catch(fail);
+  /** Home's queue card action: the mutation, then the poll that carries its result, with the
+   *  failure handed to the toast the rest of the app uses. */
+  const homeAction = async (job: DownloadJob, action: "pause" | "resume" | "retry") => {
+    try { await api.downloadAction(job.id, action); await loadDownloads(); } catch (error) { fail(error); }
+  };
   /** The followed series and the episodes they announced: the Library row needs both. */
   const loadFollows = () => Promise.all([api.follows(), api.newEpisodes()])
     .then(([list, items]) => { setFollows(list); setNewEpisodes(items); })
@@ -1072,6 +1095,8 @@ export function App() {
       ? (current.some((item) => item.id === id) ? current.map((item) => item.id === id ? follow : item) : [...current, follow])
       : current.filter((item) => item.id !== id));
     void loadFollows();
+    // A follow change moves the New episodes row; refresh it only while Home is on screen.
+    if (viewRef.current === "home") home.refresh(["episodes"]);
   };
   /** Following from the detail hero: the chip switches state and the Library rows catch up. */
   const followed = (item: Meta, follow: FollowView) => {
@@ -1126,7 +1151,23 @@ export function App() {
     setViews(next);
     setViewsReady(true);
   };
-  useEffect(() => { if (!ready) return; refresh().catch(fail); loadDownloads(); loadFollows(); api.settings().then((next) => { setSettings((current: AppSettings) => ({ ...current, ...next })); setLocale(next.uiLanguage); }).catch(fail); api.languages().then(setLanguages).catch(() => undefined); void loadViews(); }, [ready]);
+  useEffect(() => {
+    // A fresh sign-in re-arms the start page: signing out again must not remember the last
+    // switch as if the person had navigated.
+    if (!ready) { navigated.current = false; return; }
+    refresh().catch(fail); loadDownloads(); loadFollows();
+    api.settings().then((next) => {
+      setSettings((current: AppSettings) => ({ ...current, ...next }));
+      setLocale(next.uiLanguage);
+      // The chosen page is opened once, and only while nobody has gone anywhere yet.
+      if (view === "catalog" && !navigated.current && !selected && !playerOpen) {
+        const target = resolveStartView(next.startView, { restricted, navigated: navigated.current });
+        if (target) { navigated.current = true; openView(target); }
+      }
+    }).catch(fail);
+    api.languages().then(setLanguages).catch(() => undefined);
+    void loadViews();
+  }, [ready]);
   // Which addons are worth searching changes as they are switched on and off.
   useEffect(() => { api.searchable().then(setSearchable).catch(() => undefined); }, [addons]);
   // Only a file probe knows the exact languages, so we run one for the chosen stream.
@@ -1139,12 +1180,20 @@ export function App() {
   }, [selectedStream]);
   /** The shape buttons save like any other setting, but without the toast: one per click
    *  while somebody flips back and forth is noise. A refused save puts the grid back. */
-  const toggleShape = async (key: "catalogTileShape" | "libraryTileShape") => {
+  const toggleShape = async (key: "catalogTileShape" | "libraryTileShape" | "homeTileShape") => {
     const before = settings[key];
     const next = before === "wide" ? "poster" : "wide";
     setSettings((current: AppSettings) => ({ ...current, [key]: next }));
     try { const saved = await api.updateSettings({ [key]: next }); setSettings((current: AppSettings) => ({ ...current, ...saved })); }
     catch (e) { setSettings((current: AppSettings) => ({ ...current, [key]: before })); fail(e); }
+  };
+  /** The library shelf's segment saves like a shape: optimistic, silent, and put back on
+   *  failure so the clicked segment never sticks without the write behind it. */
+  const chooseLibraryShelf = async (segment: AppSettings["libraryShelf"]) => {
+    const before = settings.libraryShelf;
+    setSettings((current: AppSettings) => ({ ...current, libraryShelf: segment }));
+    try { const saved = await api.updateSettings({ libraryShelf: segment }); setSettings((current: AppSettings) => ({ ...current, ...saved })); }
+    catch (e) { setSettings((current: AppSettings) => ({ ...current, libraryShelf: before })); fail(e); }
   };
 
   const saveSettings = async (patch: SettingsPatch) => {
@@ -1321,6 +1370,13 @@ export function App() {
   // Confirming the last title takes the button away with it, and a filter nobody can switch
   // off would leave the listing empty for good.
   useEffect(() => { if (!suggestionCount) setOnlyUnconfirmed(false); }, [suggestionCount]);
+  // The To confirm shelf opens the same suggestions dialog the library page does; once it
+  // closes, Home re-reads the row so a confirmed or dismissed proposal leaves the shelf.
+  const suggestionsWereOpen = useRef(false);
+  useEffect(() => {
+    if (suggestionsWereOpen.current && !suggestionsOpen && viewRef.current === "home") home.refresh(["confirm"]);
+    suggestionsWereOpen.current = suggestionsOpen;
+  }, [suggestionsOpen]);
   // Page-scroll paging, the same as in the catalogue. The button stays as a fallback.
   useEffect(() => {
     if (view !== "library" || !browse) return;
@@ -1379,6 +1435,7 @@ export function App() {
   /** Jumping from the download queue: opens the folder the file sits in and finds it there.
    * The filters have to be cleared, or the wanted file would stay filtered out of the listing. */
   const revealInLibrary = (target: string) => {
+    navigated.current = true;
     const slash = target.lastIndexOf("/");
     setMenuFor(null); setFromFavorites(false); setOnlyFavorites(false); setBrowseQuery("");
     suppressFavoritesApply.current = true;
@@ -1892,6 +1949,45 @@ export function App() {
     await loadDownloads();
   };
 
+  /** The library's own Continue watching list or its favourites list. Both drop the filters
+   *  that would hide what they open, the way the library's own links do. */
+  const openHomeLibraryList = (target: ":resume" | ":favorites") => {
+    navigated.current = true;
+    setMenuFor(null); setFromFavorites(false); setBrowseQuery(""); setOnlyFavorites(false);
+    suppressFavoritesApply.current = true;
+    setBrowsePath(target);
+    scrollByView.current.library = 0;
+    setView("library");
+  };
+
+  /** A Home media card's action, by kind: a file plays, a catalogue entry opens the remembered
+   *  episode the way a catalogue Continue-watching tile does, a favourite or Tonight folder opens
+   *  itself, a new episode opens its show the way the Library's row does, and a suggestion opens
+   *  the dialog the library page opens. */
+  const homePlay = (card: HomeCard) => {
+    if (card.kind === "resume-catalogue" || card.kind === "episode" || card.kind === "confirm") return;
+    const title = card.kind === "favorite" || card.kind === "recent" || card.kind === "tonight" ? card.label : card.title;
+    void playLocal(title, card.path, card.poster, (card.kind === "resume-file" || card.kind === "completed" || card.kind === "recent") && card.season != null);
+  };
+  const homeOpen = (card: HomeCard) => {
+    if (card.kind === "episode") { void openFromCatalog({ type: card.type, id: card.metaId, name: card.name, poster: card.poster }); return; }
+    if (card.kind === "confirm") { setSuggestionsOpen(true); return; }
+    if (card.kind !== "resume-catalogue") return;
+    navigated.current = true;
+    setView("catalog");
+    const episode = card.season != null && card.episode != null ? { key: card.key, season: card.season, number: card.episode } : undefined;
+    void openMeta({ id: card.id, type: card.type, name: card.name, poster: card.poster } as Meta, episode);
+  };
+  const homeShowAll = (target: ShowAllTarget) => {
+    navigated.current = true;
+    if (target === "downloads") openView("downloads");
+    else if (target === "following") openView("following");
+    else if (target === "library") openView("library");
+    else if (target === "confirm") setSuggestionsOpen(true);
+    else if (target === "catalog-resume") { setView("catalog"); setSelectedCatalog(VIRTUAL.resume); }
+    else openHomeLibraryList(target === "library-resume" ? ":resume" : ":favorites");
+  };
+
   const activeLibraryOp = libraryOps.find((job) => job.status === "running" || job.status === "paused");
   const operationProgress = activeLibraryOp
     ? activeLibraryOp.bytesTotal > 0 ? activeLibraryOp.bytes / activeLibraryOp.bytesTotal : (activeLibraryOp.done + activeLibraryOp.failed) / Math.max(1, activeLibraryOp.total)
@@ -1904,24 +2000,44 @@ export function App() {
   // render a shell whose every request comes back refused with nothing to explain it.
   if (session?.mustChangePassword) return <PasswordChangeRequired session={session} onSession={setSession}/>;
 
-  return <div className={`app-shell catalog-tiles-${settings.catalogTileSize} library-tiles-${settings.libraryTileSize} catalog-shape-${settings.catalogTileShape} library-shape-${settings.libraryTileShape}${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
+  // Following, Addons, Settings and Statistics are the destinations the compact chrome folds
+  // into More. `badge` on More is the Following indicator: new episodes plus attention.
+  const followingBadge = (newEpisodes.length + follows.reduce((sum, follow) => sum + follow.downloads.attention, 0)) || undefined;
+  const moreItems: MoreItem[] = [
+    { key: "following", icon: <BellRing/>, label: t("nav.following"), badge: followingBadge, active: view === "following", onSelect: () => openView("following") },
+    { key: "addons", icon: <PackagePlus/>, label: t("nav.addons"), badge: addons.length, active: view === "addons", onSelect: () => openView("addons") },
+    { key: "settings", icon: <Settings/>, label: t("nav.settings"), active: view === "settings", onSelect: () => openView("settings") },
+    ...(session!.role === "admin" ? [{ key: "stats", icon: <BarChart3/>, label: t("nav.stats"), active: view === "stats", onSelect: () => openView("stats") }] : []),
+  ];
+  const moreActive = view === "following" || view === "addons" || view === "settings" || view === "stats";
+
+  return <div className={`app-shell catalog-tiles-${settings.catalogTileSize} library-tiles-${settings.libraryTileSize} catalog-shape-${settings.catalogTileShape} library-shape-${settings.libraryTileShape} home-shape-${settings.homeTileShape}${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
     <header className="topbar"><button className="brand brand-home" title={t("app.goToCleanCatalog")} aria-label={t("app.goToCleanCatalog")} onClick={resetCatalog}><div className="brand-mark"><CirclePlay/></div><div><small>{t("auth.brandEyebrow")}</small><h1>Stremio <span>Offline</span></h1></div></button><div className="topbar-right">{restricted && <div className="restricted-chip">{t("restricted.chip")}</div>}<div className="online"><i/> {t("app.serverOnline")}</div>
       <div className="topbar-user"><span className="topbar-user-name">
         <strong title={t("auth.signedInAs", { username: session?.username ?? "" })}>{session?.username}</strong>
         {session?.role === "admin" && <i className="library-badge">{t("users.administrator")}</i>}
-      </span><button className="signout" title={t("auth.signedInAs", { username: session?.username ?? "" })} aria-label={t("app.signOut")} onClick={async () => { try { await api.logout(); } finally { location.reload(); } }}><LogOut/> <span className="signout-label">{t("app.signOut")}</span></button></div></div></header>
+      </span><button className="signout" title={t("auth.signedInAs", { username: session?.username ?? "" })} aria-label={t("app.signOut")} onClick={signOut}><LogOut/> <span className="signout-label">{t("app.signOut")}</span></button></div></div></header>
     <aside className="sidebar"><nav>
+      {/* Restricted accounts have no Home: the view needs the personal data they are not
+          given, so the destination is not offered at all. */}
+      {!restricted && <Nav icon={<HomeIcon/>} label={t("nav.home")} active={view === "home"} onClick={() => openView("home")}/>}
       <Nav icon={<Library/>} label={t("nav.catalog")} active={view === "catalog"} onClick={() => openView("catalog")}/>
       <Nav icon={<HardDrive/>} label={t("nav.library")} active={view === "library"} onClick={() => openView("library")}/>
-      <Nav icon={<BellRing/>} label={t("nav.following")} active={view === "following"} badge={(newEpisodes.length + follows.reduce((sum, follow) => sum + follow.downloads.attention, 0)) || undefined} onClick={() => openView("following")}/>
+      <Nav secondary icon={<BellRing/>} label={t("nav.following")} active={view === "following"} badge={followingBadge} onClick={() => openView("following")}/>
       <Nav icon={<Download/>} label={t("nav.downloads")} active={view === "downloads"} badge={downloads.filter((job) => job.status === "checking" || job.status === "downloading" || job.status === "queued" || job.status === "waiting").length} onClick={() => openView("downloads")}/>
-      <Nav icon={<PackagePlus/>} label={t("nav.addons")} active={view === "addons"} badge={addons.length} onClick={() => openView("addons")}/>
-      <Nav icon={<Settings/>} label={t("nav.settings")} active={view === "settings"} onClick={() => openView("settings")}/>
+      <Nav secondary icon={<PackagePlus/>} label={t("nav.addons")} active={view === "addons"} badge={addons.length} onClick={() => openView("addons")}/>
+      <Nav secondary icon={<Settings/>} label={t("nav.settings")} active={view === "settings"} onClick={() => openView("settings")}/>
       {/* `/api/stats` is administrator-only, so for anybody else this is a tab that loads an
           error. */}
-      {session!.role === "admin" && <Nav icon={<BarChart3/>} label={t("nav.stats")} active={view === "stats"} onClick={() => openView("stats")}/>}
+      {session!.role === "admin" && <Nav secondary icon={<BarChart3/>} label={t("nav.stats")} active={view === "stats"} onClick={() => openView("stats")}/>}
+      <MoreMenu items={moreItems} badge={followingBadge} active={moreActive} onSignOut={signOut}/>
     </nav><div className="sidebar-bottom"><button className="sidebar-toggle" onClick={toggleSidebar} title={t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")} aria-label={t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")}>{sidebarCollapsed ? <PanelLeftOpen/> : <PanelLeftClose/>}<span>{t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")}</span></button><div className="addon-status"><small>{t("app.activeAddons")}</small><strong>{addons.filter((a) => a.enabled).length}</strong><span>{t("app.catalogsAndSources")}</span></div></div></aside>
     <main className={`view-${view}`}>
+      {view === "home" && !restricted && <Home jobs={downloads} libraries={libraries} onShowDownloads={() => openView("downloads")} onAction={homeAction} admin={admin}
+        rows={home.rows} shape={settings.homeTileShape} onToggleShape={() => void toggleShape("homeTileShape")}
+        onRetry={(row) => home.refresh([row])} onShowAll={homeShowAll} onPlay={homePlay} onOpenCatalogue={homeOpen}
+        onShuffle={(row, shuffle) => home.refresh([row], { shuffle })}
+        onReveal={revealInLibrary} onForgotten={() => home.refresh(["resume"])} onError={fail}/>}
       {view === "catalog" && <section className={`catalog-view ${catalogCompact ? "catalog-compact" : ""}`} {...chromeGestures(() => gridRef.current)} onFocusCapture={(event) => {
         if ((event.target as HTMLElement).closest(".searchbar,.filterbar")) setCatalogCompact(false);
       }}><Heading eyebrow={t("catalog.eyebrow")} title={t("catalog.title")}/>
@@ -1929,7 +2045,7 @@ export function App() {
           // An ordinary account seeing no catalogue has not been granted an addon, and
           // cannot add one: the invitation would lead to a screen it may not use.
           ? <Empty icon={<PackagePlus/>} title={t("onboarding.title")} text={t(restricted ? "restricted.notice" : "onboarding.noneGranted")}/>
-          : <Onboarding onOpen={() => setView("addons")}/>) : <>
+          : <Onboarding onOpen={() => { navigated.current = true; setView("addons"); }}/>) : <>
           {/* The head sits on the same columns as the panels below it: search spans both, so it ends
               with the sources panel, and the filters keep to the first, so they end with the results. */}
           <div className="catalog-head"><div className={`fold${catalogCompact ? " closed" : ""}${suggestions.length ? " suggesting" : ""}`}><form className="searchbar" onSubmit={submitSearch}>
@@ -2208,27 +2324,23 @@ export function App() {
           compactOnScroll(event, libraryCompact, setLibraryCompact);
           scheduleViewAnchor();
         }}>
-        {settings.showResumeRow && !browsePath && !onlyFavorites && localResume.length > 0 && <div className="resume-row">
-          <div className="subhead"><h3>{t("library.continueWatching")}</h3><button className="resume-show-all" onClick={() => { setBrowseQuery(""); setOnlyFavorites(false); setFromFavorites(false); setMenuFor(null); setBrowsePath(":resume"); }}>{t("library.showAll")} ({resumePreview?.total ?? localResume.length}) <ChevronRight/></button></div>
-          <div className="resume-strip">
-            {localResume.slice(0, 8).map((item) => <button className="browse-item" key={item.key} data-path={item.path} onClick={() => {
-              if (item.path) void playLocal(item.title, item.path, item.poster, item.season != null);
-            }}>
-              <span className="browse-art">
-                {item.poster ? <img src={item.poster} alt="" loading="lazy"/> : <Film/>}
-                <i className="browse-play"><CirclePlay/></i>
-                <i className="resume-bar"><i style={{ width: `${Math.min(100, Math.round(item.position / (item.duration || 1) * 100))}%` }}/></i>
-              </span>
-              <span className="browse-menu" onClick={(event) => { event.stopPropagation(); setMenuFor(menuFor === item.key ? null : item.key); }}><MoreVertical/></span>
-              <strong>{item.series?.name ?? item.title}</strong>
-              <small>{item.season != null ? `${item.season}×${String(item.episode ?? 0).padStart(2, "0")} ` : ""}{t("library.remaining", { time: fmtEta(Math.max(0, item.duration - item.position)) })}</small>
-              {menuFor === item.key && <span className="browse-actions" onClick={(event) => event.stopPropagation()}>
-                <button onClick={() => { if (item.path) revealInLibrary(item.path); }}><HardDrive/> {t("library.showInLibrary")}</button>
-              </span>}
-            </button>)}
-          </div>
-        </div>}
-        {!browsePath && !onlyFavorites && <NewEpisodesRow follows={follows} episodes={newEpisodes} onManage={() => openView("following")} onOpen={(episode) => void openFromCatalog({ type: episode.type, id: episode.metaId, name: episode.name, poster: episode.poster })}/>}
+        {!browsePath && !onlyFavorites && !browseQuery && <LibraryShelf
+          segment={settings.libraryShelf}
+          showResume={settings.showResumeRow}
+          resume={localResume.slice(0, 8)}
+          resumeTotal={resumePreview?.total ?? localResume.length}
+          episodes={newEpisodes}
+          follows={follows}
+          favorites={favoritePreview}
+          onSegment={(segment) => void chooseLibraryShelf(segment)}
+          onPlayResume={(item) => { if (item.path) void playLocal(item.title, item.path, item.poster, item.season != null); }}
+          onRevealResume={(path) => revealInLibrary(path)}
+          onOpenEpisode={(episode) => void openFromCatalog({ type: episode.type, id: episode.metaId, name: episode.name, poster: episode.poster })}
+          onOpenFavorite={(item) => { if (item.kind === "folder") { setBrowseQuery(""); setFromFavorites(true); setBrowsePath(item.path); } else void playLocal(item.label, item.path, item.poster); }}
+          onShowResume={() => { setBrowseQuery(""); setOnlyFavorites(false); setFromFavorites(false); setMenuFor(null); setBrowsePath(":resume"); }}
+          onShowEpisodes={() => openView("following")}
+          onShowFavorites={() => { setBrowseQuery(""); setFromFavorites(false); setBrowsePath(":favorites"); }}
+        />}
         {!browsePath && !scanHintDismissed && !libraryScan?.finishedAt && (browse?.total ?? 0) >= 10 && <div className="library-scan-hint" role="status">
           <span>{t("library.scanHint")}</span>
           <button type="button" onClick={dismissScanHint}>{t("library.dismissHint")}</button>
@@ -2237,11 +2349,6 @@ export function App() {
           <span>{t("library.suggestionsWaiting", { count: suggestionCount })}</span>
           <button type="button" onClick={() => setSuggestionsOpen(true)}>{t("library.suggestionsReview")}</button>
         </div>}
-
-        {!browsePath && !onlyFavorites && !browseQuery && <button className="library-favorites" onClick={() => { setBrowseQuery(""); setFromFavorites(false); setBrowsePath(":favorites"); }}>
-          <span className="favorites-collage" aria-hidden="true">{[...new Set(favoritePreview?.items.map((item) => item.poster).filter((poster): poster is string => Boolean(poster)))].slice(0, 3).map((poster) => <img key={poster} src={poster} alt="" onError={hideBroken}/>)}<Star/></span>
-          <span className="favorites-copy"><strong>{t("favorite.off")}</strong><small>{favoritePreview?.total ? t("library.favoritesCount", { count: favoritePreview.total }) : t("library.favoritesEmptyHint")}</small></span><ChevronRight/>
-        </button>}
         {!browse || !browse.items.length
           ? (browseBusy ? <div className="loading">{t("common.loading")}</div>
             : <Empty icon={<HardDrive/>} title={t(browseQuery ? "library.emptyFilterTitle" : onlyUnconfirmed ? "library.emptyUnconfirmedTitle" : browsePath === ":resume" ? "library.emptyResumeTitle" : browsePath === ":favorites" || onlyFavorites ? "library.emptyFavoritesTitle" : "library.emptyTitle")} text={t(browseQuery ? "library.emptyFilterText" : onlyUnconfirmed ? "library.emptyUnconfirmedText" : browsePath === ":resume" ? "library.emptyResumeText" : browsePath === ":favorites" || onlyFavorites ? "library.emptyFavoritesText" : "library.emptyText")}/>)

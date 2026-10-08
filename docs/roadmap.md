@@ -102,6 +102,9 @@ Shipped in `main`; implementation details live in the linked guides.
   [Supported sign-in](../desktop/README.md#cloudflare-access).
 - **Phones and tablets**: responsive layouts and Home Screen setup.
   [Mobile guide](mobile.md).
+- **Home**: the queue, Continue watching, new episodes, Ready to play, Recently
+  added, Tonight, Favourites and the titles waiting for a match on one page, with a five-slot compact navigation and a More menu on phones and short
+  landscape screens. [Home page](home-spec.md).
 - **Statistics and diagnostics**: traffic by source, active streams, admin
   activity history, grouped errors and redacted logs.
   [Activity history](users.md#activity-history), [Diagnostics](troubleshooting.md).
@@ -140,21 +143,18 @@ episode without adult help, documentation or recovery through browser controls.
 
 ### Home screen
 
-Make the normal entry point useful without first navigating a catalogue. Start
-with rows that can be derived from state the app already has:
+The adult Home page is built (see [Home page](home-spec.md)): Downloads,
+Continue watching, New episodes, Ready to play, Recently added, Tonight,
+Favourites and, for administrators, To confirm, beside the catalogue and the
+library. Each library and add-on has a **Show on Home** switch, and each account
+chooses its start page (Catalogue unless it says otherwise). What is left:
 
-- **Continue watching**;
-- favourites / **My shows**;
-- recently added local media;
-- new episodes from followed shows once that feature exists;
-- completed downloads that are ready to play.
-
-Keep this personal per account and make the child-facing variant much smaller
-than the full adult home screen. The adult page is specified in
-[Home page](home-spec.md): a Downloads row first, then Continue watching, Ready
-to play and Favourites, as an extra entry beside the catalogue and the library. Ship the existing-state rows first; followed
-episodes are an additive row, not a reason to block the home screen. See the
-[home contract](roadmap-delivery-spec.md#family-home-and-kids-mode).
+- row order and visibility per account;
+- carousels from an add-on's own catalogues, opt-in per add-on;
+- a "next episode is missing" card with a one-tap download, and an airing-today
+  card once the calendar exists;
+- the much smaller child-facing variant, with server-side enforcement. See the
+  [home contract](roadmap-delivery-spec.md#family-home-and-kids-mode).
 
 ### Player and mobile chrome
 

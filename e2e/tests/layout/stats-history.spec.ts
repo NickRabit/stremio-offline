@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { goToView } from "../nav";
 
 test("activity filters and long filenames fit the statistics panel", async ({ page }) => {
   await page.route("**/api/stats/activity?*", (route) => route.fulfill({ json: {
@@ -6,7 +7,7 @@ test("activity filters and long filenames fit the statistics panel", async ({ pa
     total: 1, users: [{ id: "admin", username: "e2e-admin" }],
   } }));
   await page.goto("/");
-  await page.getByRole("button", { name: "Statistiky", exact: true }).click();
+  await goToView(page, "Statistiky");
   const history = page.locator(".stats-history");
   await expect(history.getByText("A long movie title")).toBeVisible();
   await history.getByRole("combobox", { name: "Aktivita", exact: true }).selectOption("library");

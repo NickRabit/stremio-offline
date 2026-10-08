@@ -25,6 +25,9 @@ export type WatchedMarker = { name: string; poster?: string; addonKey?: string; 
 
 export type TileSize = "compact" | "small" | "medium" | "large";
 export type TileShape = "poster" | "wide";
+export type StartView = "catalog" | "home" | "library";
+/** Which segment the library root's shelf shows. */
+export type LibraryShelf = "resume" | "episodes" | "favorites";
 /** Settings that belong to the instance. Only an administrator changes these. */
 export interface InstanceSettings {
   concurrentDownloads: number; parallelPerProvider: number;
@@ -56,7 +59,11 @@ export interface UserPrefs {
   uiLanguage: UiLanguage; audioLanguage: string; subtitleLanguage: string; downloadTitleLanguage: "ui" | string;
   mergeByName: boolean; streamSort: string; trackProgress: boolean; showResumeRow: boolean;
   catalogTileSize: TileSize; libraryTileSize: TileSize;
-  catalogTileShape: TileShape; libraryTileShape: TileShape;
+  catalogTileShape: TileShape; libraryTileShape: TileShape; homeTileShape: TileShape;
+  /** The view the app opens on; the catalogue unless the person chose otherwise. */
+  startView: StartView;
+  /** The segment the library root's one shelf shows; Continue unless the person chose otherwise. */
+  libraryShelf: LibraryShelf;
 }
 
 /** The flat shape of the settings file and of the settings backup: the instance's half and
@@ -106,7 +113,7 @@ export interface State { schemaVersion?: number;
   /** When the addon manifests were last refreshed in the background. */
   addonsRefreshedAt?: string }
 const baseInstanceSettings: InstanceSettings = { concurrentDownloads: 1, parallelPerProvider: 1, downloadSegments: 2, libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, addonRefreshHours: 24, defaultMovieLibrary: "", defaultSeriesLibrary: "", realDebridToken: "", tmdbApiKey: "" };
-const basePrefs: UserPrefs = { uiLanguage: "en", audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui", mergeByName: true, streamSort: "recommended", trackProgress: true, showResumeRow: true, catalogTileSize: "medium", libraryTileSize: "medium", catalogTileShape: "poster", libraryTileShape: "poster" };
+const basePrefs: UserPrefs = { uiLanguage: "en", audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui", mergeByName: true, streamSort: "recommended", trackProgress: true, showResumeRow: true, catalogTileSize: "medium", libraryTileSize: "medium", catalogTileShape: "poster", libraryTileShape: "poster", homeTileShape: "wide", startView: "catalog", libraryShelf: "resume" };
 
 /** A fresh install starts with the one library the download directory has always been,
  *  so it never runs the migration an upgrade needs. */

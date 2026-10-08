@@ -142,6 +142,21 @@ it("one save carries every staged change in a single request", async () => {
   expect(body).not.toHaveProperty("url");
 });
 
+it("can keep an addon's titles off Home from the addon dialog", async () => {
+  await render([addon({ role: "catalog", manifest: { ...addon().manifest, resources: ["catalog"] } })]);
+  await openEditor();
+  const box = [...host.querySelectorAll<HTMLInputElement>(".addon-edit-card input[type=checkbox]")]
+    .find((input) => input.closest("label")?.textContent?.includes("Show on Home"))!;
+  expect(box.checked, "addons stay on Home unless explicitly excluded").toBe(true);
+  await act(async () => { box.click(); await Promise.resolve(); });
+  fetchMock.mockResolvedValue(json(addon()));
+  await act(async () => { button("Save changes")!.click(); });
+  await act(async () => { await Promise.resolve(); });
+  const patches = fetchMock.mock.calls.filter(([, init]) => init?.method === "PATCH");
+  expect(patches).toHaveLength(1);
+  expect(JSON.parse(patches[0][1].body as string)).toEqual({ showOnHome: false });
+});
+
 it("a stream-only addon has no catalogue switches to set", async () => {
   await render([addon()]);
   await openEditor();

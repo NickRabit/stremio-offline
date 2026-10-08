@@ -15,6 +15,8 @@ const ROLES = new Set<AddonRole>(["catalog", "source", "both"]);
 const STREAM_SORTS = new Set(["recommended", "size-desc", "size-asc", "addon"]);
 const TILE_SIZES = new Set(["compact", "small", "medium", "large"]);
 const TILE_SHAPES = new Set(["poster", "wide"]);
+const START_VIEWS = new Set(["catalog", "home", "library"]);
+const LIBRARY_SHELVES = new Set(["resume", "episodes", "favorites"]);
 
 export interface BackupAddon {
   manifestUrl: string;
@@ -75,6 +77,9 @@ function parseSettings(value: unknown): Settings {
   const libraryTileSize = String(source.libraryTileSize ?? "");
   const catalogTileShape = String(source.catalogTileShape ?? "");
   const libraryTileShape = String(source.libraryTileShape ?? "");
+  const homeTileShape = String(source.homeTileShape ?? "");
+  const startView = String(source.startView ?? "");
+  const libraryShelf = String(source.libraryShelf ?? "");
   return {
     concurrentDownloads: number("concurrentDownloads", 8),
     parallelPerProvider: number("parallelPerProvider", 8),
@@ -92,6 +97,9 @@ function parseSettings(value: unknown): Settings {
     libraryTileSize: TILE_SIZES.has(libraryTileSize) ? libraryTileSize as Settings["libraryTileSize"] : fallback.libraryTileSize,
     catalogTileShape: TILE_SHAPES.has(catalogTileShape) ? catalogTileShape as Settings["catalogTileShape"] : fallback.catalogTileShape,
     libraryTileShape: TILE_SHAPES.has(libraryTileShape) ? libraryTileShape as Settings["libraryTileShape"] : fallback.libraryTileShape,
+    homeTileShape: TILE_SHAPES.has(homeTileShape) ? homeTileShape as Settings["homeTileShape"] : fallback.homeTileShape,
+    startView: START_VIEWS.has(startView) ? startView as Settings["startView"] : fallback.startView,
+    libraryShelf: LIBRARY_SHELVES.has(libraryShelf) ? libraryShelf as Settings["libraryShelf"] : fallback.libraryShelf,
     // Whatever the backup names here is another instance's id; the import maps it onto a local
     // library by root or name, and falls back to the default when it cannot.
     defaultMovieLibrary: typeof source.defaultMovieLibrary === "string" ? source.defaultMovieLibrary : "",

@@ -1,8 +1,14 @@
 # Home page: design specification
 
-Status: proposed, not implemented. Written 2026-10-05 and revised the same day
-against `main` at 0.5.8, which already ships Following and owner-scoped duplicate
-checks. The [roadmap](roadmap.md) owns priority; this file owns the shape of the
+Status: slices 0 to 5 shipped in 0.5.25, with a per-account Start page setting
+(Catalogue by default) and a Show on Home switch on every library and add-on;
+the rows are Continue watching, Favourites, Tonight, New episodes, Ready to
+play, Recently added and then the Downloads strip. To confirm is a count in the
+heading, not a shelf, and Downloads is a one-line summary unless a job has
+failed or is blocked. The row order above is fixed. Hiding a row per account is not
+built. Written 2026-10-05 and revised the
+same day against `main` at 0.5.8, which already ships Following and owner-scoped
+duplicate checks. The [roadmap](roadmap.md) owns priority; this file owns the shape of the
 page. Every claim about current behaviour was checked against the source. An
 independent review (the closed PR #303) found the contract gaps folded in below.
 
@@ -14,8 +20,8 @@ contracts, and the app still opens on the catalogue. Home is built from state
 the app already holds. It never scans a disk and never fans out to addons on
 load.
 
-The app is a download manager first and a player second, so Home leads with the
-queue rather than with a "watch what you have" shelf. The official Stremio home
+Home leads with Continue watching. The queue stays on the page as a one-line
+summary unless a job needs attention. The official Stremio home
 is deliberately not the model. Ideas taken from Jellyfin, Plex and Infuse:
 short horizontal rows, one merged Continue watching row that mixes movies and
 episodes, progress drawn on the tile, and removal from the row on the card
@@ -24,20 +30,23 @@ side (802x293) it would take the only visible band.
 
 ## Rows
 
-Fixed order. A row with nothing in it is not drawn, so a quiet queue lets
-Continue watching rise to the top and a busy one pushes it down. Nothing is
-re-ordered by a heuristic, which keeps scroll restoration honest.
+Fixed order. A row with nothing in it is not drawn. Downloads sit last, so a
+busy queue does not push Continue watching down. Nothing is re-ordered by a
+heuristic, which keeps scroll restoration honest.
 
 | # | Row | Contents | Status |
 | --- | --- | --- | --- |
-| 1 | Downloads | The account's own jobs: failed or blocked first, then running, waiting and queued. One action per card. | Ready: the client already holds and polls the queue |
-| 2 | Continue watching | Library files with a stored position, catalogue progress and next-episode rows. | Needs a server identity contract, see below |
-| 3 | Ready to play | The account's own completed downloads that resolve to a file that can be opened now. | Small server change |
-| 4 | Favourites | Library favourites, filtered by grant. | Ready |
-| 5 | New episodes | The existing `NewEpisodesRow` from Following, after a check of its grant semantics. | Ready, reuse |
+| 1 | Continue watching | Library files with a stored position, catalogue progress and next-episode rows. | Needs a server identity contract, see below |
+| 2 | Favourites | Library favourites, filtered by grant. | Ready |
+| 3 | Tonight | Unstarted whole titles from the libraries Home shows, in a per-day order. | Ready |
+| 4 | New episodes | The existing `NewEpisodesRow` from Following, after a check of its grant semantics. | Ready, reuse |
+| 5 | Ready to play | The account's own completed downloads that resolve to a file that can be opened now. | Small server change |
 | 6 | Recently added | Files first seen by a library scan. | Needs new persisted data |
+| 7 | Downloads | The account's own jobs. A one-line summary, unless one has failed or is blocked, in which case only those jobs are cards. | Ready: the client already holds and polls the queue |
 
 Following is its own destination and is not rebuilt here.
+
+Tonight tops up from the account's unfinished favourites when fewer than 12 unstarted titles are eligible.
 
 ## Rules that apply to every row
 
@@ -473,6 +482,8 @@ page, restored offsets after playback, rotation and a breakpoint resize, and
 the busy, empty, partial, failed and revoked states.
 
 ## Slices
+
+Slices 0 to 5 shipped together in one pull request; 6 (row order and hiding) remains.
 
 0. **Compact navigation with More.** Its own PR: the five-slot navigation for
    phones and short landscape, the wide-short and medium-landscape chrome, the

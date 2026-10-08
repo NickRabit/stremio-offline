@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { goToView } from "../nav";
 
 // Baselines catch what the invariants cannot measure: spacing, overlap, truncation,
 // a control that quietly moved. They are kept to four screens on purpose -- every
@@ -20,7 +21,7 @@ const settle = async (page: Page) => {
 
 const openView = async (page: Page, name: string) => {
   await page.goto("/");
-  await page.getByRole("button", { name, exact: true }).click();
+  await goToView(page, name);
   await settle(page);
 };
 

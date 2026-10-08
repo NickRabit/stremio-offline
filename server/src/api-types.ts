@@ -61,6 +61,8 @@ export interface PublicDownload {
   title: string;
   media?: MediaInfo;
   ownerUserId?: string;
+  /** Set by `GET /api/downloads`: whether this job belongs to the caller. */
+  mine?: boolean;
   follow?: { followId: string; episodeKey: string; intent: string };
   resolution?: DownloadResolution;
   status: DownloadStatus;

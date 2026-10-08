@@ -1,11 +1,12 @@
 import { expect, test } from "@playwright/test";
 import { forgetFilm } from "./film-progress";
+import { goToView, menuItem } from "./nav";
 
 test.beforeEach(async ({ request }) => { await forgetFilm(request); });
 
 test("Safari landscape keeps document scrolling available and restores its position", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: "Nastavení", exact: true }).click();
+  await goToView(page, "Nastavení");
   const main = page.locator(".app-shell > main");
   await expect(main).toHaveCSS("overflow-y", "visible");
   await expect(page.locator("body")).not.toHaveCSS("overflow-y", "hidden");
@@ -17,18 +18,23 @@ test("Safari landscape keeps document scrolling available and restores its posit
   await page.evaluate(() => window.scrollBy(0, -100));
   await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(250);
   await page.getByRole("button", { name: "Katalog", exact: true }).click();
-  await page.getByRole("button", { name: "Nastavení", exact: true }).click();
+  await goToView(page, "Nastavení");
   await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(250);
-  await page.getByRole("button", { name: "Nastavení", exact: true }).click();
+  await goToView(page, "Nastavení");
   await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
 });
 
 test("Safari landscape sidebar accepts touch navigation from every page", async ({ page }) => {
   await page.goto("/");
   for (const name of ["Nastavení", "Knihovna", "Stahování", "Doplňky", "Statistiky", "Katalog"]) {
-    const button = page.locator(".sidebar").getByRole("button", { name, exact: true });
+    const more = page.locator(".sidebar nav .nav-more");
+    const behindMore = (await more.isVisible()) && !["Knihovna", "Stahování", "Katalog"].includes(name);
+    // Following, Add-ons, Settings and Statistics sit behind More in this orientation; the
+    // trigger carries the active state while one of them is open.
+    const button = behindMore ? more : page.locator(".sidebar").getByRole("button", { name, exact: true });
     await expect(button).toBeInViewport();
     await button.tap();
+    if (behindMore) await menuItem(page, name).tap();
     await expect(button).toHaveClass(/active/);
     await expect(page.locator(".app-shell > main")).toBeVisible();
     await expect(page.locator("body")).not.toHaveCSS("overflow-y", "hidden");

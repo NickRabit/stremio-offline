@@ -34,6 +34,7 @@ export async function loadAddon(rawUrl: string, role: AddonRole): Promise<AddonR
   if (!manifest.id || !manifest.name || !manifest.version) throw new AppError("The manifest is missing id, name or version.", "err.manifestIncomplete");
   return {
     key: randomUUID(), manifestUrl: url.toString(), role, enabled: true, globalSearch: true, showInContinueWatching: true,
+    showOnHome: true,
     addedAt: new Date().toISOString(), manifest, downloadSettings: defaultDownloadSettings(),
   };
 }

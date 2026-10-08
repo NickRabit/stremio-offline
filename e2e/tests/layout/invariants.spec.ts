@@ -1,15 +1,18 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import { goToView, menuItem } from "../nav";
 
 // Assertions that hold in every viewport, checked without stored baselines. They
 // catch the class of bug this project keeps shipping -- content escaping the
 // screen sideways, controls too small to hit, the wrong navigation for the size --
 // and unlike screenshots they never need refreshing.
 
-const VIEWS = ["Katalog", "Knihovna", "Stahování", "Doplňky", "Nastavení", "Statistiky"] as const;
+const VIEWS = ["Domů", "Katalog", "Knihovna", "Stahování", "Doplňky", "Nastavení", "Statistiky"] as const;
+// What the compact navigation keeps on screen; the rest sits behind More.
+const COMPACT = ["Domů", "Katalog", "Knihovna", "Stahování", "Více"] as const;
 
 const openView = async (page: Page, name: string) => {
   await page.goto("/");
-  await page.getByRole("button", { name, exact: true }).click();
+  await goToView(page, name);
   // The bottom bar animates in on small screens; a settled frame keeps the
   // measurements below honest.
   await page.waitForTimeout(150);
@@ -87,13 +90,39 @@ test.describe("layout invariants", () => {
   test("navigation stays reachable without scrolling", async ({ page }) => {
     await openView(page, "Katalog");
     const viewport = page.viewportSize()!;
-    for (const view of VIEWS) {
-      const box = (await page.getByRole("button", { name: view, exact: true }).boundingBox())!;
+    const compact = await page.locator("aside.sidebar nav").getByRole("button", { name: "Více", exact: true }).isVisible();
+    for (const view of compact ? COMPACT : VIEWS) {
+      const box = (await page.locator("aside.sidebar nav").getByRole("button", { name: view, exact: true }).boundingBox())!;
       expect(box, `${view} has no box`).toBeTruthy();
       expect(box.x, `${view} sits off the left edge`).toBeGreaterThanOrEqual(-1);
       expect(box.x + box.width, `${view} sits off the right edge`).toBeLessThanOrEqual(viewport.width + 1);
       expect(box.y + box.height, `${view} sits below the fold`).toBeLessThanOrEqual(viewport.height + 1);
     }
+  });
+
+  test("compact navigation shows exactly five slots and More holds the rest", async ({ page }) => {
+    await openView(page, "Katalog");
+    const more = page.locator("aside.sidebar nav").getByRole("button", { name: "Více", exact: true });
+    if (!(await more.isVisible())) {
+      // Every destination is on screen: Following is the one VIEWS does not list.
+      await expect(page.locator("aside.sidebar nav button:visible")).toHaveCount(VIEWS.length + 1);
+      return;
+    }
+    await expect(page.locator("aside.sidebar nav button:visible")).toHaveCount(COMPACT.length);
+    await more.click();
+    await expect(more).toHaveAttribute("aria-expanded", "true");
+    for (const name of ["Sledované", "Doplňky", "Nastavení", "Statistiky", "Odhlásit"]) {
+      await expect(menuItem(page, name), `${name} is in More`).toBeVisible();
+    }
+    const menu = (await page.getByRole("menu").boundingBox())!;
+    const viewport = page.viewportSize()!;
+    expect(menu.x).toBeGreaterThanOrEqual(-1);
+    expect(menu.x + menu.width).toBeLessThanOrEqual(viewport.width + 1);
+    expect(menu.y).toBeGreaterThanOrEqual(-1);
+    expect(menu.y + menu.height).toBeLessThanOrEqual(viewport.height + 1);
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("menu")).toHaveCount(0);
+    await expect(more).toBeFocused();
   });
 
   test("touch targets meet the minimum size", async ({ page }, testInfo) => {
@@ -298,7 +327,8 @@ test.describe("layout invariants", () => {
       await expect(dialog).toHaveCount(0);
 
       await openView(page, "Knihovna");
-      const row = page.locator(".resume-row", { hasText: "Nové díly" });
+      const row = page.locator(".library-shelf");
+      await row.getByRole("button", { name: "Nové díly", exact: true }).click();
       await expect(row).toBeVisible();
       await expect(row).toContainText("Sledované seriály (1)");
       const libraryOverflow = await horizontalOverflow(page);
@@ -306,6 +336,7 @@ test.describe("layout invariants", () => {
       expect(libraryOverflow.scrollWidth, "the Library row overflows horizontally").toBeLessThanOrEqual(libraryOverflow.clientWidth + 1);
     } finally {
       for (const follow of await apiFollows(request).catch(() => [])) await request.delete(`/api/follows/${follow.id}`);
+      await request.patch("/api/settings", { data: { libraryShelf: "resume" } }).catch(() => undefined);
     }
   });
 });

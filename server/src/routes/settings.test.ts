@@ -178,6 +178,8 @@ test("GET /api/settings tells an ordinary account nothing about the instance it 
   assert.equal(carol.secureMode, harness.state.settings.secureMode);
   assert.equal(carol.uiLanguage, "en", "its own half arrives whole");
   assert.equal(carol.libraryTileSize, "medium");
+  assert.equal(carol.homeTileShape, "wide", "the Home tile shape defaults to wide");
+  assert.equal(carol.startView, "catalog", "the start page defaults to the catalogue");
 
   const ada = await (await api(harness.base, "/api/settings", { user: "ada" })).json() as Record<string, unknown>;
   assert.equal(ada.concurrentDownloads, harness.state.settings.concurrentDownloads, "an administrator still reads it all");
@@ -205,17 +207,47 @@ test("PATCH /api/settings sends an instance key to the instance and a personal k
   const response = await api(harness.base, "/api/settings", {
     method: "PATCH",
     user: "bob",
-    body: { concurrentDownloads: 5, libraryTileSize: "large" },
+    body: { concurrentDownloads: 5, libraryTileSize: "large", homeTileShape: "poster", startView: "library" },
   });
 
   assert.equal(response.status, 200);
   assert.equal(harness.state.settings.concurrentDownloads, 5);
   assert.equal("libraryTileSize" in harness.state.settings, false, "a personal key never reaches the instance half");
   assert.equal(harness.state.userData?.[BOB]?.prefs.libraryTileSize, "large");
+  assert.equal(harness.state.userData?.[BOB]?.prefs.homeTileShape, "poster");
+  assert.equal(harness.state.userData?.[BOB]?.prefs.startView, "library");
   assert.equal(harness.state.userData?.[ADA]?.prefs.libraryTileSize, "medium", "the other person keeps their value");
   const body = await response.json() as Record<string, unknown>;
   assert.equal(body.concurrentDownloads, 5);
   assert.equal(body.libraryTileSize, "large");
+  assert.equal(body.homeTileShape, "poster");
+  assert.equal(body.startView, "library");
+});
+
+test("PATCH /api/settings coerces a start page it does not know to the catalogue", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+
+  const response = await api(harness.base, "/api/settings", { method: "PATCH", user: "carol", body: { startView: "shelf" } });
+
+  assert.equal(response.status, 200);
+  assert.equal(harness.state.userData?.[CAROL]?.prefs.startView, "catalog");
+  assert.equal((await response.json() as Record<string, unknown>).startView, "catalog");
+});
+
+test("PATCH /api/settings round trips the library shelf and coerces a value it does not know", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+
+  const set = await api(harness.base, "/api/settings", { method: "PATCH", user: "carol", body: { libraryShelf: "episodes" } });
+  assert.equal(set.status, 200);
+  assert.equal(harness.state.userData?.[CAROL]?.prefs.libraryShelf, "episodes");
+  assert.equal((await set.json() as Record<string, unknown>).libraryShelf, "episodes");
+
+  const junk = await api(harness.base, "/api/settings", { method: "PATCH", user: "carol", body: { libraryShelf: "nope" } });
+  assert.equal(junk.status, 200);
+  assert.equal(harness.state.userData?.[CAROL]?.prefs.libraryShelf, "resume");
+  assert.equal((await junk.json() as Record<string, unknown>).libraryShelf, "resume");
 });
 
 test("PATCH /api/settings drops an unknown streamSort and clamps concurrentDownloads", async (t) => {

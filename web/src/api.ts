@@ -1,6 +1,7 @@
 import { serverText, t } from "./i18n";
 import type { SaveTarget } from "./save-target";
 import type { StatsActivityPage, ActiveStream, ActivityItem, CalendarItem, UndatedCalendarItem, Diagnostics, BuildInfo, AuthStatus, StatsSummary, Addon, AddonDownloadSettings, Capabilities, Catalog, Download, DownloadSelection, DownloadSnapshot, FollowDefaults, FollowEpisodeRow, FollowPreview, FollowStartMode, FollowView, Inspection, BrowseResult, IdentityPreview, LibraryFolder, LibraryMatchResult, LibraryOp, LibraryOpsState, NewEpisode, ProgressEntry, UserViews, WatchlistEntry, GrantBrowse, LibraryEstimate, LibraryGrant, LibrarySummary, LibraryType, LibraryView, Meta, PlaybackSession, ScanState, SearchPreferences, SearchResult, SearchState, SearchableCatalog, SiteLink, SuggestionRow, Session, Settings, SettingsBackup, SettingsPatch, SettingsView, Stream, Subtitle, Trailer, UserAccount, UserPermissions, UserRole } from "./types";
+import type { HomeResponse, HomeRowId } from "../../server/src/home";
 
 /** The status code has to reach the top, or a sign-out is indistinguishable from an ordinary error. */
 export class ApiError extends Error {
@@ -75,7 +76,7 @@ export const api = {
   activity: (hours: number, kind: string, user: string, before?: number) => request<StatsActivityPage>(`/api/stats/activity?${new URLSearchParams({ hours: String(hours), kind, user, ...(before ? { before: String(before) } : {}) })}`),
   stats: (hours: number) => request<StatsSummary>(`/api/stats?hours=${hours}`),
   activeStreams: () => request<ActiveStream[]>("/api/stats/streams"),
-  updateAddon: (key: string, patch: { enabled?: boolean; globalSearch?: boolean; showInContinueWatching?: boolean; url?: string; role?: string; allowedUsers?: string[]; downloadSettings?: AddonDownloadSettings }) => request<Addon>(`/api/addons/${key}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  updateAddon: (key: string, patch: { enabled?: boolean; globalSearch?: boolean; showInContinueWatching?: boolean; showOnHome?: boolean; url?: string; role?: string; allowedUsers?: string[]; downloadSettings?: AddonDownloadSettings }) => request<Addon>(`/api/addons/${key}`, { method: "PATCH", body: JSON.stringify(patch) }),
   toggleAddon: (key: string, enabled: boolean) => request<Addon>(`/api/addons/${key}`, { method: "PATCH", body: JSON.stringify({ enabled }) }),
   catalogs: () => request<Catalog[]>("/api/catalogs"),
   catalog: (catalog: Catalog, search = "", skip = 0, genre = "") => request<Meta[]>(`/api/catalog?${q({ addon: catalog.addonKey, type: catalog.type, id: catalog.id, search: search || undefined, skip: skip || undefined, genre: genre || undefined })}`),
@@ -197,6 +198,17 @@ export const api = {
     request<void>("/api/progress", { method: "POST", body: JSON.stringify(payload) }),
   clearProgress: () => request<void>("/api/progress", { method: "DELETE" }),
   forgetProgress: (key: string) => request<void>(`/api/progress/${encodeURIComponent(key)}`, { method: "DELETE" }),
+  /** Forgets every key a merged Home card stands for in one owner-scoped write. */
+  forgetManyProgress: (keys: string[]) => request<void>("/api/progress/forget", { method: "POST", body: JSON.stringify({ keys }) }),
+  /** Home's rows. Naming rows re-requests only those; a shuffle seed reorders the Tonight row.
+   *  The seed cycles 0..99 so one long session keeps the server's per-day order reachable. */
+  home: (rows?: HomeRowId[], options?: { shuffle?: number }) => {
+    const query = q({
+      rows: rows && rows.length ? rows.join(",") : undefined,
+      shuffle: options?.shuffle == null ? undefined : ((Math.trunc(options.shuffle) % 100) + 100) % 100,
+    });
+    return request<HomeResponse>(`/api/home${query ? `?${query}` : ""}`);
+  },
   setFavorite: (path: string, favorite: boolean) => request<{ path: string; favorite: boolean }>("/api/library/favorite", { method: "POST", body: JSON.stringify({ path, favorite }) }),
   resumeLibrary: (options: { skip?: number; limit?: number; sort?: string; order?: string; seed?: string; query?: string; favorites?: boolean }) =>
     request<BrowseResult>(`/api/library/resume?${q({ ...options, favorites: options.favorites ? 1 : undefined })}`),
@@ -206,7 +218,7 @@ export const api = {
   libraries: () => request<LibraryView[]>("/api/libraries"),
   createLibrary: (body: { name: string; type: LibraryType; root: string; create?: boolean; writeArtwork?: boolean; autoScanMetadata?: boolean }) =>
     request<LibraryView>("/api/libraries", { method: "POST", body: JSON.stringify(body) }),
-  updateLibrary: (id: string, patch: { name?: string; type?: LibraryType; enabled?: boolean; order?: number; writeArtwork?: boolean; autoScanMetadata?: boolean; mosaic?: boolean; showInContinueWatching?: boolean; defaultMovie?: boolean; defaultSeries?: boolean; visibleTo?: string[]; root?: string; create?: boolean }) =>
+  updateLibrary: (id: string, patch: { name?: string; type?: LibraryType; enabled?: boolean; order?: number; writeArtwork?: boolean; autoScanMetadata?: boolean; mosaic?: boolean; showInContinueWatching?: boolean; showOnHome?: boolean; showInFavorites?: boolean; defaultMovie?: boolean; defaultSeries?: boolean; visibleTo?: string[]; root?: string; create?: boolean }) =>
     request<LibraryView>(`/api/libraries/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(patch) }),
   /** Re-rooting that carries the content over. Queued, so it answers with the job id and
    *  the library only follows once every item is across. */

@@ -213,6 +213,30 @@ test("GET /api/downloads shows an administrator every device transfer with usern
   assert.deepEqual(body.deviceTransfers.map((row) => row.username).sort(), ["ada", "bob"]);
 });
 
+test("GET /api/downloads marks mine only on the administrator's own jobs", async (t) => {
+  const harness = await mount([streamAddon("stream-addon")], {
+    viewer: admin,
+    jobs: [{ id: "job-ada", ownerUserId: ADA }, { id: "job-bob", ownerUserId: BOB }],
+  });
+  t.after(harness.close);
+
+  const response = await api(harness.base, "/api/downloads");
+  const body = await response.json() as { jobs: Array<{ id: string; mine?: boolean }> };
+  assert.deepEqual(body.jobs.map((job) => [job.id, job.mine]), [["job-ada", true], ["job-bob", false]]);
+});
+
+test("GET /api/downloads marks every visible job as mine for an ordinary account", async (t) => {
+  const harness = await mount([streamAddon("stream-addon")], {
+    viewer: ordinary,
+    jobs: [{ id: "job-ada", ownerUserId: ADA }, { id: "job-bob", ownerUserId: BOB }],
+  });
+  t.after(harness.close);
+
+  const response = await api(harness.base, "/api/downloads");
+  const body = await response.json() as { jobs: Array<{ id: string; mine?: boolean }> };
+  assert.deepEqual(body.jobs.map((job) => [job.id, job.mine]), [["job-bob", true]]);
+});
+
 test("POST /api/downloads/bulk refuses an empty episode list", async (t) => {
   const harness = await mount();
   t.after(harness.close);

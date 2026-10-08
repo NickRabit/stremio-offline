@@ -18,6 +18,8 @@ Search all addons, one addon or one searchable catalogue. Turning off
 **Include in search across all addons** excludes an addon from global search;
 you can still select it explicitly. Selecting a catalogue also selects it for
 browsing after the search is cleared.
+**Show on Home** keeps an addon's titles off the Home page: its half-watched
+titles and next episodes. The stored positions are kept.
 
 The addon settings dialog holds its role, visibility and storage rules.
 Replacing its manifest URL preserves order, enabled state and save rules.

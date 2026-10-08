@@ -350,6 +350,44 @@ it("can keep a library out of Continue watching from the library dialog", async 
   expect(patched).toEqual([{ showInContinueWatching: false }]);
 });
 
+it("can keep a library off Home from the library dialog", async () => {
+  const patched: Record<string, unknown>[] = [];
+  fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+    if (init?.method === "PATCH") { patched.push(JSON.parse(String(init.body))); return json(library({ showOnHome: false })); }
+    return json([library()]);
+  });
+  await act(async () => { root.render(<LibraryManager onError={vi.fn()} onNotify={vi.fn()}/>); });
+  await act(async () => { await Promise.resolve(); });
+
+  await openEditor();
+  const box = [...host.querySelectorAll<HTMLInputElement>("input[type=checkbox]")]
+    .find((input) => input.closest("label")?.textContent?.includes("Show on Home"))!;
+  expect(box.checked, "libraries stay on Home unless explicitly excluded").toBe(true);
+  await act(async () => { box.click(); await Promise.resolve(); });
+  await clickIn(host, "Save changes");
+
+  expect(patched).toEqual([{ showOnHome: false }]);
+});
+
+it("can keep a library's stars out of Favourites from the library dialog", async () => {
+  const patched: Record<string, unknown>[] = [];
+  fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+    if (init?.method === "PATCH") { patched.push(JSON.parse(String(init.body))); return json(library({ showInFavorites: false })); }
+    return json([library()]);
+  });
+  await act(async () => { root.render(<LibraryManager onError={vi.fn()} onNotify={vi.fn()}/>); });
+  await act(async () => { await Promise.resolve(); });
+
+  await openEditor();
+  const box = [...host.querySelectorAll<HTMLInputElement>("input[type=checkbox]")]
+    .find((input) => input.closest("label")?.textContent?.includes("Show in Favourites"))!;
+  expect(box.checked, "libraries stay in Favourites unless explicitly excluded").toBe(true);
+  await act(async () => { box.click(); await Promise.resolve(); });
+  await clickIn(host, "Save changes");
+
+  expect(patched).toEqual([{ showInFavorites: false }]);
+});
+
 it("saves a renamed library and its settings in one request", async () => {
   const patched: Record<string, unknown>[] = [];
   fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {

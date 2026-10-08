@@ -51,12 +51,12 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
     const {
       uiLanguage, audioLanguage, subtitleLanguage, downloadTitleLanguage,
       mergeByName, streamSort, trackProgress, showResumeRow,
-      catalogTileSize, libraryTileSize, catalogTileShape, libraryTileShape,
+      catalogTileSize, libraryTileSize, catalogTileShape, libraryTileShape, homeTileShape, startView, libraryShelf,
       ...instance
     } = flat;
     return {
       instance,
-      prefs: { uiLanguage, audioLanguage, subtitleLanguage, downloadTitleLanguage, mergeByName, streamSort, trackProgress, showResumeRow, catalogTileSize, libraryTileSize, catalogTileShape, libraryTileShape },
+      prefs: { uiLanguage, audioLanguage, subtitleLanguage, downloadTitleLanguage, mergeByName, streamSort, trackProgress, showResumeRow, catalogTileSize, libraryTileSize, catalogTileShape, libraryTileShape, homeTileShape, startView, libraryShelf },
     };
   };
 
@@ -206,6 +206,17 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
       }
       if (req.body.libraryTileShape !== undefined) {
         prefs.libraryTileShape = String(req.body.libraryTileShape) === "wide" ? "wide" : "poster";
+      }
+      if (req.body.homeTileShape !== undefined) {
+        prefs.homeTileShape = String(req.body.homeTileShape) === "wide" ? "wide" : "poster";
+      }
+      if (req.body.startView !== undefined) {
+        const value = String(req.body.startView);
+        prefs.startView = value === "home" || value === "library" ? value : "catalog";
+      }
+      if (req.body.libraryShelf !== undefined) {
+        const value = String(req.body.libraryShelf);
+        prefs.libraryShelf = value === "episodes" || value === "favorites" ? value : "resume";
       }
       if (realDebridToken !== undefined) state.settings.realDebridToken = realDebridToken;
       if (tmdbApiKey !== undefined) state.settings.tmdbApiKey = tmdbApiKey;

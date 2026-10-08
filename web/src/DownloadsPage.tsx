@@ -1,14 +1,12 @@
 import { useEffect, useState } from "react";
 import { ArrowDown, ArrowUp, Check, ChevronDown, HardDrive, Library, Pause, Play, RefreshCw, Trash2, X } from "lucide-react";
 import { api } from "./api";
-import { fmtEta, statusLabel } from "./download-format";
+import { bytes, fmtEta, speed, statusLabel } from "./download-format";
 import { label } from "./languages";
 import { queueDestination } from "./queue-target";
-import { bytes, Heading } from "./settings-ui";
+import { Heading } from "./settings-ui";
 import { localeTag, serverText, t, type Key } from "./i18n";
 import type { Download as DownloadJob, DeviceTransfer, DownloadDateField, DownloadPageSize, DownloadSort, DownloadStatusFilter, DownloadsViewPrefs, LibraryOrder, LibraryView, QueueHalt } from "./types";
-
-const speed = (value: number) => value ? `${bytes(value)}/s` : "—";
 
 /** `admin` gates the controls the role gate refuses outright. Reordering the queue and
  *  clearing the completed list are instance-wide -- one queue, everybody's bandwidth -- so an

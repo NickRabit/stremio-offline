@@ -11,6 +11,7 @@ export interface AddonDownloadSettings { movie: DownloadTargetSettings; series: 
 export interface Addon {
   key: string; role: "catalog" | "source" | "both"; enabled: boolean; globalSearch: boolean; displayUrl?: string;
   showInContinueWatching?: boolean;
+  showOnHome?: boolean;
   /** The accounts this addon is granted to. Absent or empty means administrators only:
    *  there is no sentinel for "everybody", so a grant is always a list of ids. */
   allowedUsers?: string[];
@@ -69,6 +70,8 @@ export type DownloadSnapshot = ServerDownloadSnapshot;
 export type PlaybackMode = "direct" | "remux" | "transcode";
 export type TileSize = "compact" | "small" | "medium" | "large";
 export type TileShape = "poster" | "wide";
+export type StartView = "catalog" | "home" | "library";
+export type LibraryShelf = "resume" | "episodes" | "favorites";
 export interface Track { index: number; codec: string; language?: string; title?: string; channels?: number; default?: boolean; forced?: boolean }
 export interface Inspection { duration?: number; video?: { codec: string; width?: number; height?: number }; audioTracks: Track[]; subtitleTracks: Track[] }
 export interface BuildInfo { status: string; version: string; builtAt?: string; commit?: string; restricted?: boolean }
@@ -126,7 +129,9 @@ export interface Settings {
   logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR";
   addonRefreshHours: number;
   catalogTileSize: TileSize; libraryTileSize: TileSize;
-  catalogTileShape: TileShape; libraryTileShape: TileShape;
+  catalogTileShape: TileShape; libraryTileShape: TileShape; homeTileShape: TileShape;
+  startView: StartView;
+  libraryShelf: LibraryShelf;
   realDebridConfigured: boolean; tmdbConfigured: boolean;
 }
 /** The instance keys the settings endpoints leave out for an ordinary account, which is told
@@ -231,7 +236,7 @@ export interface BrowseLibrary {
 /** One library in `GET /api/libraries`. `root` is absent in restricted mode. */
 export interface LibraryView {
   id: string; name: string; type: LibraryType; root?: string; enabled: boolean; order: number;
-  addedAt: string; writeArtwork: boolean; autoScanMetadata: boolean; mosaic?: boolean; showInContinueWatching?: boolean; unreachable: boolean; readOnly: boolean;
+  addedAt: string; writeArtwork: boolean; autoScanMetadata: boolean; mosaic?: boolean; showInContinueWatching?: boolean; showOnHome?: boolean; showInFavorites?: boolean; unreachable: boolean; readOnly: boolean;
   defaultMovie: boolean; defaultSeries: boolean; titles: number; files: number; bytes: number;
   /** The accounts this library is granted to. Absent or empty means administrators only:
    *  there is no sentinel for "everybody", so a grant is always a list of ids. */
