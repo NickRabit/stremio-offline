@@ -56,6 +56,33 @@ test("a movie by IMDb id is resolved and mapped to Czech", async () => {
   assert.equal("genres" in result, false);
 });
 
+test("a prefixed catalogue id is resolved through its IMDb segment", async () => {
+  clearTmdbCache();
+  const calls: string[] = [];
+  const fetchImpl: FetchLike = async (url) => {
+    calls.push(url);
+    return url.includes("/find/") ? json(findMovie) : json(movieDetail);
+  };
+
+  const result = await tmdbMeta("movie", "mpa:webshare-index:tt0090257", config, fetchImpl);
+
+  assert.match(calls[0], /\/find\/tt0090257\?/, "the IMDb id of the last segment, not the whole id");
+  if (!result) throw new Error("expected metadata");
+  assert.equal(result.id, "mpa:webshare-index:tt0090257", "the id the caller asked about is the one it gets back");
+  assert.equal(result.name, "Návrat do budoucnosti");
+  assert.equal(result.description, "Marty se vydává do minulosti.");
+});
+
+test("an id with no IMDb segment in it stays unresolved", async () => {
+  clearTmdbCache();
+  const fetchImpl: FetchLike = async () => {
+    throw new Error("TMDB is not asked about an id it cannot read");
+  };
+
+  assert.equal(await tmdbMeta("movie", "mpa:webshare-index:title:movie:grinch-2018", config, fetchImpl), null);
+  assert.equal(await tmdbMeta("movie", "some-addon:12345", config, fetchImpl), null);
+});
+
 test("artwork on maps the poster and backdrop and nothing else", async () => {
   clearTmdbCache();
   const fetchImpl: FetchLike = async (url) =>

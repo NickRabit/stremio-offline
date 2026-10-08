@@ -220,4 +220,16 @@ test("siteLinks builds the row the language and the kind call for", () => {
     { site: "tmdb", url: "https://www.themoviedb.org/movie/22137?language=cs-CZ" },
     { site: "imdb", url: "https://www.imdb.com/title/tt0108906/" },
   ]);
+  // A prefixed catalogue id carries the IMDb id in its last segment, and all three links
+  // are built from it.
+  assert.deepEqual(siteLinks("movie", "mpa:webshare-index:tt2709692", ids, "cs"), [
+    { site: "csfd", url: "https://www.csfd.cz/film/6672/" },
+    { site: "tmdb", url: "https://www.themoviedb.org/movie/31410?language=cs-CZ" },
+    { site: "imdb", url: "https://www.imdb.com/title/tt2709692/" },
+  ]);
+  // An id with no IMDb segment in it links to nothing at all.
+  assert.deepEqual(siteLinks("movie", "mpa:webshare-index:title:movie:grinch-2018", ids, "cs"), [
+    { site: "csfd", url: "https://www.csfd.cz/film/6672/" },
+    { site: "tmdb", url: "https://www.themoviedb.org/movie/31410?language=cs-CZ" },
+  ]);
 });

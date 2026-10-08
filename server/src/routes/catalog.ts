@@ -2,7 +2,7 @@ import type express from "express";
 import { readFile } from "node:fs/promises";
 import { allowedAddons, catalog, orderedForUser, orderFor, searchAll, searchableCatalogs, streamCandidates, streams, subtitles, type MetaProvider } from "../addons.js";
 import { AppError } from "../errors.js";
-import { ExternalIdStore, siteLinks } from "../external-ids.js";
+import { ExternalIdStore, imdbOf, siteLinks } from "../external-ids.js";
 import { images } from "../images.js";
 import { normalizeLanguage } from "../language.js";
 import { libraryFor, libraryVisible, parseLibraryPath, type Viewer } from "../libraries.js";
@@ -116,7 +116,8 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
   app.get("/api/links/:type/:id", asyncRoute(async (req, res) => {
     const id = String(req.params.id);
     const language = normalizeLanguage(String(req.query.language ?? "")) ?? prefsOf(req).uiLanguage;
-    const ids = /^tt\d+$/.test(id) ? await externalIds.ids(id) : {};
+    const imdbId = imdbOf(id);
+    const ids = imdbId ? await externalIds.ids(imdbId) : {};
     res.json({ links: siteLinks(String(req.params.type), id, ids ?? {}, language) });
   }));
   /** Opaque id in, cached bytes out. An id we never handed out means nothing here. */
