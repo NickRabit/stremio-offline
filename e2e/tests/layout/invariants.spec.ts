@@ -327,7 +327,8 @@ test.describe("layout invariants", () => {
       await expect(dialog).toHaveCount(0);
 
       await openView(page, "Knihovna");
-      const row = page.locator(".resume-row", { hasText: "Nové díly" });
+      const row = page.locator(".library-shelf");
+      await row.getByRole("button", { name: "Nové díly", exact: true }).click();
       await expect(row).toBeVisible();
       await expect(row).toContainText("Sledované seriály (1)");
       const libraryOverflow = await horizontalOverflow(page);
@@ -335,6 +336,7 @@ test.describe("layout invariants", () => {
       expect(libraryOverflow.scrollWidth, "the Library row overflows horizontally").toBeLessThanOrEqual(libraryOverflow.clientWidth + 1);
     } finally {
       for (const follow of await apiFollows(request).catch(() => [])) await request.delete(`/api/follows/${follow.id}`);
+      await request.patch("/api/settings", { data: { libraryShelf: "resume" } }).catch(() => undefined);
     }
   });
 });
