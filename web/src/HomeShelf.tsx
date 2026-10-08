@@ -3,20 +3,20 @@ import { HomeCard, type HomeCardActions } from "./HomeCard";
 import { showAllTarget, type ShowAllTarget } from "./home-cards";
 import { t, type Key } from "./i18n";
 import type { HomeRowState } from "./home-state";
-import type { HomeRowId } from "../../server/src/home";
+import type { MediaRowId } from "../../server/src/home";
 import type { TileShape } from "./types";
 
-const TITLE: Record<HomeRowId, Key> = { resume: "home.continue", completed: "home.readyToPlay", favorites: "home.favorites" };
+const TITLE: Record<MediaRowId, Key> = { resume: "home.continue", completed: "home.readyToPlay", favorites: "home.favorites" };
 const SKELETON = [0, 1, 2, 3];
 
 /** One media shelf: its heading, its Show all, and either its cards, a first-load skeleton or
  *  its own error line with a retry. A row with nothing in it and no failure is not drawn. */
 export function HomeShelf({ row, state, shape, actions, onRetry, onShowAll }: {
-  row: HomeRowId;
+  row: MediaRowId;
   state: HomeRowState | undefined;
   shape: TileShape;
   actions: HomeCardActions;
-  onRetry: (row: HomeRowId) => void;
+  onRetry: (row: MediaRowId) => void;
   onShowAll: (target: ShowAllTarget) => void;
 }) {
   if (!state || state.status === "idle") return null;

@@ -1,14 +1,18 @@
 import type express from "express";
 import type { ArtShape } from "../artwork.js";
 import { messageKeyOf } from "../errors.js";
+import type { NewEpisode } from "../follows.js";
+import { images } from "../images.js";
 import {
-  HOME_CANDIDATES, HOME_LOOKUP_DEADLINE_MS, HOME_MARKER_LIMIT,
+  HOME_CANDIDATES, HOME_LOOKUP_DEADLINE_MS, HOME_MARKER_LIMIT, HOME_ROW_LIMIT,
   boundCards, mergeResume,
   type HomeCard, type HomeResponse, type HomeRow, type HomeRowError, type HomeRowId,
   type ResumeCatalogueItem, type ResumeFileItem,
 } from "../home.js";
-import { libraryFor, libraryPath, parseLibraryPath, showsOnHome, type LibraryRecord, type Viewer } from "../libraries.js";
-import type { BrowseItem } from "../library.js";
+import { libraryFor, libraryPath, libraryVisible, parseLibraryPath, showsOnHome, type LibraryRecord, type Viewer } from "../libraries.js";
+import { isPathWithin, type BrowseItem } from "../library.js";
+import type { LibraryMetaStore } from "../library-meta-store.js";
+import type { StoredProgress, WatchedMarker } from "../store.js";
 import type { UserData } from "../users.js";
 import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
 import type { PersonalApi } from "./personal.js";
@@ -24,9 +28,27 @@ export interface CompletedJobView {
   completedAt?: string;
 }
 
+/** One pending library proposal as the curate route serialises it; Home reads the candidate
+ *  it names and nothing else. */
+export interface HomeSuggestion {
+  key: string;
+  label: string;
+  libraryId: string;
+  library: string;
+  path: string;
+  suggestion: { name: string; year?: number; poster?: string };
+}
+
+/** Tonight picks this many cards, drawn from a slightly larger hash-ordered pool so a file
+ *  that vanished since the scan does not shorten the row. */
+const TONIGHT_CARDS = 12;
+const TONIGHT_SPARES = 6;
+
 export interface HomeDeps extends RouteContext {
   personal: PersonalApi;
   completedJobs(): CompletedJobView[];
+  /** The owner's unseen episodes, read exactly the way `GET /api/follows/new-episodes` reads them. */
+  newEpisodes(ownerUserId: string, watched: (metaId: string) => { season: number; episode: number } | undefined): NewEpisode[];
   describeLibraryPath(key: string, read?: { stale?: boolean }): Promise<BrowseItem | undefined>;
   locateFileArtwork(key: string, shape?: ArtShape): Promise<string | undefined>;
   locateFolderArtworkPair(key: string): Promise<{ poster: string | undefined; wide: string | undefined }>;
@@ -35,11 +57,17 @@ export interface HomeDeps extends RouteContext {
   scheduleFolderArtwork(key: string, shape?: ArtShape): void;
   wirePath(key: string): string;
   dataOf(req: express.Request): UserData;
+  markersOf(data: UserData): Record<string, WatchedMarker>;
+  progressOf(data: UserData): Record<string, StoredProgress>;
+  metaStore: LibraryMetaStore;
+  suggestionRows(libraryId?: string): Promise<HomeSuggestion[]>;
+  /** Injected so the tonight seed is testable without a real date. */
+  now?: () => number;
   /** Tests inject a few milliseconds instead of waiting the real deadline out. */
   homeLookupDeadlineMs?: number;
 }
 
-const ALL_ROWS: HomeRowId[] = ["resume", "completed", "favorites"];
+const ALL_ROWS: HomeRowId[] = ["resume", "completed", "favorites", "episodes", "tonight", "confirm"];
 
 const requestedRows = (raw: unknown): HomeRowId[] => {
   if (raw === undefined) return ALL_ROWS;
@@ -54,8 +82,24 @@ const rowError = (error: unknown): HomeRowError => ({
   ...(messageKeyOf(error) ? { messageKey: messageKeyOf(error)! } : {}),
 });
 
+/** FNV-1a, over the seed and the key together. Deterministic, so the same request on the
+ *  same day orders a row the same way; the shuffle query only changes the seed. */
+const seedHash = (value: string): number => {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return hash >>> 0;
+};
+
+const shuffleOf = (raw: unknown): number => {
+  const value = Math.trunc(Number(Array.isArray(raw) ? raw[0] : raw));
+  return Number.isFinite(value) ? Math.min(99, Math.max(0, value)) : 0;
+};
+
 export function registerHomeRoutes(app: express.Application, deps: HomeDeps): void {
-  const { store, currentUser, personal, completedJobs, describeLibraryPath, locateFileArtwork, locateFolderArtworkPair, thumbUrl, scheduleFileArtwork, scheduleFolderArtwork, wirePath, dataOf, homeLookupDeadlineMs = HOME_LOOKUP_DEADLINE_MS } = deps;
+  const { store, currentUser, personal, completedJobs, newEpisodes, describeLibraryPath, locateFileArtwork, locateFolderArtworkPair, thumbUrl, scheduleFileArtwork, scheduleFolderArtwork, wirePath, dataOf, markersOf, progressOf, metaStore, suggestionRows, now = Date.now, homeLookupDeadlineMs = HOME_LOOKUP_DEADLINE_MS } = deps;
 
   /** A key the caller may open now: its library is still configured, switched on and granted.
    *  `pathVisible` covers the removed and the lost-grant case; the enabled switch is Home's.
@@ -188,10 +232,109 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
     return { status: "ok", items: cards, hasMore };
   };
 
+  /** A followed show belongs to the account, not to a library or an add-on, so the Home
+   *  switch does not apply to this row. */
+  const episodesRow = (req: express.Request, viewer: Viewer): HomeRow => {
+    const markers = markersOf(dataOf(req));
+    const items = newEpisodes(viewer.id, (metaId) => {
+      const marker = markers[metaId];
+      return marker ? { season: marker.season, episode: marker.episode } : undefined;
+    })
+      .sort((a, b) => b.released.localeCompare(a.released) || a.followId.localeCompare(b.followId) || a.videoId.localeCompare(b.videoId))
+      .map((item): HomeCard => ({
+        kind: "episode", key: `episode:${item.followId}:${item.videoId}`,
+        followId: item.followId, type: item.type, metaId: item.metaId, name: item.name,
+        // Stored as the provider's address; the page only ever loads our own proxy.
+        ...(item.poster ? { poster: images.proxied(item.poster) } : {}),
+        season: item.season, episode: item.episode,
+        ...(item.title ? { title: item.title } : {}),
+        released: item.released,
+      }));
+    const bounded = boundCards(items);
+    return { status: "ok", items: bounded.items, hasMore: bounded.hasMore };
+  };
+
+  /** A whole title the caller has not started, drawn from the libraries Home shows, in a
+   *  per-day order that is the same for the same request and changes with `?shuffle=`. */
+  const tonightRow = async (req: express.Request, viewer: Viewer): Promise<HomeRow> => {
+    const libraries = store.libraries();
+    const records = metaStore.qualifiedMeta();
+    const progress = Object.entries(progressOf(dataOf(req)));
+
+    const started = (key: string, id: string): boolean => progress.some(([progressKey, value]) =>
+      value.series?.id === id || progressKey === `movie:${id}` || Boolean(value.path && isPathWithin(value.path, key)));
+
+    const eligible = Object.entries(records).flatMap(([key, record]) => {
+      if (record.type !== "movie" && record.type !== "series") return [];
+      if (!record.id || record.unmatched || record.season !== undefined || record.episode !== undefined) return [];
+      const target = parseLibraryPath(key);
+      if (!target) return [];
+      const library = libraryFor(libraries, target.libraryId);
+      if (!library || !library.enabled || library.unreachable || !libraryVisible(library, viewer)) return [];
+      if (!showsOnHome(key, libraries)) return [];
+      if (started(key, record.id)) return [];
+      return [key];
+    });
+
+    const utcDate = new Date(now()).toISOString().slice(0, 10);
+    const seed = `${viewer.id}:${utcDate}:${shuffleOf(req.query.shuffle)}`;
+    const ordered = eligible
+      .map((key) => ({ key, hash: seedHash(`${seed}:${key}`) }))
+      .sort((a, b) => a.hash - b.hash || a.key.localeCompare(b.key))
+      .slice(0, TONIGHT_CARDS + TONIGHT_SPARES)
+      .map((entry) => entry.key);
+
+    const described = await Promise.all(ordered.map(async (key) => {
+      const item = await describeLibraryPath(key);
+      return item ? { key, item } : undefined;
+    }));
+    const present = described
+      .filter((entry): entry is NonNullable<typeof entry> => entry !== undefined)
+      .slice(0, TONIGHT_CARDS);
+    const cards: HomeCard[] = await Promise.all(present.map(async ({ key, item }) => {
+      const record = records[key]!;
+      const relative = wirePath(key);
+      const { poster, wide } = item.kind === "folder" ? await folderArtwork(key, relative) : await fileArtwork(key, relative);
+      return {
+        kind: "tonight", key, path: relative, itemKind: item.kind,
+        label: record.name || (item.kind === "folder" ? item.name : item.label),
+        ...(record.year ? { year: record.year } : {}),
+        ...(poster ? { poster } : {}),
+        ...(wide ? { wide } : {}),
+        libraryId: parseLibraryPath(key)!.libraryId,
+      };
+    }));
+    return { status: "ok", items: cards, hasMore: false };
+  };
+
+  /** Library titles the scan proposed and nobody has confirmed. The list is built in memory,
+   *  so its count is exact; an ordinary account never reaches it, and the suggestions are
+   *  not read for one. */
+  const confirmRow = async (viewer: Viewer): Promise<HomeRow> => {
+    if (viewer.role !== "admin") return { status: "ok", items: [], hasMore: false };
+    const libraries = store.libraries();
+    const rows = (await suggestionRows())
+      .filter((row) => libraryFor(libraries, row.libraryId)?.showOnHome !== false)
+      .sort((a, b) => a.label.localeCompare(b.label) || a.key.localeCompare(b.key));
+    const cards: HomeCard[] = rows.slice(0, HOME_ROW_LIMIT).map((row) => ({
+      kind: "confirm", key: row.key, libraryId: row.libraryId, library: row.library,
+      label: row.label, path: row.path,
+      candidate: {
+        name: row.suggestion.name,
+        ...(row.suggestion.year !== undefined ? { year: String(row.suggestion.year) } : {}),
+        ...(row.suggestion.poster ? { poster: row.suggestion.poster } : {}),
+      },
+    }));
+    return { status: "ok", items: cards, hasMore: rows.length > HOME_ROW_LIMIT, total: rows.length };
+  };
+
   const builders: Record<HomeRowId, (req: express.Request, viewer: Viewer) => Promise<HomeRow>> = {
     resume: (req) => resumeRow(req),
     completed: completedRow,
     favorites: favoritesRow,
+    episodes: (req, viewer) => Promise.resolve(episodesRow(req, viewer)),
+    tonight: tonightRow,
+    confirm: (_req, viewer) => Promise.resolve(confirmRow(viewer)),
   };
 
   app.get("/api/home", asyncRoute(async (req, res) => {

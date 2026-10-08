@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { HOME_ROWS, emptyHomeRows, homeReducer, type HomeRows } from "./home-state";
-import type { HomeRowId } from "../../server/src/home";
+import type { MediaRowId } from "../../server/src/home";
 
 /** Home's three media rows, wired to `GET /api/home`. Each call names its rows, so a retry
  *  touches only the row that failed; an answer only lands on the request still current for it. */
@@ -9,7 +9,7 @@ export function useHome({ active, account, playerOpen }: { active: boolean; acco
   const [rows, setRows] = useState<HomeRows>(emptyHomeRows);
   const request = useRef(0);
 
-  const refresh = useCallback((ids: readonly HomeRowId[]) => {
+  const refresh = useCallback((ids: readonly MediaRowId[]) => {
     if (!ids.length) return;
     const number = ++request.current;
     const rows = [...ids];

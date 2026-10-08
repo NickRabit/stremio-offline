@@ -3,7 +3,7 @@ import { Film, FolderOpen, HardDrive, MoreVertical, RotateCcw } from "lucide-rea
 import { TileArt } from "./TileArt";
 import { t } from "./i18n";
 import { cardLabel, cardNumbering, cardProgress } from "./home-cards";
-import type { HomeCard as HomeCardData } from "../../server/src/home";
+import type { MediaHomeCard as HomeCardData } from "../../server/src/home";
 import type { TileShape } from "./types";
 
 export interface HomeCardActions {

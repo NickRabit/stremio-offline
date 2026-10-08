@@ -8,7 +8,7 @@ export const HOME_MARKER_LIMIT = 20;
 export const HOME_LOOKUP_DEADLINE_MS = 1500;
 export const HOME_FORGET_LIMIT = 50;
 
-export type HomeRowId = "resume" | "completed" | "favorites";
+export type HomeRowId = "resume" | "completed" | "favorites" | "episodes" | "tonight" | "confirm";
 
 export interface HomeProgress { position: number; duration: number }
 
@@ -23,15 +23,27 @@ export type HomeCard =
   | { kind: "completed"; key: string; title: string; poster?: string; wide?: string;
       path: string; completedAt: string; season?: number; episode?: number }
   | { kind: "favorite"; key: string; path: string; itemKind: "file" | "folder"; label: string;
-      poster?: string; wide?: string };
+      poster?: string; wide?: string }
+  | { kind: "episode"; key: string; followId: string; type: string; metaId: string; name: string;
+      poster?: string; season: number; episode: number; title?: string; released: string }
+  | { kind: "tonight"; key: string; path: string; itemKind: "file" | "folder"; label: string;
+      year?: string; poster?: string; wide?: string; libraryId: string }
+  | { kind: "confirm"; key: string; libraryId: string; library: string; label: string;
+      path: string; candidate: { name: string; year?: string; poster?: string } };
 
 export interface HomeRowError { error: string; code?: string; messageKey?: string }
+
+/** The rows and cards the client draws today; `episode`, `tonight` and `confirm` follow. */
+export type MediaRowId = "resume" | "completed" | "favorites";
+export type MediaHomeCard = Extract<HomeCard, { kind: "resume-file" | "resume-catalogue" | "completed" | "favorite" }>;
 
 export interface HomeRow {
   status: "ok" | "error";
   error?: HomeRowError;
   items: HomeCard[];
   hasMore: boolean;
+  /** Only `confirm` computes this: its list is built in memory, so the count is exact. */
+  total?: number;
   /** True when an addon lookup timed out and a card may be missing. */
   partial?: boolean;
 }

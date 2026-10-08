@@ -4,6 +4,8 @@ import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 import express from "express";
 import { messageKeyOf } from "../errors.js";
+import type { NewEpisode } from "../follows.js";
+import { images } from "../images.js";
 import { parseLibraryPath, relativeWithin, type LibraryRecord } from "../libraries.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import type { BrowseItem } from "../library.js";
@@ -17,7 +19,9 @@ import { registerHomeRoutes, type CompletedJobView, type HomeDeps } from "./home
 type WatchlistEntry = { type: string; id: string; name: string; poster?: string; addedAt: string };
 type StoredProgress = { position: number; duration: number; title: string; path?: string; poster?: string; addonKey?: string; series?: { id: string; name: string; season: number; episode: number }; updatedAt: string };
 type WatchedMarker = { name: string; poster?: string; addonKey?: string; season: number; episode: number; updatedAt: string };
-type MetaRecord = { type: string; id: string; name: string };
+type MetaRecord = { type: string; id: string; name?: string; year?: string; season?: number; episode?: number; unmatched?: boolean };
+type EpisodeRow = NewEpisode & { ownerUserId: string };
+type SuggestionRow = { key: string; label: string; libraryId: string; library: string; path: string; suggestion: { name: string; year?: number; poster?: string } };
 
 const ALICE = "usr_00000001";
 const BOB = "usr_00000002";
@@ -42,6 +46,20 @@ interface Harness {
   /** The finished jobs `completedJobs()` hands out. */
   completed: CompletedJobView[];
   completedThrows: boolean;
+  /** The episodes `newEpisodes()` hands out, each tagged with its owner. */
+  episodes: EpisodeRow[];
+  episodesThrows: boolean;
+  /** Every owner the episodes row asked about, in order. */
+  newEpisodesCalls: string[];
+  /** The marker reader the episodes row handed to `newEpisodes()`. */
+  watched?: (metaId: string) => { season: number; episode: number } | undefined;
+  /** The pending proposals `suggestionRows()` hands out. */
+  suggestions: SuggestionRow[];
+  suggestionsThrow: boolean;
+  /** How many times the confirm row read the proposals. */
+  suggestionCalls: number;
+  /** The clock the tonight seed reads. */
+  now: number;
   /** How long the fake metadata lookup waits before answering. */
   metaDelayMs: number;
   metaAnswer: MetaItem | null;
@@ -61,14 +79,17 @@ const fileItem = (relative: string): BrowseItem => ({
   kind: "file", path: relative, label: relative.slice(relative.lastIndexOf("/") + 1), season: null, episode: null, size: 0, modified: "2024-01-01T00:00:00.000Z",
 });
 
-const mount = async (options: { libraries?: LibraryRecord[]; deadlineMs?: number } = {}): Promise<Harness> => {
+const mount = async (options: { libraries?: LibraryRecord[]; deadlineMs?: number; now?: number } = {}): Promise<Harness> => {
   const libraries = options.libraries ?? [];
   const addons: AddonRecord[] = [];
   const records: Record<string, MetaRecord> = {};
   const missing = new Set<string>();
   const broken = new Set<string>();
   const state: Harness = {
-    base: "", addons, records, missing, broken, completed: [], completedThrows: false, metaDelayMs: 0, metaAnswer: null, lookups: [],
+    base: "", addons, records, missing, broken, completed: [], completedThrows: false,
+    episodes: [], episodesThrows: false, newEpisodesCalls: [], suggestions: [], suggestionsThrow: false, suggestionCalls: 0,
+    now: options.now ?? Date.parse("2026-01-15T12:00:00.000Z"),
+    metaDelayMs: 0, metaAnswer: null, lookups: [],
     data: () => { throw new Error("not mounted"); }, close: async () => undefined,
   };
   const users = new Map<string, UserData>([[ALICE, emptyUserData()], [BOB, emptyUserData()], [ADMIN, emptyUserData()]]);
@@ -143,6 +164,12 @@ const mount = async (options: { libraries?: LibraryRecord[]; deadlineMs?: number
     ...personalDeps,
     personal,
     completedJobs: () => { if (state.completedThrows) throw new Error("the queue is unavailable"); return state.completed; },
+    newEpisodes: (ownerUserId, watched) => {
+      if (state.episodesThrows) throw new Error("the follows are unavailable");
+      state.newEpisodesCalls.push(ownerUserId);
+      state.watched = watched;
+      return state.episodes.filter((item) => item.ownerUserId === ownerUserId).map(({ ownerUserId: _owner, ...item }) => item);
+    },
     describeLibraryPath: personalDeps.describeLibraryPath,
     locateFileArtwork: personalDeps.locateFileArtwork,
     locateFolderArtworkPair: personalDeps.locateFolderArtworkPair,
@@ -151,6 +178,15 @@ const mount = async (options: { libraries?: LibraryRecord[]; deadlineMs?: number
     scheduleFolderArtwork: personalDeps.scheduleFolderArtwork,
     wirePath: personalDeps.wirePath,
     dataOf: personalDeps.dataOf,
+    markersOf: personalDeps.markersOf,
+    progressOf: personalDeps.progressOf,
+    metaStore: personalDeps.metaStore,
+    suggestionRows: async () => {
+      state.suggestionCalls += 1;
+      if (state.suggestionsThrow) throw new Error("the proposals are unavailable");
+      return state.suggestions;
+    },
+    now: () => state.now,
     homeLookupDeadlineMs: options.deadlineMs,
   };
   registerHomeRoutes(app, homeDeps);
@@ -177,8 +213,10 @@ const mount = async (options: { libraries?: LibraryRecord[]; deadlineMs?: number
 const api = (base: string, pathname: string, user?: string) =>
   fetch(`${base}${pathname}`, { headers: user ? { "x-user": user } : {} });
 
-const allRows = async (harness: Harness, user: string) =>
-  (await (await api(harness.base, "/api/home", user)).json() as { rows: Record<string, { status: string; items: Array<Record<string, unknown>>; hasMore: boolean; partial?: boolean }> }).rows;
+interface HomeRowView { status: string; items: Array<Record<string, unknown>>; hasMore: boolean; partial?: boolean; total?: number; error?: unknown }
+
+const allRows = async (harness: Harness, user: string): Promise<Record<string, HomeRowView>> =>
+  (await (await api(harness.base, "/api/home", user)).json() as { rows: Record<string, HomeRowView> }).rows;
 
 test("GET /api/home answers with the whole envelope and private caching", async (t) => {
   const harness = await mount();
@@ -189,7 +227,7 @@ test("GET /api/home answers with the whole envelope and private caching", async 
   assert.equal(response.headers.get("cache-control"), "private, no-store");
   const body = await response.json() as { generatedAt: string; rows: Record<string, unknown> };
   assert.equal(typeof body.generatedAt, "string");
-  assert.deepEqual(Object.keys(body.rows).sort(), ["completed", "favorites", "resume"]);
+  assert.deepEqual(Object.keys(body.rows).sort(), ["completed", "confirm", "episodes", "favorites", "resume", "tonight"]);
 });
 
 test("GET /api/home is refused without a session, the way the personal routes refuse", async (t) => {
@@ -340,7 +378,7 @@ test("?rows= names which rows come back and an unknown name is ignored", async (
   t.after(harness.close);
 
   const some = await allRows(harness, ALICE);
-  assert.deepEqual(Object.keys(some).sort(), ["completed", "favorites", "resume"]);
+  assert.deepEqual(Object.keys(some).sort(), ["completed", "confirm", "episodes", "favorites", "resume", "tonight"]);
 
   const filtered = await (await api(harness.base, "/api/home?rows=resume,favorites", ALICE)).json() as { rows: Record<string, unknown> };
   assert.deepEqual(Object.keys(filtered.rows).sort(), ["favorites", "resume"]);
@@ -506,4 +544,184 @@ test("a thumbnail is addressed by the wire path, which is the qualified one when
   assert.equal(rows.completed!.items[0]!.poster, "thumb:lib_00000002/Kept.mkv");
   assert.equal(rows.completed!.items[0]!.wide, "thumb:lib_00000002/Kept.mkv:wide");
   assert.equal(rows.favorites!.items[0]!.poster, "thumb:lib_00000002/Shows/01.mkv");
+});
+
+test("new episodes are newest first, only the caller's, and the poster goes through the proxy", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const poster = "https://images.example/poster.jpg";
+  harness.episodes = [
+    { ownerUserId: ALICE, followId: "f1", type: "series", metaId: "tt1", name: "Show", poster, videoId: "e1", season: 1, episode: 1, title: "One", released: "2024-03-02T00:00:00.000Z" },
+    { ownerUserId: ALICE, followId: "f1", type: "series", metaId: "tt1", name: "Show", poster, videoId: "e2", season: 1, episode: 2, title: "Two", released: "2024-03-01T00:00:00.000Z" },
+    { ownerUserId: BOB, followId: "f2", type: "movie", metaId: "tt2", name: "Bob film", videoId: "v1", season: 1, episode: 1, released: "2024-03-05T00:00:00.000Z" },
+  ];
+  harness.data(ALICE).watchedSeries = { tt1: { name: "Show", season: 1, episode: 1, updatedAt: "2024-03-02T00:00:00.000Z" } };
+
+  const rows = await allRows(harness, ALICE);
+  assert.deepEqual(rows.episodes!.items.map((item) => item.key), ["episode:f1:e1", "episode:f1:e2"]);
+  assert.equal(rows.episodes!.items[0]!.poster, images.proxied(poster));
+  assert.deepEqual(harness.newEpisodesCalls, [ALICE]);
+  assert.deepEqual(harness.watched?.("tt1"), { season: 1, episode: 1 }, "the row reads the caller's markers");
+});
+
+test("tonight draws the same cards for the same seed and other cards for a different shuffle", async (t) => {
+  const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
+  t.after(harness.close);
+  for (let index = 0; index < 20; index += 1) {
+    Object.assign(harness.records, { [`lib_00000001/Films/${String(index).padStart(2, "0")}`]: { type: "movie", id: `tt${index}`, name: `Film ${index}` } });
+  }
+
+  const first = await allRows(harness, ALICE);
+  const again = await allRows(harness, ALICE);
+  assert.equal(first.tonight!.items.length, 12);
+  assert.deepEqual(first.tonight!.items.map((item) => item.key), again.tonight!.items.map((item) => item.key));
+  const ordered = first.tonight!.items.map((item) => item.key);
+  const shuffled = await (await api(harness.base, "/api/home?rows=tonight&shuffle=7", ALICE)).json() as { rows: Record<string, HomeRowView> };
+  assert.notDeepEqual(shuffled.rows.tonight!.items.map((item) => item.key), ordered);
+});
+
+test("tonight skips a started title, a single episode and an unmatched row", async (t) => {
+  const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
+  t.after(harness.close);
+  Object.assign(harness.records, {
+    "lib_00000001/Films/Started": { type: "movie", id: "ttA", name: "Started" },
+    "lib_00000001/Films/SeriesStarted": { type: "series", id: "ttB", name: "SeriesStarted" },
+    "lib_00000001/Films/FolderStarted": { type: "movie", id: "ttC", name: "FolderStarted" },
+    "lib_00000001/Films/Episode": { type: "series", id: "ttD", name: "Episode", season: 1, episode: 2 },
+    "lib_00000001/Films/Unmatched": { type: "movie", id: "", unmatched: true },
+    "lib_00000001/Films/Free": { type: "movie", id: "ttE", name: "Free" },
+  });
+  harness.data(ALICE).progress = {
+    "movie:ttA": { position: 10, duration: 100, title: "Started", updatedAt: "2024-01-01T00:00:00.000Z" },
+    "series:ttB:1:1": { position: 1, duration: 100, title: "SeriesStarted", series: { id: "ttB", name: "SeriesStarted", season: 1, episode: 1 }, updatedAt: "2024-01-01T00:00:00.000Z" },
+    "file:lib_00000001/Films/FolderStarted/Copy.mkv": { position: 1, duration: 100, title: "FolderStarted", path: "lib_00000001/Films/FolderStarted/Copy.mkv", updatedAt: "2024-01-01T00:00:00.000Z" },
+  };
+
+  const rows = await allRows(harness, ALICE);
+  assert.deepEqual(rows.tonight!.items.map((item) => item.label), ["Free"]);
+  assert.equal(rows.tonight!.items[0]!.itemKind, "file");
+  assert.equal(rows.tonight!.items[0]!.libraryId, "lib_00000001");
+});
+
+test("tonight draws nothing from a library switched off, disabled, away or not granted", async (t) => {
+  const harness = await mount({
+    libraries: [
+      library({ id: "lib_00000001", root: "/a", visibleTo: [ALICE] }),
+      library({ id: "lib_00000002", root: "/b", visibleTo: [ALICE], showOnHome: false }),
+      library({ id: "lib_00000003", root: "/c", visibleTo: [ALICE], enabled: false }),
+      library({ id: "lib_00000004", root: "/d", visibleTo: [ALICE], unreachable: true }),
+      library({ id: "lib_00000005", root: "/e", visibleTo: [BOB] }),
+    ],
+  });
+  t.after(harness.close);
+  for (const [index, libraryId] of ["lib_00000001", "lib_00000002", "lib_00000003", "lib_00000004", "lib_00000005"].entries()) {
+    Object.assign(harness.records, { [`${libraryId}/Films/Only`]: { type: "movie", id: `tt${index}`, name: `Only ${index}` } });
+  }
+
+  const rows = await allRows(harness, ALICE);
+  assert.deepEqual(rows.tonight!.items.map((item) => item.libraryId), ["lib_00000001"]);
+});
+
+test("tonight replaces a file that vanished with a spare", async (t) => {
+  const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
+  t.after(harness.close);
+  for (let index = 0; index < 20; index += 1) {
+    Object.assign(harness.records, { [`lib_00000001/Films/${String(index).padStart(2, "0")}`]: { type: "movie", id: `tt${index}`, name: `Film ${index}` } });
+  }
+
+  const before = await allRows(harness, ALICE);
+  const firstKey = String(before.tonight!.items[0]!.key);
+  harness.missing.add(firstKey);
+  const rows = await allRows(harness, ALICE);
+  assert.equal(rows.tonight!.items.length, 12);
+  assert.equal(rows.tonight!.items.some((item) => item.key === firstKey), false);
+  const known = new Set(before.tonight!.items.map((item) => item.key));
+  assert.equal(rows.tonight!.items.some((item) => !known.has(item.key)), true, "a spare stood in");
+});
+
+test("two accounts get their own tonight picks on the same day", async (t) => {
+  const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE, BOB] })] });
+  t.after(harness.close);
+  for (let index = 0; index < 20; index += 1) {
+    Object.assign(harness.records, { [`lib_00000001/Films/${String(index).padStart(2, "0")}`]: { type: "movie", id: `tt${index}`, name: `Film ${index}` } });
+  }
+
+  const alice = await allRows(harness, ALICE);
+  const bob = await allRows(harness, BOB);
+  assert.equal(alice.tonight!.items.length, 12);
+  assert.notDeepEqual(alice.tonight!.items.map((item) => item.key), bob.tonight!.items.map((item) => item.key));
+});
+
+test("an administrator's confirm row lists the proposals sorted by label with an exact total", async (t) => {
+  const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media" })] });
+  t.after(harness.close);
+  harness.suggestions = [
+    { key: "B", label: "Beta", libraryId: "lib_00000001", library: "Media", path: "B", suggestion: { name: "Beta film", year: 2001, poster: "img_b" } },
+    { key: "A", label: "Alpha", libraryId: "lib_00000001", library: "Media", path: "A", suggestion: { name: "Alpha film", year: 1999 } },
+  ];
+
+  const rows = await allRows(harness, ADMIN);
+  assert.equal(rows.confirm!.total, 2);
+  const items = rows.confirm!.items as Array<{ kind: string; label: string; candidate: { name: string; year?: string; poster?: string } }>;
+  assert.deepEqual(items.map((item) => item.label), ["Alpha", "Beta"]);
+  assert.deepEqual(items.map((item) => item.kind), ["confirm", "confirm"]);
+  assert.deepEqual(items.map((item) => item.candidate.name), ["Alpha film", "Beta film"]);
+  assert.deepEqual(items.map((item) => item.candidate.year), ["1999", "2001"]);
+  assert.deepEqual(items.map((item) => item.candidate.poster), [undefined, "img_b"]);
+  assert.equal(harness.suggestionCalls, 1);
+  for (const id of ["episodes", "favorites", "resume", "tonight"]) assert.equal("total" in rows[id]!, false, `${id} carries no total`);
+});
+
+test("an ordinary account's confirm row is empty and the proposals are never read", async (t) => {
+  const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
+  t.after(harness.close);
+  harness.suggestions = [{ key: "A", label: "Alpha", libraryId: "lib_00000001", library: "Media", path: "A", suggestion: { name: "Alpha" } }];
+
+  const rows = await allRows(harness, ALICE);
+  assert.deepEqual(rows.confirm, { status: "ok", items: [], hasMore: false });
+  assert.equal(harness.suggestionCalls, 0);
+});
+
+test("the confirm row drops a proposal whose library is switched off for Home", async (t) => {
+  const harness = await mount({
+    libraries: [
+      library({ id: "lib_00000001", root: "/a" }),
+      library({ id: "lib_00000002", root: "/b", showOnHome: false }),
+    ],
+  });
+  t.after(harness.close);
+  harness.suggestions = [
+    { key: "A", label: "Alpha", libraryId: "lib_00000001", library: "A", path: "A", suggestion: { name: "Alpha" } },
+    { key: "B", label: "Beta", libraryId: "lib_00000002", library: "B", path: "B", suggestion: { name: "Beta" } },
+  ];
+
+  const rows = await allRows(harness, ADMIN);
+  assert.deepEqual(rows.confirm!.items.map((item) => item.label), ["Alpha"]);
+  assert.equal(rows.confirm!.total, 1);
+});
+
+test("a throwing episodes source leaves the other rows ok", async (t) => {
+  const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
+  t.after(harness.close);
+  harness.episodesThrows = true;
+
+  const rows = await allRows(harness, ALICE);
+  assert.equal(rows.episodes!.status, "error");
+  assert.deepEqual(rows.episodes!.items, []);
+  assert.equal(rows.tonight!.status, "ok");
+  assert.equal(rows.resume!.status, "ok");
+  assert.equal(rows.favorites!.status, "ok");
+  assert.equal(rows.completed!.status, "ok");
+});
+
+test("a throwing proposals source leaves the other rows ok", async (t) => {
+  const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media" })] });
+  t.after(harness.close);
+  harness.suggestionsThrow = true;
+
+  const rows = await allRows(harness, ADMIN);
+  assert.equal(rows.confirm!.status, "error");
+  assert.deepEqual(rows.confirm!.items, []);
+  assert.equal(rows.episodes!.status, "ok");
+  assert.equal(rows.tonight!.status, "ok");
 });

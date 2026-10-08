@@ -1,13 +1,17 @@
-import type { HomeCard, HomeResponse, HomeRowId } from "../../server/src/home";
+import type { HomeCard, HomeResponse, MediaHomeCard, MediaRowId } from "../../server/src/home";
+
+/** The kinds Home draws today; the rows that add `episode`, `tonight` and `confirm` come later. */
+export const isMediaCard = (card: HomeCard): card is MediaHomeCard =>
+  card.kind === "resume-file" || card.kind === "resume-catalogue" || card.kind === "completed" || card.kind === "favorite";
 
 /** The three server rows below the Downloads row, in the order Home draws them. */
-export const HOME_ROWS: readonly HomeRowId[] = ["resume", "completed", "favorites"];
+export const HOME_ROWS: readonly MediaRowId[] = ["resume", "completed", "favorites"];
 
 export type HomeRowStatus = "idle" | "loading" | "ok" | "error";
 
 export interface HomeRowState {
   status: HomeRowStatus;
-  items: HomeCard[];
+  items: MediaHomeCard[];
   hasMore: boolean;
   /** An addon lookup timed out, so a card may be missing but the row is usable. */
   partial: boolean;
@@ -15,12 +19,12 @@ export interface HomeRowState {
   request: number;
 }
 
-export type HomeRows = Partial<Record<HomeRowId, HomeRowState>>;
+export type HomeRows = Partial<Record<MediaRowId, HomeRowState>>;
 
 export type HomeAction =
-  | { type: "begin"; rows: readonly HomeRowId[]; request: number }
-  | { type: "answer"; rows: readonly HomeRowId[]; request: number; response: HomeResponse }
-  | { type: "fail"; rows: readonly HomeRowId[]; request: number }
+  | { type: "begin"; rows: readonly MediaRowId[]; request: number }
+  | { type: "answer"; rows: readonly MediaRowId[]; request: number; response: HomeResponse }
+  | { type: "fail"; rows: readonly MediaRowId[]; request: number }
   | { type: "reset" };
 
 export const emptyHomeRows = (): HomeRows => ({});
@@ -56,7 +60,7 @@ export function homeReducer(state: HomeRows, action: HomeAction): HomeRows {
       next[row] = { ...current, status: "error" };
       continue;
     }
-    next[row] = { status: "ok", items: answered.items, hasMore: answered.hasMore, partial: answered.partial === true, request: current.request };
+    next[row] = { status: "ok", items: answered.items.filter(isMediaCard), hasMore: answered.hasMore, partial: answered.partial === true, request: current.request };
   }
   return next;
 }

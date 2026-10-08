@@ -10,7 +10,7 @@ import { HomeShelf } from "./HomeShelf";
 import type { HomeCardActions } from "./HomeCard";
 import { t } from "./i18n";
 import type { Download, LibraryView, TileShape } from "./types";
-import type { HomeCard, HomeRowId } from "../../server/src/home";
+import type { MediaHomeCard, MediaRowId } from "../../server/src/home";
 
 const BLOCKED_KEY = { storage: "home.blocked.storage", library: "home.blocked.library", permission: "home.blocked.permission" } as const;
 const ACTION_LABEL = { retry: "downloads.retry", resume: "library.continue", pause: "player.pause", open: "nav.downloads" } as const;
@@ -44,10 +44,10 @@ export function Home({ jobs, onShowDownloads, onAction, rows, shape, onToggleSha
   rows: HomeRows;
   shape: TileShape;
   onToggleShape: () => void;
-  onRetry: (row: HomeRowId) => void;
+  onRetry: (row: MediaRowId) => void;
   onShowAll: (target: ShowAllTarget) => void;
-  onPlay: (card: HomeCard) => void;
-  onOpenCatalogue: (card: HomeCard) => void;
+  onPlay: (card: MediaHomeCard) => void;
+  onOpenCatalogue: (card: MediaHomeCard) => void;
   onReveal: (path: string) => void;
   onForgotten: () => void;
   onError: (error: unknown) => void;
@@ -71,7 +71,7 @@ export function Home({ jobs, onShowDownloads, onAction, rows, shape, onToggleSha
       .finally(() => setBusy((current) => { const next = new Set(current); next.delete(job.id); return next; }));
   };
 
-  const forget = (card: HomeCard) => {
+  const forget = (card: MediaHomeCard) => {
     if (card.kind !== "resume-file" && card.kind !== "resume-catalogue") return;
     if (!window.confirm(t("home.forgetConfirm", { title: card.title }))) return;
     void api.forgetManyProgress(card.forgetKeys).then(onForgotten, onError);

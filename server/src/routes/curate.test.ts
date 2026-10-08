@@ -47,6 +47,7 @@ interface Harness {
   calls: Calls;
   pendingOps: Set<string>;
   scan: LibraryScan;
+  curate: ReturnType<typeof registerCurateRoutes>;
   close(): Promise<void>;
 }
 
@@ -179,7 +180,7 @@ const mount = async (options: {
   };
   const app = express();
   app.use(express.json());
-  registerCurateRoutes(app, deps);
+  const curate = registerCurateRoutes(app, deps);
   app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
     const status = typeof (error as { status?: unknown }).status === "number" ? (error as { status: number }).status : 400;
     res.status(status).json({
@@ -195,6 +196,7 @@ const mount = async (options: {
     calls,
     pendingOps,
     scan,
+    curate,
     close: async () => {
       await scan.stop();
       server.closeAllConnections();
@@ -718,4 +720,26 @@ test("dismissing a suggestion records a decision the rules will not undo", async
   assert.equal(updated?.suggestions["Films/Heat"]?.dismissed, true);
   assert.equal(updated?.suggestions["Films/Heat"]?.id, "", "the binding is cleared, keeping only the memory");
   assert.equal(harness.calls.invalidated, 1);
+});
+
+test("GET /api/library/suggestions answers exactly the array the extracted builder returns", async (t) => {
+  const harness = await mount({
+    units: [
+      { key: "lib_00000001/Films/Ronin", kind: "movie", relative: "Films/Ronin", sampleFiles: ["Films/Ronin/Ronin.mkv"] },
+      { key: "lib_00000001/Films/Heat", kind: "movie", relative: "Films/Heat", sampleFiles: ["Films/Heat/Heat.mkv"] },
+    ],
+    suggestions: {
+      "lib_00000001/Films/Ronin": { type: "movie", id: "tt0122690", name: "Ronin", score: 88, poster: "https://image.tmdb.org/t/p/w500/r.jpg" },
+      "lib_00000001/Films/Heat": { type: "movie", id: "tt0113277", name: "Heat", score: 92 },
+    },
+  });
+  t.after(harness.close);
+
+  const body = await (await api(harness.base, "/api/library/suggestions")).json() as { items: unknown[]; total: number };
+  assert.deepEqual(body.items, await harness.curate.suggestionRows());
+  assert.equal(body.total, body.items.length);
+
+  const scoped = await (await api(harness.base, "/api/library/suggestions?libraryId=lib_00000001")).json() as { items: unknown[]; total: number };
+  assert.deepEqual(scoped.items, await harness.curate.suggestionRows("lib_00000001"));
+  assert.equal(scoped.total, 2);
 });

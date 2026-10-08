@@ -1604,7 +1604,6 @@ const setLibraryFavorite = async (relative: string, wanted: boolean, userId: str
 };
 
 const personal = registerPersonalRoutes(app, { ...routeContext, attachBrowseMeta, cachedMeta, dataOf, describeLibraryPath, libraryKey, libraryOfKey, locateFileArtwork, locateFolderArtworkPair, markersOf, metaStore, posterOf, prefsOf, progressOf, scheduleFileArtwork, scheduleFolderArtwork, setLibraryFavorite, thumbUrl, updateData, watchlistOf, wirePath });
-registerHomeRoutes(app, { ...routeContext, personal, completedJobs: () => queue.list(), describeLibraryPath, locateFileArtwork, locateFolderArtworkPair, thumbUrl, scheduleFileArtwork, scheduleFolderArtwork, wirePath, dataOf });
 
 /** The followed series: the daily check reads the owner's addons in the owner's language,
  *  past the cache, so a new episode is seen the day it appears. */
@@ -2160,7 +2159,11 @@ await libraryOps.load();
 
 registerLibrariesRoutes(app, { ...routeContext, grantRows, healthOf, invalidateAutoScan: (libraryId) => libraryAutoScan.invalidate(libraryId), invalidateLibrary, libraryGrants, libraryStats, libraryView, progressOf, refreshLibraryHealth, libraryProbe, metaStore, libraryOps });
 
-registerCurateRoutes(app, { ...routeContext, candidates: libraryCandidates, invalidateLibrary, libraryAutoScan, libraryOps, libraryPathBusy, libraryScan, libraryTarget, libraryUnits, matchLibraryItem, metaStore, ownRecord, ownerOf, prefsOf, proxyImage: (url) => images.proxied(url), refreshLibraryHealth, scheduleMetaBackfill, wirePath });
+const curate = registerCurateRoutes(app, { ...routeContext, candidates: libraryCandidates, invalidateLibrary, libraryAutoScan, libraryOps, libraryPathBusy, libraryScan, libraryTarget, libraryUnits, matchLibraryItem, metaStore, ownRecord, ownerOf, prefsOf, proxyImage: (url) => images.proxied(url), refreshLibraryHealth, scheduleMetaBackfill, wirePath });
+
+// Home's confirm row shows what the curate route proposes, so it is registered once that
+// route exists.
+registerHomeRoutes(app, { ...routeContext, personal, completedJobs: () => queue.list(), newEpisodes: (ownerUserId, watched) => followService.newEpisodes(ownerUserId, watched), describeLibraryPath, locateFileArtwork, locateFolderArtworkPair, thumbUrl, scheduleFileArtwork, scheduleFolderArtwork, wirePath, dataOf, markersOf, progressOf, metaStore, suggestionRows: curate.suggestionRows });
 
 registerDeviceRoutes(app, { ...routeContext, stats, countBytes, deviceDownloadTickets, deviceTransfers, DEVICE_TICKET_TTL, httpSourceOf, libraryTarget, mediaSource, ownerOf, pruneDeviceDownloadTickets, statMeta, trackMedia });
 registerDownloadRoutes(app, { ...routeContext, queue, deviceTransfers, jobView, sourceOf, mediaSource, posterOf, rememberTitle, titleKey, saveCatalogPoster, libraryKey, cachedMeta, prefsOf });

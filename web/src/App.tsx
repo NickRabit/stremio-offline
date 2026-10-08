@@ -37,7 +37,7 @@ import { Downloads } from "./DownloadsPage";
 import { Home } from "./Home";
 import { useHome } from "./useHome";
 import type { ShowAllTarget } from "./home-cards";
-import type { HomeCard } from "../../server/src/home";
+import type { MediaHomeCard } from "../../server/src/home";
 import { MoreMenu, type MoreItem } from "./MoreMenu";
 import { fmtEta } from "./download-format";
 import { MediaGallery, type GalleryImage, type GalleryKind } from "./MediaGallery";
@@ -1920,11 +1920,11 @@ export function App() {
 
   /** A Home media card's action, by kind: a file plays, a catalogue entry opens the remembered
    *  episode the way a catalogue Continue-watching tile does, a favourite folder opens itself. */
-  const homePlay = (card: HomeCard) => {
+  const homePlay = (card: MediaHomeCard) => {
     if (card.kind === "resume-catalogue") return;
     void playLocal(card.kind === "favorite" ? card.label : card.title, card.path, card.poster, card.kind !== "favorite" && card.season != null);
   };
-  const homeOpen = (card: HomeCard) => {
+  const homeOpen = (card: MediaHomeCard) => {
     if (card.kind !== "resume-catalogue") return;
     setView("catalog");
     const episode = card.season != null && card.episode != null ? { key: card.key, season: card.season, number: card.episode } : undefined;

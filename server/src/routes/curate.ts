@@ -7,7 +7,7 @@ import { normalizeLanguage } from "../language.js";
 import { libraryFor, parseLibraryPath, posixBase, resolveLibraryPath, type Viewer } from "../libraries.js";
 import type { LibraryAutoScan } from "../library-autoscan.js";
 import type { LibraryCandidateSource } from "../library-candidates.js";
-import { episodeNumberOf, knownEntryForUnit, knownTitleOf, lookupSkipped, needsBackfill, parseUnit, pendingSuggestionKeys, scanMiss, suggestionFor, suggestionForUnit, unitFor, type LibraryMetaRecord, type TitleUnit } from "../library-match.js";
+import { episodeNumberOf, knownEntryForUnit, knownTitleOf, lookupSkipped, needsBackfill, parseUnit, pendingSuggestionKeys, scanMiss, suggestionFor, suggestionForUnit, unitFor, type LibraryMetaRecord, type LibrarySuggestion, type TitleUnit } from "../library-match.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import type { LibraryOp, LibraryOps } from "../library-ops.js";
 import { parseMediaPath } from "../library-parse.js";
@@ -21,6 +21,17 @@ import { asyncRoute, type RouteContext } from "./context.js";
 
 /** How many rows the manual identity search offers: enough to pick from, not a catalogue. */
 const SEARCH_RESULT_LIMIT = 20;
+
+/** One pending proposal as `GET /api/library/suggestions` serialises it, and as Home's
+ *  confirm row reads it. */
+export interface CurateSuggestionRow {
+  key: string;
+  label: string;
+  libraryId: string;
+  library: string;
+  path: string;
+  suggestion: LibrarySuggestion;
+}
 
 /** Matching a title, the library operations and the scan. */
 export interface CurateDeps extends RouteContext {
@@ -45,7 +56,7 @@ export interface CurateDeps extends RouteContext {
   wirePath(key: string): string;
 }
 
-export function registerCurateRoutes(app: express.Application, deps: CurateDeps): void {
+export function registerCurateRoutes(app: express.Application, deps: CurateDeps): { suggestionRows(libraryId?: string): Promise<CurateSuggestionRow[]> } {
   const { candidates, store, currentUser, invalidateLibrary, libraryAutoScan, libraryOps, libraryPathBusy, libraryScan, libraryTarget, libraryUnits, matchLibraryItem, metaStore, ownRecord, ownerOf, prefsOf, proxyImage, refreshLibraryHealth, requireAccess, scheduleMetaBackfill, wirePath } = deps;
   const suggestionView = (suggestion: NonNullable<ReturnType<typeof suggestionFor>>) => ({
     ...suggestion,
@@ -194,13 +205,13 @@ export function registerCurateRoutes(app: express.Application, deps: CurateDeps)
   /** What the scan proposed and nobody has confirmed yet. A row only counts while the
    *  library it belongs to is reachable and the file behind it is still in the tree: a
    *  proposal for something that is gone is not a proposal, it is a stale count. */
-  app.get("/api/library/suggestions", asyncRoute(async (req, res) => {
-    const wanted = String(req.query.libraryId ?? "").trim();
+  const suggestionRows = async (libraryId?: string): Promise<CurateSuggestionRow[]> => {
+    const wanted = (libraryId ?? "").trim();
     const records = metaStore.qualifiedMeta();
     const suggestions = metaStore.qualifiedSuggestions();
     const libraries = store.libraries();
     const units = await libraryUnits();
-    const items = pendingSuggestionKeys(records, suggestions)
+    return pendingSuggestionKeys(records, suggestions)
       .flatMap((key) => {
         const target = parseLibraryPath(key);
         if (!target || (wanted && target.libraryId !== wanted)) return [];
@@ -219,6 +230,10 @@ export function registerCurateRoutes(app: express.Application, deps: CurateDeps)
         }];
       })
       .sort((a, b) => b.suggestion.score - a.suggestion.score);
+  };
+
+  app.get("/api/library/suggestions", asyncRoute(async (req, res) => {
+    const items = await suggestionRows(String(req.query.libraryId ?? ""));
     res.json({ items, total: items.length });
   }));
   app.delete("/api/library/suggestion", asyncRoute(async (req, res) => {
@@ -295,4 +310,6 @@ export function registerCurateRoutes(app: express.Application, deps: CurateDeps)
     requireAccess(req, { libraryId: parseLibraryPath(key)?.libraryId });
     res.setHeader("cache-control", "private, no-store").json(mediaResources.publicStream({ url: `file://${key}`, subtitles: sidecars, behaviorHints: { filename: path.basename(relative) } }, ownerOf(req)));
   }));
+
+  return { suggestionRows };
 }

@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { Home } from "./Home";
 import { setLocale } from "./i18n";
 import type { HomeRowState, HomeRows } from "./home-state";
-import type { HomeCard } from "../../server/src/home";
+import type { MediaHomeCard as HomeCard } from "../../server/src/home";
 import type { Download, TileShape } from "./types";
 
 const at = "2026-01-01T00:00:00.000Z";
