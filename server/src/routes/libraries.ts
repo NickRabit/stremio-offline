@@ -12,6 +12,7 @@ import { knownTitleOf, titleUnits } from "../library-match.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import type { LibraryOps } from "../library-ops.js";
 import type { LibraryHealth, LibraryProbe } from "../library-probe.js";
+import type { LibrarySeenStore } from "../library-seen.js";
 import { log } from "../logger.js";
 import { assertStillAdmin } from "../roles.js";
 import type { State } from "../store.js";
@@ -32,13 +33,15 @@ export interface LibrariesDeps extends RouteContext {
   refreshLibraryHealth(): Promise<Map<string, LibraryHealth>>;
   libraryProbe: LibraryProbe;
   metaStore: LibraryMetaStore;
+  /** The first-seen index, dropped when a library is forgotten and kept when it is only removed. */
+  seen: LibrarySeenStore;
   libraryOps: LibraryOps;
 }
 
 const runUnlocked = <T,>(work: () => Promise<T>): Promise<T> => work();
 
 export function registerLibrariesRoutes(app: express.Application, deps: LibrariesDeps): void {
-  const { store, currentUser, grantRows, healthOf, invalidateAutoScan, invalidateLibrary, libraryGrants, libraryStats, libraryView, progressOf, refreshLibraryHealth, libraryProbe, metaStore, libraryOps, stopContentAccess } = deps;
+  const { store, currentUser, grantRows, healthOf, invalidateAutoScan, invalidateLibrary, libraryGrants, libraryStats, libraryView, progressOf, refreshLibraryHealth, libraryProbe, metaStore, seen, libraryOps, stopContentAccess } = deps;
 
   /** The same check the module makes, raised as the failure the interface renders. */
   async function requireLibraryRoot(value: unknown, opts: { create?: boolean; exceptId?: string } = {}): Promise<string> {
@@ -439,6 +442,7 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
     await stopContentAccess({ libraryId: target.id });
     if (forget) {
       await metaStore.forget(target.id);
+      await seen.forget(target.id);
       await rm(artworks.dirOf(target.id), { recursive: true, force: true });
       await artworks.removedTree(artworks.dirOf(target.id));
     }

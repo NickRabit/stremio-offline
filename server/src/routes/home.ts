@@ -12,6 +12,8 @@ import {
 import { libraryFor, libraryPath, libraryVisible, parseLibraryPath, showsOnHome, type LibraryRecord, type Viewer } from "../libraries.js";
 import { isPathWithin, type BrowseItem } from "../library.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
+import { knownTitleEntry } from "../library-match.js";
+import type { LibrarySeenStore } from "../library-seen.js";
 import type { StoredProgress, WatchedMarker } from "../store.js";
 import type { UserData } from "../users.js";
 import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
@@ -60,6 +62,8 @@ export interface HomeDeps extends RouteContext {
   markersOf(data: UserData): Record<string, WatchedMarker>;
   progressOf(data: UserData): Record<string, StoredProgress>;
   metaStore: LibraryMetaStore;
+  /** The first-seen index: the times this app met each library file, not the file's own dates. */
+  seen: LibrarySeenStore;
   suggestionRows(libraryId?: string): Promise<HomeSuggestion[]>;
   /** Injected so the tonight seed is testable without a real date. */
   now?: () => number;
@@ -67,7 +71,11 @@ export interface HomeDeps extends RouteContext {
   homeLookupDeadlineMs?: number;
 }
 
-const ALL_ROWS: HomeRowId[] = ["resume", "completed", "favorites", "episodes", "tonight", "confirm"];
+const ALL_ROWS: HomeRowId[] = ["resume", "completed", "favorites", "recent", "episodes", "tonight", "confirm"];
+
+/** The row asks the index for more than it draws, so a file that vanished since the walk does
+ *  not shorten it, and it never reads the disk for more than this many keys. */
+const RECENT_CANDIDATES = 60;
 
 const requestedRows = (raw: unknown): HomeRowId[] => {
   if (raw === undefined) return ALL_ROWS;
@@ -99,7 +107,7 @@ const shuffleOf = (raw: unknown): number => {
 };
 
 export function registerHomeRoutes(app: express.Application, deps: HomeDeps): void {
-  const { store, currentUser, personal, completedJobs, newEpisodes, describeLibraryPath, locateFileArtwork, locateFolderArtworkPair, thumbUrl, scheduleFileArtwork, scheduleFolderArtwork, wirePath, dataOf, markersOf, progressOf, metaStore, suggestionRows, now = Date.now, homeLookupDeadlineMs = HOME_LOOKUP_DEADLINE_MS } = deps;
+  const { store, currentUser, personal, completedJobs, newEpisodes, describeLibraryPath, locateFileArtwork, locateFolderArtworkPair, thumbUrl, scheduleFileArtwork, scheduleFolderArtwork, wirePath, dataOf, markersOf, progressOf, metaStore, seen, suggestionRows, now = Date.now, homeLookupDeadlineMs = HOME_LOOKUP_DEADLINE_MS } = deps;
 
   /** A key the caller may open now: its library is still configured, switched on and granted.
    *  `pathVisible` covers the removed and the lost-grant case; the enabled switch is Home's.
@@ -232,6 +240,47 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
     return { status: "ok", items: cards, hasMore };
   };
 
+  /** Files the app first met after its baseline, newest first. A file the library knows as an
+   *  episode of a bound show collapses into the show's one card, kept on the newest file. */
+  const recentRow = async (viewer: Viewer): Promise<HomeRow> => {
+    const libraries = store.libraries();
+    const ids = libraries
+      .filter((library) => library.enabled && !library.unreachable && libraryVisible(library, viewer) && showsOnHome(library.id, libraries))
+      .map((library) => library.id);
+    const described = (await Promise.all(seen.recent(ids, RECENT_CANDIDATES).map(async (entry) => {
+      const key = libraryPath(entry.libraryId, entry.relative);
+      const item = await describeLibraryPath(key);
+      return item ? { entry, key, item } : undefined;
+    }))).filter((row): row is NonNullable<typeof row> => row !== undefined);
+    const records = metaStore.qualifiedMeta();
+    // The index is newest first, so the first file of a group is its newest and the card.
+    const kept = new Map<string, (typeof described)[number]>();
+    for (const row of described) {
+      const bound = knownTitleEntry(row.key, records);
+      const group = bound?.record.type === "series" ? bound.key : row.key;
+      if (kept.has(group)) continue;
+      kept.set(group, row);
+    }
+    const bounded = boundCards([...kept.values()]);
+    const cards: HomeCard[] = await Promise.all(bounded.items.map(async ({ entry, key, item }) => {
+      const bound = knownTitleEntry(key, records);
+      const series = bound?.record.type === "series" ? bound.record : undefined;
+      const relative = wirePath(key);
+      const { poster, wide } = await fileArtwork(key, relative);
+      const season = item.kind === "file" ? item.season : null;
+      const episode = item.kind === "file" ? item.episode : null;
+      return {
+        kind: "recent", key, path: relative, label: series?.name || (item.kind === "folder" ? item.name : item.label),
+        addedAt: entry.at, libraryId: entry.libraryId,
+        ...(season != null ? { season } : {}),
+        ...(episode != null ? { episode } : {}),
+        ...(poster ? { poster } : {}),
+        ...(wide ? { wide } : {}),
+      };
+    }));
+    return { status: "ok", items: cards, hasMore: bounded.hasMore };
+  };
+
   /** A followed show belongs to the account, not to a library or an add-on, so the Home
    *  switch does not apply to this row. */
   const episodesRow = (req: express.Request, viewer: Viewer): HomeRow => {
@@ -332,6 +381,7 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
     resume: (req) => resumeRow(req),
     completed: completedRow,
     favorites: favoritesRow,
+    recent: (_req, viewer) => recentRow(viewer),
     episodes: (req, viewer) => Promise.resolve(episodesRow(req, viewer)),
     tonight: tonightRow,
     confirm: (_req, viewer) => Promise.resolve(confirmRow(viewer)),

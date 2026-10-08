@@ -8,7 +8,7 @@ export const HOME_MARKER_LIMIT = 20;
 export const HOME_LOOKUP_DEADLINE_MS = 1500;
 export const HOME_FORGET_LIMIT = 50;
 
-export type HomeRowId = "resume" | "completed" | "favorites" | "episodes" | "tonight" | "confirm";
+export type HomeRowId = "resume" | "completed" | "favorites" | "recent" | "episodes" | "tonight" | "confirm";
 
 export interface HomeProgress { position: number; duration: number }
 
@@ -24,6 +24,8 @@ export type HomeCard =
       path: string; completedAt: string; season?: number; episode?: number }
   | { kind: "favorite"; key: string; path: string; itemKind: "file" | "folder"; label: string;
       poster?: string; wide?: string }
+  | { kind: "recent"; key: string; path: string; label: string; poster?: string; wide?: string;
+      addedAt: string; libraryId: string; season?: number; episode?: number }
   | { kind: "episode"; key: string; followId: string; type: string; metaId: string; name: string;
       poster?: string; season: number; episode: number; title?: string; released: string }
   | { kind: "tonight"; key: string; path: string; itemKind: "file" | "folder"; label: string;

@@ -12,6 +12,7 @@ import { mergeGrants } from "../library-grants.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import type { LibraryOps } from "../library-ops.js";
 import type { LibraryHealth } from "../library-probe.js";
+import type { LibrarySeenStore } from "../library-seen.js";
 import type { LibraryRecord, RootGrant } from "../libraries.js";
 import type { Store } from "../store.js";
 import type { UserRecord } from "../users.js";
@@ -26,6 +27,8 @@ interface Harness {
   viewed: Array<{ id: string; health: LibraryHealth; stats: { titles: number; files: number; bytes: number }; admin: boolean }>;
   enqueued: unknown[];
   invalidated: string[];
+  /** Every library id the first-seen index was asked to forget, in order. */
+  seenForgotten: string[];
   stored: () => LibraryRecord[];
   userGrants: () => RootGrant[];
   allGrants: () => RootGrant[];
@@ -65,6 +68,7 @@ const mount = async (
   const viewed: Harness["viewed"] = [];
   const enqueued: unknown[] = [];
   const invalidated: string[] = [];
+  const seenForgotten: string[] = [];
   // A write can be held, so two requests can both read the state before either mutator runs.
   let held: Array<() => void> = [];
   let holding = false;
@@ -115,6 +119,7 @@ const mount = async (
       invalidate: () => undefined,
     },
     metaStore: { qualifiedMeta: () => ({}), forget: async () => undefined } as unknown as LibraryMetaStore,
+    seen: { forget: async (libraryId: string) => { seenForgotten.push(libraryId); } } as unknown as LibrarySeenStore,
     libraryOps: { enqueue: async (operation: unknown) => { enqueued.push(operation); return { id: "op-1" }; } } as unknown as LibraryOps,
   };
   const app = express();
@@ -133,6 +138,7 @@ const mount = async (
     enqueued,
     invalidated,
     stored: () => state.libraries,
+    seenForgotten,
     settings: () => state.settings,
     userGrants: () => state.grants,
     loseSession: (after: number) => { sessionReads = after; },
@@ -342,6 +348,17 @@ test("DELETE /api/libraries/:id keeps the thumbnails, and forget drops the direc
   await artworks.flush();
   await assert.rejects(stat(dropped), "forgetting removes the library's thumbnail directory");
   assert.ok(!Object.keys(await index()).some((name) => name.startsWith(`${gone}${path.sep}`)), "and its index entries");
+});
+
+test("a library's first-seen index is forgotten only when the removal asks to forget", async (t) => {
+  const harness = await mount([library("lib_aaaaaaaa", 0), library("lib_bbbbbbbb", 1), library("lib_cccccccc", 2)]);
+  t.after(harness.close);
+
+  assert.equal((await api(harness.base, "/api/libraries/lib_aaaaaaaa", { method: "DELETE" })).status, 204);
+  assert.deepEqual(harness.seenForgotten, [], "a plain removal keeps the first-seen index, as it keeps the artwork");
+
+  assert.equal((await api(harness.base, "/api/libraries/lib_bbbbbbbb?forget=1", { method: "DELETE" })).status, 204);
+  assert.deepEqual(harness.seenForgotten, ["lib_bbbbbbbb"]);
 });
 
 /** A root the picker would accept: inside the grant, and a real folder. */

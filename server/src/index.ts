@@ -60,6 +60,7 @@ import { automaticMetadataEnabled, carveOuts, queuedArtworkKey, defaultLibrary, 
 import { envGrants, grantView, mergeGrants } from "./library-grants.js";
 import { migrateStateFile } from "./library-migrate.js";
 import { LibraryMetaStore } from "./library-meta-store.js";
+import { LibrarySeenStore } from "./library-seen.js";
 import { artworks } from "./artwork-cache.js";
 import type { AddonRecord, MetaItem, StreamItem } from "./types.js";
 import { createLibraryActions } from "./library-actions.js";
@@ -93,12 +94,15 @@ const metaStore = new LibraryMetaStore(DATA_DIR);
 const externalIds = new ExternalIdStore(DATA_DIR);
 /** The series each account follows, kept outside the personal state so it survives it. */
 const followStore = new FollowStore(DATA_DIR);
+/** When this app first met each library file, so "Recently added" is not the file's own date. */
+const seen = new LibrarySeenStore(DATA_DIR);
 let markServerReady!: () => void;
 const serverReady = new Promise<void>((resolve) => { markServerReady = resolve; });
 await store.load();
 await metaStore.load();
 await externalIds.load();
 await followStore.load();
+await seen.load();
 if (libraryMigration.migrated) log("INFO", "State migrated to libraries", { libraryId: libraryMigration.libraryId, paths: libraryMigration.paths, artwork: libraryMigration.artwork });
 if (libraryMigration.metadata) log("INFO", "Library metadata moved out of the state", { rows: libraryMigration.metadata });
 if (libraryMigration.artworkSetting) log("INFO", "The global artwork location was retired", { libraries: libraryMigration.artworkSetting });
@@ -912,7 +916,13 @@ const sweepDeps: SweepDeps = {
     }
     return sweepable;
   },
-  scan: (library) => listVideosChecked(library.root, library.exclude),
+  scan: async (library) => {
+    const walk = await listVideosChecked(library.root, library.exclude);
+    // Only a complete walk speaks for the tree: a folder that could not be read must not read
+    // as files that just arrived, nor let the walk's absence drop ones that are still there.
+    if (walk.complete) seen.observe(library.id, walk.files, new Date());
+    return walk;
+  },
   // The poster is saved when the job is queued, while the source does not exist yet.
   // Without this the sweep would delete it before the download finishes.
   queuedKeys: () => queue.list().flatMap((job) => {
@@ -1946,6 +1956,15 @@ const noteQueueCompletion = async (job: Readonly<DownloadJob>) => {
   const user = store.users().find((user) => user.id === job.ownerUserId);
   stats.activity.record({ kind: "library", title: job.title, filename: path.basename(job.target), userId: job.ownerUserId, username: user?.username, bytes: job.received });
   await stats.complete(statMeta({ url: job.stream?.url, addonKey: job.stream?.addonKey, addonName: job.stream?.addonName, title: job.title, kind: job.media?.kind }));
+  // The file is only in the library now, and the next complete walk can be hours away: stamp
+  // the moment it landed from the size and date the disk reports for it.
+  const landed = job.target ? parseLibraryPath(job.target) ?? (job.libraryId ? { libraryId: job.libraryId, relative: job.target } : undefined) : undefined;
+  if (landed?.relative) {
+    try {
+      const info = await stat(mediaPath(libraryPath(landed.libraryId, landed.relative)));
+      if (info.isFile()) seen.add(landed.libraryId, landed.relative, info.size, info.mtimeMs, new Date());
+    } catch { /* the file or its library is gone since it was written; nothing to stamp */ }
+  }
   if (!job.source || !job.target || !job.media) return;
   const addon = store.addons().find((item) => item.key === job.stream?.addonKey);
   const settings = addon?.downloadSettings ?? defaultDownloadSettings();
@@ -2157,13 +2176,13 @@ const libraryOps = new LibraryOps({
 });
 await libraryOps.load();
 
-registerLibrariesRoutes(app, { ...routeContext, grantRows, healthOf, invalidateAutoScan: (libraryId) => libraryAutoScan.invalidate(libraryId), invalidateLibrary, libraryGrants, libraryStats, libraryView, progressOf, refreshLibraryHealth, libraryProbe, metaStore, libraryOps });
+registerLibrariesRoutes(app, { ...routeContext, grantRows, healthOf, invalidateAutoScan: (libraryId) => libraryAutoScan.invalidate(libraryId), invalidateLibrary, libraryGrants, libraryStats, libraryView, progressOf, refreshLibraryHealth, libraryProbe, metaStore, seen, libraryOps });
 
 const curate = registerCurateRoutes(app, { ...routeContext, candidates: libraryCandidates, invalidateLibrary, libraryAutoScan, libraryOps, libraryPathBusy, libraryScan, libraryTarget, libraryUnits, matchLibraryItem, metaStore, ownRecord, ownerOf, prefsOf, proxyImage: (url) => images.proxied(url), refreshLibraryHealth, scheduleMetaBackfill, wirePath });
 
 // Home's confirm row shows what the curate route proposes, so it is registered once that
 // route exists.
-registerHomeRoutes(app, { ...routeContext, personal, completedJobs: () => queue.list(), newEpisodes: (ownerUserId, watched) => followService.newEpisodes(ownerUserId, watched), describeLibraryPath, locateFileArtwork, locateFolderArtworkPair, thumbUrl, scheduleFileArtwork, scheduleFolderArtwork, wirePath, dataOf, markersOf, progressOf, metaStore, suggestionRows: curate.suggestionRows });
+registerHomeRoutes(app, { ...routeContext, personal, completedJobs: () => queue.list(), newEpisodes: (ownerUserId, watched) => followService.newEpisodes(ownerUserId, watched), describeLibraryPath, locateFileArtwork, locateFolderArtworkPair, thumbUrl, scheduleFileArtwork, scheduleFolderArtwork, wirePath, dataOf, markersOf, progressOf, metaStore, seen, suggestionRows: curate.suggestionRows });
 
 registerDeviceRoutes(app, { ...routeContext, stats, countBytes, deviceDownloadTickets, deviceTransfers, DEVICE_TICKET_TTL, httpSourceOf, libraryTarget, mediaSource, ownerOf, pruneDeviceDownloadTickets, statMeta, trackMedia });
 registerDownloadRoutes(app, { ...routeContext, queue, deviceTransfers, jobView, sourceOf, mediaSource, posterOf, rememberTitle, titleKey, saveCatalogPoster, libraryKey, cachedMeta, prefsOf });
@@ -2281,7 +2300,7 @@ const shutdown = createShutdown({
   maintenance,
   followService,
   killRunningMedia,
-  flushes: [() => stats.activity.flush(), () => images.flush(), () => artworks.flush(), () => metaStore.flush(), () => libraryOps.flush()],
+  flushes: [() => stats.activity.flush(), () => images.flush(), () => artworks.flush(), () => metaStore.flush(), () => seen.flush(), () => libraryOps.flush()],
   store,
   flushLog,
   log,

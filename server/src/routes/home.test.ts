@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
+import { mkdtemp, rm } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { test } from "node:test";
 import express from "express";
 import { messageKeyOf } from "../errors.js";
@@ -8,6 +11,7 @@ import type { NewEpisode } from "../follows.js";
 import { images } from "../images.js";
 import { parseLibraryPath, relativeWithin, type LibraryRecord } from "../libraries.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
+import { LibrarySeenStore } from "../library-seen.js";
 import type { BrowseItem } from "../library.js";
 import { ResourceError } from "../media-resources.js";
 import type { Store, UserPrefs } from "../store.js";
@@ -46,6 +50,8 @@ interface Harness {
   /** The finished jobs `completedJobs()` hands out. */
   completed: CompletedJobView[];
   completedThrows: boolean;
+  /** The first-seen index the recent row reads; a test seeds it with `observe` or `add`. */
+  seen: LibrarySeenStore;
   /** The episodes `newEpisodes()` hands out, each tagged with its owner. */
   episodes: EpisodeRow[];
   episodesThrows: boolean;
@@ -75,9 +81,15 @@ const library = (over: Partial<LibraryRecord> & { id: string; root: string }): L
   name: over.id, type: "mixed", enabled: true, order: 0, addedAt: "", writeArtwork: false, ...over,
 });
 
-const fileItem = (relative: string): BrowseItem => ({
-  kind: "file", path: relative, label: relative.slice(relative.lastIndexOf("/") + 1), season: null, episode: null, size: 0, modified: "2024-01-01T00:00:00.000Z",
-});
+const fileItem = (relative: string): BrowseItem => {
+  const label = relative.slice(relative.lastIndexOf("/") + 1);
+  const numbered = /S(\d+)E(\d+)/i.exec(label);
+  return {
+    kind: "file", path: relative, label,
+    season: numbered ? Number(numbered[1]) : null, episode: numbered ? Number(numbered[2]) : null,
+    size: 0, modified: "2024-01-01T00:00:00.000Z",
+  };
+};
 
 const mount = async (options: { libraries?: LibraryRecord[]; deadlineMs?: number; now?: number } = {}): Promise<Harness> => {
   const libraries = options.libraries ?? [];
@@ -85,8 +97,11 @@ const mount = async (options: { libraries?: LibraryRecord[]; deadlineMs?: number
   const records: Record<string, MetaRecord> = {};
   const missing = new Set<string>();
   const broken = new Set<string>();
+  const seenDir = await mkdtemp(path.join(tmpdir(), "home-seen-"));
+  const seen = new LibrarySeenStore(seenDir);
+  await seen.load();
   const state: Harness = {
-    base: "", addons, records, missing, broken, completed: [], completedThrows: false,
+    base: "", addons, records, missing, broken, completed: [], completedThrows: false, seen,
     episodes: [], episodesThrows: false, newEpisodesCalls: [], suggestions: [], suggestionsThrow: false, suggestionCalls: 0,
     now: options.now ?? Date.parse("2026-01-15T12:00:00.000Z"),
     metaDelayMs: 0, metaAnswer: null, lookups: [],
@@ -181,6 +196,7 @@ const mount = async (options: { libraries?: LibraryRecord[]; deadlineMs?: number
     markersOf: personalDeps.markersOf,
     progressOf: personalDeps.progressOf,
     metaStore: personalDeps.metaStore,
+    seen,
     suggestionRows: async () => {
       state.suggestionCalls += 1;
       if (state.suggestionsThrow) throw new Error("the proposals are unavailable");
@@ -206,6 +222,7 @@ const mount = async (options: { libraries?: LibraryRecord[]; deadlineMs?: number
   state.close = async () => {
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));
+    await rm(seenDir, { recursive: true, force: true });
   };
   return state;
 };
@@ -227,7 +244,7 @@ test("GET /api/home answers with the whole envelope and private caching", async 
   assert.equal(response.headers.get("cache-control"), "private, no-store");
   const body = await response.json() as { generatedAt: string; rows: Record<string, unknown> };
   assert.equal(typeof body.generatedAt, "string");
-  assert.deepEqual(Object.keys(body.rows).sort(), ["completed", "confirm", "episodes", "favorites", "resume", "tonight"]);
+  assert.deepEqual(Object.keys(body.rows).sort(), ["completed", "confirm", "episodes", "favorites", "recent", "resume", "tonight"]);
 });
 
 test("GET /api/home is refused without a session, the way the personal routes refuse", async (t) => {
@@ -378,7 +395,7 @@ test("?rows= names which rows come back and an unknown name is ignored", async (
   t.after(harness.close);
 
   const some = await allRows(harness, ALICE);
-  assert.deepEqual(Object.keys(some).sort(), ["completed", "confirm", "episodes", "favorites", "resume", "tonight"]);
+  assert.deepEqual(Object.keys(some).sort(), ["completed", "confirm", "episodes", "favorites", "recent", "resume", "tonight"]);
 
   const filtered = await (await api(harness.base, "/api/home?rows=resume,favorites", ALICE)).json() as { rows: Record<string, unknown> };
   assert.deepEqual(Object.keys(filtered.rows).sort(), ["favorites", "resume"]);
@@ -669,7 +686,7 @@ test("an administrator's confirm row lists the proposals sorted by label with an
   assert.deepEqual(items.map((item) => item.candidate.year), ["1999", "2001"]);
   assert.deepEqual(items.map((item) => item.candidate.poster), [undefined, "img_b"]);
   assert.equal(harness.suggestionCalls, 1);
-  for (const id of ["episodes", "favorites", "resume", "tonight"]) assert.equal("total" in rows[id]!, false, `${id} carries no total`);
+  for (const id of ["episodes", "favorites", "recent", "resume", "tonight"]) assert.equal("total" in rows[id]!, false, `${id} carries no total`);
 });
 
 test("an ordinary account's confirm row is empty and the proposals are never read", async (t) => {
@@ -724,4 +741,93 @@ test("a throwing proposals source leaves the other rows ok", async (t) => {
   assert.deepEqual(rows.confirm!.items, []);
   assert.equal(rows.episodes!.status, "ok");
   assert.equal(rows.tonight!.status, "ok");
+});
+
+const walk = (relative: string, size: number, modified: string) => ({ relative, size, modified });
+
+test("the recent row shows a file the app met after the baseline, and never a baseline file", async (t) => {
+  const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
+  t.after(harness.close);
+  harness.seen.observe("lib_00000001", [walk("Films/Old.mkv", 10, "2024-01-01T00:00:00.000Z")], new Date("2024-01-01T00:00:00.000Z"));
+  harness.seen.observe("lib_00000001", [
+    walk("Films/Old.mkv", 10, "2024-01-01T00:00:00.000Z"),
+    walk("Films/New.mkv", 20, "2024-02-01T00:00:00.000Z"),
+  ], new Date("2024-02-01T00:00:00.000Z"));
+
+  const rows = await allRows(harness, ALICE);
+  assert.equal(rows.recent!.status, "ok");
+  assert.deepEqual(rows.recent!.items.map((item) => item.key), ["lib_00000001/Films/New.mkv"], "the baseline file is left out");
+  const card = rows.recent!.items[0]!;
+  assert.equal(card.label, "New.mkv");
+  assert.equal(card.addedAt, "2024-02-01T00:00:00.000Z");
+  assert.equal(card.libraryId, "lib_00000001");
+});
+
+test("episodes of one bound show collapse into the show's card, kept on the newest file", async (t) => {
+  const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
+  t.after(harness.close);
+  harness.records["lib_00000001/Shows/Show"] = { type: "series", id: "tt1", name: "Show" };
+  harness.seen.observe("lib_00000001", [], new Date("2024-01-01T00:00:00.000Z"));
+  harness.seen.observe("lib_00000001", [walk("Shows/Show/Show.S01E01.mkv", 10, "2024-01-02T00:00:00.000Z")], new Date("2024-02-01T00:00:00.000Z"));
+  harness.seen.observe("lib_00000001", [
+    walk("Shows/Show/Show.S01E01.mkv", 10, "2024-01-02T00:00:00.000Z"),
+    walk("Shows/Show/Show.S01E02.mkv", 11, "2024-01-03T00:00:00.000Z"),
+  ], new Date("2024-02-02T00:00:00.000Z"));
+
+  const rows = await allRows(harness, ALICE);
+  assert.equal(rows.recent!.items.length, 1, "the show is one card");
+  const card = rows.recent!.items[0]!;
+  assert.equal(card.key, "lib_00000001/Shows/Show/Show.S01E02.mkv", "the newest episode is the card");
+  assert.equal(card.label, "Show");
+  assert.equal(card.season, 1);
+  assert.equal(card.episode, 2);
+  assert.equal(card.addedAt, "2024-02-02T00:00:00.000Z");
+});
+
+test("the recent row draws nothing from a library off Home, disabled, away or not granted", async (t) => {
+  const ids = ["lib_00000001", "lib_00000002", "lib_00000003", "lib_00000004", "lib_00000005"];
+  const harness = await mount({
+    libraries: [
+      library({ id: ids[0]!, root: "/a", visibleTo: [ALICE] }),
+      library({ id: ids[1]!, root: "/b", visibleTo: [ALICE], showOnHome: false }),
+      library({ id: ids[2]!, root: "/c", visibleTo: [ALICE], enabled: false }),
+      library({ id: ids[3]!, root: "/d", visibleTo: [ALICE], unreachable: true }),
+      library({ id: ids[4]!, root: "/e", visibleTo: [BOB] }),
+    ],
+  });
+  t.after(harness.close);
+  for (const [index, id] of ids.entries()) {
+    harness.seen.observe(id, [], new Date("2024-01-01T00:00:00.000Z"));
+    harness.seen.observe(id, [walk("Only.mkv", index + 1, "2024-02-01T00:00:00.000Z")], new Date("2024-02-01T00:00:00.000Z"));
+  }
+
+  const rows = await allRows(harness, ALICE);
+  assert.deepEqual(rows.recent!.items.map((item) => item.libraryId), [ids[0]!]);
+});
+
+test("the recent row drops a file that vanished after the walk", async (t) => {
+  const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
+  t.after(harness.close);
+  harness.seen.observe("lib_00000001", [], new Date("2024-01-01T00:00:00.000Z"));
+  harness.seen.observe("lib_00000001", [
+    walk("Films/Kept.mkv", 10, "2024-02-01T00:00:00.000Z"),
+    walk("Films/Gone.mkv", 11, "2024-02-02T00:00:00.000Z"),
+  ], new Date("2024-02-02T00:00:00.000Z"));
+  harness.missing.add("lib_00000001/Films/Gone.mkv");
+
+  const rows = await allRows(harness, ALICE);
+  assert.deepEqual(rows.recent!.items.map((item) => item.key), ["lib_00000001/Films/Kept.mkv"]);
+});
+
+test("the recent row is bounded to twenty and reports hasMore", async (t) => {
+  const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
+  t.after(harness.close);
+  harness.seen.observe("lib_00000001", [], new Date("2024-01-01T00:00:00.000Z"));
+  const files = Array.from({ length: 25 }, (_, index) => walk(`Films/${String(index).padStart(2, "0")}.mkv`, index + 1, `2024-02-${String((index % 28) + 1).padStart(2, "0")}T00:00:00.000Z`));
+  harness.seen.observe("lib_00000001", files, new Date("2024-03-01T00:00:00.000Z"));
+
+  const rows = await allRows(harness, ALICE);
+  assert.equal(rows.recent!.items.length, 20);
+  assert.equal(rows.recent!.hasMore, true);
+  assert.equal(rows.recent!.items[0]!.addedAt, "2024-03-01T00:00:00.000Z");
 });
