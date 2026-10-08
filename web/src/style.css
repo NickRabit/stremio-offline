@@ -1794,6 +1794,11 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
 .home-row .resume-show-all{min-height:44px;min-width:44px;display:inline-flex;align-items:center;justify-content:center}
 .home-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .home-heading-copy{min-width:0}
+.home-heading-actions{display:flex;align-items:center;gap:8px;margin-left:auto}
+.home-confirm-chip{min-height:44px;padding:0 14px;border-radius:999px;border:1px solid var(--line);background:var(--panel);color:var(--accent2);font-size:12px;font-weight:700}
+.library-shelf-segments{display:flex;flex-wrap:wrap;gap:6px;min-width:0}
+.library-shelf-segments button{min-height:44px;padding:0 14px;border-radius:999px;border:1px solid var(--line);background:transparent;color:var(--muted);font-size:12px;font-weight:700}
+.library-shelf-segments button.active{background:var(--panel2);color:var(--text);border-color:var(--accent)}
 /* The media shelves. Sizes and shape variants come from docs/home-prototype/home.css, which
    stays the visual reference for these rows. */
 .home-row .resume-strip{scroll-snap-type:x proximity;overscroll-behavior-x:contain;scroll-padding-inline:2px}

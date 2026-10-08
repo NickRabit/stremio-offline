@@ -235,6 +235,21 @@ test("PATCH /api/settings coerces a start page it does not know to the catalogue
   assert.equal((await response.json() as Record<string, unknown>).startView, "catalog");
 });
 
+test("PATCH /api/settings round trips the library shelf and coerces a value it does not know", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+
+  const set = await api(harness.base, "/api/settings", { method: "PATCH", user: "carol", body: { libraryShelf: "episodes" } });
+  assert.equal(set.status, 200);
+  assert.equal(harness.state.userData?.[CAROL]?.prefs.libraryShelf, "episodes");
+  assert.equal((await set.json() as Record<string, unknown>).libraryShelf, "episodes");
+
+  const junk = await api(harness.base, "/api/settings", { method: "PATCH", user: "carol", body: { libraryShelf: "nope" } });
+  assert.equal(junk.status, 200);
+  assert.equal(harness.state.userData?.[CAROL]?.prefs.libraryShelf, "resume");
+  assert.equal((await junk.json() as Record<string, unknown>).libraryShelf, "resume");
+});
+
 test("PATCH /api/settings drops an unknown streamSort and clamps concurrentDownloads", async (t) => {
   const harness = await mount();
   t.after(harness.close);

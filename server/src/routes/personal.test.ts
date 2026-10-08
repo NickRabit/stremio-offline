@@ -25,6 +25,7 @@ const instancePrefs: UserPrefs = {
   mergeByName: false, streamSort: "recommended", trackProgress: true, showResumeRow: true,
   catalogTileSize: "medium", libraryTileSize: "medium", catalogTileShape: "poster", libraryTileShape: "poster", homeTileShape: "wide",
   startView: "catalog",
+  libraryShelf: "resume",
 };
 
 interface Harness {
@@ -316,6 +317,19 @@ test("GET /api/library/favorites drops a row whose library the caller has lost",
   assert.equal(response.status, 200);
   const body = await response.json() as { items: Array<{ path: string }> };
   assert.deepEqual(body.items.map((item) => item.path), ["lib_00000002/Shows/01.mkv"]);
+});
+
+test("GET /api/library/favorites omits a library that opted out and keeps another's star", async (t) => {
+  const optedOut: LibraryRecord = { id: "lib_00000003", name: "Quiet", type: "mixed", root: "/media/quiet", enabled: true, order: 2, addedAt: "", writeArtwork: false, showInFavorites: false, visibleTo: [ALICE] };
+  const harness = await mount([granted, optedOut]);
+  t.after(harness.close);
+  harness.data(ALICE).favorites = ["lib_00000002/Shows/01.mkv", "lib_00000003/Quiet/Hidden.mkv"];
+
+  const response = await api(harness.base, "/api/library/favorites", { user: ALICE });
+
+  assert.equal(response.status, 200);
+  const body = await response.json() as { items: Array<{ path: string }> };
+  assert.deepEqual(body.items.map((item) => item.path), ["lib_00000002/Shows/01.mkv"], "the stars stay stored, the opted-out library just does not answer");
 });
 
 test("Continue watching neither shows nor asks an addon the caller may not use", async (t) => {

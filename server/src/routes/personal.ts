@@ -7,7 +7,7 @@ import { images } from "../images.js";
 import { knownTitleEntry } from "../library-match.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import { sortFiles, type BrowseItem, type BrowseMeta, type LibraryFile } from "../library.js";
-import { libraryFor, libraryPath, libraryVisible, parseLibraryPath, showsInContinueWatching, showsOnHome, type LibraryRecord, type Viewer } from "../libraries.js";
+import { libraryFor, libraryPath, libraryVisible, parseLibraryPath, showsInContinueWatching, showsInFavorites, showsOnHome, type LibraryRecord, type Viewer } from "../libraries.js";
 import { log } from "../logger.js";
 import { markersOwingRow, nextEpisodeOf } from "../next-episode.js";
 import { groupSeriesProgress, seriesOf, type ProgressSeries } from "../progress-series.js";
@@ -466,7 +466,7 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     const sort = sorts.has(String(req.query.sort)) ? String(req.query.sort) as "name" : "name";
     const viewer = viewerOf(currentUser(req));
     const libraries = store.libraries();
-    const described = await Promise.all(dataOf(req).favorites.filter((stored) => pathVisible(stored, viewer, libraries)).map(async (stored) => {
+    const described = await Promise.all(dataOf(req).favorites.filter((stored) => pathVisible(stored, viewer, libraries) && showsInFavorites(stored, libraries)).map(async (stored) => {
       const item = await describeLibraryPath(stored, { stale: true });
       return item && { ...item, path: wirePath(libraryKey(stored)) };
     }));
