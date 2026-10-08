@@ -1774,6 +1774,96 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
   .following-activity-actions{justify-content:flex-start;padding-top:4px}
 }
 
-/* Seven items on the phone bottom bar still fit at 360px; below 420px their labels would not,
-   so the text collapses to zero width and the label lives on in the button's aria-label and title. */
-@media(max-width:420px){.sidebar nav button>span{font-size:0}}
+/* Home: the compact navigation, the Downloads row and the More menu. Ported from
+   docs/home-prototype/home.css, which stays the visual reference. */
+.hq{display:flex;gap:12px;overflow-x:auto;overflow-y:hidden;padding:3px 2px 8px;scroll-snap-type:x proximity;overscroll-behavior-x:contain;scroll-padding-inline:2px}
+.sidebar nav{overscroll-behavior:contain}
+.hq-card{flex:0 0 264px;scroll-snap-align:start;display:grid;gap:6px;padding:0 12px 10px;border:1px solid var(--line);border-radius:12px;background:var(--panel);min-width:0}
+.hq-card.attention{border-color:#e7b86755;background:linear-gradient(120deg,#e7b86712,var(--panel) 70%)}
+.hq-card.failed{border-color:#f06a7655;background:linear-gradient(120deg,#f06a7612,var(--panel) 70%)}
+.hq-title{display:flex;align-items:flex-end;border:0;background:transparent;padding:8px 0 0;text-align:left;font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-height:44px;color:var(--text)}
+.hq-state{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hq-state.run{color:var(--green)}.hq-state.warn{color:#e7b867}.hq-state.bad{color:var(--red)}
+.hq-bar{height:4px;border-radius:99px;background:#ffffff14;overflow:hidden}.hq-bar i{display:block;height:100%;background:var(--accent)}.hq-bar.warn i{background:#e7b867}.hq-bar.bad i{background:var(--red)}.hq-bar.run i{background:var(--green)}
+.hq-foot{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.hq-meta{font-size:11px;color:var(--muted);min-width:0;flex:1 1 auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hq-foot button{min-height:44px;min-width:44px;max-width:70%;padding:0 12px;font-size:12px;flex:0 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.home-head{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;min-width:0}
+.home-head h3{margin:0}.home-head .count{font-size:11px;color:var(--muted)}
+.home-row{margin-bottom:20px}.home-row .subhead{gap:12px;flex-wrap:wrap}
+.home-row .resume-show-all{min-height:44px;min-width:44px;display:inline-flex;align-items:center;justify-content:center}
+.sidebar nav .nav-more{display:none}
+.more-menu{display:none;position:fixed;z-index:60;background:#141922;border:1px solid var(--line);border-radius:14px;box-shadow:0 18px 50px #000a;padding:6px;overflow:auto}
+.more-menu.open{display:grid;gap:2px}
+.more-menu button{display:flex;align-items:center;gap:12px;justify-content:flex-start;min-height:48px;border:0;background:transparent;border-radius:9px;color:var(--text);padding:0 14px;font-weight:600}
+.more-menu button:hover{background:var(--panel2)}
+.more-menu b{margin-left:auto;background:var(--accent);color:#1a0d09;border-radius:99px;font-size:10px;padding:2px 7px}
+.more-menu hr{border:0;border-top:1px solid var(--line);margin:4px 8px;width:auto}
+
+/* Phone upright and short landscape: exactly five slots, labels back under the icons. */
+@media(max-width:700px){
+  .sidebar nav .nav-secondary{display:none}.sidebar nav .nav-more{display:flex}
+  .sidebar nav{justify-content:stretch;align-items:stretch}
+  .sidebar nav button{min-width:0;flex:1 1 0;min-height:0;gap:3px;justify-content:center}
+  .sidebar nav button>span{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;white-space:normal;overflow:hidden;font-size:10px;line-height:1.1;max-width:100%}
+  .home-row .subhead{flex-wrap:nowrap;align-items:center}
+  .home-head{flex:1 1 auto;min-width:0;flex-direction:column;align-items:flex-start;gap:1px}
+  .home-head h3{max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .home-row .resume-show-all{border:0;background:transparent;padding:0 2px 0 10px;flex:0 0 auto}
+  main.view-home{padding:78px 16px 25px}
+  main.view-home .heading small,main.view-home .heading .lead{display:none}
+  main.view-home .heading{margin-bottom:12px}
+  .hq-card{flex-basis:244px}
+  .hq{gap:12px}
+  .more-menu{left:12px;right:12px;bottom:calc(76px + env(safe-area-inset-bottom,0px));max-height:60dvh}
+}
+
+/* Short landscape: the rail beside the listing, the menu anchored to its own trigger. */
+@media(max-width:980px) and (max-height:500px) and (orientation:landscape){
+  .sidebar nav .nav-secondary{display:none}.sidebar nav .nav-more{display:flex}
+  .sidebar{width:calc(64px + env(safe-area-inset-left,0px));padding:5px 5px max(5px,env(safe-area-inset-bottom,0px)) calc(5px + env(safe-area-inset-left,0px))}
+  .sidebar nav{gap:0;justify-content:stretch;overflow-y:auto}
+  .sidebar nav button{flex:1 0 40px;min-height:40px;padding:3px 2px;flex-direction:column;gap:1px;font-size:9.5px;line-height:1.1}
+  .sidebar nav button>span{display:block;-webkit-line-clamp:1;white-space:nowrap;font-size:9.5px;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+  .sidebar nav button svg{width:18px;height:18px}
+  main.view-home{padding:62px 12px 16px calc(64px + 14px + env(safe-area-inset-left,0px))}
+  main.view-home .heading{display:none}
+  .home-row{margin-bottom:12px}.home-row .subhead{margin-bottom:6px}
+  .hq-card{flex-basis:232px;gap:4px;padding:0 10px 8px}
+  .hq-title{padding-top:6px}
+  .hq-foot button{min-height:44px}
+  .more-menu{left:calc(70px + env(safe-area-inset-left,0px));bottom:8px;width:230px;max-height:calc(100dvh - 70px)}
+}
+
+/* Tablet held upright: the collapsed rail, every destination, the label under each icon. */
+@media(min-width:701px) and (max-width:980px) and (orientation:portrait){
+  .sidebar{width:76px;padding:20px 6px}
+  main{padding-left:104px}
+  .sidebar nav button{flex-direction:column;justify-content:center;gap:2px;padding:9px 2px;font-size:10px;position:relative;text-align:center}
+  .sidebar nav b{position:absolute;right:4px;top:3px;margin:0}
+  .sidebar-bottom,.addon-status{display:none}
+  .sidebar-collapsed .sidebar nav button>span,.sidebar nav button>span{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;white-space:normal;overflow:hidden;max-width:100%}
+}
+
+/* Wide and short: a desktop window dragged down, which keeps every destination. */
+@media(min-width:981px) and (max-height:500px) and (orientation:landscape){
+  .topbar{height:54px;padding:0 max(14px, env(safe-area-inset-right, 0px)) 0 max(14px, env(safe-area-inset-left, 0px))}
+  .topbar .brand small,.topbar .online,.topbar .restricted-chip{display:none}
+  .topbar .brand-mark{width:34px;height:34px;border-radius:9px}
+  .topbar .brand h1{font-size:16px}
+  .sidebar{top:54px;overflow:auto}
+  .sidebar-bottom,.addon-status{display:none}
+  main.view-home{padding-top:62px}
+  main.view-home .heading{display:none}
+  .home-row{margin-bottom:12px}.home-row .subhead{margin-bottom:6px}
+}
+
+/* Medium landscape: width for every destination, not enough height for the eyebrow. */
+@media(min-width:701px) and (min-height:501px) and (max-height:680px) and (orientation:landscape){
+  .addon-status{display:none}
+  .sidebar{overflow:auto}
+  .sidebar nav{min-height:0}
+  main.view-home .heading small,main.view-home .heading .lead{display:none}
+  main.view-home .heading{margin-bottom:8px}
+  main.view-home .heading h2{font-size:22px;margin:0}
+}
