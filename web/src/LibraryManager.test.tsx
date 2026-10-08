@@ -293,6 +293,25 @@ it("the mosaic of covers can be turned off in the library dialog", async () => {
   expect(patched).toEqual([{ mosaic: false }]);
 });
 
+it("a re-root that moved the content but could not switch says where the content is", async () => {
+  fetchMock.mockResolvedValue(json([library({ rerootStranded: "/downloads/New films" })]));
+  await act(async () => { root.render(<LibraryManager onError={vi.fn()} onNotify={vi.fn()}/>); });
+  await act(async () => { await Promise.resolve(); });
+  await openEditor();
+  const warning = host.querySelector(".library-edit-warning");
+  expect(warning?.getAttribute("role")).toBe("alert");
+  expect(warning?.textContent).toContain("/downloads/New films");
+  expect(warning?.textContent).toContain("Change folder");
+});
+
+it("a library with nothing stranded shows no re-root warning", async () => {
+  fetchMock.mockResolvedValue(json([library()]));
+  await act(async () => { root.render(<LibraryManager onError={vi.fn()} onNotify={vi.fn()}/>); });
+  await act(async () => { await Promise.resolve(); });
+  await openEditor();
+  expect(host.querySelector(".library-edit-warning")).toBeNull();
+});
+
 it("saves the per-library automatic metadata setting", async () => {
   const patched: Record<string, unknown>[] = [];
   fetchMock.mockImplementation(async (_url: string, init?: RequestInit) => {

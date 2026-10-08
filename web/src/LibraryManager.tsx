@@ -203,6 +203,7 @@ function LibraryEditDialog({ library, libraryCount, onClose, onSave, onScan, onR
             <label><span>{t("library.libraryType")}</span><select value={draft.type} aria-label={t("library.libraryType")} disabled={busy} onChange={(event) => setType(event.target.value as LibraryType)}>{TYPES.map((type) => <option key={type} value={type}>{libraryTypeLabel(type)}</option>)}</select></label>
           </div>
           <div className="library-edit-folder"><span>{t("library.folderHeading")}</span><strong title={library.root}>{library.root}</strong><button type="button" disabled={busy} onClick={onReroot}><FolderOpen/> {t("library.reroot")}</button></div>
+          {library.rerootStranded && <p className="library-edit-warning" role="alert">{t("library.rerootStranded", { to: library.rerootStranded })}</p>}
         </section>
         <section className="library-edit-section">
           <div className="library-picker-section-head"><h3>{t("library.availabilityHeading")}</h3></div>

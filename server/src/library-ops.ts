@@ -57,6 +57,11 @@ export interface OpsState {
   startedAt: string;
   finishedAt?: string;
   results: OpsResult[];
+  /** Why a job whose items all went through still failed: the `finished` hook could not
+   *  complete what the items set up. Cleared if a later start completes it. */
+  error?: string;
+  errorKey?: string;
+  errorVars?: Record<string, string | number>;
 }
 
 interface StoredJob extends OpsState {
@@ -72,13 +77,17 @@ interface StoredJob extends OpsState {
 
 interface StoredState { version: 1; jobs: StoredJob[] }
 
+/** What a `finished` hook returns when the work the items did could not be completed. */
+export interface FinishOutcome { error: string; errorKey?: string; vars?: Record<string, string | number> }
+
 export interface LibraryOpsOptions {
   file: string;
   execute: (operation: LibraryOp, item: string, progress: (bytes: number, total?: number) => void, journal: OpsJournal) => Promise<{ to?: string }>;
   pause?: (operation: LibraryOp, item: string) => Promise<OpsState["pauseReason"] | undefined> | OpsState["pauseReason"] | undefined;
   /** Called once when a job reaches a terminal state, after the state is saved.
-   *  A throw is logged by the caller and never fails the job. */
-  finished?: (job: OpsState, operation: LibraryOp) => Promise<void> | void;
+   *  A throw is logged by the caller and never fails the job. A returned outcome does: the
+   *  job ends `failed` with that reason, and the hook runs again on the next start. */
+  finished?: (job: OpsState, operation: LibraryOp) => Promise<FinishOutcome | void> | FinishOutcome | void;
   retryMs?: number;
 }
 
@@ -93,6 +102,9 @@ export class LibraryOps {
   private wakeTimer?: ReturnType<typeof setTimeout>;
   private pumped: Promise<void> = Promise.resolve();
   private notified = new Set<string>();
+  /** Jobs whose `finished` hook is under way. They read as still running, so nobody hears
+   *  "done" before the hook has had its say. */
+  private finishing = new Set<string>();
   /** Set when the state file could not be read or was written by a newer version: work is
    *  refused rather than overwriting a file the owner may still be able to fix. */
   private unreadable = false;
@@ -145,7 +157,11 @@ export class LibraryOps {
   }
 
   snapshot() {
-    return { jobs: this.jobs.map(publicJob) };
+    return {
+      jobs: this.jobs.map((job) => this.finishing.has(job.id)
+        ? { ...publicJob(job), status: "running" as const, finishedAt: undefined }
+        : publicJob(job)),
+    };
   }
 
   /** Every item a job that has not finished still covers, in the wire form the request used.
@@ -157,6 +173,14 @@ export class LibraryOps {
     return this.jobs
       .filter((job) => job.status === "running" || job.status === "paused")
       .flatMap((job) => job.operation.op === "reroot" ? [job.operation.libraryId] : job.operation.items);
+  }
+
+  /** Jobs whose items all ran but whose `finished` hook reported it could not complete them,
+   *  waiting for the next start to try again. */
+  unfinished(): Array<{ operation: LibraryOp; error: string; errorKey?: string }> {
+    return this.jobs
+      .filter((job) => job.notifyPending && job.status === "failed" && job.error !== undefined)
+      .map((job) => ({ operation: structuredClone(job.operation), error: job.error!, errorKey: job.errorKey }));
   }
 
   async flush() { await this.saveTail; }
@@ -299,22 +323,45 @@ export class LibraryOps {
     await this.save();
     if (this.notified.has(job.id)) return;
     this.notified.add(job.id);
+    this.finishing.add(job.id);
+    let outcome: FinishOutcome | void;
     try {
-      await this.options.finished?.(publicJob(job), job.operation);
+      outcome = await this.options.finished?.(publicJob(job), job.operation);
     } catch (error) {
       log("WARN", "A finished library operation hook threw", {
         job: job.id, op: job.operation.op, reason: error instanceof Error ? error.message : String(error),
       });
+      this.finishing.delete(job.id);
       return;
+    }
+    if (outcome) {
+      // The flag stays on: the hook gets another go on the next start, once whatever stood
+      // in its way may have moved.
+      job.status = "failed";
+      job.error = outcome.error;
+      job.errorKey = outcome.errorKey;
+      job.errorVars = outcome.vars;
+      await this.save();
+      this.finishing.delete(job.id);
+      return;
+    }
+    if (job.error !== undefined) {
+      job.error = undefined;
+      job.errorKey = undefined;
+      job.errorVars = undefined;
+      job.status = job.cancelRequested ? "cancelled" : job.failed === job.total ? "failed" : "completed";
     }
     job.notifyPending = false;
     await this.save();
+    this.finishing.delete(job.id);
   }
 
   private save() {
     if (this.unreadable) return Promise.resolve();
     const active = this.jobs.filter((job) => job.status === "running" || job.status === "paused");
-    const finished = this.jobs.filter((job) => job.status !== "running" && job.status !== "paused").slice(-20);
+    // A job still waiting on its hook is kept past the cut, or the next start would never retry it.
+    const ended = this.jobs.filter((job) => job.status !== "running" && job.status !== "paused");
+    const finished = ended.filter((job, index) => job.notifyPending || index >= ended.length - 20);
     const state: StoredState = { version: 1, jobs: [...active, ...finished].sort((a, b) => a.startedAt.localeCompare(b.startedAt)) };
     const serialized = JSON.stringify(state, null, 2);
     this.saveTail = this.saveTail.catch(() => undefined).then(async () => {

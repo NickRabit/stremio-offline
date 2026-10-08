@@ -236,6 +236,9 @@ export interface LibraryView {
   /** The accounts this library is granted to. Absent or empty means administrators only:
    *  there is no sentinel for "everybody", so a grant is always a list of ids. */
   visibleTo?: string[];
+  /** The folder a re-root moved the content into while another library took it, so this
+   *  library still points at its old folder. Administrators only. */
+  rerootStranded?: string;
 }
 export type BrowseItem =
   | ({ kind: "folder"; favorite?: boolean } & BrowseFolder)
@@ -292,6 +295,8 @@ export interface LibraryOpsState {
   total: number; done: number; failed: number; bytes: number; bytesTotal: number;
   current?: string; startedAt: string; finishedAt?: string;
   results: Array<{ path: string; ok: boolean; to?: string; error?: string; errorKey?: string }>;
+  /** Why a job whose items all went through still failed, such as a re-root that could not switch. */
+  error?: string; errorKey?: string; errorVars?: Record<string, string | number>;
 }
 /** One destination in the move dialog. Unlike a browsed folder it may hold no video at all. */
 export interface LibraryFolder { path: string; name: string }

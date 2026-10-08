@@ -1106,6 +1106,7 @@ img.broken{visibility:hidden}
 .library-edit-folder{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--line);border-radius:9px;background:#0d111788;font-size:11px}
 .library-edit-folder>span{color:var(--muted);font-weight:700}
 .library-edit-folder>strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}
+.library-edit-warning{margin:8px 0 0;padding:10px 12px;border-radius:8px;background:#2a2113;color:#e7b867;font-size:11px;line-height:1.5;overflow-wrap:anywhere}
 .library-edit-folder button{padding:7px 9px;font-size:11px}
 .library-edit-controls{display:grid;gap:11px}
 .library-edit-controls .library-check{display:flex;align-items:center;gap:9px;font-size:12px;color:var(--text)}
