@@ -1,16 +1,16 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { ChevronRight, Download as DownloadIcon, Pause, Play, RectangleHorizontal, RectangleVertical, RefreshCw } from "lucide-react";
 import { api } from "./api";
 import { Empty } from "./app-chrome";
 import { bytes, speed, statusLabel } from "./download-format";
 import { attentionCount, blocked, homeQueue, queueAction, queueGroup } from "./home-rows";
 import type { ShowAllTarget } from "./home-cards";
-import { HOME_ROWS, homeAllRowsEmpty, type HomeRows } from "./home-state";
+import { homeAllRowsEmpty, homeRowsFor, type HomeRows } from "./home-state";
 import { HomeShelf } from "./HomeShelf";
 import type { HomeCardActions } from "./HomeCard";
 import { t } from "./i18n";
 import type { Download, LibraryView, TileShape } from "./types";
-import type { MediaHomeCard, MediaRowId } from "../../server/src/home";
+import type { HomeCard, HomeRowId } from "../../server/src/home";
 
 const BLOCKED_KEY = { storage: "home.blocked.storage", library: "home.blocked.library", permission: "home.blocked.permission" } as const;
 const ACTION_LABEL = { retry: "downloads.retry", resume: "library.continue", pause: "player.pause", open: "nav.downloads" } as const;
@@ -35,7 +35,7 @@ function metaOf(job: Download): string {
 
 const percentOf = (job: Download) => job.total != null && job.total > 0 ? Math.min(100, (job.received / job.total) * 100) : null;
 
-export function Home({ jobs, onShowDownloads, onAction, rows, shape, onToggleShape, onRetry, onShowAll, onPlay, onOpenCatalogue, onReveal, onForgotten, onError }: {
+export function Home({ jobs, admin, onShowDownloads, onAction, rows, shape, onToggleShape, onRetry, onShowAll, onPlay, onOpenCatalogue, onShuffle, onReveal, onForgotten, onError }: {
   jobs: Download[];
   libraries: LibraryView[];
   onShowDownloads: () => void;
@@ -44,15 +44,17 @@ export function Home({ jobs, onShowDownloads, onAction, rows, shape, onToggleSha
   rows: HomeRows;
   shape: TileShape;
   onToggleShape: () => void;
-  onRetry: (row: MediaRowId) => void;
+  onRetry: (row: HomeRowId) => void;
   onShowAll: (target: ShowAllTarget) => void;
-  onPlay: (card: MediaHomeCard) => void;
-  onOpenCatalogue: (card: MediaHomeCard) => void;
+  onPlay: (card: HomeCard) => void;
+  onOpenCatalogue: (card: HomeCard) => void;
+  onShuffle: (row: HomeRowId, shuffle: number) => void;
   onReveal: (path: string) => void;
   onForgotten: () => void;
   onError: (error: unknown) => void;
 }) {
   const [busy, setBusy] = useState<ReadonlySet<string>>(new Set());
+  const shuffleCount = useRef(0);
   const items = homeQueue(jobs);
   const attention = attentionCount(jobs);
 
@@ -61,7 +63,7 @@ export function Home({ jobs, onShowDownloads, onAction, rows, shape, onToggleSha
     <button className="shape-toggle" title={t(shape === "wide" ? "home.shapePoster" : "home.shapeWide")} aria-pressed={shape === "wide"} onClick={onToggleShape}>{shape === "wide" ? <RectangleVertical/> : <RectangleHorizontal/>}</button>
   </div>;
 
-  if (!items.length && homeAllRowsEmpty(rows)) return <>{heading}<Empty icon={<DownloadIcon/>} title={t("home.emptyTitle")} text={t("home.emptyText")}/></>;
+  if (!items.length && homeAllRowsEmpty(rows, homeRowsFor(admin))) return <>{heading}<Empty icon={<DownloadIcon/>} title={t("home.emptyTitle")} text={t("home.emptyText")}/></>;
 
   const run = (job: Download, action: ReturnType<typeof queueAction>) => {
     if (action === "open") { onShowDownloads(); return; }
@@ -71,12 +73,13 @@ export function Home({ jobs, onShowDownloads, onAction, rows, shape, onToggleSha
       .finally(() => setBusy((current) => { const next = new Set(current); next.delete(job.id); return next; }));
   };
 
-  const forget = (card: MediaHomeCard) => {
+  const forget = (card: HomeCard) => {
     if (card.kind !== "resume-file" && card.kind !== "resume-catalogue") return;
     if (!window.confirm(t("home.forgetConfirm", { title: card.title }))) return;
     void api.forgetManyProgress(card.forgetKeys).then(onForgotten, onError);
   };
   const actions: HomeCardActions = { play: onPlay, open: onOpenCatalogue, reveal: onReveal, forget };
+  const shuffle = () => { shuffleCount.current += 1; onShuffle("tonight", shuffleCount.current); };
 
   const summary = [t("home.downloadsSummary", { count: items.length }), attention > 0 ? t("home.attention", { count: attention }) : ""].filter(Boolean).join(" · ");
   return <>
@@ -103,6 +106,6 @@ export function Home({ jobs, onShowDownloads, onAction, rows, shape, onToggleSha
         })}
       </div>
     </section>}
-    {HOME_ROWS.map((row) => <HomeShelf key={row} row={row} state={rows[row]} shape={shape} actions={actions} onRetry={onRetry} onShowAll={onShowAll}/>)}
+    {homeRowsFor(admin).map((row) => <HomeShelf key={row} row={row} state={rows[row]} shape={shape} actions={actions} onRetry={onRetry} onShowAll={onShowAll} onShuffle={row === "tonight" ? shuffle : undefined}/>)}
   </>;
 }

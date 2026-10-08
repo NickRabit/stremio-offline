@@ -37,7 +37,7 @@ import { Downloads } from "./DownloadsPage";
 import { Home } from "./Home";
 import { useHome } from "./useHome";
 import type { ShowAllTarget } from "./home-cards";
-import type { MediaHomeCard } from "../../server/src/home";
+import type { HomeCard } from "../../server/src/home";
 import { MoreMenu, type MoreItem } from "./MoreMenu";
 import { fmtEta } from "./download-format";
 import { MediaGallery, type GalleryImage, type GalleryKind } from "./MediaGallery";
@@ -219,7 +219,7 @@ export function App() {
   const [languages, setLanguages] = useState<Array<{ code: string; name: string }>>([]);
   const [inspection, setInspection] = useState<Inspection | null>(null);
   const [session, setSession] = useState<Session | null | undefined>(undefined);
-  const home = useHome({ active: view === "home", account: session?.username ?? null, playerOpen });
+  const home = useHome({ active: view === "home", account: session?.username ?? null, admin: session?.role === "admin", playerOpen });
   const [resumePreview, setResumePreview] = useState<BrowseResult | null>(null);
   const [favoritePreview, setFavoritePreview] = useState<BrowseResult | null>(null);
   const [browse, setBrowse] = useState<BrowseResult | null>(null);
@@ -1067,9 +1067,9 @@ export function App() {
         }
         if (previous && previous !== "completed" && job.status === "completed") {
           notify(t("downloads.inLibrary", { title: job.title }));
-          // Ready to play gained a card; Home refreshes only that row, and only while it is
-          // the view on screen -- the answer would otherwise land behind another view.
-          if (viewRef.current === "home") home.refresh(["completed"]);
+          // Ready to play and Recently added gained a card; Home refreshes only those rows, and
+          // only while it is the view on screen -- the answer would otherwise land behind another view.
+          if (viewRef.current === "home") home.refresh(["completed", "recent"]);
         }
       }
     }
@@ -1095,6 +1095,8 @@ export function App() {
       ? (current.some((item) => item.id === id) ? current.map((item) => item.id === id ? follow : item) : [...current, follow])
       : current.filter((item) => item.id !== id));
     void loadFollows();
+    // A follow change moves the New episodes row; refresh it only while Home is on screen.
+    if (viewRef.current === "home") home.refresh(["episodes"]);
   };
   /** Following from the detail hero: the chip switches state and the Library rows catch up. */
   const followed = (item: Meta, follow: FollowView) => {
@@ -1360,6 +1362,13 @@ export function App() {
   // Confirming the last title takes the button away with it, and a filter nobody can switch
   // off would leave the listing empty for good.
   useEffect(() => { if (!suggestionCount) setOnlyUnconfirmed(false); }, [suggestionCount]);
+  // The To confirm shelf opens the same suggestions dialog the library page does; once it
+  // closes, Home re-reads the row so a confirmed or dismissed proposal leaves the shelf.
+  const suggestionsWereOpen = useRef(false);
+  useEffect(() => {
+    if (suggestionsWereOpen.current && !suggestionsOpen && viewRef.current === "home") home.refresh(["confirm"]);
+    suggestionsWereOpen.current = suggestionsOpen;
+  }, [suggestionsOpen]);
   // Page-scroll paging, the same as in the catalogue. The button stays as a fallback.
   useEffect(() => {
     if (view !== "library" || !browse) return;
@@ -1944,12 +1953,17 @@ export function App() {
   };
 
   /** A Home media card's action, by kind: a file plays, a catalogue entry opens the remembered
-   *  episode the way a catalogue Continue-watching tile does, a favourite folder opens itself. */
-  const homePlay = (card: MediaHomeCard) => {
-    if (card.kind === "resume-catalogue") return;
-    void playLocal(card.kind === "favorite" ? card.label : card.title, card.path, card.poster, card.kind !== "favorite" && card.season != null);
+   *  episode the way a catalogue Continue-watching tile does, a favourite or Tonight folder opens
+   *  itself, a new episode opens its show the way the Library's row does, and a suggestion opens
+   *  the dialog the library page opens. */
+  const homePlay = (card: HomeCard) => {
+    if (card.kind === "resume-catalogue" || card.kind === "episode" || card.kind === "confirm") return;
+    const title = card.kind === "favorite" || card.kind === "recent" || card.kind === "tonight" ? card.label : card.title;
+    void playLocal(title, card.path, card.poster, (card.kind === "resume-file" || card.kind === "completed" || card.kind === "recent") && card.season != null);
   };
-  const homeOpen = (card: MediaHomeCard) => {
+  const homeOpen = (card: HomeCard) => {
+    if (card.kind === "episode") { void openFromCatalog({ type: card.type, id: card.metaId, name: card.name, poster: card.poster }); return; }
+    if (card.kind === "confirm") { setSuggestionsOpen(true); return; }
     if (card.kind !== "resume-catalogue") return;
     navigated.current = true;
     setView("catalog");
@@ -1959,6 +1973,9 @@ export function App() {
   const homeShowAll = (target: ShowAllTarget) => {
     navigated.current = true;
     if (target === "downloads") openView("downloads");
+    else if (target === "following") openView("following");
+    else if (target === "library") openView("library");
+    else if (target === "confirm") setSuggestionsOpen(true);
     else if (target === "catalog-resume") { setView("catalog"); setSelectedCatalog(VIRTUAL.resume); }
     else openHomeLibraryList(target === "library-resume" ? ":resume" : ":favorites");
   };
@@ -2011,6 +2028,7 @@ export function App() {
       {view === "home" && !restricted && <Home jobs={downloads} libraries={libraries} onShowDownloads={() => openView("downloads")} onAction={homeAction} admin={admin}
         rows={home.rows} shape={settings.homeTileShape} onToggleShape={() => void toggleShape("homeTileShape")}
         onRetry={(row) => home.refresh([row])} onShowAll={homeShowAll} onPlay={homePlay} onOpenCatalogue={homeOpen}
+        onShuffle={(row, shuffle) => home.refresh([row], { shuffle })}
         onReveal={revealInLibrary} onForgotten={() => home.refresh(["resume"])} onError={fail}/>}
       {view === "catalog" && <section className={`catalog-view ${catalogCompact ? "catalog-compact" : ""}`} {...chromeGestures(() => gridRef.current)} onFocusCapture={(event) => {
         if ((event.target as HTMLElement).closest(".searchbar,.filterbar")) setCatalogCompact(false);

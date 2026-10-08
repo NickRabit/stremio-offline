@@ -102,8 +102,8 @@ Shipped in `main`; implementation details live in the linked guides.
   [Supported sign-in](../desktop/README.md#cloudflare-access).
 - **Phones and tablets**: responsive layouts and Home Screen setup.
   [Mobile guide](mobile.md).
-- **Home**: the queue, Continue watching, Ready to play and Favourites on one
-  page, with a five-slot compact navigation and a More menu on phones and short
+- **Home**: the queue, Continue watching, new episodes, Ready to play, Recently
+  added, Tonight, Favourites and the titles waiting for a match on one page, with a five-slot compact navigation and a More menu on phones and short
   landscape screens. [Home page](home-spec.md).
 - **Statistics and diagnostics**: traffic by source, active streams, admin
   activity history, grouped errors and redacted logs.
@@ -143,14 +143,16 @@ episode without adult help, documentation or recovery through browser controls.
 
 ### Home screen
 
-The adult Home page is built (see [Home page](home-spec.md)): a Downloads row,
-Continue watching, Ready to play and Favourites beside the catalogue and the
-library. What is left:
+The adult Home page is built (see [Home page](home-spec.md)): Downloads,
+Continue watching, New episodes, Ready to play, Recently added, Tonight,
+Favourites and, for administrators, To confirm, beside the catalogue and the
+library. Each library and add-on has a **Show on Home** switch, and each account
+chooses its start page (Catalogue unless it says otherwise). What is left:
 
-- **Recently added**, which needs a write-once first-seen time per file so that
-  a re-copied file does not look new;
-- new episodes from followed shows, as a row once Following can be reused there;
-- row order, visibility and an opt-in landing view, per account;
+- row order and visibility per account;
+- carousels from an add-on's own catalogues, opt-in per add-on;
+- a "next episode is missing" card with a one-tap download, and an airing-today
+  card once the calendar exists;
 - the much smaller child-facing variant, with server-side enforcement. See the
   [home contract](roadmap-delivery-spec.md#family-home-and-kids-mode).
 

@@ -69,6 +69,7 @@ The dialog contains these controls:
 | Name | The name in the app. Nothing on disk moves. |
 | Show a mosaic of covers | Uses up to five title covers for the library card. Off uses plain folder artwork. Individual titles or folders can also be kept out of the mosaic from their item menu or a bulk selection. |
 | Show in Continue watching | Hides or shows this library in resume lists; stored playback positions are kept. |
+| Show on Home | Keeps this library's titles off the Home page (Continue watching, Ready to play, Recently added, Tonight, To confirm and Favourites). Nothing is deleted, and the library itself is unchanged. |
 | Scan this library | Matches this one library now instead of waiting for the automatic scan. |
 | Change folder | Choose whether to point at another folder only or move the content along — see below. |
 | Remove / Remove and forget | See *Removing a library*. |

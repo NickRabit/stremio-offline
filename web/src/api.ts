@@ -200,8 +200,15 @@ export const api = {
   forgetProgress: (key: string) => request<void>(`/api/progress/${encodeURIComponent(key)}`, { method: "DELETE" }),
   /** Forgets every key a merged Home card stands for in one owner-scoped write. */
   forgetManyProgress: (keys: string[]) => request<void>("/api/progress/forget", { method: "POST", body: JSON.stringify({ keys }) }),
-  /** Home's rows. Naming rows re-requests only those; omitting them asks for all three. */
-  home: (rows?: HomeRowId[]) => request<HomeResponse>(`/api/home${rows && rows.length ? `?rows=${rows.join(",")}` : ""}`),
+  /** Home's rows. Naming rows re-requests only those; a shuffle seed reorders the Tonight row.
+   *  The seed cycles 0..99 so one long session keeps the server's per-day order reachable. */
+  home: (rows?: HomeRowId[], options?: { shuffle?: number }) => {
+    const query = q({
+      rows: rows && rows.length ? rows.join(",") : undefined,
+      shuffle: options?.shuffle == null ? undefined : ((Math.trunc(options.shuffle) % 100) + 100) % 100,
+    });
+    return request<HomeResponse>(`/api/home${query ? `?${query}` : ""}`);
+  },
   setFavorite: (path: string, favorite: boolean) => request<{ path: string; favorite: boolean }>("/api/library/favorite", { method: "POST", body: JSON.stringify({ path, favorite }) }),
   resumeLibrary: (options: { skip?: number; limit?: number; sort?: string; order?: string; seed?: string; query?: string; favorites?: boolean }) =>
     request<BrowseResult>(`/api/library/resume?${q({ ...options, favorites: options.favorites ? 1 : undefined })}`),

@@ -35,10 +35,6 @@ export type HomeCard =
 
 export interface HomeRowError { error: string; code?: string; messageKey?: string }
 
-/** The rows and cards the client draws today; `episode`, `tonight` and `confirm` follow. */
-export type MediaRowId = "resume" | "completed" | "favorites";
-export type MediaHomeCard = Extract<HomeCard, { kind: "resume-file" | "resume-catalogue" | "completed" | "favorite" }>;
-
 export interface HomeRow {
   status: "ok" | "error";
   error?: HomeRowError;

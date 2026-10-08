@@ -1813,6 +1813,10 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
 .home-note{font-size:11px;color:var(--muted);margin:-4px 0 8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;min-height:24px}
 .home-note.bad{color:var(--red)}
 .home-retry{min-height:44px;padding:0 12px}
+.home-shuffle{width:44px;height:44px;min-height:44px;padding:0;flex:0 0 auto;border:0;background:transparent;color:var(--muted)}
+.home-shuffle:hover{color:var(--text)}
+.home-shuffle svg{width:18px;height:18px}
+.home-card[data-kind="confirm"] .home-candidate{color:var(--accent2)}
 .home-shape-poster .home-row .resume-strip .browse-art{aspect-ratio:2/3}
 .home-shape-poster .home-row .resume-strip .browse-item{flex-basis:132px;width:132px}
 .home-shape-poster .home-row .browse-open strong{white-space:normal;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-height:1.2}
