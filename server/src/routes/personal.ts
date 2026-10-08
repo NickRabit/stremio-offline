@@ -2,10 +2,11 @@ import type express from "express";
 import { allowedAddons } from "../addons.js";
 import type { ArtShape } from "../artwork.js";
 import { AppError } from "../errors.js";
+import { HOME_FORGET_LIMIT } from "../home.js";
 import { images } from "../images.js";
 import { knownTitleEntry } from "../library-match.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
-import { sortFiles, type BrowseItem } from "../library.js";
+import { sortFiles, type BrowseItem, type BrowseMeta, type LibraryFile } from "../library.js";
 import { libraryFor, libraryPath, libraryVisible, parseLibraryPath, showsInContinueWatching, type LibraryRecord, type Viewer } from "../libraries.js";
 import { log } from "../logger.js";
 import { markersOwingRow, nextEpisodeOf } from "../next-episode.js";
@@ -43,7 +44,68 @@ export interface PersonalDeps extends RouteContext {
   wirePath(key: string): string;
 }
 
-export function registerPersonalRoutes(app: express.Application, deps: PersonalDeps): void {
+/** What `GET /api/progress` hands the interface: one row per show, already wire-keyed and
+ *  with its poster proxied. `partial` is set for Home when a marker lookup timed out. */
+export interface ProgressPageItem {
+  key: string;
+  position: number;
+  duration: number;
+  title: string;
+  path?: string;
+  poster?: string;
+  addonKey?: string;
+  series?: ProgressSeries;
+  pending?: true;
+  updatedAt: string;
+}
+export interface ProgressPage { items: ProgressPageItem[]; partial: boolean }
+
+export interface ProgressRowOptions {
+  /** Only the newest markers are looked up, so a big history cannot fan out on Home. */
+  markerLimit?: number;
+  /** Each lookup races this deadline; a miss leaves the marker alone and sets `partial`. */
+  deadlineMs?: number;
+  /** Drop stored rows whose addon the caller may not use. Home asks for this; the route does not. */
+  addonFilter?: boolean;
+  /** How many rows survive the cut. `Infinity` keeps every candidate for the caller to merge. */
+  limit?: number;
+}
+
+/** One row of `GET /api/library/resume` as the handler serialises it, plus the series
+ *  identity Home needs -- the handler strips it, exactly as it strips the show key today. */
+export type ResumePageItem = LibraryFile & BrowseMeta & {
+  kind: "file";
+  favorite: boolean;
+  progress: { position: number; duration: number };
+  poster?: string;
+  wide?: string;
+  seriesKey?: string;
+  seriesId?: string;
+  seriesType?: string;
+  backfill?: boolean;
+};
+export interface ResumePage { items: ResumePageItem[]; total: number; pending: boolean }
+
+/** The pieces `registerHomeRoutes` reads from the personal routes instead of reaching into
+ *  the store itself, so exactly one place applies the permission rules. */
+export interface PersonalApi {
+  progressRows(req: express.Request, options?: ProgressRowOptions): Promise<ProgressPage>;
+  libraryResumeItems(req: express.Request): Promise<ResumePage>;
+  pathVisible(key: string, viewer: Viewer, libraries: LibraryRecord[]): boolean;
+}
+
+const LOOKUP_TIMEOUT = Symbol("home-lookup-timeout");
+
+/** Races one promise against a deadline. `undefined` means there is no deadline. */
+async function withDeadline<T>(work: Promise<T>, ms?: number): Promise<T | typeof LOOKUP_TIMEOUT> {
+  if (ms === undefined || ms <= 0) return work;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([work, new Promise<typeof LOOKUP_TIMEOUT>((resolve) => { timer = setTimeout(() => resolve(LOOKUP_TIMEOUT), ms); })]);
+  } finally { if (timer) clearTimeout(timer); }
+}
+
+export function registerPersonalRoutes(app: express.Application, deps: PersonalDeps): PersonalApi {
   const { store, currentUser, attachBrowseMeta, cachedMeta, dataOf, describeLibraryPath, libraryKey, libraryOfKey, locateFileArtwork, locateFolderArtworkPair, markersOf, metaStore, posterOf, prefsOf, progressOf, scheduleFileArtwork, scheduleFolderArtwork, setLibraryFavorite, thumbUrl, updateData, watchlistOf, wirePath } = deps;
 
   /** Whether the caller may see the library a stored path names. A path that names no
@@ -173,7 +235,9 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
   /** One row of Continue watching, either a stored position or the next episode a finished
    *  one left behind. */
   type ProgressRow = StoredProgress & { key: string; pending?: true };
-  app.get("/api/progress", asyncRoute(async (req, res) => {
+  /** The body of `GET /api/progress`, shared with Home so both read the same markers and
+   *  apply the same permission rules. The options are Home's work bounds. */
+  const progressRows = async (req: express.Request, options: ProgressRowOptions = {}): Promise<ProgressPage> => {
     const data = dataOf(req);
     const all = progressOf(data);
     const viewer = viewerOf(currentUser(req));
@@ -182,25 +246,33 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     // after the markers have had their say, so a show does not spend the row on every episode.
     // A row whose file is in a library the caller has lost drops out here, the way it does
     // from the resume list: it is the same row, read through a different door.
-    const rows = groupSeriesProgress(Object.entries(all)
+    const grouped = groupSeriesProgress(Object.entries(all)
       .filter(([, value]) => !value.path || pathVisible(value.path, viewer, libraries))
       .map(([key, value]) => ({ ...value, key })));
-    const shown = rows.flatMap((row) => (row.series ? [row.series.id] : []));
+    const allowed = new Set(allowedAddons(store.addons(), viewer).map((addon) => addon.key));
+    const shown = grouped.flatMap((row) => (row.series ? [row.series.id] : []));
+    // A stored catalogue row from an addon the caller may not use is dropped; the marker of
+    // the same show stays suppressed, so a dropped row does not reappear as its next episode.
+    const rows = options.addonFilter ? grouped.filter((row) => !row.addonKey || allowed.has(row.addonKey)) : grouped;
     const over: string[] = [];
     const language = prefsOf(req).uiLanguage;
-    const allowed = new Set(allowedAddons(store.addons(), viewer).map((addon) => addon.key));
     // A marker remembers which addon the show came from. One the caller may no longer use
     // has no row here: showing it would offer a next episode from a source this account is
     // not allowed to ask, and finding that out by asking is itself the leak.
-    const owed = markersOwingRow(markersOf(data), shown)
+    const owing = markersOwingRow(markersOf(data), shown)
       .filter(([, marker]) => !marker.addonKey || allowed.has(marker.addonKey));
+    const owed = options.markerLimit === undefined
+      ? owing
+      : [...owing].sort((a, b) => b[1].updatedAt.localeCompare(a[1].updatedAt) || a[0].localeCompare(b[0])).slice(0, options.markerLimit);
+    let partial = false;
     const pending = await Promise.all(owed.map(async ([id, marker]): Promise<ProgressRow | undefined> => {
       // The six-hour cache answers most of these. An addon that stays quiet answers null,
       // which leaves the marker alone: one unreachable show must fail by itself.
       //
       // The viewer goes with it: without one the lookup merges every addon on the instance,
       // so a request for the next episode reaches addons this account was never given.
-      const meta = await cachedMeta("series", id, language, viewer);
+      const meta = await withDeadline(cachedMeta("series", id, language, viewer), options.deadlineMs);
+      if (meta === LOOKUP_TIMEOUT) { partial = true; return undefined; }
       if (!meta) return undefined;
       const next = nextEpisodeOf(meta.videos, marker);
       if (!next) { over.push(id); return undefined; }
@@ -222,9 +294,12 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     });
     const items = [...rows, ...pending.filter((row) => row !== undefined)]
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-      .slice(0, 40)
+      .slice(0, options.limit ?? 40)
       .map((value) => ({ ...value, key: wireProgressKey(value.key), path: value.path ? wirePath(value.path) : value.path, poster: images.proxied(value.poster) }));
-    res.json(items);
+    return { items, partial };
+  };
+  app.get("/api/progress", asyncRoute(async (req, res) => {
+    res.json((await progressRows(req)).items);
   }));
   app.get("/api/progress/:key", (req, res) => {
     const found = progressOf(dataOf(req))[storedProgressKey(String(req.params.key))];
@@ -297,6 +372,28 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     });
     res.status(204).end();
   }));
+  /** Forgetting a merged Home card forgets every key it stands for, and the marker of any
+   *  show it implies, in one owner-scoped write. */
+  app.post("/api/progress/forget", asyncRoute(async (req, res) => {
+    const raw = (req.body ?? {}) as { keys?: unknown };
+    if (!Array.isArray(raw.keys)) throw new AppError("The forget request names no keys.", "err.invalidRequest");
+    if (raw.keys.length > HOME_FORGET_LIMIT) throw new AppError("Too many keys to forget at once.", "err.invalidRequest");
+    const keys = raw.keys.map((key) => storedProgressKey(String(key)));
+    if (!keys.length) return res.status(204).end();
+    await updateData(req, (data) => {
+      const all = { ...progressOf(data) };
+      const markers = { ...markersOf(data) };
+      for (const key of keys) {
+        const removed = all[key];
+        delete all[key];
+        const series = seriesOf(key, { title: removed?.title ?? "", series: removed?.series });
+        if (series) delete markers[series.id];
+      }
+      data.progress = all;
+      data.watchedSeries = markers;
+    });
+    res.status(204).end();
+  }));
 
   app.post("/api/library/favorite", asyncRoute(async (req, res) => {
     const relative = String(req.body.path ?? "").trim();
@@ -305,7 +402,7 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     res.json({ path: relative, favorite: wanted });
   }));
 
-  app.get("/api/library/resume", asyncRoute(async (req, res) => {
+  const libraryResumeItems = async (req: express.Request): Promise<ResumePage> => {
     const data = dataOf(req);
     const favorites = new Set(data.favorites);
     const query = String(req.query.query ?? "").trim().toLocaleLowerCase();
@@ -325,10 +422,11 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
       // The binding sits on the show's folder, so two season folders of one show answer with the
       // same key and the grouping below turns them into a single tile.
       const bound = knownTitleEntry(libraryKey(key), records);
-      const series = bound?.record.type === "series" ? { key: bound.key, name: bound.record.name } : undefined;
+      const series = bound?.record.type === "series" ? { key: bound.key, id: bound.record.id, name: bound.record.name } : undefined;
       return [{ ...item, path: wirePath(key), label: entry.title || item.label, modified: entry.updatedAt,
         progress: { position: entry.position, duration: entry.duration }, favorite: favorites.has(key),
         seriesKey: series?.key,
+        seriesId: series?.id, seriesType: series ? "series" : undefined,
         ...(series?.name ? { series: { name: series.name } } : {}) }];
     }));
     // One tile per show before the filters, the sort and the slice, so `total` and the paging
@@ -349,7 +447,11 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
       const { item: withMeta, backfill } = await attachBrowseMeta(item, prefsOf(req).uiLanguage);
       return { ...withMeta, poster: await thumbUrl("path", item.path, art), wide: await thumbUrl("path", item.path, wide, "wide"), backfill };
     }));
-    res.json({ path: ":resume", items: page.map(({ backfill: _backfill, seriesKey: _seriesKey, ...item }) => item), total: ordered.length, pending: page.some((item) => !item.poster || !item.wide || item.backfill) });
+    return { items: page, total: ordered.length, pending: page.some((item) => !item.poster || !item.wide || item.backfill) };
+  };
+  app.get("/api/library/resume", asyncRoute(async (req, res) => {
+    const result = await libraryResumeItems(req);
+    res.json({ path: ":resume", items: result.items.map(({ backfill: _backfill, seriesKey: _seriesKey, seriesId: _seriesId, seriesType: _seriesType, ...item }) => item), total: result.total, pending: result.pending });
   }));
 
   app.get("/api/library/favorites", asyncRoute(async (req, res) => {
@@ -384,4 +486,6 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     }));
     res.json({ path: ":favorites", items: page.map(({ backfill: _backfill, ...item }) => item), total: ordered.length, pending: page.some((item) => !item.poster || !item.wide || item.backfill) });
   }));
+
+  return { progressRows, libraryResumeItems, pathVisible };
 }

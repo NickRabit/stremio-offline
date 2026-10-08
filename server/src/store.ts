@@ -56,7 +56,7 @@ export interface UserPrefs {
   uiLanguage: UiLanguage; audioLanguage: string; subtitleLanguage: string; downloadTitleLanguage: "ui" | string;
   mergeByName: boolean; streamSort: string; trackProgress: boolean; showResumeRow: boolean;
   catalogTileSize: TileSize; libraryTileSize: TileSize;
-  catalogTileShape: TileShape; libraryTileShape: TileShape;
+  catalogTileShape: TileShape; libraryTileShape: TileShape; homeTileShape: TileShape;
 }
 
 /** The flat shape of the settings file and of the settings backup: the instance's half and
@@ -106,7 +106,7 @@ export interface State { schemaVersion?: number;
   /** When the addon manifests were last refreshed in the background. */
   addonsRefreshedAt?: string }
 const baseInstanceSettings: InstanceSettings = { concurrentDownloads: 1, parallelPerProvider: 1, downloadSegments: 2, libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, addonRefreshHours: 24, defaultMovieLibrary: "", defaultSeriesLibrary: "", realDebridToken: "", tmdbApiKey: "" };
-const basePrefs: UserPrefs = { uiLanguage: "en", audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui", mergeByName: true, streamSort: "recommended", trackProgress: true, showResumeRow: true, catalogTileSize: "medium", libraryTileSize: "medium", catalogTileShape: "poster", libraryTileShape: "poster" };
+const basePrefs: UserPrefs = { uiLanguage: "en", audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui", mergeByName: true, streamSort: "recommended", trackProgress: true, showResumeRow: true, catalogTileSize: "medium", libraryTileSize: "medium", catalogTileShape: "poster", libraryTileShape: "poster", homeTileShape: "wide" };
 
 /** A fresh install starts with the one library the download directory has always been,
  *  so it never runs the migration an upgrade needs. */

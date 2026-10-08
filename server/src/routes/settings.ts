@@ -51,12 +51,12 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
     const {
       uiLanguage, audioLanguage, subtitleLanguage, downloadTitleLanguage,
       mergeByName, streamSort, trackProgress, showResumeRow,
-      catalogTileSize, libraryTileSize, catalogTileShape, libraryTileShape,
+      catalogTileSize, libraryTileSize, catalogTileShape, libraryTileShape, homeTileShape,
       ...instance
     } = flat;
     return {
       instance,
-      prefs: { uiLanguage, audioLanguage, subtitleLanguage, downloadTitleLanguage, mergeByName, streamSort, trackProgress, showResumeRow, catalogTileSize, libraryTileSize, catalogTileShape, libraryTileShape },
+      prefs: { uiLanguage, audioLanguage, subtitleLanguage, downloadTitleLanguage, mergeByName, streamSort, trackProgress, showResumeRow, catalogTileSize, libraryTileSize, catalogTileShape, libraryTileShape, homeTileShape },
     };
   };
 
@@ -206,6 +206,9 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
       }
       if (req.body.libraryTileShape !== undefined) {
         prefs.libraryTileShape = String(req.body.libraryTileShape) === "wide" ? "wide" : "poster";
+      }
+      if (req.body.homeTileShape !== undefined) {
+        prefs.homeTileShape = String(req.body.homeTileShape) === "wide" ? "wide" : "poster";
       }
       if (realDebridToken !== undefined) state.settings.realDebridToken = realDebridToken;
       if (tmdbApiKey !== undefined) state.settings.tmdbApiKey = tmdbApiKey;

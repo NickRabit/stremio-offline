@@ -18,7 +18,7 @@ import { registerContentRoutes, type ContentDeps } from "./content.js";
 const instancePrefs: UserPrefs = {
   uiLanguage: "en", audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui",
   mergeByName: false, streamSort: "recommended", trackProgress: true, showResumeRow: true,
-  catalogTileSize: "medium", libraryTileSize: "medium", catalogTileShape: "poster", libraryTileShape: "poster",
+  catalogTileSize: "medium", libraryTileSize: "medium", catalogTileShape: "poster", libraryTileShape: "poster", homeTileShape: "wide",
 };
 
 interface Calls {

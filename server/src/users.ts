@@ -228,7 +228,7 @@ export interface MigratableState {
 export const PERSONAL_SETTINGS = [
   "uiLanguage", "audioLanguage", "subtitleLanguage", "downloadTitleLanguage",
   "mergeByName", "streamSort", "trackProgress", "showResumeRow",
-  "catalogTileSize", "libraryTileSize", "catalogTileShape", "libraryTileShape",
+  "catalogTileSize", "libraryTileSize", "catalogTileShape", "libraryTileShape", "homeTileShape",
 ] as const;
 
 export interface UserMigration { migrated: boolean; userId?: string }

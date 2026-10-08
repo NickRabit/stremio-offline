@@ -23,7 +23,7 @@ const BOB = "usr_00000002";
 const instancePrefs: UserPrefs = {
   uiLanguage: "en", audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui",
   mergeByName: false, streamSort: "recommended", trackProgress: true, showResumeRow: true,
-  catalogTileSize: "medium", libraryTileSize: "medium", catalogTileShape: "poster", libraryTileShape: "poster",
+  catalogTileSize: "medium", libraryTileSize: "medium", catalogTileShape: "poster", libraryTileShape: "poster", homeTileShape: "wide",
 };
 
 interface Harness {
@@ -31,6 +31,8 @@ interface Harness {
   /** Whose preferences each `prefsOf` call asked for. */
   prefsAsked: string[];
   favoriteCalls: Array<{ relative: string; wanted: boolean; userId: string | undefined }>;
+  /** How many writes reached `updateData`, so a single-operation forget can be counted. */
+  updates: number;
   data(user: string): UserData;
   close(): Promise<void>;
 }
@@ -45,6 +47,7 @@ const mount = async (libraries: LibraryRecord[] = []): Promise<Harness> => {
   const users = new Map<string, UserData>([[ALICE, emptyUserData()], [BOB, emptyUserData()]]);
   const prefsAsked: string[] = [];
   const favoriteCalls: Harness["favoriteCalls"] = [];
+  let updates = 0;
   const userOf = (req?: express.Request) => {
     const id = req?.header("x-user");
     return id && users.has(id) ? id : undefined;
@@ -96,6 +99,7 @@ const mount = async (libraries: LibraryRecord[] = []): Promise<Harness> => {
     updateData: async (req, mutate) => {
       const id = userOf(req);
       if (!id) throw new ResourceError(401, "AUTH_REQUIRED");
+      updates += 1;
       mutate(users.get(id)!);
     },
     watchlistOf: (data) => data.watchlist as Record<string, WatchlistEntry>,
@@ -119,6 +123,7 @@ const mount = async (libraries: LibraryRecord[] = []): Promise<Harness> => {
     base: `http://127.0.0.1:${port}`,
     prefsAsked,
     favoriteCalls,
+    get updates() { return updates; },
     data: (user) => users.get(user)!,
     close: async () => {
       server.closeAllConnections();
@@ -211,6 +216,54 @@ test("DELETE /api/progress/:key removes one key and leaves the rest", async (t) 
   assert.equal(response.status, 204);
   assert.deepEqual(Object.keys(harness.data(ALICE).progress), ["movie:tt2"]);
   assert.deepEqual(harness.data(BOB).progress, {});
+});
+
+test("POST /api/progress/forget removes several keys and their markers in one write", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  harness.data(ALICE).progress = {
+    "series:tt1:1:2": { position: 60, duration: 600, title: "Pilot", series: { id: "tt1", name: "Show", season: 1, episode: 2 }, updatedAt: "2024-01-01T00:00:00.000Z" },
+    "file:lib_00000002/Shows/01.mkv": { position: 30, duration: 600, title: "Pilot", path: "lib_00000002/Shows/01.mkv", updatedAt: "2024-01-02T00:00:00.000Z" },
+    "movie:tt9": { position: 90, duration: 600, title: "Ronin", updatedAt: "2024-01-03T00:00:00.000Z" },
+  };
+  harness.data(ALICE).watchedSeries = { tt1: { name: "Show", season: 1, episode: 3, updatedAt: "2024-01-04T00:00:00.000Z" } };
+
+  const response = await api(harness.base, "/api/progress/forget", {
+    method: "POST", user: ALICE,
+    body: { keys: ["series:tt1:1:2", "file:lib_00000002/Shows/01.mkv"] },
+  });
+
+  assert.equal(response.status, 204);
+  assert.deepEqual(Object.keys(harness.data(ALICE).progress), ["movie:tt9"], "the unrelated movie stays");
+  assert.deepEqual(harness.data(ALICE).watchedSeries, {}, "the marker the forgotten show implies goes too");
+  assert.equal(harness.updates, 1, "every key is forgotten inside one updateData");
+  assert.deepEqual(harness.data(BOB).progress, {}, "and the write is the caller's own");
+});
+
+test("POST /api/progress/forget ignores a key that is not stored", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  harness.data(ALICE).progress = { "movie:tt9": { position: 90, duration: 600, title: "Ronin", updatedAt: "2024-01-03T00:00:00.000Z" } };
+
+  const response = await api(harness.base, "/api/progress/forget", { method: "POST", user: ALICE, body: { keys: ["movie:absent"] } });
+
+  assert.equal(response.status, 204);
+  assert.deepEqual(Object.keys(harness.data(ALICE).progress), ["movie:tt9"]);
+});
+
+test("POST /api/progress/forget refuses more than fifty keys and does nothing for an empty list", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+
+  const tooMany = await api(harness.base, "/api/progress/forget", {
+    method: "POST", user: ALICE, body: { keys: Array.from({ length: 51 }, (_, index) => `movie:t${index}`) },
+  });
+  assert.equal(tooMany.status, 400);
+  assert.equal((await tooMany.json() as { messageKey?: string }).messageKey, "err.invalidRequest");
+
+  const none = await api(harness.base, "/api/progress/forget", { method: "POST", user: ALICE, body: { keys: [] } });
+  assert.equal(none.status, 204);
+  assert.equal(harness.updates, 0, "an empty list is a no-op, not a write");
 });
 
 test("POST /api/library/favorite hands setLibraryFavorite the relative path and the wanted state", async (t) => {

@@ -126,7 +126,7 @@ export interface Settings {
   logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR";
   addonRefreshHours: number;
   catalogTileSize: TileSize; libraryTileSize: TileSize;
-  catalogTileShape: TileShape; libraryTileShape: TileShape;
+  catalogTileShape: TileShape; libraryTileShape: TileShape; homeTileShape: TileShape;
   realDebridConfigured: boolean; tmdbConfigured: boolean;
 }
 /** The instance keys the settings endpoints leave out for an ordinary account, which is told

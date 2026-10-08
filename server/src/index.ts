@@ -76,6 +76,7 @@ import { registerDownloadRoutes } from "./routes/downloads.js";
 import { calendarFeedHandler, registerFollowRoutes } from "./routes/follows.js";
 import { registerLibrariesRoutes } from "./routes/libraries.js";
 import { registerPersonalRoutes } from "./routes/personal.js";
+import { registerHomeRoutes } from "./routes/home.js";
 import { registerPlaybackRoutes } from "./routes/playback.js";
 import { registerSettingsRoutes } from "./routes/settings.js";
 import { registerUsersRoutes } from "./routes/users.js";
@@ -1601,7 +1602,8 @@ const setLibraryFavorite = async (relative: string, wanted: boolean, userId: str
   });
 };
 
-registerPersonalRoutes(app, { ...routeContext, attachBrowseMeta, cachedMeta, dataOf, describeLibraryPath, libraryKey, libraryOfKey, locateFileArtwork, locateFolderArtworkPair, markersOf, metaStore, posterOf, prefsOf, progressOf, scheduleFileArtwork, scheduleFolderArtwork, setLibraryFavorite, thumbUrl, updateData, watchlistOf, wirePath });
+const personal = registerPersonalRoutes(app, { ...routeContext, attachBrowseMeta, cachedMeta, dataOf, describeLibraryPath, libraryKey, libraryOfKey, locateFileArtwork, locateFolderArtworkPair, markersOf, metaStore, posterOf, prefsOf, progressOf, scheduleFileArtwork, scheduleFolderArtwork, setLibraryFavorite, thumbUrl, updateData, watchlistOf, wirePath });
+registerHomeRoutes(app, { ...routeContext, personal, completedJobs: () => queue.list(), describeLibraryPath, locateFileArtwork, locateFolderArtworkPair, thumbUrl, scheduleFileArtwork, scheduleFolderArtwork, wirePath, dataOf });
 
 /** The followed series: the daily check reads the owner's addons in the owner's language,
  *  past the cache, so a new episode is seen the day it appears. */

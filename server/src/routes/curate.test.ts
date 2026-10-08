@@ -26,7 +26,7 @@ import { registerCurateRoutes, type CurateDeps } from "./curate.js";
 const instancePrefs: UserPrefs = {
   uiLanguage: "en", audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui",
   mergeByName: false, streamSort: "recommended", trackProgress: true, showResumeRow: true,
-  catalogTileSize: "medium", libraryTileSize: "medium", catalogTileShape: "poster", libraryTileShape: "poster",
+  catalogTileSize: "medium", libraryTileSize: "medium", catalogTileShape: "poster", libraryTileShape: "poster", homeTileShape: "wide",
 };
 
 /** What a request answers with. The instance default above is English, so a handler that

@@ -75,6 +75,7 @@ function parseSettings(value: unknown): Settings {
   const libraryTileSize = String(source.libraryTileSize ?? "");
   const catalogTileShape = String(source.catalogTileShape ?? "");
   const libraryTileShape = String(source.libraryTileShape ?? "");
+  const homeTileShape = String(source.homeTileShape ?? "");
   return {
     concurrentDownloads: number("concurrentDownloads", 8),
     parallelPerProvider: number("parallelPerProvider", 8),
@@ -92,6 +93,7 @@ function parseSettings(value: unknown): Settings {
     libraryTileSize: TILE_SIZES.has(libraryTileSize) ? libraryTileSize as Settings["libraryTileSize"] : fallback.libraryTileSize,
     catalogTileShape: TILE_SHAPES.has(catalogTileShape) ? catalogTileShape as Settings["catalogTileShape"] : fallback.catalogTileShape,
     libraryTileShape: TILE_SHAPES.has(libraryTileShape) ? libraryTileShape as Settings["libraryTileShape"] : fallback.libraryTileShape,
+    homeTileShape: TILE_SHAPES.has(homeTileShape) ? homeTileShape as Settings["homeTileShape"] : fallback.homeTileShape,
     // Whatever the backup names here is another instance's id; the import maps it onto a local
     // library by root or name, and falls back to the default when it cannot.
     defaultMovieLibrary: typeof source.defaultMovieLibrary === "string" ? source.defaultMovieLibrary : "",

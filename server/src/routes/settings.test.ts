@@ -178,6 +178,7 @@ test("GET /api/settings tells an ordinary account nothing about the instance it 
   assert.equal(carol.secureMode, harness.state.settings.secureMode);
   assert.equal(carol.uiLanguage, "en", "its own half arrives whole");
   assert.equal(carol.libraryTileSize, "medium");
+  assert.equal(carol.homeTileShape, "wide", "the Home tile shape defaults to wide");
 
   const ada = await (await api(harness.base, "/api/settings", { user: "ada" })).json() as Record<string, unknown>;
   assert.equal(ada.concurrentDownloads, harness.state.settings.concurrentDownloads, "an administrator still reads it all");
@@ -205,17 +206,19 @@ test("PATCH /api/settings sends an instance key to the instance and a personal k
   const response = await api(harness.base, "/api/settings", {
     method: "PATCH",
     user: "bob",
-    body: { concurrentDownloads: 5, libraryTileSize: "large" },
+    body: { concurrentDownloads: 5, libraryTileSize: "large", homeTileShape: "poster" },
   });
 
   assert.equal(response.status, 200);
   assert.equal(harness.state.settings.concurrentDownloads, 5);
   assert.equal("libraryTileSize" in harness.state.settings, false, "a personal key never reaches the instance half");
   assert.equal(harness.state.userData?.[BOB]?.prefs.libraryTileSize, "large");
+  assert.equal(harness.state.userData?.[BOB]?.prefs.homeTileShape, "poster");
   assert.equal(harness.state.userData?.[ADA]?.prefs.libraryTileSize, "medium", "the other person keeps their value");
   const body = await response.json() as Record<string, unknown>;
   assert.equal(body.concurrentDownloads, 5);
   assert.equal(body.libraryTileSize, "large");
+  assert.equal(body.homeTileShape, "poster");
 });
 
 test("PATCH /api/settings drops an unknown streamSort and clamps concurrentDownloads", async (t) => {
