@@ -142,7 +142,7 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
       if (!job.target || !pathOpen(key, viewer, libraries)) return undefined;
       const item = await describeLibraryPath(key);
       if (!item || item.kind !== "file") return undefined;
-      const { poster, wide } = await fileArtwork(key, item.path);
+      const { poster, wide } = await fileArtwork(key, wirePath(key));
       return { job, item, key, poster, wide };
     }));
     const cards: HomeCard[] = resolved
@@ -175,7 +175,7 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
     const page = bounded.items;
     const hasMore = bounded.hasMore || visible.length > stored.length;
     const cards: HomeCard[] = await Promise.all(page.map(async ({ key, item, label }) => {
-      const { poster, wide } = item.kind === "folder" ? await folderArtwork(key, item.path) : await fileArtwork(key, item.path);
+      const { poster, wide } = item.kind === "folder" ? await folderArtwork(key, wirePath(key)) : await fileArtwork(key, wirePath(key));
       return {
         kind: "favorite", key, path: wirePath(key), itemKind: item.kind, label,
         ...(poster ? { poster } : {}),

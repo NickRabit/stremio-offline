@@ -45,6 +45,8 @@ interface Harness {
   /** How long the fake metadata lookup waits before answering. */
   metaDelayMs: number;
   metaAnswer: MetaItem | null;
+  /** What `locateFileArtwork` answers; a thumbnail URL exists only when there is one. */
+  artwork?: string;
   /** Every series id the catalogue side was asked about, in order. */
   lookups: string[];
   data(user: string): UserData;
@@ -109,7 +111,7 @@ const mount = async (options: { libraries?: LibraryRecord[]; deadlineMs?: number
       const parsed = parseLibraryPath(key)!;
       return { library: libraries.find((item) => item.id === parsed.libraryId)!, relative: parsed.relative };
     },
-    locateFileArtwork: async () => undefined,
+    locateFileArtwork: async () => state.artwork,
     locateFolderArtworkPair: async () => ({ poster: undefined, wide: undefined }),
     markersOf: (data) => data.watchedSeries as Record<string, WatchedMarker>,
     metaStore: { qualifiedMeta: () => records } as unknown as LibraryMetaStore,
@@ -122,7 +124,7 @@ const mount = async (options: { libraries?: LibraryRecord[]; deadlineMs?: number
     scheduleFileArtwork: () => undefined,
     scheduleFolderArtwork: () => undefined,
     setLibraryFavorite: async () => undefined,
-    thumbUrl: async () => undefined,
+    thumbUrl: async (_param, value, art, shape) => (art ? `thumb:${value}${shape === "wide" ? ":wide" : ""}` : undefined),
     updateData: async (req, mutate) => {
       const id = userOf(req);
       if (!id) throw new ResourceError(401, "AUTH_REQUIRED");
@@ -418,4 +420,22 @@ test("favourites are read newest first and only as many as the row can use", asy
   assert.equal(rows.favorites!.items.length, 20);
   assert.equal(rows.favorites!.hasMore, true);
   assert.equal(rows.favorites!.items[0]!.path, "Films/44.mkv");
+});
+
+test("a thumbnail is addressed by the wire path, which is the qualified one when libraries are several", async (t) => {
+  const harness = await mount({
+    libraries: [
+      library({ id: "lib_00000001", root: "/media/films", visibleTo: [ALICE] }),
+      library({ id: "lib_00000002", root: "/media/shows", visibleTo: [ALICE] }),
+    ],
+  });
+  t.after(harness.close);
+  harness.artwork = "art.jpg";
+  harness.data(ALICE).favorites = ["lib_00000002/Shows/01.mkv"];
+  harness.completed = [{ id: "a", title: "Kept", ownerUserId: ALICE, status: "completed", target: "lib_00000002/Kept.mkv", completedAt: "2024-02-01T00:00:00.000Z" }];
+
+  const rows = await allRows(harness, ALICE);
+  assert.equal(rows.completed!.items[0]!.poster, "thumb:lib_00000002/Kept.mkv");
+  assert.equal(rows.completed!.items[0]!.wide, "thumb:lib_00000002/Kept.mkv:wide");
+  assert.equal(rows.favorites!.items[0]!.poster, "thumb:lib_00000002/Shows/01.mkv");
 });
