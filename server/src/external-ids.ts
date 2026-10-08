@@ -20,6 +20,11 @@ const NEGATIVE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const IMDB_ID = /^tt\d+$/;
 const TMDB_ID = /^tmdb:(\d+)$/;
 
+/** The IMDb id an id carries, when it carries one. A catalogue chooses its own ids and an
+ *  addon that groups titles by source prefixes them (`mpa:webshare-index:tt2709692`), so the
+ *  IMDb id is the last segment rather than the whole id. */
+export const imdbOf = (id: string): string | undefined => /(?:^|:)(tt\d+)$/.exec(id)?.[1];
+
 const sparql = (imdbId: string) => `SELECT ?csfd ?tmdbMovie ?tmdbTv WHERE {
   ?item wdt:P345 "${imdbId}".
   OPTIONAL { ?item wdt:P2529 ?csfd }
@@ -149,7 +154,8 @@ export function siteLinks(type: string, id: string, ids: ExternalIds, language: 
   const tmdb: SiteLink | undefined = target
     ? { site: "tmdb", url: `https://www.themoviedb.org/${target.path}/${target.id}${czech ? "?language=cs-CZ" : ""}` }
     : undefined;
-  const imdb: SiteLink | undefined = id.startsWith("tt") ? { site: "imdb", url: `https://www.imdb.com/title/${id}/` } : undefined;
+  const imdbId = imdbOf(id);
+  const imdb: SiteLink | undefined = imdbId ? { site: "imdb", url: `https://www.imdb.com/title/${imdbId}/` } : undefined;
   const csfd: SiteLink | undefined = czech && ids.csfd ? { site: "csfd", url: `https://www.csfd.cz/film/${ids.csfd}/` } : undefined;
   return (czech ? [csfd, tmdb, imdb] : [imdb, tmdb]).filter((link): link is SiteLink => Boolean(link));
 }
