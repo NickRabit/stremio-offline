@@ -104,7 +104,8 @@ test.describe("layout invariants", () => {
     await openView(page, "Katalog");
     const more = page.locator("aside.sidebar nav").getByRole("button", { name: "Více", exact: true });
     if (!(await more.isVisible())) {
-      await expect(page.locator("aside.sidebar nav button:visible")).toHaveCount(VIEWS.length);
+      // Every destination is on screen: Following is the one VIEWS does not list.
+      await expect(page.locator("aside.sidebar nav button:visible")).toHaveCount(VIEWS.length + 1);
       return;
     }
     await expect(page.locator("aside.sidebar nav button:visible")).toHaveCount(COMPACT.length);
