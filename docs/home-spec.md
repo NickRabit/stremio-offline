@@ -1,8 +1,9 @@
 # Home page: design specification
 
-Status: proposed, not implemented. Written 2026-10-05 and revised the same day
-against `main` at 0.5.8, which already ships Following and owner-scoped duplicate
-checks. The [roadmap](roadmap.md) owns priority; this file owns the shape of the
+Status: slices 0 to 4 shipped in 0.5.25; Recently added and the per-account
+row order and landing preference are not built. Written 2026-10-05 and revised the
+same day against `main` at 0.5.8, which already ships Following and owner-scoped
+duplicate checks. The [roadmap](roadmap.md) owns priority; this file owns the shape of the
 page. Every claim about current behaviour was checked against the source. An
 independent review (the closed PR #303) found the contract gaps folded in below.
 
@@ -473,6 +474,8 @@ page, restored offsets after playback, rotation and a breakpoint resize, and
 the busy, empty, partial, failed and revoked states.
 
 ## Slices
+
+Slices 0 to 4 shipped together in one pull request; 5 and 6 remain.
 
 0. **Compact navigation with More.** Its own PR: the five-slot navigation for
    phones and short landscape, the wide-short and medium-landscape chrome, the

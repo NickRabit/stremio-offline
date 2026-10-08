@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
+import { goToView } from "../nav";
 
 // WCAG A and AA rules that can be decided from the DOM alone. Axe finds no false
 // positives here in exchange for finding only part of the picture; keyboard order
@@ -10,10 +11,10 @@ const scan = (page: Page) =>
 const describe = (violations: Awaited<ReturnType<typeof scan>>["violations"]) =>
   violations.map((violation) => `${violation.id} (${violation.impact}) on ${violation.nodes.length}: ${violation.nodes[0]?.target.join(" ")}`);
 
-for (const view of ["Katalog", "Knihovna", "Stahování", "Doplňky", "Nastavení"]) {
+for (const view of ["Domů", "Katalog", "Knihovna", "Stahování", "Doplňky", "Nastavení"]) {
   test(`${view} has no accessibility violations`, async ({ page }) => {
     await page.goto("/");
-    await page.getByRole("button", { name: view, exact: true }).click();
+    await goToView(page, view);
     await page.waitForTimeout(150);
 
     const { violations } = await scan(page);
