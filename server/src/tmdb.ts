@@ -392,27 +392,32 @@ export async function verifyTmdbKey(apiKey: string, fetchImpl: FetchLike = guard
 async function resolveId(type: string, id: string, config: TmdbConfig, fetchImpl: FetchLike): Promise<number | null> {
   const direct = /^tmdb:(\d+)$/.exec(id);
   if (direct) return Number(direct[1]);
-  if (!id.startsWith("tt")) return null;
 
-  const key = `${type}:${id}`;
+  // A catalogue chooses its own ids, and an addon that groups titles by source prefixes
+  // them: `mpa:webshare-index:tt2709692`. The IMDb id is the last segment, and without
+  // reading it here the title gets no overview, no genres and no backdrop.
+  const imdb = /(?:^|:)(tt\d+)$/.exec(id)?.[1];
+  if (!imdb) return null;
+
+  const key = `${type}:${imdb}`;
   if (idCache.has(key)) return idCache.get(key) ?? null;
 
   let response: Response;
   try {
-    response = await request(`/find/${encodeURIComponent(id)}`, { api_key: config.apiKey, language: config.language, external_source: "imdb_id" }, fetchImpl);
+    response = await request(`/find/${encodeURIComponent(imdb)}`, { api_key: config.apiKey, language: config.language, external_source: "imdb_id" }, fetchImpl);
   } catch (error) {
-    log("WARN", "TMDB id lookup failed", { operation: "find", type, id, reason: reasonOf(error, config.apiKey) });
+    log("WARN", "TMDB id lookup failed", { operation: "find", type, id: imdb, reason: reasonOf(error, config.apiKey) });
     return null;
   }
   if (!response.ok) {
-    log("WARN", "TMDB id lookup failed", { operation: "find", type, id, status: response.status });
+    log("WARN", "TMDB id lookup failed", { operation: "find", type, id: imdb, status: response.status });
     return null;
   }
 
   let body: TmdbFind;
   try { body = await response.json() as TmdbFind; }
   catch (error) {
-    log("WARN", "TMDB answered with malformed JSON", { operation: "find", type, id, reason: reasonOf(error, config.apiKey) });
+    log("WARN", "TMDB answered with malformed JSON", { operation: "find", type, id: imdb, reason: reasonOf(error, config.apiKey) });
     return null;
   }
 
