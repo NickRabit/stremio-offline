@@ -157,7 +157,6 @@ export const it: Catalog = {
   "home.blocked.storage": "In pausa · spazio esaurito",
   "home.blocked.library": "In pausa · libreria non disponibile",
   "home.blocked.permission": "In pausa · non consentito",
-  "home.openDownloads": "Apri download",
   "home.emptyTitle": "Qui non c'è ancora niente",
   "home.emptyText": "Scarica qualcosa o inizia a guardare e comparirà qui.",
   "home.action.pause": "Metti in pausa {title}",

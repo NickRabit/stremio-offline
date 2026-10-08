@@ -33,7 +33,8 @@ test("a card opens the title where the catalogue's own Continue watching tile do
   expect((await seedFilm(request)).ok()).toBe(true);
   await page.goto("/");
   await goToView(page, "Domů");
-  await page.locator(".home-row .browse-item", { hasText: "Zkušební film" }).getByRole("button").first().click();
+  const shelf = page.locator(".home-row", { has: page.getByRole("heading", { name: "Pokračovat ve sledování" }) });
+  await shelf.locator(".browse-item", { hasText: "Zkušební film" }).getByRole("button").first().click();
   await expect(page.locator(".detail-panel")).toContainText("Zkušební film");
 });
 

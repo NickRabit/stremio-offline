@@ -157,7 +157,6 @@ export const ru: Catalog = {
   "home.blocked.storage": "Приостановлено · нет места",
   "home.blocked.library": "Приостановлено · библиотека недоступна",
   "home.blocked.permission": "Приостановлено · нет разрешения",
-  "home.openDownloads": "Открыть загрузки",
   "home.emptyTitle": "Здесь пока ничего нет",
   "home.emptyText": "Скачайте что-нибудь или начните смотреть — и это появится здесь.",
   "home.action.pause": "Приостановить {title}",

@@ -4,10 +4,11 @@ const pad = (value: number) => String(value).padStart(2, "0");
 
 /** The catalogue key a card's caption leads with. A completed file and a favourite carry no
  *  label of their own, so their caption is just the numbering. */
-export type CardLabel = "home.resume" | "home.openEpisode" | "home.openTitle" | "home.nextEpisode";
+export type CardLabel = "home.resume" | "home.openEpisode" | "home.openTitle" | "home.nextEpisode" | "player.play";
 
 export function cardLabel(card: HomeCard): CardLabel | undefined {
   if (card.kind === "resume-file") return "home.resume";
+  if (card.kind === "completed") return "player.play";
   if (card.kind !== "resume-catalogue") return undefined;
   if (card.pending) return "home.nextEpisode";
   return card.type === "series" ? "home.openEpisode" : "home.openTitle";

@@ -169,7 +169,6 @@ export const cs: Catalog = {
   "home.blocked.storage": "Pozastaveno · nedostatek místa",
   "home.blocked.library": "Pozastaveno · knihovna nedostupná",
   "home.blocked.permission": "Pozastaveno · chybí oprávnění",
-  "home.openDownloads": "Otevřít stahování",
   "home.emptyTitle": "Zatím tu nic není",
   "home.emptyText": "Něco si stáhněte nebo začněte sledovat a objeví se to tady.",
   "home.action.pause": "Pozastavit: {title}",

@@ -157,7 +157,6 @@ export const ptBR: Catalog = {
   "home.blocked.storage": "Pausado · sem espaço",
   "home.blocked.library": "Pausado · biblioteca indisponível",
   "home.blocked.permission": "Pausado · sem permissão",
-  "home.openDownloads": "Abrir downloads",
   "home.emptyTitle": "Ainda não há nada aqui",
   "home.emptyText": "Baixe algo ou comece a assistir e aparecerá aqui.",
   "home.action.pause": "Pausar {title}",

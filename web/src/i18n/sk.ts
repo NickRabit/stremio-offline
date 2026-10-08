@@ -157,7 +157,6 @@ export const sk: Catalog = {
   "home.blocked.storage": "Pozastavené · nedostatok miesta",
   "home.blocked.library": "Pozastavené · knižnica nedostupná",
   "home.blocked.permission": "Pozastavené · chýba oprávnenie",
-  "home.openDownloads": "Otvoriť sťahovanie",
   "home.emptyTitle": "Zatiaľ tu nič nie je",
   "home.emptyText": "Niečo si stiahnite alebo začnite sledovať a objaví sa to tu.",
   "home.action.pause": "Pozastaviť: {title}",

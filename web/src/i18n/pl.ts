@@ -157,7 +157,6 @@ export const pl: Catalog = {
   "home.blocked.storage": "Wstrzymane · brak miejsca",
   "home.blocked.library": "Wstrzymane · biblioteka niedostępna",
   "home.blocked.permission": "Wstrzymane · brak uprawnień",
-  "home.openDownloads": "Otwórz pobierane",
   "home.emptyTitle": "Jeszcze nic tu nie ma",
   "home.emptyText": "Pobierz coś albo zacznij oglądać, a pojawi się to tutaj.",
   "home.action.pause": "Wstrzymaj {title}",

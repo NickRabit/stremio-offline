@@ -15,7 +15,7 @@ describe("cardLabel", () => {
     expect(cardLabel(movie)).toBe("home.openTitle");
     expect(cardLabel(episode)).toBe("home.openEpisode");
     expect(cardLabel(pending)).toBe("home.nextEpisode");
-    expect(cardLabel(completed)).toBeUndefined();
+    expect(cardLabel(completed)).toBe("player.play");
     expect(cardLabel(favorite)).toBeUndefined();
   });
 });

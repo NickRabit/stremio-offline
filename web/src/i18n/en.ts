@@ -174,7 +174,6 @@ export const en = {
   "home.blocked.storage": "Paused · out of space",
   "home.blocked.library": "Paused · library unavailable",
   "home.blocked.permission": "Paused · not allowed",
-  "home.openDownloads": "Open downloads",
   "home.emptyTitle": "Nothing here yet",
   "home.emptyText": "Download something or start watching, and it will show up here.",
   "home.action.pause": "Pause {title}",

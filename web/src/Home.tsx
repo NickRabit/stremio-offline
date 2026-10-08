@@ -13,7 +13,7 @@ import type { Download, LibraryView, TileShape } from "./types";
 import type { HomeCard, HomeRowId } from "../../server/src/home";
 
 const BLOCKED_KEY = { storage: "home.blocked.storage", library: "home.blocked.library", permission: "home.blocked.permission" } as const;
-const ACTION_LABEL = { retry: "downloads.retry", resume: "library.continue", pause: "player.pause", open: "home.openDownloads" } as const;
+const ACTION_LABEL = { retry: "downloads.retry", resume: "library.continue", pause: "player.pause", open: "nav.downloads" } as const;
 const ACTION_ICON = { retry: <RefreshCw />, resume: <Play />, pause: <Pause />, open: <ChevronRight /> };
 
 function stateOf(job: Download): { text: string; tone: string } {

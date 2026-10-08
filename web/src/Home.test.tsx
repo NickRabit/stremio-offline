@@ -118,7 +118,7 @@ describe("Home", () => {
     await click(cardButtons()[0]![1]!);
     expect(onShowDownloads).toHaveBeenCalled();
     expect(onAction).not.toHaveBeenCalled();
-    expect(cardButtons()[0]![1]!.textContent).toContain("Open downloads");
+    expect(cardButtons()[0]![1]!.textContent).toContain("Downloads");
   });
 
   it("disables only the card whose mutation is pending and restores it on failure", async () => {

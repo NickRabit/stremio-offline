@@ -157,7 +157,6 @@ export const de: Catalog = {
   "home.blocked.storage": "Pausiert · kein Speicherplatz",
   "home.blocked.library": "Pausiert · Bibliothek nicht verfügbar",
   "home.blocked.permission": "Pausiert · nicht erlaubt",
-  "home.openDownloads": "Downloads öffnen",
   "home.emptyTitle": "Hier ist noch nichts",
   "home.emptyText": "Laden Sie etwas herunter oder beginnen Sie zu schauen – es erscheint dann hier.",
   "home.action.pause": "{title} pausieren",

@@ -1781,13 +1781,13 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
 .hq-card{flex:0 0 264px;scroll-snap-align:start;display:grid;gap:6px;padding:0 12px 10px;border:1px solid var(--line);border-radius:12px;background:var(--panel);min-width:0}
 .hq-card.attention{border-color:#e7b86755;background:linear-gradient(120deg,#e7b86712,var(--panel) 70%)}
 .hq-card.failed{border-color:#f06a7655;background:linear-gradient(120deg,#f06a7612,var(--panel) 70%)}
-.hq-title{display:flex;align-items:flex-end;border:0;background:transparent;padding:8px 0 0;text-align:left;font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-height:44px;color:var(--text)}
+.hq-title{display:flex;justify-content:flex-start;align-items:flex-end;border:0;background:transparent;padding:8px 0 0;text-align:left;font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-height:44px;color:var(--text)}
 .hq-state{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .hq-state.run{color:var(--green)}.hq-state.warn{color:#e7b867}.hq-state.bad{color:var(--red)}
 .hq-bar{height:4px;border-radius:99px;background:#ffffff14;overflow:hidden}.hq-bar i{display:block;height:100%;background:var(--accent)}.hq-bar.warn i{background:#e7b867}.hq-bar.bad i{background:var(--red)}.hq-bar.run i{background:var(--green)}
-.hq-foot{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.hq-foot{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:10px}
 .hq-meta{font-size:11px;color:var(--muted);min-width:0;flex:1 1 auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.hq-foot button{min-height:44px;min-width:44px;max-width:70%;padding:0 12px;font-size:12px;flex:0 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hq-foot button{min-height:44px;min-width:44px;max-width:100%;padding:0 12px;font-size:12px;flex:0 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .home-head{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;min-width:0}
 .home-head h3{margin:0}.home-head .count{font-size:11px;color:var(--muted)}
 .home-row{margin-bottom:20px}.home-row .subhead{gap:12px;flex-wrap:wrap}
@@ -1859,6 +1859,7 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
   .hq-card{flex-basis:232px;gap:4px;padding:0 10px 8px}
   .hq-title{padding-top:6px}
   .hq-foot button{min-height:44px}
+  .home-row .resume-show-all{border:0;background:transparent;padding:0 4px}
   .home-row .resume-strip .browse-item{flex-basis:152px;width:152px}
   .view-home .shape-toggle{display:none}
   /* A 2:3 tile and its caption need about 240 px; this band has about 231 px for everything. */
