@@ -1,11 +1,16 @@
 import { useState } from "react";
-import { ChevronRight, Download as DownloadIcon, Pause, Play, RefreshCw } from "lucide-react";
+import { ChevronRight, Download as DownloadIcon, Pause, Play, RectangleHorizontal, RectangleVertical, RefreshCw } from "lucide-react";
+import { api } from "./api";
 import { Empty } from "./app-chrome";
 import { bytes, speed, statusLabel } from "./download-format";
 import { attentionCount, blocked, homeQueue, queueAction, queueGroup } from "./home-rows";
+import type { ShowAllTarget } from "./home-cards";
+import { HOME_ROWS, homeAllRowsEmpty, type HomeRows } from "./home-state";
+import { HomeShelf } from "./HomeShelf";
+import type { HomeCardActions } from "./HomeCard";
 import { t } from "./i18n";
-import { Heading } from "./settings-ui";
-import type { Download, LibraryView } from "./types";
+import type { Download, LibraryView, TileShape } from "./types";
+import type { HomeCard, HomeRowId } from "../../server/src/home";
 
 const BLOCKED_KEY = { storage: "home.blocked.storage", library: "home.blocked.library", permission: "home.blocked.permission" } as const;
 const ACTION_LABEL = { retry: "downloads.retry", resume: "library.continue", pause: "player.pause", open: "home.openDownloads" } as const;
@@ -30,18 +35,33 @@ function metaOf(job: Download): string {
 
 const percentOf = (job: Download) => job.total != null && job.total > 0 ? Math.min(100, (job.received / job.total) * 100) : null;
 
-export function Home({ jobs, onShowDownloads, onAction }: {
+export function Home({ jobs, onShowDownloads, onAction, rows, shape, onToggleShape, onRetry, onShowAll, onPlay, onOpenCatalogue, onReveal, onForgotten, onError }: {
   jobs: Download[];
   libraries: LibraryView[];
   onShowDownloads: () => void;
   onAction: (job: Download, action: "pause" | "resume" | "retry") => Promise<void>;
   admin: boolean;
+  rows: HomeRows;
+  shape: TileShape;
+  onToggleShape: () => void;
+  onRetry: (row: HomeRowId) => void;
+  onShowAll: (target: ShowAllTarget) => void;
+  onPlay: (card: HomeCard) => void;
+  onOpenCatalogue: (card: HomeCard) => void;
+  onReveal: (path: string) => void;
+  onForgotten: () => void;
+  onError: (error: unknown) => void;
 }) {
   const [busy, setBusy] = useState<ReadonlySet<string>>(new Set());
   const items = homeQueue(jobs);
   const attention = attentionCount(jobs);
 
-  if (!items.length) return <><Heading eyebrow={t("home.eyebrow")} title={t("home.title")}/><Empty icon={<DownloadIcon/>} title={t("home.emptyTitle")} text={t("home.emptyText")}/></>;
+  const heading = <div className="heading home-heading">
+    <div className="home-heading-copy"><small>{t("home.eyebrow")}</small><h2>{t("home.title")}</h2></div>
+    <button className="shape-toggle" title={t(shape === "wide" ? "home.shapePoster" : "home.shapeWide")} aria-pressed={shape === "wide"} onClick={onToggleShape}>{shape === "wide" ? <RectangleVertical/> : <RectangleHorizontal/>}</button>
+  </div>;
+
+  if (!items.length && homeAllRowsEmpty(rows)) return <>{heading}<Empty icon={<DownloadIcon/>} title={t("home.emptyTitle")} text={t("home.emptyText")}/></>;
 
   const run = (job: Download, action: ReturnType<typeof queueAction>) => {
     if (action === "open") { onShowDownloads(); return; }
@@ -51,10 +71,17 @@ export function Home({ jobs, onShowDownloads, onAction }: {
       .finally(() => setBusy((current) => { const next = new Set(current); next.delete(job.id); return next; }));
   };
 
+  const forget = (card: HomeCard) => {
+    if (card.kind !== "resume-file" && card.kind !== "resume-catalogue") return;
+    if (!window.confirm(t("home.forgetConfirm", { title: card.title }))) return;
+    void api.forgetManyProgress(card.forgetKeys).then(onForgotten, onError);
+  };
+  const actions: HomeCardActions = { play: onPlay, open: onOpenCatalogue, reveal: onReveal, forget };
+
   const summary = [t("home.downloadsSummary", { count: items.length }), attention > 0 ? t("home.attention", { count: attention }) : ""].filter(Boolean).join(" · ");
   return <>
-    <Heading eyebrow={t("home.eyebrow")} title={t("home.title")}/>
-    <section className="home-row">
+    {heading}
+    {items.length > 0 && <section className="home-row">
       <div className="subhead">
         <div className="home-head"><h3>{t("home.downloads")}</h3><span className="count">{summary}</span></div>
         <button className="resume-show-all" onClick={onShowDownloads}>{t("library.showAll")}<ChevronRight/></button>
@@ -75,6 +102,7 @@ export function Home({ jobs, onShowDownloads, onAction }: {
           </div>;
         })}
       </div>
-    </section>
+    </section>}
+    {HOME_ROWS.map((row) => <HomeShelf key={row} row={row} state={rows[row]} shape={shape} actions={actions} onRetry={onRetry} onShowAll={onShowAll}/>)}
   </>;
 }

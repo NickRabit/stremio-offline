@@ -1,6 +1,7 @@
 import { serverText, t } from "./i18n";
 import type { SaveTarget } from "./save-target";
 import type { StatsActivityPage, ActiveStream, ActivityItem, CalendarItem, UndatedCalendarItem, Diagnostics, BuildInfo, AuthStatus, StatsSummary, Addon, AddonDownloadSettings, Capabilities, Catalog, Download, DownloadSelection, DownloadSnapshot, FollowDefaults, FollowEpisodeRow, FollowPreview, FollowStartMode, FollowView, Inspection, BrowseResult, IdentityPreview, LibraryFolder, LibraryMatchResult, LibraryOp, LibraryOpsState, NewEpisode, ProgressEntry, UserViews, WatchlistEntry, GrantBrowse, LibraryEstimate, LibraryGrant, LibrarySummary, LibraryType, LibraryView, Meta, PlaybackSession, ScanState, SearchPreferences, SearchResult, SearchState, SearchableCatalog, SiteLink, SuggestionRow, Session, Settings, SettingsBackup, SettingsPatch, SettingsView, Stream, Subtitle, Trailer, UserAccount, UserPermissions, UserRole } from "./types";
+import type { HomeResponse, HomeRowId } from "../../server/src/home";
 
 /** The status code has to reach the top, or a sign-out is indistinguishable from an ordinary error. */
 export class ApiError extends Error {
@@ -197,6 +198,10 @@ export const api = {
     request<void>("/api/progress", { method: "POST", body: JSON.stringify(payload) }),
   clearProgress: () => request<void>("/api/progress", { method: "DELETE" }),
   forgetProgress: (key: string) => request<void>(`/api/progress/${encodeURIComponent(key)}`, { method: "DELETE" }),
+  /** Forgets every key a merged Home card stands for in one owner-scoped write. */
+  forgetManyProgress: (keys: string[]) => request<void>("/api/progress/forget", { method: "POST", body: JSON.stringify({ keys }) }),
+  /** Home's rows. Naming rows re-requests only those; omitting them asks for all three. */
+  home: (rows?: HomeRowId[]) => request<HomeResponse>(`/api/home${rows && rows.length ? `?rows=${rows.join(",")}` : ""}`),
   setFavorite: (path: string, favorite: boolean) => request<{ path: string; favorite: boolean }>("/api/library/favorite", { method: "POST", body: JSON.stringify({ path, favorite }) }),
   resumeLibrary: (options: { skip?: number; limit?: number; sort?: string; order?: string; seed?: string; query?: string; favorites?: boolean }) =>
     request<BrowseResult>(`/api/library/resume?${q({ ...options, favorites: options.favorites ? 1 : undefined })}`),

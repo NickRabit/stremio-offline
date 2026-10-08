@@ -1792,6 +1792,32 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
 .home-head h3{margin:0}.home-head .count{font-size:11px;color:var(--muted)}
 .home-row{margin-bottom:20px}.home-row .subhead{gap:12px;flex-wrap:wrap}
 .home-row .resume-show-all{min-height:44px;min-width:44px;display:inline-flex;align-items:center;justify-content:center}
+.home-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.home-heading-copy{min-width:0}
+/* The media shelves. Sizes and shape variants come from docs/home-prototype/home.css, which
+   stays the visual reference for these rows. */
+.home-row .resume-strip{scroll-snap-type:x proximity;overscroll-behavior-x:contain;scroll-padding-inline:2px}
+.home-row .resume-strip .browse-item{flex:0 0 208px;width:208px;scroll-snap-align:start}
+.home-row .browse-item:hover .browse-art{transform:none}
+.home-row .browse-frame{position:relative}
+.home-row .browse-open{display:block;width:100%;text-align:left;border:0;background:transparent;padding:0;min-width:0;color:inherit;font:inherit}
+.home-row .browse-open strong,.home-row .browse-open small{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-height:22px;line-height:22px;padding-right:44px}
+.home-row .browse-open strong{font-size:12px;margin-top:6px}
+.home-row .browse-open small{font-size:10px;color:var(--muted)}
+.home-row .browse-menu{position:absolute;top:auto;right:0;bottom:0;width:44px;height:44px;display:grid;place-items:center;color:var(--muted);border:0;border-radius:0;background:transparent;opacity:1;padding:0;z-index:2}
+.home-row .browse-actions{position:static;right:auto;top:auto;width:auto;min-width:0;max-width:none;margin-top:6px}
+.home-row .resume-strip.refreshing{opacity:.72}
+.home-row .resume-strip .home-skeleton-line{display:block;height:22px;margin-top:6px;border-radius:4px;background:var(--panel2)}
+.home-row .resume-strip.skeleton .browse-art{background:var(--panel2);border:0;animation:home-pulse 1.4s ease-in-out infinite}
+@keyframes home-pulse{0%,100%{opacity:1}50%{opacity:.55}}
+.home-note{font-size:11px;color:var(--muted);margin:-4px 0 8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;min-height:24px}
+.home-note.bad{color:var(--red)}
+.home-retry{min-height:44px;padding:0 12px}
+.home-shape-poster .home-row .resume-strip .browse-art{aspect-ratio:2/3}
+.home-shape-poster .home-row .resume-strip .browse-item{flex-basis:132px;width:132px}
+.home-shape-poster .home-row .browse-open strong{white-space:normal;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-height:1.2}
+@media(min-width:981px){.home-shape-poster .home-row .resume-strip .browse-item{flex-basis:148px;width:148px}}
+@media(max-width:700px){.home-shape-poster .home-row .resume-strip .browse-item{flex-basis:120px;width:120px}}
 .sidebar nav .nav-more{display:none}
 .more-menu{display:none;position:fixed;z-index:60;background:#141922;border:1px solid var(--line);border-radius:14px;box-shadow:0 18px 50px #000a;padding:6px;overflow:auto}
 .more-menu.open{display:grid;gap:2px}
@@ -1815,6 +1841,7 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
   main.view-home .heading{margin-bottom:12px}
   .hq-card{flex-basis:244px}
   .hq{gap:12px}
+  .home-row .resume-strip .browse-item{flex-basis:144px;width:144px}
   .more-menu{left:12px;right:12px;bottom:calc(76px + env(safe-area-inset-bottom,0px));max-height:60dvh}
 }
 
@@ -1832,6 +1859,11 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
   .hq-card{flex-basis:232px;gap:4px;padding:0 10px 8px}
   .hq-title{padding-top:6px}
   .hq-foot button{min-height:44px}
+  .home-row .resume-strip .browse-item{flex-basis:152px;width:152px}
+  .view-home .shape-toggle{display:none}
+  /* A 2:3 tile and its caption need about 240 px; this band has about 231 px for everything. */
+  .home-shape-poster .home-row .resume-strip .browse-art{aspect-ratio:16/9}
+  .home-shape-poster .home-row .resume-strip .browse-item{flex-basis:152px;width:152px}
   .more-menu{left:calc(70px + env(safe-area-inset-left,0px));bottom:8px;width:230px;max-height:calc(100dvh - 70px)}
 }
 
@@ -1843,6 +1875,7 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
   .sidebar nav b{position:absolute;right:4px;top:3px;margin:0}
   .sidebar-bottom,.addon-status{display:none}
   .sidebar-collapsed .sidebar nav button>span,.sidebar nav button>span{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;white-space:normal;overflow:hidden;max-width:100%}
+  .home-row .resume-strip .browse-item{flex-basis:184px;width:184px}
 }
 
 /* Wide and short: a desktop window dragged down, which keeps every destination. */
@@ -1866,4 +1899,10 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
   main.view-home .heading small,main.view-home .heading .lead{display:none}
   main.view-home .heading{margin-bottom:8px}
   main.view-home .heading h2{font-size:22px;margin:0}
+}
+
+/* A wide short window can still hold a 2:3 tile with its caption. Below this height it cannot,
+   so the shelves fall back to 16:9 whatever the setting. */
+@media(min-width:981px) and (max-height:399px) and (orientation:landscape){
+  .home-shape-poster .home-row .resume-strip .browse-art{aspect-ratio:16/9}
 }

@@ -35,6 +35,9 @@ import { emptyViews, prefsFor, scopeOf, withDownloads, withExtra, withLibrary } 
 import { Empty, Nav, Onboarding } from "./app-chrome";
 import { Downloads } from "./DownloadsPage";
 import { Home } from "./Home";
+import { useHome } from "./useHome";
+import type { ShowAllTarget } from "./home-cards";
+import type { HomeCard } from "../../server/src/home";
 import { MoreMenu, type MoreItem } from "./MoreMenu";
 import { fmtEta } from "./download-format";
 import { MediaGallery, type GalleryImage, type GalleryKind } from "./MediaGallery";
@@ -212,6 +215,7 @@ export function App() {
   const [languages, setLanguages] = useState<Array<{ code: string; name: string }>>([]);
   const [inspection, setInspection] = useState<Inspection | null>(null);
   const [session, setSession] = useState<Session | null | undefined>(undefined);
+  const home = useHome({ active: view === "home", account: session?.username ?? null, playerOpen });
   const [resumePreview, setResumePreview] = useState<BrowseResult | null>(null);
   const [favoritePreview, setFavoritePreview] = useState<BrowseResult | null>(null);
   const [browse, setBrowse] = useState<BrowseResult | null>(null);
@@ -1056,6 +1060,9 @@ export function App() {
         }
         if (previous && previous !== "completed" && job.status === "completed") {
           notify(t("downloads.inLibrary", { title: job.title }));
+          // Ready to play gained a card; Home refreshes only that row, and only while it is
+          // the view on screen -- the answer would otherwise land behind another view.
+          if (viewRef.current === "home") home.refresh(["completed"]);
         }
       }
     }
@@ -1148,7 +1155,7 @@ export function App() {
   }, [selectedStream]);
   /** The shape buttons save like any other setting, but without the toast: one per click
    *  while somebody flips back and forth is noise. A refused save puts the grid back. */
-  const toggleShape = async (key: "catalogTileShape" | "libraryTileShape") => {
+  const toggleShape = async (key: "catalogTileShape" | "libraryTileShape" | "homeTileShape") => {
     const before = settings[key];
     const next = before === "wide" ? "poster" : "wide";
     setSettings((current: AppSettings) => ({ ...current, [key]: next }));
@@ -1901,6 +1908,34 @@ export function App() {
     await loadDownloads();
   };
 
+  /** The library's own Continue watching list or its favourites list. Both drop the filters
+   *  that would hide what they open, the way the library's own links do. */
+  const openHomeLibraryList = (target: ":resume" | ":favorites") => {
+    setMenuFor(null); setFromFavorites(false); setBrowseQuery(""); setOnlyFavorites(false);
+    suppressFavoritesApply.current = true;
+    setBrowsePath(target);
+    scrollByView.current.library = 0;
+    setView("library");
+  };
+
+  /** A Home media card's action, by kind: a file plays, a catalogue entry opens the remembered
+   *  episode the way a catalogue Continue-watching tile does, a favourite folder opens itself. */
+  const homePlay = (card: HomeCard) => {
+    if (card.kind === "resume-catalogue") return;
+    void playLocal(card.kind === "favorite" ? card.label : card.title, card.path, card.poster, card.kind !== "favorite" && card.season != null);
+  };
+  const homeOpen = (card: HomeCard) => {
+    if (card.kind !== "resume-catalogue") return;
+    setView("catalog");
+    const episode = card.season != null && card.episode != null ? { key: card.key, season: card.season, number: card.episode } : undefined;
+    void openMeta({ id: card.id, type: card.type, name: card.name, poster: card.poster } as Meta, episode);
+  };
+  const homeShowAll = (target: ShowAllTarget) => {
+    if (target === "downloads") openView("downloads");
+    else if (target === "catalog-resume") { setView("catalog"); setSelectedCatalog(VIRTUAL.resume); }
+    else openHomeLibraryList(target === "library-resume" ? ":resume" : ":favorites");
+  };
+
   const activeLibraryOp = libraryOps.find((job) => job.status === "running" || job.status === "paused");
   const operationProgress = activeLibraryOp
     ? activeLibraryOp.bytesTotal > 0 ? activeLibraryOp.bytes / activeLibraryOp.bytesTotal : (activeLibraryOp.done + activeLibraryOp.failed) / Math.max(1, activeLibraryOp.total)
@@ -1924,7 +1959,7 @@ export function App() {
   ];
   const moreActive = view === "following" || view === "addons" || view === "settings" || view === "stats";
 
-  return <div className={`app-shell catalog-tiles-${settings.catalogTileSize} library-tiles-${settings.libraryTileSize} catalog-shape-${settings.catalogTileShape} library-shape-${settings.libraryTileShape}${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
+  return <div className={`app-shell catalog-tiles-${settings.catalogTileSize} library-tiles-${settings.libraryTileSize} catalog-shape-${settings.catalogTileShape} library-shape-${settings.libraryTileShape} home-shape-${settings.homeTileShape}${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
     <header className="topbar"><button className="brand brand-home" title={t("app.goToCleanCatalog")} aria-label={t("app.goToCleanCatalog")} onClick={resetCatalog}><div className="brand-mark"><CirclePlay/></div><div><small>{t("auth.brandEyebrow")}</small><h1>Stremio <span>Offline</span></h1></div></button><div className="topbar-right">{restricted && <div className="restricted-chip">{t("restricted.chip")}</div>}<div className="online"><i/> {t("app.serverOnline")}</div>
       <div className="topbar-user"><span className="topbar-user-name">
         <strong title={t("auth.signedInAs", { username: session?.username ?? "" })}>{session?.username}</strong>
@@ -1946,7 +1981,10 @@ export function App() {
       <MoreMenu items={moreItems} badge={followingBadge} active={moreActive} onSignOut={signOut}/>
     </nav><div className="sidebar-bottom"><button className="sidebar-toggle" onClick={toggleSidebar} title={t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")} aria-label={t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")}>{sidebarCollapsed ? <PanelLeftOpen/> : <PanelLeftClose/>}<span>{t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")}</span></button><div className="addon-status"><small>{t("app.activeAddons")}</small><strong>{addons.filter((a) => a.enabled).length}</strong><span>{t("app.catalogsAndSources")}</span></div></div></aside>
     <main className={`view-${view}`}>
-      {view === "home" && !restricted && <Home jobs={downloads} libraries={libraries} onShowDownloads={() => openView("downloads")} onAction={homeAction} admin={admin}/>}
+      {view === "home" && !restricted && <Home jobs={downloads} libraries={libraries} onShowDownloads={() => openView("downloads")} onAction={homeAction} admin={admin}
+        rows={home.rows} shape={settings.homeTileShape} onToggleShape={() => void toggleShape("homeTileShape")}
+        onRetry={(row) => home.refresh([row])} onShowAll={homeShowAll} onPlay={homePlay} onOpenCatalogue={homeOpen}
+        onReveal={revealInLibrary} onForgotten={() => home.refresh(["resume"])} onError={fail}/>}
       {view === "catalog" && <section className={`catalog-view ${catalogCompact ? "catalog-compact" : ""}`} {...chromeGestures(() => gridRef.current)} onFocusCapture={(event) => {
         if ((event.target as HTMLElement).closest(".searchbar,.filterbar")) setCatalogCompact(false);
       }}><Heading eyebrow={t("catalog.eyebrow")} title={t("catalog.title")}/>
