@@ -204,6 +204,12 @@ A content move refuses nested libraries, overlapping source/destination paths,
 colliding names and an empty source. Failure or cancellation keeps the old root,
 but does not roll back files already moved; check both folders before retrying.
 
+If another library takes the new folder while the content is moving, the root is
+not switched: two libraries never share a folder. The job ends as failed, the
+library dialog says which folder now holds the content, and the switch is tried
+again on the next start. Free the folder, then use **Change folder → Only point
+at the new folder** to finish it by hand.
+
 For manual relocation, stop the server, move the whole tree, restart and choose
 **Only point at the new folder**.
 

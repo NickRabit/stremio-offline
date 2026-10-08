@@ -2,6 +2,7 @@ import { mkdir, readdir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { grantingRoot } from "./library-grants.js";
 import { isInside, realTarget, sameFile, type LibraryRecord, type LibraryType, type RootGrant } from "./libraries.js";
+import type { FinishOutcome, LibraryOp, OpsState } from "./library-ops.js";
 import { log } from "./logger.js";
 
 /** A root the deployment will accept, or why it will not. The message carries the catalogue
@@ -151,4 +152,47 @@ export async function libraryRootTaken(libraries: LibraryRecord[], root: string,
     if (sameFile(other, real)) return true;
   }
   return false;
+}
+
+/** The `finished` hook of a re-root: once every item is across, the library points at the new
+ *  folder. A switch it cannot make is a failed job the interface shows and the next start
+ *  retries, not a success with a warning in the log. */
+export function switchRerootedRoot(deps: {
+  libraries: () => LibraryRecord[];
+  update: (mutate: (state: { libraries?: LibraryRecord[] }) => void) => Promise<void>;
+  switched: () => Promise<void>;
+}) {
+  return async (job: OpsState, operation: LibraryOp): Promise<FinishOutcome | void> => {
+    if (operation.op !== "reroot") return;
+    // Every item went over. The status is not the test: a start that retries a switch the
+    // last one could not make sees the job it marked `failed` itself.
+    if (job.failed > 0 || job.done < job.total) return;
+    // Somebody pointed the library elsewhere by hand, or removed it: the switch is theirs now.
+    const current = deps.libraries().find((library) => library.id === operation.libraryId);
+    if (!current || path.resolve(current.root) !== operation.from) return;
+    // Under the root lock, with the folder checked afresh: a create or an edit that took the new
+    // folder while the content moved owns it, and two libraries over one folder is worse than a
+    // re-root that waits for somebody to look.
+    const switched = await withLibraryRootLock(async () => {
+      if (await libraryRootTaken(deps.libraries(), operation.to, operation.libraryId)) return false;
+      await deps.update((state) => {
+        state.libraries = (state.libraries ?? []).map((library) => library.id === operation.libraryId ? { ...library, root: operation.to } : library);
+      });
+      return true;
+    });
+    if (!switched) {
+      log("WARN", "The re-rooted content is in place, but another library took the new folder meanwhile; the root was not switched", {
+        library: operation.libraryId, from: operation.from, to: operation.to,
+      });
+      return {
+        error: `The content is now in ${operation.to}, but another library took that folder meanwhile, so this library still points to ${operation.from}.`,
+        errorKey: "err.libraryRerootTaken",
+        vars: { from: operation.from, to: operation.to },
+      };
+    }
+    await deps.switched();
+    log("INFO", "Library re-rooted, the content came along", {
+      library: operation.libraryId, from: operation.from, root: operation.to, items: operation.items.length,
+    });
+  };
 }

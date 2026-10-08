@@ -327,6 +327,76 @@ test("a terminal job whose hook never ran fires once on the next load", async ()
   } finally { await cleanup(dataDir, queues); }
 });
 
+test("a finished hook that reports an outcome fails the job, and the next start tries again", async () => {
+  const dataDir = await mkdtemp(path.join(tmpdir(), "stremio-ops-"));
+  const queues: LibraryOps[] = [];
+  const file = path.join(dataDir, "outcome.json");
+  let blocked = true;
+  const calls: string[] = [];
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const finished: LibraryOpsOptions["finished"] = async (job) => {
+    calls.push(job.status);
+    if (calls.length === 1) await gate;
+    return blocked ? { error: "The folder is taken.", errorKey: "err.libraryRerootTaken", vars: { to: "/new" } } : undefined;
+  };
+  try {
+    const queue = new LibraryOps({ file, retryMs: 10, execute: async () => ({}), finished });
+    queues.push(queue);
+    await queue.load();
+    const job = await queue.enqueue({ op: "reroot", items: ["Show"], libraryId: "lib_a", from: "/old", to: "/new" });
+    await waitFor(() => calls.length === 1);
+    // While the hook has not answered, nobody may read the job as done.
+    assert.equal(queue.snapshot().jobs[0]!.status, "running");
+    release();
+    await waitFor(() => queue.snapshot().jobs[0]!.status === "failed");
+    const failed = queue.snapshot().jobs[0]!;
+    assert.equal(failed.id, job.id);
+    assert.equal(failed.error, "The folder is taken.");
+    assert.equal(failed.errorKey, "err.libraryRerootTaken");
+    assert.deepEqual(failed.errorVars, { to: "/new" });
+    assert.ok(failed.finishedAt);
+    assert.deepEqual(queue.unfinished().map((entry) => entry.operation.op), ["reroot"]);
+    await queue.settled();
+    assert.equal(JSON.parse(await readFile(file, "utf8")).jobs[0].notifyPending, true, "the retry flag came off");
+
+    // The next start finds the way clear: the job completes and the reason goes.
+    blocked = false;
+    const again = new LibraryOps({ file, retryMs: 10, execute: async () => ({}), finished });
+    queues.push(again);
+    await again.load();
+    await again.settled();
+    assert.deepEqual(calls, ["completed", "failed"]);
+    const done = again.snapshot().jobs[0]!;
+    assert.equal(done.status, "completed");
+    assert.equal(done.error, undefined);
+    assert.equal(done.errorKey, undefined);
+    assert.deepEqual(again.unfinished(), []);
+    assert.equal(JSON.parse(await readFile(file, "utf8")).jobs[0].notifyPending, false);
+  } finally { await cleanup(dataDir, queues); }
+});
+
+test("a job still waiting on its hook outlives the trim of finished jobs", async () => {
+  const dataDir = await mkdtemp(path.join(tmpdir(), "stremio-ops-"));
+  const queues: LibraryOps[] = [];
+  const file = path.join(dataDir, "trim.json");
+  try {
+    const queue = new LibraryOps({
+      file, retryMs: 10, execute: async () => ({}),
+      finished: (_job, operation) => operation.op === "reroot" ? { error: "taken" } : undefined,
+    });
+    queues.push(queue);
+    await queue.load();
+    const stranded = await queue.enqueue({ op: "reroot", items: ["Show"], libraryId: "lib_a", from: "/old", to: "/new" });
+    for (let index = 0; index < 22; index += 1) await queue.enqueue({ op: "delete", items: [`item-${index}`] });
+    await waitFor(() => queue.snapshot().jobs.every((job) => job.status === "completed" || job.status === "failed"));
+    await queue.settled();
+    const stored = JSON.parse(await readFile(file, "utf8")).jobs as Array<{ id: string }>;
+    assert.ok(stored.some((job) => job.id === stranded.id), "the job the next start has to retry was trimmed");
+    assert.equal(stored.length, 21);
+  } finally { await cleanup(dataDir, queues); }
+});
+
 test("a terminal job stored without the flag does not fire on load", async () => {
   const dataDir = await mkdtemp(path.join(tmpdir(), "stremio-ops-"));
   const queues: LibraryOps[] = [];

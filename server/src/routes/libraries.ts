@@ -356,6 +356,12 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
           bumped = usersToBump(library.visibleTo, resolved.visibleTo);
         }
         const changed: LibraryRecord = { ...library, ...resolved, writeArtwork: (resolved.writeArtwork ?? library.writeArtwork) && !health.readOnly };
+        // Asked again over the library as this write finds it: the check before the queue read a
+        // type that a PATCH queued ahead of this one may have changed since.
+        for (const kind of ["movie", "series"] as const) {
+          if (claimsDefault(kind) !== true || changed.type === kind || changed.type === "mixed") continue;
+          throw new AppError(`A ${changed.type} library cannot be the default for ${kind === "movie" ? "movies" : "series"}.`, "err.libraryDefaultType");
+        }
         // The probe answers for the root as it is now; a stale `unreachable` on a disk that came
         // back would keep the library out of every walk.
         if (health.unreachable) changed.unreachable = true; else delete changed.unreachable;

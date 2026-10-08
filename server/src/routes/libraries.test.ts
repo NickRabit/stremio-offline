@@ -29,6 +29,7 @@ interface Harness {
   stored: () => LibraryRecord[];
   userGrants: () => RootGrant[];
   allGrants: () => RootGrant[];
+  settings(): { defaultMovieLibrary: string; defaultSeriesLibrary: string };
   /** How many writes are waiting for `releaseWrites`, so a test can interleave two of them. */
   pendingWrites(): number;
   holdWrites(): void;
@@ -60,7 +61,7 @@ const mount = async (
   let sessionReads: number | undefined;
   // `users` lives in the state, not only behind `store.users()`: a mutator reads the state,
   // and the write-time role check is one of the things that does.
-  const state = { libraries: records, users: [admin, ordinary], grants: [] as RootGrant[], departed };
+  const state = { libraries: records, users: [admin, ordinary], grants: [] as RootGrant[], departed, settings: { defaultMovieLibrary: "", defaultSeriesLibrary: "" } };
   const viewed: Harness["viewed"] = [];
   const enqueued: unknown[] = [];
   const invalidated: string[] = [];
@@ -72,6 +73,7 @@ const mount = async (
     users: () => state.users,
     grants: () => state.grants,
     departed: () => state.departed,
+    settings: () => state.settings,
     update: async (mutate: (value: typeof state) => void) => {
       if (holding) {
         await new Promise<void>((resolve, reject) => {
@@ -131,6 +133,7 @@ const mount = async (
     enqueued,
     invalidated,
     stored: () => state.libraries,
+    settings: () => state.settings,
     userGrants: () => state.grants,
     loseSession: (after: number) => { sessionReads = after; },
     disable: (id: string) => { state.users = state.users.map((user) => user.id === id ? { ...user, disabled: true } : user); },
@@ -267,6 +270,27 @@ test("a PATCH that names one field leaves another a queued PATCH set", async (t)
   assert.equal(second.status, 200);
   assert.equal(harness.stored()[0]!.name, "Renamed", "a field the second request never named was written over");
   assert.equal(harness.stored()[0]!.type, "movie");
+});
+
+test("a default claimed behind a queued type change is checked against the type it lands on", async (t) => {
+  const harness = await mount([library("alpha", 0)]);
+  t.after(harness.close);
+  harness.holdWrites();
+
+  // Both requests pass the early check over a mixed library; the first then makes it a series
+  // library, and the second must not make that the default for films.
+  const typed = api(harness.base, "/api/libraries/alpha", { method: "PATCH", body: { type: "series" } });
+  while (harness.pendingWrites() < 1) await new Promise((resolve) => setImmediate(resolve));
+  const claimed = api(harness.base, "/api/libraries/alpha", { method: "PATCH", body: { defaultMovie: true } });
+  while (harness.pendingWrites() < 2) await new Promise((resolve) => setImmediate(resolve));
+  harness.releaseWrites();
+
+  const [first, second] = await Promise.all([typed, claimed]);
+  assert.equal(first.status, 200);
+  assert.equal(second.status, 400);
+  assert.equal((await failure(second)).messageKey, "err.libraryDefaultType");
+  assert.equal(harness.stored()[0]!.type, "series");
+  assert.equal(harness.settings().defaultMovieLibrary, "", "a series library became the default for films");
 });
 
 test("DELETE /api/libraries/:id refuses to remove the last library", async (t) => {

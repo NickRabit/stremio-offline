@@ -309,7 +309,8 @@ export function App() {
       // One item that failed has one reason, and the dialog that would have shown it has
       // closed by now: a count of failures would leave the reason nowhere at all.
       const only = job.total === 1 ? job.results.find((result) => !result.ok) : undefined;
-      if (only) fail(new ApiError(only.error ?? t("library.bulkFinishedFailed", { failed: 1, total: 1 }), 0, undefined, only.errorKey));
+      if (job.error) fail(new ApiError(job.error, 0, undefined, job.errorKey, job.errorVars));
+      else if (only) fail(new ApiError(only.error ?? t("library.bulkFinishedFailed", { failed: 1, total: 1 }), 0, undefined, only.errorKey));
       else notify(job.failed
         ? t("library.bulkFinishedFailed", { failed: job.failed, total: job.total })
         : single ? t(single) : t("library.bulkFinished"));

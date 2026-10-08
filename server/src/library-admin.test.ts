@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readdir, realpath, rm, stat, symlink, writeFile } from 
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { asLibraryType, checkLibraryRemoval, checkLibraryRoot, checkRerootItems, checkRerootPaths, libraryFlag, libraryRootTaken, withLibraryRootLock } from "./library-admin.js";
+import { asLibraryType, checkLibraryRemoval, checkLibraryRoot, checkRerootItems, checkRerootPaths, libraryFlag, libraryRootTaken, switchRerootedRoot, withLibraryRootLock } from "./library-admin.js";
 import { carveOuts, type LibraryRecord, type RootGrant } from "./libraries.js";
 import { flushLog } from "./logger.js";
 
@@ -345,4 +345,59 @@ test("a folder reached through a symlink is the folder another library already u
   const libraries = [{ id: "lib_a", name: "A", type: "movie", root: path.join(dir, "alias"), enabled: true, order: 0, addedAt: "2026-01-01T00:00:00.000Z", writeArtwork: false }] as LibraryRecord[];
   assert.equal(await libraryRootTaken(libraries, films), true);
   assert.equal(await libraryRootTaken(libraries, films, "lib_a"), false, "the library itself is not another library");
+});
+
+const rerootFixture = async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "stremio-reroot-switch-"));
+  const from = path.join(dir, "old");
+  const to = path.join(dir, "new");
+  await mkdir(from);
+  await mkdir(to);
+  const record = (id: string, root: string) => ({ id, name: id, type: "mixed", root, enabled: true, order: 0, addedAt: "2026-01-01T00:00:00.000Z", writeArtwork: false }) as LibraryRecord;
+  const state = { libraries: [record("lib_a", from)] };
+  let switched = 0;
+  const hook = switchRerootedRoot({
+    libraries: () => state.libraries,
+    update: async (mutate) => { mutate(state); },
+    switched: async () => { switched += 1; },
+  });
+  const operation = { op: "reroot" as const, items: ["Show"], libraryId: "lib_a", from, to };
+  const job = { id: "job", op: "reroot" as const, status: "completed" as const, total: 1, done: 1, failed: 0, bytes: 0, bytesTotal: 0, startedAt: "", results: [] };
+  return { dir, from, to, state, record, hook, operation, job, switched: () => switched };
+};
+
+test("a re-root whose items all went over points the library at the new folder", async (t) => {
+  const fixture = await rerootFixture();
+  t.after(() => rm(fixture.dir, { recursive: true, force: true }));
+  assert.equal(await fixture.hook(fixture.job, fixture.operation), undefined);
+  assert.equal(fixture.state.libraries[0]!.root, fixture.to);
+  assert.equal(fixture.switched(), 1);
+});
+
+test("a re-root whose new folder another library took meanwhile fails, and is retried once it is free", async (t) => {
+  const fixture = await rerootFixture();
+  t.after(() => rm(fixture.dir, { recursive: true, force: true }));
+  fixture.state.libraries.push(fixture.record("lib_b", fixture.to));
+  const outcome = await fixture.hook(fixture.job, fixture.operation);
+  assert.equal(outcome && outcome.errorKey, "err.libraryRerootTaken");
+  assert.deepEqual(outcome && outcome.vars, { from: fixture.from, to: fixture.to });
+  assert.equal(fixture.state.libraries[0]!.root, fixture.from, "the library was pointed at a folder another library holds");
+  assert.equal(fixture.switched(), 0);
+
+  // The retry on the next start sees the job it failed itself, and the folder free by now.
+  fixture.state.libraries = fixture.state.libraries.filter((library) => library.id !== "lib_b");
+  assert.equal(await fixture.hook({ ...fixture.job, status: "failed" }, fixture.operation), undefined);
+  assert.equal(fixture.state.libraries[0]!.root, fixture.to);
+});
+
+test("a re-root the owner settled by hand, or that left items behind, switches nothing", async (t) => {
+  const fixture = await rerootFixture();
+  t.after(() => rm(fixture.dir, { recursive: true, force: true }));
+  assert.equal(await fixture.hook({ ...fixture.job, done: 0, failed: 1, status: "failed" }, fixture.operation), undefined);
+  assert.equal(fixture.state.libraries[0]!.root, fixture.from);
+  const elsewhere = path.join(fixture.dir, "elsewhere");
+  fixture.state.libraries = [{ ...fixture.state.libraries[0]!, root: elsewhere }];
+  assert.equal(await fixture.hook({ ...fixture.job, status: "failed" }, fixture.operation), undefined);
+  assert.equal(fixture.state.libraries[0]!.root, elsewhere, "a retry pulled the library back from where the owner pointed it");
+  assert.equal(fixture.switched(), 0);
 });
