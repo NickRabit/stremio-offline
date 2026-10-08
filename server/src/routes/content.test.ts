@@ -20,6 +20,7 @@ const instancePrefs: UserPrefs = {
   mergeByName: false, streamSort: "recommended", trackProgress: true, showResumeRow: true,
   catalogTileSize: "medium", libraryTileSize: "medium", catalogTileShape: "poster", libraryTileShape: "poster", homeTileShape: "wide",
   startView: "catalog",
+  libraryShelf: "resume",
 };
 
 interface Calls {

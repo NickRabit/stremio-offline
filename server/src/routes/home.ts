@@ -9,7 +9,7 @@ import {
   type HomeCard, type HomeResponse, type HomeRow, type HomeRowError, type HomeRowId,
   type ResumeCatalogueItem, type ResumeFileItem,
 } from "../home.js";
-import { libraryFor, libraryPath, libraryVisible, parseLibraryPath, showsOnHome, type LibraryRecord, type Viewer } from "../libraries.js";
+import { libraryFor, libraryPath, libraryVisible, parseLibraryPath, showsInFavorites, showsOnHome, type LibraryRecord, type Viewer } from "../libraries.js";
 import { isPathWithin, type BrowseItem } from "../library.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import { knownTitleEntry } from "../library-match.js";
@@ -45,6 +45,10 @@ export interface HomeSuggestion {
  *  that vanished since the scan does not shorten the row. */
 const TONIGHT_CARDS = 12;
 const TONIGHT_SPARES = 6;
+
+/** A title at or past this share of its duration counts as finished, so Tonight does not top
+ *  up from it. The same threshold `POST /api/progress` uses to forget a position. */
+const PROGRESS_DONE = 0.94;
 
 export interface HomeDeps extends RouteContext {
   personal: PersonalApi;
@@ -117,6 +121,19 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
     const parsed = parseLibraryPath(key);
     if (!parsed) return true;
     return libraryFor(libraries, parsed.libraryId)?.enabled === true;
+  };
+
+  /** A key whose owning library can still be shown on Home: switched on and reachable. A key
+   *  no library claims -- an unqualified one, or one whose library is gone -- is left to the
+   *  caller's own rules, which keep it. */
+  const libraryOnHome = (key: string, libraries: LibraryRecord[]): boolean => {
+    const parsed = parseLibraryPath(key);
+    if (!parsed) return true;
+    const library = libraryFor(libraries, parsed.libraryId);
+    // A path whose library record is already gone keeps the showsOnHome answer.
+    // Enabled and reachable are checked only for a library that is still here.
+    if (!library) return true;
+    return library.enabled && !library.unreachable;
   };
 
   const fileArtwork = async (key: string, relative: string) => {
@@ -216,7 +233,9 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
 
   const favoritesRow = async (req: express.Request, viewer: Viewer): Promise<HomeRow> => {
     const libraries = store.libraries();
-    const visible = dataOf(req).favorites.filter((key) => personal.pathVisible(key, viewer, libraries) && showsOnHome(key, libraries));
+    const visible = dataOf(req).favorites.filter((key) =>
+      personal.pathVisible(key, viewer, libraries) && showsOnHome(key, libraries)
+      && showsInFavorites(key, libraries) && libraryOnHome(key, libraries));
     // Newest first, and only as many as a row can use: a long list of favourites is not
     // described on every visit to Home.
     const stored = visible.slice(-HOME_CANDIDATES).reverse();
@@ -313,6 +332,16 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
     const started = (key: string, id: string): boolean => progress.some(([progressKey, value]) =>
       value.series?.id === id || progressKey === `movie:${id}` || Boolean(value.path && isPathWithin(value.path, key)));
 
+    // Finished only when every position that covers the favourite is at the end. One
+    // finished episode of a show that is still in progress must not hide the show.
+    const finished = (key: string): boolean => {
+      const id = records[key]?.id ?? "";
+      const covering = progress.filter(([progressKey, value]) =>
+        (id !== "" && (value.series?.id === id || progressKey === `movie:${id}`))
+        || Boolean(value.path && isPathWithin(value.path, key)));
+      return covering.length > 0 && covering.every(([, value]) => value.duration > 0 && value.position / value.duration >= PROGRESS_DONE);
+    };
+
     const eligible = Object.entries(records).flatMap(([key, record]) => {
       if (record.type !== "movie" && record.type !== "series") return [];
       if (!record.id || record.unmatched || record.season !== undefined || record.episode !== undefined) return [];
@@ -327,11 +356,18 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
 
     const utcDate = new Date(now()).toISOString().slice(0, 10);
     const seed = `${viewer.id}:${utcDate}:${shuffleOf(req.query.shuffle)}`;
-    const ordered = eligible
+    const hashSort = (keys: string[]): string[] => keys
       .map((key) => ({ key, hash: seedHash(`${seed}:${key}`) }))
       .sort((a, b) => a.hash - b.hash || a.key.localeCompare(b.key))
-      .slice(0, TONIGHT_CARDS + TONIGHT_SPARES)
       .map((entry) => entry.key);
+
+    // Only when the unstarted pool is short of a full row: unfinished favourites top it up,
+    // in the same per-day order and after the unstarted titles.
+    const known = new Set(eligible);
+    const topUp = eligible.length >= TONIGHT_CARDS ? [] : dataOf(req).favorites.filter((key) =>
+      !known.has(key) && personal.pathVisible(key, viewer, libraries) && showsOnHome(key, libraries)
+      && showsInFavorites(key, libraries) && libraryOnHome(key, libraries) && !finished(key));
+    const ordered = [...hashSort(eligible), ...hashSort(topUp)].slice(0, TONIGHT_CARDS + TONIGHT_SPARES);
 
     const described = await Promise.all(ordered.map(async (key) => {
       const item = await describeLibraryPath(key);
@@ -341,16 +377,18 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
       .filter((entry): entry is NonNullable<typeof entry> => entry !== undefined)
       .slice(0, TONIGHT_CARDS);
     const cards: HomeCard[] = await Promise.all(present.map(async ({ key, item }) => {
-      const record = records[key]!;
+      const record = records[key];
       const relative = wirePath(key);
       const { poster, wide } = item.kind === "folder" ? await folderArtwork(key, relative) : await fileArtwork(key, relative);
       return {
         kind: "tonight", key, path: relative, itemKind: item.kind,
-        label: record.name || (item.kind === "folder" ? item.name : item.label),
-        ...(record.year ? { year: record.year } : {}),
+        label: record?.name || (item.kind === "folder" ? item.name : item.label),
+        ...(record?.year ? { year: record.year } : {}),
         ...(poster ? { poster } : {}),
         ...(wide ? { wide } : {}),
-        libraryId: parseLibraryPath(key)!.libraryId,
+        // A favourite carried over from before libraries names no library; it still draws, and
+        // only its single-library install can resolve the card.
+        libraryId: parseLibraryPath(key)?.libraryId ?? "",
       };
     }));
     return { status: "ok", items: cards, hasMore: false };

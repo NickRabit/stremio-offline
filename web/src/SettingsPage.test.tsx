@@ -15,7 +15,7 @@ const settings = (over: Partial<AppSettings> = {}): AppSettings => ({
   libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, addonRefreshHours: 24,
   catalogTileSize: "medium", libraryTileSize: "medium",
   catalogTileShape: "poster", libraryTileShape: "poster", homeTileShape: "wide",
-  startView: "catalog", realDebridConfigured: false, tmdbConfigured: false, ...over,
+  startView: "catalog", libraryShelf: "resume", realDebridConfigured: false, tmdbConfigured: false, ...over,
 });
 
 let root: Root;

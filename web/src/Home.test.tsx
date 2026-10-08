@@ -96,16 +96,46 @@ describe("Home", () => {
     expect(host.querySelector(".empty")).toBeNull();
   });
 
-  it("draws the Downloads row when the account has jobs", async () => {
+  it("draws a quiet Downloads strip for healthy jobs, with no cards", async () => {
     await render({ jobs: [job({ id: "running", status: "downloading", total: 100, received: 50, speed: 1024 })] });
     expect(host.querySelector(".home-row")).not.toBeNull();
     expect(host.querySelector(".empty")).toBeNull();
     expect(host.textContent).toContain("Downloads");
-    expect(host.querySelectorAll(".hq-card")).toHaveLength(1);
+    expect(host.querySelectorAll(".hq-card")).toHaveLength(0);
+    expect(host.querySelector(".home-row .resume-show-all")!.textContent).toContain("Show all");
+  });
+
+  it("draws a card only for a job that needs attention", async () => {
+    await render({ jobs: [
+      job({ id: "running", status: "downloading" }),
+      job({ id: "queued", status: "queued", order: 1 }),
+      job({ id: "failed", status: "failed", order: 2 }),
+      job({ id: "blocked", status: "paused", pauseReason: "storage", order: 3 }),
+    ] });
+    expect(cardButtons().map((buttons) => buttons[0]!.textContent)).toEqual(["failed", "blocked"]);
+  });
+
+  it("draws the shelves in the page order with Downloads last", async () => {
+    await render({
+      admin: true,
+      jobs: [job({ id: "failed", status: "failed" })],
+      rows: allEmpty({
+        resume: rowState({ items: [resumeFile()] }),
+        favorites: rowState({ items: [favoriteCard("file")] }),
+        tonight: rowState({ items: [tonightFile()] }),
+        episodes: rowState({ items: [episodeCard()] }),
+        completed: rowState({ items: [completedCard()] }),
+        recent: rowState({ items: [recentCard()] }),
+        confirm: rowState({ items: [confirmCard()], total: 1 }),
+      }),
+    });
+    expect([...host.querySelectorAll<HTMLElement>(".home-row")].map((element) => element.dataset.row ?? "downloads"))
+      .toEqual(["resume", "favorites", "tonight", "episodes", "completed", "recent", "downloads"]);
+    expect(row("confirm")).toBeNull();
   });
 
   it("keeps the title and the action as sibling buttons", async () => {
-    const { onShowDownloads } = await render({ jobs: [job({ id: "Duna", status: "downloading" })] });
+    const { onShowDownloads } = await render({ jobs: [job({ id: "Duna", status: "failed" })] });
     const [title, action] = cardButtons()[0]!;
     expect(title!.classList.contains("hq-title")).toBe(true);
     expect(title!.contains(action!)).toBe(false);
@@ -118,10 +148,10 @@ describe("Home", () => {
     const failed = job({ id: "failed", status: "failed" });
     const paused = job({ id: "paused", status: "paused", pauseReason: "user", order: 1 });
     const { onAction } = await render({ jobs: [failed, paused] });
+    expect(cardButtons()).toHaveLength(1);
     await click(cardButtons()[0]![1]!);
     expect(onAction).toHaveBeenCalledWith(failed, "retry");
-    await click(cardButtons()[1]![1]!);
-    expect(onAction).toHaveBeenCalledWith(paused, "resume");
+    expect(cardButtons().some((buttons) => buttons[0]!.textContent?.includes("paused"))).toBe(false);
   });
 
   it("opens the Downloads view for a job Home cannot repair", async () => {
@@ -283,7 +313,7 @@ describe("Home", () => {
     expect(onToggleShape).toHaveBeenCalledTimes(1);
   });
 
-  it("draws the New episodes, Recently added, Tonight and To confirm shelves", async () => {
+  it("draws the New episodes, Recently added and Tonight shelves, and no confirm shelf", async () => {
     await render({ admin: true, rows: allEmpty({
       episodes: rowState({ items: [episodeCard()] }),
       recent: rowState({ items: [recentCard()] }),
@@ -293,7 +323,7 @@ describe("Home", () => {
     expect(row("episodes")).not.toBeNull();
     expect(row("recent")).not.toBeNull();
     expect(row("tonight")).not.toBeNull();
-    expect(row("confirm")).not.toBeNull();
+    expect(row("confirm")).toBeNull();
   });
 
   it("omits a new shelf with no items", async () => {
@@ -346,16 +376,33 @@ describe("Home", () => {
     expect(onShuffle.mock.calls).toEqual([["tonight", 1], ["tonight", 2]]);
   });
 
-  it("shows the To confirm count and opens the suggestions dialog from the card and from Show all", async () => {
-    const card = confirmCard();
-    const { onOpenCatalogue, onShowAll } = await render({ admin: true, rows: allEmpty({ confirm: rowState({ items: [card], total: 4 }) }) });
-    expect(row("confirm")!.querySelector(".home-head .count")!.textContent).toBe("4");
-    expect(row("confirm")!.textContent).toContain("Suggested: Real Title (2023)");
-    await click(primary("confirm"));
-    expect(onOpenCatalogue).toHaveBeenCalledWith(card);
-    await click(row("confirm")!.querySelector<HTMLButtonElement>(".resume-show-all")!);
+  it("shows the To confirm count as a heading chip that opens the suggestions dialog", async () => {
+    const { onShowAll } = await render({ admin: true, rows: allEmpty({ confirm: rowState({ items: [confirmCard()], total: 4 }) }) });
+    expect(row("confirm")).toBeNull();
+    const chip = host.querySelector<HTMLButtonElement>(".home-confirm-chip")!;
+    expect(chip.textContent).toBe("4 to confirm");
+    await click(chip);
     expect(onShowAll).toHaveBeenCalledWith("confirm");
-    expect(row("confirm")!.querySelector(".browse-menu")).toBeNull();
+  });
+
+  it("draws no confirm chip for an empty, loading or ordinary confirm row", async () => {
+    await render({ admin: true, rows: allEmpty() });
+    expect(host.querySelector(".home-confirm-chip")).toBeNull();
+    await render({ admin: true, rows: allEmpty({ confirm: rowState({ status: "loading" }) }) });
+    expect(host.querySelector(".home-confirm-chip")).toBeNull();
+    // An ordinary account never asks for `confirm`, so its rows carry none and no chip.
+    const withoutConfirm = Object.fromEntries(Object.entries(allEmpty()).filter(([row]) => row !== "confirm")) as HomeRows;
+    await render({ admin: false, rows: withoutConfirm });
+    expect(host.querySelector(".home-confirm-chip")).toBeNull();
+  });
+
+  it("shows the confirm row's failure and retry under the heading, not a shelf", async () => {
+    const { onRetry } = await render({ admin: true, rows: allEmpty({ confirm: rowState({ status: "error" }) }) });
+    expect(row("confirm")).toBeNull();
+    const note = host.querySelector(".home-note.bad")!;
+    expect(note.textContent).toContain("This row could not load.");
+    await click(note.querySelector<HTMLButtonElement>(".home-retry")!);
+    expect(onRetry).toHaveBeenCalledWith("confirm");
   });
 
   it("never draws the To confirm shelf for an ordinary account", async () => {

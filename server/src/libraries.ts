@@ -28,6 +28,9 @@ export interface LibraryRecord {
   showInContinueWatching?: boolean;
   /** Off leaves this library's files off Home, in every shelf, while the stored data stays. Absent means on. */
   showOnHome?: boolean;
+  /** Off hides this library's starred titles from Home Favourites and the library Favourites
+   *  shelf, without deleting the stars. Absent means on. */
+  showInFavorites?: boolean;
   /** Off keeps this library out of the automatic scans, startup to watch. Absent means on. */
   autoScanMetadata?: boolean;
   /** The root could not be reached at the last check. Metadata and artwork stay. */
@@ -159,6 +162,14 @@ export function showsInContinueWatching(value: string, libraries: readonly Pick<
 export function showsOnHome(value: string, libraries: readonly Pick<LibraryRecord, "id" | "showOnHome">[]): boolean {
   const owner = parseLibraryPath(value)?.libraryId;
   return !owner || libraries.find((library) => library.id === owner)?.showOnHome !== false;
+}
+
+/** Whether starred titles kept for a path belong in Favourites. A path no library claims
+ *  -- an unqualified one, or one whose library is gone -- stays; a library that turned the
+ *  switch off keeps its stored stars and drops out of Home and the library shelf. */
+export function showsInFavorites(value: string, libraries: readonly Pick<LibraryRecord, "id" | "showInFavorites">[]): boolean {
+  const owner = parseLibraryPath(value)?.libraryId;
+  return !owner || libraries.find((library) => library.id === owner)?.showInFavorites !== false;
 }
 
 /** The qualified key a queued download's target belongs to. A job from before libraries

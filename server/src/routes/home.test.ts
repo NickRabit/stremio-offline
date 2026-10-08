@@ -36,6 +36,7 @@ const instancePrefs: UserPrefs = {
   mergeByName: false, streamSort: "recommended", trackProgress: true, showResumeRow: true,
   catalogTileSize: "medium", libraryTileSize: "medium", catalogTileShape: "poster", libraryTileShape: "poster", homeTileShape: "wide",
   startView: "catalog",
+  libraryShelf: "resume",
 };
 
 interface Harness {
@@ -533,6 +534,26 @@ test("a library switched off for Home hides only its half of a merged show", asy
   assert.deepEqual(rows.resume!.items[0]!.forgetKeys, ["series:tt1:1:2"]);
 });
 
+test("Home Favourites keeps a star unless its library opted out, is off Home or is disabled", async (t) => {
+  const harness = await mount({ libraries: [
+    library({ id: "lib_00000001", root: "/media/one", visibleTo: [ALICE] }),
+    library({ id: "lib_00000002", root: "/media/two", visibleTo: [ALICE], showInFavorites: false }),
+    library({ id: "lib_00000003", root: "/media/three", visibleTo: [ALICE], showOnHome: false }),
+    library({ id: "lib_00000004", root: "/media/four", visibleTo: [ALICE], enabled: false }),
+  ] });
+  t.after(harness.close);
+  harness.data(ALICE).favorites = [
+    "lib_00000001/One/Kept.mkv",
+    "lib_00000002/Two/OptedOut.mkv",
+    "lib_00000003/Three/OffHome.mkv",
+    "lib_00000004/Four/Disabled.mkv",
+  ];
+
+  const rows = await allRows(harness, ALICE);
+  assert.deepEqual(rows.favorites!.items.map((item) => item.path), ["lib_00000001/One/Kept.mkv"],
+    "a missing field stays in, an opt-out, an off-Home library and a disabled one drop out");
+});
+
 test("favourites are read newest first and only as many as the row can use", async (t) => {
   const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media/films", visibleTo: [ALICE] })] });
   t.after(harness.close);
@@ -638,6 +659,76 @@ test("tonight draws nothing from a library switched off, disabled, away or not g
 
   const rows = await allRows(harness, ALICE);
   assert.deepEqual(rows.tonight!.items.map((item) => item.libraryId), ["lib_00000001"]);
+});
+
+test("tonight ignores favourites while a full row of unstarted titles is eligible", async (t) => {
+  const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
+  t.after(harness.close);
+  for (let index = 0; index < 12; index += 1) {
+    Object.assign(harness.records, { [`lib_00000001/Films/${String(index).padStart(2, "0")}`]: { type: "movie", id: `tt${index}`, name: `Film ${index}` } });
+  }
+  harness.data(ALICE).favorites = ["lib_00000001/Films/Extra"];
+
+  const rows = await allRows(harness, ALICE);
+  assert.equal(rows.tonight!.items.length, 12);
+  assert.equal(rows.tonight!.items.some((item) => item.key === "lib_00000001/Films/Extra"), false, "a favourite stands in only below a full row");
+});
+
+test("tonight tops up from unfinished favourites, never a finished one, in the same per-day order", async (t) => {
+  const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
+  t.after(harness.close);
+  Object.assign(harness.records, {
+    "lib_00000001/Films/A": { type: "movie", id: "ttA", name: "A" },
+    "lib_00000001/Films/B": { type: "movie", id: "ttB", name: "B" },
+    "lib_00000001/Films/C": { type: "movie", id: "ttC", name: "C" },
+    "lib_00000001/Films/Unfinished": { type: "movie", id: "ttU", name: "Unfinished" },
+    "lib_00000001/Films/Finish": { type: "movie", id: "ttD", name: "Finish" },
+  });
+  harness.data(ALICE).favorites = ["lib_00000001/Films/Unfinished", "lib_00000001/Films/Finish"];
+  harness.data(ALICE).progress = {
+    "movie:ttU": { position: 20, duration: 100, title: "Unfinished", updatedAt: "2024-01-02T00:00:00.000Z" },
+    "movie:ttD": { position: 95, duration: 100, title: "Finish", updatedAt: "2024-01-01T00:00:00.000Z" },
+  };
+
+  const rows = await allRows(harness, ALICE);
+  const keys = rows.tonight!.items.map((item) => item.key);
+  assert.equal(rows.tonight!.items.length, 4);
+  assert.deepEqual([...keys].slice(0, 3).sort(), ["lib_00000001/Films/A", "lib_00000001/Films/B", "lib_00000001/Films/C"], "the unstarted titles come first");
+  assert.equal(keys[3], "lib_00000001/Films/Unfinished", "the unfinished favourite is appended after them");
+  assert.equal(keys.includes("lib_00000001/Films/Finish"), false, "a finished favourite is not offered again");
+
+  const again = await allRows(harness, ALICE);
+  assert.deepEqual(again.tonight!.items.map((item) => item.key), keys, "the same seed keeps the same order");
+});
+
+test("tonight keeps a favourite show that still has an unfinished episode", async (t) => {
+  const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
+  t.after(harness.close);
+  Object.assign(harness.records, {
+    "lib_00000001/Films/A": { type: "movie", id: "ttA", name: "A" },
+    "lib_00000001/Shows/StillOn": { type: "series", id: "ttS", name: "StillOn" },
+    "lib_00000001/Shows/AllDone": { type: "series", id: "ttDone", name: "AllDone" },
+    "lib_00000001/Films/Blank": { type: "movie", id: "", name: "Blank" },
+  });
+  harness.data(ALICE).favorites = [
+    "lib_00000001/Shows/StillOn",
+    "lib_00000001/Shows/AllDone",
+    "lib_00000001/Films/Blank",
+  ];
+  harness.data(ALICE).progress = {
+    "series:ttS:1:1": { position: 95, duration: 100, title: "StillOn · One", series: { id: "ttS", name: "StillOn", season: 1, episode: 1 }, updatedAt: "2024-01-02T00:00:00.000Z" },
+    "series:ttS:1:2": { position: 20, duration: 100, title: "StillOn · Two", series: { id: "ttS", name: "StillOn", season: 1, episode: 2 }, updatedAt: "2024-01-03T00:00:00.000Z" },
+    "series:ttDone:1:1": { position: 95, duration: 100, title: "AllDone · One", series: { id: "ttDone", name: "AllDone", season: 1, episode: 1 }, updatedAt: "2024-01-01T00:00:00.000Z" },
+    "series:ttDone:1:2": { position: 96, duration: 100, title: "AllDone · Two", series: { id: "ttDone", name: "AllDone", season: 1, episode: 2 }, updatedAt: "2024-01-01T00:00:00.000Z" },
+    "series::1:1": { position: 99, duration: 100, title: "No id", series: { id: "", name: "No id", season: 1, episode: 1 }, updatedAt: "2024-01-01T00:00:00.000Z" },
+  };
+
+  const rows = await allRows(harness, ALICE);
+  const keys = rows.tonight!.items.map((item) => item.key);
+  assert.equal(keys.includes("lib_00000001/Films/A"), true, "the unstarted title stays in the primary pool");
+  assert.equal(keys.includes("lib_00000001/Shows/StillOn"), true, "one finished episode does not hide a show still in progress");
+  assert.equal(keys.includes("lib_00000001/Shows/AllDone"), false, "a show whose every episode is finished is not offered again");
+  assert.equal(keys.includes("lib_00000001/Films/Blank"), true, "an empty meta id does not match a progress row that also has none");
 });
 
 test("tonight replaces a file that vanished with a spare", async (t) => {

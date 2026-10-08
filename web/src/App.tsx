@@ -17,7 +17,7 @@ import { SuggestionsDialog } from "./SuggestionsDialog";
 import { SeriesDownloadDialog } from "./SeriesDownloadDialog";
 import { FollowDialog, toEpisodes } from "./FollowDialog";
 import { FollowingPage } from "./FollowingPage";
-import { NewEpisodesRow } from "./NewEpisodesRow";
+import { LibraryShelf } from "./LibraryShelf";
 import { StatsPanel } from "./Stats";
 import { report } from "./diagnostics";
 import { label, titleLanguage } from "./languages";
@@ -215,7 +215,7 @@ export function App() {
   const [bulkDownload, setBulkDownload] = useState<{ label: string; title: string; type: string; episodes: Array<{ id: string; season?: number; episode?: number; title?: string }>; media: { id?: string; metaType?: string; poster?: string; background?: string; gallery?: Array<{ url: string; kind: GalleryKind }> } } | null>(null);
   const [downloads, setDownloads] = useState<DownloadJob[]>([]); const [queueHalt, setQueueHalt] = useState<QueueHalt | null>(null); const [busy, setBusy] = useState(false); const [message, setMessage] = useState(""); const [error, setError] = useState(""); const [playerOpen, setPlayerOpen] = useState(false);
   const [deviceTransfers, setDeviceTransfers] = useState<DeviceTransfer[]>([]);
-  const [settings, setSettings] = useState<AppSettings>({ concurrentDownloads: 1, parallelPerProvider: 1, downloadSegments: 2, uiLanguage: locale(), audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui", mergeByName: true, streamSort: "recommended", trackProgress: true, showResumeRow: true, libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, addonRefreshHours: 24, catalogTileSize: "medium", libraryTileSize: "medium", catalogTileShape: "poster", libraryTileShape: "poster", homeTileShape: "wide", startView: "catalog", realDebridConfigured: false, tmdbConfigured: false });
+  const [settings, setSettings] = useState<AppSettings>({ concurrentDownloads: 1, parallelPerProvider: 1, downloadSegments: 2, uiLanguage: locale(), audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui", mergeByName: true, streamSort: "recommended", trackProgress: true, showResumeRow: true, libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, addonRefreshHours: 24, catalogTileSize: "medium", libraryTileSize: "medium", catalogTileShape: "poster", libraryTileShape: "poster", homeTileShape: "wide", startView: "catalog", libraryShelf: "resume", realDebridConfigured: false, tmdbConfigured: false });
   const [languages, setLanguages] = useState<Array<{ code: string; name: string }>>([]);
   const [inspection, setInspection] = useState<Inspection | null>(null);
   const [session, setSession] = useState<Session | null | undefined>(undefined);
@@ -1186,6 +1186,14 @@ export function App() {
     setSettings((current: AppSettings) => ({ ...current, [key]: next }));
     try { const saved = await api.updateSettings({ [key]: next }); setSettings((current: AppSettings) => ({ ...current, ...saved })); }
     catch (e) { setSettings((current: AppSettings) => ({ ...current, [key]: before })); fail(e); }
+  };
+  /** The library shelf's segment saves like a shape: optimistic, silent, and put back on
+   *  failure so the clicked segment never sticks without the write behind it. */
+  const chooseLibraryShelf = async (segment: AppSettings["libraryShelf"]) => {
+    const before = settings.libraryShelf;
+    setSettings((current: AppSettings) => ({ ...current, libraryShelf: segment }));
+    try { const saved = await api.updateSettings({ libraryShelf: segment }); setSettings((current: AppSettings) => ({ ...current, ...saved })); }
+    catch (e) { setSettings((current: AppSettings) => ({ ...current, libraryShelf: before })); fail(e); }
   };
 
   const saveSettings = async (patch: SettingsPatch) => {
@@ -2316,27 +2324,23 @@ export function App() {
           compactOnScroll(event, libraryCompact, setLibraryCompact);
           scheduleViewAnchor();
         }}>
-        {settings.showResumeRow && !browsePath && !onlyFavorites && localResume.length > 0 && <div className="resume-row">
-          <div className="subhead"><h3>{t("library.continueWatching")}</h3><button className="resume-show-all" onClick={() => { setBrowseQuery(""); setOnlyFavorites(false); setFromFavorites(false); setMenuFor(null); setBrowsePath(":resume"); }}>{t("library.showAll")} ({resumePreview?.total ?? localResume.length}) <ChevronRight/></button></div>
-          <div className="resume-strip">
-            {localResume.slice(0, 8).map((item) => <button className="browse-item" key={item.key} data-path={item.path} onClick={() => {
-              if (item.path) void playLocal(item.title, item.path, item.poster, item.season != null);
-            }}>
-              <span className="browse-art">
-                {item.poster ? <img src={item.poster} alt="" loading="lazy"/> : <Film/>}
-                <i className="browse-play"><CirclePlay/></i>
-                <i className="resume-bar"><i style={{ width: `${Math.min(100, Math.round(item.position / (item.duration || 1) * 100))}%` }}/></i>
-              </span>
-              <span className="browse-menu" onClick={(event) => { event.stopPropagation(); setMenuFor(menuFor === item.key ? null : item.key); }}><MoreVertical/></span>
-              <strong>{item.series?.name ?? item.title}</strong>
-              <small>{item.season != null ? `${item.season}×${String(item.episode ?? 0).padStart(2, "0")} ` : ""}{t("library.remaining", { time: fmtEta(Math.max(0, item.duration - item.position)) })}</small>
-              {menuFor === item.key && <span className="browse-actions" onClick={(event) => event.stopPropagation()}>
-                <button onClick={() => { if (item.path) revealInLibrary(item.path); }}><HardDrive/> {t("library.showInLibrary")}</button>
-              </span>}
-            </button>)}
-          </div>
-        </div>}
-        {!browsePath && !onlyFavorites && <NewEpisodesRow follows={follows} episodes={newEpisodes} onManage={() => openView("following")} onOpen={(episode) => void openFromCatalog({ type: episode.type, id: episode.metaId, name: episode.name, poster: episode.poster })}/>}
+        {!browsePath && !onlyFavorites && !browseQuery && <LibraryShelf
+          segment={settings.libraryShelf}
+          showResume={settings.showResumeRow}
+          resume={localResume.slice(0, 8)}
+          resumeTotal={resumePreview?.total ?? localResume.length}
+          episodes={newEpisodes}
+          follows={follows}
+          favorites={favoritePreview}
+          onSegment={(segment) => void chooseLibraryShelf(segment)}
+          onPlayResume={(item) => { if (item.path) void playLocal(item.title, item.path, item.poster, item.season != null); }}
+          onRevealResume={(path) => revealInLibrary(path)}
+          onOpenEpisode={(episode) => void openFromCatalog({ type: episode.type, id: episode.metaId, name: episode.name, poster: episode.poster })}
+          onOpenFavorite={(item) => { if (item.kind === "folder") { setBrowseQuery(""); setFromFavorites(true); setBrowsePath(item.path); } else void playLocal(item.label, item.path, item.poster); }}
+          onShowResume={() => { setBrowseQuery(""); setOnlyFavorites(false); setFromFavorites(false); setMenuFor(null); setBrowsePath(":resume"); }}
+          onShowEpisodes={() => openView("following")}
+          onShowFavorites={() => { setBrowseQuery(""); setFromFavorites(false); setBrowsePath(":favorites"); }}
+        />}
         {!browsePath && !scanHintDismissed && !libraryScan?.finishedAt && (browse?.total ?? 0) >= 10 && <div className="library-scan-hint" role="status">
           <span>{t("library.scanHint")}</span>
           <button type="button" onClick={dismissScanHint}>{t("library.dismissHint")}</button>
@@ -2345,11 +2349,6 @@ export function App() {
           <span>{t("library.suggestionsWaiting", { count: suggestionCount })}</span>
           <button type="button" onClick={() => setSuggestionsOpen(true)}>{t("library.suggestionsReview")}</button>
         </div>}
-
-        {!browsePath && !onlyFavorites && !browseQuery && <button className="library-favorites" onClick={() => { setBrowseQuery(""); setFromFavorites(false); setBrowsePath(":favorites"); }}>
-          <span className="favorites-collage" aria-hidden="true">{[...new Set(favoritePreview?.items.map((item) => item.poster).filter((poster): poster is string => Boolean(poster)))].slice(0, 3).map((poster) => <img key={poster} src={poster} alt="" onError={hideBroken}/>)}<Star/></span>
-          <span className="favorites-copy"><strong>{t("favorite.off")}</strong><small>{favoritePreview?.total ? t("library.favoritesCount", { count: favoritePreview.total }) : t("library.favoritesEmptyHint")}</small></span><ChevronRight/>
-        </button>}
         {!browse || !browse.items.length
           ? (browseBusy ? <div className="loading">{t("common.loading")}</div>
             : <Empty icon={<HardDrive/>} title={t(browseQuery ? "library.emptyFilterTitle" : onlyUnconfirmed ? "library.emptyUnconfirmedTitle" : browsePath === ":resume" ? "library.emptyResumeTitle" : browsePath === ":favorites" || onlyFavorites ? "library.emptyFavoritesTitle" : "library.emptyTitle")} text={t(browseQuery ? "library.emptyFilterText" : onlyUnconfirmed ? "library.emptyUnconfirmedText" : browsePath === ":resume" ? "library.emptyResumeText" : browsePath === ":favorites" || onlyFavorites ? "library.emptyFavoritesText" : "library.emptyText")}/>)

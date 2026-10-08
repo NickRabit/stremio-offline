@@ -28,6 +28,7 @@ const instancePrefs: UserPrefs = {
   mergeByName: false, streamSort: "recommended", trackProgress: true, showResumeRow: true,
   catalogTileSize: "medium", libraryTileSize: "medium", catalogTileShape: "poster", libraryTileShape: "poster", homeTileShape: "wide",
   startView: "catalog",
+  libraryShelf: "resume",
 };
 
 /** What a request answers with. The instance default above is English, so a handler that

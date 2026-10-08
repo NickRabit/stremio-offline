@@ -15,12 +15,12 @@ const ALL = HOME_ROWS;
 
 describe("HOME_ROWS", () => {
   it("knows every server row, in page order, including the four this task adds", () => {
-    expect([...HOME_ROWS]).toEqual(["resume", "episodes", "completed", "recent", "tonight", "favorites", "confirm"]);
+    expect([...HOME_ROWS]).toEqual(["resume", "favorites", "tonight", "episodes", "completed", "recent", "confirm"]);
   });
 
   it("asks an administrator for all seven rows and an ordinary account for the six it may see", () => {
     expect([...homeRowsFor(true)]).toEqual([...HOME_ROWS]);
-    expect([...homeRowsFor(false)]).toEqual(["resume", "episodes", "completed", "recent", "tonight", "favorites"]);
+    expect([...homeRowsFor(false)]).toEqual(["resume", "favorites", "tonight", "episodes", "completed", "recent"]);
     expect(homeRowsFor(false)).not.toContain("confirm");
   });
 });

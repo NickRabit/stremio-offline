@@ -57,13 +57,22 @@ export function Home({ jobs, admin, onShowDownloads, onAction, rows, shape, onTo
   const shuffleCount = useRef(0);
   const items = homeQueue(jobs);
   const attention = attentionCount(jobs);
+  const cards = items.filter((job) => queueGroup(job) === "attention");
+  const confirm = rows.confirm;
 
   const heading = <div className="heading home-heading">
     <div className="home-heading-copy"><small>{t("home.eyebrow")}</small><h2>{t("home.title")}</h2></div>
-    <button className="shape-toggle" title={t(shape === "wide" ? "home.shapePoster" : "home.shapeWide")} aria-pressed={shape === "wide"} onClick={onToggleShape}>{shape === "wide" ? <RectangleVertical/> : <RectangleHorizontal/>}</button>
+    <div className="home-heading-actions">
+      {confirm?.status === "ok" && (confirm.total ?? 0) > 0 && <button className="home-confirm-chip" onClick={() => onShowAll("confirm")}>{t("home.confirmChip", { count: confirm.total ?? 0 })}</button>}
+      <button className="shape-toggle" title={t(shape === "wide" ? "home.shapePoster" : "home.shapeWide")} aria-pressed={shape === "wide"} onClick={onToggleShape}>{shape === "wide" ? <RectangleVertical/> : <RectangleHorizontal/>}</button>
+    </div>
   </div>;
 
-  if (!items.length && homeAllRowsEmpty(rows, homeRowsFor(admin))) return <>{heading}<Empty icon={<DownloadIcon/>} title={t("home.emptyTitle")} text={t("home.emptyText")}/></>;
+  const confirmError = confirm?.status === "error"
+    ? <div className="home-note bad"><span>{t("home.rowFailed")}</span><button className="home-retry" onClick={() => onRetry("confirm")}>{t("home.retry")}</button></div>
+    : null;
+
+  if (!items.length && homeAllRowsEmpty(rows, homeRowsFor(admin))) return <>{heading}{confirmError}<Empty icon={<DownloadIcon/>} title={t("home.emptyTitle")} text={t("home.emptyText")}/></>;
 
   const run = (job: Download, action: ReturnType<typeof queueAction>) => {
     if (action === "open") { onShowDownloads(); return; }
@@ -84,13 +93,15 @@ export function Home({ jobs, admin, onShowDownloads, onAction, rows, shape, onTo
   const summary = [t("home.downloadsSummary", { count: items.length }), attention > 0 ? t("home.attention", { count: attention }) : ""].filter(Boolean).join(" · ");
   return <>
     {heading}
+    {confirmError}
+    {homeRowsFor(admin).filter((row) => row !== "confirm").map((row) => <HomeShelf key={row} row={row} state={rows[row]} shape={shape} actions={actions} onRetry={onRetry} onShowAll={onShowAll} onShuffle={row === "tonight" ? shuffle : undefined}/>)}
     {items.length > 0 && <section className="home-row">
       <div className="subhead">
         <div className="home-head"><h3>{t("home.downloads")}</h3><span className="count">{summary}</span></div>
         <button className="resume-show-all" onClick={onShowDownloads}>{t("library.showAll")}<ChevronRight/></button>
       </div>
-      <div className="hq">
-        {items.map((job) => {
+      {cards.length > 0 && <div className="hq">
+        {cards.map((job) => {
           const { text, tone } = stateOf(job);
           const action = queueAction(job);
           const percent = percentOf(job);
@@ -104,8 +115,7 @@ export function Home({ jobs, admin, onShowDownloads, onAction, rows, shape, onTo
             </div>
           </div>;
         })}
-      </div>
+      </div>}
     </section>}
-    {homeRowsFor(admin).map((row) => <HomeShelf key={row} row={row} state={rows[row]} shape={shape} actions={actions} onRetry={onRetry} onShowAll={onShowAll} onShuffle={row === "tonight" ? shuffle : undefined}/>)}
   </>;
 }
