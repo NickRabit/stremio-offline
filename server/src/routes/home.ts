@@ -7,7 +7,7 @@ import {
   type HomeCard, type HomeResponse, type HomeRow, type HomeRowError, type HomeRowId,
   type ResumeCatalogueItem, type ResumeFileItem,
 } from "../home.js";
-import { libraryFor, libraryPath, parseLibraryPath, type LibraryRecord, type Viewer } from "../libraries.js";
+import { libraryFor, libraryPath, parseLibraryPath, showsOnHome, type LibraryRecord, type Viewer } from "../libraries.js";
 import type { BrowseItem } from "../library.js";
 import type { UserData } from "../users.js";
 import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
@@ -90,14 +90,17 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
         // would leave the other half behind; the merge does the real cut to 20.
         limit: Number.POSITIVE_INFINITY,
       }),
-      personal.libraryResumeItems(req),
+      personal.libraryResumeItems(req, { onHome: true }),
     ]);
-    // The addon's own switch for Continue watching, as the catalogue row reads it: a row whose
-    // addon is gone, or that never recorded one, stays.
+    // The addon's own switches for the row, as the catalogue row reads them: a row whose addon
+    // is gone, or that never recorded one, stays.
     const addons = store.addons();
     const catalogue: ResumeCatalogueItem[] = progress.items
       .filter((row) => !row.key.startsWith("file:"))
-      .filter((row) => addons.find((addon) => addon.key === row.addonKey)?.showInContinueWatching !== false)
+      .filter((row) => {
+        const addon = addons.find((entry) => entry.key === row.addonKey);
+        return addon?.showInContinueWatching !== false && addon?.showOnHome !== false;
+      })
       .map((row) => {
         const series = row.series;
         const colon = row.key.indexOf(":");
@@ -139,7 +142,7 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
       const parsed = parseLibraryPath(job.target);
       if (!parsed && libraries.length !== 1) return undefined;
       const key = parsed ? job.target : libraryPath(libraries[0]!.id, job.target);
-      if (!job.target || !pathOpen(key, viewer, libraries)) return undefined;
+      if (!job.target || !pathOpen(key, viewer, libraries) || !showsOnHome(key, libraries)) return undefined;
       const item = await describeLibraryPath(key);
       if (!item || item.kind !== "file") return undefined;
       const { poster, wide } = await fileArtwork(key, wirePath(key));
@@ -161,7 +164,7 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
 
   const favoritesRow = async (req: express.Request, viewer: Viewer): Promise<HomeRow> => {
     const libraries = store.libraries();
-    const visible = dataOf(req).favorites.filter((key) => personal.pathVisible(key, viewer, libraries));
+    const visible = dataOf(req).favorites.filter((key) => personal.pathVisible(key, viewer, libraries) && showsOnHome(key, libraries));
     // Newest first, and only as many as a row can use: a long list of favourites is not
     // described on every visit to Home.
     const stored = visible.slice(-HOME_CANDIDATES).reverse();

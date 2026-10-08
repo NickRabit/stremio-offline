@@ -409,6 +409,74 @@ test("a catalogue row of an addon whose Continue watching switch is off does not
   assert.deepEqual(rows.resume!.items.map((item) => item.title).sort(), ["No addon recorded", "Shown"]);
 });
 
+test("a library switched off for Home drops its resume, completed and favourite cards, and switching it back on returns them", async (t) => {
+  const quiet = library({ id: "lib_00000002", root: "/media/quiet", visibleTo: [ALICE], showOnHome: false });
+  const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media/loud", visibleTo: [ALICE] }), quiet] });
+  t.after(harness.close);
+  harness.data(ALICE).favorites = ["lib_00000001/Loud/Kept.mkv", "lib_00000002/Quiet/Hidden.mkv"];
+  harness.data(ALICE).progress = {
+    "file:lib_00000001/Loud/Kept.mkv": { position: 60, duration: 600, title: "Kept", path: "lib_00000001/Loud/Kept.mkv", updatedAt: "2024-01-02T00:00:00.000Z" },
+    "file:lib_00000002/Quiet/Hidden.mkv": { position: 30, duration: 600, title: "Hidden", path: "lib_00000002/Quiet/Hidden.mkv", updatedAt: "2024-01-01T00:00:00.000Z" },
+  };
+  harness.completed = [
+    { id: "a", title: "Kept", ownerUserId: ALICE, status: "completed", target: "lib_00000001/Kept.mkv", completedAt: "2024-02-01T00:00:00.000Z" },
+    { id: "b", title: "Hidden", ownerUserId: ALICE, status: "completed", target: "lib_00000002/Hidden.mkv", completedAt: "2024-02-02T00:00:00.000Z" },
+  ];
+
+  const off = await allRows(harness, ALICE);
+  assert.deepEqual(off.resume!.items.map((item) => item.key), ["file:lib_00000001/Loud/Kept.mkv"]);
+  assert.deepEqual(off.completed!.items.map((item) => item.title), ["Kept"]);
+  assert.deepEqual(off.favorites!.items.map((item) => item.path), ["lib_00000001/Loud/Kept.mkv"]);
+
+  quiet.showOnHome = true;
+  const on = await allRows(harness, ALICE);
+  assert.deepEqual(on.resume!.items.map((item) => item.key).sort(), ["file:lib_00000001/Loud/Kept.mkv", "file:lib_00000002/Quiet/Hidden.mkv"]);
+  assert.deepEqual(on.completed!.items.map((item) => item.title).sort(), ["Hidden", "Kept"]);
+  assert.deepEqual(on.favorites!.items.map((item) => item.path).sort(), ["lib_00000001/Loud/Kept.mkv", "lib_00000002/Quiet/Hidden.mkv"]);
+});
+
+test("an addon switched off for Home drops its stored and pending catalogue cards, and switching it back on returns them", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const quiet = { key: "quiet", manifestUrl: "https://quiet/manifest.json", role: "both", enabled: true, globalSearch: true, showOnHome: false, addedAt: "", allowedUsers: [ALICE], manifest: { id: "quiet", name: "Quiet", version: "1" } } as AddonRecord;
+  harness.addons.push(
+    quiet,
+    { key: "loud", manifestUrl: "https://loud/manifest.json", role: "both", enabled: true, globalSearch: true, showOnHome: true, addedAt: "", allowedUsers: [ALICE], manifest: { id: "loud", name: "Loud", version: "1" } } as AddonRecord,
+  );
+  harness.metaAnswer = { id: "ttQ", type: "series", name: "Quiet", videos: [{ season: 1, episode: 3, name: "Third" }] } as MetaItem;
+  harness.data(ALICE).progress = {
+    "movie:tt1": { position: 10, duration: 100, title: "Hidden row", addonKey: "quiet", updatedAt: "2024-01-05T00:00:00.000Z" },
+    "movie:tt2": { position: 10, duration: 100, title: "Shown row", addonKey: "loud", updatedAt: "2024-01-04T00:00:00.000Z" },
+    "movie:tt3": { position: 10, duration: 100, title: "No addon recorded", updatedAt: "2024-01-03T00:00:00.000Z" },
+  };
+  harness.data(ALICE).watchedSeries = {
+    ttQ: { name: "Quiet show", addonKey: "quiet", season: 1, episode: 2, updatedAt: "2024-01-02T00:00:00.000Z" },
+    ttL: { name: "Loud show", addonKey: "loud", season: 1, episode: 2, updatedAt: "2024-01-01T00:00:00.000Z" },
+  };
+
+  const off = await allRows(harness, ALICE);
+  assert.deepEqual(off.resume!.items.map((item) => item.title).sort(), ["Loud show · Third", "No addon recorded", "Shown row"]);
+
+  quiet.showOnHome = true;
+  const on = await allRows(harness, ALICE);
+  assert.deepEqual(on.resume!.items.map((item) => item.title).sort(), ["Hidden row", "Loud show · Third", "No addon recorded", "Quiet show · Third", "Shown row"]);
+});
+
+test("a library switched off for Home hides only its half of a merged show", async (t) => {
+  const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE], showOnHome: false })] });
+  t.after(harness.close);
+  harness.records["lib_00000001/Shows"] = { type: "series", id: "tt1", name: "Show" };
+  harness.data(ALICE).progress = {
+    "file:lib_00000001/Shows/01.mkv": { position: 60, duration: 600, title: "Pilot", path: "lib_00000001/Shows/01.mkv", updatedAt: "2024-01-02T00:00:00.000Z" },
+    "series:tt1:1:2": { position: 10, duration: 600, title: "Show · Second", series: { id: "tt1", name: "Show", season: 1, episode: 2 }, updatedAt: "2024-01-01T00:00:00.000Z" },
+  };
+
+  const rows = await allRows(harness, ALICE);
+  assert.equal(rows.resume!.items.length, 1);
+  assert.equal(rows.resume!.items[0]!.kind, "resume-catalogue");
+  assert.deepEqual(rows.resume!.items[0]!.forgetKeys, ["series:tt1:1:2"]);
+});
+
 test("favourites are read newest first and only as many as the row can use", async (t) => {
   const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media/films", visibleTo: [ALICE] })] });
   t.after(harness.close);

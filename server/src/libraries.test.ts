@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { activeDeparted, automaticMetadataEnabled, carveOuts, defaultLibrary, DEPARTED_MAX, departedIdFor, libraryFor, libraryPath, libraryVisible, parseLibraryPath, playingUnder, relativeWithin, resolveLibraryPath, sameFile, showsInContinueWatching, toFs, toPosix, visibleLibraries, type DepartedLibrary, type LibraryRecord, queuedArtworkKey } from "./libraries.js";
+import { activeDeparted, automaticMetadataEnabled, carveOuts, defaultLibrary, DEPARTED_MAX, departedIdFor, libraryFor, libraryPath, libraryVisible, parseLibraryPath, playingUnder, relativeWithin, resolveLibraryPath, sameFile, showsInContinueWatching, showsOnHome, toFs, toPosix, visibleLibraries, type DepartedLibrary, type LibraryRecord, queuedArtworkKey } from "./libraries.js";
 
 const library = (over: Partial<LibraryRecord> = {}): LibraryRecord => ({
   id: "lib_ab12cd34", name: "Filmy", type: "movie", root: "/media/filmy", enabled: true,
@@ -40,6 +40,15 @@ test("a library is in Continue watching unless it was turned off", () => {
   assert.equal(showsInContinueWatching("lib_ab12cd34/Show/01.mkv", [library({ showInContinueWatching: true })]), true, "turning it back on brings the stored rows with it");
   assert.equal(showsInContinueWatching("Show/01.mkv", [off]), true, "a path no library claims belongs to no switch");
   assert.equal(showsInContinueWatching("lib_11111111/Show/01.mkv", [off]), true, "a library that is gone hides nothing");
+});
+
+test("a library is on Home unless it was turned off", () => {
+  const off = library({ showOnHome: false });
+  assert.equal(showsOnHome("lib_ab12cd34/Show/01.mkv", [library()]), true, "a record without the field predates the switch and stays on");
+  assert.equal(showsOnHome("lib_ab12cd34/Show/01.mkv", [off]), false);
+  assert.equal(showsOnHome("lib_ab12cd34/Show/01.mkv", [library({ showOnHome: true })]), true, "turning it back on brings the stored rows with it");
+  assert.equal(showsOnHome("Show/01.mkv", [off]), true, "a path no library claims belongs to no switch");
+  assert.equal(showsOnHome("lib_11111111/Show/01.mkv", [off]), true, "a library that is gone hides nothing");
 });
 
 test("automatic metadata lookup is on unless the record says it is off", () => {

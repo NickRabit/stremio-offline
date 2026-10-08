@@ -11,6 +11,7 @@ export interface AddonDownloadSettings { movie: DownloadTargetSettings; series: 
 export interface Addon {
   key: string; role: "catalog" | "source" | "both"; enabled: boolean; globalSearch: boolean; displayUrl?: string;
   showInContinueWatching?: boolean;
+  showOnHome?: boolean;
   /** The accounts this addon is granted to. Absent or empty means administrators only:
    *  there is no sentinel for "everybody", so a grant is always a list of ids. */
   allowedUsers?: string[];
@@ -231,7 +232,7 @@ export interface BrowseLibrary {
 /** One library in `GET /api/libraries`. `root` is absent in restricted mode. */
 export interface LibraryView {
   id: string; name: string; type: LibraryType; root?: string; enabled: boolean; order: number;
-  addedAt: string; writeArtwork: boolean; autoScanMetadata: boolean; mosaic?: boolean; showInContinueWatching?: boolean; unreachable: boolean; readOnly: boolean;
+  addedAt: string; writeArtwork: boolean; autoScanMetadata: boolean; mosaic?: boolean; showInContinueWatching?: boolean; showOnHome?: boolean; unreachable: boolean; readOnly: boolean;
   defaultMovie: boolean; defaultSeries: boolean; titles: number; files: number; bytes: number;
   /** The accounts this library is granted to. Absent or empty means administrators only:
    *  there is no sentinel for "everybody", so a grant is always a list of ids. */

@@ -173,6 +173,7 @@ function movedOrder(addons: Addon[], key: string, direction: -1 | 1): string[] |
 
 type Draft = {
   url: string; role: Addon["role"]; globalSearch: boolean; showInContinueWatching: boolean;
+  showOnHome: boolean;
   downloadSettings: AddonDownloadSettings;
 };
 
@@ -187,6 +188,7 @@ function AddonEditDialog({ addon, libraries, onClose, onChanged, onNotify, onErr
   const [draft, setDraft] = useState<Draft>(() => ({
     url: "", role: addon.role, globalSearch: addon.globalSearch,
     showInContinueWatching: addon.showInContinueWatching !== false,
+    showOnHome: addon.showOnHome !== false,
     downloadSettings: cloneDownloadSettings(stored),
   }));
   // The address as the server knows it. Until it arrives the URL field stages nothing.
@@ -214,7 +216,8 @@ function AddonEditDialog({ addon, libraries, onClose, onChanged, onNotify, onErr
   const urlChanged = Boolean(loadedUrl) && draft.url.trim() !== loadedUrl;
   const storageChanged = streams && JSON.stringify(draft.downloadSettings) !== JSON.stringify(stored);
   const dirty = urlChanged || draft.role !== addon.role || draft.globalSearch !== addon.globalSearch
-    || draft.showInContinueWatching !== (addon.showInContinueWatching !== false) || storageChanged;
+    || draft.showInContinueWatching !== (addon.showInContinueWatching !== false)
+    || draft.showOnHome !== (addon.showOnHome !== false) || storageChanged;
   const valid = !urlChanged || Boolean(draft.url.trim());
 
   const run = async (action: () => Promise<void>) => {
@@ -229,6 +232,7 @@ function AddonEditDialog({ addon, libraries, onClose, onChanged, onNotify, onErr
     if (draft.role !== addon.role) patch.role = draft.role;
     if (draft.globalSearch !== addon.globalSearch) patch.globalSearch = draft.globalSearch;
     if (draft.showInContinueWatching !== (addon.showInContinueWatching !== false)) patch.showInContinueWatching = draft.showInContinueWatching;
+    if (draft.showOnHome !== (addon.showOnHome !== false)) patch.showOnHome = draft.showOnHome;
     if (storageChanged) patch.downloadSettings = draft.downloadSettings;
     await api.updateAddon(addon.key, patch);
     await onChanged();
@@ -284,7 +288,7 @@ function AddonEditDialog({ addon, libraries, onClose, onChanged, onNotify, onErr
       : `${root}/${show}/01 ${t("addons.sampleSeasonFolder")}/${show} - S01E01 - ${t("addons.sampleEpisode")}.mkv`;
   };
 
-  const check = (key: "globalSearch" | "showInContinueWatching", labelText: string, hint: string) =>
+  const check = (key: "globalSearch" | "showInContinueWatching" | "showOnHome", labelText: string, hint: string) =>
     <label className="library-check" title={hint}>
       <span className="switch"><input type="checkbox" aria-label={labelText} checked={draft[key]} disabled={busy}
         onChange={(event) => update({ [key]: event.target.checked } as Partial<Draft>)}/><span/></span>
@@ -316,6 +320,7 @@ function AddonEditDialog({ addon, libraries, onClose, onChanged, onNotify, onErr
           <div className="library-edit-controls">
             {check("globalSearch", t("addons.globalSearch"), t("addons.globalSearchHint"))}
             {check("showInContinueWatching", t("addons.showInContinueWatching"), t("addons.showInContinueWatchingHint"))}
+            {check("showOnHome", t("addons.showOnHome"), t("addons.showOnHomeHint"))}
           </div>
         </section>}
         {streams && <section className="addon-edit-section">

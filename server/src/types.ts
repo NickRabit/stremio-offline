@@ -18,6 +18,8 @@ export interface AddonRecord {
   globalSearch: boolean;
   /** Off keeps playback position but leaves catalogue titles from this addon out of Continue watching. */
   showInContinueWatching?: boolean;
+  /** Off leaves this addon's catalogue titles off Home, in every shelf, while the stored data stays. */
+  showOnHome?: boolean;
   /** The users who may use this addon. Absent or empty means administrators
    *  only: an addon installed later is unavailable until somebody says
    *  otherwise, which is the safe direction for a list whose failure mode is

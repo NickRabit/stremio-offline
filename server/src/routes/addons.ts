@@ -187,6 +187,7 @@ export function registerAddonsRoutes(app: express.Application, deps: AddonsDeps)
       if (typeof req.body.enabled === "boolean") addon.enabled = req.body.enabled;
       if (typeof req.body.globalSearch === "boolean") addon.globalSearch = req.body.globalSearch;
       if (typeof req.body.showInContinueWatching === "boolean") addon.showInContinueWatching = req.body.showInContinueWatching;
+      if (typeof req.body.showOnHome === "boolean") addon.showOnHome = req.body.showOnHome;
       if (downloadSettings) addon.downloadSettings = downloadSettings;
       if (allowedUsers !== undefined) addon.allowedUsers = allowedUsers;
       if (bumped.length) state.users = bumpPermissions(state.users ?? [], bumped);

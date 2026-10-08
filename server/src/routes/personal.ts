@@ -7,7 +7,7 @@ import { images } from "../images.js";
 import { knownTitleEntry } from "../library-match.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import { sortFiles, type BrowseItem, type BrowseMeta, type LibraryFile } from "../library.js";
-import { libraryFor, libraryPath, libraryVisible, parseLibraryPath, showsInContinueWatching, type LibraryRecord, type Viewer } from "../libraries.js";
+import { libraryFor, libraryPath, libraryVisible, parseLibraryPath, showsInContinueWatching, showsOnHome, type LibraryRecord, type Viewer } from "../libraries.js";
 import { log } from "../logger.js";
 import { markersOwingRow, nextEpisodeOf } from "../next-episode.js";
 import { groupSeriesProgress, seriesOf, type ProgressSeries } from "../progress-series.js";
@@ -71,6 +71,12 @@ export interface ProgressRowOptions {
   limit?: number;
 }
 
+export interface ResumeRowOptions {
+  /** Drop stored rows whose library was switched off for Home. Home asks for this; the route
+   *  keeps showing a library whose Home switch is off, because that switch is not its own. */
+  onHome?: boolean;
+}
+
 /** One row of `GET /api/library/resume` as the handler serialises it, plus the series
  *  identity Home needs -- the handler strips it, exactly as it strips the show key today. */
 export type ResumePageItem = LibraryFile & BrowseMeta & {
@@ -90,7 +96,7 @@ export interface ResumePage { items: ResumePageItem[]; total: number; pending: b
  *  the store itself, so exactly one place applies the permission rules. */
 export interface PersonalApi {
   progressRows(req: express.Request, options?: ProgressRowOptions): Promise<ProgressPage>;
-  libraryResumeItems(req: express.Request): Promise<ResumePage>;
+  libraryResumeItems(req: express.Request, options?: ResumeRowOptions): Promise<ResumePage>;
   pathVisible(key: string, viewer: Viewer, libraries: LibraryRecord[]): boolean;
 }
 
@@ -402,7 +408,7 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     res.json({ path: relative, favorite: wanted });
   }));
 
-  const libraryResumeItems = async (req: express.Request): Promise<ResumePage> => {
+  const libraryResumeItems = async (req: express.Request, options: ResumeRowOptions = {}): Promise<ResumePage> => {
     const data = dataOf(req);
     const favorites = new Set(data.favorites);
     const query = String(req.query.query ?? "").trim().toLocaleLowerCase();
@@ -410,7 +416,8 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     const libraries = store.libraries();
     const records = metaStore.qualifiedMeta();
     const entries = Object.entries(progressOf(data)).filter(([key, entry]) =>
-      key.startsWith("file:") && Boolean(entry.path) && showsInContinueWatching(entry.path!, libraries) && pathVisible(entry.path!, viewer, libraries));
+      key.startsWith("file:") && Boolean(entry.path) && showsInContinueWatching(entry.path!, libraries)
+      && (!options.onHome || showsOnHome(entry.path!, libraries)) && pathVisible(entry.path!, viewer, libraries));
     const described = await Promise.all(entries.map(async ([, entry]) => {
       const item = await describeLibraryPath(entry.path!);
       if (!item || item.kind !== "file") return [];

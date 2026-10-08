@@ -217,6 +217,29 @@ test("a PATCH that names only globalSearch leaves the role a queued PATCH set", 
   assert.equal(harness.stored()[0]!.globalSearch, false);
 });
 
+test("PATCH /api/addons/:key persists the Home switch, takes only a boolean and reads an absent one as on", async (t) => {
+  const harness = await mount([addon("alpha")]);
+  t.after(harness.close);
+  assert.equal(harness.stored()[0]!.showOnHome, undefined, "a record written before the switch reads as on");
+
+  const off = await api(harness.base, "/api/addons/alpha", { method: "PATCH", body: { showOnHome: false } });
+  assert.equal(off.status, 200);
+  assert.equal(harness.stored()[0]!.showOnHome, false);
+  assert.equal((await off.json() as { showOnHome?: boolean }).showOnHome, false, "the public view carries the field");
+
+  const untouched = await api(harness.base, "/api/addons/alpha", { method: "PATCH", body: { showOnHome: "off" } });
+  assert.equal(untouched.status, 200);
+  assert.equal(harness.stored()[0]!.showOnHome, false, "a value that is not a boolean is not taken");
+
+  const renamed = await api(harness.base, "/api/addons/alpha", { method: "PATCH", body: { globalSearch: false } });
+  assert.equal(renamed.status, 200);
+  assert.equal(harness.stored()[0]!.showOnHome, false, "a patch that does not mention the switch leaves it alone");
+
+  const on = await api(harness.base, "/api/addons/alpha", { method: "PATCH", body: { showOnHome: true } });
+  assert.equal(on.status, 200);
+  assert.equal(harness.stored()[0]!.showOnHome, true);
+});
+
 test("PUT /api/addons/order filters the list against the visibility the write lands on", async (t) => {
   const harness = await mount([granted("alpha"), granted("beta")]);
   t.after(harness.close);

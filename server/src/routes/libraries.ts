@@ -282,6 +282,7 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
     }
     if (req.body?.mosaic !== undefined) patch.mosaic = req.body.mosaic !== false;
     if (req.body?.showInContinueWatching !== undefined) patch.showInContinueWatching = req.body.showInContinueWatching !== false;
+    if (req.body?.showOnHome !== undefined) patch.showOnHome = req.body.showOnHome !== false;
     if (req.body?.order !== undefined && Number.isFinite(Number(req.body.order))) patch.order = Number(req.body.order);
     if (req.body?.writeArtwork !== undefined) patch.writeArtwork = req.body.writeArtwork === true;
     if (req.body?.visibleTo !== undefined && !Array.isArray(req.body.visibleTo)) throw new AppError("The list of accounts has to be an array.", "err.invalidRequest", 400);

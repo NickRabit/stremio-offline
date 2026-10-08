@@ -498,6 +498,24 @@ test("PATCH /api/libraries/:id persists the automatic metadata switch and invali
   assert.deepEqual(harness.invalidated, ["alpha", "alpha", "alpha"]);
 });
 
+test("PATCH /api/libraries/:id persists the Home switch and coerces it like its neighbour", async (t) => {
+  const harness = await mount([library("alpha", 0)]);
+  t.after(harness.close);
+  assert.equal(harness.stored()[0]!.showOnHome, undefined, "a record written before the switch reads as on");
+
+  const off = await api(harness.base, "/api/libraries/alpha", { method: "PATCH", body: { showOnHome: false } });
+  assert.equal(off.status, 200);
+  assert.equal(harness.stored()[0]!.showOnHome, false);
+
+  const renamed = await api(harness.base, "/api/libraries/alpha", { method: "PATCH", body: { name: "Renamed" } });
+  assert.equal(renamed.status, 200);
+  assert.equal(harness.stored()[0]!.showOnHome, false, "a patch that does not mention the switch leaves it alone");
+
+  const coerced = await api(harness.base, "/api/libraries/alpha", { method: "PATCH", body: { showOnHome: 0 } });
+  assert.equal(coerced.status, 200);
+  assert.equal(harness.stored()[0]!.showOnHome, true, "only an explicit false opts out");
+});
+
 test("PATCH /api/libraries/:id leaves an absent switch absent, which reads as on", async (t) => {
   const harness = await mount([library("alpha", 0)]);
   t.after(harness.close);
