@@ -187,6 +187,11 @@ export function SettingsPage({ build, restricted = false, settings, search, onSe
           }}><Trash2/> {t("settings.clearHistory")}</button></SettingControl>}</section>
       <SearchSettings state={search} onState={onSearch} onNotify={onNotify} onError={onError}/>
       <section className="panel settings-section language-section"><SettingsSectionHead icon={<Languages/>} title={t("settings.appearanceTitle")}/>
+        <SettingControl title={t("settings.startView")} text={t("settings.startViewHint")}>
+          <select aria-label={t("settings.startView")} disabled={restricted} value={settings.startView} onChange={(event) => void onSave({ startView: event.target.value as AppSettings["startView"] })}>
+            <option value="catalog">{t("nav.catalog")}</option><option value="home">{t("nav.home")}</option><option value="library">{t("nav.library")}</option>
+          </select>
+        </SettingControl>
         <SettingControl title={t("settings.uiLanguage")} text={t("settings.uiLanguageHint")}>
           <select aria-label={t("settings.uiLanguage")} disabled={restricted} value={locale} onChange={(event) => {
             const next = event.target.value as Locale;

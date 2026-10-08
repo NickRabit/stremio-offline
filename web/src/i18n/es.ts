@@ -1072,6 +1072,8 @@ export const es: Catalog = {
   "settings.shape.wide": "Apaisado",
   "settings.catalogTiles": "Tamaño del mosaico del catálogo",
   "settings.catalogTilesHint": "¿Cuántos carteles caben en una fila del catálogo?",
+  "settings.startView": "Página de inicio",
+  "settings.startViewHint": "La página en la que se abre la aplicación. El catálogo de forma predeterminada.",
   "settings.libraryTiles": "Tamaño del mosaico de la biblioteca",
   "settings.libraryTilesHint": "Tamaño de miniatura en la cuadrícula de la biblioteca.",
   "settings.tile.compact": "Compacto",

@@ -1120,6 +1120,8 @@ export const en = {
   "settings.shape.wide": "Landscape",
   "settings.catalogTiles": "Catalog tile size",
   "settings.catalogTilesHint": "How many posters fit in a catalog row.",
+  "settings.startView": "Start page",
+  "settings.startViewHint": "The page the app opens on. Catalogue unless you choose otherwise.",
   "settings.libraryTiles": "Library tile size",
   "settings.libraryTilesHint": "Thumbnail size in the library grid.",
   "settings.tile.compact": "Compact",

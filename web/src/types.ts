@@ -70,6 +70,7 @@ export type DownloadSnapshot = ServerDownloadSnapshot;
 export type PlaybackMode = "direct" | "remux" | "transcode";
 export type TileSize = "compact" | "small" | "medium" | "large";
 export type TileShape = "poster" | "wide";
+export type StartView = "catalog" | "home" | "library";
 export interface Track { index: number; codec: string; language?: string; title?: string; channels?: number; default?: boolean; forced?: boolean }
 export interface Inspection { duration?: number; video?: { codec: string; width?: number; height?: number }; audioTracks: Track[]; subtitleTracks: Track[] }
 export interface BuildInfo { status: string; version: string; builtAt?: string; commit?: string; restricted?: boolean }
@@ -128,6 +129,7 @@ export interface Settings {
   addonRefreshHours: number;
   catalogTileSize: TileSize; libraryTileSize: TileSize;
   catalogTileShape: TileShape; libraryTileShape: TileShape; homeTileShape: TileShape;
+  startView: StartView;
   realDebridConfigured: boolean; tmdbConfigured: boolean;
 }
 /** The instance keys the settings endpoints leave out for an ordinary account, which is told

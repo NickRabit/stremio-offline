@@ -1115,6 +1115,8 @@ export const cs: Catalog = {
   "settings.shape.wide": "Na šířku",
   "settings.catalogTiles": "Velikost položek katalogu",
   "settings.catalogTilesHint": "Kolik plakátů se vejde do řádku katalogu.",
+  "settings.startView": "Úvodní stránka",
+  "settings.startViewHint": "Stránka, na které se aplikace otevře. Výchozí je Katalog.",
   "settings.libraryTiles": "Velikost položek knihovny",
   "settings.libraryTilesHint": "Velikost náhledů v mřížce knihovny.",
   "settings.tile.compact": "Kompaktní",

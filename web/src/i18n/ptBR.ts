@@ -1072,6 +1072,8 @@ export const ptBR: Catalog = {
   "settings.shape.wide": "Horizontal",
   "settings.catalogTiles": "Tamanho do bloco do catálogo",
   "settings.catalogTilesHint": "Quantos pôsteres cabem em uma linha do catálogo.",
+  "settings.startView": "Página inicial",
+  "settings.startViewHint": "A página em que o aplicativo abre. O catálogo por padrão.",
   "settings.libraryTiles": "Tamanho do bloco da biblioteca",
   "settings.libraryTilesHint": "Tamanho da miniatura na grade da biblioteca.",
   "settings.tile.compact": "Compactar",

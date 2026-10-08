@@ -1072,6 +1072,8 @@ export const it: Catalog = {
   "settings.shape.wide": "Orizzontale",
   "settings.catalogTiles": "Dimensioni delle tessere del catalogo",
   "settings.catalogTilesHint": "Quanti poster rientrano in una riga del catalogo.",
+  "settings.startView": "Pagina iniziale",
+  "settings.startViewHint": "La pagina con cui si apre l'app. Il catalogo per impostazione predefinita.",
   "settings.libraryTiles": "Dimensioni del riquadro della libreria",
   "settings.libraryTilesHint": "Dimensioni delle miniature nella griglia della libreria.",
   "settings.tile.compact": "Compatto",

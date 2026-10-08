@@ -42,6 +42,7 @@ import { MoreMenu, type MoreItem } from "./MoreMenu";
 import { fmtEta } from "./download-format";
 import { MediaGallery, type GalleryImage, type GalleryKind } from "./MediaGallery";
 import { SettingsPage } from "./SettingsPage";
+import { resolveStartView } from "./start-view";
 import type { Addon, BuildInfo, BrowseFile, BrowseItem, BrowseLibrary, BrowseResult, DeviceTransfer, DownloadsViewPrefs, FollowView, LibraryOp, LibraryOpsState, LibrarySort, LibraryView, LibraryViewPrefs, NewEpisode, ProgressEntry, UserViews, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, DownloadSelection, Inspection, Meta, QueueHalt, ScanState, SearchableCatalog, Session, Settings as AppSettings, SettingsPatch, SiteLink, Stream, Subtitle, Trailer, Video, SearchState } from "./types";
 
 /** The names of the linked sites. They are trademarks, not interface text, so they are
@@ -142,6 +143,9 @@ export function App() {
   const libraryPrewarmStarted = useRef(false);
   const restoringScroll = useRef(false);
   const viewRef = useRef<View>("catalog");
+  /** True once the person has chosen a view themselves, so the start-page switch never
+   *  drags them away from where they went on purpose. Reset on a fresh sign-in. */
+  const navigated = useRef(false);
   const [galleryIndex, setGalleryIndex] = useState<number | null>(null);
   /** A library item's saved pictures, which take the overlay over while it is open. */
   const [storedGallery, setStoredGallery] = useState<GalleryImage[] | null>(null);
@@ -211,7 +215,7 @@ export function App() {
   const [bulkDownload, setBulkDownload] = useState<{ label: string; title: string; type: string; episodes: Array<{ id: string; season?: number; episode?: number; title?: string }>; media: { id?: string; metaType?: string; poster?: string; background?: string; gallery?: Array<{ url: string; kind: GalleryKind }> } } | null>(null);
   const [downloads, setDownloads] = useState<DownloadJob[]>([]); const [queueHalt, setQueueHalt] = useState<QueueHalt | null>(null); const [busy, setBusy] = useState(false); const [message, setMessage] = useState(""); const [error, setError] = useState(""); const [playerOpen, setPlayerOpen] = useState(false);
   const [deviceTransfers, setDeviceTransfers] = useState<DeviceTransfer[]>([]);
-  const [settings, setSettings] = useState<AppSettings>({ concurrentDownloads: 1, parallelPerProvider: 1, downloadSegments: 2, uiLanguage: locale(), audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui", mergeByName: true, streamSort: "recommended", trackProgress: true, showResumeRow: true, libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, addonRefreshHours: 24, catalogTileSize: "medium", libraryTileSize: "medium", catalogTileShape: "poster", libraryTileShape: "poster", homeTileShape: "wide", realDebridConfigured: false, tmdbConfigured: false });
+  const [settings, setSettings] = useState<AppSettings>({ concurrentDownloads: 1, parallelPerProvider: 1, downloadSegments: 2, uiLanguage: locale(), audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui", mergeByName: true, streamSort: "recommended", trackProgress: true, showResumeRow: true, libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, addonRefreshHours: 24, catalogTileSize: "medium", libraryTileSize: "medium", catalogTileShape: "poster", libraryTileShape: "poster", homeTileShape: "wide", startView: "catalog", realDebridConfigured: false, tmdbConfigured: false });
   const [languages, setLanguages] = useState<Array<{ code: string; name: string }>>([]);
   const [inspection, setInspection] = useState<Inspection | null>(null);
   const [session, setSession] = useState<Session | null | undefined>(undefined);
@@ -390,6 +394,7 @@ export function App() {
 
   /** Opens a catalogue title; the resume position then follows from the key on its own. */
   const openFromCatalog = async (entry: { type: string; id: string; name: string; poster?: string }) => {
+    navigated.current = true;
     setView("catalog");
     await openMeta({ id: entry.id, type: entry.type, name: entry.name, poster: entry.poster } as Meta);
   };
@@ -1005,6 +1010,7 @@ export function App() {
   }, [selected]);
 
   const resetCatalog = () => {
+    navigated.current = true;
     live.cancel();
     setCatalogCompact(false);
     const firstCatalog = catalogs[0];
@@ -1025,6 +1031,7 @@ export function App() {
   /** Clicking the section we are already in resets it; otherwise the last filters
    * and the page position are restored. */
   const openView = (target: View) => {
+    navigated.current = true;
     if (target !== view) { setView(target); return; }
     scrollByView.current[target] = 0;
     if (target === "catalog") resetCatalog();
@@ -1142,7 +1149,23 @@ export function App() {
     setViews(next);
     setViewsReady(true);
   };
-  useEffect(() => { if (!ready) return; refresh().catch(fail); loadDownloads(); loadFollows(); api.settings().then((next) => { setSettings((current: AppSettings) => ({ ...current, ...next })); setLocale(next.uiLanguage); }).catch(fail); api.languages().then(setLanguages).catch(() => undefined); void loadViews(); }, [ready]);
+  useEffect(() => {
+    // A fresh sign-in re-arms the start page: signing out again must not remember the last
+    // switch as if the person had navigated.
+    if (!ready) { navigated.current = false; return; }
+    refresh().catch(fail); loadDownloads(); loadFollows();
+    api.settings().then((next) => {
+      setSettings((current: AppSettings) => ({ ...current, ...next }));
+      setLocale(next.uiLanguage);
+      // The chosen page is opened once, and only while nobody has gone anywhere yet.
+      if (view === "catalog" && !navigated.current && !selected && !playerOpen) {
+        const target = resolveStartView(next.startView, { restricted, navigated: navigated.current });
+        if (target) { navigated.current = true; openView(target); }
+      }
+    }).catch(fail);
+    api.languages().then(setLanguages).catch(() => undefined);
+    void loadViews();
+  }, [ready]);
   // Which addons are worth searching changes as they are switched on and off.
   useEffect(() => { api.searchable().then(setSearchable).catch(() => undefined); }, [addons]);
   // Only a file probe knows the exact languages, so we run one for the chosen stream.
@@ -1395,6 +1418,7 @@ export function App() {
   /** Jumping from the download queue: opens the folder the file sits in and finds it there.
    * The filters have to be cleared, or the wanted file would stay filtered out of the listing. */
   const revealInLibrary = (target: string) => {
+    navigated.current = true;
     const slash = target.lastIndexOf("/");
     setMenuFor(null); setFromFavorites(false); setOnlyFavorites(false); setBrowseQuery("");
     suppressFavoritesApply.current = true;
@@ -1911,6 +1935,7 @@ export function App() {
   /** The library's own Continue watching list or its favourites list. Both drop the filters
    *  that would hide what they open, the way the library's own links do. */
   const openHomeLibraryList = (target: ":resume" | ":favorites") => {
+    navigated.current = true;
     setMenuFor(null); setFromFavorites(false); setBrowseQuery(""); setOnlyFavorites(false);
     suppressFavoritesApply.current = true;
     setBrowsePath(target);
@@ -1926,11 +1951,13 @@ export function App() {
   };
   const homeOpen = (card: MediaHomeCard) => {
     if (card.kind !== "resume-catalogue") return;
+    navigated.current = true;
     setView("catalog");
     const episode = card.season != null && card.episode != null ? { key: card.key, season: card.season, number: card.episode } : undefined;
     void openMeta({ id: card.id, type: card.type, name: card.name, poster: card.poster } as Meta, episode);
   };
   const homeShowAll = (target: ShowAllTarget) => {
+    navigated.current = true;
     if (target === "downloads") openView("downloads");
     else if (target === "catalog-resume") { setView("catalog"); setSelectedCatalog(VIRTUAL.resume); }
     else openHomeLibraryList(target === "library-resume" ? ":resume" : ":favorites");
@@ -1992,7 +2019,7 @@ export function App() {
           // An ordinary account seeing no catalogue has not been granted an addon, and
           // cannot add one: the invitation would lead to a screen it may not use.
           ? <Empty icon={<PackagePlus/>} title={t("onboarding.title")} text={t(restricted ? "restricted.notice" : "onboarding.noneGranted")}/>
-          : <Onboarding onOpen={() => setView("addons")}/>) : <>
+          : <Onboarding onOpen={() => { navigated.current = true; setView("addons"); }}/>) : <>
           {/* The head sits on the same columns as the panels below it: search spans both, so it ends
               with the sources panel, and the filters keep to the first, so they end with the results. */}
           <div className="catalog-head"><div className={`fold${catalogCompact ? " closed" : ""}${suggestions.length ? " suggesting" : ""}`}><form className="searchbar" onSubmit={submitSearch}>

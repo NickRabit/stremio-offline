@@ -1072,6 +1072,8 @@ export const pl: Catalog = {
   "settings.shape.wide": "Poziomy",
   "settings.catalogTiles": "Rozmiar płytki katalogu",
   "settings.catalogTilesHint": "Ile plakatów mieści się w rzędzie w katalogu.",
+  "settings.startView": "Strona startowa",
+  "settings.startViewHint": "Strona, na której otwiera się aplikacja. Domyślnie katalog.",
   "settings.libraryTiles": "Rozmiar kafelka biblioteki",
   "settings.libraryTilesHint": "Rozmiar miniatury w siatce biblioteki.",
   "settings.tile.compact": "Kompaktowy",

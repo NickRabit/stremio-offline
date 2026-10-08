@@ -1072,6 +1072,8 @@ export const ru: Catalog = {
   "settings.shape.wide": "Горизонтальный",
   "settings.catalogTiles": "Размер плитки каталога",
   "settings.catalogTilesHint": "Сколько постеров поместится в один ряд каталога.",
+  "settings.startView": "Начальная страница",
+  "settings.startViewHint": "Страница, с которой открывается приложение. По умолчанию каталог.",
   "settings.libraryTiles": "Размер плитки библиотеки",
   "settings.libraryTilesHint": "Размер миниатюр в сетке библиотеки.",
   "settings.tile.compact": "Компактный",

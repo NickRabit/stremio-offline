@@ -1072,6 +1072,8 @@ export const sk: Catalog = {
   "settings.shape.wide": "Na šírku",
   "settings.catalogTiles": "Katalógový rozmer dlaždíc",
   "settings.catalogTilesHint": "Počet plagátov, ktoré sa zmestia do jedného riadka katalógu.",
+  "settings.startView": "Úvodná stránka",
+  "settings.startViewHint": "Stránka, na ktorej sa aplikácia otvorí. Predvolene katalóg.",
   "settings.libraryTiles": "Veľkosť dlaždice knižnice",
   "settings.libraryTilesHint": "Veľkosť miniatúr v mriežke knižnice.",
   "settings.tile.compact": "Kompaktný",

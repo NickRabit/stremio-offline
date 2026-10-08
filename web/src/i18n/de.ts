@@ -1072,6 +1072,8 @@ export const de: Catalog = {
   "settings.shape.wide": "Querformat",
   "settings.catalogTiles": "Kachelgröße im Katalog",
   "settings.catalogTilesHint": "Wie viele Poster passen in eine Katalogzeile?",
+  "settings.startView": "Startseite",
+  "settings.startViewHint": "Die Seite, mit der die App startet. Standardmäßig der Katalog.",
   "settings.libraryTiles": "Größe der Bibliothekskachel",
   "settings.libraryTilesHint": "Miniaturbildgröße im Bibliotheksraster.",
   "settings.tile.compact": "Kompakt",

@@ -35,6 +35,7 @@ const instancePrefs: UserPrefs = {
   uiLanguage: "en", audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui",
   mergeByName: false, streamSort: "recommended", trackProgress: true, showResumeRow: true,
   catalogTileSize: "medium", libraryTileSize: "medium", catalogTileShape: "poster", libraryTileShape: "poster", homeTileShape: "wide",
+  startView: "catalog",
 };
 
 interface Harness {

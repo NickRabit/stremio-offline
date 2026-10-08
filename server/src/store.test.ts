@@ -32,6 +32,7 @@ test("an old addon state migrates to the default save rules", async () => {
     assert.equal(store.prefs(undefined).catalogTileShape, "poster");
     assert.equal(store.prefs(undefined).libraryTileShape, "poster");
     assert.equal(store.prefs(undefined).homeTileShape, "wide");
+    assert.equal(store.prefs(undefined).startView, "catalog");
     assert.equal(store.settings().realDebridToken, "");
     assert.equal(store.prefs(undefined).downloadTitleLanguage, "ui");
     assert.equal(store.addons()[0].globalSearch, true);
@@ -259,6 +260,7 @@ test("a state from before the accounts shape migrates and the owner finds their 
     assert.equal(store.prefs(user.id).catalogTileShape, "wide");
     assert.equal(store.prefs(user.id).libraryTileShape, "poster");
     assert.equal(store.prefs(user.id).homeTileShape, "wide", "a preference the state predates answers its default");
+    assert.equal(store.prefs(user.id).startView, "catalog", "the start page defaults to the catalogue");
     // The instance keeps its own half exactly as it was.
     assert.deepEqual(store.settings(), {
       concurrentDownloads: 3, parallelPerProvider: 2, downloadSegments: 4,

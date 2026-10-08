@@ -1072,6 +1072,8 @@ export const fr: Catalog = {
   "settings.shape.wide": "Paysage",
   "settings.catalogTiles": "Taille des vignettes du catalogue",
   "settings.catalogTilesHint": "Combien d’affiches tiennent dans une rangée de catalogue.",
+  "settings.startView": "Page de démarrage",
+  "settings.startViewHint": "La page sur laquelle l'application s'ouvre. Le catalogue par défaut.",
   "settings.libraryTiles": "Taille des vignettes de la bibliothèque",
   "settings.libraryTilesHint": "Taille des vignettes dans la grille de la bibliothèque.",
   "settings.tile.compact": "Compact",
