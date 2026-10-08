@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { releaseMediaElement, HLS_PLAYER_CONFIG, canRecoverDecode, ignoreHlsErrorDuringRestart, planDecodeRecovery, planSeek, recordDecodeRecover, waitForSeekable } from "./player-hls";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { releaseMediaElement, HLS_PLAYER_CONFIG, canRecoverDecode, ignoreHlsErrorDuringRestart, planDecodeRecovery, planSeek, recordDecodeRecover, scheduleRemuxStartNudge, waitForSeekable } from "./player-hls";
 
 describe("HLS_PLAYER_CONFIG", () => {
   it("keeps the forward buffer short enough that an 8x remux burst should not fill MSE", () => {
@@ -108,5 +108,56 @@ describe("releaseMediaElement", () => {
     })).not.toThrow();
     expect(calls).toEqual(["src"]);
     expect(() => releaseMediaElement(null)).not.toThrow();
+  });
+});
+
+
+describe("scheduleRemuxStartNudge", () => {
+  afterEach(() => vi.useRealTimers());
+  const stalledVideo = () => ({ currentTime: 0.0666667, paused: false, seeking: false, ended: false,
+    buffered: { length: 1, start: () => 0.0666666667, end: () => 12.0047 },
+  });
+
+  it("nudges the logged buffered-start stall once, after allowing normal recovery", () => {
+    vi.useFakeTimers();
+    const video = stalledVideo();
+    const report = vi.fn();
+    scheduleRemuxStartNudge(video, () => true, report);
+    vi.advanceTimersByTime(1499);
+    expect(video.currentTime).toBe(0.0666667);
+    vi.advanceTimersByTime(1);
+    expect(video.currentTime).toBeCloseTo(0.1666667);
+    vi.advanceTimersByTime(10_000);
+    expect(report).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["progress", "pause", "seeking", "ended", "replaced", "destroyed", "empty"])("does not interfere after %s", (change) => {
+    vi.useFakeTimers();
+    const video = stalledVideo();
+    const report = vi.fn();
+    let current = true;
+    const cancel = scheduleRemuxStartNudge(video, () => current, report);
+    if (change === "progress") video.currentTime += 0.03;
+    if (change === "pause") video.paused = true;
+    if (change === "seeking") video.seeking = true;
+    if (change === "ended") video.ended = true;
+    if (change === "replaced") current = false;
+    if (change === "destroyed") cancel?.();
+    if (change === "empty") video.buffered.length = 0;
+    const at = video.currentTime;
+    vi.advanceTimersByTime(2000);
+    expect(video.currentTime).toBe(at);
+    expect(report).not.toHaveBeenCalled();
+  });
+
+  it("leaves gaps, later stalls and insufficient buffer to the existing recovery", () => {
+    vi.useFakeTimers();
+    for (const at of [0, 0.2, 4]) {
+      const video = { ...stalledVideo(), currentTime: at };
+      expect(scheduleRemuxStartNudge(video, () => true, vi.fn())).toBeUndefined();
+    }
+    const video = stalledVideo();
+    video.buffered.end = () => 1;
+    expect(scheduleRemuxStartNudge(video, () => true, vi.fn())).toBeUndefined();
   });
 });
