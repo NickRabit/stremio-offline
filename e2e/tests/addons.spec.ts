@@ -72,7 +72,7 @@ test.describe("addons", () => {
     await dialog.getByRole("textbox", { name: "Filmy – podsložka" }).fill("Akce");
     await expect(save).toBeEnabled();
 
-    await dialog.getByRole("button", { name: "Zrušit" }).click();
+    await dialog.getByRole("button", { name: "Zrušit", exact: true }).click();
     await expect(dialog).toBeHidden();
     dialog = await openEditor(page);
     await expect(dialog.getByRole("textbox", { name: "Filmy – podsložka" })).toHaveValue("");
