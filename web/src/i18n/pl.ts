@@ -183,6 +183,7 @@ export const pl: Catalog = {
   "home.newEpisodes": "Nowe odcinki",
   "home.recent": "Ostatnio dodane",
   "home.tonight": "Na dziś wieczór",
+  "home.cinemeta": "Cinemeta",
   "home.toConfirm": "Do potwierdzenia",
   "home.shuffle": "Losuj",
   "home.confirmGuess": "Sugerowane: {name}",

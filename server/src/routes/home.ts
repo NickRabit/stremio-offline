@@ -3,6 +3,7 @@ import type { ArtShape } from "../artwork.js";
 import { messageKeyOf } from "../errors.js";
 import type { NewEpisode } from "../follows.js";
 import { images } from "../images.js";
+import { allowedAddons, catalog } from "../addons.js";
 import {
   HOME_CANDIDATES, HOME_LOOKUP_DEADLINE_MS, HOME_MARKER_LIMIT, HOME_ROW_LIMIT,
   boundCards, mergeResume,
@@ -16,6 +17,7 @@ import { knownTitleEntry } from "../library-match.js";
 import type { LibrarySeenStore } from "../library-seen.js";
 import type { StoredProgress, WatchedMarker } from "../store.js";
 import type { UserData } from "../users.js";
+import type { MetaItem } from "../types.js";
 import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
 import type { PersonalApi } from "./personal.js";
 
@@ -69,13 +71,15 @@ export interface HomeDeps extends RouteContext {
   /** The first-seen index: the times this app met each library file, not the file's own dates. */
   seen: LibrarySeenStore;
   suggestionRows(libraryId?: string): Promise<HomeSuggestion[]>;
+  /** Injectable for route tests; production reads the selected catalog from Cinemeta. */
+  cinemetaCatalog?(addon: import("../types.js").AddonRecord, type: string, catalogId: string): Promise<MetaItem[]>;
   /** Injected so the tonight seed is testable without a real date. */
   now?: () => number;
   /** Tests inject a few milliseconds instead of waiting the real deadline out. */
   homeLookupDeadlineMs?: number;
 }
 
-const ALL_ROWS: HomeRowId[] = ["resume", "completed", "favorites", "recent", "episodes", "tonight", "confirm"];
+const ALL_ROWS: HomeRowId[] = ["resume", "completed", "favorites", "recent", "episodes", "tonight", "cinemeta", "confirm"];
 
 /** The row asks the index for more than it draws, so a file that vanished since the walk does
  *  not shorten it, and it never reads the disk for more than this many keys. */
@@ -415,6 +419,52 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
     return { status: "ok", items: cards, hasMore: rows.length > HOME_ROW_LIMIT, total: rows.length };
   };
 
+  const cinemetaRow = async (req: express.Request, viewer: Viewer): Promise<HomeRow> => {
+    const addon = allowedAddons(store.addons(), viewer).find((entry) =>
+      entry.enabled && entry.role !== "source" && entry.showOnHome !== false
+      && entry.manifest.id === "com.linvo.cinemeta");
+    if (!addon) return { status: "ok", items: [], hasMore: false };
+    const definitions = (["movie", "series"] as const).filter((type) =>
+      addon.manifest.catalogs?.some((definition) => definition.type === type && definition.id === "top"));
+    const fetchCatalog = deps.cinemetaCatalog ?? catalog;
+    const catalogues = Promise.allSettled(definitions.map((type) => fetchCatalog(addon, type, "top")));
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    const results = await Promise.race([
+      catalogues,
+      new Promise<undefined>((resolve) => { deadline = setTimeout(() => resolve(undefined), homeLookupDeadlineMs); }),
+    ]);
+    if (deadline) clearTimeout(deadline);
+    if (!results) return { status: "ok", items: [], hasMore: false, partial: true };
+    const groups: HomeCard[][] = [];
+    let partial = false;
+    results.forEach((result, index) => {
+      if (result.status === "rejected") { partial = true; return; }
+      const type = definitions[index]!;
+      const group: HomeCard[] = [];
+      for (const meta of result.value) {
+        if (!meta.id || !meta.name) continue;
+        const rewritten = images.rewriteMeta(meta);
+        group.push({ kind: "discovery", key: `${type}:${meta.id}`, type, id: meta.id, name: meta.name,
+          title: meta.name, ...(rewritten.poster ? { poster: rewritten.poster } : {}),
+          ...(rewritten.background ? { wide: rewritten.background } : {}),
+          ...(meta.year ? { year: String(meta.year) } : meta.releaseInfo ? { year: meta.releaseInfo } : {}) });
+      }
+      groups.push(group);
+    });
+    const utcDate = new Date(now()).toISOString().slice(0, 10);
+    const seed = `${viewer.id}:${utcDate}:${shuffleOf(req.query.shuffle)}`;
+    for (const group of groups) {
+      group.sort((a, b) => seedHash(`${seed}:${a.key}`) - seedHash(`${seed}:${b.key}`) || a.key.localeCompare(b.key));
+    }
+    const interleaved: HomeCard[] = [];
+    for (let index = 0; groups.some((group) => index < group.length); index += 1) {
+      for (const group of groups) if (group[index]) interleaved.push(group[index]!);
+    }
+    const unique = [...new Map(interleaved.map((item) => [item.key, item])).values()];
+    const bounded = boundCards(unique);
+    return { status: "ok", items: bounded.items, hasMore: bounded.hasMore, ...(partial ? { partial: true } : {}) };
+  };
+
   const builders: Record<HomeRowId, (req: express.Request, viewer: Viewer) => Promise<HomeRow>> = {
     resume: (req) => resumeRow(req),
     completed: completedRow,
@@ -422,6 +472,7 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
     recent: (_req, viewer) => recentRow(viewer),
     episodes: (req, viewer) => Promise.resolve(episodesRow(req, viewer)),
     tonight: tonightRow,
+    cinemeta: (req, viewer) => cinemetaRow(req, viewer),
     confirm: (_req, viewer) => Promise.resolve(confirmRow(viewer)),
   };
 

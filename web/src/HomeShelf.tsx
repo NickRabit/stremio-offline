@@ -8,7 +8,7 @@ import type { TileShape } from "./types";
 
 const TITLE: Record<HomeRowId, Key> = {
   resume: "home.continue", episodes: "home.newEpisodes", completed: "home.readyToPlay",
-  recent: "home.recent", tonight: "home.tonight", favorites: "home.favorites", confirm: "home.toConfirm",
+  recent: "home.recent", tonight: "home.tonight", cinemeta: "home.cinemeta", favorites: "home.favorites", confirm: "home.toConfirm",
 };
 const SHOW_ALL: Partial<Record<HomeRowId, Key>> = { favorites: "home.openLibrary", episodes: "home.openFollowing" };
 const SKELETON = [0, 1, 2, 3];
@@ -22,7 +22,7 @@ export function HomeShelf({ row, state, shape, actions, onRetry, onShowAll, onSh
   actions: HomeCardActions;
   onRetry: (row: HomeRowId) => void;
   onShowAll: (target: ShowAllTarget) => void;
-  /** The Tonight shelf draws a shuffle control; no other row has one. */
+  /** Tonight and Cinemeta can be reshuffled independently. */
   onShuffle?: () => void;
 }) {
   if (!state || state.status === "idle") return null;
@@ -33,7 +33,7 @@ export function HomeShelf({ row, state, shape, actions, onRetry, onShowAll, onSh
   return <section className="home-row" data-row={row}>
     <div className="subhead">
       <div className="home-head"><h3>{t(TITLE[row])}</h3>{row === "confirm" && state.total != null && <span className="count">{state.total}</span>}</div>
-      {row === "tonight" && onShuffle && <button className="home-shuffle" aria-label={t("home.shuffle")} title={t("home.shuffle")} onClick={onShuffle}><Shuffle/></button>}
+      {(row === "tonight" || row === "cinemeta") && onShuffle && <button className="home-shuffle" aria-label={t("home.shuffle")} title={t("home.shuffle")} onClick={onShuffle}><Shuffle/></button>}
       {target && <button className="resume-show-all" onClick={() => onShowAll(target)}>{t(SHOW_ALL[row] ?? "library.showAll")}<ChevronRight/></button>}
     </div>
     {state.status === "error"

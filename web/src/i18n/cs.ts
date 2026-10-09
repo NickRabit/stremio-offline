@@ -195,6 +195,7 @@ export const cs: Catalog = {
   "home.newEpisodes": "Nové epizody",
   "home.recent": "Nedávno přidané",
   "home.tonight": "Co dnes večer",
+  "home.cinemeta": "Cinemeta",
   "home.toConfirm": "K potvrzení",
   "home.shuffle": "Zamíchat",
   "home.confirmGuess": "Návrh: {name}",

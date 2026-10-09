@@ -1963,12 +1963,12 @@ export function App() {
    *  itself, a new episode opens its show the way the Library's row does, and a suggestion opens
    *  the dialog the library page opens. */
   const homePlay = (card: HomeCard) => {
-    if (card.kind === "resume-catalogue" || card.kind === "episode" || card.kind === "confirm") return;
+    if (card.kind === "resume-catalogue" || card.kind === "episode" || card.kind === "discovery" || card.kind === "confirm") return;
     const title = card.kind === "favorite" || card.kind === "recent" || card.kind === "tonight" ? card.label : card.title;
     void playLocal(title, card.path, card.poster, (card.kind === "resume-file" || card.kind === "completed" || card.kind === "recent") && card.season != null);
   };
   const homeOpen = (card: HomeCard) => {
-    if (card.kind === "episode") { void openFromCatalog({ type: card.type, id: card.metaId, name: card.name, poster: card.poster }); return; }
+    if (card.kind === "episode" || card.kind === "discovery") { void openFromCatalog({ type: card.type, id: card.kind === "episode" ? card.metaId : card.id, name: card.name, poster: card.poster }); return; }
     if (card.kind === "confirm") { setSuggestionsOpen(true); return; }
     if (card.kind !== "resume-catalogue") return;
     navigated.current = true;

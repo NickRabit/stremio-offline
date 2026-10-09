@@ -14,7 +14,7 @@ const job = (over: Partial<Download> & Pick<Download, "id">): Download => ({
 });
 const rowState = (over: Partial<HomeRowState> = {}): HomeRowState => ({ status: "ok", items: [], hasMore: false, partial: false, request: 1, ...over });
 const allEmpty = (over: Partial<HomeRows> = {}): HomeRows => ({
-  resume: rowState(), episodes: rowState(), completed: rowState(), recent: rowState(), tonight: rowState(), favorites: rowState(), confirm: rowState(), ...over,
+  resume: rowState(), episodes: rowState(), completed: rowState(), recent: rowState(), tonight: rowState(), cinemeta: rowState(), favorites: rowState(), confirm: rowState(), ...over,
 });
 type ResumeFile = Extract<HomeCard, { kind: "resume-file" }>;
 type Completed = Extract<HomeCard, { kind: "completed" }>;
@@ -23,6 +23,7 @@ type Episode = Extract<HomeCard, { kind: "episode" }>;
 type Recent = Extract<HomeCard, { kind: "recent" }>;
 type Tonight = Extract<HomeCard, { kind: "tonight" }>;
 type Confirm = Extract<HomeCard, { kind: "confirm" }>;
+type Discovery = Extract<HomeCard, { kind: "discovery" }>;
 const resumeFile = (key = "file:a"): ResumeFile => ({
   kind: "resume-file", key, title: `Title ${key}`, path: `lib_00000000/${key}.mkv`,
   progress: { position: 1, duration: 4 }, updatedAt: at, forgetKeys: [key, `${key}:extra`],
@@ -38,6 +39,7 @@ const recentCard = (): Recent => ({ kind: "recent", key: "lib_00000000/r.mkv", p
 const tonightFile = (): Tonight => ({ kind: "tonight", key: "lib_00000000/t.mkv", path: "lib_00000000/t.mkv", itemKind: "file", label: "Tonight", year: "2024", libraryId: "lib_00000000" });
 const tonightFolder = (): Tonight => ({ kind: "tonight", key: "lib_00000000/tf", path: "lib_00000000/tf", itemKind: "folder", label: "Folder", libraryId: "lib_00000000" });
 const confirmCard = (): Confirm => ({ kind: "confirm", key: "s1", libraryId: "lib_00000000", library: "Films", label: "guess.mkv", path: "lib_00000000/guess.mkv", candidate: { name: "Real Title", year: "2023", poster: "art" } });
+const discoveryCard = (): Discovery => ({ kind: "discovery", key: "movie:tt1", type: "movie", id: "tt1", name: "Film", title: "Film", year: "2025" });
 
 let root: Root;
 let host: HTMLDivElement;
@@ -123,6 +125,7 @@ describe("Home", () => {
         resume: rowState({ items: [resumeFile()] }),
         favorites: rowState({ items: [favoriteCard("file")] }),
         tonight: rowState({ items: [tonightFile()] }),
+        cinemeta: rowState({ items: [discoveryCard()] }),
         episodes: rowState({ items: [episodeCard()] }),
         completed: rowState({ items: [completedCard()] }),
         recent: rowState({ items: [recentCard()] }),
@@ -130,7 +133,7 @@ describe("Home", () => {
       }),
     });
     expect([...host.querySelectorAll<HTMLElement>(".home-row")].map((element) => element.dataset.row ?? "downloads"))
-      .toEqual(["resume", "favorites", "tonight", "episodes", "completed", "recent", "downloads"]);
+      .toEqual(["resume", "favorites", "tonight", "cinemeta", "episodes", "completed", "recent", "downloads"]);
     expect(row("confirm")).toBeNull();
   });
 
@@ -326,6 +329,15 @@ describe("Home", () => {
     expect(row("confirm")).toBeNull();
   });
 
+  it("opens a Cinemeta title and displays its year without a card menu", async () => {
+    const card = discoveryCard();
+    const { onOpenCatalogue } = await render({ rows: allEmpty({ cinemeta: rowState({ items: [card] }) }) });
+    expect(row("cinemeta")!.textContent).toContain("2025");
+    await click(primary("cinemeta"));
+    expect(onOpenCatalogue).toHaveBeenCalledWith(card);
+    expect(row("cinemeta")!.querySelector(".browse-menu")).toBeNull();
+  });
+
   it("omits a new shelf with no items", async () => {
     await render({ admin: true, rows: allEmpty({ episodes: rowState({ items: [episodeCard()] }) }) });
     expect(row("episodes")).not.toBeNull();
@@ -374,6 +386,16 @@ describe("Home", () => {
     await click(shuffle);
     await click(shuffle);
     expect(onShuffle.mock.calls).toEqual([["tonight", 1], ["tonight", 2]]);
+  });
+
+  it("shuffles the Cinemeta row with an incrementing counter", async () => {
+    const onShuffle = vi.fn();
+    await render({ rows: allEmpty({ cinemeta: rowState({ items: [discoveryCard()] }) }), onShuffle });
+    const shuffle = row("cinemeta")!.querySelector<HTMLButtonElement>(".home-shuffle")!;
+    expect(shuffle.getAttribute("aria-label")).toBe("Shuffle");
+    await click(shuffle);
+    await click(shuffle);
+    expect(onShuffle.mock.calls).toEqual([["cinemeta", 1], ["cinemeta", 2]]);
   });
 
   it("shows the To confirm count as a heading chip that opens the suggestions dialog", async () => {

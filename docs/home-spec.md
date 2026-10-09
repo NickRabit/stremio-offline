@@ -2,8 +2,8 @@
 
 Status: slices 0 to 5 shipped in 0.5.25, with a per-account Start page setting
 (Catalogue by default) and a Show on Home switch on every library and add-on;
-the rows are Continue watching, Favourites, Tonight, New episodes, Ready to
-play, Recently added and then the Downloads strip. To confirm is a count in the
+the rows are Continue watching, Favourites, Tonight, Cinemeta, New episodes,
+Ready to play, Recently added and then the Downloads strip. To confirm is a count in the
 heading, not a shelf, and Downloads is a one-line summary unless a job has
 failed or is blocked. The row order above is fixed. Hiding a row per account is not
 built. Written 2026-10-05 and revised the
@@ -16,9 +16,9 @@ independent review (the closed PR #303) found the contract gaps folded in below.
 
 An additional **Home** view for an account. The catalogue and the library stay
 exactly as they are: same navigation entries, scroll restoration and API
-contracts, and the app still opens on the catalogue. Home is built from state
-the app already holds. It never scans a disk and never fans out to addons on
-load.
+contracts, and the app still opens on the catalogue. Local Home rows are built
+from state the app already holds and never scan a disk. The Cinemeta row makes
+bounded requests to its popular movie and series catalogs when requested.
 
 Home leads with Continue watching. The queue stays on the page as a one-line
 summary unless a job needs attention. The official Stremio home
@@ -39,10 +39,11 @@ heuristic, which keeps scroll restoration honest.
 | 1 | Continue watching | Library files with a stored position, catalogue progress and next-episode rows. | Needs a server identity contract, see below |
 | 2 | Favourites | Library favourites, filtered by grant. | Ready |
 | 3 | Tonight | Unstarted whole titles from the libraries Home shows, in a per-day order. | Ready |
-| 4 | New episodes | The existing `NewEpisodesRow` from Following, after a check of its grant semantics. | Ready, reuse |
-| 5 | Ready to play | The account's own completed downloads that resolve to a file that can be opened now. | Small server change |
-| 6 | Recently added | Files first seen by a library scan. | Needs new persisted data |
-| 7 | Downloads | The account's own jobs. A one-line summary, unless one has failed or is blocked, in which case only those jobs are cards. | Ready: the client already holds and polls the queue |
+| 4 | Cinemeta | A seeded random selection from the popular movie and series catalogs, when Cinemeta is enabled, granted and shown on Home. | Ready; two bounded catalog requests |
+| 5 | New episodes | The existing `NewEpisodesRow` from Following, after a check of its grant semantics. | Ready, reuse |
+| 6 | Ready to play | The account's own completed downloads that resolve to a file that can be opened now. | Small server change |
+| 7 | Recently added | Files first seen by a library scan. | Needs new persisted data |
+| 8 | Downloads | The account's own jobs. A one-line summary, unless one has failed or is blocked, in which case only those jobs are cards. | Ready: the client already holds and polls the queue |
 
 Following is its own destination and is not rebuilt here.
 

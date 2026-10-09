@@ -183,6 +183,7 @@ export const ru: Catalog = {
   "home.newEpisodes": "Новые эпизоды",
   "home.recent": "Недавно добавленные",
   "home.tonight": "На сегодня",
+  "home.cinemeta": "Cinemeta",
   "home.toConfirm": "Подтвердить",
   "home.shuffle": "Перемешать",
   "home.confirmGuess": "Предложено: {name}",

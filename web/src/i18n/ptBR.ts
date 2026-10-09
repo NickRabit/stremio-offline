@@ -183,6 +183,7 @@ export const ptBR: Catalog = {
   "home.newEpisodes": "Novos episódios",
   "home.recent": "Adicionado recentemente",
   "home.tonight": "Hoje à noite",
+  "home.cinemeta": "Cinemeta",
   "home.toConfirm": "Para confirmar",
   "home.shuffle": "Embaralhar",
   "home.confirmGuess": "Sugerido: {name}",

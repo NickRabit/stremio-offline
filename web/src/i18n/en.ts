@@ -200,6 +200,7 @@ export const en = {
   "home.newEpisodes": "New episodes",
   "home.recent": "Recently added",
   "home.tonight": "Tonight",
+  "home.cinemeta": "Cinemeta",
   "home.toConfirm": "To confirm",
   "home.shuffle": "Shuffle",
   "home.confirmGuess": "Suggested: {name}",
