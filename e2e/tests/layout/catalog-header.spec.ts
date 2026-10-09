@@ -114,7 +114,7 @@ test("mobile source view returns to the episode picker", async ({ page }, testIn
   await expect(detail.locator(".mobile-detail-head").getByRole("button", { name: "Výsledky" })).toBeVisible();
 });
 
-test("phone source scrolling hides metadata and restores it before reaching the top", async ({ page }, testInfo) => {
+test("phone source scrolling hides metadata and restores it on an intentional pull", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile", "phone portrait has a collapsible metadata header");
   await page.route("**/api/streams/**", async (route) => {
     const response = await route.fetch();
@@ -132,12 +132,12 @@ test("phone source scrolling hides metadata and restores it before reaching the 
   await list.evaluate((element) => { element.scrollTop = 500; });
   await expect(page.locator(".detail-panel .hero")).toBeHidden();
   await page.waitForTimeout(300);
-  await list.evaluate((element) => { element.scrollTop -= 80; });
+  await list.evaluate((element) => { element.scrollTop -= 200; });
   await expect(page.locator(".detail-panel .hero")).toBeVisible();
   expect(await list.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
 });
 
-test("phone catalog header returns on an intentional pull, by its button or at the top of the list", async ({ page }, testInfo) => {
+test("phone catalog header returns by its button or at the top of the list", async ({ page }, testInfo) => {
   test.skip(!["mobile", "mobile-landscape"].includes(testInfo.project.name), "compact phone catalog");
   await page.route("**/api/catalog?**", async (route) => {
     const response = await route.fetch();
@@ -154,15 +154,15 @@ test("phone catalog header returns on an intentional pull, by its button or at t
   await list.evaluate((element) => { element.scrollTop = 500; });
   await expect(page.locator(".searchbar")).toBeHidden();
 
-  // A small drift should not unfold the header, but a deliberate pull should.
+  // Partial upward scrolling does not unfold the catalog header.
   await page.waitForTimeout(300);
   await list.evaluate((element) => { element.scrollTop -= 20; });
   await page.waitForTimeout(300);
   await expect(page.locator(".searchbar")).toBeHidden();
 
   await list.evaluate((element) => { element.scrollTop -= 80; });
-  await expect(page.locator(".searchbar")).toBeVisible();
-  await expect.poll(() => page.locator(".topbar").evaluate((element) => element.getBoundingClientRect().bottom)).toBeGreaterThan(0);
+  await expect(page.locator(".searchbar")).toBeHidden();
+  await expect.poll(() => page.locator(".topbar").evaluate((element) => element.getBoundingClientRect().bottom)).toBeLessThanOrEqual(0);
   expect(await list.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
 
   // Reaching the top remains another way back.
