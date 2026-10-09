@@ -78,6 +78,8 @@ interface Harness {
   lookups: string[];
   /** Every manifest feed the Home route requested, including its required extras. */
   catalogCalls: Array<{ addonKey: string; type: string; catalogId: string; extras: Record<string, string | number> }>;
+  /** How long the fake addon takes to answer a catalogue. */
+  catalogDelayMs: number;
   data(user: string): UserData;
   close(): Promise<void>;
 }
@@ -109,7 +111,7 @@ const mount = async (options: { libraries?: LibraryRecord[]; deadlineMs?: number
     base: "", addons, records, missing, broken, completed: [], completedThrows: false, seen,
     episodes: [], episodesThrows: false, newEpisodesCalls: [], suggestions: [], suggestionsThrow: false, suggestionCalls: 0,
     now: options.now ?? Date.parse("2026-01-15T12:00:00.000Z"),
-    metaDelayMs: 0, metaAnswer: null, lookups: [], catalogCalls: [],
+    metaDelayMs: 0, metaAnswer: null, lookups: [], catalogCalls: [], catalogDelayMs: 0,
     data: () => { throw new Error("not mounted"); }, close: async () => undefined,
   };
   const users = new Map<string, UserData>([[ALICE, emptyUserData()], [BOB, emptyUserData()], [ADMIN, emptyUserData()]]);
@@ -209,6 +211,7 @@ const mount = async (options: { libraries?: LibraryRecord[]; deadlineMs?: number
     },
     homeCatalog: async (addon, type, catalogId, extras) => {
       state.catalogCalls.push({ addonKey: addon.key, type, catalogId, extras: { ...extras } });
+      if (state.catalogDelayMs) await new Promise((resolve) => setTimeout(resolve, state.catalogDelayMs));
       const numbers = type === "movie" ? [1, 3, 5] : [2, 4, 6];
       return [...numbers, numbers[0]!].map((number) => ({
         id: `${catalogId}-tt${number}`, type, name: `${catalogId} ${type === "movie" ? "Film" : "Seriál"} ${number}`,
@@ -450,6 +453,31 @@ test("Home loads each selected addon catalog feed into its own seeded carousel",
   assert.deepEqual(new Set(harness.catalogCalls.map(({ type, catalogId }) => `${type}:${catalogId}`)),
     new Set(["movie:top", "series:top", "movie:featured"]));
   assert.equal(harness.catalogCalls.filter((call) => call.catalogId === "featured").every((call) => call.extras.genre === "Drama"), true);
+});
+
+test("a catalogue that misses the deadline comes back partial and the next request draws it from memory", async (t) => {
+  const harness = await mount({ deadlineMs: 5 });
+  t.after(harness.close);
+  harness.addons.push({ key: "slow", manifestUrl: "https://slow/manifest.json", role: "catalog", enabled: true,
+    globalSearch: true, showOnHome: true, addedAt: "", allowedUsers: [ALICE],
+    manifest: { id: "slow", name: "Slow", version: "1", catalogs: [{ type: "movie", id: "top" }, { type: "series", id: "top" }] } } as AddonRecord);
+  harness.catalogDelayMs = 40;
+  const movie = homeCatalogRowId("slow", "movie", "top");
+  const series = homeCatalogRowId("slow", "series", "top");
+
+  const first = await (await api(harness.base, `/api/home?rows=${movie}`, ALICE)).json() as { rows: Record<string, HomeRowView> };
+  assert.equal(first.rows[movie]!.partial, true);
+  assert.deepEqual(first.rows[movie]!.items, []);
+  // Opening Home asked for the shelf below as well, though this request did not name it.
+  assert.deepEqual(harness.catalogCalls.map((call) => `${call.type}:${call.catalogId}`).sort(), ["movie:top", "series:top"]);
+
+  // The lookup kept running past the deadline.
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  const second = await (await api(harness.base, `/api/home?rows=${movie},${series}`, ALICE)).json() as { rows: Record<string, HomeRowView> };
+  assert.equal(second.rows[movie]!.partial, undefined);
+  assert.equal(second.rows[movie]!.items.length, 3);
+  assert.equal(second.rows[series]!.items.length, 3);
+  assert.deepEqual(harness.catalogCalls.map((call) => `${call.type}:${call.catalogId}`).sort(), ["movie:top", "series:top"]);
 });
 
 test("one row that throws leaves the others ok and carries no total", async (t) => {

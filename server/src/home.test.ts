@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { HOME_ROW_LIMIT, boundCards, mergeResume, type HomeCard, type ResumeCatalogueItem, type ResumeFileItem } from "./home.js";
+import { HOME_ROW_LIMIT, boundCards, homeCatalogRowId, mergeResume, parseHomeCatalogRowId, type HomeCard, type ResumeCatalogueItem, type ResumeFileItem } from "./home.js";
 
 const at = (day: number) => `2024-01-${String(day).padStart(2, "0")}T00:00:00.000Z`;
 
@@ -108,4 +108,10 @@ test("the winner of a merged show does not depend on the input order", () => {
   const forward = mergeResume(sources);
   const reversed = mergeResume({ files: [...sources.files].reverse(), catalogue: [...sources.catalogue].reverse() });
   assert.deepEqual(forward, reversed);
+});
+
+test("a catalogue row id names its addon, type and catalogue back, even with colons inside", () => {
+  assert.deepEqual(parseHomeCatalogRowId(homeCatalogRowId("key:1", "movie", "top/a b")), { addonKey: "key:1", type: "movie", id: "top/a b" });
+  assert.equal(parseHomeCatalogRowId("resume"), undefined);
+  assert.equal(parseHomeCatalogRowId("catalog:%E0:movie:top"), undefined);
 });

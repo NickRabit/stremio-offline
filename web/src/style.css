@@ -1795,6 +1795,10 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
 .hq-foot button{min-height:44px;min-width:44px;max-width:100%;padding:0 12px;font-size:12px;flex:0 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .home-head{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;min-width:0}
 .home-head h3{margin:0}.home-head .count{font-size:11px;color:var(--muted)}
+.home-catalog-link{display:inline-flex;align-items:center;gap:2px;max-width:100%;min-width:0;padding:0;border:0;background:none;color:inherit;font:inherit;cursor:pointer;text-align:left}
+.home-catalog-link span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.home-catalog-link svg{flex:none;width:1em;height:1em;color:var(--muted);transition:transform .15s,color .15s}
+.home-catalog-link:hover svg,.home-catalog-link:focus-visible svg{color:var(--accent);transform:translateX(2px)}
 .home-row{margin-bottom:20px}.home-row .subhead{gap:12px;flex-wrap:wrap}
 .home-row .resume-show-all{min-height:44px;min-width:44px;display:inline-flex;align-items:center;justify-content:center}
 .home-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}

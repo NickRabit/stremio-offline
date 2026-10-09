@@ -38,6 +38,7 @@ import { Home } from "./Home";
 import { useHome } from "./useHome";
 import type { ShowAllTarget } from "./home-cards";
 import type { HomeCard } from "../../server/src/home";
+import { parseHomeCatalogRowId } from "../../server/src/home";
 import { MoreMenu, type MoreItem } from "./MoreMenu";
 import { fmtEta } from "./download-format";
 import { MediaGallery, type GalleryImage, type GalleryKind } from "./MediaGallery";
@@ -1007,11 +1008,12 @@ export function App() {
     };
   }, [selected]);
 
-  const resetCatalog = () => {
+  /** The catalogue view from the top, on its first catalogue or on the one named. */
+  const resetCatalog = (pick?: { addonKey: string; type: string; id: string }) => {
     navigated.current = true;
     live.cancel();
     setCatalogCompact(false);
-    const firstCatalog = catalogs[0];
+    const firstCatalog = (pick && catalogs.find((catalog) => catalog.addonKey === pick.addonKey && catalog.type === pick.type && catalog.id === pick.id)) ?? catalogs[0];
     scrollByView.current.catalog = 0;
     setView("catalog");
     setSearch(""); setSubmittedQuery(""); setSearchScopeValue(""); setTypeFilter(""); setGenre(""); setSort("default"); setSearchSort("default");
@@ -2010,7 +2012,7 @@ export function App() {
   const moreActive = view === "following" || view === "addons" || view === "settings" || view === "stats";
 
   return <div className={`app-shell catalog-tiles-${settings.catalogTileSize} library-tiles-${settings.libraryTileSize} catalog-shape-${settings.catalogTileShape} library-shape-${settings.libraryTileShape} home-shape-${settings.homeTileShape}${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
-    <header className="topbar"><button className="brand brand-home" title={t("app.goToCleanCatalog")} aria-label={t("app.goToCleanCatalog")} onClick={resetCatalog}><div className="brand-mark"><CirclePlay/></div><div><small>{t("auth.brandEyebrow")}</small><h1>Stremio <span>Offline</span></h1></div></button><div className="topbar-right">{restricted && <div className="restricted-chip">{t("restricted.chip")}</div>}<div className="online"><i/> {t("app.serverOnline")}</div>
+    <header className="topbar"><button className="brand brand-home" title={t("app.goToCleanCatalog")} aria-label={t("app.goToCleanCatalog")} onClick={() => resetCatalog()}><div className="brand-mark"><CirclePlay/></div><div><small>{t("auth.brandEyebrow")}</small><h1>Stremio <span>Offline</span></h1></div></button><div className="topbar-right">{restricted && <div className="restricted-chip">{t("restricted.chip")}</div>}<div className="online"><i/> {t("app.serverOnline")}</div>
       <div className="topbar-user"><span className="topbar-user-name">
         <strong title={t("auth.signedInAs", { username: session?.username ?? "" })}>{session?.username}</strong>
         {session?.role === "admin" && <i className="library-badge">{t("users.administrator")}</i>}
@@ -2034,7 +2036,7 @@ export function App() {
       {view === "home" && !restricted && <Home jobs={downloads} addons={addons} libraries={libraries} onShowDownloads={() => openView("downloads")} onAction={homeAction} admin={admin}
         rows={home.rows} shape={settings.homeTileShape} onToggleShape={() => void toggleShape("homeTileShape")}
         onRetry={(row) => home.refresh([row])} onShowAll={homeShowAll} onPlay={homePlay} onOpenCatalogue={homeOpen}
-        onShuffle={(row, shuffle) => home.refresh([row], { shuffle })}
+        onShuffle={(row, shuffle) => home.refresh([row], { shuffle })} onVisible={home.reveal} onOpenCatalog={(row) => { const pick = parseHomeCatalogRowId(row); if (pick) resetCatalog(pick); }}
         onReveal={revealInLibrary} onForgotten={() => home.refresh(["resume"])} onError={fail}/>}
       {view === "catalog" && <section className={`catalog-view ${catalogCompact ? "catalog-compact" : ""}`} {...chromeGestures(() => gridRef.current)} onFocusCapture={(event) => {
         if ((event.target as HTMLElement).closest(".searchbar,.filterbar")) setCatalogCompact(false);

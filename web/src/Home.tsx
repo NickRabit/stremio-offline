@@ -35,7 +35,7 @@ function metaOf(job: Download): string {
 
 const percentOf = (job: Download) => job.total != null && job.total > 0 ? Math.min(100, (job.received / job.total) * 100) : null;
 
-export function Home({ jobs, addons, admin, onShowDownloads, onAction, rows, shape, onToggleShape, onRetry, onShowAll, onPlay, onOpenCatalogue, onShuffle, onReveal, onForgotten, onError }: {
+export function Home({ jobs, addons, admin, onShowDownloads, onAction, rows, shape, onToggleShape, onRetry, onShowAll, onPlay, onOpenCatalogue, onShuffle, onVisible, onOpenCatalog, onReveal, onForgotten, onError }: {
   jobs: Download[];
   libraries: LibraryView[];
   addons: import("./types").Addon[];
@@ -50,12 +50,20 @@ export function Home({ jobs, addons, admin, onShowDownloads, onAction, rows, sha
   onPlay: (card: HomeCard) => void;
   onOpenCatalogue: (card: HomeCard) => void;
   onShuffle: (row: HomeRowId, shuffle: number) => void;
+  /** An addon shelf neared the screen and should load. */
+  onVisible?: (row: HomeRowId) => void;
+  /** An addon shelf's heading was chosen: show its catalogue in full. */
+  onOpenCatalog?: (row: HomeRowId) => void;
   onReveal: (path: string) => void;
   onForgotten: () => void;
   onError: (error: unknown) => void;
 }) {
   const [busy, setBusy] = useState<ReadonlySet<string>>(new Set());
   const shuffleCount = useRef<Record<string, number>>({});
+  // Stable per row, so a shelf's observer is not torn down and rebuilt on every render.
+  const visibleCallbacks = useRef(new Map<HomeRowId, () => void>());
+  const latestVisible = useRef(onVisible);
+  latestVisible.current = onVisible;
   const catalogShelves = homeCatalogShelves(addons);
   const catalogTitles = new Map(catalogShelves.map((shelf) => [shelf.id, shelf.title]));
   const askedRows = homeRowsFor(admin, addons);
@@ -92,13 +100,18 @@ export function Home({ jobs, addons, admin, onShowDownloads, onAction, rows, sha
     void api.forgetManyProgress(card.forgetKeys).then(onForgotten, onError);
   };
   const actions: HomeCardActions = { play: onPlay, open: onOpenCatalogue, reveal: onReveal, forget };
+  const visibleOf = (row: HomeRowId) => {
+    let callback = visibleCallbacks.current.get(row);
+    if (!callback) { callback = () => latestVisible.current?.(row); visibleCallbacks.current.set(row, callback); }
+    return callback;
+  };
   const shuffle = (row: HomeRowId) => { shuffleCount.current[row] = (shuffleCount.current[row] ?? 0) + 1; onShuffle(row, shuffleCount.current[row]!); };
 
   const summary = [t("home.downloadsSummary", { count: items.length }), attention > 0 ? t("home.attention", { count: attention }) : ""].filter(Boolean).join(" · ");
   return <>
     {heading}
     {confirmError}
-    {askedRows.filter((row) => row !== "confirm").map((row) => <HomeShelf key={row} row={row} title={catalogTitles.get(row)} state={rows[row]} shape={shape} actions={actions} onRetry={onRetry} onShowAll={onShowAll} onShuffle={row === "tonight" || catalogTitles.has(row) ? () => shuffle(row) : undefined}/>)}
+    {askedRows.filter((row) => row !== "confirm").map((row) => <HomeShelf key={row} row={row} title={catalogTitles.get(row)} state={rows[row]} shape={shape} actions={actions} onRetry={onRetry} onShowAll={onShowAll} onShuffle={row === "tonight" || catalogTitles.has(row) ? () => shuffle(row) : undefined} onVisible={onVisible && catalogTitles.has(row) ? visibleOf(row) : undefined} onOpenCatalog={onOpenCatalog && catalogTitles.has(row) ? () => onOpenCatalog(row) : undefined}/>)}
     {items.length > 0 && <section className="home-row">
       <div className="subhead">
         <div className="home-head"><h3>{t("home.downloads")}</h3><span className="count">{summary}</span></div>

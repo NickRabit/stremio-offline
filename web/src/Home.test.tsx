@@ -343,6 +343,47 @@ describe("Home", () => {
     expect(row(catalogRow)!.querySelector(".browse-menu")).toBeNull();
   });
 
+  it("holds an addon shelf as a titled placeholder until it nears the screen, then asks for it once", async () => {
+    let notify: ((entries: Array<{ isIntersecting: boolean }>) => void) | undefined;
+    const observe = vi.fn();
+    vi.stubGlobal("IntersectionObserver", class {
+      constructor(callback: (entries: Array<{ isIntersecting: boolean }>) => void) { notify = callback; }
+      observe = observe;
+      disconnect = vi.fn();
+    });
+    const onVisible = vi.fn();
+    await render({ addons: [catalogAddon], onVisible });
+    expect(row(catalogRow)!.textContent).toContain("Cinemeta · Popular");
+    expect(row(catalogRow)!.querySelector(".skeleton")).not.toBeNull();
+    expect(observe).toHaveBeenCalledTimes(1);
+    expect(onVisible).not.toHaveBeenCalled();
+    await act(async () => { notify!([{ isIntersecting: true }]); });
+    expect(onVisible).toHaveBeenCalledTimes(1);
+    expect(onVisible).toHaveBeenCalledWith(catalogRow);
+  });
+
+  it("asks for an addon shelf at once where the browser cannot observe it", async () => {
+    vi.stubGlobal("IntersectionObserver", undefined);
+    const onVisible = vi.fn();
+    await render({ addons: [catalogAddon], onVisible });
+    expect(onVisible).toHaveBeenCalledWith(catalogRow);
+  });
+
+  it("opens an addon shelf's whole catalogue from its heading, loaded or not", async () => {
+    const onOpenCatalog = vi.fn();
+    await render({ addons: [catalogAddon], rows: allEmpty({ [catalogRow]: rowState({ items: [discoveryCard()] }) }), onOpenCatalog });
+    const link = row(catalogRow)!.querySelector<HTMLButtonElement>(".home-catalog-link")!;
+    expect(link.textContent).toContain("Cinemeta · Popular");
+    expect(link.title).toBe("Open in catalogue");
+    await click(link);
+    expect(onOpenCatalog).toHaveBeenCalledWith(catalogRow);
+    expect(row("resume")?.querySelector(".home-catalog-link") ?? null).toBeNull();
+
+    vi.stubGlobal("IntersectionObserver", class { observe() {} disconnect() {} });
+    await render({ addons: [catalogAddon], rows: allEmpty(), onOpenCatalog, onVisible: vi.fn() });
+    expect(row(catalogRow)!.querySelector(".home-catalog-link")).not.toBeNull();
+  });
+
   it("omits a new shelf with no items", async () => {
     await render({ admin: true, rows: allEmpty({ episodes: rowState({ items: [episodeCard()] }) }) });
     expect(row("episodes")).not.toBeNull();

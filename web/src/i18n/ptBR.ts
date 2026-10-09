@@ -186,6 +186,7 @@ export const ptBR: Catalog = {
   "home.cinemeta": "Cinemeta",
   "home.toConfirm": "Para confirmar",
   "home.shuffle": "Embaralhar",
+  "home.openCatalog": "Abrir no catálogo",
   "home.confirmGuess": "Sugerido: {name}",
   "home.newEpisode": "Novo episódio",
   "home.openFollowing": "Abrir Seguindo",
