@@ -794,11 +794,11 @@ const durationOfKey = async (key: string): Promise<number | undefined> => {
 const libraryProbe = createLibraryProbe();
 const libraryHealth = new Map<string, LibraryHealth>();
 /** Probes are cached for half a minute, and a library whose answer changed drops the walks. */
-const refreshLibraryHealth = async () => {
+const refreshLibraryHealth = async (read?: { stale?: boolean }) => {
   let changed = false;
   // Each probe may wait out its timeout on a sick mount; one slow disk must not hold up the rest.
   const libraries = store.libraries();
-  const probes = await Promise.all(libraries.map((library) => libraryProbe.cached(library.root)));
+  const probes = await Promise.all(libraries.map((library) => libraryProbe.cached(library.root, read)));
   libraries.forEach((library, index) => {
     const before = libraryHealth.get(library.id);
     const health = probes[index]!;
@@ -969,7 +969,8 @@ const artStamp = async (file: string) => {
  *  is configured. Counts come from the walks the library listing already holds, so opening
  *  the root does not walk the tree again. */
 const libraryRootBrowse = async (viewer: Viewer, options: { prewarm?: boolean } = {}) => {
-  await refreshLibraryHealth();
+  // The rows only render, so the last probe will do; a change it finds lands on the next visit.
+  await refreshLibraryHealth({ stale: true });
   const [stats, entries] = await Promise.all([libraryStats({ stale: true }), libraryEntries({ stale: true })]);
   let pending = false;
   const items = await Promise.all([...visibleLibraries(store.libraries(), viewer)].sort((a, b) => a.order - b.order).map(async (library) => {
@@ -1168,6 +1169,9 @@ const warmLibraryCaches = async () => {
   try {
     await refreshLibraryHealth();
     const [stats] = await Promise.all([libraryStats({ stale: true }), libraryEntries({ stale: true })]);
+    // The overview's mosaics are the first pictures anybody waits for, so the ones still
+    // missing are queued now rather than on the first visit.
+    await libraryRootBrowse({ id: "", role: "admin" });
     log("DEBUG", "Library caches warmed", { libraries: stats.size });
   } catch (error) {
     log("WARN", "The library warm-up failed", { reason: error instanceof Error ? error.message : String(error) });
@@ -1255,7 +1259,9 @@ const describeLibraryPath = async (key: string, read?: WalkRead) => {
  *  one keeps its own slot. */
 async function locateFileArtwork(key: string, shape: ArtShape = "poster") {
   const media = path.join(path.dirname(mediaPath(key)), episodeArtName(posixBase(key)));
-  const unit = unitFor(key, await libraryUnits());
+  // Every tile asks this, so it takes the held walk: waiting for a new walk of every library
+  // whenever the last has aged out is what made a library slow to open after a pause.
+  const unit = unitFor(key, await libraryUnits({ stale: true }));
   // The key that supplied the file's binding, not the folder's: a file the user bound on its
   // own path keeps that key, so the folder's picture is not mistaken for its own.
   const cover = knownEntryForUnit(unit, metaStore.qualifiedMeta(), key);

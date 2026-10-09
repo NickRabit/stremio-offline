@@ -18,8 +18,10 @@ export interface LibraryHealth {
 export interface LibraryProbe {
   /** What the disk says right now, bounded by the timeout. */
   probe(root: string): Promise<LibraryHealth>;
-  /** The same, unless an answer younger than the TTL is already in hand. */
-  cached(root: string): Promise<LibraryHealth>;
+  /** The same, unless an answer younger than the TTL is already in hand. `stale` takes an
+   *  older answer at once and asks the disk again behind it: a view must not wait for a
+   *  sleeping NAS to spin up just to draw what it drew a minute ago. */
+  cached(root: string, read?: { stale?: boolean }): Promise<LibraryHealth>;
   /** Called when an operation against the root fails on I/O: a failing write is a
    *  better signal than the next scheduled probe. */
   invalidate(root?: string): void;
@@ -103,17 +105,22 @@ export function createLibraryProbe(opts: { timeoutMs?: number; ttlMs?: number; n
     };
   };
 
-  const cached = async (root: string): Promise<LibraryHealth> => {
+  const cached = async (root: string, read: { stale?: boolean } = {}): Promise<LibraryHealth> => {
     const absolute = path.resolve(root);
     const hit = cache.get(absolute);
     if (hit && now() - hit.at < ttlMs) return hit.value;
-    const running = inflight.get(absolute);
-    if (running) return running;
-    const pending = probe(absolute)
-      .then((value) => { cache.set(absolute, { at: now(), value }); return value; })
-      .finally(() => { inflight.delete(absolute); });
-    inflight.set(absolute, pending);
-    return pending;
+    let running = inflight.get(absolute);
+    if (!running) {
+      running = probe(absolute)
+        .then((value) => { cache.set(absolute, { at: now(), value }); return value; })
+        .finally(() => { inflight.delete(absolute); });
+      inflight.set(absolute, running);
+    }
+    if (hit && read.stale) {
+      running.catch(() => undefined);
+      return hit.value;
+    }
+    return running;
   };
 
   return {

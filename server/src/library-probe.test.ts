@@ -104,6 +104,19 @@ test("the answer is cached until the TTL passes", async (t) => {
   assert.deepEqual(standing(await probe.cached(dir)), { unreachable: true, readOnly: false });
 });
 
+test("a stale read takes the older answer at once and asks the disk again behind it", async (t) => {
+  const dir = await temp(t);
+  let clock = 1_000;
+  const probe = createLibraryProbe({ ttlMs: 30_000, now: () => clock });
+  assert.equal(standing(await probe.cached(dir, { stale: true })).unreachable, false, "with nothing held, a stale read still waits");
+
+  await rm(dir, { recursive: true, force: true });
+  clock += 30_000;
+  assert.equal(standing(await probe.cached(dir, { stale: true })).unreachable, false, "the view is drawn from the last answer");
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(standing(await probe.cached(dir, { stale: true })).unreachable, true, "the refresh behind it has landed");
+});
+
 test("an operation that failed on I/O drops the cached answer", async (t) => {
   const dir = await temp(t);
   const probe = createLibraryProbe();
