@@ -416,24 +416,29 @@ test("Home loads each selected addon catalog feed into its own seeded carousel",
   harness.addons.push({ key: "cinemeta", manifestUrl: "https://cinemeta/manifest.json", role: "catalog", enabled: true,
     globalSearch: true, showOnHome: true, addedAt: "", allowedUsers: [ALICE],
     manifest: { id: "com.linvo.cinemeta", name: "Cinemeta", version: "1", catalogs: [
-      { type: "movie", id: "top" }, { type: "series", id: "top" },
+      { type: "movie", id: "top" }, { type: "series", id: "top" }, { type: "movie", id: "featured" },
     ] } } as AddonRecord);
 
   const movie = homeCatalogRowId("cinemeta", "movie", "top");
   const series = homeCatalogRowId("cinemeta", "series", "top");
-  const query = `rows=${movie},${series}`;
+  const featured = homeCatalogRowId("cinemeta", "movie", "featured");
+  const query = `rows=${movie},${series},${featured}`;
   const first = await (await api(harness.base, `/api/home?${query}&shuffle=0`, ALICE)).json() as { rows: Record<string, HomeRowView> };
   const repeated = await (await api(harness.base, `/api/home?${query}&shuffle=0`, ALICE)).json() as { rows: Record<string, HomeRowView> };
   const second = await (await api(harness.base, `/api/home?${query}&shuffle=1`, ALICE)).json() as { rows: Record<string, HomeRowView> };
   const movies = first.rows[movie]!.items;
   const shows = first.rows[series]!.items;
+  const featuredMovies = first.rows[featured]!.items;
   assert.equal(movies.length, 3);
   assert.equal(shows.length, 3);
+  assert.equal(featuredMovies.length, 3);
   assert.deepEqual(movies.map((item) => (item as { type: string }).type), Array(3).fill("movie"));
   assert.deepEqual(shows.map((item) => (item as { type: string }).type), Array(3).fill("series"));
   assert.deepEqual(movies.map((item) => item.kind), Array(3).fill("discovery"));
   assert.deepEqual(movies.map((item) => item.key), repeated.rows[movie]!.items.map((item) => item.key));
+  assert.deepEqual(featuredMovies.map((item) => item.key), repeated.rows[featured]!.items.map((item) => item.key));
   assert.notDeepEqual(movies.map((item) => item.key), second.rows[movie]!.items.map((item) => item.key));
+  assert.notDeepEqual(featuredMovies.map((item) => item.key), second.rows[featured]!.items.map((item) => item.key));
 });
 
 test("one row that throws leaves the others ok and carries no total", async (t) => {
