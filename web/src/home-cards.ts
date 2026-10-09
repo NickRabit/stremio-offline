@@ -52,6 +52,7 @@ export function showAllTarget(row: HomeRowId, cards: HomeCard[], hasMore: boolea
   if (row === "episodes") return "following";
   if (row === "confirm") return "confirm";
   if (row === "tonight") return undefined;
+  if (row === "cinemeta") return undefined;
   if (row === "recent") return hasMore ? "library" : undefined;
   if (row === "favorites") return "library-favorites";
   if (!hasMore) return undefined;

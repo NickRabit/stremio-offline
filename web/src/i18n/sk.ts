@@ -183,6 +183,7 @@ export const sk: Catalog = {
   "home.newEpisodes": "Nové epizódy",
   "home.recent": "Nedávno pridané",
   "home.tonight": "Čo dnes večer",
+  "home.cinemeta": "Cinemeta",
   "home.toConfirm": "Na potvrdenie",
   "home.shuffle": "Zamiešať",
   "home.confirmGuess": "Návrh: {name}",

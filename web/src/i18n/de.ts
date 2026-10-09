@@ -183,6 +183,7 @@ export const de: Catalog = {
   "home.newEpisodes": "Neue Folgen",
   "home.recent": "Kürzlich hinzugefügt",
   "home.tonight": "Heute Abend",
+  "home.cinemeta": "Cinemeta",
   "home.toConfirm": "Zu bestätigen",
   "home.shuffle": "Mischen",
   "home.confirmGuess": "Vorschlag: {name}",

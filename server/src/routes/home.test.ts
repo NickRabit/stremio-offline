@@ -204,6 +204,9 @@ const mount = async (options: { libraries?: LibraryRecord[]; deadlineMs?: number
       if (state.suggestionsThrow) throw new Error("the proposals are unavailable");
       return state.suggestions;
     },
+    cinemetaCatalog: async (_addon, type) => type === "movie"
+      ? [1, 3, 5].map((number) => ({ id: `tt${number}`, type, name: `Film ${number}`, poster: "https://img/film.jpg", year: 2025 }))
+      : [2, 4, 6].map((number) => ({ id: `tt${number}`, type, name: `Seriál ${number}` })),
     now: () => state.now,
     homeLookupDeadlineMs: options.deadlineMs,
   };
@@ -246,7 +249,7 @@ test("GET /api/home answers with the whole envelope and private caching", async 
   assert.equal(response.headers.get("cache-control"), "private, no-store");
   const body = await response.json() as { generatedAt: string; rows: Record<string, unknown> };
   assert.equal(typeof body.generatedAt, "string");
-  assert.deepEqual(Object.keys(body.rows).sort(), ["completed", "confirm", "episodes", "favorites", "recent", "resume", "tonight"]);
+  assert.deepEqual(Object.keys(body.rows).sort(), ["cinemeta", "completed", "confirm", "episodes", "favorites", "recent", "resume", "tonight"]);
 });
 
 test("GET /api/home is refused without a session, the way the personal routes refuse", async (t) => {
@@ -397,13 +400,33 @@ test("?rows= names which rows come back and an unknown name is ignored", async (
   t.after(harness.close);
 
   const some = await allRows(harness, ALICE);
-  assert.deepEqual(Object.keys(some).sort(), ["completed", "confirm", "episodes", "favorites", "recent", "resume", "tonight"]);
+  assert.deepEqual(Object.keys(some).sort(), ["cinemeta", "completed", "confirm", "episodes", "favorites", "recent", "resume", "tonight"]);
 
   const filtered = await (await api(harness.base, "/api/home?rows=resume,favorites", ALICE)).json() as { rows: Record<string, unknown> };
   assert.deepEqual(Object.keys(filtered.rows).sort(), ["favorites", "resume"]);
 
   const unknown = await (await api(harness.base, "/api/home?rows=nope", ALICE)).json() as { rows: Record<string, unknown> };
   assert.deepEqual(unknown.rows, {});
+});
+
+test("Cinemeta Home row loads its enabled popular movie and series catalogs", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  harness.addons.push({ key: "cinemeta", manifestUrl: "https://cinemeta/manifest.json", role: "catalog", enabled: true,
+    globalSearch: true, showOnHome: true, addedAt: "", allowedUsers: [ALICE],
+    manifest: { id: "com.linvo.cinemeta", name: "Cinemeta", version: "1", catalogs: [
+      { type: "movie", id: "top" }, { type: "series", id: "top" },
+    ] } } as AddonRecord);
+
+  const first = await (await api(harness.base, "/api/home?rows=cinemeta&shuffle=0", ALICE)).json() as { rows: Record<string, HomeRowView> };
+  const repeated = await (await api(harness.base, "/api/home?rows=cinemeta&shuffle=0", ALICE)).json() as { rows: Record<string, HomeRowView> };
+  const second = await (await api(harness.base, "/api/home?rows=cinemeta&shuffle=1", ALICE)).json() as { rows: Record<string, HomeRowView> };
+  const items = first.rows.cinemeta!.items;
+  assert.equal(items.length, 6);
+  assert.deepEqual(items.map((item) => (item as { type: string }).type), ["movie", "series", "movie", "series", "movie", "series"]);
+  assert.deepEqual(items.map((item) => item.kind), Array(6).fill("discovery"));
+  assert.deepEqual(items.map((item) => item.key), repeated.rows.cinemeta!.items.map((item) => item.key));
+  assert.notDeepEqual(items.map((item) => item.key), second.rows.cinemeta!.items.map((item) => item.key));
 });
 
 test("one row that throws leaves the others ok and carries no total", async (t) => {

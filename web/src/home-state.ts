@@ -2,7 +2,7 @@ import type { HomeCard, HomeResponse, HomeRowId } from "../../server/src/home";
 
 /** Every shelf the page draws, in the page's order. `confirm` is not a shelf: it is a count
  *  in the heading, and Home fetches it only so that count is available. */
-export const HOME_ROWS = ["resume", "favorites", "tonight", "episodes", "completed", "recent", "confirm"] as const satisfies readonly HomeRowId[];
+export const HOME_ROWS = ["resume", "favorites", "tonight", "cinemeta", "episodes", "completed", "recent", "confirm"] as const satisfies readonly HomeRowId[];
 
 /** The rows one account loads. `confirm` is administrator-only, so an ordinary account's load
  *  omits it and its global empty state must not wait for a row that will never answer. */

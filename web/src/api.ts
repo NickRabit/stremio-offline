@@ -200,7 +200,7 @@ export const api = {
   forgetProgress: (key: string) => request<void>(`/api/progress/${encodeURIComponent(key)}`, { method: "DELETE" }),
   /** Forgets every key a merged Home card stands for in one owner-scoped write. */
   forgetManyProgress: (keys: string[]) => request<void>("/api/progress/forget", { method: "POST", body: JSON.stringify({ keys }) }),
-  /** Home's rows. Naming rows re-requests only those; a shuffle seed reorders the Tonight row.
+  /** Home's rows. Naming rows re-requests only those; a shuffle seed reorders a supported row.
    *  The seed cycles 0..99 so one long session keeps the server's per-day order reachable. */
   home: (rows?: HomeRowId[], options?: { shuffle?: number }) => {
     const query = q({

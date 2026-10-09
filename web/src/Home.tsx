@@ -54,7 +54,7 @@ export function Home({ jobs, admin, onShowDownloads, onAction, rows, shape, onTo
   onError: (error: unknown) => void;
 }) {
   const [busy, setBusy] = useState<ReadonlySet<string>>(new Set());
-  const shuffleCount = useRef(0);
+  const shuffleCount = useRef({ tonight: 0, cinemeta: 0 });
   const items = homeQueue(jobs);
   const attention = attentionCount(jobs);
   const cards = items.filter((job) => queueGroup(job) === "attention");
@@ -88,13 +88,13 @@ export function Home({ jobs, admin, onShowDownloads, onAction, rows, shape, onTo
     void api.forgetManyProgress(card.forgetKeys).then(onForgotten, onError);
   };
   const actions: HomeCardActions = { play: onPlay, open: onOpenCatalogue, reveal: onReveal, forget };
-  const shuffle = () => { shuffleCount.current += 1; onShuffle("tonight", shuffleCount.current); };
+  const shuffle = (row: "tonight" | "cinemeta") => { shuffleCount.current[row] += 1; onShuffle(row, shuffleCount.current[row]); };
 
   const summary = [t("home.downloadsSummary", { count: items.length }), attention > 0 ? t("home.attention", { count: attention }) : ""].filter(Boolean).join(" · ");
   return <>
     {heading}
     {confirmError}
-    {homeRowsFor(admin).filter((row) => row !== "confirm").map((row) => <HomeShelf key={row} row={row} state={rows[row]} shape={shape} actions={actions} onRetry={onRetry} onShowAll={onShowAll} onShuffle={row === "tonight" ? shuffle : undefined}/>)}
+    {homeRowsFor(admin).filter((row) => row !== "confirm").map((row) => <HomeShelf key={row} row={row} state={rows[row]} shape={shape} actions={actions} onRetry={onRetry} onShowAll={onShowAll} onShuffle={row === "tonight" || row === "cinemeta" ? () => shuffle(row) : undefined}/>)}
     {items.length > 0 && <section className="home-row">
       <div className="subhead">
         <div className="home-head"><h3>{t("home.downloads")}</h3><span className="count">{summary}</span></div>
