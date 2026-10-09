@@ -106,6 +106,11 @@ const seedHash = (value: string): number => {
     hash ^= value.charCodeAt(index);
     hash = Math.imul(hash, 0x01000193);
   }
+  hash ^= hash >>> 16;
+  hash = Math.imul(hash, 0x7feb352d);
+  hash ^= hash >>> 15;
+  hash = Math.imul(hash, 0x846ca68b);
+  hash ^= hash >>> 16;
   return hash >>> 0;
 };
 
