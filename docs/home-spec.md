@@ -26,7 +26,7 @@ within about 800px of the screen, and the carousels revealed together go out in
 one request separate from the built-in rows, so a slow add-on never delays
 Continue watching. The server remembers every catalog answer for 20 minutes and
 serves an older one (up to 12 hours) at once while it refreshes it in the
-background; it asks one add-on at most four catalogs at a time. A first lookup
+background; it asks one add-on at most six catalogs at a time. A first lookup
 that misses the 1.5 s deadline keeps running and fills the memory, the row comes
 back partial, and the client asks again after 2.5 s (three times at most).
 Opening Home fetches every carousel of the account in the background, and a

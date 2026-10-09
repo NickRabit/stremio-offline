@@ -28,12 +28,15 @@ export function homeCatalogExtras(definition: CatalogDefinition): Record<string,
   const requiredNames = Array.isArray(rawRequired)
     ? rawRequired.filter((name): name is string => typeof name === "string")
     : typeof rawRequired === "string" ? [rawRequired] : [];
-  const required = new Set([...requiredNames, ...(definition.extra ?? []).filter((extra) => extra.isRequired).map((extra) => extra.name)]);
+  // A remote manifest is not validated: anything but a list of extras declares none.
+  const declared = Array.isArray(definition.extra) ? definition.extra.filter((extra) => extra && typeof extra === "object") : [];
+  const required = new Set([...requiredNames, ...declared.filter((extra) => extra.isRequired).map((extra) => extra.name)]);
   const extras: Record<string, string | number> = {};
   for (const extra of required) {
     if (extra === "skip") extras.skip = 0;
     else {
-      const option = definition.extra?.find((candidate) => candidate.name === extra)?.options?.[0];
+      const options = declared.find((candidate) => candidate.name === extra)?.options;
+      const option = Array.isArray(options) ? options[0] : undefined;
       if (option) extras[extra] = option;
     }
   }
@@ -68,14 +71,15 @@ export class HomeCatalogCache {
   private readonly maxEntries: number;
   private readonly perAddon: number;
   private readonly now: () => number;
-  private visitedAt: number | undefined;
+  private visitedAt: number;
 
   constructor(private readonly fetch: HomeCatalogFetch = (addon, type, id, extras) => catalogWithExtras(addon, type, id, extras), options: HomeCatalogCacheOptions = {}) {
     this.freshMs = options.freshMs ?? 20 * 60_000;
     this.keepMs = options.keepMs ?? 12 * 60 * 60_000;
     this.maxEntries = options.maxEntries ?? 400;
-    this.perAddon = options.perAddon ?? 4;
+    this.perAddon = options.perAddon ?? 6;
     this.now = options.now ?? Date.now;
+    this.visitedAt = this.now();
   }
 
   /** The manifest URL carries an addon's configuration, so it names the content; the key alone
@@ -137,7 +141,7 @@ export class HomeCatalogCache {
   /** The periodic warm-up keeps going only while somebody uses Home; an instance nobody opens
    *  does not ask its addons every few minutes. A fresh start counts as recent. */
   get idle(): boolean {
-    return this.visitedAt !== undefined && this.now() - this.visitedAt > this.keepMs;
+    return this.now() - this.visitedAt > this.keepMs;
   }
 
   /** How often a warm-up is worth running: every shelf has just gone stale by then. */

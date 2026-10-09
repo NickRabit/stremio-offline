@@ -468,8 +468,10 @@ test("a catalogue that misses the deadline comes back partial and the next reque
   const first = await (await api(harness.base, `/api/home?rows=${movie}`, ALICE)).json() as { rows: Record<string, HomeRowView> };
   assert.equal(first.rows[movie]!.partial, true);
   assert.deepEqual(first.rows[movie]!.items, []);
+  // Opening Home asked for the shelf below as well, though this request did not name it.
+  assert.deepEqual(harness.catalogCalls.map((call) => `${call.type}:${call.catalogId}`).sort(), ["movie:top", "series:top"]);
 
-  // The lookup kept running past the deadline, and opening Home also fetched the shelf below.
+  // The lookup kept running past the deadline.
   await new Promise((resolve) => setTimeout(resolve, 80));
   const second = await (await api(harness.base, `/api/home?rows=${movie},${series}`, ALICE)).json() as { rows: Record<string, HomeRowView> };
   assert.equal(second.rows[movie]!.partial, undefined);

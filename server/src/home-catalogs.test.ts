@@ -84,6 +84,9 @@ test("the periodic warm-up stops once nobody has opened Home for a while", () =>
   let clock = 0;
   const cache = new HomeCatalogCache(async () => [], { keepMs: 100, now: () => clock });
   assert.equal(cache.idle, false);
+  clock = 500;
+  assert.equal(cache.idle, true, "an instance whose Home is never opened goes quiet too");
+  clock = 0;
   cache.visited([]);
   clock = 50;
   assert.equal(cache.idle, false);
@@ -104,4 +107,11 @@ test("Home's targets follow the addon switches and the chosen feeds", () => {
 test("required extras take skip zero and the first declared option", () => {
   assert.deepEqual(homeCatalogExtras({ type: "movie", id: "x", extraRequired: ["skip"],
     extra: [{ name: "genre", isRequired: true, options: ["Drama", "Comedy"] }, { name: "search" }] }), { skip: 0, genre: "Drama" });
+});
+
+test("a manifest whose extras are not a list declares none, rather than failing the warm-up", () => {
+  const broken = { type: "movie", id: "x", extra: "search" } as unknown as HomeCatalogTarget["definition"];
+  assert.deepEqual(homeCatalogExtras(broken), {});
+  const cache = new HomeCatalogCache(async () => []);
+  assert.doesNotThrow(() => cache.warm([{ addon: addon("a", []), definition: broken }]));
 });
