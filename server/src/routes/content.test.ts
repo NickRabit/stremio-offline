@@ -31,6 +31,8 @@ interface Calls {
   relocated: Array<{ key: string; nextKey: string }>;
   thumbAsked: string[];
   entriesAsked: number;
+  /** Whether each entries read accepted the held walk. */
+  entriesStale: boolean[];
   artworkAsked: string[];
   swept: number;
   scheduledFolder: string[];
@@ -78,7 +80,7 @@ const makeRoot = () => mkdtemp(path.join(tmpdir(), "stremio-content-"));
  *  instance over fake collaborators that record what they were asked to do. The filesystem
  *  is real: the resolver, the browse walk and the name checks are module singletons. */
 const mount = async (libraries: LibraryRecord[], entries: LibraryEntry[] = [], activeItems: () => string[] = () => [], state: LibraryState = {}): Promise<Harness> => {
-  const calls: Calls = { browsed: [], rootBrowses: 0, deleted: [], transfers: [], relocated: [], thumbAsked: [], entriesAsked: 0, artworkAsked: [], swept: 0, scheduledFolder: [], scheduledFile: [], rootPrewarm: [], browseMetaPrewarm: [] };
+  const calls: Calls = { browsed: [], rootBrowses: 0, deleted: [], transfers: [], relocated: [], thumbAsked: [], entriesAsked: 0, entriesStale: [], artworkAsked: [], swept: 0, scheduledFolder: [], scheduledFile: [], rootPrewarm: [], browseMetaPrewarm: [] };
   const deps: ContentDeps = {
     store: { libraries: () => libraries, users: () => [admin, ordinary] } as unknown as Store,
     needsSetup: () => false,
@@ -98,7 +100,7 @@ const mount = async (libraries: LibraryRecord[], entries: LibraryEntry[] = [], a
     galleryArtwork: () => undefined,
     healthOf: (record) => ({ unreachable: false, readOnly: false, realRoot: record.root, caseInsensitive: false }),
     invalidateLibrary: () => undefined,
-    libraryEntries: async () => { calls.entriesAsked += 1; return entries; },
+    libraryEntries: async (read?: { stale?: boolean }) => { calls.entriesAsked += 1; calls.entriesStale.push(read?.stale === true); return entries; },
     libraryKey: (value) => {
       const parsed = parseLibraryPath(value);
       if (parsed) return libraryPath(parsed.libraryId, parsed.relative);
@@ -637,6 +639,7 @@ test("GET /api/library/thumb answers 404 for a key whose artwork is missing", as
 
   assert.equal(response.status, 404);
   assert.equal(harness.calls.entriesAsked, 1);
+  assert.deepEqual(harness.calls.entriesStale, [true], "a mosaic tile never waits for a new walk of every library");
   assert.deepEqual(harness.calls.artworkAsked, ["lib_00000001/Films"], "the key is looked up among the library entries");
 });
 

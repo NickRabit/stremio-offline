@@ -30,7 +30,7 @@ export interface ContentDeps extends RouteContext {
   galleryArtwork(key: string, index: number): string | undefined;
   healthOf(library: LibraryRecord): LibraryHealth;
   invalidateLibrary(): void;
-  libraryEntries(): Promise<LibraryEntry[]>;
+  libraryEntries(read?: { stale?: boolean }): Promise<LibraryEntry[]>;
   libraryKey(value: string): string;
   libraryPathBusy(keys: string[]): Promise<string | undefined>;
   libraryRootBrowse(viewer: Viewer, options?: { prewarm?: boolean }): Promise<{ path: string; items: unknown[]; total: number; pending: boolean }>;
@@ -331,7 +331,9 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     else if (dirPath) art = await locateFolderArtwork(dirPath, shape);
     else {
       const selected = await keyOf(req.query.key);
-      const entry = selected ? (await libraryEntries()).find((item) => item.key === selected) : undefined;
+      // A mosaic tile only draws, so it takes the walk the page was built from rather than
+      // waiting for a new one of every library each time the last has aged out.
+      const entry = selected ? (await libraryEntries({ stale: true })).find((item) => item.key === selected) : undefined;
       art = entry && await locateArtwork(entry, shape);
     }
     if (!art) return res.status(404).end();
