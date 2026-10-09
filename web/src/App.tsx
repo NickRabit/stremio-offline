@@ -183,7 +183,7 @@ export function App() {
     // because a thumb that drifts twenty pixels upward did not mean to ask for it.
     const next = top <= 32 ? false
       : travel > 56 && top > 80 ? true
-      : revealOnPull && travel < -64 ? false
+      : revealOnPull && travel < -Math.max(120, element.clientHeight * 0.18) ? false
       : compact;
     const header = element.closest(".detail-panel")?.querySelector(".hero");
     const headerHeight = header?.getBoundingClientRect().height ?? 200;
