@@ -217,7 +217,7 @@ export function App() {
   const [languages, setLanguages] = useState<Array<{ code: string; name: string }>>([]);
   const [inspection, setInspection] = useState<Inspection | null>(null);
   const [session, setSession] = useState<Session | null | undefined>(undefined);
-  const home = useHome({ active: view === "home", account: session?.username ?? null, admin: session?.role === "admin", playerOpen });
+  const home = useHome({ active: view === "home", account: session?.username ?? null, admin: session?.role === "admin", addons, playerOpen });
   const [resumePreview, setResumePreview] = useState<BrowseResult | null>(null);
   const [favoritePreview, setFavoritePreview] = useState<BrowseResult | null>(null);
   const [browse, setBrowse] = useState<BrowseResult | null>(null);
@@ -2031,7 +2031,7 @@ export function App() {
       <MoreMenu items={moreItems} badge={followingBadge} active={moreActive} onSignOut={signOut}/>
     </nav><div className="sidebar-bottom"><button className="sidebar-toggle" onClick={toggleSidebar} title={t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")} aria-label={t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")}>{sidebarCollapsed ? <PanelLeftOpen/> : <PanelLeftClose/>}<span>{t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")}</span></button><div className="addon-status"><small>{t("app.activeAddons")}</small><strong>{addons.filter((a) => a.enabled).length}</strong><span>{t("app.catalogsAndSources")}</span></div></div></aside>
     <main className={`view-${view}`}>
-      {view === "home" && !restricted && <Home jobs={downloads} libraries={libraries} onShowDownloads={() => openView("downloads")} onAction={homeAction} admin={admin}
+      {view === "home" && !restricted && <Home jobs={downloads} addons={addons} libraries={libraries} onShowDownloads={() => openView("downloads")} onAction={homeAction} admin={admin}
         rows={home.rows} shape={settings.homeTileShape} onToggleShape={() => void toggleShape("homeTileShape")}
         onRetry={(row) => home.refresh([row])} onShowAll={homeShowAll} onPlay={homePlay} onOpenCatalogue={homeOpen}
         onShuffle={(row, shuffle) => home.refresh([row], { shuffle })}

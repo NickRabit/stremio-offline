@@ -5,6 +5,7 @@ import { AppError } from "../errors.js";
 import { log } from "../logger.js";
 import { assertStillAdmin } from "../roles.js";
 import { normalizeDownloadSettings } from "../naming.js";
+import { homeCatalogSelectionKey } from "../home.js";
 import { essentialAddon, publicAddon, publicAddonRestricted } from "../security.js";
 import type { AddonRecord, AddonRole } from "../types.js";
 import { bumpPermissions, dormantGrants, emptyUserData, findUserById, usersToBump } from "../users.js";
@@ -92,7 +93,7 @@ export function registerAddonsRoutes(app: express.Application, deps: AddonsDeps)
   app.get("/api/addons/:key/export", asyncRoute(async (req, res) => {
     const addon = store.addons().find((a) => a.key === req.params.key);
     if (!addon) throw new AppError("The addon was not found.", "err.addonNotFound");
-    res.json({ manifestUrl: addon.manifestUrl, role: addon.role, enabled: addon.enabled, globalSearch: addon.globalSearch, addedAt: addon.addedAt, downloadSettings: addon.downloadSettings, manifest: addon.manifest });
+    res.json({ manifestUrl: addon.manifestUrl, role: addon.role, enabled: addon.enabled, globalSearch: addon.globalSearch, showOnHome: addon.showOnHome !== false, homeCatalogs: addon.homeCatalogs, addedAt: addon.addedAt, downloadSettings: addon.downloadSettings, manifest: addon.manifest });
   }));
   app.post("/api/addons/refresh", asyncRoute(async (req, res) => {
     const actor = currentUser(req);
@@ -140,6 +141,11 @@ export function registerAddonsRoutes(app: express.Application, deps: AddonsDeps)
       throw new AppError("The list of accounts has to be an array.", "err.invalidRequest", 400);
     }
     const requestedUsers = req.body.allowedUsers === undefined ? undefined : (req.body.allowedUsers as unknown[]).map(String);
+    if (req.body.homeCatalogs !== undefined && !Array.isArray(req.body.homeCatalogs)) {
+      throw new AppError("The Home catalogue selection has to be a list.", "err.invalidRequest", 400);
+    }
+    const requestedHomeCatalogs = req.body.homeCatalogs === undefined ? undefined
+      : [...new Set((req.body.homeCatalogs as unknown[]).filter((value): value is string => typeof value === "string"))];
     // Checked here as well as inside the write, so a refused list never costs a manifest fetch
     // and answers with its own reason; the write repeats it against the state it lands on.
     if (requestedUsers !== undefined) {
@@ -188,6 +194,10 @@ export function registerAddonsRoutes(app: express.Application, deps: AddonsDeps)
       if (typeof req.body.globalSearch === "boolean") addon.globalSearch = req.body.globalSearch;
       if (typeof req.body.showInContinueWatching === "boolean") addon.showInContinueWatching = req.body.showInContinueWatching;
       if (typeof req.body.showOnHome === "boolean") addon.showOnHome = req.body.showOnHome;
+      if (requestedHomeCatalogs !== undefined) {
+        const declared = new Set((reloaded?.manifest ?? addon.manifest).catalogs?.map((catalog) => homeCatalogSelectionKey(catalog.type, catalog.id)) ?? []);
+        addon.homeCatalogs = requestedHomeCatalogs.filter((key) => declared.has(key));
+      }
       if (downloadSettings) addon.downloadSettings = downloadSettings;
       if (allowedUsers !== undefined) addon.allowedUsers = allowedUsers;
       if (bumped.length) state.users = bumpPermissions(state.users ?? [], bumped);

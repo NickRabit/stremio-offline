@@ -3,20 +3,21 @@ import { HomeCard, type HomeCardActions } from "./HomeCard";
 import { showAllTarget, type ShowAllTarget } from "./home-cards";
 import { t, type Key } from "./i18n";
 import type { HomeRowState } from "./home-state";
-import type { HomeRowId } from "../../server/src/home";
+import type { BuiltinHomeRowId, HomeRowId } from "../../server/src/home";
 import type { TileShape } from "./types";
 
-const TITLE: Record<HomeRowId, Key> = {
+const TITLE: Record<BuiltinHomeRowId, Key> = {
   resume: "home.continue", episodes: "home.newEpisodes", completed: "home.readyToPlay",
-  recent: "home.recent", tonight: "home.tonight", cinemeta: "home.cinemeta", favorites: "home.favorites", confirm: "home.toConfirm",
+  recent: "home.recent", tonight: "home.tonight", favorites: "home.favorites", confirm: "home.toConfirm",
 };
 const SHOW_ALL: Partial<Record<HomeRowId, Key>> = { favorites: "home.openLibrary", episodes: "home.openFollowing" };
 const SKELETON = [0, 1, 2, 3];
 
 /** One media shelf: its heading, its Show all, and either its cards, a first-load skeleton or
  *  its own error line with a retry. A row with nothing in it and no failure is not drawn. */
-export function HomeShelf({ row, state, shape, actions, onRetry, onShowAll, onShuffle }: {
+export function HomeShelf({ row, title, state, shape, actions, onRetry, onShowAll, onShuffle }: {
   row: HomeRowId;
+  title?: string;
   state: HomeRowState | undefined;
   shape: TileShape;
   actions: HomeCardActions;
@@ -27,13 +28,13 @@ export function HomeShelf({ row, state, shape, actions, onRetry, onShowAll, onSh
 }) {
   if (!state || state.status === "idle") return null;
   const empty = state.items.length === 0;
-  if (state.status === "ok" && empty) return null;
+  if (state.status === "ok" && empty && !state.partial) return null;
   const target = showAllTarget(row, state.items, state.hasMore);
 
   return <section className="home-row" data-row={row}>
     <div className="subhead">
-      <div className="home-head"><h3>{t(TITLE[row])}</h3>{row === "confirm" && state.total != null && <span className="count">{state.total}</span>}</div>
-      {(row === "tonight" || row === "cinemeta") && onShuffle && <button className="home-shuffle" aria-label={t("home.shuffle")} title={t("home.shuffle")} onClick={onShuffle}><Shuffle/></button>}
+      <div className="home-head"><h3>{title ?? (row in TITLE ? t(TITLE[row as BuiltinHomeRowId]) : row)}</h3>{row === "confirm" && state.total != null && <span className="count">{state.total}</span>}</div>
+      {(row === "tonight" || row.startsWith("catalog:") ) && onShuffle && <button className="home-shuffle" aria-label={t("home.shuffle")} title={t("home.shuffle")} onClick={onShuffle}><Shuffle/></button>}
       {target && <button className="resume-show-all" onClick={() => onShowAll(target)}>{t(SHOW_ALL[row] ?? "library.showAll")}<ChevronRight/></button>}
     </div>
     {state.status === "error"

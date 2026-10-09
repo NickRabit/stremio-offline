@@ -3,12 +3,12 @@ import type { ArtShape } from "../artwork.js";
 import { messageKeyOf } from "../errors.js";
 import type { NewEpisode } from "../follows.js";
 import { images } from "../images.js";
-import { allowedAddons, catalog } from "../addons.js";
+import { allowedAddons, catalogWithExtras } from "../addons.js";
 import {
-  HOME_CANDIDATES, HOME_LOOKUP_DEADLINE_MS, HOME_MARKER_LIMIT, HOME_ROW_LIMIT,
-  boundCards, mergeResume,
+  HOME_BUILTIN_ROWS, HOME_CANDIDATES, HOME_LOOKUP_DEADLINE_MS, HOME_MARKER_LIMIT, HOME_ROW_LIMIT,
+  boundCards, homeCatalogRowId, homeCatalogSelectionKey, mergeResume,
   type HomeCard, type HomeResponse, type HomeRow, type HomeRowError, type HomeRowId,
-  type ResumeCatalogueItem, type ResumeFileItem,
+  type BuiltinHomeRowId, type ResumeCatalogueItem, type ResumeFileItem,
 } from "../home.js";
 import { libraryFor, libraryPath, libraryVisible, parseLibraryPath, showsInFavorites, showsOnHome, type LibraryRecord, type Viewer } from "../libraries.js";
 import { isPathWithin, type BrowseItem } from "../library.js";
@@ -71,7 +71,9 @@ export interface HomeDeps extends RouteContext {
   /** The first-seen index: the times this app met each library file, not the file's own dates. */
   seen: LibrarySeenStore;
   suggestionRows(libraryId?: string): Promise<HomeSuggestion[]>;
-  /** Injectable for route tests; production reads the selected catalog from Cinemeta. */
+  /** Injectable for route tests; production reads the selected catalog from its addon. */
+  homeCatalog?(addon: import("../types.js").AddonRecord, type: string, catalogId: string, extras: Record<string, string | number>): Promise<MetaItem[]>;
+  /** @deprecated Kept as a test adapter for the Cinemeta-only row during migration. */
   cinemetaCatalog?(addon: import("../types.js").AddonRecord, type: string, catalogId: string): Promise<MetaItem[]>;
   /** Injected so the tonight seed is testable without a real date. */
   now?: () => number;
@@ -79,17 +81,17 @@ export interface HomeDeps extends RouteContext {
   homeLookupDeadlineMs?: number;
 }
 
-const ALL_ROWS: HomeRowId[] = ["resume", "completed", "favorites", "recent", "episodes", "tonight", "cinemeta", "confirm"];
+const ALL_ROWS: BuiltinHomeRowId[] = [...HOME_BUILTIN_ROWS];
 
 /** The row asks the index for more than it draws, so a file that vanished since the walk does
  *  not shorten it, and it never reads the disk for more than this many keys. */
 const RECENT_CANDIDATES = 60;
 
-const requestedRows = (raw: unknown): HomeRowId[] => {
-  if (raw === undefined) return ALL_ROWS;
+const requestedRows = (raw: unknown, catalogRows: Map<HomeRowId, { addon: import("../types.js").AddonRecord; definition: import("../types.js").CatalogDefinition }>): HomeRowId[] => {
+  if (raw === undefined) return [...ALL_ROWS, ...catalogRows.keys()];
   const value = Array.isArray(raw) ? raw.join(",") : String(raw);
   const wanted = new Set(value.split(",").map((entry) => entry.trim()).filter(Boolean));
-  return ALL_ROWS.filter((id) => wanted.has(id));
+  return [...ALL_ROWS.filter((id) => wanted.has(id)), ...[...catalogRows.keys()].filter((id) => wanted.has(id))];
 };
 
 const rowError = (error: unknown): HomeRowError => ({
@@ -419,60 +421,63 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
     return { status: "ok", items: cards, hasMore: rows.length > HOME_ROW_LIMIT, total: rows.length };
   };
 
-  const cinemetaRow = async (req: express.Request, viewer: Viewer): Promise<HomeRow> => {
-    const addon = allowedAddons(store.addons(), viewer).find((entry) =>
-      entry.enabled && entry.role !== "source" && entry.showOnHome !== false
-      && entry.manifest.id === "com.linvo.cinemeta");
-    if (!addon) return { status: "ok", items: [], hasMore: false };
-    const definitions = (["movie", "series"] as const).filter((type) =>
-      addon.manifest.catalogs?.some((definition) => definition.type === type && definition.id === "top"));
-    const fetchCatalog = deps.cinemetaCatalog ?? catalog;
-    const catalogues = Promise.allSettled(definitions.map((type) => fetchCatalog(addon, type, "top")));
+  const addonCatalogRows = (viewer: Viewer) => {
+    const rows = new Map<HomeRowId, { addon: import("../types.js").AddonRecord; definition: import("../types.js").CatalogDefinition }>();
+    for (const addon of allowedAddons(store.addons(), viewer)) {
+      if (!addon.enabled || addon.role === "source" || addon.showOnHome === false) continue;
+      for (const definition of addon.manifest.catalogs ?? []) {
+        if (addon.homeCatalogs !== undefined && !addon.homeCatalogs.includes(homeCatalogSelectionKey(definition.type, definition.id))) continue;
+        const row = homeCatalogRowId(addon.key, definition.type, definition.id);
+        if (!rows.has(row)) rows.set(row, { addon, definition });
+      }
+    }
+    return rows;
+  };
+
+  const addonCatalogRow = async (req: express.Request, viewer: Viewer, rowId: HomeRowId,
+    addon: import("../types.js").AddonRecord, definition: import("../types.js").CatalogDefinition): Promise<HomeRow> => {
+    const required = new Set([...(definition.extraRequired ?? []), ...(definition.extra ?? []).filter((extra) => extra.isRequired).map((extra) => extra.name)]);
+    const extras: Record<string, string | number> = {};
+    for (const extra of required) {
+      if (extra === "skip") extras.skip = 0;
+      else {
+        const option = definition.extra?.find((candidate) => candidate.name === extra)?.options?.[0];
+        if (option) extras[extra] = option;
+      }
+    }
+    const fetch = deps.homeCatalog ?? (deps.cinemetaCatalog
+      ? (entry: import("../types.js").AddonRecord, type: string, id: string) => deps.cinemetaCatalog!(entry, type, id)
+      : (entry: import("../types.js").AddonRecord, type: string, id: string, values: Record<string, string | number>) => catalogWithExtras(entry, type, id, values));
     let deadline: ReturnType<typeof setTimeout> | undefined;
-    const results = await Promise.race([
-      catalogues,
+    const response = await Promise.race([
+      fetch(addon, definition.type, definition.id, extras),
       new Promise<undefined>((resolve) => { deadline = setTimeout(() => resolve(undefined), homeLookupDeadlineMs); }),
     ]);
     if (deadline) clearTimeout(deadline);
-    if (!results) return { status: "ok", items: [], hasMore: false, partial: true };
-    const groups: HomeCard[][] = [];
-    let partial = false;
-    results.forEach((result, index) => {
-      if (result.status === "rejected") { partial = true; return; }
-      const type = definitions[index]!;
-      const group: HomeCard[] = [];
-      for (const meta of result.value) {
-        if (!meta.id || !meta.name) continue;
-        const rewritten = images.rewriteMeta(meta);
-        group.push({ kind: "discovery", key: `${type}:${meta.id}`, type, id: meta.id, name: meta.name,
-          title: meta.name, ...(rewritten.poster ? { poster: rewritten.poster } : {}),
-          ...(rewritten.background ? { wide: rewritten.background } : {}),
-          ...(meta.year ? { year: String(meta.year) } : meta.releaseInfo ? { year: meta.releaseInfo } : {}) });
-      }
-      groups.push(group);
-    });
-    const utcDate = new Date(now()).toISOString().slice(0, 10);
-    const seed = `${viewer.id}:${utcDate}:${shuffleOf(req.query.shuffle)}`;
-    for (const group of groups) {
-      group.sort((a, b) => seedHash(`${seed}:${a.key}`) - seedHash(`${seed}:${b.key}`) || a.key.localeCompare(b.key));
+    if (!response) return { status: "ok", items: [], hasMore: false, partial: true };
+    const seed = `${viewer.id}:${new Date(now()).toISOString().slice(0, 10)}:${rowId}:${shuffleOf(req.query.shuffle)}`;
+    const cards: HomeCard[] = [];
+    for (const meta of response) {
+      if (!meta.id || !meta.name) continue;
+      const rewritten = images.rewriteMeta(meta);
+      cards.push({ kind: "discovery", key: `${definition.type}:${meta.id}`, type: definition.type,
+        id: meta.id, name: meta.name, title: meta.name, addonKey: addon.key,
+        ...(rewritten.poster ? { poster: rewritten.poster } : {}),
+        ...(rewritten.background ? { wide: rewritten.background } : {}),
+        ...(meta.year ? { year: String(meta.year) } : meta.releaseInfo ? { year: meta.releaseInfo } : {}) });
     }
-    const interleaved: HomeCard[] = [];
-    for (let index = 0; groups.some((group) => index < group.length); index += 1) {
-      for (const group of groups) if (group[index]) interleaved.push(group[index]!);
-    }
-    const unique = [...new Map(interleaved.map((item) => [item.key, item])).values()];
-    const bounded = boundCards(unique);
-    return { status: "ok", items: bounded.items, hasMore: bounded.hasMore, ...(partial ? { partial: true } : {}) };
+    cards.sort((a, b) => seedHash(`${seed}:${a.key}`) - seedHash(`${seed}:${b.key}`) || a.key.localeCompare(b.key));
+    const bounded = boundCards(cards);
+    return { status: "ok", items: bounded.items, hasMore: bounded.hasMore };
   };
 
-  const builders: Record<HomeRowId, (req: express.Request, viewer: Viewer) => Promise<HomeRow>> = {
+  const builders: Record<BuiltinHomeRowId, (req: express.Request, viewer: Viewer) => Promise<HomeRow>> = {
     resume: (req) => resumeRow(req),
     completed: completedRow,
     favorites: favoritesRow,
     recent: (_req, viewer) => recentRow(viewer),
     episodes: (req, viewer) => Promise.resolve(episodesRow(req, viewer)),
     tonight: tonightRow,
-    cinemeta: (req, viewer) => cinemetaRow(req, viewer),
     confirm: (_req, viewer) => Promise.resolve(confirmRow(viewer)),
   };
 
@@ -482,9 +487,13 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
     const viewer = viewerOf(currentUser(req));
     res.set("Cache-Control", "private, no-store");
     const rows: Partial<Record<HomeRowId, HomeRow>> = {};
-    await Promise.all(requestedRows(req.query.rows).map(async (id) => {
+    const catalogRows = addonCatalogRows(viewer);
+    await Promise.all(requestedRows(req.query.rows, catalogRows).map(async (id) => {
       try {
-        rows[id] = await builders[id](req, viewer);
+        const catalogRow = catalogRows.get(id);
+        rows[id] = catalogRow
+          ? await addonCatalogRow(req, viewer, id, catalogRow.addon, catalogRow.definition)
+          : await builders[id as BuiltinHomeRowId](req, viewer);
       } catch (error) {
         rows[id] = { status: "error", error: rowError(error), items: [], hasMore: false };
       }

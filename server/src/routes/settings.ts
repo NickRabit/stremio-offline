@@ -83,6 +83,11 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
         const addon = await loadAddon(saved.manifestUrl, saved.role);
         addon.enabled = saved.enabled;
         addon.globalSearch = saved.globalSearch;
+        addon.showOnHome = saved.showOnHome !== false;
+        if (saved.homeCatalogs !== undefined) {
+          const known = new Set(addon.manifest.catalogs?.map((catalog) => `${encodeURIComponent(catalog.type)}:${encodeURIComponent(catalog.id)}`) ?? []);
+          addon.homeCatalogs = saved.homeCatalogs.filter((key) => known.has(key));
+        }
         addon.addedAt = saved.addedAt;
         addon.downloadSettings = saved.downloadSettings;
         return addon;

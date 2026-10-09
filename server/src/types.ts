@@ -20,6 +20,8 @@ export interface AddonRecord {
   showInContinueWatching?: boolean;
   /** Off leaves this addon's catalogue titles off Home, in every shelf, while the stored data stays. */
   showOnHome?: boolean;
+  /** Absent means every declared catalogue feed; a list opts into only these type/id pairs. */
+  homeCatalogs?: string[];
   /** The users who may use this addon. Absent or empty means administrators
    *  only: an addon installed later is unavailable until somebody says
    *  otherwise, which is the safe direction for a list whose failure mode is

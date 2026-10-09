@@ -1,13 +1,15 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 import { emptyHomeRows, homeReducer, homeRowsFor, type HomeRows } from "./home-state";
 import type { HomeRowId } from "../../server/src/home";
+import type { Addon } from "./types";
 
 /** Home's media rows, wired to `GET /api/home`. Each call names its rows, so a retry touches
  *  only the row that failed; an answer only lands on the request still current for it. */
-export function useHome({ active, account, admin, playerOpen }: { active: boolean; account: string | null; admin: boolean; playerOpen: boolean }) {
+export function useHome({ active, account, admin, addons, playerOpen }: { active: boolean; account: string | null; admin: boolean; addons: Addon[]; playerOpen: boolean }) {
   const [rows, setRows] = useState<HomeRows>(emptyHomeRows);
   const request = useRef(0);
+  const allRows = useMemo(() => homeRowsFor(admin, addons), [admin, addons]);
 
   const refresh = useCallback((ids: readonly HomeRowId[], options?: { shuffle?: number }) => {
     if (!ids.length) return;
@@ -20,7 +22,7 @@ export function useHome({ active, account, admin, playerOpen }: { active: boolea
     );
   }, []);
 
-  const full = useCallback(() => refresh(homeRowsFor(admin)), [admin, refresh]);
+  const full = useCallback(() => refresh(allRows), [allRows, refresh]);
 
   // A sign-out or an account switch discards every row and any answer still on its way.
   useEffect(() => { request.current += 1; setRows(emptyHomeRows()); }, [account]);

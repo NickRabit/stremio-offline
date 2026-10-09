@@ -8,7 +8,13 @@ export const HOME_MARKER_LIMIT = 20;
 export const HOME_LOOKUP_DEADLINE_MS = 1500;
 export const HOME_FORGET_LIMIT = 50;
 
-export type HomeRowId = "resume" | "completed" | "favorites" | "recent" | "episodes" | "tonight" | "cinemeta" | "confirm";
+export type BuiltinHomeRowId = "resume" | "completed" | "favorites" | "recent" | "episodes" | "tonight" | "confirm";
+export type HomeRowId = BuiltinHomeRowId | `catalog:${string}:${string}:${string}` | (string & {});
+
+export const HOME_BUILTIN_ROWS: readonly BuiltinHomeRowId[] = ["resume", "completed", "favorites", "recent", "episodes", "tonight", "confirm"];
+export const homeCatalogSelectionKey = (type: string, id: string) => `${encodeURIComponent(type)}:${encodeURIComponent(id)}`;
+export const homeCatalogRowId = (addonKey: string, type: string, id: string): HomeRowId =>
+  `catalog:${encodeURIComponent(addonKey)}:${encodeURIComponent(type)}:${encodeURIComponent(id)}`;
 
 export interface HomeProgress { position: number; duration: number }
 
@@ -29,7 +35,7 @@ export type HomeCard =
   | { kind: "episode"; key: string; followId: string; type: string; metaId: string; name: string;
       poster?: string; season: number; episode: number; title?: string; released: string }
   | { kind: "discovery"; key: string; type: string; id: string; name: string; title: string;
-      poster?: string; wide?: string; year?: string }
+      poster?: string; wide?: string; year?: string; addonKey?: string }
   | { kind: "tonight"; key: string; path: string; itemKind: "file" | "folder"; label: string;
       year?: string; poster?: string; wide?: string; libraryId: string }
   | { kind: "confirm"; key: string; libraryId: string; library: string; label: string;

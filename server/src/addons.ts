@@ -109,13 +109,17 @@ function supports(addon: AddonRecord, resource: string, type: string, id?: strin
   return !id || !prefixes?.length || prefixes.some((prefix) => id.startsWith(prefix));
 }
 
+export async function catalogWithExtras(addon: AddonRecord, type: string, catalogId: string, extras: Record<string, string | number> = {}, interactive = false) {
+  const response = await jsonFetch<{ metas?: MetaItem[] }>(resourceUrl(addon, "catalog", type, catalogId, extras), TIMEOUT_MS, interactive);
+  return response.metas ?? [];
+}
+
 export async function catalog(addon: AddonRecord, type: string, catalogId: string, search?: string, skip = 0, genre?: string, interactive = false) {
   const extras: Record<string, string | number> = {};
   if (search) extras.search = search;
   if (genre) extras.genre = genre;
   if (skip) extras.skip = skip;
-  const response = await jsonFetch<{ metas?: MetaItem[] }>(resourceUrl(addon, "catalog", type, catalogId, extras), TIMEOUT_MS, interactive);
-  return response.metas ?? [];
+  return catalogWithExtras(addon, type, catalogId, extras, interactive);
 }
 
 /** Addons declare extras support in three different ways; the protocol changed over time. */

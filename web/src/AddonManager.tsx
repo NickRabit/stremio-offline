@@ -5,6 +5,7 @@ import { copyText } from "./clipboard";
 import { Heading, hideBroken } from "./settings-ui";
 import { t, useI18n } from "./i18n";
 import type { Addon, AddonDownloadSettings, LibraryView } from "./types";
+import { homeCatalogSelectionKey } from "../../server/src/home";
 
 const ROLES: Addon["role"][] = ["both", "catalog", "source"];
 
@@ -174,6 +175,7 @@ function movedOrder(addons: Addon[], key: string, direction: -1 | 1): string[] |
 type Draft = {
   url: string; role: Addon["role"]; globalSearch: boolean; showInContinueWatching: boolean;
   showOnHome: boolean;
+  homeCatalogs: string[];
   downloadSettings: AddonDownloadSettings;
 };
 
@@ -185,10 +187,14 @@ function AddonEditDialog({ addon, libraries, onClose, onChanged, onNotify, onErr
     onNotify: (message: string) => void; onError: (error: unknown) => void; onRemoved: () => void }) {
   useI18n();
   const stored = addon.downloadSettings ?? emptyDownloadSettings();
+  const catalogDefinitions = addon.manifest.catalogs ?? [];
+  const allHomeCatalogs = catalogDefinitions.map((catalog) => homeCatalogSelectionKey(catalog.type, catalog.id));
+  const savedHomeCatalogs = addon.homeCatalogs?.filter((key) => allHomeCatalogs.includes(key)) ?? allHomeCatalogs;
   const [draft, setDraft] = useState<Draft>(() => ({
     url: "", role: addon.role, globalSearch: addon.globalSearch,
     showInContinueWatching: addon.showInContinueWatching !== false,
     showOnHome: addon.showOnHome !== false,
+    homeCatalogs: savedHomeCatalogs,
     downloadSettings: cloneDownloadSettings(stored),
   }));
   // The address as the server knows it. Until it arrives the URL field stages nothing.
@@ -215,9 +221,10 @@ function AddonEditDialog({ addon, libraries, onClose, onChanged, onNotify, onErr
 
   const urlChanged = Boolean(loadedUrl) && draft.url.trim() !== loadedUrl;
   const storageChanged = streams && JSON.stringify(draft.downloadSettings) !== JSON.stringify(stored);
+  const homeCatalogsChanged = JSON.stringify([...draft.homeCatalogs].sort()) !== JSON.stringify([...savedHomeCatalogs].sort());
   const dirty = urlChanged || draft.role !== addon.role || draft.globalSearch !== addon.globalSearch
     || draft.showInContinueWatching !== (addon.showInContinueWatching !== false)
-    || draft.showOnHome !== (addon.showOnHome !== false) || storageChanged;
+    || draft.showOnHome !== (addon.showOnHome !== false) || homeCatalogsChanged || storageChanged;
   const valid = !urlChanged || Boolean(draft.url.trim());
 
   const run = async (action: () => Promise<void>) => {
@@ -233,6 +240,7 @@ function AddonEditDialog({ addon, libraries, onClose, onChanged, onNotify, onErr
     if (draft.globalSearch !== addon.globalSearch) patch.globalSearch = draft.globalSearch;
     if (draft.showInContinueWatching !== (addon.showInContinueWatching !== false)) patch.showInContinueWatching = draft.showInContinueWatching;
     if (draft.showOnHome !== (addon.showOnHome !== false)) patch.showOnHome = draft.showOnHome;
+    if (homeCatalogsChanged) patch.homeCatalogs = draft.homeCatalogs;
     if (storageChanged) patch.downloadSettings = draft.downloadSettings;
     await api.updateAddon(addon.key, patch);
     await onChanged();
@@ -322,6 +330,25 @@ function AddonEditDialog({ addon, libraries, onClose, onChanged, onNotify, onErr
             {check("showInContinueWatching", t("addons.showInContinueWatching"), t("addons.showInContinueWatchingHint"))}
             {check("showOnHome", t("addons.showOnHome"), t("addons.showOnHomeHint"))}
           </div>
+        </section>}
+        {addon.role !== "source" && catalogDefinitions.length > 0 && <section className="addon-edit-section">
+          <div className="library-picker-section-head"><h3>{t("addons.homeFeeds")}</h3><p>{t("addons.homeFeedsHint")}</p></div>
+          <div className="addon-feed-actions">
+            <button type="button" disabled={busy} onClick={() => update({ homeCatalogs: allHomeCatalogs })}>{t("addons.homeFeedsAll")}</button>
+            <button type="button" disabled={busy} onClick={() => update({ homeCatalogs: [] })}>{t("addons.homeFeedsNone")}</button>
+          </div>
+          <div className="addon-feed-list">{catalogDefinitions.map((catalog) => {
+            const key = homeCatalogSelectionKey(catalog.type, catalog.id);
+            const label = `${catalog.name || catalog.id} (${catalog.type})`;
+            const checked = draft.homeCatalogs.includes(key);
+            return <label className="library-check" key={key}>
+              <span className="switch"><input type="checkbox" aria-label={label} checked={checked} disabled={busy}
+                onChange={(event) => update({ homeCatalogs: event.target.checked
+                  ? [...draft.homeCatalogs, key]
+                  : draft.homeCatalogs.filter((item) => item !== key) })}/><span/></span>
+              <span>{label}</span>
+            </label>;
+          })}</div>
         </section>}
         {streams && <section className="addon-edit-section">
           <div className="library-picker-section-head"><h3>{t("addons.whereToStore")}</h3><p>{t("addons.whereToStoreHint")}</p></div>

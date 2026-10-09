@@ -76,7 +76,7 @@ export const api = {
   activity: (hours: number, kind: string, user: string, before?: number) => request<StatsActivityPage>(`/api/stats/activity?${new URLSearchParams({ hours: String(hours), kind, user, ...(before ? { before: String(before) } : {}) })}`),
   stats: (hours: number) => request<StatsSummary>(`/api/stats?hours=${hours}`),
   activeStreams: () => request<ActiveStream[]>("/api/stats/streams"),
-  updateAddon: (key: string, patch: { enabled?: boolean; globalSearch?: boolean; showInContinueWatching?: boolean; showOnHome?: boolean; url?: string; role?: string; allowedUsers?: string[]; downloadSettings?: AddonDownloadSettings }) => request<Addon>(`/api/addons/${key}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  updateAddon: (key: string, patch: { enabled?: boolean; globalSearch?: boolean; showInContinueWatching?: boolean; showOnHome?: boolean; homeCatalogs?: string[]; url?: string; role?: string; allowedUsers?: string[]; downloadSettings?: AddonDownloadSettings }) => request<Addon>(`/api/addons/${key}`, { method: "PATCH", body: JSON.stringify(patch) }),
   toggleAddon: (key: string, enabled: boolean) => request<Addon>(`/api/addons/${key}`, { method: "PATCH", body: JSON.stringify({ enabled }) }),
   catalogs: () => request<Catalog[]>("/api/catalogs"),
   catalog: (catalog: Catalog, search = "", skip = 0, genre = "") => request<Meta[]>(`/api/catalog?${q({ addon: catalog.addonKey, type: catalog.type, id: catalog.id, search: search || undefined, skip: skip || undefined, genre: genre || undefined })}`),

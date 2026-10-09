@@ -17,6 +17,7 @@ import { ResourceError } from "../media-resources.js";
 import type { Store, UserPrefs } from "../store.js";
 import { emptyUserData, type UserData, type UserRecord } from "../users.js";
 import type { AddonRecord, MetaItem } from "../types.js";
+import { homeCatalogRowId } from "../home.js";
 import { registerPersonalRoutes, type PersonalDeps } from "./personal.js";
 import { registerHomeRoutes, type CompletedJobView, type HomeDeps } from "./home.js";
 
@@ -249,7 +250,7 @@ test("GET /api/home answers with the whole envelope and private caching", async 
   assert.equal(response.headers.get("cache-control"), "private, no-store");
   const body = await response.json() as { generatedAt: string; rows: Record<string, unknown> };
   assert.equal(typeof body.generatedAt, "string");
-  assert.deepEqual(Object.keys(body.rows).sort(), ["cinemeta", "completed", "confirm", "episodes", "favorites", "recent", "resume", "tonight"]);
+  assert.deepEqual(Object.keys(body.rows).sort(), ["completed", "confirm", "episodes", "favorites", "recent", "resume", "tonight"]);
 });
 
 test("GET /api/home is refused without a session, the way the personal routes refuse", async (t) => {
@@ -400,7 +401,7 @@ test("?rows= names which rows come back and an unknown name is ignored", async (
   t.after(harness.close);
 
   const some = await allRows(harness, ALICE);
-  assert.deepEqual(Object.keys(some).sort(), ["cinemeta", "completed", "confirm", "episodes", "favorites", "recent", "resume", "tonight"]);
+  assert.deepEqual(Object.keys(some).sort(), ["completed", "confirm", "episodes", "favorites", "recent", "resume", "tonight"]);
 
   const filtered = await (await api(harness.base, "/api/home?rows=resume,favorites", ALICE)).json() as { rows: Record<string, unknown> };
   assert.deepEqual(Object.keys(filtered.rows).sort(), ["favorites", "resume"]);
@@ -409,7 +410,7 @@ test("?rows= names which rows come back and an unknown name is ignored", async (
   assert.deepEqual(unknown.rows, {});
 });
 
-test("Cinemeta Home row loads its enabled popular movie and series catalogs", async (t) => {
+test("Home loads each selected addon catalog feed into its own seeded carousel", async (t) => {
   const harness = await mount();
   t.after(harness.close);
   harness.addons.push({ key: "cinemeta", manifestUrl: "https://cinemeta/manifest.json", role: "catalog", enabled: true,
@@ -418,15 +419,21 @@ test("Cinemeta Home row loads its enabled popular movie and series catalogs", as
       { type: "movie", id: "top" }, { type: "series", id: "top" },
     ] } } as AddonRecord);
 
-  const first = await (await api(harness.base, "/api/home?rows=cinemeta&shuffle=0", ALICE)).json() as { rows: Record<string, HomeRowView> };
-  const repeated = await (await api(harness.base, "/api/home?rows=cinemeta&shuffle=0", ALICE)).json() as { rows: Record<string, HomeRowView> };
-  const second = await (await api(harness.base, "/api/home?rows=cinemeta&shuffle=1", ALICE)).json() as { rows: Record<string, HomeRowView> };
-  const items = first.rows.cinemeta!.items;
-  assert.equal(items.length, 6);
-  assert.deepEqual(items.map((item) => (item as { type: string }).type), ["movie", "series", "movie", "series", "movie", "series"]);
-  assert.deepEqual(items.map((item) => item.kind), Array(6).fill("discovery"));
-  assert.deepEqual(items.map((item) => item.key), repeated.rows.cinemeta!.items.map((item) => item.key));
-  assert.notDeepEqual(items.map((item) => item.key), second.rows.cinemeta!.items.map((item) => item.key));
+  const movie = homeCatalogRowId("cinemeta", "movie", "top");
+  const series = homeCatalogRowId("cinemeta", "series", "top");
+  const query = `rows=${movie},${series}`;
+  const first = await (await api(harness.base, `/api/home?${query}&shuffle=0`, ALICE)).json() as { rows: Record<string, HomeRowView> };
+  const repeated = await (await api(harness.base, `/api/home?${query}&shuffle=0`, ALICE)).json() as { rows: Record<string, HomeRowView> };
+  const second = await (await api(harness.base, `/api/home?${query}&shuffle=1`, ALICE)).json() as { rows: Record<string, HomeRowView> };
+  const movies = first.rows[movie]!.items;
+  const shows = first.rows[series]!.items;
+  assert.equal(movies.length, 3);
+  assert.equal(shows.length, 3);
+  assert.deepEqual(movies.map((item) => (item as { type: string }).type), Array(3).fill("movie"));
+  assert.deepEqual(shows.map((item) => (item as { type: string }).type), Array(3).fill("series"));
+  assert.deepEqual(movies.map((item) => item.kind), Array(3).fill("discovery"));
+  assert.deepEqual(movies.map((item) => item.key), repeated.rows[movie]!.items.map((item) => item.key));
+  assert.notDeepEqual(movies.map((item) => item.key), second.rows[movie]!.items.map((item) => item.key));
 });
 
 test("one row that throws leaves the others ok and carries no total", async (t) => {
