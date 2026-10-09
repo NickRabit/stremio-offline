@@ -17,6 +17,7 @@ import { ResourceError } from "../media-resources.js";
 import type { Store, UserPrefs } from "../store.js";
 import { emptyUserData, type UserData, type UserRecord } from "../users.js";
 import type { AddonRecord, MetaItem } from "../types.js";
+import { homeCatalogRowId } from "../home.js";
 import { registerPersonalRoutes, type PersonalDeps } from "./personal.js";
 import { registerHomeRoutes, type CompletedJobView, type HomeDeps } from "./home.js";
 
@@ -75,6 +76,8 @@ interface Harness {
   artwork?: string;
   /** Every series id the catalogue side was asked about, in order. */
   lookups: string[];
+  /** Every manifest feed the Home route requested, including its required extras. */
+  catalogCalls: Array<{ addonKey: string; type: string; catalogId: string; extras: Record<string, string | number> }>;
   data(user: string): UserData;
   close(): Promise<void>;
 }
@@ -106,7 +109,7 @@ const mount = async (options: { libraries?: LibraryRecord[]; deadlineMs?: number
     base: "", addons, records, missing, broken, completed: [], completedThrows: false, seen,
     episodes: [], episodesThrows: false, newEpisodesCalls: [], suggestions: [], suggestionsThrow: false, suggestionCalls: 0,
     now: options.now ?? Date.parse("2026-01-15T12:00:00.000Z"),
-    metaDelayMs: 0, metaAnswer: null, lookups: [],
+    metaDelayMs: 0, metaAnswer: null, lookups: [], catalogCalls: [],
     data: () => { throw new Error("not mounted"); }, close: async () => undefined,
   };
   const users = new Map<string, UserData>([[ALICE, emptyUserData()], [BOB, emptyUserData()], [ADMIN, emptyUserData()]]);
@@ -204,9 +207,14 @@ const mount = async (options: { libraries?: LibraryRecord[]; deadlineMs?: number
       if (state.suggestionsThrow) throw new Error("the proposals are unavailable");
       return state.suggestions;
     },
-    cinemetaCatalog: async (_addon, type) => type === "movie"
-      ? [1, 3, 5].map((number) => ({ id: `tt${number}`, type, name: `Film ${number}`, poster: "https://img/film.jpg", year: 2025 }))
-      : [2, 4, 6].map((number) => ({ id: `tt${number}`, type, name: `Seriál ${number}` })),
+    homeCatalog: async (addon, type, catalogId, extras) => {
+      state.catalogCalls.push({ addonKey: addon.key, type, catalogId, extras: { ...extras } });
+      const numbers = type === "movie" ? [1, 3, 5] : [2, 4, 6];
+      return [...numbers, numbers[0]!].map((number) => ({
+        id: `${catalogId}-tt${number}`, type, name: `${catalogId} ${type === "movie" ? "Film" : "Seriál"} ${number}`,
+        ...(type === "movie" ? { poster: "https://img/film.jpg", year: 2025 } : {}),
+      }));
+    },
     now: () => state.now,
     homeLookupDeadlineMs: options.deadlineMs,
   };
@@ -249,7 +257,7 @@ test("GET /api/home answers with the whole envelope and private caching", async 
   assert.equal(response.headers.get("cache-control"), "private, no-store");
   const body = await response.json() as { generatedAt: string; rows: Record<string, unknown> };
   assert.equal(typeof body.generatedAt, "string");
-  assert.deepEqual(Object.keys(body.rows).sort(), ["cinemeta", "completed", "confirm", "episodes", "favorites", "recent", "resume", "tonight"]);
+  assert.deepEqual(Object.keys(body.rows).sort(), ["completed", "confirm", "episodes", "favorites", "recent", "resume", "tonight"]);
 });
 
 test("GET /api/home is refused without a session, the way the personal routes refuse", async (t) => {
@@ -400,7 +408,7 @@ test("?rows= names which rows come back and an unknown name is ignored", async (
   t.after(harness.close);
 
   const some = await allRows(harness, ALICE);
-  assert.deepEqual(Object.keys(some).sort(), ["cinemeta", "completed", "confirm", "episodes", "favorites", "recent", "resume", "tonight"]);
+  assert.deepEqual(Object.keys(some).sort(), ["completed", "confirm", "episodes", "favorites", "recent", "resume", "tonight"]);
 
   const filtered = await (await api(harness.base, "/api/home?rows=resume,favorites", ALICE)).json() as { rows: Record<string, unknown> };
   assert.deepEqual(Object.keys(filtered.rows).sort(), ["favorites", "resume"]);
@@ -409,24 +417,39 @@ test("?rows= names which rows come back and an unknown name is ignored", async (
   assert.deepEqual(unknown.rows, {});
 });
 
-test("Cinemeta Home row loads its enabled popular movie and series catalogs", async (t) => {
+test("Home loads each selected addon catalog feed into its own seeded carousel", async (t) => {
   const harness = await mount();
   t.after(harness.close);
   harness.addons.push({ key: "cinemeta", manifestUrl: "https://cinemeta/manifest.json", role: "catalog", enabled: true,
     globalSearch: true, showOnHome: true, addedAt: "", allowedUsers: [ALICE],
     manifest: { id: "com.linvo.cinemeta", name: "Cinemeta", version: "1", catalogs: [
       { type: "movie", id: "top" }, { type: "series", id: "top" },
+      { type: "movie", id: "featured", extra: [{ name: "genre", isRequired: true, options: ["Drama", "Comedy"] }] },
     ] } } as AddonRecord);
 
-  const first = await (await api(harness.base, "/api/home?rows=cinemeta&shuffle=0", ALICE)).json() as { rows: Record<string, HomeRowView> };
-  const repeated = await (await api(harness.base, "/api/home?rows=cinemeta&shuffle=0", ALICE)).json() as { rows: Record<string, HomeRowView> };
-  const second = await (await api(harness.base, "/api/home?rows=cinemeta&shuffle=1", ALICE)).json() as { rows: Record<string, HomeRowView> };
-  const items = first.rows.cinemeta!.items;
-  assert.equal(items.length, 6);
-  assert.deepEqual(items.map((item) => (item as { type: string }).type), ["movie", "series", "movie", "series", "movie", "series"]);
-  assert.deepEqual(items.map((item) => item.kind), Array(6).fill("discovery"));
-  assert.deepEqual(items.map((item) => item.key), repeated.rows.cinemeta!.items.map((item) => item.key));
-  assert.notDeepEqual(items.map((item) => item.key), second.rows.cinemeta!.items.map((item) => item.key));
+  const movie = homeCatalogRowId("cinemeta", "movie", "top");
+  const series = homeCatalogRowId("cinemeta", "series", "top");
+  const featured = homeCatalogRowId("cinemeta", "movie", "featured");
+  const query = `rows=${movie},${series},${featured}`;
+  const first = await (await api(harness.base, `/api/home?${query}&shuffle=0`, ALICE)).json() as { rows: Record<string, HomeRowView> };
+  const repeated = await (await api(harness.base, `/api/home?${query}&shuffle=0`, ALICE)).json() as { rows: Record<string, HomeRowView> };
+  const second = await (await api(harness.base, `/api/home?${query}&shuffle=1`, ALICE)).json() as { rows: Record<string, HomeRowView> };
+  const movies = first.rows[movie]!.items;
+  const shows = first.rows[series]!.items;
+  const featuredMovies = first.rows[featured]!.items;
+  assert.equal(movies.length, 3);
+  assert.equal(shows.length, 3);
+  assert.equal(featuredMovies.length, 3);
+  assert.deepEqual(movies.map((item) => (item as { type: string }).type), Array(3).fill("movie"));
+  assert.deepEqual(shows.map((item) => (item as { type: string }).type), Array(3).fill("series"));
+  assert.deepEqual(movies.map((item) => item.kind), Array(3).fill("discovery"));
+  assert.deepEqual(movies.map((item) => item.key), repeated.rows[movie]!.items.map((item) => item.key));
+  assert.deepEqual(featuredMovies.map((item) => item.key), repeated.rows[featured]!.items.map((item) => item.key));
+  assert.notDeepEqual(movies.map((item) => item.key), second.rows[movie]!.items.map((item) => item.key));
+  assert.notDeepEqual(featuredMovies.map((item) => item.key), second.rows[featured]!.items.map((item) => item.key));
+  assert.deepEqual(new Set(harness.catalogCalls.map(({ type, catalogId }) => `${type}:${catalogId}`)),
+    new Set(["movie:top", "series:top", "movie:featured"]));
+  assert.equal(harness.catalogCalls.filter((call) => call.catalogId === "featured").every((call) => call.extras.genre === "Drama"), true);
 });
 
 test("one row that throws leaves the others ok and carries no total", async (t) => {

@@ -1,13 +1,38 @@
 import type { HomeCard, HomeResponse, HomeRowId } from "../../server/src/home";
+import { homeCatalogRowId, homeCatalogSelectionKey } from "../../server/src/home";
+import type { Addon } from "./types";
 
 /** Every shelf the page draws, in the page's order. `confirm` is not a shelf: it is a count
  *  in the heading, and Home fetches it only so that count is available. */
-export const HOME_ROWS = ["resume", "favorites", "tonight", "cinemeta", "episodes", "completed", "recent", "confirm"] as const satisfies readonly HomeRowId[];
+export const HOME_ROWS = ["resume", "favorites", "tonight", "episodes", "completed", "recent", "confirm"] as const satisfies readonly HomeRowId[];
+
+export interface HomeCatalogShelf { id: HomeRowId; title: string }
+
+export function homeCatalogShelves(addons: Addon[]): HomeCatalogShelf[] {
+  const seen = new Set<string>();
+  return addons.flatMap((addon) => {
+    if (!addon.enabled || addon.role === "source" || addon.showOnHome === false) return [];
+    return (addon.manifest.catalogs ?? []).flatMap((catalog) => {
+      const selection = homeCatalogSelectionKey(catalog.type, catalog.id);
+      if (addon.homeCatalogs !== undefined && !addon.homeCatalogs.includes(selection)) return [];
+      const id = homeCatalogRowId(addon.key, catalog.type, catalog.id);
+      if (seen.has(id)) return [];
+      seen.add(id);
+      return [{
+        id,
+        title: `${addon.manifest.name} · ${catalog.name || catalog.id}`,
+      }];
+    });
+  });
+}
 
 /** The rows one account loads. `confirm` is administrator-only, so an ordinary account's load
  *  omits it and its global empty state must not wait for a row that will never answer. */
-export const homeRowsFor = (admin: boolean): readonly HomeRowId[] =>
-  admin ? HOME_ROWS : HOME_ROWS.filter((row) => row !== "confirm");
+export const homeRowsFor = (admin: boolean, addons: Addon[] = []): readonly HomeRowId[] => {
+  const fixed = admin ? HOME_ROWS : HOME_ROWS.filter((row) => row !== "confirm");
+  const at = fixed.indexOf("episodes");
+  return [...fixed.slice(0, at), ...homeCatalogShelves(addons).map((shelf) => shelf.id), ...fixed.slice(at)];
+};
 
 export type HomeRowStatus = "idle" | "loading" | "ok" | "error";
 
@@ -73,5 +98,5 @@ export function homeReducer(state: HomeRows, action: HomeAction): HomeRows {
 /** The page-wide empty state only: every row the account asked for answered and every one is
  *  empty. A row that is still loading or has failed is not an empty account. */
 export function homeAllRowsEmpty(rows: HomeRows, asked: readonly HomeRowId[] = HOME_ROWS): boolean {
-  return asked.every((row) => rows[row]?.status === "ok" && rows[row]!.items.length === 0);
+  return asked.every((row) => rows[row]?.status === "ok" && rows[row]!.items.length === 0 && !rows[row]!.partial);
 }

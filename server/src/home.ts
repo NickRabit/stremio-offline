@@ -8,7 +8,13 @@ export const HOME_MARKER_LIMIT = 20;
 export const HOME_LOOKUP_DEADLINE_MS = 1500;
 export const HOME_FORGET_LIMIT = 50;
 
-export type HomeRowId = "resume" | "completed" | "favorites" | "recent" | "episodes" | "tonight" | "cinemeta" | "confirm";
+export type BuiltinHomeRowId = "resume" | "completed" | "favorites" | "recent" | "episodes" | "tonight" | "confirm";
+export type HomeRowId = BuiltinHomeRowId | `catalog:${string}:${string}:${string}`;
+
+export const HOME_BUILTIN_ROWS: readonly BuiltinHomeRowId[] = ["resume", "completed", "favorites", "recent", "episodes", "tonight", "confirm"];
+export const homeCatalogSelectionKey = (type: string, id: string) => `${encodeURIComponent(type)}:${encodeURIComponent(id)}`;
+export const homeCatalogRowId = (addonKey: string, type: string, id: string): HomeRowId =>
+  `catalog:${encodeURIComponent(addonKey)}:${encodeURIComponent(type)}:${encodeURIComponent(id)}`;
 
 export interface HomeProgress { position: number; duration: number }
 

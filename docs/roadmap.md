@@ -150,7 +150,7 @@ library. Each library and add-on has a **Show on Home** switch, and each account
 chooses its start page (Catalogue unless it says otherwise). What is left:
 
 - row order and visibility per account;
-- catalogue carousels from other add-ons, configurable per add-on;
+- [x] configurable Home carousels for selected catalog feeds from enabled add-ons;
 - a "next episode is missing" card with a one-tap download, and an airing-today
   card once the calendar exists;
 - the much smaller child-facing variant, with server-side enforcement. See the

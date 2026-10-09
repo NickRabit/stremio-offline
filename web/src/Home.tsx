@@ -5,7 +5,7 @@ import { Empty } from "./app-chrome";
 import { bytes, speed, statusLabel } from "./download-format";
 import { attentionCount, blocked, homeQueue, queueAction, queueGroup } from "./home-rows";
 import type { ShowAllTarget } from "./home-cards";
-import { homeAllRowsEmpty, homeRowsFor, type HomeRows } from "./home-state";
+import { homeAllRowsEmpty, homeCatalogShelves, homeRowsFor, type HomeRows } from "./home-state";
 import { HomeShelf } from "./HomeShelf";
 import type { HomeCardActions } from "./HomeCard";
 import { t } from "./i18n";
@@ -35,9 +35,10 @@ function metaOf(job: Download): string {
 
 const percentOf = (job: Download) => job.total != null && job.total > 0 ? Math.min(100, (job.received / job.total) * 100) : null;
 
-export function Home({ jobs, admin, onShowDownloads, onAction, rows, shape, onToggleShape, onRetry, onShowAll, onPlay, onOpenCatalogue, onShuffle, onReveal, onForgotten, onError }: {
+export function Home({ jobs, addons, admin, onShowDownloads, onAction, rows, shape, onToggleShape, onRetry, onShowAll, onPlay, onOpenCatalogue, onShuffle, onReveal, onForgotten, onError }: {
   jobs: Download[];
   libraries: LibraryView[];
+  addons: import("./types").Addon[];
   onShowDownloads: () => void;
   onAction: (job: Download, action: "pause" | "resume" | "retry") => Promise<void>;
   admin: boolean;
@@ -54,7 +55,10 @@ export function Home({ jobs, admin, onShowDownloads, onAction, rows, shape, onTo
   onError: (error: unknown) => void;
 }) {
   const [busy, setBusy] = useState<ReadonlySet<string>>(new Set());
-  const shuffleCount = useRef({ tonight: 0, cinemeta: 0 });
+  const shuffleCount = useRef<Record<string, number>>({});
+  const catalogShelves = homeCatalogShelves(addons);
+  const catalogTitles = new Map(catalogShelves.map((shelf) => [shelf.id, shelf.title]));
+  const askedRows = homeRowsFor(admin, addons);
   const items = homeQueue(jobs);
   const attention = attentionCount(jobs);
   const cards = items.filter((job) => queueGroup(job) === "attention");
@@ -72,7 +76,7 @@ export function Home({ jobs, admin, onShowDownloads, onAction, rows, shape, onTo
     ? <div className="home-note bad"><span>{t("home.rowFailed")}</span><button className="home-retry" onClick={() => onRetry("confirm")}>{t("home.retry")}</button></div>
     : null;
 
-  if (!items.length && homeAllRowsEmpty(rows, homeRowsFor(admin))) return <>{heading}{confirmError}<Empty icon={<DownloadIcon/>} title={t("home.emptyTitle")} text={t("home.emptyText")}/></>;
+  if (!items.length && homeAllRowsEmpty(rows, askedRows)) return <>{heading}{confirmError}<Empty icon={<DownloadIcon/>} title={t("home.emptyTitle")} text={t("home.emptyText")}/></>;
 
   const run = (job: Download, action: ReturnType<typeof queueAction>) => {
     if (action === "open") { onShowDownloads(); return; }
@@ -88,13 +92,13 @@ export function Home({ jobs, admin, onShowDownloads, onAction, rows, shape, onTo
     void api.forgetManyProgress(card.forgetKeys).then(onForgotten, onError);
   };
   const actions: HomeCardActions = { play: onPlay, open: onOpenCatalogue, reveal: onReveal, forget };
-  const shuffle = (row: "tonight" | "cinemeta") => { shuffleCount.current[row] += 1; onShuffle(row, shuffleCount.current[row]); };
+  const shuffle = (row: HomeRowId) => { shuffleCount.current[row] = (shuffleCount.current[row] ?? 0) + 1; onShuffle(row, shuffleCount.current[row]!); };
 
   const summary = [t("home.downloadsSummary", { count: items.length }), attention > 0 ? t("home.attention", { count: attention }) : ""].filter(Boolean).join(" · ");
   return <>
     {heading}
     {confirmError}
-    {homeRowsFor(admin).filter((row) => row !== "confirm").map((row) => <HomeShelf key={row} row={row} state={rows[row]} shape={shape} actions={actions} onRetry={onRetry} onShowAll={onShowAll} onShuffle={row === "tonight" || row === "cinemeta" ? () => shuffle(row) : undefined}/>)}
+    {askedRows.filter((row) => row !== "confirm").map((row) => <HomeShelf key={row} row={row} title={catalogTitles.get(row)} state={rows[row]} shape={shape} actions={actions} onRetry={onRetry} onShowAll={onShowAll} onShuffle={row === "tonight" || catalogTitles.has(row) ? () => shuffle(row) : undefined}/>)}
     {items.length > 0 && <section className="home-row">
       <div className="subhead">
         <div className="home-head"><h3>{t("home.downloads")}</h3><span className="count">{summary}</span></div>

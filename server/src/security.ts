@@ -196,6 +196,7 @@ export function publicAddon(addon: import("./types.js").AddonRecord) {
     globalSearch: addon.globalSearch,
     showInContinueWatching: addon.showInContinueWatching !== false,
     showOnHome: addon.showOnHome !== false,
+    homeCatalogs: addon.homeCatalogs,
     allowedUsers: addon.allowedUsers ?? [],
     essential: essentialAddon(addon),
     addedAt: addon.addedAt,

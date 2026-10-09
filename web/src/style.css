@@ -1223,13 +1223,18 @@ img.broken{visibility:hidden}
 .addon-edit-body{display:grid;gap:0}
 .addon-edit-section{display:grid;gap:12px;padding:15px 0;border-top:1px solid var(--line)}
 .addon-edit-section:first-child{padding-top:0;border-top:0}
+.addon-feed-actions{display:flex;flex-wrap:wrap;gap:8px}
+.addon-feed-actions button{font-size:11px;padding:7px 10px}
+.addon-feed-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px 18px}
+.addon-feed-list .library-check{display:flex;align-items:center;gap:9px;min-width:0;font-size:11px;color:var(--text)}
+.addon-feed-list .library-check>span:last-child{overflow-wrap:anywhere}
 .addon-configure{display:inline-flex;align-items:center;gap:7px;justify-self:start;font-size:11px;color:var(--accent2);text-decoration:none}
 .addon-configure:hover{text-decoration:underline}
 .addon-configure svg{width:14px;height:14px}
 .addon-edit-actions{display:flex;flex-wrap:wrap;gap:8px}
 .addon-edit-actions button{font-size:11px;padding:8px 11px}
 .addon-edit-footer .primary{min-width:150px}
-@media(max-width:700px){.addon-tools{justify-content:stretch}.addon-filter{flex:1 1 100%}.addon-head{grid-template-columns:42px minmax(0,1fr) auto}.addon-head>img,.addon-logo{width:42px;height:42px}}
+@media(max-width:700px){.addon-tools{justify-content:stretch}.addon-filter{flex:1 1 100%}.addon-head{grid-template-columns:42px minmax(0,1fr) auto}.addon-head>img,.addon-logo{width:42px;height:42px}.addon-feed-list{grid-template-columns:1fr}}
 /* Full screen, not a sheet. Sized to its pane it jumped on every switch and a short pane
    left a third of the screen dark above it -- the same reason the account dialog below
    gives for its own card. */
@@ -1845,7 +1850,7 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
   .home-head{flex:1 1 auto;min-width:0;flex-direction:column;align-items:flex-start;gap:1px}
   .home-head h3{max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .home-row .resume-show-all{border:0;background:transparent;padding:0 2px 0 10px;flex:0 0 auto}
-  main.view-home{padding:78px 16px 25px}
+  main.view-home{padding:calc(78px + env(safe-area-inset-top, 0px)) 16px 25px}
   main.view-home .heading small,main.view-home .heading .lead{display:none}
   main.view-home .heading{margin-bottom:12px}
   .hq-card{flex-basis:244px}

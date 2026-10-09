@@ -9,18 +9,18 @@ const card = (key: string): HomeCard => ({
 const ok = (items: HomeCard[], over: Partial<HomeRow> = {}): HomeRow => ({ status: "ok", items, hasMore: false, ...over });
 const response = (rows: HomeResponse["rows"]): HomeResponse => ({ generatedAt: "2026-01-01T00:00:00.000Z", rows });
 const answer = (over: Partial<Record<HomeRowId, HomeRow>> = {}): HomeResponse => response({
-  resume: ok([]), episodes: ok([]), completed: ok([]), recent: ok([]), tonight: ok([]), cinemeta: ok([]), favorites: ok([]), confirm: ok([]), ...over,
+  resume: ok([]), episodes: ok([]), completed: ok([]), recent: ok([]), tonight: ok([]), favorites: ok([]), confirm: ok([]), ...over,
 });
 const ALL = HOME_ROWS;
 
 describe("HOME_ROWS", () => {
   it("knows every server row, in page order, including the four this task adds", () => {
-    expect([...HOME_ROWS]).toEqual(["resume", "favorites", "tonight", "cinemeta", "episodes", "completed", "recent", "confirm"]);
+    expect([...HOME_ROWS]).toEqual(["resume", "favorites", "tonight", "episodes", "completed", "recent", "confirm"]);
   });
 
   it("asks an administrator for all eight rows and an ordinary account for the seven it may see", () => {
     expect([...homeRowsFor(true)]).toEqual([...HOME_ROWS]);
-    expect([...homeRowsFor(false)]).toEqual(["resume", "favorites", "tonight", "cinemeta", "episodes", "completed", "recent"]);
+    expect([...homeRowsFor(false)]).toEqual(["resume", "favorites", "tonight", "episodes", "completed", "recent"]);
     expect(homeRowsFor(false)).not.toContain("confirm");
   });
 });
