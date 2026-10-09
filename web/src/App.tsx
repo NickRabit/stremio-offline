@@ -169,9 +169,7 @@ export function App() {
     for (const event of ["touchstart", "wheel", "keydown"]) window.addEventListener(event, releaseHold, { passive: true });
     return () => { for (const event of ["touchstart", "wheel", "keydown"]) window.removeEventListener(event, releaseHold); };
   }, []);
-  // `revealOnPull` belongs to a header with no way back of its own -- the detail's metadata, which
-  // only a pull can restore. Where a button offers to bring the header back, a pull must not: the
-  // reader who drifts twenty pixels upward did not ask for it.
+  // A deliberate pull towards the start restores folded headers; small direction changes do not.
   function compactOnScroll(event: UIEvent<HTMLDivElement>, compact: boolean, update: (value: boolean) => void, revealOnPull = false) {
     if (playerOpenRef.current || restoringScroll.current) return;
     const element = event.currentTarget;
@@ -2133,7 +2131,7 @@ export function App() {
             }}><SlidersHorizontal/></button>
           </div></div></div>
           <div className="catalog-layout"><section className={`panel result-panel${staleGrid ? " refreshing" : ""}`}><div className="panel-head"><h3>{submittedQuery ? t("catalog.searchHeading", { query: submittedQuery }) : t("catalog.results")}</h3><small className="search-status" role="status">{liveState === "pending" || (busy && submittedQuery) ? t("catalog.searchUpdating") : liveState === "tooShort" ? t("catalog.searchMinChars") : ""}</small><span>{t("catalog.itemCount", { count: visibleItems.length })}{hasMore ? "+" : ""}</span></div>
-            <div className={`poster-grid${staleGrid ? " stale" : ""}`} aria-busy={staleGrid || undefined} ref={gridRef} onScroll={(event) => { compactOnScroll(event, catalogCompact, setCatalogCompact); scheduleViewAnchor(); }}>
+            <div className={`poster-grid${staleGrid ? " stale" : ""}`} aria-busy={staleGrid || undefined} ref={gridRef} onScroll={(event) => { compactOnScroll(event, catalogCompact, setCatalogCompact, true); scheduleViewAnchor(); }}>
               {visibleItems.map((item) => {
                 const klic = `${item.type || "movie"}:${item.id}`;
                 const postup = catalogProgress(item);
@@ -2321,7 +2319,7 @@ export function App() {
         </div>
         <div className="browse-scroll" ref={browseScrollRef} onScroll={(event) => {
           if (!restoringScroll.current && !playerOpenRef.current) scrollByView.current.library = event.currentTarget.scrollTop;
-          compactOnScroll(event, libraryCompact, setLibraryCompact);
+          compactOnScroll(event, libraryCompact, setLibraryCompact, true);
           scheduleViewAnchor();
         }}>
         {!browsePath && !onlyFavorites && !browseQuery && <LibraryShelf

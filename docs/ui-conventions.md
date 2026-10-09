@@ -63,9 +63,10 @@ device in standalone mode.
 
 The catalogue and library toolbars fold away when the listing is scrolled, and on
 a phone the top bar goes with them (`catalog-compact` / `library-compact`). A
-new listing that wants the same needs the `.fold` wrapper and `compactOnScroll`;
-copy the catalogue rather than inventing a second mechanism. The detail panel's
-hero folds the same way (`hero-compact`).
+deliberate pull towards the start restores them before the list reaches its top;
+small changes of direction do not. A new listing that wants the same needs the
+`.fold` wrapper and `compactOnScroll`; copy the catalogue rather than inventing a
+second mechanism. The detail panel's hero folds the same way (`hero-compact`).
 
 ## Checking a change
 
