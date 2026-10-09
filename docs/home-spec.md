@@ -21,6 +21,18 @@ contracts, and the app still opens on the catalogue. Local Home rows are built
 from state the app already holds and never scan a disk. Add-on catalog carousels
 make bounded requests to their selected manifest catalogs when requested.
 
+Add-on carousels load lazily: each one is a titled placeholder until it comes
+within about 800px of the screen, and the carousels revealed together go out in
+one request separate from the built-in rows, so a slow add-on never delays
+Continue watching. The server remembers every catalog answer for 20 minutes and
+serves an older one (up to 12 hours) at once while it refreshes it in the
+background; it asks one add-on at most four catalogs at a time. A first lookup
+that misses the 1.5 s deadline keeps running and fills the memory, the row comes
+back partial, and the client asks again after 2.5 s (three times at most).
+Opening Home fetches every carousel of the account in the background, and a
+warm-up at start and every 20 minutes keeps them filled while Home has been
+opened within the last 12 hours.
+
 Home leads with Continue watching. The queue stays on the page as a one-line
 summary unless a job needs attention. The official Stremio home
 is deliberately not the model. Ideas taken from Jellyfin, Plex and Infuse:

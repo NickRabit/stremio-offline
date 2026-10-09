@@ -2034,7 +2034,7 @@ export function App() {
       {view === "home" && !restricted && <Home jobs={downloads} addons={addons} libraries={libraries} onShowDownloads={() => openView("downloads")} onAction={homeAction} admin={admin}
         rows={home.rows} shape={settings.homeTileShape} onToggleShape={() => void toggleShape("homeTileShape")}
         onRetry={(row) => home.refresh([row])} onShowAll={homeShowAll} onPlay={homePlay} onOpenCatalogue={homeOpen}
-        onShuffle={(row, shuffle) => home.refresh([row], { shuffle })}
+        onShuffle={(row, shuffle) => home.refresh([row], { shuffle })} onVisible={home.reveal}
         onReveal={revealInLibrary} onForgotten={() => home.refresh(["resume"])} onError={fail}/>}
       {view === "catalog" && <section className={`catalog-view ${catalogCompact ? "catalog-compact" : ""}`} {...chromeGestures(() => gridRef.current)} onFocusCapture={(event) => {
         if ((event.target as HTMLElement).closest(".searchbar,.filterbar")) setCatalogCompact(false);

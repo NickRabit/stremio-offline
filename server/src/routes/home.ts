@@ -3,10 +3,11 @@ import type { ArtShape } from "../artwork.js";
 import { messageKeyOf } from "../errors.js";
 import type { NewEpisode } from "../follows.js";
 import { images } from "../images.js";
-import { allowedAddons, catalogWithExtras } from "../addons.js";
+import { allowedAddons } from "../addons.js";
+import { HomeCatalogCache, homeCatalogTargets, type HomeCatalogTarget } from "../home-catalogs.js";
 import {
   HOME_BUILTIN_ROWS, HOME_CANDIDATES, HOME_LOOKUP_DEADLINE_MS, HOME_MARKER_LIMIT, HOME_ROW_LIMIT,
-  boundCards, homeCatalogRowId, homeCatalogSelectionKey, mergeResume,
+  boundCards, homeCatalogRowId, mergeResume,
   type HomeCard, type HomeResponse, type HomeRow, type HomeRowError, type HomeRowId,
   type BuiltinHomeRowId, type ResumeCatalogueItem, type ResumeFileItem,
 } from "../home.js";
@@ -73,6 +74,8 @@ export interface HomeDeps extends RouteContext {
   suggestionRows(libraryId?: string): Promise<HomeSuggestion[]>;
   /** Injectable for route tests; production reads the selected catalog from its addon. */
   homeCatalog?(addon: import("../types.js").AddonRecord, type: string, catalogId: string, extras: Record<string, string | number>): Promise<MetaItem[]>;
+  /** The addon shelves' memory; production shares it with the warm-up that fills it. */
+  homeCatalogs?: HomeCatalogCache;
   /** Injected so the tonight seed is testable without a real date. */
   now?: () => number;
   /** Tests inject a few milliseconds instead of waiting the real deadline out. */
@@ -85,7 +88,7 @@ const ALL_ROWS: BuiltinHomeRowId[] = [...HOME_BUILTIN_ROWS];
  *  not shorten it, and it never reads the disk for more than this many keys. */
 const RECENT_CANDIDATES = 60;
 
-const requestedRows = (raw: unknown, catalogRows: Map<HomeRowId, { addon: import("../types.js").AddonRecord; definition: import("../types.js").CatalogDefinition }>): HomeRowId[] => {
+const requestedRows = (raw: unknown, catalogRows: Map<HomeRowId, HomeCatalogTarget>): HomeRowId[] => {
   if (raw === undefined) return [...ALL_ROWS, ...catalogRows.keys()];
   const value = Array.isArray(raw) ? raw.join(",") : String(raw);
   const wanted = new Set(value.split(",").map((entry) => entry.trim()).filter(Boolean));
@@ -424,46 +427,43 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
     return { status: "ok", items: cards, hasMore: rows.length > HOME_ROW_LIMIT, total: rows.length };
   };
 
+  const catalogs = deps.homeCatalogs ?? new HomeCatalogCache(deps.homeCatalog);
+
   const addonCatalogRows = (viewer: Viewer) => {
-    const rows = new Map<HomeRowId, { addon: import("../types.js").AddonRecord; definition: import("../types.js").CatalogDefinition }>();
-    for (const addon of allowedAddons(store.addons(), viewer)) {
-      if (!addon.enabled || addon.role === "source" || addon.showOnHome === false) continue;
-      for (const definition of addon.manifest.catalogs ?? []) {
-        if (addon.homeCatalogs !== undefined && !addon.homeCatalogs.includes(homeCatalogSelectionKey(definition.type, definition.id))) continue;
-        const row = homeCatalogRowId(addon.key, definition.type, definition.id);
-        if (!rows.has(row)) rows.set(row, { addon, definition });
-      }
+    const rows = new Map<HomeRowId, HomeCatalogTarget>();
+    for (const target of homeCatalogTargets(allowedAddons(store.addons(), viewer))) {
+      const row = homeCatalogRowId(target.addon.key, target.definition.type, target.definition.id);
+      if (!rows.has(row)) rows.set(row, target);
     }
     return rows;
   };
 
-  const addonCatalogRow = async (req: express.Request, viewer: Viewer, rowId: HomeRowId,
-    addon: import("../types.js").AddonRecord, definition: import("../types.js").CatalogDefinition): Promise<HomeRow> => {
-    const rawRequired = definition.extraRequired as unknown;
-    const requiredNames = Array.isArray(rawRequired)
-      ? rawRequired.filter((name): name is string => typeof name === "string")
-      : typeof rawRequired === "string" ? [rawRequired] : [];
-    const required = new Set([...requiredNames, ...(definition.extra ?? []).filter((extra) => extra.isRequired).map((extra) => extra.name)]);
-    const extras: Record<string, string | number> = {};
-    for (const extra of required) {
-      if (extra === "skip") extras.skip = 0;
-      else {
-        const option = definition.extra?.find((candidate) => candidate.name === extra)?.options?.[0];
-        if (option) extras[extra] = option;
-      }
+  /** A remembered answer is drawn at once and refreshed behind it when stale. Only a shelf
+   *  never fetched waits on the addon, and only up to the deadline: the lookup keeps running
+   *  and the next request finds it. */
+  const catalogItems = async (target: HomeCatalogTarget): Promise<MetaItem[] | undefined> => {
+    const remembered = catalogs.peek(target);
+    if (remembered) {
+      if (!remembered.fresh) catalogs.refresh(target);
+      return remembered.items;
     }
-    const fetch = deps.homeCatalog ?? ((entry: import("../types.js").AddonRecord, type: string, id: string, values: Record<string, string | number>) =>
-      catalogWithExtras(entry, type, id, values));
     let deadline: ReturnType<typeof setTimeout> | undefined;
-    let response: MetaItem[] | undefined;
+    const lookup = catalogs.load(target);
     try {
-      response = await Promise.race([
-        fetch(addon, definition.type, definition.id, extras),
+      return await Promise.race([
+        lookup,
         new Promise<undefined>((resolve) => { deadline = setTimeout(() => resolve(undefined), homeLookupDeadlineMs); }),
       ]);
     } finally {
       if (deadline) clearTimeout(deadline);
+      // A lookup that lost the race may still fail, and nobody is listening for it any more.
+      lookup.catch(() => undefined);
     }
+  };
+
+  const addonCatalogRow = async (req: express.Request, viewer: Viewer, rowId: HomeRowId, target: HomeCatalogTarget): Promise<HomeRow> => {
+    const { definition } = target;
+    const response = await catalogItems(target);
     if (!response) return { status: "ok", items: [], hasMore: false, partial: true };
     const seed = `${viewer.id}:${new Date(now()).toISOString().slice(0, 10)}:${rowId}:${shuffleOf(req.query.shuffle)}`;
     const cards: HomeCard[] = [];
@@ -502,11 +502,12 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
     res.set("Cache-Control", "private, no-store");
     const rows: Partial<Record<HomeRowId, HomeRow>> = {};
     const catalogRows = addonCatalogRows(viewer);
+    catalogs.visited([...catalogRows.values()]);
     await Promise.all(requestedRows(req.query.rows, catalogRows).map(async (id) => {
       try {
         const catalogRow = catalogRows.get(id);
         rows[id] = catalogRow
-          ? await addonCatalogRow(req, viewer, id, catalogRow.addon, catalogRow.definition)
+          ? await addonCatalogRow(req, viewer, id, catalogRow)
           : await builders[id as BuiltinHomeRowId](req, viewer);
       } catch (error) {
         rows[id] = { status: "error", error: rowError(error), items: [], hasMore: false };

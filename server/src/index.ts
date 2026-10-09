@@ -78,6 +78,7 @@ import { calendarFeedHandler, registerFollowRoutes } from "./routes/follows.js";
 import { registerLibrariesRoutes } from "./routes/libraries.js";
 import { registerPersonalRoutes } from "./routes/personal.js";
 import { registerHomeRoutes } from "./routes/home.js";
+import { HomeCatalogCache, homeCatalogTargets } from "./home-catalogs.js";
 import { registerPlaybackRoutes } from "./routes/playback.js";
 import { registerSettingsRoutes } from "./routes/settings.js";
 import { registerUsersRoutes } from "./routes/users.js";
@@ -2183,7 +2184,9 @@ const curate = registerCurateRoutes(app, { ...routeContext, candidates: libraryC
 
 // Home's confirm row shows what the curate route proposes, so it is registered once that
 // route exists.
-registerHomeRoutes(app, { ...routeContext, personal, completedJobs: () => queue.list(), newEpisodes: (ownerUserId, watched) => followService.newEpisodes(ownerUserId, watched), describeLibraryPath, locateFileArtwork, locateFolderArtworkPair, thumbUrl, scheduleFileArtwork, scheduleFolderArtwork, wirePath, dataOf, markersOf, progressOf, metaStore, seen, suggestionRows: curate.suggestionRows });
+const homeCatalogs = new HomeCatalogCache();
+const warmHomeCatalogs = () => { if (!homeCatalogs.idle) homeCatalogs.warm(homeCatalogTargets(store.addons())); };
+registerHomeRoutes(app, { ...routeContext, homeCatalogs, personal, completedJobs: () => queue.list(), newEpisodes: (ownerUserId, watched) => followService.newEpisodes(ownerUserId, watched), describeLibraryPath, locateFileArtwork, locateFolderArtworkPair, thumbUrl, scheduleFileArtwork, scheduleFolderArtwork, wirePath, dataOf, markersOf, progressOf, metaStore, seen, suggestionRows: curate.suggestionRows });
 
 registerDeviceRoutes(app, { ...routeContext, stats, countBytes, deviceDownloadTickets, deviceTransfers, DEVICE_TICKET_TTL, httpSourceOf, libraryTarget, mediaSource, ownerOf, pruneDeviceDownloadTickets, statMeta, trackMedia });
 registerDownloadRoutes(app, { ...routeContext, queue, deviceTransfers, jobView, sourceOf, mediaSource, posterOf, rememberTitle, titleKey, saveCatalogPoster, libraryKey, cachedMeta, prefsOf });
@@ -2275,6 +2278,8 @@ try {
   log("INFO", "Stremio Offline is listening", { port: bound.port, address: bound.address });
   // Readiness is announced first: the warm-up only fills the walks, and nothing waits on it.
   void warmLibraryCaches();
+  warmHomeCatalogs();
+  setInterval(warmHomeCatalogs, homeCatalogs.interval).unref();
   // The desktop shell holds the Mac awake while something streams or downloads; Docker has no
   // parent port.
   const activityPort = utilityParentPort();

@@ -343,6 +343,32 @@ describe("Home", () => {
     expect(row(catalogRow)!.querySelector(".browse-menu")).toBeNull();
   });
 
+  it("holds an addon shelf as a titled placeholder until it nears the screen, then asks for it once", async () => {
+    let notify: ((entries: Array<{ isIntersecting: boolean }>) => void) | undefined;
+    const observe = vi.fn();
+    vi.stubGlobal("IntersectionObserver", class {
+      constructor(callback: (entries: Array<{ isIntersecting: boolean }>) => void) { notify = callback; }
+      observe = observe;
+      disconnect = vi.fn();
+    });
+    const onVisible = vi.fn();
+    await render({ addons: [catalogAddon], onVisible });
+    expect(row(catalogRow)!.textContent).toContain("Cinemeta · Popular");
+    expect(row(catalogRow)!.querySelector(".skeleton")).not.toBeNull();
+    expect(observe).toHaveBeenCalledTimes(1);
+    expect(onVisible).not.toHaveBeenCalled();
+    await act(async () => { notify!([{ isIntersecting: true }]); });
+    expect(onVisible).toHaveBeenCalledTimes(1);
+    expect(onVisible).toHaveBeenCalledWith(catalogRow);
+  });
+
+  it("asks for an addon shelf at once where the browser cannot observe it", async () => {
+    vi.stubGlobal("IntersectionObserver", undefined);
+    const onVisible = vi.fn();
+    await render({ addons: [catalogAddon], onVisible });
+    expect(onVisible).toHaveBeenCalledWith(catalogRow);
+  });
+
   it("omits a new shelf with no items", async () => {
     await render({ admin: true, rows: allEmpty({ episodes: rowState({ items: [episodeCard()] }) }) });
     expect(row("episodes")).not.toBeNull();
