@@ -34,22 +34,33 @@ function remuxStartNudgeTarget(video: StartStallVideo): number | undefined {
   if (video.paused || video.seeking || video.ended || !video.buffered.length) return;
   const start = video.buffered.start(0);
   const at = video.currentTime;
-  if (start > 0.25 || at < start || at > start + 0.05 || video.buffered.end(0) - at < 2) return;
-  return at + 0.1;
+  if (start > 0.25 || at > start + 0.25 || video.buffered.end(0) - Math.max(at, start) < 2) return;
+  return Math.max(at, start) + 0.1;
 }
 
-/** Safari can stop at the first buffered frame after remux seeking, with no hole for hls.js to skip. */
-export function scheduleRemuxStartNudge(video: StartStallVideo, isCurrent: () => boolean, onNudge: () => void) {
-  if (remuxStartNudgeTarget(video) === undefined) return;
-  const stalledAt = video.currentTime;
-  const timer = setTimeout(() => {
-    if (!isCurrent() || Math.abs(video.currentTime - stalledAt) > 0.001) return;
+/** Watch actual progress: hls.js can report a stall before the buffer is ready,
+ * or move to its first frame without emitting another error when that frame sticks. */
+export function watchRemuxStart(video: StartStallVideo, isCurrent: () => boolean, onNudge: () => void) {
+  let stalledAt = video.currentTime;
+  let stableFor = 0;
+  const timer = setInterval(() => {
+    if (!isCurrent() || video.ended || video.currentTime > 0.5) {
+      clearInterval(timer);
+      return;
+    }
     const target = remuxStartNudgeTarget(video);
-    if (target === undefined) return;
+    if (target === undefined || Math.abs(video.currentTime - stalledAt) > 0.001) {
+      stalledAt = video.currentTime;
+      stableFor = 0;
+      return;
+    }
+    stableFor += 250;
+    if (stableFor < 1500) return;
+    clearInterval(timer);
     video.currentTime = target;
     onNudge();
-  }, 1500);
-  return () => clearTimeout(timer);
+  }, 250);
+  return () => clearInterval(timer);
 }
 
 /** How far past the current playlist we wait for FFmpeg instead of restarting. */

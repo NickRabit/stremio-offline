@@ -6,7 +6,7 @@ import { ApiError, api, describeError, subtitleUrl } from "./api";
 import { watchSidecar } from "./player-sidecar";
 import { label, pickAddonSubtitle } from "./languages";
 import { hostOf, report } from "./diagnostics";
-import { releaseMediaElement, AHEAD_CATCHUP_MS, HLS_PLAYER_CONFIG, ignoreHlsErrorDuringRestart, planDecodeRecovery, planSeek, recordDecodeRecover, scheduleRemuxStartNudge, waitForSeekable } from "./player-hls";
+import { releaseMediaElement, AHEAD_CATCHUP_MS, HLS_PLAYER_CONFIG, ignoreHlsErrorDuringRestart, planDecodeRecovery, planSeek, recordDecodeRecover, watchRemuxStart, waitForSeekable } from "./player-hls";
 import { clampVolume, readVolume, writeVolume } from "./player-volume";
 import { progressToSave } from "./player-progress";
 import { detectCapabilities } from "./capabilities";
@@ -493,8 +493,9 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       hlsRef.current = hls;
       hls.on(Hls.Events.MANIFEST_PARSED, () => { if (autoplay) void video.play().catch(() => undefined); });
       let recoveries = 0;
-      let startNudgeScheduled = false;
-      let cancelStartNudge: (() => void) | undefined;
+      const cancelStartNudge = mode === "remux" ? watchRemuxStart(video,
+        () => hlsRef.current === hls && !abandonedRef.current && !seekInFlightRef.current,
+        () => report("INFO", "Nudged a stalled remux start", context())) : undefined;
       hls.on(Hls.Events.DESTROYING, () => cancelStartNudge?.());
       hls.on(Hls.Events.FRAG_BUFFERED, () => { recoveries = 0; });
       hls.on(Hls.Events.ERROR, (_event, data) => {
@@ -510,15 +511,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
           reason: (data as { reason?: string }).reason,
           cause: ((data as { error?: Error }).error?.message ?? (data as { err?: Error }).err?.message)?.slice(0, 160),
         });
-        if (!data.fatal) {
-          if (data.details === Hls.ErrorDetails.BUFFER_STALLED_ERROR && mode === "remux" && offsetRef.current > 0 && !startNudgeScheduled) {
-            cancelStartNudge = scheduleRemuxStartNudge(video,
-              () => hlsRef.current === hls && !abandonedRef.current && !seekInFlightRef.current,
-              () => report("INFO", "Nudged a stalled remux start", context()));
-            startNudgeScheduled = Boolean(cancelStartNudge);
-          }
-          return;
-        }
+        if (!data.fatal) return;
         if (recoveries < 2) {
           recoveries += 1;
           if (data.type === Hls.ErrorTypes.NETWORK_ERROR) { hls.startLoad(); return; }
