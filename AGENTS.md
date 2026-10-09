@@ -47,6 +47,11 @@ The single set of rules for any coding agent working in this repository.
   Bump minor or major only when the user asks. Skip the bump for docs, rules,
   and other non-shipping work.
 
+## Delegating to other agents
+
+- When the user asks to use "deepseek" for a task, that means running
+  `codex --profile deepseek`.
+
 ## After implementing
 
 ### Visual verification
