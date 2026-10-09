@@ -2131,7 +2131,7 @@ export function App() {
             }}><SlidersHorizontal/></button>
           </div></div></div>
           <div className="catalog-layout"><section className={`panel result-panel${staleGrid ? " refreshing" : ""}`}><div className="panel-head"><h3>{submittedQuery ? t("catalog.searchHeading", { query: submittedQuery }) : t("catalog.results")}</h3><small className="search-status" role="status">{liveState === "pending" || (busy && submittedQuery) ? t("catalog.searchUpdating") : liveState === "tooShort" ? t("catalog.searchMinChars") : ""}</small><span>{t("catalog.itemCount", { count: visibleItems.length })}{hasMore ? "+" : ""}</span></div>
-            <div className={`poster-grid${staleGrid ? " stale" : ""}`} aria-busy={staleGrid || undefined} ref={gridRef} onScroll={(event) => { compactOnScroll(event, catalogCompact, setCatalogCompact, true); scheduleViewAnchor(); }}>
+            <div className={`poster-grid${staleGrid ? " stale" : ""}`} aria-busy={staleGrid || undefined} ref={gridRef} onScroll={(event) => { compactOnScroll(event, catalogCompact, setCatalogCompact); scheduleViewAnchor(); }}>
               {visibleItems.map((item) => {
                 const klic = `${item.type || "movie"}:${item.id}`;
                 const postup = catalogProgress(item);
@@ -2319,7 +2319,7 @@ export function App() {
         </div>
         <div className="browse-scroll" ref={browseScrollRef} onScroll={(event) => {
           if (!restoringScroll.current && !playerOpenRef.current) scrollByView.current.library = event.currentTarget.scrollTop;
-          compactOnScroll(event, libraryCompact, setLibraryCompact, true);
+          compactOnScroll(event, libraryCompact, setLibraryCompact);
           scheduleViewAnchor();
         }}>
         {!browsePath && !onlyFavorites && !browseQuery && <LibraryShelf
