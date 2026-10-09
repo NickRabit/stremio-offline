@@ -58,7 +58,10 @@ export function createSettingsBackup(settings: Settings, addons: AddonRecord[], 
     settings: structuredClone(settings),
     libraries: libraries.map(({ id, name, type, root }) => ({ id, name, type, root: toPosix(root) })),
     addons: addons.map(({ manifestUrl, role, enabled, globalSearch, showOnHome, homeCatalogs, addedAt, downloadSettings }) => ({
-      manifestUrl, role, enabled, globalSearch, showOnHome, homeCatalogs: homeCatalogs ? [...homeCatalogs] : undefined, addedAt, downloadSettings: structuredClone(downloadSettings),
+      manifestUrl, role, enabled, globalSearch,
+      ...(showOnHome !== undefined ? { showOnHome } : {}),
+      ...(homeCatalogs !== undefined ? { homeCatalogs: [...homeCatalogs] } : {}),
+      addedAt, downloadSettings: structuredClone(downloadSettings),
     })),
   };
 }

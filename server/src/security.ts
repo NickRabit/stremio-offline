@@ -218,7 +218,6 @@ export function publicAddonRestricted(addon: import("./types.js").AddonRecord) {
     globalSearch: addon.globalSearch,
     showInContinueWatching: addon.showInContinueWatching !== false,
     showOnHome: addon.showOnHome !== false,
-    homeCatalogs: addon.homeCatalogs,
     allowedUsers: addon.allowedUsers ?? [],
     essential: essentialAddon(addon),
     manifest: {

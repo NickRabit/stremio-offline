@@ -76,6 +76,8 @@ interface Harness {
   artwork?: string;
   /** Every series id the catalogue side was asked about, in order. */
   lookups: string[];
+  /** Every manifest feed the Home route requested, including its required extras. */
+  catalogCalls: Array<{ addonKey: string; type: string; catalogId: string; extras: Record<string, string | number> }>;
   data(user: string): UserData;
   close(): Promise<void>;
 }
@@ -107,7 +109,7 @@ const mount = async (options: { libraries?: LibraryRecord[]; deadlineMs?: number
     base: "", addons, records, missing, broken, completed: [], completedThrows: false, seen,
     episodes: [], episodesThrows: false, newEpisodesCalls: [], suggestions: [], suggestionsThrow: false, suggestionCalls: 0,
     now: options.now ?? Date.parse("2026-01-15T12:00:00.000Z"),
-    metaDelayMs: 0, metaAnswer: null, lookups: [],
+    metaDelayMs: 0, metaAnswer: null, lookups: [], catalogCalls: [],
     data: () => { throw new Error("not mounted"); }, close: async () => undefined,
   };
   const users = new Map<string, UserData>([[ALICE, emptyUserData()], [BOB, emptyUserData()], [ADMIN, emptyUserData()]]);
@@ -205,9 +207,14 @@ const mount = async (options: { libraries?: LibraryRecord[]; deadlineMs?: number
       if (state.suggestionsThrow) throw new Error("the proposals are unavailable");
       return state.suggestions;
     },
-    cinemetaCatalog: async (_addon, type) => type === "movie"
-      ? [1, 3, 5].map((number) => ({ id: `tt${number}`, type, name: `Film ${number}`, poster: "https://img/film.jpg", year: 2025 }))
-      : [2, 4, 6].map((number) => ({ id: `tt${number}`, type, name: `Seriál ${number}` })),
+    homeCatalog: async (addon, type, catalogId, extras) => {
+      state.catalogCalls.push({ addonKey: addon.key, type, catalogId, extras: { ...extras } });
+      const numbers = type === "movie" ? [1, 3, 5] : [2, 4, 6];
+      return [...numbers, numbers[0]!].map((number) => ({
+        id: `${catalogId}-tt${number}`, type, name: `${catalogId} ${type === "movie" ? "Film" : "Seriál"} ${number}`,
+        ...(type === "movie" ? { poster: "https://img/film.jpg", year: 2025 } : {}),
+      }));
+    },
     now: () => state.now,
     homeLookupDeadlineMs: options.deadlineMs,
   };
@@ -416,7 +423,8 @@ test("Home loads each selected addon catalog feed into its own seeded carousel",
   harness.addons.push({ key: "cinemeta", manifestUrl: "https://cinemeta/manifest.json", role: "catalog", enabled: true,
     globalSearch: true, showOnHome: true, addedAt: "", allowedUsers: [ALICE],
     manifest: { id: "com.linvo.cinemeta", name: "Cinemeta", version: "1", catalogs: [
-      { type: "movie", id: "top" }, { type: "series", id: "top" }, { type: "movie", id: "featured" },
+      { type: "movie", id: "top" }, { type: "series", id: "top" },
+      { type: "movie", id: "featured", extra: [{ name: "genre", isRequired: true, options: ["Drama", "Comedy"] }] },
     ] } } as AddonRecord);
 
   const movie = homeCatalogRowId("cinemeta", "movie", "top");
@@ -439,6 +447,9 @@ test("Home loads each selected addon catalog feed into its own seeded carousel",
   assert.deepEqual(featuredMovies.map((item) => item.key), repeated.rows[featured]!.items.map((item) => item.key));
   assert.notDeepEqual(movies.map((item) => item.key), second.rows[movie]!.items.map((item) => item.key));
   assert.notDeepEqual(featuredMovies.map((item) => item.key), second.rows[featured]!.items.map((item) => item.key));
+  assert.deepEqual(new Set(harness.catalogCalls.map(({ type, catalogId }) => `${type}:${catalogId}`)),
+    new Set(["movie:top", "series:top", "movie:featured"]));
+  assert.equal(harness.catalogCalls.filter((call) => call.catalogId === "featured").every((call) => call.extras.genre === "Drama"), true);
 });
 
 test("one row that throws leaves the others ok and carries no total", async (t) => {

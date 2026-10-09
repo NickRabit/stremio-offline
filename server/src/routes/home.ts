@@ -73,8 +73,6 @@ export interface HomeDeps extends RouteContext {
   suggestionRows(libraryId?: string): Promise<HomeSuggestion[]>;
   /** Injectable for route tests; production reads the selected catalog from its addon. */
   homeCatalog?(addon: import("../types.js").AddonRecord, type: string, catalogId: string, extras: Record<string, string | number>): Promise<MetaItem[]>;
-  /** @deprecated Kept as a test adapter for the Cinemeta-only row during migration. */
-  cinemetaCatalog?(addon: import("../types.js").AddonRecord, type: string, catalogId: string): Promise<MetaItem[]>;
   /** Injected so the tonight seed is testable without a real date. */
   now?: () => number;
   /** Tests inject a few milliseconds instead of waiting the real deadline out. */
@@ -436,7 +434,11 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
 
   const addonCatalogRow = async (req: express.Request, viewer: Viewer, rowId: HomeRowId,
     addon: import("../types.js").AddonRecord, definition: import("../types.js").CatalogDefinition): Promise<HomeRow> => {
-    const required = new Set([...(definition.extraRequired ?? []), ...(definition.extra ?? []).filter((extra) => extra.isRequired).map((extra) => extra.name)]);
+    const rawRequired = definition.extraRequired as unknown;
+    const requiredNames = Array.isArray(rawRequired)
+      ? rawRequired.filter((name): name is string => typeof name === "string")
+      : typeof rawRequired === "string" ? [rawRequired] : [];
+    const required = new Set([...requiredNames, ...(definition.extra ?? []).filter((extra) => extra.isRequired).map((extra) => extra.name)]);
     const extras: Record<string, string | number> = {};
     for (const extra of required) {
       if (extra === "skip") extras.skip = 0;
@@ -445,23 +447,30 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
         if (option) extras[extra] = option;
       }
     }
-    const fetch = deps.homeCatalog ?? (deps.cinemetaCatalog
-      ? (entry: import("../types.js").AddonRecord, type: string, id: string) => deps.cinemetaCatalog!(entry, type, id)
-      : (entry: import("../types.js").AddonRecord, type: string, id: string, values: Record<string, string | number>) => catalogWithExtras(entry, type, id, values));
+    const fetch = deps.homeCatalog ?? ((entry: import("../types.js").AddonRecord, type: string, id: string, values: Record<string, string | number>) =>
+      catalogWithExtras(entry, type, id, values));
     let deadline: ReturnType<typeof setTimeout> | undefined;
-    const response = await Promise.race([
-      fetch(addon, definition.type, definition.id, extras),
-      new Promise<undefined>((resolve) => { deadline = setTimeout(() => resolve(undefined), homeLookupDeadlineMs); }),
-    ]);
-    if (deadline) clearTimeout(deadline);
+    let response: MetaItem[] | undefined;
+    try {
+      response = await Promise.race([
+        fetch(addon, definition.type, definition.id, extras),
+        new Promise<undefined>((resolve) => { deadline = setTimeout(() => resolve(undefined), homeLookupDeadlineMs); }),
+      ]);
+    } finally {
+      if (deadline) clearTimeout(deadline);
+    }
     if (!response) return { status: "ok", items: [], hasMore: false, partial: true };
     const seed = `${viewer.id}:${new Date(now()).toISOString().slice(0, 10)}:${rowId}:${shuffleOf(req.query.shuffle)}`;
     const cards: HomeCard[] = [];
+    const seen = new Set<string>();
     for (const meta of response) {
       if (!meta.id || !meta.name) continue;
+      const key = `${definition.type}:${meta.id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
       const rewritten = images.rewriteMeta(meta);
-      cards.push({ kind: "discovery", key: `${definition.type}:${meta.id}`, type: definition.type,
-        id: meta.id, name: meta.name, title: meta.name, addonKey: addon.key,
+      cards.push({ kind: "discovery", key, type: definition.type,
+        id: meta.id, name: meta.name, title: meta.name,
         ...(rewritten.poster ? { poster: rewritten.poster } : {}),
         ...(rewritten.background ? { wide: rewritten.background } : {}),
         ...(meta.year ? { year: String(meta.year) } : meta.releaseInfo ? { year: meta.releaseInfo } : {}) });

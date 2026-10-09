@@ -124,6 +124,7 @@ describe("Home", () => {
   it("draws the shelves in the page order with Downloads last", async () => {
     await render({
       admin: true,
+      addons: [catalogAddon],
       jobs: [job({ id: "failed", status: "failed" })],
       rows: allEmpty({
         resume: rowState({ items: [resumeFile()] }),
