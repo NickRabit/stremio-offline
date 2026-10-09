@@ -1,9 +1,13 @@
-import { catalogWithExtras } from "./addons.js";
+import { addonMetadata, catalogWithExtras } from "./addons.js";
 import { homeCatalogSelectionKey } from "./home.js";
 import { log } from "./logger.js";
 import type { AddonRecord, CatalogDefinition, MetaItem } from "./types.js";
 
 export type HomeCatalogFetch = (addon: AddonRecord, type: string, catalogId: string, extras: Record<string, string | number>) => Promise<MetaItem[]>;
+export type HomeMetaFetch = (addon: AddonRecord, type: string, id: string) => Promise<MetaItem | null>;
+
+/** A catalogue without artwork is looked up title by title, but only this far into it. */
+const ARTWORK_LOOKUPS = 100;
 
 /** One Home shelf an addon feeds: the addon and the catalogue it reads. */
 export interface HomeCatalogTarget { addon: AddonRecord; definition: CatalogDefinition }
@@ -53,6 +57,10 @@ export interface HomeCatalogCacheOptions {
   maxEntries?: number;
   /** Requests one addon answers at a time; Home with every Cinemeta feed is a dozen at once. */
   perAddon?: number;
+  /** Where a title's artwork comes from when its catalogue entry carries none. */
+  meta?: HomeMetaFetch;
+  /** How long a title's looked-up artwork is trusted. */
+  artworkMs?: number;
   now?: () => number;
 }
 
@@ -63,6 +71,7 @@ export interface HomeCatalogCacheOptions {
  *  content. */
 export class HomeCatalogCache {
   private entries = new Map<string, Entry>();
+  private artwork = new Map<string, { poster?: string; background?: string; at: number }>();
   private inFlight = new Map<string, Promise<MetaItem[]>>();
   private active = new Map<string, number>();
   private waiting = new Map<string, Array<() => void>>();
@@ -71,6 +80,8 @@ export class HomeCatalogCache {
   private readonly maxEntries: number;
   private readonly perAddon: number;
   private readonly now: () => number;
+  private readonly meta: HomeMetaFetch;
+  private readonly artworkMs: number;
   private visitedAt: number;
 
   constructor(private readonly fetch: HomeCatalogFetch = (addon, type, id, extras) => catalogWithExtras(addon, type, id, extras), options: HomeCatalogCacheOptions = {}) {
@@ -80,6 +91,8 @@ export class HomeCatalogCache {
     this.perAddon = options.perAddon ?? 6;
     this.now = options.now ?? Date.now;
     this.visitedAt = this.now();
+    this.meta = options.meta ?? ((addon, type, id) => addonMetadata(addon, type, id));
+    this.artworkMs = options.artworkMs ?? 24 * 60 * 60_000;
   }
 
   /** The manifest URL carries an addon's configuration, so it names the content; the key alone
@@ -105,14 +118,10 @@ export class HomeCatalogCache {
     if (pending) return pending;
     const slot = target.addon.key;
     const started = (async () => {
-      await this.acquire(slot);
-      try {
-        const items = await this.fetch(target.addon, target.definition.type, target.definition.id, homeCatalogExtras(target.definition));
-        this.store(key, items);
-        return items;
-      } finally {
-        this.release(slot);
-      }
+      const listed = await this.limited(slot, () => this.fetch(target.addon, target.definition.type, target.definition.id, homeCatalogExtras(target.definition)));
+      const items = await this.withArtwork(target.addon, listed);
+      this.store(key, items);
+      return items;
     })().finally(() => this.inFlight.delete(key));
     this.inFlight.set(key, started);
     return started;
@@ -146,6 +155,40 @@ export class HomeCatalogCache {
 
   /** How often a warm-up is worth running: every shelf has just gone stale by then. */
   get interval(): number { return this.freshMs; }
+
+  /** Some catalogues list bare names -- a debrid account's downloads, say -- and keep the
+   *  poster for the title's own page. Those are asked for it, one title at a time, and the
+   *  answer is kept for a day: a title's artwork does not change between visits. */
+  private async withArtwork(addon: AddonRecord, items: MetaItem[]): Promise<MetaItem[]> {
+    let lookups = 0;
+    return Promise.all(items.map(async (item) => {
+      if (item.poster || item.background || !item.id || !item.type || lookups >= ARTWORK_LOOKUPS) return item;
+      lookups += 1;
+      const key = JSON.stringify([addon.manifestUrl, item.type, item.id]);
+      let art = this.artwork.get(key);
+      if (!art || this.now() - art.at > this.artworkMs) {
+        try {
+          const meta = await this.limited(addon.key, () => this.meta(addon, item.type, item.id));
+          art = { ...(typeof meta?.poster === "string" ? { poster: meta.poster } : {}), ...(typeof meta?.background === "string" ? { background: meta.background } : {}), at: this.now() };
+          this.artwork.delete(key);
+          this.artwork.set(key, art);
+          while (this.artwork.size > this.maxEntries * 10) {
+            const oldest = this.artwork.keys().next();
+            if (oldest.done) break;
+            this.artwork.delete(oldest.value);
+          }
+        } catch {
+          return item;
+        }
+      }
+      return art.poster || art.background ? { ...item, ...(art.poster ? { poster: art.poster } : {}), ...(art.background ? { background: art.background } : {}) } : item;
+    }));
+  }
+
+  private async limited<T>(slot: string, run: () => Promise<T>): Promise<T> {
+    await this.acquire(slot);
+    try { return await run(); } finally { this.release(slot); }
+  }
 
   private store(key: string, items: MetaItem[]) {
     this.entries.delete(key);

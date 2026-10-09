@@ -33,6 +33,10 @@ Opening Home fetches every carousel of the account in the background, and a
 warm-up at start and every 20 minutes keeps them filled while Home has been
 opened within the last 12 hours.
 
+A catalog that lists bare names without artwork (Torrentio's debrid downloads,
+for example) has the first 100 such titles looked up through the add-on's own
+`meta` resource; the artwork found is kept for a day.
+
 Home leads with Continue watching. The queue stays on the page as a one-line
 summary unless a job needs attention. The official Stremio home
 is deliberately not the model. Ideas taken from Jellyfin, Plex and Infuse:

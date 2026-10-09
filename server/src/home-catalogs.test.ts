@@ -115,3 +115,33 @@ test("a manifest whose extras are not a list declares none, rather than failing 
   const cache = new HomeCatalogCache(async () => []);
   assert.doesNotThrow(() => cache.warm([{ addon: addon("a", []), definition: broken }]));
 });
+
+test("a catalogue that lists bare names takes each title's artwork from its own page, once", async () => {
+  const asked: string[] = [];
+  const record = addon("rd", [{ type: "other", id: "downloads" }]);
+  const cache = new HomeCatalogCache(async () => [
+    { id: "rd:1", type: "other", name: "Cars 3" },
+    { id: "rd:2", type: "other", name: "Unknown" },
+    { id: "rd:3", type: "other", name: "Has art", poster: "https://art/own.jpg" },
+  ], {
+    freshMs: 0,
+    meta: async (_addon, _type, id) => { asked.push(id); return id === "rd:1" ? { id, type: "other", name: "Cars 3", poster: "https://art/cars.jpg", background: "https://art/cars-wide.jpg" } : null; },
+  });
+  const items = await cache.load(target(record));
+  assert.equal(items[0]!.poster, "https://art/cars.jpg");
+  assert.equal(items[0]!.background, "https://art/cars-wide.jpg");
+  assert.equal(items[1]!.poster, undefined);
+  assert.equal(items[2]!.poster, "https://art/own.jpg");
+  assert.deepEqual(asked.sort(), ["rd:1", "rd:2"]);
+  await cache.load(target(record));
+  assert.equal(asked.length, 2, "artwork already looked up is not asked for again");
+});
+
+test("an artwork lookup that fails leaves the title without a poster but keeps the row", async () => {
+  const cache = new HomeCatalogCache(async () => [{ id: "rd:1", type: "other", name: "x" }], {
+    meta: async () => { throw new Error("down"); },
+  });
+  const items = await cache.load(target(addon("rd", [{ type: "other", id: "downloads" }])));
+  assert.equal(items.length, 1);
+  assert.equal(items[0]!.poster, undefined);
+});
