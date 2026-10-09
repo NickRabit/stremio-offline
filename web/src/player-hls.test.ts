@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { releaseMediaElement, HLS_PLAYER_CONFIG, canRecoverDecode, ignoreHlsErrorDuringRestart, planDecodeRecovery, planSeek, recordDecodeRecover, scheduleRemuxStartNudge, waitForSeekable } from "./player-hls";
+import { releaseMediaElement, HLS_PLAYER_CONFIG, canRecoverDecode, ignoreHlsErrorDuringRestart, planDecodeRecovery, planSeek, recordDecodeRecover, watchRemuxStart, waitForSeekable } from "./player-hls";
 
 describe("HLS_PLAYER_CONFIG", () => {
   it("keeps the forward buffer short enough that an 8x remux burst should not fill MSE", () => {
@@ -112,7 +112,7 @@ describe("releaseMediaElement", () => {
 });
 
 
-describe("scheduleRemuxStartNudge", () => {
+describe("watchRemuxStart", () => {
   afterEach(() => vi.useRealTimers());
   const stalledVideo = () => ({ currentTime: 0.0666667, paused: false, seeking: false, ended: false,
     buffered: { length: 1, start: () => 0.0666666667, end: () => 12.0047 },
@@ -122,7 +122,7 @@ describe("scheduleRemuxStartNudge", () => {
     vi.useFakeTimers();
     const video = stalledVideo();
     const report = vi.fn();
-    scheduleRemuxStartNudge(video, () => true, report);
+    watchRemuxStart(video, () => true, report);
     vi.advanceTimersByTime(1499);
     expect(video.currentTime).toBe(0.0666667);
     vi.advanceTimersByTime(1);
@@ -136,8 +136,8 @@ describe("scheduleRemuxStartNudge", () => {
     const video = stalledVideo();
     const report = vi.fn();
     let current = true;
-    const cancel = scheduleRemuxStartNudge(video, () => current, report);
-    if (change === "progress") video.currentTime += 0.03;
+    const cancel = watchRemuxStart(video, () => current, report);
+    if (change === "progress") video.currentTime = 1;
     if (change === "pause") video.paused = true;
     if (change === "seeking") video.seeking = true;
     if (change === "ended") video.ended = true;
@@ -150,14 +150,68 @@ describe("scheduleRemuxStartNudge", () => {
     expect(report).not.toHaveBeenCalled();
   });
 
-  it("leaves gaps, later stalls and insufficient buffer to the existing recovery", () => {
+  it.each([0, 0.08, 0.1166667, 0.13])("recovers a stationary start at %s without an HLS error", (at) => {
     vi.useFakeTimers();
-    for (const at of [0, 0.2, 4]) {
-      const video = { ...stalledVideo(), currentTime: at };
-      expect(scheduleRemuxStartNudge(video, () => true, vi.fn())).toBeUndefined();
-    }
+    const video = { ...stalledVideo(), currentTime: at };
+    const report = vi.fn();
+    watchRemuxStart(video, () => true, report);
+    vi.advanceTimersByTime(1500);
+    expect(video.currentTime).toBeCloseTo(Math.max(at, video.buffered.start()) + 0.1);
+    expect(report).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits for delayed buffering instead of losing the recovery opportunity", () => {
+    vi.useFakeTimers();
     const video = stalledVideo();
-    video.buffered.end = () => 1;
-    expect(scheduleRemuxStartNudge(video, () => true, vi.fn())).toBeUndefined();
+    video.buffered.length = 0;
+    const report = vi.fn();
+    watchRemuxStart(video, () => true, report);
+    vi.advanceTimersByTime(5000);
+    expect(report).not.toHaveBeenCalled();
+    video.buffered.length = 1;
+    vi.advanceTimersByTime(1500);
+    expect(report).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows hls.js to cross the initial gap, then recovers if the first frame still sticks", () => {
+    vi.useFakeTimers();
+    const video = { ...stalledVideo(), currentTime: 0 };
+    const report = vi.fn();
+    watchRemuxStart(video, () => true, report);
+    vi.advanceTimersByTime(1000);
+    video.currentTime = 0.1166667;
+    vi.advanceTimersByTime(1500);
+    expect(report).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(250);
+    expect(report).toHaveBeenCalledTimes(1);
+    expect(video.currentTime).toBeCloseTo(0.2166667);
+  });
+
+  it("does not mistake normal playback for a stuck first frame", () => {
+    vi.useFakeTimers();
+    const video = stalledVideo();
+    const report = vi.fn();
+    watchRemuxStart(video, () => true, report);
+    for (let i = 0; i < 20; i++) {
+      video.currentTime += 0.04;
+      vi.advanceTimersByTime(250);
+    }
+    vi.advanceTimersByTime(5000);
+    expect(report).not.toHaveBeenCalled();
+  });
+
+  it("leaves later stalls, large gaps and insufficient buffer alone", () => {
+    vi.useFakeTimers();
+    for (const video of [
+      { ...stalledVideo(), currentTime: 4 },
+      { ...stalledVideo(), buffered: { length: 1, start: () => 2, end: () => 12 } },
+      { ...stalledVideo(), buffered: { length: 1, start: () => 0.0666667, end: () => 1 } },
+    ]) {
+      const report = vi.fn();
+      const cancel = watchRemuxStart(video, () => true, report);
+      vi.advanceTimersByTime(5000);
+      expect(report).not.toHaveBeenCalled();
+      cancel();
+    }
   });
 });
