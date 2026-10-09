@@ -21,7 +21,7 @@ const skeleton = <div className="resume-strip skeleton" aria-hidden="true">{SKEL
 
 /** One media shelf: its heading, its Show all, and either its cards, a first-load skeleton or
  *  its own error line with a retry. A row with nothing in it and no failure is not drawn. */
-export function HomeShelf({ row, title, state, shape, actions, onRetry, onShowAll, onShuffle, onVisible }: {
+export function HomeShelf({ row, title, state, shape, actions, onRetry, onShowAll, onShuffle, onVisible, onOpenCatalog }: {
   row: HomeRowId;
   title?: string;
   state: HomeRowState | undefined;
@@ -33,6 +33,8 @@ export function HomeShelf({ row, title, state, shape, actions, onRetry, onShowAl
   onShuffle?: () => void;
   /** A shelf that loads only once it nears the screen; until then it is a placeholder. */
   onVisible?: () => void;
+  /** An addon shelf's heading opens its whole catalogue. */
+  onOpenCatalog?: () => void;
 }) {
   const placeholder = useRef<HTMLElement>(null);
   const waiting = (!state || state.status === "idle") && onVisible !== undefined;
@@ -47,8 +49,12 @@ export function HomeShelf({ row, title, state, shape, actions, onRetry, onShowAl
     return () => observer.disconnect();
   }, [waiting, onVisible]);
 
+  const heading = (text: string) => onOpenCatalog
+    ? <h3><button className="home-catalog-link" title={t("home.openCatalog")} onClick={onOpenCatalog}><span>{text}</span><ChevronRight aria-hidden="true"/></button></h3>
+    : <h3>{text}</h3>;
+
   if (waiting) return <section className="home-row" data-row={row} ref={placeholder}>
-    <div className="subhead"><div className="home-head"><h3>{title ?? row}</h3></div></div>
+    <div className="subhead"><div className="home-head">{heading(title ?? row)}</div></div>
     {skeleton}
   </section>;
   if (!state || state.status === "idle") return null;
@@ -58,7 +64,7 @@ export function HomeShelf({ row, title, state, shape, actions, onRetry, onShowAl
 
   return <section className="home-row" data-row={row}>
     <div className="subhead">
-      <div className="home-head"><h3>{title ?? (row in TITLE ? t(TITLE[row as BuiltinHomeRowId]) : row)}</h3>{row === "confirm" && state.total != null && <span className="count">{state.total}</span>}</div>
+      <div className="home-head">{heading(title ?? (row in TITLE ? t(TITLE[row as BuiltinHomeRowId]) : row))}{row === "confirm" && state.total != null && <span className="count">{state.total}</span>}</div>
       {(row === "tonight" || row.startsWith("catalog:") ) && onShuffle && <button className="home-shuffle" aria-label={t("home.shuffle")} title={t("home.shuffle")} onClick={onShuffle}><Shuffle/></button>}
       {target && <button className="resume-show-all" onClick={() => onShowAll(target)}>{t(SHOW_ALL[row] ?? "library.showAll")}<ChevronRight/></button>}
     </div>

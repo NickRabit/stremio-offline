@@ -186,6 +186,7 @@ export const sk: Catalog = {
   "home.cinemeta": "Cinemeta",
   "home.toConfirm": "Na potvrdenie",
   "home.shuffle": "Zamiešať",
+  "home.openCatalog": "Otvoriť v katalógu",
   "home.confirmGuess": "Návrh: {name}",
   "home.newEpisode": "Nová epizóda",
   "home.openFollowing": "Otvoriť Sledované",

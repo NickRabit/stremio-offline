@@ -369,6 +369,21 @@ describe("Home", () => {
     expect(onVisible).toHaveBeenCalledWith(catalogRow);
   });
 
+  it("opens an addon shelf's whole catalogue from its heading, loaded or not", async () => {
+    const onOpenCatalog = vi.fn();
+    await render({ addons: [catalogAddon], rows: allEmpty({ [catalogRow]: rowState({ items: [discoveryCard()] }) }), onOpenCatalog });
+    const link = row(catalogRow)!.querySelector<HTMLButtonElement>(".home-catalog-link")!;
+    expect(link.textContent).toContain("Cinemeta · Popular");
+    expect(link.title).toBe("Open in catalogue");
+    await click(link);
+    expect(onOpenCatalog).toHaveBeenCalledWith(catalogRow);
+    expect(row("resume")?.querySelector(".home-catalog-link") ?? null).toBeNull();
+
+    vi.stubGlobal("IntersectionObserver", class { observe() {} disconnect() {} });
+    await render({ addons: [catalogAddon], rows: allEmpty(), onOpenCatalog, onVisible: vi.fn() });
+    expect(row(catalogRow)!.querySelector(".home-catalog-link")).not.toBeNull();
+  });
+
   it("omits a new shelf with no items", async () => {
     await render({ admin: true, rows: allEmpty({ episodes: rowState({ items: [episodeCard()] }) }) });
     expect(row("episodes")).not.toBeNull();

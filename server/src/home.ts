@@ -16,6 +16,18 @@ export const homeCatalogSelectionKey = (type: string, id: string) => `${encodeUR
 export const homeCatalogRowId = (addonKey: string, type: string, id: string): HomeRowId =>
   `catalog:${encodeURIComponent(addonKey)}:${encodeURIComponent(type)}:${encodeURIComponent(id)}`;
 
+/** The addon catalogue a Home row reads, or nothing for a built-in row. */
+export function parseHomeCatalogRowId(row: string): { addonKey: string; type: string; id: string } | undefined {
+  const parts = row.split(":");
+  if (parts.length !== 4 || parts[0] !== "catalog") return undefined;
+  try {
+    const [addonKey, type, id] = parts.slice(1).map(decodeURIComponent) as [string, string, string];
+    return { addonKey, type, id };
+  } catch {
+    return undefined;
+  }
+}
+
 export interface HomeProgress { position: number; duration: number }
 
 export type HomeCard =

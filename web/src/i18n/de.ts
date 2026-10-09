@@ -186,6 +186,7 @@ export const de: Catalog = {
   "home.cinemeta": "Cinemeta",
   "home.toConfirm": "Zu bestätigen",
   "home.shuffle": "Mischen",
+  "home.openCatalog": "Im Katalog öffnen",
   "home.confirmGuess": "Vorschlag: {name}",
   "home.newEpisode": "Neue Folge",
   "home.openFollowing": "Gefolgt öffnen",

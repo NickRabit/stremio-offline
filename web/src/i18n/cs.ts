@@ -198,6 +198,7 @@ export const cs: Catalog = {
   "home.cinemeta": "Cinemeta",
   "home.toConfirm": "K potvrzení",
   "home.shuffle": "Zamíchat",
+  "home.openCatalog": "Otevřít v katalogu",
   "home.confirmGuess": "Návrh: {name}",
   "home.newEpisode": "Nová epizoda",
   "home.openFollowing": "Otevřít Sledované",

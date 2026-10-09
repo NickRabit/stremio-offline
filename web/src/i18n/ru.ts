@@ -186,6 +186,7 @@ export const ru: Catalog = {
   "home.cinemeta": "Cinemeta",
   "home.toConfirm": "Подтвердить",
   "home.shuffle": "Перемешать",
+  "home.openCatalog": "Открыть в каталоге",
   "home.confirmGuess": "Предложено: {name}",
   "home.newEpisode": "Новый эпизод",
   "home.openFollowing": "Открыть отслеживаемые",

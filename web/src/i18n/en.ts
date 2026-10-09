@@ -203,6 +203,7 @@ export const en = {
   "home.cinemeta": "Cinemeta",
   "home.toConfirm": "To confirm",
   "home.shuffle": "Shuffle",
+  "home.openCatalog": "Open in catalogue",
   "home.confirmGuess": "Suggested: {name}",
   "home.newEpisode": "New episode",
   "home.openFollowing": "Open Following",

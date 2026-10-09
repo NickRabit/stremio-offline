@@ -35,7 +35,7 @@ function metaOf(job: Download): string {
 
 const percentOf = (job: Download) => job.total != null && job.total > 0 ? Math.min(100, (job.received / job.total) * 100) : null;
 
-export function Home({ jobs, addons, admin, onShowDownloads, onAction, rows, shape, onToggleShape, onRetry, onShowAll, onPlay, onOpenCatalogue, onShuffle, onVisible, onReveal, onForgotten, onError }: {
+export function Home({ jobs, addons, admin, onShowDownloads, onAction, rows, shape, onToggleShape, onRetry, onShowAll, onPlay, onOpenCatalogue, onShuffle, onVisible, onOpenCatalog, onReveal, onForgotten, onError }: {
   jobs: Download[];
   libraries: LibraryView[];
   addons: import("./types").Addon[];
@@ -52,6 +52,8 @@ export function Home({ jobs, addons, admin, onShowDownloads, onAction, rows, sha
   onShuffle: (row: HomeRowId, shuffle: number) => void;
   /** An addon shelf neared the screen and should load. */
   onVisible?: (row: HomeRowId) => void;
+  /** An addon shelf's heading was chosen: show its catalogue in full. */
+  onOpenCatalog?: (row: HomeRowId) => void;
   onReveal: (path: string) => void;
   onForgotten: () => void;
   onError: (error: unknown) => void;
@@ -109,7 +111,7 @@ export function Home({ jobs, addons, admin, onShowDownloads, onAction, rows, sha
   return <>
     {heading}
     {confirmError}
-    {askedRows.filter((row) => row !== "confirm").map((row) => <HomeShelf key={row} row={row} title={catalogTitles.get(row)} state={rows[row]} shape={shape} actions={actions} onRetry={onRetry} onShowAll={onShowAll} onShuffle={row === "tonight" || catalogTitles.has(row) ? () => shuffle(row) : undefined} onVisible={onVisible && catalogTitles.has(row) ? visibleOf(row) : undefined}/>)}
+    {askedRows.filter((row) => row !== "confirm").map((row) => <HomeShelf key={row} row={row} title={catalogTitles.get(row)} state={rows[row]} shape={shape} actions={actions} onRetry={onRetry} onShowAll={onShowAll} onShuffle={row === "tonight" || catalogTitles.has(row) ? () => shuffle(row) : undefined} onVisible={onVisible && catalogTitles.has(row) ? visibleOf(row) : undefined} onOpenCatalog={onOpenCatalog && catalogTitles.has(row) ? () => onOpenCatalog(row) : undefined}/>)}
     {items.length > 0 && <section className="home-row">
       <div className="subhead">
         <div className="home-head"><h3>{t("home.downloads")}</h3><span className="count">{summary}</span></div>
