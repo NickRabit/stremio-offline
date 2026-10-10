@@ -9,36 +9,30 @@ needs VAAPI. See [Hardware acceleration](hardware-acceleration.md) for the setup
 
 ## Direction and delivery order
 
-The order was set against PR #260 (`11f1759`) on 2026-09-29. **Done** and
-**Next** were last reconciled with `main` (`2686fc2`, 0.5.6) on 2026-10-04. This
-is a proposed delivery sequence, not a statement that the work below has
-shipped.
+Rechecked against `origin/main` at `0b3e8b2b` (0.5.36) on 2026-10-10. The
+feature inventory and near-term work below describe that revision; the dated
+engineering audit later in this file is retained as an audit record, not a
+claim that every older probe or count describes today's checkout.
 
-Make the NAS a dependable family media library: a useful home screen, a
-restricted child account and predictable playback. Deliver household UX alongside
-focused data-safety work, then reduce daily effort with show following and
-guided library management. Extend into Sonarr/Radarr through the
-existing queue only after its durability and staging boundaries are proven.
-Keep desktop clients on the same server contracts; avoid a second downloader,
-metadata store or scheduler for each platform.
+The core product is now broad: following and automatic episode downloads,
+Home, enhanced search, and desktop apps for macOS, Windows, and Linux have
+shipped. The next work should improve household safety and fit-and-finish,
+while keeping data recovery and the existing queue contracts reliable. Keep
+desktop clients on the same server contracts; do not create a second downloader,
+metadata store, or scheduler for each platform.
 
-| Order | Outcome | Scope / release gate |
+| Order | Current opportunity | What remains |
 | --- | --- | --- |
-| P0a | Files and acknowledged work survive failure | Fix queue admission/write failures and journal loss; journal cross-store operations so a restart can replay them |
-| P0b | Playback and mobile controls are dependable | Session lifecycle tests and physical iOS verification |
-| P1a | Home is useful immediately | Permission-filtered personal rows from existing state; no scheduler dependency |
-| P1b | Children can use the app safely | Restricted child account, server-enforced policy, parent-authenticated exit |
-| P2a | New episodes are easy to discover | Follow show with opt-in downloads, durable deduplication and bounded polling |
-| P2b | Library management is guided | Guided split, then live search; bulk rename only after P0 recovery works |
-| P3 | External automation is usable | Opt-in HTTP Sonarr/Radarr bridge passing the real-application harness |
+| 1 | Family home and kids mode | A child-specific interface and policy enforced by server routes; the adult account and Home are not a parental boundary. |
+| 2 | Personal Home layout | Let each account choose built-in row order and visibility. The current order is fixed; addon catalog feeds can already be selected. |
+| 3 | Guided library split | Offer the documented carve-out and folder-change path as a guided flow from the library manager. |
+| 4 | Queue controls | Optional quiet hours, aggregate speed limit, and a completion notice; current download limits cover concurrency, not these controls. |
+| 5 | Library bulk rename | Rename by pattern after the remaining destructive-operation recovery boundaries are established. |
+| Later | Desktop distribution and external automation | Test clean install/upgrade on real target systems; signing/notarization need credentials. The *arr bridge remains a spec/probe, not a supported integration. |
 
-Home-screen work, small mobile fixes and backup inventory documentation can
-ship alongside P0. Child mode requires its own server policy before release;
-it does not depend on completing the entire engineering backlog.
-The ordering is a dependency guide, not a reason to bundle unrelated changes.
-Signing, unattended installers, remote-instance protocols, richer profiles and
-additional debrid providers remain separate investments. Do not add them to a
-release merely because a related screen is being edited.
+This is a suggested order, not a commitment to bundle unrelated work. Physical
+iOS browser-chrome checks remain device-dependent. Richer profiles and extra
+debrid providers remain later investments.
 
 The [delivery specification](roadmap-delivery-spec.md) defines contracts,
 non-goals, acceptance scenarios and suggested PR boundaries. It also records
@@ -103,7 +97,10 @@ Shipped in `main`; implementation details live in the linked guides.
 - **Phones and tablets**: responsive layouts and Home Screen setup.
   [Mobile guide](mobile.md).
 - **Home**: the queue, Continue watching, new episodes, Ready to play, Recently
-  added, Tonight, Favourites and the titles waiting for a match on one page, with a five-slot compact navigation and a More menu on phones and short
+  added, Tonight, Favourites and the titles waiting for a match on one page;
+  selected add-on catalog feeds have their own lazy-loaded carousels. The
+  account can choose its start page, while built-in row order remains fixed.
+  Compact navigation has five slots and a More menu on phones and short
   landscape screens. [Home page](home-spec.md).
 - **Statistics and diagnostics**: traffic by source, active streams, admin
   activity history, grouped errors and redacted logs.
@@ -149,10 +146,12 @@ Favourites and, for administrators, To confirm, beside the catalogue and the
 library. Each library and add-on has a **Show on Home** switch, and each account
 chooses its start page (Catalogue unless it says otherwise). What is left:
 
-- row order and visibility per account;
-- [x] configurable Home carousels for selected catalog feeds from enabled add-ons;
-- a "next episode is missing" card with a one-tap download, and an airing-today
-  card once the calendar exists;
+- the built-in row order is fixed and rows cannot yet be hidden per account;
+- configurable Home carousels for selected catalog feeds from enabled add-ons
+  are implemented;
+- consider a one-tap action for a missing next episode and a Home view of
+  today's releases. Following already has its own release calendar, so this is
+  a Home convenience rather than missing calendar infrastructure;
 - the much smaller child-facing variant, with server-side enforcement. See the
   [home contract](roadmap-delivery-spec.md#family-home-and-kids-mode).
 
@@ -171,28 +170,27 @@ chooses its start page (Catalogue unless it says otherwise). What is left:
 - Bulk rename by pattern. Deliberately out of the first multi-library release;
   the operations queue is shaped to take it without a migration.
 
-### Queue robustness
+### Queue controls
 
-Optional later: a night-only window, a speed limit, and a notice when the queue
-drains. The in-app notice is shared with the debrid waiting state; push out of
-the browser is later.
+Optional: a night-only window, an aggregate speed limit, and a notice when the
+queue drains. Existing concurrency settings limit simultaneous jobs; they do
+not provide a time window or bandwidth cap. Push notifications outside the
+browser are a separate later idea.
 
 ### Desktop
 
-The apps are distributed unsigned: the first launch needs a one-time approval on
-macOS and a click through SmartScreen on Windows. Signing and notarization need
-an Apple Developer account and a Windows code-signing certificate, which the
-project does not have, so the manual **Desktop release** workflow stays unused
-and the cookie-encryption fuse stays off. There is no Intel Mac build. Updates
-are a notice pointing at the release, not an installer.
-
-Open items: verify a clean install and an upgrade on both platforms before each
-release, and keep the Windows checklist in
-[testing-windows.md](testing-windows.md) current.
+The clients and release packages exist for macOS arm64, Windows x64, and Linux
+x64. Builds are unsigned unless the separately credentialled signing workflow
+is run; macOS first launch and Windows SmartScreen therefore need user action.
+There is no Intel Mac build. Update checks announce a release and open its page;
+they do not install updates. Keep clean-install and upgrade evidence current on
+real systems using [the Windows checklist](testing-windows.md) and the Mac and
+Linux install guides.
 
 ## Engineering health
 
-Status (2026-10-07): the items below shipped in #304–#324 and this branch —
+Status last recorded on 2026-10-07: the items below shipped in #304–#324 and
+the branch audited then —
 P0 H1–H3; P1 recoverable moves, copies and re-roots, the destructive-path,
 security and playback audits with their fixes, DNS pinning, commit-aware
 `state.json`, follow/queue crash tests and the backup guide; P2 the shared
