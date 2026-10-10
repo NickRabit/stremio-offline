@@ -11,6 +11,8 @@ import cz.stremiooffline.tv.data.ApiError
 import cz.stremiooffline.tv.data.CatalogApi
 import cz.stremiooffline.tv.data.CatalogDto
 import cz.stremiooffline.tv.data.MetaDto
+import cz.stremiooffline.tv.data.WatchlistEntryDto
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
@@ -24,9 +26,14 @@ data class CatalogState(
   val loading: Boolean = true,
   val loadingMore: Boolean = false,
   val error: Boolean = false,
+  /** The watchlist entries behind the virtual My list entry, and how many there are. */
+  val watchlist: List<WatchlistEntryDto> = emptyList(),
+  val watchlistCount: Int = 0,
+  /** True while the grid shows the watchlist instead of an addon catalogue. */
+  val onWatchlist: Boolean = false,
 ) {
   val current: CatalogDto? get() = catalogs.getOrNull(catalogIndex)
-  val genres: List<String> get() = current?.genreOptions.orEmpty()
+  val genres: List<String> get() = if (onWatchlist) emptyList() else current?.genreOptions.orEmpty()
 }
 
 /**
@@ -53,12 +60,14 @@ class CatalogViewModel(private val api: CatalogApi) : ViewModel() {
         return@launch
       }
       state = state.copy(catalogs = catalogs, catalogIndex = 0, genre = "")
+      refreshWatchlistCount()
       if (catalogs.isNotEmpty()) load(reset = true) else state = state.copy(loading = false, hasMore = false)
     }
   }
 
   fun select(index: Int) {
-    if (index == state.catalogIndex || index !in state.catalogs.indices) return
+    // Leaving My list for the catalogue it was showing must still reload it.
+    if (index !in state.catalogs.indices || (index == state.catalogIndex && !state.onWatchlist)) return
     job?.cancel()
     // A genre, season or episode belongs to one catalogue; a different one starts clean.
     state = state.copy(
@@ -70,24 +79,48 @@ class CatalogViewModel(private val api: CatalogApi) : ViewModel() {
       loading = true,
       loadingMore = false,
       error = false,
+      onWatchlist = false,
     )
     job = viewModelScope.launch { load(reset = true) }
   }
 
+  /** Chooses the virtual My list entry, which reads `GET /api/watchlist` instead of an addon. */
+  fun selectWatchlist() {
+    if (state.onWatchlist) return
+    job?.cancel()
+    state = state.copy(
+      onWatchlist = true,
+      genre = "",
+      items = emptyList(),
+      skip = 0,
+      hasMore = false,
+      loading = true,
+      loadingMore = false,
+      error = false,
+    )
+    job = viewModelScope.launch { loadWatchlist() }
+  }
+
   fun setGenre(genre: String) {
-    if (genre == state.genre) return
+    if (state.onWatchlist || genre == state.genre) return
     job?.cancel()
     state = state.copy(genre = genre, items = emptyList(), skip = 0, hasMore = true, loading = true, loadingMore = false, error = false)
     job = viewModelScope.launch { load(reset = true) }
   }
 
   fun loadMore() {
-    if (state.loading || state.loadingMore || !state.hasMore || state.current == null) return
+    if (state.onWatchlist || state.loading || state.loadingMore || !state.hasMore || state.current == null) return
     state = state.copy(loadingMore = true)
     job = viewModelScope.launch { load(reset = false) }
   }
 
   fun retry() {
+    if (state.onWatchlist) {
+      job?.cancel()
+      state = state.copy(items = emptyList(), loading = true, error = false)
+      job = viewModelScope.launch { loadWatchlist() }
+      return
+    }
     if (state.current == null) {
       started = false
       start()
@@ -97,6 +130,50 @@ class CatalogViewModel(private val api: CatalogApi) : ViewModel() {
     state = state.copy(items = emptyList(), skip = 0, hasMore = true, loading = true, loadingMore = false, error = false)
     job = viewModelScope.launch { load(reset = true) }
   }
+
+  /** Re-reads the watchlist when a detail returns, so the count and the grid stay honest. */
+  fun refreshWatchlist() {
+    viewModelScope.launch { refreshWatchlistCount() }
+  }
+
+  private suspend fun refreshWatchlistCount() {
+    val entries = watchlistOrNull() ?: return
+    state = state.copy(
+      watchlist = entries,
+      watchlistCount = entries.size,
+      items = if (state.onWatchlist) entries.map(::toMeta) else state.items,
+      error = if (state.onWatchlist) false else state.error,
+    )
+  }
+
+  private suspend fun loadWatchlist() {
+    val entries = watchlistOrNull()
+    if (entries == null) {
+      state = state.copy(items = emptyList(), loading = false, error = true)
+      return
+    }
+    state = state.copy(
+      watchlist = entries,
+      watchlistCount = entries.size,
+      items = entries.map(::toMeta),
+      skip = entries.size,
+      hasMore = false,
+      loading = false,
+      loadingMore = false,
+      error = false,
+    )
+  }
+
+  private suspend fun watchlistOrNull(): List<WatchlistEntryDto>? = try {
+    api.watchlist()
+  } catch (cancelled: CancellationException) {
+    throw cancelled
+  } catch (_: ApiError) {
+    null
+  }
+
+  private fun toMeta(entry: WatchlistEntryDto): MetaDto =
+    MetaDto(id = entry.id, type = entry.type.ifEmpty { "movie" }, name = entry.name, poster = entry.poster)
 
   private suspend fun load(reset: Boolean) {
     val catalog = state.current ?: return

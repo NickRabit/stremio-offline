@@ -6,11 +6,16 @@ import okhttp3.OkHttpClient
 /** The library browse and paging one screen needs. */
 interface LibraryApi {
   suspend fun browse(path: String?, limit: Int = 60, skip: Int = 0): BrowseResult
+
+  /** The library's Favourites view (`GET /api/library/favorites`). */
+  suspend fun favorites(limit: Int = 60, skip: Int = 0): BrowseResult
 }
 
-/** What the title detail needs to refresh a stored position. */
+/** What the title detail needs: the stored position and the library star. */
 interface DetailApi {
   suspend fun progress(key: String): ProgressDto?
+
+  suspend fun setFavorite(path: String, favorite: Boolean): FavoriteToggleDto
 }
 
 /** The catalogue calls: browse, search, metadata, streams, the watchlist and To library. */

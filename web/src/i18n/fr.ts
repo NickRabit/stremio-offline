@@ -1552,4 +1552,5 @@ export const fr: Catalog = {
   "tv.searchHint": "Saisissez un titre, puis appuyez sur Terminé.",
   "tv.findingSources": "Recherche des sources…",
   "tv.playWhenReady": "Démarrage dès que les sources sont prêtes…",
+  "tv.myListEmpty": "Les titres que vous ajoutez avec une étoile apparaissent ici.",
 };

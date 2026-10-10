@@ -75,6 +75,11 @@ fun LibraryRoute(
 
   val state = viewModel.state
   val items = state.current?.items.orEmpty()
+  val favoritesTitle = stringResource(R.string.library_shelf_favorites)
+  // The virtual Favourites card leads the root, and only while the server has favourites.
+  val entries: List<LibraryEntry> =
+    (if (state.pages.size == 1 && state.hasFavorites) listOf(LibraryEntry.Favorites(FavoritesPath)) else emptyList()) +
+      items.map { LibraryEntry.Item(it) }
   val scope = rememberCoroutineScope()
   val selectedPath = viewModel.selectedPath
   val requesters = remember { mutableMapOf<String, FocusRequester>() }
@@ -93,15 +98,21 @@ fun LibraryRoute(
   }
 
   // A new page focuses its own first card; a return restores the card that opened the page.
-  LaunchedEffect(state.loading, state.pages.size, state.current?.items?.size, restoreToken, backToken) {
-    if (!state.loading && !state.current?.items.isNullOrEmpty()) {
-      val items = state.current!!.items
-      val target = restoreKey.takeIf { key -> key.isNotEmpty() && items.any { it.path.ifEmpty { it.title } == key } }
+  LaunchedEffect(state.loading, state.pages.size, entries.size, restoreToken, backToken) {
+    val keys = entries.map { it.key }
+    if (!state.loading && keys.isNotEmpty()) {
+      val target = restoreKey.takeIf { key -> key.isNotEmpty() && key in keys }
       restoreKey = ""
-      val kept = selectedPath.takeIf { key -> key.isNotEmpty() && items.any { it.path.ifEmpty { it.title } == key } }
+      val kept = selectedPath.takeIf { key -> key.isNotEmpty() && key in keys }
       val requester = target?.let { requesters[it] } ?: kept?.let { requesters[it] } ?: gridFocus
       runCatching { requester.requestFocus() }
     }
+  }
+
+  fun openFavoritesPage() {
+    restoreKey = ""
+    openedBy.add(FavoritesPath)
+    viewModel.openFavorites(favoritesTitle)
   }
 
   fun openFolder(folder: BrowseItem.Folder) {
@@ -155,7 +166,7 @@ fun LibraryRoute(
       when {
         state.loading -> ShimmerCards()
         state.error -> ErrorPanel { viewModel.retry() }
-        items.isEmpty() -> Text(
+        entries.isEmpty() -> Text(
           stringResource(R.string.tv_library_empty),
           color = Tokens.Muted,
           fontSize = 12.sp,
@@ -170,18 +181,20 @@ fun LibraryRoute(
             horizontalArrangement = Arrangement.spacedBy(18.dp),
             verticalArrangement = Arrangement.spacedBy(18.dp),
           ) {
-            itemsIndexed(items, key = { _, item -> item.path.ifEmpty { item.title } }) { index, item ->
-              val key = item.path.ifEmpty { item.title }
+            itemsIndexed(entries, key = { _, entry -> entry.key }) { index, entry ->
+              val key = entry.key
+              val item = (entry as? LibraryEntry.Item)?.item
               val requester = remember(key) { FocusRequester() }
               requesters[key] = requester
               PosterCard(
-                name = item.title,
-                imageUrl = (item.poster ?: item.wide)?.let(api::url),
-                progress = progressFraction(item),
-                caption = caption(item),
-                cardTag = item.path.ifEmpty { item.title },
+                name = item?.title ?: "★ $favoritesTitle",
+                imageUrl = (item?.poster ?: item?.wide)?.let(api::url),
+                progress = if (item != null) progressFraction(item) else null,
+                caption = if (item != null) caption(item) else null,
+                cardTag = key,
                 onClick = {
                   when (item) {
+                    null -> openFavoritesPage()
                     is BrowseItem.Library -> viewModel.open(item.path, item.title)
                     is BrowseItem.Folder -> openFolder(item)
                     is BrowseItem.File -> onOpenDetail(DetailData.ofFile(item))
@@ -193,7 +206,7 @@ fun LibraryRoute(
                     if (it.isFocused) {
                       viewModel.selectedPath = key
                       requesters[key] = requester
-                      if (index >= items.size - columns) viewModel.loadMore()
+                      if (index >= entries.size - columns) viewModel.loadMore()
                     }
                   },
               )
@@ -232,4 +245,15 @@ private fun progressFraction(item: BrowseItem): Float? {
   val position = file.progress?.position ?: 0.0
   if (duration <= 0 || position <= 0) return null
   return (position / duration).toFloat()
+}
+
+/** One card of the library grid: a real browse row or the virtual Favourites entry. */
+private sealed class LibraryEntry {
+  abstract val key: String
+
+  class Favorites(override val key: String) : LibraryEntry()
+
+  class Item(val item: BrowseItem) : LibraryEntry() {
+    override val key: String = item.path.ifEmpty { item.title }
+  }
 }

@@ -175,4 +175,72 @@ class LibraryScreenTest {
     compose.onNodeWithTag("S1/E1").assertDoesNotExist()
   }
 
+  @Test
+  fun `the root hides the Favourites card when the server has none`() {
+    val api = FakeTvApi()
+    api.pages[null] = BrowseResult("", listOf(folder("Films", "Films")), 1, false)
+    mount(api)
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(FavoritesPath).assertDoesNotExist()
+    compose.onNodeWithTag("Films").assertIsFocused()
+  }
+
+  @Test
+  fun `the root leads with the Favourites card when the server has favourites`() {
+    val api = FakeTvApi()
+    api.pages[null] = BrowseResult("", listOf(folder("Films", "Films")), 1, false)
+    api.favoritesValue = BrowseResult(FavoritesPath, listOf(file("lib_1/It.mkv")), 1, false)
+    mount(api)
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(FavoritesPath).assertIsFocused()
+    compose.onNodeWithTag("Films").assertExists()
+  }
+
+  @Test
+  fun `ok on the Favourites card opens its grid and back restores focus to it`() {
+    val api = FakeTvApi()
+    api.pages[null] = BrowseResult("", listOf(folder("Films", "Films")), 1, false)
+    api.favoritesValue = BrowseResult(
+      FavoritesPath,
+      listOf(folder("lib_1/It", "It"), file("lib_1/Looper.mkv")),
+      2,
+      false,
+    )
+    mount(api)
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(FavoritesPath).performKeyInput { pressKey(Key.DirectionCenter) }
+    compose.waitForIdle()
+
+    // The Favourites grid draws the same cards as a folder: a folder and a file.
+    compose.onNodeWithTag("lib_1/It").assertExists()
+    compose.onNodeWithTag("lib_1/Looper.mkv").assertExists()
+    compose.onNodeWithTag(FavoritesPath).assertDoesNotExist()
+
+    host!!.onBackPressedDispatcher.onBackPressed()
+    compose.waitForIdle()
+    compose.onNodeWithTag("lib_1/It").assertDoesNotExist()
+    compose.onNodeWithTag(FavoritesPath).assertIsFocused()
+  }
+
+  @Test
+  fun `ok on a favourite file opens its detail`() {
+    val api = FakeTvApi()
+    api.pages[null] = BrowseResult("", emptyList(), 0, false)
+    api.favoritesValue = BrowseResult(FavoritesPath, listOf(file("lib_1/It.mkv")), 1, false)
+    val details = mutableListOf<DetailData>()
+    mount(api, onDetail = { details += it })
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(FavoritesPath).performKeyInput { pressKey(Key.DirectionCenter) }
+    compose.waitForIdle()
+    compose.onNodeWithTag("lib_1/It.mkv").performKeyInput { pressKey(Key.DirectionCenter) }
+    compose.waitForIdle()
+
+    assertEquals(1, details.size)
+    assertEquals("lib_1/It.mkv", details[0].gridPath)
+  }
+
 }

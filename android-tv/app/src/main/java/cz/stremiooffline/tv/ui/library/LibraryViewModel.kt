@@ -15,12 +15,17 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
+/** The library's virtual Favourites view; the server answers it under its own route. */
+const val FavoritesPath = ":favorites"
+
 /** One level of the library grid: its path, the breadcrumb title and the rows loaded so far. */
 data class LibraryPage(
   val path: String,
   val title: String,
   val items: List<BrowseItem> = emptyList(),
   val total: Int = 0,
+  /** True for the virtual Favourites level, which comes from `/api/library/favorites`. */
+  val favorites: Boolean = false,
 )
 
 data class LibraryState(
@@ -28,6 +33,8 @@ data class LibraryState(
   val loading: Boolean = false,
   val loadingMore: Boolean = false,
   val error: Boolean = false,
+  /** Whether the root draws its Favourites card; the server's answer decides. */
+  val hasFavorites: Boolean = false,
 ) {
   val current: LibraryPage? get() = pages.lastOrNull()
 }
@@ -54,7 +61,10 @@ class LibraryViewModel(
     deepLinked = false
     job?.cancel()
     state = LibraryState(pages = listOf(LibraryPage(path = "", title = "")), loading = true)
-    job = viewModelScope.launch { load(null) }
+    job = viewModelScope.launch {
+      load(null)
+      loadFavoritesPresence()
+    }
   }
 
   fun open(path: String, title: String) {
@@ -78,6 +88,17 @@ class LibraryViewModel(
     }
   }
 
+  /** Opens the virtual Favourites view above the current level. */
+  fun openFavorites(title: String) {
+    job?.cancel()
+    state = state.copy(
+      pages = state.pages + LibraryPage(path = FavoritesPath, title = title, favorites = true),
+      loading = true,
+      error = false,
+    )
+    job = viewModelScope.launch { load(null) }
+  }
+
   /** Pushes a level whose rows were already fetched, so a folder is not browsed twice. */
   fun push(path: String, title: String, items: List<BrowseItem>, total: Int) {
     job?.cancel()
@@ -98,7 +119,8 @@ class LibraryViewModel(
     val depth = state.pages.size
     job?.cancel()
     job = viewModelScope.launch {
-      val next = runCatching { loadPage(page.path.ifEmpty { null }, 0) }.getOrNull() ?: return@launch
+      if (!page.favorites && depth == 1) loadFavoritesPresence()
+      val next = pageOrNull(page.path.ifEmpty { null }, 0, page.favorites) ?: return@launch
       update(depth) { it.copy(path = next.path, items = next.items, total = next.total) }
     }
   }
@@ -119,7 +141,7 @@ class LibraryViewModel(
     val depth = state.pages.size
     job = viewModelScope.launch {
       try {
-        val next = loadPage(page.path.ifEmpty { null }, page.items.size)
+        val next = loadPage(page.path.ifEmpty { null }, page.items.size, page.favorites)
         update(depth) { it.copy(items = it.items + next.items, total = next.total.coerceAtLeast(it.total)) }
       } catch (_: ApiError) {
       } finally {
@@ -130,28 +152,41 @@ class LibraryViewModel(
 
   /** The server answers before its first walk of a library has finished; an empty pending page
    *  is asked again instead of being shown as empty. */
-  private suspend fun loadPage(path: String?, skip: Int): BrowsePage {
-    var page = api.browse(path, limit = PAGE, skip = skip)
+  private suspend fun loadPage(path: String?, skip: Int, favorites: Boolean = false): BrowsePage {
+    var page = if (favorites) api.favorites(limit = PAGE, skip = skip) else api.browse(path, limit = PAGE, skip = skip)
     var attempts = 0
     while (page.pending && page.items.isEmpty() && attempts++ < PENDING_RETRIES) {
       delay(pendingDelayMs)
-      page = api.browse(path, limit = PAGE, skip = skip)
+      page = if (favorites) api.favorites(limit = PAGE, skip = skip) else api.browse(path, limit = PAGE, skip = skip)
     }
     return BrowsePage(page.path, page.items, page.total)
   }
 
-  private suspend fun pageOrNull(path: String?, skip: Int): BrowsePage? = try {
-    loadPage(path, skip)
+  private suspend fun pageOrNull(path: String?, skip: Int, favorites: Boolean = false): BrowsePage? = try {
+    loadPage(path, skip, favorites)
   } catch (cancelled: CancellationException) {
     throw cancelled
   } catch (_: ApiError) {
     null
   }
 
+  /** Only the presence matters here: one row is enough to decide whether the card is drawn. */
+  private suspend fun loadFavoritesPresence() {
+    val page = try {
+      api.favorites(limit = 1, skip = 0)
+    } catch (cancelled: CancellationException) {
+      throw cancelled
+    } catch (_: ApiError) {
+      return
+    }
+    state = state.copy(hasFavorites = page.items.isNotEmpty())
+  }
+
   private suspend fun load(path: String?) {
     val depth = state.pages.size
+    val favorites = state.current?.favorites == true
     try {
-      val page = loadPage(path, 0)
+      val page = loadPage(path, 0, favorites)
       update(depth) { it.copy(path = page.path, items = page.items, total = page.total) }
       state = state.copy(loading = false, error = false)
     } catch (_: ApiError) {

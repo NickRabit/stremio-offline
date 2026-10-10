@@ -221,6 +221,7 @@ fun Shell(start: Section, api: TvApi, username: String, onSignOut: () -> Unit) {
         returnToken++
       },
       progress = api::progress,
+      setFavorite = { path, wanted -> api.setFavorite(path, wanted).favorite },
       restoreToken = returnToken,
       backEnabled = player == null,
     )
