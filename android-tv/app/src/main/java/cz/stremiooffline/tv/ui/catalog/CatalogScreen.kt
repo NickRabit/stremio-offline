@@ -50,6 +50,8 @@ data class CatalogDetailArgs(
   val addonName: String,
   val type: String,
   val episode: cz.stremiooffline.tv.catalog.ResumeEpisode? = null,
+  /** The catalogue the meta came from, so a catalogue resume card can be drawn on Home. */
+  val addonKey: String? = null,
 )
 
 private enum class CatalogPanel { Catalogs, Genres }
@@ -144,7 +146,16 @@ fun CatalogScreen(
           else -> PosterGrid(
             items = state.items,
             imageUrl = imageUrl,
-            onOpen = { item -> onOpenDetail(CatalogDetailArgs(item, state.current?.addonName.orEmpty(), item.type ?: state.current?.type ?: "movie")) },
+            onOpen = { item ->
+              onOpenDetail(
+                CatalogDetailArgs(
+                  item,
+                  state.current?.addonName.orEmpty(),
+                  item.type ?: state.current?.type ?: "movie",
+                  addonKey = state.current?.addonKey,
+                ),
+              )
+            },
             onNearEnd = { viewModel.loadMore() },
             gridFocus = gridFocus,
             modifier = Modifier.fillMaxSize(),

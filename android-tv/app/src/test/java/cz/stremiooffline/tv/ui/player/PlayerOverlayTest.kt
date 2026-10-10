@@ -23,6 +23,7 @@ import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.pressKey
 import androidx.tv.material3.Text
+import cz.stremiooffline.tv.playback.PlaybackController
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -51,6 +52,8 @@ class PlayerOverlayTest {
     duration: Double = 1_000.0,
     playing: Boolean = false,
     initiallyShown: Boolean = true,
+    showControls: Int = 0,
+    seekKept: Int = 0,
   ) {
     compose.setContent {
       PlayerOverlayShell(
@@ -61,6 +64,8 @@ class PlayerOverlayTest {
         eyebrow = "Direct play",
         playFocus = FocusRequester(),
         initiallyShown = initiallyShown,
+        showControls = showControls,
+        seekKept = seekKept,
         onSeek = { seeks += it },
         onTogglePause = { pauses++ },
         onExit = { exits++ },
@@ -129,13 +134,61 @@ class PlayerOverlayTest {
     mount(initiallyShown = false)
 
     compose.onNodeWithTag("video").performKeyInput { pressKey(Key.DirectionRight) }
-    compose.waitForIdle()
+    compose.mainClock.advanceTimeBy(PlaybackController.SEEK_DEBOUNCE_MS + 100)
     assertEquals(listOf(110.0), seeks)
     compose.onNodeWithTag(TAG_OVERLAY_BUBBLE).assertExists()
 
     compose.onNodeWithTag("video").performKeyInput { pressKey(Key.DirectionLeft) }
-    compose.waitForIdle()
+    compose.mainClock.advanceTimeBy(PlaybackController.SEEK_DEBOUNCE_MS + 100)
     assertEquals(listOf(110.0, 90.0), seeks)
+  }
+
+  @Test
+  fun `a single press seeks exactly ten seconds`() {
+    mount(initiallyShown = false)
+
+    compose.onNodeWithTag("video").performKeyInput { pressKey(Key.DirectionRight) }
+    compose.mainClock.advanceTimeBy(PlaybackController.SEEK_DEBOUNCE_MS + 100)
+
+    assertEquals(listOf(110.0), seeks)
+  }
+
+  // Compose's test dispatcher refuses a second key-down without a key-up, so the hold is driven
+  // by presses closer together than the debounce, the way a real remote repeats a held key.
+  @Test
+  fun `holding right sums one seek instead of one per press`() {
+    mount(initiallyShown = false)
+
+    compose.onNodeWithTag("video").performKeyInput { pressKey(Key.DirectionRight) }
+    repeat(4) {
+      compose.onNodeWithTag("video").performKeyInput { advanceEventTime(300); pressKey(Key.DirectionRight) }
+    }
+    assertTrue("nothing is sent while the key keeps coming", seeks.isEmpty())
+
+    compose.mainClock.advanceTimeBy(PlaybackController.SEEK_DEBOUNCE_MS + 100)
+
+    assertEquals(listOf(190.0), seeks)
+    compose.onNodeWithTag(TAG_OVERLAY_BUBBLE).assertExists()
+    compose.onNodeWithText("+1:30").assertExists()
+  }
+
+  @Test
+  fun `the controls come back when the screen asks for them`() {
+    mount(initiallyShown = false, showControls = 1)
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TAG_OSD_PLAY).assertExists()
+  }
+
+  @Test
+  fun `a refused seek shows the message for a few seconds`() {
+    mount(seekKept = 1)
+
+    compose.onNodeWithTag(TAG_OVERLAY_SEEK_KEPT).assertExists()
+
+    compose.mainClock.advanceTimeBy(SEEK_KEPT_MS + 100)
+    compose.waitForIdle()
+    compose.onNodeWithTag(TAG_OVERLAY_SEEK_KEPT).assertDoesNotExist()
   }
 
   @Test

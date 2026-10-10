@@ -65,6 +65,7 @@
   <string name="save_to_library">In libreria</string>
   <string name="save_queued">In coda</string>
   <string name="player_play">Gioca</string>
+  <string name="player_seek_restored">Impossibile cambiare posizione. È stata mantenuta la posizione precedente.</string>
   <string name="favorite_add">Aggiungi ai preferiti</string>
   <string name="favorite_remove">Rimuovi dai preferiti</string>
   <string name="episodes_season_number">Stagione %1$s</string>

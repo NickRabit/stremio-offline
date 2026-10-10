@@ -41,6 +41,8 @@ class ApiClient(
   private val json = Json { ignoreUnknownKeys = true }
   /** The download body drops null media fields instead of sending them as `null`. */
   private val downloadJson = Json { ignoreUnknownKeys = true; explicitNulls = false; encodeDefaults = false }
+  /** Progress carries the artwork and addon only when the player knew them. */
+  private val progressJson = Json { ignoreUnknownKeys = true; explicitNulls = false; encodeDefaults = false }
   private val mediaType = "application/json; charset=utf-8".toMediaType()
 
   private val client = baseClient.newBuilder()
@@ -250,10 +252,19 @@ class ApiClient(
     request(Request.Builder().url(address.resolve("/api/downloads")).get().build())
       .decode<DownloadsResponseDto>() ?: throw ApiError(ApiFailure.Generic)
 
-  override suspend fun saveProgress(key: String, position: Double, duration: Double, title: String, path: String?) {
-    val payload = json.encodeToString(
+  override suspend fun saveProgress(
+    key: String,
+    position: Double,
+    duration: Double,
+    title: String,
+    path: String?,
+    poster: String?,
+    addonKey: String?,
+  ) {
+    // The body drops what it does not have instead of sending nulls, the way the download body does.
+    val payload = progressJson.encodeToString(
       ProgressRequest.serializer(),
-      ProgressRequest(key, position, duration, title, path),
+      ProgressRequest(key, position, duration, title, path, poster, addonKey),
     )
     request(Request.Builder().url(address.resolve("/api/progress")).post(payload.toRequestBody(mediaType)).build())
   }
@@ -337,4 +348,6 @@ private data class ProgressRequest(
   val duration: Double,
   val title: String,
   val path: String? = null,
+  val poster: String? = null,
+  val addonKey: String? = null,
 )

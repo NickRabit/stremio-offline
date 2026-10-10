@@ -124,7 +124,8 @@ fun Osd(
   onBack10: () -> Unit,
   onForward10: () -> Unit,
   onToggle: () -> Unit,
-  onSeek: (Float) -> Unit,
+  /** A LEFT/RIGHT press on the focused progress bar: -1 rewinds, +1 forwards, with the event time. */
+  onSeekStep: (Int, Long) -> Unit,
   onActivity: () -> Unit,
 ) {
   Box(Modifier.fillMaxSize()) {
@@ -152,7 +153,7 @@ fun Osd(
         Text(formatTime(position), color = Tokens.Text, fontSize = 11.sp)
         Timeline(
           fraction = if (duration > 0) (position / duration).toFloat() else 0f,
-          onSeek = onSeek,
+          onSeekStep = onSeekStep,
           onActivity = onActivity,
           modifier = Modifier.weight(1f),
         )
@@ -188,7 +189,7 @@ fun Osd(
 @Composable
 private fun Timeline(
   fraction: Float,
-  onSeek: (Float) -> Unit,
+  onSeekStep: (Int, Long) -> Unit,
   onActivity: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
@@ -203,8 +204,8 @@ private fun Timeline(
       .onPreviewKeyEvent { event ->
         if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
         when (event.key) {
-          Key.DirectionLeft -> { onActivity(); onSeek((fraction - 10f / 60f).coerceAtLeast(0f)); true }
-          Key.DirectionRight -> { onActivity(); onSeek((fraction + 10f / 60f).coerceAtMost(1f)); true }
+          Key.DirectionLeft -> { onActivity(); onSeekStep(-1, event.nativeKeyEvent.eventTime); true }
+          Key.DirectionRight -> { onActivity(); onSeekStep(1, event.nativeKeyEvent.eventTime); true }
           else -> false
         }
       },

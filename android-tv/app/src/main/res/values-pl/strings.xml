@@ -65,6 +65,7 @@
   <string name="save_to_library">Do biblioteki</string>
   <string name="save_queued">W kolejce</string>
   <string name="player_play">Zagraj</string>
+  <string name="player_seek_restored">Nie udało się przewinąć. Zachowano poprzednią pozycję.</string>
   <string name="favorite_add">Dodaj do ulubionych</string>
   <string name="favorite_remove">Usuń z ulubionych</string>
   <string name="episodes_season_number">Sezon %1$s</string>
