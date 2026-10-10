@@ -155,6 +155,28 @@ chooses its start page (Catalogue unless it says otherwise). What is left:
 - the much smaller child-facing variant, with server-side enforcement. See the
   [home contract](roadmap-delivery-spec.md#family-home-and-kids-mode).
 
+### Richer title detail
+
+Stremio, Nuvio and Plex show more than the poster, the overview and the
+sources. The aggregate metadata already keeps every field an add-on answers
+with (`fillMissingMeta` in `server/src/addons.ts`), so most of it costs no new
+fetch:
+
+- **Cast and crew** from Cinemeta's `links` (categories `Cast`, `Directors`,
+  `Writers`) and the older `cast`/`director` arrays; TMDB adds photos when the
+  instance has a key. Selecting a person searches the catalogues for them.
+- **Related titles**: "More like this" from TMDB recommendations when a key is
+  set; without one, other titles that share genres and a person in the same
+  add-on catalogue.
+- **Trailers** (`trailerStreams`), the age rating, the original title and
+  language, and the release date of the next episode for a series.
+- **Library titles** get the same block once identified, from the stored
+  match.
+
+One server route (`/api/meta/:type/:id/extras` or fields on the existing meta
+answer) serves the web, the desktop apps and the Android TV client alike; no
+client calls TMDB on its own.
+
 ### Player and mobile chrome
 
 - Improve Safari landscape chrome behavior on a physical iPhone/iPad; WebKit
