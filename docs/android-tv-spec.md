@@ -205,8 +205,9 @@ Add, without changing what a browser gets:
 
 - `containers`: the containers the client plays as they are (`mp4`, `webm`,
   `mkv`, `ts`).
-- Video: codec with profile and bit depth (`hevc10`, `av1`, `vp9`, Dolby Vision
-  profile where the device reports one).
+- Video: the existing codec flags cover eight-bit 4:2:0; `deepColor` lists the
+  codecs the device also decodes at 10 bits (HEVC keeps `hevc10`). 4:2:2 and
+  4:4:4 are never handed over. Dolby Vision is reported, not negotiated.
 - Audio, split into **decode** and **passthrough**, because a TCL set may not
   decode DTS while a receiver behind it would take the bitstream. The client
   re-sends it when the audio route changes.
