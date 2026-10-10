@@ -37,6 +37,8 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.SemanticsPropertyKey
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -47,6 +49,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Text
 import cz.stremiooffline.tv.ui.theme.Tokens
+
+/** Whether a field draws its accent border: focused by the D-pad or being edited. */
+internal val TvFieldActive = SemanticsPropertyKey<Boolean>("TvFieldActive")
 
 /**
  * The one text field of the app, shared by sign-in and search. It is a focusable surface first:
@@ -87,10 +92,12 @@ fun TvTextField(
     if (move == null) surface.requestFocus() else focusManager.moveFocus(move)
   }
 
-  var wasActive by remember { mutableStateOf(false) }
-  LaunchedEffect(active) {
-    if (wasActive && !active) onFocusLost()
-    wasActive = active
+  // Only the end of an edit counts: walking past an untouched field with the D-pad must not
+  // validate it.
+  var wasEditing by remember { mutableStateOf(false) }
+  LaunchedEffect(editing) {
+    if (wasEditing && !editing) onFocusLost()
+    wasEditing = editing
   }
   LaunchedEffect(editing) {
     if (editing) {
@@ -134,8 +141,10 @@ fun TvTextField(
             false
           }
         }
-        .focusable()
+        // Observes the surface's own focus target, so it has to sit before `focusable()`.
         .onFocusChanged { surfaceFocused = it.isFocused }
+        .focusable()
+        .semantics { this[TvFieldActive] = active }
         .background(Tokens.Bg, shape)
         .border(if (active) 2.dp else 1.dp, if (active) Tokens.Accent2 else Tokens.Line, shape)
         .padding(horizontal = 12.dp),
