@@ -69,4 +69,31 @@
   <string name="downloads_waiting_debrid">En attendant Real-Debrid.</string>
   <string name="err_torrent_not_playable">Un torrent ne peut pas être lu directement. Ajoutez-le avec À la bibliothèque.</string>
   <string name="err_download_library_not_allowed">Ce compte ne peut pas être téléchargé vers la bibliothèque.</string>
+  <string name="home_continue">Reprendre</string>
+  <string name="home_favorites">Favoris</string>
+  <string name="home_tonight">Ce soir</string>
+  <string name="home_new_episodes">Nouveaux épisodes</string>
+  <string name="home_ready_to_play">Prêt à lire</string>
+  <string name="home_recent">Ajouté récemment</string>
+  <string name="home_downloads">Téléchargements</string>
+  <plurals name="home_downloads_summary">
+    <item quantity="one">%1$s tâche</item>
+    <item quantity="other">%1$s tâches</item>
+  </plurals>
+  <plurals name="home_attention">
+    <item quantity="one">%1$s demande attention</item>
+    <item quantity="other">%1$s demandent attention</item>
+  </plurals>
+  <string name="home_partial">Certains titres n’ont pas pu être vérifiés.</string>
+  <string name="home_retry">Réessayer</string>
+  <string name="home_row_failed">Cette rangée n’a pas pu être chargée.</string>
+  <string name="home_next_episode">Épisode suivant</string>
+  <string name="home_resume">Reprendre</string>
+  <string name="home_open_episode">Ouvrir l’épisode</string>
+  <string name="home_open_title">Ouvrir le titre</string>
+  <string name="home_new_episode">Nouvel épisode</string>
+  <string name="home_empty_title">Rien ici pour l\'instant</string>
+  <string name="home_empty_text">Téléchargez quelque chose ou commencez à regarder, et cela apparaîtra ici.</string>
+  <string name="tv_home_load_error">La page d\'accueil n\'a pas pu être chargée.</string>
+  <string name="tv_downloads_later">La file de téléchargements s\'ouvre pour l\'instant sur le web.</string>
 </resources>

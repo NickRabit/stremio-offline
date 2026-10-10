@@ -69,4 +69,35 @@
   <string name="downloads_waiting_debrid">Čeká na Real-Debrid.</string>
   <string name="err_torrent_not_playable">Torrent nejde přehrát přímo. Přidejte ho tlačítkem Do knihovny.</string>
   <string name="err_download_library_not_allowed">Tento účet nesmí stahovat do knihovny.</string>
+  <string name="home_continue">Pokračovat ve sledování</string>
+  <string name="home_favorites">Oblíbené</string>
+  <string name="home_tonight">Co dnes večer</string>
+  <string name="home_new_episodes">Nové epizody</string>
+  <string name="home_ready_to_play">Připraveno k přehrání</string>
+  <string name="home_recent">Nedávno přidané</string>
+  <string name="home_downloads">Stahování</string>
+  <plurals name="home_downloads_summary">
+    <item quantity="one">1 úloha</item>
+    <item quantity="few">%1$s úlohy</item>
+    <item quantity="many">%1$s úlohy</item>
+    <item quantity="other">%1$s úloh</item>
+  </plurals>
+  <plurals name="home_attention">
+    <item quantity="one">1 vyžaduje pozornost</item>
+    <item quantity="few">%1$s vyžadují pozornost</item>
+    <item quantity="many">%1$s vyžaduje pozornost</item>
+    <item quantity="other">%1$s vyžaduje pozornost</item>
+  </plurals>
+  <string name="home_partial">Některé tituly se nepodařilo ověřit.</string>
+  <string name="home_retry">Zkusit znovu</string>
+  <string name="home_row_failed">Tuto řadu se nepodařilo načíst.</string>
+  <string name="home_next_episode">Další epizoda</string>
+  <string name="home_resume">Pokračovat</string>
+  <string name="home_open_episode">Otevřít epizodu</string>
+  <string name="home_open_title">Otevřít titul</string>
+  <string name="home_new_episode">Nová epizoda</string>
+  <string name="home_empty_title">Zatím tu nic není</string>
+  <string name="home_empty_text">Něco si stáhněte nebo začněte sledovat a objeví se to tady.</string>
+  <string name="tv_home_load_error">Domovskou stránku se nepodařilo načíst.</string>
+  <string name="tv_downloads_later">Fronta stahování se zatím otevírá na webu.</string>
 </resources>

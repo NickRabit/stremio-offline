@@ -1541,6 +1541,8 @@ export const ru: Catalog = {
   "tv.pathTranscode": "Преобразуется на сервере",
   "tv.playerError": "Не удалось воспроизвести это видео.",
   "tv.loadError": "Не удалось загрузить библиотеку.",
+  "tv.homeLoadError": "Не удалось загрузить главную страницу.",
+  "tv.downloadsLater": "Очередь загрузок пока открывается в веб-интерфейсе.",
   "tv.back": "Назад",
   "tv.detailEyebrowMovie": "Фильм · {addon}",
   "tv.detailEyebrowSeries": "Сериал · {addon}",

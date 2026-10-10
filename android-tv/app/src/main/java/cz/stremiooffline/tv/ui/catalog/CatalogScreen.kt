@@ -43,7 +43,13 @@ fun genreOptionTag(index: Int): String = "genre_option_$index"
 const val TagGenreAll = "genre_option_all"
 
 /** Everything the detail needs to open one catalogue title. */
-data class CatalogDetailArgs(val meta: MetaDto, val addonName: String, val type: String)
+/** [episode] is set when Home opens a remembered episode, so the detail focuses it. */
+data class CatalogDetailArgs(
+  val meta: MetaDto,
+  val addonName: String,
+  val type: String,
+  val episode: cz.stremiooffline.tv.catalog.ResumeEpisode? = null,
+)
 
 private enum class CatalogPanel { Catalogs, Genres }
 

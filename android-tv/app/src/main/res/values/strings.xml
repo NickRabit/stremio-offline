@@ -69,4 +69,31 @@
   <string name="downloads_waiting_debrid">Waiting for Real-Debrid.</string>
   <string name="err_torrent_not_playable">A torrent cannot be played directly. Add it with To library.</string>
   <string name="err_download_library_not_allowed">This account may not download to the library.</string>
+  <string name="home_continue">Continue watching</string>
+  <string name="home_favorites">Favourites</string>
+  <string name="home_tonight">Tonight</string>
+  <string name="home_new_episodes">New episodes</string>
+  <string name="home_ready_to_play">Ready to play</string>
+  <string name="home_recent">Recently added</string>
+  <string name="home_downloads">Downloads</string>
+  <plurals name="home_downloads_summary">
+    <item quantity="one">1 job</item>
+    <item quantity="other">%1$s jobs</item>
+  </plurals>
+  <plurals name="home_attention">
+    <item quantity="one">1 needs attention</item>
+    <item quantity="other">%1$s need attention</item>
+  </plurals>
+  <string name="home_partial">Some titles could not be checked.</string>
+  <string name="home_retry">Try again</string>
+  <string name="home_row_failed">This row could not load.</string>
+  <string name="home_next_episode">Next episode</string>
+  <string name="home_resume">Resume</string>
+  <string name="home_open_episode">Open episode</string>
+  <string name="home_open_title">Open title</string>
+  <string name="home_new_episode">New episode</string>
+  <string name="home_empty_title">Nothing here yet</string>
+  <string name="home_empty_text">Download something or start watching, and it will show up here.</string>
+  <string name="tv_home_load_error">Home could not be loaded.</string>
+  <string name="tv_downloads_later">The download queue opens on the web for now.</string>
 </resources>

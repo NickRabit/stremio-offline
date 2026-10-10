@@ -1541,6 +1541,8 @@ export const it: Catalog = {
   "tv.pathTranscode": "Convertito sul server",
   "tv.playerError": "Impossibile riprodurre questo video.",
   "tv.loadError": "Impossibile caricare la libreria.",
+  "tv.homeLoadError": "Impossibile caricare la Home.",
+  "tv.downloadsLater": "La coda dei download si apre per ora sul web.",
   "tv.back": "Indietro",
   "tv.detailEyebrowMovie": "Film · {addon}",
   "tv.detailEyebrowSeries": "Serie · {addon}",

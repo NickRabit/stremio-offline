@@ -1598,6 +1598,8 @@ export const en = {
   "tv.pathTranscode": "Converted on the server",
   "tv.playerError": "This video could not be played.",
   "tv.loadError": "The library could not be loaded.",
+  "tv.homeLoadError": "Home could not be loaded.",
+  "tv.downloadsLater": "The download queue opens on the web for now.",
   "tv.back": "Back",
   "tv.detailEyebrowMovie": "Movie · {addon}",
   "tv.detailEyebrowSeries": "Series · {addon}",

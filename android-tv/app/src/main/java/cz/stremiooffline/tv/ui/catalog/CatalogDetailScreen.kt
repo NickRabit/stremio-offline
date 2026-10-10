@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
@@ -31,6 +32,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
@@ -139,6 +141,7 @@ fun CatalogDetailScreen(
 
   val primaryFocus = remember { FocusRequester() }
   val rowFocus = remember { FocusRequester() }
+  val seasonFocus = remember { FocusRequester() }
   val sourcesOpenerFocus = remember { FocusRequester() }
   val sourcesPanelFocus = remember { FocusRequester() }
 
@@ -172,10 +175,14 @@ fun CatalogDetailScreen(
       movieProgress = progressJob.await()
       if (args.type == "series") {
         val videos = meta.videos.orEmpty()
-        val watched = Resume.resumeVideo(videos, seriesEntry(entries, meta.id)?.let { Resume.resumeTarget(it).episode })
-        val resuming = seriesEntry(entries, meta.id)?.let { Progress.resumePosition(it.position, it.duration) != null } == true
-        selectedVideo = (if (resuming) watched else null) ?: nextRelevantEpisode(videos, watched) ?: firstReleased(videos)
-        season = defaultSeason(videos)
+        val stored = seriesEntry(entries, meta.id)
+        val storedEpisode = stored?.let { Resume.resumeTarget(it).episode }
+        val resuming = args.episode == null && stored?.let { Progress.resumePosition(it.position, it.duration) != null } == true
+        // Home names the episode it remembers; without one, the stored position decides.
+        val wanted = args.episode ?: if (resuming) storedEpisode else null
+        val watched = Resume.resumeVideo(videos, wanted)
+        selectedVideo = watched ?: nextRelevantEpisode(videos, Resume.resumeVideo(videos, storedEpisode)) ?: firstReleased(videos)
+        season = wanted?.season ?: defaultSeason(videos)
       }
     }
   }
@@ -543,6 +550,7 @@ fun CatalogDetailScreen(
           imageUrl = imageUrl,
           onSelect = { selectVideo(it) },
           focusRequester = rowFocus,
+          seasonFocus = seasonFocus,
         )
       }
     }
@@ -657,21 +665,42 @@ private fun SeriesRows(
   imageUrl: (String?) -> String?,
   onSelect: (VideoDto) -> Unit,
   focusRequester: FocusRequester,
+  seasonFocus: FocusRequester,
 ) {
   val seasons = seasonsOf(videos)
   val current = season ?: seasons.firstOrNull()
-  Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-    seasons.forEach { value ->
+  val seasonState = remember { LazyListState() }
+  var focusedSeason by remember { mutableIntStateOf(seasons.indexOf(current)) }
+  // A series can carry more seasons than fit; scrolling the row keeps the focused chip in view.
+  LaunchedEffect(focusedSeason) {
+    if (focusedSeason >= 0) seasonState.animateScrollToItem(focusedSeason)
+  }
+  LazyRow(state = seasonState, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    itemsIndexed(seasons, key = { _, value -> value }) { index, value ->
       FocusButton(
         text = stringResource(R.string.episodes_season_number, value.toString()),
         onClick = { onSeason(value) },
         kind = if (value == current) FocusButtonKind.Primary else FocusButtonKind.Normal,
-        modifier = Modifier.testTag(seasonChipTag(value)),
+        modifier = Modifier
+          .testTag(seasonChipTag(value))
+          // The chip the row is scrolled to carries the requester the episode row's UP returns to.
+          .then(if (index == focusedSeason) Modifier.focusRequester(seasonFocus) else Modifier)
+          .onFocusChanged { if (it.hasFocus) focusedSeason = index },
       )
     }
   }
   val episodes = videos.filter { it.season == current }.ifEmpty { videos }
-  LazyRow(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+  LazyRow(
+    horizontalArrangement = Arrangement.spacedBy(18.dp),
+    // UP from the episodes goes to the season chips; the chips never trap the remote.
+    modifier = Modifier.onPreviewKeyEvent { event ->
+      if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionUp) {
+        runCatching { seasonFocus.requestFocus() }.isSuccess
+      } else {
+        false
+      }
+    },
+  ) {
     itemsIndexed(episodes, key = { _, video -> video.id ?: video.label }) { index, video ->
       val resumeIndex = episodes.indexOfFirst { resumeEpisode != null && it.id != null && it.id == resumeEpisode.id }
       val progress = if (video.id != null && video.id == resumeEpisode?.id && seriesDuration > 0) {

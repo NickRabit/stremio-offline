@@ -44,6 +44,7 @@ import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Text
 import coil.compose.AsyncImage
 import cz.stremiooffline.tv.R
+import cz.stremiooffline.tv.episodeCode
 import cz.stremiooffline.tv.data.BrowseItem
 import cz.stremiooffline.tv.data.ProgressDto
 import cz.stremiooffline.tv.playback.Progress
@@ -120,7 +121,7 @@ data class DetailData(
 
 /** The episode label of one file: `S1 · E2` when the server numbered it, its label otherwise. */
 fun episodeLabel(file: BrowseItem.File): String =
-  if (file.season != null && file.episode != null) "S${file.season} · E${file.episode}" else file.label
+  episodeCode(file.season, file.episode) ?: file.label
 
 @Composable
 fun DetailScreen(

@@ -1541,6 +1541,8 @@ export const de: Catalog = {
   "tv.pathTranscode": "Wird auf dem Server konvertiert",
   "tv.playerError": "Dieses Video konnte nicht abgespielt werden.",
   "tv.loadError": "Die Bibliothek konnte nicht geladen werden.",
+  "tv.homeLoadError": "Die Startseite konnte nicht geladen werden.",
+  "tv.downloadsLater": "Die Download-Warteschlange öffnet sich vorerst im Web.",
   "tv.back": "Zurück",
   "tv.detailEyebrowMovie": "Film · {addon}",
   "tv.detailEyebrowSeries": "Serie · {addon}",

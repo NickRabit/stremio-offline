@@ -1541,6 +1541,8 @@ export const ptBR: Catalog = {
   "tv.pathTranscode": "Convertido no servidor",
   "tv.playerError": "Não foi possível reproduzir este vídeo.",
   "tv.loadError": "Não foi possível carregar a biblioteca.",
+  "tv.homeLoadError": "Não foi possível carregar a página inicial.",
+  "tv.downloadsLater": "A fila de downloads abre na web por enquanto.",
   "tv.back": "Voltar",
   "tv.detailEyebrowMovie": "Filme · {addon}",
   "tv.detailEyebrowSeries": "Série · {addon}",
