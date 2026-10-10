@@ -36,6 +36,7 @@ import androidx.tv.material3.Text
 import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.data.BrowseItem
 import cz.stremiooffline.tv.data.TvApi
+import cz.stremiooffline.tv.ui.components.CardRowInset
 import cz.stremiooffline.tv.ui.components.FocusButton
 import cz.stremiooffline.tv.ui.components.FocusButtonKind
 import cz.stremiooffline.tv.ui.components.PosterCard
@@ -165,7 +166,7 @@ fun LibraryRoute(
             columns = GridCells.Fixed(columns),
             modifier = Modifier.focusRequester(gridFocus).focusGroup(),
             // Room for the focused card's scale and ring so the first row is not clipped.
-            contentPadding = PaddingValues(start = 10.dp, top = 10.dp, bottom = 40.dp),
+            contentPadding = PaddingValues(start = CardRowInset, top = 10.dp, end = CardRowInset, bottom = 40.dp),
             horizontalArrangement = Arrangement.spacedBy(18.dp),
             verticalArrangement = Arrangement.spacedBy(18.dp),
           ) {

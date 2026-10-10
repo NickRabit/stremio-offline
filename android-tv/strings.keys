@@ -52,6 +52,7 @@ tv.detailEyebrowMovie
 tv.detailEyebrowSeries
 tv.sourcesCount
 tv.default
+tv.chosenSource
 tv.searchHint
 tv.findingSources
 tv.playWhenReady

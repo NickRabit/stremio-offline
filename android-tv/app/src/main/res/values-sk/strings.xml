@@ -53,6 +53,7 @@
   <string name="tv_detail_eyebrow_series">Seriál · %1$s</string>
   <string name="tv_sources_count">Zdroje · %1$s</string>
   <string name="tv_default">Predvolené</string>
+  <string name="tv_chosen_source">Zdroj</string>
   <string name="tv_search_hint">Napíšte názov a stlačte Hotovo.</string>
   <string name="tv_finding_sources">Hľadám zdroje…</string>
   <string name="tv_play_when_ready">Spustím, keď budú zdroje načítané…</string>

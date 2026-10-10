@@ -1548,6 +1548,7 @@ export const ru: Catalog = {
   "tv.detailEyebrowSeries": "Сериал · {addon}",
   "tv.sourcesCount": "Источники · {count}",
   "tv.default": "По умолчанию",
+  "tv.chosenSource": "Источник",
   "tv.searchHint": "Введите название и нажмите Готово.",
   "tv.findingSources": "Поиск источников…",
   "tv.playWhenReady": "Запущу, когда источники будут готовы…",

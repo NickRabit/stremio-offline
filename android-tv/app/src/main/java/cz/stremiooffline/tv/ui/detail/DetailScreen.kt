@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -48,6 +49,7 @@ import cz.stremiooffline.tv.episodeCode
 import cz.stremiooffline.tv.data.BrowseItem
 import cz.stremiooffline.tv.data.ProgressDto
 import cz.stremiooffline.tv.playback.Progress
+import cz.stremiooffline.tv.ui.components.CardRowInset
 import cz.stremiooffline.tv.ui.components.FocusButton
 import cz.stremiooffline.tv.ui.components.FocusButtonKind
 import cz.stremiooffline.tv.ui.components.WideCard
@@ -281,7 +283,11 @@ private fun EpisodeRow(
   LaunchedEffect(detail.gridPath) {
     state.scrollToItem(startIndex.coerceAtLeast(0))
   }
-  LazyRow(state = state, horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+  LazyRow(
+    state = state,
+    contentPadding = PaddingValues(horizontal = CardRowInset),
+    horizontalArrangement = Arrangement.spacedBy(18.dp),
+  ) {
     itemsIndexed(detail.files, key = { _, file -> file.path }) { index, file ->
       WideCard(
         label = episodeLabel(file),

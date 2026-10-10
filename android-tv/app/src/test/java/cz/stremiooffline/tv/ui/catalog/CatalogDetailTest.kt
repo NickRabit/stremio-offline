@@ -150,7 +150,7 @@ class CatalogDetailTest {
   }
 
   @Test
-  fun `sources open in arrangeStreams order, the default is marked and OK plays it`() {
+  fun `sources open in arrangeStreams order, the default is marked and OK chooses it`() {
     val api = FakeTvApi()
     api.settingsValue = settings()
     api.streamsValues["movie:tt1"] = listOf(
@@ -165,8 +165,14 @@ class CatalogDetailTest {
     compose.onNodeWithTag(sourceRowTag(0)).assertIsFocused()
     compose.onNodeWithTag(sourceRowTag(1)).assertExists()
 
-    // Recommended puts the largest first, so the ticked row is srcB and OK plays it.
+    // Recommended puts the largest first, so the ticked row is srcB and OK makes it the choice.
     compose.onNodeWithTag(sourceRowTag(0)).assertIsFocused()
+    press(Key.DirectionCenter)
+
+    assertTrue(played.isEmpty())
+    compose.onNodeWithTag(TagSourcesPanel).assertDoesNotExist()
+    compose.onNodeWithTag(TagCatalogPrimary).assertIsFocused()
+
     press(Key.DirectionCenter)
     assertEquals(listOf("srcB"), played.map { it.sourceId })
   }
@@ -189,6 +195,11 @@ class CatalogDetailTest {
     compose.onNodeWithTag(TagCatalogPrimary).assertIsNotFocused()
     press(Key.DirectionDown)
     compose.onNodeWithTag(sourceRowTag(1)).assertIsFocused()
+    press(Key.DirectionCenter)
+
+    // Choosing the row does not play it; the action row does, once the panel is gone.
+    assertTrue(played.isEmpty())
+    compose.onNodeWithTag(TagSourcesPanel).assertDoesNotExist()
     press(Key.DirectionCenter)
     assertEquals(listOf("srcA"), played.map { it.sourceId })
   }
@@ -265,6 +276,214 @@ class CatalogDetailTest {
     assertTrue(api.streamsRequests.contains("series:tt1:1:3"))
   }
 
+  // --- ATV-12: choosing a source, series sources, DOWN in the panel ---------------------------
+
+  @Test
+  fun `Down in series source panel reaches the second source`() {
+    val api = seriesApi()
+    api.metaValues["series:tt1"] = seriesMeta(v1(), v2())
+    api.streamsValues["series:tt1:1:1"] = listOf(
+      stream("srcA", name = "A", title = "English 8 GB"),
+      stream("srcB", name = "B", title = "English 1 GB"),
+    )
+    mount(api, seriesArgs())
+    compose.waitForIdle()
+
+    openSources()
+    compose.onNodeWithTag(sourceRowTag(0)).assertIsFocused()
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(sourceRowTag(1)).assertIsFocused()
+  }
+
+  @Test
+  fun `DOWN from the action row still lands on the episodes`() {
+    val api = seriesApi()
+    api.metaValues["series:tt1"] = seriesMeta(v1(), v2())
+    api.streamsValues["series:tt1:1:1"] = listOf(stream("s1", name = "One's source"))
+    mount(api, seriesArgs())
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagCatalogPrimary).assertIsFocused()
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(episodeCardTag(v1())).assertIsFocused()
+  }
+
+  @Test
+  fun `OK on a source row chooses it, closes the panel and focuses Play`() {
+    val api = FakeTvApi()
+    api.settingsValue = settings()
+    api.streamsValues["movie:tt1"] = listOf(
+      stream("srcA", name = "small", title = "Czech 1 GB", addonName = "alpha"),
+      stream("srcB", name = "big", title = "Czech 8 GB", addonName = "beta"),
+    )
+    mount(api, movieArgs())
+    compose.waitForIdle()
+
+    openSources()
+    compose.onNodeWithTag(sourceRowTag(0)).assertIsFocused()
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(sourceRowTag(1)).assertIsFocused()
+    press(Key.DirectionCenter)
+
+    assertTrue(played.isEmpty())
+    compose.onNodeWithTag(TagSourcesPanel).assertDoesNotExist()
+    compose.onNodeWithTag(TagCatalogPrimary).assertIsFocused()
+    compose.onNodeWithTag(TagCatalogChosenSource).assertTextContains("Source · alpha · small · 1.0 GB")
+  }
+
+  @Test
+  fun `reopening the panel focuses and ticks the chosen row`() {
+    val api = FakeTvApi()
+    api.settingsValue = settings()
+    api.streamsValues["movie:tt1"] = listOf(
+      stream("srcA", name = "small", title = "Czech 1 GB", addonName = "alpha"),
+      stream("srcB", name = "big", title = "Czech 8 GB", addonName = "beta"),
+    )
+    mount(api, movieArgs())
+    compose.waitForIdle()
+
+    openSources()
+    press(Key.DirectionDown)
+    press(Key.DirectionCenter)
+    assertTrue(played.isEmpty())
+
+    focusFromLeft(TagCatalogSources)
+    press(Key.DirectionCenter)
+
+    compose.onNodeWithTag(sourceRowTag(1)).assertIsFocused()
+    compose.onNodeWithTag(sourceRowTag(0)).assertTextContains("Default", substring = true)
+    compose.onNodeWithTag(sourceRowTag(1)).assertTextContains("✓", substring = true)
+  }
+
+  @Test
+  fun `To library queues the chosen source`() {
+    val api = FakeTvApi()
+    api.settingsValue = settings()
+    api.streamsValues["movie:tt1"] = listOf(
+      stream("srcA", name = "small", title = "Czech 1 GB", addonName = "alpha"),
+      stream("srcB", name = "big", title = "Czech 8 GB", addonName = "beta"),
+    )
+    mount(api, movieArgs())
+    compose.waitForIdle()
+
+    openSources()
+    press(Key.DirectionDown)
+    press(Key.DirectionCenter)
+
+    focusFromLeft(TagCatalogToLibrary)
+    press(Key.DirectionCenter)
+
+    assertEquals(listOf("srcA"), api.queuedSourceIds)
+    compose.onNodeWithTag(TagCatalogToLibrary).assertTextContains("Queued", substring = true)
+  }
+
+  @Test
+  fun `a row that cannot be played or queued can still be chosen`() {
+    val api = FakeTvApi()
+    api.settingsValue = SettingsResponse(uiLanguage = "en", audioLanguage = "en", realDebridConfigured = false)
+    api.streamsValues["movie:tt1"] = listOf(
+      stream("s1", playable = false, kind = "remote", name = "External", title = "Czech 8 GB", addonName = "alpha"),
+    )
+    mount(api, movieArgs())
+    compose.waitForIdle()
+
+    openSources()
+    compose.onNodeWithTag(sourceRowTag(0)).assertIsFocused()
+    press(Key.DirectionCenter)
+
+    assertTrue(played.isEmpty())
+    compose.onNodeWithTag(TagCatalogPrimary).assertIsFocused()
+    compose.onNodeWithTag(TagCatalogChosenSource).assertTextContains("Source · alpha · External · 8.0 GB")
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(TagCatalogMessage).assertTextContains("A torrent cannot be played directly.", substring = true)
+  }
+
+  @Test
+  fun `a series asks for the preselected episode's sources on open`() {
+    val api = seriesApi()
+    api.metaValues["series:tt1"] = seriesMeta(v1(), v2())
+    api.streamsValues["series:tt1:1:1"] = listOf(stream("s1", name = "One's source"))
+    mount(api, seriesArgs())
+    compose.waitForIdle()
+
+    assertTrue(api.streamsRequests.contains("series:tt1:1:1"))
+    assertFalse(api.streamsRequests.contains("series:tt1"))
+    compose.onNodeWithTag(TagCatalogSources).assertTextContains("Sources · 1")
+  }
+
+  @Test
+  fun `the episode line names the selected episode`() {
+    val api = seriesApi()
+    api.metaValues["series:tt1"] = seriesMeta(v1(), v2())
+    api.streamsValues["series:tt1:1:1"] = listOf(stream("s1", name = "One's source"))
+    api.streamsValues["series:tt1:1:2"] = listOf(stream("s2", name = "Two's source"))
+    mount(api, seriesArgs())
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagCatalogEpisode).assertTextContains("S1 · E1 · One")
+
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(episodeCardTag(v1())).assertIsFocused()
+    press(Key.DirectionRight)
+    compose.onNodeWithTag(episodeCardTag(v2())).assertIsFocused()
+    press(Key.DirectionCenter)
+
+    compose.onNodeWithTag(TagCatalogEpisode).assertTextContains("S1 · E2 · Two")
+  }
+
+  @Test
+  fun `OK on an episode selects it and moves focus to Play`() {
+    val api = seriesApi()
+    api.metaValues["series:tt1"] = seriesMeta(v1(), v2())
+    api.streamsValues["series:tt1:1:1"] = listOf(stream("s1", name = "One's source"))
+    api.streamsValues["series:tt1:1:2"] = listOf(stream("s2", name = "Two's source"))
+    mount(api, seriesArgs())
+    compose.waitForIdle()
+
+    press(Key.DirectionDown)
+    press(Key.DirectionRight)
+    compose.onNodeWithTag(episodeCardTag(v2())).assertIsFocused()
+    press(Key.DirectionCenter)
+
+    compose.onNodeWithTag(TagCatalogPrimary).assertIsFocused()
+    assertTrue(api.streamsRequests.contains("series:tt1:1:2"))
+    compose.onNodeWithTag(TagCatalogEpisode).assertTextContains("S1 · E2 · Two")
+  }
+
+  @Test
+  fun `OK on the already selected episode just moves focus to Play`() {
+    val api = seriesApi()
+    api.metaValues["series:tt1"] = seriesMeta(v1(), v2())
+    api.streamsValues["series:tt1:1:1"] = listOf(stream("s1", name = "One's source"))
+    mount(api, seriesArgs())
+    compose.waitForIdle()
+
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(episodeCardTag(v1())).assertIsFocused()
+    press(Key.DirectionCenter)
+
+    compose.onNodeWithTag(TagCatalogPrimary).assertIsFocused()
+    compose.onNodeWithTag(TagCatalogEpisode).assertTextContains("S1 · E1 · One")
+    assertEquals(1, api.streamsRequests.count { it == "series:tt1:1:1" })
+  }
+
+  @Test
+  fun `pressing Sources in a series lists the selected episode's sources`() {
+    val api = seriesApi()
+    api.metaValues["series:tt1"] = seriesMeta(v1(), v2())
+    api.streamsValues["series:tt1:1:1"] = listOf(stream("s1", name = "One's source"))
+    mount(api, seriesArgs())
+    compose.waitForIdle()
+
+    openSources()
+    compose.onNodeWithTag(sourceRowTag(0)).assertIsFocused()
+    press(Key.DirectionCenter)
+
+    assertTrue(played.isEmpty())
+    compose.onNodeWithTag(TagSourcesPanel).assertDoesNotExist()
+    compose.onNodeWithTag(TagCatalogPrimary).assertIsFocused()
+  }
+
   // --- Review fixes -------------------------------------------------------------------------
 
   private fun seriesApi(): FakeTvApi {
@@ -308,9 +527,8 @@ class CatalogDetailTest {
     compose.onNodeWithTag(episodeCardTag(second)).assertIsFocused()
     press(Key.DirectionCenter)
     compose.waitForIdle()
-    press(Key.DirectionLeft)
-    press(Key.DirectionUp)
-    press(Key.DirectionUp)
+    // Selecting the episode moves the remote to Play; OK there must not reach episode one's stale
+    // source while episode two's streams are still in flight.
     compose.onNodeWithTag(TagCatalogPrimary).assertIsFocused()
     press(Key.DirectionCenter)
 

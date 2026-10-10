@@ -1548,6 +1548,7 @@ export const es: Catalog = {
   "tv.detailEyebrowSeries": "Serie · {addon}",
   "tv.sourcesCount": "Fuentes · {count}",
   "tv.default": "Predeterminado",
+  "tv.chosenSource": "Fuente",
   "tv.searchHint": "Escriba un título y pulse Listo.",
   "tv.findingSources": "Buscando fuentes…",
   "tv.playWhenReady": "Se iniciará cuando las fuentes estén listas…",

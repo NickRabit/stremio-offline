@@ -9,6 +9,7 @@ import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -75,6 +76,7 @@ import cz.stremiooffline.tv.data.isWideKind
 import cz.stremiooffline.tv.data.progressFraction
 import cz.stremiooffline.tv.data.wideImage
 import cz.stremiooffline.tv.data.yearText
+import cz.stremiooffline.tv.ui.components.CardRowInset
 import cz.stremiooffline.tv.ui.components.PosterCard
 import cz.stremiooffline.tv.ui.components.ShimmerCard
 import cz.stremiooffline.tv.ui.components.ShimmerCards
@@ -87,6 +89,8 @@ const val TagDownloadsStrip = "home_downloads_strip"
 const val TagBackdropTitle = "home_backdrop_title"
 
 fun homeCardTag(key: String): String = "card:$key"
+
+fun homeRowTag(rowId: String): String = "row:$rowId"
 
 fun homeRetryTag(rowId: String): String = "home_retry:$rowId"
 
@@ -440,6 +444,7 @@ private fun HomeRowView(
       fontSize = 15.sp,
       fontWeight = FontWeight.Bold,
       letterSpacing = (-0.2).sp,
+      modifier = Modifier.padding(start = CardRowInset),
     )
     Spacer(Modifier.height(9.dp))
     when (val content = slot.content) {
@@ -461,7 +466,12 @@ private fun HomeRowView(
         LaunchedEffect(isFocusedRow, focusedCardIndex) {
           if (isFocusedRow) listState.animateScrollToItem(focusedCardIndex.coerceAtLeast(0))
         }
-        LazyRow(state = listState, horizontalArrangement = Arrangement.spacedBy(RowGap)) {
+        LazyRow(
+          state = listState,
+          contentPadding = PaddingValues(horizontal = CardRowInset),
+          horizontalArrangement = Arrangement.spacedBy(RowGap),
+          modifier = Modifier.testTag(homeRowTag(slot.id)),
+        ) {
           itemsIndexed(content.items, key = { _, card -> card.key }) { index, card ->
             val requester = remember(slot.id, index) { FocusRequester() }
             requesters[slot.id to card.key] = requester

@@ -7,6 +7,7 @@ import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -69,6 +70,7 @@ import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.data.VideoDto
 import cz.stremiooffline.tv.playback.Progress
+import cz.stremiooffline.tv.ui.components.CardRowInset
 import cz.stremiooffline.tv.ui.components.FocusButton
 import cz.stremiooffline.tv.ui.components.FocusButtonKind
 import cz.stremiooffline.tv.ui.components.TvSpinner
@@ -91,6 +93,8 @@ const val TagCatalogFavourite = "catalog_favourite"
 const val TagCatalogToLibrary = "catalog_to_library"
 const val TagCatalogSources = "catalog_sources"
 const val TagCatalogMessage = "catalog_message"
+const val TagCatalogEpisode = "catalog_episode"
+const val TagCatalogChosenSource = "catalog_chosen_source"
 const val TagSourcesPanel = "catalog_sources_panel"
 const val TagSourcesEmpty = "catalog_sources_empty"
 
@@ -136,6 +140,8 @@ fun CatalogDetailScreen(
   var selectedStream by remember { mutableStateOf<StreamDto?>(null) }
   var pickedStream by remember { mutableStateOf(false) }
   var sourcesOpen by remember { mutableStateOf(false) }
+  var actionRowFocused by remember { mutableStateOf(false) }
+  var closeToPlay by remember { mutableStateOf(false) }
   var favourite by remember { mutableStateOf(false) }
   var favouriteBusy by remember { mutableStateOf(false) }
   var queuedSourceId by remember { mutableStateOf<String?>(null) }
@@ -275,7 +281,8 @@ fun CatalogDetailScreen(
   )
   val notices = Streams.addonNotices(streams)
   val preferredStream = Streams.pickDefaultStream(visible)
-  val activeStream = selectedStream?.takeIf { visible.contains(it) } ?: preferredStream
+  val chosenStream = selectedStream?.takeIf { pickedStream && visible.contains(it) }
+  val activeStream = chosenStream ?: selectedStream?.takeIf { visible.contains(it) } ?: preferredStream
   // Asking covers both "the addon list has not answered" and "some addon still owes a list".
   val sourcesAsking = !sourcesFailed && (!sourcesLoaded || pendingSources > 0)
   // While no playable stream has arrived the primary action is a spinner, not a promise to play.
@@ -323,13 +330,19 @@ fun CatalogDetailScreen(
   }
 
   var sourcesWasOpen by remember { mutableStateOf(false) }
-  // The opener gets the remote back on the frame the panel and its focus trap are gone.
+  // The opener gets the remote back on the frame the panel and its focus trap are gone; a picked
+  // source sends it to Play instead, so the action row is where the viewer carries on.
   LaunchedEffect(sourcesOpen) {
     if (sourcesOpen) {
       sourcesWasOpen = true
     } else if (sourcesWasOpen) {
       sourcesWasOpen = false
-      runCatching { sourcesOpenerFocus.requestFocus() }
+      if (closeToPlay) {
+        closeToPlay = false
+        runCatching { primaryFocus.requestFocus() }
+      } else {
+        runCatching { sourcesOpenerFocus.requestFocus() }
+      }
     }
   }
 
@@ -364,13 +377,13 @@ fun CatalogDetailScreen(
     }
   }
 
-  /** One row's rule: play it, queue a torrent the server can fetch, or say it is not playable. */
-  fun activate(stream: StreamDto) {
-    when {
-      stream.playable -> play(stream)
-      Streams.canQueue(stream, settings.realDebridConfigured) -> queue(stream)
-      else -> message = torrentText
-    }
+  /** OK in the panel picks a row; Play or To library in the action row then acts on it. */
+  fun chooseSource(stream: StreamDto) {
+    selectedStream = stream
+    pickedStream = true
+    message = null
+    closeToPlay = true
+    closeSources()
   }
 
   /** OK while the sources are still coming; the wait ends when they all answer or the deadline passes. */
@@ -393,7 +406,9 @@ fun CatalogDetailScreen(
       sourcesFailed -> message = loadErrorText
       stream?.playable == true -> play(stream)
       findingSources -> armPendingPlay()
-      stream != null -> activate(stream)
+      // A chosen stream that cannot be played is what the torrent message is for; queuing it is
+      // the To library button's job.
+      stream != null -> message = torrentText
       else -> message = emptyText
     }
   }
@@ -467,7 +482,11 @@ fun CatalogDetailScreen(
       .fillMaxSize()
       .background(Tokens.Bg)
       .onPreviewKeyEvent { event ->
-        if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown && args.type == "series") {
+        // DOWN drops into the episode row from the action row only; inside an open panel it must
+        // reach the next source instead.
+        if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown &&
+          isSeries && !sourcesOpen && actionRowFocused
+        ) {
           runCatching { rowFocus.requestFocus() }
           true
         } else {
@@ -508,6 +527,16 @@ fun CatalogDetailScreen(
         overflow = TextOverflow.Ellipsis,
         modifier = Modifier.width(760.dp),
       )
+      val selectedEpisodeLine = if (isSeries) selectedVideo?.let { episodeLine(it) } else null
+      if (selectedEpisodeLine != null) {
+        Text(
+          selectedEpisodeLine,
+          color = Tokens.Muted,
+          fontSize = 11.5.sp,
+          fontWeight = FontWeight.Medium,
+          modifier = Modifier.testTag(TagCatalogEpisode),
+        )
+      }
       Text(metaLine(meta), color = Tokens.Muted, fontSize = 11.5.sp, fontWeight = FontWeight.Medium)
       val description = meta.description
       if (description != null) {
@@ -531,7 +560,11 @@ fun CatalogDetailScreen(
         }
       }
       Spacer(Modifier.height(3.dp))
-      Row(horizontalArrangement = Arrangement.spacedBy(11.dp), verticalAlignment = Alignment.CenterVertically) {
+      Row(
+        modifier = Modifier.onFocusChanged { actionRowFocused = it.hasFocus },
+        horizontalArrangement = Arrangement.spacedBy(11.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
         FocusButton(
           text = when {
             pendingPlay -> playWhenReadyText
@@ -575,6 +608,25 @@ fun CatalogDetailScreen(
           modifier = Modifier.focusRequester(sourcesOpenerFocus).testTag(TagCatalogSources),
         )
       }
+      if (pickedStream) {
+        activeStream?.let { stream ->
+          val caption = listOfNotNull(
+            stream.addonName?.takeIf { it.isNotBlank() },
+            streamLabel(stream).takeIf { it.isNotBlank() },
+            formatSize(Streams.streamSize(stream)),
+          ).joinToString(" · ")
+          if (caption.isNotEmpty()) {
+            Text(
+              stringResource(R.string.tv_chosen_source) + " · " + caption,
+              color = Tokens.Muted,
+              fontSize = 11.sp,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+              modifier = Modifier.testTag(TagCatalogChosenSource),
+            )
+          }
+        }
+      }
       val shown = message
       if (shown != null) {
         Text(
@@ -600,7 +652,13 @@ fun CatalogDetailScreen(
           seriesPosition = storedPosition,
           seriesDuration = storedDuration,
           imageUrl = imageUrl,
-          onSelect = { selectVideo(it) },
+          onSelect = { video ->
+            selectVideo(video)
+            scope.launch {
+              awaitFrame()
+              runCatching { primaryFocus.requestFocus() }
+            }
+          },
           focusRequester = rowFocus,
           seasonFocus = seasonFocus,
         )
@@ -608,7 +666,8 @@ fun CatalogDetailScreen(
     }
 
     if (sourcesOpen) {
-      val focusIndex = visible.indexOfFirst { it === preferredStream }.let { if (it >= 0) it else 0 }
+      // Reopening lands on what the viewer picked; without a pick, on the default.
+      val focusIndex = visible.indexOfFirst { it === (chosenStream ?: preferredStream) }.let { if (it >= 0) it else 0 }
       SidePanel(
         title = stringResource(R.string.sources_heading),
         onClose = { closeSources() },
@@ -633,9 +692,11 @@ fun CatalogDetailScreen(
             SourceRow(
               stream = stream,
               default = preferredStream === stream,
+              chosen = chosenStream === stream,
+              anyChosen = chosenStream != null,
               defaultText = defaultText,
               titleLanguage = titleLanguage,
-              onClick = { activate(stream) },
+              onClick = { chooseSource(stream) },
               modifier = Modifier
                 .testTag(sourceRowTag(index))
                 .then(if (index == focusIndex) Modifier.focusRequester(sourcesPanelFocus) else Modifier),
@@ -656,6 +717,8 @@ fun CatalogDetailScreen(
 private fun SourceRow(
   stream: StreamDto,
   default: Boolean,
+  chosen: Boolean,
+  anyChosen: Boolean,
   defaultText: String,
   titleLanguage: String?,
   onClick: () -> Unit,
@@ -702,7 +765,12 @@ private fun SourceRow(
         Text(streamLabel(stream), fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
         if (meta.isNotEmpty()) Text(meta.joinToString(" · "), color = Tokens.Muted, fontSize = 10.sp, maxLines = 1)
       }
-      if (default) Text("✓ $defaultText", color = Tokens.Green, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+      // One tick only: on the picked row once the viewer chose one, otherwise on the default.
+      when {
+        chosen -> Text(if (default) "✓ $defaultText" else "✓", color = Tokens.Green, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+        default && !anyChosen -> Text("✓ $defaultText", color = Tokens.Green, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+        default -> Text(defaultText, color = Tokens.Muted, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+      }
     }
   }
 }
@@ -729,7 +797,11 @@ private fun SeriesRows(
   LaunchedEffect(focusedSeason) {
     if (focusedSeason >= 0) seasonState.animateScrollToItem(focusedSeason)
   }
-  LazyRow(state = seasonState, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+  LazyRow(
+    state = seasonState,
+    contentPadding = PaddingValues(horizontal = CardRowInset),
+    horizontalArrangement = Arrangement.spacedBy(8.dp),
+  ) {
     itemsIndexed(seasons, key = { _, value -> value }) { index, value ->
       FocusButton(
         text = stringResource(R.string.episodes_season_number, value.toString()),
@@ -745,6 +817,7 @@ private fun SeriesRows(
   }
   val episodes = videos.filter { it.season == current }.ifEmpty { videos }
   LazyRow(
+    contentPadding = PaddingValues(horizontal = CardRowInset),
     horizontalArrangement = Arrangement.spacedBy(18.dp),
     // UP from the episodes goes to the season chips; the chips never trap the remote.
     modifier = Modifier.onPreviewKeyEvent { event ->
@@ -778,6 +851,14 @@ private fun SeriesRows(
 
 private fun streamLabel(stream: StreamDto): String =
   stream.name ?: stream.title?.split("\n")?.firstOrNull() ?: stream.description?.split("\n")?.firstOrNull() ?: ""
+
+/** The selected episode under the title: the card's `S1 · E1` label and the episode's name. */
+internal fun episodeLine(video: VideoDto): String {
+  val name = video.title ?: video.name
+  return listOfNotNull(video.numbered, name?.takeIf { it.isNotBlank() })
+    .joinToString(" · ")
+    .ifEmpty { video.label }
+}
 
 internal fun formatSize(size: Double?): String? = when {
   size == null -> null

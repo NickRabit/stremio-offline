@@ -15,6 +15,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.unit.dp
 import cz.stremiooffline.tv.data.MetaDto
+import cz.stremiooffline.tv.ui.components.CardRowInset
 import cz.stremiooffline.tv.ui.components.PosterCard
 
 /** The poster grid of both the catalogue and search: focus with the D-pad, ask for more when
@@ -33,7 +34,8 @@ fun PosterGrid(
     LazyVerticalGrid(
       columns = GridCells.Fixed(columns),
       modifier = Modifier.focusRequester(gridFocus).focusGroup(),
-      contentPadding = PaddingValues(start = 10.dp, top = 10.dp, bottom = 40.dp),
+      // Room for the focused card's scale and glow so the first column is not clipped.
+      contentPadding = PaddingValues(start = CardRowInset, top = 10.dp, end = CardRowInset, bottom = 40.dp),
       horizontalArrangement = Arrangement.spacedBy(18.dp),
       verticalArrangement = Arrangement.spacedBy(18.dp),
     ) {

@@ -68,6 +68,8 @@ open class FakeTvApi : TvApi {
   var watchlistFailure: ApiFailure? = null
   var watchlistAnswer: ((Boolean) -> Boolean)? = null
   var downloads: MutableList<Pair<String?, MediaDto>> = mutableListOf()
+  /** The source id each `download()` was called with, so a test can name the queued source. */
+  var queuedSourceIds: MutableList<String> = mutableListOf()
   var downloadResult: DownloadResult = DownloadResult(status = "queued")
   var downloadFailure: ApiFailure? = null
   var searchPages: MutableMap<String, SearchResultDto> = mutableMapOf()
@@ -178,6 +180,7 @@ open class FakeTvApi : TvApi {
   override suspend fun download(title: String, sourceId: String, media: MediaDto): DownloadResult {
     downloadFailure?.let { throw ApiError(it) }
     downloads += title to media
+    queuedSourceIds += sourceId
     return downloadResult
   }
 
