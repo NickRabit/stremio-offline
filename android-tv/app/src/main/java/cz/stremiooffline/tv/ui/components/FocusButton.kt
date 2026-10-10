@@ -27,6 +27,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -48,6 +50,7 @@ fun FocusButton(
   modifier: Modifier = Modifier,
   kind: FocusButtonKind = FocusButtonKind.Normal,
   leading: (@Composable () -> Unit)? = null,
+  contentDescription: String? = null,
 ) {
   val interaction = remember { MutableInteractionSource() }
   val focused by interaction.collectIsFocusedAsState()
@@ -60,6 +63,7 @@ fun FocusButton(
     onClick = onClick,
     modifier = modifier
       .then(if (kind == FocusButtonKind.Icon) Modifier.size(36.dp) else Modifier.height(36.dp))
+      .then(if (contentDescription != null) Modifier.semantics { this.contentDescription = contentDescription } else Modifier)
       .background(if (focused) Tokens.AccentGradient else SolidColor(Color.Transparent), shape),
     scale = ButtonDefaults.scale(focusedScale = 1.06f),
     glow = ButtonDefaults.glow(focusedGlow = Glow(Tokens.Accent.copy(alpha = 0.35f), 20.dp)),

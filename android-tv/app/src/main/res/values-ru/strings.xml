@@ -49,4 +49,24 @@
   <string name="tv_player_error">Не удалось воспроизвести это видео.</string>
   <string name="tv_load_error">Не удалось загрузить библиотеку.</string>
   <string name="tv_back">Назад</string>
+  <string name="tv_detail_eyebrow_movie">Фильм · %1$s</string>
+  <string name="tv_detail_eyebrow_series">Сериал · %1$s</string>
+  <string name="tv_sources_count">Источники · %1$s</string>
+  <string name="tv_default">По умолчанию</string>
+  <string name="tv_search_hint">Введите название и нажмите Готово.</string>
+  <string name="tv_finding_sources">Поиск источников…</string>
+  <string name="catalog_title">Что вы хотите посмотреть?</string>
+  <string name="catalog_genre">Жанр</string>
+  <string name="catalog_all_genres">Все</string>
+  <string name="sources_heading">Источники</string>
+  <string name="sources_none">Ни один активный исходный аддон не имеет потока для этого заголовка.</string>
+  <string name="save_to_library">В библиотеку</string>
+  <string name="save_queued">В очереди</string>
+  <string name="player_play">Играть</string>
+  <string name="favorite_add">Добавить в избранное</string>
+  <string name="favorite_remove">Удалить из избранного</string>
+  <string name="episodes_season_number">Сезон %1$s</string>
+  <string name="downloads_waiting_debrid">Жду Реал-Дебрид.</string>
+  <string name="err_torrent_not_playable">Торрент нельзя воспроизводить напрямую. Добавьте его в библиотеку.</string>
+  <string name="err_download_library_not_allowed">Эта учетная запись не может загружать файлы в библиотеку.</string>
 </resources>

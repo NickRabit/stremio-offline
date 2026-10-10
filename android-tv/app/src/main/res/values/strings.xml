@@ -49,4 +49,24 @@
   <string name="tv_player_error">This video could not be played.</string>
   <string name="tv_load_error">The library could not be loaded.</string>
   <string name="tv_back">Back</string>
+  <string name="tv_detail_eyebrow_movie">Movie · %1$s</string>
+  <string name="tv_detail_eyebrow_series">Series · %1$s</string>
+  <string name="tv_sources_count">Sources · %1$s</string>
+  <string name="tv_default">Default</string>
+  <string name="tv_search_hint">Type a title, then press Done.</string>
+  <string name="tv_finding_sources">Finding sources…</string>
+  <string name="catalog_title">What do you want to watch?</string>
+  <string name="catalog_genre">Genre</string>
+  <string name="catalog_all_genres">All</string>
+  <string name="sources_heading">Sources</string>
+  <string name="sources_none">No active source addon has a stream for this title.</string>
+  <string name="save_to_library">To library</string>
+  <string name="save_queued">Queued</string>
+  <string name="player_play">Play</string>
+  <string name="favorite_add">Add to favorites</string>
+  <string name="favorite_remove">Remove from favorites</string>
+  <string name="episodes_season_number">Season %1$s</string>
+  <string name="downloads_waiting_debrid">Waiting for Real-Debrid.</string>
+  <string name="err_torrent_not_playable">A torrent cannot be played directly. Add it with To library.</string>
+  <string name="err_download_library_not_allowed">This account may not download to the library.</string>
 </resources>

@@ -49,4 +49,24 @@
   <string name="tv_player_error">No se pudo reproducir este vídeo.</string>
   <string name="tv_load_error">No se pudo cargar la biblioteca.</string>
   <string name="tv_back">Atrás</string>
+  <string name="tv_detail_eyebrow_movie">Película · %1$s</string>
+  <string name="tv_detail_eyebrow_series">Serie · %1$s</string>
+  <string name="tv_sources_count">Fuentes · %1$s</string>
+  <string name="tv_default">Predeterminado</string>
+  <string name="tv_search_hint">Escriba un título y pulse Listo.</string>
+  <string name="tv_finding_sources">Buscando fuentes…</string>
+  <string name="catalog_title">¿Qué quieres ver?</string>
+  <string name="catalog_genre">Género</string>
+  <string name="catalog_all_genres">Todos</string>
+  <string name="sources_heading">Fuentes</string>
+  <string name="sources_none">Ningún complemento de fuente activa tiene una transmisión para este título.</string>
+  <string name="save_to_library">A la biblioteca</string>
+  <string name="save_queued">En cola</string>
+  <string name="player_play">Jugar</string>
+  <string name="favorite_add">Añadir a favoritos</string>
+  <string name="favorite_remove">Quitar de favoritos</string>
+  <string name="episodes_season_number">Temporada %1$s</string>
+  <string name="downloads_waiting_debrid">Esperando a Real-Debrid.</string>
+  <string name="err_torrent_not_playable">Un torrent no se puede reproducir directamente. Agréguelo con A la biblioteca.</string>
+  <string name="err_download_library_not_allowed">Es posible que esta cuenta no se descargue en la biblioteca.</string>
 </resources>

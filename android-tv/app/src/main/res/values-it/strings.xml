@@ -49,4 +49,24 @@
   <string name="tv_player_error">Impossibile riprodurre questo video.</string>
   <string name="tv_load_error">Impossibile caricare la libreria.</string>
   <string name="tv_back">Indietro</string>
+  <string name="tv_detail_eyebrow_movie">Film · %1$s</string>
+  <string name="tv_detail_eyebrow_series">Serie · %1$s</string>
+  <string name="tv_sources_count">Fonti · %1$s</string>
+  <string name="tv_default">Predefinito</string>
+  <string name="tv_search_hint">Digita un titolo e premi Fine.</string>
+  <string name="tv_finding_sources">Ricerca delle fonti…</string>
+  <string name="catalog_title">Cosa vuoi guardare?</string>
+  <string name="catalog_genre">Genere</string>
+  <string name="catalog_all_genres">Tutto</string>
+  <string name="sources_heading">Fonti</string>
+  <string name="sources_none">Nessun componente aggiuntivo di origine attivo ha uno streaming per questo titolo.</string>
+  <string name="save_to_library">In libreria</string>
+  <string name="save_queued">In coda</string>
+  <string name="player_play">Gioca</string>
+  <string name="favorite_add">Aggiungi ai preferiti</string>
+  <string name="favorite_remove">Rimuovi dai preferiti</string>
+  <string name="episodes_season_number">Stagione %1$s</string>
+  <string name="downloads_waiting_debrid">Aspettando Real-Debrid.</string>
+  <string name="err_torrent_not_playable">Un torrent non può essere riprodotto direttamente. Aggiungilo con Alla libreria.</string>
+  <string name="err_download_library_not_allowed">Questo account potrebbe non essere scaricato nella libreria.</string>
 </resources>

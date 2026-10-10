@@ -1542,4 +1542,10 @@ export const ru: Catalog = {
   "tv.playerError": "Не удалось воспроизвести это видео.",
   "tv.loadError": "Не удалось загрузить библиотеку.",
   "tv.back": "Назад",
+  "tv.detailEyebrowMovie": "Фильм · {addon}",
+  "tv.detailEyebrowSeries": "Сериал · {addon}",
+  "tv.sourcesCount": "Источники · {count}",
+  "tv.default": "По умолчанию",
+  "tv.searchHint": "Введите название и нажмите Готово.",
+  "tv.findingSources": "Поиск источников…",
 };

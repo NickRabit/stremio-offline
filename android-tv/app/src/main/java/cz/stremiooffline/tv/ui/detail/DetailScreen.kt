@@ -57,8 +57,18 @@ const val TagDetailPrimary = "detail_primary"
 const val TagDetailStartOver = "detail_start_over"
 const val TagDetailWatched = "detail_watched"
 
-/** A file to play and whether to resume it. */
-data class PlayTarget(val path: String, val title: String, val resume: Boolean)
+/**
+ * What to play: the progress key and title, and either a library [path] to mint a source from or
+ * a catalogue [sourceId] the server already handed out. The player skips `librarySource()` when a
+ * source id is present.
+ */
+data class PlayTarget(
+  val key: String,
+  val title: String,
+  val resume: Boolean,
+  val path: String? = null,
+  val sourceId: String? = null,
+)
 
 /** Everything the title detail draws: the artwork, the meta line and the files that sit under it. */
 data class DetailData(
@@ -232,14 +242,14 @@ fun DetailScreen(
       Row(horizontalArrangement = Arrangement.spacedBy(11.dp), verticalAlignment = Alignment.CenterVertically) {
         FocusButton(
           text = stringResource(if (resuming) R.string.tv_resume else R.string.tv_play),
-          onClick = { playFile?.let { onPlay(PlayTarget(it.path, it.label, resume = resuming)) } },
+          onClick = { playFile?.let { onPlay(PlayTarget(Progress.libraryKey(it.path), it.label, resume = resuming, path = it.path)) } },
           kind = FocusButtonKind.Primary,
           modifier = Modifier.focusRequester(primaryFocus).testTag(TagDetailPrimary),
         )
         if (resuming) {
           FocusButton(
             text = stringResource(R.string.tv_start_over),
-            onClick = { playFile?.let { onPlay(PlayTarget(it.path, it.label, resume = false)) } },
+            onClick = { playFile?.let { onPlay(PlayTarget(Progress.libraryKey(it.path), it.label, resume = false, path = it.path)) } },
             modifier = Modifier.testTag(TagDetailStartOver),
           )
         }
@@ -280,7 +290,7 @@ private fun EpisodeRow(
         cardTag = file.path,
         onClick = {
           val resume = Progress.resumePosition(positionOf(file), durationOf(file)) != null
-          onPlay(PlayTarget(file.path, file.label, resume = resume))
+          onPlay(PlayTarget(Progress.libraryKey(file.path), file.label, resume = resume, path = file.path))
         },
         modifier = if (index == startIndex) Modifier.focusRequester(focusRequester) else Modifier,
       )

@@ -1542,4 +1542,10 @@ export const ptBR: Catalog = {
   "tv.playerError": "Não foi possível reproduzir este vídeo.",
   "tv.loadError": "Não foi possível carregar a biblioteca.",
   "tv.back": "Voltar",
+  "tv.detailEyebrowMovie": "Filme · {addon}",
+  "tv.detailEyebrowSeries": "Série · {addon}",
+  "tv.sourcesCount": "Fontes · {count}",
+  "tv.default": "Padrão",
+  "tv.searchHint": "Digite um título e pressione Concluído.",
+  "tv.findingSources": "Procurando fontes…",
 };

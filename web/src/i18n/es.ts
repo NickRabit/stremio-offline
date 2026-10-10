@@ -1542,4 +1542,10 @@ export const es: Catalog = {
   "tv.playerError": "No se pudo reproducir este vídeo.",
   "tv.loadError": "No se pudo cargar la biblioteca.",
   "tv.back": "Atrás",
+  "tv.detailEyebrowMovie": "Película · {addon}",
+  "tv.detailEyebrowSeries": "Serie · {addon}",
+  "tv.sourcesCount": "Fuentes · {count}",
+  "tv.default": "Predeterminado",
+  "tv.searchHint": "Escriba un título y pulse Listo.",
+  "tv.findingSources": "Buscando fuentes…",
 };

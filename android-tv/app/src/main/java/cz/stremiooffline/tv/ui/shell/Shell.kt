@@ -61,6 +61,10 @@ import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.ui.components.BrandMark
 import cz.stremiooffline.tv.ui.components.FocusButton
 import cz.stremiooffline.tv.ui.components.FocusButtonKind
+import cz.stremiooffline.tv.ui.catalog.CatalogDetailArgs
+import cz.stremiooffline.tv.ui.catalog.CatalogDetailScreen
+import cz.stremiooffline.tv.ui.catalog.CatalogScreen
+import cz.stremiooffline.tv.ui.catalog.SearchScreen
 import cz.stremiooffline.tv.ui.detail.DetailData
 import cz.stremiooffline.tv.ui.detail.DetailScreen
 import cz.stremiooffline.tv.ui.detail.PlayTarget
@@ -107,6 +111,7 @@ fun Shell(start: Section, api: TvApi, username: String, onSignOut: () -> Unit) {
   val sectionStates = rememberSaveableStateHolder()
 
   var detail by remember { mutableStateOf<DetailData?>(null) }
+  var catalogDetail by remember { mutableStateOf<CatalogDetailArgs?>(null) }
   var player by remember { mutableStateOf<PlayTarget?>(null) }
   var returnToken by remember { mutableIntStateOf(0) }
   // Bumped each time Library comes back into view, so re-entering refreshes without losing focus.
@@ -128,20 +133,31 @@ fun Shell(start: Section, api: TvApi, username: String, onSignOut: () -> Unit) {
       true
     },
     onBackToExit = onSignOut,
-    railHidden = detail != null,
+    railHidden = detail != null || catalogDetail != null,
   ) { focusRequester ->
     val section = current
     // The holder keeps each section's list state and selection across the swap.
     sectionStates.SaveableStateProvider(section) {
-      if (section == Section.Library) {
-        LibraryRoute(
+      when (section) {
+        Section.Library -> LibraryRoute(
           api = api,
           onOpenDetail = { detail = it },
           restoreToken = returnToken,
           refreshToken = libraryRefreshToken,
         )
-      } else {
-        SectionContent(
+        Section.Catalog -> CatalogScreen(
+          api = api,
+          onOpenDetail = { catalogDetail = it },
+          onOpenSearch = { shellState.pick(Section.Search) },
+          imageUrl = { path -> path?.let(api::url) },
+          restoreToken = returnToken,
+        )
+        Section.Search -> SearchScreen(
+          api = api,
+          onOpenDetail = { catalogDetail = it },
+          imageUrl = { path -> path?.let(api::url) },
+        )
+        Section.Home, Section.Account -> SectionContent(
           section = section,
           username = username,
           onSignOut = onSignOut,
@@ -165,6 +181,21 @@ fun Shell(start: Section, api: TvApi, username: String, onSignOut: () -> Unit) {
       progress = api::progress,
       restoreToken = returnToken,
       backEnabled = player == null,
+    )
+  }
+
+  val openCatalogDetail = catalogDetail
+  if (openCatalogDetail != null) {
+    CatalogDetailScreen(
+      api = api,
+      args = openCatalogDetail,
+      imageUrl = { path -> path?.let(api::url) },
+      onPlay = { player = it },
+      onBack = {
+        catalogDetail = null
+        returnToken++
+      },
+      restoreToken = returnToken,
     )
   }
 

@@ -1542,4 +1542,10 @@ export const fr: Catalog = {
   "tv.playerError": "Cette vidéo n'a pas pu être lue.",
   "tv.loadError": "La bibliothèque n'a pas pu être chargée.",
   "tv.back": "Retour",
+  "tv.detailEyebrowMovie": "Film · {addon}",
+  "tv.detailEyebrowSeries": "Série · {addon}",
+  "tv.sourcesCount": "Sources · {count}",
+  "tv.default": "Par défaut",
+  "tv.searchHint": "Saisissez un titre, puis appuyez sur Terminé.",
+  "tv.findingSources": "Recherche des sources…",
 };
