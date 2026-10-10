@@ -18,6 +18,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.pressKey
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -54,5 +55,32 @@ class TvTextFieldTest {
 
     compose.onNodeWithTag("b").assertIsFocused().assert(active(true))
     compose.onNodeWithTag("a").assert(active(false))
+  }
+
+  @Test
+  fun `walking past a field does not report it left, ending an edit does`() {
+    var lost = 0
+    compose.setContent {
+      val first = remember { FocusRequester() }
+      var a by remember { mutableStateOf("http://") }
+      var b by remember { mutableStateOf("") }
+      Column {
+        TvTextField(label = "A", value = a, onValueChange = { a = it }, surfaceRequester = first, onFocusLost = { lost++ }, testTag = "a")
+        TvTextField(label = "B", value = b, onValueChange = { b = it }, testTag = "b")
+      }
+      LaunchedEffect(Unit) { first.requestFocus() }
+    }
+    compose.waitForIdle()
+
+    compose.onRoot().performKeyInput { pressKey(Key.DirectionDown) }
+    compose.waitForIdle()
+    assertEquals("moving off an untouched field is not an edit", 0, lost)
+
+    compose.onRoot().performKeyInput { pressKey(Key.DirectionUp) }
+    compose.onRoot().performKeyInput { pressKey(Key.DirectionCenter) }
+    compose.waitForIdle()
+    compose.onRoot().performKeyInput { pressKey(Key.DirectionDown) }
+    compose.waitForIdle()
+    assertEquals("ending the edit reports the field once", 1, lost)
   }
 }

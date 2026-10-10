@@ -51,7 +51,7 @@ import androidx.tv.material3.Text
 import cz.stremiooffline.tv.ui.theme.Tokens
 
 /** Whether a field draws its accent border: focused by the D-pad or being edited. */
-val TvFieldActive = SemanticsPropertyKey<Boolean>("TvFieldActive")
+internal val TvFieldActive = SemanticsPropertyKey<Boolean>("TvFieldActive")
 
 /**
  * The one text field of the app, shared by sign-in and search. It is a focusable surface first:
@@ -92,10 +92,12 @@ fun TvTextField(
     if (move == null) surface.requestFocus() else focusManager.moveFocus(move)
   }
 
-  var wasActive by remember { mutableStateOf(false) }
-  LaunchedEffect(active) {
-    if (wasActive && !active) onFocusLost()
-    wasActive = active
+  // Only the end of an edit counts: walking past an untouched field with the D-pad must not
+  // validate it.
+  var wasEditing by remember { mutableStateOf(false) }
+  LaunchedEffect(editing) {
+    if (wasEditing && !editing) onFocusLost()
+    wasEditing = editing
   }
   LaunchedEffect(editing) {
     if (editing) {
