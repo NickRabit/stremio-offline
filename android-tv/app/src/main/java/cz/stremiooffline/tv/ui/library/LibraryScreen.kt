@@ -72,6 +72,9 @@ fun LibraryRoute(
   // Re-entering the section asks the server again; the grid keeps the old rows until the answer.
   // The shell only raises the token after the first mount, so a fresh mount just starts.
   LaunchedEffect(refreshToken) { if (refreshToken > 0) viewModel.refresh() }
+  // A detail may have starred its title; re-read the level so the card and the root's Favourites
+  // entry match the server again, without dropping the remote off the card the viewer came from.
+  LaunchedEffect(restoreToken) { if (restoreToken > 0) viewModel.refresh() }
 
   val state = viewModel.state
   val items = state.current?.items.orEmpty()

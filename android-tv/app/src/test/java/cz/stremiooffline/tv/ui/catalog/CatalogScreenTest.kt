@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.Context
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assertIsDisplayed
@@ -340,5 +341,59 @@ class CatalogScreenTest {
     press(Key.DirectionCenter)
 
     compose.onNodeWithText(context.getString(cz.stremiooffline.tv.R.string.tv_my_list_empty)).assertExists()
+  }
+
+  @Test
+  fun `with no addon catalogues the picker still reaches My list`() {
+    val api = FakeTvApi()
+    api.catalogsValue = emptyList()
+    api.watchlistValue = mutableListOf(watchlistEntry("tt9", "Nine"))
+    mount(api)
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagCatalogChip).assertExists()
+    focusBy(TagCatalogChip, Key.DirectionRight)
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(TagMyListOption).assertIsFocused()
+    press(Key.DirectionCenter)
+
+    compose.onNodeWithTag(TagCatalogChip).assertTextContains("★ My list", substring = true)
+    compose.onNodeWithTag(posterTag(meta("tt9", name = "Nine"))).assertExists()
+  }
+
+  @Test
+  fun `an emptied My list on return moves focus to the catalogue chip`() {
+    val api = FakeTvApi()
+    api.catalogsValue = listOf(feature("Open Movies"))
+    api.catalogPages["a"] = listOf(listOf(meta("ttA", name = "Alpha")))
+    api.watchlistValue = mutableListOf(watchlistEntry("tt9", "Nine"))
+    val token = mutableIntStateOf(0)
+    scenario.onActivity { activity ->
+      host = activity
+      activity.setContent {
+        CatalogScreen(
+          api = api,
+          onOpenDetail = {},
+          onOpenSearch = {},
+          imageUrl = { null },
+          restoreToken = token.value,
+        )
+      }
+    }
+    compose.waitForIdle()
+
+    press(Key.DirectionCenter)
+    press(Key.DirectionUp)
+    press(Key.DirectionCenter)
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(posterTag(meta("tt9", name = "Nine"))).assertIsFocused()
+
+    // The detail unstars the last title and the shell brings the list back into view.
+    api.watchlistValue.clear()
+    token.value = 1
+    compose.waitForIdle()
+
+    compose.onNodeWithText(context.getString(cz.stremiooffline.tv.R.string.tv_my_list_empty)).assertExists()
+    compose.onNodeWithTag(TagCatalogChip).assertIsFocused()
   }
 }

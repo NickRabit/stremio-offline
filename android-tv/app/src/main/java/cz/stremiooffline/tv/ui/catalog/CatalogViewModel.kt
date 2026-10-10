@@ -132,8 +132,8 @@ class CatalogViewModel(private val api: CatalogApi) : ViewModel() {
   }
 
   /** Re-reads the watchlist when a detail returns, so the count and the grid stay honest. */
-  fun refreshWatchlist() {
-    viewModelScope.launch { refreshWatchlistCount() }
+  suspend fun refreshWatchlist() {
+    refreshWatchlistCount()
   }
 
   private suspend fun refreshWatchlistCount() {
