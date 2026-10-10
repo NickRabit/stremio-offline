@@ -53,6 +53,7 @@
   <string name="tv_detail_eyebrow_series">Series · %1$s</string>
   <string name="tv_sources_count">Sources · %1$s</string>
   <string name="tv_default">Default</string>
+  <string name="tv_chosen_source">Source</string>
   <string name="tv_search_hint">Type a title, then press Done.</string>
   <string name="tv_finding_sources">Finding sources…</string>
   <string name="tv_play_when_ready">Starting when sources are ready…</string>

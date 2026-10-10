@@ -18,7 +18,7 @@ import cz.stremiooffline.tv.data.StreamSourceDto
 import cz.stremiooffline.tv.data.VideoDto
 import cz.stremiooffline.tv.ui.FakeTvApi
 import cz.stremiooffline.tv.ui.detail.PlayTarget
-import java.util.concurrent.CountDownLatch
+import kotlinx.coroutines.CompletableDeferred
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -64,15 +64,15 @@ class CatalogPendingPlayTest {
   private fun hasText(text: String) = compose.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty()
 
   /** Two addons whose answers the test releases: alpha has 1 GB, beta the larger 8 GB. */
-  private fun twoSlowAddons(api: FakeTvApi): Pair<CountDownLatch, CountDownLatch> {
+  private fun twoSlowAddons(api: FakeTvApi): Pair<CompletableDeferred<Unit>, CompletableDeferred<Unit>> {
     api.settingsValue = settings()
     api.streamSourcesValues["movie:tt1"] = listOf(source("alpha"), source("beta"))
     api.addonStreams["movie:tt1|alpha"] = listOf(stream("srcA", "Czech 1 GB", "Alpha"))
     api.addonStreams["movie:tt1|beta"] = listOf(stream("srcB", "Czech 8 GB", "Beta"))
-    val alpha = CountDownLatch(1)
-    val beta = CountDownLatch(1)
-    api.streamsLatches["movie:tt1|alpha"] = alpha
-    api.streamsLatches["movie:tt1|beta"] = beta
+    val alpha = CompletableDeferred<Unit>()
+    val beta = CompletableDeferred<Unit>()
+    api.streamsGates["movie:tt1|alpha"] = alpha
+    api.streamsGates["movie:tt1|beta"] = beta
     return alpha to beta
   }
 
@@ -89,13 +89,13 @@ class CatalogPendingPlayTest {
     assertTrue(played.isEmpty())
     compose.onNodeWithTag(TagCatalogPrimary).assertTextContains("Starting when sources are ready…")
 
-    alpha.countDown()
+    alpha.complete(Unit)
     compose.waitUntil(5_000) { api.streamsCompleted.contains("movie:tt1|alpha") }
     compose.waitForIdle()
     // The slow addon is still out, so nothing has played yet.
     assertTrue(played.isEmpty())
 
-    beta.countDown()
+    beta.complete(Unit)
     compose.waitUntil(5_000) { api.streamsCompleted.contains("movie:tt1|beta") }
     compose.waitUntil(5_000) { played.isNotEmpty() }
     compose.waitForIdle()
@@ -112,7 +112,7 @@ class CatalogPendingPlayTest {
 
     press(Key.DirectionCenter)
     compose.waitUntil(5_000) { hasText("Starting when sources are ready…") }
-    alpha.countDown()
+    alpha.complete(Unit)
     compose.waitUntil(5_000) { api.streamsCompleted.contains("movie:tt1|alpha") }
     compose.waitForIdle()
     assertTrue(played.isEmpty())
@@ -122,7 +122,7 @@ class CatalogPendingPlayTest {
     compose.waitForIdle()
     assertEquals(listOf("srcA"), played.map { it.sourceId })
 
-    beta.countDown()
+    beta.complete(Unit)
   }
 
   @Test
@@ -132,10 +132,10 @@ class CatalogPendingPlayTest {
     api.streamSourcesValues["movie:tt1"] = listOf(source("alpha"), source("beta"))
     api.addonStreams["movie:tt1|alpha"] = emptyList()
     api.addonStreams["movie:tt1|beta"] = emptyList()
-    val alpha = CountDownLatch(1)
-    val beta = CountDownLatch(1)
-    api.streamsLatches["movie:tt1|alpha"] = alpha
-    api.streamsLatches["movie:tt1|beta"] = beta
+    val alpha = CompletableDeferred<Unit>()
+    val beta = CompletableDeferred<Unit>()
+    api.streamsGates["movie:tt1|alpha"] = alpha
+    api.streamsGates["movie:tt1|beta"] = beta
     mount(api)
     compose.waitUntil(5_000) { api.streamsRequests.size == 2 }
     compose.waitForIdle()
@@ -144,8 +144,8 @@ class CatalogPendingPlayTest {
     compose.waitUntil(5_000) { hasText("Starting when sources are ready…") }
     compose.onNodeWithTag(TagCatalogPrimary).assertTextContains("Starting when sources are ready…")
 
-    alpha.countDown()
-    beta.countDown()
+    alpha.complete(Unit)
+    beta.complete(Unit)
     compose.waitUntil(5_000) { api.streamsCompleted.contains("movie:tt1|beta") }
     compose.waitUntil(5_000) { messageShown() }
     compose.waitForIdle()
@@ -163,8 +163,8 @@ class CatalogPendingPlayTest {
     api.metaValues["series:tt1"] = MetaDto(id = "tt1", type = "series", name = "Show", videos = listOf(first, second))
     api.streamsValues["series:tt1:1:1"] = listOf(stream("s1", "One's source", "Alpha"))
     api.streamsValues["series:tt1:1:2"] = listOf(stream("s2", "Two's source", "Beta"))
-    val gate = CountDownLatch(1)
-    api.streamsLatches["series:tt1:1:1"] = gate
+    val gate = CompletableDeferred<Unit>()
+    api.streamsGates["series:tt1:1:1"] = gate
     mount(api, CatalogDetailArgs(MetaDto(id = "tt1", type = "series", name = "Show"), "Cinemeta", "series"))
     compose.waitUntil(5_000) { api.streamsRequests.contains("series:tt1:1:1") }
     compose.waitForIdle()
@@ -180,7 +180,7 @@ class CatalogPendingPlayTest {
     compose.waitUntil(5_000) { api.streamsCompleted.contains("series:tt1:1:2") }
     compose.waitForIdle()
 
-    gate.countDown()
+    gate.complete(Unit)
     compose.waitForIdle()
     compose.mainClock.advanceTimeBy(PLAY_WHEN_READY_TIMEOUT_MS + 100)
     compose.waitUntil(5_000) { hasText("Play") }

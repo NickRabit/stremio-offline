@@ -1548,6 +1548,7 @@ export const sk: Catalog = {
   "tv.detailEyebrowSeries": "Seriál · {addon}",
   "tv.sourcesCount": "Zdroje · {count}",
   "tv.default": "Predvolené",
+  "tv.chosenSource": "Zdroj",
   "tv.searchHint": "Napíšte názov a stlačte Hotovo.",
   "tv.findingSources": "Hľadám zdroje…",
   "tv.playWhenReady": "Spustím, keď budú zdroje načítané…",

@@ -9,6 +9,7 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -549,6 +550,25 @@ class HomeScreenTest {
     compose.waitForIdle()
 
     compose.onNodeWithTag(TagDownloadsStrip).assertDoesNotExist()
+  }
+
+  // Found on the owner's server: the focused first card's left border and glow were cut off.
+  @Test
+  fun `the focused first card is not clipped by its row`() {
+    val api = FakeTvApi()
+    serve(api, order("resume"), mapOf("resume" to row(resumeFile("a", "First"), resumeFile("b", "Second"))))
+    mount(api)
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(homeCardTag("a")).assertIsFocused()
+    val card = compose.onNodeWithTag(homeCardTag("a")).getBoundsInRoot()
+    val row = compose.onNodeWithTag(homeRowTag("resume")).getBoundsInRoot()
+    // A poster grows by 8 % on focus; the whole scaled card has to stay inside the row viewport.
+    val half = (card.right - card.left) * 0.08f / 2
+    assertTrue(
+      "the scaled card ${card.left - half}..${card.right + half} does not fit the row ${row.left}..${row.right}",
+      card.left - half >= row.left && card.right + half <= row.right,
+    )
   }
 
   @Test

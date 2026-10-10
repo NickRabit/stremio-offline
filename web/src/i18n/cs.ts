@@ -1599,6 +1599,7 @@ export const cs: Catalog = {
   "tv.detailEyebrowSeries": "Seriál · {addon}",
   "tv.sourcesCount": "Zdroje · {count}",
   "tv.default": "Výchozí",
+  "tv.chosenSource": "Zdroj",
   "tv.searchHint": "Napište název a stiskněte Hotovo.",
   "tv.findingSources": "Hledám zdroje…",
   "tv.playWhenReady": "Spustím, až budou zdroje načtené…",

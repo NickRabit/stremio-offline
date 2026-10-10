@@ -1605,6 +1605,7 @@ export const en = {
   "tv.detailEyebrowSeries": "Series · {addon}",
   "tv.sourcesCount": "Sources · {count}",
   "tv.default": "Default",
+  "tv.chosenSource": "Source",
   "tv.searchHint": "Type a title, then press Done.",
   "tv.findingSources": "Finding sources…",
   "tv.playWhenReady": "Starting when sources are ready…",

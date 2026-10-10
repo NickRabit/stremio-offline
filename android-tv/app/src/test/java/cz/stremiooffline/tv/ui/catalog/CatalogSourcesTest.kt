@@ -18,7 +18,7 @@ import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.data.StreamSourceDto
 import cz.stremiooffline.tv.ui.FakeTvApi
 import cz.stremiooffline.tv.ui.detail.PlayTarget
-import java.util.concurrent.CountDownLatch
+import kotlinx.coroutines.CompletableDeferred
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -72,13 +72,13 @@ class CatalogSourcesTest {
     compose.onNodeWithTag(TagCatalogSources).assertIsFocused()
   }
 
-  private fun twoAddons(api: FakeTvApi): CountDownLatch {
+  private fun twoAddons(api: FakeTvApi): CompletableDeferred<Unit> {
     api.settingsValue = settings()
     api.streamSourcesValues["movie:tt1"] = listOf(source("alpha"), source("beta"))
     api.addonStreams["movie:tt1|alpha"] = listOf(stream("srcA", "Czech 1 GB", "Alpha"))
     api.addonStreams["movie:tt1|beta"] = listOf(stream("srcB", "Czech 8 GB", "Beta"))
-    val beta = CountDownLatch(1)
-    api.streamsLatches["movie:tt1|beta"] = beta
+    val beta = CompletableDeferred<Unit>()
+    api.streamsGates["movie:tt1|beta"] = beta
     return beta
   }
 
@@ -96,7 +96,7 @@ class CatalogSourcesTest {
     press(Key.DirectionCenter)
     assertEquals(listOf("srcA"), played.map { it.sourceId })
 
-    beta.countDown()
+    beta.complete(Unit)
     compose.waitUntil(5_000) { api.streamsCompleted.contains("movie:tt1|beta") }
     compose.waitForIdle()
     compose.onNodeWithTag(TagCatalogSources).assertTextContains("Sources · 2")
@@ -110,10 +110,10 @@ class CatalogSourcesTest {
     api.addonStreams["movie:tt1|alpha"] = listOf(stream("srcA", "Czech 1 GB", "Alpha"))
     api.addonStreams["movie:tt1|beta"] = listOf(stream("srcB", "Czech 8 GB", "Beta"))
     api.addonStreams["movie:tt1|gamma"] = emptyList()
-    val beta = CountDownLatch(1)
-    val gamma = CountDownLatch(1)
-    api.streamsLatches["movie:tt1|beta"] = beta
-    api.streamsLatches["movie:tt1|gamma"] = gamma
+    val beta = CompletableDeferred<Unit>()
+    val gamma = CompletableDeferred<Unit>()
+    api.streamsGates["movie:tt1|beta"] = beta
+    api.streamsGates["movie:tt1|gamma"] = gamma
     mount(api)
     compose.waitUntil(5_000) { api.streamsCompleted.contains("movie:tt1|alpha") }
     compose.waitForIdle()
@@ -124,7 +124,7 @@ class CatalogSourcesTest {
     compose.onNodeWithTag(sourceRowTag(0)).assertIsFocused()
     compose.onNodeWithTag(sourceRowTag(0)).assertTextContains("Czech 1 GB")
 
-    beta.countDown()
+    beta.complete(Unit)
     compose.waitUntil(5_000) { api.streamsCompleted.contains("movie:tt1|beta") }
     compose.waitForIdle()
 
@@ -132,7 +132,7 @@ class CatalogSourcesTest {
     compose.onNodeWithTag(sourceRowTag(0)).assertTextContains("Czech 8 GB")
     compose.onNodeWithTag(sourceRowTag(0)).assertTextContains("Default", substring = true)
 
-    gamma.countDown()
+    gamma.complete(Unit)
     compose.waitUntil(5_000) { api.streamsCompleted.contains("movie:tt1|gamma") }
     compose.waitForIdle()
     // Once every addon answered the default no longer moves.
@@ -144,7 +144,7 @@ class CatalogSourcesTest {
   fun `the title's requests are all issued at once`() {
     val api = FakeTvApi()
     api.settingsValue = settings()
-    api.progressListLatch = CountDownLatch(1)
+    api.progressListGate = CompletableDeferred<Unit>()
     mount(api)
     compose.waitUntil(5_000) { api.progressListCalls >= 1 && api.watchlistCalls >= 1 }
 
@@ -153,7 +153,7 @@ class CatalogSourcesTest {
     assertTrue(api.watchlistCalls >= 1)
     assertTrue(api.metaRequests.isNotEmpty())
 
-    api.progressListLatch!!.countDown()
+    api.progressListGate!!.complete(Unit)
     compose.waitForIdle()
   }
 }

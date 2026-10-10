@@ -1548,6 +1548,7 @@ export const ptBR: Catalog = {
   "tv.detailEyebrowSeries": "Série · {addon}",
   "tv.sourcesCount": "Fontes · {count}",
   "tv.default": "Padrão",
+  "tv.chosenSource": "Fonte",
   "tv.searchHint": "Digite um título e pressione Concluído.",
   "tv.findingSources": "Procurando fontes…",
   "tv.playWhenReady": "Vou iniciar quando as fontes estiverem prontas…",

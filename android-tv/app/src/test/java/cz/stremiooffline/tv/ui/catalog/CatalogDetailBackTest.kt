@@ -22,7 +22,7 @@ import cz.stremiooffline.tv.data.SettingsResponse
 import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.data.StreamSourceDto
 import cz.stremiooffline.tv.ui.FakeTvApi
-import java.util.concurrent.CountDownLatch
+import kotlinx.coroutines.CompletableDeferred
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Before
@@ -102,7 +102,7 @@ class CatalogDetailBackTest {
     api.settingsValue = SettingsResponse(uiLanguage = "en", audioLanguage = "en", realDebridConfigured = true)
     api.streamSourcesValues["movie:tt1"] = listOf(StreamSourceDto("alpha", "Alpha"))
     api.addonStreams["movie:tt1|alpha"] = listOf(StreamDto(sourceId = "s1", kind = "remote", playable = true, title = "Czech 1 GB", addonName = "Alpha"))
-    api.streamsLatches["movie:tt1|alpha"] = CountDownLatch(1)
+    api.streamsGates["movie:tt1|alpha"] = CompletableDeferred()
     var backs = 0
     scenario.onActivity { activity ->
       host = activity
