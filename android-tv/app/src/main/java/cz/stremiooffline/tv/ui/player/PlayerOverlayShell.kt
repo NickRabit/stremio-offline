@@ -88,6 +88,8 @@ fun PlayerOverlayShell(
   onDiagnostics: () -> Unit = {},
   diagnosticsLabel: String = "",
   diagnosticsFocus: FocusRequester? = null,
+  /** Panels and the next-episode card: drawn above the OSD, over the picture they cover. */
+  topLayer: @Composable () -> Unit = {},
   content: @Composable () -> Unit,
 ) {
   var controls by remember { mutableStateOf(initiallyShown) }
@@ -270,6 +272,8 @@ fun PlayerOverlayShell(
           .padding(horizontal = 22.dp, vertical = 10.dp),
       )
     }
+
+    topLayer()
   }
 }
 

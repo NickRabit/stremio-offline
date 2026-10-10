@@ -14,6 +14,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
@@ -49,6 +50,51 @@ const val TagSubtitleOffRow = "tracks_sub_off"
 
 /** The panel's "no value" mark, drawn wherever a value could not be read. */
 const val DIAGNOSTIC_UNKNOWN = "—"
+
+/** The row the panel hands the remote to when it opens: the one the viewer is using now. */
+internal sealed interface TracksEntry {
+  data class Audio(val index: Int) : TracksEntry
+  data object Off : TracksEntry
+  data class Embedded(val index: Int) : TracksEntry
+  data class Addon(val index: Int) : TracksEntry
+}
+
+/**
+ * Which row takes focus on open. A title with no audio still has the Off row, so the panel never
+ * opens without a focusable target -- an unfocused panel left the D-pad dead.
+ */
+internal fun tracksEntry(
+  audioTracks: List<DescriptorTrack>,
+  audioTrackIndex: Int,
+  subtitleTracks: List<DescriptorTrack>,
+  subtitle: SubtitleChoice,
+  addonSubtitles: List<AddonSubtitleDto>,
+): TracksEntry = when {
+  audioTracks.isNotEmpty() -> TracksEntry.Audio(audioTrackIndex.coerceIn(0, audioTracks.lastIndex))
+  subtitle is SubtitleChoice.Embedded && subtitle.index in subtitleTracks.indices -> TracksEntry.Embedded(subtitle.index)
+  subtitle is SubtitleChoice.Addon -> {
+    val index = addonSubtitles.indexOfFirst { it.subtitleId == subtitle.subtitleId }
+    if (index >= 0) TracksEntry.Addon(index) else TracksEntry.Off
+  }
+  else -> TracksEntry.Off
+}
+
+/**
+ * The addon rows' labels. Several releases of one film in one language arrive with the same
+ * language and addon name, so only the shared ones are numbered -- that is what tells them apart.
+ */
+internal fun addonSubtitleLabels(addonSubtitles: List<AddonSubtitleDto>): List<String> {
+  val bases = addonSubtitles.map { item ->
+    val parts = mutableListOf(Languages.label(item.lang))
+    item.addonName?.takeIf { it.isNotBlank() }?.let(parts::add)
+    parts.joinToString(" · ")
+  }
+  val totals = bases.groupingBy { it }.eachCount()
+  val seen = mutableMapOf<String, Int>()
+  return bases.map { base ->
+    if ((totals[base] ?: 0) > 1) "$base · ${seen.merge(base, 1, Int::plus)}" else base
+  }
+}
 
 /** The channel name the web shows beside a codec, or `3ch`. */
 internal fun channelLabel(channels: Int): String? = when {
@@ -110,6 +156,8 @@ fun PlayerTracksPanel(
   onClose: () -> Unit,
   initialFocus: FocusRequester? = null,
 ) {
+  val entry = tracksEntry(audioTracks, audioTrackIndex, subtitleTracks, subtitle, addonSubtitles)
+  val addonLabels = addonSubtitleLabels(addonSubtitles)
   SidePanel(
     title = stringResource(R.string.tv_tracks_title),
     onClose = onClose,
@@ -125,7 +173,9 @@ fun PlayerTracksPanel(
           text = audioRowLabel(track, capabilities),
           selected = index == audioTrackIndex,
           onClick = { onAudio(index) },
-          modifier = Modifier.testTag(audioRowTag(index)),
+          modifier = Modifier
+            .testTag(audioRowTag(index))
+            .then(if (initialFocus != null && entry == TracksEntry.Audio(index)) Modifier.focusRequester(initialFocus) else Modifier),
         )
       }
     }
@@ -135,34 +185,33 @@ fun PlayerTracksPanel(
       text = stringResource(R.string.player_subtitles_off),
       selected = subtitle == SubtitleChoice.Off,
       onClick = { onSubtitle(SubtitleChoice.Off) },
-      modifier = Modifier.testTag(TagSubtitleOffRow),
+      modifier = Modifier
+        .testTag(TagSubtitleOffRow)
+        .then(if (initialFocus != null && entry == TracksEntry.Off) Modifier.focusRequester(initialFocus) else Modifier),
     )
     subtitleTracks.forEachIndexed { index, track ->
       PanelOption(
         text = embeddedRowLabel(track),
         selected = subtitle == SubtitleChoice.Embedded(index),
         onClick = { onSubtitle(SubtitleChoice.Embedded(index)) },
-        modifier = Modifier.testTag(embeddedRowTag(index)),
+        modifier = Modifier
+          .testTag(embeddedRowTag(index))
+          .then(if (initialFocus != null && entry == TracksEntry.Embedded(index)) Modifier.focusRequester(initialFocus) else Modifier),
       )
     }
     addonSubtitles.forEachIndexed { index, item ->
       PanelOption(
-        text = subtitleAddonLabel(item),
+        text = addonLabels[index],
         selected = subtitle == SubtitleChoice.Addon(item.subtitleId),
         onClick = { onSubtitle(SubtitleChoice.Addon(item.subtitleId)) },
-        modifier = Modifier.testTag(addonRowTag(index)),
+        modifier = Modifier
+          .testTag(addonRowTag(index))
+          .then(if (initialFocus != null && entry == TracksEntry.Addon(index)) Modifier.focusRequester(initialFocus) else Modifier),
       )
     }
 
     DelayRow(delay = delay, enabled = delayEnabled, onDelay = onDelay)
   }
-}
-
-@Composable
-private fun subtitleAddonLabel(item: AddonSubtitleDto): String {
-  val parts = mutableListOf(Languages.label(item.lang))
-  item.addonName?.takeIf { it.isNotBlank() }?.let(parts::add)
-  return parts.joinToString(" · ")
 }
 
 /** The delay row: LEFT/RIGHT change it by a quarter of a second, and it is disabled while only
