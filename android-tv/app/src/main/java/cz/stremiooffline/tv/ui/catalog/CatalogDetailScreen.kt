@@ -79,8 +79,11 @@ import java.util.Locale
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.android.awaitFrame
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 const val TagCatalogPrimary = "catalog_primary"
 const val TagCatalogStartOver = "catalog_start_over"
@@ -90,6 +93,9 @@ const val TagCatalogSources = "catalog_sources"
 const val TagCatalogMessage = "catalog_message"
 const val TagSourcesPanel = "catalog_sources_panel"
 const val TagSourcesEmpty = "catalog_sources_empty"
+
+/** One slow addon must not hold a play back longer once something playable has arrived. */
+const val PLAY_WHEN_READY_TIMEOUT_MS = 8_000L
 
 fun sourceRowTag(index: Int): String = "source_row_$index"
 fun seasonChipTag(season: Int): String = "season_chip_$season"
@@ -105,7 +111,14 @@ fun CatalogDetailScreen(
   onBack: () -> Unit,
   restoreToken: Int = 0,
 ) {
-  BackHandler { onBack() }
+  // An OK while the sources load waits for them; Back or a second OK drops the wait.
+  var pendingPlay by remember { mutableStateOf(false) }
+  var playTimeoutReached by remember { mutableStateOf(false) }
+  fun cancelPendingPlay() {
+    pendingPlay = false
+    playTimeoutReached = false
+  }
+  BackHandler { if (pendingPlay) cancelPendingPlay() else onBack() }
 
   val scope = rememberCoroutineScope()
   var settings by remember { mutableStateOf(SettingsResponse()) }
@@ -138,6 +151,7 @@ fun CatalogDetailScreen(
   val defaultText = stringResource(R.string.tv_default)
   val toLibraryText = stringResource(R.string.save_to_library)
   val findingSourcesText = stringResource(R.string.tv_finding_sources)
+  val playWhenReadyText = stringResource(R.string.tv_play_when_ready)
 
   val primaryFocus = remember { FocusRequester() }
   val rowFocus = remember { FocusRequester() }
@@ -214,6 +228,9 @@ fun CatalogDetailScreen(
     }
     sourcesLoaded = true
     pendingSources = sources.size
+    // Addon answers can resume on different threads, so their updates take a lock: a lost
+    // decrement would leave the button spinning on "Finding sources…" forever.
+    val updates = Mutex()
     coroutineScope {
       sources.forEach { source ->
         launch {
@@ -224,8 +241,10 @@ fun CatalogDetailScreen(
           } catch (error: ApiError) {
             emptyList()
           }
-          if (part.isNotEmpty()) streams = streams + part
-          pendingSources -= 1
+          updates.withLock {
+            if (part.isNotEmpty()) streams = streams + part
+            pendingSources -= 1
+          }
         }
       }
     }
@@ -354,14 +373,27 @@ fun CatalogDetailScreen(
     }
   }
 
+  /** OK while the sources are still coming; the wait ends when they all answer or the deadline passes. */
+  fun armPendingPlay() {
+    message = null
+    playTimeoutReached = false
+    pendingPlay = true
+  }
+
+  fun resolvePendingPlay() {
+    cancelPendingPlay()
+    val stream = preferredStream
+    if (stream?.playable == true) play(stream) else message = if (offered.isEmpty()) noSourcesText else torrentText
+  }
+
   fun playPressed() {
     val stream = activeStream
     when {
+      pendingPlay -> cancelPendingPlay()
       sourcesFailed -> message = loadErrorText
       stream?.playable == true -> play(stream)
+      findingSources -> armPendingPlay()
       stream != null -> activate(stream)
-      // The list is still coming; doing nothing visible beats playing the wrong episode.
-      sourcesAsking -> Unit
       else -> message = emptyText
     }
   }
@@ -403,6 +435,7 @@ fun CatalogDetailScreen(
   /** Selecting an episode drops the list, the queued state and any message at once. */
   fun selectVideo(video: VideoDto) {
     if (video.id == selectedVideo?.id) return
+    cancelPendingPlay()
     selectedVideo = video
     selectedStream = null
     pickedStream = false
@@ -412,6 +445,21 @@ fun CatalogDetailScreen(
     sourcesFailed = false
     queuedSourceId = null
     message = null
+  }
+
+  // The deadline starts when OK arms the wait, not when the first stream lands.
+  LaunchedEffect(pendingPlay) {
+    if (!pendingPlay) return@LaunchedEffect
+    delay(PLAY_WHEN_READY_TIMEOUT_MS)
+    playTimeoutReached = true
+  }
+
+  // Resolves the armed play once every addon answered, or at the deadline with something playable.
+  LaunchedEffect(pendingPlay, sourcesAsking, preferredStream, playTimeoutReached) {
+    if (!pendingPlay) return@LaunchedEffect
+    val playable = preferredStream?.playable == true
+    if (sourcesAsking && !(playTimeoutReached && playable)) return@LaunchedEffect
+    resolvePendingPlay()
   }
 
   Box(
@@ -486,13 +534,14 @@ fun CatalogDetailScreen(
       Row(horizontalArrangement = Arrangement.spacedBy(11.dp), verticalAlignment = Alignment.CenterVertically) {
         FocusButton(
           text = when {
+            pendingPlay -> playWhenReadyText
             findingSources -> findingSourcesText
             resuming -> stringResource(R.string.tv_resume)
             else -> stringResource(R.string.player_play)
           },
           onClick = { playPressed() },
           kind = FocusButtonKind.Primary,
-          leading = if (findingSources) ({ TvSpinner() }) else null,
+          leading = if (pendingPlay || findingSources) ({ TvSpinner() }) else null,
           modifier = Modifier.focusRequester(primaryFocus).testTag(TagCatalogPrimary),
         )
         if (resuming) {
@@ -518,7 +567,10 @@ fun CatalogDetailScreen(
         }
         FocusButton(
           text = stringResource(R.string.tv_sources_count, visible.size.toString()),
-          onClick = { sourcesOpen = true },
+          onClick = {
+            cancelPendingPlay()
+            sourcesOpen = true
+          },
           leading = if (sourcesAsking) ({ TvSpinner() }) else null,
           modifier = Modifier.focusRequester(sourcesOpenerFocus).testTag(TagCatalogSources),
         )
@@ -632,6 +684,8 @@ private fun SourceRow(
       pressedContainerColor = Tokens.Panel2,
       pressedContentColor = Tokens.Text,
     ),
+    // Panel rows do not scale on focus: the list viewport would clip the first and last row.
+    scale = ClickableSurfaceDefaults.scale(focusedScale = 1f, pressedScale = 1f),
     border = ClickableSurfaceDefaults.border(
       border = Border.None,
       focusedBorder = Border(BorderStroke(1.5.dp, Tokens.Accent2), shape = shape),

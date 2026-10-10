@@ -55,6 +55,7 @@
   <string name="tv_default">Standard</string>
   <string name="tv_search_hint">Geben Sie einen Titel ein und drücken Sie Fertig.</string>
   <string name="tv_finding_sources">Suche Quellen…</string>
+  <string name="tv_play_when_ready">Startet, sobald Quellen bereit sind…</string>
   <string name="catalog_title">Was möchten Sie sehen?</string>
   <string name="catalog_genre">Genre</string>
   <string name="catalog_all_genres">Alle</string>

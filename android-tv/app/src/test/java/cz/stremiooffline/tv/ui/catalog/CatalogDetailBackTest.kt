@@ -8,6 +8,7 @@ import androidx.activity.compose.setContent
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -19,8 +20,11 @@ import androidx.test.core.app.ApplicationProvider
 import cz.stremiooffline.tv.data.MetaDto
 import cz.stremiooffline.tv.data.SettingsResponse
 import cz.stremiooffline.tv.data.StreamDto
+import cz.stremiooffline.tv.data.StreamSourceDto
 import cz.stremiooffline.tv.ui.FakeTvApi
+import java.util.concurrent.CountDownLatch
 import org.junit.After
+import org.junit.Assert.assertEquals
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -90,5 +94,37 @@ class CatalogDetailBackTest {
 
     compose.onNodeWithTag(TagSourcesPanel).assertDoesNotExist()
     compose.onNodeWithTag(TagCatalogSources).assertIsFocused()
+  }
+
+  @Test
+  fun `Back while a play waits on the sources drops the wait instead of leaving`() {
+    val api = FakeTvApi()
+    api.settingsValue = SettingsResponse(uiLanguage = "en", audioLanguage = "en", realDebridConfigured = true)
+    api.streamSourcesValues["movie:tt1"] = listOf(StreamSourceDto("alpha", "Alpha"))
+    api.addonStreams["movie:tt1|alpha"] = listOf(StreamDto(sourceId = "s1", kind = "remote", playable = true, title = "Czech 1 GB", addonName = "Alpha"))
+    api.streamsLatches["movie:tt1|alpha"] = CountDownLatch(1)
+    var backs = 0
+    scenario.onActivity { activity ->
+      host = activity
+      activity.setContent {
+        CatalogDetailScreen(
+          api = api,
+          args = CatalogDetailArgs(MetaDto(id = "tt1", type = "movie", name = "It"), "Cinemeta", "movie"),
+          imageUrl = { null },
+          onPlay = {},
+          onBack = { backs++ },
+        )
+      }
+    }
+    compose.waitForIdle()
+
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(TagCatalogPrimary).assertTextContains("Starting when sources are ready…")
+
+    host!!.onBackPressedDispatcher.onBackPressed()
+    compose.waitForIdle()
+
+    assertEquals(0, backs)
+    compose.onNodeWithTag(TagCatalogPrimary).assertTextContains("Finding sources…")
   }
 }

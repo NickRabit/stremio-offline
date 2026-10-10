@@ -1550,4 +1550,5 @@ export const es: Catalog = {
   "tv.default": "Predeterminado",
   "tv.searchHint": "Escriba un título y pulse Listo.",
   "tv.findingSources": "Buscando fuentes…",
+  "tv.playWhenReady": "Se iniciará cuando las fuentes estén listas…",
 };
