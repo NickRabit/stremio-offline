@@ -42,7 +42,51 @@ export type PlaybackMode = "direct" | "remux" | "transcode";
 export interface ClientCapabilities {
   h264?: boolean; hevc?: boolean; hevc10?: boolean; vp8?: boolean; vp9?: boolean; av1?: boolean;
   aac?: boolean; mp3?: boolean; opus?: boolean; vorbis?: boolean; ac3?: boolean; eac3?: boolean; flac?: boolean;
+  /** Present only for a native client: the containers it plays as they are ("mp4", "webm", "mkv", "ts"). */
+  containers?: string[];
+  /** Audio codecs, by ffprobe name ("aac", "ac3", "eac3", "dts", "truehd", "flac", "opus", ...), the device decodes. */
+  audioDecode?: string[];
+  /** Audio codecs the device passes to a receiver as a bitstream. */
+  audioPassthrough?: string[];
+  /** Embedded subtitle codecs, by ffprobe name ("subrip", "ass", "webvtt", "hdmv_pgs_subtitle"), the player renders itself. */
+  subtitles?: string[];
+  /** Video codecs ("h264", "hevc", "vp9", "av1") the native client also decodes at 10 bits. */
+  deepColor?: string[];
 }
+
+const CAPABILITY_BOOLEANS = ["h264", "hevc", "hevc10", "vp8", "vp9", "av1", "aac", "mp3", "opus", "vorbis", "ac3", "eac3", "flac"] as const;
+const CAPABILITY_LISTS = ["containers", "audioDecode", "audioPassthrough", "subtitles", "deepColor"] as const;
+const CAPABILITY_ENTRY = /^[a-z0-9._-]{1,32}$/;
+const CAPABILITY_LIST_LIMIT = 32;
+
+/** What the client claims it can play. A native client sends lists so the file can be handed over
+ *  untouched; anything malformed or unknown is dropped rather than taken on trust. */
+export function clientCapabilities(raw: unknown): ClientCapabilities {
+  const caps: ClientCapabilities = {};
+  if (typeof raw !== "object" || raw === null) return caps;
+  const source = raw as Record<string, unknown>;
+  for (const key of CAPABILITY_BOOLEANS) {
+    const value = source[key];
+    if (typeof value === "boolean") caps[key] = value;
+  }
+  for (const key of CAPABILITY_LISTS) {
+    const value = source[key];
+    if (!Array.isArray(value)) continue;
+    const kept: string[] = [];
+    for (const entry of value) {
+      if (typeof entry !== "string") continue;
+      const token = entry.toLowerCase();
+      if (!CAPABILITY_ENTRY.test(token) || kept.includes(token)) continue;
+      kept.push(token);
+      if (kept.length === CAPABILITY_LIST_LIMIT) break;
+    }
+    caps[key] = kept;
+  }
+  return caps;
+}
+
+/** A native client is one that declares containers; a browser declares only booleans. */
+const native = (caps: ClientCapabilities) => Array.isArray(caps.containers);
 
 export interface PlaybackOptions {
   audioLanguage?: string;
@@ -64,6 +108,8 @@ export interface PlaybackDescriptor {
   audioTracks: Track[]; subtitleTracks: Track[];
   audioTrack: number; subtitleTrack: number | null;
   quality: number | null;
+  /** What the conversion copies rather than re-encodes; absent for a direct stream. */
+  copy?: { video: boolean; audio: boolean };
   sidecarUrl?: string;
   /**
    * Whether `url` addresses a playlist rather than the media. The client cannot
@@ -146,6 +192,32 @@ interface Session {
 const hevcPlayable = (video: MediaInfo["video"], caps: ClientCapabilities) => {
   const deep = /\b1[02]\b/.test(video?.profile ?? "") || /p1[02](le|be)$/i.test(video?.pixelFormat ?? "");
   return deep ? caps.hevc10 === true : caps.hevc === true;
+};
+
+/** What a native client has to declare before it is handed a video stream as it is. A codec flag
+ *  covers eight-bit 4:2:0 only: ten or twelve bits need `deepColor` (or `hevc10`). Anything else --
+ *  4:2:2, 4:4:4, an unusual depth, or a pixel format the probe did not report -- is never assumed,
+ *  since TV decoders rarely take it and a refused stream costs a failed start. The level is not
+ *  checked; a stream the decoder still refuses goes through `escalate`. */
+const EIGHT_BIT_420 = /^(yuv420p|yuvj420p|nv12|nv21)$/i;
+const DEEP_420 = /^(yuv420p1[02](le|be)?|p01[02](le|be)?)$/i;
+const nativeVideoPlayable = (video: MediaInfo["video"], caps: ClientCapabilities): boolean => {
+  if (!video) return false;
+  const profile = video.profile ?? "";
+  const format = video.pixelFormat ?? "";
+  if (/4:[24][24]|Predictive/i.test(profile) || (video.codec === "vp9" && /Profile [13]/i.test(profile))) return false;
+  // A ten- or twelve-bit profile with an eight-bit pixel format is a contradictory probe; the
+  // deeper reading wins, so the client still has to have declared the depth.
+  const deep = DEEP_420.test(format) || /\b1[02]\b|Profile 2/i.test(profile);
+  if (!DEEP_420.test(format) && !EIGHT_BIT_420.test(format)) return false;
+  const deepOk = (codec: string) => caps.deepColor?.includes(codec) ?? false;
+  switch (video.codec) {
+    case "h264": return caps.h264 === true && (!deep || deepOk("h264"));
+    case "hevc": return deep ? caps.hevc10 === true || deepOk("hevc") : caps.hevc === true;
+    case "vp8": return caps.vp8 === true && !deep;
+    case "vp9": case "av1": return caps[video.codec] === true && (!deep || deepOk(video.codec));
+    default: return false;
+  }
 };
 
 /** A source whose software decode cannot keep up: HEVC, AV1, VP9, anything 10-bit, or over 1080 lines.
@@ -408,12 +480,13 @@ export class PlaybackManager {
       dolbyVisionEnhancementLayer: info?.video?.dolbyVisionEnhancementLayer,
     };
 
-    // Audio and quality decide conversion. Embedded subtitles always ride as a sidecar:
-    // muxing WebVTT into fMP4 HLS makes the muxer die with "timescale not set".
+    // Audio and quality decide conversion. Embedded subtitles ride as a sidecar unless the
+    // client renders them itself: muxing WebVTT into fMP4 HLS makes the muxer die with
+    // "timescale not set".
     const avDefault = audioTrack === 0 && quality === null;
-    const direct = this.directPlay(stream, info, capabilities);
-    if (avDefault && direct.ok) {
-      if (subtitleTrack !== null) this.extractSidecar(session);
+    const direct = this.directAllowed(session);
+    if (direct.ok) {
+      if (subtitleTrack !== null && !this.clientRendersSubtitle(session)) this.extractSidecar(session);
       log("INFO", "Direct play from source", { id, reason: direct.reason, ...summary });
       return this.describe(session, source);
     }
@@ -463,22 +536,30 @@ export class PlaybackManager {
       if (changes.audio !== undefined) session.audioTrack = Math.max(0, changes.audio);
       if (changes.subtitle !== undefined) session.subtitleTrack = changes.subtitle;
       if (changes.quality !== undefined) session.quality = changes.quality != null && QUALITY_BITRATE[changes.quality] ? changes.quality : null;
+      // A native direct session plays the new track as it is: no restart while the container and
+      // the new codec are still among those the client declared.
+      if (session.mode === "direct" && native(session.capabilities) && changes.quality === undefined
+        && (changes.audio !== undefined || changes.subtitle !== undefined) && this.directAllowed(session).ok) {
+        if (session.subtitleTrack !== null && !this.clientRendersSubtitle(session)) this.extractSidecar(session);
+        else await this.sidecars.stop(id);
+        log("INFO", "Direct play track switched", { id, audioTrack: session.audioTrack, subtitleTrack: session.subtitleTrack });
+        return this.describe(session, this.proxyPath(session.stream));
+      }
       // Subtitles never ride in the conversion, they are read beside it. Restarting FFmpeg
       // for them would interrupt the picture and ask the source for another connection --
       // which is the one thing these hosts tend to refuse.
       if (changes.subtitle !== undefined && changes.audio === undefined && changes.quality === undefined) {
-        if (session.subtitleTrack !== null) this.extractSidecar(session);
+        if (session.subtitleTrack !== null && !this.clientRendersSubtitle(session)) this.extractSidecar(session);
         else await this.sidecars.stop(id);
         log("INFO", "Subtitle track switched", { id, subtitleTrack: session.subtitleTrack, offset: Math.round(session.offset) });
         return this.describe(session, this.currentUrl(session));
       }
       // Going back to the original may satisfy the conditions for direct play again.
-      if (session.quality === null && session.audioTrack === 0 && !session.copyRejected
-        && this.canDirectPlay(session.stream, session.info, session.capabilities)) {
+      if (this.directAllowed(session).ok) {
         session.pendingKill = this.kill(session);
         session.mode = "direct"; session.offset = 0;
-        if (session.subtitleTrack !== null) this.extractSidecar(session);
-        else await this.sidecars.stop(session.id);
+        if (session.subtitleTrack !== null && !this.clientRendersSubtitle(session)) this.extractSidecar(session);
+        else await this.sidecars.stop(id);
         log("INFO", "Back to direct play", { id });
         return this.describe(session, this.proxyPath(session.stream));
       }
@@ -648,6 +729,7 @@ export class PlaybackManager {
   }
 
   private describe(session: Session, url: string): PlaybackDescriptor {
+    const copy = session.mode === "direct" ? undefined : this.plan(session);
     return {
       id: session.id, mode: session.mode, url, offset: session.offset,
       duration: session.info?.duration, video: session.info?.video?.codec, audio: session.info?.audio?.codec,
@@ -655,7 +737,8 @@ export class PlaybackManager {
       audioTracks: (session.info?.audioTracks ?? []).map((track) => ({ ...track, title: safeSourceText(track.title, session.stream) })),
       subtitleTracks: (session.info?.subtitleTracks ?? []).map((track) => ({ ...track, title: safeSourceText(track.title, session.stream) })),
       audioTrack: session.audioTrack, subtitleTrack: session.subtitleTrack, quality: session.quality,
-      sidecarUrl: session.subtitleTrack !== null ? this.sidecarUrl(session) : undefined,
+      sidecarUrl: session.subtitleTrack !== null && !this.clientRendersSubtitle(session) ? this.sidecarUrl(session) : undefined,
+      copy: copy ? { video: copy.copyVideo, audio: copy.copyAudio } : undefined,
       playlist: session.mode === "direct" ? isPlaylistSource(session.stream, session.info) : true,
     };
   }
@@ -682,6 +765,14 @@ export class PlaybackManager {
     const revision = this.sidecars.revision(session.id);
     if (!revision) return undefined;
     return `/api/playback/${session.id}/sidecar.vtt?revision=${revision}&offset=${session.offset.toFixed(3)}`;
+  }
+
+  /** A native client that declared the subtitle codec renders it from the container itself, so
+   *  no FFmpeg reader is started and no sidecar address is handed to the player. */
+  private clientRendersSubtitle(session: Session): boolean {
+    if (!native(session.capabilities) || session.mode !== "direct" || session.subtitleTrack === null) return false;
+    const codec = session.info?.subtitleTracks.find((track) => track.index === session.subtitleTrack)?.codec;
+    return codec !== undefined && (session.capabilities.subtitles?.includes(codec) ?? false);
   }
 
   private extractSidecar(session: Session) {
@@ -752,10 +843,47 @@ export class PlaybackManager {
     return "other";
   }
 
+  /** The container a native client has to have declared. The probe wins; the extension only fills
+   *  in when ffprobe named no format at all. */
+  private nativeContainer(stream: StreamItem, info: MediaInfo): "mp4" | "webm" | "mkv" | "ts" | "hls" | undefined {
+    const tokens = new Set((info.container ?? "").toLowerCase().split(",").map((item) => item.trim()).filter(Boolean));
+    const video = info.video?.codec ?? "";
+    if ([...tokens].some((token) => MP4_FORMAT.has(token))) return "mp4";
+    if (tokens.has("hls") || tokens.has("applehttp")) return "hls";
+    if (tokens.has("matroska")) return tokens.has("webm") && WEBM_VIDEO.has(video) ? "webm" : "mkv";
+    if (tokens.has("webm")) return "webm";
+    if (tokens.has("mpegts")) return "ts";
+    if (!tokens.size) {
+      const extension = this.extension(stream);
+      if (DIRECT_MP4.has(extension)) return "mp4";
+      if (extension === ".webm") return "webm";
+      if (extension === ".mkv") return "mkv";
+      if (extension === ".ts" || extension === ".m2ts") return "ts";
+    }
+    return undefined;
+  }
+
   /** The cheapest path: a file the browser handles on its own. Seeking then runs natively over HTTP Range.
    * A refusal carries its reason: "why is this being transcoded" is the first question about any playback
    * problem, and without it nobody can answer it from the log. */
-  private directPlay(stream: StreamItem, info: MediaInfo | undefined, caps: ClientCapabilities): { ok: boolean; reason: string } {
+  private directPlay(stream: StreamItem, info: MediaInfo | undefined, caps: ClientCapabilities, audioTrack = 0): { ok: boolean; reason: string } {
+    if (native(caps)) {
+      if (!info?.video) return { ok: false, reason: "source has no probed video stream" };
+      const kind = this.nativeContainer(stream, info);
+      if (kind === "hls" || kind === undefined) {
+        return { ok: false, reason: `container ${info.container || this.extension(stream) || "unknown"} is not directly playable` };
+      }
+      if (!(caps.containers?.includes(kind) ?? false)) return { ok: false, reason: `client does not play ${kind} as it is` };
+      const codec = info.video.codec;
+      if (!nativeVideoPlayable(info.video, caps)) {
+        return { ok: false, reason: `client cannot play video codec ${codec || "unknown"}${info.video.profile ? ` (${info.video.profile})` : ""}` };
+      }
+      const audio = info.audioTracks?.[audioTrack]?.codec ?? info.audio?.codec;
+      if (audio && !((caps.audioDecode?.includes(audio) ?? false) || (caps.audioPassthrough?.includes(audio) ?? false))) {
+        return { ok: false, reason: `client cannot play audio codec ${audio}` };
+      }
+      return { ok: true, reason: "native client plays container and codecs as they are" };
+    }
     if (stream.behaviorHints?.notWebReady) return { ok: false, reason: "addon marks the source as not web ready" };
     if (!info?.video) return { ok: false, reason: "source has no probed video stream" };
     const kind = this.directKind(stream, info);
@@ -778,8 +906,15 @@ export class PlaybackManager {
     }
     return { ok: false, reason: `container ${info.container || extension || "unknown"} is not directly playable` };
   }
-  private canDirectPlay(stream: StreamItem, info: MediaInfo | undefined, caps: ClientCapabilities) {
-    return this.directPlay(stream, info, caps).ok;
+  /** Which session may hand the file over untouched right now. A native client picks its own
+   *  tracks; a browser only ever gets the default one, and a chosen quality or a refused copy
+   *  rules direct play out for either. */
+  private directAllowed(session: Session): { ok: boolean; reason: string } {
+    if (session.quality !== null) return { ok: false, reason: "a quality was chosen" };
+    if (session.copyRejected) return { ok: false, reason: "the client refused a copy" };
+    if (native(session.capabilities)) return this.directPlay(session.stream, session.info, session.capabilities, session.audioTrack);
+    if (session.audioTrack !== 0) return { ok: false, reason: "a non-default track or quality was requested" };
+    return this.directPlay(session.stream, session.info, session.capabilities);
   }
 
   /** A device that exists and opens is not proof that it can encode: on some builds libva
@@ -950,10 +1085,16 @@ export class PlaybackManager {
     // A lower chosen quality forces a real transcode; a copy would carry the original resolution.
     // A refused copy says the probe and the capability list disagreed with the real decoder.
     // Which stream was to blame is unknowable from here, so both go through the encoder.
-    const copyVideo = !session.copyRejected && session.quality === null
-      && ((video === "h264" && caps.h264 !== false) || (video === "hevc" && hevcPlayable(session.info?.video, caps)));
+    const copyVideo = !session.copyRejected && session.quality === null && (native(caps)
+      ? (video === "h264" || video === "hevc") && nativeVideoPlayable(session.info?.video, caps)
+      : (video === "h264" && caps.h264 !== false) || (video === "hevc" && hevcPlayable(session.info?.video, caps)));
     const audioCapability = COPYABLE_AUDIO[audio];
-    return { copyVideo, copyAudio: !session.copyRejected && Boolean(audioCapability && caps[audioCapability] === true) };
+    // A native client names the audio codecs it decodes or passes through; a browser only sends
+    // booleans. Either way the codec has to be one the muxer can carry unchanged.
+    const copyAudio = !session.copyRejected && (native(caps)
+      ? Boolean(audioCapability) && ((caps.audioDecode?.includes(audio) ?? false) || (caps.audioPassthrough?.includes(audio) ?? false))
+      : Boolean(audioCapability && caps[audioCapability] === true));
+    return { copyVideo, copyAudio };
   }
 
   private retire(session: Session, directory: string, generation: number, process?: ChildProcess) {

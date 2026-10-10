@@ -11,7 +11,8 @@ import { log } from "../logger.js";
 import { mediaChildPath, mediaResources, openMediaUrl, ResourceError, safeSourceText, type ResourceOwner } from "../media-resources.js";
 import { contentOf } from "../revocation.js";
 import { readMediaText, rewritePlaylist } from "../media-playlist.js";
-import type { ClientCapabilities, PlaybackManager, PlaybackOptions } from "../playback.js";
+import { clientCapabilities } from "../playback.js";
+import type { PlaybackManager, PlaybackOptions } from "../playback.js";
 import type { RangeCache } from "../range-cache.js";
 import { redirectedHeaders, safeFetch, validateRemoteUrl } from "../security.js";
 import type { StatsLog, TrafficMeta } from "../stats.js";
@@ -93,7 +94,7 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
         const subtitle = mediaResources.get(id, owner.sid, "subtitle");
         subtitleIds[id] = mediaResources.add(subtitle.stream, owner, "subtitle", prepared.resourceId);
       }
-      started = await playback.start(prepared.stream, req.body.capabilities as ClientCapabilities, options);
+      started = await playback.start(prepared.stream, clientCapabilities(req.body.capabilities), options);
       // FFmpeg took its time starting: the account, its session and its rights are re-read
       // here, and the registration below follows in the same synchronous step.
       requireAccess(req, need);

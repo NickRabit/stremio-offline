@@ -5,7 +5,7 @@ import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { PlaybackManager, SOURCE_UNREACHABLE, SerialOperations, describeFailure, hlsCanStart, hlsPlaylistFiles, isPlaylistSource, sourceReachable, nvencBusy } from "./playback.js";
+import { PlaybackManager, SOURCE_UNREACHABLE, SerialOperations, clientCapabilities, describeFailure, hlsCanStart, hlsPlaylistFiles, isPlaylistSource, sourceReachable, nvencBusy } from "./playback.js";
 import { setFetchTransport } from "./security.js";
 
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -774,6 +774,14 @@ const playCaps = {
   aac: true, mp3: true, opus: true, vorbis: true,
 };
 
+const nativeCaps = {
+  h264: true, hevc: true, hevc10: true,
+  containers: ["mp4", "mkv"],
+  audioDecode: ["aac", "ac3", "eac3"],
+  audioPassthrough: ["dts"],
+  subtitles: ["subrip", "hdmv_pgs_subtitle"],
+};
+
 test("hlsCanStart accepts one segment or a finished playlist", () => {
   assert.equal(hlsCanStart("#EXTM3U\n#EXT-X-VERSION:7\n"), false);
   // A segment without EXT-X-MAP is the race that hands Safari a truncated init.mp4.
@@ -881,6 +889,226 @@ test("mkv with subtitles still remuxes", async () => {
   await manager.sidecars.stop(started.id);
 });
 
+test("clientCapabilities keeps only the shapes it declares", () => {
+  assert.deepEqual(clientCapabilities(undefined), {});
+  assert.deepEqual(clientCapabilities("native"), {});
+  assert.deepEqual(clientCapabilities(42), {});
+  assert.deepEqual(clientCapabilities(null), {});
+  assert.deepEqual(clientCapabilities({ containers: "mkv" }), {});
+  assert.deepEqual(clientCapabilities({ containers: ["MKV", "mkv", "a b", 7, "webm"], h264: "yes", airplay: true }), { containers: ["mkv", "webm"] });
+  assert.deepEqual(clientCapabilities({ h264: "yes" }), {});
+  assert.deepEqual(clientCapabilities({ h264: true, unknown: 1 }), { h264: true });
+  const many = Array.from({ length: 40 }, (_, index) => `c${index}`);
+  assert.equal(clientCapabilities({ containers: many }).containers?.length, 32);
+});
+
+const nativeInfo = (overrides: Record<string, unknown> = {}) => ({
+  container: "matroska,webm", duration: 120,
+  video: { codec: "h264", pixelFormat: "yuv420p" }, audio: { codec: "ac3" },
+  audioTracks: [{ index: 0, codec: "ac3", language: "en" }], subtitleTracks: [],
+  ...overrides,
+});
+
+test("a native client plays a declared mkv with ac3 audio directly", async () => {
+  const manager = new PlaybackManager(tmp("test-native-direct")) as any;
+  manager.inspect = async () => nativeInfo();
+  let spawned = false;
+  manager.spawnAt = async () => { spawned = true; return "/hls"; };
+
+  const started = await manager.start({ url: "https://cdn.example/movie.mkv" }, nativeCaps);
+
+  assert.equal(spawned, false);
+  assert.equal(started.mode, "direct");
+  assert.equal(started.copy, undefined);
+});
+
+test("a native client passes dts through to the receiver and stays direct", async () => {
+  const manager = new PlaybackManager(tmp("test-native-dts")) as any;
+  manager.inspect = async () => nativeInfo({ audio: { codec: "dts" }, audioTracks: [{ index: 0, codec: "dts", language: "en" }] });
+  let spawned = false;
+  manager.spawnAt = async () => { spawned = true; return "/hls"; };
+
+  const started = await manager.start({ url: "https://cdn.example/movie.mkv" }, nativeCaps);
+
+  assert.equal(spawned, false);
+  assert.equal(started.mode, "direct");
+});
+
+test("a native client that cannot play the audio remuxes and copies only the video", async () => {
+  const manager = new PlaybackManager(tmp("test-native-dts-remux")) as any;
+  manager.inspect = async () => nativeInfo({ audio: { codec: "dts" }, audioTracks: [{ index: 0, codec: "dts", language: "en" }] });
+  manager.spawnAt = async (session: any, time: number) => { session.offset = time; return "/hls"; };
+
+  const started = await manager.start({ url: "https://cdn.example/movie.mkv" }, { ...nativeCaps, audioPassthrough: [] });
+
+  assert.equal(started.mode, "remux");
+  assert.deepEqual(started.copy, { video: true, audio: false });
+});
+
+test("a native client's declared second audio track still plays directly", async () => {
+  const manager = new PlaybackManager(tmp("test-native-audio-track")) as any;
+  manager.inspect = async () => nativeInfo({
+    audioTracks: [{ index: 0, codec: "ac3", language: "en" }, { index: 1, codec: "ac3", language: "cs" }],
+  });
+  let spawned = false;
+  manager.spawnAt = async () => { spawned = true; return "/hls"; };
+
+  const started = await manager.start({ url: "https://cdn.example/movie.mkv" }, nativeCaps, { audioLanguage: "cs" });
+
+  assert.equal(spawned, false);
+  assert.equal(started.mode, "direct");
+  assert.equal(started.audioTrack, 1);
+});
+
+test("a native client without hevc10 does not play Main 10 directly", async () => {
+  const manager = new PlaybackManager(tmp("test-native-hevc10")) as any;
+  manager.inspect = async () => nativeInfo({ video: { codec: "hevc", profile: "Main 10", pixelFormat: "yuv420p10le" } });
+  manager.spawnAt = async (session: any, time: number) => { session.offset = time; return "/hls"; };
+
+  const started = await manager.start({ url: "https://cdn.example/movie.mkv" }, { ...nativeCaps, hevc10: false });
+
+  assert.notEqual(started.mode, "direct");
+});
+
+test("a native client gets a ten-bit H.264, VP9 or AV1 directly only when it declares deep colour", () => {
+  const manager = new PlaybackManager(tmp("test-native-deep")) as any;
+  const mkv = (video: Record<string, string>) => ({ container: "matroska,webm", video, audio: { codec: "aac" }, audioTracks: [{ index: 0, codec: "aac" }], subtitleTracks: [] });
+  const caps = { ...nativeCaps, vp9: true, av1: true, containers: ["mkv", "webm"] };
+  const hi10 = mkv({ codec: "h264", profile: "High 10", pixelFormat: "yuv420p10le" });
+  assert.equal(manager.directPlay({ url: "https://cdn.example/a.mkv" }, hi10, caps).ok, false);
+  assert.equal(manager.directPlay({ url: "https://cdn.example/a.mkv" }, hi10, { ...caps, deepColor: ["h264"] }).ok, true);
+  const vp9 = mkv({ codec: "vp9", profile: "Profile 2", pixelFormat: "yuv420p10le" });
+  assert.equal(manager.directPlay({ url: "https://cdn.example/a.mkv" }, vp9, caps).ok, false);
+  assert.equal(manager.directPlay({ url: "https://cdn.example/a.mkv" }, vp9, { ...caps, deepColor: ["vp9"] }).ok, true);
+  const av1 = mkv({ codec: "av1", profile: "Main", pixelFormat: "yuv420p" });
+  assert.equal(manager.directPlay({ url: "https://cdn.example/a.mkv" }, av1, caps).ok, true);
+  assert.equal(manager.directPlay({ url: "https://cdn.example/a.mkv" }, mkv({ codec: "av1", profile: "Main", pixelFormat: "yuv420p10le" }), caps).ok, false);
+});
+
+test("a native client gets nothing directly that the probe cannot show to be 4:2:0 at 8, 10 or 12 bits", () => {
+  const manager = new PlaybackManager(tmp("test-native-unknown-format")) as any;
+  const caps = { ...nativeCaps, vp9: true, av1: true, deepColor: ["h264", "hevc", "vp9", "av1"], containers: ["mkv", "webm"] };
+  const mkv = (video: Record<string, string>) => ({ container: "matroska,webm", video, audio: { codec: "aac" }, audioTracks: [{ index: 0, codec: "aac" }], subtitleTracks: [] });
+  for (const codec of ["h264", "hevc", "av1"]) {
+    assert.equal(manager.directPlay({ url: "https://cdn.example/a.mkv" }, mkv({ codec }), caps).ok, false, `${codec} without a pixel format`);
+  }
+  for (const pixelFormat of ["yuv420p9le", "yuv420p14le", "yuv420p16le", "gray"]) {
+    assert.equal(manager.directPlay({ url: "https://cdn.example/a.mkv" }, mkv({ codec: "hevc", profile: "Rext", pixelFormat }), caps).ok, false, pixelFormat);
+  }
+  assert.equal(manager.directPlay({ url: "https://cdn.example/a.mkv" }, mkv({ codec: "vp9", profile: "Profile 1" }), caps).ok, false);
+  assert.equal(manager.directPlay({ url: "https://cdn.example/a.mkv" }, mkv({ codec: "vp9", profile: "Profile 1", pixelFormat: "yuv420p" }), caps).ok, false);
+  assert.equal(manager.directPlay({ url: "https://cdn.example/a.mkv" }, mkv({ codec: "hevc", profile: "Main 10", pixelFormat: "yuv420p" }), { ...caps, deepColor: [], hevc10: false }).ok, false);
+  for (const pixelFormat of ["yuv420p", "yuvj420p", "nv12", "yuv420p10le", "yuv420p10", "p010le", "p012le"]) {
+    assert.equal(manager.directPlay({ url: "https://cdn.example/a.mkv" }, mkv({ codec: "hevc", profile: "Main", pixelFormat }), caps).ok, true, pixelFormat);
+  }
+});
+
+test("a native client never gets 4:2:2 or 4:4:4 video directly, nor copied into a remux", async () => {
+  const manager = new PlaybackManager(tmp("test-native-chroma")) as any;
+  const caps = { ...nativeCaps, deepColor: ["h264"] };
+  manager.inspect = async () => nativeInfo({ video: { codec: "h264", profile: "High 4:2:2", pixelFormat: "yuv422p10le" } });
+  manager.spawnAt = async (session: any, time: number) => { session.offset = time; session.mode = manager.plan(session).copyVideo ? "remux" : "transcode"; return "/hls"; };
+
+  const started = await manager.start({ url: "https://cdn.example/movie.mkv" }, caps);
+
+  assert.equal(started.mode, "transcode");
+  assert.equal(started.copy?.video, false);
+});
+
+test("a native client that does not declare mkv does not play an mkv directly", async () => {
+  const manager = new PlaybackManager(tmp("test-native-container")) as any;
+  manager.inspect = async () => nativeInfo();
+  manager.spawnAt = async (session: any, time: number) => { session.offset = time; return "/hls"; };
+
+  const started = await manager.start({ url: "https://cdn.example/movie.mkv" }, { ...nativeCaps, containers: ["mp4"] });
+
+  assert.notEqual(started.mode, "direct");
+});
+
+test("notWebReady blocks the browser but not a native client", () => {
+  const manager = new PlaybackManager(tmp("test-native-notwebready")) as any;
+  const info = nativeInfo();
+  const stream = { url: "https://cdn.example/movie.mkv", behaviorHints: { notWebReady: true } };
+
+  assert.equal(manager.directPlay(stream, info, nativeCaps).ok, true);
+  assert.equal(manager.directPlay(stream, info, playCaps).ok, false);
+});
+
+test("an hls source never plays directly, native or browser", () => {
+  const manager = new PlaybackManager(tmp("test-native-hls")) as any;
+  const info = { container: "hls,applehttp", video: { codec: "h264" }, audio: { codec: "aac" } };
+
+  assert.equal(manager.directPlay({ url: "https://cdn.example/master.m3u8" }, info, nativeCaps).ok, false);
+  assert.equal(manager.directPlay({ url: "https://cdn.example/master.m3u8" }, info, playCaps).ok, false);
+});
+
+test("subtitles a native client renders are not extracted as a sidecar", async () => {
+  const manager = new PlaybackManager(tmp("test-native-subtitles")) as any;
+  manager.inspect = async () => nativeInfo({ subtitleTracks: [{ index: 0, codec: "hdmv_pgs_subtitle", language: "cs" }] });
+  let spawned = false;
+  manager.spawnAt = async () => { spawned = true; return "/hls"; };
+  let extracted = 0;
+  manager.sidecars.run = async (_args: string[], _file: string, _append: boolean, signal: AbortSignal) => { extracted += 1; await whenAborted(signal); };
+
+  const started = await manager.start({ url: "https://cdn.example/movie.mkv" }, nativeCaps, { subtitleLanguage: "cs" });
+
+  assert.equal(spawned, false);
+  assert.equal(started.mode, "direct");
+  assert.equal(started.subtitleTrack, 0);
+  assert.equal(started.sidecarUrl, undefined);
+  await pause(20);
+  assert.equal(extracted, 0);
+});
+
+test("a subtitle codec the native client does not render is still extracted", async () => {
+  const manager = new PlaybackManager(tmp("test-native-subtitles-other")) as any;
+  manager.inspect = async () => nativeInfo({ subtitleTracks: [{ index: 0, codec: "ass", language: "cs" }] });
+  let spawned = false;
+  manager.spawnAt = async () => { spawned = true; return "/hls"; };
+  let extracted = 0;
+  manager.sidecars.run = async (_args: string[], _file: string, _append: boolean, signal: AbortSignal) => { extracted += 1; await whenAborted(signal); };
+
+  const started = await manager.start({ url: "https://cdn.example/movie.mkv" }, nativeCaps, { subtitleLanguage: "cs" });
+
+  assert.equal(spawned, false);
+  assert.equal(started.mode, "direct");
+  assert.match(started.sidecarUrl ?? "", /sidecar\.vtt\?revision=/);
+  while (!extracted) await pause(5);
+  assert.equal(extracted, 1);
+  await manager.sidecars.stop(started.id);
+});
+
+test("a chosen quality forces a conversion for a native client too", async () => {
+  const manager = new PlaybackManager(tmp("test-native-quality")) as any;
+  manager.inspect = async () => nativeInfo();
+  manager.spawnAt = async (session: any, time: number) => { session.offset = time; return "/hls"; };
+
+  const started = await manager.start({ url: "https://cdn.example/movie.mkv" }, nativeCaps, { quality: 720 });
+
+  assert.notEqual(started.mode, "direct");
+});
+
+test("a native direct session switches to another playable audio track without restarting", async () => {
+  const manager = new PlaybackManager(tmp("test-native-track")) as any;
+  manager.inspect = async () => nativeInfo({
+    audioTracks: [{ index: 0, codec: "ac3", language: "en" }, { index: 1, codec: "ac3", language: "cs" }],
+  });
+  const spawns: number[] = [];
+  manager.spawnAt = async (session: any, offset: number) => {
+    spawns.push(offset); session.offset = offset; session.generation += 1;
+    return `/api/playback/${session.id}/${session.generation}/master.m3u8`;
+  };
+
+  const started = await manager.start({ url: "https://cdn.example/movie.mkv" }, nativeCaps);
+  assert.equal(started.mode, "direct");
+
+  const switched = await manager.track(started.id, { audio: 1, time: 0 });
+
+  assert.equal(switched.mode, "direct");
+  assert.equal(switched.audioTrack, 1);
+  assert.deepEqual(spawns, []);
+});
+
 const remuxSession = (manager: any, overrides: Record<string, unknown> = {}) => {
   const session: Record<string, any> = {
     id: "escalated", stream: { url: "https://cdn.example/movie.mkv" },
@@ -947,6 +1175,18 @@ test("escalate from direct play converts instead of handing the file over again"
 
   assert.equal(restarted.mode, "transcode");
   assert.equal(session.mode, "transcode");
+});
+
+test("escalate on a native direct session converts instead of handing the file over again", async () => {
+  const manager = new PlaybackManager(tmp("test-native-escalate")) as any;
+  const session = remuxSession(manager, { capabilities: nativeCaps, mode: "direct" });
+  const spawned = stubSpawn(manager, session);
+
+  const restarted = await manager.escalate("escalated", 0);
+
+  assert.equal(restarted.mode, "transcode");
+  assert.equal(session.mode, "transcode");
+  assert.deepEqual(spawned, [0]);
 });
 
 test("a session that already transcodes is not escalated twice, only restarted", async () => {
