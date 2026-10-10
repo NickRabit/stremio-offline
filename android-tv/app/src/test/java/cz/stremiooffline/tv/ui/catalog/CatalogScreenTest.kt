@@ -9,6 +9,7 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
@@ -237,5 +238,22 @@ class CatalogScreenTest {
     press(Key.DirectionCenter)
 
     compose.onNodeWithTag(posterTag(meta("ttA", name = "Alpha"))).assertExists()
+  }
+
+  @Test
+  fun `twin catalogues say which one is films and which series`() {
+    val api = FakeTvApi()
+    api.catalogsValue = listOf(
+      feature("Popular", addonKey = "a"),
+      feature("Popular", addonKey = "a", id = "top-series").copy(type = "series"),
+    )
+    api.catalogPages["a"] = listOf(listOf(meta("tt1")))
+    mount(api)
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagCatalogChip).assertIsFocused().assertTextContains("(movie)", substring = true)
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(catalogOptionTag(0)).assertTextContains("(movie)", substring = true)
+    compose.onNodeWithTag(catalogOptionTag(1)).assertTextContains("(series)", substring = true)
   }
 }

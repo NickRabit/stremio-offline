@@ -91,3 +91,5 @@ home.emptyTitle
 home.emptyText
 tv.homeLoadError
 tv.downloadsLater
+catalog.typeMovie
+catalog.typeSeries

@@ -102,4 +102,6 @@
   <string name="home_empty_text">Pobierz coś albo zacznij oglądać, a pojawi się to tutaj.</string>
   <string name="tv_home_load_error">Nie udało się wczytać strony głównej.</string>
   <string name="tv_downloads_later">Kolejka pobierania otwiera się na razie w przeglądarce.</string>
+  <string name="catalog_type_movie">film</string>
+  <string name="catalog_type_series">seria</string>
 </resources>

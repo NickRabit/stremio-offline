@@ -98,4 +98,6 @@
   <string name="home_empty_text">Download something or start watching, and it will show up here.</string>
   <string name="tv_home_load_error">Home could not be loaded.</string>
   <string name="tv_downloads_later">The download queue opens on the web for now.</string>
+  <string name="catalog_type_movie">movie</string>
+  <string name="catalog_type_series">series</string>
 </resources>
