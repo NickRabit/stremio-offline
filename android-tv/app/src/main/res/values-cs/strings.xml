@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="app_name">Stremio Offline</string>
+  <string name="auth_brand_eyebrow">DOMÁCÍ KNIHOVNA MÉDIÍ</string>
+  <string name="auth_username">Uživatelské jméno</string>
+  <string name="auth_password">Heslo</string>
+  <string name="auth_sign_in">Přihlásit se</string>
+  <string name="auth_sign_out">Odhlásit se</string>
+  <string name="auth_signed_in_as">Přihlášen jako %1$s</string>
+  <string name="nav_home">Domů</string>
+  <string name="nav_catalog">Katalog</string>
+  <string name="nav_library">Knihovna</string>
+  <string name="nav_settings">Nastavení</string>
+  <string name="tv_nav_search">Hledat</string>
+  <string name="tv_connect_title">Připojte se ke svému serveru</string>
+  <string name="tv_server_address">Adresa serveru</string>
+  <string name="tv_server_found">Stremio Offline %1$s</string>
+  <string name="tv_signin_note">Účty i prvního správce založíte ve webovém rozhraní. Heslo se v televizi nikdy neukládá.</string>
+  <string name="tv_err_unreachable">Server neodpovídá. Zkontrolujte adresu a že server běží.</string>
+  <string name="tv_err_incompatible">Na této adrese něco odpovídá, ale není to server Stremio Offline.</string>
+  <string name="tv_err_bad_credentials">Nesprávné uživatelské jméno nebo heslo.</string>
+  <string name="tv_err_too_many">Příliš mnoho neúspěšných pokusů. Zkuste to znovu za %1$d s.</string>
+  <string name="tv_err_needs_setup">Server zatím nemá žádný účet. Založte první ve webovém rozhraní.</string>
+  <string name="tv_err_must_change_password">Nejdřív si změňte heslo ve webovém rozhraní, pak se přihlaste tady.</string>
+  <string name="tv_err_session_expired">Přihlášení vypršelo. Přihlaste se znovu.</string>
+  <string name="tv_err_generic">Něco se nepovedlo. Zkuste to znovu.</string>
+  <string name="tv_offline_title">Server není dostupný</string>
+  <string name="tv_offline_text">%1$s přestal odpovídat.</string>
+  <string name="tv_try_again">Zkusit znovu</string>
+  <string name="tv_change_server">Změnit server</string>
+  <string name="tv_back_to_exit">Dalším stiskem Zpět aplikaci opustíte</string>
+  <string name="tv_placeholder_title">Přijde v příští verzi</string>
+  <string name="tv_placeholder_action">Zpět domů</string>
+</resources>

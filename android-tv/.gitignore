@@ -7,3 +7,6 @@ local.properties
 .kotlin/
 /keystore/
 *.jks
+# The root .gitignore drops every `data/` directory; the app's data packages are source.
+!app/src/main/java/cz/stremiooffline/tv/data/
+!app/src/test/java/cz/stremiooffline/tv/data/
