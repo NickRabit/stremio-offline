@@ -159,6 +159,19 @@ class CatalogDetailTest {
     compose.onNodeWithText("No active source addon has a stream for this title.").assertExists()
   }
 
+  // Found on the emulator: Play with no source did nothing at all.
+  @Test
+  fun `play with no source says so`() {
+    val api = FakeTvApi()
+    api.settingsValue = settings()
+    mount(api, movieArgs())
+    compose.waitForIdle()
+
+    click(TagCatalogPrimary)
+
+    compose.onNodeWithText("No active source addon has a stream for this title.").assertExists()
+  }
+
   @Test
   fun `a series focuses the next episode and reloads streams for the one chosen`() {
     val api = FakeTvApi()

@@ -116,6 +116,7 @@ fun CatalogDetailScreen(
   val waitingText = stringResource(R.string.downloads_waiting_debrid)
   val notAllowedText = stringResource(R.string.err_download_library_not_allowed)
   val torrentText = stringResource(R.string.err_torrent_not_playable)
+  val noSourcesText = stringResource(R.string.sources_none)
   val defaultText = stringResource(R.string.tv_default)
   val toLibraryText = stringResource(R.string.save_to_library)
 
@@ -275,14 +276,14 @@ fun CatalogDetailScreen(
       Row(horizontalArrangement = Arrangement.spacedBy(11.dp), verticalAlignment = Alignment.CenterVertically) {
         FocusButton(
           text = stringResource(if (resuming) R.string.tv_resume else R.string.player_play),
-          onClick = { activeStream?.let { if (it.playable) play(it) else queue(it) } },
+          onClick = { activeStream?.let { if (it.playable) play(it) else queue(it) } ?: run { message = noSourcesText } },
           kind = FocusButtonKind.Primary,
           modifier = Modifier.focusRequester(primaryFocus).testTag(TagCatalogPrimary),
         )
         if (resuming) {
           FocusButton(
             text = stringResource(R.string.tv_start_over),
-            onClick = { activeStream?.takeIf { it.playable }?.let { onPlay(PlayTarget(progressKey, playerTitle, resume = false, sourceId = it.sourceId)) } },
+            onClick = { activeStream?.takeIf { it.playable }?.let { onPlay(PlayTarget(progressKey, playerTitle, resume = false, sourceId = it.sourceId)) } ?: run { message = noSourcesText } },
             modifier = Modifier.testTag(TagCatalogStartOver),
           )
         }

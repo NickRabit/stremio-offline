@@ -53,13 +53,6 @@ fun SidePanel(
         .padding(horizontal = 24.dp, vertical = Tokens.SafeY),
       verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-      Text(
-        title.uppercase(),
-        color = Tokens.Accent,
-        fontSize = 10.sp,
-        fontWeight = FontWeight.Bold,
-        letterSpacing = 1.6.sp,
-      )
       Text(title, color = Tokens.Text, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold)
       Spacer(Modifier.height(2.dp))
       Column(
