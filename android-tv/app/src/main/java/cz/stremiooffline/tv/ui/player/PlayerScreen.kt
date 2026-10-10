@@ -80,15 +80,8 @@ fun PlayerScreen(api: TvApi, target: PlayTarget, onExit: () -> Unit) {
   var playing by remember { mutableStateOf(false) }
   var position by remember { mutableDoubleStateOf(0.0) }
 
-  val playerFocus = remember { FocusRequester() }
+  // The overlay owns focus: a hidden OSD focuses its own root, a shown one the play button.
   val playFocus = remember { FocusRequester() }
-  val osdShown = controls && state.started && state.error == null
-  LaunchedEffect(controls, state.started, state.error) {
-    when {
-      osdShown -> runCatching { playFocus.requestFocus() }
-      state.started && state.error == null -> runCatching { playerFocus.requestFocus() }
-    }
-  }
 
   LaunchedEffect(attempt) {
     val source = runCatching { api.librarySource(target.path) }.getOrNull()
@@ -175,11 +168,10 @@ fun PlayerScreen(api: TvApi, target: PlayTarget, onExit: () -> Unit) {
     onSeek = { controller.seekTo(it) },
     onTogglePause = { if (playing) exoPlayer.pause() else exoPlayer.play() },
     onExit = onExit,
-    modifier = Modifier.then(if (osdShown) Modifier else Modifier.focusRequester(playerFocus).focusable())
-      .onPreviewKeyEvent { event ->
-        if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-        mediaKey(event.key, exoPlayer, playing, onExit) ?: false
-      },
+    modifier = Modifier.onPreviewKeyEvent { event ->
+      if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+      mediaKey(event.key, exoPlayer, playing, onExit) ?: false
+    },
   ) {
     AndroidView(
       factory = { ctx ->
@@ -204,14 +196,16 @@ fun PlayerScreen(api: TvApi, target: PlayTarget, onExit: () -> Unit) {
   }
 }
 
-/** The media keys work whether or not the OSD is up; a null answer means the key is not ours. */
-private fun mediaKey(key: Key, player: ExoPlayer, playing: Boolean, onExit: () -> Unit): Boolean? = when (key) {
+/**
+ * The media keys work whether or not the OSD is up; a null answer means the key is not ours. Back
+ * is deliberately absent: the overlay's own rule owns it and hides the controls first.
+ */
+internal fun mediaKey(key: Key, player: ExoPlayer, playing: Boolean, onExit: () -> Unit): Boolean? = when (key) {
   Key.MediaPlayPause -> { if (playing) player.pause() else player.play(); true }
   Key.MediaPlay -> { player.play(); true }
   Key.MediaPause -> { player.pause(); true }
   Key.MediaFastForward -> { player.seekTo(player.currentPosition + (SEEK_STEP_SECONDS * 1000).toLong()); true }
   Key.MediaRewind -> { player.seekTo((player.currentPosition - (SEEK_STEP_SECONDS * 1000).toLong()).coerceAtLeast(0)); true }
-  Key.Back -> { onExit(); true }
   else -> null
 }
 

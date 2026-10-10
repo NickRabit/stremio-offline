@@ -65,8 +65,8 @@ const val TAG_OSD_PLAY = "osd_play"
 const val TAG_OSD_BUBBLE = "osd_bubble"
 
 /** The seek icons beside the plain `10` labels. */
-const val SEEK_BACK_LABEL = "↺ 10"
-const val SEEK_FORWARD_LABEL = "10 ↻"
+const val SEEK_BACK_LABEL = "10"
+const val SEEK_FORWARD_LABEL = "10"
 
 @Composable
 fun LoadingOverlay(title: String) {

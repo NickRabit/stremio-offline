@@ -137,4 +137,42 @@ class LibraryScreenTest {
     compose.onNodeWithTag("Shows").assertIsFocused()
   }
 
+  // Bug 5: `openedBy` recorded a folder that opened the detail too, so the next Back restored
+  // focus to the wrong card.
+  @Test
+  fun `a folder that opened and closed a detail does not shift the next back's focus`() {
+    val api = FakeTvApi()
+    api.pages[null] = BrowseResult(
+      "",
+      listOf(folder("It", "It"), folder("S1", "S1")),
+      2,
+      false,
+    )
+    api.pages["It"] = BrowseResult("It", listOf(file("It/It.mkv")), 1, false)
+    api.pages["S1"] = BrowseResult("S1", listOf(folder("S1/E1", "E1")), 1, false)
+    val details = mutableListOf<DetailData>()
+    mount(api, onDetail = { details += it })
+    compose.waitForIdle()
+
+    // Open the only-files folder: it opens the detail and must not be booked as a pushed level.
+    compose.onNodeWithTag("It").assertIsFocused()
+    compose.onNodeWithTag("It").performKeyInput { pressKey(Key.DirectionCenter) }
+    compose.waitForIdle()
+    assertEquals(1, details.size)
+
+    // The grid kept the folder focused; RIGHT reaches the nested folder. Push it and go Back: its
+    // own card must take focus, not the folder that opened the detail earlier.
+    compose.onNodeWithTag("It").performKeyInput { pressKey(Key.DirectionRight) }
+    compose.waitForIdle()
+    compose.onNodeWithTag("S1").assertIsFocused()
+    compose.onNodeWithTag("S1").performKeyInput { pressKey(Key.DirectionCenter) }
+    compose.waitForIdle()
+    compose.onNodeWithTag("S1/E1").assertExists()
+
+    host!!.onBackPressedDispatcher.onBackPressed()
+    compose.waitForIdle()
+    compose.onNodeWithTag("S1").assertIsFocused()
+    compose.onNodeWithTag("S1/E1").assertDoesNotExist()
+  }
+
 }

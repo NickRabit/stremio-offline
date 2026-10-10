@@ -3,6 +3,7 @@ package cz.stremiooffline.tv.ui.player
 import androidx.activity.compose.BackHandler
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -26,6 +27,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.tv.material3.Text
 import cz.stremiooffline.tv.ui.theme.Tokens
 import kotlinx.coroutines.delay
@@ -62,6 +64,7 @@ fun PlayerOverlayShell(
   var controls by remember { mutableStateOf(initiallyShown) }
   var activity by remember { mutableIntStateOf(0) }
   var bubble by remember { mutableStateOf<String?>(null) }
+  val rootFocus = remember { FocusRequester() }
 
   // Android 13+ hands the remote's Back to the back dispatcher, not to key listeners, so the
   // player claims it here; otherwise the detail underneath would take it and close instead.
@@ -85,6 +88,12 @@ fun PlayerOverlayShell(
     }
   }
 
+  // The hidden state needs a focus target of its own: the video is not focusable, so without this
+  // the remote went dead once the OSD was gone.
+  LaunchedEffect(controls) {
+    if (controls) runCatching { playFocus.requestFocus() } else runCatching { rootFocus.requestFocus() }
+  }
+
   fun seek(offsetSeconds: Double) {
     bubble = if (offsetSeconds < 0) "−10 s" else "+10 s"
     onSeek((position + offsetSeconds).coerceAtLeast(0.0))
@@ -95,6 +104,8 @@ fun PlayerOverlayShell(
       .fillMaxSize()
       .testTag(TAG_OVERLAY_ROOT)
       .background(Color.Black)
+      .focusRequester(rootFocus)
+      .focusable()
       .onPreviewKeyEvent { event ->
         if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
         activity++

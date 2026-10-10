@@ -27,6 +27,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -103,10 +104,20 @@ private val ExpandedRail = 200.dp
 fun Shell(start: Section, api: TvApi, username: String, onSignOut: () -> Unit) {
   val shellState = remember(start) { ShellState(start) }
   val current = shellState.selected
+  val sectionStates = rememberSaveableStateHolder()
 
   var detail by remember { mutableStateOf<DetailData?>(null) }
   var player by remember { mutableStateOf<PlayTarget?>(null) }
   var returnToken by remember { mutableIntStateOf(0) }
+  // Bumped each time Library comes back into view, so re-entering refreshes without losing focus.
+  var libraryRefreshToken by remember { mutableIntStateOf(0) }
+  var librarySeen by remember { mutableStateOf(false) }
+  LaunchedEffect(current) {
+    if (current == Section.Library) {
+      if (librarySeen) libraryRefreshToken++
+      librarySeen = true
+    }
+  }
 
   ShellScaffold(
     username = username,
@@ -120,20 +131,24 @@ fun Shell(start: Section, api: TvApi, username: String, onSignOut: () -> Unit) {
     railHidden = detail != null,
   ) { focusRequester ->
     val section = current
-    if (section == Section.Library) {
-      LibraryRoute(
-        api = api,
-        onOpenDetail = { detail = it },
-        restoreToken = returnToken,
-      )
-    } else {
-      SectionContent(
-        section = section,
-        username = username,
-        onSignOut = onSignOut,
-        onAction = { shellState.pick(Section.Home) },
-        focusRequester = focusRequester,
-      )
+    // The holder keeps each section's list state and selection across the swap.
+    sectionStates.SaveableStateProvider(section) {
+      if (section == Section.Library) {
+        LibraryRoute(
+          api = api,
+          onOpenDetail = { detail = it },
+          restoreToken = returnToken,
+          refreshToken = libraryRefreshToken,
+        )
+      } else {
+        SectionContent(
+          section = section,
+          username = username,
+          onSignOut = onSignOut,
+          onAction = { shellState.pick(Section.Home) },
+          focusRequester = focusRequester,
+        )
+      }
     }
   }
 

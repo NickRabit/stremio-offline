@@ -19,7 +19,6 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -52,14 +51,19 @@ fun LibraryRoute(
   onOpenDetail: (DetailData) -> Unit,
   modifier: Modifier = Modifier,
   restoreToken: Int = 0,
+  refreshToken: Int = 0,
   pendingDelayMs: Long = 1_500L,
 ) {
   val viewModel = viewModel<LibraryViewModel>(factory = LibraryViewModel.factory(api, pendingDelayMs))
   LaunchedEffect(Unit) { if (viewModel.state.pages.isEmpty()) viewModel.start() }
+  // Re-entering the section asks the server again; the grid keeps the old rows until the answer.
+  // The shell only raises the token after the first mount, so a fresh mount just starts.
+  LaunchedEffect(refreshToken) { if (refreshToken > 0) viewModel.refresh() }
 
   val state = viewModel.state
+  val items = state.current?.items.orEmpty()
   val scope = rememberCoroutineScope()
-  var selectedPath by rememberSaveable { mutableStateOf("") }
+  val selectedPath = viewModel.selectedPath
   val requesters = remember { mutableMapOf<String, FocusRequester>() }
   val gridFocus = remember { FocusRequester() }
   val fallbackTitle = stringResource(R.string.tv_library_title)
@@ -81,13 +85,13 @@ fun LibraryRoute(
       val items = state.current!!.items
       val target = restoreKey.takeIf { key -> key.isNotEmpty() && items.any { it.path.ifEmpty { it.title } == key } }
       restoreKey = ""
-      val requester = target?.let { requesters[it] } ?: gridFocus
+      val kept = selectedPath.takeIf { key -> key.isNotEmpty() && items.any { it.path.ifEmpty { it.title } == key } }
+      val requester = target?.let { requesters[it] } ?: kept?.let { requesters[it] } ?: gridFocus
       runCatching { requester.requestFocus() }
     }
   }
 
   fun openFolder(folder: BrowseItem.Folder) {
-    openedBy.add(folder.path.ifEmpty { folder.title })
     restoreKey = ""
     scope.launch {
       val result = runCatching { api.browse(folder.path, limit = LibraryViewModel.PAGE, skip = 0) }.getOrNull()
@@ -99,6 +103,8 @@ fun LibraryRoute(
       if (files.isNotEmpty() && files.size == result.items.size) {
         onOpenDetail(DetailData.ofFolder(folder, files))
       } else {
+        // Only a pushed level is consumed by Back, so the key is recorded only when it is pushed.
+        openedBy.add(folder.path.ifEmpty { folder.title })
         viewModel.push(result.path.ifEmpty { folder.path }, folder.title, result.items, result.total)
       }
     }
@@ -135,51 +141,48 @@ fun LibraryRoute(
       when {
         state.loading -> ShimmerCards()
         state.error -> ErrorPanel { viewModel.retry() }
-        state.current?.items.isNullOrEmpty() -> Text(
+        items.isEmpty() -> Text(
           stringResource(R.string.tv_library_empty),
           color = Tokens.Muted,
           fontSize = 12.sp,
         )
-        else -> {
-          val items = state.current!!.items
-          BoxWithConstraints(Modifier.fillMaxSize()) {
-            val columns = (((maxWidth.value + 18f) / 128f).toInt()).coerceAtLeast(1)
-            LazyVerticalGrid(
-              columns = GridCells.Fixed(columns),
-              modifier = Modifier.focusRequester(gridFocus).focusGroup(),
-              // Room for the focused card's scale and ring so the first row is not clipped.
-              contentPadding = PaddingValues(start = 10.dp, top = 10.dp, bottom = 40.dp),
-              horizontalArrangement = Arrangement.spacedBy(18.dp),
-              verticalArrangement = Arrangement.spacedBy(18.dp),
-            ) {
-              itemsIndexed(items, key = { _, item -> item.path.ifEmpty { item.title } }) { index, item ->
-                val key = item.path.ifEmpty { item.title }
-                val requester = remember(key) { FocusRequester() }
-                requesters[key] = requester
-                PosterCard(
-                  name = item.title,
-                  imageUrl = (item.poster ?: item.wide)?.let(api::url),
-                  progress = progressFraction(item),
-                  caption = caption(item),
-                  cardTag = item.path.ifEmpty { item.title },
-                  onClick = {
-                    when (item) {
-                      is BrowseItem.Library -> viewModel.open(item.path, item.title)
-                      is BrowseItem.Folder -> openFolder(item)
-                      is BrowseItem.File -> onOpenDetail(DetailData.ofFile(item))
+        else -> BoxWithConstraints(Modifier.fillMaxSize()) {
+          val columns = (((maxWidth.value + 18f) / 128f).toInt()).coerceAtLeast(1)
+          LazyVerticalGrid(
+            columns = GridCells.Fixed(columns),
+            modifier = Modifier.focusRequester(gridFocus).focusGroup(),
+            // Room for the focused card's scale and ring so the first row is not clipped.
+            contentPadding = PaddingValues(start = 10.dp, top = 10.dp, bottom = 40.dp),
+            horizontalArrangement = Arrangement.spacedBy(18.dp),
+            verticalArrangement = Arrangement.spacedBy(18.dp),
+          ) {
+            itemsIndexed(items, key = { _, item -> item.path.ifEmpty { item.title } }) { index, item ->
+              val key = item.path.ifEmpty { item.title }
+              val requester = remember(key) { FocusRequester() }
+              requesters[key] = requester
+              PosterCard(
+                name = item.title,
+                imageUrl = (item.poster ?: item.wide)?.let(api::url),
+                progress = progressFraction(item),
+                caption = caption(item),
+                cardTag = item.path.ifEmpty { item.title },
+                onClick = {
+                  when (item) {
+                    is BrowseItem.Library -> viewModel.open(item.path, item.title)
+                    is BrowseItem.Folder -> openFolder(item)
+                    is BrowseItem.File -> onOpenDetail(DetailData.ofFile(item))
+                  }
+                },
+                modifier = Modifier
+                  .focusRequester(requester)
+                  .onFocusChanged {
+                    if (it.isFocused) {
+                      viewModel.selectedPath = key
+                      requesters[key] = requester
+                      if (index >= items.size - columns) viewModel.loadMore()
                     }
                   },
-                  modifier = Modifier
-                    .focusRequester(requester)
-                    .onFocusChanged {
-                      if (it.isFocused) {
-                        selectedPath = key
-                        requesters[key] = requester
-                        if (index >= items.size - columns) viewModel.loadMore()
-                      }
-                    },
-                )
-              }
+              )
             }
           }
         }

@@ -40,6 +40,9 @@ class LibraryViewModel(
   var state by mutableStateOf(LibraryState(loading = true))
     private set
 
+  /** The card the grid last focused, kept across a section swap. */
+  var selectedPath by mutableStateOf("")
+
   private var job: Job? = null
 
   fun start() {
@@ -65,6 +68,18 @@ class LibraryViewModel(
     job?.cancel()
     state = state.copy(loading = true, error = false)
     job = viewModelScope.launch { load(page.path.ifEmpty { null }) }
+  }
+
+  /** Re-reads the level on screen in the background: the old rows stay until the answer lands. */
+  fun refresh() {
+    val page = state.current ?: return
+    if (state.loading || state.loadingMore) return
+    val depth = state.pages.size
+    job?.cancel()
+    job = viewModelScope.launch {
+      val next = runCatching { loadPage(page.path.ifEmpty { null }, 0) }.getOrNull() ?: return@launch
+      update(depth) { it.copy(path = next.path, items = next.items, total = next.total) }
+    }
   }
 
   /** True while there is a level to go back to. */

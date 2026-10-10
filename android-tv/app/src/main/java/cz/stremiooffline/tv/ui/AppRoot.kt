@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -33,8 +34,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelStore
+import androidx.lifecycle.ViewModelStoreOwner
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import androidx.tv.material3.Icon
@@ -47,6 +51,7 @@ import cz.stremiooffline.tv.data.CookieStore
 import cz.stremiooffline.tv.data.MeResult
 import cz.stremiooffline.tv.data.ServerAddress
 import cz.stremiooffline.tv.data.SessionStore
+import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.ui.components.FocusButton
 import cz.stremiooffline.tv.ui.components.FocusButtonKind
 import cz.stremiooffline.tv.ui.shell.Section
@@ -160,9 +165,9 @@ fun AppRoot() {
     is SessionState.SignedIn -> {
       val imageLoader = remember(state.api) { ImageLoader.Builder(context).okHttpClient(state.api.http).build() }
       CompositionLocalProvider(LocalImageLoader provides imageLoader) {
-        Shell(
-          start = state.start,
+        SessionShell(
           api = state.api,
+          start = state.start,
           username = state.username,
           onSignOut = session::signOut,
         )
@@ -175,6 +180,30 @@ fun AppRoot() {
       onChangeServer = session::changeServer,
     )
   }
+}
+
+/**
+ * The shell of one signed-in session. The view-model store is keyed to the `ApiClient` and cleared
+ * on sign-out, so a new sign-in never reuses the previous account's view models or its client.
+ */
+@Composable
+fun SessionShell(api: TvApi, start: Section, username: String, onSignOut: () -> Unit) {
+  SessionContent(api) {
+    Shell(start = start, api = api, username = username, onSignOut = onSignOut)
+  }
+}
+
+/** The session-scoped store around [content]; the shell of one signed-in session. */
+@Composable
+fun SessionContent(api: TvApi, content: @Composable () -> Unit) {
+  val owner = remember(api) { SessionViewModelStoreOwner() }
+  DisposableEffect(api) { onDispose { owner.viewModelStore.clear() } }
+  CompositionLocalProvider(LocalViewModelStoreOwner provides owner) { content() }
+}
+
+/** The view-model store of one signed-in session; a new sign-in gets a fresh instance. */
+private class SessionViewModelStoreOwner : ViewModelStoreOwner {
+  override val viewModelStore = ViewModelStore()
 }
 
 @Composable

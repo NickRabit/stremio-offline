@@ -18,6 +18,8 @@ import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.pressKey
 import androidx.tv.material3.Text
@@ -77,12 +79,38 @@ class PlayerOverlayTest {
     }
   }
 
+  /**
+   * The same shell with content that is not focusable, the way `PlayerScreen`'s `PlayerView` is.
+   * The widget takes no focus, so once the OSD is gone the overlay itself is the only target left.
+   */
+  private fun mountWithoutFocusableContent(
+    position: Double = 100.0,
+    duration: Double = 1_000.0,
+    playing: Boolean = true,
+  ) {
+    compose.setContent {
+      PlayerOverlayShell(
+        position = position,
+        duration = duration,
+        playing = playing,
+        title = "It",
+        eyebrow = "Direct play",
+        playFocus = FocusRequester(),
+        initiallyShown = true,
+        onSeek = { seeks += it },
+        onTogglePause = { pauses++ },
+        onExit = { exits++ },
+      ) {
+        Box(Modifier.fillMaxSize().testTag("video").background(Color.Black))
+      }
+    }
+  }
+
   @Test
   fun `the seek buttons carry the ten label`() {
     mount()
 
-    compose.onNodeWithText("↺ 10").assertIsDisplayed()
-    compose.onNodeWithText("10 ↻").assertIsDisplayed()
+    assertEquals(2, compose.onAllNodesWithText("10").fetchSemanticsNodes().size)
   }
 
   @Test
@@ -126,6 +154,34 @@ class PlayerOverlayTest {
     mount(initiallyShown = false)
 
     compose.onNodeWithTag("video").performKeyInput { pressKey(Key.Back) }
+    compose.waitForIdle()
+
+    assertEquals(1, exits)
+  }
+
+  // Bug 1: the shell never took focus when the OSD hid, so a non-focusable video left nothing to
+  // press and the remote went dead. The overlay root has to own focus in the hidden state.
+  @Test
+  fun `after auto-hide OK pauses and shows the controls again`() {
+    mountWithoutFocusableContent()
+
+    compose.mainClock.advanceTimeBy(CONTROLS_HIDE_MS + 100)
+    compose.waitForIdle()
+    compose.onRoot().performKeyInput { pressKey(Key.DirectionCenter) }
+    compose.waitForIdle()
+
+    assertEquals(1, pauses)
+    compose.onNodeWithTag(TAG_OSD_PLAY).assertExists()
+  }
+
+  // Bug 1: with the OSD hidden nothing held focus, so Back was dropped instead of leaving.
+  @Test
+  fun `after auto-hide back leaves the player`() {
+    mountWithoutFocusableContent()
+
+    compose.mainClock.advanceTimeBy(CONTROLS_HIDE_MS + 100)
+    compose.waitForIdle()
+    compose.onRoot().performKeyInput { pressKey(Key.Back) }
     compose.waitForIdle()
 
     assertEquals(1, exits)
