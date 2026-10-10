@@ -162,6 +162,11 @@ fun PlayerOverlayShell(
 
   fun seekBy(offsetSeconds: Double) {
     val from = if (!preview.isNaN()) preview else position
+    // A button press inside a held burst takes the burst over, so its pending commit never follows.
+    seekTimer?.cancel()
+    seekTimer = null
+    preview = Double.NaN
+    previewDirection = 0
     val target = (from + offsetSeconds).coerceAtLeast(0.0)
     bubble = seekBubble(offsetSeconds.toLong())
     onSeek(target)
