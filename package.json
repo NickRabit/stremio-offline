@@ -27,7 +27,8 @@
     "dev:server": "npm run dev -w server",
     "dev:web": "npm run dev -w web",
     "dev:desktop": "npm run dev -w desktop",
-    "complexity": "node scripts/complexity-report.mjs"
+    "complexity": "node scripts/complexity-report.mjs",
+    "android:strings": "node scripts/android-strings.mjs"
   },
   "engines": {
     "node": ">=22"

@@ -6,10 +6,22 @@ name: Android TV
 
 on:
   pull_request:
-    paths: ["android-tv/**", ".github/workflows/android-tv.yml", "package.json"]
+    paths:
+      - "android-tv/**"
+      - ".github/workflows/android-tv.yml"
+      - "package.json"
+      - "web/src/i18n/**"
+      - "scripts/android-strings.mjs"
+      - "android-tv/strings.keys"
   push:
     branches: [main]
-    paths: ["android-tv/**", ".github/workflows/android-tv.yml", "package.json"]
+    paths:
+      - "android-tv/**"
+      - ".github/workflows/android-tv.yml"
+      - "package.json"
+      - "web/src/i18n/**"
+      - "scripts/android-strings.mjs"
+      - "android-tv/strings.keys"
 
 permissions:
   contents: read
@@ -28,5 +40,9 @@ jobs:
         with:
           # The default list still names the retired `tools` package, which sdkmanager now refuses.
           packages: platform-tools platforms;android-35 build-tools;35.0.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: node scripts/android-strings.mjs --check
       - run: ./gradlew assembleDebug testDebugUnitTest lintDebug --no-daemon
         working-directory: android-tv

@@ -1,0 +1,32 @@
+# Web catalogue keys the Android TV code uses today, one per line. The
+# generator reads them in this order and writes matching string resources.
+auth.brandEyebrow
+auth.username
+auth.password
+auth.signIn
+auth.signOut
+auth.signedInAs
+nav.home
+nav.catalog
+nav.library
+nav.settings
+tv.navSearch
+tv.connectTitle
+tv.serverAddress
+tv.serverFound
+tv.signinNote
+tv.errUnreachable
+tv.errIncompatible
+tv.errBadCredentials
+tv.errTooMany
+tv.errNeedsSetup
+tv.errMustChangePassword
+tv.errSessionExpired
+tv.errGeneric
+tv.offlineTitle
+tv.offlineText
+tv.tryAgain
+tv.changeServer
+tv.backToExit
+tv.placeholderTitle
+tv.placeholderAction
