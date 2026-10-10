@@ -25,5 +25,8 @@ jobs:
           java-version: "17"
           cache: gradle
       - uses: android-actions/setup-android@v3
+        with:
+          # The default list still names the retired `tools` package, which sdkmanager now refuses.
+          packages: platform-tools platforms;android-35 build-tools;35.0.0
       - run: ./gradlew assembleDebug testDebugUnitTest lintDebug --no-daemon
         working-directory: android-tv
