@@ -493,7 +493,10 @@ private fun HomeRowView(
 
 @Composable
 private fun PlaceholderRow(rowId: String, requesters: MutableMap<Pair<String, String>, FocusRequester>, onCardFocus: (Int) -> Unit) {
-  Row(horizontalArrangement = Arrangement.spacedBy(RowGap)) {
+  Row(
+    modifier = Modifier.padding(start = CardRowInset),
+    horizontalArrangement = Arrangement.spacedBy(RowGap),
+  ) {
     repeat(PlaceholderCards) { index ->
       val requester = remember(rowId, index) { FocusRequester() }
       requesters[rowId to "index:$index"] = requester
@@ -510,7 +513,11 @@ private fun PlaceholderRow(rowId: String, requesters: MutableMap<Pair<String, St
 
 @Composable
 private fun RowNote(text: String, retryTag: String, requester: FocusRequester, onRetry: () -> Unit, onFocus: () -> Unit) {
-  Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(11.dp)) {
+  Row(
+    modifier = Modifier.padding(start = CardRowInset),
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(11.dp),
+  ) {
     Text(text, color = Tokens.Muted, fontSize = 11.sp)
     Surface(
       onClick = onRetry,

@@ -3,7 +3,12 @@
 package cz.stremiooffline.tv.ui.catalog
 
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.foundation.layout.Box
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotFocused
@@ -15,6 +20,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.pressKey
+import androidx.compose.ui.Modifier
 import androidx.compose.runtime.mutableIntStateOf
 import cz.stremiooffline.tv.data.MetaDto
 import cz.stremiooffline.tv.catalog.ResumeEpisode
@@ -22,10 +28,11 @@ import cz.stremiooffline.tv.data.ProgressDto
 import cz.stremiooffline.tv.data.ProgressEntryDto
 import cz.stremiooffline.tv.data.SettingsResponse
 import cz.stremiooffline.tv.data.StreamDto
+import cz.stremiooffline.tv.data.StreamSourceDto
 import cz.stremiooffline.tv.data.VideoDto
 import cz.stremiooffline.tv.ui.FakeTvApi
 import cz.stremiooffline.tv.ui.detail.PlayTarget
-import java.util.concurrent.CountDownLatch
+import kotlinx.coroutines.CompletableDeferred
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -518,8 +525,8 @@ class CatalogDetailTest {
     api.streamsValues["series:tt1:1:1"] = (1..3).map { stream("s1-$it", name = "One's source $it") }
     api.streamsValues["series:tt1:1:2"] = listOf(stream("s2", name = "Two's source"))
     // Episode two's streams stay in flight, so a stale episode one answer is all there is to play.
-    val gate = CountDownLatch(1)
-    api.streamsLatches["series:tt1:1:2"] = gate
+    val gate = CompletableDeferred<Unit>()
+    api.streamsGates["series:tt1:1:2"] = gate
     mount(api, seriesArgs())
     compose.waitForIdle()
 
@@ -533,7 +540,7 @@ class CatalogDetailTest {
     press(Key.DirectionCenter)
 
     assertTrue(played.isEmpty())
-    gate.countDown()
+    gate.complete(Unit)
   }
 
   @Test
@@ -546,7 +553,7 @@ class CatalogDetailTest {
     // Three sources on episode one against one on episode two, so a stale write is visible.
     api.streamsValues["series:tt1:1:1"] = (1..3).map { stream("s1-$it", name = "One's source $it") }
     api.streamsValues["series:tt1:1:2"] = listOf(stream("s2", name = "Two's source"))
-    api.streamsLatches["series:tt1:1:1"] = CountDownLatch(1)
+    api.streamsGates["series:tt1:1:1"] = CompletableDeferred()
     mount(api, seriesArgs())
     compose.waitForIdle()
 
@@ -562,7 +569,7 @@ class CatalogDetailTest {
     val api = FakeTvApi()
     api.settingsValue = settings()
     api.streamsValues["movie:tt1"] = listOf(stream("s1", name = "FullHD"))
-    api.streamsLatches["movie:tt1"] = CountDownLatch(1)
+    api.streamsGates["movie:tt1"] = CompletableDeferred()
     mount(api, movieArgs())
     compose.waitForIdle()
 
@@ -649,8 +656,8 @@ class CatalogDetailTest {
     val api = FakeTvApi()
     api.settingsValue = settings()
     api.streamsValues["movie:tt1"] = listOf(stream("s1", name = "FullHD"))
-    val latch = CountDownLatch(1)
-    api.watchlistLatch = latch
+    val gate = CompletableDeferred<Unit>()
+    api.watchlistGate = gate
     mount(api, movieArgs())
     compose.waitForIdle()
 
@@ -659,7 +666,7 @@ class CatalogDetailTest {
     press(Key.DirectionCenter)
 
     assertEquals(1, api.favoriteCalls.size)
-    latch.countDown()
+    gate.complete(Unit)
     compose.waitForIdle()
     compose.onNodeWithTag(TagCatalogFavourite).assertTextContains("★")
   }
@@ -765,5 +772,120 @@ class CatalogDetailTest {
     compose.waitForIdle()
     compose.onNodeWithTag(episodeCardTag(videos[29])).assertExists()
     compose.onNodeWithTag(episodeCardTag(videos[0])).assertDoesNotExist()
+  }
+
+  // --- Review round 2 -------------------------------------------------------------------------
+
+  private fun source(key: String) = StreamSourceDto(key, key.replaceFirstChar { it.uppercase() })
+
+  @Test
+  fun `DOWN from the action row is not eaten before the episodes arrive`() {
+    val api = seriesApi()
+    api.metaValues["series:tt1"] = seriesMeta(v1(), v2())
+    api.streamsValues["series:tt1:1:1"] = listOf(stream("s1", name = "One's source"))
+    val meta = CompletableDeferred<Unit>()
+    api.metaGates["series:tt1"] = meta
+    var downReachedSearch = false
+    compose.setContent {
+      Box(
+        Modifier.onKeyEvent { event ->
+          if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown) downReachedSearch = true
+          false
+        },
+      ) {
+        CatalogDetailScreen(api = api, args = seriesArgs(), imageUrl = { null }, onPlay = { played += it }, onBack = {})
+      }
+    }
+    compose.waitForIdle()
+    compose.onNodeWithTag(TagCatalogPrimary).assertIsFocused()
+
+    // The meta has not answered, so no card carries the episode-row requester: DOWN must reach the
+    // focus search instead of being swallowed by the handler.
+    downReachedSearch = false
+    press(Key.DirectionDown)
+    assertTrue(downReachedSearch)
+
+    meta.complete(Unit)
+    compose.waitForIdle()
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(episodeCardTag(v1())).assertIsFocused()
+  }
+
+  @Test
+  fun `Play on a chosen unplayable row never arms the wait for another addon`() {
+    val api = FakeTvApi()
+    api.settingsValue = settings()
+    api.streamSourcesValues["movie:tt1"] = listOf(source("alpha"), source("beta"))
+    api.addonStreams["movie:tt1|alpha"] =
+      listOf(stream("srcA", playable = false, kind = "remote", name = "External", title = "Czech 1 GB", addonName = "Alpha"))
+    api.addonStreams["movie:tt1|beta"] = listOf(stream("srcB", name = "Large", title = "Czech 8 GB", addonName = "Beta"))
+    val beta = CompletableDeferred<Unit>()
+    api.streamsGates["movie:tt1|beta"] = beta
+    mount(api, movieArgs())
+    compose.waitUntil(5_000) { api.streamsCompleted.contains("movie:tt1|alpha") }
+    compose.waitForIdle()
+
+    openSources()
+    compose.onNodeWithTag(sourceRowTag(0)).assertIsFocused()
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(TagCatalogPrimary).assertIsFocused()
+
+    // The pick is unplayable, so Play says so at once rather than waiting for the other addon.
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(TagCatalogMessage).assertTextContains("A torrent cannot be played directly.", substring = true)
+    assertTrue(played.isEmpty())
+
+    beta.complete(Unit)
+    compose.waitUntil(5_000) { api.streamsCompleted.contains("movie:tt1|beta") }
+    compose.waitForIdle()
+    assertTrue(played.isEmpty())
+    compose.onNodeWithTag(TagCatalogMessage).assertTextContains("A torrent cannot be played directly.", substring = true)
+  }
+
+  @Test
+  fun `a focused To library moves to Play when the chosen stream can no longer be queued`() {
+    val api = FakeTvApi()
+    api.settingsValue = settings()
+    api.streamSourcesValues["movie:tt1"] = listOf(source("alpha"), source("beta"), source("gamma"))
+    api.addonStreams["movie:tt1|alpha"] =
+      listOf(stream("srcA", playable = false, kind = "torrent", title = "Czech 1 GB", addonName = "Alpha"))
+    api.addonStreams["movie:tt1|beta"] =
+      listOf(stream("srcB", playable = false, kind = "remote", title = "Czech 8 GB", addonName = "Beta"))
+    api.addonStreams["movie:tt1|gamma"] = emptyList()
+    val beta = CompletableDeferred<Unit>()
+    val gamma = CompletableDeferred<Unit>()
+    api.streamsGates["movie:tt1|beta"] = beta
+    api.streamsGates["movie:tt1|gamma"] = gamma
+    mount(api, movieArgs())
+    compose.waitUntil(5_000) { api.streamsCompleted.contains("movie:tt1|alpha") }
+    compose.waitForIdle()
+
+    focusFromLeft(TagCatalogToLibrary)
+    compose.onNodeWithTag(TagCatalogToLibrary).assertIsFocused()
+
+    // The larger Beta lands while Gamma is still out: it outranks Alpha and cannot be queued, so the
+    // button the remote is on disappears.
+    beta.complete(Unit)
+    compose.waitUntil(5_000) { api.streamsCompleted.contains("movie:tt1|beta") }
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagCatalogToLibrary).assertDoesNotExist()
+    compose.onNodeWithTag(TagCatalogPrimary).assertIsFocused()
+    gamma.complete(Unit)
+  }
+
+  @Test
+  fun `Play without picking a source shows no chosen caption`() {
+    val api = FakeTvApi()
+    api.settingsValue = settings()
+    api.streamsValues["movie:tt1"] = listOf(stream("s1", name = "FullHD"))
+    mount(api, movieArgs())
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagCatalogPrimary).assertIsFocused()
+    press(Key.DirectionCenter)
+
+    assertEquals(listOf("s1"), played.map { it.sourceId })
+    compose.onNodeWithTag(TagCatalogChosenSource).assertDoesNotExist()
   }
 }

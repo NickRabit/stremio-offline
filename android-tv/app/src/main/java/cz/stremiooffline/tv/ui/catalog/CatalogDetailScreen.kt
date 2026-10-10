@@ -139,8 +139,13 @@ fun CatalogDetailScreen(
   var season by remember { mutableStateOf<Int?>(null) }
   var selectedStream by remember { mutableStateOf<StreamDto?>(null) }
   var pickedStream by remember { mutableStateOf(false) }
+  // The caption under the buttons names a source only once the viewer chose one in the panel;
+  // pressing Play, Start over or To library does not turn it on.
+  var chosenInPanel by remember { mutableStateOf(false) }
   var sourcesOpen by remember { mutableStateOf(false) }
   var actionRowFocused by remember { mutableStateOf(false) }
+  var toLibraryFocused by remember { mutableStateOf(false) }
+  var startOverFocused by remember { mutableStateOf(false) }
   var closeToPlay by remember { mutableStateOf(false) }
   var favourite by remember { mutableStateOf(false) }
   var favouriteBusy by remember { mutableStateOf(false) }
@@ -213,6 +218,7 @@ fun CatalogDetailScreen(
     streams = emptyList()
     selectedStream = null
     pickedStream = false
+    chosenInPanel = false
     pendingSources = 0
     sourcesLoaded = false
     sourcesFailed = false
@@ -381,6 +387,7 @@ fun CatalogDetailScreen(
   fun chooseSource(stream: StreamDto) {
     selectedStream = stream
     pickedStream = true
+    chosenInPanel = true
     message = null
     closeToPlay = true
     closeSources()
@@ -404,6 +411,13 @@ fun CatalogDetailScreen(
     when {
       pendingPlay -> cancelPendingPlay()
       sourcesFailed -> message = loadErrorText
+      // Once a row is chosen, Play acts on that row alone: a playable pick plays, an unplayable
+      // one says why, and the wait for another addon never overrides the pick.
+      pickedStream -> when {
+        stream?.playable == true -> play(stream)
+        stream != null -> message = torrentText
+        else -> message = emptyText
+      }
       stream?.playable == true -> play(stream)
       findingSources -> armPendingPlay()
       // A chosen stream that cannot be played is what the torrent message is for; queuing it is
@@ -423,6 +437,7 @@ fun CatalogDetailScreen(
         selectedStream = stream
         onPlay(PlayTarget(progressKey, playerTitle, resume = false, sourceId = stream.sourceId))
       }
+      pickedStream -> message = if (stream != null) torrentText else emptyText
       sourcesAsking -> Unit
       else -> message = emptyText
     }
@@ -454,6 +469,7 @@ fun CatalogDetailScreen(
     selectedVideo = video
     selectedStream = null
     pickedStream = false
+    chosenInPanel = false
     streams = emptyList()
     pendingSources = 0
     sourcesLoaded = false
@@ -477,6 +493,23 @@ fun CatalogDetailScreen(
     resolvePendingPlay()
   }
 
+  // A button that disappears while it holds the remote hands it back to Play. The flag is read
+  // during composition, before the button is dropped, so losing focus on disposal does not hide it.
+  val toLibraryWasFocused = toLibraryFocused
+  val startOverWasFocused = startOverFocused
+  LaunchedEffect(canQueueActive) {
+    if (!canQueueActive && toLibraryWasFocused) {
+      toLibraryFocused = false
+      runCatching { primaryFocus.requestFocus() }
+    }
+  }
+  LaunchedEffect(resuming) {
+    if (!resuming && startOverWasFocused) {
+      startOverFocused = false
+      runCatching { primaryFocus.requestFocus() }
+    }
+  }
+
   Box(
     Modifier
       .fillMaxSize()
@@ -487,8 +520,7 @@ fun CatalogDetailScreen(
         if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown &&
           isSeries && !sourcesOpen && actionRowFocused
         ) {
-          runCatching { rowFocus.requestFocus() }
-          true
+          runCatching { rowFocus.requestFocus() }.isSuccess
         } else {
           false
         }
@@ -581,7 +613,9 @@ fun CatalogDetailScreen(
           FocusButton(
             text = stringResource(R.string.tv_start_over),
             onClick = { startOverPressed() },
-            modifier = Modifier.testTag(TagCatalogStartOver),
+            modifier = Modifier
+              .testTag(TagCatalogStartOver)
+              .onFocusChanged { startOverFocused = it.isFocused },
           )
         }
         FocusButton(
@@ -595,7 +629,9 @@ fun CatalogDetailScreen(
           FocusButton(
             text = if (queued) "✓ $queuedText" else toLibraryText,
             onClick = { activeStream?.let { queue(it) } },
-            modifier = Modifier.testTag(TagCatalogToLibrary),
+            modifier = Modifier
+              .testTag(TagCatalogToLibrary)
+              .onFocusChanged { toLibraryFocused = it.isFocused },
           )
         }
         FocusButton(
@@ -608,7 +644,7 @@ fun CatalogDetailScreen(
           modifier = Modifier.focusRequester(sourcesOpenerFocus).testTag(TagCatalogSources),
         )
       }
-      if (pickedStream) {
+      if (chosenInPanel) {
         activeStream?.let { stream ->
           val caption = listOfNotNull(
             stream.addonName?.takeIf { it.isNotBlank() },

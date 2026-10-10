@@ -23,9 +23,7 @@ import cz.stremiooffline.tv.data.WatchlistEntryDto
 import cz.stremiooffline.tv.data.WatchlistToggleDto
 import cz.stremiooffline.tv.data.ApiError
 import cz.stremiooffline.tv.data.ApiFailure
-import java.util.concurrent.CountDownLatch
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.CompletableDeferred
 import okhttp3.OkHttpClient
 
 /** A `TvApi` that answers from memory, so a screen can be tested without a server. */
@@ -42,6 +40,8 @@ open class FakeTvApi : TvApi {
   var failCatalog = false
   var metaValues: MutableMap<String, MetaDto> = mutableMapOf()
   var metaRequests: MutableList<Triple<String, String, String?>> = mutableListOf()
+  /** A gate keyed by `type:id` holds a `meta()` call until the test releases it. */
+  var metaGates: MutableMap<String, CompletableDeferred<Unit>> = mutableMapOf()
   var streamsValues: MutableMap<String, List<StreamDto>> = mutableMapOf()
   /** Per-addon answers keyed by `type:id|addonKey`; takes precedence over [streamsValues]. */
   var addonStreams: MutableMap<String, List<StreamDto>> = mutableMapOf()
@@ -50,8 +50,9 @@ open class FakeTvApi : TvApi {
   var streamsRequests: MutableList<String> = mutableListOf()
   /** Each `streams()` request that has finished answering, in completion order. */
   var streamsCompleted: MutableList<String> = mutableListOf()
-  /** A latch keyed by `type:id` blocks a `streams()` call like a slow server would. */
-  var streamsLatches: MutableMap<String, CountDownLatch> = mutableMapOf()
+  /** A gate keyed by `type:id` blocks a `streams()` call like a slow server would. Releasing it
+   *  resumes the caller through the test clock, not a real thread. */
+  var streamsGates: MutableMap<String, CompletableDeferred<Unit>> = mutableMapOf()
   var streamFailures: MutableMap<String, ApiFailure> = mutableMapOf()
   var streamSourcesFailures: MutableMap<String, ApiFailure> = mutableMapOf()
   var addonsValue: List<AddonDto> = emptyList()
@@ -60,11 +61,11 @@ open class FakeTvApi : TvApi {
   var settingsCalls = 0
   var progressEntries: List<ProgressEntryDto> = emptyList()
   var progressListCalls = 0
-  var progressListLatch: CountDownLatch? = null
+  var progressListGate: CompletableDeferred<Unit>? = null
   var watchlistValue: MutableList<WatchlistEntryDto> = mutableListOf()
   var watchlistCalls = 0
   var favoriteCalls: MutableList<Triple<String, String, Boolean>> = mutableListOf()
-  var watchlistLatch: CountDownLatch? = null
+  var watchlistGate: CompletableDeferred<Unit>? = null
   var watchlistFailure: ApiFailure? = null
   var watchlistAnswer: ((Boolean) -> Boolean)? = null
   var downloads: MutableList<Pair<String?, MediaDto>> = mutableListOf()
@@ -121,6 +122,7 @@ open class FakeTvApi : TvApi {
 
   override suspend fun meta(type: String, id: String, language: String?): MetaDto {
     metaRequests += Triple(type, id, language)
+    metaGates["$type:$id"]?.await()
     return metaValues["$type:$id"] ?: throw ApiError(ApiFailure.NotFound)
   }
 
@@ -135,9 +137,7 @@ open class FakeTvApi : TvApi {
     val key = "$type:$id"
     val request = if (addon.isNullOrEmpty()) key else "$key|$addon"
     streamsRequests += request
-    // A blocking wait inside the IO context, like the real client: the coroutine is cancelled, but
-    // the call still runs to completion before the cancellation is delivered.
-    (streamsLatches[request] ?: streamsLatches[key])?.let { latch -> withContext(Dispatchers.IO) { latch.await() } }
+    (streamsGates[request] ?: streamsGates[key])?.await()
     (streamFailures[request] ?: streamFailures[key])?.let { throw ApiError(it) }
     streamsCompleted += request
     return addonStreams[request] ?: streamsValues[key] ?: emptyList()
@@ -155,7 +155,7 @@ open class FakeTvApi : TvApi {
 
   override suspend fun progressList(): List<ProgressEntryDto> {
     progressListCalls += 1
-    progressListLatch?.let { latch -> withContext(Dispatchers.IO) { latch.await() } }
+    progressListGate?.await()
     return progressEntries
   }
 
@@ -172,7 +172,7 @@ open class FakeTvApi : TvApi {
     favorite: Boolean,
   ): WatchlistToggleDto {
     favoriteCalls += Triple(type, id, favorite)
-    watchlistLatch?.let { latch -> withContext(Dispatchers.IO) { latch.await() } }
+    watchlistGate?.await()
     watchlistFailure?.let { throw ApiError(it) }
     return WatchlistToggleDto("$type:$id", watchlistAnswer?.invoke(favorite) ?: favorite)
   }

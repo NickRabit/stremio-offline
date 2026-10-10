@@ -53,7 +53,7 @@ import cz.stremiooffline.tv.ui.theme.Tokens
 
 /** Room a focused card's scale and glow need inside a scrolling viewport, so the first one is
  *  not clipped by the row or grid it lives in. */
-val CardRowInset = 20.dp
+val CardRowInset = 24.dp
 
 /** A 110x165 poster card: the image or a gradient, a title in the lower part, an optional bar. */
 @Composable
