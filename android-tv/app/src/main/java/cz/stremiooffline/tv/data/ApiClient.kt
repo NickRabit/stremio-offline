@@ -3,6 +3,7 @@ package cz.stremiooffline.tv.data
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -60,7 +61,7 @@ class ApiClient(
     if (path.startsWith("http://") || path.startsWith("https://")) path else address.resolve(path).toString()
 
   suspend fun status(): ServerStatus {
-    call(Request.Builder().url(address.resolve("/api/status")).get().build()).use { response ->
+    call(Request.Builder().url(address.resolve("/api/status")).get().build()).closing { response ->
       val parsed = readBody(response).decodeOrNull<StatusResponse>()
       if (parsed?.status != "ok") throw ApiError(ApiFailure.Incompatible)
       return ServerStatus(parsed.version.orEmpty())
@@ -70,7 +71,7 @@ class ApiClient(
   suspend fun login(username: String, password: String): LoginResult {
     val payload = json.encodeToString(LoginRequest.serializer(), LoginRequest(username, password, true))
     call(Request.Builder().url(address.resolve("/api/auth/login")).post(payload.toRequestBody(mediaType)).build())
-      .use { response ->
+      .closing { response ->
         val body = readBody(response)
         return when {
           response.isSuccessful -> {
@@ -88,7 +89,7 @@ class ApiClient(
   }
 
   suspend fun me(): MeResult {
-    call(Request.Builder().url(address.resolve("/api/auth/me")).get().build()).use { response ->
+    call(Request.Builder().url(address.resolve("/api/auth/me")).get().build()).closing { response ->
       val body = readBody(response)
       if (response.code == 401) throw ApiError(ApiFailure.SessionExpired)
       val parsed = body.decodeOrNull<MeResponse>() ?: throw ApiError(ApiFailure.Incompatible)
@@ -98,7 +99,7 @@ class ApiClient(
   }
 
   suspend fun settings(): SettingsResponse {
-    call(Request.Builder().url(address.resolve("/api/settings")).get().build()).use { response ->
+    call(Request.Builder().url(address.resolve("/api/settings")).get().build()).closing { response ->
       if (!response.isSuccessful) throw ApiError(ApiFailure.Generic)
       return readBody(response).decodeOrNull<SettingsResponse>() ?: SettingsResponse()
     }
@@ -106,7 +107,7 @@ class ApiClient(
 
   suspend fun logout() {
     try {
-      call(Request.Builder().url(address.resolve("/api/auth/logout")).post("{}".toRequestBody(mediaType)).build()).use { }
+      call(Request.Builder().url(address.resolve("/api/auth/logout")).post("{}".toRequestBody(mediaType)).build()).closing { }
     } catch (_: ApiError) {
     }
   }
@@ -173,7 +174,7 @@ class ApiClient(
     request(Request.Builder().url(address.resolve("/api/progress")).post(payload.toRequestBody(mediaType)).build())
   }
 
-  private suspend fun request(request: Request): String = call(request).use { response ->
+  private suspend fun request(request: Request): String = call(request).closing { response ->
     when {
       response.isSuccessful -> readBody(response)
       response.code == 401 -> throw ApiError(ApiFailure.SessionExpired)
@@ -199,12 +200,23 @@ class ApiClient(
     }
   }
 
-  private fun readBody(response: Response): String =
+  /** Like `use`, but the response is closed on the IO dispatcher: closing an unread body drains
+   *  what is left of it from the socket, which must not happen on the main thread. */
+  private suspend inline fun <T> Response.closing(block: (Response) -> T): T =
+    try {
+      block(this)
+    } finally {
+      withContext(NonCancellable + Dispatchers.IO) { close() }
+    }
+
+  /** The body streams from the socket, so it is read off the main thread like the call itself. */
+  private suspend fun readBody(response: Response): String = withContext(Dispatchers.IO) {
     try {
       response.body?.string().orEmpty()
     } catch (error: IOException) {
       throw ApiError(ApiFailure.Unreachable)
     }
+  }
 
   private inline fun <reified T> String.decodeOrNull(): T? = try {
     json.decodeFromString<T>(this)

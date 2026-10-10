@@ -16,6 +16,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
+import kotlinx.coroutines.asCoroutineDispatcher
 import org.junit.Test
 
 class ApiClientTest {
@@ -181,5 +182,53 @@ class ApiClientTest {
     val api = ApiClient(ServerAddress.parse("http://server/stremio")!!, CookieStore("http://server:80", Memory()))
     assertEquals("https://cdn.example/a.mkv", api.url("https://cdn.example/a.mkv"))
     assertEquals("http://server/stremio/api/media/x", api.url("/api/media/x"))
+  }
+
+  // Bug: the body was read on the caller's thread, which is the main thread in the app; a large
+  // catalogue answer then crashed with NetworkOnMainThreadException.
+  @Test
+  fun `the response body is read off the calling thread`() {
+    val server = okhttp3.mockwebserver.MockWebServer()
+    server.enqueue(okhttp3.mockwebserver.MockResponse().setBody("{\"path\":\"\",\"items\":[],\"total\":0}").throttleBody(8, 50, java.util.concurrent.TimeUnit.MILLISECONDS))
+    server.start()
+    val readers = java.util.concurrent.CopyOnWriteArrayList<String>()
+    val listener = object : okhttp3.EventListener() {
+      override fun responseBodyEnd(call: okhttp3.Call, byteCount: Long) { readers += Thread.currentThread().name }
+    }
+    val address = ServerAddress.parse(server.url("/").toString())!!
+    val api = ApiClient(address, CookieStore(address.origin, Memory()), okhttp3.OkHttpClient.Builder().eventListener(listener).build())
+    val caller = java.util.concurrent.Executors.newSingleThreadExecutor { Thread(it, "caller") }.asCoroutineDispatcher()
+    try {
+      kotlinx.coroutines.runBlocking(caller) { api.browse(null) }
+    } finally {
+      caller.close()
+      server.shutdown()
+    }
+    assertEquals(1, readers.size)
+    assertTrue("read on ${readers[0]}", !readers[0].startsWith("caller"))
+  }
+
+  // Found in review: an error answer was closed unread on the caller's thread, and closing drains
+  // what is left of the body from the socket.
+  @Test
+  fun `an unread error body is drained off the calling thread`() {
+    val server = okhttp3.mockwebserver.MockWebServer()
+    server.enqueue(okhttp3.mockwebserver.MockResponse().setResponseCode(500).setBody("x".repeat(64)).throttleBody(8, 50, java.util.concurrent.TimeUnit.MILLISECONDS))
+    server.start()
+    val readers = java.util.concurrent.CopyOnWriteArrayList<String>()
+    val listener = object : okhttp3.EventListener() {
+      override fun responseBodyEnd(call: okhttp3.Call, byteCount: Long) { readers += Thread.currentThread().name }
+      override fun responseFailed(call: okhttp3.Call, ioe: java.io.IOException) { readers += Thread.currentThread().name }
+    }
+    val address = ServerAddress.parse(server.url("/").toString())!!
+    val api = ApiClient(address, CookieStore(address.origin, Memory()), okhttp3.OkHttpClient.Builder().eventListener(listener).build())
+    val caller = java.util.concurrent.Executors.newSingleThreadExecutor { Thread(it, "caller") }.asCoroutineDispatcher()
+    try {
+      kotlinx.coroutines.runBlocking(caller) { runCatching { api.browse(null) } }
+    } finally {
+      caller.close()
+      server.shutdown()
+    }
+    assertTrue("closed on $readers", readers.none { it.startsWith("caller") })
   }
 }
