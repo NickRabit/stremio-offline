@@ -6,6 +6,8 @@ import cz.stremiooffline.tv.data.BrowseResult
 import cz.stremiooffline.tv.data.CatalogDto
 import cz.stremiooffline.tv.data.ClientCapabilitiesDto
 import cz.stremiooffline.tv.data.DownloadResult
+import cz.stremiooffline.tv.data.DownloadsResponseDto
+import cz.stremiooffline.tv.data.HomeResponseDto
 import cz.stremiooffline.tv.data.MediaDto
 import cz.stremiooffline.tv.data.MetaDto
 import cz.stremiooffline.tv.data.PlaybackDescriptorDto
@@ -71,6 +73,12 @@ open class FakeTvApi : TvApi {
   var searchPages: MutableMap<String, SearchResultDto> = mutableMapOf()
   var searchRequests: MutableList<Pair<String, String?>> = mutableListOf()
   var failSearch = false
+
+  var homeHandler: (List<String>) -> HomeResponseDto = { HomeResponseDto() }
+  var homeRequests: MutableList<List<String>> = mutableListOf()
+  var failHome = false
+  var downloadsValue: DownloadsResponseDto = DownloadsResponseDto()
+  var downloadsRequests = 0
 
   override val http: OkHttpClient = OkHttpClient()
 
@@ -171,6 +179,17 @@ open class FakeTvApi : TvApi {
     downloadFailure?.let { throw ApiError(it) }
     downloads += title to media
     return downloadResult
+  }
+
+  override suspend fun home(rows: List<String>): HomeResponseDto {
+    homeRequests += rows
+    if (failHome) throw ApiError(ApiFailure.Generic)
+    return homeHandler(rows)
+  }
+
+  override suspend fun downloads(): DownloadsResponseDto {
+    downloadsRequests += 1
+    return downloadsValue
   }
 
   override suspend fun startPlayback(sourceId: String, capabilities: ClientCapabilitiesDto, time: Double): PlaybackDescriptorDto =

@@ -69,4 +69,31 @@
   <string name="downloads_waiting_debrid">Aspettando Real-Debrid.</string>
   <string name="err_torrent_not_playable">Un torrent non può essere riprodotto direttamente. Aggiungilo con Alla libreria.</string>
   <string name="err_download_library_not_allowed">Questo account potrebbe non essere scaricato nella libreria.</string>
+  <string name="home_continue">Continua a guardare</string>
+  <string name="home_favorites">Preferiti</string>
+  <string name="home_tonight">Stasera</string>
+  <string name="home_new_episodes">Nuovi episodi</string>
+  <string name="home_ready_to_play">Pronto per la riproduzione</string>
+  <string name="home_recent">Aggiunto di recente</string>
+  <string name="home_downloads">Download</string>
+  <plurals name="home_downloads_summary">
+    <item quantity="one">1 attività</item>
+    <item quantity="other">%1$s attività</item>
+  </plurals>
+  <plurals name="home_attention">
+    <item quantity="one">1 richiede attenzione</item>
+    <item quantity="other">%1$s richiedono attenzione</item>
+  </plurals>
+  <string name="home_partial">Alcuni titoli non sono stati verificati.</string>
+  <string name="home_retry">Riprova</string>
+  <string name="home_row_failed">Impossibile caricare questa riga.</string>
+  <string name="home_next_episode">Episodio successivo</string>
+  <string name="home_resume">Riprendi</string>
+  <string name="home_open_episode">Apri episodio</string>
+  <string name="home_open_title">Apri titolo</string>
+  <string name="home_new_episode">Nuovo episodio</string>
+  <string name="home_empty_title">Qui non c\'è ancora niente</string>
+  <string name="home_empty_text">Scarica qualcosa o inizia a guardare e comparirà qui.</string>
+  <string name="tv_home_load_error">Impossibile caricare la Home.</string>
+  <string name="tv_downloads_later">La coda dei download si apre per ora sul web.</string>
 </resources>

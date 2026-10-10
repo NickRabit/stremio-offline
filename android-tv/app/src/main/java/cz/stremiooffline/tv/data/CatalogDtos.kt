@@ -1,5 +1,6 @@
 package cz.stremiooffline.tv.data
 
+import cz.stremiooffline.tv.episodeCode
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
@@ -73,7 +74,7 @@ data class VideoDto(
       ""
     }
 
-  val numbered: String? get() = if (season != null && episode != null) "S$season · E$episode" else null
+  val numbered: String? get() = episodeCode(season, episode)
 }
 
 @Serializable

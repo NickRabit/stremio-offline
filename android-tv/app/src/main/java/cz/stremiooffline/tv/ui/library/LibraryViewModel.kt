@@ -57,6 +57,13 @@ class LibraryViewModel(
     job = viewModelScope.launch { load(path) }
   }
 
+  /** Opens one folder as the only level, the way a Home card reveals its library. */
+  fun openHere(path: String, title: String) {
+    job?.cancel()
+    state = LibraryState(pages = listOf(LibraryPage(path, title)), loading = true)
+    job = viewModelScope.launch { load(path) }
+  }
+
   /** Pushes a level whose rows were already fetched, so a folder is not browsed twice. */
   fun push(path: String, title: String, items: List<BrowseItem>, total: Int) {
     job?.cancel()

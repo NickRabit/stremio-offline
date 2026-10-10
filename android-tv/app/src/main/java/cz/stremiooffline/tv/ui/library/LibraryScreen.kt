@@ -52,10 +52,19 @@ fun LibraryRoute(
   modifier: Modifier = Modifier,
   restoreToken: Int = 0,
   refreshToken: Int = 0,
+  /** A folder a Home card asked to reveal; opened once and then cleared by the caller. */
+  pushPath: String? = null,
+  onPushConsumed: () -> Unit = {},
   pendingDelayMs: Long = 1_500L,
 ) {
   val viewModel = viewModel<LibraryViewModel>(factory = LibraryViewModel.factory(api, pendingDelayMs))
   LaunchedEffect(Unit) { if (viewModel.state.pages.isEmpty()) viewModel.start() }
+  LaunchedEffect(pushPath) {
+    if (pushPath.isNullOrEmpty()) return@LaunchedEffect
+    val title = pushPath.substringAfterLast('/').ifEmpty { pushPath }
+    viewModel.openHere(pushPath, title)
+    onPushConsumed()
+  }
   // Re-entering the section asks the server again; the grid keeps the old rows until the answer.
   // The shell only raises the token after the first mount, so a fresh mount just starts.
   LaunchedEffect(refreshToken) { if (refreshToken > 0) viewModel.refresh() }

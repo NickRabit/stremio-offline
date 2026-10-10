@@ -29,8 +29,18 @@ interface CatalogApi {
   suspend fun download(title: String, sourceId: String, media: MediaDto): DownloadResult
 }
 
-/** Everything a signed-in screen does: library, detail, catalogue, images and playback. */
-interface TvApi : LibraryApi, DetailApi, PlaybackApi, CatalogApi {
+/** The Home rows, asked by name so a retry touches only the row it names. */
+interface HomeApi {
+  suspend fun home(rows: List<String>): HomeResponseDto
+}
+
+/** The account's download queue, read for the Home summary. */
+interface DownloadsApi {
+  suspend fun downloads(): DownloadsResponseDto
+}
+
+/** Everything a signed-in screen does: library, detail, catalogue, Home, images and playback. */
+interface TvApi : LibraryApi, DetailApi, PlaybackApi, CatalogApi, HomeApi, DownloadsApi {
   val http: OkHttpClient
   fun url(path: String): String
   suspend fun librarySource(path: String): SourceDto

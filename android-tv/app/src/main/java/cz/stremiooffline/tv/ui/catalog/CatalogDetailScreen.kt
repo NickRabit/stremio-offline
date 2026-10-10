@@ -172,10 +172,14 @@ fun CatalogDetailScreen(
       movieProgress = progressJob.await()
       if (args.type == "series") {
         val videos = meta.videos.orEmpty()
-        val watched = Resume.resumeVideo(videos, seriesEntry(entries, meta.id)?.let { Resume.resumeTarget(it).episode })
-        val resuming = seriesEntry(entries, meta.id)?.let { Progress.resumePosition(it.position, it.duration) != null } == true
-        selectedVideo = (if (resuming) watched else null) ?: nextRelevantEpisode(videos, watched) ?: firstReleased(videos)
-        season = defaultSeason(videos)
+        val stored = seriesEntry(entries, meta.id)
+        val storedEpisode = stored?.let { Resume.resumeTarget(it).episode }
+        val resuming = args.episode == null && stored?.let { Progress.resumePosition(it.position, it.duration) != null } == true
+        // Home names the episode it remembers; without one, the stored position decides.
+        val wanted = args.episode ?: if (resuming) storedEpisode else null
+        val watched = Resume.resumeVideo(videos, wanted)
+        selectedVideo = watched ?: nextRelevantEpisode(videos, Resume.resumeVideo(videos, storedEpisode)) ?: firstReleased(videos)
+        season = wanted?.season ?: defaultSeason(videos)
       }
     }
   }

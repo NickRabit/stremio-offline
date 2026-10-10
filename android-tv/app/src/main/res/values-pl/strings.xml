@@ -69,4 +69,35 @@
   <string name="downloads_waiting_debrid">Czekam na Real-Debrid.</string>
   <string name="err_torrent_not_playable">Torrentu nie można odtwarzać bezpośrednio. Dodaj go za pomocą Do biblioteki.</string>
   <string name="err_download_library_not_allowed">Z tego konta nie można pobrać plików do biblioteki.</string>
+  <string name="home_continue">Kontynuuj oglądanie</string>
+  <string name="home_favorites">Ulubione</string>
+  <string name="home_tonight">Na dziś wieczór</string>
+  <string name="home_new_episodes">Nowe odcinki</string>
+  <string name="home_ready_to_play">Gotowe do odtworzenia</string>
+  <string name="home_recent">Ostatnio dodane</string>
+  <string name="home_downloads">Pobierane</string>
+  <plurals name="home_downloads_summary">
+    <item quantity="one">1 zadanie</item>
+    <item quantity="few">%1$s zadania</item>
+    <item quantity="many">%1$s zadań</item>
+    <item quantity="other">%1$s zadań</item>
+  </plurals>
+  <plurals name="home_attention">
+    <item quantity="one">1 wymaga uwagi</item>
+    <item quantity="few">%1$s wymagają uwagi</item>
+    <item quantity="many">%1$s wymaga uwagi</item>
+    <item quantity="other">%1$s wymaga uwagi</item>
+  </plurals>
+  <string name="home_partial">Nie udało się sprawdzić niektórych tytułów.</string>
+  <string name="home_retry">Spróbuj ponownie</string>
+  <string name="home_row_failed">Nie udało się wczytać tego rzędu.</string>
+  <string name="home_next_episode">Następny odcinek</string>
+  <string name="home_resume">Kontynuuj</string>
+  <string name="home_open_episode">Otwórz odcinek</string>
+  <string name="home_open_title">Otwórz tytuł</string>
+  <string name="home_new_episode">Nowy odcinek</string>
+  <string name="home_empty_title">Jeszcze nic tu nie ma</string>
+  <string name="home_empty_text">Pobierz coś albo zacznij oglądać, a pojawi się to tutaj.</string>
+  <string name="tv_home_load_error">Nie udało się wczytać strony głównej.</string>
+  <string name="tv_downloads_later">Kolejka pobierania otwiera się na razie w przeglądarce.</string>
 </resources>

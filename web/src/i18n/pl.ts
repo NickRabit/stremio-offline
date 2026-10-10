@@ -1541,6 +1541,8 @@ export const pl: Catalog = {
   "tv.pathTranscode": "Konwertowane na serwerze",
   "tv.playerError": "Nie udało się odtworzyć tego wideo.",
   "tv.loadError": "Nie udało się wczytać biblioteki.",
+  "tv.homeLoadError": "Nie udało się wczytać strony głównej.",
+  "tv.downloadsLater": "Kolejka pobierania otwiera się na razie w przeglądarce.",
   "tv.back": "Wstecz",
   "tv.detailEyebrowMovie": "Film · {addon}",
   "tv.detailEyebrowSeries": "Serial · {addon}",

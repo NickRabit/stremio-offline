@@ -239,6 +239,17 @@ class ApiClient(
       .decode() ?: DownloadResult()
   }
 
+  /** One Home answer for the named rows; an empty list only asks for `order`. */
+  override suspend fun home(rows: List<String>): HomeResponseDto {
+    val query = "?rows=" + encode(rows.joinToString(","))
+    return request(Request.Builder().url(address.resolve("/api/home$query")).get().build())
+      .decode<HomeResponseDto>() ?: throw ApiError(ApiFailure.Generic)
+  }
+
+  override suspend fun downloads(): DownloadsResponseDto =
+    request(Request.Builder().url(address.resolve("/api/downloads")).get().build())
+      .decode<DownloadsResponseDto>() ?: throw ApiError(ApiFailure.Generic)
+
   override suspend fun saveProgress(key: String, position: Double, duration: Double, title: String, path: String?) {
     val payload = json.encodeToString(
       ProgressRequest.serializer(),

@@ -69,4 +69,35 @@
   <string name="downloads_waiting_debrid">Čakanie na Real-Debrid.</string>
   <string name="err_torrent_not_playable">Torrent nie je možné prehrať priamo. Pridajte ho do knižnice.</string>
   <string name="err_download_library_not_allowed">Tento účet sa nemusí stiahnuť do knižnice.</string>
+  <string name="home_continue">Pokračovať v sledovaní</string>
+  <string name="home_favorites">Obľúbené</string>
+  <string name="home_tonight">Čo dnes večer</string>
+  <string name="home_new_episodes">Nové epizódy</string>
+  <string name="home_ready_to_play">Pripravené na prehratie</string>
+  <string name="home_recent">Nedávno pridané</string>
+  <string name="home_downloads">Sťahovanie</string>
+  <plurals name="home_downloads_summary">
+    <item quantity="one">1 úloha</item>
+    <item quantity="few">%1$s úlohy</item>
+    <item quantity="many">%1$s úlohy</item>
+    <item quantity="other">%1$s úloh</item>
+  </plurals>
+  <plurals name="home_attention">
+    <item quantity="one">1 vyžaduje pozornosť</item>
+    <item quantity="few">%1$s vyžadujú pozornosť</item>
+    <item quantity="many">%1$s vyžaduje pozornosť</item>
+    <item quantity="other">%1$s vyžaduje pozornosť</item>
+  </plurals>
+  <string name="home_partial">Niektoré tituly sa nepodarilo overiť.</string>
+  <string name="home_retry">Skúsiť znova</string>
+  <string name="home_row_failed">Tento riadok sa nepodarilo načítať.</string>
+  <string name="home_next_episode">Ďalšia epizóda</string>
+  <string name="home_resume">Pokračovať</string>
+  <string name="home_open_episode">Otvoriť epizódu</string>
+  <string name="home_open_title">Otvoriť titul</string>
+  <string name="home_new_episode">Nová epizóda</string>
+  <string name="home_empty_title">Zatiaľ tu nič nie je</string>
+  <string name="home_empty_text">Niečo si stiahnite alebo začnite sledovať a objaví sa to tu.</string>
+  <string name="tv_home_load_error">Domovskú stránku sa nepodarilo načítať.</string>
+  <string name="tv_downloads_later">Fronta sťahovania sa zatiaľ otvára na webe.</string>
 </resources>

@@ -69,4 +69,35 @@
   <string name="downloads_waiting_debrid">Жду Реал-Дебрид.</string>
   <string name="err_torrent_not_playable">Торрент нельзя воспроизводить напрямую. Добавьте его в библиотеку.</string>
   <string name="err_download_library_not_allowed">Эта учетная запись не может загружать файлы в библиотеку.</string>
+  <string name="home_continue">Продолжить просмотр</string>
+  <string name="home_favorites">Избранное</string>
+  <string name="home_tonight">На сегодня</string>
+  <string name="home_new_episodes">Новые эпизоды</string>
+  <string name="home_ready_to_play">Готово к воспроизведению</string>
+  <string name="home_recent">Недавно добавленные</string>
+  <string name="home_downloads">Загрузки</string>
+  <plurals name="home_downloads_summary">
+    <item quantity="one">%1$s задача</item>
+    <item quantity="few">%1$s задачи</item>
+    <item quantity="many">%1$s задач</item>
+    <item quantity="other">%1$s задач</item>
+  </plurals>
+  <plurals name="home_attention">
+    <item quantity="one">%1$s требует внимания</item>
+    <item quantity="few">%1$s требуют внимания</item>
+    <item quantity="many">%1$s требуют внимания</item>
+    <item quantity="other">%1$s требуют внимания</item>
+  </plurals>
+  <string name="home_partial">Некоторые названия не удалось проверить.</string>
+  <string name="home_retry">Повторить</string>
+  <string name="home_row_failed">Не удалось загрузить эту строку.</string>
+  <string name="home_next_episode">Следующий эпизод</string>
+  <string name="home_resume">Продолжить</string>
+  <string name="home_open_episode">Открыть эпизод</string>
+  <string name="home_open_title">Открыть название</string>
+  <string name="home_new_episode">Новый эпизод</string>
+  <string name="home_empty_title">Здесь пока ничего нет</string>
+  <string name="home_empty_text">Скачайте что-нибудь или начните смотреть — и это появится здесь.</string>
+  <string name="tv_home_load_error">Не удалось загрузить главную страницу.</string>
+  <string name="tv_downloads_later">Очередь загрузок пока открывается в веб-интерфейсе.</string>
 </resources>

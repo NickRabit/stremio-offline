@@ -68,6 +68,8 @@ import cz.stremiooffline.tv.ui.catalog.SearchScreen
 import cz.stremiooffline.tv.ui.detail.DetailData
 import cz.stremiooffline.tv.ui.detail.DetailScreen
 import cz.stremiooffline.tv.ui.detail.PlayTarget
+import cz.stremiooffline.tv.ui.home.HomeAction
+import cz.stremiooffline.tv.ui.home.HomeScreen
 import cz.stremiooffline.tv.ui.library.LibraryRoute
 import cz.stremiooffline.tv.ui.player.PlayerScreen
 import cz.stremiooffline.tv.ui.theme.Tokens
@@ -114,6 +116,13 @@ fun Shell(start: Section, api: TvApi, username: String, onSignOut: () -> Unit) {
   var catalogDetail by remember { mutableStateOf<CatalogDetailArgs?>(null) }
   var player by remember { mutableStateOf<PlayTarget?>(null) }
   var returnToken by remember { mutableIntStateOf(0) }
+  // Bumped each time Home comes back into view, so re-entering refreshes the rows.
+  var homeRefreshToken by remember { mutableIntStateOf(0) }
+  var homeSeen by remember { mutableStateOf(false) }
+  // A folder a Home card asked for; the library opens it once and clears it.
+  var libraryPush by remember { mutableStateOf<String?>(null) }
+  var hint by remember { mutableStateOf<String?>(null) }
+  val hintScope = rememberCoroutineScope()
   // Bumped each time Library comes back into view, so re-entering refreshes without losing focus.
   var libraryRefreshToken by remember { mutableIntStateOf(0) }
   var librarySeen by remember { mutableStateOf(false) }
@@ -122,12 +131,17 @@ fun Shell(start: Section, api: TvApi, username: String, onSignOut: () -> Unit) {
       if (librarySeen) libraryRefreshToken++
       librarySeen = true
     }
+    if (current == Section.Home) {
+      if (homeSeen) homeRefreshToken++
+      homeSeen = true
+    }
   }
 
   ShellScaffold(
     username = username,
     start = start,
     current = current,
+    hint = hint,
     onSection = { section ->
       shellState.pick(section)
       true
@@ -144,6 +158,8 @@ fun Shell(start: Section, api: TvApi, username: String, onSignOut: () -> Unit) {
           onOpenDetail = { detail = it },
           restoreToken = returnToken,
           refreshToken = libraryRefreshToken,
+          pushPath = libraryPush,
+          onPushConsumed = { libraryPush = null },
         )
         Section.Catalog -> CatalogScreen(
           api = api,
@@ -157,7 +173,28 @@ fun Shell(start: Section, api: TvApi, username: String, onSignOut: () -> Unit) {
           onOpenDetail = { catalogDetail = it },
           imageUrl = { path -> path?.let(api::url) },
         )
-        Section.Home, Section.Account -> SectionContent(
+        Section.Home -> HomeScreen(
+          api = api,
+          refreshToken = homeRefreshToken + returnToken,
+          onHint = { text ->
+            hint = text
+            hintScope.launch {
+              delay(2_500)
+              if (hint == text) hint = null
+            }
+          },
+          onAction = { action ->
+            when (action) {
+              is HomeAction.Play -> player = action.target
+              is HomeAction.OpenLibrary -> {
+                libraryPush = action.path
+                shellState.pick(Section.Library)
+              }
+              is HomeAction.OpenCatalog -> catalogDetail = action.args
+            }
+          },
+        )
+        Section.Account -> SectionContent(
           section = section,
           username = username,
           onSignOut = onSignOut,
@@ -223,6 +260,8 @@ fun ShellScaffold(
   onSection: (Section) -> Boolean = { false },
   onBackToExit: () -> Unit,
   railHidden: Boolean = false,
+  /** A transient notice over the content; the shell's own exit warning shows when it is null. */
+  hint: String? = null,
   content: @Composable (FocusRequester) -> Unit,
 ) {
   val railFocusRequesters = remember { Section.entries.associateWith { FocusRequester() } }
@@ -271,8 +310,9 @@ fun ShellScaffold(
       )
     }
 
-    if (exitArmed) {
-      ExitHint(Modifier.align(Alignment.BottomCenter).padding(bottom = 40.dp))
+    val notice = hint ?: if (exitArmed) stringResource(R.string.tv_back_to_exit) else null
+    if (notice != null) {
+      Hint(notice, Modifier.align(Alignment.BottomCenter).padding(bottom = 40.dp))
     }
   }
 }
@@ -460,8 +500,9 @@ private fun SectionContent(
   }
 }
 
+/** A transient notice at the bottom of the screen: the exit warning or a Home message. */
 @Composable
-private fun ExitHint(modifier: Modifier = Modifier) {
+fun Hint(text: String, modifier: Modifier = Modifier) {
   Row(
     modifier = modifier
       .background(Tokens.Panel2, RoundedCornerShape(999.dp))
@@ -471,7 +512,7 @@ private fun ExitHint(modifier: Modifier = Modifier) {
     horizontalArrangement = Arrangement.spacedBy(7.dp),
   ) {
     Box(Modifier.size(5.dp).clip(CircleShape).background(Tokens.Green))
-    Text(stringResource(R.string.tv_back_to_exit), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+    Text(text, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
   }
 }
 

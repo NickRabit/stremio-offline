@@ -1541,6 +1541,8 @@ export const es: Catalog = {
   "tv.pathTranscode": "Se convierte en el servidor",
   "tv.playerError": "No se pudo reproducir este vídeo.",
   "tv.loadError": "No se pudo cargar la biblioteca.",
+  "tv.homeLoadError": "No se pudo cargar el inicio.",
+  "tv.downloadsLater": "La cola de descargas se abre por ahora en la web.",
   "tv.back": "Atrás",
   "tv.detailEyebrowMovie": "Película · {addon}",
   "tv.detailEyebrowSeries": "Serie · {addon}",
