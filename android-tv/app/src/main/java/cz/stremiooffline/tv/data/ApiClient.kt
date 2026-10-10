@@ -199,12 +199,14 @@ class ApiClient(
     }
   }
 
-  private fun readBody(response: Response): String =
+  /** The body streams from the socket, so it is read off the main thread like the call itself. */
+  private suspend fun readBody(response: Response): String = withContext(Dispatchers.IO) {
     try {
       response.body?.string().orEmpty()
     } catch (error: IOException) {
       throw ApiError(ApiFailure.Unreachable)
     }
+  }
 
   private inline fun <reified T> String.decodeOrNull(): T? = try {
     json.decodeFromString<T>(this)
