@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -71,6 +72,7 @@ import cz.stremiooffline.tv.ui.components.WideCard
 import cz.stremiooffline.tv.ui.detail.PlayTarget
 import cz.stremiooffline.tv.ui.theme.Tokens
 import java.util.Locale
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
 const val TagCatalogPrimary = "catalog_primary"
@@ -84,6 +86,9 @@ const val TagSourcesPanel = "catalog_sources_panel"
 fun sourceRowTag(index: Int): String = "source_row_$index"
 fun seasonChipTag(season: Int): String = "season_chip_$season"
 fun episodeCardTag(video: VideoDto): String = "episode_card_${video.id ?: video.label}"
+
+/** What the sources list of the selected video is currently doing. */
+private enum class SourcesState { Loading, Failed, Loaded }
 
 /** The catalogue title detail: the library's layout for a movie or a series, with sources. */
 @Composable
@@ -104,11 +109,14 @@ fun CatalogDetailScreen(
   var addons by remember { mutableStateOf<List<AddonDto>>(emptyList()) }
   var movieProgress by remember { mutableStateOf<ProgressDto?>(null) }
   var streams by remember { mutableStateOf<List<StreamDto>>(emptyList()) }
+  var sourcesState by remember { mutableStateOf(SourcesState.Loading) }
+  var sourcesRetry by remember { mutableIntStateOf(0) }
   var selectedVideo by remember { mutableStateOf<VideoDto?>(null) }
   var season by remember { mutableStateOf<Int?>(null) }
   var pickedSource by remember { mutableStateOf<StreamDto?>(null) }
   var sourcesOpen by remember { mutableStateOf(false) }
   var favourite by remember { mutableStateOf(false) }
+  var favouriteBusy by remember { mutableStateOf(false) }
   var queued by remember { mutableStateOf(false) }
   var message by remember { mutableStateOf<String?>(null) }
 
@@ -117,11 +125,19 @@ fun CatalogDetailScreen(
   val notAllowedText = stringResource(R.string.err_download_library_not_allowed)
   val torrentText = stringResource(R.string.err_torrent_not_playable)
   val noSourcesText = stringResource(R.string.sources_none)
+  val loadErrorText = stringResource(R.string.tv_load_error)
+  val tryAgainText = stringResource(R.string.tv_try_again)
   val defaultText = stringResource(R.string.tv_default)
   val toLibraryText = stringResource(R.string.save_to_library)
 
   val primaryFocus = remember { FocusRequester() }
   val rowFocus = remember { FocusRequester() }
+
+  val streamType = meta.type ?: args.type
+  val isSeries = streamType == "series"
+  // Streams belong to a video; a series asks for nothing until an episode is chosen.
+  val streamVideoId = if (isSeries) selectedVideo?.id else meta.id
+  val streamsKey = streamVideoId?.let { "$streamType:$it" }
 
   // Metadata and the personal state, once. Streams follow the chosen video.
   LaunchedEffect(args.meta.id) {
@@ -142,18 +158,42 @@ fun CatalogDetailScreen(
     }
   }
 
-  LaunchedEffect(meta.id, selectedVideo?.id) {
+  // A change of video clears the list at once, so nothing can play or queue a stale source, and a
+  // cancelled load of the video left behind never writes over the new one.
+  LaunchedEffect(streamsKey, sourcesRetry) {
     pickedSource = null
-    val type = meta.type ?: args.type
-    val id = selectedVideo?.id ?: meta.id
-    streams = runCatching { api.streams(type, id) }.getOrDefault(emptyList())
+    queued = false
+    message = null
+    streams = emptyList()
+    sourcesState = SourcesState.Loading
+    val id = streamVideoId
+    if (id == null) {
+      sourcesState = SourcesState.Loaded
+      return@LaunchedEffect
+    }
+    try {
+      streams = api.streams(streamType, id)
+      sourcesState = SourcesState.Loaded
+    } catch (cancelled: CancellationException) {
+      throw cancelled
+    } catch (error: ApiError) {
+      sourcesState = SourcesState.Failed
+    }
   }
 
   LaunchedEffect(meta.id) { runCatching { primaryFocus.requestFocus() } }
-  LaunchedEffect(restoreToken) { if (restoreToken > 0) runCatching { primaryFocus.requestFocus() } }
+  // The player covers this screen, so on return re-read the stored position to keep Resume honest.
+  LaunchedEffect(restoreToken) {
+    if (restoreToken == 0) return@LaunchedEffect
+    runCatching { primaryFocus.requestFocus() }
+    if (isSeries) {
+      entries = runCatching { api.progressList() }.getOrDefault(entries)
+    } else {
+      movieProgress = runCatching { api.progress(ProgressKey.of(streamType, meta.id)) }.getOrNull()
+    }
+  }
 
   val offered = Streams.offeredStreams(streams)
-  val isSeries = (meta.type ?: args.type) == "series"
   val priority = addons.mapIndexed { index, addon -> addon.manifest.name to index }.toMap()
   val visible = Streams.visibleCatalogStreams(
     offered,
@@ -167,6 +207,8 @@ fun CatalogDetailScreen(
   val defaultStream = Streams.pickDefaultStream(visible)
   val activeStream = pickedSource ?: defaultStream
   val canQueueActive = activeStream != null && Streams.canQueue(activeStream, settings.realDebridConfigured)
+  // Nothing visible to play: either no addon offers a source, or only a torrent it cannot open.
+  val emptyText = if (offered.isEmpty()) noSourcesText else torrentText
 
   val resumeEntry = if (isSeries) seriesEntry(entries, meta.id) else null
   val resumeEpisode = if (isSeries) Resume.resumeVideo(meta.videos.orEmpty(), resumeEntry?.let { Resume.resumeTarget(it).episode }) else null
@@ -177,16 +219,18 @@ fun CatalogDetailScreen(
 
   val baseTitle = localizedTitle(args.meta, meta, settings.uiLanguage)
   val playerTitle = if (selectedVideo != null) "$baseTitle · ${selectedVideo!!.label}" else baseTitle
-  val progressKey = ProgressKey.of(meta.type ?: args.type, meta.id, selectedVideo?.id)
+  val progressKey = ProgressKey.of(streamType, meta.id, selectedVideo?.id)
 
   fun play(stream: StreamDto) {
     pickedSource = stream
     sourcesOpen = false
+    message = null
     onPlay(PlayTarget(key = progressKey, title = playerTitle, resume = resuming, sourceId = stream.sourceId))
   }
 
   fun queue(stream: StreamDto) {
     pickedSource = stream
+    message = null
     if (!Streams.canQueue(stream, settings.realDebridConfigured)) {
       message = torrentText
       return
@@ -198,10 +242,77 @@ fun CatalogDetailScreen(
         val job = api.download(title, stream.sourceId, media)
         queued = true
         message = if (job.status == "waiting") waitingText else queuedText
+      } catch (cancelled: CancellationException) {
+        throw cancelled
       } catch (error: ApiError) {
         message = if (error.failure == ApiFailure.Forbidden) notAllowedText else null
       }
     }
+  }
+
+  /** One row's rule: play it, queue a torrent the server can fetch, or say it is not playable. */
+  fun activate(stream: StreamDto) {
+    when {
+      stream.playable -> play(stream)
+      Streams.canQueue(stream, settings.realDebridConfigured) -> queue(stream)
+      else -> message = torrentText
+    }
+  }
+
+  fun playPressed() {
+    when (sourcesState) {
+      // The list is still coming; doing nothing visible beats playing the wrong episode.
+      SourcesState.Loading -> Unit
+      SourcesState.Failed -> message = loadErrorText
+      SourcesState.Loaded -> activeStream?.let { activate(it) } ?: run { message = emptyText }
+    }
+  }
+
+  fun startOverPressed() {
+    message = null
+    when (sourcesState) {
+      SourcesState.Loading -> Unit
+      SourcesState.Failed -> message = loadErrorText
+      SourcesState.Loaded -> {
+        val stream = activeStream
+        if (stream != null && stream.playable) {
+          pickedSource = stream
+          onPlay(PlayTarget(progressKey, playerTitle, resume = false, sourceId = stream.sourceId))
+        } else {
+          message = emptyText
+        }
+      }
+    }
+  }
+
+  /** Serialised so two quick presses cannot leave the star disagreeing with the server. */
+  fun toggleFavourite() {
+    if (favouriteBusy) return
+    favouriteBusy = true
+    val wanted = !favourite
+    favourite = wanted
+    scope.launch {
+      try {
+        favourite = api.setWatchlist(args.type, meta.id, meta.name, meta.poster, wanted).favorite
+      } catch (cancelled: CancellationException) {
+        throw cancelled
+      } catch (error: ApiError) {
+        favourite = !wanted
+      } finally {
+        favouriteBusy = false
+      }
+    }
+  }
+
+  /** Selecting an episode drops the list, the queued state and any message at once. */
+  fun selectVideo(video: VideoDto) {
+    if (video.id == selectedVideo?.id) return
+    selectedVideo = video
+    pickedSource = null
+    streams = emptyList()
+    sourcesState = SourcesState.Loading
+    queued = false
+    message = null
   }
 
   Box(
@@ -276,24 +387,20 @@ fun CatalogDetailScreen(
       Row(horizontalArrangement = Arrangement.spacedBy(11.dp), verticalAlignment = Alignment.CenterVertically) {
         FocusButton(
           text = stringResource(if (resuming) R.string.tv_resume else R.string.player_play),
-          onClick = { activeStream?.let { if (it.playable) play(it) else queue(it) } ?: run { message = noSourcesText } },
+          onClick = { playPressed() },
           kind = FocusButtonKind.Primary,
           modifier = Modifier.focusRequester(primaryFocus).testTag(TagCatalogPrimary),
         )
         if (resuming) {
           FocusButton(
             text = stringResource(R.string.tv_start_over),
-            onClick = { activeStream?.takeIf { it.playable }?.let { onPlay(PlayTarget(progressKey, playerTitle, resume = false, sourceId = it.sourceId)) } ?: run { message = noSourcesText } },
+            onClick = { startOverPressed() },
             modifier = Modifier.testTag(TagCatalogStartOver),
           )
         }
         FocusButton(
           text = if (favourite) "★" else "☆",
-          onClick = {
-            val wanted = !favourite
-            favourite = wanted
-            scope.launch { runCatching { api.setWatchlist(args.type, meta.id, meta.name, meta.poster, wanted) } }
-          },
+          onClick = { toggleFavourite() },
           kind = FocusButtonKind.Icon,
           contentDescription = stringResource(if (favourite) R.string.favorite_remove else R.string.favorite_add),
           modifier = Modifier.testTag(TagCatalogFavourite),
@@ -315,7 +422,12 @@ fun CatalogDetailScreen(
       if (shown != null) {
         Text(
           shown,
-          color = if (shown == notAllowedText) Tokens.Red else Tokens.Green,
+          // Red for a failure, muted for a neutral notice, green only for a successful queue.
+          color = when (shown) {
+            queuedText, waitingText -> Tokens.Green
+            notAllowedText, torrentText, loadErrorText -> Tokens.Red
+            else -> Tokens.Muted
+          },
           fontSize = 11.sp,
           modifier = Modifier.testTag(TagCatalogMessage),
         )
@@ -331,7 +443,7 @@ fun CatalogDetailScreen(
           seriesPosition = storedPosition,
           seriesDuration = storedDuration,
           imageUrl = imageUrl,
-          onSelect = { selectedVideo = it },
+          onSelect = { selectVideo(it) },
           focusRequester = rowFocus,
         )
       }
@@ -339,18 +451,31 @@ fun CatalogDetailScreen(
 
     if (sourcesOpen) {
       SidePanel(title = stringResource(R.string.sources_heading), onClose = { sourcesOpen = false }, modifier = Modifier.testTag(TagSourcesPanel)) {
-        if (visible.isEmpty()) {
-          Text(stringResource(R.string.sources_none), color = Tokens.Muted, fontSize = 12.sp, lineHeight = 17.sp)
-        }
-        visible.forEachIndexed { index, stream ->
-          SourceRow(
-            stream = stream,
-            default = defaultStream === stream,
-            defaultText = defaultText,
-            titleLanguage = Languages.titleLanguage(meta.language),
-            onClick = { if (stream.playable) play(stream) else queue(stream) },
-            modifier = Modifier.testTag(sourceRowTag(index)),
-          )
+        when (sourcesState) {
+          SourcesState.Loading -> Unit
+          SourcesState.Failed -> {
+            Text(loadErrorText, color = Tokens.Red, fontSize = 12.sp, lineHeight = 17.sp)
+            FocusButton(
+              text = tryAgainText,
+              onClick = { sourcesRetry++ },
+              modifier = Modifier.testTag(TagCatalogRetry),
+            )
+          }
+          SourcesState.Loaded -> {
+            if (visible.isEmpty()) {
+              Text(emptyText, color = Tokens.Muted, fontSize = 12.sp, lineHeight = 17.sp)
+            }
+            visible.forEachIndexed { index, stream ->
+              SourceRow(
+                stream = stream,
+                default = defaultStream === stream,
+                defaultText = defaultText,
+                titleLanguage = Languages.titleLanguage(meta.language),
+                onClick = { activate(stream) },
+                modifier = Modifier.testTag(sourceRowTag(index)),
+              )
+            }
+          }
         }
         if (notices.isNotEmpty()) {
           Spacer(Modifier.height(4.dp))

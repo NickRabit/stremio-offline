@@ -20,6 +20,9 @@ import cz.stremiooffline.tv.data.WatchlistEntryDto
 import cz.stremiooffline.tv.data.WatchlistToggleDto
 import cz.stremiooffline.tv.data.ApiError
 import cz.stremiooffline.tv.data.ApiFailure
+import java.util.concurrent.CountDownLatch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 
 /** A `TvApi` that answers from memory, so a screen can be tested without a server. */
@@ -37,11 +40,17 @@ open class FakeTvApi : TvApi {
   var metaValues: MutableMap<String, MetaDto> = mutableMapOf()
   var streamsValues: MutableMap<String, List<StreamDto>> = mutableMapOf()
   var streamsRequests: MutableList<String> = mutableListOf()
+  /** A latch keyed by `type:id` blocks a `streams()` call like a slow server would. */
+  var streamsLatches: MutableMap<String, CountDownLatch> = mutableMapOf()
+  var streamFailures: MutableMap<String, ApiFailure> = mutableMapOf()
   var addonsValue: List<AddonDto> = emptyList()
   var settingsValue: SettingsResponse = SettingsResponse()
   var progressEntries: List<ProgressEntryDto> = emptyList()
   var watchlistValue: MutableList<WatchlistEntryDto> = mutableListOf()
   var favoriteCalls: MutableList<Triple<String, String, Boolean>> = mutableListOf()
+  var watchlistLatch: CountDownLatch? = null
+  var watchlistFailure: ApiFailure? = null
+  var watchlistAnswer: ((Boolean) -> Boolean)? = null
   var downloads: MutableList<Pair<String?, MediaDto>> = mutableListOf()
   var downloadResult: DownloadResult = DownloadResult(status = "queued")
   var downloadFailure: ApiFailure? = null
@@ -90,8 +99,13 @@ open class FakeTvApi : TvApi {
     metaValues["$type:$id"] ?: throw ApiError(ApiFailure.NotFound)
 
   override suspend fun streams(type: String, id: String): List<StreamDto> {
-    streamsRequests += "$type:$id"
-    return streamsValues["$type:$id"] ?: emptyList()
+    val key = "$type:$id"
+    streamsRequests += key
+    // A blocking wait inside the IO context, like the real client: the coroutine is cancelled, but
+    // the call still runs to completion before the cancellation is delivered.
+    streamsLatches[key]?.let { latch -> withContext(Dispatchers.IO) { latch.await() } }
+    streamFailures[key]?.let { throw ApiError(it) }
+    return streamsValues[key] ?: emptyList()
   }
 
   override suspend fun addons(): List<AddonDto> = addonsValue
@@ -110,7 +124,9 @@ open class FakeTvApi : TvApi {
     favorite: Boolean,
   ): WatchlistToggleDto {
     favoriteCalls += Triple(type, id, favorite)
-    return WatchlistToggleDto("$type:$id", favorite)
+    watchlistLatch?.let { latch -> withContext(Dispatchers.IO) { latch.await() } }
+    watchlistFailure?.let { throw ApiError(it) }
+    return WatchlistToggleDto("$type:$id", watchlistAnswer?.invoke(favorite) ?: favorite)
   }
 
   override suspend fun download(title: String, sourceId: String, media: MediaDto): DownloadResult {
