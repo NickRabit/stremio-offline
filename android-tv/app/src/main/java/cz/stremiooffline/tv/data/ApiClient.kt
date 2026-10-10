@@ -39,6 +39,8 @@ class ApiClient(
 ) : TvApi {
 
   private val json = Json { ignoreUnknownKeys = true }
+  /** The download body drops null media fields instead of sending them as `null`. */
+  private val downloadJson = Json { ignoreUnknownKeys = true; explicitNulls = false; encodeDefaults = false }
   private val mediaType = "application/json; charset=utf-8".toMediaType()
 
   private val client = baseClient.newBuilder()
@@ -98,7 +100,7 @@ class ApiClient(
     }
   }
 
-  suspend fun settings(): SettingsResponse {
+  override suspend fun settings(): SettingsResponse {
     call(Request.Builder().url(address.resolve("/api/settings")).get().build()).closing { response ->
       if (!response.isSuccessful) throw ApiError(ApiFailure.Generic)
       return readBody(response).decodeOrNull<SettingsResponse>() ?: SettingsResponse()
@@ -166,6 +168,69 @@ class ApiClient(
     return body.decode<ProgressDto>()
   }
 
+  override suspend fun catalogs(): List<CatalogDto> =
+    request(Request.Builder().url(address.resolve("/api/catalogs")).get().build()).decode() ?: emptyList()
+
+  override suspend fun catalog(addonKey: String, type: String, id: String, skip: Int, genre: String?): List<MetaDto> {
+    val query = buildString {
+      append("?addon=").append(encode(addonKey))
+      append("&type=").append(encode(type))
+      append("&id=").append(encode(id))
+      if (skip > 0) append("&skip=").append(skip)
+      if (!genre.isNullOrEmpty()) append("&genre=").append(encode(genre))
+    }
+    return request(Request.Builder().url(address.resolve("/api/catalog$query")).get().build()).decode() ?: emptyList()
+  }
+
+  override suspend fun search(query: String, cursor: String?): SearchResultDto {
+    val suffix = buildString {
+      append("?query=").append(encode(query))
+      if (!cursor.isNullOrEmpty()) append("&cursor=").append(encode(cursor))
+    }
+    return request(Request.Builder().url(address.resolve("/api/search$suffix")).get().build()).decode()
+      ?: throw ApiError(ApiFailure.Generic)
+  }
+
+  override suspend fun meta(type: String, id: String, language: String?): MetaDto {
+    val suffix = if (!language.isNullOrEmpty()) "?language=" + encode(language) else ""
+    return request(Request.Builder().url(address.resolve("/api/meta/" + encode(type) + "/" + encode(id) + suffix)).get().build()).decode()
+      ?: throw ApiError(ApiFailure.Generic)
+  }
+
+  override suspend fun streams(type: String, id: String): List<StreamDto> =
+    request(Request.Builder().url(address.resolve("/api/streams/" + encode(type) + "/" + encode(id))).get().build()).decode()
+      ?: emptyList()
+
+  override suspend fun addons(): List<AddonDto> =
+    request(Request.Builder().url(address.resolve("/api/addons")).get().build()).decode() ?: emptyList()
+
+  override suspend fun progressList(): List<ProgressEntryDto> =
+    request(Request.Builder().url(address.resolve("/api/progress")).get().build()).decode() ?: emptyList()
+
+  override suspend fun watchlist(): List<WatchlistEntryDto> =
+    request(Request.Builder().url(address.resolve("/api/watchlist")).get().build()).decode() ?: emptyList()
+
+  override suspend fun setWatchlist(
+    type: String,
+    id: String,
+    name: String,
+    poster: String?,
+    favorite: Boolean,
+  ): WatchlistToggleDto {
+    val payload = json.encodeToString(
+      WatchlistRequest.serializer(),
+      WatchlistRequest(type, id, name, poster, favorite),
+    )
+    return request(Request.Builder().url(address.resolve("/api/watchlist")).post(payload.toRequestBody(mediaType)).build())
+      .decode() ?: WatchlistToggleDto("$type:$id", favorite)
+  }
+
+  override suspend fun download(title: String, sourceId: String, media: MediaDto): DownloadResult {
+    val payload = downloadJson.encodeToString(DownloadRequest.serializer(), DownloadRequest(title, sourceId, media))
+    return request(Request.Builder().url(address.resolve("/api/downloads")).post(payload.toRequestBody(mediaType)).build())
+      .decode() ?: DownloadResult()
+  }
+
   override suspend fun saveProgress(key: String, position: Double, duration: Double, title: String, path: String?) {
     val payload = json.encodeToString(
       ProgressRequest.serializer(),
@@ -227,6 +292,18 @@ class ApiClient(
 
 @Serializable
 private data class SourceRequest(val path: String)
+
+@Serializable
+private data class WatchlistRequest(
+  val type: String,
+  val id: String,
+  val name: String,
+  val poster: String? = null,
+  val favorite: Boolean,
+)
+
+@Serializable
+private data class DownloadRequest(val title: String, val sourceId: String, val media: MediaDto)
 
 @Serializable
 private data class TimeRequest(val time: Double)

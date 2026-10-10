@@ -147,6 +147,7 @@ fun WideCard(
   onClick: () -> Unit,
   modifier: Modifier = Modifier,
   cardTag: String? = null,
+  caption: String? = null,
 ) {
   var focused by remember { mutableStateOf(false) }
   val shape = RoundedCornerShape(10.dp)
@@ -222,6 +223,16 @@ fun WideCard(
       overflow = TextOverflow.Ellipsis,
       modifier = Modifier.width(190.dp).alpha(if (focused) 1f else 0.75f),
     )
+    if (caption != null) {
+      Text(
+        caption,
+        color = Tokens.Muted,
+        fontSize = 9.5.sp,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier.width(190.dp).alpha(if (focused) 1f else 0.75f),
+      )
+    }
   }
 }
 

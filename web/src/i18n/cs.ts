@@ -1593,4 +1593,9 @@ export const cs: Catalog = {
   "tv.playerError": "Video se nepodařilo přehrát.",
   "tv.loadError": "Knihovnu se nepodařilo načíst.",
   "tv.back": "Zpět",
+  "tv.detailEyebrowMovie": "Film · {addon}",
+  "tv.detailEyebrowSeries": "Seriál · {addon}",
+  "tv.sourcesCount": "Zdroje · {count}",
+  "tv.default": "Výchozí",
+  "tv.searchHint": "Napište název a stiskněte Hotovo.",
 };

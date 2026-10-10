@@ -1542,4 +1542,9 @@ export const it: Catalog = {
   "tv.playerError": "Impossibile riprodurre questo video.",
   "tv.loadError": "Impossibile caricare la libreria.",
   "tv.back": "Indietro",
+  "tv.detailEyebrowMovie": "Film · {addon}",
+  "tv.detailEyebrowSeries": "Serie · {addon}",
+  "tv.sourcesCount": "Fonti · {count}",
+  "tv.default": "Predefinito",
+  "tv.searchHint": "Digita un titolo e premi Fine.",
 };

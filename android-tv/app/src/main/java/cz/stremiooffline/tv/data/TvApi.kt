@@ -13,8 +13,23 @@ interface DetailApi {
   suspend fun progress(key: String): ProgressDto?
 }
 
-/** Everything a signed-in screen does: library, detail, images and playback. */
-interface TvApi : LibraryApi, DetailApi, PlaybackApi {
+/** The catalogue calls: browse, search, metadata, streams, the watchlist and To library. */
+interface CatalogApi {
+  suspend fun catalogs(): List<CatalogDto>
+  suspend fun catalog(addonKey: String, type: String, id: String, skip: Int, genre: String?): List<MetaDto>
+  suspend fun search(query: String, cursor: String?): SearchResultDto
+  suspend fun meta(type: String, id: String, language: String?): MetaDto
+  suspend fun streams(type: String, id: String): List<StreamDto>
+  suspend fun addons(): List<AddonDto>
+  suspend fun settings(): SettingsResponse
+  suspend fun progressList(): List<ProgressEntryDto>
+  suspend fun watchlist(): List<WatchlistEntryDto>
+  suspend fun setWatchlist(type: String, id: String, name: String, poster: String?, favorite: Boolean): WatchlistToggleDto
+  suspend fun download(title: String, sourceId: String, media: MediaDto): DownloadResult
+}
+
+/** Everything a signed-in screen does: library, detail, catalogue, images and playback. */
+interface TvApi : LibraryApi, DetailApi, PlaybackApi, CatalogApi {
   val http: OkHttpClient
   fun url(path: String): String
   suspend fun librarySource(path: String): SourceDto

@@ -1599,4 +1599,9 @@ export const en = {
   "tv.playerError": "This video could not be played.",
   "tv.loadError": "The library could not be loaded.",
   "tv.back": "Back",
+  "tv.detailEyebrowMovie": "Movie · {addon}",
+  "tv.detailEyebrowSeries": "Series · {addon}",
+  "tv.sourcesCount": "Sources · {count}",
+  "tv.default": "Default",
+  "tv.searchHint": "Type a title, then press Done.",
 };

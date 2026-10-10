@@ -1542,4 +1542,9 @@ export const pl: Catalog = {
   "tv.playerError": "Nie udało się odtworzyć tego wideo.",
   "tv.loadError": "Nie udało się wczytać biblioteki.",
   "tv.back": "Wstecz",
+  "tv.detailEyebrowMovie": "Film · {addon}",
+  "tv.detailEyebrowSeries": "Serial · {addon}",
+  "tv.sourcesCount": "Źródła · {count}",
+  "tv.default": "Domyślne",
+  "tv.searchHint": "Wpisz tytuł i naciśnij Gotowe.",
 };

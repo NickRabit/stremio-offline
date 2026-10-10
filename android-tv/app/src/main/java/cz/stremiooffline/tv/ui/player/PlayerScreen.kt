@@ -47,7 +47,6 @@ import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.playback.PlaybackController
 import cz.stremiooffline.tv.playback.PlaybackMode
-import cz.stremiooffline.tv.playback.Progress
 import cz.stremiooffline.tv.playback.detectCapabilities
 import cz.stremiooffline.tv.ui.detail.PlayTarget
 import kotlinx.coroutines.CoroutineScope
@@ -84,12 +83,13 @@ fun PlayerScreen(api: TvApi, target: PlayTarget, onExit: () -> Unit) {
   val playFocus = remember { FocusRequester() }
 
   LaunchedEffect(attempt) {
-    val source = runCatching { api.librarySource(target.path) }.getOrNull()
-    if (source == null) {
+    // A catalogue target already carries the server's source id; a library one is minted from its path.
+    val sourceId = target.sourceId ?: target.path?.let { runCatching { api.librarySource(it) }.getOrNull()?.sourceId }
+    if (sourceId == null) {
       controller.onNetworkError()
       return@LaunchedEffect
     }
-    controller.start(source.sourceId, Progress.libraryKey(target.path), target.title, target.path, resume = target.resume)
+    controller.start(sourceId, target.key, target.title, target.path, resume = target.resume)
   }
 
   LaunchedEffect(state.revision) {

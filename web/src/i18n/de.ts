@@ -1542,4 +1542,9 @@ export const de: Catalog = {
   "tv.playerError": "Dieses Video konnte nicht abgespielt werden.",
   "tv.loadError": "Die Bibliothek konnte nicht geladen werden.",
   "tv.back": "Zurück",
+  "tv.detailEyebrowMovie": "Film · {addon}",
+  "tv.detailEyebrowSeries": "Serie · {addon}",
+  "tv.sourcesCount": "Quellen · {count}",
+  "tv.default": "Standard",
+  "tv.searchHint": "Geben Sie einen Titel ein und drücken Sie Fertig.",
 };

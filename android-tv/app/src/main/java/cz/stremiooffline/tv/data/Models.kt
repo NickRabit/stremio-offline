@@ -25,7 +25,13 @@ data class MeResponse(
 )
 
 @Serializable
-data class SettingsResponse(val startView: String? = null)
+data class SettingsResponse(
+  val startView: String? = null,
+  val uiLanguage: String? = null,
+  val audioLanguage: String? = null,
+  val streamSort: String? = null,
+  val realDebridConfigured: Boolean = false,
+)
 
 @Serializable
 data class ErrorVars(val seconds: Int? = null)

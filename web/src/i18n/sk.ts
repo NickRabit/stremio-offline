@@ -1542,4 +1542,9 @@ export const sk: Catalog = {
   "tv.playerError": "Toto video sa nepodarilo prehrať.",
   "tv.loadError": "Knižnicu sa nepodarilo načítať.",
   "tv.back": "Späť",
+  "tv.detailEyebrowMovie": "Film · {addon}",
+  "tv.detailEyebrowSeries": "Seriál · {addon}",
+  "tv.sourcesCount": "Zdroje · {count}",
+  "tv.default": "Predvolené",
+  "tv.searchHint": "Napíšte názov a stlačte Hotovo.",
 };
