@@ -997,7 +997,8 @@ test("a native client gets nothing directly that the probe cannot show to be 4:2
   }
   assert.equal(manager.directPlay({ url: "https://cdn.example/a.mkv" }, mkv({ codec: "vp9", profile: "Profile 1" }), caps).ok, false);
   assert.equal(manager.directPlay({ url: "https://cdn.example/a.mkv" }, mkv({ codec: "vp9", profile: "Profile 1", pixelFormat: "yuv420p" }), caps).ok, false);
-  for (const pixelFormat of ["yuv420p", "yuvj420p", "nv12", "yuv420p10le", "p010le"]) {
+  assert.equal(manager.directPlay({ url: "https://cdn.example/a.mkv" }, mkv({ codec: "hevc", profile: "Main 10", pixelFormat: "yuv420p" }), { ...caps, deepColor: [], hevc10: false }).ok, false);
+  for (const pixelFormat of ["yuv420p", "yuvj420p", "nv12", "yuv420p10le", "yuv420p10", "p010le", "p012le"]) {
     assert.equal(manager.directPlay({ url: "https://cdn.example/a.mkv" }, mkv({ codec: "hevc", profile: "Main", pixelFormat }), caps).ok, true, pixelFormat);
   }
 });

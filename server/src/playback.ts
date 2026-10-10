@@ -200,14 +200,16 @@ const hevcPlayable = (video: MediaInfo["video"], caps: ClientCapabilities) => {
  *  since TV decoders rarely take it and a refused stream costs a failed start. The level is not
  *  checked; a stream the decoder still refuses goes through `escalate`. */
 const EIGHT_BIT_420 = /^(yuv420p|yuvj420p|nv12|nv21)$/i;
-const DEEP_420 = /^(yuv420p1[02](le|be)|p010(le|be)?)$/i;
+const DEEP_420 = /^(yuv420p1[02](le|be)?|p01[02](le|be)?)$/i;
 const nativeVideoPlayable = (video: MediaInfo["video"], caps: ClientCapabilities): boolean => {
   if (!video) return false;
   const profile = video.profile ?? "";
   const format = video.pixelFormat ?? "";
   if (/4:[24][24]|Predictive/i.test(profile) || (video.codec === "vp9" && /Profile [13]/i.test(profile))) return false;
-  const deep = DEEP_420.test(format);
-  if (!deep && !EIGHT_BIT_420.test(format)) return false;
+  // A ten- or twelve-bit profile with an eight-bit pixel format is a contradictory probe; the
+  // deeper reading wins, so the client still has to have declared the depth.
+  const deep = DEEP_420.test(format) || /\b1[02]\b|Profile 2/i.test(profile);
+  if (!DEEP_420.test(format) && !EIGHT_BIT_420.test(format)) return false;
   const deepOk = (codec: string) => caps.deepColor?.includes(codec) ?? false;
   switch (video.codec) {
     case "h264": return caps.h264 === true && (!deep || deepOk("h264"));
