@@ -7,6 +7,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
@@ -54,6 +55,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Text
 import cz.stremiooffline.tv.R
+import cz.stremiooffline.tv.catalog.Languages
 import cz.stremiooffline.tv.ui.components.FocusButton
 import cz.stremiooffline.tv.ui.components.FocusButtonKind
 import cz.stremiooffline.tv.ui.theme.Tokens
@@ -70,6 +72,11 @@ const val TAG_OSD_DIAG = "osd_diag"
 /** The seek icons beside the plain `10` labels. */
 const val SEEK_BACK_LABEL = "10"
 const val SEEK_FORWARD_LABEL = "10"
+
+/** The tracks button shows the current audio language; a title without one falls back to the
+ *  plain captions mark the button already carries, never the language list's `?`. */
+internal fun tracksButtonText(language: String?): String =
+  if (language.isNullOrBlank()) "" else Languages.label(language)
 
 @Composable
 fun LoadingOverlay(title: String) {
@@ -291,6 +298,7 @@ private fun PlayButton(
     contentAlignment = Alignment.Center,
   ) {
     if (focused) Box(Modifier.fillMaxSize().clip(CircleShape).background(Color.White.copy(alpha = 0.12f)))
+    if (focused) Box(Modifier.fillMaxSize().border(2.dp, Tokens.Accent2, CircleShape))
     if (playing) PauseIcon() else PlayIcon()
   }
 }
@@ -310,7 +318,8 @@ private fun RoundButton(
     Modifier
       .testTag(tag)
       .clip(CircleShape)
-      .background(if (focused) Color.White else Color.White.copy(alpha = 0.14f))
+      .background(if (focused) Tokens.Panel2 else Color.White.copy(alpha = 0.14f))
+      .then(if (focused) Modifier.border(1.5.dp, Tokens.Accent2, CircleShape) else Modifier)
       .semantics { this.contentDescription = label }
       .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
       .focusable()
@@ -322,7 +331,7 @@ private fun RoundButton(
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
       content()
       if (text != null) {
-        Text(text, color = if (focused) Tokens.Bg else Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        Text(text, color = if (focused) Tokens.Text else Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
       }
     }
   }

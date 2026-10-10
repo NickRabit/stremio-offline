@@ -151,6 +151,34 @@ class PlayerTracksPanelTest {
   }
 
   @Test
+  fun `several releases of one language are numbered so the rows can be told apart`() {
+    compose.setContent {
+      PlayerTracksPanel(
+        audioTracks = emptyList(),
+        audioTrackIndex = 0,
+        subtitleTracks = emptyList(),
+        subtitle = SubtitleChoice.Off,
+        addonSubtitles = listOf(
+          AddonSubtitleDto(subtitleId = "a", lang = "en", addonName = "OpenSubtitles v3"),
+          AddonSubtitleDto(subtitleId = "b", lang = "en", addonName = "OpenSubtitles v3"),
+        ),
+        capabilities = capabilities,
+        delay = 0.0,
+        delayEnabled = false,
+        onAudio = {},
+        onSubtitle = {},
+        onDelay = {},
+        onClose = {},
+      )
+    }
+
+    compose.onNodeWithTag(addonRowTag(0)).assertExists()
+    compose.onNodeWithTag(addonRowTag(1)).assertExists()
+    compose.onNodeWithText("EN · OpenSubtitles v3 · 1").assertExists()
+    compose.onNodeWithText("EN · OpenSubtitles v3 · 2").assertExists()
+  }
+
+  @Test
   fun `Back closes the panel and the opener takes the remote back`() {
     compose.setContent {
       var open by remember { mutableStateOf(true) }

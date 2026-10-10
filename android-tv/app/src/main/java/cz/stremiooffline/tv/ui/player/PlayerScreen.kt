@@ -50,7 +50,6 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.MediaSession
 import androidx.media3.ui.PlayerView
 import cz.stremiooffline.tv.R
-import cz.stremiooffline.tv.catalog.Languages
 import cz.stremiooffline.tv.data.AddonSubtitleDto
 import cz.stremiooffline.tv.data.SettingsResponse
 import cz.stremiooffline.tv.data.TvApi
@@ -113,6 +112,9 @@ fun PlayerScreen(api: TvApi, target: PlayTarget, onExit: () -> Unit) {
 
   var tracksOpen by remember { mutableStateOf(false) }
   var diagnosticsOpen by remember { mutableStateOf(false) }
+  // The button that opened a panel takes the remote back once the panel and its focus trap are
+  // gone; the request waits for the frame that removed them.
+  var restoreFocus by remember { mutableStateOf<FocusRequester?>(null) }
   var nextEpisode by remember { mutableStateOf<NextEpisode?>(null) }
   var nextCard by remember { mutableStateOf(false) }
   // The correction lives with this playback, not beyond it.
@@ -123,9 +125,16 @@ fun PlayerScreen(api: TvApi, target: PlayTarget, onExit: () -> Unit) {
   val currentNext by rememberUpdatedState(nextEpisode)
 
   val tracksFocus = remember { FocusRequester() }
+  val tracksEntry = remember { FocusRequester() }
   val diagnosticsFocus = remember { FocusRequester() }
   val playFocus = remember { FocusRequester() }
   val nextFocus = remember { FocusRequester() }
+
+  LaunchedEffect(restoreFocus) {
+    val target = restoreFocus ?: return@LaunchedEffect
+    restoreFocus = null
+    runCatching { target.requestFocus() }
+  }
 
   /** The player's tracks, grouped the way the player groups them, for the matcher. */
   fun offeredTracks(): List<PlayerTrackGroup> = exoPlayer.currentTracks.groups.map { group ->
@@ -402,7 +411,7 @@ fun PlayerScreen(api: TvApi, target: PlayTarget, onExit: () -> Unit) {
     onTogglePause = { if (playing) exoPlayer.pause() else exoPlayer.play() },
     onExit = onExit,
     onTracks = { tracksOpen = true },
-    tracksText = Languages.label(state.audioTrack?.language),
+    tracksText = tracksButtonText(state.audioTrack?.language),
     tracksLabel = stringResource(R.string.tv_tracks_title),
     tracksFocus = tracksFocus,
     onNext = if (currentNext != null) ({ startNext() }) else null,
@@ -413,6 +422,70 @@ fun PlayerScreen(api: TvApi, target: PlayTarget, onExit: () -> Unit) {
     modifier = Modifier.onPreviewKeyEvent { event ->
       if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
       mediaKey(event.key, exoPlayer, playing, onExit) ?: false
+    },
+    topLayer = {
+      if (tracksOpen) {
+        PlayerTracksPanel(
+          audioTracks = state.audioTracks,
+          audioTrackIndex = state.audioTrackIndex,
+          subtitleTracks = state.subtitleTracks,
+          subtitle = state.subtitle,
+          addonSubtitles = state.addonSubtitles,
+          capabilities = capabilities,
+          delay = delaySeconds,
+          delayEnabled = delayEnabled,
+          onAudio = { controller.selectAudio(it) },
+          onSubtitle = { controller.selectSubtitle(it) },
+          onDelay = { delaySeconds = SubtitleDelay.nudge(delaySeconds, it) },
+          onClose = {
+            tracksOpen = false
+            restoreFocus = tracksFocus
+          },
+          initialFocus = tracksEntry,
+        )
+      }
+
+      if (diagnosticsOpen) {
+        PlayerDiagnosticsPanel(
+          path = diagPath(state.mode, state.copyAudio),
+          container = null,
+          video = PlaybackDiagnostics.video(
+            codec = videoFormat?.sampleMimeType,
+            width = videoFormat?.width?.takeIf { it > 0 },
+            height = videoFormat?.height?.takeIf { it > 0 },
+            frameRate = videoFormat?.frameRate?.takeIf { it > 0 },
+            codecs = videoFormat?.codecs,
+          ),
+          hdr = PlaybackDiagnostics.color(videoFormat?.colorInfo),
+          audio = audioValue,
+          subtitles = subtitleSourceLabel,
+          bitrate = PlaybackDiagnostics.bitrate(videoFormat?.bitrate),
+          buffer = PlaybackDiagnostics.buffer(exoPlayer.totalBufferedDuration),
+          session = sessionValue,
+          device = device,
+          converted = state.mode != PlaybackMode.Direct,
+          onClose = {
+            diagnosticsOpen = false
+            restoreFocus = diagnosticsFocus
+          },
+        )
+      }
+
+      if (nextCard && currentNext != null) {
+        Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.35f)), contentAlignment = Alignment.BottomEnd) {
+          Box(Modifier.padding(48.dp)) {
+            NextEpisodeOffer(
+              title = currentNext!!.title,
+              onPlay = { startNext() },
+              onDismiss = {
+                nextCard = false
+                restoreFocus = playFocus
+              },
+              focus = nextFocus,
+            )
+          }
+        }
+      }
     },
   ) {
     AndroidView(
@@ -436,65 +509,6 @@ fun PlayerScreen(api: TvApi, target: PlayTarget, onExit: () -> Unit) {
         onBack = onExit,
       )
       !state.started -> LoadingOverlay(title = target.title)
-    }
-
-    if (tracksOpen) {
-      PlayerTracksPanel(
-        audioTracks = state.audioTracks,
-        audioTrackIndex = state.audioTrackIndex,
-        subtitleTracks = state.subtitleTracks,
-        subtitle = state.subtitle,
-        addonSubtitles = state.addonSubtitles,
-        capabilities = capabilities,
-        delay = delaySeconds,
-        delayEnabled = delayEnabled,
-        onAudio = { controller.selectAudio(it) },
-        onSubtitle = { controller.selectSubtitle(it) },
-        onDelay = { delaySeconds = SubtitleDelay.nudge(delaySeconds, it) },
-        onClose = {
-          tracksOpen = false
-          runCatching { tracksFocus.requestFocus() }
-        },
-      )
-    }
-
-    if (diagnosticsOpen) {
-      PlayerDiagnosticsPanel(
-        path = diagPath(state.mode, state.copyAudio),
-        container = null,
-        video = PlaybackDiagnostics.video(
-          codec = videoFormat?.sampleMimeType,
-          width = videoFormat?.width?.takeIf { it > 0 },
-          height = videoFormat?.height?.takeIf { it > 0 },
-          frameRate = videoFormat?.frameRate?.takeIf { it > 0 },
-          codecs = videoFormat?.codecs,
-        ),
-        hdr = PlaybackDiagnostics.color(videoFormat?.colorInfo),
-        audio = audioValue,
-        subtitles = subtitleSourceLabel,
-        bitrate = PlaybackDiagnostics.bitrate(videoFormat?.bitrate),
-        buffer = PlaybackDiagnostics.buffer(exoPlayer.totalBufferedDuration),
-        session = sessionValue,
-        device = device,
-        converted = state.mode != PlaybackMode.Direct,
-        onClose = {
-          diagnosticsOpen = false
-          runCatching { diagnosticsFocus.requestFocus() }
-        },
-      )
-    }
-
-    if (nextCard && currentNext != null) {
-      Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.35f)), contentAlignment = Alignment.BottomEnd) {
-        Box(Modifier.padding(48.dp)) {
-          NextEpisodeOffer(
-            title = currentNext!!.title,
-            onPlay = { startNext() },
-            onDismiss = { nextCard = false },
-            focus = nextFocus,
-          )
-        }
-      }
     }
   }
 }
