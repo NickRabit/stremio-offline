@@ -195,15 +195,19 @@ const hevcPlayable = (video: MediaInfo["video"], caps: ClientCapabilities) => {
 };
 
 /** What a native client has to declare before it is handed a video stream as it is. A codec flag
- *  covers eight-bit 4:2:0 only: a deeper variant needs `deepColor` (or `hevc10`), and 4:2:2 or 4:4:4
- *  -- High 4:2:2 H.264, VP9 profile 1 -- is never assumed, since TV decoders rarely take it. The
- *  level is not checked; a stream the decoder still refuses goes through `escalate`. */
+ *  covers eight-bit 4:2:0 only: ten or twelve bits need `deepColor` (or `hevc10`). Anything else --
+ *  4:2:2, 4:4:4, an unusual depth, or a pixel format the probe did not report -- is never assumed,
+ *  since TV decoders rarely take it and a refused stream costs a failed start. The level is not
+ *  checked; a stream the decoder still refuses goes through `escalate`. */
+const EIGHT_BIT_420 = /^(yuv420p|yuvj420p|nv12|nv21)$/i;
+const DEEP_420 = /^(yuv420p1[02](le|be)|p010(le|be)?)$/i;
 const nativeVideoPlayable = (video: MediaInfo["video"], caps: ClientCapabilities): boolean => {
   if (!video) return false;
   const profile = video.profile ?? "";
   const format = video.pixelFormat ?? "";
-  if (/4:[24][24]|Predictive/i.test(profile) || (format && !/420|nv12|nv21|p010/i.test(format))) return false;
-  const deep = /p1[02](le|be)$|p010/i.test(format) || /\b1[02]\b|Profile 2/i.test(profile);
+  if (/4:[24][24]|Predictive/i.test(profile) || (video.codec === "vp9" && /Profile [13]/i.test(profile))) return false;
+  const deep = DEEP_420.test(format);
+  if (!deep && !EIGHT_BIT_420.test(format)) return false;
   const deepOk = (codec: string) => caps.deepColor?.includes(codec) ?? false;
   switch (video.codec) {
     case "h264": return caps.h264 === true && (!deep || deepOk("h264"));

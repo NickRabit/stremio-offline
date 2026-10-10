@@ -904,7 +904,7 @@ test("clientCapabilities keeps only the shapes it declares", () => {
 
 const nativeInfo = (overrides: Record<string, unknown> = {}) => ({
   container: "matroska,webm", duration: 120,
-  video: { codec: "h264" }, audio: { codec: "ac3" },
+  video: { codec: "h264", pixelFormat: "yuv420p" }, audio: { codec: "ac3" },
   audioTracks: [{ index: 0, codec: "ac3", language: "en" }], subtitleTracks: [],
   ...overrides,
 });
@@ -983,6 +983,23 @@ test("a native client gets a ten-bit H.264, VP9 or AV1 directly only when it dec
   const av1 = mkv({ codec: "av1", profile: "Main", pixelFormat: "yuv420p" });
   assert.equal(manager.directPlay({ url: "https://cdn.example/a.mkv" }, av1, caps).ok, true);
   assert.equal(manager.directPlay({ url: "https://cdn.example/a.mkv" }, mkv({ codec: "av1", profile: "Main", pixelFormat: "yuv420p10le" }), caps).ok, false);
+});
+
+test("a native client gets nothing directly that the probe cannot show to be 4:2:0 at 8, 10 or 12 bits", () => {
+  const manager = new PlaybackManager(tmp("test-native-unknown-format")) as any;
+  const caps = { ...nativeCaps, vp9: true, av1: true, deepColor: ["h264", "hevc", "vp9", "av1"], containers: ["mkv", "webm"] };
+  const mkv = (video: Record<string, string>) => ({ container: "matroska,webm", video, audio: { codec: "aac" }, audioTracks: [{ index: 0, codec: "aac" }], subtitleTracks: [] });
+  for (const codec of ["h264", "hevc", "av1"]) {
+    assert.equal(manager.directPlay({ url: "https://cdn.example/a.mkv" }, mkv({ codec }), caps).ok, false, `${codec} without a pixel format`);
+  }
+  for (const pixelFormat of ["yuv420p9le", "yuv420p14le", "yuv420p16le", "gray"]) {
+    assert.equal(manager.directPlay({ url: "https://cdn.example/a.mkv" }, mkv({ codec: "hevc", profile: "Rext", pixelFormat }), caps).ok, false, pixelFormat);
+  }
+  assert.equal(manager.directPlay({ url: "https://cdn.example/a.mkv" }, mkv({ codec: "vp9", profile: "Profile 1" }), caps).ok, false);
+  assert.equal(manager.directPlay({ url: "https://cdn.example/a.mkv" }, mkv({ codec: "vp9", profile: "Profile 1", pixelFormat: "yuv420p" }), caps).ok, false);
+  for (const pixelFormat of ["yuv420p", "yuvj420p", "nv12", "yuv420p10le", "p010le"]) {
+    assert.equal(manager.directPlay({ url: "https://cdn.example/a.mkv" }, mkv({ codec: "hevc", profile: "Main", pixelFormat }), caps).ok, true, pixelFormat);
+  }
 });
 
 test("a native client never gets 4:2:2 or 4:4:4 video directly, nor copied into a remux", async () => {
