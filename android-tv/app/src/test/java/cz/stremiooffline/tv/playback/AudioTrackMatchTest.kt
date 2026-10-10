@@ -6,7 +6,9 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AudioTrackMatchTest {
@@ -101,5 +103,44 @@ class AudioTrackMatchTest {
     assertEquals("en", normalizeLanguage("eng_GB"))
     assertNull(normalizeLanguage(null))
     assertNull(normalizeLanguage("  "))
+  }
+
+  @Test
+  fun `the descriptor carries the flags the panel draws`() {
+    val tracks = descriptorTracks(
+      descriptor(
+        """[{"index":0,"codec":"subrip","language":"eng","forced":true,"title":"Signs"},
+            {"index":1,"codec":"subrip","language":"cze","default":true}]""",
+      ),
+    )
+    assertEquals(2, tracks.size)
+    assertTrue(tracks[0].forced)
+    assertFalse(tracks[0].default)
+    assertEquals("Signs", tracks[0].title)
+    assertTrue(tracks[1].default)
+    assertEquals(1, tracks[1].index)
+  }
+
+  @Test
+  fun `subtitle tracks are matched among their own kind by language`() {
+    val target = descriptorTrack(descriptor("""[{"codec":"subrip","language":"cze"}]"""), 0)!!
+    val groups = listOf(
+      PlayerTrackGroup(C.TRACK_TYPE_AUDIO, listOf(offered("cze", "audio/mp4a-latm", 2))),
+      PlayerTrackGroup(
+        C.TRACK_TYPE_TEXT,
+        listOf(offered("eng", "application/x-media3-cues", 0), offered("cze", "application/x-media3-cues", 0)),
+      ),
+    )
+    assertEquals(TrackMatch(1, 1), matchTrack(target, groups, C.TRACK_TYPE_TEXT))
+  }
+
+  @Test
+  fun `a text track the renderer transcoded still matches its codec`() {
+    // Media3 moves the original MIME into `Format.codecs`, so a subrip target and a cues MIME agree.
+    val target = descriptorTrack(descriptor("""[{"codec":"subrip","language":"eng"}]"""), 0)!!
+    val groups = listOf(
+      PlayerTrackGroup(C.TRACK_TYPE_TEXT, listOf(offered("eng", "application/x-media3-cues", 0))),
+    )
+    assertEquals(TrackMatch(0, 0), matchTrack(target, groups, C.TRACK_TYPE_TEXT))
   }
 }

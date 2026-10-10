@@ -63,6 +63,9 @@ const val TAG_OSD_SEEK_BACK = "osd_seek_back"
 const val TAG_OSD_SEEK_FORWARD = "osd_seek_forward"
 const val TAG_OSD_PLAY = "osd_play"
 const val TAG_OSD_BUBBLE = "osd_bubble"
+const val TAG_OSD_TRACKS = "osd_tracks"
+const val TAG_OSD_NEXT = "osd_next"
+const val TAG_OSD_DIAG = "osd_diag"
 
 /** The seek icons beside the plain `10` labels. */
 const val SEEK_BACK_LABEL = "10"
@@ -127,6 +130,15 @@ fun Osd(
   /** A LEFT/RIGHT press on the focused progress bar: -1 rewinds, +1 forwards, with the event time. */
   onSeekStep: (Int, Long) -> Unit,
   onActivity: () -> Unit,
+  onTracks: () -> Unit = {},
+  tracksText: String = "",
+  tracksLabel: String = "",
+  tracksFocus: FocusRequester? = null,
+  onNext: (() -> Unit)? = null,
+  nextLabel: String = "",
+  onDiagnostics: () -> Unit = {},
+  diagnosticsLabel: String = "",
+  diagnosticsFocus: FocusRequester? = null,
 ) {
   Box(Modifier.fillMaxSize()) {
     Column(
@@ -181,6 +193,31 @@ fun Osd(
           onClick = onForward10,
           onActivity = onActivity,
         ) { SeekIcon(forward = true) }
+        RoundButton(
+          label = tracksLabel,
+          text = tracksText.ifBlank { "CC" },
+          tag = TAG_OSD_TRACKS,
+          onClick = onTracks,
+          onActivity = onActivity,
+          focusRequester = tracksFocus,
+        ) { }
+        if (onNext != null) {
+          RoundButton(
+            label = nextLabel,
+            text = "\u00BB",
+            tag = TAG_OSD_NEXT,
+            onClick = onNext,
+            onActivity = onActivity,
+          ) { }
+        }
+        RoundButton(
+          label = diagnosticsLabel,
+          text = "i",
+          tag = TAG_OSD_DIAG,
+          onClick = onDiagnostics,
+          onActivity = onActivity,
+          focusRequester = diagnosticsFocus,
+        ) { }
       }
     }
   }
@@ -265,6 +302,7 @@ private fun RoundButton(
   tag: String,
   onClick: () -> Unit,
   onActivity: () -> Unit,
+  focusRequester: FocusRequester? = null,
   content: @Composable () -> Unit,
 ) {
   var focused by remember { mutableStateOf(false) }
@@ -274,6 +312,7 @@ private fun RoundButton(
       .clip(CircleShape)
       .background(if (focused) Color.White else Color.White.copy(alpha = 0.14f))
       .semantics { this.contentDescription = label }
+      .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
       .focusable()
       .onFocusChanged { focused = it.isFocused }
       .clickable { onActivity(); onClick() }

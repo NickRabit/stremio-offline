@@ -77,6 +77,17 @@ fun PlayerOverlayShell(
   showControls: Int = 0,
   /** Bumped when the server refused a seek; the message shows for [SEEK_KEPT_MS]. */
   seekKept: Int = 0,
+  /** A panel or the next-episode card is up: it owns the D-pad, Back and the auto-hide timer. */
+  modal: Boolean = false,
+  onTracks: () -> Unit = {},
+  tracksText: String = "",
+  tracksLabel: String = "",
+  tracksFocus: FocusRequester? = null,
+  onNext: (() -> Unit)? = null,
+  nextLabel: String = "",
+  onDiagnostics: () -> Unit = {},
+  diagnosticsLabel: String = "",
+  diagnosticsFocus: FocusRequester? = null,
   content: @Composable () -> Unit,
 ) {
   var controls by remember { mutableStateOf(initiallyShown) }
@@ -131,8 +142,8 @@ fun PlayerOverlayShell(
     if (intent.hideControls) controls = false
   }
 
-  LaunchedEffect(controls, activity, playing) {
-    if (controls && playing) {
+  LaunchedEffect(controls, activity, playing, modal) {
+    if (controls && playing && !modal) {
       delay(CONTROLS_HIDE_MS)
       controls = false
     }
@@ -184,6 +195,8 @@ fun PlayerOverlayShell(
       .focusable()
       .onPreviewKeyEvent { event ->
         if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+        // A panel or the card has the remote: it traps focus itself, so the shell steps aside.
+        if (modal) return@onPreviewKeyEvent false
         activity++
         // The media keys seek like the pad, held or not.
         when (event.key) {
@@ -214,6 +227,15 @@ fun PlayerOverlayShell(
         onToggle = { activity++; onTogglePause() },
         onSeekStep = { direction, eventTime -> pressSeek(direction, eventTime) },
         onActivity = { activity++ },
+        onTracks = onTracks,
+        tracksText = tracksText,
+        tracksLabel = tracksLabel,
+        tracksFocus = tracksFocus,
+        onNext = onNext,
+        nextLabel = nextLabel,
+        onDiagnostics = onDiagnostics,
+        diagnosticsLabel = diagnosticsLabel,
+        diagnosticsFocus = diagnosticsFocus,
       )
     }
 

@@ -1,5 +1,6 @@
 package cz.stremiooffline.tv.data
 
+import cz.stremiooffline.tv.playback.SubtitleUrls
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
@@ -148,12 +149,26 @@ class ApiClient(
       .decode() ?: FavoriteToggleDto(path, favorite)
   }
 
-  override suspend fun startPlayback(sourceId: String, capabilities: ClientCapabilitiesDto, time: Double): PlaybackDescriptorDto {
+  override suspend fun startPlayback(
+    sourceId: String,
+    capabilities: ClientCapabilitiesDto,
+    time: Double,
+    subtitleIds: List<String>,
+  ): PlaybackDescriptorDto {
     val payload = json.encodeToString(
       PlaybackStartRequest.serializer(),
-      PlaybackStartRequest(sourceId, capabilities, time),
+      PlaybackStartRequest(sourceId, capabilities, time, subtitleIds),
     )
     return request(Request.Builder().url(address.resolve("/api/playback")).post(payload.toRequestBody(mediaType)).build())
+      .decode<PlaybackDescriptorDto>() ?: throw ApiError(ApiFailure.Generic)
+  }
+
+  override suspend fun trackPlayback(id: String, change: TrackChange): PlaybackDescriptorDto {
+    val payload = when (change) {
+      is TrackChange.Audio -> json.encodeToString(TrackAudioRequest.serializer(), TrackAudioRequest(change.index, change.time))
+      is TrackChange.Subtitle -> json.encodeToString(TrackSubtitleRequest.serializer(), TrackSubtitleRequest(change.index, change.time))
+    }
+    return request(Request.Builder().url(address.resolve("/api/playback/$id/track")).post(payload.toRequestBody(mediaType)).build())
       .decode<PlaybackDescriptorDto>() ?: throw ApiError(ApiFailure.Generic)
   }
 
@@ -171,6 +186,33 @@ class ApiClient(
 
   override suspend fun pingPlayback(id: String) {
     request(Request.Builder().url(address.resolve("/api/playback/$id/ping")).post("{}".toRequestBody(mediaType)).build())
+  }
+
+  override suspend fun sidecar(url: String, position: Double, delay: Double): SidecarFetch? {
+    val poll = SubtitleUrls.sidecar(url, position, delay)
+    return call(Request.Builder().url(address.resolve(poll)).get().build()).closing { response ->
+      if (!response.isSuccessful) return@closing null
+      val complete = response.header("x-sidecar-complete") == "1"
+      val coverage = response.header("x-sidecar-coverage")?.toDoubleOrNull() ?: Double.POSITIVE_INFINITY
+      SidecarFetch(readBody(response), complete, coverage)
+    }
+  }
+
+  override suspend fun subtitles(type: String, id: String): List<AddonSubtitleDto> =
+    request(Request.Builder().url(address.resolve("/api/subtitles/" + encode(type) + "/" + encode(id))).get().build())
+      .decode() ?: emptyList()
+
+  override suspend fun subtitleText(id: String, offset: Double, delay: Double): String? {
+    val path = SubtitleUrls.addon(id, offset, delay)
+    return call(Request.Builder().url(address.resolve(path)).get().build()).closing { response ->
+      if (!response.isSuccessful) null else readBody(response)
+    }
+  }
+
+  override suspend fun libraryNext(sourceId: String): NextFileDto? {
+    val body = request(Request.Builder().url(address.resolve("/api/library/next/" + encode(sourceId))).get().build())
+    if (body.isBlank() || body == "null") return null
+    return body.decode()
   }
 
   override suspend fun deletePlayback(id: String) {
@@ -288,7 +330,7 @@ class ApiClient(
       response.isSuccessful -> readBody(response)
       response.code == 401 -> throw ApiError(ApiFailure.SessionExpired)
       response.code == 403 -> throw ApiError(ApiFailure.Forbidden)
-      response.code == 404 -> throw ApiError(ApiFailure.NotFound)
+      response.code == 404 || response.code == 410 -> throw ApiError(ApiFailure.NotFound)
       else -> throw ApiError(ApiFailure.Generic)
     }
   }
@@ -356,7 +398,18 @@ private data class DownloadRequest(val title: String, val sourceId: String, val 
 private data class TimeRequest(val time: Double)
 
 @Serializable
-private data class PlaybackStartRequest(val sourceId: String, val capabilities: ClientCapabilitiesDto, val time: Double)
+private data class PlaybackStartRequest(
+  val sourceId: String,
+  val capabilities: ClientCapabilitiesDto,
+  val time: Double,
+  val subtitleIds: List<String> = emptyList(),
+)
+
+@Serializable
+private data class TrackAudioRequest(val audio: Int, val time: Double)
+
+@Serializable
+private data class TrackSubtitleRequest(val subtitle: Int?, val time: Double)
 
 @Serializable
 private data class ProgressRequest(

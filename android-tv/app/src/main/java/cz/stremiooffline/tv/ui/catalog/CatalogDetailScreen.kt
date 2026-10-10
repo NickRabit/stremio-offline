@@ -365,6 +365,8 @@ fun CatalogDetailScreen(
         sourceId = stream.sourceId,
         poster = args.meta.poster ?: meta.poster,
         addonKey = args.addonKey,
+        subtitleType = streamType,
+        subtitleTarget = streamVideoId,
       ),
     )
   }
@@ -452,6 +454,8 @@ fun CatalogDetailScreen(
             sourceId = stream.sourceId,
             poster = args.meta.poster ?: meta.poster,
             addonKey = args.addonKey,
+            subtitleType = streamType,
+            subtitleTarget = streamVideoId,
           ),
         )
       }

@@ -1,15 +1,22 @@
 package cz.stremiooffline.tv.playback
 
+import androidx.media3.common.C
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 
-/** One track the server lists for a file, reduced to what matching reads. */
+/** One track the server lists for a file. `index` is the position within its own type, which is
+ *  also what `/track` answers with; the flags are only read for the panel's labels. */
 data class DescriptorTrack(
+  val index: Int = 0,
   val language: String? = null,
   val codec: String? = null,
   val channels: Int = 0,
+  val title: String? = null,
+  val forced: Boolean = false,
+  val default: Boolean = false,
 )
 
 /** One track the player offers, in the player's own order. */
@@ -28,12 +35,22 @@ data class TrackMatch(val groupIndex: Int, val trackIndex: Int)
 /** The server's chosen track of one descriptor list, or null when the index or the entry is gone. */
 fun descriptorTrack(tracks: List<JsonObject>, index: Int): DescriptorTrack? {
   val track = tracks.getOrNull(index) ?: return null
-  return DescriptorTrack(
-    language = (track["language"] as? JsonPrimitive)?.contentOrNull,
-    codec = (track["codec"] as? JsonPrimitive)?.contentOrNull,
-    channels = (track["channels"] as? JsonPrimitive)?.intOrNull ?: 0,
-  )
+  return trackOf(track, index)
 }
+
+/** Every track of one descriptor list, in the server's order. */
+fun descriptorTracks(tracks: List<JsonObject>): List<DescriptorTrack> =
+  tracks.mapIndexed { position, track -> trackOf(track, position) }
+
+private fun trackOf(track: JsonObject, position: Int): DescriptorTrack = DescriptorTrack(
+  index = (track["index"] as? JsonPrimitive)?.intOrNull ?: position,
+  language = (track["language"] as? JsonPrimitive)?.contentOrNull,
+  codec = (track["codec"] as? JsonPrimitive)?.contentOrNull,
+  channels = (track["channels"] as? JsonPrimitive)?.intOrNull ?: 0,
+  title = (track["title"] as? JsonPrimitive)?.contentOrNull,
+  forced = (track["forced"] as? JsonPrimitive)?.booleanOrNull ?: false,
+  default = (track["default"] as? JsonPrimitive)?.booleanOrNull ?: false,
+)
 
 /**
  * The track the server meant, matched by language, then codec MIME, then channels. An attribute
@@ -43,14 +60,13 @@ fun descriptorTrack(tracks: List<JsonObject>, index: Int): DescriptorTrack? {
  */
 fun matchTrack(target: DescriptorTrack, groups: List<PlayerTrackGroup>, type: Int): TrackMatch? {
   val wantedLanguage = normalizeLanguage(target.language)
-  val wantedMime = mimeOf(target.codec)
   val wantedChannels = target.channels
-  if (wantedLanguage == null && wantedMime == null && wantedChannels <= 0) return null
+  if (wantedLanguage == null && mimeOf(target.codec) == null && wantedChannels <= 0) return null
   for ((groupIndex, group) in groups.withIndex()) {
     if (group.type != type) continue
     for ((trackIndex, track) in group.tracks.withIndex()) {
       if (wantedLanguage != null && normalizeLanguage(track.language) != wantedLanguage) continue
-      if (wantedMime != null && track.mimeType != wantedMime) continue
+      if (!mimeMatches(target.codec, track.mimeType, type)) continue
       if (wantedChannels > 0 && track.channels != wantedChannels) continue
       return TrackMatch(groupIndex, trackIndex)
     }
@@ -119,3 +135,14 @@ private val MIME_TYPES = mapOf(
 )
 
 internal fun mimeOf(codec: String?): String? = codec?.let { MIME_TYPES[it.trim().lowercase()] }
+
+/** The MIME the text renderer reports after Media3 transcodes a subtitle track: the original
+ *  Media3 MIME moves to `Format.codecs`, so the sample MIME alone cannot tell two text codecs
+ *  apart. A text target still counts when the player reports this one. */
+private const val CUES_MIME = "application/x-media3-cues"
+
+private fun mimeMatches(codec: String?, sampleMimeType: String?, type: Int): Boolean {
+  val wanted = mimeOf(codec) ?: return true
+  if (sampleMimeType == wanted) return true
+  return type == C.TRACK_TYPE_TEXT && sampleMimeType == CUES_MIME
+}

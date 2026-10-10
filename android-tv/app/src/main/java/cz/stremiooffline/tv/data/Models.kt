@@ -29,6 +29,7 @@ data class SettingsResponse(
   val startView: String? = null,
   val uiLanguage: String? = null,
   val audioLanguage: String? = null,
+  val subtitleLanguage: String? = null,
   val streamSort: String? = null,
   val realDebridConfigured: Boolean = false,
 )

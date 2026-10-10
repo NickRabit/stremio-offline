@@ -123,4 +123,27 @@ class LanguagesTest {
   fun `label marks a missing code`() {
     assertEquals("?", Languages.label(null))
   }
+
+  @Test
+  fun `pickAddonSubtitle stays silent over dialogue the viewer understands`() {
+    val items = listOf(sub("a", "cs"), sub("b", "en"))
+    assertNull(Languages.pickAddonSubtitle(items, preferred = "cs", spoken = "cs", understood = "cs"))
+  }
+
+  @Test
+  fun `pickAddonSubtitle prefers the asked language and falls back to English`() {
+    val items = listOf(sub("a", "de"), sub("b", "en"), sub("c", "cs"))
+    assertEquals("c", Languages.pickAddonSubtitle(items, preferred = "cs", spoken = "de", understood = "cs")?.subtitleId)
+    assertEquals("b", Languages.pickAddonSubtitle(items, preferred = "fr", spoken = "de", understood = "cs")?.subtitleId)
+    assertNull(Languages.pickAddonSubtitle(listOf(sub("a", "de")), preferred = "fr", spoken = "de", understood = "cs"))
+  }
+
+  @Test
+  fun `pickAddonSubtitle matches a regional tag by its language`() {
+    val items = listOf(sub("a", "pt-BR"))
+    assertEquals("a", Languages.pickAddonSubtitle(items, preferred = "pt", spoken = "en", understood = "cs")?.subtitleId)
+  }
+
+  private fun sub(id: String, lang: String?) =
+    cz.stremiooffline.tv.data.AddonSubtitleDto(subtitleId = id, lang = lang, addonName = id)
 }
