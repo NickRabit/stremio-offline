@@ -90,7 +90,7 @@ sealed interface HomeCard {
   data class Favorite(
     override val key: String,
     val path: String = "",
-    val itemKind: String = "folder",
+    val itemKind: String = "file",
     val label: String = "",
     override val poster: String? = null,
     override val wide: String? = null,
@@ -140,7 +140,7 @@ sealed interface HomeCard {
   data class Tonight(
     override val key: String,
     val path: String = "",
-    val itemKind: String = "folder",
+    val itemKind: String = "file",
     val label: String = "",
     val year: String? = null,
     override val poster: String? = null,

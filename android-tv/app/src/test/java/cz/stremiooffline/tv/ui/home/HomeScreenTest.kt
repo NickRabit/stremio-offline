@@ -7,14 +7,14 @@ import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performKeyInput
-import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.pressKey
-import androidx.compose.ui.semantics.SemanticsActions
 import androidx.test.core.app.ApplicationProvider
 import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.catalog.ResumeEpisode
@@ -31,6 +31,7 @@ import cz.stremiooffline.tv.ui.detail.PlayTarget
 import kotlinx.serialization.json.JsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -126,6 +127,32 @@ class HomeScreenTest {
   }
 
   @Test
+  fun `the focused row stays inside the rows area as focus walks down eight rows`() {
+    val api = FakeTvApi()
+    val ids = listOf("resume", "favorites", "tonight", "episodes", "completed", "recent", "r7", "r8")
+    serve(api, order(*ids.toTypedArray()), ids.associateWith { row(resumeFile(it, it)) })
+    mount(api)
+    compose.waitForIdle()
+
+    var current = "resume"
+    compose.onNodeWithTag(homeCardTag(current)).assertIsFocused()
+    ids.drop(1).forEach { id ->
+      compose.onNodeWithTag(homeCardTag(current)).performKeyInput { pressKey(Key.DirectionDown) }
+      compose.waitForIdle()
+      compose.onNodeWithTag(homeCardTag(id)).assertIsFocused()
+      compose.onNodeWithTag(homeCardTag(id)).assertIsDisplayed()
+      // The whole card, not just a sliver: the row is scrolled fully into the rows area.
+      val root = compose.onRoot().fetchSemanticsNode().boundsInRoot
+      val card = compose.onNodeWithTag(homeCardTag(id)).fetchSemanticsNode().boundsInRoot
+      assertTrue(
+        "card $id $card is not inside the root $root",
+        card.left >= root.left && card.top >= root.top && card.right <= root.right && card.bottom <= root.bottom,
+      )
+      current = id
+    }
+  }
+
+  @Test
   fun `a catalogue row is a placeholder until focus is one row above it`() {
     val api = FakeTvApi()
     val catalog = "catalog:addon:movie:top"
@@ -171,29 +198,51 @@ class HomeScreenTest {
   }
 
   @Test
-  fun `an error row shows Try again and OK retries that row only`() {
+  fun `the D-pad reaches an error row and OK retries that row only`() {
     val api = FakeTvApi()
     serve(
       api,
-      order("resume", "episodes"),
+      order("resume", "episodes", "tonight"),
       mapOf(
-        "resume" to row(status = "error"),
-        "episodes" to row(resumeFile("c", "Third")),
+        "resume" to row(resumeFile("a", "First")),
+        "episodes" to row(status = "error"),
+        "tonight" to row(resumeFile("c", "Third")),
       ),
     )
     mount(api)
     compose.waitForIdle()
 
+    compose.onNodeWithTag(homeCardTag("a")).assertIsFocused()
+    compose.onNodeWithTag(homeCardTag("a")).performKeyInput { pressKey(Key.DirectionDown) }
+    compose.waitForIdle()
     compose.onNodeWithText(context.getString(R.string.home_row_failed)).assertExists()
-    compose.onNodeWithTag(homeRetryTag("resume")).performSemanticsAction(SemanticsActions.RequestFocus)
-    compose.onNodeWithTag(homeRetryTag("resume")).performKeyInput { pressKey(Key.DirectionCenter) }
+    compose.onNodeWithTag(homeRetryTag("episodes")).assertIsFocused()
+
+    // The retry button does not trap the remote: DOWN still reaches the row below it.
+    compose.onNodeWithTag(homeRetryTag("episodes")).performKeyInput { pressKey(Key.DirectionDown) }
+    compose.waitForIdle()
+    compose.onNodeWithTag(homeCardTag("c")).assertIsFocused()
+
+    compose.onNodeWithTag(homeCardTag("c")).performKeyInput { pressKey(Key.DirectionUp) }
+    compose.waitForIdle()
+    compose.onNodeWithTag(homeRetryTag("episodes")).performKeyInput { pressKey(Key.DirectionCenter) }
     compose.waitForIdle()
 
-    assertEquals(listOf("resume"), api.homeRequests.last())
+    assertEquals(listOf("episodes"), api.homeRequests.last())
   }
 
   @Test
-  fun `a partial row shows its note and the retry button`() {
+  fun `an error row in the first slot still gives the panel something to focus`() {
+    val api = FakeTvApi()
+    serve(api, order("resume"), mapOf("resume" to row(status = "error")))
+    mount(api)
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(homeRetryTag("resume")).assertIsFocused()
+  }
+
+  @Test
+  fun `the D-pad reaches a partial row and its Try again retries it`() {
     val api = FakeTvApi()
     val catalog = "catalog:addon:movie:top"
     serve(
@@ -201,19 +250,49 @@ class HomeScreenTest {
       order("resume", catalog),
       mapOf(
         "resume" to row(resumeFile("a", "First")),
-        catalog to row(discovery("movie:tt1", "tt1"), partial = true),
+        catalog to row(partial = true),
       ),
     )
     mount(api)
     compose.waitForIdle()
 
+    compose.onNodeWithTag(homeCardTag("a")).performKeyInput { pressKey(Key.DirectionDown) }
+    compose.waitForIdle()
     compose.onNodeWithText(context.getString(R.string.home_partial)).assertExists()
+    compose.onNodeWithTag(homeRetryTag(catalog)).assertIsFocused()
     val before = api.homeRequests.count { it == listOf(catalog) }
-    compose.onNodeWithTag(homeRetryTag(catalog)).performSemanticsAction(SemanticsActions.RequestFocus)
     compose.onNodeWithTag(homeRetryTag(catalog)).performKeyInput { pressKey(Key.DirectionCenter) }
     compose.waitForIdle()
 
     assertEquals(before + 1, api.homeRequests.count { it == listOf(catalog) })
+  }
+
+  @Test
+  fun `the whole page failure shows its panel and Try again recovers`() {
+    val api = FakeTvApi()
+    serve(api, order("resume"), mapOf("resume" to row(resumeFile("a", "First"))))
+    api.failHome = true
+    mount(api)
+    compose.waitForIdle()
+
+    compose.onNodeWithText(context.getString(R.string.tv_home_load_error)).assertExists()
+
+    api.failHome = false
+    compose.onNodeWithText(context.getString(R.string.home_retry)).performKeyInput { pressKey(Key.DirectionCenter) }
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(homeCardTag("a")).assertIsFocused()
+  }
+
+  @Test
+  fun `an account with every row empty shows the empty panel`() {
+    val api = FakeTvApi()
+    serve(api, order("resume", "favorites"), mapOf("resume" to row(), "favorites" to row()))
+    mount(api)
+    compose.waitForIdle()
+
+    compose.onNodeWithText(context.getString(R.string.home_empty_title)).assertExists()
+    compose.onNodeWithText(context.getString(R.string.home_empty_text)).assertExists()
   }
 
   @Test
@@ -295,6 +374,74 @@ class HomeScreenTest {
     compose.onNodeWithTag(homeCardTag("folder:f")).performKeyInput { pressKey(Key.DirectionCenter) }
 
     assertEquals(HomeAction.OpenLibrary("browse/Films"), actions.single())
+  }
+
+  @Test
+  fun `ok on a completed card plays the file`() {
+    val api = FakeTvApi()
+    serve(
+      api,
+      order("completed"),
+      mapOf("completed" to row(HomeCard.Completed(key = "file:b", title = "Done", path = "browse/Films/Done.mkv"))),
+    )
+    val actions = mutableListOf<HomeAction>()
+    mount(api, onAction = { actions += it })
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(homeCardTag("file:b")).performKeyInput { pressKey(Key.DirectionCenter) }
+
+    assertEquals(
+      HomeAction.Play(PlayTarget(key = "file:browse/Films/Done.mkv", title = "Done", resume = true, path = "browse/Films/Done.mkv")),
+      actions.single(),
+    )
+  }
+
+  @Test
+  fun `ok on a recent card plays the file`() {
+    val api = FakeTvApi()
+    serve(
+      api,
+      order("recent"),
+      mapOf("recent" to row(HomeCard.Recent(key = "file:d", path = "browse/New.mkv", label = "New"))),
+    )
+    val actions = mutableListOf<HomeAction>()
+    mount(api, onAction = { actions += it })
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(homeCardTag("file:d")).performKeyInput { pressKey(Key.DirectionCenter) }
+
+    assertEquals(
+      HomeAction.Play(PlayTarget(key = "file:browse/New.mkv", title = "New", resume = true, path = "browse/New.mkv")),
+      actions.single(),
+    )
+  }
+
+  @Test
+  fun `ok on a tonight file plays it and a tonight folder opens the library`() {
+    val api = FakeTvApi()
+    serve(
+      api,
+      order("tonight"),
+      mapOf(
+        "tonight" to row(
+          HomeCard.Tonight(key = "file:e", path = "browse/Ton.mkv", itemKind = "file", label = "Ton", year = "1999"),
+          HomeCard.Tonight(key = "folder:f", path = "browse/Films", itemKind = "folder", label = "Films", year = "2001"),
+        ),
+      ),
+    )
+    val actions = mutableListOf<HomeAction>()
+    mount(api, onAction = { actions += it })
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(homeCardTag("file:e")).performKeyInput { pressKey(Key.DirectionCenter) }
+    assertEquals(
+      HomeAction.Play(PlayTarget(key = "file:browse/Ton.mkv", title = "Ton", resume = true, path = "browse/Ton.mkv")),
+      actions.single(),
+    )
+
+    compose.onNodeWithTag(homeCardTag("file:e")).performKeyInput { pressKey(Key.DirectionRight) }
+    compose.onNodeWithTag(homeCardTag("folder:f")).performKeyInput { pressKey(Key.DirectionCenter) }
+    assertEquals(HomeAction.OpenLibrary("browse/Films"), actions.last())
   }
 
   @Test

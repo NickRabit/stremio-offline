@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -60,9 +61,12 @@ fun PosterCard(
   modifier: Modifier = Modifier,
   caption: String? = null,
   cardTag: String? = null,
+  fallbackImageUrl: String? = null,
 ) {
   var focused by remember { mutableStateOf(false) }
-  var imageFailed by remember(imageUrl) { mutableStateOf(false) }
+  val candidates = remember(imageUrl, fallbackImageUrl) { listOfNotNull(imageUrl, fallbackImageUrl).distinct() }
+  var artIndex by remember(imageUrl, fallbackImageUrl) { mutableIntStateOf(0) }
+  val art = candidates.getOrNull(artIndex)
   val shape = RoundedCornerShape(10.dp)
   Column(modifier) {
     Surface(
@@ -89,19 +93,18 @@ fun PosterCard(
           .clip(shape)
           .background(Brush.verticalGradient(listOf(Tokens.Panel2, Tokens.Bg))),
       ) {
-        if (imageUrl != null) {
+        if (art != null) {
           AsyncImage(
-            model = imageUrl,
+            model = art,
             contentDescription = null,
             contentScale = ContentScale.Crop,
-            onSuccess = { imageFailed = false },
-            onError = { imageFailed = true },
+            onError = { artIndex += 1 },
             modifier = Modifier.fillMaxSize(),
           )
         }
         // The name over the artwork is the gradient fallback; with a real poster it would only
         // fight the picture.
-        if (imageUrl == null || imageFailed) {
+        if (art == null) {
           Text(
             name,
             color = Tokens.Text,
@@ -153,8 +156,12 @@ fun WideCard(
   modifier: Modifier = Modifier,
   cardTag: String? = null,
   caption: String? = null,
+  fallbackImageUrl: String? = null,
 ) {
   var focused by remember { mutableStateOf(false) }
+  val candidates = remember(imageUrl, fallbackImageUrl) { listOfNotNull(imageUrl, fallbackImageUrl).distinct() }
+  var artIndex by remember(imageUrl, fallbackImageUrl) { mutableIntStateOf(0) }
+  val art = candidates.getOrNull(artIndex)
   val shape = RoundedCornerShape(10.dp)
   Column(modifier) {
     Surface(
@@ -181,23 +188,28 @@ fun WideCard(
           .clip(shape)
           .background(Brush.verticalGradient(listOf(Tokens.Panel2, Tokens.Bg))),
       ) {
-        if (imageUrl != null) {
+        if (art != null) {
           AsyncImage(
-            model = imageUrl,
+            model = art,
             contentDescription = null,
             contentScale = ContentScale.Crop,
+            onError = { artIndex += 1 },
             modifier = Modifier.fillMaxSize(),
           )
         }
-        Text(
-          label,
-          color = Tokens.Text,
-          fontSize = 10.sp,
-          fontWeight = FontWeight.ExtraBold,
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
-          modifier = Modifier.align(Alignment.BottomStart).padding(7.dp),
-        )
+        // The title over the artwork is the gradient fallback; with a real still it would only
+        // fight the picture.
+        if (art == null) {
+          Text(
+            label,
+            color = Tokens.Text,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.ExtraBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.align(Alignment.BottomStart).padding(7.dp),
+          )
+        }
         if (progress != null) {
           Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(3.dp).background(Tokens.Line)) {
             Box(Modifier.fillMaxWidth(progress.coerceIn(0f, 1f)).height(3.dp).background(Tokens.Accent))
@@ -241,9 +253,17 @@ fun WideCard(
   }
 }
 
-/** Six grey cards with a slow shimmer, shown while a page loads. */
+/** A row of grey cards with a slow shimmer, shown while a page loads. */
 @Composable
 fun ShimmerCards(count: Int = 6, modifier: Modifier = Modifier) {
+  Row(modifier, horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+    repeat(count) { ShimmerCard() }
+  }
+}
+
+/** One shimmering placeholder card, for example a catalogue row not revealed yet. */
+@Composable
+fun ShimmerCard(modifier: Modifier = Modifier, width: Dp = 110.dp, height: Dp = 165.dp) {
   val transition = rememberInfiniteTransition(label = "shimmer")
   val alpha by transition.animateFloat(
     initialValue = 0.35f,
@@ -251,17 +271,13 @@ fun ShimmerCards(count: Int = 6, modifier: Modifier = Modifier) {
     animationSpec = infiniteRepeatable(tween(900), RepeatMode.Reverse),
     label = "shimmerAlpha",
   )
-  Row(modifier, horizontalArrangement = Arrangement.spacedBy(18.dp)) {
-    repeat(count) {
-      Box(
-        Modifier
-          .size(110.dp, 165.dp)
-          .clip(RoundedCornerShape(10.dp))
-          .background(Brush.verticalGradient(listOf(Tokens.Panel, Tokens.Panel2)))
-          .alpha(alpha),
-      )
-    }
-  }
+  Box(
+    modifier
+      .size(width, height)
+      .clip(RoundedCornerShape(10.dp))
+      .background(Brush.verticalGradient(listOf(Tokens.Panel, Tokens.Panel2)))
+      .alpha(alpha),
+  )
 }
 
 /** A small turning arc for a button that is waiting on the server. */

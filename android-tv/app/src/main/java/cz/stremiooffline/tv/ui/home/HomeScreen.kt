@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
@@ -71,11 +72,11 @@ import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.data.displayTitle
 import cz.stremiooffline.tv.data.episodeCodeText
 import cz.stremiooffline.tv.data.isWideKind
-import cz.stremiooffline.tv.data.posterImage
 import cz.stremiooffline.tv.data.progressFraction
 import cz.stremiooffline.tv.data.wideImage
 import cz.stremiooffline.tv.data.yearText
 import cz.stremiooffline.tv.ui.components.PosterCard
+import cz.stremiooffline.tv.ui.components.ShimmerCard
 import cz.stremiooffline.tv.ui.components.ShimmerCards
 import cz.stremiooffline.tv.ui.components.WideCard
 import cz.stremiooffline.tv.ui.theme.Tokens
@@ -155,10 +156,12 @@ private fun HomeLoading() {
 
 @Composable
 private fun HomeErrorPanel(onRetry: () -> Unit) {
+  val requester = remember { FocusRequester() }
+  LaunchedEffect(Unit) { runCatching { requester.requestFocus() } }
   Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
     Column(verticalArrangement = Arrangement.spacedBy(11.dp), horizontalAlignment = Alignment.CenterHorizontally) {
       Text(stringResource(R.string.tv_home_load_error), color = Tokens.Muted, fontSize = 12.sp)
-      ErrorRetry(onRetry)
+      ErrorRetry(onRetry, requester)
     }
   }
 }
@@ -174,9 +177,10 @@ private fun HomeEmptyPanel() {
 }
 
 @Composable
-private fun ErrorRetry(onRetry: () -> Unit) {
+private fun ErrorRetry(onRetry: () -> Unit, requester: FocusRequester) {
   Surface(
     onClick = onRetry,
+    modifier = Modifier.focusRequester(requester),
     shape = ClickableSurfaceDefaults.shape(shape = RoundedCornerShape(10.dp)),
     colors = ClickableSurfaceDefaults.colors(
       containerColor = Tokens.Panel2,
@@ -224,15 +228,15 @@ private fun HomeBody(
   val focusedItems = (focusedSlot?.content as? RowContent.Cards)?.items.orEmpty()
   val focusedCard = focusedItems.getOrNull(focusedCardIndex.coerceIn(0, maxOf(0, focusedItems.lastIndex)))
 
-  fun focusCard(index: Int, cardIndex: Int) {
-    val rowId = rowIds.getOrNull(index) ?: return
+  fun focusCard(index: Int, cardIndex: Int): Boolean {
+    val rowId = rowIds.getOrNull(index) ?: return false
     val items = (slots.getOrNull(index)?.content as? RowContent.Cards)?.items
     val count = if (items != null) items.size else 1
     val target = cardIndex.coerceIn(0, maxOf(0, count - 1))
     val key = items?.getOrNull(target)?.key ?: "index:$target"
     val fallback = items?.firstOrNull()?.key ?: "index:0"
-    val requester = requesters[rowId to key] ?: requesters[rowId to fallback] ?: return
-    runCatching { requester.requestFocus() }
+    val requester = requesters[rowId to key] ?: requesters[rowId to fallback] ?: return false
+    return runCatching { requester.requestFocus() }.isSuccess
   }
 
   fun revealNear(rowIndex: Int) {
@@ -280,26 +284,25 @@ private fun HomeBody(
           if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
           when (event.key) {
             Key.DirectionDown -> {
-              if (focusedIndex < rowIds.lastIndex) {
+              focusedIndex < rowIds.lastIndex &&
                 focusCard(focusedIndex + 1, cardMemory[rowIds[focusedIndex + 1]] ?: 0)
-                true
-              } else {
-                false
-              }
             }
             Key.DirectionUp -> {
-              if (focusedIndex > 0) {
+              focusedIndex > 0 &&
                 focusCard(focusedIndex - 1, cardMemory[rowIds[focusedIndex - 1]] ?: 0)
-                true
-              } else {
-                false
-              }
             }
             else -> false
           }
         },
     ) {
-      Column(Modifier.offset { IntOffset(0, -offset.roundToInt()) }) {
+      // `unbounded` so the rows keep their natural height: the clip above them is only a viewport,
+      // and a bounded Column would squeeze the later rows to nothing.
+      Column(
+        Modifier
+          .offset { IntOffset(0, -offset.roundToInt()) }
+          .wrapContentHeight(Alignment.Top, unbounded = true),
+        verticalArrangement = Arrangement.spacedBy(RowGap),
+      ) {
         slots.forEachIndexed { index, slot ->
           HomeRowView(
             slot = slot,
@@ -381,6 +384,7 @@ private fun Backdrop(row: HomeRowSlot?, card: HomeCard, imageUrl: (String?) -> S
         card.displayTitle,
         color = Tokens.Text,
         fontSize = 34.sp,
+        lineHeight = 36.sp,
         fontWeight = FontWeight.ExtraBold,
         letterSpacing = (-1).sp,
         maxLines = 2,
@@ -407,7 +411,7 @@ private fun Backdrop(row: HomeRowSlot?, card: HomeCard, imageUrl: (String?) -> S
 @Composable
 private fun rowTitle(slot: HomeRowSlot): String {
   val builtin = builtinRowTitle(slot.id)
-  return if (builtin != null) stringResource(builtin) else slot.title ?: slot.id
+  return if (builtin != null) stringResource(builtin) else slot.title.orEmpty()
 }
 
 @Composable
@@ -440,10 +444,17 @@ private fun HomeRowView(
     Spacer(Modifier.height(9.dp))
     when (val content = slot.content) {
       RowContent.Placeholder, RowContent.Loading -> PlaceholderRow(slot.id, requesters, onCardFocus)
-      RowContent.Error -> RowNote(stringResource(R.string.home_row_failed), homeRetryTag(slot.id), onRetry)
+      RowContent.Error -> {
+        // The retry button is the row's only focusable, so DOWN/UP can land on it.
+        val requester = remember(slot.id) { FocusRequester() }
+        requesters[slot.id to "index:0"] = requester
+        RowNote(stringResource(R.string.home_row_failed), homeRetryTag(slot.id), requester, onRetry) { onCardFocus(0) }
+      }
       is RowContent.Cards -> {
         if (content.partial) {
-          RowNote(stringResource(R.string.home_partial), homeRetryTag(slot.id), onRetry)
+          val requester = remember(slot.id) { FocusRequester() }
+          requesters[slot.id to "index:0"] = requester
+          RowNote(stringResource(R.string.home_partial), homeRetryTag(slot.id), requester, onRetry) { onCardFocus(0) }
           Spacer(Modifier.height(6.dp))
         }
         val listState = remember(slot.id) { LazyListState() }
@@ -476,11 +487,8 @@ private fun PlaceholderRow(rowId: String, requesters: MutableMap<Pair<String, St
     repeat(PlaceholderCards) { index ->
       val requester = remember(rowId, index) { FocusRequester() }
       requesters[rowId to "index:$index"] = requester
-      Box(
-        Modifier
-          .size(110.dp, 165.dp)
-          .clip(RoundedCornerShape(10.dp))
-          .background(Brush.verticalGradient(listOf(Tokens.Panel, Tokens.Panel2)))
+      ShimmerCard(
+        modifier = Modifier
           .testTag("$rowId:$index")
           .focusRequester(requester)
           .focusable()
@@ -491,12 +499,15 @@ private fun PlaceholderRow(rowId: String, requesters: MutableMap<Pair<String, St
 }
 
 @Composable
-private fun RowNote(text: String, retryTag: String, onRetry: () -> Unit) {
+private fun RowNote(text: String, retryTag: String, requester: FocusRequester, onRetry: () -> Unit, onFocus: () -> Unit) {
   Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(11.dp)) {
     Text(text, color = Tokens.Muted, fontSize = 11.sp)
     Surface(
       onClick = onRetry,
-      modifier = Modifier.testTag(retryTag),
+      modifier = Modifier
+        .testTag(retryTag)
+        .focusRequester(requester)
+        .onFocusChanged { if (it.isFocused) onFocus() },
       shape = ClickableSurfaceDefaults.shape(shape = RoundedCornerShape(8.dp)),
       colors = ClickableSurfaceDefaults.colors(
         containerColor = Tokens.Panel2,
@@ -524,7 +535,8 @@ private fun HomeCardView(
   if (card.isWideKind) {
     WideCard(
       label = title,
-      imageUrl = imageUrl(card.wideImage),
+      imageUrl = imageUrl(card.wide),
+      fallbackImageUrl = imageUrl(card.poster),
       progress = card.progressFraction,
       completed = false,
       onClick = onClick,
@@ -535,7 +547,8 @@ private fun HomeCardView(
   } else {
     PosterCard(
       name = title,
-      imageUrl = imageUrl(card.posterImage),
+      imageUrl = imageUrl(card.poster),
+      fallbackImageUrl = imageUrl(card.wide),
       progress = card.progressFraction,
       onClick = onClick,
       modifier = modifier,

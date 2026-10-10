@@ -7,12 +7,14 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import cz.stremiooffline.tv.data.ApiError
 import cz.stremiooffline.tv.data.DownloadDto
 import cz.stremiooffline.tv.data.HomeCard
 import cz.stremiooffline.tv.data.HomeResponseDto
 import cz.stremiooffline.tv.data.HomeRowStatus
 import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.data.decodeHomeRow
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -41,6 +43,8 @@ data class HomeRowSlot(
   val attempts: Int = 0,
   /** Bumped on every answer, so a retry timer restarts on a fresh partial answer. */
   val answerSeq: Int = 0,
+  /** The newest request that asked for this row; an older answer is dropped. */
+  val request: Int = 0,
 )
 
 data class HomeState(
@@ -74,6 +78,8 @@ class HomeViewModel(private val api: TvApi) : ViewModel() {
   private var started = false
   private val pendingReveal = mutableSetOf<String>()
   private var revealJob: Job? = null
+  private var loadJob: Job? = null
+  private var requestCounter = 0
 
   fun start() {
     if (started) return
@@ -92,10 +98,11 @@ class HomeViewModel(private val api: TvApi) : ViewModel() {
   }
 
   private fun load() {
-    viewModelScope.launch {
+    loadJob?.cancel()
+    loadJob = viewModelScope.launch {
       val existing = state.rows.associateBy { it.id }
       state = state.copy(loading = existing.isEmpty(), failed = false)
-      val probe = runCatching { api.home(emptyList()) }.getOrNull()
+      val probe = ask(emptyList())
       if (probe == null) {
         state = state.copy(loading = false, failed = true)
         return@launch
@@ -109,18 +116,20 @@ class HomeViewModel(private val api: TvApi) : ViewModel() {
 
       val builtin = slots.filter { !it.catalog }.map { it.id }
       if (builtin.isNotEmpty()) {
-        val answer = runCatching { api.home(builtin) }.getOrNull()
+        val claims = begin(builtin)
+        val answer = ask(builtin)
         if (answer == null) {
           state = state.copy(loading = false, failed = true)
           return@launch
         }
-        apply(builtin, answer, catalog = false)
+        apply(builtin, answer, catalog = false, claims = claims)
       }
       state = state.copy(loading = false)
 
       val revealed = revealedCatalogRows(slots)
       if (revealed.isNotEmpty()) {
-        runCatching { api.home(revealed) }.getOrNull()?.let { apply(revealed, it, catalog = true) }
+        val claims = begin(revealed)
+        ask(revealed)?.let { apply(revealed, it, catalog = true, claims = claims) }
       }
       refreshDownloads()
     }
@@ -132,7 +141,13 @@ class HomeViewModel(private val api: TvApi) : ViewModel() {
 
   private fun refreshDownloads() {
     viewModelScope.launch {
-      val jobs = runCatching { api.downloads() }.getOrNull()?.jobs ?: return@launch
+      val jobs = try {
+        api.downloads().jobs
+      } catch (cancelled: CancellationException) {
+        throw cancelled
+      } catch (_: ApiError) {
+        return@launch
+      }
       state = state.copy(downloads = jobs)
     }
   }
@@ -145,14 +160,21 @@ class HomeViewModel(private val api: TvApi) : ViewModel() {
     pendingReveal += rowId
     if (revealJob?.isActive == true) return
     revealJob = viewModelScope.launch {
-      // Rows revealed in the same moment go out as one request.
-      delay(0)
-      val ids = pendingReveal.toList()
-      pendingReveal.clear()
-      if (ids.isEmpty()) return@launch
-      val answer = runCatching { api.home(ids) }.getOrNull()
-      if (answer == null) ids.forEach { id -> update(id) { it.copy(content = RowContent.Error, answerSeq = it.answerSeq + 1) } }
-      else apply(ids, answer, catalog = true)
+      // Rows revealed in the same moment go out as one request; a row revealed while one is in
+      // flight joins the next batch instead of waiting for the next entry to Home.
+      while (pendingReveal.isNotEmpty()) {
+        delay(0)
+        val ids = pendingReveal.toList()
+        pendingReveal.clear()
+        if (ids.isEmpty()) continue
+        val claims = begin(ids)
+        val answer = ask(ids)
+        if (answer == null) {
+          ids.forEach { id -> update(id) { it.copy(content = RowContent.Error, answerSeq = it.answerSeq + 1) } }
+        } else {
+          apply(ids, answer, catalog = true, claims = claims)
+        }
+      }
     }
   }
 
@@ -160,9 +182,10 @@ class HomeViewModel(private val api: TvApi) : ViewModel() {
   fun retry(rowId: String) {
     viewModelScope.launch {
       val catalog = state.rows.firstOrNull { it.id == rowId }?.catalog == true
-      val answer = runCatching { api.home(listOf(rowId)) }.getOrNull()
+      val claims = begin(listOf(rowId))
+      val answer = ask(listOf(rowId))
       if (answer == null) update(rowId) { it.copy(content = RowContent.Error, answerSeq = it.answerSeq + 1) }
-      else apply(listOf(rowId), answer, catalog = catalog)
+      else apply(listOf(rowId), answer, catalog = catalog, claims = claims)
     }
   }
 
@@ -174,11 +197,38 @@ class HomeViewModel(private val api: TvApi) : ViewModel() {
     retry(rowId)
   }
 
-  private fun apply(ids: List<String>, response: HomeResponseDto, catalog: Boolean) {
+  /** One Home call; a failed one is null, a cancelled one propagates. */
+  private suspend fun ask(ids: List<String>): HomeResponseDto? = try {
+    api.home(ids)
+  } catch (cancelled: CancellationException) {
+    throw cancelled
+  } catch (_: ApiError) {
+    null
+  }
+
+  /** Marks the rows a request is about to ask, so a superseded answer can be dropped. */
+  private fun begin(ids: List<String>): Map<String, Int> {
+    val wanted = ids.toSet()
+    val claims = mutableMapOf<String, Int>()
+    state = state.copy(
+      rows = state.rows.map { slot ->
+        if (slot.id in wanted) {
+          val next = ++requestCounter
+          claims[slot.id] = next
+          slot.copy(request = next)
+        } else {
+          slot
+        }
+      },
+    )
+    return claims
+  }
+
+  private fun apply(ids: List<String>, response: HomeResponseDto, catalog: Boolean, claims: Map<String, Int>) {
     val wanted = ids.toSet()
     state = state.copy(
       rows = state.rows.map { slot ->
-        if (slot.id !in wanted) slot
+        if (slot.id !in wanted || claims[slot.id] != slot.request) slot
         else {
           val row = response.rows[slot.id]
           val content = if (row == null) {

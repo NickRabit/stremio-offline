@@ -22,6 +22,7 @@ import cz.stremiooffline.tv.data.HomeResponseDto
 import cz.stremiooffline.tv.data.HomeRowDto
 import cz.stremiooffline.tv.ui.FakeTvApi
 import cz.stremiooffline.tv.ui.home.homeCardTag
+import cz.stremiooffline.tv.ui.library.TagLibraryBreadcrumb
 import kotlinx.serialization.json.JsonObject
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -110,5 +111,42 @@ class HomeStartTest {
     compose.waitForIdle()
 
     assertTrue(api.browseCalls.any { it.first == "browse/Films" })
+  }
+
+  @Test
+  fun `a folder jump pushes onto the library root and Back leaves the folder`() {
+    val api = FakeTvApi()
+    val card = HomeCard.Favorite(key = "folder:f", path = "browse/Films", itemKind = "folder", label = "Films")
+    api.homeHandler = { asked ->
+      if (asked.isEmpty()) HomeResponseDto(order = listOf(HomeOrderEntry("favorites")))
+      else HomeResponseDto(
+        order = listOf(HomeOrderEntry("favorites")),
+        rows = mapOf(
+          "favorites" to HomeRowDto(items = listOf(HomeCardsJson.encodeToJsonElement(HomeCard.serializer(), card) as JsonObject)),
+        ),
+      )
+    }
+    api.pages[null] = BrowseResult("", listOf(BrowseItem.Library(path = "browse", name = "Films", fileCount = 1)), 1, false)
+    api.pages["browse/Films"] = BrowseResult(
+      "browse/Films",
+      listOf(BrowseItem.Folder(path = "browse/Films/It", name = "It", fileCount = 1)),
+      1,
+      false,
+    )
+
+    scenario.onActivity { activity ->
+      activity.setContent { Shell(start = Section.Home, api = api, username = "demo", onSignOut = {}) }
+    }
+    compose.waitForIdle()
+    compose.onNodeWithTag(homeCardTag("folder:f")).performKeyInput { pressKey(Key.DirectionCenter) }
+    compose.waitForIdle()
+
+    // The jump pushed the folder onto the root instead of replacing it: the breadcrumb is shown.
+    compose.onNodeWithTag(TagLibraryBreadcrumb).assertExists()
+
+    // Back pops the folder and stays in the library.
+    scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
+    compose.waitForIdle()
+    compose.onNodeWithTag(TagLibraryBreadcrumb).assertDoesNotExist()
   }
 }

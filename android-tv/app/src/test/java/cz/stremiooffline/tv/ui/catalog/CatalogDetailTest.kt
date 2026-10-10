@@ -17,6 +17,7 @@ import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.pressKey
 import androidx.compose.runtime.mutableIntStateOf
 import cz.stremiooffline.tv.data.MetaDto
+import cz.stremiooffline.tv.catalog.ResumeEpisode
 import cz.stremiooffline.tv.data.ProgressDto
 import cz.stremiooffline.tv.data.ProgressEntryDto
 import cz.stremiooffline.tv.data.SettingsResponse
@@ -497,5 +498,53 @@ class CatalogDetailTest {
 
     assertFalse(api.streamsRequests.contains("series:tt1"))
     assertFalse(api.streamSourcesRequests.contains("series:tt1"))
+  }
+
+  @Test
+  fun `opened from Home a series selects the named episode's sources`() {
+    val api = seriesApi()
+    api.metaValues["series:tt1"] = seriesMeta(v1(), v2())
+    api.streamsValues["series:tt1:1:1"] = listOf(stream("s1", name = "First's source"))
+    api.streamsValues["series:tt1:1:2"] = listOf(stream("s2", name = "Second's source"))
+    mount(
+      api,
+      CatalogDetailArgs(
+        MetaDto(id = "tt1", type = "series", name = "Show"),
+        "Cinemeta",
+        "series",
+        episode = ResumeEpisode("series:tt1:1:2", 1, 2),
+      ),
+    )
+    compose.waitForIdle()
+
+    assertTrue(api.streamsRequests.contains("series:tt1:1:2"))
+    assertFalse(api.streamsRequests.contains("series:tt1:1:1"))
+  }
+
+  @Test
+  fun `the season row scrolls as the D-pad walks to a far season`() {
+    val api = seriesApi()
+    val videos = (1..30).map { season -> VideoDto(id = "tt1:$season:1", title = "S$season", season = season, episode = 1) }
+    api.metaValues["series:tt1"] = seriesMeta(*videos.toTypedArray())
+    api.streamsValues["series:tt1:1:1"] = listOf(stream("s1", name = "FullHD"))
+    api.streamsValues["series:tt1:30:1"] = listOf(stream("s30", name = "FullHD"))
+    mount(api, seriesArgs())
+    compose.waitForIdle()
+
+    // DOWN lands on the episode row, UP climbs back to the season chips.
+    press(Key.DirectionDown)
+    press(Key.DirectionUp)
+    compose.onNodeWithTag(seasonChipTag(1)).assertIsFocused()
+
+    repeat(29) {
+      press(Key.DirectionRight)
+    }
+    compose.onNodeWithTag(seasonChipTag(30)).assertIsFocused()
+    compose.onNodeWithTag(seasonChipTag(30)).assertIsDisplayed()
+
+    press(Key.DirectionCenter)
+    compose.waitForIdle()
+    compose.onNodeWithTag(episodeCardTag(videos[29])).assertExists()
+    compose.onNodeWithTag(episodeCardTag(videos[0])).assertDoesNotExist()
   }
 }

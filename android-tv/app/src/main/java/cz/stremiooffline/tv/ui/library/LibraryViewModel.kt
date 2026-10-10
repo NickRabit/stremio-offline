@@ -10,6 +10,7 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import cz.stremiooffline.tv.data.ApiError
 import cz.stremiooffline.tv.data.BrowseItem
 import cz.stremiooffline.tv.data.LibraryApi
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -44,8 +45,13 @@ class LibraryViewModel(
   var selectedPath by mutableStateOf("")
 
   private var job: Job? = null
+  private var deepLinked = false
+
+  /** True while the section is showing a folder a Home card asked for, not the library root. */
+  val needsRootReset: Boolean get() = deepLinked
 
   fun start() {
+    deepLinked = false
     job?.cancel()
     state = LibraryState(pages = listOf(LibraryPage(path = "", title = "")), loading = true)
     job = viewModelScope.launch { load(null) }
@@ -57,11 +63,19 @@ class LibraryViewModel(
     job = viewModelScope.launch { load(path) }
   }
 
-  /** Opens one folder as the only level, the way a Home card reveals its library. */
+  /** Opens a folder a Home card asked for, on top of the library root so Back leaves the folder. */
   fun openHere(path: String, title: String) {
     job?.cancel()
-    state = LibraryState(pages = listOf(LibraryPage(path, title)), loading = true)
-    job = viewModelScope.launch { load(path) }
+    deepLinked = true
+    val root = state.pages.firstOrNull() ?: LibraryPage(path = "", title = "")
+    state = state.copy(pages = listOf(root, LibraryPage(path, title)), loading = true, error = false)
+    job = viewModelScope.launch {
+      val rootPage = pageOrNull(null, 0)
+      if (rootPage != null) updateAt(0) { it.copy(path = rootPage.path, items = rootPage.items, total = rootPage.total) }
+      val page = pageOrNull(path, 0)
+      if (page != null) updateAt(1) { it.copy(path = page.path, items = page.items, total = page.total) }
+      state = state.copy(loading = false, error = page == null)
+    }
   }
 
   /** Pushes a level whose rows were already fetched, so a folder is not browsed twice. */
@@ -126,6 +140,14 @@ class LibraryViewModel(
     return BrowsePage(page.path, page.items, page.total)
   }
 
+  private suspend fun pageOrNull(path: String?, skip: Int): BrowsePage? = try {
+    loadPage(path, skip)
+  } catch (cancelled: CancellationException) {
+    throw cancelled
+  } catch (_: ApiError) {
+    null
+  }
+
   private suspend fun load(path: String?) {
     val depth = state.pages.size
     try {
@@ -142,6 +164,14 @@ class LibraryViewModel(
     if (state.pages.isEmpty() || state.pages.size != depth) return
     val pages = state.pages.toMutableList()
     pages[pages.lastIndex] = transform(pages.last())
+    state = state.copy(pages = pages)
+  }
+
+  /** Applies an answer to the level it was asked for, wherever it sits in the stack. */
+  private fun updateAt(index: Int, transform: (LibraryPage) -> LibraryPage) {
+    if (index !in state.pages.indices) return
+    val pages = state.pages.toMutableList()
+    pages[index] = transform(pages[index])
     state = state.copy(pages = pages)
   }
 
