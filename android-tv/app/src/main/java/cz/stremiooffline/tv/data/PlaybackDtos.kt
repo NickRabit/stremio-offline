@@ -43,6 +43,8 @@ data class PlaybackDescriptorDto(
   val offset: Double = 0.0,
   val duration: Double? = null,
   val playlist: Boolean = false,
+  /** The server kept the stream it had when a seek was refused. */
+  val seekRestored: Boolean = false,
   val audioTracks: List<JsonObject> = emptyList(),
   val audioTrack: Int = 0,
   val copy: CopyDto? = null,

@@ -64,6 +64,7 @@ sources.none
 save.toLibrary
 save.queued
 player.play
+player.seekRestored
 favorite.add
 favorite.remove
 episodes.seasonNumber

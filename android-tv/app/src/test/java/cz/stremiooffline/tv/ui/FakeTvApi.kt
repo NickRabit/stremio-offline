@@ -208,7 +208,15 @@ open class FakeTvApi : TvApi {
 
   override suspend fun deletePlayback(id: String) {}
 
-  override suspend fun saveProgress(key: String, position: Double, duration: Double, title: String, path: String?) {}
+  override suspend fun saveProgress(
+    key: String,
+    position: Double,
+    duration: Double,
+    title: String,
+    path: String?,
+    poster: String?,
+    addonKey: String?,
+  ) {}
 }
 
 data class CatalogRequest(val addonKey: String, val type: String, val id: String, val skip: Int, val genre: String?)

@@ -16,6 +16,7 @@ import androidx.compose.runtime.mutableDoubleStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -33,9 +34,12 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.TrackSelectionOverride
+import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
@@ -47,7 +51,10 @@ import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.playback.PlaybackController
 import cz.stremiooffline.tv.playback.PlaybackMode
+import cz.stremiooffline.tv.playback.PlayerTrack
+import cz.stremiooffline.tv.playback.PlayerTrackGroup
 import cz.stremiooffline.tv.playback.detectCapabilities
+import cz.stremiooffline.tv.playback.matchTrack
 import cz.stremiooffline.tv.ui.detail.PlayTarget
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -78,9 +85,40 @@ fun PlayerScreen(api: TvApi, target: PlayTarget, onExit: () -> Unit) {
   var loadedUrl by remember { mutableStateOf<String?>(null) }
   var playing by remember { mutableStateOf(false) }
   var position by remember { mutableDoubleStateOf(0.0) }
+  // Coming back from the background starts a fresh session paused, at the position left behind.
+  var backgroundPosition by remember { mutableStateOf<Double?>(null) }
+  var showControls by remember { mutableIntStateOf(0) }
+  var startPaused by remember { mutableStateOf(false) }
+  // The direct-play audio track is overridden once per descriptor; tracks arrive after the source.
+  var audioRevision by remember { mutableIntStateOf(-1) }
+  val currentState by rememberUpdatedState(state)
 
   // The overlay owns focus: a hidden OSD focuses its own root, a shown one the play button.
   val playFocus = remember { FocusRequester() }
+
+  /** The server picked the audio track by the account's language; direct play must follow it. */
+  fun applyServerAudio() {
+    val snapshot = currentState
+    if (snapshot.mode != PlaybackMode.Direct) return
+    val hint = snapshot.audioTrack ?: return
+    if (audioRevision == snapshot.revision) return
+    val tracks = exoPlayer.currentTracks
+    val groups = tracks.groups.map { group ->
+      PlayerTrackGroup(
+        group.type,
+        (0 until group.length).map { index ->
+          val format = group.getTrackFormat(index)
+          PlayerTrack(format.language, format.sampleMimeType, format.channelCount)
+        },
+      )
+    }
+    val match = matchTrack(hint, groups, C.TRACK_TYPE_AUDIO) ?: return
+    val group = tracks.groups.getOrNull(match.groupIndex) ?: return
+    exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon()
+      .setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, match.trackIndex))
+      .build()
+    audioRevision = snapshot.revision
+  }
 
   LaunchedEffect(attempt) {
     // A catalogue target already carries the server's source id; a library one is minted from its path.
@@ -89,7 +127,10 @@ fun PlayerScreen(api: TvApi, target: PlayTarget, onExit: () -> Unit) {
       controller.onNetworkError()
       return@LaunchedEffect
     }
-    controller.start(sourceId, target.key, target.title, target.path, resume = target.resume)
+    controller.start(
+      sourceId, target.key, target.title, target.path,
+      resume = target.resume, poster = target.poster, addonKey = target.addonKey,
+    )
   }
 
   LaunchedEffect(state.revision) {
@@ -107,7 +148,9 @@ fun PlayerScreen(api: TvApi, target: PlayTarget, onExit: () -> Unit) {
       exoPlayer.prepare()
     }
     exoPlayer.seekTo(((state.target - state.offset).coerceAtLeast(0.0) * 1000).toLong())
-    exoPlayer.playWhenReady = true
+    exoPlayer.playWhenReady = !startPaused
+    startPaused = false
+    applyServerAudio()
   }
 
   DisposableEffect(exoPlayer) {
@@ -118,7 +161,12 @@ fun PlayerScreen(api: TvApi, target: PlayTarget, onExit: () -> Unit) {
       }
 
       override fun onPlaybackStateChanged(playbackState: Int) {
+        if (playbackState == Player.STATE_READY) controller.onPlayerReady()
         if (playbackState == Player.STATE_ENDED) controller.onEnded()
+      }
+
+      override fun onTracksChanged(tracks: Tracks) {
+        applyServerAudio()
       }
 
       override fun onPlayerError(error: PlaybackException) {
@@ -139,9 +187,22 @@ fun PlayerScreen(api: TvApi, target: PlayTarget, onExit: () -> Unit) {
 
   DisposableEffect(lifecycle) {
     val observer = LifecycleEventObserver { _, event ->
-      if (event == Lifecycle.Event.ON_STOP) {
-        exoPlayer.pause()
-        controller.stop()
+      when (event) {
+        Lifecycle.Event.ON_STOP -> {
+          exoPlayer.pause()
+          backgroundPosition = controller.position
+          // The session is gone, so even an unchanged address must be prepared again.
+          loadedUrl = null
+          controller.stop()
+        }
+        Lifecycle.Event.ON_START -> {
+          if (backgroundPosition == null) return@LifecycleEventObserver
+          backgroundPosition = null
+          startPaused = true
+          showControls++
+          controller.retry()
+        }
+        else -> Unit
       }
     }
     lifecycle.addObserver(observer)
@@ -165,6 +226,8 @@ fun PlayerScreen(api: TvApi, target: PlayTarget, onExit: () -> Unit) {
     title = target.title,
     eyebrow = stringResource(pathLabel(state.mode, state.copyAudio)),
     playFocus = playFocus,
+    showControls = showControls,
+    seekKept = state.seekKept,
     onSeek = { controller.seekTo(it) },
     onTogglePause = { if (playing) exoPlayer.pause() else exoPlayer.play() },
     onExit = onExit,
@@ -198,14 +261,13 @@ fun PlayerScreen(api: TvApi, target: PlayTarget, onExit: () -> Unit) {
 
 /**
  * The media keys work whether or not the OSD is up; a null answer means the key is not ours. Back
- * is deliberately absent: the overlay's own rule owns it and hides the controls first.
+ * is deliberately absent: the overlay's own rule owns it and hides the controls first. Fast
+ * forward and rewind are the overlay's too, so a held key follows the same step rule as the pad.
  */
 internal fun mediaKey(key: Key, player: ExoPlayer, playing: Boolean, onExit: () -> Unit): Boolean? = when (key) {
   Key.MediaPlayPause -> { if (playing) player.pause() else player.play(); true }
   Key.MediaPlay -> { player.play(); true }
   Key.MediaPause -> { player.pause(); true }
-  Key.MediaFastForward -> { player.seekTo(player.currentPosition + (SEEK_STEP_SECONDS * 1000).toLong()); true }
-  Key.MediaRewind -> { player.seekTo((player.currentPosition - (SEEK_STEP_SECONDS * 1000).toLong()).coerceAtLeast(0)); true }
   else -> null
 }
 

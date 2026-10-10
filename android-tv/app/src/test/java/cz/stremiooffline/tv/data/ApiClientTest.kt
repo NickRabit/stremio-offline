@@ -133,6 +133,36 @@ class ApiClientTest {
     assertEquals("http://nas:8090/stremio/api/media/x", api.url("/api/media/x"))
   }
 
+  @Test
+  fun `progress carries the poster and addon only when the player knew them`() = runTest {
+    val api = client(start())
+    server.enqueue(MockResponse().setResponseCode(204))
+    api.saveProgress("movie:tt1", 42.0, 1_000.0, "It", null, poster = "poster.jpg", addonKey = "com.linvo.cinemeta")
+    val catalogue = server.takeRequest().body.readUtf8()
+    assertTrue(catalogue, catalogue.contains("\"poster\":\"poster.jpg\""))
+    assertTrue(catalogue, catalogue.contains("\"addonKey\":\"com.linvo.cinemeta\""))
+    assertTrue(catalogue, !catalogue.contains("null"))
+
+    server.enqueue(MockResponse().setResponseCode(204))
+    api.saveProgress("file:Films/It.mkv", 42.0, 1_000.0, "It", "Films/It.mkv")
+    val library = server.takeRequest().body.readUtf8()
+    assertTrue(library, !library.contains("poster"))
+    assertTrue(library, !library.contains("addonKey"))
+  }
+
+  @Test
+  fun `a refused seek keeps the stream and says so`() = runTest {
+    server.enqueue(
+      MockResponse().setBody(
+        """{"id":"p1","mode":"remux","url":"old.m3u8","offset":0,"duration":1000,"playlist":true,"seekRestored":true}""",
+      ),
+    )
+    val descriptor = client(start()).seekPlayback("p1", 900.0)
+
+    assertTrue(descriptor.seekRestored)
+    assertEquals("old.m3u8", descriptor.url)
+  }
+
   private fun start(): ServerAddress {
     server.start()
     return ServerAddress.parse(server.url("/").toString())!!

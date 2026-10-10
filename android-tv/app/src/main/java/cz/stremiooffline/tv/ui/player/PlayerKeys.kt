@@ -16,17 +16,29 @@ fun playerKeyOf(key: Key): PlayerKey? = when (key) {
   else -> null
 }
 
-/** What one key does. `seekSeconds` is negative for a rewind. */
+/** What one key does. */
 data class PlayerKeyIntent(
   val pausePlayback: Boolean = false,
   val showControls: Boolean = false,
   val hideControls: Boolean = false,
-  val seekSeconds: Double? = null,
+  /** -1 rewinds, +1 forwards; the distance comes from how long the key is held. */
+  val seekDirection: Int? = null,
   val exit: Boolean = false,
 )
 
 /** The step every playback seek uses, in seconds. */
 const val SEEK_STEP_SECONDS = 10.0
+
+/**
+ * The step of one seek press: a tap is ten seconds, and a key held longer than a second takes
+ * bigger bites so a long film does not need a hundred presses.
+ */
+fun seekStep(heldMs: Long): Double = when {
+  heldMs < 1_000 -> 10.0
+  heldMs < 3_000 -> 30.0
+  heldMs < 6_000 -> 60.0
+  else -> 120.0
+}
 
 /**
  * The prototype's key map. With the controls hidden the five-way pad drives playback directly;
@@ -36,7 +48,7 @@ const val SEEK_STEP_SECONDS = 10.0
 fun playerKeyIntent(key: PlayerKey, controlsShown: Boolean): PlayerKeyIntent? = when (key) {
   PlayerKey.Back -> if (controlsShown) PlayerKeyIntent(hideControls = true) else PlayerKeyIntent(exit = true)
   PlayerKey.Center -> if (controlsShown) null else PlayerKeyIntent(pausePlayback = true, showControls = true)
-  PlayerKey.Left -> if (controlsShown) null else PlayerKeyIntent(seekSeconds = -SEEK_STEP_SECONDS)
-  PlayerKey.Right -> if (controlsShown) null else PlayerKeyIntent(seekSeconds = SEEK_STEP_SECONDS)
+  PlayerKey.Left -> if (controlsShown) null else PlayerKeyIntent(seekDirection = -1)
+  PlayerKey.Right -> if (controlsShown) null else PlayerKeyIntent(seekDirection = 1)
   PlayerKey.Up, PlayerKey.Down -> if (controlsShown) null else PlayerKeyIntent(showControls = true)
 }

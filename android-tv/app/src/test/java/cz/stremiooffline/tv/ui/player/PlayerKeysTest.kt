@@ -25,10 +25,22 @@ class PlayerKeysTest {
   }
 
   @Test
-  fun `with the controls hidden left and right seek ten seconds`() {
-    assertEquals(-10.0, playerKeyIntent(PlayerKey.Left, controlsShown = false)!!.seekSeconds!!, 0.0)
-    assertEquals(10.0, playerKeyIntent(PlayerKey.Right, controlsShown = false)!!.seekSeconds!!, 0.0)
+  fun `with the controls hidden left and right seek, the distance growing with the hold`() {
+    assertEquals(-1, playerKeyIntent(PlayerKey.Left, controlsShown = false)!!.seekDirection)
+    assertEquals(1, playerKeyIntent(PlayerKey.Right, controlsShown = false)!!.seekDirection)
     assertTrue(playerKeyIntent(PlayerKey.Up, controlsShown = false)!!.showControls)
+  }
+
+  @Test
+  fun `a seek step is ten seconds, then thirty, sixty and two minutes`() {
+    assertEquals(10.0, seekStep(0), 0.0)
+    assertEquals(10.0, seekStep(999), 0.0)
+    assertEquals(30.0, seekStep(1_000), 0.0)
+    assertEquals(30.0, seekStep(2_999), 0.0)
+    assertEquals(60.0, seekStep(3_000), 0.0)
+    assertEquals(60.0, seekStep(5_999), 0.0)
+    assertEquals(120.0, seekStep(6_000), 0.0)
+    assertEquals(120.0, seekStep(120_000), 0.0)
   }
 
   @Test

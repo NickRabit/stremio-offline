@@ -65,6 +65,7 @@
   <string name="save_to_library">Salvar na biblioteca</string>
   <string name="save_queued">Na fila</string>
   <string name="player_play">Jogar</string>
+  <string name="player_seek_restored">Não foi possível mudar de posição. A posição anterior foi mantida.</string>
   <string name="favorite_add">Adicionar aos favoritos</string>
   <string name="favorite_remove">Remover dos favoritos</string>
   <string name="episodes_season_number">Temporada %1$s</string>

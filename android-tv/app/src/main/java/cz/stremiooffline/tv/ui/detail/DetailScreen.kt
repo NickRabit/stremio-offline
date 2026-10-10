@@ -71,6 +71,10 @@ data class PlayTarget(
   val resume: Boolean,
   val path: String? = null,
   val sourceId: String? = null,
+  /** The artwork and addon the catalogue title came from, saved with the progress so Home can
+   *  draw a resume card; a library file leaves them empty and gets its art from the library. */
+  val poster: String? = null,
+  val addonKey: String? = null,
 )
 
 /** Everything the title detail draws: the artwork, the meta line and the files that sit under it. */

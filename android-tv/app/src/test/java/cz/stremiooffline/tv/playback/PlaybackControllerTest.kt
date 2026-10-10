@@ -27,6 +27,8 @@ class PlaybackControllerTest {
     val pings = mutableListOf<String>()
     val deleted = mutableListOf<String>()
     val saved = mutableListOf<Pair<String, Double>>()
+    /** Every mutating call in the order it arrived, so a stop's save-then-delete is visible. */
+    val calls = mutableListOf<String>()
 
     var stored: ProgressDto? = null
     var failSave = false
@@ -35,6 +37,7 @@ class PlaybackControllerTest {
     var descriptor = PlaybackDescriptorDto(id = "p1", mode = "direct", url = "direct.mp4", offset = 0.0, duration = 1_000.0)
 
     override suspend fun startPlayback(sourceId: String, capabilities: ClientCapabilitiesDto, time: Double): PlaybackDescriptorDto {
+      calls += "start"
       started += Triple(sourceId, capabilities, time)
       if (startDelayMs > 0) delay(startDelayMs)
       if (failStart) throw IllegalStateException("the server said no")
@@ -56,13 +59,23 @@ class PlaybackControllerTest {
     }
 
     override suspend fun deletePlayback(id: String) {
+      calls += "delete"
       deleted += id
     }
 
     override suspend fun progress(key: String): ProgressDto? = stored
 
-    override suspend fun saveProgress(key: String, position: Double, duration: Double, title: String, path: String?) {
+    override suspend fun saveProgress(
+      key: String,
+      position: Double,
+      duration: Double,
+      title: String,
+      path: String?,
+      poster: String?,
+      addonKey: String?,
+    ) {
       if (failSave) throw IllegalStateException("the server said no")
+      calls += "save"
       saved += key to position
     }
   }
@@ -119,6 +132,7 @@ class PlaybackControllerTest {
 
     controller.start("src", "file:a", "A", "a", resume = false)
     runCurrent()
+    controller.onPlayerReady()
     controller.onPlayerPosition(10.0)
     controller.onPlaying()
     advanceTimeBy(10_001)
@@ -176,6 +190,7 @@ class PlaybackControllerTest {
 
     controller.start("src", "file:a", "A", "a", resume = false)
     runCurrent()
+    controller.onPlayerReady()
     controller.onPlayerPosition(42.0)
     controller.stop()
     runCurrent()
@@ -193,6 +208,7 @@ class PlaybackControllerTest {
 
     controller.start("src", "file:a", "A", "a", resume = false)
     runCurrent()
+    controller.onPlayerReady()
     controller.onPlayerPosition(42.0)
     controller.stop()
     runCurrent()
@@ -247,5 +263,94 @@ class PlaybackControllerTest {
 
     assertEquals(1, api.escalates.size)
     assertEquals(PlaybackError.Decoder, controller.state.value.error)
+  }
+
+  @Test
+  fun `closing a still loading resume must not overwrite stored progress`() = runTest {
+    val api = FakeApi()
+    api.stored = ProgressDto(position = 120.0, duration = 1_000.0)
+    api.startDelayMs = 5_000L
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+    controller.start("src", "file:a", "A", "a", resume = true)
+    runCurrent()
+    controller.onPlayerPosition(0.0)
+    controller.stop()
+    runCurrent()
+    assertTrue("Opening and closing an unprepared player must preserve resume; saved=${api.saved}", api.saved.isEmpty())
+  }
+
+  @Test
+  fun `a position the player reported after becoming ready is saved`() = runTest {
+    val api = FakeApi()
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+
+    controller.start("src", "file:a", "A", "a", resume = false)
+    runCurrent()
+    controller.onPlayerReady()
+    controller.onPlayerPosition(12.0)
+    controller.stop()
+    runCurrent()
+
+    assertEquals(listOf(12.0), api.saved.map { it.second })
+  }
+
+  @Test
+  fun `a refused seek must retain the playing position`() = runTest {
+    val api = FakeApi()
+    api.descriptor = PlaybackDescriptorDto(id = "p1", mode = "remux", url = "old.m3u8", offset = 0.0, duration = 1_000.0, playlist = true)
+    val restoredApi = object : PlaybackApi by api {
+      override suspend fun seekPlayback(id: String, time: Double): PlaybackDescriptorDto =
+        kotlinx.serialization.json.Json { ignoreUnknownKeys = true }.decodeFromString(
+          PlaybackDescriptorDto.serializer(),
+          """{"id":"p1","mode":"remux","url":"old.m3u8","offset":0,"duration":1000,"playlist":true,"seekRestored":true}""",
+        )
+    }
+    val controller = PlaybackController(restoredApi, backgroundScope, { 0L }, capabilities)
+    controller.start("src", "file:a", "A", "a", resume = false)
+    runCurrent()
+    controller.onPlayerPosition(100.0)
+    controller.seekTo(900.0)
+    advanceTimeBy(601L)
+    runCurrent()
+    assertEquals("The server retained the old stream; the requested position was never reached", 100.0, controller.position, 0.001)
+  }
+
+  @Test
+  fun `a refused seek asks the screen to show the message`() = runTest {
+    val api = FakeApi()
+    api.descriptor = PlaybackDescriptorDto(id = "p1", mode = "remux", url = "old.m3u8", offset = 0.0, duration = 1_000.0, playlist = true)
+    val restoredApi = object : PlaybackApi by api {
+      override suspend fun seekPlayback(id: String, time: Double): PlaybackDescriptorDto =
+        api.descriptor.copy(seekRestored = true)
+    }
+    val controller = PlaybackController(restoredApi, backgroundScope, { 0L }, capabilities)
+    controller.start("src", "file:a", "A", "a", resume = false)
+    runCurrent()
+    controller.onPlayerPosition(100.0)
+    controller.seekTo(900.0)
+    advanceTimeBy(601L)
+    runCurrent()
+
+    assertEquals(1, controller.state.value.seekKept)
+  }
+
+  @Test
+  fun `coming back from the background stops and starts again at the position left behind`() = runTest {
+    val api = FakeApi()
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+
+    controller.start("src", "file:a", "A", "a", resume = true)
+    runCurrent()
+    controller.onPlayerReady()
+    controller.onPlayerPosition(42.0)
+    controller.stop()
+    runCurrent()
+    assertEquals(listOf("start", "save", "delete"), api.calls)
+
+    controller.retry()
+    runCurrent()
+    assertEquals(listOf("start", "save", "delete", "start"), api.calls)
+    assertEquals(42.0, api.started.last().third, 0.001)
+    assertTrue("The restart resumes at the position, not from the server's stored value", api.saved.size == 1)
   }
 }

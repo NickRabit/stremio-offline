@@ -23,7 +23,15 @@ interface PlaybackApi {
   suspend fun pingPlayback(id: String)
   suspend fun deletePlayback(id: String)
   suspend fun progress(key: String): ProgressDto?
-  suspend fun saveProgress(key: String, position: Double, duration: Double, title: String, path: String?)
+  suspend fun saveProgress(
+    key: String,
+    position: Double,
+    duration: Double,
+    title: String,
+    path: String?,
+    poster: String? = null,
+    addonKey: String? = null,
+  )
 }
 
 enum class PlaybackMode { Direct, Remux, Transcode }
@@ -44,10 +52,14 @@ data class PlaybackState(
   val duration: Double = 0.0,
   val mode: PlaybackMode = PlaybackMode.Direct,
   val copyAudio: Boolean = true,
+  /** The server's chosen audio track, for the direct-play override; null when it names none. */
+  val audioTrack: DescriptorTrack? = null,
   /** The absolute position the player should start or seek to after `revision` changes. */
   val target: Double = 0.0,
   val revision: Int = 0,
   val startedAt: Long = 0L,
+  /** Bumped when the server refused a seek; the screen shows the message for a few seconds. */
+  val seekKept: Int = 0,
   val error: PlaybackError? = null,
 )
 
@@ -76,8 +88,11 @@ class PlaybackController(
   private var key = ""
   private var title = ""
   private var path: String? = null
+  private var poster: String? = null
+  private var addonKey: String? = null
 
   private var playing = false
+  private var ready = false
   private var hasPosition = false
   private var lastPosition = 0.0
   private var escalated = false
@@ -96,16 +111,32 @@ class PlaybackController(
 
   private fun absolute(playerPosition: Double) = if (playlist) offset + playerPosition else playerPosition
 
-  fun start(sourceId: String, key: String, title: String, path: String?, resume: Boolean) =
-    begin(sourceId, key, title, path, explicitTime = null, resume = resume)
+  fun start(
+    sourceId: String,
+    key: String,
+    title: String,
+    path: String?,
+    resume: Boolean,
+    poster: String? = null,
+    addonKey: String? = null,
+  ) = begin(sourceId, key, title, path, explicitTime = null, resume = resume, poster = poster, addonKey = addonKey)
 
   /** Retries a failed start at the position the player last reported. */
   fun retry() {
     val id = sourceId ?: return
-    begin(id, key, title, path, explicitTime = position, resume = false)
+    begin(id, key, title, path, explicitTime = position, resume = false, poster = poster, addonKey = addonKey)
   }
 
-  private fun begin(sourceId: String, key: String, title: String, path: String?, explicitTime: Double?, resume: Boolean) {
+  private fun begin(
+    sourceId: String,
+    key: String,
+    title: String,
+    path: String?,
+    explicitTime: Double?,
+    resume: Boolean,
+    poster: String?,
+    addonKey: String?,
+  ) {
     val mine = ++generation
     // A start that is still in flight is left to finish: the session it may have already created
     // on the server is deleted when its answer arrives, rather than leaked to the reaper.
@@ -117,7 +148,10 @@ class PlaybackController(
     this.key = key
     this.title = title
     this.path = path
+    this.poster = poster
+    this.addonKey = addonKey
     playing = false
+    ready = false
     hasPosition = false
     lastPosition = 0.0
     escalated = false
@@ -152,7 +186,14 @@ class PlaybackController(
 
   fun onPlayerPosition(seconds: Double) {
     lastPosition = seconds
-    hasPosition = true
+    // Before the player has prepared the item the position is meaningless, so it is kept for the
+    // display but never saved; a seek answer confirms one of its own below.
+    if (ready) hasPosition = true
+  }
+
+  /** The player has reached `STATE_READY` for the item, so its position is worth keeping. */
+  fun onPlayerReady() {
+    ready = true
   }
 
   fun onPlaying() {
@@ -189,6 +230,11 @@ class PlaybackController(
       val id = sessionId ?: return@launch
       val descriptor = runCatching { api.seekPlayback(id, target) }.getOrNull() ?: return@launch
       if (stopped || mine != generation || stamp != sequence) return@launch
+      // The server kept the stream it had: the player must not move, and the position stays put.
+      if (descriptor.seekRestored && descriptor.id == id && descriptor.url == _state.value.url) {
+        _state.update { it.copy(seekKept = it.seekKept + 1) }
+        return@launch
+      }
       apply(descriptor, target = target)
       lastPosition = target - offset
       hasPosition = true
@@ -226,11 +272,13 @@ class PlaybackController(
     generation++
     cancelLoops()
     val id = sessionId
-    val payload = if (hasPosition) SavePayload(key, position, duration, title, path) else null
+    val payload = if (hasPosition) SavePayload(key, position, duration, title, path, poster, addonKey) else null
     sessionId = null
     if (payload != null || id != null) {
       scope.launch {
-        if (payload != null) runCatching { api.saveProgress(payload.key, payload.position, payload.duration, payload.title, payload.path) }
+        if (payload != null) runCatching {
+          api.saveProgress(payload.key, payload.position, payload.duration, payload.title, payload.path, payload.poster, payload.addonKey)
+        }
         if (id != null) runCatching { api.deletePlayback(id) }
       }
     }
@@ -243,7 +291,9 @@ class PlaybackController(
     val key = key
     val title = title
     val path = path
-    scope.launch { runCatching { api.saveProgress(key, position, duration, title, path) } }
+    val poster = poster
+    val addonKey = addonKey
+    scope.launch { runCatching { api.saveProgress(key, position, duration, title, path, poster, addonKey) } }
   }
 
   private fun startLoops() {
@@ -257,7 +307,7 @@ class PlaybackController(
     saveJob = scope.launch {
       while (isActive) {
         delay(SAVE_INTERVAL_MS)
-        if (playing && hasPosition) runCatching { api.saveProgress(key, position, duration, title, path) }
+        if (playing && hasPosition) runCatching { api.saveProgress(key, position, duration, title, path, poster, addonKey) }
       }
     }
   }
@@ -291,6 +341,7 @@ class PlaybackController(
         duration = duration,
         mode = mode,
         copyAudio = copyAudio,
+        audioTrack = descriptorTrack(descriptor.audioTracks, descriptor.audioTrack),
         target = target,
         revision = it.revision + 1,
         error = null,
@@ -318,6 +369,8 @@ class PlaybackController(
     val duration: Double,
     val title: String,
     val path: String?,
+    val poster: String?,
+    val addonKey: String?,
   )
 
   companion object {

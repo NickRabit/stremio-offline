@@ -357,7 +357,16 @@ fun CatalogDetailScreen(
     selectedStream = stream
     closeSources()
     message = null
-    onPlay(PlayTarget(key = progressKey, title = playerTitle, resume = resuming, sourceId = stream.sourceId))
+    onPlay(
+      PlayTarget(
+        key = progressKey,
+        title = playerTitle,
+        resume = resuming,
+        sourceId = stream.sourceId,
+        poster = args.meta.poster ?: meta.poster,
+        addonKey = args.addonKey,
+      ),
+    )
   }
 
   fun queue(stream: StreamDto) {
@@ -435,7 +444,16 @@ fun CatalogDetailScreen(
       stream?.playable == true -> {
         pickedStream = true
         selectedStream = stream
-        onPlay(PlayTarget(progressKey, playerTitle, resume = false, sourceId = stream.sourceId))
+        onPlay(
+          PlayTarget(
+            progressKey,
+            playerTitle,
+            resume = false,
+            sourceId = stream.sourceId,
+            poster = args.meta.poster ?: meta.poster,
+            addonKey = args.addonKey,
+          ),
+        )
       }
       pickedStream -> message = if (stream != null) torrentText else emptyText
       sourcesAsking -> Unit

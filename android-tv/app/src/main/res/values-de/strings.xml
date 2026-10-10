@@ -65,6 +65,7 @@
   <string name="save_to_library">Zur Bibliothek</string>
   <string name="save_queued">In der Warteschlange</string>
   <string name="player_play">Spielen</string>
+  <string name="player_seek_restored">Springen nicht möglich. Die vorherige Position wurde beibehalten.</string>
   <string name="favorite_add">Zu Favoriten hinzufügen</string>
   <string name="favorite_remove">Aus Favoriten entfernen</string>
   <string name="episodes_season_number">Staffel %1$s</string>

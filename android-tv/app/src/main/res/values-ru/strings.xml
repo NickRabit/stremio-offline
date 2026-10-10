@@ -65,6 +65,7 @@
   <string name="save_to_library">В библиотеку</string>
   <string name="save_queued">В очереди</string>
   <string name="player_play">Играть</string>
+  <string name="player_seek_restored">Не удалось перемотать. Сохранена предыдущая позиция.</string>
   <string name="favorite_add">Добавить в избранное</string>
   <string name="favorite_remove">Удалить из избранного</string>
   <string name="episodes_season_number">Сезон %1$s</string>

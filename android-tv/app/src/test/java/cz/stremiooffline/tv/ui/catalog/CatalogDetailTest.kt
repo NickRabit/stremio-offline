@@ -212,6 +212,28 @@ class CatalogDetailTest {
   }
 
   @Test
+  fun `playing a catalogue title carries the poster and the addon`() {
+    val api = FakeTvApi()
+    api.settingsValue = settings()
+    api.streamsValues["movie:tt1"] = listOf(stream("s1", name = "FullHD"))
+    mount(
+      api,
+      CatalogDetailArgs(
+        MetaDto(id = "tt1", type = "movie", name = "It", poster = "poster.jpg"),
+        "Cinemeta",
+        "movie",
+        addonKey = "com.linvo.cinemeta",
+      ),
+    )
+    compose.waitForIdle()
+
+    press(Key.DirectionCenter)
+
+    assertEquals("poster.jpg", played.single().poster)
+    assertEquals("com.linvo.cinemeta", played.single().addonKey)
+  }
+
+  @Test
   fun `the background stays inert while a panel is open`() {
     val api = FakeTvApi()
     api.settingsValue = settings()
