@@ -1,0 +1,972 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Stremio Offline TV</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
+<style>
+/* Layout: a 1920x1080 TV stage scaled into the page, remote and notes below. Tokens are the web app's own (web/src/style.css). */
+:root{
+  color-scheme:dark;
+  --bg:#0b0e13;--panel:#141922;--panel2:#1b222d;--line:#29313e;--text:#f1f4f8;--muted:#929eae;
+  --accent:#ff5b38;--accent2:#ff795c;--plum:#a83c79;--green:#42ce91;--red:#f06a76;--gold:#e9b560;
+  --scrim:#0b0e13;--glow:#ff5b3840;
+  --font:Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  --safe-x:96px;--safe-y:54px;--rail:120px;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:radial-gradient(circle at 78% -10%,#252031 0,transparent 33%),var(--bg);color:var(--text);font-family:var(--font);padding-block:28px 48px;padding-inline:16px}
+button{font:inherit;color:inherit}
+.page{max-width:1600px;margin:0 auto;display:grid;gap:22px}
+.doc-head{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.brand-mark{width:44px;height:44px;border-radius:12px;display:grid;place-items:center;background:linear-gradient(145deg,var(--accent),var(--plum));box-shadow:0 8px 24px #ff5b3833;flex:none}
+.brand-mark svg{width:24px;height:24px}
+.doc-head small,.eyebrow{color:var(--accent);font-size:11px;letter-spacing:1.8px;font-weight:800;text-transform:uppercase}
+.doc-head h1{margin:2px 0 0;font-size:24px;letter-spacing:-.4px;text-wrap:balance}
+.doc-head h1 span{color:var(--accent)}
+.doc-head p{margin:0;color:var(--muted);font-size:14px;flex:1 1 320px;min-width:0}
+.switcher{display:flex;flex-wrap:wrap;gap:8px}
+.switcher button{border:1px solid var(--line);background:var(--panel);border-radius:999px;padding:8px 14px;font-size:13px;font-weight:600;color:var(--muted);cursor:pointer}
+.switcher button[aria-pressed="true"]{color:var(--text);border-color:#ff5b3866;background:#ff5b381c}
+.switcher button:focus-visible,.pad button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.tv{position:relative;width:100%;aspect-ratio:16/9;max-width:100%;border-radius:16px;overflow:hidden;border:1px solid var(--line);box-shadow:0 30px 80px #0008;background:var(--bg)}
+.stage{position:absolute;left:0;top:0;width:1920px;height:1080px;transform-origin:0 0;overflow:hidden;background:radial-gradient(circle at 78% -10%,#252031 0,transparent 38%),var(--bg);font-size:24px}
+.under{display:grid;grid-template-columns:minmax(0,300px) minmax(0,1fr);gap:22px;align-items:start}
+@media (max-width:760px){.under{grid-template-columns:minmax(0,1fr)}}
+.pad{display:grid;grid-template-columns:repeat(3,56px);grid-template-rows:repeat(3,56px);gap:6px;justify-content:center;padding:18px;border:1px solid var(--line);border-radius:14px;background:linear-gradient(150deg,#191f2af5,#11161ef5)}
+.pad button{border:1px solid var(--line);background:var(--panel2);border-radius:12px;cursor:pointer;display:grid;place-items:center;color:var(--text)}
+.pad button svg{width:22px;height:22px}
+.pad .ok{border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--accent2));border-color:transparent;font-weight:800;font-size:14px}
+.pad-wrap{display:grid;gap:10px}
+.pad-row{display:flex;gap:6px;justify-content:center}
+.pad-row button{flex:1;border:1px solid var(--line);background:var(--panel2);border-radius:10px;padding:9px;font-size:13px;font-weight:600;cursor:pointer}
+.keys{font-size:12px;color:var(--muted);text-align:center;margin:0}
+kbd{font-family:var(--font);font-size:11px;border:1px solid var(--line);border-bottom-width:2px;border-radius:5px;padding:1px 5px;color:var(--text);background:var(--panel)}
+.notes{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,250px),1fr));gap:12px}
+.note{border:1px solid var(--line);border-radius:14px;padding:16px 18px;background:linear-gradient(150deg,#191f2af5,#11161ef5);min-width:0}
+.note h3{margin:6px 0 6px;font-size:15px}
+.note p{margin:0;font-size:13px;line-height:1.55;color:var(--muted)}
+.note b{color:var(--text);font-weight:600}
+
+/* ---------- TV stage ---------- */
+.screen{position:absolute;inset:0;display:none}
+.screen.on{display:block}
+.ic{width:1em;height:1em;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.ic.fill{fill:currentColor;stroke:none}
+.focusable{outline:none;border:0;background:none;padding:0;cursor:pointer;text-align:left}
+
+/* rail */
+.rail{position:absolute;z-index:30;left:0;top:0;bottom:0;width:var(--rail);padding:var(--safe-y) 22px;display:flex;flex-direction:column;gap:10px;transition:width .22s ease,background .22s;background:linear-gradient(90deg,#0b0e13 60%,#0b0e1300)}
+.rail .brand-mark{width:64px;height:64px;border-radius:18px;margin:0 0 34px 6px}
+.rail .brand-mark svg{width:32px;height:32px}
+.rail-item{display:flex;align-items:center;gap:22px;height:72px;padding:0 22px;border-radius:16px;color:var(--muted);white-space:nowrap;overflow:hidden;font-size:26px;font-weight:600;position:relative}
+.rail-item .ic{font-size:32px}
+.rail-item span{opacity:0;transition:opacity .15s}
+.rail-item.current{color:var(--text)}
+.rail-item.current::before{content:"";position:absolute;left:0;top:18px;bottom:18px;width:4px;border-radius:4px;background:var(--accent)}
+.rail-foot{margin-top:auto}
+.avatar{width:44px;height:44px;border-radius:50%;display:grid;place-items:center;background:var(--panel2);border:1px solid var(--line);font-size:20px;font-weight:800;color:var(--accent2);flex:none}
+.rail.open{width:400px;background:linear-gradient(90deg,#0b0e13 70%,#0b0e13d0 88%,#0b0e1300)}
+.rail.open .rail-item span{opacity:1}
+.rail-item.focus{background:var(--panel2);color:var(--text);box-shadow:inset 0 0 0 3px var(--accent2)}
+.with-rail{position:absolute;inset:0 0 0 var(--rail)}
+
+/* hero */
+.hero{position:absolute;left:0;right:0;top:0;height:600px}
+.hero-art,.backdrop{position:absolute;inset:0;transition:opacity .35s}
+.hero::after,.backdrop-scrim{content:"";position:absolute;inset:0;background:linear-gradient(90deg,var(--scrim) 12%,#0b0e13cc 38%,#0b0e1300 70%),linear-gradient(0deg,var(--scrim) 2%,#0b0e1300 55%)}
+.hero-copy{position:absolute;z-index:2;left:64px;top:96px;max-width:900px;display:grid;gap:14px}
+.hero-copy .eyebrow{font-size:17px;letter-spacing:3px}
+.hero-copy h2{margin:0;font-size:68px;line-height:1.02;letter-spacing:-2px;font-weight:800;text-wrap:balance}
+.meta{display:flex;align-items:center;gap:14px;color:var(--muted);font-size:24px;font-weight:500;flex-wrap:wrap}
+.meta .star{color:var(--gold);font-weight:700;display:inline-flex;gap:6px;align-items:center}
+.meta i{width:5px;height:5px;border-radius:50%;background:var(--muted);opacity:.6}
+.syn{margin:0;font-size:25px;line-height:1.5;color:#cfd6e0;max-width:860px;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.hero-progress{display:flex;align-items:center;gap:16px;font-size:20px;color:var(--muted)}
+.bar{width:280px;height:6px;border-radius:6px;background:#2b3340;overflow:hidden}
+.bar i{display:block;height:100%;background:var(--accent)}
+
+/* rows */
+.rows-clip{position:absolute;left:0;right:0;top:540px;bottom:0;overflow:hidden}
+.rows{position:absolute;left:0;right:0;top:0;transition:transform .28s ease}
+.row{padding:0 0 30px 64px}
+.row-head{display:flex;align-items:baseline;gap:16px;margin:0 0 18px;font-size:30px;font-weight:700;letter-spacing:-.4px}
+.row-head small{font-size:20px;color:var(--muted);font-weight:500}
+.row-head .addon{font-size:15px;font-weight:800;letter-spacing:1.6px;color:var(--accent);text-transform:uppercase}
+.track{display:flex;gap:28px;transition:transform .28s ease;padding:14px 0 6px 6px}
+.row.dim{opacity:.55}
+.card{flex:none;display:grid;gap:12px;color:var(--text)}
+.card .art{position:relative;border-radius:14px;overflow:hidden;transition:transform .18s ease,box-shadow .18s ease;box-shadow:0 10px 30px #0006}
+.poster .art{width:220px;height:330px}
+.wide .art{width:400px;height:225px}
+.card .cap{display:grid;gap:4px;max-width:100%;opacity:.0;transform:translateY(-6px);transition:opacity .18s,transform .18s}
+.card .cap strong{font-size:22px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.card .cap small{font-size:18px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.poster .cap{width:220px}.wide .cap{width:400px}
+.card.focus .art{transform:scale(1.08);box-shadow:0 0 0 4px var(--accent2),0 22px 60px var(--glow)}
+.card.focus .cap{opacity:1;transform:translateY(8px)}
+.wide .cap{opacity:1;transform:none}
+.wide.focus .cap{transform:translateY(10px)}
+.resume-bar{position:absolute;left:0;right:0;bottom:0;height:7px;background:#0b0e1399}
+.resume-bar i{display:block;height:100%;background:var(--accent)}
+.badge{position:absolute;top:12px;left:12px;padding:5px 10px;border-radius:8px;font-size:14px;font-weight:800;letter-spacing:1px;background:#0b0e13cc;color:var(--text);text-transform:uppercase}
+.badge.new{background:var(--accent);color:#fff}
+.badge.ok{color:var(--green)}
+.art-title{position:absolute;left:16px;right:16px;bottom:22px;font-weight:800;font-size:26px;line-height:1.05;letter-spacing:-.3px;text-shadow:0 2px 12px #0009;text-wrap:balance}
+.art-title.old{font-family:Georgia,"Times New Roman",serif;font-style:italic;font-weight:700;letter-spacing:0}
+.wide .art-title{font-size:28px;bottom:26px}
+.skeleton .art{background:linear-gradient(110deg,var(--panel) 30%,var(--panel2) 50%,var(--panel) 70%);background-size:300% 100%;animation:shimmer 1.4s linear infinite}
+@keyframes shimmer{to{background-position:-150% 0}}
+.dl-strip{display:flex;align-items:center;gap:20px;padding:20px 28px;border-radius:16px;border:1px solid var(--line);background:linear-gradient(150deg,#191f2af5,#11161ef5);font-size:22px;width:max-content;max-width:900px}
+.dl-strip .ic{font-size:30px;color:var(--accent2)}
+.dl-strip small{color:var(--muted);font-size:20px}
+.dl-strip.focus{box-shadow:0 0 0 4px var(--accent2),0 18px 50px var(--glow)}
+
+/* page headings (catalog, library, settings) */
+.page-head{position:absolute;left:64px;top:var(--safe-y);right:var(--safe-x);display:grid;gap:8px}
+.page-head .eyebrow{font-size:16px;letter-spacing:3px}
+.page-head h2{margin:0;font-size:52px;letter-spacing:-1.6px;font-weight:800}
+.chips{display:flex;gap:16px;margin-top:22px;flex-wrap:wrap}
+.chip{display:inline-flex;align-items:center;gap:12px;height:60px;padding:0 26px;border-radius:999px;border:1px solid var(--line);background:var(--panel);font-size:22px;font-weight:600;color:var(--text)}
+.chip small{color:var(--muted);font-weight:500;font-size:20px}
+.chip .ic{font-size:24px;color:var(--muted)}
+.chip.selected{border-color:#ff5b3866;background:#ff5b381c;color:var(--accent2)}
+.chip.focus{background:linear-gradient(135deg,var(--accent),var(--accent2));border-color:transparent;color:#fff;box-shadow:0 10px 30px var(--glow);transform:scale(1.04)}
+.chip.focus small,.chip.focus .ic{color:#fff}
+.grid-clip{position:absolute;left:64px;right:0;top:330px;bottom:0;overflow:hidden}
+.grid{display:grid;grid-template-columns:repeat(7,220px);gap:30px 36px;padding:14px 6px 80px;transition:transform .28s ease}
+.grid .card .cap{opacity:1;transform:none}
+.grid .card.focus .cap{transform:translateY(8px)}
+.fav-card{grid-column:span 3;display:flex;align-items:center;gap:30px;padding:0 40px;height:330px;border-radius:16px;border:1px solid var(--line);background:linear-gradient(120deg,#2a2030,#151a23);color:var(--text)}
+.fav-card .ic{font-size:64px;color:var(--gold)}
+.fav-card strong{display:block;font-size:34px}
+.fav-card small{font-size:22px;color:var(--muted)}
+.fav-card.focus{box-shadow:0 0 0 4px var(--accent2),0 22px 60px var(--glow);transform:scale(1.02)}
+.crumbs{display:flex;align-items:center;gap:12px;font-size:20px;color:var(--muted);margin-top:4px}
+.crumbs b{color:var(--text);font-weight:600}
+
+/* buttons on TV */
+.actions{display:flex;gap:18px;margin-top:10px;flex-wrap:wrap}
+.btn{display:inline-flex;align-items:center;gap:14px;height:72px;padding:0 32px;border-radius:16px;border:1px solid var(--line);background:#1b222dd9;font-size:25px;font-weight:700;color:var(--text);transition:transform .15s,box-shadow .15s}
+.btn .ic{font-size:28px}
+.btn.primary{background:#ff5b3826;border-color:#ff5b3870;color:var(--accent2)}
+.btn.icon{width:72px;padding:0;justify-content:center}
+.btn.focus{background:linear-gradient(135deg,var(--accent),var(--accent2));border-color:transparent;color:#fff;transform:scale(1.06);box-shadow:0 12px 34px var(--glow)}
+.btn.on .ic{fill:var(--gold);stroke:var(--gold)}
+.btn.focus.on .ic{fill:#fff;stroke:#fff}
+
+/* detail */
+.detail-copy{position:absolute;z-index:2;left:120px;top:96px;width:1100px;display:grid;gap:18px}
+.detail-copy h2{margin:0;font-size:84px;line-height:1;letter-spacing:-2.6px;font-weight:800}
+.tchips{display:flex;gap:12px;flex-wrap:wrap}
+.tchip{padding:6px 16px;border-radius:999px;border:1px solid var(--line);font-size:17px;font-weight:800;letter-spacing:1.2px;text-transform:uppercase;color:var(--muted);background:#0b0e1399}
+.tchip.k{color:var(--accent2);border-color:#ff5b3866}
+.tchip.g{color:var(--green);border-color:#42ce9155}
+.episodes{position:absolute;left:120px;right:0;bottom:var(--safe-y);display:grid;gap:16px}
+.episodes .row-head{margin:0}
+.episodes .track{padding-left:6px}
+.ep .art{width:380px;height:214px}
+.ep .cap{width:380px;opacity:1;transform:none}
+.ep.focus .cap{transform:translateY(10px)}
+.ep .num{position:absolute;left:14px;top:12px;font-size:16px;font-weight:800;letter-spacing:1.4px;background:#0b0e13cc;border-radius:8px;padding:5px 10px}
+.ep .watched{position:absolute;right:12px;top:12px;width:36px;height:36px;border-radius:50%;display:grid;place-items:center;background:#0b0e13cc;color:var(--green);font-size:20px}
+
+/* drawer */
+.drawer{position:absolute;z-index:40;top:0;right:0;bottom:0;width:720px;padding:var(--safe-y) var(--safe-x) var(--safe-y) 48px;background:linear-gradient(150deg,#191f2afa,#11161efa);border-left:1px solid var(--line);box-shadow:-40px 0 80px #0009;transform:translateX(100%);transition:transform .25s ease;display:flex;flex-direction:column;gap:18px}
+.drawer.on{transform:none}
+.drawer h3{margin:0;font-size:36px;letter-spacing:-.6px;display:flex;justify-content:space-between;align-items:baseline}
+.drawer h3 small{font-size:20px;color:var(--muted);font-weight:500}
+.drawer h4{margin:16px 0 0;font-size:16px;letter-spacing:2.4px;text-transform:uppercase;color:var(--accent);font-weight:800}
+.src{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:20px;align-items:center;padding:20px 22px;border-radius:14px;border:1px solid var(--line);background:#0b0e1366;color:var(--text);width:100%}
+.src .tag{font-size:15px;font-weight:800;letter-spacing:1.2px;color:var(--green)}
+.src .tag.http{color:#7fb3ff}
+.src strong{display:block;font-size:23px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.src small{display:block;font-size:18px;color:var(--muted);margin-top:4px}
+.src .unk{color:var(--gold)}
+.src .end{font-size:20px;color:var(--muted);display:flex;align-items:center;gap:10px}
+.src .end .ic{color:var(--accent2);font-size:26px}
+.src.focus{border-color:var(--accent2);background:#ff5b3818;box-shadow:0 0 0 2px var(--accent2)}
+.drawer .hint{margin-top:auto;font-size:18px;color:var(--muted);line-height:1.5}
+.opt{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:16px 22px;border-radius:12px;font-size:23px;color:var(--text);width:100%}
+.opt small{color:var(--muted);font-size:18px}
+.opt .ic{color:var(--accent2);font-size:26px;visibility:hidden}
+.opt.sel .ic{visibility:visible}
+.opt.focus{background:var(--panel2);box-shadow:inset 0 0 0 3px var(--accent2)}
+.diag{display:grid;grid-template-columns:auto 1fr;gap:12px 24px;font-size:21px}
+.diag dt{color:var(--muted)}
+.diag dd{margin:0;font-weight:600;font-variant-numeric:tabular-nums}
+.diag .good{color:var(--green)}
+
+/* player */
+.video{position:absolute;inset:0;overflow:hidden;background:#000}
+.video .frame{position:absolute;inset:-4%;animation:drift 30s ease-in-out infinite alternate}
+@keyframes drift{to{transform:scale(1.06) translate(-1%,1%)}}
+.sub{position:absolute;left:0;right:0;bottom:200px;text-align:center;font-size:46px;font-weight:700;text-shadow:0 2px 8px #000,0 0 2px #000;transition:bottom .2s}
+.osd-hidden .sub{bottom:110px}
+.osd{position:absolute;inset:0;transition:opacity .25s}
+.osd-hidden .osd{opacity:0}
+.osd-top{position:absolute;left:0;right:0;top:0;padding:var(--safe-y) var(--safe-x) 120px;background:linear-gradient(180deg,#000c,#0000)}
+.osd-top .eyebrow{font-size:16px;letter-spacing:3px}
+.osd-top h2{margin:6px 0 0;font-size:40px;letter-spacing:-.8px}
+.osd-top .mode{position:absolute;right:var(--safe-x);top:var(--safe-y);display:flex;gap:10px}
+.osd-bot{position:absolute;left:0;right:0;bottom:0;padding:140px var(--safe-x) var(--safe-y);background:linear-gradient(0deg,#000d,#0000)}
+.timeline{display:flex;align-items:center;gap:24px;font-size:22px;font-variant-numeric:tabular-nums;color:#d8dee8}
+.tl{position:relative;flex:1;height:8px;border-radius:8px;background:#ffffff2e;transition:height .15s}
+.tl i{position:absolute;left:0;top:0;bottom:0;border-radius:8px;background:var(--accent)}
+.tl b{position:absolute;top:50%;width:0;height:0;border-radius:50%;background:#fff;transform:translate(-50%,-50%);transition:width .15s,height .15s}
+.tl.focus{height:12px}
+.tl.focus b{width:28px;height:28px;box-shadow:0 0 0 6px #ff5b3855}
+.tl .tip{position:absolute;bottom:34px;transform:translateX(-50%);background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:6px 12px;font-size:20px;opacity:0;white-space:nowrap}
+.tl.focus .tip{opacity:1}
+.ctrls{display:flex;align-items:center;gap:18px;margin-top:28px}
+.ctrls .spacer{flex:1}
+.cbtn{height:76px;min-width:76px;padding:0 22px;border-radius:38px;display:inline-flex;align-items:center;justify-content:center;gap:10px;background:#ffffff1a;font-size:22px;font-weight:700;color:var(--text);transition:transform .15s,box-shadow .15s,background .15s}
+.cbtn .ic{font-size:30px}
+.cbtn.play{width:92px;height:92px;border-radius:50%;padding:0;background:linear-gradient(135deg,var(--accent),var(--accent2))}
+.cbtn.focus{background:#fff;color:var(--bg);transform:scale(1.08);box-shadow:0 10px 30px #0008}
+.cbtn.play.focus{background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff;box-shadow:0 0 0 5px #fff,0 12px 36px var(--glow)}
+.seek-bubble{position:absolute;top:50%;padding:16px 28px;border-radius:40px;background:#000a;font-size:30px;font-weight:800;opacity:0;transform:translateY(-50%);transition:opacity .2s;display:flex;gap:12px;align-items:center}
+.seek-bubble.show{opacity:1}
+.seek-bubble.l{left:240px}.seek-bubble.r{right:240px}
+.mini-tl{position:absolute;left:0;right:0;bottom:0;height:5px;background:#ffffff22;opacity:0;transition:opacity .2s}
+.mini-tl i{display:block;height:100%;background:var(--accent)}
+.osd-hidden .mini-tl.show{opacity:1}
+
+/* sign in + states */
+.center{position:absolute;inset:0;display:grid;place-items:center}
+.card-panel{width:820px;padding:56px 64px;border-radius:24px;border:1px solid var(--line);background:linear-gradient(150deg,#191f2af5,#11161ef5);box-shadow:0 40px 100px #0008;display:grid;gap:22px}
+.card-panel .brand-mark{width:76px;height:76px;border-radius:20px}
+.card-panel .brand-mark svg{width:40px;height:40px}
+.card-panel h2{margin:0;font-size:46px;letter-spacing:-1.2px}
+.card-panel p{margin:0;color:var(--muted);font-size:23px;line-height:1.5}
+.field{display:grid;gap:8px;text-align:left;width:100%}
+.field label{font-size:17px;font-weight:800;letter-spacing:1.6px;text-transform:uppercase;color:var(--muted)}
+.field .input{height:76px;border-radius:14px;border:1px solid var(--line);background:#0b0e13;display:flex;align-items:center;padding:0 24px;font-size:26px;color:var(--text);justify-content:space-between}
+.field .input.dots{letter-spacing:6px}
+.field.focus .input{border-color:var(--accent2);box-shadow:0 0 0 3px var(--accent2)}
+.reach{display:flex;align-items:center;gap:12px;font-size:20px;color:var(--muted)}
+.reach i{width:12px;height:12px;border-radius:50%;background:var(--green);box-shadow:0 0 14px var(--green)}
+.err-ic{width:96px;height:96px;border-radius:24px;display:grid;place-items:center;background:#f06a761f;color:var(--red);font-size:48px}
+.card-panel .actions{margin-top:6px}
+.setlist{position:absolute;left:64px;top:240px;width:1100px;display:grid;gap:10px}
+.set{display:flex;align-items:center;justify-content:space-between;gap:20px;height:88px;padding:0 30px;border-radius:16px;border:1px solid var(--line);background:#141922cc;font-size:25px;color:var(--text);width:100%}
+.set small{font-size:22px;color:var(--muted);display:flex;align-items:center;gap:12px}
+.set.focus{background:var(--panel2);border-color:var(--accent2);box-shadow:0 0 0 2px var(--accent2)}
+.toast{position:absolute;z-index:60;left:50%;bottom:80px;transform:translate(-50%,20px);padding:18px 30px;border-radius:999px;background:var(--panel2);border:1px solid var(--line);font-size:22px;font-weight:600;opacity:0;transition:opacity .2s,transform .2s;display:flex;gap:14px;align-items:center;box-shadow:0 20px 50px #0009}
+.toast.on{opacity:1;transform:translate(-50%,0)}
+.toast i{width:10px;height:10px;border-radius:50%;background:var(--green)}
+.safe-guide{position:absolute;inset:var(--safe-y) var(--safe-x);border:2px dashed #42ce9166;border-radius:6px;pointer-events:none;z-index:90;display:none}
+.show-safe .safe-guide{display:block}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-logo" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="#fff" stroke-width="2"/><path d="M10 8.5v7l6-3.5z" fill="#fff"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></symbol>
+  <symbol id="i-home" viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9v12h5v-6h4v6h5V9"/></symbol>
+  <symbol id="i-catalog" viewBox="0 0 24 24"><path d="M5 4v16M10 4v16M15 4.5l5 15"/></symbol>
+  <symbol id="i-library" viewBox="0 0 24 24"><rect x="3" y="12" width="18" height="8" rx="2"/><path d="M5.5 12 8 5h8l2.5 7M7 16h.01"/></symbol>
+  <symbol id="i-settings" viewBox="0 0 24 24"><path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.5v15l12.5-7.5z" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><rect x="6" y="4.5" width="4" height="15" rx="1" fill="currentColor" stroke="none"/><rect x="14" y="4.5" width="4" height="15" rx="1" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-back10" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></symbol>
+  <symbol id="i-fwd10" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></symbol>
+  <symbol id="i-start" viewBox="0 0 24 24"><path d="M19 19 9 12l10-7z"/><path d="M5 19V5"/></symbol>
+  <symbol id="i-next" viewBox="0 0 24 24"><path d="M5 5l10 7-10 7z"/><path d="M19 5v14"/></symbol>
+  <symbol id="i-star" viewBox="0 0 24 24"><path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1 6.2L12 17.3l-5.5 2.9 1-6.2L3 9.6l6.2-.9z"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></symbol>
+  <symbol id="i-sources" viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13 9 5 9-5"/></symbol>
+  <symbol id="i-cc" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 15h4M14 15h3M7 11h2M12 11h5"/></symbol>
+  <symbol id="i-diag" viewBox="0 0 24 24"><path d="M3 12h4l3-8 4 16 3-8h4"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
+  <symbol id="i-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+  <symbol id="i-up" viewBox="0 0 24 24"><path d="m6 15 6-6 6 6"/></symbol>
+  <symbol id="i-left" viewBox="0 0 24 24"><path d="m15 6-6 6 6 6"/></symbol>
+  <symbol id="i-offline" viewBox="0 0 24 24"><path d="M2 8.8a15 15 0 0 1 4.2-2.6M10.7 5.1A15 15 0 0 1 22 8.8M5 12.5a10 10 0 0 1 3.4-2M15.5 10.6A10 10 0 0 1 19 12.5M8.5 16a5 5 0 0 1 7 0M12 20h.01M3 3l18 18"/></symbol>
+</svg>
+
+<div class="page">
+  <header class="doc-head">
+    <div class="brand-mark"><svg><use href="#i-logo"/></svg></div>
+    <div>
+      <small>Android TV · prototype</small>
+      <h1>Stremio <span>Offline</span> on the television</h1>
+    </div>
+    <p>A layout study for <code>docs/android-tv-spec.md</code>. Use the arrow keys, <kbd>Enter</kbd> and <kbd>Esc</kbd> like a remote, or the pad below. Artwork is generated; the open films are only sample titles.</p>
+  </header>
+
+  <nav class="switcher" aria-label="Screens" id="switcher"></nav>
+
+  <div class="tv" id="tv">
+    <div class="stage" id="stage">
+      <div class="safe-guide"></div>
+
+      <!-- rail, shared by the section screens -->
+      <nav class="rail" id="rail" aria-label="Sections">
+        <div class="brand-mark"><svg><use href="#i-logo"/></svg></div>
+        <button class="focusable rail-item" data-go="catalog" data-search="1"><svg class="ic"><use href="#i-search"/></svg><span>Search</span></button>
+        <button class="focusable rail-item" data-go="home"><svg class="ic"><use href="#i-home"/></svg><span>Home</span></button>
+        <button class="focusable rail-item" data-go="catalog"><svg class="ic"><use href="#i-catalog"/></svg><span>Catalog</span></button>
+        <button class="focusable rail-item" data-go="library"><svg class="ic"><use href="#i-library"/></svg><span>Library</span></button>
+        <div class="rail-foot">
+          <button class="focusable rail-item" data-go="settings"><span class="avatar">D</span><span>demo · Settings</span></button>
+        </div>
+      </nav>
+
+      <!-- HOME -->
+      <section class="screen" data-screen="home" data-rail="home">
+        <div class="with-rail">
+          <div class="hero" id="hero">
+            <div class="hero-art" id="heroArt"></div>
+            <div class="hero-copy">
+              <span class="eyebrow" id="heroEyebrow"></span>
+              <h2 id="heroTitle"></h2>
+              <div class="meta" id="heroMeta"></div>
+              <div class="hero-progress" id="heroProgress"></div>
+              <p class="syn" id="heroSyn"></p>
+            </div>
+          </div>
+          <div class="rows-clip"><div class="rows" id="rows"></div></div>
+        </div>
+      </section>
+
+      <!-- CATALOG -->
+      <section class="screen" data-screen="catalog" data-rail="catalog">
+        <div class="with-rail">
+          <div class="page-head">
+            <span class="eyebrow">Catalog</span>
+            <h2>What do you want to watch?</h2>
+            <div class="chips" id="catChips">
+              <button class="focusable chip" data-act="search"><svg class="ic"><use href="#i-search"/></svg>Search all addons</button>
+              <button class="focusable chip selected" data-act="menu">Open Movies <small>Movies</small><svg class="ic"><use href="#i-down"/></svg></button>
+              <button class="focusable chip" data-act="menu">Genre <small>All</small><svg class="ic"><use href="#i-down"/></svg></button>
+            </div>
+          </div>
+          <div class="grid-clip"><div class="grid" id="catGrid"></div></div>
+        </div>
+      </section>
+
+      <!-- LIBRARY -->
+      <section class="screen" data-screen="library" data-rail="library">
+        <div class="with-rail">
+          <div class="page-head">
+            <span class="eyebrow">Library</span>
+            <h2>Downloaded files</h2>
+            <div class="chips" id="libChips">
+              <button class="focusable chip selected" data-act="lib">Films <small>124</small></button>
+              <button class="focusable chip" data-act="lib">Series <small>18</small></button>
+              <button class="focusable chip" data-act="lib">Kids <small>41</small></button>
+              <button class="focusable chip" data-act="menu">By name<svg class="ic"><use href="#i-down"/></svg></button>
+            </div>
+          </div>
+          <div class="grid-clip"><div class="grid" id="libGrid"></div></div>
+        </div>
+      </section>
+
+      <!-- SETTINGS -->
+      <section class="screen" data-screen="settings" data-rail="settings">
+        <div class="with-rail">
+          <div class="page-head">
+            <span class="eyebrow">Settings</span>
+            <h2>This television</h2>
+          </div>
+          <div class="setlist">
+            <button class="focusable set" data-go="signin">Server <small>nas.local:8090 <svg class="ic"><use href="#i-chev"/></svg></small></button>
+            <button class="focusable set" data-go="signin">Account <small>demo · Sign out <svg class="ic"><use href="#i-chev"/></svg></small></button>
+            <button class="focusable set" data-act="menu">Interface language <small>Čeština <svg class="ic"><use href="#i-chev"/></svg></small></button>
+            <button class="focusable set" data-act="menu">Preferred audio <small>Czech, then English <svg class="ic"><use href="#i-chev"/></svg></small></button>
+            <button class="focusable set" data-act="menu">Preferred subtitles <small>Czech <svg class="ic"><use href="#i-chev"/></svg></small></button>
+            <button class="focusable set" data-act="menu">Start page <small>Home <svg class="ic"><use href="#i-chev"/></svg></small></button>
+            <button class="focusable set" data-act="diag">Playback diagnostics <small>Shield TV Pro · HDR10, DV 8.1 · passthrough E-AC3 <svg class="ic"><use href="#i-chev"/></svg></small></button>
+          </div>
+        </div>
+      </section>
+
+      <!-- DETAIL -->
+      <section class="screen" data-screen="detail">
+        <div class="backdrop" id="dArt"></div>
+        <div class="backdrop-scrim"></div>
+        <div class="detail-copy">
+          <span class="eyebrow" id="dEyebrow" style="font-size:17px;letter-spacing:3px"></span>
+          <h2 id="dTitle"></h2>
+          <div class="meta" id="dMeta"></div>
+          <div class="tchips" id="dChips"></div>
+          <p class="syn" id="dSyn"></p>
+          <div class="hero-progress" id="dProgress"></div>
+          <div class="actions" id="dActions"></div>
+        </div>
+        <div class="episodes" id="dEpisodes"></div>
+      </section>
+
+      <!-- PLAYER -->
+      <section class="screen" data-screen="player">
+        <div class="video"><div class="frame" id="pArt"></div></div>
+        <div class="sub" id="pSub">Prosím, pojď domů. Draci nejsou domácí zvířata.</div>
+        <div class="seek-bubble l" id="seekL"><svg class="ic"><use href="#i-back10"/></svg><span>−10 s</span></div>
+        <div class="seek-bubble r" id="seekR"><span>+10 s</span><svg class="ic"><use href="#i-fwd10"/></svg></div>
+        <div class="mini-tl" id="miniTl"><i></i></div>
+        <div class="osd">
+          <div class="osd-top">
+            <span class="eyebrow" id="pMode">Direct play · MKV · no server conversion</span>
+            <h2 id="pTitle"></h2>
+          </div>
+          <div class="osd-bot">
+            <div class="timeline">
+              <span id="pNow">04:33</span>
+              <button class="focusable tl" id="pTl" aria-label="Timeline"><i></i><b></b><span class="tip"></span></button>
+              <span id="pEnd">12:14</span>
+            </div>
+            <div class="ctrls" id="pCtrls">
+              <button class="focusable cbtn" data-act="back10"><svg class="ic"><use href="#i-back10"/></svg>10</button>
+              <button class="focusable cbtn play" data-act="toggle" id="pPlay" aria-label="Pause"><svg class="ic"><use href="#i-pause"/></svg></button>
+              <button class="focusable cbtn" data-act="fwd10">10<svg class="ic"><use href="#i-fwd10"/></svg></button>
+              <span class="spacer"></span>
+              <button class="focusable cbtn" data-act="tracks"><svg class="ic"><use href="#i-cc"/></svg>Czech · English 5.1</button>
+              <button class="focusable cbtn" data-act="next" id="pNext"><svg class="ic"><use href="#i-next"/></svg>Next episode</button>
+              <button class="focusable cbtn" data-act="diag" aria-label="Diagnostics"><svg class="ic"><use href="#i-diag"/></svg></button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- SIGN IN -->
+      <section class="screen" data-screen="signin">
+        <div class="center">
+          <div class="card-panel">
+            <div class="brand-mark"><svg><use href="#i-logo"/></svg></div>
+            <span class="eyebrow" style="font-size:16px;letter-spacing:3px">Home media library</span>
+            <h2>Connect to your server</h2>
+            <div class="field focusable" data-act="field"><label>Server address</label><div class="input">http://nas.local:8090<span class="reach"><i></i>Stremio Offline 0.5.36</span></div></div>
+            <div class="field focusable" data-act="field"><label>Username</label><div class="input">demo</div></div>
+            <div class="field focusable" data-act="field"><label>Password</label><div class="input dots">••••••••</div></div>
+            <div class="actions"><button class="focusable btn primary" data-go="home">Sign in</button></div>
+            <p style="font-size:19px">Accounts and the first administrator are set up in the web interface. The password is never stored on the television.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- OFFLINE -->
+      <section class="screen" data-screen="offline">
+        <div class="center">
+          <div class="card-panel">
+            <div class="err-ic"><svg class="ic"><use href="#i-offline"/></svg></div>
+            <h2>Can't reach the server</h2>
+            <p>nas.local:8090 stopped answering. Playback stopped at 41:12 and that position is saved on the server.</p>
+            <div class="actions">
+              <button class="focusable btn primary" data-act="retry">Try again</button>
+              <button class="focusable btn" data-go="signin">Change server</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- drawers -->
+      <aside class="drawer" id="drSources" aria-label="Sources">
+        <h3>Sources <small id="srcCount"></small></h3>
+        <div id="srcList" style="display:grid;gap:12px"></div>
+        <p class="hint">The library copy plays by default. A value the addon does not give is shown as unknown, never guessed.</p>
+      </aside>
+      <aside class="drawer" id="drTracks" aria-label="Audio and subtitles">
+        <h3>Audio and subtitles</h3>
+        <h4>Audio</h4>
+        <div data-group="audio">
+          <button class="focusable opt sel">English · E-AC3 5.1 <small>passthrough to the receiver</small><svg class="ic"><use href="#i-check"/></svg></button>
+          <button class="focusable opt">Czech · AAC 2.0 <small>decoded on the TV</small><svg class="ic"><use href="#i-check"/></svg></button>
+          <button class="focusable opt">English · DTS-HD MA <small>server converts audio only</small><svg class="ic"><use href="#i-check"/></svg></button>
+        </div>
+        <h4>Subtitles</h4>
+        <div data-group="subs">
+          <button class="focusable opt">Off<svg class="ic"><use href="#i-check"/></svg></button>
+          <button class="focusable opt sel">Czech <small>SRT · OpenSubtitles addon</small><svg class="ic"><use href="#i-check"/></svg></button>
+          <button class="focusable opt">English <small>PGS · in the file</small><svg class="ic"><use href="#i-check"/></svg></button>
+          <button class="focusable opt" data-act="delay">Subtitle delay <small>0.0 s · ◀ ▶ to adjust</small><svg class="ic"><use href="#i-check"/></svg></button>
+        </div>
+      </aside>
+      <aside class="drawer" id="drDiag" aria-label="Playback diagnostics">
+        <h3>Playback <small>diagnostics</small></h3>
+        <dl class="diag">
+          <dt>Path</dt><dd class="good">Direct · no server FFmpeg</dd>
+          <dt>Container</dt><dd>Matroska (mkv)</dd>
+          <dt>Video</dt><dd>HEVC Main10 · 3840×2160 · 23.976</dd>
+          <dt>HDR</dt><dd>HDR10 reported · display matched</dd>
+          <dt>Audio</dt><dd>E-AC3 5.1 · passthrough</dd>
+          <dt>Subtitles</dt><dd>SRT · rendered on the TV</dd>
+          <dt>Bitrate</dt><dd>38.4 Mb/s · buffer 24 s</dd>
+          <dt>Session</dt><dd>alive · ping 30 s ago</dd>
+          <dt>Device</dt><dd>NVIDIA Shield TV Pro · Android 11</dd>
+        </dl>
+        <p class="hint">Reported, not promised: HDR, Dolby Vision and refresh-rate matching show what the device said, so a probe on the owner's TCL can be written down.</p>
+      </aside>
+
+      <div class="toast" id="toast"><i></i><span></span></div>
+    </div>
+  </div>
+
+  <div class="under">
+    <div class="pad-wrap">
+      <div class="pad" id="pad">
+        <span></span><button data-key="ArrowUp" aria-label="Up"><svg class="ic"><use href="#i-up"/></svg></button><span></span>
+        <button data-key="ArrowLeft" aria-label="Left"><svg class="ic"><use href="#i-left"/></svg></button><button class="ok" data-key="Enter">OK</button><button data-key="ArrowRight" aria-label="Right"><svg class="ic"><use href="#i-chev"/></svg></button>
+        <span></span><button data-key="ArrowDown" aria-label="Down"><svg class="ic"><use href="#i-down"/></svg></button><span></span>
+      </div>
+      <div class="pad-row"><button data-key="Escape">Back</button><button data-key="Home">Home</button><button id="safeBtn" aria-pressed="false">Safe area</button></div>
+      <p class="keys"><kbd>←↑→↓</kbd> move · <kbd>Enter</kbd> OK · <kbd>Esc</kbd> Back</p>
+    </div>
+    <div class="notes">
+      <div class="note"><span class="eyebrow">Focus</span><h3>The accent means focus</h3><p>On the web the orange gradient marks the primary action. On TV it moves with the cursor: <b>a focused control fills with the accent and grows 6–8 %</b>; an unfocused primary is only tinted. One rule, readable from the sofa.</p></div>
+      <div class="note"><span class="eyebrow">Navigation</span><h3>The web sidebar becomes a rail</h3><p>Same sections and icons as the web sidebar, collapsed to icons with the same <b>accent bar on the current section</b>. It opens with labels when focus enters it; Back from any row goes to the rail.</p></div>
+      <div class="note"><span class="eyebrow">Home</span><h3>A backdrop that follows focus</h3><p>The rows are the server's <code>/api/home</code> cards in server order. The top shows the focused card's art and text instead of a fixed resume hero. The addon row loads as placeholders first.</p></div>
+      <div class="note"><span class="eyebrow">Scale</span><h3>10-foot sizes</h3><p>Body text 24 px or more on a 1920×1080 canvas, titles 68–84 px, posters 220×330, wide cards 400×225. Everything stays inside a <b>5 % overscan safe area</b> (toggle it under the pad).</p></div>
+      <div class="note"><span class="eyebrow">Player</span><h3>OK pauses, arrows seek</h3><p>With no controls shown, <b>OK pauses and opens them</b>, left and right jump 10 s with a bubble and a thin progress line. The mode line says whether the server converts anything.</p></div>
+      <div class="note"><span class="eyebrow">States</span><h3>Nothing spins forever</h3><p>Every failure ends in a panel that names the server, says what was saved and offers one way forward. Try it on the Offline screen.</p></div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+  var T = {
+    tos:{title:"Tears of Steel",year:2012,genre:"Sci-fi",len:"12 min",rating:"5.6",h:[200,330],s:62,syn:"In a future Amsterdam, a group of scientists restage one moment of the past to save the world from the robots they once built."},
+    sintel:{title:"Sintel",year:2010,genre:"Fantasy",len:"15 min",rating:"7.4",h:[195,250],s:55,syn:"A young woman crosses the wintry mountains alone to find the baby dragon she raised and lost."},
+    bbb:{title:"Big Buck Bunny",year:2008,genre:"Comedy",len:"10 min",rating:"6.4",h:[95,140],s:60,syn:"A gentle giant rabbit gets even with the three rodents who spoiled his morning in the meadow."},
+    ed:{title:"Elephants Dream",year:2006,genre:"Sci-fi",len:"11 min",rating:"5.8",h:[25,280],s:55,syn:"Two men wander a vast mechanical world that one of them insists is full of wonders."},
+    cami:{title:"Caminandes",year:2013,genre:"Animation",len:"3 episodes",rating:"7.6",h:[38,190],s:65,series:true,syn:"Koro the llama keeps trying to reach the greener grass on the other side of a Patagonian fence."},
+    cosmos:{title:"Cosmos Laundromat",year:2015,genre:"Fantasy",len:"12 min",rating:"7.0",h:[280,20],s:55,syn:"A sheep at the end of his tether meets a salesman who offers him a lifetime of lives."},
+    spring:{title:"Spring",year:2019,genre:"Fantasy",len:"8 min",rating:"7.3",h:[150,260],s:55,syn:"A shepherd girl and her dog face ancient spirits to keep the cycle of life turning."},
+    agent:{title:"Agent 327",year:2017,genre:"Action",len:"4 min",rating:"7.5",h:[210,40],s:60,syn:"A secret agent goes undercover in a barbershop to find a missing colleague."},
+    charge:{title:"Charge",year:2022,genre:"Action",len:"4 min",rating:"6.9",h:[15,220],s:60,syn:"In an energy-hungry future, an old man breaks into a guarded charging station."},
+    sprite:{title:"Sprite Fright",year:2021,genre:"Horror comedy",len:"10 min",rating:"7.1",h:[110,330],s:55,syn:"Teenagers camping in a British forest find out the mushroom folk do not like litter."},
+    nosf:{title:"Nosferatu",year:1922,genre:"Horror",len:"94 min",rating:"7.8",h:[45,0],s:12,old:true,syn:"An estate agent travels to the Carpathians to sell a house to a count who never leaves his castle by day."},
+    moon:{title:"A Trip to the Moon",year:1902,genre:"Adventure",len:"13 min",rating:"8.1",h:[48,230],s:14,old:true,syn:"Astronomers fire themselves at the Moon in a shell and meet its inhabitants."},
+    train:{title:"The Great Train Robbery",year:1903,genre:"Western",len:"11 min",rating:"7.2",h:[35,20],s:10,old:true,syn:"Bandits hold up a steam train, and a posse rides out after them."},
+    metro:{title:"Metropolis",year:1927,genre:"Sci-fi",len:"153 min",rating:"8.3",h:[45,210],s:14,old:true,syn:"In a city split between thinkers and workers, the son of its master falls for a woman from below."},
+    general:{title:"The General",year:1926,genre:"Comedy",len:"78 min",rating:"8.1",h:[30,200],s:12,old:true,syn:"A train engineer chases the Union spies who stole both his locomotive and his sweetheart."},
+    kid:{title:"The Kid",year:1921,genre:"Comedy",len:"68 min",rating:"8.2",h:[0,30],s:10,old:true,syn:"The Tramp takes in an abandoned child and raises him in the slums."}
+  };
+  var EPS = [
+    {n:1,title:"Llama Drama",len:"1 min 30 s",done:true},
+    {n:2,title:"Gran Dillama",len:"2 min 26 s",p:62},
+    {n:3,title:"Llamigos",len:"7 min 30 s",isNew:true}
+  ];
+  var ROWS = [
+    {label:"Continue watching",shape:"wide",items:[["tos",38],["cami",62,"S1 · E2 Gran Dillama"],["nosf",12],["cosmos",70]]},
+    {label:"Favourites",shape:"poster",items:["sintel","metro","spring","bbb","ed","general","agent"]},
+    {label:"Tonight",shape:"poster",count:"from your libraries",items:["kid","moon","train","charge","sprite","agent","bbb"]},
+    {label:"Popular",addon:"Open Movies",shape:"poster",lazy:true,items:["bbb","sintel","tos","ed","cosmos","spring","charge"]},
+    {label:"New episodes",shape:"wide",items:[["cami",0,"S1 · E3 Llamigos","new"]]},
+    {label:"Ready to play",shape:"poster",count:"6 titles",items:["metro","general","kid","nosf","moon","train"]},
+    {label:"Recently added",shape:"poster",items:["sprite","agent","charge","spring","cosmos","tos"]}
+  ];
+
+  var $ = function(s,r){return (r||document).querySelector(s);};
+  var $$ = function(s,r){return Array.prototype.slice.call((r||document).querySelectorAll(s));};
+  var stage = $("#stage"), tv = $("#tv");
+
+  function art(id, big){
+    var t = T[id], a = t.h[0], b = t.h[1], s = t.s;
+    return "radial-gradient(circle at "+(big?"72% 30%":"30% 22%")+", hsl("+a+" "+s+"% 60% / .85), transparent "+(big?"42%":"55%")+"),"+
+      "radial-gradient(circle at 85% 90%, hsl("+b+" "+s+"% 45% / .7), transparent 50%),"+
+      "linear-gradient(160deg, hsl("+a+" "+Math.round(s*.7)+"% 26%), hsl("+b+" "+Math.round(s*.8)+"% 10%))";
+  }
+  function esc(s){return String(s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c];});}
+  function metaHtml(t){
+    return '<span class="star"><svg class="ic fill"><use href="#i-star"/></svg>'+t.rating+'</span><i></i><span>'+t.year+'</span><i></i><span>'+t.genre+'</span><i></i><span>'+t.len+'</span>';
+  }
+  function cardHtml(shape, id, p, sub, flag){
+    var t = T[id];
+    var badge = flag==="new" ? '<span class="badge new">New</span>' : "";
+    var bar = p ? '<div class="resume-bar"><i style="width:'+p+'%"></i></div>' : "";
+    var small = sub || (t.year+" · "+t.len);
+    return '<div class="art" style="background:'+art(id)+'">'+badge+'<span class="art-title'+(t.old?" old":"")+'">'+esc(t.title)+'</span>'+bar+'</div>'+
+      '<div class="cap"><strong>'+esc(t.title)+'</strong><small>'+esc(small)+'</small></div>';
+  }
+
+  /* ---------- build home ---------- */
+  var rowsEl = $("#rows");
+  ROWS.forEach(function(r, ri){
+    var row = document.createElement("div");
+    row.className = "row"; row.dataset.row = ri;
+    var head = r.addon ? '<span class="addon">'+esc(r.addon)+'</span>' : "";
+    row.innerHTML = '<div class="row-head">'+head+'<span>'+esc(r.label)+'</span>'+(r.count?'<small>'+esc(r.count)+'</small>':"")+'</div><div class="track"></div>';
+    var track = $(".track", row);
+    r.items.forEach(function(it){
+      var id = Array.isArray(it) ? it[0] : it;
+      var b = document.createElement("button");
+      b.className = "focusable card " + r.shape + (r.lazy ? " skeleton" : "");
+      b.dataset.id = id; b.dataset.eyebrow = r.addon ? r.addon+" · "+r.label : r.label;
+      if (Array.isArray(it)) { b.dataset.p = it[1] || ""; b.dataset.sub = it[2] || ""; }
+      b.innerHTML = r.lazy ? '<div class="art"></div><div class="cap"><strong>&nbsp;</strong><small>&nbsp;</small></div>' : cardHtml(r.shape, id, it[1], it[2], it[3]);
+      track.appendChild(b);
+    });
+    rowsEl.appendChild(row);
+  });
+  var dl = document.createElement("div");
+  dl.className = "row"; dl.dataset.row = ROWS.length;
+  dl.innerHTML = '<div class="row-head"><span>Downloads</span></div><button class="focusable dl-strip" data-act="downloads"><svg class="ic"><use href="#i-download"/></svg><span>2 running · Spring, Charge</span><small>1.4 GB left · about 6 min</small></button>';
+  rowsEl.appendChild(dl);
+
+  function fillLazy(row){
+    if (!row || row.dataset.filled) return;
+    row.dataset.filled = "1";
+    setTimeout(function(){
+      $$(".card.skeleton", row).forEach(function(b){
+        b.classList.remove("skeleton");
+        b.innerHTML = cardHtml("poster", b.dataset.id);
+      });
+      if (current && row.contains(current)) updateHero(current);
+    }, 650);
+  }
+
+  /* ---------- catalog + library grids ---------- */
+  var catIds = ["tos","sintel","bbb","ed","cosmos","spring","agent","charge","sprite","cami","nosf","moon","train","metro","general","kid","bbb","sintel","tos","ed","spring"];
+  $("#catGrid").innerHTML = catIds.map(function(id){return '<button class="focusable card poster" data-id="'+id+'">'+cardHtml("poster",id)+'</button>';}).join("");
+  var libIds = ["ed","sintel","tos","metro","general","kid","nosf","moon","train","spring","cosmos","bbb"];
+  $("#libGrid").innerHTML = '<button class="focusable fav-card" data-act="favs"><svg class="ic"><use href="#i-star"/></svg><span><strong>Favourites</strong><small>7 titles you starred, from every library</small></span></button>' +
+    libIds.map(function(id){var t=T[id];return '<button class="focusable card poster" data-id="'+id+'" data-lib="1">'+cardHtml("poster",id,null,t.year+" · 1 file")+'</button>';}).join("");
+
+  /* ---------- screens + history ---------- */
+  var screen = null, history = [], current = null, rememberedFocus = {}, drawer = null;
+  var rail = $("#rail");
+  var SCREENS = [["signin","Sign in"],["home","Home"],["catalog","Catalog"],["library","Library"],["detail","Title · movie"],["series","Title · series"],["player","Player"],["settings","Settings"],["offline","Offline"]];
+  var sw = $("#switcher");
+  SCREENS.forEach(function(s){
+    var b = document.createElement("button"); b.textContent = s[1]; b.dataset.s = s[0];
+    b.addEventListener("click", function(){
+      b.blur(); history = [];
+      if (s[0]==="detail") { show("home",true); openDetail("tos"); }
+      else if (s[0]==="series") { show("home",true); openDetail("cami"); }
+      else if (s[0]==="player") { show("home",true); openDetail("tos"); openPlayer("tos"); }
+      else show(s[0], true);
+    });
+    sw.appendChild(b);
+  });
+  function markSwitcher(){
+    var key = screen==="detail" && detailId==="cami" ? "series" : screen;
+    $$("button", sw).forEach(function(b){ b.setAttribute("aria-pressed", String(b.dataset.s===key)); });
+  }
+
+  function screenEl(n){ return $('.screen[data-screen="'+n+'"]'); }
+  function show(name, reset){
+    if (screen && !reset) history.push({screen:screen, focus:current});
+    if (screen) rememberedFocus[screen] = current;
+    closeDrawer(true);
+    $$(".screen").forEach(function(s){ s.classList.toggle("on", s.dataset.screen===name); });
+    screen = name;
+    var el = screenEl(name);
+    var railFor = el.dataset.rail;
+    rail.style.display = railFor ? "" : "none";
+    $$(".rail-item", rail).forEach(function(r){ r.classList.toggle("current", !!railFor && r.dataset.go===railFor && !r.dataset.search); });
+    var f = rememberedFocus[name];
+    if (!f || !document.contains(f) || !el.contains(f)) f = firstIn(el);
+    setFocus(f);
+    markSwitcher();
+  }
+  function firstIn(el){
+    if (el.dataset.screen==="player") return null;
+    return $(".actions .focusable", el) || $(".card, .chip, .set, .field", el) || $(".focusable", el);
+  }
+  function back(){
+    if (drawer) { closeDrawer(); return; }
+    if (screen==="player" && !osdHidden && current !== $("#pPlay")) { /* fallthrough to hide */ }
+    if (screen==="player" && !osdHidden) { hideOsd(); return; }
+    if (rail.style.display!=="none" && !rail.contains(current)) { setFocus($(".rail-item.current", rail) || $(".rail-item", rail)); return; }
+    var h = history.pop();
+    if (!h) { toast("Press Back again to leave the app"); return; }
+    if (screen==="player") stopPlayer();
+    rememberedFocus[h.screen] = h.focus;
+    show(h.screen, true);
+  }
+
+  /* ---------- focus ---------- */
+  function setFocus(el){
+    if (current) current.classList.remove("focus");
+    current = el;
+    if (!el) return;
+    el.classList.add("focus");
+    rail.classList.toggle("open", rail.contains(el));
+    var track = el.closest(".track");
+    if (track) {
+      track.dataset.last = Array.prototype.indexOf.call(track.children, el);
+      var x = Math.max(0, el.offsetLeft - 6);
+      var max = Math.max(0, track.scrollWidth - (track.parentElement.clientWidth || 1600) + 80);
+      track.style.transform = "translateX("+(-(screen==="home" ? x : Math.min(x, max)))+"px)";
+    }
+    var row = el.closest(".row");
+    if (row && screen==="home") {
+      rowsEl.style.transform = "translateY("+(-row.offsetTop)+"px)";
+      $$(".row", rowsEl).forEach(function(r){ r.classList.toggle("dim", r.offsetTop < row.offsetTop); });
+      var next = row.nextElementSibling;
+      [row, next, next && next.nextElementSibling].forEach(function(r){ if (r && $(".skeleton", r)) fillLazy(r); });
+      updateHero(el);
+    }
+    var grid = el.closest(".grid");
+    if (grid) grid.style.transform = "translateY("+(-Math.max(0, el.offsetTop - 380))+"px)";
+    if (screen==="player") pokeOsd();
+  }
+
+  function updateHero(el){
+    var id = el.dataset.id;
+    if (!id) {
+      $("#heroEyebrow").textContent = "Downloads";
+      $("#heroTitle").textContent = "Two titles on their way";
+      $("#heroMeta").innerHTML = "<span>Spring · 72 %</span><i></i><span>Charge · 31 %</span>";
+      $("#heroProgress").innerHTML = ""; $("#heroSyn").textContent = "Downloads keep running on the server when the television is off. Open the queue on the web to pause or reorder them.";
+      $("#heroArt").style.background = "radial-gradient(circle at 70% 30%, #ff5b3833, transparent 45%)";
+      return;
+    }
+    if (el.classList.contains("skeleton")) return;
+    var t = T[id];
+    $("#heroArt").style.background = art(id, true);
+    $("#heroEyebrow").textContent = el.dataset.eyebrow || "";
+    $("#heroTitle").textContent = t.title;
+    $("#heroMeta").innerHTML = metaHtml(t);
+    var p = +el.dataset.p;
+    var sub = el.dataset.sub;
+    $("#heroProgress").innerHTML = p ? '<span class="bar"><i style="width:'+p+'%"></i></span><span>'+(sub?esc(sub)+" · ":"")+p+' % watched</span>' : (sub ? '<span>'+esc(sub)+'</span>' : "");
+    $("#heroSyn").textContent = t.syn;
+  }
+
+  function visibleFocusables(){
+    var scope = drawer ? [drawer] : [screenEl(screen)].concat(rail.style.display==="none" ? [] : [rail]);
+    var sr = stage.getBoundingClientRect();
+    var out = [];
+    scope.forEach(function(s){
+      $$(".focusable", s).forEach(function(el){
+        if (el.offsetParent === null) return;
+        var r = el.getBoundingClientRect();
+        if (r.right < sr.left + 2 || r.left > sr.right - 2) return;
+        if (r.bottom < sr.top - sr.height || r.top > sr.bottom + sr.height) return;
+        out.push(el);
+      });
+    });
+    return out;
+  }
+  function move(dir){
+    if (!current) { setFocus(firstIn(screenEl(screen)) || $(".focusable", screenEl(screen))); return; }
+    var cands = visibleFocusables().filter(function(e){ return e!==current; });
+    var a = current.getBoundingClientRect(), ac = {x:a.left+a.width/2, y:a.top+a.height/2};
+    var best = null, bestScore = Infinity;
+    cands.forEach(function(el){
+      var r = el.getBoundingClientRect(), c = {x:r.left+r.width/2, y:r.top+r.height/2}, d, o;
+      if (dir==="right") { if (r.left < a.right - a.width*0.5) return; d = r.left - a.right; o = Math.abs(c.y-ac.y); }
+      if (dir==="left")  { if (r.right > a.left + a.width*0.5) return; d = a.left - r.right; o = Math.abs(c.y-ac.y); }
+      if (dir==="down")  { if (r.top < a.bottom - a.height*0.5) return; d = r.top - a.bottom; o = Math.abs(c.x-ac.x); }
+      if (dir==="up")    { if (r.bottom > a.top + a.height*0.5) return; d = a.top - r.bottom; o = Math.abs(c.x-ac.x); }
+      var score = Math.max(0,d) + o*2.2;
+      if (score < bestScore) { bestScore = score; best = el; }
+    });
+    if (!best) return;
+    if (rail.contains(best) && !rail.contains(current) && dir!=="left") return;
+    var track = best.closest(".track");
+    if (track && (dir==="up"||dir==="down") && track !== (current.closest && current.closest(".track"))) {
+      var idx = +track.dataset.last;
+      if (!isNaN(idx) && track.children[idx]) best = track.children[idx];
+    }
+    if (rail.contains(best) && !rail.contains(current)) best = $(".rail-item.current", rail) || best;
+    if (rail.contains(current) && !rail.contains(best) && dir==="right") {
+      var mem = rememberedFocus[screen];
+      if (mem && screenEl(screen).contains(mem)) best = mem;
+    }
+    if (!rail.contains(current) && !drawer) rememberedFocus[screen] = best;
+    setFocus(best);
+  }
+
+  /* ---------- detail ---------- */
+  var detailId = null;
+  function openDetail(id, fromLib){
+    detailId = id;
+    var t = T[id];
+    $("#dArt").style.background = art(id, true);
+    $("#dTitle").textContent = t.title;
+    $("#dMeta").innerHTML = metaHtml(t);
+    $("#dSyn").textContent = t.syn;
+    var lib = fromLib || id==="tos" || t.old;
+    $("#dEyebrow").textContent = (t.series ? "Series" : "Movie") + (lib ? " · in your library" : " · Open Movies");
+    $("#dChips").innerHTML = (t.series ? '<span class="tchip k">Series</span>' : '<span class="tchip k">Movie</span>') +
+      (lib ? '<span class="tchip g">Library copy</span><span class="tchip">4K · HEVC 10-bit</span>' : '<span class="tchip">1080p</span>') +
+      '<span class="tchip">CZ subtitles</span><span class="tchip">IMDb</span>';
+    var acts = "";
+    if (t.series) {
+      $("#dProgress").innerHTML = '<span class="bar"><i style="width:62%"></i></span><span>S1 · E2 Gran Dillama · 62 % watched</span>';
+      acts = btn("primary","play","Resume S1 · E2","play") + btn("","star","","fav",true) + btn("","sources","Sources","sources");
+    } else if (id==="tos") {
+      $("#dProgress").innerHTML = '<span class="bar"><i style="width:38%"></i></span><span>38 % watched · 7 min left</span>';
+      acts = btn("primary","play","Resume","play") + btn("","start","Start over","play") + btn("","star","","fav",true) + btn("","sources","Sources · 3","sources");
+    } else {
+      $("#dProgress").innerHTML = "";
+      acts = btn("primary","play","Play","play") + btn("","star","","fav",true) + (lib ? "" : btn("","download","To library","tolib")) + btn("","sources","Sources · 3","sources");
+    }
+    $("#dActions").innerHTML = acts;
+    $("#dEpisodes").innerHTML = t.series ? '<div class="row-head"><span>Season 1</span><small>3 episodes</small></div><div class="track">'+EPS.map(function(e){
+      return '<button class="focusable card ep" data-id="cami" data-ep="'+e.n+'"><div class="art" style="background:'+art("cami")+'"><span class="num">E'+e.n+'</span>'+(e.done?'<span class="watched"><svg class="ic"><use href="#i-check"/></svg></span>':"")+(e.isNew?'<span class="badge new" style="left:auto;right:12px">New</span>':"")+(e.p?'<div class="resume-bar"><i style="width:'+e.p+'%"></i></div>':"")+'</div><div class="cap"><strong>'+e.n+'. '+esc(e.title)+'</strong><small>'+e.len+(e.done?" · watched":"")+'</small></div></button>';
+    }).join("")+'</div>' : "";
+    rememberedFocus.detail = null;
+    show("detail");
+    if (t.series) { var tr = $("#dEpisodes .track"); tr.dataset.last = 1; }
+  }
+  function btn(kind, icon, label, act, isIcon){
+    return '<button class="focusable btn '+kind+(isIcon?" icon":"")+'" data-act="'+act+'"'+(isIcon?' aria-label="Favourite"':"")+'><svg class="ic"><use href="#i-'+icon+'"/></svg>'+(label?esc(label):"")+'</button>';
+  }
+
+  /* ---------- drawers ---------- */
+  function openDrawer(el, focusSel){
+    drawer = el; drawer.dataset.ret = "";
+    drawer._ret = current;
+    el.classList.add("on");
+    setFocus($(focusSel || ".focusable", el));
+  }
+  function closeDrawer(silent){
+    if (!drawer) return;
+    var ret = drawer._ret;
+    drawer.classList.remove("on"); drawer = null;
+    if (!silent && ret) setFocus(ret);
+  }
+  function openSources(){
+    var t = T[detailId];
+    var rows = [
+      ["LIBRARY","lib", (t.series?"Caminandes S01E02":t.title+" ("+t.year+")")+".mkv","2160p · HEVC 10-bit · English 5.1, Czech · 6.2 GB",true],
+      ["HTTP","http","Open Movies","1080p · H.264 · English · 372 MB",false],
+      ["HTTP","http","Archive mirror",'720p · H.264 · <span class="unk">language unknown</span> · <span class="unk">size unknown</span>',false]
+    ];
+    $("#srcCount").textContent = rows.length + " found";
+    $("#srcList").innerHTML = rows.map(function(r){
+      return '<button class="focusable src" data-act="play"><span class="tag '+r[1]+'">'+r[0]+'</span><span><strong>'+esc(r[2])+'</strong><small>'+r[3]+'</small></span><span class="end">'+(r[4]?'Default<svg class="ic"><use href="#i-check"/></svg>':"")+'</span></button>';
+    }).join("");
+    openDrawer($("#drSources"));
+  }
+
+  /* ---------- player ---------- */
+  var osdHidden = false, osdTimer = null, playing = true, pos = 273, dur = 734, playTimer = null, seekTimer = null;
+  function openPlayer(id){
+    var t = T[id];
+    $("#pArt").style.background = art(id, true);
+    $("#pTitle").textContent = t.series ? "Caminandes · S1 · E2 Gran Dillama" : t.title;
+    $("#pNext").style.display = t.series ? "" : "none";
+    $("#pMode").textContent = t.series ? "Remux · MKV to HLS · video and audio copied" : "Direct play · MKV · no server conversion";
+    dur = t.series ? 146 : 734; pos = t.series ? 90 : 273;
+    playing = true; setPlayIcon();
+    show("player");
+    showOsd($("#pPlay"));
+    clearInterval(playTimer);
+    playTimer = setInterval(function(){ if (playing && screen==="player") { pos = Math.min(dur, pos+1); renderTime(); } }, 1000);
+    renderTime();
+  }
+  function stopPlayer(){ clearInterval(playTimer); clearTimeout(osdTimer); toast("Position saved · "+fmt(pos)); }
+  function fmt(s){ s=Math.round(s); return String(Math.floor(s/60)).padStart(2,"0")+":"+String(s%60).padStart(2,"0"); }
+  function renderTime(){
+    var pc = (pos/dur*100).toFixed(2)+"%";
+    $("#pNow").textContent = fmt(pos); $("#pEnd").textContent = fmt(dur);
+    $("#pTl i").style.width = pc; $("#pTl b").style.left = pc;
+    $("#pTl .tip").style.left = pc; $("#pTl .tip").textContent = fmt(pos);
+    $("#miniTl i").style.width = pc;
+  }
+  function setPlayIcon(){ $("#pPlay").innerHTML = '<svg class="ic"><use href="#i-'+(playing?"pause":"play")+'"/></svg>'; $("#pPlay").setAttribute("aria-label", playing?"Pause":"Play"); }
+  function showOsd(focusEl){ osdHidden = false; screenEl("player").classList.remove("osd-hidden"); setFocus(focusEl || current || $("#pPlay")); pokeOsd(); }
+  function hideOsd(){ osdHidden = true; screenEl("player").classList.add("osd-hidden"); if (current) current.classList.remove("focus"); }
+  function pokeOsd(){ clearTimeout(osdTimer); osdTimer = setTimeout(function(){ if (screen==="player" && playing && !drawer) hideOsd(); }, 5000); }
+  function seek(delta){
+    pos = Math.max(0, Math.min(dur, pos+delta)); renderTime();
+    var bub = delta<0 ? $("#seekL") : $("#seekR");
+    bub.classList.add("show"); $("#miniTl").classList.add("show");
+    clearTimeout(seekTimer);
+    seekTimer = setTimeout(function(){ bub.classList.remove("show"); $("#miniTl").classList.remove("show"); }, 900);
+  }
+
+  /* ---------- actions ---------- */
+  var toastTimer = null;
+  function toast(msg){ var t = $("#toast"); $("span", t).textContent = msg; t.classList.add("on"); clearTimeout(toastTimer); toastTimer = setTimeout(function(){ t.classList.remove("on"); }, 2200); }
+
+  function activate(el){
+    if (!el) return;
+    var go = el.dataset.go, act = el.dataset.act;
+    if (go) {
+      if (el.dataset.search) { show("catalog", true); setFocus($('#catChips [data-act="search"]')); return; }
+      history = []; show(go, true); return;
+    }
+    if (el.classList.contains("card") && !el.classList.contains("ep")) {
+      if (el.classList.contains("skeleton")) return;
+      openDetail(el.dataset.id, !!el.dataset.lib); return;
+    }
+    if (el.classList.contains("ep")) { openPlayer("cami"); return; }
+    switch (act) {
+      case "play": closeDrawer(true); openPlayer(detailId); break;
+      case "fav": el.classList.toggle("on"); toast(el.classList.contains("on") ? "Added to favourites" : "Removed from favourites"); break;
+      case "tolib": el.innerHTML = '<svg class="ic"><use href="#i-check"/></svg>Queued'; toast("Queued on the server · continues with the TV off"); break;
+      case "sources": openSources(); break;
+      case "toggle": playing = !playing; setPlayIcon(); toast(playing ? "Playing" : "Paused · position saved"); pokeOsd(); break;
+      case "back10": seek(-10); pokeOsd(); break;
+      case "fwd10": seek(10); pokeOsd(); break;
+      case "tracks": openDrawer($("#drTracks"), ".opt.sel"); break;
+      case "diag": openDrawer($("#drDiag"), ".focusable") ; break;
+      case "next": toast("Next: E3 Llamigos"); break;
+      case "retry": toast("Still no answer from nas.local:8090 · next try in 10 s"); break;
+      case "downloads": toast("The queue opens in v1.1 · for now it is a summary"); break;
+      case "favs": toast("Favourites open as a grid"); break;
+      case "search": toast("The system keyboard and voice input open here"); break;
+      case "menu": toast("Opens a list in a side panel"); break;
+      case "field": toast("The Android TV keyboard opens"); break;
+      case "lib": $$("#libChips .chip").forEach(function(c){ c.classList.toggle("selected", c===el); }); break;
+      default:
+        if (el.classList.contains("opt")) {
+          var g = el.parentElement; $$(".opt", g).forEach(function(o){ if (!o.dataset.act) o.classList.toggle("sel", o===el); });
+          toast(g.dataset.group==="audio" ? "Audio switched in the player · no server work" : "Subtitles switched");
+        }
+    }
+  }
+
+  function key(k){
+    if (screen==="player" && !drawer) {
+      if (osdHidden) {
+        if (k==="ArrowLeft") { seek(-10); return; }
+        if (k==="ArrowRight") { seek(10); return; }
+        if (k==="Enter") { playing = false; setPlayIcon(); showOsd($("#pPlay")); return; }
+        if (k==="ArrowUp" || k==="ArrowDown") { showOsd($("#pPlay")); return; }
+      } else if (current && current.id==="pTl" && (k==="ArrowLeft" || k==="ArrowRight")) {
+        seek(k==="ArrowLeft" ? -10 : 10); pokeOsd(); return;
+      }
+    }
+    if (drawer && current && current.dataset.act==="delay" && (k==="ArrowLeft"||k==="ArrowRight")) {
+      var sm = $("small", current), v = parseFloat(sm.textContent) + (k==="ArrowLeft" ? -0.1 : 0.1);
+      sm.textContent = v.toFixed(1)+" s · ◀ ▶ to adjust"; return;
+    }
+    if (k==="ArrowLeft") move("left");
+    else if (k==="ArrowRight") move("right");
+    else if (k==="ArrowUp") move("up");
+    else if (k==="ArrowDown") move("down");
+    else if (k==="Enter") activate(current);
+    else if (k==="Escape" || k==="Backspace") back();
+    else if (k==="Home") { if (screen==="player") stopPlayer(); history = []; show("home", true); }
+  }
+
+  document.addEventListener("keydown", function(e){
+    if (e.target.closest && e.target.closest(".switcher, .pad-wrap") && (e.key==="Enter" || e.key===" ")) return;
+    if (["ArrowLeft","ArrowRight","ArrowUp","ArrowDown","Enter","Escape","Backspace"].indexOf(e.key) < 0) return;
+    e.preventDefault(); key(e.key);
+  });
+  $$("#pad button, .pad-row button[data-key]").forEach(function(b){
+    b.addEventListener("click", function(){ key(b.dataset.key); });
+  });
+  $("#safeBtn").addEventListener("click", function(){
+    var on = stage.classList.toggle("show-safe"); this.setAttribute("aria-pressed", String(on));
+  });
+  stage.addEventListener("click", function(e){
+    var el = e.target.closest(".focusable");
+    if (!el) return;
+    if (screen==="player" && osdHidden) { showOsd(el); return; }
+    setFocus(el); activate(el);
+  });
+
+  function fit(){ stage.style.transform = "scale("+(tv.clientWidth/1920)+")"; }
+  if (window.ResizeObserver) new ResizeObserver(fit).observe(tv); else window.addEventListener("resize", fit);
+  fit();
+  show("home", true);
+})();
+</script>
+</body>
+</html>
