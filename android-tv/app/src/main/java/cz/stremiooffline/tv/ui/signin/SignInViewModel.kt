@@ -44,15 +44,27 @@ fun ApiFailure.messageRes(): Int = when (this) {
   ApiFailure.NeedsSetup -> R.string.tv_err_needs_setup
   ApiFailure.MustChangePassword -> R.string.tv_err_must_change_password
   ApiFailure.SessionExpired -> R.string.tv_err_session_expired
+  ApiFailure.NotFound -> R.string.tv_err_generic
+  ApiFailure.Forbidden -> R.string.tv_err_generic
   ApiFailure.Generic -> R.string.tv_err_generic
+}
+
+/** The sign-in screen's state and the five actions it fires, so the screen can be faked in a test. */
+interface SignInActions {
+  val state: SignInState
+  fun onServerChange(value: String)
+  fun onUsernameChange(value: String)
+  fun onPasswordChange(value: String)
+  fun checkServer()
+  fun signIn()
 }
 
 class SignInViewModel(
   private val store: SessionStore,
-  private val onSignedIn: (String, Section) -> Unit,
-) : ViewModel() {
+  private val onSignedIn: (String, Section, ApiClient) -> Unit,
+) : ViewModel(), SignInActions {
 
-  var state by mutableStateOf(SignInState())
+  override var state by mutableStateOf(SignInState())
     private set
 
   private var client: ApiClient? = null
@@ -65,20 +77,20 @@ class SignInViewModel(
     clientOrigin = null
   }
 
-  fun onServerChange(value: String) {
+  override fun onServerChange(value: String) {
     state = state.copy(server = value, check = ServerCheck.Idle, error = null, errorSeconds = null)
   }
 
-  fun onUsernameChange(value: String) {
+  override fun onUsernameChange(value: String) {
     state = state.copy(username = value, error = null, errorSeconds = null)
   }
 
-  fun onPasswordChange(value: String) {
+  override fun onPasswordChange(value: String) {
     state = state.copy(password = value, error = null, errorSeconds = null)
   }
 
   /** The reachability line under the address field, checked when the field is left. */
-  fun checkServer() {
+  override fun checkServer() {
     val address = ServerAddress.parse(state.server)
     if (address == null) {
       state = state.copy(check = ServerCheck.Failed(ApiFailure.Unreachable))
@@ -95,7 +107,7 @@ class SignInViewModel(
     }
   }
 
-  fun signIn() {
+  override fun signIn() {
     if (state.busy) return
     val address = ServerAddress.parse(state.server)
     if (address == null) {
@@ -137,7 +149,7 @@ class SignInViewModel(
     store.serverUrl = address.display
     val start = startSection(runCatching { api.settings().startView }.getOrNull())
     state = state.copy(busy = false)
-    onSignedIn(username, start)
+    onSignedIn(username, start, api)
   }
 
   private fun clientFor(address: ServerAddress): ApiClient {
@@ -150,7 +162,7 @@ class SignInViewModel(
   }
 
   companion object {
-    fun factory(store: SessionStore, onSignedIn: (String, Section) -> Unit) =
+    fun factory(store: SessionStore, onSignedIn: (String, Section, ApiClient) -> Unit) =
       viewModelFactory { initializer { SignInViewModel(store, onSignedIn) } }
   }
 }

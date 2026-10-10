@@ -31,4 +31,22 @@
   <string name="tv_back_to_exit">Press Back again to leave</string>
   <string name="tv_placeholder_title">Coming in the next release</string>
   <string name="tv_placeholder_action">Back to Home</string>
+  <string name="tv_library_title">Your library</string>
+  <string name="tv_library_empty">Nothing here yet. Files you download appear in this library.</string>
+  <string name="tv_library_files">%1$s files</string>
+  <string name="tv_detail_eyebrow_library">In your library</string>
+  <string name="tv_detail_watched">%1$s %% watched</string>
+  <string name="tv_play">Play</string>
+  <string name="tv_resume">Resume</string>
+  <string name="tv_start_over">Start over</string>
+  <string name="tv_back10">Back 10 seconds</string>
+  <string name="tv_forward10">Forward 10 seconds</string>
+  <string name="tv_pause">Pause</string>
+  <string name="tv_path_direct">Direct play · no server conversion</string>
+  <string name="tv_path_audio">Remux · audio converted on the server</string>
+  <string name="tv_path_remux">Remux · nothing re-encoded</string>
+  <string name="tv_path_transcode">Converted on the server</string>
+  <string name="tv_player_error">This video could not be played.</string>
+  <string name="tv_load_error">The library could not be loaded.</string>
+  <string name="tv_back">Back</string>
 </resources>

@@ -5,8 +5,11 @@ import android.content.SharedPreferences
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 
-/** The one place the server address and the session cookie live, encrypted with the Keystore. */
-class SessionStore(context: Context) : SessionPersistence {
+/**
+ * The one place the server address and the session cookie live, encrypted with the Keystore. Open
+ * so a test can substitute an in-memory store.
+ */
+open class SessionStore(context: Context) : SessionPersistence {
 
   private val prefs: SharedPreferences = EncryptedSharedPreferences.create(
     context.applicationContext,
@@ -16,12 +19,12 @@ class SessionStore(context: Context) : SessionPersistence {
     EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
   )
 
-  var serverUrl: String?
+  open var serverUrl: String?
     get() = prefs.getString(KEY_SERVER, null)
     set(value) = prefs.edit().apply { if (value == null) remove(KEY_SERVER) else putString(KEY_SERVER, value) }.apply()
 
   /** Signs out locally but keeps the server address, so the sign-in screen can prefill it. */
-  fun clearSession() {
+  open fun clearSession() {
     prefs.edit().remove(KEY_SESSION).remove(KEY_ORIGIN).apply()
   }
 

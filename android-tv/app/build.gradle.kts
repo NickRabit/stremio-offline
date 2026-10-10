@@ -31,6 +31,20 @@ android {
     compose = true
   }
 
+  testOptions {
+    unitTests {
+      isIncludeAndroidResources = true
+      all {
+        // Robolectric fetches its SDK jar through Maven. An offline environment can pre-place the
+        // jars and point at them with ROBOLECTRIC_DEPS; otherwise Robolectric's own fetch is used.
+        val deps = System.getenv("ROBOLECTRIC_DEPS")
+        if (deps != null && file(deps).isDirectory) {
+          it.systemProperty("robolectric.dependency.dir", deps)
+        }
+      }
+    }
+  }
+
   compileOptions {
     sourceCompatibility = JavaVersion.VERSION_17
     targetCompatibility = JavaVersion.VERSION_17
@@ -57,8 +71,22 @@ dependencies {
   implementation(libs.okhttp)
   implementation(libs.kotlinx.serialization.json)
   implementation(libs.kotlinx.coroutines.android)
+  implementation(libs.androidx.media3.exoplayer)
+  implementation(libs.androidx.media3.exoplayer.hls)
+  implementation(libs.androidx.media3.datasource.okhttp)
+  implementation(libs.androidx.media3.ui)
+  implementation(libs.androidx.media3.session)
+  implementation(libs.coil.compose)
+
+  debugImplementation(libs.androidx.compose.ui.test.manifest)
 
   testImplementation(libs.junit)
   testImplementation(libs.okhttp.mockwebserver)
   testImplementation(libs.kotlinx.coroutines.test)
+  testImplementation(libs.robolectric)
+  testImplementation(libs.androidx.test.core)
+  testImplementation(libs.androidx.test.ext.junit)
+  testImplementation(platform(libs.androidx.compose.bom))
+  testImplementation(libs.androidx.compose.ui.test.junit4)
+  testImplementation(libs.androidx.compose.ui.test.manifest)
 }

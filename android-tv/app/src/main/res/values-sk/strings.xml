@@ -31,4 +31,22 @@
   <string name="tv_back_to_exit">Ďalším stlačením Späť aplikáciu opustíte</string>
   <string name="tv_placeholder_title">Príde v ďalšej verzii</string>
   <string name="tv_placeholder_action">Späť domov</string>
+  <string name="tv_library_title">Vaša knižnica</string>
+  <string name="tv_library_empty">Zatiaľ tu nič nie je. Stiahnuté súbory sa objavia v tejto knižnici.</string>
+  <string name="tv_library_files">Súborov: %1$s</string>
+  <string name="tv_detail_eyebrow_library">Vo vašej knižnici</string>
+  <string name="tv_detail_watched">Zhliadnuté %1$s %%</string>
+  <string name="tv_play">Prehrať</string>
+  <string name="tv_resume">Pokračovať</string>
+  <string name="tv_start_over">Od začiatku</string>
+  <string name="tv_back10">O 10 sekúnd späť</string>
+  <string name="tv_forward10">O 10 sekúnd vpred</string>
+  <string name="tv_pause">Pozastaviť</string>
+  <string name="tv_path_direct">Priame prehrávanie · server nič nekonvertuje</string>
+  <string name="tv_path_audio">Remux · server konvertuje len zvuk</string>
+  <string name="tv_path_remux">Remux · nič sa nekóduje</string>
+  <string name="tv_path_transcode">Konvertuje sa na serveri</string>
+  <string name="tv_player_error">Toto video sa nepodarilo prehrať.</string>
+  <string name="tv_load_error">Knižnicu sa nepodarilo načítať.</string>
+  <string name="tv_back">Späť</string>
 </resources>

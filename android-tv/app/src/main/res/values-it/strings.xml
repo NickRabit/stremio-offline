@@ -31,4 +31,22 @@
   <string name="tv_back_to_exit">Premi di nuovo Indietro per uscire</string>
   <string name="tv_placeholder_title">In arrivo nella prossima versione</string>
   <string name="tv_placeholder_action">Torna alla Home</string>
+  <string name="tv_library_title">La tua libreria</string>
+  <string name="tv_library_empty">Non c\'è ancora nulla. I file scaricati appariranno in questa libreria.</string>
+  <string name="tv_library_files">%1$s file</string>
+  <string name="tv_detail_eyebrow_library">Nella tua libreria</string>
+  <string name="tv_detail_watched">%1$s %% visto</string>
+  <string name="tv_play">Riproduci</string>
+  <string name="tv_resume">Riprendi</string>
+  <string name="tv_start_over">Dall\'inizio</string>
+  <string name="tv_back10">10 secondi indietro</string>
+  <string name="tv_forward10">10 secondi avanti</string>
+  <string name="tv_pause">Pausa</string>
+  <string name="tv_path_direct">Riproduzione diretta · nessuna conversione sul server</string>
+  <string name="tv_path_audio">Remux · il server converte solo l\'audio</string>
+  <string name="tv_path_remux">Remux · nulla viene riconvertito</string>
+  <string name="tv_path_transcode">Convertito sul server</string>
+  <string name="tv_player_error">Impossibile riprodurre questo video.</string>
+  <string name="tv_load_error">Impossibile caricare la libreria.</string>
+  <string name="tv_back">Indietro</string>
 </resources>

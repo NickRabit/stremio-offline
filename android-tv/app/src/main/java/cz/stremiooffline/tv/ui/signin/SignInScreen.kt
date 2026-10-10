@@ -46,6 +46,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -66,12 +67,17 @@ import cz.stremiooffline.tv.ui.theme.appBackground
 
 private const val DefaultAddress = "http://"
 
+const val TagAddress = "signin_address"
+const val TagUsername = "signin_username"
+const val TagPassword = "signin_password"
+const val TagSignIn = "signin_submit"
+
 /**
  * @param prefillAddress the address the sign-in screen was opened with. It decides the initial
  *   focus: a bare `http://` sends focus to the address field, a real address to Sign in.
  */
 @Composable
-fun SignInScreen(viewModel: SignInViewModel, prefillAddress: String, modifier: Modifier = Modifier) {
+fun SignInScreen(viewModel: SignInActions, prefillAddress: String, modifier: Modifier = Modifier) {
   val state = viewModel.state
   val shape = RoundedCornerShape(12.dp)
   val addressFocus = remember { FocusRequester() }
@@ -112,11 +118,13 @@ fun SignInScreen(viewModel: SignInViewModel, prefillAddress: String, modifier: M
         keyboardType = KeyboardType.Uri,
         surfaceRequester = addressFocus,
         onFocusLost = viewModel::checkServer,
+        tag = TagAddress,
       ) { ServerStatusLine(state.check) }
       Field(
         label = stringResource(R.string.auth_username),
         value = state.username,
         onValueChange = viewModel::onUsernameChange,
+        tag = TagUsername,
       )
       Field(
         label = stringResource(R.string.auth_password),
@@ -124,11 +132,12 @@ fun SignInScreen(viewModel: SignInViewModel, prefillAddress: String, modifier: M
         onValueChange = viewModel::onPasswordChange,
         password = true,
         imeAction = ImeAction.Done,
+        tag = TagPassword,
       )
       FocusButton(
         text = stringResource(R.string.auth_sign_in),
         onClick = viewModel::signIn,
-        modifier = Modifier.focusRequester(signInFocus),
+        modifier = Modifier.focusRequester(signInFocus).testTag(TagSignIn),
         kind = FocusButtonKind.Primary,
       )
       val error = state.error
@@ -166,6 +175,7 @@ private fun Field(
   imeAction: ImeAction = ImeAction.Next,
   surfaceRequester: FocusRequester? = null,
   onFocusLost: () -> Unit = {},
+  tag: String? = null,
   below: (@Composable () -> Unit)? = null,
 ) {
   var surfaceFocused by remember { mutableStateOf(false) }
@@ -221,6 +231,7 @@ private fun Field(
         .fillMaxWidth()
         .height(38.dp)
         .focusRequester(surface)
+        .then(if (tag != null) Modifier.testTag(tag) else Modifier)
         .onPreviewKeyEvent { event ->
           val enter = event.key == Key.DirectionCenter || event.key == Key.Enter
           if (enter && event.type == KeyEventType.KeyDown && !editing) {
@@ -276,6 +287,7 @@ private fun Field(
     below?.invoke()
   }
 }
+
 
 @Composable
 private fun ServerStatusLine(check: ServerCheck) {
