@@ -134,7 +134,7 @@ fun SignInScreen(viewModel: SignInViewModel, prefillAddress: String, modifier: M
       val error = state.error
       if (error != null) {
         Text(
-          if (error == ApiFailure.TooMany) stringResource(R.string.tv_err_too_many, state.errorSeconds ?: 0)
+          if (error == ApiFailure.TooMany) stringResource(R.string.tv_err_too_many, (state.errorSeconds ?: 0).toString())
           else stringResource(error.messageRes()),
           color = Tokens.Red,
           fontSize = 10.sp,
