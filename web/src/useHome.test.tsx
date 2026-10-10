@@ -17,7 +17,7 @@ let hook: ReturnType<typeof useHome>;
 const Probe = () => { hook = useHome({ active: true, account: "alice", admin: false, addons, playerOpen: false }); return null; };
 
 const answer = (rows: readonly HomeRowId[], partial: ReadonlySet<HomeRowId> = new Set()): HomeResponse => ({
-  generatedAt: "", rows: Object.fromEntries(rows.map((row) => [row, { status: "ok", items: [], hasMore: false, ...(partial.has(row) ? { partial: true } : {}) }])),
+  generatedAt: "", order: [], rows: Object.fromEntries(rows.map((row) => [row, { status: "ok", items: [], hasMore: false, ...(partial.has(row) ? { partial: true } : {}) }])),
 });
 
 beforeEach(() => {
