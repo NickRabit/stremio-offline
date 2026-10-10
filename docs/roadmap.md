@@ -177,6 +177,14 @@ queue drains. Existing concurrency settings limit simultaneous jobs; they do
 not provide a time window or bandwidth cap. Push notifications outside the
 browser are a separate later idea.
 
+### Android TV
+
+A native client for the TCL televisions and the Shield, with the web's Home,
+Catalog and Library and a player that plays MKV without a server conversion.
+It starts with a server-only PR that lets a native client declare containers,
+profiles and audio passthrough. Scope, contracts and PR order:
+[Android TV client](android-tv-spec.md).
+
 ### Desktop
 
 The clients and release packages exist for macOS arm64, Windows x64, and Linux
