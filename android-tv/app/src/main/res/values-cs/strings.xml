@@ -101,4 +101,6 @@
   <string name="home_empty_text">Něco si stáhněte nebo začněte sledovat a objeví se to tady.</string>
   <string name="tv_home_load_error">Domovskou stránku se nepodařilo načíst.</string>
   <string name="tv_downloads_later">Fronta stahování se zatím otevírá na webu.</string>
+  <string name="catalog_type_movie">film</string>
+  <string name="catalog_type_series">seriál</string>
 </resources>

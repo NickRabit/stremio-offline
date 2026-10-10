@@ -97,4 +97,6 @@
   <string name="home_empty_text">Scarica qualcosa o inizia a guardare e comparirà qui.</string>
   <string name="tv_home_load_error">Impossibile caricare la Home.</string>
   <string name="tv_downloads_later">La coda dei download si apre per ora sul web.</string>
+  <string name="catalog_type_movie">film</string>
+  <string name="catalog_type_series">serie</string>
 </resources>

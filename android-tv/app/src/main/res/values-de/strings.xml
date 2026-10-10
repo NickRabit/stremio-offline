@@ -97,4 +97,6 @@
   <string name="home_empty_text">Laden Sie etwas herunter oder beginnen Sie zu schauen – es erscheint dann hier.</string>
   <string name="tv_home_load_error">Die Startseite konnte nicht geladen werden.</string>
   <string name="tv_downloads_later">Die Download-Warteschlange öffnet sich vorerst im Web.</string>
+  <string name="catalog_type_movie">Film</string>
+  <string name="catalog_type_series">Serie</string>
 </resources>

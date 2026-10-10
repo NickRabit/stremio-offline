@@ -101,4 +101,6 @@
   <string name="home_empty_text">Скачайте что-нибудь или начните смотреть — и это появится здесь.</string>
   <string name="tv_home_load_error">Не удалось загрузить главную страницу.</string>
   <string name="tv_downloads_later">Очередь загрузок пока открывается в веб-интерфейсе.</string>
+  <string name="catalog_type_movie">фильм</string>
+  <string name="catalog_type_series">серия</string>
 </resources>

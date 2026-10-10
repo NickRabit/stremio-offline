@@ -25,6 +25,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.Text
 import cz.stremiooffline.tv.R
+import cz.stremiooffline.tv.data.CatalogDto
 import cz.stremiooffline.tv.data.MetaDto
 import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.ui.components.FocusButton
@@ -122,7 +123,7 @@ fun CatalogScreen(
         val catalog = state.current
         if (catalog != null) {
           FocusButton(
-            text = catalog.label,
+            text = catalogText(catalog),
             onClick = { panelOpener = catalogFocus; panel = CatalogPanel.Catalogs },
             modifier = Modifier.focusRequester(catalogFocus).testTag(TagCatalogChip),
           )
@@ -164,7 +165,7 @@ fun CatalogScreen(
         ) {
           state.catalogs.forEachIndexed { index, catalog ->
             PanelOption(
-              text = catalog.label,
+              text = catalogText(catalog),
               selected = index == state.catalogIndex,
               onClick = { viewModel.select(index); closePanel() },
               modifier = Modifier
@@ -223,4 +224,12 @@ private fun CatalogError(onRetry: () -> Unit) {
       )
     }
   }
+}
+
+/** The web's catalogue label with its type, so Cinemeta's twin "Popular" lists tell films from series. */
+@Composable
+internal fun catalogText(catalog: CatalogDto): String = when (catalog.type) {
+  "movie" -> "${catalog.label} (${stringResource(R.string.catalog_type_movie)})"
+  "series" -> "${catalog.label} (${stringResource(R.string.catalog_type_series)})"
+  else -> catalog.label
 }
