@@ -1550,4 +1550,5 @@ export const pl: Catalog = {
   "tv.default": "Domyślne",
   "tv.searchHint": "Wpisz tytuł i naciśnij Gotowe.",
   "tv.findingSources": "Szukam źródeł…",
+  "tv.playWhenReady": "Uruchomię, gdy źródła będą gotowe…",
 };

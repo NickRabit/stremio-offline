@@ -29,6 +29,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -38,6 +39,8 @@ import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
 import cz.stremiooffline.tv.ui.theme.Tokens
 import kotlinx.coroutines.android.awaitFrame
+
+const val TagSidePanelList = "side_panel_list"
 
 private val PanelShape = RoundedCornerShape(topStart = 14.dp, bottomStart = 14.dp)
 
@@ -76,7 +79,7 @@ fun SidePanel(
       Text(title, color = Tokens.Text, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold)
       Spacer(Modifier.height(2.dp))
       Column(
-        modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+        modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).testTag(TagSidePanelList),
         verticalArrangement = Arrangement.spacedBy(8.dp),
         content = content,
       )
@@ -105,6 +108,8 @@ fun PanelOption(
       pressedContainerColor = Tokens.Panel2,
       pressedContentColor = Tokens.Text,
     ),
+    // Panel rows do not scale on focus: the list viewport would clip the first and last row.
+    scale = ClickableSurfaceDefaults.scale(focusedScale = 1f, pressedScale = 1f),
     border = ClickableSurfaceDefaults.border(
       border = Border.None,
       focusedBorder = Border(BorderStroke(1.5.dp, Tokens.Accent2), shape = shape),

@@ -69,4 +69,24 @@ class ShellNavigationTest {
 
     compose.onNodeWithTag("Films").assertIsFocused()
   }
+
+  // Found on the emulator: RIGHT from the rail crashed with "FocusRequester is not initialized"
+  // when the section had not attached the shell's content requester.
+  @Test
+  fun `right from the rail into every section never crashes`() {
+    val api = FakeTvApi()
+    api.pages[null] = BrowseResult("", listOf(BrowseItem.Folder(path = "Films", name = "Films", fileCount = 1)), 1, false)
+    scenario.onActivity { activity ->
+      activity.setContent { Shell(start = Section.Catalog, api = api, username = "demo", onSignOut = {}) }
+    }
+    compose.waitForIdle()
+
+    for (section in listOf(Section.Catalog, Section.Home, Section.Library, Section.Search, Section.Account)) {
+      compose.onRoot().performKeyInput { pressKey(Key.DirectionLeft) }
+      compose.waitForIdle()
+      scenario.onActivity { }
+      compose.onRoot().performKeyInput { pressKey(Key.DirectionRight) }
+      compose.waitForIdle()
+    }
+  }
 }

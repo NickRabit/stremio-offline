@@ -1550,4 +1550,5 @@ export const ptBR: Catalog = {
   "tv.default": "Padrão",
   "tv.searchHint": "Digite um título e pressione Concluído.",
   "tv.findingSources": "Procurando fontes…",
+  "tv.playWhenReady": "Vou iniciar quando as fontes estiverem prontas…",
 };

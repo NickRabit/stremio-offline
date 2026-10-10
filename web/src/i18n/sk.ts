@@ -1550,4 +1550,5 @@ export const sk: Catalog = {
   "tv.default": "Predvolené",
   "tv.searchHint": "Napíšte názov a stlačte Hotovo.",
   "tv.findingSources": "Hľadám zdroje…",
+  "tv.playWhenReady": "Spustím, keď budú zdroje načítané…",
 };

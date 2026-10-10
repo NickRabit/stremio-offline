@@ -1550,4 +1550,5 @@ export const it: Catalog = {
   "tv.default": "Predefinito",
   "tv.searchHint": "Digita un titolo e premi Fine.",
   "tv.findingSources": "Ricerca delle fonti…",
+  "tv.playWhenReady": "Avvio quando le fonti saranno pronte…",
 };

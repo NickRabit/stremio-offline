@@ -1550,4 +1550,5 @@ export const ru: Catalog = {
   "tv.default": "По умолчанию",
   "tv.searchHint": "Введите название и нажмите Готово.",
   "tv.findingSources": "Поиск источников…",
+  "tv.playWhenReady": "Запущу, когда источники будут готовы…",
 };

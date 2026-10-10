@@ -340,7 +340,7 @@ class CatalogDetailTest {
   }
 
   @Test
-  fun `play while the sources load does nothing and keeps a message away`() {
+  fun `play while the sources load arms the wait and keeps a message away`() {
     val api = FakeTvApi()
     api.settingsValue = settings()
     api.streamsValues["movie:tt1"] = listOf(stream("s1", name = "FullHD"))
@@ -352,6 +352,7 @@ class CatalogDetailTest {
 
     assertTrue(played.isEmpty())
     compose.onNodeWithTag(TagCatalogMessage).assertDoesNotExist()
+    compose.onNodeWithTag(TagCatalogPrimary).assertTextContains("Starting when sources are ready…")
     compose.onNodeWithTag(TagCatalogPrimary).assertIsFocused()
   }
 

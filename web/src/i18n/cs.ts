@@ -1601,4 +1601,5 @@ export const cs: Catalog = {
   "tv.default": "Výchozí",
   "tv.searchHint": "Napište název a stiskněte Hotovo.",
   "tv.findingSources": "Hledám zdroje…",
+  "tv.playWhenReady": "Spustím, až budou zdroje načtené…",
 };

@@ -54,6 +54,7 @@ tv.sourcesCount
 tv.default
 tv.searchHint
 tv.findingSources
+tv.playWhenReady
 catalog.title
 catalog.genre
 catalog.allGenres
