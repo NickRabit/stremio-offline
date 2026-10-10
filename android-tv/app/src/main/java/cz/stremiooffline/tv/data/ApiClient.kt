@@ -4,6 +4,7 @@ import java.io.IOException
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -14,7 +15,8 @@ import okhttp3.Response
 
 /** Every way a call can fail, before it is turned into a catalogued message. */
 enum class ApiFailure {
-  Unreachable, Incompatible, BadCredentials, TooMany, NeedsSetup, MustChangePassword, SessionExpired, Generic
+  Unreachable, Incompatible, BadCredentials, TooMany, NeedsSetup, MustChangePassword, SessionExpired,
+  NotFound, Forbidden, Generic
 }
 
 class ApiError(val failure: ApiFailure, val seconds: Int? = null) : Exception(failure.name)
@@ -33,7 +35,7 @@ class ApiClient(
   private val address: ServerAddress,
   cookieStore: CookieStore,
   baseClient: OkHttpClient = OkHttpClient(),
-) {
+) : TvApi {
 
   private val json = Json { ignoreUnknownKeys = true }
   private val mediaType = "application/json; charset=utf-8".toMediaType()
@@ -49,6 +51,13 @@ class ApiClient(
       chain.proceed(request)
     }
     .build()
+
+  /** The one HTTP client of the session: images and the player share it so they share the cookie. */
+  override val http: OkHttpClient get() = client
+
+  /** A server-relative address (an image, a stream) resolved against the configured prefix. */
+  override fun url(path: String): String =
+    if (path.startsWith("http://") || path.startsWith("https://")) path else address.resolve(path).toString()
 
   suspend fun status(): ServerStatus {
     call(Request.Builder().url(address.resolve("/api/status")).get().build()).use { response ->
@@ -102,6 +111,86 @@ class ApiClient(
     }
   }
 
+  /** One page of the library tree. An unknown item kind is dropped rather than failing the page. */
+  override suspend fun browse(path: String?, limit: Int, skip: Int): BrowseResult {
+    val query = buildString {
+      append("?limit=").append(limit).append("&skip=").append(skip)
+      if (!path.isNullOrEmpty()) append("&path=").append(encode(path))
+    }
+    val page = request(Request.Builder().url(address.resolve("/api/library/browse$query")).get().build())
+      .decode<BrowsePage>() ?: throw ApiError(ApiFailure.Generic)
+    return BrowseResult(page.path, browseItems(page), page.total, page.pending)
+  }
+
+  /** Mints a playable source for one library file. */
+  override suspend fun librarySource(path: String): SourceDto {
+    val payload = json.encodeToString(SourceRequest.serializer(), SourceRequest(path))
+    return request(Request.Builder().url(address.resolve("/api/library/source")).post(payload.toRequestBody(mediaType)).build())
+      .decode<SourceDto>() ?: throw ApiError(ApiFailure.Generic)
+  }
+
+  override suspend fun startPlayback(sourceId: String, capabilities: ClientCapabilitiesDto, time: Double): PlaybackDescriptorDto {
+    val payload = json.encodeToString(
+      PlaybackStartRequest.serializer(),
+      PlaybackStartRequest(sourceId, capabilities, time),
+    )
+    return request(Request.Builder().url(address.resolve("/api/playback")).post(payload.toRequestBody(mediaType)).build())
+      .decode<PlaybackDescriptorDto>() ?: throw ApiError(ApiFailure.Generic)
+  }
+
+  override suspend fun seekPlayback(id: String, time: Double): PlaybackDescriptorDto {
+    val payload = json.encodeToString(TimeRequest.serializer(), TimeRequest(time))
+    return request(Request.Builder().url(address.resolve("/api/playback/$id/seek")).post(payload.toRequestBody(mediaType)).build())
+      .decode<PlaybackDescriptorDto>() ?: throw ApiError(ApiFailure.Generic)
+  }
+
+  override suspend fun escalatePlayback(id: String, time: Double): PlaybackDescriptorDto {
+    val payload = json.encodeToString(TimeRequest.serializer(), TimeRequest(time))
+    return request(Request.Builder().url(address.resolve("/api/playback/$id/escalate")).post(payload.toRequestBody(mediaType)).build())
+      .decode<PlaybackDescriptorDto>() ?: throw ApiError(ApiFailure.Generic)
+  }
+
+  override suspend fun pingPlayback(id: String) {
+    request(Request.Builder().url(address.resolve("/api/playback/$id/ping")).post("{}".toRequestBody(mediaType)).build())
+  }
+
+  override suspend fun deletePlayback(id: String) {
+    request(Request.Builder().url(address.resolve("/api/playback/$id")).delete().build())
+  }
+
+  /** The stored position of one progress key, or null when nothing is stored. */
+  override suspend fun progress(key: String): ProgressDto? {
+    val body = request(Request.Builder().url(address.resolve("/api/progress/" + encode(key))).get().build())
+    if (body.isBlank() || body == "null") return null
+    return body.decode<ProgressDto>()
+  }
+
+  override suspend fun saveProgress(key: String, position: Double, duration: Double, title: String, path: String?) {
+    val payload = json.encodeToString(
+      ProgressRequest.serializer(),
+      ProgressRequest(key, position, duration, title, path),
+    )
+    request(Request.Builder().url(address.resolve("/api/progress")).post(payload.toRequestBody(mediaType)).build())
+  }
+
+  private suspend fun request(request: Request): String = call(request).use { response ->
+    when {
+      response.isSuccessful -> readBody(response)
+      response.code == 401 -> throw ApiError(ApiFailure.SessionExpired)
+      response.code == 403 -> throw ApiError(ApiFailure.Forbidden)
+      response.code == 404 -> throw ApiError(ApiFailure.NotFound)
+      else -> throw ApiError(ApiFailure.Generic)
+    }
+  }
+
+  private inline fun <reified T> String.decode(): T? = try {
+    json.decodeFromString<T>(this)
+  } catch (_: Exception) {
+    null
+  }
+
+  private fun encode(value: String): String = java.net.URLEncoder.encode(value, "UTF-8").replace("+", "%20")
+
   private suspend fun call(request: Request): Response = withContext(Dispatchers.IO) {
     try {
       client.newCall(request).execute()
@@ -123,3 +212,21 @@ class ApiClient(
     null
   }
 }
+
+@Serializable
+private data class SourceRequest(val path: String)
+
+@Serializable
+private data class TimeRequest(val time: Double)
+
+@Serializable
+private data class PlaybackStartRequest(val sourceId: String, val capabilities: ClientCapabilitiesDto, val time: Double)
+
+@Serializable
+private data class ProgressRequest(
+  val key: String,
+  val position: Double,
+  val duration: Double,
+  val title: String,
+  val path: String? = null,
+)

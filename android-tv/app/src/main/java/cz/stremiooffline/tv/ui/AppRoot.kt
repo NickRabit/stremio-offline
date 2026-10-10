@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -55,12 +56,14 @@ import cz.stremiooffline.tv.ui.signin.SignInScreen
 import cz.stremiooffline.tv.ui.signin.SignInViewModel
 import cz.stremiooffline.tv.ui.theme.Tokens
 import cz.stremiooffline.tv.ui.theme.appBackground
+import coil.ImageLoader
+import coil.compose.LocalImageLoader
 import kotlinx.coroutines.launch
 
 sealed interface SessionState {
   data object Loading : SessionState
   data class SignedOut(val address: String, val error: ApiFailure?) : SessionState
-  data class SignedIn(val username: String, val start: Section) : SessionState
+  data class SignedIn(val username: String, val start: Section, val api: ApiClient) : SessionState
   data class Offline(val server: String) : SessionState
 }
 
@@ -90,7 +93,7 @@ class SessionViewModel(private val store: SessionStore) : ViewModel() {
       val api = ApiClient(address, CookieStore(address.origin, store))
       try {
         state = when (val me = api.me()) {
-          is MeResult.SignedIn -> SessionState.SignedIn(me.username, startSection(settingsOf(api)))
+          is MeResult.SignedIn -> SessionState.SignedIn(me.username, startSection(settingsOf(api)), api)
           MeResult.Setup -> {
             store.clearSession()
             SessionState.SignedOut(address.display, ApiFailure.NeedsSetup)
@@ -107,8 +110,8 @@ class SessionViewModel(private val store: SessionStore) : ViewModel() {
     }
   }
 
-  fun signedIn(username: String, start: Section) {
-    state = SessionState.SignedIn(username, start)
+  fun signedIn(username: String, start: Section, api: ApiClient) {
+    state = SessionState.SignedIn(username, start, api)
   }
 
   fun changeServer() {
@@ -139,6 +142,7 @@ class SessionViewModel(private val store: SessionStore) : ViewModel() {
 }
 
 @Composable
+@Suppress("DEPRECATION")
 fun AppRoot() {
   val context = LocalContext.current
   val store = remember { SessionStore(context.applicationContext) }
@@ -153,11 +157,17 @@ fun AppRoot() {
       SignInScreen(signIn, prefillAddress = state.address)
     }
 
-    is SessionState.SignedIn -> Shell(
-      username = state.username,
-      start = state.start,
-      onSignOut = session::signOut,
-    )
+    is SessionState.SignedIn -> {
+      val imageLoader = remember(state.api) { ImageLoader.Builder(context).okHttpClient(state.api.http).build() }
+      CompositionLocalProvider(LocalImageLoader provides imageLoader) {
+        Shell(
+          start = state.start,
+          api = state.api,
+          username = state.username,
+          onSignOut = session::signOut,
+        )
+      }
+    }
 
     is SessionState.Offline -> OfflinePanel(
       server = state.server,

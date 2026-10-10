@@ -1,6 +1,5 @@
 package cz.stremiooffline.tv.ui.shell
 
-import android.app.Activity
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
@@ -24,6 +23,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -45,24 +45,26 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.PathBuilder
 import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.navigation.NavHostController
-import androidx.navigation.compose.NavHost
-import androidx.navigation.compose.composable
-import androidx.navigation.compose.currentBackStackEntryAsState
-import androidx.navigation.compose.rememberNavController
 import androidx.tv.material3.Border
 import androidx.tv.material3.ClickableSurfaceDefaults
 import androidx.tv.material3.Icon
 import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
 import cz.stremiooffline.tv.R
+import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.ui.components.BrandMark
 import cz.stremiooffline.tv.ui.components.FocusButton
 import cz.stremiooffline.tv.ui.components.FocusButtonKind
+import cz.stremiooffline.tv.ui.detail.DetailData
+import cz.stremiooffline.tv.ui.detail.DetailScreen
+import cz.stremiooffline.tv.ui.detail.PlayTarget
+import cz.stremiooffline.tv.ui.library.LibraryRoute
+import cz.stremiooffline.tv.ui.player.PlayerScreen
 import cz.stremiooffline.tv.ui.theme.Tokens
 import cz.stremiooffline.tv.ui.theme.appBackground
 import kotlinx.coroutines.delay
@@ -92,87 +94,140 @@ private val Section.labelRes: Int
     Section.Account -> R.string.nav_settings
   }
 
+const val TAG_RAIL_PREFIX = "rail_"
+
 private val CollapsedRail = 60.dp
 private val ExpandedRail = 200.dp
 
 @Composable
-fun Shell(username: String, start: Section, onSignOut: () -> Unit) {
-  val navController = rememberNavController()
-  val backStackEntry by navController.currentBackStackEntryAsState()
-  val current = Section.entries.firstOrNull { it.route == backStackEntry?.destination?.route } ?: start
+fun Shell(start: Section, api: TvApi, username: String, onSignOut: () -> Unit) {
+  val shellState = remember(start) { ShellState(start) }
+  val current = shellState.selected
+
+  var detail by remember { mutableStateOf<DetailData?>(null) }
+  var player by remember { mutableStateOf<PlayTarget?>(null) }
+  var returnToken by remember { mutableIntStateOf(0) }
+
+  ShellScaffold(
+    username = username,
+    start = start,
+    current = current,
+    onSection = { section ->
+      shellState.pick(section)
+      true
+    },
+    onBackToExit = onSignOut,
+    railHidden = detail != null,
+  ) { focusRequester ->
+    val section = current
+    if (section == Section.Library) {
+      LibraryRoute(
+        api = api,
+        onOpenDetail = { detail = it },
+        restoreToken = returnToken,
+      )
+    } else {
+      SectionContent(
+        section = section,
+        username = username,
+        onSignOut = onSignOut,
+        onAction = { shellState.pick(Section.Home) },
+        focusRequester = focusRequester,
+      )
+    }
+  }
+
+  val openDetail = detail
+  if (openDetail != null) {
+    DetailScreen(
+      detail = openDetail,
+      imageUrl = { path -> path?.let(api::url) },
+      onPlay = { player = it },
+      onBack = {
+        detail = null
+        returnToken++
+      },
+      progress = api::progress,
+      restoreToken = returnToken,
+      backEnabled = player == null,
+    )
+  }
+
+  val openPlayer = player
+  if (openPlayer != null) {
+    PlayerScreen(api = api, target = openPlayer, onExit = {
+      player = null
+      returnToken++
+    })
+  }
+}
+
+
+/**
+ * The rail plus the content of the current section, with the focus contract between them. The
+ * slot receives the focus requester the rail's RIGHT returns to; the modifier that points its LEFT
+ * back at the rail is applied around it. Extracted from [Shell] so a test can drive the rail
+ * against fake content.
+ */
+@Composable
+fun ShellScaffold(
+  username: String,
+  start: Section,
+  current: Section,
+  onSection: (Section) -> Boolean = { false },
+  onBackToExit: () -> Unit,
+  railHidden: Boolean = false,
+  content: @Composable (FocusRequester) -> Unit,
+) {
   val railFocusRequesters = remember { Section.entries.associateWith { FocusRequester() } }
-  val contentFocusRequesters = remember { Section.entries.associateWith { FocusRequester() } }
+  val contentFocusRequester = remember { FocusRequester() }
   var focusedRail by remember { mutableStateOf<Section?>(null) }
-  var pendingContentFocus by remember { mutableStateOf<Section?>(start) }
   var exitArmed by remember { mutableStateOf(false) }
-  val activity = LocalContext.current as? Activity
   val scope = rememberCoroutineScope()
 
   BackHandler {
-    val rail = focusedRail
-    if (rail != null) {
-      if (exitArmed) {
-        activity?.finish()
-      } else {
+    when (railBackAction(railFocused = focusedRail != null, exitArmed = exitArmed)) {
+      RailBackAction.FocusRail -> railFocusRequesters.getValue(current).requestFocus()
+      RailBackAction.Exit -> onBackToExit()
+      RailBackAction.ArmExit -> {
         exitArmed = true
         scope.launch {
           delay(2_000)
           exitArmed = false
         }
       }
-    } else {
-      railFocusRequesters.getValue(current).requestFocus()
     }
   }
 
   Box(Modifier.fillMaxSize().appBackground()) {
-    NavHost(
-      navController = navController,
-      startDestination = start.route,
-      modifier = Modifier.fillMaxSize().padding(start = CollapsedRail),
+    Box(
+      Modifier
+        .fillMaxSize()
+        .padding(start = CollapsedRail)
+        .focusProperties { left = railFocusRequesters.getValue(current) },
     ) {
-      Section.entries.forEach { section ->
-        composable(section.route) {
-          SectionContent(
-            section = section,
-            username = username,
-            onSignOut = onSignOut,
-            onAction = { navigate(navController, start, Section.Home) },
-            focusRequester = contentFocusRequesters.getValue(section),
-            autoFocus = pendingContentFocus == section,
-            onFocused = { if (pendingContentFocus == section) pendingContentFocus = null },
-            modifier = Modifier.focusProperties { left = railFocusRequesters.getValue(section) },
-          )
-        }
-      }
+      content(contentFocusRequester)
     }
 
-    Rail(
-      username = username,
-      current = current,
-      expanded = focusedRail != null,
-      requesters = railFocusRequesters,
-      contentRequester = { contentFocusRequesters.getValue(current) },
-      onFocusChanged = { section, focused ->
-        if (focused) focusedRail = section else if (focusedRail == section) focusedRail = null
-      },
-      onSelect = { section ->
-        pendingContentFocus = section
-        if (section != current) navigate(navController, start, section)
-      },
-    )
+    if (!railHidden) {
+      Rail(
+        username = username,
+        current = current,
+        expanded = focusedRail != null,
+        requesters = railFocusRequesters,
+        contentRequester = { contentFocusRequester },
+        onFocusChanged = { section, focused ->
+          if (focused) focusedRail = section else if (focusedRail == section) focusedRail = null
+        },
+        onSelect = { section ->
+          if (section != current && !onSection(section)) contentFocusRequester.requestFocus()
+        },
+      )
+    }
 
     if (exitArmed) {
       ExitHint(Modifier.align(Alignment.BottomCenter).padding(bottom = 40.dp))
     }
-  }
-}
-
-private fun navigate(navController: NavHostController, start: Section, section: Section) {
-  navController.navigate(section.route) {
-    launchSingleTop = true
-    popUpTo(start.route) { inclusive = false; saveState = true }
-    restoreState = true
   }
 }
 
@@ -213,6 +268,7 @@ private fun Rail(
         expanded = expanded,
         modifier = Modifier
           .fillMaxWidth()
+          .testTag(railTag(section))
           .focusRequester(requesters.getValue(section))
           .focusProperties { right = contentRequester() },
         leading = { Icon(mark, contentDescription = null, modifier = Modifier.size(16.dp)) },
@@ -229,6 +285,7 @@ private fun Rail(
       expanded = expanded,
       modifier = Modifier
         .fillMaxWidth()
+        .testTag(railTag(Section.Account))
         .focusRequester(requesters.getValue(Section.Account))
         .focusProperties { right = contentRequester() },
       leading = { Avatar(username) },
@@ -237,6 +294,8 @@ private fun Rail(
     )
   }
 }
+
+fun railTag(section: Section): String = TAG_RAIL_PREFIX + section.route
 
 @Composable
 private fun RailItem(
@@ -316,19 +375,10 @@ private fun SectionContent(
   onSignOut: () -> Unit,
   onAction: () -> Unit,
   focusRequester: FocusRequester,
-  autoFocus: Boolean,
-  onFocused: () -> Unit,
-  modifier: Modifier = Modifier,
 ) {
-  LaunchedEffect(autoFocus) {
-    if (autoFocus) {
-      focusRequester.requestFocus()
-      onFocused()
-    }
-  }
-
+  LaunchedEffect(Unit) { runCatching { focusRequester.requestFocus() } }
   Column(
-    modifier = Modifier.fillMaxSize().padding(start = Tokens.SafeX, top = Tokens.SafeY),
+    modifier = Modifier.padding(start = Tokens.SafeX, top = Tokens.SafeY),
     verticalArrangement = Arrangement.spacedBy(11.dp),
   ) {
     Text(
@@ -350,14 +400,14 @@ private fun SectionContent(
       FocusButton(
         text = stringResource(R.string.auth_sign_out),
         onClick = onSignOut,
-        modifier = modifier.focusRequester(focusRequester),
+        modifier = Modifier.focusRequester(focusRequester),
         kind = FocusButtonKind.Primary,
       )
     } else {
       FocusButton(
         text = stringResource(R.string.tv_placeholder_action),
         onClick = onAction,
-        modifier = modifier.focusRequester(focusRequester),
+        modifier = Modifier.focusRequester(focusRequester),
         kind = FocusButtonKind.Primary,
       )
     }

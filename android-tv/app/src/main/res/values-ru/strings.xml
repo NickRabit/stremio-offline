@@ -31,4 +31,22 @@
   <string name="tv_back_to_exit">Нажмите Назад еще раз, чтобы выйти</string>
   <string name="tv_placeholder_title">Появится в следующей версии</string>
   <string name="tv_placeholder_action">На главную</string>
+  <string name="tv_library_title">Ваша библиотека</string>
+  <string name="tv_library_empty">Здесь пока ничего нет. Скачанные файлы появятся в этой библиотеке.</string>
+  <string name="tv_library_files">Файлов: %1$s</string>
+  <string name="tv_detail_eyebrow_library">В вашей библиотеке</string>
+  <string name="tv_detail_watched">Просмотрено %1$s %%</string>
+  <string name="tv_play">Воспроизвести</string>
+  <string name="tv_resume">Продолжить</string>
+  <string name="tv_start_over">С начала</string>
+  <string name="tv_back10">10 секунд назад</string>
+  <string name="tv_forward10">10 секунд вперёд</string>
+  <string name="tv_pause">Пауза</string>
+  <string name="tv_path_direct">Прямое воспроизведение · сервер ничего не преобразует</string>
+  <string name="tv_path_audio">Remux · сервер преобразует только звук</string>
+  <string name="tv_path_remux">Remux · ничего не перекодируется</string>
+  <string name="tv_path_transcode">Преобразуется на сервере</string>
+  <string name="tv_player_error">Не удалось воспроизвести это видео.</string>
+  <string name="tv_load_error">Не удалось загрузить библиотеку.</string>
+  <string name="tv_back">Назад</string>
 </resources>
