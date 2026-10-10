@@ -1,10 +1,8 @@
 import type { HomeCard, HomeResponse, HomeRowId } from "../../server/src/home";
-import { homeCatalogRowId, homeCatalogSelectionKey } from "../../server/src/home";
+import { HOME_ROWS, homeCatalogRowId, homeCatalogSelectionKey, homeRowOrder } from "../../server/src/home";
 import type { Addon } from "./types";
 
-/** Every shelf the page draws, in the page's order. `confirm` is not a shelf: it is a count
- *  in the heading, and Home fetches it only so that count is available. */
-export const HOME_ROWS = ["resume", "favorites", "tonight", "episodes", "completed", "recent", "confirm"] as const satisfies readonly HomeRowId[];
+export { HOME_ROWS };
 
 export const isHomeCatalogRow = (row: HomeRowId): boolean => row.startsWith("catalog:");
 
@@ -30,11 +28,8 @@ export function homeCatalogShelves(addons: Addon[]): HomeCatalogShelf[] {
 
 /** The rows one account loads. `confirm` is administrator-only, so an ordinary account's load
  *  omits it and its global empty state must not wait for a row that will never answer. */
-export const homeRowsFor = (admin: boolean, addons: Addon[] = []): readonly HomeRowId[] => {
-  const fixed = admin ? HOME_ROWS : HOME_ROWS.filter((row) => row !== "confirm");
-  const at = fixed.indexOf("episodes");
-  return [...fixed.slice(0, at), ...homeCatalogShelves(addons).map((shelf) => shelf.id), ...fixed.slice(at)];
-};
+export const homeRowsFor = (admin: boolean, addons: Addon[] = []): readonly HomeRowId[] =>
+  homeRowOrder(admin, homeCatalogShelves(addons).map((shelf) => ({ id: shelf.id }))).map((entry) => entry.id);
 
 export type HomeRowStatus = "idle" | "loading" | "ok" | "error";
 

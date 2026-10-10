@@ -455,6 +455,43 @@ test("Home loads each selected addon catalog feed into its own seeded carousel",
   assert.equal(harness.catalogCalls.filter((call) => call.catalogId === "featured").every((call) => call.extras.genre === "Drama"), true);
 });
 
+test("GET /api/home states the display order, addon carousels between tonight and episodes", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  harness.addons.push({ key: "cinemeta", manifestUrl: "https://cinemeta/manifest.json", role: "catalog", enabled: true,
+    globalSearch: true, showOnHome: true, addedAt: "", allowedUsers: [ALICE],
+    manifest: { id: "com.linvo.cinemeta", name: "Cinemeta", version: "1", catalogs: [
+      { type: "movie", id: "top" },
+      { type: "series", id: "top", name: "Top series" },
+    ] } } as AddonRecord);
+  const movie = homeCatalogRowId("cinemeta", "movie", "top");
+  const series = homeCatalogRowId("cinemeta", "series", "top");
+
+  const admin = await (await api(harness.base, "/api/home", ADMIN)).json() as { order: Array<{ id: string; title?: string }> };
+  assert.deepEqual(admin.order, [
+    { id: "resume" }, { id: "favorites" }, { id: "tonight" },
+    { id: movie, title: "Cinemeta · top" },
+    { id: series, title: "Cinemeta · Top series" },
+    { id: "episodes" }, { id: "completed" }, { id: "recent" }, { id: "confirm" },
+  ]);
+
+  const alice = await (await api(harness.base, "/api/home", ALICE)).json() as { order: Array<{ id: string }> };
+  assert.deepEqual(alice.order.map((entry) => entry.id),
+    ["resume", "favorites", "tonight", movie, series, "episodes", "completed", "recent"]);
+
+  const bob = await (await api(harness.base, "/api/home", BOB)).json() as { order: Array<{ id: string }> };
+  assert.deepEqual(bob.order.map((entry) => entry.id), ["resume", "favorites", "tonight", "episodes", "completed", "recent"],
+    "an addon the account may not use contributes no entry");
+});
+
+test("?rows= still carries the whole order", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const body = await (await api(harness.base, "/api/home?rows=resume", ALICE)).json() as { order: Array<{ id: string }>; rows: Record<string, unknown> };
+  assert.deepEqual(Object.keys(body.rows), ["resume"]);
+  assert.deepEqual(body.order.map((entry) => entry.id), ["resume", "favorites", "tonight", "episodes", "completed", "recent"]);
+});
+
 test("a catalogue that misses the deadline comes back partial and the next request draws it from memory", async (t) => {
   const harness = await mount({ deadlineMs: 5 });
   t.after(harness.close);

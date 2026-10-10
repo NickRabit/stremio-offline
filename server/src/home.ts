@@ -11,6 +11,23 @@ export const HOME_FORGET_LIMIT = 50;
 export type BuiltinHomeRowId = "resume" | "completed" | "favorites" | "recent" | "episodes" | "tonight" | "confirm";
 export type HomeRowId = BuiltinHomeRowId | `catalog:${string}:${string}:${string}`;
 
+/** Every shelf the page draws, in the page's order. `confirm` is a count in the heading, not a shelf. */
+export const HOME_ROWS = ["resume", "favorites", "tonight", "episodes", "completed", "recent", "confirm"] as const satisfies readonly BuiltinHomeRowId[];
+
+export interface HomeOrderEntry { id: HomeRowId; title?: string }
+
+/** The rows one account's Home shows, in display order: addon carousels sit before `episodes`,
+ *  `confirm` only for an administrator. */
+export function homeRowOrder(admin: boolean, catalogRows: readonly HomeOrderEntry[]): HomeOrderEntry[] {
+  const fixed: readonly BuiltinHomeRowId[] = admin ? HOME_ROWS : HOME_ROWS.filter((row) => row !== "confirm");
+  const at = fixed.indexOf("episodes");
+  return [
+    ...fixed.slice(0, at).map((id) => ({ id })),
+    ...catalogRows.map((entry) => ({ ...entry })),
+    ...fixed.slice(at).map((id) => ({ id })),
+  ];
+}
+
 export const HOME_BUILTIN_ROWS: readonly BuiltinHomeRowId[] = ["resume", "completed", "favorites", "recent", "episodes", "tonight", "confirm"];
 export const homeCatalogSelectionKey = (type: string, id: string) => `${encodeURIComponent(type)}:${encodeURIComponent(id)}`;
 export const homeCatalogRowId = (addonKey: string, type: string, id: string): HomeRowId =>
@@ -66,7 +83,7 @@ export interface HomeRow {
   partial?: boolean;
 }
 
-export interface HomeResponse { generatedAt: string; rows: Partial<Record<HomeRowId, HomeRow>> }
+export interface HomeResponse { generatedAt: string; order: HomeOrderEntry[]; rows: Partial<Record<HomeRowId, HomeRow>> }
 
 /** One library file with a stored position, already filtered by permission and shaped by
  *  the caller of the builder. `seriesId` is the catalogue title the folder is bound to. */

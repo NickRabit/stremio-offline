@@ -7,7 +7,7 @@ import { allowedAddons } from "../addons.js";
 import { HomeCatalogCache, homeCatalogTargets, type HomeCatalogTarget } from "../home-catalogs.js";
 import {
   HOME_BUILTIN_ROWS, HOME_CANDIDATES, HOME_LOOKUP_DEADLINE_MS, HOME_MARKER_LIMIT, HOME_ROW_LIMIT,
-  boundCards, homeCatalogRowId, mergeResume,
+  boundCards, homeCatalogRowId, homeRowOrder, mergeResume,
   type HomeCard, type HomeResponse, type HomeRow, type HomeRowError, type HomeRowId,
   type BuiltinHomeRowId, type ResumeCatalogueItem, type ResumeFileItem,
 } from "../home.js";
@@ -503,6 +503,10 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
     const rows: Partial<Record<HomeRowId, HomeRow>> = {};
     const catalogRows = addonCatalogRows(viewer);
     catalogs.visited([...catalogRows.values()]);
+    const order = homeRowOrder(viewer.role === "admin", [...catalogRows.entries()].map(([id, target]) => ({
+      id,
+      title: `${target.addon.manifest.name} · ${target.definition.name || target.definition.id}`,
+    })));
     await Promise.all(requestedRows(req.query.rows, catalogRows).map(async (id) => {
       try {
         const catalogRow = catalogRows.get(id);
@@ -513,7 +517,7 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
         rows[id] = { status: "error", error: rowError(error), items: [], hasMore: false };
       }
     }));
-    const response: HomeResponse = { generatedAt: new Date().toISOString(), rows };
+    const response: HomeResponse = { generatedAt: new Date().toISOString(), order, rows };
     res.json(response);
   }));
 }

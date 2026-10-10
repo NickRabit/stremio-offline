@@ -7,7 +7,7 @@ const card = (key: string): HomeCard => ({
   progress: { position: 1, duration: 10 }, updatedAt: "2026-01-01T00:00:00.000Z", forgetKeys: [key],
 });
 const ok = (items: HomeCard[], over: Partial<HomeRow> = {}): HomeRow => ({ status: "ok", items, hasMore: false, ...over });
-const response = (rows: HomeResponse["rows"]): HomeResponse => ({ generatedAt: "2026-01-01T00:00:00.000Z", rows });
+const response = (rows: HomeResponse["rows"]): HomeResponse => ({ generatedAt: "2026-01-01T00:00:00.000Z", order: [], rows });
 const answer = (over: Partial<Record<HomeRowId, HomeRow>> = {}): HomeResponse => response({
   resume: ok([]), episodes: ok([]), completed: ok([]), recent: ok([]), tonight: ok([]), favorites: ok([]), confirm: ok([]), ...over,
 });

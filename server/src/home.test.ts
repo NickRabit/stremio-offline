@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { HOME_ROW_LIMIT, boundCards, homeCatalogRowId, mergeResume, parseHomeCatalogRowId, type HomeCard, type ResumeCatalogueItem, type ResumeFileItem } from "./home.js";
+import { HOME_ROWS, HOME_ROW_LIMIT, boundCards, homeCatalogRowId, homeRowOrder, mergeResume, parseHomeCatalogRowId, type HomeCard, type ResumeCatalogueItem, type ResumeFileItem } from "./home.js";
 
 const at = (day: number) => `2024-01-${String(day).padStart(2, "0")}T00:00:00.000Z`;
 
@@ -114,4 +114,33 @@ test("a catalogue row id names its addon, type and catalogue back, even with col
   assert.deepEqual(parseHomeCatalogRowId(homeCatalogRowId("key:1", "movie", "top/a b")), { addonKey: "key:1", type: "movie", id: "top/a b" });
   assert.equal(parseHomeCatalogRowId("resume"), undefined);
   assert.equal(parseHomeCatalogRowId("catalog:%E0:movie:top"), undefined);
+});
+
+test("homeRowOrder lists the seven built-ins in display order for an administrator", () => {
+  assert.deepEqual(homeRowOrder(true, []), [
+    { id: "resume" }, { id: "favorites" }, { id: "tonight" },
+    { id: "episodes" }, { id: "completed" }, { id: "recent" }, { id: "confirm" },
+  ]);
+  assert.deepEqual(homeRowOrder(true, []).map((entry) => entry.id), [...HOME_ROWS]);
+});
+
+test("homeRowOrder leaves confirm out for an ordinary account", () => {
+  const ids = homeRowOrder(false, []).map((entry) => entry.id);
+  assert.deepEqual(ids, ["resume", "favorites", "tonight", "episodes", "completed", "recent"]);
+  assert.equal(ids.includes("confirm"), false);
+});
+
+test("homeRowOrder copies catalogue entries between tonight and episodes, titles included", () => {
+  const shelves = [
+    { id: homeCatalogRowId("cinemeta", "movie", "top"), title: "Cinemeta · Top" },
+    { id: homeCatalogRowId("cinemeta", "series", "top"), title: "Cinemeta · Top series" },
+  ];
+  const order = homeRowOrder(true, shelves);
+  assert.deepEqual(order.map((entry) => entry.id), [
+    "resume", "favorites", "tonight",
+    ...shelves.map((entry) => entry.id),
+    "episodes", "completed", "recent", "confirm",
+  ]);
+  assert.deepEqual(order.slice(3, 5), shelves);
+  assert.equal("title" in order[0]!, false, "a built-in entry carries no title");
 });
