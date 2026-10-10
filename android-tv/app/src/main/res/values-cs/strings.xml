@@ -54,6 +54,7 @@
   <string name="tv_sources_count">Zdroje · %1$s</string>
   <string name="tv_default">Výchozí</string>
   <string name="tv_search_hint">Napište název a stiskněte Hotovo.</string>
+  <string name="tv_finding_sources">Hledám zdroje…</string>
   <string name="catalog_title">Co chcete sledovat?</string>
   <string name="catalog_genre">Žánr</string>
   <string name="catalog_all_genres">Všechny</string>

@@ -1604,4 +1604,5 @@ export const en = {
   "tv.sourcesCount": "Sources · {count}",
   "tv.default": "Default",
   "tv.searchHint": "Type a title, then press Done.",
+  "tv.findingSources": "Finding sources…",
 };

@@ -1547,4 +1547,5 @@ export const sk: Catalog = {
   "tv.sourcesCount": "Zdroje · {count}",
   "tv.default": "Predvolené",
   "tv.searchHint": "Napíšte názov a stlačte Hotovo.",
+  "tv.findingSources": "Hľadám zdroje…",
 };

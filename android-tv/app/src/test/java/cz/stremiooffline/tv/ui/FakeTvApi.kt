@@ -15,6 +15,7 @@ import cz.stremiooffline.tv.data.SearchResultDto
 import cz.stremiooffline.tv.data.SettingsResponse
 import cz.stremiooffline.tv.data.SourceDto
 import cz.stremiooffline.tv.data.StreamDto
+import cz.stremiooffline.tv.data.StreamSourceDto
 import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.data.WatchlistEntryDto
 import cz.stremiooffline.tv.data.WatchlistToggleDto
@@ -38,15 +39,28 @@ open class FakeTvApi : TvApi {
   var failCatalogs = false
   var failCatalog = false
   var metaValues: MutableMap<String, MetaDto> = mutableMapOf()
+  var metaRequests: MutableList<Triple<String, String, String?>> = mutableListOf()
   var streamsValues: MutableMap<String, List<StreamDto>> = mutableMapOf()
+  /** Per-addon answers keyed by `type:id|addonKey`; takes precedence over [streamsValues]. */
+  var addonStreams: MutableMap<String, List<StreamDto>> = mutableMapOf()
+  var streamSourcesValues: MutableMap<String, List<StreamSourceDto>> = mutableMapOf()
+  var streamSourcesRequests: MutableList<String> = mutableListOf()
   var streamsRequests: MutableList<String> = mutableListOf()
+  /** Each `streams()` request that has finished answering, in completion order. */
+  var streamsCompleted: MutableList<String> = mutableListOf()
   /** A latch keyed by `type:id` blocks a `streams()` call like a slow server would. */
   var streamsLatches: MutableMap<String, CountDownLatch> = mutableMapOf()
   var streamFailures: MutableMap<String, ApiFailure> = mutableMapOf()
+  var streamSourcesFailures: MutableMap<String, ApiFailure> = mutableMapOf()
   var addonsValue: List<AddonDto> = emptyList()
+  var addonsCalls = 0
   var settingsValue: SettingsResponse = SettingsResponse()
+  var settingsCalls = 0
   var progressEntries: List<ProgressEntryDto> = emptyList()
+  var progressListCalls = 0
+  var progressListLatch: CountDownLatch? = null
   var watchlistValue: MutableList<WatchlistEntryDto> = mutableListOf()
+  var watchlistCalls = 0
   var favoriteCalls: MutableList<Triple<String, String, Boolean>> = mutableListOf()
   var watchlistLatch: CountDownLatch? = null
   var watchlistFailure: ApiFailure? = null
@@ -95,26 +109,50 @@ open class FakeTvApi : TvApi {
     return searchPages[cursor ?: ""] ?: SearchResultDto()
   }
 
-  override suspend fun meta(type: String, id: String, language: String?): MetaDto =
-    metaValues["$type:$id"] ?: throw ApiError(ApiFailure.NotFound)
-
-  override suspend fun streams(type: String, id: String): List<StreamDto> {
-    val key = "$type:$id"
-    streamsRequests += key
-    // A blocking wait inside the IO context, like the real client: the coroutine is cancelled, but
-    // the call still runs to completion before the cancellation is delivered.
-    streamsLatches[key]?.let { latch -> withContext(Dispatchers.IO) { latch.await() } }
-    streamFailures[key]?.let { throw ApiError(it) }
-    return streamsValues[key] ?: emptyList()
+  override suspend fun meta(type: String, id: String, language: String?): MetaDto {
+    metaRequests += Triple(type, id, language)
+    return metaValues["$type:$id"] ?: throw ApiError(ApiFailure.NotFound)
   }
 
-  override suspend fun addons(): List<AddonDto> = addonsValue
+  override suspend fun streamSources(type: String, id: String): List<StreamSourceDto> {
+    val key = "$type:$id"
+    streamSourcesRequests += key
+    streamSourcesFailures[key]?.let { throw ApiError(it) }
+    return streamSourcesValues[key] ?: listOf(StreamSourceDto(key = "", name = ""))
+  }
 
-  override suspend fun settings(): SettingsResponse = settingsValue
+  override suspend fun streams(type: String, id: String, addon: String?): List<StreamDto> {
+    val key = "$type:$id"
+    val request = if (addon.isNullOrEmpty()) key else "$key|$addon"
+    streamsRequests += request
+    // A blocking wait inside the IO context, like the real client: the coroutine is cancelled, but
+    // the call still runs to completion before the cancellation is delivered.
+    (streamsLatches[request] ?: streamsLatches[key])?.let { latch -> withContext(Dispatchers.IO) { latch.await() } }
+    (streamFailures[request] ?: streamFailures[key])?.let { throw ApiError(it) }
+    streamsCompleted += request
+    return addonStreams[request] ?: streamsValues[key] ?: emptyList()
+  }
 
-  override suspend fun progressList(): List<ProgressEntryDto> = progressEntries
+  override suspend fun addons(): List<AddonDto> {
+    addonsCalls += 1
+    return addonsValue
+  }
 
-  override suspend fun watchlist(): List<WatchlistEntryDto> = watchlistValue
+  override suspend fun settings(): SettingsResponse {
+    settingsCalls += 1
+    return settingsValue
+  }
+
+  override suspend fun progressList(): List<ProgressEntryDto> {
+    progressListCalls += 1
+    progressListLatch?.let { latch -> withContext(Dispatchers.IO) { latch.await() } }
+    return progressEntries
+  }
+
+  override suspend fun watchlist(): List<WatchlistEntryDto> {
+    watchlistCalls += 1
+    return watchlistValue
+  }
 
   override suspend fun setWatchlist(
     type: String,

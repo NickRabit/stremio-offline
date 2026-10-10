@@ -105,6 +105,28 @@ object Streams {
   fun pickDefaultStream(streams: List<StreamDto>): StreamDto? =
     streams.firstOrNull { it.playable } ?: streams.firstOrNull()
 
+  /** What a repick decided: [move] is false when the current pick stays. */
+  data class Repick<T>(val move: Boolean, val to: T? = null)
+
+  /** Sources keep arriving after the first ones are shown, and a later one can rank higher than
+   *  the one already picked. Moving is right while the viewer is still looking at the list and
+   *  wrong once they are watching or picked a source themselves. */
+  fun <T> repickStream(
+    playing: Boolean,
+    picked: Boolean,
+    pending: Int,
+    visible: List<T>,
+    selected: T?,
+    preferred: T?,
+  ): Repick<T> {
+    if (visible.isEmpty()) return if (selected != null && !playing) Repick(true, null) else Repick(false)
+    if (playing) return Repick(false)
+    if (selected == null || !visible.contains(selected)) return Repick(true, preferred)
+    // A better source may arrive while paging, but the viewer's own pick is never overridden.
+    if (!picked && pending > 0 && preferred != null && selected != preferred) return Repick(true, preferred)
+    return Repick(false)
+  }
+
   fun streamBadge(stream: StreamDto): String = when {
     stream.playable -> "HTTP"
     stream.kind == "torrent" -> "RD"

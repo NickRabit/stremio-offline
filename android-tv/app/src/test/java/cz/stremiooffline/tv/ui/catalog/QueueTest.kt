@@ -3,14 +3,16 @@
 package cz.stremiooffline.tv.ui.catalog
 
 import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertTextContains
+import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performKeyInput
-import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.pressKey
 import cz.stremiooffline.tv.data.ApiFailure
 import cz.stremiooffline.tv.data.DownloadResult
@@ -49,12 +51,21 @@ class QueueTest {
     return api
   }
 
-  /** tv-material controls activate on DPAD_CENTER once focused; a plain click does not reach them. */
-  private fun click(tag: String) {
-    compose.onNodeWithTag(tag).performSemanticsAction(SemanticsActions.RequestFocus)
+  private fun press(key: Key) {
+    compose.onRoot().performKeyInput { pressKey(key) }
     compose.waitForIdle()
-    compose.onNodeWithTag(tag).performKeyInput { pressKey(Key.DirectionCenter) }
-    compose.waitForIdle()
+  }
+
+  private fun focused(tag: String): Boolean =
+    compose.onAllNodes(isFocused()).fetchSemanticsNodes()
+      .any { it.config.getOrElse(SemanticsProperties.TestTag) { "" } == tag }
+
+  private fun focusFromLeft(tag: String) {
+    repeat(6) {
+      if (focused(tag)) return
+      press(Key.DirectionRight)
+    }
+    compose.onNodeWithTag(tag).assertIsFocused()
   }
 
   @Test
@@ -64,7 +75,8 @@ class QueueTest {
     mount(api)
     compose.waitForIdle()
 
-    click(TagCatalogToLibrary)
+    focusFromLeft(TagCatalogToLibrary)
+    press(Key.DirectionCenter)
 
     compose.onNodeWithTag(TagCatalogToLibrary).assertTextContains("Queued", substring = true)
     compose.onNodeWithText("Waiting for Real-Debrid.").assertIsDisplayed()
@@ -77,8 +89,36 @@ class QueueTest {
     mount(api)
     compose.waitForIdle()
 
-    click(TagCatalogToLibrary)
+    focusFromLeft(TagCatalogToLibrary)
+    press(Key.DirectionCenter)
 
     compose.onNodeWithTag(TagCatalogMessage).assertTextContains("This account may not download to the library.")
+  }
+
+  // Found on the owner's server: the Queued mark outlived the source it was queued for.
+  @Test
+  fun `Queued belongs to the source that was queued and drops when another is picked`() {
+    val api = FakeTvApi()
+    api.settingsValue = SettingsResponse(uiLanguage = "en", audioLanguage = "en", realDebridConfigured = true)
+    api.streamsValues["movie:tt1"] = listOf(
+      StreamDto(sourceId = "srcA", kind = "remote", playable = true, name = "small", title = "Czech 1 GB", addonName = "alpha"),
+      StreamDto(sourceId = "srcB", kind = "remote", playable = true, name = "big", title = "Czech 8 GB", addonName = "beta"),
+    )
+    mount(api)
+    compose.waitForIdle()
+
+    // Recommended puts the largest first, so srcB is queued.
+    focusFromLeft(TagCatalogToLibrary)
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(TagCatalogToLibrary).assertTextContains("Queued", substring = true)
+
+    // Playing the other source drops the mark: the queued job is not for this one.
+    focusFromLeft(TagCatalogSources)
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(sourceRowTag(0)).assertIsFocused()
+    press(Key.DirectionDown)
+    press(Key.DirectionCenter)
+
+    compose.onNodeWithTag(TagCatalogToLibrary).assertTextContains("To library")
   }
 }

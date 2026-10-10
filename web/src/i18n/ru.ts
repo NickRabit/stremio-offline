@@ -1547,4 +1547,5 @@ export const ru: Catalog = {
   "tv.sourcesCount": "Источники · {count}",
   "tv.default": "По умолчанию",
   "tv.searchHint": "Введите название и нажмите Готово.",
+  "tv.findingSources": "Поиск источников…",
 };

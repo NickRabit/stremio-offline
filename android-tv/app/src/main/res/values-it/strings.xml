@@ -54,6 +54,7 @@
   <string name="tv_sources_count">Fonti · %1$s</string>
   <string name="tv_default">Predefinito</string>
   <string name="tv_search_hint">Digita un titolo e premi Fine.</string>
+  <string name="tv_finding_sources">Ricerca delle fonti…</string>
   <string name="catalog_title">Cosa vuoi guardare?</string>
   <string name="catalog_genre">Genere</string>
   <string name="catalog_all_genres">Tutto</string>

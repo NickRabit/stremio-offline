@@ -1547,4 +1547,5 @@ export const ptBR: Catalog = {
   "tv.sourcesCount": "Fontes · {count}",
   "tv.default": "Padrão",
   "tv.searchHint": "Digite um título e pressione Concluído.",
+  "tv.findingSources": "Procurando fontes…",
 };

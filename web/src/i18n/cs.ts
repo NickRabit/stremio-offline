@@ -1598,4 +1598,5 @@ export const cs: Catalog = {
   "tv.sourcesCount": "Zdroje · {count}",
   "tv.default": "Výchozí",
   "tv.searchHint": "Napište název a stiskněte Hotovo.",
+  "tv.findingSources": "Hledám zdroje…",
 };

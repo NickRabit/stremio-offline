@@ -52,11 +52,28 @@ class CatalogApiTest {
   }
 
   @Test
+  fun `streamSources lists the addons that offer a source`() = runTest {
+    server.enqueue(MockResponse().setBody("""[{"key":"alpha","name":"Alpha"}]"""))
+    val sources = client(start()).streamSources("movie", "tt1")
+
+    assertEquals("/api/stream-sources/movie/tt1", server.takeRequest().path)
+    assertEquals("Alpha", sources.single().name)
+  }
+
+  @Test
   fun `streams of a movie name the title`() = runTest {
     server.enqueue(MockResponse().setBody("[]"))
     client(start()).streams("movie", "tt1")
 
     assertEquals("/api/streams/movie/tt1", server.takeRequest().path)
+  }
+
+  @Test
+  fun `streams of one addon carry the addon key`() = runTest {
+    server.enqueue(MockResponse().setBody("[]"))
+    client(start()).streams("movie", "tt1", "alpha")
+
+    assertEquals("/api/streams/movie/tt1?addon=alpha", server.takeRequest().path)
   }
 
   @Test

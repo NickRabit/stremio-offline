@@ -197,9 +197,17 @@ class ApiClient(
       ?: throw ApiError(ApiFailure.Generic)
   }
 
-  override suspend fun streams(type: String, id: String): List<StreamDto> =
-    request(Request.Builder().url(address.resolve("/api/streams/" + encode(type) + "/" + encode(id))).get().build()).decode()
+  /** The source addons of one video, in the caller's own order. */
+  override suspend fun streamSources(type: String, id: String): List<StreamSourceDto> =
+    request(Request.Builder().url(address.resolve("/api/stream-sources/" + encode(type) + "/" + encode(id))).get().build()).decode()
       ?: emptyList()
+
+  /** One addon's streams; asking each addon on its own keeps the slowest from holding the rest. */
+  override suspend fun streams(type: String, id: String, addon: String?): List<StreamDto> {
+    val suffix = if (!addon.isNullOrEmpty()) "?addon=" + encode(addon) else ""
+    return request(Request.Builder().url(address.resolve("/api/streams/" + encode(type) + "/" + encode(id) + suffix)).get().build()).decode()
+      ?: emptyList()
+  }
 
   override suspend fun addons(): List<AddonDto> =
     request(Request.Builder().url(address.resolve("/api/addons")).get().build()).decode() ?: emptyList()

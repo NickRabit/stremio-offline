@@ -19,7 +19,8 @@ interface CatalogApi {
   suspend fun catalog(addonKey: String, type: String, id: String, skip: Int, genre: String?): List<MetaDto>
   suspend fun search(query: String, cursor: String?): SearchResultDto
   suspend fun meta(type: String, id: String, language: String?): MetaDto
-  suspend fun streams(type: String, id: String): List<StreamDto>
+  suspend fun streamSources(type: String, id: String): List<StreamSourceDto>
+  suspend fun streams(type: String, id: String, addon: String? = null): List<StreamDto>
   suspend fun addons(): List<AddonDto>
   suspend fun settings(): SettingsResponse
   suspend fun progressList(): List<ProgressEntryDto>

@@ -6,14 +6,15 @@ import android.content.Intent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.assertIsNotFocused
+import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithTag
-import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performKeyInput
-import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.pressKey
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
@@ -74,12 +75,22 @@ class CatalogScreenTest {
     }
   }
 
-  /** tv-material controls activate on DPAD_CENTER once focused; a plain click does not reach them. */
-  private fun click(tag: String) {
-    compose.onNodeWithTag(tag).performSemanticsAction(SemanticsActions.RequestFocus)
+  // Every interaction goes through the remote: a key at the root reaches whatever holds focus.
+  private fun press(key: Key) {
+    compose.onRoot().performKeyInput { pressKey(key) }
     compose.waitForIdle()
-    compose.onNodeWithTag(tag).performKeyInput { pressKey(Key.DirectionCenter) }
-    compose.waitForIdle()
+  }
+
+  private fun focused(tag: String): Boolean =
+    compose.onAllNodes(isFocused()).fetchSemanticsNodes()
+      .any { it.config.getOrElse(SemanticsProperties.TestTag) { "" } == tag }
+
+  private fun focusBy(tag: String, key: Key, times: Int = 8) {
+    repeat(times) {
+      if (focused(tag)) return
+      press(key)
+    }
+    compose.onNodeWithTag(tag).assertIsFocused()
   }
 
   @Test
@@ -91,9 +102,9 @@ class CatalogScreenTest {
     compose.waitForIdle()
 
     compose.onNodeWithTag(TagCatalogChip).assertIsFocused()
-    compose.onNodeWithTag(TagCatalogChip).performKeyInput { pressKey(Key.DirectionLeft) }
+    press(Key.DirectionLeft)
     compose.onNodeWithTag(TagCatalogSearchChip).assertIsFocused()
-    compose.onNodeWithTag(TagCatalogSearchChip).performKeyInput { pressKey(Key.DirectionRight) }
+    press(Key.DirectionRight)
     compose.onNodeWithTag(TagCatalogChip).assertIsFocused()
   }
 
@@ -106,16 +117,34 @@ class CatalogScreenTest {
     mount(api)
     compose.waitForIdle()
 
-    compose.onNodeWithTag(TagCatalogChip).performKeyInput { pressKey(Key.DirectionCenter) }
-    compose.waitForIdle()
+    compose.onNodeWithTag(TagCatalogChip).assertIsFocused()
+    press(Key.DirectionCenter)
     compose.onNodeWithTag(TagCatalogPanel).assertExists()
-    compose.onNodeWithTag(catalogOptionTag(0)).assertExists()
-    compose.onNodeWithTag(catalogOptionTag(1)).assertExists()
+    // The panel moves the remote into itself, onto the chosen catalogue.
+    compose.onNodeWithTag(catalogOptionTag(0)).assertIsFocused()
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(catalogOptionTag(1)).assertIsFocused()
 
-    click(catalogOptionTag(1))
+    press(Key.DirectionCenter)
 
     compose.onNodeWithTag(posterTag(meta("ttB", name = "Beta"))).assertExists()
     compose.onNodeWithTag(TagCatalogChip).assertIsFocused()
+  }
+
+  @Test
+  fun `the catalog panel keeps the remote inside itself`() {
+    val api = FakeTvApi()
+    api.catalogsValue = listOf(feature("Open Movies"))
+    api.catalogPages["a"] = listOf(listOf(meta("ttA", name = "Alpha")))
+    mount(api)
+    compose.waitForIdle()
+
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(catalogOptionTag(0)).assertIsFocused()
+    press(Key.DirectionLeft)
+
+    compose.onNodeWithTag(catalogOptionTag(0)).assertIsFocused()
+    compose.onNodeWithTag(TagCatalogChip).assertIsNotFocused()
   }
 
   @Test
@@ -126,7 +155,7 @@ class CatalogScreenTest {
     mount(api)
     compose.waitForIdle()
 
-    click(TagCatalogChip)
+    press(Key.DirectionCenter)
     compose.onNodeWithTag(TagCatalogPanel).assertExists()
 
     host!!.onBackPressedDispatcher.onBackPressed()
@@ -134,6 +163,7 @@ class CatalogScreenTest {
 
     compose.onNodeWithTag(TagCatalogPanel).assertDoesNotExist()
     compose.onNodeWithTag(posterTag(meta("ttA", name = "Alpha"))).assertExists()
+    compose.onNodeWithTag(TagCatalogChip).assertIsFocused()
   }
 
   @Test
@@ -144,15 +174,35 @@ class CatalogScreenTest {
     mount(api)
     compose.waitForIdle()
 
-    compose.onNodeWithTag(TagCatalogChip).performKeyInput { pressKey(Key.DirectionRight) }
+    press(Key.DirectionRight)
     compose.onNodeWithTag(TagCatalogGenreChip).assertIsFocused()
-    click(TagCatalogGenreChip)
+    press(Key.DirectionCenter)
     compose.onNodeWithTag(TagGenreAll).assertIsFocused()
-    compose.onNodeWithTag(TagGenreAll).performKeyInput { pressKey(Key.DirectionDown) }
+    press(Key.DirectionDown)
     compose.onNodeWithTag(genreOptionTag(0)).assertIsFocused()
-    click(genreOptionTag(0))
+    press(Key.DirectionCenter)
 
     assertEquals("Action", api.catalogRequests.last().genre)
+    compose.onNodeWithTag(TagCatalogGenreChip).assertIsFocused()
+  }
+
+  @Test
+  fun `the genre panel opens on the chosen genre, not on All`() {
+    val api = FakeTvApi()
+    api.catalogsValue = listOf(feature("Open Movies", genres = listOf("Action", "Comedy")))
+    api.catalogPages["a"] = listOf(listOf(meta("ttA", name = "Alpha")))
+    mount(api)
+    compose.waitForIdle()
+
+    press(Key.DirectionRight)
+    press(Key.DirectionCenter)
+    press(Key.DirectionDown)
+    press(Key.DirectionCenter)
+    assertEquals("Action", api.catalogRequests.last().genre)
+
+    // Open the panel again; the chosen genre is where the remote lands.
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(genreOptionTag(0)).assertIsFocused()
   }
 
   @Test
@@ -163,8 +213,10 @@ class CatalogScreenTest {
     mount(api)
     compose.waitForIdle()
 
-    compose.onNodeWithTag(posterTag(meta("tt7"))).performSemanticsAction(SemanticsActions.RequestFocus)
-    compose.waitForIdle()
+    press(Key.DirectionDown)
+    // Six columns here, so the seventh poster starts the last row.
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(posterTag(meta("tt7"))).assertIsFocused()
 
     assertEquals(7, api.catalogRequests.last().skip)
   }
@@ -181,7 +233,8 @@ class CatalogScreenTest {
 
     api.failCatalog = false
     api.catalogPages["a"] = listOf(listOf(meta("ttA", name = "Alpha")))
-    click(TagCatalogRetry)
+    focusBy(TagCatalogRetry, Key.DirectionDown)
+    press(Key.DirectionCenter)
 
     compose.onNodeWithTag(posterTag(meta("ttA", name = "Alpha"))).assertExists()
   }

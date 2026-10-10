@@ -1547,4 +1547,5 @@ export const es: Catalog = {
   "tv.sourcesCount": "Fuentes · {count}",
   "tv.default": "Predeterminado",
   "tv.searchHint": "Escriba un título y pulse Listo.",
+  "tv.findingSources": "Buscando fuentes…",
 };

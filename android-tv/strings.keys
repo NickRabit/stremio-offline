@@ -53,6 +53,7 @@ tv.detailEyebrowSeries
 tv.sourcesCount
 tv.default
 tv.searchHint
+tv.findingSources
 catalog.title
 catalog.genre
 catalog.allGenres

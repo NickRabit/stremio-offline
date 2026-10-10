@@ -66,12 +66,15 @@ fun CatalogScreen(
   val gridFocus = remember { FocusRequester() }
 
   var panel by remember { mutableStateOf<CatalogPanel?>(null) }
-  var panelReturn by remember { mutableStateOf<FocusRequester?>(null) }
+  var panelOpener by remember { mutableStateOf<FocusRequester?>(null) }
   var firstFocusDone by remember { mutableStateOf(false) }
 
+  // Back to the chip that opened the panel, on the frame the panel and its focus trap are gone.
   fun closePanel() {
     panel = null
-    panelReturn?.requestFocus()
+  }
+  LaunchedEffect(panel) {
+    if (panel == null) runCatching { panelOpener?.requestFocus() }
   }
 
   // The first control takes focus on entry; a return from detail or the player goes to the grid.
@@ -114,13 +117,13 @@ fun CatalogScreen(
         if (catalog != null) {
           FocusButton(
             text = catalog.label,
-            onClick = { panelReturn = catalogFocus; panel = CatalogPanel.Catalogs },
+            onClick = { panelOpener = catalogFocus; panel = CatalogPanel.Catalogs },
             modifier = Modifier.focusRequester(catalogFocus).testTag(TagCatalogChip),
           )
           if (state.genres.isNotEmpty()) {
             FocusButton(
               text = state.genre.ifEmpty { stringResource(R.string.catalog_all_genres) },
-              onClick = { panelReturn = genreFocus; panel = CatalogPanel.Genres },
+              onClick = { panelOpener = genreFocus; panel = CatalogPanel.Genres },
               modifier = Modifier.focusRequester(genreFocus).testTag(TagCatalogGenreChip),
             )
           }
@@ -144,46 +147,55 @@ fun CatalogScreen(
     }
 
     when (panel) {
-      CatalogPanel.Catalogs -> SidePanel(
-        title = stringResource(R.string.nav_catalog),
-        onClose = { closePanel() },
-        modifier = Modifier.testTag(TagCatalogPanel),
-      ) {
-        state.catalogs.forEachIndexed { index, catalog ->
-          val requester = remember(index) { FocusRequester() }
-          PanelOption(
-            text = catalog.label,
-            selected = index == state.catalogIndex,
-            onClick = { viewModel.select(index); closePanel() },
-            modifier = Modifier.focusRequester(requester).testTag(catalogOptionTag(index)),
-          )
-          LaunchedEffect(state.catalogIndex) {
-            if (index == state.catalogIndex) runCatching { requester.requestFocus() }
+      CatalogPanel.Catalogs -> {
+        val entry = remember { FocusRequester() }
+        val focusIndex = state.catalogIndex.coerceIn(0, (state.catalogs.size - 1).coerceAtLeast(0))
+        SidePanel(
+          title = stringResource(R.string.nav_catalog),
+          onClose = { closePanel() },
+          modifier = Modifier.testTag(TagCatalogPanel),
+          initialFocus = entry,
+        ) {
+          state.catalogs.forEachIndexed { index, catalog ->
+            PanelOption(
+              text = catalog.label,
+              selected = index == state.catalogIndex,
+              onClick = { viewModel.select(index); closePanel() },
+              modifier = Modifier
+                .testTag(catalogOptionTag(index))
+                .then(if (index == focusIndex) Modifier.focusRequester(entry) else Modifier),
+            )
           }
         }
       }
 
-      CatalogPanel.Genres -> SidePanel(
-        title = stringResource(R.string.catalog_genre),
-        onClose = { closePanel() },
-        modifier = Modifier.testTag(TagCatalogPanel),
-      ) {
-        val allRequester = remember { FocusRequester() }
-        PanelOption(
-          text = stringResource(R.string.catalog_all_genres),
-          selected = state.genre.isEmpty(),
-          onClick = { viewModel.setGenre(""); closePanel() },
-          modifier = Modifier.focusRequester(allRequester).testTag(TagGenreAll),
-        )
-        LaunchedEffect(state.genres) { runCatching { allRequester.requestFocus() } }
-        state.genres.forEachIndexed { index, genre ->
-          val requester = remember(index) { FocusRequester() }
+      CatalogPanel.Genres -> {
+        val entry = remember { FocusRequester() }
+        val focusIndex = state.genres.indexOf(state.genre)
+        SidePanel(
+          title = stringResource(R.string.catalog_genre),
+          onClose = { closePanel() },
+          modifier = Modifier.testTag(TagCatalogPanel),
+          initialFocus = entry,
+        ) {
           PanelOption(
-            text = genre,
-            selected = genre == state.genre,
-            onClick = { viewModel.setGenre(genre); closePanel() },
-            modifier = Modifier.focusRequester(requester).testTag(genreOptionTag(index)),
+            text = stringResource(R.string.catalog_all_genres),
+            selected = state.genre.isEmpty(),
+            onClick = { viewModel.setGenre(""); closePanel() },
+            modifier = Modifier
+              .testTag(TagGenreAll)
+              .then(if (focusIndex < 0) Modifier.focusRequester(entry) else Modifier),
           )
+          state.genres.forEachIndexed { index, genre ->
+            PanelOption(
+              text = genre,
+              selected = genre == state.genre,
+              onClick = { viewModel.setGenre(genre); closePanel() },
+              modifier = Modifier
+                .testTag(genreOptionTag(index))
+                .then(if (index == focusIndex) Modifier.focusRequester(entry) else Modifier),
+            )
+          }
         }
       }
 

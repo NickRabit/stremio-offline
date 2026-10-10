@@ -1,8 +1,11 @@
+@file:OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
+
 package cz.stremiooffline.tv.ui.catalog
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,8 +22,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -31,24 +37,38 @@ import androidx.tv.material3.ClickableSurfaceDefaults
 import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
 import cz.stremiooffline.tv.ui.theme.Tokens
+import kotlinx.coroutines.android.awaitFrame
 
 private val PanelShape = RoundedCornerShape(topStart = 14.dp, bottomStart = 14.dp)
 
-/** A panel from the right, the TV's replacement for a dialog. Back closes it. */
+/**
+ * A panel from the right, the TV's replacement for a dialog. Back closes it, and while it is up
+ * it keeps the D-pad inside itself: [initialFocus] is taken a frame after it opens so the panel
+ * never leaves the background focused, and focus cannot walk back out behind it.
+ */
 @Composable
 fun SidePanel(
   title: String,
   onClose: () -> Unit,
   modifier: Modifier = Modifier,
+  initialFocus: FocusRequester? = null,
   content: @Composable ColumnScope.() -> Unit,
 ) {
   BackHandler { onClose() }
+  if (initialFocus != null) {
+    LaunchedEffect(initialFocus) {
+      awaitFrame()
+      runCatching { initialFocus.requestFocus() }
+    }
+  }
   Box(modifier.fillMaxSize(), contentAlignment = Alignment.CenterEnd) {
     Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.45f)))
     Column(
       modifier = Modifier
         .fillMaxHeight()
         .width(360.dp)
+        .focusGroup()
+        .focusProperties { exit = { FocusRequester.Cancel } }
         .background(Brush.verticalGradient(listOf(Tokens.Panel, Color(0xFF11161E))), PanelShape)
         .padding(horizontal = 24.dp, vertical = Tokens.SafeY),
       verticalArrangement = Arrangement.spacedBy(10.dp),

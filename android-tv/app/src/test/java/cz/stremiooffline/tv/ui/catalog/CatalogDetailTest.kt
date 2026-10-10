@@ -3,16 +3,17 @@
 package cz.stremiooffline.tv.ui.catalog
 
 import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.test.assertTextContains
+import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
-import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performKeyInput
-import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.pressKey
 import androidx.compose.runtime.mutableIntStateOf
 import cz.stremiooffline.tv.data.MetaDto
@@ -60,12 +61,29 @@ class CatalogDetailTest {
     }
   }
 
-  /** tv-material controls activate on DPAD_CENTER once focused; a plain click does not reach them. */
-  private fun click(tag: String) {
-    compose.onNodeWithTag(tag).performSemanticsAction(SemanticsActions.RequestFocus)
+  // Every interaction goes through the remote: a key at the root reaches whatever holds focus.
+  private fun press(key: Key) {
+    compose.onRoot().performKeyInput { pressKey(key) }
     compose.waitForIdle()
-    compose.onNodeWithTag(tag).performKeyInput { pressKey(Key.DirectionCenter) }
-    compose.waitForIdle()
+  }
+
+  private fun focused(tag: String): Boolean =
+    compose.onAllNodes(isFocused()).fetchSemanticsNodes()
+      .any { it.config.getOrElse(SemanticsProperties.TestTag) { "" } == tag }
+
+  /** Walk right until the tag holds focus, the way a viewer pages across the action row. */
+  private fun focusFromLeft(tag: String) {
+    repeat(6) {
+      if (focused(tag)) return
+      press(Key.DirectionRight)
+    }
+    compose.onNodeWithTag(tag).assertIsFocused()
+  }
+
+  private fun openSources() {
+    focusFromLeft(TagCatalogSources)
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(TagSourcesPanel).assertExists()
   }
 
   @Test
@@ -124,7 +142,8 @@ class CatalogDetailTest {
     mount(api, movieArgs())
     compose.waitForIdle()
 
-    click(TagCatalogFavourite)
+    focusFromLeft(TagCatalogFavourite)
+    press(Key.DirectionCenter)
 
     assertEquals(listOf(Triple("movie", "tt1", true)), api.favoriteCalls)
   }
@@ -140,15 +159,56 @@ class CatalogDetailTest {
     mount(api, movieArgs())
     compose.waitForIdle()
 
-    click(TagCatalogSources)
-    compose.onNodeWithTag(TagSourcesPanel).assertExists()
+    openSources()
     compose.onNodeWithText("✓ Default").assertExists()
-    compose.onNodeWithTag(sourceRowTag(0)).assertExists()
+    compose.onNodeWithTag(sourceRowTag(0)).assertIsFocused()
     compose.onNodeWithTag(sourceRowTag(1)).assertExists()
 
-    // Recommended puts the largest first, so row 0 is the default and plays srcB.
-    click(sourceRowTag(0))
+    // Recommended puts the largest first, so the ticked row is srcB and OK plays it.
+    compose.onNodeWithTag(sourceRowTag(0)).assertIsFocused()
+    press(Key.DirectionCenter)
     assertEquals(listOf("srcB"), played.map { it.sourceId })
+  }
+
+  // Found on the owner's server: the panel opened but no row ever took focus.
+  @Test
+  fun `the sources panel takes the remote from the button behind it`() {
+    val api = FakeTvApi()
+    api.settingsValue = settings()
+    api.streamsValues["movie:tt1"] = listOf(
+      stream("srcA", name = "small", title = "Czech 1 GB"),
+      stream("srcB", name = "big", title = "Czech 8 GB"),
+    )
+    mount(api, movieArgs())
+    compose.waitForIdle()
+
+    openSources()
+
+    compose.onNodeWithTag(sourceRowTag(0)).assertIsFocused()
+    compose.onNodeWithTag(TagCatalogPrimary).assertIsNotFocused()
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(sourceRowTag(1)).assertIsFocused()
+    press(Key.DirectionCenter)
+    assertEquals(listOf("srcA"), played.map { it.sourceId })
+  }
+
+  @Test
+  fun `the background stays inert while a panel is open`() {
+    val api = FakeTvApi()
+    api.settingsValue = settings()
+    api.streamsValues["movie:tt1"] = listOf(
+      stream("srcA", name = "small", title = "Czech 1 GB"),
+      stream("srcB", name = "big", title = "Czech 8 GB"),
+    )
+    mount(api, movieArgs())
+    compose.waitForIdle()
+
+    openSources()
+    compose.onNodeWithTag(sourceRowTag(0)).assertIsFocused()
+    press(Key.DirectionLeft)
+
+    compose.onNodeWithTag(sourceRowTag(0)).assertIsFocused()
+    compose.onNodeWithTag(TagCatalogPrimary).assertIsNotFocused()
   }
 
   @Test
@@ -158,12 +218,11 @@ class CatalogDetailTest {
     mount(api, movieArgs())
     compose.waitForIdle()
 
-    click(TagCatalogSources)
+    openSources()
 
     compose.onNodeWithText("No active source addon has a stream for this title.").assertExists()
   }
 
-  // Found on the emulator: Play with no source did nothing at all.
   @Test
   fun `play with no source says so`() {
     val api = FakeTvApi()
@@ -171,7 +230,7 @@ class CatalogDetailTest {
     mount(api, movieArgs())
     compose.waitForIdle()
 
-    click(TagCatalogPrimary)
+    press(Key.DirectionCenter)
 
     compose.onNodeWithText("No active source addon has a stream for this title.").assertExists()
   }
@@ -196,11 +255,12 @@ class CatalogDetailTest {
     compose.onNodeWithTag(episodeCardTag(v2)).assertExists()
     compose.onNodeWithTag(episodeCardTag(v3)).assertExists()
 
-    compose.onNodeWithTag(TagCatalogPrimary).performKeyInput { pressKey(Key.DirectionDown) }
-    compose.waitForIdle()
+    press(Key.DirectionDown)
     compose.onNodeWithTag(episodeCardTag(v2)).assertIsFocused()
 
-    click(episodeCardTag(v3))
+    press(Key.DirectionRight)
+    compose.onNodeWithTag(episodeCardTag(v3)).assertIsFocused()
+    press(Key.DirectionCenter)
     assertTrue(api.streamsRequests.contains("series:tt1:1:3"))
   }
 
@@ -217,12 +277,24 @@ class CatalogDetailTest {
   private fun seriesMeta(vararg videos: VideoDto) =
     MetaDto(id = "tt1", type = "series", name = "Show", videos = videos.toList())
 
+  private fun v1() = VideoDto(id = "tt1:1:1", title = "One", season = 1, episode = 1)
+  private fun v2() = VideoDto(id = "tt1:1:2", title = "Two", season = 1, episode = 2)
+
+  private fun watched(video: VideoDto) = ProgressEntryDto(
+    key = "series:tt1:1:1",
+    position = 600.0,
+    duration = 600.0,
+    title = "Show · ${video.title}",
+    series = ProgressEntryDto.Series("tt1", "Show", 1, 1),
+  )
+
   @Test
   fun `switching episode cannot play the previous episode's source`() {
     val api = seriesApi()
-    val v1 = VideoDto(id = "tt1:1:1", title = "One", season = 1, episode = 1)
-    val v2 = VideoDto(id = "tt1:1:2", title = "Two", season = 1, episode = 2)
-    api.metaValues["series:tt1"] = seriesMeta(v1, v2)
+    val first = v1()
+    val second = v2()
+    api.metaValues["series:tt1"] = seriesMeta(first, second)
+    api.progressEntries = listOf(watched(first))
     api.streamsValues["series:tt1:1:1"] = (1..3).map { stream("s1-$it", name = "One's source $it") }
     api.streamsValues["series:tt1:1:2"] = listOf(stream("s2", name = "Two's source"))
     // Episode two's streams stay in flight, so a stale episode one answer is all there is to play.
@@ -231,8 +303,15 @@ class CatalogDetailTest {
     mount(api, seriesArgs())
     compose.waitForIdle()
 
-    click(episodeCardTag(v2))
-    click(TagCatalogPrimary)
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(episodeCardTag(second)).assertIsFocused()
+    press(Key.DirectionCenter)
+    compose.waitForIdle()
+    press(Key.DirectionLeft)
+    press(Key.DirectionUp)
+    press(Key.DirectionUp)
+    compose.onNodeWithTag(TagCatalogPrimary).assertIsFocused()
+    press(Key.DirectionCenter)
 
     assertTrue(played.isEmpty())
     gate.countDown()
@@ -241,24 +320,21 @@ class CatalogDetailTest {
   @Test
   fun `an abandoned stream load does not blank the new episode`() {
     val api = seriesApi()
-    val v1 = VideoDto(id = "tt1:1:1", title = "One", season = 1, episode = 1)
-    val v2 = VideoDto(id = "tt1:1:2", title = "Two", season = 1, episode = 2)
-    api.metaValues["series:tt1"] = seriesMeta(v1, v2)
+    val first = v1()
+    val second = v2()
+    api.metaValues["series:tt1"] = seriesMeta(first, second)
+    api.progressEntries = listOf(watched(first))
     // Three sources on episode one against one on episode two, so a stale write is visible.
     api.streamsValues["series:tt1:1:1"] = (1..3).map { stream("s1-$it", name = "One's source $it") }
     api.streamsValues["series:tt1:1:2"] = listOf(stream("s2", name = "Two's source"))
-    val gate = CountDownLatch(1)
-    api.streamsLatches["series:tt1:1:1"] = gate
+    api.streamsLatches["series:tt1:1:1"] = CountDownLatch(1)
     mount(api, seriesArgs())
     compose.waitForIdle()
 
-    click(episodeCardTag(v2))
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(episodeCardTag(second)).assertIsFocused()
+    press(Key.DirectionCenter)
     compose.waitForIdle()
-    compose.onNodeWithTag(TagCatalogSources).assertTextContains("Sources · 1")
-
-    gate.countDown()
-    compose.waitForIdle()
-
     compose.onNodeWithTag(TagCatalogSources).assertTextContains("Sources · 1")
   }
 
@@ -271,7 +347,7 @@ class CatalogDetailTest {
     mount(api, movieArgs())
     compose.waitForIdle()
 
-    click(TagCatalogPrimary)
+    press(Key.DirectionCenter)
 
     assertTrue(played.isEmpty())
     compose.onNodeWithTag(TagCatalogMessage).assertDoesNotExist()
@@ -279,19 +355,20 @@ class CatalogDetailTest {
   }
 
   @Test
-  fun `a failed sources load shows the error and retries`() {
+  fun `a failed addon list shows the error and retries`() {
     val api = FakeTvApi()
     api.settingsValue = settings()
+    api.streamSourcesFailures["movie:tt1"] = cz.stremiooffline.tv.data.ApiFailure.Generic
     api.streamsValues["movie:tt1"] = listOf(stream("s1", name = "FullHD"))
-    api.streamFailures["movie:tt1"] = cz.stremiooffline.tv.data.ApiFailure.Generic
     mount(api, movieArgs())
     compose.waitForIdle()
 
-    click(TagCatalogSources)
+    openSources()
     compose.onNodeWithText("The library could not be loaded.").assertExists()
 
-    api.streamFailures.remove("movie:tt1")
-    click(TagCatalogRetry)
+    api.streamSourcesFailures.remove("movie:tt1")
+    focusFromLeft(TagCatalogRetry)
+    press(Key.DirectionCenter)
 
     compose.onNodeWithTag(sourceRowTag(0)).assertExists()
   }
@@ -299,17 +376,21 @@ class CatalogDetailTest {
   @Test
   fun `the no sources message clears after switching to an episode with sources`() {
     val api = seriesApi()
-    val v1 = VideoDto(id = "tt1:1:1", title = "One", season = 1, episode = 1)
-    val v2 = VideoDto(id = "tt1:1:2", title = "Two", season = 1, episode = 2)
-    api.metaValues["series:tt1"] = seriesMeta(v1, v2)
+    val first = v1()
+    val second = v2()
+    api.metaValues["series:tt1"] = seriesMeta(first, second)
     api.streamsValues["series:tt1:1:2"] = listOf(stream("s2", name = "Two's source"))
     mount(api, seriesArgs())
     compose.waitForIdle()
 
-    click(TagCatalogPrimary)
+    press(Key.DirectionCenter)
     compose.onNodeWithTag(TagCatalogMessage).assertTextContains("No active source addon has a stream for this title.")
 
-    click(episodeCardTag(v2))
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(episodeCardTag(first)).assertIsFocused()
+    press(Key.DirectionRight)
+    compose.onNodeWithTag(episodeCardTag(second)).assertIsFocused()
+    press(Key.DirectionCenter)
 
     compose.onNodeWithTag(TagCatalogMessage).assertDoesNotExist()
     compose.onNodeWithTag(TagCatalogSources).assertTextContains("Sources · 1")
@@ -323,7 +404,7 @@ class CatalogDetailTest {
     mount(api, movieArgs())
     compose.waitForIdle()
 
-    click(TagCatalogPrimary)
+    press(Key.DirectionCenter)
 
     compose.onNodeWithTag(TagCatalogMessage).assertTextContains("A torrent cannot be played directly.", substring = true)
   }
@@ -337,7 +418,8 @@ class CatalogDetailTest {
     mount(api, movieArgs())
     compose.waitForIdle()
 
-    click(TagCatalogFavourite)
+    focusFromLeft(TagCatalogFavourite)
+    press(Key.DirectionCenter)
 
     compose.onNodeWithTag(TagCatalogFavourite).assertTextContains("☆")
   }
@@ -352,8 +434,9 @@ class CatalogDetailTest {
     mount(api, movieArgs())
     compose.waitForIdle()
 
-    click(TagCatalogFavourite)
-    click(TagCatalogFavourite)
+    focusFromLeft(TagCatalogFavourite)
+    press(Key.DirectionCenter)
+    press(Key.DirectionCenter)
 
     assertEquals(1, api.favoriteCalls.size)
     latch.countDown()
@@ -370,7 +453,8 @@ class CatalogDetailTest {
     mount(api, movieArgs())
     compose.waitForIdle()
 
-    click(TagCatalogFavourite)
+    focusFromLeft(TagCatalogFavourite)
+    press(Key.DirectionCenter)
     compose.waitForIdle()
 
     compose.onNodeWithTag(TagCatalogFavourite).assertTextContains("☆")
@@ -399,19 +483,19 @@ class CatalogDetailTest {
     compose.runOnIdle { token.intValue = 1 }
 
     compose.onNodeWithText("Resume").assertIsDisplayed()
-    click(TagCatalogPrimary)
+    press(Key.DirectionCenter)
     assertEquals(true, played.last().resume)
   }
 
   @Test
   fun `entering a series does not request the series id`() {
     val api = seriesApi()
-    val v1 = VideoDto(id = "tt1:1:1", title = "One", season = 1, episode = 1)
-    api.metaValues["series:tt1"] = seriesMeta(v1)
+    api.metaValues["series:tt1"] = seriesMeta(v1())
     api.streamsValues["series:tt1:1:1"] = listOf(stream("s1", name = "One's source"))
     mount(api, seriesArgs())
     compose.waitForIdle()
 
     assertFalse(api.streamsRequests.contains("series:tt1"))
+    assertFalse(api.streamSourcesRequests.contains("series:tt1"))
   }
 }

@@ -1547,4 +1547,5 @@ export const it: Catalog = {
   "tv.sourcesCount": "Fonti · {count}",
   "tv.default": "Predefinito",
   "tv.searchHint": "Digita un titolo e premi Fine.",
+  "tv.findingSources": "Ricerca delle fonti…",
 };

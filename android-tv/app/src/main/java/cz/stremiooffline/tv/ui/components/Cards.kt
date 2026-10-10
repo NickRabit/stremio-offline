@@ -3,9 +3,11 @@ package cz.stremiooffline.tv.ui.components
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -28,6 +30,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -37,6 +40,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.unit.Dp
 import androidx.tv.material3.Border
 import androidx.tv.material3.ClickableSurfaceDefaults
 import androidx.tv.material3.Glow
@@ -256,5 +261,27 @@ fun ShimmerCards(count: Int = 6, modifier: Modifier = Modifier) {
           .alpha(alpha),
       )
     }
+  }
+}
+
+/** A small turning arc for a button that is waiting on the server. */
+@Composable
+fun TvSpinner(size: Dp = 13.dp, color: Color = Color.White, modifier: Modifier = Modifier) {
+  val transition = rememberInfiniteTransition(label = "spinner")
+  val angle by transition.animateFloat(
+    initialValue = 0f,
+    targetValue = 360f,
+    animationSpec = infiniteRepeatable(tween(900, easing = LinearEasing)),
+    label = "spinnerAngle",
+  )
+  Canvas(modifier.size(size).rotate(angle)) {
+    val stroke = this.size.minDimension / 7f
+    drawArc(
+      color = color,
+      startAngle = 0f,
+      sweepAngle = 250f,
+      useCenter = false,
+      style = Stroke(width = stroke),
+    )
   }
 }

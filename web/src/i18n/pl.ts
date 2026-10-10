@@ -1547,4 +1547,5 @@ export const pl: Catalog = {
   "tv.sourcesCount": "Źródła · {count}",
   "tv.default": "Domyślne",
   "tv.searchHint": "Wpisz tytuł i naciśnij Gotowe.",
+  "tv.findingSources": "Szukam źródeł…",
 };

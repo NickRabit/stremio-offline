@@ -267,4 +267,82 @@ class StreamsTest {
     val notice = stream(kind = "unsupported", playable = false, name = "⚠ Luna", title = "VIP expires in 4 days.")
     assertNull(Streams.pickDefaultStream(Streams.offeredStreams(listOf(notice))))
   }
+
+  // The web's repickStream cases: the default may move, but never under the viewer's feet.
+  private val first = "a"
+  private val second = "b"
+  private val third = "c"
+
+  @Test
+  fun `repickStream moves the pick to the first source left when a filter removed the chosen one`() {
+    assertEquals(
+      Streams.Repick(true, second),
+      Streams.repickStream(
+        playing = false,
+        picked = false,
+        pending = 0,
+        visible = listOf(second, third),
+        selected = first,
+        preferred = second,
+      ),
+    )
+  }
+
+  @Test
+  fun `repickStream follows a better source that arrives while the viewer is still looking at the list`() {
+    assertEquals(
+      Streams.Repick(true, second),
+      Streams.repickStream(
+        playing = false,
+        picked = false,
+        pending = 2,
+        visible = listOf(first, second),
+        selected = first,
+        preferred = second,
+      ),
+    )
+  }
+
+  @Test
+  fun `repickStream never overrides a source the viewer picked themselves`() {
+    assertEquals(
+      Streams.Repick<String>(false),
+      Streams.repickStream(
+        playing = false,
+        picked = true,
+        pending = 2,
+        visible = listOf(first, second),
+        selected = first,
+        preferred = second,
+      ),
+    )
+  }
+
+  @Test
+  fun `repickStream leaves the source alone once the film is playing on it`() {
+    assertEquals(
+      Streams.Repick<String>(false),
+      Streams.repickStream(playing = true, picked = false, pending = 2, visible = listOf(first, second), selected = first, preferred = second),
+    )
+    assertEquals(
+      Streams.Repick<String>(false),
+      Streams.repickStream(playing = true, picked = false, pending = 0, visible = listOf(second, third), selected = first, preferred = second),
+    )
+    assertEquals(
+      Streams.Repick<String>(false),
+      Streams.repickStream(playing = true, picked = false, pending = 0, visible = emptyList(), selected = first, preferred = null),
+    )
+  }
+
+  @Test
+  fun `repickStream clears the pick when nothing is left to play and nobody is watching`() {
+    assertEquals(
+      Streams.Repick(true, null),
+      Streams.repickStream(playing = false, picked = false, pending = 0, visible = emptyList(), selected = first, preferred = null),
+    )
+    assertEquals(
+      Streams.Repick<String>(false),
+      Streams.repickStream(playing = false, picked = false, pending = 0, visible = emptyList(), selected = null, preferred = null),
+    )
+  }
 }

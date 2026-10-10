@@ -97,6 +97,10 @@ data class StreamDto(
   val behaviorHints: BehaviorHintsDto? = null,
 )
 
+/** One `GET /api/stream-sources/:type/:id` entry: a source addon the streams are asked from. */
+@Serializable
+data class StreamSourceDto(val key: String = "", val name: String = "")
+
 @Serializable
 data class SearchResultDto(
   val items: List<MetaDto> = emptyList(),

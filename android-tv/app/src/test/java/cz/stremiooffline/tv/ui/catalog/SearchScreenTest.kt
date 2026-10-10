@@ -3,14 +3,15 @@
 package cz.stremiooffline.tv.ui.catalog
 
 import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performImeAction
 import androidx.compose.ui.test.performKeyInput
-import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.pressKey
 import cz.stremiooffline.tv.data.MetaDto
@@ -39,12 +40,21 @@ class SearchScreenTest {
   }
 
   private fun type(query: String) {
-    compose.onNodeWithTag(TagSearchField).performKeyInput { pressKey(Key.DirectionCenter) }
-    compose.waitForIdle()
+    press(Key.DirectionCenter)
     compose.onNodeWithTag(TagSearchInput).performTextInput(query)
     compose.onNodeWithTag(TagSearchInput).performImeAction()
     compose.waitForIdle()
   }
+
+  private fun press(key: Key) {
+    compose.onRoot().performKeyInput { pressKey(key) }
+    compose.waitForIdle()
+  }
+
+  private fun focused(tag: String): Boolean =
+    compose.onAllNodes(isFocused()).fetchSemanticsNodes()
+      .any { it.config.getOrElse(SemanticsProperties.TestTag) { "" } == tag }
+
 
   @Test
   fun `the field takes focus without opening the IME`() {
@@ -88,8 +98,11 @@ class SearchScreenTest {
     compose.waitForIdle()
 
     type("it")
-    compose.onNodeWithTag(posterTag(meta("tt7"))).performSemanticsAction(SemanticsActions.RequestFocus)
-    compose.waitForIdle()
+    press(Key.DirectionDown)
+    // Six columns at 960 dp: from the first row, left to the first poster, then down to the last row.
+    press(Key.DirectionLeft)
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(posterTag(meta("tt7"))).assertIsFocused()
 
     assertTrue(api.searchRequests.contains("it" to "c1"))
   }

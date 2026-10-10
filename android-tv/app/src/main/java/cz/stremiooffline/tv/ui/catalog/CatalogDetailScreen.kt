@@ -3,6 +3,7 @@ package cz.stremiooffline.tv.ui.catalog
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -68,12 +69,16 @@ import cz.stremiooffline.tv.data.VideoDto
 import cz.stremiooffline.tv.playback.Progress
 import cz.stremiooffline.tv.ui.components.FocusButton
 import cz.stremiooffline.tv.ui.components.FocusButtonKind
+import cz.stremiooffline.tv.ui.components.TvSpinner
 import cz.stremiooffline.tv.ui.components.WideCard
 import cz.stremiooffline.tv.ui.detail.PlayTarget
 import cz.stremiooffline.tv.ui.theme.Tokens
 import java.util.Locale
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.android.awaitFrame
 
 const val TagCatalogPrimary = "catalog_primary"
 const val TagCatalogStartOver = "catalog_start_over"
@@ -82,13 +87,11 @@ const val TagCatalogToLibrary = "catalog_to_library"
 const val TagCatalogSources = "catalog_sources"
 const val TagCatalogMessage = "catalog_message"
 const val TagSourcesPanel = "catalog_sources_panel"
+const val TagSourcesEmpty = "catalog_sources_empty"
 
 fun sourceRowTag(index: Int): String = "source_row_$index"
 fun seasonChipTag(season: Int): String = "season_chip_$season"
 fun episodeCardTag(video: VideoDto): String = "episode_card_${video.id ?: video.label}"
-
-/** What the sources list of the selected video is currently doing. */
-private enum class SourcesState { Loading, Failed, Loaded }
 
 /** The catalogue title detail: the library's layout for a movie or a series, with sources. */
 @Composable
@@ -109,15 +112,18 @@ fun CatalogDetailScreen(
   var addons by remember { mutableStateOf<List<AddonDto>>(emptyList()) }
   var movieProgress by remember { mutableStateOf<ProgressDto?>(null) }
   var streams by remember { mutableStateOf<List<StreamDto>>(emptyList()) }
-  var sourcesState by remember { mutableStateOf(SourcesState.Loading) }
+  var pendingSources by remember { mutableIntStateOf(0) }
+  var sourcesLoaded by remember { mutableStateOf(false) }
+  var sourcesFailed by remember { mutableStateOf(false) }
   var sourcesRetry by remember { mutableIntStateOf(0) }
   var selectedVideo by remember { mutableStateOf<VideoDto?>(null) }
   var season by remember { mutableStateOf<Int?>(null) }
-  var pickedSource by remember { mutableStateOf<StreamDto?>(null) }
+  var selectedStream by remember { mutableStateOf<StreamDto?>(null) }
+  var pickedStream by remember { mutableStateOf(false) }
   var sourcesOpen by remember { mutableStateOf(false) }
   var favourite by remember { mutableStateOf(false) }
   var favouriteBusy by remember { mutableStateOf(false) }
-  var queued by remember { mutableStateOf(false) }
+  var queuedSourceId by remember { mutableStateOf<String?>(null) }
   var message by remember { mutableStateOf<String?>(null) }
 
   val queuedText = stringResource(R.string.save_queued)
@@ -129,9 +135,12 @@ fun CatalogDetailScreen(
   val tryAgainText = stringResource(R.string.tv_try_again)
   val defaultText = stringResource(R.string.tv_default)
   val toLibraryText = stringResource(R.string.save_to_library)
+  val findingSourcesText = stringResource(R.string.tv_finding_sources)
 
   val primaryFocus = remember { FocusRequester() }
   val rowFocus = remember { FocusRequester() }
+  val sourcesOpenerFocus = remember { FocusRequester() }
+  val sourcesPanelFocus = remember { FocusRequester() }
 
   val streamType = meta.type ?: args.type
   val isSeries = streamType == "series"
@@ -139,45 +148,79 @@ fun CatalogDetailScreen(
   val streamVideoId = if (isSeries) selectedVideo?.id else meta.id
   val streamsKey = streamVideoId?.let { "$streamType:$it" }
 
-  // Metadata and the personal state, once. Streams follow the chosen video.
+  // The title's own requests do not depend on each other, so they all leave at once; only the
+  // metadata waits for the settings it takes its language from.
   LaunchedEffect(args.meta.id) {
-    settings = runCatching { api.settings() }.getOrDefault(SettingsResponse())
-    val detail = runCatching { api.meta(args.type, args.meta.id, settings.uiLanguage) }.getOrNull()
-    meta = if (detail != null) mergeMeta(args.meta, detail) else args.meta
-    addons = runCatching { api.addons() }.getOrDefault(emptyList())
-    entries = runCatching { api.progressList() }.getOrDefault(emptyList())
-    favourite = runCatching { api.watchlist() }.getOrDefault(emptyList()).any { it.key == "${args.type}:${args.meta.id}" }
-    if (args.type == "series") {
-      val videos = meta.videos.orEmpty()
-      val watched = Resume.resumeVideo(videos, seriesEntry(entries, meta.id)?.let { Resume.resumeTarget(it).episode })
-      val resuming = seriesEntry(entries, meta.id)?.let { Progress.resumePosition(it.position, it.duration) != null } == true
-      selectedVideo = (if (resuming) watched else null) ?: nextRelevantEpisode(videos, watched) ?: firstReleased(videos)
-      season = defaultSeason(videos)
-    } else {
-      movieProgress = runCatching { api.progress(ProgressKey.of(args.type, meta.id)) }.getOrNull()
+    queuedSourceId = null
+    message = null
+    coroutineScope {
+      val settingsJob = async { runCatching { api.settings() }.getOrDefault(SettingsResponse()) }
+      val addonsJob = async { runCatching { api.addons() }.getOrDefault(emptyList()) }
+      val entriesJob = async { runCatching { api.progressList() }.getOrDefault(emptyList()) }
+      val watchlistJob = async { runCatching { api.watchlist() }.getOrDefault(emptyList()) }
+      val progressJob = async {
+        if (args.type == "series") null else runCatching { api.progress(ProgressKey.of(args.type, args.meta.id)) }.getOrNull()
+      }
+      val loadedSettings = settingsJob.await()
+      settings = loadedSettings
+      val metaJob = async { runCatching { api.meta(args.type, args.meta.id, loadedSettings.uiLanguage) }.getOrNull() }
+      val detail = metaJob.await()
+      if (detail != null) meta = mergeMeta(args.meta, detail)
+      addons = addonsJob.await()
+      entries = entriesJob.await()
+      favourite = watchlistJob.await().any { it.key == "${args.type}:${args.meta.id}" }
+      movieProgress = progressJob.await()
+      if (args.type == "series") {
+        val videos = meta.videos.orEmpty()
+        val watched = Resume.resumeVideo(videos, seriesEntry(entries, meta.id)?.let { Resume.resumeTarget(it).episode })
+        val resuming = seriesEntry(entries, meta.id)?.let { Progress.resumePosition(it.position, it.duration) != null } == true
+        selectedVideo = (if (resuming) watched else null) ?: nextRelevantEpisode(videos, watched) ?: firstReleased(videos)
+        season = defaultSeason(videos)
+      }
     }
   }
 
-  // A change of video clears the list at once, so nothing can play or queue a stale source, and a
-  // cancelled load of the video left behind never writes over the new one.
+  // Each source addon is asked on its own so the first answer is usable without waiting for the
+  // slowest, and a change of video clears the list at once so nothing plays a stale source.
   LaunchedEffect(streamsKey, sourcesRetry) {
-    pickedSource = null
-    queued = false
-    message = null
     streams = emptyList()
-    sourcesState = SourcesState.Loading
+    selectedStream = null
+    pickedStream = false
+    pendingSources = 0
+    sourcesLoaded = false
+    sourcesFailed = false
+    queuedSourceId = null
+    message = null
     val id = streamVideoId
     if (id == null) {
-      sourcesState = SourcesState.Loaded
+      sourcesLoaded = true
       return@LaunchedEffect
     }
-    try {
-      streams = api.streams(streamType, id)
-      sourcesState = SourcesState.Loaded
+    val sources = try {
+      api.streamSources(streamType, id)
     } catch (cancelled: CancellationException) {
       throw cancelled
     } catch (error: ApiError) {
-      sourcesState = SourcesState.Failed
+      sourcesFailed = true
+      sourcesLoaded = true
+      return@LaunchedEffect
+    }
+    sourcesLoaded = true
+    pendingSources = sources.size
+    coroutineScope {
+      sources.forEach { source ->
+        launch {
+          val part = try {
+            api.streams(streamType, id, source.key.ifEmpty { null })
+          } catch (cancelled: CancellationException) {
+            throw cancelled
+          } catch (error: ApiError) {
+            emptyList()
+          }
+          if (part.isNotEmpty()) streams = streams + part
+          pendingSources -= 1
+        }
+      }
     }
   }
 
@@ -195,20 +238,47 @@ fun CatalogDetailScreen(
 
   val offered = Streams.offeredStreams(streams)
   val priority = addons.mapIndexed { index, addon -> addon.manifest.name to index }.toMap()
+  val titleLanguage = Languages.titleLanguage(meta.language)
   val visible = Streams.visibleCatalogStreams(
     offered,
     Streams.StreamFilters(sort = Streams.StreamSort.of(settings.streamSort)),
     settings.audioLanguage ?: "en",
     priority,
     settings.realDebridConfigured,
-    Languages.titleLanguage(meta.language),
+    titleLanguage,
   )
   val notices = Streams.addonNotices(streams)
-  val defaultStream = Streams.pickDefaultStream(visible)
-  val activeStream = pickedSource ?: defaultStream
+  val preferredStream = Streams.pickDefaultStream(visible)
+  val activeStream = selectedStream?.takeIf { visible.contains(it) } ?: preferredStream
+  // Asking covers both "the addon list has not answered" and "some addon still owes a list".
+  val sourcesAsking = !sourcesFailed && (!sourcesLoaded || pendingSources > 0)
+  // While no playable stream has arrived the primary action is a spinner, not a promise to play.
+  val findingSources = activeStream?.playable != true && sourcesAsking
   val canQueueActive = activeStream != null && Streams.canQueue(activeStream, settings.realDebridConfigured)
+  // The tick belongs to the source that was actually queued, and only while it is still the pick.
+  val queued = queuedSourceId != null && activeStream?.sourceId == queuedSourceId
   // Nothing visible to play: either no addon offers a source, or only a torrent it cannot open.
   val emptyText = if (offered.isEmpty()) noSourcesText else torrentText
+
+  // A later addon may outrank the one already picked, but only while the viewer has not chosen.
+  LaunchedEffect(visible, sourcesAsking) {
+    val next = Streams.repickStream(
+      playing = false,
+      picked = pickedStream,
+      pending = if (sourcesAsking) maxOf(pendingSources, 1) else 0,
+      visible = visible,
+      selected = selectedStream,
+      preferred = preferredStream,
+    )
+    if (next.move) selectedStream = next.to
+  }
+
+  // The default row may only appear after the panel is already up (sources still arriving).
+  LaunchedEffect(sourcesOpen, visible.isEmpty(), sourcesFailed) {
+    if (!sourcesOpen) return@LaunchedEffect
+    awaitFrame()
+    runCatching { sourcesPanelFocus.requestFocus() }
+  }
 
   val resumeEntry = if (isSeries) seriesEntry(entries, meta.id) else null
   val resumeEpisode = if (isSeries) Resume.resumeVideo(meta.videos.orEmpty(), resumeEntry?.let { Resume.resumeTarget(it).episode }) else null
@@ -221,15 +291,33 @@ fun CatalogDetailScreen(
   val playerTitle = if (selectedVideo != null) "$baseTitle · ${selectedVideo!!.label}" else baseTitle
   val progressKey = ProgressKey.of(streamType, meta.id, selectedVideo?.id)
 
-  fun play(stream: StreamDto) {
-    pickedSource = stream
+  fun closeSources() {
+    if (!sourcesOpen) return
     sourcesOpen = false
+  }
+
+  var sourcesWasOpen by remember { mutableStateOf(false) }
+  // The opener gets the remote back on the frame the panel and its focus trap are gone.
+  LaunchedEffect(sourcesOpen) {
+    if (sourcesOpen) {
+      sourcesWasOpen = true
+    } else if (sourcesWasOpen) {
+      sourcesWasOpen = false
+      runCatching { sourcesOpenerFocus.requestFocus() }
+    }
+  }
+
+  fun play(stream: StreamDto) {
+    pickedStream = true
+    selectedStream = stream
+    closeSources()
     message = null
     onPlay(PlayTarget(key = progressKey, title = playerTitle, resume = resuming, sourceId = stream.sourceId))
   }
 
   fun queue(stream: StreamDto) {
-    pickedSource = stream
+    selectedStream = stream
+    pickedStream = true
     message = null
     if (!Streams.canQueue(stream, settings.realDebridConfigured)) {
       message = torrentText
@@ -240,7 +328,7 @@ fun CatalogDetailScreen(
     scope.launch {
       try {
         val job = api.download(title, stream.sourceId, media)
-        queued = true
+        queuedSourceId = stream.sourceId
         message = if (job.status == "waiting") waitingText else queuedText
       } catch (cancelled: CancellationException) {
         throw cancelled
@@ -260,28 +348,29 @@ fun CatalogDetailScreen(
   }
 
   fun playPressed() {
-    when (sourcesState) {
+    val stream = activeStream
+    when {
+      sourcesFailed -> message = loadErrorText
+      stream?.playable == true -> play(stream)
+      stream != null -> activate(stream)
       // The list is still coming; doing nothing visible beats playing the wrong episode.
-      SourcesState.Loading -> Unit
-      SourcesState.Failed -> message = loadErrorText
-      SourcesState.Loaded -> activeStream?.let { activate(it) } ?: run { message = emptyText }
+      sourcesAsking -> Unit
+      else -> message = emptyText
     }
   }
 
   fun startOverPressed() {
     message = null
-    when (sourcesState) {
-      SourcesState.Loading -> Unit
-      SourcesState.Failed -> message = loadErrorText
-      SourcesState.Loaded -> {
-        val stream = activeStream
-        if (stream != null && stream.playable) {
-          pickedSource = stream
-          onPlay(PlayTarget(progressKey, playerTitle, resume = false, sourceId = stream.sourceId))
-        } else {
-          message = emptyText
-        }
+    val stream = activeStream
+    when {
+      sourcesFailed -> message = loadErrorText
+      stream?.playable == true -> {
+        pickedStream = true
+        selectedStream = stream
+        onPlay(PlayTarget(progressKey, playerTitle, resume = false, sourceId = stream.sourceId))
       }
+      sourcesAsking -> Unit
+      else -> message = emptyText
     }
   }
 
@@ -308,10 +397,13 @@ fun CatalogDetailScreen(
   fun selectVideo(video: VideoDto) {
     if (video.id == selectedVideo?.id) return
     selectedVideo = video
-    pickedSource = null
+    selectedStream = null
+    pickedStream = false
     streams = emptyList()
-    sourcesState = SourcesState.Loading
-    queued = false
+    pendingSources = 0
+    sourcesLoaded = false
+    sourcesFailed = false
+    queuedSourceId = null
     message = null
   }
 
@@ -386,9 +478,14 @@ fun CatalogDetailScreen(
       Spacer(Modifier.height(3.dp))
       Row(horizontalArrangement = Arrangement.spacedBy(11.dp), verticalAlignment = Alignment.CenterVertically) {
         FocusButton(
-          text = stringResource(if (resuming) R.string.tv_resume else R.string.player_play),
+          text = when {
+            findingSources -> findingSourcesText
+            resuming -> stringResource(R.string.tv_resume)
+            else -> stringResource(R.string.player_play)
+          },
           onClick = { playPressed() },
           kind = FocusButtonKind.Primary,
+          leading = if (findingSources) ({ TvSpinner() }) else null,
           modifier = Modifier.focusRequester(primaryFocus).testTag(TagCatalogPrimary),
         )
         if (resuming) {
@@ -415,7 +512,8 @@ fun CatalogDetailScreen(
         FocusButton(
           text = stringResource(R.string.tv_sources_count, visible.size.toString()),
           onClick = { sourcesOpen = true },
-          modifier = Modifier.testTag(TagCatalogSources),
+          leading = if (sourcesAsking) ({ TvSpinner() }) else null,
+          modifier = Modifier.focusRequester(sourcesOpenerFocus).testTag(TagCatalogSources),
         )
       }
       val shown = message
@@ -450,31 +548,38 @@ fun CatalogDetailScreen(
     }
 
     if (sourcesOpen) {
-      SidePanel(title = stringResource(R.string.sources_heading), onClose = { sourcesOpen = false }, modifier = Modifier.testTag(TagSourcesPanel)) {
-        when (sourcesState) {
-          SourcesState.Loading -> Unit
-          SourcesState.Failed -> {
+      val focusIndex = visible.indexOfFirst { it === preferredStream }.let { if (it >= 0) it else 0 }
+      SidePanel(
+        title = stringResource(R.string.sources_heading),
+        onClose = { closeSources() },
+        modifier = Modifier.testTag(TagSourcesPanel),
+        initialFocus = sourcesPanelFocus,
+      ) {
+        when {
+          sourcesFailed -> {
             Text(loadErrorText, color = Tokens.Red, fontSize = 12.sp, lineHeight = 17.sp)
             FocusButton(
               text = tryAgainText,
               onClick = { sourcesRetry++ },
-              modifier = Modifier.testTag(TagCatalogRetry),
+              modifier = Modifier.focusRequester(sourcesPanelFocus).testTag(TagCatalogRetry),
             )
           }
-          SourcesState.Loaded -> {
-            if (visible.isEmpty()) {
-              Text(emptyText, color = Tokens.Muted, fontSize = 12.sp, lineHeight = 17.sp)
-            }
-            visible.forEachIndexed { index, stream ->
-              SourceRow(
-                stream = stream,
-                default = defaultStream === stream,
-                defaultText = defaultText,
-                titleLanguage = Languages.titleLanguage(meta.language),
-                onClick = { activate(stream) },
-                modifier = Modifier.testTag(sourceRowTag(index)),
-              )
-            }
+          visible.isEmpty() -> {
+            Text(if (sourcesAsking) findingSourcesText else emptyText, color = Tokens.Muted, fontSize = 12.sp, lineHeight = 17.sp)
+            // Something has to hold the remote while the panel is up, even with no rows yet.
+            Box(Modifier.focusRequester(sourcesPanelFocus).focusable().testTag(TagSourcesEmpty))
+          }
+          else -> visible.forEachIndexed { index, stream ->
+            SourceRow(
+              stream = stream,
+              default = preferredStream === stream,
+              defaultText = defaultText,
+              titleLanguage = titleLanguage,
+              onClick = { activate(stream) },
+              modifier = Modifier
+                .testTag(sourceRowTag(index))
+                .then(if (index == focusIndex) Modifier.focusRequester(sourcesPanelFocus) else Modifier),
+            )
           }
         }
         if (notices.isNotEmpty()) {
