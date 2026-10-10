@@ -50,10 +50,12 @@ export interface ClientCapabilities {
   audioPassthrough?: string[];
   /** Embedded subtitle codecs, by ffprobe name ("subrip", "ass", "webvtt", "hdmv_pgs_subtitle"), the player renders itself. */
   subtitles?: string[];
+  /** Video codecs ("h264", "hevc", "vp9", "av1") the native client also decodes at 10 bits. */
+  deepColor?: string[];
 }
 
 const CAPABILITY_BOOLEANS = ["h264", "hevc", "hevc10", "vp8", "vp9", "av1", "aac", "mp3", "opus", "vorbis", "ac3", "eac3", "flac"] as const;
-const CAPABILITY_LISTS = ["containers", "audioDecode", "audioPassthrough", "subtitles"] as const;
+const CAPABILITY_LISTS = ["containers", "audioDecode", "audioPassthrough", "subtitles", "deepColor"] as const;
 const CAPABILITY_ENTRY = /^[a-z0-9._-]{1,32}$/;
 const CAPABILITY_LIST_LIMIT = 32;
 
@@ -190,6 +192,26 @@ interface Session {
 const hevcPlayable = (video: MediaInfo["video"], caps: ClientCapabilities) => {
   const deep = /\b1[02]\b/.test(video?.profile ?? "") || /p1[02](le|be)$/i.test(video?.pixelFormat ?? "");
   return deep ? caps.hevc10 === true : caps.hevc === true;
+};
+
+/** What a native client has to declare before it is handed a video stream as it is. A codec flag
+ *  covers eight-bit 4:2:0 only: a deeper variant needs `deepColor` (or `hevc10`), and 4:2:2 or 4:4:4
+ *  -- High 4:2:2 H.264, VP9 profile 1 -- is never assumed, since TV decoders rarely take it. The
+ *  level is not checked; a stream the decoder still refuses goes through `escalate`. */
+const nativeVideoPlayable = (video: MediaInfo["video"], caps: ClientCapabilities): boolean => {
+  if (!video) return false;
+  const profile = video.profile ?? "";
+  const format = video.pixelFormat ?? "";
+  if (/4:[24][24]|Predictive/i.test(profile) || (format && !/420|nv12|nv21|p010/i.test(format))) return false;
+  const deep = /p1[02](le|be)$|p010/i.test(format) || /\b1[02]\b|Profile 2/i.test(profile);
+  const deepOk = (codec: string) => caps.deepColor?.includes(codec) ?? false;
+  switch (video.codec) {
+    case "h264": return caps.h264 === true && (!deep || deepOk("h264"));
+    case "hevc": return deep ? caps.hevc10 === true || deepOk("hevc") : caps.hevc === true;
+    case "vp8": return caps.vp8 === true && !deep;
+    case "vp9": case "av1": return caps[video.codec] === true && (!deep || deepOk(video.codec));
+    default: return false;
+  }
 };
 
 /** A source whose software decode cannot keep up: HEVC, AV1, VP9, anything 10-bit, or over 1080 lines.
@@ -847,11 +869,7 @@ export class PlaybackManager {
       }
       if (!(caps.containers?.includes(kind) ?? false)) return { ok: false, reason: `client does not play ${kind} as it is` };
       const codec = info.video.codec;
-      const videoPlayable = codec === "h264" ? caps.h264 === true
-        : codec === "hevc" ? hevcPlayable(info.video, caps)
-          : codec === "vp8" || codec === "vp9" || codec === "av1" ? caps[codec] === true
-            : false;
-      if (!videoPlayable) {
+      if (!nativeVideoPlayable(info.video, caps)) {
         return { ok: false, reason: `client cannot play video codec ${codec || "unknown"}${info.video.profile ? ` (${info.video.profile})` : ""}` };
       }
       const audio = info.audioTracks?.[audioTrack]?.codec ?? info.audio?.codec;
@@ -1061,8 +1079,9 @@ export class PlaybackManager {
     // A lower chosen quality forces a real transcode; a copy would carry the original resolution.
     // A refused copy says the probe and the capability list disagreed with the real decoder.
     // Which stream was to blame is unknowable from here, so both go through the encoder.
-    const copyVideo = !session.copyRejected && session.quality === null
-      && ((video === "h264" && caps.h264 !== false) || (video === "hevc" && hevcPlayable(session.info?.video, caps)));
+    const copyVideo = !session.copyRejected && session.quality === null && (native(caps)
+      ? (video === "h264" || video === "hevc") && nativeVideoPlayable(session.info?.video, caps)
+      : (video === "h264" && caps.h264 !== false) || (video === "hevc" && hevcPlayable(session.info?.video, caps)));
     const audioCapability = COPYABLE_AUDIO[audio];
     // A native client names the audio codecs it decodes or passes through; a browser only sends
     // booleans. Either way the codec has to be one the muxer can carry unchanged.

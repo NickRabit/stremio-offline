@@ -970,6 +970,33 @@ test("a native client without hevc10 does not play Main 10 directly", async () =
   assert.notEqual(started.mode, "direct");
 });
 
+test("a native client gets a ten-bit H.264, VP9 or AV1 directly only when it declares deep colour", () => {
+  const manager = new PlaybackManager(tmp("test-native-deep")) as any;
+  const mkv = (video: Record<string, string>) => ({ container: "matroska,webm", video, audio: { codec: "aac" }, audioTracks: [{ index: 0, codec: "aac" }], subtitleTracks: [] });
+  const caps = { ...nativeCaps, vp9: true, av1: true, containers: ["mkv", "webm"] };
+  const hi10 = mkv({ codec: "h264", profile: "High 10", pixelFormat: "yuv420p10le" });
+  assert.equal(manager.directPlay({ url: "https://cdn.example/a.mkv" }, hi10, caps).ok, false);
+  assert.equal(manager.directPlay({ url: "https://cdn.example/a.mkv" }, hi10, { ...caps, deepColor: ["h264"] }).ok, true);
+  const vp9 = mkv({ codec: "vp9", profile: "Profile 2", pixelFormat: "yuv420p10le" });
+  assert.equal(manager.directPlay({ url: "https://cdn.example/a.mkv" }, vp9, caps).ok, false);
+  assert.equal(manager.directPlay({ url: "https://cdn.example/a.mkv" }, vp9, { ...caps, deepColor: ["vp9"] }).ok, true);
+  const av1 = mkv({ codec: "av1", profile: "Main", pixelFormat: "yuv420p" });
+  assert.equal(manager.directPlay({ url: "https://cdn.example/a.mkv" }, av1, caps).ok, true);
+  assert.equal(manager.directPlay({ url: "https://cdn.example/a.mkv" }, mkv({ codec: "av1", profile: "Main", pixelFormat: "yuv420p10le" }), caps).ok, false);
+});
+
+test("a native client never gets 4:2:2 or 4:4:4 video directly, nor copied into a remux", async () => {
+  const manager = new PlaybackManager(tmp("test-native-chroma")) as any;
+  const caps = { ...nativeCaps, deepColor: ["h264"] };
+  manager.inspect = async () => nativeInfo({ video: { codec: "h264", profile: "High 4:2:2", pixelFormat: "yuv422p10le" } });
+  manager.spawnAt = async (session: any, time: number) => { session.offset = time; session.mode = manager.plan(session).copyVideo ? "remux" : "transcode"; return "/hls"; };
+
+  const started = await manager.start({ url: "https://cdn.example/movie.mkv" }, caps);
+
+  assert.equal(started.mode, "transcode");
+  assert.equal(started.copy?.video, false);
+});
+
 test("a native client that does not declare mkv does not play an mkv directly", async () => {
   const manager = new PlaybackManager(tmp("test-native-container")) as any;
   manager.inspect = async () => nativeInfo();
