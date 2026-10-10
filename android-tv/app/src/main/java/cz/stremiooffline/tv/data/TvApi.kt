@@ -49,4 +49,16 @@ interface TvApi : LibraryApi, DetailApi, PlaybackApi, CatalogApi, HomeApi, Downl
   val http: OkHttpClient
   fun url(path: String): String
   suspend fun librarySource(path: String): SourceDto
+
+  /** The addon subtitles offered for one catalogue title or episode. */
+  suspend fun subtitles(type: String, id: String): List<AddonSubtitleDto>
+
+  /** One subtitle as WebVTT, shifted by `offset` and `delay` the way the web asks for it. */
+  suspend fun subtitleText(id: String, offset: Double, delay: Double): String?
+
+  /** The next library file after this source, or null when there is none. */
+  suspend fun libraryNext(sourceId: String): NextFileDto?
+
+  /** One poll of the sidecar URL the descriptor named, at the current position and delay. */
+  suspend fun sidecar(url: String, position: Double, delay: Double): SidecarFetch?
 }

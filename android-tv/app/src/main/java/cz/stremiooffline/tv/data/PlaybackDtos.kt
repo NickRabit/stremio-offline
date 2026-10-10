@@ -31,6 +31,29 @@ data class ClientCapabilitiesDto(
 @Serializable
 data class SourceDto(val sourceId: String = "", val kind: String? = null, val playable: Boolean = true)
 
+/** One addon subtitle offered for a catalogue title (`GET /api/subtitles/:type/:id`). */
+@Serializable
+data class AddonSubtitleDto(
+  val subtitleId: String = "",
+  val lang: String? = null,
+  val addonName: String? = null,
+)
+
+/** The library neighbour `GET /api/library/next/:sourceId` answers with, or null. */
+@Serializable
+data class NextFileDto(val path: String = "", val title: String = "")
+
+/** One `POST /api/playback/:id/track` change, with the absolute position it applies at. */
+sealed interface TrackChange {
+  val time: Double
+  data class Audio(val index: Int, override val time: Double) : TrackChange
+  /** A null index asks the server for Off. */
+  data class Subtitle(val index: Int?, override val time: Double) : TrackChange
+}
+
+/** One read of the progressively written sidecar: its WebVTT plus how far it reaches. */
+data class SidecarFetch(val text: String, val complete: Boolean, val coverage: Double)
+
 @Serializable
 data class CopyDto(val video: Boolean = true, val audio: Boolean = true)
 
@@ -47,5 +70,15 @@ data class PlaybackDescriptorDto(
   val seekRestored: Boolean = false,
   val audioTracks: List<JsonObject> = emptyList(),
   val audioTrack: Int = 0,
+  val subtitleTracks: List<JsonObject> = emptyList(),
+  /** The server's chosen embedded subtitle, or null when it chose Off. */
+  val subtitleTrack: Int? = null,
+  /** The progressively written WebVTT the server reads beside the picture, when it renders it. */
+  val sidecarUrl: String? = null,
+  /** The codecs of the chosen streams, for the diagnostics panel. */
+  val video: String? = null,
+  val audio: String? = null,
   val copy: CopyDto? = null,
+  /** `POST /api/playback` maps each offered addon subtitle id to the id this session must use. */
+  val subtitleIds: Map<String, String> = emptyMap(),
 )
