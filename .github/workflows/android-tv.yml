@@ -1,0 +1,32 @@
+# The Android TV project is a separate Gradle build, so it is left out of the
+# Node jobs in ci.yml and gets its own run. The paths filter keeps it off pull
+# requests that touch nothing here; package.json is in the list because the
+# app's versionName and versionCode are read from it.
+name: Android TV
+
+on:
+  pull_request:
+    paths: ["android-tv/**", ".github/workflows/android-tv.yml", "package.json"]
+  push:
+    branches: [main]
+    paths: ["android-tv/**", ".github/workflows/android-tv.yml", "package.json"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+      - uses: android-actions/setup-android@v3
+        with:
+          # The default list still names the retired `tools` package, which sdkmanager now refuses.
+          packages: platform-tools platforms;android-35 build-tools;35.0.0
+      - run: ./gradlew assembleDebug testDebugUnitTest lintDebug --no-daemon
+        working-directory: android-tv

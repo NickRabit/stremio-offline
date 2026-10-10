@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="app_name">Stremio Offline</string>
+  <string name="auth_brand_eyebrow">HOME MEDIA LIBRARY</string>
+  <string name="auth_username">Username</string>
+  <string name="auth_password">Password</string>
+  <string name="auth_sign_in">Sign in</string>
+  <string name="auth_sign_out">Sign out</string>
+  <string name="auth_signed_in_as">Signed in as %1$s</string>
+  <string name="nav_home">Home</string>
+  <string name="nav_catalog">Catalog</string>
+  <string name="nav_library">Library</string>
+  <string name="nav_settings">Settings</string>
+  <string name="tv_nav_search">Search</string>
+  <string name="tv_connect_title">Connect to your server</string>
+  <string name="tv_server_address">Server address</string>
+  <string name="tv_server_found">Stremio Offline %1$s</string>
+  <string name="tv_signin_note">Accounts and the first administrator are set up in the web interface. The password is never stored on the television.</string>
+  <string name="tv_err_unreachable">The server is not answering. Check the address and that the server is running.</string>
+  <string name="tv_err_incompatible">This address answers, but it is not a Stremio Offline server.</string>
+  <string name="tv_err_bad_credentials">Wrong username or password.</string>
+  <string name="tv_err_too_many">Too many failed attempts. Try again in %1$d s.</string>
+  <string name="tv_err_needs_setup">This server has no account yet. Create the first one in the web interface.</string>
+  <string name="tv_err_must_change_password">Change your password in the web interface first, then sign in here.</string>
+  <string name="tv_err_session_expired">Your sign-in has expired. Sign in again.</string>
+  <string name="tv_err_generic">Something went wrong. Try again.</string>
+  <string name="tv_offline_title">Can\'t reach the server</string>
+  <string name="tv_offline_text">%1$s stopped answering.</string>
+  <string name="tv_try_again">Try again</string>
+  <string name="tv_change_server">Change server</string>
+  <string name="tv_back_to_exit">Press Back again to leave</string>
+  <string name="tv_placeholder_title">Coming in the next release</string>
+  <string name="tv_placeholder_action">Back to Home</string>
+</resources>

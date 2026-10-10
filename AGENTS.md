@@ -83,6 +83,7 @@ endpoint `/api/status`, which must return `{"status":"ok",…}`.
 | Accounts, roles and per-user access | [docs/users.md](docs/users.md) |
 | Dialogs, form controls, safe areas, folding toolbars | [docs/ui-conventions.md](docs/ui-conventions.md) |
 | Licences of what is distributed (FFmpeg, bundled packages) | [docs/licensing.md](docs/licensing.md) |
+| Android TV client: machine setup, build, emulator | [docs/android-tv-development.md](docs/android-tv-development.md) |
 | Contributor workflow | [CONTRIBUTING.md](CONTRIBUTING.md) |
 
 Some working documents are deliberately untracked (see `.gitignore`). Read them
