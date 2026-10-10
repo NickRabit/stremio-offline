@@ -99,6 +99,9 @@
   <string name="home_empty_text">Baixe algo ou comece a assistir e aparecerá aqui.</string>
   <string name="tv_home_load_error">Não foi possível carregar a página inicial.</string>
   <string name="tv_downloads_later">A fila de downloads abre na web por enquanto.</string>
+  <string name="tv_my_list_empty">Os títulos que você marca com uma estrela aparecem aqui.</string>
   <string name="catalog_type_movie">filme</string>
   <string name="catalog_type_series">série</string>
+  <string name="catalog_my_list">Minha lista</string>
+  <string name="library_shelf_favorites">Favoritos</string>
 </resources>

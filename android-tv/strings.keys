@@ -92,5 +92,8 @@ home.emptyTitle
 home.emptyText
 tv.homeLoadError
 tv.downloadsLater
+tv.myListEmpty
 catalog.typeMovie
 catalog.typeSeries
+catalog.myList
+library.shelf.favorites

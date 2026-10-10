@@ -558,10 +558,7 @@ fun CatalogDetailScreen(
       verticalArrangement = Arrangement.spacedBy(9.dp),
     ) {
       Text(
-        stringResource(
-          if (isSeries) R.string.tv_detail_eyebrow_series else R.string.tv_detail_eyebrow_movie,
-          args.addonName,
-        ).uppercase(),
+        eyebrow(args.addonName, isSeries).uppercase(),
         color = Tokens.Accent,
         fontSize = 10.sp,
         fontWeight = FontWeight.Bold,
@@ -765,6 +762,15 @@ fun CatalogDetailScreen(
     }
   }
 }
+
+/** The type line over the title: `Movie · Cinemeta`, or just `Movie` for a title with no addon. */
+@Composable
+private fun eyebrow(addonName: String, series: Boolean): String =
+  if (addonName.isBlank()) {
+    stringResource(if (series) R.string.catalog_type_series else R.string.catalog_type_movie)
+  } else {
+    stringResource(if (series) R.string.tv_detail_eyebrow_series else R.string.tv_detail_eyebrow_movie, addonName)
+  }
 
 /** One offered stream: badge, addon, the stream's title and a size/language meta line. */
 @Composable

@@ -23,6 +23,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -46,6 +47,7 @@ import androidx.tv.material3.Text
 import coil.compose.AsyncImage
 import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.episodeCode
+import cz.stremiooffline.tv.data.ApiError
 import cz.stremiooffline.tv.data.BrowseItem
 import cz.stremiooffline.tv.data.ProgressDto
 import cz.stremiooffline.tv.playback.Progress
@@ -55,9 +57,12 @@ import cz.stremiooffline.tv.ui.components.FocusButtonKind
 import cz.stremiooffline.tv.ui.components.WideCard
 import cz.stremiooffline.tv.ui.theme.Tokens
 import java.util.Locale
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
 
 const val TagDetailPrimary = "detail_primary"
 const val TagDetailStartOver = "detail_start_over"
+const val TagDetailFavourite = "detail_favourite"
 const val TagDetailWatched = "detail_watched"
 
 /**
@@ -88,6 +93,8 @@ data class DetailData(
   val size: Double,
   val fileCount: Int,
   val files: List<BrowseItem.File>,
+  /** Whether the starred title itself is a favourite; the browse item carries it. */
+  val favorite: Boolean = false,
 ) {
   /** Re-reads the stored position of every file, so returning from the player shows the resume. */
   suspend fun refresh(progress: suspend (String) -> ProgressDto?): DetailData {
@@ -109,6 +116,7 @@ data class DetailData(
       size = folder.size,
       fileCount = folder.fileCount,
       files = files,
+      favorite = folder.favorite,
     )
 
     fun ofFile(file: BrowseItem.File) = DetailData(
@@ -121,6 +129,7 @@ data class DetailData(
       size = file.size,
       fileCount = 1,
       files = listOf(file),
+      favorite = file.favorite,
     )
   }
 }
@@ -136,14 +145,19 @@ fun DetailScreen(
   onPlay: (PlayTarget) -> Unit,
   onBack: () -> Unit,
   progress: suspend (String) -> ProgressDto?,
+  setFavorite: suspend (String, Boolean) -> Boolean = { _, wanted -> wanted },
   restoreToken: Int = 0,
   backEnabled: Boolean = true,
 ) {
   BackHandler(enabled = backEnabled) { onBack() }
+  val scope = rememberCoroutineScope()
 
   // The stored positions are re-read on every entry and when the player returns, so the detail
   // never keeps a stale "Play" after a title was watched.
   var current by remember { mutableStateOf(detail) }
+  // The star is optimistic and serialised the way the catalogue detail toggles the watchlist.
+  var favourite by remember(detail.gridPath) { mutableStateOf(detail.favorite) }
+  var favouriteBusy by remember(detail.gridPath) { mutableStateOf(false) }
   LaunchedEffect(detail.gridPath, restoreToken) {
     current = if (detail.files.isEmpty()) detail else detail.refresh(progress)
   }
@@ -157,6 +171,24 @@ fun DetailScreen(
   // The primary action takes focus on the first entry and again when the player closes.
   LaunchedEffect(current.gridPath, restoreToken) {
     runCatching { primaryFocus.requestFocus() }
+  }
+
+  fun toggleFavourite() {
+    if (favouriteBusy) return
+    favouriteBusy = true
+    val wanted = !favourite
+    favourite = wanted
+    scope.launch {
+      try {
+        favourite = setFavorite(detail.gridPath, wanted)
+      } catch (cancelled: CancellationException) {
+        throw cancelled
+      } catch (_: ApiError) {
+        favourite = !wanted
+      } finally {
+        favouriteBusy = false
+      }
+    }
   }
 
 
@@ -260,6 +292,13 @@ fun DetailScreen(
             modifier = Modifier.testTag(TagDetailStartOver),
           )
         }
+        FocusButton(
+          text = if (favourite) "★" else "☆",
+          onClick = { toggleFavourite() },
+          kind = FocusButtonKind.Icon,
+          contentDescription = stringResource(if (favourite) R.string.favorite_remove else R.string.favorite_add),
+          modifier = Modifier.testTag(TagDetailFavourite),
+        )
       }
       if (current.files.size > 1) {
         Spacer(Modifier.height(3.dp))

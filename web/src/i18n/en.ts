@@ -1609,4 +1609,5 @@ export const en = {
   "tv.searchHint": "Type a title, then press Done.",
   "tv.findingSources": "Finding sources…",
   "tv.playWhenReady": "Starting when sources are ready…",
+  "tv.myListEmpty": "Titles you star appear here.",
 };

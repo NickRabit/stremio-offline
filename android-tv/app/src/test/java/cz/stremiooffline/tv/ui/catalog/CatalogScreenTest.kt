@@ -3,17 +3,21 @@
 package cz.stremiooffline.tv.ui.catalog
 
 import android.content.Intent
+import android.content.Context
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.assertIsNotFocused
+import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.pressKey
@@ -22,9 +26,11 @@ import androidx.test.core.app.ApplicationProvider
 import cz.stremiooffline.tv.data.CatalogDto
 import cz.stremiooffline.tv.data.CatalogExtraDto
 import cz.stremiooffline.tv.data.MetaDto
+import cz.stremiooffline.tv.data.WatchlistEntryDto
 import cz.stremiooffline.tv.ui.FakeTvApi
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -40,6 +46,8 @@ class CatalogScreenTest {
 
   private lateinit var scenario: ActivityScenario<ComponentActivity>
   private var host: ComponentActivity? = null
+
+  private val context: Context get() = ApplicationProvider.getApplicationContext()
 
   @Before
   fun launchHost() {
@@ -62,19 +70,22 @@ class CatalogScreenTest {
 
   private fun meta(id: String, name: String = id, type: String = "movie") = MetaDto(id = id, type = type, name = name)
 
-  private fun mount(api: FakeTvApi) {
+  private fun mount(api: FakeTvApi, onOpenDetail: (CatalogDetailArgs) -> Unit = {}) {
     scenario.onActivity { activity ->
       host = activity
       activity.setContent {
         CatalogScreen(
           api = api,
-          onOpenDetail = {},
+          onOpenDetail = onOpenDetail,
           onOpenSearch = {},
           imageUrl = { null },
         )
       }
     }
   }
+
+  private fun watchlistEntry(id: String, name: String, type: String = "movie") =
+    WatchlistEntryDto(key = "$type:$id", type = type, id = id, name = name)
 
   // Every interaction goes through the remote: a key at the root reaches whatever holds focus.
   private fun press(key: Key) {
@@ -255,5 +266,134 @@ class CatalogScreenTest {
     press(Key.DirectionCenter)
     compose.onNodeWithTag(catalogOptionTag(0)).assertTextContains("(movie)", substring = true)
     compose.onNodeWithTag(catalogOptionTag(1)).assertTextContains("(series)", substring = true)
+  }
+
+  @Test
+  fun `the picker leads with My list and its count`() {
+    val api = FakeTvApi()
+    api.catalogsValue = listOf(feature("Open Movies"))
+    api.catalogPages["a"] = listOf(listOf(meta("ttA", name = "Alpha")))
+    api.watchlistValue = mutableListOf(watchlistEntry("a", "A"), watchlistEntry("b", "B", type = "series"))
+    mount(api)
+    compose.waitForIdle()
+
+    press(Key.DirectionCenter)
+
+    compose.onNodeWithTag(TagMyListOption).assertTextContains("★ My list (2)", substring = true)
+    val myListTop = compose.onNodeWithTag(TagMyListOption).getBoundsInRoot().top
+    val firstCatalogTop = compose.onNodeWithTag(catalogOptionTag(0)).getBoundsInRoot().top
+    assertTrue("My list is not above the first catalogue", myListTop < firstCatalogTop)
+  }
+
+  @Test
+  fun `choosing My list shows the watchlist titles and hides the genre chip`() {
+    val api = FakeTvApi()
+    api.catalogsValue = listOf(feature("Open Movies", genres = listOf("Action")))
+    api.catalogPages["a"] = listOf(listOf(meta("ttA", name = "Alpha")))
+    api.watchlistValue = mutableListOf(watchlistEntry("tt9", "Nine"))
+    mount(api)
+    compose.waitForIdle()
+
+    press(Key.DirectionCenter)
+    press(Key.DirectionUp)
+    compose.onNodeWithTag(TagMyListOption).assertIsFocused()
+    press(Key.DirectionCenter)
+
+    compose.onNodeWithTag(TagCatalogChip).assertTextContains("★ My list", substring = true)
+    compose.onNodeWithTag(posterTag(meta("tt9", name = "Nine"))).assertExists()
+    compose.onNodeWithTag(TagCatalogGenreChip).assertDoesNotExist()
+  }
+
+  @Test
+  fun `ok on a watchlist title opens the detail without an addon`() {
+    val api = FakeTvApi()
+    api.catalogsValue = listOf(feature("Open Movies"))
+    api.catalogPages["a"] = listOf(listOf(meta("ttA", name = "Alpha")))
+    api.watchlistValue = mutableListOf(watchlistEntry("tt9", "Nine"))
+    val opened = mutableListOf<CatalogDetailArgs>()
+    mount(api, onOpenDetail = { opened += it })
+    compose.waitForIdle()
+
+    press(Key.DirectionCenter)
+    press(Key.DirectionUp)
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(TagCatalogChip).assertTextContains("★ My list", substring = true)
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(posterTag(meta("tt9", name = "Nine"))).assertIsFocused()
+    press(Key.DirectionCenter)
+
+    assertEquals(1, opened.size)
+    assertEquals("tt9", opened[0].meta.id)
+    assertEquals("", opened[0].addonName)
+    assertEquals("movie", opened[0].type)
+  }
+
+  @Test
+  fun `an empty My list shows the watchlist empty text`() {
+    val api = FakeTvApi()
+    api.catalogsValue = listOf(feature("Open Movies"))
+    api.catalogPages["a"] = listOf(listOf(meta("ttA", name = "Alpha")))
+    mount(api)
+    compose.waitForIdle()
+
+    press(Key.DirectionCenter)
+    press(Key.DirectionUp)
+    press(Key.DirectionCenter)
+
+    compose.onNodeWithText(context.getString(cz.stremiooffline.tv.R.string.tv_my_list_empty)).assertExists()
+  }
+
+  @Test
+  fun `with no addon catalogues the picker still reaches My list`() {
+    val api = FakeTvApi()
+    api.catalogsValue = emptyList()
+    api.watchlistValue = mutableListOf(watchlistEntry("tt9", "Nine"))
+    mount(api)
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagCatalogChip).assertExists()
+    focusBy(TagCatalogChip, Key.DirectionRight)
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(TagMyListOption).assertIsFocused()
+    press(Key.DirectionCenter)
+
+    compose.onNodeWithTag(TagCatalogChip).assertTextContains("★ My list", substring = true)
+    compose.onNodeWithTag(posterTag(meta("tt9", name = "Nine"))).assertExists()
+  }
+
+  @Test
+  fun `an emptied My list on return moves focus to the catalogue chip`() {
+    val api = FakeTvApi()
+    api.catalogsValue = listOf(feature("Open Movies"))
+    api.catalogPages["a"] = listOf(listOf(meta("ttA", name = "Alpha")))
+    api.watchlistValue = mutableListOf(watchlistEntry("tt9", "Nine"))
+    val token = mutableIntStateOf(0)
+    scenario.onActivity { activity ->
+      host = activity
+      activity.setContent {
+        CatalogScreen(
+          api = api,
+          onOpenDetail = {},
+          onOpenSearch = {},
+          imageUrl = { null },
+          restoreToken = token.value,
+        )
+      }
+    }
+    compose.waitForIdle()
+
+    press(Key.DirectionCenter)
+    press(Key.DirectionUp)
+    press(Key.DirectionCenter)
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(posterTag(meta("tt9", name = "Nine"))).assertIsFocused()
+
+    // The detail unstars the last title and the shell brings the list back into view.
+    api.watchlistValue.clear()
+    token.value = 1
+    compose.waitForIdle()
+
+    compose.onNodeWithText(context.getString(cz.stremiooffline.tv.R.string.tv_my_list_empty)).assertExists()
+    compose.onNodeWithTag(TagCatalogChip).assertIsFocused()
   }
 }

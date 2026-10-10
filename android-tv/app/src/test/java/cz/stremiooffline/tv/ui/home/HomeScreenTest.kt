@@ -589,4 +589,59 @@ class HomeScreenTest {
 
     assertEquals(context.getString(R.string.tv_downloads_later), hint)
   }
+
+  @Test
+  fun `the Favourites row renders its items in the server's order`() {
+    val api = FakeTvApi()
+    serve(
+      api,
+      order("favorites"),
+      mapOf(
+        "favorites" to row(
+          HomeCard.Favorite(key = "file:a", path = "browse/A.mkv", label = "A"),
+          HomeCard.Favorite(key = "file:b", path = "browse/B.mkv", label = "B"),
+        ),
+      ),
+    )
+    mount(api)
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(homeCardTag("file:a")).assertIsFocused()
+    compose.onNodeWithTag(TagBackdropTitle).assertTextEquals("A")
+    compose.onNodeWithTag(homeCardTag("file:a")).performKeyInput { pressKey(Key.DirectionRight) }
+    compose.waitForIdle()
+    compose.onNodeWithTag(homeCardTag("file:b")).assertIsFocused()
+    compose.onNodeWithTag(TagBackdropTitle).assertTextEquals("B")
+  }
+
+  @Test
+  fun `a favourites row of folders shows each folder's artwork`() {
+    val urls = mutableListOf<String>()
+    val api = object : FakeTvApi() {
+      override fun url(path: String): String {
+        urls += path
+        return super.url(path)
+      }
+    }
+    serve(
+      api,
+      order("favorites"),
+      mapOf(
+        "favorites" to row(
+          HomeCard.Favorite(
+            key = "folder:f",
+            path = "browse/Films",
+            itemKind = "folder",
+            label = "Films",
+            poster = "lib_1/Films/cover.jpg",
+          ),
+        ),
+      ),
+    )
+    mount(api)
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(homeCardTag("folder:f")).assertIsFocused()
+    assertTrue("the folder poster was not resolved: $urls", "lib_1/Films/cover.jpg" in urls)
+  }
 }

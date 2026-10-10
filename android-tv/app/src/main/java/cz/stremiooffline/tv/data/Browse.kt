@@ -9,6 +9,10 @@ import kotlinx.serialization.json.JsonObject
 @Serializable
 data class ProgressDto(val position: Double = 0.0, val duration: Double = 0.0)
 
+/** The answer of `POST /api/library/favorite`: the path and the state the server stored. */
+@Serializable
+data class FavoriteToggleDto(val path: String = "", val favorite: Boolean = false)
+
 /** One row of `GET /api/library/browse`. The server tags every item with `kind`. */
 @Serializable
 sealed class BrowseItem {
@@ -42,6 +46,7 @@ sealed class BrowseItem {
     val description: String? = null,
     val catalogName: String? = null,
     val posters: List<String>? = null,
+    val favorite: Boolean = false,
     override val poster: String? = null,
     override val wide: String? = null,
   ) : BrowseItem()
@@ -58,6 +63,7 @@ sealed class BrowseItem {
     val description: String? = null,
     val catalogName: String? = null,
     val progress: ProgressDto? = null,
+    val favorite: Boolean = false,
     override val poster: String? = null,
     override val wide: String? = null,
   ) : BrowseItem()

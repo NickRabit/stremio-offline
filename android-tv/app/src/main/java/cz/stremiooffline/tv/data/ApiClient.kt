@@ -134,6 +134,20 @@ class ApiClient(
       .decode<SourceDto>() ?: throw ApiError(ApiFailure.Generic)
   }
 
+  /** One page of the library's Favourites view. */
+  override suspend fun favorites(limit: Int, skip: Int): BrowseResult {
+    val page = request(Request.Builder().url(address.resolve("/api/library/favorites?limit=$limit&skip=$skip")).get().build())
+      .decode<BrowsePage>() ?: throw ApiError(ApiFailure.Generic)
+    return BrowseResult(page.path, browseItems(page), page.total, page.pending)
+  }
+
+  /** Stars or unstars a library file or folder. */
+  override suspend fun setFavorite(path: String, favorite: Boolean): FavoriteToggleDto {
+    val payload = json.encodeToString(FavoriteRequest.serializer(), FavoriteRequest(path, favorite))
+    return request(Request.Builder().url(address.resolve("/api/library/favorite")).post(payload.toRequestBody(mediaType)).build())
+      .decode() ?: FavoriteToggleDto(path, favorite)
+  }
+
   override suspend fun startPlayback(sourceId: String, capabilities: ClientCapabilitiesDto, time: Double): PlaybackDescriptorDto {
     val payload = json.encodeToString(
       PlaybackStartRequest.serializer(),
@@ -322,6 +336,9 @@ class ApiClient(
 
 @Serializable
 private data class SourceRequest(val path: String)
+
+@Serializable
+private data class FavoriteRequest(val path: String, val favorite: Boolean)
 
 @Serializable
 private data class WatchlistRequest(

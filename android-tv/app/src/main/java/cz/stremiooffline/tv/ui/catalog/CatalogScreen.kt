@@ -38,6 +38,7 @@ const val TagCatalogChip = "catalog_chip_catalog"
 const val TagCatalogGenreChip = "catalog_chip_genre"
 const val TagCatalogRetry = "catalog_retry"
 const val TagCatalogPanel = "catalog_panel"
+const val TagMyListOption = "catalog_option_my_list"
 
 fun catalogOptionTag(index: Int): String = "catalog_option_$index"
 fun genreOptionTag(index: Int): String = "genre_option_$index"
@@ -94,7 +95,14 @@ fun CatalogScreen(
     }
   }
   LaunchedEffect(restoreToken) {
-    if (restoreToken > 0 && state.items.isNotEmpty()) runCatching { gridFocus.requestFocus() }
+    if (restoreToken == 0) return@LaunchedEffect
+    // A star toggled in the detail changes the list and its count.
+    viewModel.refreshWatchlist()
+    val fresh = viewModel.state
+    when {
+      fresh.onWatchlist && fresh.items.isEmpty() -> runCatching { catalogFocus.requestFocus() }
+      fresh.items.isNotEmpty() -> runCatching { gridFocus.requestFocus() }
+    }
   }
 
   Box(modifier.fillMaxSize()) {
@@ -123,19 +131,18 @@ fun CatalogScreen(
           modifier = Modifier.focusRequester(searchFocus).testTag(TagCatalogSearchChip),
         )
         val catalog = state.current
-        if (catalog != null) {
+        // The picker always leads with My list, so its chip is drawn even with no addon catalogues.
+        FocusButton(
+          text = if (state.onWatchlist || catalog == null) "★ ${stringResource(R.string.catalog_my_list)}" else catalogText(catalog),
+          onClick = { panelOpener = catalogFocus; panel = CatalogPanel.Catalogs },
+          modifier = Modifier.focusRequester(catalogFocus).testTag(TagCatalogChip),
+        )
+        if (state.genres.isNotEmpty()) {
           FocusButton(
-            text = catalogText(catalog),
-            onClick = { panelOpener = catalogFocus; panel = CatalogPanel.Catalogs },
-            modifier = Modifier.focusRequester(catalogFocus).testTag(TagCatalogChip),
+            text = state.genre.ifEmpty { stringResource(R.string.catalog_all_genres) },
+            onClick = { panelOpener = genreFocus; panel = CatalogPanel.Genres },
+            modifier = Modifier.focusRequester(genreFocus).testTag(TagCatalogGenreChip),
           )
-          if (state.genres.isNotEmpty()) {
-            FocusButton(
-              text = state.genre.ifEmpty { stringResource(R.string.catalog_all_genres) },
-              onClick = { panelOpener = genreFocus; panel = CatalogPanel.Genres },
-              modifier = Modifier.focusRequester(genreFocus).testTag(TagCatalogGenreChip),
-            )
-          }
         }
       }
 
@@ -143,16 +150,20 @@ fun CatalogScreen(
         when {
           state.loading -> ShimmerCards()
           state.error -> CatalogError(onRetry = { viewModel.retry() })
+          state.onWatchlist && state.items.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text(stringResource(R.string.tv_my_list_empty), color = Tokens.Muted, fontSize = 12.sp)
+          }
           else -> PosterGrid(
             items = state.items,
             imageUrl = imageUrl,
             onOpen = { item ->
+              val onList = state.onWatchlist
               onOpenDetail(
                 CatalogDetailArgs(
                   item,
-                  state.current?.addonName.orEmpty(),
+                  if (onList) "" else state.current?.addonName.orEmpty(),
                   item.type ?: state.current?.type ?: "movie",
-                  addonKey = state.current?.addonKey,
+                  addonKey = if (onList) null else state.current?.addonKey,
                 ),
               )
             },
@@ -174,6 +185,14 @@ fun CatalogScreen(
           modifier = Modifier.testTag(TagCatalogPanel),
           initialFocus = entry,
         ) {
+          PanelOption(
+            text = "★ " + stringResource(R.string.catalog_my_list) + " (${state.watchlistCount})",
+            selected = state.onWatchlist,
+            onClick = { viewModel.selectWatchlist(); closePanel() },
+            modifier = Modifier
+              .testTag(TagMyListOption)
+              .then(if (state.onWatchlist || state.catalogs.isEmpty()) Modifier.focusRequester(entry) else Modifier),
+          )
           state.catalogs.forEachIndexed { index, catalog ->
             PanelOption(
               text = catalogText(catalog),
@@ -181,7 +200,7 @@ fun CatalogScreen(
               onClick = { viewModel.select(index); closePanel() },
               modifier = Modifier
                 .testTag(catalogOptionTag(index))
-                .then(if (index == focusIndex) Modifier.focusRequester(entry) else Modifier),
+                .then(if (!state.onWatchlist && index == focusIndex) Modifier.focusRequester(entry) else Modifier),
             )
           }
         }

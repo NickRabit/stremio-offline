@@ -1552,4 +1552,5 @@ export const pl: Catalog = {
   "tv.searchHint": "Wpisz tytuł i naciśnij Gotowe.",
   "tv.findingSources": "Szukam źródeł…",
   "tv.playWhenReady": "Uruchomię, gdy źródła będą gotowe…",
+  "tv.myListEmpty": "Tytuły oznaczone gwiazdką pojawią się tutaj.",
 };

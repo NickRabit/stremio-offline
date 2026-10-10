@@ -127,6 +127,34 @@ class ApiClientTest {
   }
 
   @Test
+  fun `favourite posts the path and the wanted state`() = runTest {
+    server.enqueue(MockResponse().setBody("""{"path":"lib_1/Films/It.mkv","favorite":true}"""))
+    val result = client(start()).setFavorite("lib_1/Films/It.mkv", true)
+
+    val request = server.takeRequest()
+    assertEquals("/api/library/favorite", request.path)
+    assertEquals("POST", request.method)
+    val body = request.body.readUtf8()
+    assertTrue(body, body.contains("\"path\":\"lib_1/Films/It.mkv\""))
+    assertTrue(body, body.contains("\"favorite\":true"))
+    assertEquals(true, result.favorite)
+  }
+
+  @Test
+  fun `favorites asks the library favourites route and reads the star`() = runTest {
+    server.enqueue(
+      MockResponse().setBody(
+        """{"path":":favorites","items":[{"kind":"file","path":"lib_1/It.mkv","label":"It","favorite":true}],"total":1,"pending":false}"""
+      )
+    )
+    val result = client(start()).favorites()
+
+    assertEquals("/api/library/favorites?limit=60&skip=0", server.takeRequest().path)
+    assertEquals(":favorites", result.path)
+    assertTrue((result.items.single() as BrowseItem.File).favorite)
+  }
+
+  @Test
   fun `a relative url resolves under the configured prefix`() {
     val address = ServerAddress.parse("http://nas:8090/stremio")!!
     val api = ApiClient(address, CookieStore(address.origin, Memory()))

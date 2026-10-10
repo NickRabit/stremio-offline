@@ -910,4 +910,15 @@ class CatalogDetailTest {
     assertEquals(listOf("s1"), played.map { it.sourceId })
     compose.onNodeWithTag(TagCatalogChosenSource).assertDoesNotExist()
   }
+
+  @Test
+  fun `a title with no addon name shows the type alone in the eyebrow`() {
+    val api = FakeTvApi()
+    api.settingsValue = settings()
+    api.streamsValues["movie:tt1"] = listOf(stream("s1", name = "FullHD"))
+    mount(api, CatalogDetailArgs(MetaDto(id = "tt1", type = "movie", name = "It"), "", "movie"))
+    compose.waitForIdle()
+
+    compose.onNodeWithText("MOVIE").assertExists()
+  }
 }

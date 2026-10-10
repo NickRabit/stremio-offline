@@ -1552,4 +1552,5 @@ export const sk: Catalog = {
   "tv.searchHint": "Napíšte názov a stlačte Hotovo.",
   "tv.findingSources": "Hľadám zdroje…",
   "tv.playWhenReady": "Spustím, keď budú zdroje načítané…",
+  "tv.myListEmpty": "Tituly označené hviezdičkou nájdete tu.",
 };
