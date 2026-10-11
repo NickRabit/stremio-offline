@@ -24,7 +24,7 @@ metadata store, or scheduler for each platform.
 | Order | Current opportunity | What remains |
 | --- | --- | --- |
 | 1 | Family home and kids mode | A child-specific interface and policy enforced by server routes; the adult account and Home are not a parental boundary. |
-| 2 | Personal Home layout | Let each account choose built-in row order and visibility. The current order is fixed; addon catalog feeds can already be selected. |
+| 2 | Personal Home layout — **done** | Each account now arranges its own Home: which rows show, their order, and extra catalogue feeds from the addons it may use. The instance's Show on Home switches stay the default. |
 | 3 | Guided library split | Offer the documented carve-out and folder-change path as a guided flow from the library manager. |
 | 4 | Queue controls | Optional quiet hours, aggregate speed limit, and a completion notice; current download limits cover concurrency, not these controls. |
 | 5 | Library bulk rename | Rename by pattern after the remaining destructive-operation recovery boundaries are established. |
@@ -99,7 +99,8 @@ Shipped in `main`; implementation details live in the linked guides.
 - **Home**: the queue, Continue watching, new episodes, Ready to play, Recently
   added, Tonight, Favourites and the titles waiting for a match on one page;
   selected add-on catalog feeds have their own lazy-loaded carousels. The
-  account can choose its start page, while built-in row order remains fixed.
+  account can choose its start page, arrange which rows show and in what order,
+  and add catalogue feeds from the addons it may use.
   Compact navigation has five slots and a More menu on phones and short
   landscape screens. [Home page](home-spec.md).
 - **Statistics and diagnostics**: traffic by source, active streams, admin
@@ -143,12 +144,13 @@ episode without adult help, documentation or recovery through browser controls.
 The adult Home page is built (see [Home page](home-spec.md)): Downloads,
 Continue watching, New episodes, Ready to play, Recently added, Tonight,
 Favourites and, for administrators, To confirm, beside the catalogue and the
-library. Each library and add-on has a **Show on Home** switch, and each account
-chooses its start page (Catalogue unless it says otherwise). What is left:
+library. Each library and add-on has a **Show on Home** switch, each account
+chooses its start page (Catalogue unless it says otherwise), and each account
+arranges its own Home: which rows show, their order, and extra catalogue feeds
+from the addons it may use. What is left:
 
-- the built-in row order is fixed and rows cannot yet be hidden per account;
-- configurable Home carousels for selected catalog feeds from enabled add-ons
-  are implemented;
+- the instance's **Show on Home** switches and catalogue selection stay the
+  default every account starts from;
 - consider a one-tap action for a missing next episode and a Home view of
   today's releases. Following already has its own release calendar, so this is
   a Home convenience rather than missing calendar infrastructure;

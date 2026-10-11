@@ -218,7 +218,7 @@ export function App() {
   const [languages, setLanguages] = useState<Array<{ code: string; name: string }>>([]);
   const [inspection, setInspection] = useState<Inspection | null>(null);
   const [session, setSession] = useState<Session | null | undefined>(undefined);
-  const home = useHome({ active: view === "home", account: session?.username ?? null, admin: session?.role === "admin", addons, playerOpen });
+  const home = useHome({ active: view === "home", account: session?.username ?? null, admin: session?.role === "admin", playerOpen });
   const [resumePreview, setResumePreview] = useState<BrowseResult | null>(null);
   const [favoritePreview, setFavoritePreview] = useState<BrowseResult | null>(null);
   const [browse, setBrowse] = useState<BrowseResult | null>(null);
@@ -1198,7 +1198,11 @@ export function App() {
 
   const saveSettings = async (patch: SettingsPatch) => {
     const { realDebridToken: _token, tmdbApiKey: _apiKey, ...rest } = patch;
-    if (Object.keys(rest).length) setSettings((current: AppSettings) => ({ ...current, ...rest }));
+    // Clearing the Home layout is stored as its absence, so the optimistic state drops the
+    // key rather than carry a `null` the `Settings` shape does not allow.
+    const optimistic = { ...rest } as Partial<AppSettings>;
+    if (optimistic.homeLayout === null) delete optimistic.homeLayout;
+    if (Object.keys(optimistic).length) setSettings((current: AppSettings) => ({ ...current, ...optimistic }));
     try { const saved = await api.updateSettings(patch); setSettings((current: AppSettings) => ({ ...current, ...saved })); notify(t("settings.saved")); } catch (e) { fail(e); }
   };
   // An empty path with more than one library configured is the library list; a
@@ -2034,7 +2038,7 @@ export function App() {
     </nav><div className="sidebar-bottom"><button className="sidebar-toggle" onClick={toggleSidebar} title={t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")} aria-label={t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")}>{sidebarCollapsed ? <PanelLeftOpen/> : <PanelLeftClose/>}<span>{t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")}</span></button><div className="addon-status"><small>{t("app.activeAddons")}</small><strong>{addons.filter((a) => a.enabled).length}</strong><span>{t("app.catalogsAndSources")}</span></div></div></aside>
     <main className={`view-${view}`}>
       {view === "home" && !restricted && <Home jobs={downloads} addons={addons} libraries={libraries} onShowDownloads={() => openView("downloads")} onAction={homeAction} admin={admin}
-        rows={home.rows} shape={settings.homeTileShape} onToggleShape={() => void toggleShape("homeTileShape")}
+        rows={home.rows} order={home.order} shape={settings.homeTileShape} onToggleShape={() => void toggleShape("homeTileShape")}
         onRetry={(row) => home.refresh([row])} onShowAll={homeShowAll} onPlay={homePlay} onOpenCatalogue={homeOpen}
         onShuffle={(row, shuffle) => home.refresh([row], { shuffle })} onVisible={home.reveal} onOpenCatalog={(row) => { const pick = parseHomeCatalogRowId(row); if (pick) resetCatalog(pick); }}
         onReveal={revealInLibrary} onForgotten={() => home.refresh(["resume"])} onError={fail}/>}

@@ -25,6 +25,17 @@ export function homeCatalogTargets(addons: AddonRecord[]): HomeCatalogTarget[] {
   return targets;
 }
 
+/** Every catalogue a usable addon offers, whatever its Home switches say: the personal layout
+ *  may add any of them for itself. Only a disabled addon is left out here. */
+export function homeCatalogOfferings(addons: AddonRecord[]): HomeCatalogTarget[] {
+  const targets: HomeCatalogTarget[] = [];
+  for (const addon of addons) {
+    if (!addon.enabled) continue;
+    for (const definition of addon.manifest.catalogs ?? []) targets.push({ addon, definition });
+  }
+  return targets;
+}
+
 /** The extras a catalogue refuses to answer without: `skip` starts at zero, anything else
  *  takes its first declared option. */
 export function homeCatalogExtras(definition: CatalogDefinition): Record<string, string | number> {

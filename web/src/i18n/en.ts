@@ -1175,6 +1175,17 @@ export const en = {
   "settings.imported": "Settings and addons imported.",
   "settings.importRemapped": { one: "1 save rule was pointed at this instance's libraries.", other: "{count} save rules were pointed at this instance's libraries." },
   "settings.saveSettings": "Save settings",
+  "settings.homeTitle": "Home",
+  "settings.homeText": "Your rows and catalogue feeds, in your order.",
+  "settings.homeMoveUp": "Move {row} up",
+  "settings.homeMoveDown": "Move {row} down",
+  "settings.homeShowRow": "Show {row}",
+  "settings.homeRemove": "Remove {row}",
+  "settings.homeAddCatalog": "Add a catalogue",
+  "settings.homeAddCatalogHint": "Catalogues from the addons you may use that are not on your Home yet.",
+  "settings.homeAdd": "Add",
+  "settings.homeAddRow": "Add {row}",
+  "settings.homeReset": "Reset to default",
 
   // Real-Debrid.
   "debrid.title": "Real-Debrid",
@@ -1275,6 +1286,7 @@ export const en = {
   // stands in for anything not listed here.
   "err.restricted": "This instance is in restricted mode.",
   "err.notAllowed": "This account may not do that.",
+  "err.homeLayoutShape": "A Home layout must list an order, the hidden rows and the feeds.",
   "err.lastAdmin": "The last administrator cannot be removed.",
   "err.libraryNotWritable": "The library cannot be written to.",
   "err.invalidDownloadTarget": "Invalid download destination.",

@@ -4,17 +4,13 @@ import { createRoot, type Root } from "react-dom/client";
 import { api } from "./api";
 import { useHome } from "./useHome";
 import { homeCatalogRowId, type HomeResponse, type HomeRowId } from "../../server/src/home";
-import type { Addon } from "./types";
 
-const addon = { key: "cinemeta", role: "catalog", enabled: true, globalSearch: true, showOnHome: true,
-  manifest: { id: "c", name: "Cinemeta", version: "1", catalogs: [{ type: "movie", id: "top" }, { type: "series", id: "top" }] } } as unknown as Addon;
 const movie = homeCatalogRowId("cinemeta", "movie", "top");
 const series = homeCatalogRowId("cinemeta", "series", "top");
-const addons = [addon];
 
 let root: Root;
 let hook: ReturnType<typeof useHome>;
-const Probe = () => { hook = useHome({ active: true, account: "alice", admin: false, addons, playerOpen: false }); return null; };
+const Probe = () => { hook = useHome({ active: true, account: "alice", admin: false, playerOpen: false }); return null; };
 
 const answer = (rows: readonly HomeRowId[], partial: ReadonlySet<HomeRowId> = new Set()): HomeResponse => ({
   generatedAt: "", order: [], rows: Object.fromEntries(rows.map((row) => [row, { status: "ok", items: [], hasMore: false, ...(partial.has(row) ? { partial: true } : {}) }])),

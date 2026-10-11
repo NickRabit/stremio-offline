@@ -195,9 +195,16 @@ test("the personal settings are the keys PERSONAL_SETTINGS names, both ways roun
   const prefs = defaultPrefs();
   const keys = Object.keys(prefs).sort();
   const listed = [...PERSONAL_SETTINGS].sort();
-  assert.deepEqual(keys, listed);
+  // `homeLayout` is personal but has no default: an account that never arranged its Home
+  // keeps the instance's, so it is absent from `defaultPrefs()` until the person writes one.
+  const optional: string[] = ["homeLayout"];
+  assert.deepEqual([...new Set([...keys, ...optional])].sort(), listed);
+  const defaults = new Set(keys);
   for (const key of PERSONAL_SETTINGS) {
-    assert.ok(key in prefs, `${key} is treated as personal but has no default`);
+    if (!defaults.has(key)) {
+      assert.ok(optional.includes(key), `${key} is treated as personal but has no default`);
+      continue;
+    }
     assert.equal(key in defaultInstanceSettings(), false, `${key} belongs to a person, not to the instance`);
   }
 });

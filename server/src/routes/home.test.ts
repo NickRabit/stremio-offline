@@ -17,7 +17,7 @@ import { ResourceError } from "../media-resources.js";
 import type { Store, UserPrefs } from "../store.js";
 import { emptyUserData, type UserData, type UserRecord } from "../users.js";
 import type { AddonRecord, MetaItem } from "../types.js";
-import { homeCatalogRowId } from "../home.js";
+import { homeCatalogRowId, homeFeedSelectionKey } from "../home.js";
 import { registerPersonalRoutes, type PersonalDeps } from "./personal.js";
 import { registerHomeRoutes, type CompletedJobView, type HomeDeps } from "./home.js";
 
@@ -1065,4 +1065,163 @@ test("the recent row is bounded to twenty and reports hasMore", async (t) => {
   assert.equal(rows.recent!.items.length, 20);
   assert.equal(rows.recent!.hasMore, true);
   assert.equal(rows.recent!.items[0]!.addedAt, "2024-03-01T00:00:00.000Z");
+});
+
+const cinemeta = (over: Partial<AddonRecord> = {}): AddonRecord => ({
+  key: "cinemeta", manifestUrl: "https://cinemeta/manifest.json", role: "catalog", enabled: true,
+  globalSearch: true, showOnHome: true, addedAt: "", allowedUsers: [ALICE],
+  manifest: { id: "com.linvo.cinemeta", name: "Cinemeta", version: "1", catalogs: [
+    { type: "movie", id: "top", name: "Popular" },
+    { type: "series", id: "top", name: "Top series" },
+  ] },
+  ...over,
+} as AddonRecord);
+
+const layoutOf = (harness: Harness, user: string) =>
+  (harness.data(user).prefs.homeLayout ?? { order: [], hidden: [], feeds: [] }) as { order: string[]; hidden: string[]; feeds: string[] };
+
+test("a Home with no layout keeps today's order and builds the default rows", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  harness.addons.push(cinemeta());
+  const movie = homeCatalogRowId("cinemeta", "movie", "top");
+  const series = homeCatalogRowId("cinemeta", "series", "top");
+
+  const body = await (await api(harness.base, "/api/home", ALICE)).json() as { order: Array<{ id: string }>; rows: Record<string, unknown> };
+  assert.deepEqual(body.order.map((entry) => entry.id),
+    ["resume", "favorites", "tonight", movie, series, "episodes", "completed", "recent"]);
+  assert.deepEqual(Object.keys(body.rows).sort(),
+    ["completed", "episodes", "favorites", movie, "recent", "resume", series, "tonight"].sort());
+});
+
+test("Home draws the account's saved row order", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  harness.addons.push(cinemeta());
+  const movie = homeCatalogRowId("cinemeta", "movie", "top");
+  const series = homeCatalogRowId("cinemeta", "series", "top");
+  const defaultOrder = ["resume", "favorites", "tonight", movie, series, "episodes", "completed", "recent"];
+  harness.data(ALICE).prefs.homeLayout = { order: [...defaultOrder].reverse(), hidden: [], feeds: [] };
+
+  const body = await (await api(harness.base, "/api/home", ALICE)).json() as { order: Array<{ id: string }> };
+  assert.deepEqual(body.order.map((entry) => entry.id), [...defaultOrder].reverse());
+});
+
+test("a built-in row the account never placed keeps its default place", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  // A layout saved before `recent` existed names neither `recent` nor `confirm`.
+  harness.data(ALICE).prefs.homeLayout = { order: ["tonight", "resume", "favorites", "episodes", "completed"], hidden: [], feeds: [] };
+
+  const body = await (await api(harness.base, "/api/home", ALICE)).json() as { order: Array<{ id: string }> };
+  assert.deepEqual(body.order.map((entry) => entry.id),
+    ["tonight", "resume", "favorites", "episodes", "completed", "recent"],
+    "recent slots in after the rows it normally follows");
+});
+
+test("a hidden row is neither built nor asked of its addon", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  harness.addons.push(cinemeta());
+  const movie = homeCatalogRowId("cinemeta", "movie", "top");
+  const series = homeCatalogRowId("cinemeta", "series", "top");
+  harness.data(ALICE).prefs.homeLayout = { order: [], hidden: [movie], feeds: [] };
+
+  const body = await (await api(harness.base, "/api/home", ALICE)).json() as { order: Array<{ id: string }>; rows: Record<string, unknown> };
+  assert.equal(body.order.some((entry) => entry.id === movie), false);
+  assert.equal(movie in body.rows, false, "the hidden row is not built");
+  assert.equal(series in body.rows, true, "the other feed still draws");
+  assert.equal(harness.catalogCalls.some((call) => call.type === "movie" && call.catalogId === "top"), false,
+    "the hidden feed's addon is never called");
+});
+
+test("a feed the account adds from a usable addon appears on Home", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  harness.addons.push(cinemeta({ showOnHome: false }));
+  const movie = homeCatalogRowId("cinemeta", "movie", "top");
+  harness.data(ALICE).prefs.homeLayout = { order: [], hidden: [], feeds: [homeFeedSelectionKey("cinemeta", "movie", "top")] };
+
+  const body = await (await api(harness.base, "/api/home", ALICE)).json() as { order: Array<{ id: string }>; rows: Record<string, HomeRowView> };
+  assert.equal(body.order.some((entry) => entry.id === movie), true);
+  assert.equal(body.rows[movie]!.items.length, 3);
+  assert.equal(harness.catalogCalls.some((call) => call.type === "movie" && call.catalogId === "top"), true);
+});
+
+test("a feed from a forbidden or disabled addon is dropped on read", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const movie = homeCatalogRowId("cinemeta", "movie", "top");
+  harness.addons.push(cinemeta({ showOnHome: false, allowedUsers: [BOB] }));
+  harness.data(ALICE).prefs.homeLayout = { order: [], hidden: [], feeds: [homeFeedSelectionKey("cinemeta", "movie", "top")] };
+  const forbidden = await (await api(harness.base, "/api/home", ALICE)).json() as { order: Array<{ id: string }>; rows: Record<string, unknown> };
+  assert.equal(forbidden.order.some((entry) => entry.id === movie), false);
+  assert.equal(movie in forbidden.rows, false);
+
+  harness.addons[0]!.allowedUsers = [ALICE];
+  harness.addons[0]!.enabled = false;
+  const disabled = await (await api(harness.base, "/api/home", ALICE)).json() as { order: Array<{ id: string }> };
+  assert.equal(disabled.order.some((entry) => entry.id === movie), false, "a disabled addon's feed is dropped too");
+});
+
+test("confirm stays administrator-only whatever the layout says", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  harness.data(ALICE).prefs.homeLayout = { order: ["confirm", "resume", "favorites"], hidden: [], feeds: [] };
+
+  const user = await (await api(harness.base, "/api/home", ALICE)).json() as { order: Array<{ id: string }>; rows: Record<string, unknown> };
+  assert.equal(user.order.some((entry) => entry.id === "confirm"), false);
+  assert.equal("confirm" in user.rows, false);
+  const userLayout = await (await api(harness.base, "/api/home/layout", ALICE)).json() as { rows: Array<{ id: string }> };
+  assert.equal(userLayout.rows.some((row) => row.id === "confirm"), false);
+
+  const admin = await (await api(harness.base, "/api/home/layout", ADMIN)).json() as { rows: Array<{ id: string; kind: string; label: string }> };
+  const confirm = admin.rows.find((row) => row.id === "confirm");
+  assert.equal(confirm?.kind, "builtin");
+  assert.equal(confirm?.label, "home.toConfirm");
+});
+
+test("one account's layout leaves the other's Home alone", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  harness.data(ALICE).prefs.homeLayout = { order: ["recent", "resume"], hidden: ["favorites"], feeds: [] };
+
+  const alice = await (await api(harness.base, "/api/home", ALICE)).json() as { order: Array<{ id: string }> };
+  const bob = await (await api(harness.base, "/api/home", BOB)).json() as { order: Array<{ id: string }> };
+  assert.deepEqual(alice.order.map((entry) => entry.id)[0], "recent");
+  assert.equal(alice.order.some((entry) => entry.id === "favorites"), false);
+  assert.deepEqual(bob.order.map((entry) => entry.id),
+    ["resume", "favorites", "tonight", "episodes", "completed", "recent"]);
+  assert.deepEqual(layoutOf(harness, BOB), { order: [], hidden: [], feeds: [] });
+});
+
+test("GET /api/home/layout lists every arrangeable row with its state and the current layout", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  harness.addons.push(
+    cinemeta(),
+    cinemeta({ key: "extra", manifestUrl: "https://extra/manifest.json", showOnHome: false,
+      manifest: { id: "extra", name: "Extra", version: "1", catalogs: [{ type: "movie", id: "trending", name: "Trending" }] } }),
+  );
+  const movie = homeCatalogRowId("cinemeta", "movie", "top");
+  const trending = homeCatalogRowId("extra", "movie", "trending");
+  harness.data(ALICE).prefs.homeLayout = { order: ["favorites", "resume"], hidden: ["completed"], feeds: [] };
+
+  const body = await (await api(harness.base, "/api/home/layout", ALICE)).json() as {
+    rows: Array<{ id: string; kind: string; label: string; shown: boolean; position: number; added: boolean }>;
+    layout: { order: string[]; hidden: string[]; feeds: string[] };
+  };
+  const byId = new Map(body.rows.map((row) => [row.id, row]));
+  assert.deepEqual(body.rows.map((row) => row.position), body.rows.map((_, index) => index));
+  assert.equal(byId.get("resume")!.kind, "builtin");
+  assert.equal(byId.get("resume")!.label, "home.continue");
+  assert.equal(byId.get("resume")!.shown, true);
+  assert.equal(byId.get("resume")!.added, true);
+  assert.deepEqual([byId.get(movie)!.kind, byId.get(movie)!.label, byId.get(movie)!.shown, byId.get(movie)!.added], ["feed", "Cinemeta · Popular", true, true]);
+  assert.deepEqual([byId.get("completed")!.shown, byId.get("completed")!.added], [false, true], "a hidden row is still part of the arrangement");
+  assert.deepEqual([byId.get(trending)!.shown, byId.get(trending)!.added, byId.get(trending)!.label], [false, false, "Extra · Trending"],
+    "a catalogue the account could add is listed apart from the arrangement");
+  assert.deepEqual(body.layout.hidden, ["completed"]);
+  assert.equal(body.layout.order[0], "favorites", "the placed order leads");
+  assert.ok(body.layout.order.indexOf("favorites") < body.layout.order.indexOf("resume"));
 });

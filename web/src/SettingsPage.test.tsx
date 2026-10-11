@@ -24,8 +24,12 @@ let host: HTMLDivElement;
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   setLocale("en");
-  vi.stubGlobal("fetch", vi.fn(() =>
-    Promise.resolve(json({ saveHistory: true, liveSearch: true, defaultOrder: "source", recent: [] }))));
+  vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
+    if (String(input).includes("/api/home/layout")) {
+      return Promise.resolve(json({ rows: [], layout: { order: [], hidden: [], feeds: [] } }));
+    }
+    return Promise.resolve(json({ saveHistory: true, liveSearch: true, defaultOrder: "source", recent: [] }));
+  }));
   host = document.createElement("div");
   document.body.appendChild(host);
   root = createRoot(host);
@@ -62,5 +66,12 @@ describe("SettingsPage start page", () => {
   it("is disabled for a restricted account", async () => {
     await render({}, true);
     expect(startView().disabled).toBe(true);
+  });
+});
+
+describe("SettingsPage Home layout", () => {
+  it("shows the Home section to an ordinary account", async () => {
+    await render();
+    expect(host.querySelector(".home-layout-section")).not.toBeNull();
   });
 });

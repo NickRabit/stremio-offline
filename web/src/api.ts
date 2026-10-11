@@ -1,7 +1,7 @@
 import { serverText, t } from "./i18n";
 import type { SaveTarget } from "./save-target";
 import type { StatsActivityPage, ActiveStream, ActivityItem, CalendarItem, UndatedCalendarItem, ClientLogBundle, ClientLogSummary, Diagnostics, BuildInfo, AuthStatus, StatsSummary, Addon, AddonDownloadSettings, Capabilities, Catalog, Download, DownloadSelection, DownloadSnapshot, FollowDefaults, FollowEpisodeRow, FollowPreview, FollowStartMode, FollowView, Inspection, BrowseResult, IdentityPreview, LibraryFolder, LibraryMatchResult, LibraryOp, LibraryOpsState, NewEpisode, ProgressEntry, UserViews, WatchlistEntry, GrantBrowse, LibraryEstimate, LibraryGrant, LibrarySummary, LibraryType, LibraryView, Meta, PlaybackSession, ScanState, SearchPreferences, SearchResult, SearchState, SearchableCatalog, SiteLink, SuggestionRow, Session, Settings, SettingsBackup, SettingsPatch, SettingsView, Stream, Subtitle, Trailer, UserAccount, UserPermissions, UserRole } from "./types";
-import type { HomeResponse, HomeRowId } from "../../server/src/home";
+import type { HomeLayoutResponse, HomeResponse, HomeRowId } from "../../server/src/home";
 
 /** The status code has to reach the top, or a sign-out is indistinguishable from an ordinary error. */
 export class ApiError extends Error {
@@ -212,6 +212,8 @@ export const api = {
     });
     return request<HomeResponse>(`/api/home${query ? `?${query}` : ""}`);
   },
+  /** Everything this account can arrange on Home, and its current arrangement. */
+  homeLayout: () => request<HomeLayoutResponse>("/api/home/layout"),
   setFavorite: (path: string, favorite: boolean) => request<{ path: string; favorite: boolean }>("/api/library/favorite", { method: "POST", body: JSON.stringify({ path, favorite }) }),
   resumeLibrary: (options: { skip?: number; limit?: number; sort?: string; order?: string; seed?: string; query?: string; favorites?: boolean }) =>
     request<BrowseResult>(`/api/library/resume?${q({ ...options, favorites: options.favorites ? 1 : undefined })}`),

@@ -8,7 +8,9 @@ import type { DownloadQueue } from "../downloads.js";
 import { messageKeyOf } from "../errors.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import { defaultInstanceSettings, defaultPrefs, type State, type Store, type UserPrefs } from "../store.js";
+import type { AddonRecord } from "../types.js";
 import { emptyUserData, type Role, type UserData, type UserRecord } from "../users.js";
+import { homeFeedSelectionKey } from "../home.js";
 import { registerSettingsRoutes, type SettingsDeps } from "./settings.js";
 
 const ADA = "usr_00000001";
@@ -448,4 +450,49 @@ test("PATCH /api/settings refuses a body that mixes the halves as a whole", asyn
   assert.equal(body.messageKey, "err.notAllowed");
   assert.deepEqual(harness.state.settings, settingsBefore, "the instance key is not written");
   assert.equal(harness.state.userData?.[CAROL]?.prefs.libraryTileSize, prefsBefore.libraryTileSize, "the personal key is not applied either");
+});
+
+test("PATCH /api/settings refuses a malformed Home layout with 400 and writes nothing", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const before = { ...harness.state.userData?.[CAROL]?.prefs } as Partial<UserPrefs>;
+
+  const bodies = ["nope", {}, { order: "resume" }, { order: [1], hidden: [], feeds: [] }, { order: [], hidden: [], feeds: ["x", 2] }];
+  for (const homeLayout of bodies) {
+    const response = await api(harness.base, "/api/settings", { method: "PATCH", user: "carol", body: { homeLayout } });
+    assert.equal(response.status, 400, `refused for ${JSON.stringify(homeLayout)}`);
+    assert.equal((await response.json() as { messageKey?: string }).messageKey, "err.homeLayoutShape");
+  }
+  assert.deepEqual(harness.state.userData?.[CAROL]?.prefs, before);
+});
+
+test("PATCH /api/settings stores a Home layout and drops a feed the caller may not use", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  harness.state.addons.push(
+    { key: "mine", manifestUrl: "https://mine/manifest.json", role: "catalog", enabled: true, globalSearch: true, showOnHome: true, addedAt: "", allowedUsers: [CAROL], manifest: { id: "mine", name: "Mine", version: "1", catalogs: [{ type: "movie", id: "top" }] } } as unknown as AddonRecord,
+    { key: "theirs", manifestUrl: "https://theirs/manifest.json", role: "catalog", enabled: false, globalSearch: true, showOnHome: true, addedAt: "", allowedUsers: [CAROL], manifest: { id: "theirs", name: "Theirs", version: "1", catalogs: [{ type: "movie", id: "top" }] } } as unknown as AddonRecord,
+  );
+  const mine = homeFeedSelectionKey("mine", "movie", "top");
+  const disabled = homeFeedSelectionKey("theirs", "movie", "top");
+
+  const response = await api(harness.base, "/api/settings", {
+    method: "PATCH", user: "carol",
+    body: { homeLayout: { order: ["resume"], hidden: ["recent"], feeds: [mine, disabled, "junk"] } },
+  });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(harness.state.userData?.[CAROL]?.prefs.homeLayout, { order: ["resume"], hidden: ["recent"], feeds: [mine] },
+    "a disabled addon's feed and a malformed key are dropped");
+});
+
+test("PATCH /api/settings clears the Home layout with null", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  harness.state.userData![CAROL]!.prefs.homeLayout = { order: ["resume"], hidden: [], feeds: [] };
+
+  const response = await api(harness.base, "/api/settings", { method: "PATCH", user: "carol", body: { homeLayout: null } });
+
+  assert.equal(response.status, 200);
+  assert.equal("homeLayout" in (harness.state.userData?.[CAROL]?.prefs ?? {}), false);
 });
