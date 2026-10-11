@@ -6,6 +6,4 @@ data class SearchScope(
   val addonKey: String? = null,
   val catalogType: String? = null,
   val catalogId: String? = null,
-) {
-  val onCatalog: Boolean get() = !addonKey.isNullOrEmpty() && !catalogId.isNullOrEmpty()
-}
+)

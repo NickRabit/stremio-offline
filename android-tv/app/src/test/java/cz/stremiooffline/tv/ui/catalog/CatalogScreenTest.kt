@@ -449,7 +449,7 @@ class CatalogScreenTest {
   }
 
   @Test
-  fun `a required genre preselects its first option`() {
+  fun `a required genre still opens on All, as the web does`() {
     val api = FakeTvApi()
     api.catalogsValue = listOf(
       CatalogDto(
@@ -465,12 +465,13 @@ class CatalogScreenTest {
     mount(api)
     compose.waitForIdle()
 
-    compose.onNodeWithTag(TagCatalogGenreChip).assertTextContains("Drama", substring = true)
-    assertEquals("Drama", api.catalogRequests.last().genre)
+    compose.onNodeWithTag(TagCatalogGenreChip)
+      .assertTextContains(context.getString(cz.stremiooffline.tv.R.string.catalog_all_genres), substring = true)
+    assertEquals(null, api.catalogRequests.first().genre)
 
     press(Key.DirectionRight)
     compose.onNodeWithTag(TagCatalogGenreChip).assertIsFocused()
     press(Key.DirectionCenter)
-    compose.onNodeWithTag(genreOptionTag(0)).assertIsFocused()
+    compose.onNodeWithTag(TagGenreAll).assertIsFocused()
   }
 }

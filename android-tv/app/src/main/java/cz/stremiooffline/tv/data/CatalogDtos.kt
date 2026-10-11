@@ -20,10 +20,6 @@ data class CatalogDto(
   val label: String get() = "$addonName · ${name ?: id}"
   val genreExtra: CatalogExtraDto? get() = extra?.firstOrNull { it.name == "genre" }
   val genreOptions: List<String> get() = genreExtra?.options.orEmpty()
-  /** A catalogue that refuses to answer without a genre falls back to its own first option,
-   *  the way the web's Home shelves fill a required extra in. */
-  val defaultGenre: String
-    get() = if (genreExtra?.isRequired == true) genreOptions.firstOrNull().orEmpty() else ""
 }
 
 @Serializable

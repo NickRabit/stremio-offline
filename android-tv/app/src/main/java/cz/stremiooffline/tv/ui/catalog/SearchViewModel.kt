@@ -52,6 +52,21 @@ class SearchViewModel(private val api: CatalogApi) : ViewModel() {
     }
   }
 
+  /** Re-reads the catalogues the scope panel offers; it is asked each time the panel opens, so an
+   *  addon switched on elsewhere shows up without a new session. A failed read keeps the last list. */
+  fun refreshSearchable() {
+    viewModelScope.launch {
+      val list = try {
+        api.searchable()
+      } catch (cancelled: CancellationException) {
+        throw cancelled
+      } catch (_: ApiError) {
+        return@launch
+      }
+      state = state.copy(searchable = list)
+    }
+  }
+
   fun submit(query: String) {
     val trimmed = query.trim()
     job?.cancel()

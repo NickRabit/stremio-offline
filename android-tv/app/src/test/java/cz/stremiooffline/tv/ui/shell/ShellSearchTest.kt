@@ -16,12 +16,15 @@ import androidx.compose.ui.test.pressKey
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import cz.stremiooffline.tv.data.CatalogDto
+import cz.stremiooffline.tv.data.CatalogExtraDto
 import cz.stremiooffline.tv.data.MetaDto
 import cz.stremiooffline.tv.data.SearchableCatalogDto
 import cz.stremiooffline.tv.ui.FakeTvApi
 import cz.stremiooffline.tv.ui.catalog.TagCatalogChip
+import cz.stremiooffline.tv.ui.catalog.TagCatalogGenreChip
 import cz.stremiooffline.tv.ui.catalog.TagCatalogSearchChip
 import cz.stremiooffline.tv.ui.catalog.TagSearchScopeChip
+import cz.stremiooffline.tv.ui.catalog.TagSearchField
 import org.junit.After
 import org.junit.Before
 import org.junit.Rule
@@ -79,6 +82,43 @@ class ShellSearchTest {
     mount(api(), Section.Search)
 
     compose.onNodeWithTag(TagSearchScopeChip).assertTextContains("all addons", substring = true)
+  }
+
+  @Test
+  fun `LEFT from the scope chip walks back to the field`() {
+    mount(api(), Section.Search)
+
+    compose.onNodeWithTag(TagSearchField).assertIsFocused()
+    press(Key.DirectionRight)
+    compose.onNodeWithTag(TagSearchScopeChip).assertIsFocused()
+    press(Key.DirectionLeft)
+    compose.onNodeWithTag(TagSearchField).assertIsFocused()
+  }
+
+  @Test
+  fun `LEFT walks the catalogue chip row back to the search chip`() {
+    val api = FakeTvApi()
+    api.catalogsValue = listOf(
+      CatalogDto(
+        addonKey = "a",
+        addonName = "Cinemeta",
+        type = "movie",
+        id = "top",
+        name = "Popular",
+        extra = listOf(CatalogExtraDto(name = "genre", options = listOf("Action", "Comedy"))),
+      ),
+    )
+    api.catalogPages["a"] = listOf(listOf(MetaDto(id = "tt1", type = "movie", name = "It")))
+    api.searchableValue = listOf(SearchableCatalogDto("a", "Cinemeta", true, "movie", "top", "Popular"))
+    mount(api, Section.Catalog)
+
+    compose.onNodeWithTag(TagCatalogChip).assertIsFocused()
+    press(Key.DirectionRight)
+    compose.onNodeWithTag(TagCatalogGenreChip).assertIsFocused()
+    press(Key.DirectionLeft)
+    compose.onNodeWithTag(TagCatalogChip).assertIsFocused()
+    press(Key.DirectionLeft)
+    compose.onNodeWithTag(TagCatalogSearchChip).assertIsFocused()
   }
 
   @Test

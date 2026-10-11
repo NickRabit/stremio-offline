@@ -7,6 +7,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertTextContains
+import androidx.compose.ui.test.getBoundsInRoot
+import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -16,6 +20,7 @@ import androidx.compose.ui.test.performImeAction
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.pressKey
+import androidx.compose.ui.unit.dp
 import cz.stremiooffline.tv.data.MetaDto
 import cz.stremiooffline.tv.data.SearchScope
 import cz.stremiooffline.tv.data.SearchResultDto
@@ -216,5 +221,57 @@ class SearchScreenTest {
     compose.waitForIdle()
 
     compose.onNodeWithTag(TagSearchScopeChip).assertTextContains("Alpha · Shows (series)", substring = true)
+  }
+
+  @Test
+  fun `the panel re-reads searchable every time it opens`() {
+    val api = FakeTvApi()
+    api.searchableValue = listOf(searchable("a", "Alpha"))
+    mount(api)
+    compose.waitForIdle()
+    val afterInit = api.searchableCalls
+
+    api.searchableValue = listOf(searchable("a", "Alpha"), searchable("b", "Beta"))
+    press(Key.DirectionRight)
+    press(Key.DirectionCenter)
+    compose.waitForIdle()
+
+    assertTrue("the panel did not re-read searchable", api.searchableCalls > afterInit)
+    compose.onNodeWithTag(scopeAddonTag("b")).assertExists()
+  }
+
+  @Test
+  fun `an empty searchable leaves only the all addons row`() {
+    mount(FakeTvApi())
+    compose.waitForIdle()
+
+    press(Key.DirectionRight)
+    press(Key.DirectionCenter)
+
+    compose.onNodeWithTag(TagSearchScopeAll).assertIsFocused()
+    val options = compose.onAllNodes(
+      hasClickAction() and hasAnyAncestor(hasTestTag(TagSearchScopePanel)),
+    ).fetchSemanticsNodes()
+    assertEquals(1, options.size)
+  }
+
+  @Test
+  fun `a long scope label stays within the chip width`() {
+    val api = FakeTvApi()
+    api.searchableValue = listOf(
+      searchable(
+        "a",
+        "An addon whose name runs far past the row",
+        type = "series",
+        id = "shows",
+        name = "A catalogue whose name runs even further past the row",
+      ),
+    )
+    mount(api, initial = SearchScope("a", "series", "shows"))
+    compose.waitForIdle()
+
+    val bounds = compose.onNodeWithTag(TagSearchScopeChip).getBoundsInRoot()
+    val width = bounds.right - bounds.left
+    assertTrue("the chip is $width wide", width <= 300.dp)
   }
 }

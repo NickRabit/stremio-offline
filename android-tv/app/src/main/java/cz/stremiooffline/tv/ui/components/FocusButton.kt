@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -22,14 +23,21 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -52,6 +60,8 @@ fun FocusButton(
   leading: (@Composable () -> Unit)? = null,
   contentDescription: String? = null,
   enabled: Boolean = true,
+  /** Caps the label so a long one ellipsizes instead of widening the row. */
+  labelMaxWidth: Dp? = null,
 ) {
   val interaction = remember { MutableInteractionSource() }
   val focused by interaction.collectIsFocusedAsState()
@@ -65,6 +75,7 @@ fun FocusButton(
     enabled = enabled,
     modifier = modifier
       .then(if (kind == FocusButtonKind.Icon) Modifier.size(36.dp) else Modifier.height(36.dp))
+      .then(if (labelMaxWidth != null) Modifier.widthIn(max = labelMaxWidth) else Modifier)
       .then(if (contentDescription != null) Modifier.semantics { this.contentDescription = contentDescription } else Modifier)
       .background(if (focused) Tokens.AccentGradient else SolidColor(Color.Transparent), shape),
     scale = ButtonDefaults.scale(focusedScale = 1.06f),
@@ -89,7 +100,18 @@ fun FocusButton(
       leading()
       Spacer(Modifier.width(8.dp))
     }
-    Text(text, fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
+    Text(text, fontSize = 12.5.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+  }
+}
+
+/** The shell's LEFT exit goes straight to the rail for every target in the content, which would
+ *  skip the neighbours of a chip that is not the row's first. A chip that has one walks there
+ *  instead; the leftmost control keeps the rail exit. */
+fun Modifier.leftToNeighbour(neighbour: FocusRequester): Modifier = onPreviewKeyEvent { event ->
+  if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionLeft) {
+    runCatching { neighbour.requestFocus() }.isSuccess
+  } else {
+    false
   }
 }
 

@@ -59,7 +59,7 @@ class CatalogViewModel(private val api: CatalogApi) : ViewModel() {
         state = state.copy(loading = false, error = true)
         return@launch
       }
-      state = state.copy(catalogs = catalogs, catalogIndex = 0, genre = catalogs.firstOrNull()?.defaultGenre.orEmpty())
+      state = state.copy(catalogs = catalogs, catalogIndex = 0, genre = "")
       refreshWatchlistCount()
       if (catalogs.isNotEmpty()) load(reset = true) else state = state.copy(loading = false, hasMore = false)
     }
@@ -69,11 +69,10 @@ class CatalogViewModel(private val api: CatalogApi) : ViewModel() {
     // Leaving My list for the catalogue it was showing must still reload it.
     if (index !in state.catalogs.indices || (index == state.catalogIndex && !state.onWatchlist)) return
     job?.cancel()
-    // A genre, season or episode belongs to one catalogue; a different one starts clean.
+    // A genre belongs to one catalogue; a different one starts on the web's "All".
     state = state.copy(
       catalogIndex = index,
-      // A catalogue that requires a genre cannot be asked without one: its first option stands in.
-      genre = state.catalogs[index].defaultGenre,
+      genre = "",
       items = emptyList(),
       skip = 0,
       hasMore = true,

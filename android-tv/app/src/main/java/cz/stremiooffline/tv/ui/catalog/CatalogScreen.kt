@@ -17,11 +17,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.onPreviewKeyEvent
-import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -37,6 +32,7 @@ import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.ui.components.FocusButton
 import cz.stremiooffline.tv.ui.components.FocusButtonKind
 import cz.stremiooffline.tv.ui.components.ShimmerCards
+import cz.stremiooffline.tv.ui.components.leftToNeighbour
 import cz.stremiooffline.tv.ui.theme.Tokens
 
 const val TagCatalogSearchChip = "catalog_chip_search"
@@ -149,19 +145,16 @@ fun CatalogScreen(
           modifier = Modifier
             .focusRequester(catalogFocus)
             .testTag(TagCatalogChip)
-            .onPreviewKeyEvent { event ->
-              if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionLeft) {
-                runCatching { searchFocus.requestFocus() }.isSuccess
-              } else {
-                false
-              }
-            },
+            .leftToNeighbour(searchFocus),
         )
         if (state.genres.isNotEmpty()) {
           FocusButton(
             text = state.genre.ifEmpty { stringResource(R.string.catalog_all_genres) },
             onClick = { panelOpener = genreFocus; panel = CatalogPanel.Genres },
-            modifier = Modifier.focusRequester(genreFocus).testTag(TagCatalogGenreChip),
+            modifier = Modifier
+              .focusRequester(genreFocus)
+              .testTag(TagCatalogGenreChip)
+              .leftToNeighbour(catalogFocus),
           )
         }
       }

@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -39,6 +40,7 @@ import cz.stremiooffline.tv.ui.components.FocusButton
 import cz.stremiooffline.tv.ui.components.FocusButtonKind
 import cz.stremiooffline.tv.ui.components.ShimmerCards
 import cz.stremiooffline.tv.ui.components.TvTextField
+import cz.stremiooffline.tv.ui.components.leftToNeighbour
 import cz.stremiooffline.tv.ui.theme.Tokens
 import kotlinx.coroutines.android.awaitFrame
 
@@ -97,7 +99,9 @@ fun SearchScreen(
       fontWeight = FontWeight.Bold,
       letterSpacing = 1.8.sp,
     )
-    Row(horizontalArrangement = Arrangement.spacedBy(9.dp), verticalAlignment = Alignment.CenterVertically) {
+    // Both controls carry a label of the same kind and share the field's height, so the scope sits on
+    // the field's line instead of floating between the label and the field.
+    Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.Bottom) {
       TvTextField(
         label = stringResource(R.string.tv_nav_search),
         value = text,
@@ -109,13 +113,26 @@ fun SearchScreen(
         onSubmit = { viewModel.submit(text) },
         modifier = Modifier.width(520.dp),
       )
-      Text(stringResource(R.string.catalog_search_scope_in), color = Tokens.Muted, fontSize = 11.sp)
-      FocusButton(
-        text = scopeLabel(state.scope, state.searchable),
-        onClick = { panelOpener = scopeFocus; scopePanel = true },
-        contentDescription = stringResource(R.string.catalog_search_scope),
-        modifier = Modifier.focusRequester(scopeFocus).testTag(TagSearchScopeChip),
-      )
+      Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+          stringResource(R.string.catalog_search_scope).uppercase(),
+          color = Tokens.Muted,
+          fontSize = 8.5.sp,
+          fontWeight = FontWeight.ExtraBold,
+          letterSpacing = 0.8.sp,
+        )
+        FocusButton(
+          text = scopeLabel(state.scope, state.searchable),
+          onClick = { viewModel.refreshSearchable(); panelOpener = scopeFocus; scopePanel = true },
+          contentDescription = stringResource(R.string.catalog_search_scope),
+          labelMaxWidth = 300.dp,
+          modifier = Modifier
+            .height(38.dp)
+            .focusRequester(scopeFocus)
+            .testTag(TagSearchScopeChip)
+            .leftToNeighbour(fieldFocus),
+        )
+      }
     }
     if (!state.submitted) {
       Text(stringResource(R.string.tv_search_hint), color = Tokens.Muted, fontSize = 12.sp)
