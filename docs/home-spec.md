@@ -246,6 +246,11 @@ new built-in or a newly offered feed still appears. An absent `homeLayout` is
 exactly the instance's Home, and `confirm` stays administrator-only whatever a
 layout names.
 
+The stored arrangement is bounded and narrowed to what the account can see: `order`
+and `hidden` keep only the built-ins it may have and the feeds it may add,
+deduplicated, at most 200 each, and `feeds` holds at most 50; a body that names
+more than that is refused with 400 rather than persisted.
+
 The queue row needs `ownerUserId` and the `"permission"` pause reason on the
 client's `Download` type; the server already sends both.
 
@@ -278,7 +283,10 @@ client's `Download` type; the server already sends both.
   usable catalogues not yet on Home, Remove for a feed the account added, and
   **Reset to default**. Changes save on their own, coalesced; `Home` redraws from
   the server's order on the next visit, and the instance-level add-on switches
-  remain the default the personal layout sits on top of.
+  remain the default the personal layout sits on top of. A feed row is named with
+  its catalogue's type beside the add-on and catalogue names (`Cinemeta · Popular
+  (film)`), the way the catalogue picker tells two catalogues of the same name
+  apart; `confirm` gets its show/hide switch but no move buttons.
 
 ## Layout
 

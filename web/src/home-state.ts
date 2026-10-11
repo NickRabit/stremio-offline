@@ -1,10 +1,18 @@
 import type { HomeCard, HomeResponse, HomeRowId } from "../../server/src/home";
-import { HOME_ROWS, homeCatalogRowId, homeCatalogSelectionKey, homeRowOrder } from "../../server/src/home";
+import { HOME_ROWS, homeCatalogRowId, homeCatalogSelectionKey, homeRowOrder, parseHomeCatalogRowId } from "../../server/src/home";
+import { catalogTypeTag } from "./catalog-labels";
 import type { Addon } from "./types";
 
 export { HOME_ROWS };
 
 export const isHomeCatalogRow = (row: HomeRowId): boolean => row.startsWith("catalog:");
+
+/** A feed row's heading: the add-on and catalogue names with the catalogue's type appended, so
+ *  two catalogues that share a name are told apart the way the catalogue picker tells them. */
+export const homeFeedTitle = (row: HomeRowId, name: string): string => {
+  const parsed = parseHomeCatalogRowId(row);
+  return parsed ? `${name} (${catalogTypeTag(parsed.type)})` : name;
+};
 
 export interface HomeCatalogShelf { id: HomeRowId; title: string }
 

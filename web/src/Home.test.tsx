@@ -353,7 +353,7 @@ describe("Home", () => {
     });
     const onVisible = vi.fn();
     await render({ addons: [catalogAddon], onVisible });
-    expect(row(catalogRow)!.textContent).toContain("Cinemeta · Popular");
+    expect(row(catalogRow)!.textContent).toContain("Cinemeta · Popular (movie)");
     expect(row(catalogRow)!.querySelector(".skeleton")).not.toBeNull();
     expect(observe).toHaveBeenCalledTimes(1);
     expect(onVisible).not.toHaveBeenCalled();
@@ -373,7 +373,7 @@ describe("Home", () => {
     const onOpenCatalog = vi.fn();
     await render({ addons: [catalogAddon], rows: allEmpty({ [catalogRow]: rowState({ items: [discoveryCard()] }) }), onOpenCatalog });
     const link = row(catalogRow)!.querySelector<HTMLButtonElement>(".home-catalog-link")!;
-    expect(link.textContent).toContain("Cinemeta · Popular");
+    expect(link.textContent).toContain("Cinemeta · Popular (movie)");
     expect(link.title).toBe("Open in catalogue");
     await click(link);
     expect(onOpenCatalog).toHaveBeenCalledWith(catalogRow);

@@ -3,6 +3,7 @@ import { ChevronDown, ChevronUp, LayoutList, Plus, RotateCcw, Trash2 } from "luc
 import { api } from "./api";
 import { SettingsSectionHead } from "./settings-ui";
 import { t, useI18n, type Key } from "./i18n";
+import { homeFeedTitle } from "./home-state";
 import type { HomeLayout, HomeLayoutEntry, HomeLayoutResponse } from "../../server/src/home";
 import { homeFeedSelectionKey, parseHomeCatalogRowId } from "../../server/src/home";
 
@@ -12,7 +13,7 @@ const feedKeyOf = (id: string): string | undefined => {
   return parsed ? homeFeedSelectionKey(parsed.addonKey, parsed.type, parsed.id) : undefined;
 };
 
-const labelOf = (row: HomeLayoutEntry): string => row.kind === "builtin" ? t(row.label as Key) : row.label;
+const labelOf = (row: HomeLayoutEntry): string => row.kind === "builtin" ? t(row.label as Key) : homeFeedTitle(row.id, row.label);
 
 /** How long a change waits before it is written, so flipping two switches is one save. */
 export const HOME_LAYOUT_SAVE_MS = 300;
@@ -26,37 +27,53 @@ export function HomeLayoutSettings({ disabled = false, onError }: { disabled?: b
   const [view, setView] = useState<HomeLayoutResponse | null>(null);
   const [draft, setDraft] = useState<HomeLayout | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const pending = useRef<HomeLayout | null>(null);
   const sequence = useRef(0);
   const report = useRef(onError);
   report.current = onError;
 
-  const load = useCallback(async () => {
-    try { const next = await api.homeLayout(); setView(next); setDraft(next.layout); }
+  const load = useCallback(async (token: number) => {
+    try {
+      const next = await api.homeLayout();
+      // A newer edit bumps the sequence, so an answer that lands after it must not overwrite the draft.
+      if (token !== sequence.current) return;
+      setView(next); setDraft(next.layout);
+    }
     catch (error) { report.current(error); }
   }, []);
 
-  useEffect(() => { void load(); }, [load]);
-  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+  useEffect(() => { void load(++sequence.current); }, [load]);
+  useEffect(() => () => {
+    if (timer.current) { clearTimeout(timer.current); timer.current = undefined; }
+    const next = pending.current;
+    pending.current = null;
+    // A change made just before leaving Settings is sent rather than dropped with the timer.
+    if (next) void api.updateSettings({ homeLayout: next }).catch(() => undefined);
+  }, []);
 
   /** Shows the change at once and writes it shortly after; the answer is read back so the
    *  arrangement, hidden rows and feeds stay the server's canonical answer. */
   const save = (next: HomeLayout) => {
     setDraft(next);
+    pending.current = next;
     if (timer.current) clearTimeout(timer.current);
     const token = ++sequence.current;
     timer.current = setTimeout(() => {
+      timer.current = undefined;
+      pending.current = null;
       api.updateSettings({ homeLayout: next })
-        .then(() => { if (token === sequence.current) return load(); }, (error) => report.current(error))
+        .then(() => { if (token === sequence.current) return load(token); }, (error) => report.current(error))
         .catch(() => undefined);
     }, HOME_LAYOUT_SAVE_MS);
   };
 
   const reset = () => {
-    if (timer.current) clearTimeout(timer.current);
+    if (timer.current) { clearTimeout(timer.current); timer.current = undefined; }
+    pending.current = null;
     const token = ++sequence.current;
     setDraft({ order: [], hidden: [], feeds: [] });
     api.updateSettings({ homeLayout: null })
-      .then(() => { if (token === sequence.current) return load(); }, (error) => report.current(error))
+      .then(() => { if (token === sequence.current) return load(token); }, (error) => report.current(error))
       .catch(() => undefined);
   };
 
@@ -91,20 +108,24 @@ export function HomeLayoutSettings({ disabled = false, onError }: { disabled?: b
   return <section className="panel settings-section home-layout-section">
     <SettingsSectionHead icon={<LayoutList/>} title={t("settings.homeTitle")} text={t("settings.homeText")}/>
     <ul className="home-layout-list">
-      {arranged.map((row, index) => <li key={row.id} className={`home-layout-row${shownOf(row.id) ? "" : " hidden"}`}>
-        <span className="home-layout-label">{labelOf(row)}</span>
-        <button type="button" className="icon" disabled={disabled || index === 0}
-          aria-label={t("settings.homeMoveUp", { row: labelOf(row) })} title={t("settings.homeMoveUp", { row: labelOf(row) })}
-          onClick={() => move(row.id, -1)}><ChevronUp/></button>
-        <button type="button" className="icon" disabled={disabled || index === arranged.length - 1}
-          aria-label={t("settings.homeMoveDown", { row: labelOf(row) })} title={t("settings.homeMoveDown", { row: labelOf(row) })}
-          onClick={() => move(row.id, 1)}><ChevronDown/></button>
-        <label className="switch"><input type="checkbox" role="switch" checked={shownOf(row.id)} disabled={disabled}
-          aria-label={t("settings.homeShowRow", { row: labelOf(row) })} onChange={() => toggle(row.id)}/><span/></label>
-        {row.kind === "feed" && personal.has(feedKeyOf(row.id) ?? "") && <button type="button" className="danger icon"
-          disabled={disabled} aria-label={t("settings.homeRemove", { row: labelOf(row) })} title={t("settings.homeRemove", { row: labelOf(row) })}
-          onClick={() => remove(row.id)}><Trash2/></button>}
-      </li>)}
+      {arranged.map((row, index) => {
+        // `confirm` is a count in Home's heading, never a shelf, so its position cannot move.
+        const movable = row.id !== "confirm";
+        return <li key={row.id} className={`home-layout-row${shownOf(row.id) ? "" : " hidden"}`}>
+          <span className="home-layout-label">{labelOf(row)}</span>
+          {movable && <button type="button" className="icon" disabled={disabled || index === 0}
+            aria-label={t("settings.homeMoveUp", { row: labelOf(row) })} title={t("settings.homeMoveUp", { row: labelOf(row) })}
+            onClick={() => move(row.id, -1)}><ChevronUp/></button>}
+          {movable && <button type="button" className="icon" disabled={disabled || index === arranged.length - 1}
+            aria-label={t("settings.homeMoveDown", { row: labelOf(row) })} title={t("settings.homeMoveDown", { row: labelOf(row) })}
+            onClick={() => move(row.id, 1)}><ChevronDown/></button>}
+          <label className="switch"><input type="checkbox" role="switch" checked={shownOf(row.id)} disabled={disabled}
+            aria-label={t("settings.homeShowRow", { row: labelOf(row) })} onChange={() => toggle(row.id)}/><span/></label>
+          {row.kind === "feed" && personal.has(feedKeyOf(row.id) ?? "") && <button type="button" className="danger icon"
+            disabled={disabled} aria-label={t("settings.homeRemove", { row: labelOf(row) })} title={t("settings.homeRemove", { row: labelOf(row) })}
+            onClick={() => remove(row.id)}><Trash2/></button>}
+        </li>;
+      })}
     </ul>
     {offered.length > 0 && <div className="home-layout-add">
       <strong>{t("settings.homeAddCatalog")}</strong>

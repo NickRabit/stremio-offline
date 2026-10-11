@@ -7,6 +7,9 @@ export const HOME_CANDIDATES = 30;
 export const HOME_MARKER_LIMIT = 20;
 export const HOME_LOOKUP_DEADLINE_MS = 1500;
 export const HOME_FORGET_LIMIT = 50;
+/** How many row ids and extra feeds one personal layout may name. A body over either is refused. */
+export const HOME_LAYOUT_ROW_LIMIT = 200;
+export const HOME_LAYOUT_FEED_LIMIT = 50;
 
 export type BuiltinHomeRowId = "resume" | "completed" | "favorites" | "recent" | "episodes" | "tonight" | "confirm";
 export type HomeRowId = BuiltinHomeRowId | `catalog:${string}:${string}:${string}`;

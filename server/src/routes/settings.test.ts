@@ -10,7 +10,7 @@ import type { LibraryMetaStore } from "../library-meta-store.js";
 import { defaultInstanceSettings, defaultPrefs, type State, type Store, type UserPrefs } from "../store.js";
 import type { AddonRecord } from "../types.js";
 import { emptyUserData, type Role, type UserData, type UserRecord } from "../users.js";
-import { homeFeedSelectionKey } from "../home.js";
+import { homeCatalogRowId, homeFeedSelectionKey } from "../home.js";
 import { registerSettingsRoutes, type SettingsDeps } from "./settings.js";
 
 const ADA = "usr_00000001";
@@ -495,4 +495,43 @@ test("PATCH /api/settings clears the Home layout with null", async (t) => {
 
   assert.equal(response.status, 200);
   assert.equal("homeLayout" in (harness.state.userData?.[CAROL]?.prefs ?? {}), false);
+});
+
+test("PATCH /api/settings keeps only the row ids the account can arrange, deduplicated", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  harness.state.addons.push(
+    { key: "mine", manifestUrl: "https://mine/manifest.json", role: "catalog", enabled: true, globalSearch: true, showOnHome: true, addedAt: "", allowedUsers: [CAROL], manifest: { id: "mine", name: "Mine", version: "1", catalogs: [{ type: "movie", id: "top" }] } } as unknown as AddonRecord,
+  );
+  const mine = homeCatalogRowId("mine", "movie", "top");
+
+  const response = await api(harness.base, "/api/settings", {
+    method: "PATCH", user: "carol",
+    body: { homeLayout: { order: ["resume", "resume", "confirm", mine, "catalog:junk:nope:x"], hidden: ["recent", "recent", "nonsense"], feeds: [] } },
+  });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(harness.state.userData?.[CAROL]?.prefs.homeLayout,
+    { order: ["resume", mine], hidden: ["recent"], feeds: [] },
+    "duplicates collapse and a row the account cannot arrange is dropped");
+});
+
+test("PATCH /api/settings refuses a Home layout beyond the caps and writes nothing", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const before = { ...harness.state.userData?.[CAROL]?.prefs } as Partial<UserPrefs>;
+
+  const rows = Array.from({ length: 201 }, (_, index) => `row-${index}`);
+  const feeds = Array.from({ length: 51 }, (_, index) => homeFeedSelectionKey("addon", "movie", `id-${index}`));
+  const bodies = [
+    { order: rows, hidden: [], feeds: [] },
+    { order: [], hidden: rows, feeds: [] },
+    { order: [], hidden: [], feeds },
+  ];
+  for (const homeLayout of bodies) {
+    const response = await api(harness.base, "/api/settings", { method: "PATCH", user: "carol", body: { homeLayout } });
+    assert.equal(response.status, 400, `refused for ${JSON.stringify(homeLayout).slice(0, 40)}`);
+    assert.equal((await response.json() as { messageKey?: string }).messageKey, "err.homeLayoutShape");
+  }
+  assert.deepEqual(harness.state.userData?.[CAROL]?.prefs, before);
 });

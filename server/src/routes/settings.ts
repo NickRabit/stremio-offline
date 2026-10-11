@@ -6,7 +6,7 @@ import { normalizeToken, verifyRealDebridToken } from "../debrid.js";
 import type { DownloadQueue } from "../downloads.js";
 import { AppError } from "../errors.js";
 import { homeCatalogOfferings } from "../home-catalogs.js";
-import { homeFeedSelectionKey, parseHomeLayout } from "../home.js";
+import { HOME_LAYOUT_FEED_LIMIT, HOME_LAYOUT_ROW_LIMIT, homeCatalogRowId, homeFeedSelectionKey, homeRowOrder, parseHomeLayout } from "../home.js";
 import { LANGUAGE_NAMES, isUiLanguage, normalizeLanguage } from "../language.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import { currentLevel, log, parseLevel, setLevel } from "../logger.js";
@@ -171,7 +171,11 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
     const touchesPrefs = PERSONAL_SETTINGS.some((key) => req.body[key] !== undefined);
     // The shape is checked before the write so a malformed body is refused whole; a
     // well-formed one that names a feed the caller may not use has that feed dropped below.
-    if (req.body.homeLayout !== undefined && req.body.homeLayout !== null && !parseHomeLayout(req.body.homeLayout)) {
+    // A body whose arrays are larger than any account could arrange is refused too, so a
+    // client cannot persist far more ids than there are rows.
+    const postedLayout = req.body.homeLayout !== undefined && req.body.homeLayout !== null ? parseHomeLayout(req.body.homeLayout) : undefined;
+    if (req.body.homeLayout !== undefined && req.body.homeLayout !== null
+      && (!postedLayout || postedLayout.order.length > HOME_LAYOUT_ROW_LIMIT || postedLayout.hidden.length > HOME_LAYOUT_ROW_LIMIT || postedLayout.feeds.length > HOME_LAYOUT_FEED_LIMIT)) {
       throw new AppError("A Home layout must list an order, the hidden rows and the feeds.", "err.homeLayoutShape", 400);
     }
     await store.update((state) => {
@@ -238,8 +242,20 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
         } else {
           const parsed = parseHomeLayout(req.body.homeLayout)!;
           const usable = actor ? allowedAddons(state.addons, { id: actor.id, role: actor.role }) : [];
-          const valid = new Set(homeCatalogOfferings(usable).map((target) => homeFeedSelectionKey(target.addon.key, target.definition.type, target.definition.id)));
-          prefs.homeLayout = { order: parsed.order, hidden: parsed.hidden, feeds: parsed.feeds.filter((key) => valid.has(key)) };
+          const offerings = homeCatalogOfferings(usable);
+          const valid = new Set(offerings.map((target) => homeFeedSelectionKey(target.addon.key, target.definition.type, target.definition.id)));
+          // Only ids the account could actually arrange are kept: the built-ins it may have and
+          // every catalogue its usable addons offer (its own feeds are a subset of those).
+          const arrangeable = new Set<string>([
+            ...homeRowOrder(actor?.role === "admin", []).map((entry) => entry.id),
+            ...offerings.map((target) => homeCatalogRowId(target.addon.key, target.definition.type, target.definition.id)),
+          ]);
+          const ids = (values: string[]) => [...new Set(values)].filter((id) => arrangeable.has(id)).slice(0, HOME_LAYOUT_ROW_LIMIT);
+          prefs.homeLayout = {
+            order: ids(parsed.order),
+            hidden: ids(parsed.hidden),
+            feeds: [...new Set(parsed.feeds.filter((key) => valid.has(key)))].slice(0, HOME_LAYOUT_FEED_LIMIT),
+          };
         }
       }
       if (realDebridToken !== undefined) state.settings.realDebridToken = realDebridToken;
