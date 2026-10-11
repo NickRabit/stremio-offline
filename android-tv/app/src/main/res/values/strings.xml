@@ -70,6 +70,16 @@
   <string name="sources_none">No active source addon has a stream for this title.</string>
   <string name="sources_local_badge">Local</string>
   <string name="sources_local_hint">Already in your library — plays from the server\'s disk</string>
+  <string name="sources_addon">Addon</string>
+  <string name="sources_all_addons">All</string>
+  <string name="sources_any_language">Any</string>
+  <string name="sources_of_total">%1$s of %2$s</string>
+  <string name="sources_sort_recommended">Recommended</string>
+  <string name="sources_sort_largest">Largest first</string>
+  <string name="sources_sort_smallest">Smallest first</string>
+  <string name="sources_sort_addon">By addon priority</string>
+  <string name="auth_language">Language</string>
+  <string name="common_sorting">Sorting</string>
   <string name="save_to_library">To library</string>
   <string name="save_queued">Queued</string>
   <string name="player_play">Play</string>

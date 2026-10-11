@@ -70,6 +70,16 @@
   <string name="sources_none">Ни один активный исходный аддон не имеет потока для этого заголовка.</string>
   <string name="sources_local_badge">Локальный</string>
   <string name="sources_local_hint">Уже в вашей библиотеке — воспроизводится с диска сервера</string>
+  <string name="sources_addon">Аддон</string>
+  <string name="sources_all_addons">Все</string>
+  <string name="sources_any_language">Любой</string>
+  <string name="sources_of_total">%1$s из %2$s</string>
+  <string name="sources_sort_recommended">Рекомендуется</string>
+  <string name="sources_sort_largest">Самый большой первый</string>
+  <string name="sources_sort_smallest">Сначала самый маленький</string>
+  <string name="sources_sort_addon">По приоритету аддонов</string>
+  <string name="auth_language">Язык</string>
+  <string name="common_sorting">Сортировка</string>
   <string name="save_to_library">В библиотеку</string>
   <string name="save_queued">В очереди</string>
   <string name="player_play">Играть</string>

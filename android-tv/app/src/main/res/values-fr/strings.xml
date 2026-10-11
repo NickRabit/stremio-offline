@@ -70,6 +70,16 @@
   <string name="sources_none">Aucun module complémentaire source actif n\'a de flux pour ce titre.</string>
   <string name="sources_local_badge">Local</string>
   <string name="sources_local_hint">Déjà dans votre bibliothèque — lu depuis le disque du serveur</string>
+  <string name="sources_addon">Module complémentaire</string>
+  <string name="sources_all_addons">Tout</string>
+  <string name="sources_any_language">N\'importe lequel</string>
+  <string name="sources_of_total">%1$s sur %2$s</string>
+  <string name="sources_sort_recommended">Recommandé</string>
+  <string name="sources_sort_largest">Le plus grand en premier</string>
+  <string name="sources_sort_smallest">Le plus petit en premier</string>
+  <string name="sources_sort_addon">Par priorité du module complémentaire</string>
+  <string name="auth_language">Langue</string>
+  <string name="common_sorting">Tri</string>
   <string name="save_to_library">Vers la bibliothèque</string>
   <string name="save_queued">En file d\'attente</string>
   <string name="player_play">Jouer</string>

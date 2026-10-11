@@ -51,6 +51,7 @@ import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Text
 import coil.compose.AsyncImage
 import cz.stremiooffline.tv.R
+import cz.stremiooffline.tv.catalog.Languages
 import cz.stremiooffline.tv.catalog.ProgressKey
 import cz.stremiooffline.tv.catalog.Resume
 import cz.stremiooffline.tv.catalog.Streams
@@ -169,6 +170,9 @@ fun CatalogDetailScreen(
   var season by remember { mutableStateOf<Int?>(null) }
   var selectedStream by remember { mutableStateOf<StreamDto?>(null) }
   var pickedStream by remember { mutableStateOf(false) }
+  // The source filters are not saved: they live while a title or episode is on screen and reset
+  // when either changes. A null sort follows the account's `streamSort`.
+  val sourceFilters = remember { SourceFilterState() }
   // The caption under the buttons names a source only once the viewer chose one in the panel;
   // pressing Play, Start over or To library does not turn it on.
   var chosenInPanel by remember { mutableStateOf(false) }
@@ -236,6 +240,7 @@ fun CatalogDetailScreen(
     notice(null)
     libraryPanelOpen = false
     pendingLibraryStream = null
+    sourceFilters.reset()
     coroutineScope {
       val settingsJob = async { runCatching { api.settings() }.getOrDefault(SettingsResponse()) }
       val addonsJob = async { runCatching { api.addons() }.getOrDefault(emptyList()) }
@@ -354,14 +359,15 @@ fun CatalogDetailScreen(
     }
   }
 
-  // Merged, sorted and filtered once per change of the raw list, never on a focus-driven
-  // recomposition: parsing hundreds of sizes and languages on every move is what ground the
-  // real TV to a halt.
-  val lists = remember(streams, addons, settings, meta.language) {
+  val filters = sourceFilters.filters(settings.streamSort)
+  // Merged, sorted and filtered once per change of the raw list or the filters, never on a
+  // focus-driven recomposition: parsing hundreds of sizes and languages on every move is what
+  // ground the real TV to a halt.
+  val lists = remember(streams, addons, settings, meta.language, filters) {
     Streams.sourceLists(
       streams = streams,
       addons = addons,
-      sort = Streams.StreamSort.of(settings.streamSort),
+      filters = filters,
       preferredLanguage = settings.audioLanguage ?: "en",
       showTorrents = settings.realDebridConfigured,
       metaLanguage = meta.language,
@@ -675,6 +681,8 @@ fun CatalogDetailScreen(
     selectedStream = null
     pickedStream = false
     chosenInPanel = false
+    // A new episode starts from the account's own sort and an unfiltered list.
+    sourceFilters.reset()
     streams = emptyList()
     localStreams = emptyList()
     localLoading = false
@@ -929,6 +937,8 @@ fun CatalogDetailScreen(
     if (sourcesOpen) {
       // Reopening lands on what the viewer picked; without a pick, on the default.
       val focusIndex = rows.indexOfFirst { it === (chosenStream ?: preferredStream) }.let { if (it >= 0) it else 0 }
+      // Like the web, the filter bar is only worth showing once more than one source is offered.
+      val chips = sourceFilterChips(filters, lists.options)
       SourcesPanel(
         streams = rows,
         focusIndex = focusIndex,
@@ -945,6 +955,15 @@ fun CatalogDetailScreen(
         failureText = loadErrorText,
         onRetry = { sourcesRetry++ },
         retryTag = TagCatalogRetry,
+        filters = if (offered.size > 1) chips else emptyList(),
+        onFilterSelect = { chip, key ->
+          sourceFilters.select(chip, key)
+        },
+        countText = if (offered.size > 1) {
+          stringResource(R.string.sources_of_total, rows.size, offered.size + localStreams.size)
+        } else {
+          null
+        },
         initialFocus = sourcesPanelFocus,
       )
     }

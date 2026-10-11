@@ -70,6 +70,16 @@
   <string name="sources_none">Nenhum complemento de fonte ativo possui um stream para este título.</string>
   <string name="sources_local_badge">Local</string>
   <string name="sources_local_hint">Já está na sua biblioteca — é reproduzido do disco do servidor</string>
+  <string name="sources_addon">Complemento</string>
+  <string name="sources_all_addons">Todos</string>
+  <string name="sources_any_language">Qualquer</string>
+  <string name="sources_of_total">%1$s de %2$s</string>
+  <string name="sources_sort_recommended">Recomendado</string>
+  <string name="sources_sort_largest">Maior primeiro</string>
+  <string name="sources_sort_smallest">O menor primeiro</string>
+  <string name="sources_sort_addon">Por prioridade adicional</string>
+  <string name="auth_language">Idioma</string>
+  <string name="common_sorting">Classificando</string>
   <string name="save_to_library">Salvar na biblioteca</string>
   <string name="save_queued">Na fila</string>
   <string name="player_play">Jogar</string>

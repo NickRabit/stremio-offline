@@ -2,11 +2,13 @@ package cz.stremiooffline.tv.ui.catalog
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
@@ -19,14 +21,25 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -48,8 +61,25 @@ import kotlinx.coroutines.android.awaitFrame
 const val TagSourcesPanel = "catalog_sources_panel"
 const val TagSourcesEmpty = "catalog_sources_empty"
 const val TagSourcesLoading = "catalog_sources_loading"
+const val TagSourcesFilters = "catalog_sources_filters"
+const val TagSourcesCount = "catalog_sources_count"
+const val TagSourceFilterOptions = "catalog_source_filter_options"
 
 fun sourceRowTag(index: Int): String = "source_row_$index"
+fun sourceFilterTag(key: String): String = "source_filter_$key"
+fun sourceFilterOptionTag(index: Int): String = "source_filter_option_$index"
+
+/** One row of a chip's nested list: the wire value the screen stores, and its label. */
+data class SourceFilterOption(val key: String, val label: String)
+
+/** A filter chip: its own label, the label of the current value, and the choices OK opens. */
+data class SourceFilterChip(
+  val key: String,
+  val title: String,
+  val value: String,
+  val selectedKey: String,
+  val options: List<SourceFilterOption>,
+)
 
 /**
  * The Sources side panel, shared by the catalogue detail and the player. It draws the rows in the
@@ -75,6 +105,11 @@ fun SourcesPanel(
   onRetry: (() -> Unit)? = null,
   /** The test tag of the failure's Try again, so each caller keeps its own name for it. */
   retryTag: String? = null,
+  /** The filter chips; empty for a caller that offers none (the player's own panel). */
+  filters: List<SourceFilterChip> = emptyList(),
+  onFilterSelect: (chipKey: String, optionKey: String) -> Unit = { _, _ -> },
+  /** The `shown of total` line beside the chips; null hides it. */
+  countText: String? = null,
   modifier: Modifier = Modifier,
   initialFocus: FocusRequester? = null,
 ) {
@@ -85,6 +120,29 @@ fun SourcesPanel(
   val findingSourcesText = stringResource(R.string.tv_finding_sources)
   val entry = focusIndex.coerceIn(0, maxOf(0, streams.size - 1))
   val listState = rememberLazyListState()
+
+  // OK on a chip opens its choices; Back leaves them and hands the remote back to that chip.
+  var openFilterKey by remember { mutableStateOf<String?>(null) }
+  var restoreFilterKey by remember { mutableStateOf<String?>(null) }
+  val chipFocuses = remember(filters.map { it.key }) { filters.map { FocusRequester() } }
+  val optionFocus = remember { FocusRequester() }
+
+  fun leaveFilter() {
+    restoreFilterKey = openFilterKey
+    openFilterKey = null
+  }
+
+  LaunchedEffect(openFilterKey) {
+    awaitFrame()
+    if (openFilterKey != null) {
+      runCatching { optionFocus.requestFocus() }
+      return@LaunchedEffect
+    }
+    val restore = restoreFilterKey ?: return@LaunchedEffect
+    restoreFilterKey = null
+    val index = filters.indexOfFirst { it.key == restore }
+    if (index >= 0) runCatching { chipFocuses.getOrNull(index)?.requestFocus() }
+  }
 
   // A row that only arrives after the panel is already up must take the remote too. A lazy list
   // only composes what is on screen, so the entry row is scrolled into view before the focus lands.
@@ -97,16 +155,38 @@ fun SourcesPanel(
 
   SidePanel(
     title = stringResource(R.string.sources_heading),
-    onClose = onClose,
+    onClose = { if (openFilterKey != null) leaveFilter() else onClose() },
     modifier = modifier.testTag(TagSourcesPanel),
     initialFocus = initialFocus,
     // Hundreds of sources keep the panel responsive: the rows are virtualised and only what is
     // on screen is composed.
     scroll = false,
   ) {
+    val openChip = filters.firstOrNull { it.key == openFilterKey }
+    if (openChip != null) {
+      FilterOptionList(
+        chip = openChip,
+        focusRequester = optionFocus,
+        onPick = { key ->
+          onFilterSelect(openChip.key, key)
+          leaveFilter()
+        },
+      )
+      return@SidePanel
+    }
+    if (filters.isNotEmpty()) {
+      SourceFilterBar(
+        chips = filters,
+        countText = countText,
+        chipFocuses = chipFocuses,
+        onOpen = { index -> openFilterKey = filters[index].key },
+        downFocus = initialFocus,
+      )
+      Spacer(Modifier.height(8.dp))
+    }
     LazyColumn(
       state = listState,
-      modifier = Modifier.fillMaxSize(),
+      modifier = Modifier.fillMaxWidth().weight(1f),
       verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
       when {
@@ -148,6 +228,17 @@ fun SourcesPanel(
               onClick = { onChoose(stream) },
               modifier = Modifier
                 .testTag(sourceRowTag(index))
+                .then(
+                  if (filters.isEmpty() || index != 0) Modifier
+                  else Modifier.onPreviewKeyEvent { event ->
+                    // The chips sit above the list: UP from the first row returns to them.
+                    if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionUp) {
+                      runCatching { chipFocuses.first().requestFocus() }.isSuccess
+                    } else {
+                      false
+                    }
+                  },
+                )
                 .then(if (initialFocus != null && index == entry) Modifier.focusRequester(initialFocus) else Modifier),
             )
           }
@@ -176,6 +267,157 @@ fun SourcesPanel(
  *  two rows never share a key -- and a row that is still offered keeps its identity across a
  *  re-sort. */
 private fun sourceRowKey(stream: StreamDto, index: Int): String = stream.sourceId.ifBlank { "row-$index" }
+
+/** The chips across the top of the panel and the `shown of total` line beside them. */
+@Composable
+private fun SourceFilterBar(
+  chips: List<SourceFilterChip>,
+  countText: String?,
+  chipFocuses: List<FocusRequester>,
+  onOpen: (Int) -> Unit,
+  downFocus: FocusRequester?,
+) {
+  Row(
+    modifier = Modifier
+      .fillMaxWidth()
+      .testTag(TagSourcesFilters)
+      .onPreviewKeyEvent { event ->
+        // DOWN leaves the chips for the list; the remaining directions stay on the row.
+        if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown && downFocus != null) {
+          runCatching { downFocus.requestFocus() }.isSuccess
+        } else {
+          false
+        }
+      },
+    horizontalArrangement = Arrangement.spacedBy(8.dp),
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    chips.forEachIndexed { index, chip ->
+      SourceFilterChipView(
+        title = chip.title,
+        value = chip.value,
+        onOpen = { onOpen(index) },
+        onLeft = { chipFocuses.getOrNull(index - 1)?.let { runCatching { it.requestFocus() } } },
+        onRight = { chipFocuses.getOrNull(index + 1)?.let { runCatching { it.requestFocus() } } },
+        modifier = Modifier
+          .weight(1f)
+          .testTag(sourceFilterTag(chip.key))
+          .focusRequester(chipFocuses[index]),
+      )
+    }
+    if (countText != null) {
+      Text(countText, color = Tokens.Muted, fontSize = 10.5.sp, maxLines = 1, modifier = Modifier.testTag(TagSourcesCount))
+    }
+  }
+}
+
+/** One chip: the filter's name over the current value. OK opens its choices. */
+@Composable
+private fun SourceFilterChipView(
+  title: String,
+  value: String,
+  onOpen: () -> Unit,
+  onLeft: () -> Unit,
+  onRight: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  var focused by remember { mutableStateOf(false) }
+  val shape = RoundedCornerShape(8.dp)
+  Column(
+    modifier = modifier
+      .onFocusChanged { focused = it.isFocused }
+      .focusable()
+      .semantics(mergeDescendants = true) {}
+      .onPreviewKeyEvent { event ->
+        if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+        when (event.key) {
+          Key.Enter, Key.DirectionCenter, Key.Spacebar -> { onOpen(); true }
+          Key.DirectionLeft -> { onLeft(); true }
+          Key.DirectionRight -> { onRight(); true }
+          else -> false
+        }
+      }
+      .then(if (focused) Modifier.background(Tokens.Panel2, shape).border(1.5.dp, Tokens.Accent2, shape) else Modifier)
+      .padding(horizontal = 8.dp, vertical = 7.dp),
+    verticalArrangement = Arrangement.spacedBy(1.dp),
+  ) {
+    Text(title, color = Tokens.Muted, fontSize = 9.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    Text(value, color = Tokens.Text, fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+  }
+}
+
+/** The nested list a chip opens: its choices with the current one ticked. */
+@Composable
+private fun FilterOptionList(
+  chip: SourceFilterChip,
+  focusRequester: FocusRequester,
+  onPick: (String) -> Unit,
+) {
+  val selectedIndex = chip.options.indexOfFirst { it.key == chip.selectedKey }.let { if (it >= 0) it else 0 }
+  Column(
+    modifier = Modifier.fillMaxSize().testTag(TagSourceFilterOptions),
+    verticalArrangement = Arrangement.spacedBy(6.dp),
+  ) {
+    Text(
+      chip.title,
+      color = Tokens.Accent,
+      fontSize = 13.sp,
+      fontWeight = FontWeight.Bold,
+      maxLines = 1,
+      overflow = TextOverflow.Ellipsis,
+      modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+    )
+    chip.options.forEachIndexed { index, option ->
+      FilterOptionRow(
+        text = option.label,
+        selected = option.key == chip.selectedKey,
+        onClick = { onPick(option.key) },
+        modifier = Modifier
+          .testTag(sourceFilterOptionTag(index))
+          .then(if (index == selectedIndex) Modifier.focusRequester(focusRequester) else Modifier),
+      )
+    }
+  }
+}
+
+/** One choice of a nested filter list: OK picks it, a tick marks the current one. */
+@Composable
+private fun FilterOptionRow(
+  text: String,
+  selected: Boolean,
+  onClick: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  var focused by remember { mutableStateOf(false) }
+  val shape = RoundedCornerShape(8.dp)
+  Row(
+    modifier = modifier
+      .fillMaxWidth()
+      .onFocusChanged { focused = it.isFocused }
+      .focusable()
+      .semantics(mergeDescendants = true) { this.selected = selected }
+      .onPreviewKeyEvent { event ->
+        val pressed = event.type == KeyEventType.KeyDown &&
+          (event.key == Key.Enter || event.key == Key.DirectionCenter || event.key == Key.Spacebar)
+        if (pressed) onClick()
+        pressed
+      }
+      .then(if (focused) Modifier.background(Tokens.Panel2, shape).border(1.5.dp, Tokens.Accent2, shape) else Modifier)
+      .padding(horizontal = 12.dp, vertical = 10.dp),
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    Text(
+      text,
+      modifier = Modifier.weight(1f),
+      color = Tokens.Text,
+      fontSize = 13.sp,
+      fontWeight = FontWeight.SemiBold,
+      maxLines = 1,
+      overflow = TextOverflow.Ellipsis,
+    )
+    if (selected) Text("✓", color = Tokens.Green, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+  }
+}
 
 /** One offered stream: badge, addon, the stream's title and a size/language meta line. */
 @Composable
@@ -261,3 +503,89 @@ internal fun SourceRow(
 /** One row's headline: the stream's name, or the first line it wrote about itself. */
 internal fun streamLabel(stream: StreamDto): String =
   stream.name ?: stream.title?.split("\n")?.firstOrNull() ?: stream.description?.split("\n")?.firstOrNull() ?: ""
+
+
+/**
+ * The web's three filter menus as chips. Kept out of the detail screen on purpose: that
+ * composable is already so large that adding this inline made ART refuse to verify it.
+ */
+@Composable
+internal fun sourceFilterChips(
+  filters: Streams.StreamFilters,
+  options: Streams.SourceFilterOptions,
+): List<SourceFilterChip> {
+  val sortValue = filters.sort
+  val streamAddon = filters.addon
+  val streamLanguage = filters.language
+  val sortingTitle = stringResource(R.string.common_sorting)
+  val addonTitle = stringResource(R.string.sources_addon)
+  val languageTitle = stringResource(R.string.auth_language)
+  val allAddonsLabel = stringResource(R.string.sources_all_addons)
+  val anyLanguageLabel = stringResource(R.string.sources_any_language)
+  val sortLabels = listOf(
+    Streams.StreamSort.Recommended to stringResource(R.string.sources_sort_recommended),
+    Streams.StreamSort.SizeDesc to stringResource(R.string.sources_sort_largest),
+    Streams.StreamSort.SizeAsc to stringResource(R.string.sources_sort_smallest),
+    Streams.StreamSort.Addon to stringResource(R.string.sources_sort_addon),
+  )
+  val languageOptions = options.languages
+  val chips = buildList {
+    add(
+      SourceFilterChip(
+        key = "sort",
+        title = sortingTitle,
+        value = sortLabels.first { it.first == sortValue }.second,
+        selectedKey = sortValue.wire,
+        options = sortLabels.map { SourceFilterOption(it.first.wire, it.second) },
+      ),
+    )
+    add(
+      SourceFilterChip(
+        key = "addon",
+        title = addonTitle,
+        value = streamAddon.ifEmpty { allAddonsLabel },
+        selectedKey = streamAddon,
+        options = listOf(SourceFilterOption("", allAddonsLabel)) +
+          options.addons.map { SourceFilterOption(it.value, it.value) },
+      ),
+    )
+    // With no language to offer the web hides the field; a chosen one always stays visible.
+    if (languageOptions.isNotEmpty()) {
+      add(
+        SourceFilterChip(
+          key = "language",
+          title = languageTitle,
+          value = if (streamLanguage.isEmpty()) anyLanguageLabel else Languages.label(streamLanguage),
+          selectedKey = streamLanguage,
+          options = listOf(SourceFilterOption("", anyLanguageLabel)) +
+            languageOptions.map { SourceFilterOption(it.value, Languages.label(it.value)) },
+        ),
+      )
+    }
+  }
+  return chips
+}
+
+/** The detail screen's source filters; held in one object so the screen keeps a single local. */
+internal class SourceFilterState {
+  private var addon by mutableStateOf("")
+  private var language by mutableStateOf("")
+  private var sort by mutableStateOf<Streams.StreamSort?>(null)
+
+  fun filters(accountSort: String?) =
+    Streams.StreamFilters(addon, language, sort ?: Streams.StreamSort.of(accountSort))
+
+  fun select(chip: String, key: String) {
+    when (chip) {
+      "sort" -> sort = Streams.StreamSort.of(key)
+      "addon" -> addon = key
+      "language" -> language = key
+    }
+  }
+
+  fun reset() {
+    addon = ""
+    language = ""
+    sort = null
+  }
+}
