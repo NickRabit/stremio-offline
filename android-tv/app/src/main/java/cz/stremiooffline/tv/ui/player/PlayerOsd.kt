@@ -68,6 +68,7 @@ const val TAG_OSD_BUBBLE = "osd_bubble"
 const val TAG_OSD_TRACKS = "osd_tracks"
 const val TAG_OSD_NEXT = "osd_next"
 const val TAG_OSD_DIAG = "osd_diag"
+const val TAG_ERROR_PANEL = "error_panel"
 
 /** The seek icons beside the plain `10` labels. */
 const val SEEK_BACK_LABEL = "10"
@@ -94,8 +95,12 @@ fun LoadingOverlay(title: String) {
 @Composable
 fun ErrorPanel(onRetry: () -> Unit, onBack: () -> Unit) {
   val retryFocus = remember { FocusRequester() }
+  androidx.activity.compose.BackHandler { onBack() }
   androidx.compose.runtime.LaunchedEffect(Unit) { runCatching { retryFocus.requestFocus() } }
-  Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.75f)), contentAlignment = Alignment.Center) {
+  Box(
+    Modifier.fillMaxSize().testTag(TAG_ERROR_PANEL).background(Color.Black.copy(alpha = 0.75f)),
+    contentAlignment = Alignment.Center,
+  ) {
     Column(
       modifier = Modifier
         .background(Tokens.Panel, RoundedCornerShape(12.dp))

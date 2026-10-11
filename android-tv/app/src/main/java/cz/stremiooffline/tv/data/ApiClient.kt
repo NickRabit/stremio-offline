@@ -21,6 +21,9 @@ enum class ApiFailure {
   NotFound, Forbidden, Generic
 }
 
+/** A playback call waits for FFmpeg, not for a plain API answer. */
+internal const val PLAYBACK_READ_TIMEOUT_S = 60L
+
 class ApiError(val failure: ApiFailure, val seconds: Int? = null) : Exception(failure.name)
 
 data class ServerStatus(val version: String)
@@ -56,6 +59,12 @@ class ApiClient(
       if (address.isDowngrade(request.url)) throw IOException("Refusing to downgrade https to http")
       chain.proceed(request)
     }
+    .build()
+
+  /** Starting or restarting a conversion can take a while: FFmpeg answers long after the ten
+   *  seconds every other call may wait. The playback calls get their own read timeout. */
+  private val playbackClient = client.newBuilder()
+    .readTimeout(PLAYBACK_READ_TIMEOUT_S, TimeUnit.SECONDS)
     .build()
 
   /** The one HTTP client of the session: images and the player share it so they share the cookie. */
@@ -159,7 +168,7 @@ class ApiClient(
       PlaybackStartRequest.serializer(),
       PlaybackStartRequest(sourceId, capabilities, time, subtitleIds),
     )
-    return request(Request.Builder().url(address.resolve("/api/playback")).post(payload.toRequestBody(mediaType)).build())
+    return request(Request.Builder().url(address.resolve("/api/playback")).post(payload.toRequestBody(mediaType)).build(), playbackClient)
       .decode<PlaybackDescriptorDto>() ?: throw ApiError(ApiFailure.Generic)
   }
 
@@ -168,19 +177,19 @@ class ApiClient(
       is TrackChange.Audio -> json.encodeToString(TrackAudioRequest.serializer(), TrackAudioRequest(change.index, change.time))
       is TrackChange.Subtitle -> json.encodeToString(TrackSubtitleRequest.serializer(), TrackSubtitleRequest(change.index, change.time))
     }
-    return request(Request.Builder().url(address.resolve("/api/playback/$id/track")).post(payload.toRequestBody(mediaType)).build())
+    return request(Request.Builder().url(address.resolve("/api/playback/$id/track")).post(payload.toRequestBody(mediaType)).build(), playbackClient)
       .decode<PlaybackDescriptorDto>() ?: throw ApiError(ApiFailure.Generic)
   }
 
   override suspend fun seekPlayback(id: String, time: Double): PlaybackDescriptorDto {
     val payload = json.encodeToString(TimeRequest.serializer(), TimeRequest(time))
-    return request(Request.Builder().url(address.resolve("/api/playback/$id/seek")).post(payload.toRequestBody(mediaType)).build())
+    return request(Request.Builder().url(address.resolve("/api/playback/$id/seek")).post(payload.toRequestBody(mediaType)).build(), playbackClient)
       .decode<PlaybackDescriptorDto>() ?: throw ApiError(ApiFailure.Generic)
   }
 
   override suspend fun escalatePlayback(id: String, time: Double): PlaybackDescriptorDto {
     val payload = json.encodeToString(TimeRequest.serializer(), TimeRequest(time))
-    return request(Request.Builder().url(address.resolve("/api/playback/$id/escalate")).post(payload.toRequestBody(mediaType)).build())
+    return request(Request.Builder().url(address.resolve("/api/playback/$id/escalate")).post(payload.toRequestBody(mediaType)).build(), playbackClient)
       .decode<PlaybackDescriptorDto>() ?: throw ApiError(ApiFailure.Generic)
   }
 
@@ -325,7 +334,7 @@ class ApiClient(
     request(Request.Builder().url(address.resolve("/api/progress")).post(payload.toRequestBody(mediaType)).build())
   }
 
-  private suspend fun request(request: Request): String = call(request).closing { response ->
+  private suspend fun request(request: Request, http: OkHttpClient = client): String = call(request, http).closing { response ->
     when {
       response.isSuccessful -> readBody(response)
       response.code == 401 -> throw ApiError(ApiFailure.SessionExpired)
@@ -343,9 +352,9 @@ class ApiClient(
 
   private fun encode(value: String): String = java.net.URLEncoder.encode(value, "UTF-8").replace("+", "%20")
 
-  private suspend fun call(request: Request): Response = withContext(Dispatchers.IO) {
+  private suspend fun call(request: Request, http: OkHttpClient = client): Response = withContext(Dispatchers.IO) {
     try {
-      client.newCall(request).execute()
+      http.newCall(request).execute()
     } catch (error: IOException) {
       throw ApiError(ApiFailure.Unreachable)
     }
