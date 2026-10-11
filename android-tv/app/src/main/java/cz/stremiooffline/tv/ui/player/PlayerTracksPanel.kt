@@ -226,8 +226,10 @@ private fun DelayRow(delay: Double, enabled: Boolean, onDelay: (Double) -> Unit)
     modifier = Modifier
       .fillMaxWidth()
       .testTag(TagDelayRow)
-      .focusable(enabled)
+      // Observes the row's own focus target, so it has to sit before `focusable()`.
       .onFocusChanged { focused = it.isFocused }
+      .focusable(enabled)
+      .semantics { this[OsdFocused] = focused }
       .onPreviewKeyEvent { event ->
         if (!enabled || event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
         when (event.key) {

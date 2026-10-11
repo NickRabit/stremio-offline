@@ -2,6 +2,7 @@
 
 package cz.stremiooffline.tv.ui.player
 
+import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -72,6 +73,15 @@ class PlayerPanelFocusTest {
     compose.waitForIdle()
   }
 
+  /** A real remote Back, the way Android 14 delivers it to the window. */
+  private fun backKey() {
+    compose.runOnUiThread {
+      compose.activity.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_BACK))
+      compose.activity.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_BACK))
+    }
+    compose.waitForIdle()
+  }
+
   @Test
   fun `the tracks panel takes the remote on the audio in use and Back returns it`() {
     mount()
@@ -111,6 +121,24 @@ class PlayerPanelFocusTest {
 
     compose.onNodeWithTag(TagDiagPanel).assertDoesNotExist()
     compose.onNodeWithTag(TAG_OSD_DIAG).assertIsFocused()
+  }
+
+  // Bug on the emulator: after Back closed the tracks panel the remote landed on Play instead of
+  // the button that opened the panel.
+  @Test
+  fun `a real back key returns the remote to the tracks button`() {
+    mount()
+
+    press(Key.DirectionRight)
+    press(Key.DirectionRight)
+    compose.onNodeWithTag(TAG_OSD_TRACKS).assertIsFocused()
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(TagTracksPanel).assertExists()
+
+    backKey()
+
+    compose.onNodeWithTag(TagTracksPanel).assertDoesNotExist()
+    compose.onNodeWithTag(TAG_OSD_TRACKS).assertIsFocused()
   }
 
   @Test

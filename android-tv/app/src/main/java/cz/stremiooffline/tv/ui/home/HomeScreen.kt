@@ -504,8 +504,9 @@ private fun PlaceholderRow(rowId: String, requesters: MutableMap<Pair<String, St
         modifier = Modifier
           .testTag("$rowId:$index")
           .focusRequester(requester)
-          .focusable()
-          .onFocusChanged { if (it.isFocused) onCardFocus(index) },
+          // Observes the card's own focus target, so it has to sit before `focusable()`.
+          .onFocusChanged { if (it.isFocused) onCardFocus(index) }
+          .focusable(),
       )
     }
   }
