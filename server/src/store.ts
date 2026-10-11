@@ -6,6 +6,7 @@ import { hashPassword, type AuthState } from "./auth.js";
 import { renameWithRetry } from "./fs-retry.js";
 import { normalizeDownloadSettings } from "./naming.js";
 import type { UiLanguage } from "./language.js";
+import type { HomeLayout } from "./home.js";
 import { newLibraryId, type DepartedLibrary, type LibraryRecord, type RootGrant } from "./libraries.js";
 import { log } from "./logger.js";
 import type { ProgressSeries } from "./progress-series.js";
@@ -64,6 +65,9 @@ export interface UserPrefs {
   startView: StartView;
   /** The segment the library root's one shelf shows; Continue unless the person chose otherwise. */
   libraryShelf: LibraryShelf;
+  /** One account's own Home: the row order it placed, the rows it hid and the extra feeds it
+   *  added. Absent means the instance's default Home. */
+  homeLayout?: HomeLayout;
 }
 
 /** The flat shape of the settings file and of the settings backup: the instance's half and

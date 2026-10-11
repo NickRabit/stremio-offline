@@ -4,6 +4,7 @@ import { defaultSettings, type Settings } from "./store.js";
 import { isUiLanguage, normalizeLanguage } from "./language.js";
 import { AppError } from "./errors.js";
 import { normalizeRefreshHours } from "./addon-refresh.js";
+import { parseHomeLayout } from "./home.js";
 import { sameFile, toPosix, type LibraryRecord, type LibraryType } from "./libraries.js";
 
 export const BACKUP_FORMAT = "stremio-offline-settings";
@@ -85,6 +86,9 @@ function parseSettings(value: unknown): Settings {
   const homeTileShape = String(source.homeTileShape ?? "");
   const startView = String(source.startView ?? "");
   const libraryShelf = String(source.libraryShelf ?? "");
+  // A personal Home arrangement rides in the backup like every other personal setting; a
+  // shape that is not the three arrays is dropped rather than failing the whole import.
+  const homeLayout = parseHomeLayout(source.homeLayout);
   return {
     concurrentDownloads: number("concurrentDownloads", 8),
     parallelPerProvider: number("parallelPerProvider", 8),
@@ -105,6 +109,7 @@ function parseSettings(value: unknown): Settings {
     homeTileShape: TILE_SHAPES.has(homeTileShape) ? homeTileShape as Settings["homeTileShape"] : fallback.homeTileShape,
     startView: START_VIEWS.has(startView) ? startView as Settings["startView"] : fallback.startView,
     libraryShelf: LIBRARY_SHELVES.has(libraryShelf) ? libraryShelf as Settings["libraryShelf"] : fallback.libraryShelf,
+    ...(homeLayout ? { homeLayout } : {}),
     // Whatever the backup names here is another instance's id; the import maps it onto a local
     // library by root or name, and falls back to the default when it cannot.
     defaultMovieLibrary: typeof source.defaultMovieLibrary === "string" ? source.defaultMovieLibrary : "",

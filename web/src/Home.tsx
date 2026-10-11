@@ -5,12 +5,12 @@ import { Empty } from "./app-chrome";
 import { bytes, speed, statusLabel } from "./download-format";
 import { attentionCount, blocked, homeQueue, queueAction, queueGroup } from "./home-rows";
 import type { ShowAllTarget } from "./home-cards";
-import { homeAllRowsEmpty, homeCatalogShelves, homeRowsFor, type HomeRows } from "./home-state";
+import { homeAllRowsEmpty, homeCatalogShelves, homeFeedTitle, homeRowsFor, isHomeCatalogRow, type HomeRows } from "./home-state";
 import { HomeShelf } from "./HomeShelf";
 import type { HomeCardActions } from "./HomeCard";
 import { t } from "./i18n";
 import type { Download, LibraryView, TileShape } from "./types";
-import type { HomeCard, HomeRowId } from "../../server/src/home";
+import type { HomeCard, HomeOrderEntry, HomeRowId } from "../../server/src/home";
 
 const BLOCKED_KEY = { storage: "home.blocked.storage", library: "home.blocked.library", permission: "home.blocked.permission" } as const;
 const ACTION_LABEL = { retry: "downloads.retry", resume: "library.continue", pause: "player.pause", open: "nav.downloads" } as const;
@@ -35,7 +35,7 @@ function metaOf(job: Download): string {
 
 const percentOf = (job: Download) => job.total != null && job.total > 0 ? Math.min(100, (job.received / job.total) * 100) : null;
 
-export function Home({ jobs, addons, admin, onShowDownloads, onAction, rows, shape, onToggleShape, onRetry, onShowAll, onPlay, onOpenCatalogue, onShuffle, onVisible, onOpenCatalog, onReveal, onForgotten, onError }: {
+export function Home({ jobs, addons, admin, onShowDownloads, onAction, rows, order, shape, onToggleShape, onRetry, onShowAll, onPlay, onOpenCatalogue, onShuffle, onVisible, onOpenCatalog, onReveal, onForgotten, onError }: {
   jobs: Download[];
   libraries: LibraryView[];
   addons: import("./types").Addon[];
@@ -43,6 +43,9 @@ export function Home({ jobs, addons, admin, onShowDownloads, onAction, rows, sha
   onAction: (job: Download, action: "pause" | "resume" | "retry") => Promise<void>;
   admin: boolean;
   rows: HomeRows;
+  /** The shelves the server says this account has, in its own order. Until the first answer
+   *  arrives the page draws the addon feeds this client knows about. */
+  order?: HomeOrderEntry[];
   shape: TileShape;
   onToggleShape: () => void;
   onRetry: (row: HomeRowId) => void;
@@ -64,13 +67,15 @@ export function Home({ jobs, addons, admin, onShowDownloads, onAction, rows, sha
   const visibleCallbacks = useRef(new Map<HomeRowId, () => void>());
   const latestVisible = useRef(onVisible);
   latestVisible.current = onVisible;
-  const catalogShelves = homeCatalogShelves(addons);
-  const catalogTitles = new Map(catalogShelves.map((shelf) => [shelf.id, shelf.title]));
-  const askedRows = homeRowsFor(admin, addons);
+  const catalogTitles = new Map(homeCatalogShelves(addons).map((shelf) => [shelf.id, homeFeedTitle(shelf.id, shelf.title)]));
+  for (const entry of order ?? []) if (entry.title) catalogTitles.set(entry.id, homeFeedTitle(entry.id, entry.title));
+  const askedRows = order?.length ? order.map((entry) => entry.id) : homeRowsFor(admin, addons);
   const items = homeQueue(jobs);
   const attention = attentionCount(jobs);
   const cards = items.filter((job) => queueGroup(job) === "attention");
-  const confirm = rows.confirm;
+  // A personal layout can hide `confirm`; the server then builds no row for it, so the chip
+  // and its error line follow the order rather than a row the account no longer shows.
+  const confirm = askedRows.includes("confirm") ? rows.confirm : undefined;
 
   const heading = <div className="heading home-heading">
     <div className="home-heading-copy"><small>{t("home.eyebrow")}</small><h2>{t("home.title")}</h2></div>
@@ -111,7 +116,7 @@ export function Home({ jobs, addons, admin, onShowDownloads, onAction, rows, sha
   return <>
     {heading}
     {confirmError}
-    {askedRows.filter((row) => row !== "confirm").map((row) => <HomeShelf key={row} row={row} title={catalogTitles.get(row)} state={rows[row]} shape={shape} actions={actions} onRetry={onRetry} onShowAll={onShowAll} onShuffle={row === "tonight" || catalogTitles.has(row) ? () => shuffle(row) : undefined} onVisible={onVisible && catalogTitles.has(row) ? visibleOf(row) : undefined} onOpenCatalog={onOpenCatalog && catalogTitles.has(row) ? () => onOpenCatalog(row) : undefined}/>)}
+    {askedRows.filter((row) => row !== "confirm").map((row) => <HomeShelf key={row} row={row} title={catalogTitles.get(row)} state={rows[row]} shape={shape} actions={actions} onRetry={onRetry} onShowAll={onShowAll} onShuffle={row === "tonight" || isHomeCatalogRow(row) ? () => shuffle(row) : undefined} onVisible={onVisible && isHomeCatalogRow(row) ? visibleOf(row) : undefined} onOpenCatalog={onOpenCatalog && isHomeCatalogRow(row) ? () => onOpenCatalog(row) : undefined}/>)}
     {items.length > 0 && <section className="home-row">
       <div className="subhead">
         <div className="home-head"><h3>{t("home.downloads")}</h3><span className="count">{summary}</span></div>

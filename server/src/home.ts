@@ -7,6 +7,9 @@ export const HOME_CANDIDATES = 30;
 export const HOME_MARKER_LIMIT = 20;
 export const HOME_LOOKUP_DEADLINE_MS = 1500;
 export const HOME_FORGET_LIMIT = 50;
+/** How many row ids and extra feeds one personal layout may name. A body over either is refused. */
+export const HOME_LAYOUT_ROW_LIMIT = 200;
+export const HOME_LAYOUT_FEED_LIMIT = 50;
 
 export type BuiltinHomeRowId = "resume" | "completed" | "favorites" | "recent" | "episodes" | "tonight" | "confirm";
 export type HomeRowId = BuiltinHomeRowId | `catalog:${string}:${string}:${string}`;
@@ -32,6 +35,74 @@ export const HOME_BUILTIN_ROWS: readonly BuiltinHomeRowId[] = ["resume", "comple
 export const homeCatalogSelectionKey = (type: string, id: string) => `${encodeURIComponent(type)}:${encodeURIComponent(id)}`;
 export const homeCatalogRowId = (addonKey: string, type: string, id: string): HomeRowId =>
   `catalog:${encodeURIComponent(addonKey)}:${encodeURIComponent(type)}:${encodeURIComponent(id)}`;
+
+/** The catalogue feed key a personal `homeLayout.feeds` entry stores: the addon and the
+ *  catalogue it names, each part encoded the way `homeCatalogSelectionKey` encodes its own. */
+export const homeFeedSelectionKey = (addonKey: string, type: string, id: string) =>
+  `${encodeURIComponent(addonKey)}:${encodeURIComponent(type)}:${encodeURIComponent(id)}`;
+
+/** The i18n key a built-in row's arrangement label shows. */
+export const HOME_BUILTIN_LABELS: Record<BuiltinHomeRowId, string> = {
+  resume: "home.continue",
+  favorites: "home.favorites",
+  tonight: "home.tonight",
+  episodes: "home.newEpisodes",
+  completed: "home.readyToPlay",
+  recent: "home.recent",
+  confirm: "home.toConfirm",
+};
+
+/** One account's arrangement of its Home: the row order it placed, the rows it hid and the
+ *  extra feeds it added for itself. */
+export interface HomeLayout { order: string[]; hidden: string[]; feeds: string[] }
+
+const stringArray = (value: unknown): string[] | undefined =>
+  Array.isArray(value) && value.every((item) => typeof item === "string") ? value as string[] : undefined;
+
+/** Reads a stored or submitted `homeLayout`. A shape that is not the three string arrays is
+ *  refused (`undefined`); a well-formed shape that names rows this request does not offer is
+ *  kept here and dropped where the offer set is known. */
+export function parseHomeLayout(value: unknown): HomeLayout | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const record = value as Record<string, unknown>;
+  const order = stringArray(record.order);
+  const hidden = stringArray(record.hidden);
+  const feeds = stringArray(record.feeds);
+  if (!order || !hidden || !feeds) return undefined;
+  return { order, hidden, feeds };
+}
+
+/** The account's arrangement over the rows a request offers: the ids it placed come first in
+ *  its own order, and every row it never placed is inserted at its default position, next to
+ *  the default neighbours it still has. Hidden rows stay in the order, so showing them again
+ *  puts them back where they were; the caller drops them from what it draws. */
+export function arrangeHomeRows(defaultOrder: readonly HomeRowId[], layout: HomeLayout | undefined): { order: HomeRowId[]; hidden: Set<HomeRowId> } {
+  if (!layout) return { order: [...defaultOrder], hidden: new Set() };
+  const offered = new Set(defaultOrder);
+  const hidden = new Set(layout.hidden.filter((id): id is HomeRowId => offered.has(id as HomeRowId)) as HomeRowId[]);
+  const placed: HomeRowId[] = [];
+  for (const id of layout.order) {
+    if (!offered.has(id as HomeRowId) || placed.includes(id as HomeRowId)) continue;
+    placed.push(id as HomeRowId);
+  }
+  for (const id of defaultOrder) {
+    if (placed.includes(id)) continue;
+    const index = defaultOrder.indexOf(id);
+    let at = -1;
+    for (let i = index - 1; i >= 0; i -= 1) {
+      const anchor = placed.indexOf(defaultOrder[i]!);
+      if (anchor >= 0) { at = anchor + 1; break; }
+    }
+    if (at < 0) {
+      for (let i = index + 1; i < defaultOrder.length; i += 1) {
+        const anchor = placed.indexOf(defaultOrder[i]!);
+        if (anchor >= 0) { at = anchor; break; }
+      }
+    }
+    if (at < 0) placed.push(id); else placed.splice(at, 0, id);
+  }
+  return { order: placed, hidden };
+}
 
 /** The addon catalogue a Home row reads, or nothing for a built-in row. */
 export function parseHomeCatalogRowId(row: string): { addonKey: string; type: string; id: string } | undefined {
@@ -84,6 +155,20 @@ export interface HomeRow {
 }
 
 export interface HomeResponse { generatedAt: string; order: HomeOrderEntry[]; rows: Partial<Record<HomeRowId, HomeRow>> }
+
+/** One row the settings screen can arrange. `shown` is whether it is on Home right now;
+ *  `added` is whether it is part of the arrangement at all, so an unconfigured catalogue the
+ *  account could add is told apart from a feed it hid. */
+export interface HomeLayoutEntry {
+  id: HomeRowId;
+  kind: "builtin" | "feed";
+  label: string;
+  shown: boolean;
+  position: number;
+  added: boolean;
+}
+
+export interface HomeLayoutResponse { rows: HomeLayoutEntry[]; layout: HomeLayout }
 
 /** One library file with a stored position, already filtered by permission and shaped by
  *  the caller of the builder. `seriesId` is the catalogue title the folder is bound to. */

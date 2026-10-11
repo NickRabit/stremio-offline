@@ -4,11 +4,11 @@ import { messageKeyOf } from "../errors.js";
 import type { NewEpisode } from "../follows.js";
 import { images } from "../images.js";
 import { allowedAddons } from "../addons.js";
-import { HomeCatalogCache, homeCatalogTargets, type HomeCatalogTarget } from "../home-catalogs.js";
+import { HomeCatalogCache, homeCatalogOfferings, homeCatalogTargets, type HomeCatalogTarget } from "../home-catalogs.js";
 import {
-  HOME_BUILTIN_ROWS, HOME_CANDIDATES, HOME_LOOKUP_DEADLINE_MS, HOME_MARKER_LIMIT, HOME_ROW_LIMIT,
-  boundCards, homeCatalogRowId, homeRowOrder, mergeResume,
-  type HomeCard, type HomeResponse, type HomeRow, type HomeRowError, type HomeRowId,
+  HOME_BUILTIN_LABELS, HOME_BUILTIN_ROWS, HOME_CANDIDATES, HOME_LOOKUP_DEADLINE_MS, HOME_MARKER_LIMIT, HOME_ROW_LIMIT,
+  arrangeHomeRows, boundCards, homeCatalogRowId, homeFeedSelectionKey, homeRowOrder, mergeResume, parseHomeLayout,
+  type HomeCard, type HomeLayout, type HomeLayoutEntry, type HomeLayoutResponse, type HomeResponse, type HomeRow, type HomeRowError, type HomeRowId,
   type BuiltinHomeRowId, type ResumeCatalogueItem, type ResumeFileItem,
 } from "../home.js";
 import { libraryFor, libraryPath, libraryVisible, parseLibraryPath, showsInFavorites, showsOnHome, type LibraryRecord, type Viewer } from "../libraries.js";
@@ -429,13 +429,55 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
 
   const catalogs = deps.homeCatalogs ?? new HomeCatalogCache(deps.homeCatalog);
 
-  const addonCatalogRows = (viewer: Viewer) => {
-    const rows = new Map<HomeRowId, HomeCatalogTarget>();
-    for (const target of homeCatalogTargets(allowedAddons(store.addons(), viewer))) {
-      const row = homeCatalogRowId(target.addon.key, target.definition.type, target.definition.id);
-      if (!rows.has(row)) rows.set(row, target);
+  const feedRowId = (target: HomeCatalogTarget): HomeRowId => homeCatalogRowId(target.addon.key, target.definition.type, target.definition.id);
+  const feedKey = (target: HomeCatalogTarget) => homeFeedSelectionKey(target.addon.key, target.definition.type, target.definition.id);
+  const feedTitle = (target: HomeCatalogTarget) => `${target.addon.manifest.name} · ${target.definition.name || target.definition.id}`;
+
+  /** Everything one account's Home is made of: the instance feeds it has by default, the feeds
+   *  it added for itself, every catalogue it could still add, and the arrangement that comes
+   *  out of its own layout. One builder, so `order` and the rows built never disagree. */
+  interface Arrangement {
+    /** Every feed row the account currently has on Home, keyed by row id. */
+    targets: Map<HomeRowId, HomeCatalogTarget>;
+    /** Every catalogue the account's usable addons offer, keyed by row id. */
+    offerings: Map<HomeRowId, HomeCatalogTarget>;
+    /** The feed keys the account may name, in the order it stored them. */
+    feedKeys: string[];
+    /** The full arrangement, hidden rows included. */
+    arranged: HomeRowId[];
+    hidden: Set<HomeRowId>;
+  }
+
+  const arrangementOf = (viewer: Viewer, layout: HomeLayout | undefined): Arrangement => {
+    const usable = allowedAddons(store.addons(), viewer);
+    const instance = new Map<HomeRowId, HomeCatalogTarget>();
+    for (const target of homeCatalogTargets(usable)) {
+      const id = feedRowId(target);
+      if (!instance.has(id)) instance.set(id, target);
     }
-    return rows;
+    const offerings = new Map<HomeRowId, HomeCatalogTarget>();
+    const byKey = new Map<string, HomeCatalogTarget>();
+    for (const target of homeCatalogOfferings(usable)) {
+      const id = feedRowId(target);
+      if (!offerings.has(id)) offerings.set(id, target);
+      const key = feedKey(target);
+      if (!byKey.has(key)) byKey.set(key, target);
+    }
+    const addedFeeds = new Map<HomeRowId, HomeCatalogTarget>();
+    const feedKeys: string[] = [];
+    for (const key of layout?.feeds ?? []) {
+      const target = byKey.get(key);
+      if (!target) continue;
+      if (!feedKeys.includes(key)) feedKeys.push(key);
+      const id = feedRowId(target);
+      if (!instance.has(id) && !addedFeeds.has(id)) addedFeeds.set(id, target);
+    }
+    const targets = new Map(instance);
+    for (const [id, target] of addedFeeds) targets.set(id, target);
+    const entries = [...targets.entries()].map(([id, target]) => ({ id, title: feedTitle(target) }));
+    const defaultOrder = homeRowOrder(viewer.role === "admin", entries).map((entry) => entry.id);
+    const { order, hidden } = arrangeHomeRows(defaultOrder, layout);
+    return { targets, offerings, feedKeys, arranged: order, hidden };
   };
 
   /** A remembered answer is drawn at once and refreshed behind it when stale. Only a shelf
@@ -500,19 +542,22 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
     // personal routes give, never a filtered envelope for a request that names nobody.
     const viewer = viewerOf(currentUser(req));
     res.set("Cache-Control", "private, no-store");
-    const rows: Partial<Record<HomeRowId, HomeRow>> = {};
-    const catalogRows = addonCatalogRows(viewer);
-    catalogs.visited([...catalogRows.values()]);
-    const order = homeRowOrder(viewer.role === "admin", [...catalogRows.entries()].map(([id, target]) => ({
-      id,
-      title: `${target.addon.manifest.name} · ${target.definition.name || target.definition.id}`,
-    })));
+    const arrangement = arrangementOf(viewer, parseHomeLayout(dataOf(req).prefs.homeLayout));
+    const visible = arrangement.arranged.filter((id) => !arrangement.hidden.has(id));
+    // A hidden shelf is not built and not warmed: a row the account hid never reaches its addon.
+    catalogs.visited(visible.flatMap((id) => { const target = arrangement.targets.get(id); return target ? [target] : []; }));
+    const order = visible.map((id) => {
+      const target = arrangement.targets.get(id);
+      return target ? { id, title: feedTitle(target) } : { id };
+    });
     // Only the rows the order carries are built: a row an account never sees in `order` --
-    // the administrator's `confirm` for anybody else -- must not appear in `rows` either.
-    const ordered = new Set(order.map((entry) => entry.id));
-    await Promise.all(requestedRows(req.query.rows, catalogRows).filter((id) => ordered.has(id)).map(async (id) => {
+    // the administrator's `confirm` for anybody else, or any row it hid -- must not appear in
+    // `rows` either.
+    const ordered = new Set(visible);
+    const rows: Partial<Record<HomeRowId, HomeRow>> = {};
+    await Promise.all(requestedRows(req.query.rows, arrangement.targets).filter((id) => ordered.has(id)).map(async (id) => {
       try {
-        const catalogRow = catalogRows.get(id);
+        const catalogRow = arrangement.targets.get(id);
         rows[id] = catalogRow
           ? await addonCatalogRow(req, viewer, id, catalogRow)
           : await builders[id as BuiltinHomeRowId](req, viewer);
@@ -521,6 +566,36 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
       }
     }));
     const response: HomeResponse = { generatedAt: new Date().toISOString(), order, rows };
+    res.json(response);
+  }));
+
+  app.get("/api/home/layout", asyncRoute(async (req, res) => {
+    const viewer = viewerOf(currentUser(req));
+    res.set("Cache-Control", "private, no-store");
+    const layout = parseHomeLayout(dataOf(req).prefs.homeLayout);
+    const arrangement = arrangementOf(viewer, layout);
+    const entry = (id: HomeRowId, position: number, added: boolean): HomeLayoutEntry => {
+      const target = arrangement.targets.get(id) ?? arrangement.offerings.get(id);
+      return {
+        id,
+        kind: id.startsWith("catalog:") ? "feed" : "builtin",
+        label: id.startsWith("catalog:") ? feedTitle(target!) : HOME_BUILTIN_LABELS[id as BuiltinHomeRowId],
+        shown: added && !arrangement.hidden.has(id),
+        position,
+        added,
+      };
+    };
+    const rows: HomeLayoutEntry[] = arrangement.arranged.map((id, position) => entry(id, position, true));
+    // Every catalogue the account could add but has not: the same list the "Add a catalogue"
+    // picker reads, kept after the arrangement so positions stay a single sequence.
+    for (const id of arrangement.offerings.keys()) {
+      if (arrangement.targets.has(id)) continue;
+      rows.push(entry(id, rows.length, false));
+    }
+    const response: HomeLayoutResponse = {
+      rows,
+      layout: { order: arrangement.arranged, hidden: [...arrangement.hidden], feeds: arrangement.feedKeys },
+    };
     res.json(response);
   }));
 }

@@ -6,8 +6,10 @@ the built-in rows are Continue watching, Favourites, Tonight, New episodes,
 Ready to play, Recently added and then the Downloads strip. Each enabled catalog
 feed from an add-on shown on Home can also contribute its own carousel. To confirm is a count in the
 heading, not a shelf, and Downloads is a one-line summary unless a job has
-failed or is blocked. The row order above is fixed. Hiding a row per account is not
-built. Written 2026-10-05 and revised the
+failed or is blocked. Slice 6 shipped a personal Home layout: each account orders
+and hides its rows and adds catalogue feeds for itself, on top of the instance
+defaults, and an account that never arranged one sees the page exactly as before.
+Written 2026-10-05 and revised the
 same day against `main` at 0.5.8, which already ships Following and owner-scoped
 duplicate checks. The [roadmap](roadmap.md) owns priority; this file owns the shape of the
 page. Every claim about current behaviour was checked against the source. An
@@ -47,10 +49,12 @@ side (802x293) it would take the only visible band.
 
 ## Rows
 
-Built-in rows have a fixed order. Selected add-on catalog feeds appear after
-Tonight in add-on and manifest order. A row with nothing in it is not drawn. Downloads sit last, so a
-busy queue does not push Continue watching down. Nothing is re-ordered by a
-heuristic, which keeps scroll restoration honest.
+Built-in rows have a default order, and each account may reorder and hide them and
+add catalogue feeds of its own (see Personal layout in the Server section); a row an
+account never placed keeps its default position. Selected add-on catalog feeds appear
+after Tonight in add-on and manifest order. A row with nothing in it is not drawn.
+Downloads sit last, so a busy queue does not push Continue watching down. Nothing is
+re-ordered by a heuristic, which keeps scroll restoration honest.
 
 | # | Row | Contents | Status |
 | --- | --- | --- | --- |
@@ -223,6 +227,30 @@ No aggregation cache at first. If measurement asks for one, key it by account an
 permissions version and invalidate it on a progress write, a download completing,
 a library change and a grant change.
 
+**Personal layout (slice 6).** One personal setting, `homeLayout` in
+`PERSONAL_SETTINGS`, carries `{ order, hidden, feeds }`: the row ids the account
+placed, the rows it hid and the extra feeds it added, each feed keyed
+`addonKey:type:id` the way `homeCatalogSelectionKey` encodes one. `GET /api/home`
+builds both the order it states and the rows it builds from one function, so the
+two cannot disagree: a hidden row is not built and its add-on is not called, and a
+feed an account adds is a catalogue from an enabled add-on it may use. `GET
+/api/home/layout` answers everything the account can arrange -- the built-ins it may
+have, the instance feeds and every catalogue its usable add-ons offer -- with each
+row's id, kind (`builtin` | `feed`), label (the i18n key for a built-in, the add-on
+and catalogue name for a feed), whether it is shown and its position, plus the
+account's current layout; `?rows=` keeps working. The PATCH goes through the
+existing `PATCH /api/settings`, which refuses a malformed body with 400 and drops a
+feed from an add-on the caller may not use. Ids the server no longer offers are
+dropped on read and a row the account never placed keeps its default position, so a
+new built-in or a newly offered feed still appears. An absent `homeLayout` is
+exactly the instance's Home, and `confirm` stays administrator-only whatever a
+layout names.
+
+The stored arrangement is bounded and narrowed to what the account can see: `order`
+and `hidden` keep only the built-ins it may have and the feeds it may add,
+deduplicated, at most 200 each, and `feeds` holds at most 50; a body that names
+more than that is refused with 400 rather than persisted.
+
 The queue row needs `ownerUserId` and the `"permission"` pause reason on the
 client's `Download` type; the server already sends both.
 
@@ -245,9 +273,20 @@ client's `Download` type; the server already sends both.
 - Preserve each shelf's horizontal offset when returning from playback and the
   page's vertical offset when returning from another view. A poll never reorders
   a focused or touched card; a pending reorder applies when the interaction ends.
-- The selected view is not persisted today. A landing preference, row order and
-  hidden rows would live in `UserViews` (`server/src/views.ts`), written on
-  change with no save button, and stay out of the settings backup.
+- The selected view is not persisted today. A landing preference would live in
+  `UserViews` (`server/src/views.ts`), written on change with no save button, and
+  stay out of the settings backup. The row order, hidden rows and extra feeds are
+  the personal `homeLayout` setting instead, written the same way and read back
+  through `GET /api/home`.
+- Settings gains a personal **Home** section for every account: the arranged list
+  with a show/hide switch and move up/down buttons, **Add a catalogue** for the
+  usable catalogues not yet on Home, Remove for a feed the account added, and
+  **Reset to default**. Changes save on their own, coalesced; `Home` redraws from
+  the server's order on the next visit, and the instance-level add-on switches
+  remain the default the personal layout sits on top of. A feed row is named with
+  its catalogue's type beside the add-on and catalogue names (`Cinemeta · Popular
+  (film)`), the way the catalogue picker tells two catalogues of the same name
+  apart; `confirm` gets its show/hide switch but no move buttons.
 
 ## Layout
 
@@ -507,7 +546,8 @@ the busy, empty, partial, failed and revoked states.
 
 ## Slices
 
-Slices 0 to 5 shipped together in one pull request; 6 (row order and hiding) remains.
+All six slices have shipped. 6 (row order, visibility and extra feeds) landed as
+the personal `homeLayout` setting below.
 
 0. **Compact navigation with More.** Its own PR: the five-slot navigation for
    phones and short landscape, the wide-short and medium-landscape chrome, the
@@ -525,7 +565,10 @@ Slices 0 to 5 shipped together in one pull request; 6 (row order and hiding) rem
 5. **Recently added.** A write-once first-seen index written by the scan walk
    (`library/seen.json`), remapped on move and rename, with entries that predate
    it left out.
-6. **Order, visibility and landing.** Owner-gated; ships after the rows exist.
+6. **Order, visibility and extra feeds.** Owner-gated; shipped. Each account's
+   `homeLayout` orders and hides its rows and adds feeds of its own, on top of the
+   instance's Show on Home and catalogue defaults. A landing view stays an open
+   question (see below); the layout does not choose it.
 
 ## Open questions for the owner
 

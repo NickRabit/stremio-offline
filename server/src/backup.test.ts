@@ -10,7 +10,7 @@ const library = (over: Partial<LibraryRecord> & { id: string; root: string }): L
 });
 
 test("a backup keeps the settings, the order and the addon's sensitive URL", () => {
-  const settings = { ...defaultSettings(), concurrentDownloads: 4, audioLanguage: "sk", realDebridToken: "rd-secret", libraryScanPauseOnDownload: true, catalogTileShape: "wide" as const, libraryTileShape: "wide" as const, homeTileShape: "poster" as const, startView: "home" as const, libraryShelf: "favorites" as const };
+  const settings = { ...defaultSettings(), concurrentDownloads: 4, audioLanguage: "sk", realDebridToken: "rd-secret", libraryScanPauseOnDownload: true, catalogTileShape: "wide" as const, libraryTileShape: "wide" as const, homeTileShape: "poster" as const, startView: "home" as const, libraryShelf: "favorites" as const, homeLayout: { order: ["resume", "favorites"], hidden: ["recent"], feeds: [] } };
   const backup = createSettingsBackup(settings, [{
     key: "secret-key", manifestUrl: "https://example.com/token/abc/manifest.json", role: "source", enabled: false, globalSearch: false,
     addedAt: "2026-01-01T00:00:00.000Z", downloadSettings: defaultDownloadSettings(),
@@ -24,6 +24,7 @@ test("a backup keeps the settings, the order and the addon's sensitive URL", () 
   assert.equal(parseSettingsBackup(backup).settings.homeTileShape, "poster", "the Home tile shape survives a backup round trip");
   assert.equal(parseSettingsBackup(backup).settings.startView, "home", "the start page survives a backup round trip");
   assert.equal(parseSettingsBackup(backup).settings.libraryShelf, "favorites", "the library shelf survives a backup round trip");
+  assert.deepEqual(parseSettingsBackup(backup).settings.homeLayout, { order: ["resume", "favorites"], hidden: ["recent"], feeds: [] }, "the personal Home layout survives a backup round trip");
   assert.equal(backup.addons[0].manifestUrl, "https://example.com/token/abc/manifest.json");
   assert.equal(backup.addons[0].globalSearch, false);
   assert.equal("key" in backup.addons[0], false);

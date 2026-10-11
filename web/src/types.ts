@@ -1,5 +1,6 @@
 import type { Locale } from "./i18n";
 import type { DownloadSnapshot as ServerDownloadSnapshot, PublicDownload } from "../../server/src/api-types";
+import type { HomeLayout } from "../../server/src/home";
 export type DownloadLayout = "flat" | "structured";
 export interface DownloadTargetSettings {
   subfolder: string;
@@ -141,6 +142,8 @@ export interface Settings {
   catalogTileShape: TileShape; libraryTileShape: TileShape; homeTileShape: TileShape;
   startView: StartView;
   libraryShelf: LibraryShelf;
+  /** This account's own Home arrangement. Absent means it has never arranged one. */
+  homeLayout?: HomeLayout;
   realDebridConfigured: boolean; tmdbConfigured: boolean;
 }
 /** The instance keys the settings endpoints leave out for an ordinary account, which is told
@@ -152,7 +155,7 @@ type AdminOnlySetting =
 /** What GET and PATCH /api/settings answer. An administrator receives every key; everybody
  *  else is missing the ones above, and the interface keeps its own defaults for them. */
 export type SettingsView = Omit<Settings, AdminOnlySetting> & Partial<Pick<Settings, AdminOnlySetting>>;
-export type SettingsPatch = Partial<Omit<Settings, "realDebridConfigured" | "tmdbConfigured">> & { realDebridToken?: string; tmdbApiKey?: string };
+export type SettingsPatch = Partial<Omit<Settings, "realDebridConfigured" | "tmdbConfigured" | "homeLayout">> & { homeLayout?: HomeLayout | null; realDebridToken?: string; tmdbApiKey?: string };
 export interface SettingsBackup {
   format: "stremio-offline-settings"; version: 1; exportedAt: string; settings: Settings;
   addons: Array<{ manifestUrl: string; role: Addon["role"]; enabled: boolean; globalSearch: boolean; showOnHome?: boolean; homeCatalogs?: string[]; addedAt: string; downloadSettings: AddonDownloadSettings }>;

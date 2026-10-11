@@ -5,6 +5,7 @@ import { DiagnosticsSection } from "./DiagnosticsPanel";
 import { AccountSettings } from "./Login";
 import { LibraryManager } from "./LibraryManager";
 import { SearchSettings } from "./SearchSettings";
+import { HomeLayoutSettings } from "./HomeLayoutSettings";
 import { Heading, SettingControl, SettingsSectionHead } from "./settings-ui";
 import { LOCALES, LOCALE_NAMES, languageName, localeTag, t, useI18n, type Locale } from "./i18n";
 import type { BuildInfo, LibraryView, SearchState, Session, Settings as AppSettings, SettingsPatch } from "./types";
@@ -186,6 +187,7 @@ export function SettingsPage({ build, restricted = false, settings, search, onSe
             try { await api.clearProgress(); onNotify(t("settings.historyCleared")); } catch (error) { onError(error); }
           }}><Trash2/> {t("settings.clearHistory")}</button></SettingControl>}</section>
       <SearchSettings state={search} onState={onSearch} onNotify={onNotify} onError={onError}/>
+      <HomeLayoutSettings disabled={restricted} onError={onError}/>
       <section className="panel settings-section language-section"><SettingsSectionHead icon={<Languages/>} title={t("settings.appearanceTitle")}/>
         <SettingControl title={t("settings.uiLanguage")} text={t("settings.uiLanguageHint")}>
           <select aria-label={t("settings.uiLanguage")} disabled={restricted} value={locale} onChange={(event) => {

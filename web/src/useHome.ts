@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 import { emptyHomeRows, homeReducer, homeRowsFor, isHomeCatalogRow, type HomeRows } from "./home-state";
-import type { HomeRowId } from "../../server/src/home";
-import type { Addon } from "./types";
+import type { HomeOrderEntry, HomeRowId } from "../../server/src/home";
 
 /** A shelf the server could not fill before its deadline is still being fetched there; asking
  *  again shortly picks the answer up. */
@@ -13,10 +12,15 @@ const PARTIAL_RETRIES = 3;
  *  only the row that failed; an answer only lands on the request still current for it. Addon
  *  shelves load once they come near the screen, in a request of their own, so a slow addon
  *  never holds up Continue watching. */
-export function useHome({ active, account, admin, addons, playerOpen }: { active: boolean; account: string | null; admin: boolean; addons: Addon[]; playerOpen: boolean }) {
+export function useHome({ active, account, admin, playerOpen }: { active: boolean; account: string | null; admin: boolean; playerOpen: boolean }) {
   const [rows, setRows] = useState<HomeRows>(emptyHomeRows);
+  /** The shelves the server says this account has, in its own order. A personal layout can
+   *  hide a built-in or add a feed the client's addon list does not know, so the answer -- not
+   *  `homeRowsFor` -- is what the page draws once it arrives. */
+  const [order, setOrder] = useState<HomeOrderEntry[]>([]);
+  const orderRef = useRef<HomeOrderEntry[]>([]);
   const request = useRef(0);
-  const allRows = useMemo(() => homeRowsFor(admin, addons), [admin, addons]);
+  const builtinRows = useMemo(() => homeRowsFor(admin), [admin]);
   /** Addon shelves that have come into view, kept across visits until the account changes. */
   const shown = useRef(new Set<HomeRowId>());
   const retries = useRef(new Map<HomeRowId, number>());
@@ -40,6 +44,8 @@ export function useHome({ active, account, admin, addons, playerOpen }: { active
       (response) => {
         setRows((current) => homeReducer(current, { type: "answer", rows, request: number, response }));
         if (generation !== epoch.current) return;
+        setOrder(response.order);
+        orderRef.current = response.order;
         const unfinished: HomeRowId[] = [];
         for (const row of rows) {
           if (!isHomeCatalogRow(row)) continue;
@@ -69,9 +75,9 @@ export function useHome({ active, account, admin, addons, playerOpen }: { active
 
   const full = useCallback(() => {
     retries.current.clear();
-    refresh(allRows.filter((row) => !isHomeCatalogRow(row)));
-    refresh(allRows.filter((row) => isHomeCatalogRow(row) && shown.current.has(row)));
-  }, [allRows, refresh]);
+    refresh(builtinRows);
+    refresh(orderRef.current.filter((entry) => isHomeCatalogRow(entry.id) && shown.current.has(entry.id)).map((entry) => entry.id));
+  }, [builtinRows, refresh]);
 
   // A sign-out or an account switch discards every row and any answer still on its way.
   useEffect(() => {
@@ -82,6 +88,8 @@ export function useHome({ active, account, admin, addons, playerOpen }: { active
     retries.current.clear();
     for (const timer of timers.current) clearTimeout(timer);
     timers.current.clear();
+    orderRef.current = [];
+    setOrder([]);
     setRows(emptyHomeRows());
   }, [account]);
 
@@ -97,5 +105,5 @@ export function useHome({ active, account, admin, addons, playerOpen }: { active
     wasOpen.current = playerOpen;
   }, [playerOpen, active, full]);
 
-  return { rows, refresh, reveal };
+  return { rows, order, refresh, reveal };
 }

@@ -231,6 +231,7 @@ export const PERSONAL_SETTINGS = [
   "catalogTileSize", "libraryTileSize", "catalogTileShape", "libraryTileShape", "homeTileShape",
   "startView",
   "libraryShelf",
+  "homeLayout",
 ] as const;
 
 export interface UserMigration { migrated: boolean; userId?: string }

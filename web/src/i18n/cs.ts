@@ -1170,6 +1170,17 @@ export const cs: Catalog = {
   "settings.imported": "Nastavení a doplňky importovány.",
   "settings.importRemapped": { one: "1 pravidlo ukládání míří do knihoven této instance.", few: "{count} pravidla ukládání míří do knihoven této instance.", other: "{count} pravidel ukládání míří do knihoven této instance." },
   "settings.saveSettings": "Uložit nastavení",
+  "settings.homeTitle": "Domovská obrazovka",
+  "settings.homeText": "Vaše řady a katalogové zdroje v pořadí, které si zvolíte.",
+  "settings.homeMoveUp": "Přesunout {row} nahoru",
+  "settings.homeMoveDown": "Přesunout {row} dolů",
+  "settings.homeShowRow": "Zobrazit {row}",
+  "settings.homeRemove": "Odebrat {row}",
+  "settings.homeAddCatalog": "Přidat katalog",
+  "settings.homeAddCatalogHint": "Katalogy z doplňků, které můžete používat a které na domovské obrazovce ještě nejsou.",
+  "settings.homeAdd": "Přidat",
+  "settings.homeAddRow": "Přidat {row}",
+  "settings.homeReset": "Obnovit výchozí",
 
   // Real-Debrid.
   "debrid.title": "Real-Debrid",
@@ -1269,6 +1280,7 @@ export const cs: Catalog = {
   // Chyby ze serveru.
   "err.restricted": "Tato instance běží v omezeném režimu.",
   "err.notAllowed": "Tento účet na to nemá oprávnění.",
+  "err.homeLayoutShape": "Domovská obrazovka musí uvádět pořadí, skryté řady a zdroje.",
   "err.lastAdmin": "Posledního administrátora nelze odebrat.",
   "err.libraryNotWritable": "Do knihovny nejde zapisovat.",
   "err.invalidDownloadTarget": "Neplatné umístění pro stažení.",
