@@ -134,7 +134,11 @@ fun Shell(
   var playerSources by remember { mutableStateOf(OfferedSources()) }
   /** The source the player ended on, so the title underneath keeps naming what was watched. */
   var playedSourceId by remember { mutableStateOf<String?>(null) }
+  // A section takes the remote back when a detail or a player over it closes; a detail takes it
+  // back when the player over it closes. One shared token let the hidden section underneath an open
+  // detail grab the focus after the player, and the visible detail looked frozen.
   var returnToken by remember { mutableIntStateOf(0) }
+  var detailReturnToken by remember { mutableIntStateOf(0) }
   // Bumped each time Home comes back into view, so re-entering refreshes the rows.
   var homeRefreshToken by remember { mutableIntStateOf(0) }
   var homeSeen by remember { mutableStateOf(false) }
@@ -205,7 +209,7 @@ fun Shell(
         )
         Section.Home -> HomeScreen(
           api = api,
-          refreshToken = homeRefreshToken + returnToken,
+          refreshToken = homeRefreshToken + returnToken + detailReturnToken,
           onHint = { text ->
             hint = text
             hintScope.launch {
@@ -255,7 +259,7 @@ fun Shell(
       },
       progress = api::progress,
       setFavorite = { path, wanted -> api.setFavorite(path, wanted).favorite },
-      restoreToken = returnToken,
+      restoreToken = detailReturnToken,
       backEnabled = player == null,
     )
   }
@@ -276,7 +280,7 @@ fun Shell(
         catalogDetail = null
         returnToken++
       },
-      restoreToken = returnToken,
+      restoreToken = detailReturnToken,
     )
   }
 
@@ -290,7 +294,7 @@ fun Shell(
       onExit = { endedSourceId ->
         playedSourceId = endedSourceId
         player = null
-        returnToken++
+        if (detail != null || catalogDetail != null) detailReturnToken++ else returnToken++
       },
     )
   }
