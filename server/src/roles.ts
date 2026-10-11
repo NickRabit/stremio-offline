@@ -65,6 +65,7 @@ export const USER_ALLOWED: Rule[] = [
   { method: "GET", pattern: /^\/library\/previous\/[^/]+$/ },
   { method: "POST", pattern: /^\/library\/source$/ },
   { method: "GET", pattern: /^\/libraries$/ },
+  { method: "GET", pattern: /^\/home$/ },
   { method: "GET", pattern: /^\/catalogs$/ },
   { method: "GET", pattern: /^\/catalog$/ },
   { method: "GET", pattern: /^\/search$/ },
@@ -97,6 +98,8 @@ export const USER_ALLOWED: Rule[] = [
   { method: "DELETE", pattern: /^\/device-transfers$/ },
   { method: "DELETE", pattern: /^\/device-transfers\/[^/]+$/ },
   { method: "POST", pattern: /^\/client-log$/ },
+  // A batch of client lines: the whole bundle belongs to the account that sends it.
+  { method: "POST", pattern: /^\/client-log\/bundle$/ },
   // Downloads. Which jobs are theirs is the next task; here only the path passes.
   { method: "GET", pattern: /^\/downloads$/ },
   { method: "POST", pattern: /^\/downloads$/ },

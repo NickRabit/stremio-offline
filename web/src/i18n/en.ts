@@ -1260,6 +1260,16 @@ export const en = {
   "diag.periodDay": "Past 24 hours",
   "diag.periodWeek": "Past 7 days",
   "diag.periodAll": "Everything",
+  "diag.clientLogs": "Client logs",
+  "diag.clientLogsHint": "Reports a browser or a television sent back, newest first.",
+  "diag.clientLogsEmpty": "No log bundles.",
+  "diag.clientLogsLines": { one: "1 line", other: "{count} lines" },
+  "diag.clientLogsView": "View",
+  "diag.clientLogsHide": "Hide",
+  "diag.clientLogsDownload": "Download as JSON",
+  "diag.clientLogsDelete": "Delete",
+  "diag.clientLogsDeleteConfirm": "Delete this log bundle? It cannot be recovered.",
+  "diag.clientLogsNote": "Note",
 
   // Server failures. The key travels with the response; the server's English text
   // stands in for anything not listed here.
@@ -1358,6 +1368,8 @@ export const en = {
   "err.deviceAssemblyFailed": "The stream could not be assembled.",
   "err.downloadNeedsHttp": "Only a direct HTTP stream can be downloaded.",
   "err.downloadLibraryNotAllowed": "This account may not download to the library.",
+  "err.clientLogTooLarge": "The log bundle is too large.",
+  "err.clientLogTooMany": "Too many log bundles. Try again later.",
   "err.downloadDeviceNotAllowed": "This account may not save to the device.",
   "err.downloadTicketExpired": "The download link expired. Start the download again.",
   "err.libraryFileMissing": "The file was not found in the library.",

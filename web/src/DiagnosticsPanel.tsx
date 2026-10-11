@@ -6,7 +6,7 @@ import { statusLabel } from "./download-format";
 import { groupLog, parseLog, type LogGroup, type LogLine } from "./log-groups";
 import { localeTag, serverText, t, type Key } from "./i18n";
 import { bytes, SettingsSectionHead } from "./settings-ui";
-import type { BuildInfo, Diagnostics, Settings as AppSettings, Download as DownloadJob } from "./types";
+import type { BuildInfo, ClientLogBundle, ClientLogSummary, Diagnostics, Settings as AppSettings, Download as DownloadJob } from "./types";
 
 const LOG_LEVELS = [["", "diag.levelAll"], ["INFO", "diag.levelInfo"], ["WARN", "diag.levelWarn"], ["ERROR", "diag.levelError"]] as const satisfies ReadonlyArray<readonly [string, Key]>;
 const PERIODS = [[1, "diag.periodHour"], [24, "diag.periodDay"], [168, "diag.periodWeek"], [0, "diag.periodAll"]] as const satisfies ReadonlyArray<readonly [number, Key]>;
@@ -60,6 +60,10 @@ export function DiagnosticsSection({ build, onNotify, onError }: { build: BuildI
   const [lines, setLines] = useState<LogLine[]>([]);
   // What the server writes down, as opposed to the level above, which only filters what it wrote.
   const [recording, setRecording] = useState("INFO");
+  // Log bundles clients uploaded. The list is a count per bundle; one is fetched whole only
+  // when the administrator opens it.
+  const [bundles, setBundles] = useState<ClientLogSummary[]>([]);
+  const [openBundle, setOpenBundle] = useState<ClientLogBundle | null>(null);
 
   const changeRecording = async (level: string) => {
     const previous = recording;
@@ -86,11 +90,38 @@ export function DiagnosticsSection({ build, onNotify, onError }: { build: BuildI
     catch (error) { onError(error); }
     finally { setBusy(false); }
   };
+  const loadBundles = async () => {
+    try { setBundles(await api.clientLogs()); } catch (error) { onError(error); }
+  };
+  const viewBundle = async (id: string) => {
+    try { setOpenBundle(await api.clientLog(id)); } catch (error) { onError(error); }
+  };
+  const removeBundle = async (id: string) => {
+    if (!confirm(t("diag.clientLogsDeleteConfirm"))) return;
+    try {
+      await api.deleteClientLog(id);
+      if (openBundle?.id === id) setOpenBundle(null);
+      await loadBundles();
+    } catch (error) { onError(error); }
+  };
+  const downloadBundle = async (id: string) => {
+    try {
+      const bundle = await api.clientLog(id);
+      const url = URL.createObjectURL(new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json" }));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `client-log-${id}.json`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (error) { onError(error); }
+  };
   // Typing in the search box should not hit the server on every letter.
   useEffect(() => { const timer = setTimeout(() => setQuery(search.trim()), 400); return () => clearTimeout(timer); }, [search]);
   // The overview loads even while collapsed; otherwise the header chip would claim "no errors" without looking.
   useEffect(() => { void loadOverview(); }, [hours, query]);
   useEffect(() => { if (open && showLog) void loadLog(); }, [open, showLog, level, tail, hours, query]);
+  // The client log list is only worth reading once the panel is open.
+  useEffect(() => { if (open) void loadBundles(); }, [open]);
 
   const refresh = async () => { await loadOverview(); if (showLog) await loadLog(); };
   const copyLog = async () => { try { await copyText(await api.logs()); onNotify(t("diag.logCopied")); } catch (error) { onError(error); } };
@@ -188,6 +219,40 @@ export function DiagnosticsSection({ build, onNotify, onError }: { build: BuildI
         </div>
         <p>{t("diag.logPrivacy")}{info?.logRetentionDays ? ` ${t("diag.logRetention", { days: info.logRetentionDays })}` : ""}</p>
       </div>}
+
+      <div className="client-logs">
+        <div className="issues-head">
+          <h4>{t("diag.clientLogs")}</h4>
+          {bundles.length > 0 && <span className="state-chip">{bundles.length}</span>}
+        </div>
+        <p className="hint">{t("diag.clientLogsHint")}</p>
+        {bundles.length ? <ul className="diagnostics-list">{bundles.map((bundle) => <li key={bundle.id}>
+          <strong>{bundle.device || bundle.client} · {bundle.app}</strong>
+          <span>{bundle.user} · {bundle.client} · {t("diag.clientLogsLines", { count: bundle.lines })} · {since(bundle.time)}{bundle.note ? ` · ${bundle.note}` : ""}</span>
+          <span className="client-log-actions">
+            <button onClick={() => void viewBundle(bundle.id)}>{t("diag.clientLogsView")}</button>
+            <button onClick={() => void downloadBundle(bundle.id)}><Download/> {t("diag.clientLogsDownload")}</button>
+            <button className="danger" onClick={() => void removeBundle(bundle.id)}><Trash2/> {t("diag.clientLogsDelete")}</button>
+          </span>
+        </li>)}</ul> : <p className="issues-empty">{t("diag.clientLogsEmpty")}</p>}
+
+        {openBundle && <div className="log-panel client-log-view">
+          <div className="log-filters">
+            <strong>{openBundle.device || openBundle.client} · {openBundle.app}</strong>
+            <button onClick={() => void downloadBundle(openBundle.id)}><Download/> {t("diag.clientLogsDownload")}</button>
+            <button onClick={() => setOpenBundle(null)}>{t("diag.clientLogsHide")}</button>
+          </div>
+          {openBundle.note && <p>{t("diag.clientLogsNote")}: {openBundle.note}</p>}
+          <div className="log-viewer wrap" aria-label={t("diag.clientLogs")}>
+            {openBundle.lines.length ? openBundle.lines.map((line, index) => <div className={`log-line ${line.level.toLowerCase()}`} key={`${line.t}:${index}`}>
+              <span className="log-time">{clock(line.t)}</span>
+              <span className={`level-chip ${line.level.toLowerCase()}`}>{line.level}</span>
+              <span className="log-message">{line.message}</span>
+              {line.context && <span className="log-context">{JSON.stringify(line.context)}</span>}
+            </div>) : <div className="log-line">{t("diag.noLines")}</div>}
+          </div>
+        </div>}
+      </div>
     </div>}
   </section>;
 }

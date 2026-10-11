@@ -507,7 +507,10 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
       id,
       title: `${target.addon.manifest.name} · ${target.definition.name || target.definition.id}`,
     })));
-    await Promise.all(requestedRows(req.query.rows, catalogRows).map(async (id) => {
+    // Only the rows the order carries are built: a row an account never sees in `order` --
+    // the administrator's `confirm` for anybody else -- must not appear in `rows` either.
+    const ordered = new Set(order.map((entry) => entry.id));
+    await Promise.all(requestedRows(req.query.rows, catalogRows).filter((id) => ordered.has(id)).map(async (id) => {
       try {
         const catalogRow = catalogRows.get(id);
         rows[id] = catalogRow

@@ -22,7 +22,7 @@ import {
 } from "./download-policy.js";
 import { isRetryableDebridFailure, type DebridAdvance } from "./debrid.js";
 import { playlistArgs } from "./probe.js";
-import { libraryPath, libraryVisible, parseLibraryPath, relativeWithin, type LibraryRecord, type Viewer } from "./libraries.js";
+import { defaultLibrary, libraryPath, libraryVisible, parseLibraryPath, relativeWithin, type DefaultLibrarySettings, type LibraryRecord, type Viewer } from "./libraries.js";
 import type { UserRecord } from "./users.js";
 import {
   planSegments, segmentCount, segmentedBytes, segmentSize, usableSegments, type Segment,
@@ -131,6 +131,13 @@ export interface DownloadOwnerScope {
 export const jobLibraryId = (job: Pick<DownloadJob, "libraryId" | "target" | "targetSettings" | "source">): string | undefined =>
   job.libraryId ?? (job.target ? parseLibraryPath(job.target)?.libraryId : undefined)
     ?? job.targetSettings?.libraryId ?? job.source?.selection?.targetSettings.libraryId;
+
+/** The library a rule that names no library lands in. The door, a follow's automatic rule and
+ *  the queue all resolve it through this one function, so all three name the same library:
+ *  the default for the kind, with read-only libraries left out because a download is never
+ *  written to one. */
+export const defaultDownloadLibrary = (libraries: LibraryRecord[], settings: DefaultLibrarySettings, kind: "movie" | "series"): LibraryRecord | undefined =>
+  defaultLibrary(libraries.filter((library) => !library.readOnly), settings, kind === "series" ? "episode" : "movie");
 
 /**
  * The owner-bound check, answered from the current state every time it is asked because a

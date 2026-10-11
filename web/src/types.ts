@@ -97,6 +97,14 @@ export interface Diagnostics {
   outbound: Array<{ host: string; state: "closed" | "open" | "half-open"; active: number; queued: number; failures: number; rejected: number; opened: number; opensInSeconds?: number }>;
   storage: Array<{ path: string; freeBytes?: number; totalBytes?: number }>;
 }
+/** One line of a log bundle a client sent back. */
+export interface ClientLogLine { t: string; level: string; message: string; context?: Record<string, unknown> }
+/** A bundle as the admin list shows it: `lines` is how many it holds, not the payload. */
+export interface ClientLogSummary {
+  id: string; user: string; client: "web" | "tv"; app: string; device: string;
+  note?: string; time: string; lines: number;
+}
+export interface ClientLogBundle extends Omit<ClientLogSummary, "lines"> { lines: ClientLogLine[] }
 export interface StatsWindow { bytes: number; count: number }
 /** One host a grouped row stands for; `items` counts the finished transfers on that host. */
 export interface StatsBucketHost { key: string; label: string; bytes: number; items: number }
@@ -238,6 +246,8 @@ export interface BrowseLibrary {
 export interface LibraryView {
   id: string; name: string; type: LibraryType; root?: string; enabled: boolean; order: number;
   addedAt: string; writeArtwork: boolean; autoScanMetadata: boolean; mosaic?: boolean; showInContinueWatching?: boolean; showOnHome?: boolean; showInFavorites?: boolean; unreachable: boolean; readOnly: boolean;
+  /** Whether this account may save a download here: visible, switched on, writable and reachable. */
+  writable: boolean;
   defaultMovie: boolean; defaultSeries: boolean; titles: number; files: number; bytes: number;
   /** The accounts this library is granted to. Absent or empty means administrators only:
    *  there is no sentinel for "everybody", so a grant is always a list of ids. */

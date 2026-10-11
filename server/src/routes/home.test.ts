@@ -260,7 +260,8 @@ test("GET /api/home answers with the whole envelope and private caching", async 
   assert.equal(response.headers.get("cache-control"), "private, no-store");
   const body = await response.json() as { generatedAt: string; rows: Record<string, unknown> };
   assert.equal(typeof body.generatedAt, "string");
-  assert.deepEqual(Object.keys(body.rows).sort(), ["completed", "confirm", "episodes", "favorites", "recent", "resume", "tonight"]);
+  assert.deepEqual(Object.keys(body.rows).sort(), ["completed", "episodes", "favorites", "recent", "resume", "tonight"],
+    "an ordinary account gets no administrator row");
 });
 
 test("GET /api/home is refused without a session, the way the personal routes refuse", async (t) => {
@@ -324,6 +325,36 @@ test("a revoked library drops its resume, completed and favourite cards", async 
   assert.deepEqual(rows.resume!.items.map((item) => item.key), ["file:lib_00000002/Shows/01.mkv"]);
   assert.deepEqual(rows.completed!.items.map((item) => item.title), ["Kept"]);
   assert.deepEqual(rows.favorites!.items.map((item) => item.path), ["lib_00000002/Shows/01.mkv"]);
+});
+
+test("an ordinary account's Home holds their own rows, no confirm, and nothing from a library they cannot see", async (t) => {
+  const harness = await mount({
+    libraries: [
+      library({ id: "lib_00000001", root: "/media/films" }),
+      library({ id: "lib_00000002", root: "/media/shows", visibleTo: [ALICE] }),
+    ],
+  });
+  t.after(harness.close);
+  harness.data(ALICE).favorites = ["lib_00000001/Films/Heat.mkv", "lib_00000002/Shows/01.mkv"];
+  harness.data(ALICE).progress = {
+    "file:lib_00000002/Shows/01.mkv": { position: 30, duration: 600, title: "Pilot", path: "lib_00000002/Shows/01.mkv", updatedAt: "2024-01-01T00:00:00.000Z" },
+  };
+  harness.completed = [
+    { id: "a", title: "Private", ownerUserId: ALICE, status: "completed", target: "lib_00000001/Private.mkv", completedAt: "2024-02-02T00:00:00.000Z" },
+    { id: "b", title: "Mine", ownerUserId: ALICE, status: "completed", target: "lib_00000002/Mine.mkv", completedAt: "2024-02-01T00:00:00.000Z" },
+  ];
+
+  const response = await api(harness.base, "/api/home", ALICE);
+  assert.equal(response.status, 200, "Home answers an ordinary account");
+  const body = await response.json() as { rows: Record<string, HomeRowView>; order: Array<{ id: string }> };
+  assert.equal("confirm" in body.rows, false, "the administrator row is absent from rows");
+  assert.equal(body.order.some((entry) => entry.id === "confirm"), false, "and from the order");
+  assert.deepEqual(body.rows.resume!.items.map((item) => item.key), ["file:lib_00000002/Shows/01.mkv"]);
+  assert.deepEqual(body.rows.favorites!.items.map((item) => item.path), ["lib_00000002/Shows/01.mkv"]);
+  assert.deepEqual(body.rows.completed!.items.map((item) => item.title), ["Mine"]);
+  const cards = Object.values(body.rows).flatMap((row) => row.items as Array<{ key?: string; path?: string }>);
+  assert.equal(cards.some((card) => `${card.key ?? ""}${card.path ?? ""}`.includes("lib_00000001")), false,
+    "nothing from the library the account cannot see reaches a card");
 });
 
 test("a completed job whose library is switched off or whose file is gone yields no card", async (t) => {
@@ -411,7 +442,7 @@ test("?rows= names which rows come back and an unknown name is ignored", async (
   t.after(harness.close);
 
   const some = await allRows(harness, ALICE);
-  assert.deepEqual(Object.keys(some).sort(), ["completed", "confirm", "episodes", "favorites", "recent", "resume", "tonight"]);
+  assert.deepEqual(Object.keys(some).sort(), ["completed", "episodes", "favorites", "recent", "resume", "tonight"]);
 
   const filtered = await (await api(harness.base, "/api/home?rows=resume,favorites", ALICE)).json() as { rows: Record<string, unknown> };
   assert.deepEqual(Object.keys(filtered.rows).sort(), ["favorites", "resume"]);
@@ -892,13 +923,14 @@ test("an administrator's confirm row lists the proposals sorted by label with an
   for (const id of ["episodes", "favorites", "recent", "resume", "tonight"]) assert.equal("total" in rows[id]!, false, `${id} carries no total`);
 });
 
-test("an ordinary account's confirm row is empty and the proposals are never read", async (t) => {
+test("an ordinary account's Home carries no confirm row and the proposals are never read", async (t) => {
   const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
   t.after(harness.close);
   harness.suggestions = [{ key: "A", label: "Alpha", libraryId: "lib_00000001", library: "Media", path: "A", suggestion: { name: "Alpha" } }];
 
-  const rows = await allRows(harness, ALICE);
-  assert.deepEqual(rows.confirm, { status: "ok", items: [], hasMore: false });
+  const body = await (await api(harness.base, "/api/home", ALICE)).json() as { rows: Record<string, unknown>; order: Array<{ id: string }> };
+  assert.equal("confirm" in body.rows, false, "the administrator row is absent, as it is from the order");
+  assert.equal(body.order.some((entry) => entry.id === "confirm"), false);
   assert.equal(harness.suggestionCalls, 0);
 });
 

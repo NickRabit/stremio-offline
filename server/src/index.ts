@@ -9,8 +9,9 @@ import { fileURLToPath } from "node:url";
 import { allowedAddons, loadAddon, metadata, searchAll, searchableCatalogs, streams, subtitles, type MetaProvider } from "./addons.js";
 import { autoRefreshEnabled, refreshDue, refreshManifests, type RefreshOutcome } from "./addon-refresh.js";
 import { rankStreams } from "./ranking.js";
-import { DownloadQueue, ownerMayDownload, type DownloadJob } from "./downloads.js";
+import { defaultDownloadLibrary, DownloadQueue, ownerMayDownload, type DownloadJob } from "./downloads.js";
 import { DeviceTransfers } from "./device-transfers.js";
+import { ClientLogStore } from "./client-logs.js";
 import { selectDownloadSource, selectTorrentSource } from "./download-selection.js";
 import { StatsLog, type TrafficEvent, type TrafficMeta } from "./stats.js";
 import { Throughput } from "./throughput.js";
@@ -56,7 +57,7 @@ import type { MediaInfo } from "./naming.js";
 import { defaultDownloadSettings } from "./naming.js";
 import { AppError, classifyError, explainedError, messageKeyOf } from "./errors.js";
 import { accessLost, contentOf, Revocations, type AccessClaim, type AccessNeed, type ActiveTransfer, type StopContentOptions } from "./revocation.js";
-import { automaticMetadataEnabled, carveOuts, queuedArtworkKey, defaultLibrary, isInside, libraryFor, libraryPath, libraryVisible, parseLibraryPath, playingUnder, posixBase, posixDir, posixJoin, realAncestor, relativeWithin, resolveLibraryPath, toFs, toPosix, visibleLibraries, type LibraryRecord, type LibraryType, type ResolvedPath, type RootGrant, type Viewer } from "./libraries.js";
+import { automaticMetadataEnabled, carveOuts, queuedArtworkKey, isInside, libraryFor, libraryPath, libraryVisible, parseLibraryPath, playingUnder, posixBase, posixDir, posixJoin, realAncestor, relativeWithin, resolveLibraryPath, toFs, toPosix, visibleLibraries, type LibraryRecord, type LibraryType, type ResolvedPath, type RootGrant, type Viewer } from "./libraries.js";
 import { envGrants, grantView, mergeGrants } from "./library-grants.js";
 import { migrateStateFile } from "./library-migrate.js";
 import { LibraryMetaStore } from "./library-meta-store.js";
@@ -97,6 +98,8 @@ const externalIds = new ExternalIdStore(DATA_DIR);
 const followStore = new FollowStore(DATA_DIR);
 /** When this app first met each library file, so "Recently added" is not the file's own date. */
 const seen = new LibrarySeenStore(DATA_DIR);
+/** The log bundles clients upload, one JSON file each under the data directory. */
+const clientLogs = new ClientLogStore(DATA_DIR);
 let markServerReady!: () => void;
 const serverReady = new Promise<void>((resolve) => { markServerReady = resolve; });
 await store.load();
@@ -139,10 +142,10 @@ await images.load();
 await artworks.load();
 const playbackOwners = new Map<string, { owner: ResourceOwner; resourceId: string }>();
 const airplayAccess = new AirPlayAccess(mediaResources);
-/** Where a download with no library of its own goes: the default for the kind. A read-only
- *  library is never a destination, so it is left out of the choice. */
+/** Where a download with no library of its own goes: the default for the kind, resolved the
+ *  one way the door, a follow's automatic rule and the queue all resolve it. */
 const downloadDefaultLibrary = (kind: "movie" | "series") =>
-  defaultLibrary(store.libraries().filter((library) => !library.readOnly), store.settings(), kind === "series" ? "episode" : "movie");
+  defaultDownloadLibrary(store.libraries(), store.settings(), kind);
 /** The account a job queued before ownership existed belongs to: the administrator the
  *  single-account state migrated into, which is the oldest one. A disabled account stops
  *  speaking for the queue, so a replacement administrator inherits those jobs rather than
@@ -490,6 +493,11 @@ app.use("/api", (req, res, next) => {
   res.on("finish", () => log("DEBUG", "API request", { req: id, method: req.method, path: req.path, status: res.statusCode, ms: Date.now() - startedAt }));
   next();
 });
+// A client log bundle may carry up to 512 KB, more than an ordinary request. Its own parser
+// runs first, so the smaller limit below never sees the body. The parser sits a little above
+// the route's own ceiling, so a bundle that is over it is refused with the catalogue key
+// rather than Express's bare 413.
+app.use("/api/client-log/bundle", express.json({ limit: "1mb" }));
 app.use(express.json({ limit: "256kb" }));
 /** Measures how much the response actually sends and reports it to the statistics.
  * It counts at write time, so what the client asked for and then abandoned by closing
@@ -1199,7 +1207,7 @@ const artworkBesideMediaFor = (key: string) => {
  *  mode withholds it because the picker discloses host layout to somebody at the keyboard and
  *  a shared instance renders names and counts only; an ordinary account is withheld it for
  *  the same reason, and loses nothing by it -- every view it has names a library by id. */
-const libraryView = (library: LibraryRecord, health: LibraryHealth, stats: { titles: number; files: number; bytes: number }, admin: boolean) => ({
+const libraryView = (library: LibraryRecord, health: LibraryHealth, stats: { titles: number; files: number; bytes: number }, admin: boolean, canDownload: boolean) => ({
   id: library.id, name: library.name, type: library.type,
   ...(restrictedMode() || !admin ? {} : { root: toPosix(library.root) }),
   enabled: library.enabled, order: library.order, addedAt: library.addedAt,
@@ -1211,6 +1219,10 @@ const libraryView = (library: LibraryRecord, health: LibraryHealth, stats: { tit
   autoScanMetadata: automaticMetadataEnabled(library),
   visibleTo: library.visibleTo ?? [],
   unreachable: health.unreachable, readOnly: health.readOnly,
+  // Whether a download may be saved here by the account that is asking: switched on, reachable,
+  // not read-only, and the account may download to a library at all. `visible` is implied -- only
+  // the libraries the caller can see are listed.
+  writable: library.enabled && !health.unreachable && !health.readOnly && canDownload,
   defaultMovie: store.settings().defaultMovieLibrary === library.id,
   defaultSeries: store.settings().defaultSeriesLibrary === library.id,
   titles: stats.titles, files: stats.files, bytes: stats.bytes,
@@ -1690,7 +1702,7 @@ const followService = new FollowService({
 queue.setRemovalGuard((job, reason) => followService.jobRemoving(job, reason));
 queue.setClearCompletedGuard((jobs) => followService.jobsClearing(jobs));
 
-registerFollowRoutes(app, { ...routeContext, follows: followService, followStore, prefsOf, markersOf, dataOf, updateData, posterOf, cachedMeta });
+registerFollowRoutes(app, { ...routeContext, follows: followService, followStore, prefsOf, markersOf, dataOf, updateData, posterOf, cachedMeta, defaultDownloadLibrary: downloadDefaultLibrary });
 
 // The file operations on library items live in `library-actions.ts`; these bindings keep the
 // call sites and the route dependency objects unchanged.
@@ -2199,12 +2211,12 @@ const warmHomeCatalogs = () => { if (!homeCatalogs.idle) homeCatalogs.warm(homeC
 registerHomeRoutes(app, { ...routeContext, homeCatalogs, personal, completedJobs: () => queue.list(), newEpisodes: (ownerUserId, watched) => followService.newEpisodes(ownerUserId, watched), describeLibraryPath, locateFileArtwork, locateFolderArtworkPair, thumbUrl, scheduleFileArtwork, scheduleFolderArtwork, wirePath, dataOf, markersOf, progressOf, metaStore, seen, suggestionRows: curate.suggestionRows });
 
 registerDeviceRoutes(app, { ...routeContext, stats, countBytes, deviceDownloadTickets, deviceTransfers, DEVICE_TICKET_TTL, httpSourceOf, libraryTarget, mediaSource, ownerOf, pruneDeviceDownloadTickets, statMeta, trackMedia });
-registerDownloadRoutes(app, { ...routeContext, queue, deviceTransfers, jobView, sourceOf, mediaSource, posterOf, rememberTitle, titleKey, saveCatalogPoster, libraryKey, cachedMeta, prefsOf });
+registerDownloadRoutes(app, { ...routeContext, queue, deviceTransfers, jobView, sourceOf, mediaSource, posterOf, rememberTitle, titleKey, saveCatalogPoster, libraryKey, cachedMeta, prefsOf, defaultDownloadLibrary: downloadDefaultLibrary });
 const freeSpace = async (target: string) => {
   try { const info = await statfs(target); return { path: target, freeBytes: info.bavail * info.bsize, totalBytes: info.blocks * info.bsize }; }
   catch { return { path: target }; }
 };
-registerDiagnosticsRoutes(app, { ...routeContext, stats, playback, throughput, queue, libraryScan, playbackMeta, freeSpace, dataDir: DATA_DIR });
+registerDiagnosticsRoutes(app, { ...routeContext, stats, playback, throughput, queue, libraryScan, playbackMeta, freeSpace, clientLogs, dataDir: DATA_DIR });
 registerSettingsRoutes(app, { ...routeContext, STREAM_SORTS, accountIdOf, invalidateLibrary, metaCache, metaStore, mutateData, prefsOf, queue, streamCache });
 registerPlaybackRoutes(app, { ...routeContext, airplayAccess, airplayRequest, answerHeaders, countBytes, httpSourceOf, internalMediaRequest, libraryTarget, noteSourceQuiet, ownerOf, playback, playbackMeta, playbackOwners, playbackResponse, prefsOf, quietSources, rangeCache, safeInspection, sleep, sourceIsQuiet, stats, subtitleDelay, trackMedia, SOURCE_ATTEMPTS, SOURCE_RETRY_MS, SOURCE_RESUMES, SOURCE_HEADER_MS, SOURCE_QUIET_HEADER_MS });
 
