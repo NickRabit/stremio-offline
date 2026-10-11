@@ -91,7 +91,8 @@ test("a movie already in the library leads its sources and plays the library fil
     return (result.items ?? []).some((item: { path?: string }) => (item.path ?? "").includes("Lokální film"));
   }).toBe(true);
   await goToView(page, "Pokračovat ve sledování");
-  const card = page.locator(".section-grid .browse-item", { hasText: "Lokální film" });
+  // The bound file is listed under the catalogue title it was identified as.
+  const card = page.locator(".section-grid .browse-item", { hasText: "Zkušební film" });
   await expect(card).toBeVisible();
   await expect(card.locator(".resume-bar")).toHaveCount(1);
 });
