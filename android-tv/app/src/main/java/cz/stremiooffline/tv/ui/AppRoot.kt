@@ -68,7 +68,12 @@ import kotlinx.coroutines.launch
 sealed interface SessionState {
   data object Loading : SessionState
   data class SignedOut(val address: String, val error: ApiFailure?) : SessionState
-  data class SignedIn(val username: String, val start: Section, val api: ApiClient) : SessionState
+  data class SignedIn(
+    val username: String,
+    val language: String?,
+    val start: Section,
+    val api: ApiClient,
+  ) : SessionState
   data class Offline(val server: String) : SessionState
 }
 
@@ -98,7 +103,7 @@ class SessionViewModel(private val store: SessionStore) : ViewModel() {
       val api = ApiClient(address, CookieStore(address.origin, store))
       try {
         state = when (val me = api.me()) {
-          is MeResult.SignedIn -> SessionState.SignedIn(me.username, startSection(settingsOf(api)), api)
+          is MeResult.SignedIn -> SessionState.SignedIn(me.username, me.language, startSection(settingsOf(api)), api)
           MeResult.Setup -> {
             store.clearSession()
             SessionState.SignedOut(address.display, ApiFailure.NeedsSetup)
@@ -115,8 +120,8 @@ class SessionViewModel(private val store: SessionStore) : ViewModel() {
     }
   }
 
-  fun signedIn(username: String, start: Section, api: ApiClient) {
-    state = SessionState.SignedIn(username, start, api)
+  fun signedIn(username: String, language: String?, start: Section, api: ApiClient) {
+    state = SessionState.SignedIn(username, language, start, api)
   }
 
   fun changeServer() {
@@ -163,13 +168,17 @@ fun AppRoot() {
     }
 
     is SessionState.SignedIn -> {
+      // The account's interface language from /api/auth/me is the app's locale from the first frame.
+      LaunchedEffect(state.language) { applyAppLocale(state.language) }
       val imageLoader = remember(state.api) { ImageLoader.Builder(context).okHttpClient(state.api.http).build() }
       CompositionLocalProvider(LocalImageLoader provides imageLoader) {
         SessionShell(
           api = state.api,
           start = state.start,
           username = state.username,
+          address = state.api.serverAddress,
           onSignOut = session::signOut,
+          onLocale = ::applyAppLocale,
         )
       }
     }
@@ -187,9 +196,16 @@ fun AppRoot() {
  * on sign-out, so a new sign-in never reuses the previous account's view models or its client.
  */
 @Composable
-fun SessionShell(api: TvApi, start: Section, username: String, onSignOut: () -> Unit) {
+fun SessionShell(
+  api: TvApi,
+  start: Section,
+  username: String,
+  onSignOut: () -> Unit,
+  address: String = "http://",
+  onLocale: (String) -> Unit = {},
+) {
   SessionContent(api) {
-    Shell(start = start, api = api, username = username, onSignOut = onSignOut)
+    Shell(start = start, api = api, username = username, onSignOut = onSignOut, address = address, onLocale = onLocale)
   }
 }
 

@@ -44,5 +44,6 @@ jobs:
         with:
           node-version: "22"
       - run: node scripts/android-strings.mjs --check
-      - run: ./gradlew assembleDebug testDebugUnitTest lintDebug --no-daemon
+      # assembleRelease also runs R8, so the minified build is proven on every change.
+      - run: ./gradlew assembleDebug assembleRelease testDebugUnitTest lintDebug --no-daemon
         working-directory: android-tv

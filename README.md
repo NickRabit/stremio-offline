@@ -141,6 +141,14 @@ email one-time PIN inside the app. See
 [Cloudflare Access](desktop/README.md#cloudflare-access) for supported sign-in
 and external-player limitations.
 
+### On Android TV
+
+Every release also carries an Android TV app, `stremio-offline-tv-<version>.apk`,
+a remote-first client for the same server. It installs over an older version and
+updates itself through [Obtainium](https://github.com/ImranR98/Obtainium).
+**[Installing the Android TV app](docs/install-android-tv.md)** covers Obtainium,
+the Downloader app and `adb install -r`.
+
 ### On phones and tablets
 
 Open the address of your NAS or Docker host in your mobile browser. On iPhone
@@ -178,6 +186,7 @@ on demand, so a catalogue the provider adds later still shows up. See
 | [Installing the macOS app](docs/install-mac.md) | Download, the first launch of an unsigned app, updating and removing it |
 | [Installing the Windows app](docs/install-windows.md) | SmartScreen, the notification area, firewall, updating and removing it |
 | [Installing the Linux app](docs/install-linux.md) | .deb or AppImage, VA-API/NVENC or the system's FFmpeg, firewall, updating and removing it |
+| [Installing the Android TV app](docs/install-android-tv.md) | The APK, Obtainium updates, the Downloader app, adb, updating over an older install |
 | [Building and releasing](docs/building.md) | Local builds, GHCR, version tags, macOS, Windows and Linux hosts |
 | [Licensing](docs/licensing.md) | What each distribution contains, FFmpeg's licence and source |
 | [Testing](docs/testing.md) | What belongs in which test layer, and how to run each |

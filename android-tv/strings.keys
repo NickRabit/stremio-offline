@@ -128,3 +128,15 @@ tv.diagBuffer
 tv.diagSession
 tv.diagDevice
 tv.diagPing
+common.cancel
+settings.uiLanguage
+settings.audioLanguage
+settings.subtitleLanguage
+settings.startView
+tv.settingsTitle
+tv.account
+tv.device
+tv.version
+tv.signOutConfirm
+tv.passthrough
+tv.versionMismatch

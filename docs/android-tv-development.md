@@ -69,6 +69,46 @@ All of these must pass before any change. `android-tv/local.properties` is not
 needed when `ANDROID_HOME` is set, and is git-ignored if Android Studio writes
 one.
 
+## Release signing
+
+The release APK is signed with a project keystore that never enters the
+repository. Unlike the desktop packages, the TV app must be signed: Android
+refuses an update whose signature differs from the installed one, so an
+unsigned build would make every television uninstall and sign out first.
+
+Create the keystore once, on a machine you keep, and choose a strong password
+when `keytool` asks:
+
+```bash
+keytool -genkeypair -v -keystore stremio-offline-tv.jks \
+  -alias stremio-offline-tv -keyalg RSA -keysize 4096 -validity 10000
+```
+
+**Back up the file** somewhere that outlives the laptop (a password manager, an
+encrypted disk). If it is lost, the app can no longer be updated over an older
+install: every television has to uninstall the app before it can take a build
+signed with a new key, which discards its stored session and settings.
+
+Store the keystore and its three values as repository secrets (Settings →
+Secrets and variables → Actions, or `gh secret set`). The keystore itself
+travels base64-encoded:
+
+```bash
+base64 -i stremio-offline-tv.jks | gh secret set ANDROID_KEYSTORE_BASE64
+gh secret set ANDROID_KEYSTORE_PASSWORD
+gh secret set ANDROID_KEY_ALIAS          # stremio-offline-tv
+gh secret set ANDROID_KEY_PASSWORD
+```
+
+On Linux `base64 -w0` replaces `base64 -i`. `gh secret set` reads the value
+from a prompt when it is not given one. The release workflow decodes
+`ANDROID_KEYSTORE_BASE64` to a temporary file and exports the other three, so
+nothing is written into the repository. With the same four variables set
+locally, `./gradlew assembleRelease` in `android-tv/` produces a signed APK;
+without them it still runs and produces an unsigned one.
+
+The owner creates the keystore and sets the secrets; an agent never does.
+
 ## 5. Emulator and a server to talk to
 
 ```bash

@@ -1573,4 +1573,11 @@ export const sk: Catalog = {
   "tv.diagSession": "Relácia",
   "tv.diagDevice": "Zariadenie",
   "tv.diagPing": "pred {seconds} s",
+  "tv.settingsTitle": "Táto televízia",
+  "tv.account": "Účet",
+  "tv.device": "Zariadenie",
+  "tv.version": "Verzia",
+  "tv.signOutConfirm": "Odhlásiť sa na tejto televízii? Na prihlásenie budete znova potrebovať heslo.",
+  "tv.passthrough": "Priechod",
+  "tv.versionMismatch": "Server beží vo verzii {server}, aplikácia je {app}. Aktualizujte tú staršiu.",
 };

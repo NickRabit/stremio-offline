@@ -8,6 +8,8 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -72,6 +74,8 @@ class ApiClient(
   /** The one HTTP client of the session: images and the player share it so they share the cookie. */
   override val http: OkHttpClient get() = client
 
+  override val serverAddress: String get() = address.display
+
   /** A server-relative address (an image, a stream) resolved against the configured prefix. */
   override fun url(path: String): String =
     if (path.startsWith("http://") || path.startsWith("https://")) path else address.resolve(path).toString()
@@ -83,6 +87,9 @@ class ApiClient(
       return ServerStatus(parsed.version.orEmpty())
     }
   }
+
+  /** The version `/api/status` reports, read for the Settings screen's mismatch line. */
+  override suspend fun serverVersion(): String = status().version
 
   suspend fun login(username: String, password: String): LoginResult {
     val payload = json.encodeToString(LoginRequest.serializer(), LoginRequest(username, password, true))
@@ -119,6 +126,17 @@ class ApiClient(
       if (!response.isSuccessful) throw ApiError(ApiFailure.Generic)
       return readBody(response).decodeOrNull<SettingsResponse>() ?: SettingsResponse()
     }
+  }
+
+  override suspend fun languages(): List<LanguageDto> =
+    request(Request.Builder().url(address.resolve("/api/languages")).get().build()).decode() ?: emptyList()
+
+  /** One personal preference per request, spelled as the body's only key: the server refuses a
+   *  body that names an instance field, and a non-administrator must never send one. */
+  override suspend fun updateSettings(field: String, value: String): SettingsResponse {
+    val payload = buildJsonObject { put(field, value) }.toString()
+    return request(Request.Builder().url(address.resolve("/api/settings")).patch(payload.toRequestBody(mediaType)).build())
+      .decode() ?: throw ApiError(ApiFailure.Generic)
   }
 
   suspend fun logout() {

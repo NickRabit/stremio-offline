@@ -117,3 +117,27 @@ fun detectCapabilities(context: Context): ClientCapabilitiesDto {
   }
   return capabilitiesFrom(codecs, passthrough)
 }
+
+private val CODEC_LABELS = mapOf(
+  "h264" to "H.264", "hevc" to "HEVC", "vp8" to "VP8", "vp9" to "VP9", "av1" to "AV1",
+  "aac" to "AAC", "mp3" to "MP3", "opus" to "Opus", "vorbis" to "Vorbis", "flac" to "FLAC",
+  "ac3" to "AC-3", "eac3" to "E-AC-3", "dts" to "DTS", "truehd" to "TrueHD",
+)
+
+/** The codec names of one capability list, in the order the server received them. */
+fun codecLabels(codes: List<String>): List<String> = codes.map { CODEC_LABELS[it] ?: it.uppercase() }
+
+/** What the device decodes, video first then audio, for the Settings screen's Device line. */
+fun decodedLabels(capabilities: ClientCapabilitiesDto): List<String> {
+  val video = buildList {
+    if (capabilities.h264) add("H.264")
+    if (capabilities.hevc) add("HEVC")
+    if (capabilities.vp9) add("VP9")
+    if (capabilities.av1) add("AV1")
+  }
+  return video + codecLabels(capabilities.audioDecode)
+}
+
+/** What the device passes through to a receiver, for the same line. */
+fun passthroughLabels(capabilities: ClientCapabilitiesDto): List<String> =
+  codecLabels(capabilities.audioPassthrough)

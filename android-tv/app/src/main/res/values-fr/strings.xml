@@ -135,4 +135,16 @@
   <string name="tv_diag_session">Session</string>
   <string name="tv_diag_device">Appareil</string>
   <string name="tv_diag_ping">il y a %1$s s</string>
+  <string name="common_cancel">Annuler</string>
+  <string name="settings_ui_language">Langue de l\'interface</string>
+  <string name="settings_audio_language">Langue audio</string>
+  <string name="settings_subtitle_language">Langue des sous-titres</string>
+  <string name="settings_start_view">Page de démarrage</string>
+  <string name="tv_settings_title">Cette télévision</string>
+  <string name="tv_account">Compte</string>
+  <string name="tv_device">Appareil</string>
+  <string name="tv_version">Version</string>
+  <string name="tv_sign_out_confirm">Se déconnecter sur cette télévision ? Il vous faudra le mot de passe pour vous reconnecter.</string>
+  <string name="tv_passthrough">Transmission directe</string>
+  <string name="tv_version_mismatch">Le serveur exécute %1$s, cette app est %2$s. Mettez à jour la plus ancienne.</string>
 </resources>

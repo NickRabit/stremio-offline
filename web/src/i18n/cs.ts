@@ -1624,4 +1624,11 @@ export const cs: Catalog = {
   "tv.diagSession": "Relace",
   "tv.diagDevice": "Zařízení",
   "tv.diagPing": "před {seconds} s",
+  "tv.settingsTitle": "Tato televize",
+  "tv.account": "Účet",
+  "tv.device": "Zařízení",
+  "tv.version": "Verze",
+  "tv.signOutConfirm": "Odhlásit se na této televizi? Pro přihlášení budete znovu potřebovat heslo.",
+  "tv.passthrough": "Průchod",
+  "tv.versionMismatch": "Server běží ve verzi {server}, aplikace je {app}. Aktualizujte tu starší.",
 };

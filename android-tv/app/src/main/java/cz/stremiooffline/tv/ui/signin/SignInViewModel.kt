@@ -61,7 +61,7 @@ interface SignInActions {
 
 class SignInViewModel(
   private val store: SessionStore,
-  private val onSignedIn: (String, Section, ApiClient) -> Unit,
+  private val onSignedIn: (String, String?, Section, ApiClient) -> Unit,
 ) : ViewModel(), SignInActions {
 
   override var state by mutableStateOf(SignInState())
@@ -124,7 +124,7 @@ class SignInViewModel(
         // An account that has not been created yet is told apart from wrong credentials here.
         when (val me = runCatching { api.me() }.getOrNull()) {
           MeResult.Setup -> return@launch fail(ApiFailure.NeedsSetup)
-          is MeResult.SignedIn -> return@launch succeed(address, me.username, api)
+          is MeResult.SignedIn -> return@launch succeed(address, me.username, me.language, api)
           null -> Unit
         }
         val login = api.login(username, password)
@@ -133,7 +133,7 @@ class SignInViewModel(
           store.clearSession()
           return@launch fail(ApiFailure.MustChangePassword)
         }
-        succeed(address, login.username, api)
+        succeed(address, login.username, null, api)
       } catch (error: ApiError) {
         fail(error.failure, error.seconds)
       }
@@ -145,11 +145,13 @@ class SignInViewModel(
     state = state.copy(busy = false, error = failure, errorSeconds = seconds, check = check)
   }
 
-  private suspend fun succeed(address: ServerAddress, username: String, api: ApiClient) {
+  private suspend fun succeed(address: ServerAddress, username: String, language: String?, api: ApiClient) {
     store.serverUrl = address.display
     val start = startSection(runCatching { api.settings().startView }.getOrNull())
+    // A fresh login answer carries no language; ask who the session is to apply the right one.
+    val uiLanguage = language ?: (runCatching { api.me() }.getOrNull() as? MeResult.SignedIn)?.language
     state = state.copy(busy = false)
-    onSignedIn(username, start, api)
+    onSignedIn(username, uiLanguage, start, api)
   }
 
   private fun clientFor(address: ServerAddress): ApiClient {
@@ -162,7 +164,7 @@ class SignInViewModel(
   }
 
   companion object {
-    fun factory(store: SessionStore, onSignedIn: (String, Section, ApiClient) -> Unit) =
+    fun factory(store: SessionStore, onSignedIn: (String, String?, Section, ApiClient) -> Unit) =
       viewModelFactory { initializer { SignInViewModel(store, onSignedIn) } }
   }
 }

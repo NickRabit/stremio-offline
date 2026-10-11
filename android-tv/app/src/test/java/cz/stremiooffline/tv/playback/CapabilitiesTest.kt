@@ -53,4 +53,20 @@ class CapabilitiesTest {
     assertFalse(capabilities.hevc)
     assertTrue(capabilities.deepColor.isEmpty())
   }
+
+  @Test
+  fun `the settings line names the codecs, video before audio, passthrough separately`() {
+    val capabilities = capabilitiesFrom(
+      listOf(
+        CodecInfo("video/hevc", false, emptyList()),
+        CodecInfo("video/avc", false, emptyList()),
+        CodecInfo("audio/mp4a-latm", false, emptyList()),
+        CodecInfo("audio/ac3", false, emptyList()),
+      ),
+      setOf("eac3"),
+    )
+
+    assertEquals(listOf("H.264", "HEVC", "AAC", "AC-3"), decodedLabels(capabilities))
+    assertEquals(listOf("E-AC-3"), passthroughLabels(capabilities))
+  }
 }

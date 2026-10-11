@@ -4,6 +4,7 @@ kotlin = "2.1.0"
 composeBom = "2024.12.01"
 tvMaterial = "1.0.0"
 activityCompose = "1.9.3"
+appcompat = "1.7.0"
 lifecycle = "2.8.7"
 navigationCompose = "2.8.5"
 okhttp = "4.12.0"
@@ -26,6 +27,7 @@ androidx-compose-ui-test-junit4 = { module = "androidx.compose.ui:ui-test-junit4
 androidx-compose-ui-test-manifest = { module = "androidx.compose.ui:ui-test-manifest" }
 androidx-tv-material = { module = "androidx.tv:tv-material", version.ref = "tvMaterial" }
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activityCompose" }
+androidx-appcompat = { module = "androidx.appcompat:appcompat", version.ref = "appcompat" }
 androidx-lifecycle-viewmodel-compose = { module = "androidx.lifecycle:lifecycle-viewmodel-compose", version.ref = "lifecycle" }
 androidx-lifecycle-runtime-compose = { module = "androidx.lifecycle:lifecycle-runtime-compose", version.ref = "lifecycle" }
 androidx-navigation-compose = { module = "androidx.navigation:navigation-compose", version.ref = "navigationCompose" }

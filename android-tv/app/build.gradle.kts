@@ -14,6 +14,12 @@ val sharedVersion = Regex("\"version\"\\s*:\\s*\"([^\"]+)\"")
 val sharedVersionCode = sharedVersion.split(".").map(String::toInt)
   .let { (major, minor, patch) -> major * 1_000_000 + minor * 1_000 + patch }
 
+// The release key lives in CI secrets, never in the repository: the four variables below are
+// exported by the android job in release.yml. Without them a local `assembleRelease` still runs
+// and produces an unsigned APK.
+val keystorePath = System.getenv("ANDROID_KEYSTORE")
+val hasReleaseKey = !keystorePath.isNullOrBlank()
+
 android {
   namespace = "cz.stremiooffline.tv"
   compileSdk = 35
@@ -25,6 +31,27 @@ android {
     targetSdk = 35
     versionCode = sharedVersionCode
     versionName = sharedVersion
+  }
+
+  signingConfigs {
+    if (hasReleaseKey) {
+      create("release") {
+        storeFile = file(keystorePath!!)
+        storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+        keyAlias = System.getenv("ANDROID_KEY_ALIAS")
+        keyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+      }
+    }
+  }
+
+  buildTypes {
+    release {
+      isMinifyEnabled = true
+      // Media3, OkHttp, kotlinx-serialization and Coil ship their own consumer rules; this file
+      // holds only what a minified build proves necessary.
+      proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+      if (hasReleaseKey) signingConfig = signingConfigs.getByName("release")
+    }
   }
 
   buildFeatures {
@@ -59,6 +86,7 @@ kotlin {
 
 dependencies {
   implementation(platform(libs.androidx.compose.bom))
+  implementation(libs.androidx.appcompat)
   implementation(libs.androidx.compose.foundation)
   implementation(libs.androidx.compose.ui)
   implementation(libs.androidx.compose.ui.graphics)

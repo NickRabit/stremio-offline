@@ -135,4 +135,16 @@
   <string name="tv_diag_session">Sesión</string>
   <string name="tv_diag_device">Dispositivo</string>
   <string name="tv_diag_ping">hace %1$s s</string>
+  <string name="common_cancel">Cancelar</string>
+  <string name="settings_ui_language">Idioma de la interfaz</string>
+  <string name="settings_audio_language">Idioma de audio</string>
+  <string name="settings_subtitle_language">Idioma de los subtítulos</string>
+  <string name="settings_start_view">Página de inicio</string>
+  <string name="tv_settings_title">Este televisor</string>
+  <string name="tv_account">Cuenta</string>
+  <string name="tv_device">Dispositivo</string>
+  <string name="tv_version">Versión</string>
+  <string name="tv_sign_out_confirm">¿Cerrar sesión en este televisor? Necesitarás la contraseña para volver a entrar.</string>
+  <string name="tv_passthrough">Paso directo</string>
+  <string name="tv_version_mismatch">El servidor ejecuta %1$s, esta app es %2$s. Actualiza la que sea más antigua.</string>
 </resources>

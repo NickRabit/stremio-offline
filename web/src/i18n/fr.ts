@@ -1573,4 +1573,11 @@ export const fr: Catalog = {
   "tv.diagSession": "Session",
   "tv.diagDevice": "Appareil",
   "tv.diagPing": "il y a {seconds} s",
+  "tv.settingsTitle": "Cette télévision",
+  "tv.account": "Compte",
+  "tv.device": "Appareil",
+  "tv.version": "Version",
+  "tv.signOutConfirm": "Se déconnecter sur cette télévision ? Il vous faudra le mot de passe pour vous reconnecter.",
+  "tv.passthrough": "Transmission directe",
+  "tv.versionMismatch": "Le serveur exécute {server}, cette app est {app}. Mettez à jour la plus ancienne.",
 };

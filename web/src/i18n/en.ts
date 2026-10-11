@@ -1630,4 +1630,11 @@ export const en = {
   "tv.diagSession": "Session",
   "tv.diagDevice": "Device",
   "tv.diagPing": "{seconds} s ago",
+  "tv.settingsTitle": "This television",
+  "tv.account": "Account",
+  "tv.device": "Device",
+  "tv.version": "Version",
+  "tv.signOutConfirm": "Sign out on this television? You will need the password to sign in again.",
+  "tv.passthrough": "Passthrough",
+  "tv.versionMismatch": "The server runs {server}, this app is {app}. Update the one that is older.",
 };

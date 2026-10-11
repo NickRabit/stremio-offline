@@ -139,4 +139,16 @@
   <string name="tv_diag_session">Sesja</string>
   <string name="tv_diag_device">Urządzenie</string>
   <string name="tv_diag_ping">%1$s s temu</string>
+  <string name="common_cancel">Anuluj</string>
+  <string name="settings_ui_language">Język interfejsu</string>
+  <string name="settings_audio_language">Język dźwięku</string>
+  <string name="settings_subtitle_language">Język napisów</string>
+  <string name="settings_start_view">Strona startowa</string>
+  <string name="tv_settings_title">Ten telewizor</string>
+  <string name="tv_account">Konto</string>
+  <string name="tv_device">Urządzenie</string>
+  <string name="tv_version">Wersja</string>
+  <string name="tv_sign_out_confirm">Wylogować się na tym telewizorze? Do ponownego zalogowania będzie potrzebne hasło.</string>
+  <string name="tv_passthrough">Przekazywanie</string>
+  <string name="tv_version_mismatch">Serwer działa w wersji %1$s, ta aplikacja to %2$s. Zaktualizuj tę starszą.</string>
 </resources>

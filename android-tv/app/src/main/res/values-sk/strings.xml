@@ -139,4 +139,16 @@
   <string name="tv_diag_session">Relácia</string>
   <string name="tv_diag_device">Zariadenie</string>
   <string name="tv_diag_ping">pred %1$s s</string>
+  <string name="common_cancel">Zrušiť</string>
+  <string name="settings_ui_language">Jazyk rozhrania</string>
+  <string name="settings_audio_language">Jazyk zvuku</string>
+  <string name="settings_subtitle_language">Jazyk titulkov</string>
+  <string name="settings_start_view">Úvodná stránka</string>
+  <string name="tv_settings_title">Táto televízia</string>
+  <string name="tv_account">Účet</string>
+  <string name="tv_device">Zariadenie</string>
+  <string name="tv_version">Verzia</string>
+  <string name="tv_sign_out_confirm">Odhlásiť sa na tejto televízii? Na prihlásenie budete znova potrebovať heslo.</string>
+  <string name="tv_passthrough">Priechod</string>
+  <string name="tv_version_mismatch">Server beží vo verzii %1$s, aplikácia je %2$s. Aktualizujte tú staršiu.</string>
 </resources>

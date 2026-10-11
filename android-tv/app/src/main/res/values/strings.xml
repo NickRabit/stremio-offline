@@ -135,4 +135,16 @@
   <string name="tv_diag_session">Session</string>
   <string name="tv_diag_device">Device</string>
   <string name="tv_diag_ping">%1$s s ago</string>
+  <string name="common_cancel">Cancel</string>
+  <string name="settings_ui_language">Interface language</string>
+  <string name="settings_audio_language">Audio language</string>
+  <string name="settings_subtitle_language">Subtitle language</string>
+  <string name="settings_start_view">Start page</string>
+  <string name="tv_settings_title">This television</string>
+  <string name="tv_account">Account</string>
+  <string name="tv_device">Device</string>
+  <string name="tv_version">Version</string>
+  <string name="tv_sign_out_confirm">Sign out on this television? You will need the password to sign in again.</string>
+  <string name="tv_passthrough">Passthrough</string>
+  <string name="tv_version_mismatch">The server runs %1$s, this app is %2$s. Update the one that is older.</string>
 </resources>

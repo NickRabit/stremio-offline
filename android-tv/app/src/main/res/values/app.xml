@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
   <string name="app_name" translatable="false">Stremio Offline</string>
+  <!-- A platform name, not a translated phrase; the version comes from Build.VERSION.RELEASE. -->
+  <string name="android_version" translatable="false">Android %1$s</string>
 </resources>
