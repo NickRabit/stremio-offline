@@ -1,22 +1,25 @@
 package cz.stremiooffline.tv.ui.components
 
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -24,6 +27,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -32,23 +36,28 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.unit.Dp
 import androidx.tv.material3.Border
 import androidx.tv.material3.ClickableSurfaceDefaults
 import androidx.tv.material3.Glow
 import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
 import coil.compose.AsyncImage
+import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.ui.theme.Tokens
 
 /** Room a focused card's scale and glow need inside a scrolling viewport, so the first one is
@@ -66,6 +75,7 @@ fun PosterCard(
   caption: String? = null,
   cardTag: String? = null,
   fallbackImageUrl: String? = null,
+  mosaic: List<String> = emptyList(),
 ) {
   var focused by remember { mutableStateOf(false) }
   val candidates = remember(imageUrl, fallbackImageUrl) { listOfNotNull(imageUrl, fallbackImageUrl).distinct() }
@@ -97,7 +107,7 @@ fun PosterCard(
           .clip(shape)
           .background(Brush.verticalGradient(listOf(Tokens.Panel2, Tokens.Bg))),
       ) {
-        if (art != null) {
+        if (art != null && mosaic.size < 2) {
           AsyncImage(
             model = art,
             contentDescription = null,
@@ -106,9 +116,12 @@ fun PosterCard(
             modifier = Modifier.fillMaxSize(),
           )
         }
+        // As on the web, two or more covers inside win over the folder's own picture.
+        val collage = mosaic.size >= 2
+        if (collage) PosterMosaic(mosaic, label = stringResource(R.string.library_mosaic_alt, mosaic.size.toString()))
         // The name over the artwork is the gradient fallback; with a real poster it would only
         // fight the picture.
-        if (art == null) {
+        if (art == null && !collage) {
           Text(
             name,
             color = Tokens.Text,
@@ -303,5 +316,54 @@ fun TvSpinner(size: Dp = 13.dp, color: Color = Color.White, modifier: Modifier =
       useCenter = false,
       style = Stroke(width = stroke),
     )
+  }
+}
+
+const val TagPosterMosaic = "poster_mosaic"
+
+/** Where each of up to five covers sits in the collage, as fractions of the card: the web's
+ *  `.library-preview-collage` -- a large cover on the left, four smaller ones tilted over it. */
+private data class MosaicSlot(val x: Float, val y: Float, val w: Float, val h: Float, val tilt: Float)
+
+private val MosaicSlots = listOf(
+  MosaicSlot(0f, 0f, 0.70f, 1f, 0f),
+  MosaicSlot(0.26f, 0.02f, 0.55f, 0.54f, -3f),
+  MosaicSlot(0.61f, 0.08f, 0.42f, 0.43f, 4f),
+  MosaicSlot(0.28f, 0.54f, 0.43f, 0.42f, 2f),
+  MosaicSlot(0.49f, 0.47f, 0.55f, 0.51f, -3f),
+)
+
+/** A library or folder without a cover of its own shows a collage of the covers inside it. */
+@Composable
+fun PosterMosaic(posters: List<String>, label: String, modifier: Modifier = Modifier) {
+  BoxWithConstraints(
+    modifier
+      .fillMaxSize()
+      .background(Tokens.Bg)
+      .testTag(TagPosterMosaic)
+      .semantics { contentDescription = label },
+  ) {
+    val slotShape = RoundedCornerShape(4.dp)
+    // A cover that fails to load leaves its slot empty instead of drawing a broken frame.
+    val broken = remember(posters) { mutableStateListOf<Int>() }
+    posters.take(MosaicSlots.size).forEachIndexed { index, url ->
+      if (index in broken) return@forEachIndexed
+      val slot = MosaicSlots[index]
+      val first = index == 0
+      AsyncImage(
+        model = url,
+        onError = { broken.add(index) },
+        contentDescription = null,
+        contentScale = ContentScale.Crop,
+        modifier = Modifier
+          .offset(x = maxWidth * slot.x, y = maxHeight * slot.y)
+          .size(maxWidth * slot.w, maxHeight * slot.h)
+          .rotate(slot.tilt)
+          .then(
+            if (first) Modifier
+            else Modifier.shadow(6.dp, slotShape).clip(slotShape).border(1.5.dp, Tokens.Line, slotShape),
+          ),
+      )
+    }
   }
 }

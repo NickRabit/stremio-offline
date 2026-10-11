@@ -195,6 +195,7 @@ fun LibraryRoute(
                 progress = if (item != null) progressFraction(item) else null,
                 caption = if (item != null) caption(item) else null,
                 cardTag = key,
+                mosaic = item?.mosaic?.map(api::url).orEmpty(),
                 onClick = {
                   when (item) {
                     null -> openFavoritesPage()

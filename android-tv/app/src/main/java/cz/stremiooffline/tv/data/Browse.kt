@@ -31,6 +31,7 @@ sealed class BrowseItem {
     val titles: Int = 0,
     val size: Double = 0.0,
     val unreachable: Boolean = false,
+    val posters: List<String>? = null,
     override val poster: String? = null,
     override val wide: String? = null,
   ) : BrowseItem()
@@ -67,6 +68,14 @@ sealed class BrowseItem {
     override val poster: String? = null,
     override val wide: String? = null,
   ) : BrowseItem()
+
+  /** The covers the server picked for a library or folder collage, as the web draws them. */
+  val mosaic: List<String>
+    get() = when (this) {
+      is Library -> posters.orEmpty()
+      is Folder -> posters.orEmpty()
+      is File -> emptyList()
+    }
 
   val title: String
     get() = when (this) {

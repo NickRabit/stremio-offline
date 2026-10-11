@@ -162,4 +162,5 @@
   <string name="tv_on">Zapnuté</string>
   <string name="tv_off">Vypnuté</string>
   <string name="tv_back_to_source">Späť na predchádzajúci zdroj</string>
+  <string name="library_mosaic_alt">Plagátová mozaika z %1$s filmov</string>
 </resources>

@@ -162,4 +162,5 @@
   <string name="tv_on">Zapnuto</string>
   <string name="tv_off">Vypnuto</string>
   <string name="tv_back_to_source">Zpět na předchozí zdroj</string>
+  <string name="library_mosaic_alt">Mozaika plakátů %1$s filmů</string>
 </resources>

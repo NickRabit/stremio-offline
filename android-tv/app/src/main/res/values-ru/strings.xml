@@ -162,4 +162,5 @@
   <string name="tv_on">Включено</string>
   <string name="tv_off">Выключено</string>
   <string name="tv_back_to_source">Вернуться к предыдущему источнику</string>
+  <string name="library_mosaic_alt">Постерная мозаика из %1$s фильмов</string>
 </resources>

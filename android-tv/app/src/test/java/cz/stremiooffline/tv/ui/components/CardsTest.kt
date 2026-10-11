@@ -8,6 +8,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.test.core.app.ApplicationProvider
 import coil.ImageLoader
 import coil.compose.LocalImageLoader
@@ -107,5 +108,61 @@ class CardsTest {
     }
     compose.waitForIdle()
     compose.waitUntil("the wide fallback is asked for") { requested.contains("http://server/wide.jpg") }
+  }
+
+  @Test
+  fun `a library without its own cover shows the collage of the covers inside it`() {
+    val requested = mutableListOf<String>()
+    compose.setContent {
+      CompositionLocalProvider(LocalImageLoader provides loader(requested)) {
+        PosterCard(
+          name = "TV test",
+          imageUrl = null,
+          progress = null,
+          onClick = {},
+          mosaic = listOf("http://server/a.jpg", "http://server/b.jpg", "http://server/c.jpg"),
+        )
+      }
+    }
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagPosterMosaic, useUnmergedTree = true).assertExists()
+    // The name stays under the card only; it is not painted over the collage.
+    compose.onAllNodesWithText("TV test").assertCountEquals(1)
+    compose.waitUntil(5_000) { requested.size == 3 }
+  }
+
+  @Test
+  fun `a single cover is not a collage`() {
+    compose.setContent {
+      CompositionLocalProvider(LocalImageLoader provides loader(mutableListOf())) {
+        PosterCard(name = "One", imageUrl = null, progress = null, onClick = {}, mosaic = listOf("http://server/a.jpg"))
+      }
+    }
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagPosterMosaic, useUnmergedTree = true).assertDoesNotExist()
+    compose.onAllNodesWithText("One").assertCountEquals(2)
+  }
+
+  @Test
+  fun `the collage wins over a folder's own cover, as on the web`() {
+    val requested = mutableListOf<String>()
+    compose.setContent {
+      CompositionLocalProvider(LocalImageLoader provides loader(requested)) {
+        PosterCard(
+          name = "Show",
+          imageUrl = "http://server/own.jpg",
+          progress = null,
+          onClick = {},
+          mosaic = listOf("http://server/a.jpg", "http://server/b.jpg"),
+        )
+      }
+    }
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagPosterMosaic, useUnmergedTree = true).assertExists()
+    compose.waitUntil(5_000) { requested.size == 2 }
+    assertTrue("the folder's own cover is not drawn under the collage", "http://server/own.jpg" !in requested)
   }
 }
