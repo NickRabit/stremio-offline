@@ -80,6 +80,10 @@ data class PlayTarget(
    *  draw a resume card; a library file leaves them empty and gets its art from the library. */
   val poster: String? = null,
   val addonKey: String? = null,
+  /** A catalogue title's type and the id the addon subtitles must be asked for (the video's id
+   *  for a series episode, the meta's own id for a movie); a library play leaves both null. */
+  val subtitleType: String? = null,
+  val subtitleTarget: String? = null,
 )
 
 /** Everything the title detail draws: the artwork, the meta line and the files that sit under it. */

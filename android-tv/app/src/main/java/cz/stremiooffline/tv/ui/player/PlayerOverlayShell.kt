@@ -77,6 +77,21 @@ fun PlayerOverlayShell(
   showControls: Int = 0,
   /** Bumped when the server refused a seek; the message shows for [SEEK_KEPT_MS]. */
   seekKept: Int = 0,
+  /** A panel or the next-episode card is up: it owns the D-pad, Back and the auto-hide timer. */
+  modal: Boolean = false,
+  onTracks: () -> Unit = {},
+  tracksText: String = "",
+  tracksLabel: String = "",
+  tracksFocus: FocusRequester? = null,
+  onNext: (() -> Unit)? = null,
+  nextLabel: String = "",
+  onDiagnostics: () -> Unit = {},
+  diagnosticsLabel: String = "",
+  diagnosticsFocus: FocusRequester? = null,
+  /** The server-delivered cue over the picture, or null when nothing is on screen. */
+  subtitleText: String? = null,
+  /** Panels and the next-episode card: drawn above the OSD, over the picture they cover. */
+  topLayer: @Composable () -> Unit = {},
   content: @Composable () -> Unit,
 ) {
   var controls by remember { mutableStateOf(initiallyShown) }
@@ -123,16 +138,18 @@ fun PlayerOverlayShell(
   }
 
   // Android 13+ hands the remote's Back to the back dispatcher, not to key listeners, so the
-  // player claims it here; otherwise the detail underneath would take it and close instead.
-  BackHandler {
+  // player claims it here; otherwise the detail underneath would take it and close instead. A
+  // panel or the card owns the dispatcher while it is up, so the player steps aside and the
+  // innermost layer wins: panel, then the controls, then the player.
+  BackHandler(enabled = !modal) {
     activity++
     val intent = playerKeyIntent(PlayerKey.Back, controls) ?: return@BackHandler
     if (intent.exit) onExit()
     if (intent.hideControls) controls = false
   }
 
-  LaunchedEffect(controls, activity, playing) {
-    if (controls && playing) {
+  LaunchedEffect(controls, activity, playing, modal) {
+    if (controls && playing && !modal) {
       delay(CONTROLS_HIDE_MS)
       controls = false
     }
@@ -184,6 +201,8 @@ fun PlayerOverlayShell(
       .focusable()
       .onPreviewKeyEvent { event ->
         if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+        // A panel or the card has the remote: it traps focus itself, so the shell steps aside.
+        if (modal) return@onPreviewKeyEvent false
         activity++
         // The media keys seek like the pad, held or not.
         when (event.key) {
@@ -214,8 +233,20 @@ fun PlayerOverlayShell(
         onToggle = { activity++; onTogglePause() },
         onSeekStep = { direction, eventTime -> pressSeek(direction, eventTime) },
         onActivity = { activity++ },
+        onTracks = onTracks,
+        tracksText = tracksText,
+        tracksLabel = tracksLabel,
+        tracksFocus = tracksFocus,
+        onNext = onNext,
+        nextLabel = nextLabel,
+        onDiagnostics = onDiagnostics,
+        diagnosticsLabel = diagnosticsLabel,
+        diagnosticsFocus = diagnosticsFocus,
       )
     }
+
+    // Above the picture and the OSD scrim, lifted clear of the controls, below the panels.
+    subtitleText?.let { SubtitleOverlay(it, lifted = controls) }
 
     val text = bubbleText
     if (text != null) {
@@ -248,6 +279,8 @@ fun PlayerOverlayShell(
           .padding(horizontal = 22.dp, vertical = 10.dp),
       )
     }
+
+    topLayer()
   }
 }
 

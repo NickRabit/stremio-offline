@@ -1,6 +1,7 @@
 package cz.stremiooffline.tv.ui
 
 import cz.stremiooffline.tv.data.AddonDto
+import cz.stremiooffline.tv.data.AddonSubtitleDto
 import cz.stremiooffline.tv.data.BrowseItem
 import cz.stremiooffline.tv.data.BrowseResult
 import cz.stremiooffline.tv.data.CatalogDto
@@ -11,14 +12,17 @@ import cz.stremiooffline.tv.data.FavoriteToggleDto
 import cz.stremiooffline.tv.data.HomeResponseDto
 import cz.stremiooffline.tv.data.MediaDto
 import cz.stremiooffline.tv.data.MetaDto
+import cz.stremiooffline.tv.data.NextFileDto
 import cz.stremiooffline.tv.data.PlaybackDescriptorDto
 import cz.stremiooffline.tv.data.ProgressDto
 import cz.stremiooffline.tv.data.ProgressEntryDto
 import cz.stremiooffline.tv.data.SearchResultDto
 import cz.stremiooffline.tv.data.SettingsResponse
+import cz.stremiooffline.tv.data.SidecarFetch
 import cz.stremiooffline.tv.data.SourceDto
 import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.data.StreamSourceDto
+import cz.stremiooffline.tv.data.TrackChange
 import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.data.WatchlistEntryDto
 import cz.stremiooffline.tv.data.WatchlistToggleDto
@@ -216,8 +220,56 @@ open class FakeTvApi : TvApi {
     return downloadsValue
   }
 
-  override suspend fun startPlayback(sourceId: String, capabilities: ClientCapabilitiesDto, time: Double): PlaybackDescriptorDto =
-    PlaybackDescriptorDto(id = "p1", url = "stream.mp4")
+  override suspend fun startPlayback(
+    sourceId: String,
+    capabilities: ClientCapabilitiesDto,
+    time: Double,
+    subtitleIds: List<String>,
+  ): PlaybackDescriptorDto {
+    startedSubtitleIds += subtitleIds
+    return startAnswer
+  }
+
+  var startAnswer: PlaybackDescriptorDto = PlaybackDescriptorDto(id = "p1", url = "stream.mp4")
+  val startedSubtitleIds: MutableList<List<String>> = mutableListOf()
+
+  override suspend fun trackPlayback(id: String, change: TrackChange): PlaybackDescriptorDto =
+    trackAnswer ?: PlaybackDescriptorDto(id = id, url = "stream.mp4")
+
+  var trackAnswer: PlaybackDescriptorDto? = null
+  val trackChanges: MutableList<TrackChange> = mutableListOf()
+
+  override suspend fun subtitles(type: String, id: String): List<AddonSubtitleDto> {
+    subtitlesRequests += type to id
+    return subtitlesValue
+  }
+
+  var subtitlesValue: List<AddonSubtitleDto> = emptyList()
+  val subtitlesRequests: MutableList<Pair<String, String>> = mutableListOf()
+
+  override suspend fun subtitleText(id: String, offset: Double, delay: Double): String? {
+    subtitleTextRequests += Triple(id, offset, delay)
+    return subtitleTextValue
+  }
+
+  var subtitleTextValue: String? = null
+  val subtitleTextRequests: MutableList<Triple<String, Double, Double>> = mutableListOf()
+
+  override suspend fun libraryNext(sourceId: String): NextFileDto? {
+    libraryNextRequests += sourceId
+    return libraryNextValue
+  }
+
+  var libraryNextValue: NextFileDto? = null
+  val libraryNextRequests: MutableList<String> = mutableListOf()
+
+  override suspend fun sidecar(url: String, position: Double, delay: Double): SidecarFetch? {
+    sidecarRequests += Triple(url, position, delay)
+    return sidecarValue
+  }
+
+  var sidecarValue: SidecarFetch? = null
+  val sidecarRequests: MutableList<Triple<String, Double, Double>> = mutableListOf()
 
   override suspend fun seekPlayback(id: String, time: Double): PlaybackDescriptorDto =
     PlaybackDescriptorDto(id = id, url = "stream.m3u8", playlist = true, offset = time)

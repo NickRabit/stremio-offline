@@ -3,6 +3,7 @@ package cz.stremiooffline.tv.data
 import java.io.ByteArrayInputStream
 import java.security.KeyStore
 import java.util.Base64
+import java.util.concurrent.TimeUnit
 import javax.net.ssl.KeyManagerFactory
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLSocketFactory
@@ -14,6 +15,7 @@ import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import kotlinx.coroutines.asCoroutineDispatcher
@@ -22,6 +24,8 @@ import org.junit.Test
 class ApiClientTest {
 
   private val server = MockWebServer()
+
+  private val DESCRIPTOR = """{"id":"p1","url":"stream.mp4"}"""
 
   @After
   fun shutdown() {
@@ -189,6 +193,105 @@ class ApiClientTest {
 
     assertTrue(descriptor.seekRestored)
     assertEquals("old.m3u8", descriptor.url)
+  }
+
+  @Test
+  fun `an audio track change posts the audio index and the position`() = runTest {
+    server.enqueue(MockResponse().setBody(DESCRIPTOR))
+    client(start()).trackPlayback("p1", TrackChange.Audio(2, 120.0))
+
+    val request = server.takeRequest()
+    assertEquals("/api/playback/p1/track", request.path)
+    assertEquals("""{"audio":2,"time":120.0}""", request.body.readUtf8())
+  }
+
+  @Test
+  fun `a subtitle change carries the null the server reads as Off`() = runTest {
+    server.enqueue(MockResponse().setBody(DESCRIPTOR))
+    client(start()).trackPlayback("p1", TrackChange.Subtitle(null, 60.0))
+
+    assertEquals("""{"subtitle":null,"time":60.0}""", server.takeRequest().body.readUtf8())
+  }
+
+  @Test
+  fun `a subtitle index reaches the server when the client does not render it`() = runTest {
+    server.enqueue(MockResponse().setBody(DESCRIPTOR))
+    client(start()).trackPlayback("p1", TrackChange.Subtitle(1, 60.0))
+
+    assertEquals("""{"subtitle":1,"time":60.0}""", server.takeRequest().body.readUtf8())
+  }
+
+  @Test
+  fun `starting a session registers every addon subtitle id`() = runTest {
+    server.enqueue(MockResponse().setBody("""{"id":"p1","url":"/x","subtitleIds":{"a":"b"}}"""))
+    val descriptor = client(start()).startPlayback("src", ClientCapabilitiesDto(), 0.0, listOf("one", "two"))
+
+    val body = server.takeRequest().body.readUtf8()
+    assertTrue(body, body.contains(""""subtitleIds":["one","two"]"""))
+    assertEquals(mapOf("a" to "b"), descriptor.subtitleIds)
+  }
+
+  @Test
+  fun `a start waits past the default timeout for a slow conversion`() = runTest {
+    server.enqueue(MockResponse().setBody(DESCRIPTOR).setBodyDelay(12, TimeUnit.SECONDS))
+
+    assertEquals("p1", client(start()).startPlayback("src", ClientCapabilitiesDto(), 0.0).id)
+  }
+
+  @Test
+  fun `a track change waits past the default timeout for a slow conversion`() = runTest {
+    server.enqueue(MockResponse().setBody(DESCRIPTOR).setBodyDelay(12, TimeUnit.SECONDS))
+
+    assertEquals("p1", client(start()).trackPlayback("p1", TrackChange.Audio(1, 30.0)).id)
+  }
+
+  @Test
+  fun `the addon subtitle list is asked for the video`() = runTest {
+    server.enqueue(MockResponse().setBody("""[{"subtitleId":"sid","lang":"cs","addonName":"OpenSubtitles"}]"""))
+    val list = client(start()).subtitles("series", "tt1:1:2")
+
+    assertEquals("/api/subtitles/series/tt1%3A1%3A2", server.takeRequest().path)
+    assertEquals("sid", list.single().subtitleId)
+    assertEquals("OpenSubtitles", list.single().addonName)
+  }
+
+  @Test
+  fun `the addon subtitle text is fetched with the offset and the delay`() = runTest {
+    server.enqueue(MockResponse().setBody("WEBVTT\n\n"))
+    val text = client(start()).subtitleText("sid", 120.0, 0.25)
+
+    assertEquals("/api/subtitle/sid?offset=120.000&delay=0.25", server.takeRequest().path)
+    assertTrue(text!!.startsWith("WEBVTT"))
+  }
+
+  @Test
+  fun `the sidecar is polled with the picture position and the delay`() = runTest {
+    server.enqueue(
+      MockResponse().setHeader("x-sidecar-complete", "0").setHeader("x-sidecar-coverage", "600").setBody("WEBVTT\n\n")
+    )
+    val fetch = client(start()).sidecar("/api/playback/p1/sidecar.vtt?revision=1&offset=10.000", 12.5, 0.25)
+
+    assertEquals(
+      "/api/playback/p1/sidecar.vtt?revision=1&offset=10.000&position=12.500&delay=0.25",
+      server.takeRequest().path,
+    )
+    assertEquals(600.0, fetch!!.coverage, 0.001)
+    assertEquals(false, fetch.complete)
+  }
+
+  @Test
+  fun `the next library file is asked by source id`() = runTest {
+    server.enqueue(MockResponse().setBody("""{"path":"Films/It 2.mkv","title":"It 2.mkv"}"""))
+    val next = client(start()).libraryNext("src1")
+
+    assertEquals("/api/library/next/src1", server.takeRequest().path)
+    assertEquals("Films/It 2.mkv", next?.path)
+  }
+
+  @Test
+  fun `a library source with no neighbour answers nothing`() = runTest {
+    server.enqueue(MockResponse().setBody("null"))
+    assertNull(client(start()).libraryNext("src1"))
   }
 
   private fun start(): ServerAddress {
