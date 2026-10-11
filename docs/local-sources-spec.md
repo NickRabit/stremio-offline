@@ -103,9 +103,15 @@ A file qualifies when all of the following hold:
 
 Evaluating rule 3 for every file in a large library is too slow
 (`unitFor` filters every unit per call). First collect the binding keys whose
-record has the requested `type` and `id` (one pass over `records`), keep only
-the files equal to or inside one of those keys (`isPathWithin`), and only then
-apply rules 3 and 4 to that short list.
+record has the requested `type` and `id` (one pass over `records`), build a
+candidate set from files equal to or inside those keys (`isPathWithin`)
+**plus every sample file of a unit whose key is equal to or inside those keys**,
+and only then apply rules 3 and 4. Deduplicate candidates by qualified file key.
+A unit can be keyed by a representative video file: in a shared folder,
+`Heat.1995.1080p.mkv` and `Heat.1995.720p.mkv` can share the first file's
+binding without one path containing the other. Path containment alone would
+lose the second copy. Sample membership only widens the candidate set; it
+never bypasses the effective-binding check (including a sibling's Unmatch).
 
 Order: by library display order (the visible libraries sorted by
 `LibraryRecord.order`, as `libraryRootBrowse` sorts them), then by size
@@ -151,6 +157,12 @@ with the addon requests, and drops the answer if the request it belonged to is
 stale (the existing `sourcesRequestRef` on the web, the `LaunchedEffect` key on
 TV). A failure is an empty answer, logged at most at debug level.
 
+The local request must complete independently of addon discovery and subtitle
+requests: their failure must not discard local results or disable local Play.
+Track local loading separately, reset it with the request generation, and do
+not show a final empty state while it is pending. In Kotlin, cancellation must
+propagate; do not turn `CancellationException` into an empty successful result.
+
 Local entries are kept apart from the addon streams (their own state), never
 mixed into the list the filters, counts and notices are computed from.
 
@@ -173,8 +185,13 @@ mixed into the list the filters, counts and notices are computed from.
   the file's own sidecars, not the addon subtitles (the web player is given
   `subtitles={localStream ? [] : subtitles}`).
 - The default pick (`pickDefaultStream` and its TV twin) is the first local
-  entry when there is one. The existing `repickStream` rules stay: a row the
-  viewer chose is never moved, and nothing is repicked while playing.
+  entry when there is one. Preserve the `repickStream` protections: a row the
+  viewer chose is never moved, and nothing is repicked while playing. Extend
+  the arrival handling so the first local entry replaces an automatic addon
+  pick even when it arrives last. Both current helpers require `pending > 0`
+  to replace a valid selection; simply prepending local rows and clearing the
+  last pending flag in the same update does not satisfy this contract. Test
+  the completed state as well as intermediate loading states.
 
 ### Actions on a local entry
 
@@ -187,8 +204,12 @@ mixed into the list the filters, counts and notices are computed from.
     passes its own `{ kind: "catalog", key: "<type>:<id>" }`.
   - TV: `PlayTarget(key = Progress.libraryKey(localPath), path = localPath,
     sourceId = null, …)`, the same target the library detail builds; the player
-    mints the source through `librarySource(path)`. Start over builds the same
-    target with `resume = false`.
+    mints the source through `librarySource(path)`. Ordinary local Play uses
+    `resume = true` so the player reads the file's own progress even when the
+    catalogue has none; do not copy the catalogue's `resuming` boolean.
+    Start over builds the same target with `resume = false`. Omit catalogue
+    `subtitleType` and `subtitleTarget` on local targets, so subtitles come
+    from the library source just as they do for a Library play.
 - **To library** (and its target menu) is disabled: `canQueue` answers false
   for `kind === "library"` on both clients. It already answers true for any
   playable stream, which would queue a download of a file that is on disk.
@@ -271,3 +292,10 @@ it to `android-tv/strings.keys` if TV does not use it yet.
    before, with no error.
 9. On TV, a local play offers no source switching in the player, even while
    addons are still answering for the title underneath.
+10. Two encodes sharing a file-keyed title unit both appear, unless one has an
+    explicit different binding or Unmatch.
+11. A local answer arriving after all addons replaces only an automatic pick;
+    it never interrupts playback or replaces an explicit choice.
+12. Addon discovery or subtitle lookup failure does not prevent local playback.
+13. On TV, ordinary local Play resumes saved file progress even without
+    catalogue progress; Start over starts at zero.

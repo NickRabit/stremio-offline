@@ -50,6 +50,9 @@ Tests that must exist and pass (`npm test`):
 
 - movie bound on its folder → one entry, `kind: "library"`, `playable: true`,
   `localPath`, `libraryName`, `behaviorHints.videoSize`;
+- a shared folder with two Heat encodes and an unrelated Ronin film produces
+  a file-keyed Heat unit; binding its representative file offers both encodes,
+  not Ronin; explicitly unmatching or rebinding the second encode excludes it;
 - movie bound, one file under it unmatched (`unmatchAt`) → that file absent;
 - a nearer sub-folder that is its own title unit (for example a film folder
   inside a collection folder of a movie library) bound to another title → its
@@ -81,6 +84,9 @@ local row, plus the progress limitation from the specification).
     `api.streamSources`, behind the same staleness check, into a new
     `localStreams` state that `closeMeta`, `openMeta` and `fetchSources` clear
     wherever they clear `streams`.
+  - Keep local loading independent of addon discovery and subtitles: a failure
+    in either must leave local results usable. Do not let an early addon error
+    skip the local result, and suppress final empty states until it settles.
   - The rendered list, the default pick and `repickStream` use
     `catalogSourceList(localStreams, visibleStreams)`. Filters, counts,
     `streamAddons`, `streamLangs`, notices and the empty messages keep using
@@ -97,7 +103,10 @@ local row, plus the progress limitation from the specification).
   - The footer's addon subtitle count shows 0 while a local row is selected.
 - Tests:
   - Vitest for `streams.ts` (badge, `canQueue`, ordering, default pick, a
-    local entry surviving an addon filter).
+    local entry surviving an addon filter). Include a late local answer after
+    the addon pending count reaches zero: an automatic addon pick moves to
+    local, an explicit pick stays, and playback is not interrupted. Exercise
+    the final update with all loading flags cleared, not just pending states.
   - Playwright, run through Docker only (`npm run test:e2e:docker`). Reuse the
     fixtures of `e2e/tests/library-identify.spec.ts`: copy the sample into the
     download library as `Zkušební film (2024)/Zkušební film.mkv` and the two
@@ -105,7 +114,9 @@ local row, plus the progress limitation from the specification).
     the movie detail shows the local row first and selected; **Play** starts
     playback; after closing, the Library view shows progress on the file and
     Home shows a single Continue watching row. The series detail shows a local
-    row for S01E01 and none for S02E01. The test must fail on `main`.
+    row for S01E01 and none for S02E01. Also cover late local arrival, stale
+    answers after switching episodes or closing the detail, and local playback
+    when addon discovery or subtitle lookup fails. The tests must fail on `main`.
 - Screenshot baselines: do not regenerate on a Mac; run the **Update
   screenshot baselines** workflow on the branch if they moved.
 
@@ -127,17 +138,22 @@ the only one in the tests is `FakeTvApi.kt` (the screen tests build on it);
 grep `: TvApi` again before starting.
 
 - `TvApi.localStreams(type, id): List<StreamDto>`; the client treats any
-  `ApiError` as an empty list.
+  `ApiError` as an empty list and rethrows `CancellationException`.
 - `Streams.kt`: the same `isLocalStream`, badge, `canQueue` and ordering rules
   as the web; unit tests in `StreamsTest.kt`.
 - `CatalogDetailScreen.kt`: fetch alongside `streamSources` in the same
   `LaunchedEffect`; local entries first in the panel and the default pick;
   `play` and `startOverPressed` build the library `PlayTarget` for a local
   entry (`key = Progress.libraryKey(localPath)`, `path = localPath`,
-  `sourceId = null`); **To library** on a local entry shows
-  `sources.localQueueDisabled` instead of queuing; a **Show in library** button
+  `sourceId = null`, no catalogue subtitle target). Ordinary Play sets
+  `resume = true`, Start over sets `resume = false`; **To library** on a local
+  entry shows `sources.localQueueDisabled` instead of queuing; a **Show in library** button
   in the action row while a local entry is active; `onSources` reports addon
   streams only.
+- Track local loading independently; failure of `streamSources` must not
+  cancel local lookup or let `sourcesFailed` block Play or Start over on a local
+  row. Handle the last local arrival explicitly when repicking, including the
+  state where all loading flags are already cleared.
 - `Shell.kt`: `PlayerScreen` gets `sources = emptyList()` and
   `sourcesLoading = false` whenever the target has a `path` — the catalogue
   `onPlay` branch today leaves `playerSources` as the detail keeps reporting
@@ -152,6 +168,12 @@ grep `: TvApi` again before starting.
   - an addon filter (sort setting) does not move or hide the local row;
   - **To library** on a local entry never calls `download`;
   - a failing `localStreams` leaves the addon rows untouched;
+  - delayed local results replace an automatic addon pick after addons finish,
+    but never an explicit pick or a playing source;
+  - failed addon discovery still allows a local row to load and play;
+  - saved file progress with no catalogue progress resumes on ordinary Play,
+    while Start over builds the same file target with `resume = false`;
+  - changing episodes or closing the detail ignores stale local responses;
   - a local play from the catalogue detail opens the player with no source
     switcher while the fake addons are still answering.
 - Build and test per [android-tv-development.md](android-tv-development.md);
