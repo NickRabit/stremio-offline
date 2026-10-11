@@ -83,6 +83,7 @@ const mount = async (libraries: LibraryRecord[] = []): Promise<Harness> => {
       const parsed = parseLibraryPath(key)!;
       return { library: libraries.find((item) => item.id === parsed.libraryId)!, relative: parsed.relative };
     },
+    libraryUnits: async () => [],
     locateFileArtwork: async () => undefined,
     locateFolderArtworkPair: async () => ({ poster: undefined, wide: undefined }),
     markersOf: (data) => data.watchedSeries as Record<string, WatchedMarker>,

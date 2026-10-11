@@ -11,7 +11,7 @@ const TITLE: Record<BuiltinHomeRowId, Key> = {
   resume: "home.continue", episodes: "home.newEpisodes", completed: "home.readyToPlay",
   recent: "home.recent", tonight: "home.tonight", favorites: "home.favorites", confirm: "home.toConfirm",
 };
-const SHOW_ALL: Partial<Record<HomeRowId, Key>> = { favorites: "home.openLibrary", episodes: "home.openFollowing" };
+const SHOW_ALL: Partial<Record<HomeRowId, Key>> = { episodes: "home.openFollowing" };
 const SKELETON = [0, 1, 2, 3];
 /** How far below the screen a waiting shelf starts loading, so it is drawn by the time it
  *  scrolls in. */

@@ -43,7 +43,7 @@ export function relativeAge(iso: string, now: number, locale: string): string {
   return format.format(-Math.round(seconds / 86_400), "day");
 }
 
-export type ShowAllTarget = "library-resume" | "catalog-resume" | "downloads" | "library-favorites" | "following" | "library" | "confirm";
+export type ShowAllTarget = "library-resume" | "catalog-resume" | "downloads" | "favorites" | "following" | "library" | "confirm";
 
 /** Where "Show all" goes, or nothing when the row has no more than what it shows. Favourites
  *  always offers the library's list; Continue watching picks the library when it holds a local
@@ -54,7 +54,7 @@ export function showAllTarget(row: HomeRowId, cards: HomeCard[], hasMore: boolea
   if (row === "tonight") return undefined;
   if (row.startsWith("catalog:")) return undefined;
   if (row === "recent") return hasMore ? "library" : undefined;
-  if (row === "favorites") return "library-favorites";
+  if (row === "favorites") return "favorites";
   if (!hasMore) return undefined;
   if (row === "completed") return "downloads";
   return cards.some((card) => card.kind === "resume-file") ? "library-resume" : "catalog-resume";

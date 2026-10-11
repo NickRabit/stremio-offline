@@ -211,6 +211,19 @@ export const cs: Catalog = {
   "nav.stats": "Statistiky",
   "nav.following": "Sledované",
 
+  // One Favourites section: library stars and catalogue stars together.
+  "nav.favorites": "Oblíbené",
+  "favorites.title": "Oblíbené",
+  "favorites.filterAll": "Vše",
+  "favorites.filterLibrary": "V knihovně",
+  "favorites.filterCatalog": "Z katalogu",
+  "favorites.emptyAllTitle": "Zatím žádné oblíbené",
+  "favorites.emptyAllText": "Přidejte hvězdičku souboru v knihovně nebo titulu v katalogu a objeví se tady.",
+  "favorites.emptyLibraryTitle": "Žádné oblíbené v knihovně",
+  "favorites.emptyLibraryText": "Přidejte hvězdičku souboru nebo složce v knihovně a objeví se tady.",
+  "favorites.emptyCatalogTitle": "Žádné oblíbené v katalogu",
+  "favorites.emptyCatalogText": "Přidejte hvězdičku titulu v katalogu a objeví se tady.",
+
   // Přehrávač.
   "player.settings": "Nastavení přehrávání",
   "player.closeSettings": "Zavřít nastavení přehrávání",

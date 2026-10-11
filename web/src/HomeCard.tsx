@@ -22,13 +22,14 @@ function captionOf(card: HomeCardData, locale: string): string {
   if (card.kind === "recent") parts.push(relativeAge(card.addedAt, Date.now(), locale));
   if (card.kind === "tonight") parts.push(card.year);
   if (card.kind === "discovery") parts.push(card.year);
+  if (card.kind === "favorite-catalogue") parts.push(card.year);
   if (card.kind === "confirm") parts.push(t("home.confirmGuess", { name: card.candidate.year ? `${card.candidate.name} (${card.candidate.year})` : card.candidate.name }));
   return parts.filter(Boolean).join(" · ");
 }
 
 const titleOf = (card: HomeCardData): string =>
   card.kind === "favorite" || card.kind === "recent" || card.kind === "tonight" || card.kind === "confirm" ? card.label
-  : card.kind === "episode" || card.kind === "discovery" ? card.name
+  : card.kind === "episode" || card.kind === "discovery" || card.kind === "favorite-catalogue" ? card.name
   : card.title;
 
 /** Kinds that point at a library path the card or its menu can reveal. */
@@ -44,12 +45,12 @@ export function HomeCard({ card, shape, actions }: { card: HomeCardData; shape: 
   const caption = captionOf(card, localeTag());
   const folder = (card.kind === "favorite" || card.kind === "tonight") && card.itemKind === "folder";
   const poster = card.kind === "confirm" ? card.candidate.poster : card.poster;
-  const wide = card.kind === "confirm" || card.kind === "episode" ? undefined : card.wide;
+  const wide = card.kind === "confirm" || card.kind === "episode" || card.kind === "favorite-catalogue" ? undefined : card.wide;
   // A new episode and a suggestion are the whole card: nothing behind an overflow button.
-  const menu = card.kind !== "episode" && card.kind !== "discovery" && card.kind !== "confirm";
+  const menu = card.kind !== "episode" && card.kind !== "discovery" && card.kind !== "confirm" && card.kind !== "favorite-catalogue";
 
   const primary = () => {
-    if (card.kind === "resume-catalogue" || card.kind === "episode" || card.kind === "discovery" || card.kind === "confirm") { actions.open(card); return; }
+    if (card.kind === "resume-catalogue" || card.kind === "episode" || card.kind === "discovery" || card.kind === "confirm" || card.kind === "favorite-catalogue") { actions.open(card); return; }
     if (folder) { actions.reveal(card.path); return; }
     actions.play(card);
   };

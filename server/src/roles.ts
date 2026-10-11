@@ -29,6 +29,7 @@ export const USER_ALLOWED: Rule[] = [
   { method: "DELETE", pattern: /^\/progress$/ },
   { method: "DELETE", pattern: /^\/progress\/[^/]+$/ },
   { method: "GET", pattern: /^\/library\/favorites$/ },
+  { method: "GET", pattern: /^\/favorites$/ },
   { method: "GET", pattern: /^\/library\/resume$/ },
   { method: "POST", pattern: /^\/library\/favorite$/ },
   { method: "GET", pattern: /^\/views$/ },

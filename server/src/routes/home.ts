@@ -244,31 +244,18 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
   };
 
   const favoritesRow = async (req: express.Request, viewer: Viewer): Promise<HomeRow> => {
-    const libraries = store.libraries();
-    const visible = dataOf(req).favorites.filter((key) =>
-      personal.pathVisible(key, viewer, libraries) && showsOnHome(key, libraries)
-      && showsInFavorites(key, libraries) && libraryOnHome(key, libraries));
-    // Newest first, and only as many as a row can use: a long list of favourites is not
-    // described on every visit to Home.
-    const stored = visible.slice(-HOME_CANDIDATES).reverse();
-    const described = await Promise.all(stored.map(async (key) => {
-      const item = await describeLibraryPath(key, { stale: true });
-      return item ? { key, item } : undefined;
-    }));
-    const present = described.filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);
-    const ordered = present.map(({ key, item }) => ({ key, item, label: item.kind === "folder" ? item.name : item.label }));
-    const bounded = boundCards(ordered);
-    const page = bounded.items;
-    const hasMore = bounded.hasMore || visible.length > stored.length;
-    const cards: HomeCard[] = await Promise.all(page.map(async ({ key, item, label }) => {
-      const { poster, wide } = item.kind === "folder" ? await folderArtwork(key, wirePath(key)) : await fileArtwork(key, wirePath(key));
-      return {
-        kind: "favorite", key, path: wirePath(key), itemKind: item.kind, label,
-        ...(poster ? { poster } : {}),
-        ...(wide ? { wide } : {}),
-      };
-    }));
-    return { status: "ok", items: cards, hasMore };
+    // The one merged Favourites list, first page: library stars and catalogue stars alike.
+    const page = await personal.favoritesPage(req, { filter: "all", limit: HOME_ROW_LIMIT, onHome: true });
+    const cards: HomeCard[] = page.items.map((item) => item.kind === "library" ? {
+      kind: "favorite", key: item.path, path: item.path, itemKind: item.itemKind, label: item.label,
+      ...(item.poster ? { poster: item.poster } : {}),
+      ...(item.wide ? { wide: item.wide } : {}),
+    } : {
+      kind: "favorite-catalogue", key: `${item.type}:${item.id}`, type: item.type, id: item.id, name: item.name,
+      ...(item.poster ? { poster: item.poster } : {}),
+      ...(item.year ? { year: item.year } : {}),
+    });
+    return { status: "ok", items: cards, hasMore: page.total > cards.length };
   };
 
   /** Files the app first met after its baseline, newest first. A file the library knows as an

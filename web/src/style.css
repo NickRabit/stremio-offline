@@ -1943,3 +1943,8 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
 @media(min-width:981px) and (max-height:399px) and (orientation:landscape){
   .home-shape-poster .home-row .resume-strip .browse-art{aspect-ratio:16/9}
 }
+
+/* One Favourites section: a plate of the account's own stars, above the library and the catalogue. */
+.favorites-view{display:grid;gap:6px}
+.favorites-filter{justify-content:space-between}
+.favorites-grid{margin-top:4px}

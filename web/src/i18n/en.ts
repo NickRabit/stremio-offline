@@ -216,6 +216,19 @@ export const en = {
   "nav.stats": "Statistics",
   "nav.following": "Following",
 
+  // One Favourites section: library stars and catalogue stars together.
+  "nav.favorites": "Favourites",
+  "favorites.title": "Favourites",
+  "favorites.filterAll": "All",
+  "favorites.filterLibrary": "In library",
+  "favorites.filterCatalog": "From catalog",
+  "favorites.emptyAllTitle": "No favourites yet",
+  "favorites.emptyAllText": "Star a file in the library or a title in the catalogue and it appears here.",
+  "favorites.emptyLibraryTitle": "No library favourites",
+  "favorites.emptyLibraryText": "Star a file or folder in the library and it appears here.",
+  "favorites.emptyCatalogTitle": "No catalogue favourites",
+  "favorites.emptyCatalogText": "Star a title in the catalogue and it appears here.",
+
   // Player overlay.
   "player.settings": "Playback settings",
   "player.closeSettings": "Close playback settings",

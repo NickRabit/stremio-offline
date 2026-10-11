@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { resetViews } from "../library-tools";
+import { goToView } from "../nav";
 
 test.beforeEach(async ({ request }) => {
   await resetViews(request);
@@ -13,8 +14,12 @@ const folder = { kind: "folder", path: "Seriály", name: "Seriály", fileCount: 
 const file = { kind: "file", path: "Film.mkv", label: "Cesta za obzor a další dobrodružství na konci světa", size: 2e9, season: null, episode: null, modified: "2026-09-01", poster: poster("#936347"), favorite: true, year: "2024", description: "Film, který existuje jen pro testy.", match: "matched" };
 const episode = { ...file, path: "Seriály/01/epizoda.mkv", label: "Dlouhý název epizody, který se musí vejít i na telefonu", season: 1, episode: 1, progress: { position: 120, duration: 2400 } };
 
-test("library cards, favorites and folder navigation", async ({ page }, testInfo) => {
-  await page.route("**/api/library/favorites?*", (route) => route.fulfill({ json: { path: ":favorites", items: [folder, file], total: 2, pending: false } }));
+// A star of each kind as `GET /api/favorites` hands it out; the Favourites section draws both.
+const favoriteFolder = { kind: "library", path: "Seriály", label: "Seriály", itemKind: "folder", poster: poster("#38516d"), year: "1995" };
+const favoriteFile = { kind: "library", path: "Film.mkv", label: "Cesta za obzor", itemKind: "file", poster: poster("#936347"), year: "2024", progress: { position: 120, duration: 2400 } };
+const favoriteCatalog = { kind: "catalog", type: "movie", id: "tt9", name: "Cesta za obzor", poster: poster("#936347"), year: "2024" };
+
+test("library cards and folder navigation", async ({ page }, testInfo) => {
   await page.route("**/api/library/browse?*", (route) => {
     const path = new URL(route.request().url()).searchParams.get("path") || "";
     return route.fulfill({ json: { path, items: path ? [episode] : [folder, file, { ...file, path: "other.mkv", label: "Film bez plakátu", poster: undefined, favorite: false, description: undefined, year: undefined }], total: path ? 1 : 3, pending: false } });
@@ -22,8 +27,8 @@ test("library cards, favorites and folder navigation", async ({ page }, testInfo
   await page.goto("/");
   await page.getByRole("button", { name: "Knihovna", exact: true }).click();
   const shelf = page.locator(".library-shelf");
-  await shelf.getByRole("button", { name: "Oblíbené", exact: true }).click();
-  await expect(shelf.locator(".resume-strip img")).toHaveCount(2);
+  // The shelf's Favourites segment is where the library used to keep a second Favourites entry.
+  await expect(shelf.getByRole("button", { name: "Oblíbené", exact: true })).toHaveCount(0);
   if (testInfo.project.name === "mobile") {
     await expect(page.getByRole("button", { name: "Prohledat knihovnu", exact: true })).toBeHidden();
     const tools = page.getByRole("button", { name: "Nástroje knihovny", exact: true });
@@ -70,15 +75,10 @@ test("library cards, favorites and folder navigation", async ({ page }, testInfo
   await page.getByRole("button", { name: /Seriály.*Otevřít složku/ }).click();
   await expect(page.getByRole("button", { name: /Dlouhý název.*Pokračovat/ })).toBeVisible();
   await page.getByRole("button", { name: "O složku zpět" }).click();
-  await shelf.getByRole("button", { name: "Zobrazit vše (2)" }).click();
-  await expect(page.locator(".crumbs")).toContainText("Oblíbené");
-  await page.getByRole("button", { name: /Seriály.*Otevřít složku/ }).click();
-  await page.getByRole("button", { name: "O složku zpět" }).click();
-  await expect(page.locator(".crumbs button", { hasText: "Oblíbené" })).toBeDisabled();
   await page.getByRole("button", { name: "Zobrazit po řádcích" }).click();
-  await expect(page.locator(".browse-rows .library-open")).toHaveCount(2);
+  await expect(page.locator(".browse-rows .library-open")).toHaveCount(3);
   await page.waitForTimeout(1000);
-  await expect(page.locator(".browse-rows .library-open")).toHaveCount(2);
+  await expect(page.locator(".browse-rows .library-open")).toHaveCount(3);
   await expect.soft(page).toHaveScreenshot("library-list.png", { fullPage: true });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   if (testInfo.project.use.hasTouch) {
@@ -88,24 +88,45 @@ test("library cards, favorites and folder navigation", async ({ page }, testInfo
 });
 
 
-test("empty favorites explain how to add titles", async ({ page }) => {
-  await page.route("**/api/library/favorites?*", (route) => route.fulfill({ json: { path: ":favorites", items: [], total: 0, pending: false } }));
-  // One resumed title keeps the shelf on the page, which is the only place the empty
-  // Favourites segment can say why nothing is there.
-  await page.route("**/api/library/resume?*", (route) => route.fulfill({ json: {
-    path: ":resume",
-    items: [{ ...file, path: "resume.mp4", label: "Rozkoukaný film", progress: { position: 120, duration: 2400 } }],
-    total: 1,
-    pending: false,
-  } }));
+test("the favourites section holds both kinds and filters them", async ({ page }) => {
+  const filters: string[] = [];
+  await page.route("**/api/favorites?*", (route) => {
+    const filter = new URL(route.request().url()).searchParams.get("filter") || "all";
+    filters.push(filter);
+    const items = filter === "library" ? [favoriteFolder, favoriteFile] : filter === "catalog" ? [favoriteCatalog] : [favoriteFolder, favoriteFile, favoriteCatalog];
+    return route.fulfill({ json: { items, total: items.length, pending: false } });
+  });
+  await page.route("**/api/library/browse?*", (route) => {
+    const path = new URL(route.request().url()).searchParams.get("path") || "";
+    return route.fulfill({ json: { path, items: path ? [episode] : [], total: path ? 1 : 0, pending: false } });
+  });
   await page.goto("/");
-  await page.getByRole("button", { name: "Knihovna", exact: true }).click();
-  const shelf = page.locator(".library-shelf");
-  await shelf.getByRole("button", { name: "Oblíbené", exact: true }).click();
+  await goToView(page, "Oblíbené");
+  const grid = page.locator(".favorites-grid");
+  await expect(grid.locator(".browse-item")).toHaveCount(3);
+  await expect(grid.locator('[data-kind="favorite-catalog"]')).toHaveCount(1);
+  await page.getByRole("button", { name: "V knihovně", exact: true }).click();
+  await expect(grid.locator(".browse-item")).toHaveCount(2);
+  await page.getByRole("button", { name: "Z katalogu", exact: true }).click();
+  await expect(grid.locator(".browse-item")).toHaveCount(1);
+  await expect(grid.locator('[data-kind="favorite-catalog"]')).toContainText("Cesta za obzor");
+  await page.getByRole("button", { name: "Vše", exact: true }).click();
+  await expect(grid.locator(".browse-item")).toHaveCount(3);
+  expect(filters).toContain("library");
+  expect(filters).toContain("catalog");
+  await grid.locator('[data-kind="favorite-library"]').first().click();
+  await expect(page.locator(".crumbs")).toContainText("Seriály");
+});
+
+test("empty favorites explain how to add titles", async ({ page }) => {
+  await page.route("**/api/favorites?*", (route) => route.fulfill({ json: { items: [], total: 0, pending: false } }));
+  await page.goto("/");
+  await goToView(page, "Oblíbené");
   await expect(page.getByText("Zatím žádné oblíbené", { exact: true })).toBeVisible();
-  await shelf.getByRole("button", { name: "Pokračovat", exact: true }).click();
-  await expect(page.getByText("Zatím žádné oblíbené", { exact: true })).toHaveCount(0);
-  await expect(page.locator(".crumbs")).not.toContainText("Oblíbené");
+  await page.getByRole("button", { name: "V knihovně", exact: true }).click();
+  await expect(page.getByText("Žádné oblíbené v knihovně", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Z katalogu", exact: true }).click();
+  await expect(page.getByText("Žádné oblíbené v katalogu", { exact: true })).toBeVisible();
 });
 
 test("show all opens the complete resume collection", async ({ page }) => {

@@ -21,6 +21,7 @@ const ALLOWED: Array<[string, string]> = [
   ["DELETE", "/progress"],
   ["DELETE", "/progress/movie:tt1254207"],
   ["GET", "/library/favorites"],
+  ["GET", "/favorites"],
   ["GET", "/library/resume"],
   ["POST", "/library/favorite"],
   ["GET", "/views"],

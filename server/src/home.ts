@@ -130,6 +130,8 @@ export type HomeCard =
       path: string; completedAt: string; season?: number; episode?: number }
   | { kind: "favorite"; key: string; path: string; itemKind: "file" | "folder"; label: string;
       poster?: string; wide?: string }
+  | { kind: "favorite-catalogue"; key: string; type: string; id: string; name: string;
+      poster?: string; year?: string }
   | { kind: "recent"; key: string; path: string; label: string; poster?: string; wide?: string;
       addedAt: string; libraryId: string; season?: number; episode?: number }
   | { kind: "episode"; key: string; followId: string; type: string; metaId: string; name: string;
