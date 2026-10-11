@@ -295,4 +295,75 @@ class HomeLayoutPanelTest {
     save()
     assertEquals(listOf("confirm"), api.homeLayoutPatches.single()!!.hidden)
   }
+
+  @Test
+  fun `the panel reads the arrangement again every time it opens`() {
+    val api = fake()
+    mount(api)
+    assertEquals(1, api.homeLayoutRequests)
+
+    openPanel()
+    assertEquals(2, api.homeLayoutRequests)
+
+    // A change made elsewhere (the web, another device) is picked up on the next open.
+    api.homeLayoutValue = HomeLayoutResponseDto(
+      rows = listOf(
+        entry("resume", "builtin", "home.continue"),
+        entry("favorites", "builtin", "home.favorites"),
+        entry("tonight", "builtin", "home.tonight"),
+        entry("recent", "builtin", "home.recent"),
+      ),
+      layout = HomeLayoutDto(order = listOf("resume", "favorites", "tonight", "recent")),
+    )
+    scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
+    compose.waitForIdle()
+    compose.onNodeWithTag(TagSettingsRowHomeLayout).assertIsFocused()
+
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(TagSettingsPanel).assertExists()
+    assertEquals(3, api.homeLayoutRequests)
+    compose.onNodeWithTag(homeLayoutRowTag("recent")).assertExists()
+  }
+
+  @Test
+  fun `a failed save reads the arrangement again`() {
+    val api = fake()
+    api.homeLayoutPatchFailure = ApiFailure.Forbidden
+    mount(api)
+    openPanel()
+    assertEquals(2, api.homeLayoutRequests)
+
+    openActions()
+    press(Key.DirectionCenter)
+    save()
+
+    assertEquals(3, api.homeLayoutRequests)
+  }
+
+  @Test
+  fun `a read that is not a 404 shows the message and retries on the next open`() {
+    val api = fake()
+    api.homeLayoutFailure = ApiFailure.Generic
+    api.homeLayoutFailureMessage = "Home layouts are turned off."
+    mount(api)
+
+    compose.onNodeWithTag(TagSettingsRowHomeLayout)
+      .assertTextContains("Home layouts are turned off.", substring = true)
+
+    api.homeLayoutFailure = null
+    repeat(6) { press(Key.DirectionDown) }
+    compose.onNodeWithTag(TagSettingsRowHomeLayout).assertIsFocused()
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(homeLayoutRowTag("resume")).assertIsFocused()
+  }
+
+  @Test
+  fun `an empty arrangement carries the focus to the reset row`() {
+    val api = fake()
+    api.homeLayoutValue = HomeLayoutResponseDto(rows = emptyList(), layout = HomeLayoutDto())
+    mount(api)
+    openPanel()
+
+    compose.onNodeWithTag(TagHomeLayoutReset).assertIsFocused()
+  }
 }

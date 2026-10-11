@@ -15,6 +15,7 @@ import cz.stremiooffline.tv.data.LanguageDto
 import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.diagnostics.AppLog
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 /** The personal settings the Settings screen shows and edits. */
@@ -91,6 +92,10 @@ class SettingsViewModel(
   private var savedHomeLayout: HomeLayoutDto = HomeLayoutDto()
   private var pendingHomeLayout: HomeLayoutDto? = null
   private var hasPendingHomeLayout = false
+  /** The arrangement that arrived while a PATCH was in flight; only the newest one is kept. */
+  private var queuedHomeLayout: HomeLayoutDto? = null
+  private var hasQueuedHomeLayout = false
+  private var homeSaveJob: Job? = null
 
   init {
     viewModelScope.launch {
@@ -108,18 +113,36 @@ class SettingsViewModel(
     viewModelScope.launch { loadHomeLayout() }
   }
 
-  /** Reads everything the account may arrange; a server without the route offers nothing. */
-  private suspend fun loadHomeLayout() {
+  /** Reads the arrangement again; the panel asks for this as it opens, so a layout changed on the
+   *  web or on another device is never shown stale for the rest of the session. */
+  fun refreshHomeLayout() {
+    // A write in flight or waiting lands in a moment; reading past it could show it half-applied.
+    if (hasPendingHomeLayout || hasQueuedHomeLayout || homeSaveJob?.isActive == true) return
+    viewModelScope.launch { loadHomeLayout() }
+  }
+
+  /** Reads everything the account may arrange. Only a server without the route offers nothing;
+   *  any other failure keeps what the server last accepted and says why, to be retried. */
+  private suspend fun loadHomeLayout(failure: ApiFailure? = null, message: String? = null) {
     homeLayout = try {
       val answer = api.homeLayout()
       val rows = answer.rows.filter { it.added }.map { HomeLayoutRow(it.id, it.kind, it.label, it.shown) }
       savedHomeRows = rows
       savedHomeLayout = answer.layout
-      HomeLayoutState.Ready(rows = rows, layout = answer.layout)
+      HomeLayoutState.Ready(rows = rows, layout = answer.layout, failure = failure, message = message)
     } catch (cancelled: CancellationException) {
       throw cancelled
-    } catch (_: ApiError) {
-      HomeLayoutState.Unavailable
+    } catch (error: ApiError) {
+      if (error.failure == ApiFailure.NotFound) {
+        HomeLayoutState.Unavailable
+      } else {
+        HomeLayoutState.Ready(
+          rows = savedHomeRows,
+          layout = savedHomeLayout,
+          failure = failure ?: error.failure,
+          message = message ?: error.serverMessage,
+        )
+      }
     }
   }
 
@@ -174,30 +197,53 @@ class SettingsViewModel(
     hasPendingHomeLayout = true
   }
 
-  /** Sends whatever an edit left waiting, at once: the panel calls this as it closes. */
+  /** Sends whatever an edit left waiting: the panel calls this once the edits stop and as it
+   *  closes. One PATCH is in flight at a time; a newer arrangement replaces whatever is still
+   *  waiting, so the last edit always lands last. */
   fun flushHomeLayout() {
     if (!hasPendingHomeLayout) return
     val layout = pendingHomeLayout
-    // The draft the write carries, kept for the accepted snapshot: a newer edit that arrives
-    // while the PATCH is in flight must not be recorded as saved.
-    val sent = homeLayout as? HomeLayoutState.Ready
+    val rows = (homeLayout as? HomeLayoutState.Ready)?.rows ?: savedHomeRows
     hasPendingHomeLayout = false
     pendingHomeLayout = null
-    viewModelScope.launch {
+    if (homeSaveJob?.isActive == true) {
+      queuedHomeLayout = layout
+      hasQueuedHomeLayout = true
+      return
+    }
+    homeSaveJob = viewModelScope.launch { saveHomeLayout(layout, rows) }
+  }
+
+  private suspend fun saveHomeLayout(first: HomeLayoutDto?, firstRows: List<HomeLayoutRow>) {
+    var layout = first
+    var rows = firstRows
+    while (true) {
       try {
         api.updateHomeLayout(layout)
-        if (sent != null) {
-          savedHomeRows = sent.rows
-          savedHomeLayout = sent.layout
-        }
-        val ready = homeLayout as? HomeLayoutState.Ready ?: return@launch
-        homeLayout = ready.copy(failure = null, message = null)
       } catch (cancelled: CancellationException) {
         throw cancelled
       } catch (error: ApiError) {
-        val ready = homeLayout as? HomeLayoutState.Ready ?: return@launch
-        homeLayout = ready.copy(rows = savedHomeRows, layout = savedHomeLayout, failure = error.failure, message = error.serverMessage)
+        // The edit that failed -- and any draft resting on it -- is gone; the read puts the
+        // arrangement back where the server has it.
+        hasQueuedHomeLayout = false
+        queuedHomeLayout = null
+        hasPendingHomeLayout = false
+        pendingHomeLayout = null
+        loadHomeLayout(failure = error.failure, message = error.serverMessage)
+        return
       }
+      // Nothing newer arrived while this PATCH was in flight: it was the last edit.
+      if (!hasQueuedHomeLayout) {
+        savedHomeRows = rows
+        savedHomeLayout = layout ?: HomeLayoutDto()
+        val ready = homeLayout as? HomeLayoutState.Ready ?: return
+        homeLayout = ready.copy(failure = null, message = null)
+        return
+      }
+      layout = queuedHomeLayout
+      rows = (homeLayout as? HomeLayoutState.Ready)?.rows ?: rows
+      hasQueuedHomeLayout = false
+      queuedHomeLayout = null
     }
   }
 

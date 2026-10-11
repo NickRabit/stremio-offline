@@ -130,9 +130,12 @@ open class FakeTvApi : TvApi {
   var homeFailure: ApiFailure? = null
   var homeLayoutValue: HomeLayoutResponseDto = HomeLayoutResponseDto()
   var homeLayoutFailure: ApiFailure? = null
+  var homeLayoutFailureMessage: String? = null
   var homeLayoutRequests = 0
   /** Each `updateHomeLayout()` call in order; `null` is the reset that clears the setting. */
   var homeLayoutPatches: MutableList<HomeLayoutDto?> = mutableListOf()
+  /** When set, `updateHomeLayout()` holds the PATCH like a slow server would. */
+  var homeLayoutPatchGate: CompletableDeferred<Unit>? = null
   var homeLayoutPatchFailure: ApiFailure? = null
   var homeLayoutPatchMessage: String? = null
   var downloadsValue: DownloadsResponseDto = DownloadsResponseDto()
@@ -304,12 +307,13 @@ open class FakeTvApi : TvApi {
 
   override suspend fun homeLayout(): HomeLayoutResponseDto {
     homeLayoutRequests += 1
-    homeLayoutFailure?.let { throw ApiError(it) }
+    homeLayoutFailure?.let { throw ApiError(it, serverMessage = homeLayoutFailureMessage) }
     return homeLayoutValue
   }
 
   override suspend fun updateHomeLayout(layout: HomeLayoutDto?): SettingsResponse {
     homeLayoutPatches += layout
+    homeLayoutPatchGate?.await()
     homeLayoutPatchFailure?.let { throw ApiError(it, serverMessage = homeLayoutPatchMessage) }
     return settingsValue
   }

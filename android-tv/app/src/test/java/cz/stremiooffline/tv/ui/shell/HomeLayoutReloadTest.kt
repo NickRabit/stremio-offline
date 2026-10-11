@@ -31,6 +31,7 @@ import cz.stremiooffline.tv.ui.settings.TagHomeActionToggle
 import cz.stremiooffline.tv.ui.settings.homeLayoutRowTag
 import kotlinx.serialization.json.JsonObject
 import org.junit.After
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
@@ -114,6 +115,10 @@ class HomeLayoutReloadTest {
     press(Key.DirectionCenter)
     scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
     compose.waitForIdle()
+
+    // The arrangement has to be written before Home can read it again: without the save the
+    // reload below only proves the pre-existing return-to-Home refresh.
+    assertEquals(listOf("resume"), api.homeLayoutPatches.single()!!.hidden)
 
     railTo(Section.Home, Key.DirectionUp)
 

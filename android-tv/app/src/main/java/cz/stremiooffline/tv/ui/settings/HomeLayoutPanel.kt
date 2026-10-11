@@ -93,8 +93,12 @@ private fun typeTag(type: String): String = when (type) {
  *  (film/seriál)", told apart the way the catalogue picker tells its twin lists apart. */
 @Composable
 internal fun homeRowLabel(row: HomeLayoutRow): String =
-  if (row.kind == "builtin") BUILTIN_LABELS[row.label]?.let { stringResource(it) } ?: row.label
-  else feedTypeOf(row.id)?.let { "${row.label} (${typeTag(it)})" } ?: row.label
+  if (row.kind == "builtin") {
+    // An unknown built-in key still beats showing "home." at the viewer.
+    BUILTIN_LABELS[row.label]?.let { stringResource(it) } ?: row.label.removePrefix("home.")
+  } else {
+    feedTypeOf(row.id)?.let { "${row.label} (${typeTag(it)})" } ?: row.label
+  }
 
 /**
  * The account's Home arrangement as a side panel: its rows in order with a shown/hidden mark.
@@ -188,7 +192,13 @@ fun HomeLayoutPanel(
         )
       }
       item(key = "reset") {
-        HomeResetRow(onClick = onReset, modifier = Modifier.testTag(TagHomeLayoutReset))
+        HomeResetRow(
+          onClick = onReset,
+          // With no rows the reset row is the only target; it takes the panel's first focus.
+          modifier = Modifier
+            .testTag(TagHomeLayoutReset)
+            .then(if (ready.rows.isEmpty()) Modifier.focusRequester(firstFocus) else Modifier),
+        )
       }
       item(key = "note") {
         Text(
@@ -232,12 +242,10 @@ private fun HomeLayoutRowView(
       .focusable()
       .semantics(mergeDescendants = true) {}
       .onPreviewKeyEvent { event ->
-        if (event.type == KeyEventType.KeyDown && (event.key == Key.Enter || event.key == Key.DirectionCenter)) {
-          onOpen()
-          true
-        } else {
-          false
-        }
+        val pressed = event.type == KeyEventType.KeyDown &&
+          (event.key == Key.Enter || event.key == Key.DirectionCenter || event.key == Key.Spacebar)
+        if (pressed) onOpen()
+        pressed
       }
       .then(if (focused) Modifier.background(Tokens.Panel2, shape).border(1.5.dp, Tokens.Accent2, shape) else Modifier)
       .padding(horizontal = 12.dp, vertical = 10.dp),
@@ -312,12 +320,10 @@ private fun HomeActionRow(text: String, onClick: () -> Unit, modifier: Modifier 
       .focusable()
       .semantics(mergeDescendants = true) {}
       .onPreviewKeyEvent { event ->
-        if (event.type == KeyEventType.KeyDown && (event.key == Key.Enter || event.key == Key.DirectionCenter)) {
-          onClick()
-          true
-        } else {
-          false
-        }
+        val pressed = event.type == KeyEventType.KeyDown &&
+          (event.key == Key.Enter || event.key == Key.DirectionCenter || event.key == Key.Spacebar)
+        if (pressed) onClick()
+        pressed
       }
       .then(if (focused) Modifier.background(Tokens.Panel2, shape).border(1.5.dp, Tokens.Accent2, shape) else Modifier)
       .padding(horizontal = 12.dp, vertical = 10.dp),
@@ -339,12 +345,10 @@ private fun HomeResetRow(onClick: () -> Unit, modifier: Modifier = Modifier) {
       .focusable()
       .semantics(mergeDescendants = true) {}
       .onPreviewKeyEvent { event ->
-        if (event.type == KeyEventType.KeyDown && (event.key == Key.Enter || event.key == Key.DirectionCenter)) {
-          onClick()
-          true
-        } else {
-          false
-        }
+        val pressed = event.type == KeyEventType.KeyDown &&
+          (event.key == Key.Enter || event.key == Key.DirectionCenter || event.key == Key.Spacebar)
+        if (pressed) onClick()
+        pressed
       }
       .then(if (focused) Modifier.background(Tokens.Panel2, shape).border(1.5.dp, Tokens.Accent2, shape) else Modifier)
       .padding(horizontal = 12.dp, vertical = 10.dp),

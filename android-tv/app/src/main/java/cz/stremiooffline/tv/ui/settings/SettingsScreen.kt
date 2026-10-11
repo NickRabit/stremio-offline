@@ -160,6 +160,7 @@ fun SettingsRoute(
     onMoveTopHomeRow = viewModel::moveHomeRowToTop,
     onResetHomeLayout = viewModel::resetHomeLayout,
     onFlushHomeLayout = viewModel::flushHomeLayout,
+    onOpenHomeLayout = viewModel::refreshHomeLayout,
     preferConversion = preferConversion,
     onPreferConversion = {
       preferConversion = !preferConversion
@@ -196,6 +197,8 @@ fun SettingsScreen(
   onMoveTopHomeRow: (String) -> Unit,
   onResetHomeLayout: () -> Unit,
   onFlushHomeLayout: () -> Unit,
+  /** Asked as the panel opens, so the arrangement is read again instead of shown stale. */
+  onOpenHomeLayout: () -> Unit = {},
   preferConversion: Boolean,
   onPreferConversion: () -> Unit,
   diagnosticsValue: String? = null,
@@ -243,6 +246,13 @@ fun SettingsScreen(
     "home" -> stringResource(R.string.nav_home)
     "library" -> stringResource(R.string.nav_library)
     else -> stringResource(R.string.nav_catalog)
+  }
+  // The row explains an old server, or a read that failed for another reason and can be retried.
+  val homeLayoutValue = when (homeLayout) {
+    is HomeLayoutState.Unavailable -> stringResource(R.string.tv_home_layout_unavailable)
+    is HomeLayoutState.Ready -> homeLayout.message
+      ?: homeLayout.failure?.let { stringResource(it.messageRes()) }.orEmpty()
+    else -> ""
   }
   val serverVersion = state.serverVersion?.takeIf { it.isNotBlank() }
   val decodeLine = decodedLabels(capabilities).joinToString(" · ")
@@ -312,8 +322,13 @@ fun SettingsScreen(
       )
       SettingsRow(
         label = stringResource(R.string.tv_home_layout),
-        value = if (homeLayout is HomeLayoutState.Unavailable) stringResource(R.string.tv_home_layout_unavailable) else "",
-        onClick = { if (homeLayout is HomeLayoutState.Ready) openPanel(SettingsPanel.HomeLayout, homeFocus) },
+        value = homeLayoutValue,
+        onClick = {
+          if (homeLayout is HomeLayoutState.Ready) {
+            onOpenHomeLayout()
+            openPanel(SettingsPanel.HomeLayout, homeFocus)
+          }
+        },
         modifier = Modifier.testTag(TagSettingsRowHomeLayout).focusRequester(homeFocus),
       )
       ToggleRow(
