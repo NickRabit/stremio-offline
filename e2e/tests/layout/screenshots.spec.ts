@@ -97,6 +97,9 @@ test.describe("screenshots", () => {
     // the whole page two pixels taller. A mask does not help: it is drawn over the element's
     // own box, so it changes size along with the text. The baseline gets a fixed path instead.
     await page.locator(".library-admin-root, .storage-path code").evaluateAll((paths) => paths.forEach((path) => { path.textContent = "/library"; }));
+    // The account card says when the administrator last signed in, which is the moment this
+    // run did. A two-digit day is one character wider than the baseline's, past the tolerance.
+    await page.locator(".user-admin-seen").evaluateAll((lines) => lines.forEach((line) => { line.textContent = "Naposledy 1. 1. 2026 12:00"; }));
     // Version, uptime, free disk space and the checkout path differ on every run. They used
     // to be masked, but a mask is drawn at the element's box, and these boxes sit on fractional
     // pixels (inline code in two paragraphs leaves .375 px), so on the CI runner the overlay's
