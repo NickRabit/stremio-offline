@@ -164,6 +164,13 @@ class ApiClient(
       .decode() ?: throw ApiError(ApiFailure.Generic)
   }
 
+  /** The whole personal Home arrangement travels as one `homeLayout` object. */
+  override suspend fun updateHomeLayout(layout: HomeLayoutDto?): SettingsResponse {
+    val payload = HomeLayoutJson.encodeToString(HomeLayoutPatch.serializer(), HomeLayoutPatch(layout))
+    return request(Request.Builder().url(address.resolve("/api/settings")).patch(payload.toRequestBody(mediaType)).build())
+      .decode() ?: throw ApiError(ApiFailure.Generic)
+  }
+
   suspend fun logout() {
     try {
       call(Request.Builder().url(address.resolve("/api/auth/logout")).post("{}".toRequestBody(mediaType)).build()).closing { }
@@ -371,6 +378,11 @@ class ApiClient(
       .decode<HomeResponseDto>() ?: throw ApiError(ApiFailure.Generic)
   }
 
+  /** Everything the settings panel may arrange, with the account's own arrangement. */
+  override suspend fun homeLayout(): HomeLayoutResponseDto =
+    request(Request.Builder().url(address.resolve("/api/home/layout")).get().build())
+      .decode<HomeLayoutResponseDto>() ?: throw ApiError(ApiFailure.Generic)
+
   override suspend fun downloads(): DownloadsResponseDto =
     request(Request.Builder().url(address.resolve("/api/downloads")).get().build())
       .decode<DownloadsResponseDto>() ?: throw ApiError(ApiFailure.Generic)
@@ -474,6 +486,10 @@ class ApiClient(
 
 @Serializable
 private data class SourceRequest(val path: String)
+
+/** The PATCH body's own shape: `null` clears the arrangement. */
+@Serializable
+private data class HomeLayoutPatch(val homeLayout: HomeLayoutDto? = null)
 
 @Serializable
 private data class FavoriteRequest(val path: String, val favorite: Boolean)

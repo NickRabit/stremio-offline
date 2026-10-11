@@ -36,6 +36,8 @@ interface CatalogApi {
   suspend fun languages(): List<LanguageDto>
   /** Writes exactly one personal preference; the server refuses an instance key in the body. */
   suspend fun updateSettings(field: String, value: String): SettingsResponse
+  /** Writes the whole personal Home arrangement, or clears it with a `null`. */
+  suspend fun updateHomeLayout(layout: HomeLayoutDto?): SettingsResponse
   suspend fun progressList(): List<ProgressEntryDto>
   suspend fun watchlist(): List<WatchlistEntryDto>
   suspend fun setWatchlist(type: String, id: String, name: String, poster: String?, favorite: Boolean): WatchlistToggleDto
@@ -47,6 +49,8 @@ interface CatalogApi {
 /** The Home rows, asked by name so a retry touches only the row it names. */
 interface HomeApi {
   suspend fun home(rows: List<String>): HomeResponseDto
+  /** Every Home row the account may arrange, with its own order, hidden rows and feeds. */
+  suspend fun homeLayout(): HomeLayoutResponseDto
 }
 
 /** The account's download queue, read for the Home summary. */

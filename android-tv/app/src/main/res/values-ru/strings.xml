@@ -80,6 +80,7 @@
   <string name="home_new_episodes">Новые эпизоды</string>
   <string name="home_ready_to_play">Готово к воспроизведению</string>
   <string name="home_recent">Недавно добавленные</string>
+  <string name="home_to_confirm">Подтвердить</string>
   <string name="home_downloads">Загрузки</string>
   <plurals name="home_downloads_summary">
     <item quantity="one">%1$s задача</item>
@@ -173,4 +174,15 @@
   <string name="tv_back_to_source">Вернуться к предыдущему источнику</string>
   <string name="library_mosaic_alt">Постерная мозаика из %1$s фильмов</string>
   <string name="library_show_in_library">Показать в библиотеке</string>
+  <string name="tv_home_layout">Домашняя страница</string>
+  <string name="tv_home_layout_unavailable">Макет домашней страницы недоступен на этом сервере.</string>
+  <string name="tv_home_layout_note">Каталоги добавляются на домашнюю страницу в веб-интерфейсе.</string>
+  <string name="tv_home_show">Показать</string>
+  <string name="tv_home_hide">Скрыть</string>
+  <string name="tv_home_move_up">Переместить вверх</string>
+  <string name="tv_home_move_down">Переместить вниз</string>
+  <string name="tv_home_move_top">Переместить в начало</string>
+  <string name="tv_home_layout_reset">Сбросить</string>
+  <string name="tv_home_layout_shown">Показано</string>
+  <string name="tv_home_layout_hidden">Скрыто</string>
 </resources>

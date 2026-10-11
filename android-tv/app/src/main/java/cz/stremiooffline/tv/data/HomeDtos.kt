@@ -22,6 +22,37 @@ data class HomeRowDto(
   val partial: Boolean = false,
 )
 
+/** One row `GET /api/home/layout` offers: its id, what it is, what it is called and whether
+ *  Home draws it now. A row the account never placed is offered with `added = false`. */
+@Serializable
+data class HomeLayoutEntryDto(
+  val id: String = "",
+  val kind: String = "builtin",
+  val label: String = "",
+  val shown: Boolean = true,
+  val position: Int = 0,
+  val added: Boolean = true,
+)
+
+/** The account's own arrangement: the row order, the rows it hid and the extra feeds it added. */
+@Serializable
+data class HomeLayoutDto(
+  val order: List<String> = emptyList(),
+  val hidden: List<String> = emptyList(),
+  val feeds: List<String> = emptyList(),
+)
+
+/** `GET /api/home/layout`: every row the account may arrange plus its current arrangement. */
+@Serializable
+data class HomeLayoutResponseDto(
+  val rows: List<HomeLayoutEntryDto> = emptyList(),
+  val layout: HomeLayoutDto = HomeLayoutDto(),
+)
+
+/** The layout JSON, with defaults kept: the server refuses a body that drops any of the three
+ *  arrays, so an empty one has to travel too. */
+val HomeLayoutJson: Json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+
 @Serializable
 data class HomeResponseDto(
   val generatedAt: String = "",

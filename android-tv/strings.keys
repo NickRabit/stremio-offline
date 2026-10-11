@@ -79,6 +79,7 @@ home.tonight
 home.newEpisodes
 home.readyToPlay
 home.recent
+home.toConfirm
 home.downloads
 home.downloadsSummary
 home.attention
@@ -162,3 +163,14 @@ tv.off
 tv.backToSource
 library.mosaicAlt
 library.showInLibrary
+tv.homeLayout
+tv.homeLayoutUnavailable
+tv.homeLayoutNote
+tv.homeShow
+tv.homeHide
+tv.homeMoveUp
+tv.homeMoveDown
+tv.homeMoveTop
+tv.homeLayoutReset
+tv.homeLayoutShown
+tv.homeLayoutHidden
