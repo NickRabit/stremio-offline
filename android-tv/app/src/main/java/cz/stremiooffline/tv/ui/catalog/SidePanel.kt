@@ -5,6 +5,7 @@ package cz.stremiooffline.tv.ui.catalog
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -23,14 +24,24 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Border
@@ -58,13 +69,25 @@ fun SidePanel(
   content: @Composable ColumnScope.() -> Unit,
 ) {
   BackHandler { onClose() }
-  if (initialFocus != null) {
-    LaunchedEffect(initialFocus) {
-      awaitFrame()
-      runCatching { initialFocus.requestFocus() }
-    }
+  // A panel whose rows carry no requester of their own still has to hold the remote: the panel
+  // itself takes focus and the D-pad then walks into the rows.
+  val panelFocus = remember { FocusRequester() }
+  val target = initialFocus ?: panelFocus
+  LaunchedEffect(target) {
+    awaitFrame()
+    runCatching { target.requestFocus() }
   }
-  Box(modifier.fillMaxSize(), contentAlignment = Alignment.CenterEnd) {
+  Box(
+    modifier
+      .fillMaxSize()
+      // The rows declare an exit target, which makes the focus system swallow the remote's Back
+      // before the dispatcher sees it. The panel claims the key itself, so Back always closes it.
+      .onPreviewKeyEvent { event ->
+        if (event.type == KeyEventType.KeyDown && event.key == Key.Back) { onClose(); true }
+        else false
+      },
+    contentAlignment = Alignment.CenterEnd,
+  ) {
     Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.45f)))
     Column(
       modifier = Modifier
@@ -72,6 +95,8 @@ fun SidePanel(
         .width(360.dp)
         .focusGroup()
         .focusProperties { exit = { FocusRequester.Cancel } }
+        .focusRequester(panelFocus)
+        .focusable(enabled = initialFocus == null)
         .background(Brush.verticalGradient(listOf(Tokens.Panel, Color(0xFF11161E))), PanelShape)
         .padding(horizontal = 24.dp, vertical = Tokens.SafeY),
       verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -98,7 +123,7 @@ fun PanelOption(
   val shape = RoundedCornerShape(8.dp)
   Surface(
     onClick = onClick,
-    modifier = modifier.fillMaxWidth(),
+    modifier = modifier.fillMaxWidth().semantics { this.selected = selected },
     shape = ClickableSurfaceDefaults.shape(shape = shape),
     colors = ClickableSurfaceDefaults.colors(
       containerColor = if (selected) Tokens.Panel2 else Color.Transparent,
@@ -120,7 +145,7 @@ fun PanelOption(
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.SpaceBetween,
     ) {
-      Text(text, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+      Text(text, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
   }
 }

@@ -7,6 +7,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
@@ -47,6 +48,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.SemanticsPropertyKey
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -54,6 +56,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Text
 import cz.stremiooffline.tv.R
+import cz.stremiooffline.tv.catalog.Languages
 import cz.stremiooffline.tv.ui.components.FocusButton
 import cz.stremiooffline.tv.ui.components.FocusButtonKind
 import cz.stremiooffline.tv.ui.theme.Tokens
@@ -63,10 +66,24 @@ const val TAG_OSD_SEEK_BACK = "osd_seek_back"
 const val TAG_OSD_SEEK_FORWARD = "osd_seek_forward"
 const val TAG_OSD_PLAY = "osd_play"
 const val TAG_OSD_BUBBLE = "osd_bubble"
+const val TAG_OSD_TRACKS = "osd_tracks"
+const val TAG_OSD_NEXT = "osd_next"
+const val TAG_OSD_DIAG = "osd_diag"
+const val TAG_OSD_TIMELINE = "osd_timeline"
+const val TAG_ERROR_PANEL = "error_panel"
 
 /** The seek icons beside the plain `10` labels. */
 const val SEEK_BACK_LABEL = "10"
 const val SEEK_FORWARD_LABEL = "10"
+
+/** Whether a player control draws its focused look: the D-pad is on it. Focus is observed with a
+ *  semantics property the way `TvTextField` does it, because the drawn ring is not readable. */
+internal val OsdFocused = SemanticsPropertyKey<Boolean>("OsdFocused")
+
+/** The tracks button shows the current audio language; a title without one falls back to the
+ *  plain captions mark the button already carries, never the language list's `?`. */
+internal fun tracksButtonText(language: String?): String =
+  if (language.isNullOrBlank()) "" else Languages.label(language)
 
 @Composable
 fun LoadingOverlay(title: String) {
@@ -84,8 +101,19 @@ fun LoadingOverlay(title: String) {
 @Composable
 fun ErrorPanel(onRetry: () -> Unit, onBack: () -> Unit) {
   val retryFocus = remember { FocusRequester() }
+  androidx.activity.compose.BackHandler { onBack() }
   androidx.compose.runtime.LaunchedEffect(Unit) { runCatching { retryFocus.requestFocus() } }
-  Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.75f)), contentAlignment = Alignment.Center) {
+  Box(
+    Modifier
+      .fillMaxSize()
+      .testTag(TAG_ERROR_PANEL)
+      .background(Color.Black.copy(alpha = 0.75f))
+      // The panel sits above the OSD, so it takes the remote's Back itself.
+      .onPreviewKeyEvent { event ->
+        if (event.type == KeyEventType.KeyDown && event.key == Key.Back) { onBack(); true } else false
+      },
+    contentAlignment = Alignment.Center,
+  ) {
     Column(
       modifier = Modifier
         .background(Tokens.Panel, RoundedCornerShape(12.dp))
@@ -127,6 +155,15 @@ fun Osd(
   /** A LEFT/RIGHT press on the focused progress bar: -1 rewinds, +1 forwards, with the event time. */
   onSeekStep: (Int, Long) -> Unit,
   onActivity: () -> Unit,
+  onTracks: () -> Unit = {},
+  tracksText: String = "",
+  tracksLabel: String = "",
+  tracksFocus: FocusRequester? = null,
+  onNext: (() -> Unit)? = null,
+  nextLabel: String = "",
+  onDiagnostics: () -> Unit = {},
+  diagnosticsLabel: String = "",
+  diagnosticsFocus: FocusRequester? = null,
 ) {
   Box(Modifier.fillMaxSize()) {
     Column(
@@ -181,6 +218,31 @@ fun Osd(
           onClick = onForward10,
           onActivity = onActivity,
         ) { SeekIcon(forward = true) }
+        RoundButton(
+          label = tracksLabel,
+          text = tracksText.ifBlank { "CC" },
+          tag = TAG_OSD_TRACKS,
+          onClick = onTracks,
+          onActivity = onActivity,
+          focusRequester = tracksFocus,
+        ) { }
+        if (onNext != null) {
+          RoundButton(
+            label = nextLabel,
+            text = "\u00BB",
+            tag = TAG_OSD_NEXT,
+            onClick = onNext,
+            onActivity = onActivity,
+          ) { }
+        }
+        RoundButton(
+          label = diagnosticsLabel,
+          text = "i",
+          tag = TAG_OSD_DIAG,
+          onClick = onDiagnostics,
+          onActivity = onActivity,
+          focusRequester = diagnosticsFocus,
+        ) { }
       }
     }
   }
@@ -198,9 +260,12 @@ private fun Timeline(
   Box(
     modifier
       .height(28.dp)
+      .testTag(TAG_OSD_TIMELINE)
       .focusRequester(requester)
-      .focusable()
+      // Observes the progress bar's own focus target, so it has to sit before `focusable()`.
       .onFocusChanged { focused = it.isFocused }
+      .focusable()
+      .semantics { this[OsdFocused] = focused }
       .onPreviewKeyEvent { event ->
         if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
         when (event.key) {
@@ -248,12 +313,15 @@ private fun PlayButton(
       .background(Tokens.AccentGradient)
       .semantics { this.contentDescription = contentDescription }
       .focusRequester(focusRequester)
-      .focusable()
+      // Observes the button's own focus target, so it has to sit before `focusable()`.
       .onFocusChanged { focused = it.isFocused }
-      .clickable { onActivity(); onClick() },
+      .focusable()
+      .clickable { onActivity(); onClick() }
+      .semantics { this[OsdFocused] = focused },
     contentAlignment = Alignment.Center,
   ) {
     if (focused) Box(Modifier.fillMaxSize().clip(CircleShape).background(Color.White.copy(alpha = 0.12f)))
+    if (focused) Box(Modifier.fillMaxSize().border(2.dp, Tokens.Accent2, CircleShape))
     if (playing) PauseIcon() else PlayIcon()
   }
 }
@@ -265,6 +333,7 @@ private fun RoundButton(
   tag: String,
   onClick: () -> Unit,
   onActivity: () -> Unit,
+  focusRequester: FocusRequester? = null,
   content: @Composable () -> Unit,
 ) {
   var focused by remember { mutableStateOf(false) }
@@ -272,18 +341,22 @@ private fun RoundButton(
     Modifier
       .testTag(tag)
       .clip(CircleShape)
-      .background(if (focused) Color.White else Color.White.copy(alpha = 0.14f))
+      .background(if (focused) Tokens.Panel2 else Color.White.copy(alpha = 0.14f))
+      .then(if (focused) Modifier.border(1.5.dp, Tokens.Accent2, CircleShape) else Modifier)
       .semantics { this.contentDescription = label }
-      .focusable()
+      .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
+      // Observes the button's own focus target, so it has to sit before `focusable()`.
       .onFocusChanged { focused = it.isFocused }
+      .focusable()
       .clickable { onActivity(); onClick() }
+      .semantics { this[OsdFocused] = focused }
       .padding(horizontal = 16.dp, vertical = 9.dp),
     contentAlignment = Alignment.Center,
   ) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
       content()
       if (text != null) {
-        Text(text, color = if (focused) Tokens.Bg else Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        Text(text, color = if (focused) Tokens.Text else Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
       }
     }
   }

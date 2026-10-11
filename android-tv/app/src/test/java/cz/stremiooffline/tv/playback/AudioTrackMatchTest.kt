@@ -6,7 +6,9 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AudioTrackMatchTest {
@@ -25,6 +27,7 @@ class AudioTrackMatchTest {
   @Test
   fun `several tracks pick the one the server named`() {
     val target = track("eng", "aac", 2)
+    val tracks = listOf(track("eng", "ac3", 6), track("cze", "aac", 2), target)
     val groups = listOf(
       group(
         offered("eng", "audio/ac3", 6),
@@ -33,7 +36,7 @@ class AudioTrackMatchTest {
       ),
     )
 
-    assertEquals(TrackMatch(0, 2), matchTrack(target, groups, C.TRACK_TYPE_AUDIO))
+    assertEquals(TrackMatch(0, 2), matchTrack(tracks, 2, groups, C.TRACK_TYPE_AUDIO))
   }
 
   @Test
@@ -43,7 +46,7 @@ class AudioTrackMatchTest {
           {"index":1,"codec":"ac3","language":"cze","channels":2},
           {"index":2,"codec":"aac","language":"eng","channels":2}]""",
     )
-    val target = descriptorTrack(tracks, 2)!!
+    val descriptor = descriptorTracks(tracks)
     // ExoPlayer dropped the eac3 track it cannot decode, so the file's ordinal 2 is player 1.
     val groups = listOf(
       group(
@@ -52,12 +55,31 @@ class AudioTrackMatchTest {
       ),
     )
 
-    assertEquals(TrackMatch(0, 1), matchTrack(target, groups, C.TRACK_TYPE_AUDIO))
+    assertEquals(TrackMatch(0, 1), matchTrack(descriptor, 2, groups, C.TRACK_TYPE_AUDIO))
+  }
+
+  @Test
+  fun `two tracks equal on every attribute are told apart by their order`() {
+    val tracks = descriptor(
+      """[{"index":0,"codec":"aac","language":"eng","channels":2},
+          {"index":1,"codec":"aac","language":"eng","channels":2}]""",
+    )
+    // The server picked the second of the two identical rows, so the second offered one is meant.
+    val groups = listOf(
+      group(
+        offered("en", "audio/mp4a-latm", 2),
+        offered("en", "audio/mp4a-latm", 2),
+      ),
+    )
+
+    assertEquals(TrackMatch(0, 1), matchTrack(descriptorTracks(tracks), 1, groups, C.TRACK_TYPE_AUDIO))
+    assertEquals(TrackMatch(0, 0), matchTrack(descriptorTracks(tracks), 0, groups, C.TRACK_TYPE_AUDIO))
   }
 
   @Test
   fun `two tracks of the same language are told apart by the codec`() {
     val target = track("eng", "aac", 2)
+    val tracks = listOf(track("eng", "ac3", 6), target)
     val groups = listOf(
       group(
         offered("eng", "audio/ac3", 6),
@@ -65,7 +87,7 @@ class AudioTrackMatchTest {
       ),
     )
 
-    assertEquals(TrackMatch(0, 1), matchTrack(target, groups, C.TRACK_TYPE_AUDIO))
+    assertEquals(TrackMatch(0, 1), matchTrack(tracks, 1, groups, C.TRACK_TYPE_AUDIO))
   }
 
   @Test
@@ -73,7 +95,7 @@ class AudioTrackMatchTest {
     val target = track("eng", "opus", 2)
     val groups = listOf(group(offered("eng", "audio/ac3", 6), offered("cze", "audio/mp4a-latm", 2)))
 
-    assertNull(matchTrack(target, groups, C.TRACK_TYPE_AUDIO))
+    assertNull(matchTrack(listOf(target), 0, groups, C.TRACK_TYPE_AUDIO))
   }
 
   @Test
@@ -84,7 +106,7 @@ class AudioTrackMatchTest {
       group(offered("eng", "audio/ac3", 6)),
     )
 
-    assertEquals(TrackMatch(1, 0), matchTrack(target, groups, C.TRACK_TYPE_AUDIO))
+    assertEquals(TrackMatch(1, 0), matchTrack(listOf(target), 0, groups, C.TRACK_TYPE_AUDIO))
   }
 
   @Test
@@ -101,5 +123,44 @@ class AudioTrackMatchTest {
     assertEquals("en", normalizeLanguage("eng_GB"))
     assertNull(normalizeLanguage(null))
     assertNull(normalizeLanguage("  "))
+  }
+
+  @Test
+  fun `the descriptor carries the flags the panel draws`() {
+    val tracks = descriptorTracks(
+      descriptor(
+        """[{"index":0,"codec":"subrip","language":"eng","forced":true,"title":"Signs"},
+            {"index":1,"codec":"subrip","language":"cze","default":true}]""",
+      ),
+    )
+    assertEquals(2, tracks.size)
+    assertTrue(tracks[0].forced)
+    assertFalse(tracks[0].default)
+    assertEquals("Signs", tracks[0].title)
+    assertTrue(tracks[1].default)
+    assertEquals(1, tracks[1].index)
+  }
+
+  @Test
+  fun `subtitle tracks are matched among their own kind by language`() {
+    val tracks = descriptor("""[{"codec":"subrip","language":"cze"}]""")
+    val groups = listOf(
+      PlayerTrackGroup(C.TRACK_TYPE_AUDIO, listOf(offered("cze", "audio/mp4a-latm", 2))),
+      PlayerTrackGroup(
+        C.TRACK_TYPE_TEXT,
+        listOf(offered("eng", "application/x-media3-cues", 0), offered("cze", "application/x-media3-cues", 0)),
+      ),
+    )
+    assertEquals(TrackMatch(1, 1), matchTrack(descriptorTracks(tracks), 0, groups, C.TRACK_TYPE_TEXT))
+  }
+
+  @Test
+  fun `a text track the renderer transcoded still matches its codec`() {
+    // Media3 moves the original MIME into `Format.codecs`, so a subrip target and a cues MIME agree.
+    val tracks = descriptor("""[{"codec":"subrip","language":"eng"}]""")
+    val groups = listOf(
+      PlayerTrackGroup(C.TRACK_TYPE_TEXT, listOf(offered("eng", "application/x-media3-cues", 0))),
+    )
+    assertEquals(TrackMatch(0, 0), matchTrack(descriptorTracks(tracks), 0, groups, C.TRACK_TYPE_TEXT))
   }
 }

@@ -58,6 +58,7 @@ class PlayerScreenLifecycleTest {
       sourceId: String,
       capabilities: ClientCapabilitiesDto,
       time: Double,
+      subtitleIds: List<String>,
     ): PlaybackDescriptorDto {
       started += Triple(sourceId, capabilities, time)
       return PlaybackDescriptorDto(id = "p1", url = "/stream.mp4")

@@ -2,8 +2,16 @@ package cz.stremiooffline.tv.playback
 
 import cz.stremiooffline.tv.data.ClientCapabilitiesDto
 import cz.stremiooffline.tv.data.CopyDto
+import cz.stremiooffline.tv.data.AddonSubtitleDto
 import cz.stremiooffline.tv.data.PlaybackDescriptorDto
 import cz.stremiooffline.tv.data.ProgressDto
+import cz.stremiooffline.tv.data.TrackChange
+import cz.stremiooffline.tv.data.ApiError
+import cz.stremiooffline.tv.data.ApiFailure
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
@@ -36,12 +44,28 @@ class PlaybackControllerTest {
     var startDelayMs = 0L
     var descriptor = PlaybackDescriptorDto(id = "p1", mode = "direct", url = "direct.mp4", offset = 0.0, duration = 1_000.0)
 
-    override suspend fun startPlayback(sourceId: String, capabilities: ClientCapabilitiesDto, time: Double): PlaybackDescriptorDto {
+    val subtitleIds = mutableListOf<List<String>>()
+
+    override suspend fun startPlayback(
+      sourceId: String,
+      capabilities: ClientCapabilitiesDto,
+      time: Double,
+      subtitleIds: List<String>,
+    ): PlaybackDescriptorDto {
       calls += "start"
       started += Triple(sourceId, capabilities, time)
+      this.subtitleIds += subtitleIds
       if (startDelayMs > 0) delay(startDelayMs)
       if (failStart) throw IllegalStateException("the server said no")
       return descriptor
+    }
+
+    val tracks = mutableListOf<TrackChange>()
+    var trackAnswer: PlaybackDescriptorDto? = null
+
+    override suspend fun trackPlayback(id: String, change: TrackChange): PlaybackDescriptorDto {
+      tracks += change
+      return trackAnswer ?: descriptor
     }
 
     override suspend fun seekPlayback(id: String, time: Double): PlaybackDescriptorDto {
@@ -56,7 +80,10 @@ class PlaybackControllerTest {
 
     override suspend fun pingPlayback(id: String) {
       pings += id
+      pingFailure?.let { throw it }
     }
+
+    var pingFailure: Throwable? = null
 
     override suspend fun deletePlayback(id: String) {
       calls += "delete"
@@ -353,4 +380,214 @@ class PlaybackControllerTest {
     assertEquals(42.0, api.started.last().third, 0.001)
     assertTrue("The restart resumes at the position, not from the server's stored value", api.saved.size == 1)
   }
+
+  @Test
+  fun `a track answer keeps the absolute position through a regenerated playlist`() = runTest {
+    val api = FakeApi()
+    api.descriptor = PlaybackDescriptorDto(
+      id = "p1", mode = "direct", url = "direct.mp4", offset = 0.0, duration = 600.0,
+      audioTracks = tracks("dts"),
+    )
+    api.trackAnswer = PlaybackDescriptorDto(
+      id = "p1", mode = "remux", url = "remux.m3u8", offset = 120.0, duration = 600.0,
+      playlist = true, copy = CopyDto(video = true, audio = false), audioTracks = tracks("dts"),
+    )
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+
+    controller.start("src", "file:a", "A", "a", resume = false)
+    runCurrent()
+    controller.onPlayerReady()
+    controller.onPlayerPosition(120.0)
+    controller.selectAudio(0)
+    runCurrent()
+
+    assertEquals(1, api.tracks.size)
+    // The server restarted the stream at 120 s; the answer's offset and target keep the picture there.
+    assertEquals(120.0, api.tracks.single().let { (it as TrackChange.Audio).time }, 0.001)
+    assertEquals(120.0, controller.state.value.target, 0.001)
+    assertEquals(120.0, controller.position, 0.001)
+  }
+
+  @Test
+  fun `starting the next episode saves and deletes the old session before the new start`() = runTest {
+    val api = FakeApi()
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+
+    controller.start("src1", "file:a", "A", "a", resume = false)
+    runCurrent()
+    controller.onPlayerReady()
+    controller.onPlayerPosition(300.0)
+    api.calls.clear()
+
+    controller.playNext("file:b", "B", "b", resume = false) { api.calls += "mint"; "src2" }
+    runCurrent()
+
+    assertEquals(listOf("save", "delete", "mint", "start"), api.calls)
+    assertEquals("src2", api.started.last().first)
+  }
+
+  @Test
+  fun `a next episode whose source cannot be minted reports the error instead of starting`() = runTest {
+    val api = FakeApi()
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+
+    controller.start("src1", "file:a", "A", "a", resume = false)
+    runCurrent()
+    controller.onPlayerReady()
+    controller.onPlayerPosition(300.0)
+    api.calls.clear()
+    api.started.clear()
+
+    controller.playNext("file:b", "B", "b", resume = false) { api.calls += "mint"; null }
+    runCurrent()
+
+    assertEquals(listOf("save", "delete", "mint"), api.calls)
+    assertTrue("No source may be started when none was minted", api.started.isEmpty())
+    assertEquals(PlaybackError.Network, controller.state.value.error)
+  }
+
+  @Test
+  fun `a subtitle-only track answer keeps the direct-play audio choice`() = runTest {
+    val api = FakeApi()
+    api.descriptor = PlaybackDescriptorDto(
+      id = "p1", mode = "direct", url = "direct.mp4", offset = 0.0, duration = 600.0,
+      audioTracks = trackList(
+        """[{"index":0,"language":"en","codec":"aac","channels":2},
+            {"index":1,"language":"cs","codec":"aac","channels":2}]""",
+      ),
+      audioTrack = 0,
+      subtitleTracks = trackList("""[{"index":0,"language":"en","codec":"mov_text"}]"""),
+    )
+    api.trackAnswer = api.descriptor
+    val caps = ClientCapabilitiesDto(h264 = true, containers = listOf("mp4"), audioDecode = listOf("aac"))
+    val controller = PlaybackController(api, backgroundScope, { 0L }, caps)
+
+    controller.start("src", "file:a", "A", "a", resume = false)
+    runCurrent()
+    controller.onPlayerReady()
+    controller.onPlayerPosition(30.0)
+    controller.selectAudio(1)
+    runCurrent()
+    assertEquals("Direct play selected the audio inside the player", 1, controller.state.value.audioTrackIndex)
+
+    // The subtitle the client does not render goes to the server, whose answer names its own audio
+    // default 0. A same-item subtitle answer may not re-tick the client's audio choice.
+    controller.selectSubtitle(SubtitleChoice.Embedded(0))
+    runCurrent()
+
+    assertEquals(1, api.tracks.size)
+    assertEquals(1, controller.state.value.audioTrackIndex)
+  }
+
+  @Test
+  fun `an addon subtitle survives an audio conversion restart`() = runTest {
+    val api = FakeApi()
+    api.descriptor = PlaybackDescriptorDto(
+      id = "p1", mode = "direct", url = "direct.mp4", offset = 0.0, duration = 600.0,
+      audioTracks = trackList(
+        """[{"index":0,"language":"en","codec":"aac","channels":2},
+            {"index":1,"language":"en","codec":"dts","channels":6}]""",
+      ),
+      audioTrack = 0,
+    )
+    api.trackAnswer = PlaybackDescriptorDto(
+      id = "p1", mode = "remux", url = "remux.m3u8", offset = 30.0, duration = 600.0,
+      playlist = true, copy = CopyDto(video = true, audio = false),
+      audioTracks = api.descriptor.audioTracks, audioTrack = 1, subtitleTrack = 0, sidecarUrl = "sidecar.vtt",
+    )
+    val caps = ClientCapabilitiesDto(h264 = true, containers = listOf("mp4"), audioDecode = listOf("aac"))
+    val controller = PlaybackController(api, backgroundScope, { 0L }, caps)
+    val addon = AddonSubtitleDto(subtitleId = "sid", lang = "cs", addonName = "OpenSubtitles")
+
+    controller.start("src", "file:a", "A", "a", resume = false, subtitles = listOf(addon), subtitlePreference = "cs")
+    runCurrent()
+    assertEquals(SubtitleChoice.Addon("sid"), controller.state.value.subtitle)
+    controller.onPlayerReady()
+    controller.onPlayerPosition(30.0)
+
+    controller.selectAudio(1)
+    runCurrent()
+
+    val audio = api.tracks.single() as TrackChange.Audio
+    assertTrue("The audio change tells the server to drop its own subtitle", audio.subtitleOff)
+    assertEquals("The app keeps drawing the addon it chose", SubtitleChoice.Addon("sid"), controller.state.value.subtitle)
+  }
+
+  @Test
+  fun `a track change during a pending seek carries the seek target`() = runTest {
+    val api = FakeApi()
+    api.descriptor = PlaybackDescriptorDto(
+      id = "p1", mode = "remux", url = "start.m3u8", offset = 0.0, duration = 1_000.0,
+      playlist = true, copy = CopyDto(video = true, audio = true), audioTracks = tracks("dts"),
+    )
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+
+    controller.start("src", "file:a", "A", "a", resume = false)
+    runCurrent()
+    controller.onPlayerReady()
+    controller.onPlayerPosition(10.0)
+    controller.seekTo(200.0)
+    controller.selectAudio(0)
+    runCurrent()
+
+    assertEquals(200.0, (api.tracks.single() as TrackChange.Audio).time, 0.001)
+  }
+
+  @Test
+  fun `a session the server has forgotten is restarted once at the position`() = runTest {
+    val api = FakeApi()
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+
+    controller.start("src", "file:a", "A", "a", resume = false)
+    runCurrent()
+    controller.onPlayerReady()
+    controller.onPlayerPosition(50.0)
+    api.pingFailure = ApiError(ApiFailure.NotFound)
+    advanceTimeBy(30_001)
+    runCurrent()
+
+    assertEquals(2, api.started.size)
+    assertEquals(50.0, api.started.last().third, 0.001)
+  }
+
+  @Test
+  fun `a restart that fails too leaves the error panel`() = runTest {
+    val api = FakeApi()
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+
+    controller.start("src", "file:a", "A", "a", resume = false)
+    runCurrent()
+    controller.onPlayerReady()
+    controller.onPlayerPosition(50.0)
+    api.pingFailure = ApiError(ApiFailure.NotFound)
+    api.failStart = true
+    advanceTimeBy(30_001)
+    runCurrent()
+
+    assertEquals(PlaybackError.Network, controller.state.value.error)
+  }
+
+  @Test
+  fun `a retry sends the account's fresh addon subtitle ids`() = runTest {
+    val api = FakeApi()
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+    val first = AddonSubtitleDto(subtitleId = "sid", lang = "cs", addonName = "OpenSubtitles")
+    val fresh = AddonSubtitleDto(subtitleId = "sid2", lang = "cs", addonName = "OpenSubtitles")
+
+    controller.start("src", "file:a", "A", "a", resume = false, subtitles = listOf(first))
+    runCurrent()
+    controller.onPlayerReady()
+    controller.onPlayerPosition(50.0)
+    controller.retry(subtitles = listOf(fresh), audioPreference = "en", subtitlePreference = "cs")
+    runCurrent()
+
+    assertEquals(listOf(listOf("sid"), listOf("sid2")), api.subtitleIds)
+    assertEquals(50.0, api.started.last().third, 0.001)
+  }
+
+  private fun tracks(codec: String): List<JsonObject> =
+    listOf(Json.parseToJsonElement("""{"index":0,"codec":"$codec"}""").jsonObject)
+
+  private fun trackList(json: String): List<JsonObject> =
+    Json.parseToJsonElement(json).jsonArray.map { it.jsonObject }
 }

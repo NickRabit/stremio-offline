@@ -1,5 +1,7 @@
 package cz.stremiooffline.tv.catalog
 
+import cz.stremiooffline.tv.data.AddonSubtitleDto
+
 /** The web's `web/src/languages.ts`, ported for the two things the catalogue needs: which
  *  languages a source is offered in, and the label to show for one. */
 object Languages {
@@ -75,6 +77,25 @@ object Languages {
     !bingeGroup.isNullOrEmpty() && bingeGroup.contains("|") && bingeGroup.split("|").contains("")
 
   fun label(code: String?): String = if (code.isNullOrEmpty()) "?" else LANGUAGE_LABEL[code] ?: code.uppercase()
+
+  /**
+   * Which addon subtitle to offer when the file left a gap, the web's `pickAddonSubtitle`.
+   * Addon subtitles are the whole film, never the forced lines alone, so they belong to a viewer
+   * who cannot follow the dialogue: nothing while the audio is already the language they asked
+   * for, and otherwise their language, with English after it.
+   */
+  fun pickAddonSubtitle(
+    items: List<AddonSubtitleDto>,
+    preferred: String,
+    spoken: String?,
+    understood: String?,
+  ): AddonSubtitleDto? {
+    if (understood != null && spoken == understood) return null
+    val wants = preferred.lowercase()
+    fun speaks(item: AddonSubtitleDto, language: String) =
+      item.lang.orEmpty().lowercase().startsWith(language)
+    return items.firstOrNull { speaks(it, wants) } ?: items.firstOrNull { speaks(it, "en") }
+  }
 
   /** A guess from the text the addon sent. */
   fun guessLanguages(text: String): List<String> {
