@@ -155,5 +155,7 @@
   <string name="tv_force_conversion_note">Usalo quando immagine o audio si sentono male. Il server ricodifica il video.</string>
   <string name="tv_prefer_conversion">Preferisci la conversione sul server</string>
   <string name="tv_prefer_conversion_note">Ogni riproduzione parte come in un browser, quindi il server converte ciò che il televisore non riesce a leggere. Avvio più lento e carico maggiore sul server.</string>
+  <string name="tv_on">Attivo</string>
+  <string name="tv_off">Disattivo</string>
   <string name="tv_back_to_source">Torna alla sorgente precedente</string>
 </resources>

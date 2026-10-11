@@ -1637,5 +1637,7 @@ export const cs: Catalog = {
   "tv.forceConversionNote": "Použijte, když obraz nebo zvuk hraje špatně. Server video překóduje.",
   "tv.preferConversion": "Preferovat převod na serveru",
   "tv.preferConversionNote": "Každé přehrávání začne jako v prohlížeči, takže server převede, co televize nezvládne. Pomalejší start a vyšší zátěž serveru.",
+  "tv.on": "Zapnuto",
+  "tv.off": "Vypnuto",
   "tv.backToSource": "Zpět na předchozí zdroj",
 };

@@ -148,4 +148,6 @@ tv.forceConversion
 tv.forceConversionNote
 tv.preferConversion
 tv.preferConversionNote
+tv.on
+tv.off
 tv.backToSource

@@ -1586,5 +1586,7 @@ export const pl: Catalog = {
   "tv.forceConversionNote": "Użyj, gdy obraz lub dźwięk odtwarza się źle. Serwer ponownie koduje wideo.",
   "tv.preferConversion": "Preferuj konwersję na serwerze",
   "tv.preferConversionNote": "Każde odtwarzanie startuje jak w przeglądarce, więc serwer konwertuje to, czego telewizor nie odtworzy. Wolniejszy start i większe obciążenie serwera.",
+  "tv.on": "Włączone",
+  "tv.off": "Wyłączone",
   "tv.backToSource": "Wróć do poprzedniego źródła",
 };

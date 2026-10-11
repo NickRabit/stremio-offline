@@ -159,5 +159,7 @@
   <string name="tv_force_conversion_note">Použite, keď sa obraz alebo zvuk prehráva zle. Server video prekóduje.</string>
   <string name="tv_prefer_conversion">Preferovať prevod na serveri</string>
   <string name="tv_prefer_conversion_note">Každé prehrávanie sa spustí ako v prehliadači, takže server prevedie, čo televízor nezvládne. Pomalší štart a vyššia záťaž servera.</string>
+  <string name="tv_on">Zapnuté</string>
+  <string name="tv_off">Vypnuté</string>
   <string name="tv_back_to_source">Späť na predchádzajúci zdroj</string>
 </resources>

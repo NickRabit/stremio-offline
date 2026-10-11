@@ -2,6 +2,7 @@
 
 package cz.stremiooffline.tv.ui.settings
 
+import android.content.Context
 import android.content.Intent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -23,6 +24,7 @@ import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import cz.stremiooffline.tv.data.SettingsResponse
 import cz.stremiooffline.tv.data.ApiFailure
+import cz.stremiooffline.tv.data.TvPreferences
 import cz.stremiooffline.tv.ui.FakeTvApi
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -62,6 +64,9 @@ class SettingsScreenTest {
   private fun fake() = FakeTvApi().apply {
     settingsValue = SettingsResponse(uiLanguage = "en", audioLanguage = "en", subtitleLanguage = "cs", startView = "home")
   }
+
+  private fun preferences(): TvPreferences =
+    TvPreferences(ApplicationProvider.getApplicationContext<Context>())
 
   private fun mount(api: FakeTvApi) {
     scenario.onActivity { activity ->
@@ -108,9 +113,52 @@ class SettingsScreenTest {
 
     repeat(5) { press(Key.DirectionDown) }
     focusRow(TagSettingsRowStartView)
-    // There is nothing focusable below the last row, so the remote does not leave the list.
+    // The switch is the last focusable row: the device facts under it are not.
     press(Key.DirectionDown)
+    focusRow(TagSettingsRowPreferConversion)
+    press(Key.DirectionDown)
+    focusRow(TagSettingsRowPreferConversion)
+  }
+
+  @Test
+  fun `the prefer conversion row sits between the start page and the device`() {
+    mount(fake())
+    repeat(5) { press(Key.DirectionDown) }
     focusRow(TagSettingsRowStartView)
+    press(Key.DirectionDown)
+    focusRow(TagSettingsRowPreferConversion)
+
+    val notFocusable = SemanticsMatcher.keyNotDefined(SemanticsProperties.Focused)
+    compose.onNodeWithTag(TagSettingsRowDevice).assertExists().assert(notFocusable)
+
+    press(Key.DirectionUp)
+    focusRow(TagSettingsRowStartView)
+  }
+
+  @Test
+  fun `OK on the prefer conversion row flips it and stores it on the device`() {
+    preferences().preferConversion = false
+    mount(fake())
+    repeat(6) { press(Key.DirectionDown) }
+    focusRow(TagSettingsRowPreferConversion)
+    compose.onNodeWithTag(TagSettingsRowPreferConversion).assertTextContains("Off", substring = true)
+
+    press(Key.DirectionCenter)
+
+    compose.onNodeWithTag(TagSettingsRowPreferConversion).assertTextContains("On", substring = true)
+    assertTrue(preferences().preferConversion)
+  }
+
+  @Test
+  fun `toggling the prefer conversion row writes nothing to the server`() {
+    val api = fake()
+    mount(api)
+    repeat(6) { press(Key.DirectionDown) }
+    focusRow(TagSettingsRowPreferConversion)
+
+    press(Key.DirectionCenter)
+
+    assertTrue(api.settingsPatches.isEmpty())
   }
 
   @Test

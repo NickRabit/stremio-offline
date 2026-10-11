@@ -1586,5 +1586,7 @@ export const de: Catalog = {
   "tv.forceConversionNote": "Verwenden, wenn Bild oder Ton schlecht wiedergegeben wird. Der Server kodiert das Video neu.",
   "tv.preferConversion": "Serverkonvertierung bevorzugen",
   "tv.preferConversionNote": "Jede Wiedergabe startet wie im Browser, daher konvertiert der Server, was der Fernseher nicht abspielt. Langsamerer Start und höhere Serverlast.",
+  "tv.on": "Ein",
+  "tv.off": "Aus",
   "tv.backToSource": "Zurück zur vorherigen Quelle",
 };

@@ -155,5 +155,7 @@
   <string name="tv_force_conversion_note">Verwenden, wenn Bild oder Ton schlecht wiedergegeben wird. Der Server kodiert das Video neu.</string>
   <string name="tv_prefer_conversion">Serverkonvertierung bevorzugen</string>
   <string name="tv_prefer_conversion_note">Jede Wiedergabe startet wie im Browser, daher konvertiert der Server, was der Fernseher nicht abspielt. Langsamerer Start und höhere Serverlast.</string>
+  <string name="tv_on">Ein</string>
+  <string name="tv_off">Aus</string>
   <string name="tv_back_to_source">Zurück zur vorherigen Quelle</string>
 </resources>
