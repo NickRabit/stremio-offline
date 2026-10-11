@@ -541,7 +541,11 @@ internal fun mediaKey(key: Key, player: ExoPlayer, playing: Boolean, onExit: () 
   else -> null
 }
 
-private fun isDecoderError(error: PlaybackException): Boolean = error.errorCode in setOf(
+// A container the player cannot parse is handed to the server like a codec it cannot decode:
+// ffmpeg rewrites a damaged or unusual file that ExoPlayer's extractors refuse.
+internal fun isDecoderError(error: PlaybackException): Boolean = error.errorCode in setOf(
+  PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED,
+  PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED,
   PlaybackException.ERROR_CODE_DECODER_INIT_FAILED,
   PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED,
   PlaybackException.ERROR_CODE_DECODING_FAILED,
