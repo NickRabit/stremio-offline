@@ -62,6 +62,24 @@ class SubtitleLogicTest {
   }
 
   @Test
+  fun `a resumed sidecar is rebased to the stream and shifted back to the file's timeline`() {
+    // Obsession resumed at 78: the reader logged the file's first cue at 79.627 s and the sidecar
+    // route subtracts the offset, so the player receives it rebased to the stream (1.627 s).
+    val delivered = parseVtt("WEBVTT\n\n00:01.627 --> 00:05.263\nDrawn to her, is he?")
+    val cues = absoluteCues(delivered, 78.0)
+    assertEquals(79.627, cues.single().start, 0.001)
+    assertEquals(83.263, cues.single().end, 0.001)
+    assertNull("the picture is before the cue", activeCue(cues, 78.0))
+    assertEquals("Drawn to her, is he?", activeCue(cues, 80.0))
+  }
+
+  @Test
+  fun `a direct sidecar with no offset keeps the timestamps it carries`() {
+    val cues = parseVtt("WEBVTT\n\n00:12.000 --> 00:14.000\nHello")
+    assertEquals(cues, absoluteCues(cues, 0.0))
+  }
+
+  @Test
   fun `the sidecar is re-read before the picture catches up and once when it is whole`() {
     // The four cases of `player-sidecar.test.ts`, as a sequence of coverage and playhead answers.
     val reads = listOf(

@@ -48,6 +48,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.SemanticsPropertyKey
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -68,11 +69,16 @@ const val TAG_OSD_BUBBLE = "osd_bubble"
 const val TAG_OSD_TRACKS = "osd_tracks"
 const val TAG_OSD_NEXT = "osd_next"
 const val TAG_OSD_DIAG = "osd_diag"
+const val TAG_OSD_TIMELINE = "osd_timeline"
 const val TAG_ERROR_PANEL = "error_panel"
 
 /** The seek icons beside the plain `10` labels. */
 const val SEEK_BACK_LABEL = "10"
 const val SEEK_FORWARD_LABEL = "10"
+
+/** Whether a player control draws its focused look: the D-pad is on it. Focus is observed with a
+ *  semantics property the way `TvTextField` does it, because the drawn ring is not readable. */
+internal val OsdFocused = SemanticsPropertyKey<Boolean>("OsdFocused")
 
 /** The tracks button shows the current audio language; a title without one falls back to the
  *  plain captions mark the button already carries, never the language list's `?`. */
@@ -254,9 +260,12 @@ private fun Timeline(
   Box(
     modifier
       .height(28.dp)
+      .testTag(TAG_OSD_TIMELINE)
       .focusRequester(requester)
-      .focusable()
+      // Observes the progress bar's own focus target, so it has to sit before `focusable()`.
       .onFocusChanged { focused = it.isFocused }
+      .focusable()
+      .semantics { this[OsdFocused] = focused }
       .onPreviewKeyEvent { event ->
         if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
         when (event.key) {
@@ -304,9 +313,11 @@ private fun PlayButton(
       .background(Tokens.AccentGradient)
       .semantics { this.contentDescription = contentDescription }
       .focusRequester(focusRequester)
-      .focusable()
+      // Observes the button's own focus target, so it has to sit before `focusable()`.
       .onFocusChanged { focused = it.isFocused }
-      .clickable { onActivity(); onClick() },
+      .focusable()
+      .clickable { onActivity(); onClick() }
+      .semantics { this[OsdFocused] = focused },
     contentAlignment = Alignment.Center,
   ) {
     if (focused) Box(Modifier.fillMaxSize().clip(CircleShape).background(Color.White.copy(alpha = 0.12f)))
@@ -334,9 +345,11 @@ private fun RoundButton(
       .then(if (focused) Modifier.border(1.5.dp, Tokens.Accent2, CircleShape) else Modifier)
       .semantics { this.contentDescription = label }
       .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
-      .focusable()
+      // Observes the button's own focus target, so it has to sit before `focusable()`.
       .onFocusChanged { focused = it.isFocused }
+      .focusable()
       .clickable { onActivity(); onClick() }
+      .semantics { this[OsdFocused] = focused }
       .padding(horizontal = 16.dp, vertical = 9.dp),
     contentAlignment = Alignment.Center,
   ) {

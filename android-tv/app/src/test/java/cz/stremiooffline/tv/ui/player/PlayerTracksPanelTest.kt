@@ -17,6 +17,8 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.hasTestTag
@@ -126,6 +128,18 @@ class PlayerTracksPanelTest {
 
     assertTrue(compose.onAllNodes(hasTestTag(TagDelayRow) and isFocusable()).fetchSemanticsNodes().isEmpty())
     compose.onNodeWithText("Delay works for server and addon subtitles.").assertExists()
+  }
+
+  // Same bug as the OSD buttons: the row wrote `onFocusChanged` after `focusable()`, so its
+  // focused background never drew.
+  @Test
+  fun `the delay row shows it holds the remote`() {
+    mount()
+
+    compose.onNodeWithTag(TagDelayRow).requestFocus()
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagDelayRow).assert(SemanticsMatcher.expectValue(OsdFocused, true))
   }
 
   @Test

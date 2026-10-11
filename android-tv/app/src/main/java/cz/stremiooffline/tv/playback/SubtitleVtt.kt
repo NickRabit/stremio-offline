@@ -1,7 +1,7 @@
 package cz.stremiooffline.tv.playback
 
-/** One WebVTT cue, in the player's absolute timeline (the server shifts the file by the offset
- *  and the delay). */
+/** One WebVTT cue. The server rebases what it delivers to the conversion stream, so cues are not
+ *  in the player's absolute timeline until [absoluteCues] has brought them back. */
 data class VttCue(val start: Double, val end: Double, val text: String)
 
 /** The text of the cue (or cues) covering [position], joined by a newline, or null. */
@@ -11,8 +11,19 @@ fun activeCue(cues: List<VttCue>, position: Double): String? {
 }
 
 /**
- * A WebVTT document into cues. The blocks that carry no timing (WEBVTT, NOTE, STYLE, REGION) are
- * skipped, as are the optional cue numbers; only the timestamp line and the lines under it count.
+ * The sidecar route and `/api/subtitle/:subtitleId` both subtract the session's `offset` from every
+ * cue they send -- a conversion seeks to the offset and plays from zero -- while the player's
+ * position, seek target and delay are all in the file's timeline. Shift the cues back so
+ * [activeCue] can compare them with the absolute position. A direct-play sidecar has no offset and
+ * is already absolute.
+ */
+fun absoluteCues(cues: List<VttCue>, offset: Double): List<VttCue> =
+  if (offset == 0.0) cues else cues.map { VttCue(it.start + offset, it.end + offset, it.text) }
+
+/**
+ * A WebVTT document into cues, with the timestamps the document carries. The blocks that carry no
+ * timing (WEBVTT, NOTE, STYLE, REGION) are skipped, as are the optional cue numbers; only the
+ * timestamp line and the lines under it count.
  */
 fun parseVtt(text: String): List<VttCue> {
   val cues = mutableListOf<VttCue>()

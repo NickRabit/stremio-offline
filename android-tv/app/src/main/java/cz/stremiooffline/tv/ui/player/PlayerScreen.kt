@@ -64,6 +64,7 @@ import cz.stremiooffline.tv.playback.SidecarState
 import cz.stremiooffline.tv.playback.SubtitleChoice
 import cz.stremiooffline.tv.playback.SubtitleDelay
 import cz.stremiooffline.tv.playback.VttCue
+import cz.stremiooffline.tv.playback.absoluteCues
 import cz.stremiooffline.tv.playback.activeCue
 import cz.stremiooffline.tv.playback.detectCapabilities
 import cz.stremiooffline.tv.playback.diagPath
@@ -77,6 +78,7 @@ import cz.stremiooffline.tv.ui.detail.PlayTarget
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -139,8 +141,12 @@ fun PlayerScreen(api: TvApi, target: PlayTarget, onExit: () -> Unit) {
 
   LaunchedEffect(restoreFocus) {
     val target = restoreFocus ?: return@LaunchedEffect
-    restoreFocus = null
+    // The panel is gone only once the frame that removed it is applied. Asking for the button in
+    // the same frame lets the removal take the focus back to the OSD's first control on a device,
+    // so the request waits a frame the way `SidePanel` does when it opens.
+    awaitFrame()
     runCatching { target.requestFocus() }
+    restoreFocus = null
   }
 
   /** The player's tracks, grouped the way the player groups them, for the matcher. */
@@ -331,7 +337,9 @@ fun PlayerScreen(api: TvApi, target: PlayTarget, onExit: () -> Unit) {
       val fetch = runCatching { api.sidecar(sidecar, at, delaySeconds) }.getOrNull()
       if (fetch != null) {
         if (sidecarRefresh(watcher, fetch.coverage, fetch.complete, at)) {
-          cues = parseVtt(fetch.text)
+          // The server rebases its cues to the conversion stream; the picture the overlay is
+          // compared with is absolute, so the offset goes back on.
+          cues = absoluteCues(parseVtt(fetch.text), state.offset)
           watcher = sidecarAdvanced(watcher, fetch.coverage, fetch.complete)
         }
         if (fetch.complete) return@LaunchedEffect
@@ -345,7 +353,7 @@ fun PlayerScreen(api: TvApi, target: PlayTarget, onExit: () -> Unit) {
     if (addonChoice == null || resolvedAddonId == null) return@LaunchedEffect
     cues = emptyList()
     val text = runCatching { api.subtitleText(resolvedAddonId, state.offset, delaySeconds) }.getOrNull() ?: return@LaunchedEffect
-    cues = parseVtt(text)
+    cues = absoluteCues(parseVtt(text), state.offset)
   }
 
   LaunchedEffect(state.trackRevision) {
