@@ -147,17 +147,20 @@ class ApiClientTest {
   }
 
   @Test
-  fun `favorites asks the library favourites route and reads the star`() = runTest {
+  fun `favorites asks the merged route with the filter and reads both kinds`() = runTest {
     server.enqueue(
       MockResponse().setBody(
-        """{"path":":favorites","items":[{"kind":"file","path":"lib_1/It.mkv","label":"It","favorite":true}],"total":1,"pending":false}"""
+        """{"items":[{"kind":"library","path":"lib_1/It.mkv","label":"It","itemKind":"file"},""" +
+          """{"kind":"catalog","type":"series","id":"tt2","name":"Show"}],"total":2,"pending":false}"""
       )
     )
-    val result = client(start()).favorites()
+    val result = client(start()).favorites(FavoriteFilter.Library, limit = 30, skip = 60)
 
-    assertEquals("/api/library/favorites?limit=60&skip=0", server.takeRequest().path)
-    assertEquals(":favorites", result.path)
-    assertTrue((result.items.single() as BrowseItem.File).favorite)
+    assertEquals("/api/favorites?filter=library&limit=30&skip=60", server.takeRequest().path)
+    assertEquals(2, result.total)
+    assertEquals(2, result.items.size)
+    assertEquals("library:lib_1/It.mkv", result.items[0].key)
+    assertEquals("catalog:series:tt2", result.items[1].key)
   }
 
   @Test

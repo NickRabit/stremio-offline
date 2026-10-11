@@ -84,6 +84,13 @@ fun actionFor(card: HomeCard): HomeAction = when (card) {
       type = card.type,
     ),
   )
+  is HomeCard.FavoriteCatalogue -> HomeAction.OpenCatalog(
+    CatalogDetailArgs(
+      meta = MetaDto(id = card.id, type = card.type, name = card.name, poster = card.poster),
+      addonName = "",
+      type = card.type,
+    ),
+  )
 }
 
 private fun play(path: String, title: String): HomeAction.Play =

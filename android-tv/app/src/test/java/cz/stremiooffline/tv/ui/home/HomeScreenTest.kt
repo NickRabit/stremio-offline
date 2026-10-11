@@ -402,6 +402,31 @@ class HomeScreenTest {
   }
 
   @Test
+  fun `ok on a catalogue favourite opens the catalogue detail`() {
+    val api = FakeTvApi()
+    serve(
+      api,
+      order("favorites"),
+      mapOf(
+        "favorites" to row(
+          HomeCard.FavoriteCatalogue(key = "series:tt2", type = "series", id = "tt2", name = "Show", year = "2020"),
+        ),
+      ),
+    )
+    val actions = mutableListOf<HomeAction>()
+    mount(api, onAction = { actions += it })
+    compose.waitForIdle()
+    compose.onNodeWithTag(homeCardTag("series:tt2")).performKeyInput { pressKey(Key.DirectionCenter) }
+
+    val action = actions.single()
+    assertTrue(action is HomeAction.OpenCatalog)
+    val args = (action as HomeAction.OpenCatalog).args
+    assertEquals("tt2", args.meta.id)
+    assertEquals("series", args.type)
+    assertEquals("", args.addonName)
+  }
+
+  @Test
   fun `ok on a completed card plays the file`() {
     val api = FakeTvApi()
     serve(

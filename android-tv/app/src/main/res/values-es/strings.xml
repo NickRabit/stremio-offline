@@ -10,6 +10,7 @@
   <string name="nav_home">Inicio</string>
   <string name="nav_catalog">Catálogo</string>
   <string name="nav_library">Biblioteca</string>
+  <string name="nav_favorites">Favoritos</string>
   <string name="nav_settings">Configuración</string>
   <string name="tv_nav_search">Buscar</string>
   <string name="tv_connect_title">Conecta con tu servidor</string>
@@ -114,11 +115,15 @@
   <string name="tv_diagnostics_failed">No se pudo enviar el diagnóstico.</string>
   <string name="tv_crash_hint">Se registró un fallo de la ejecución anterior. Envíe el diagnóstico desde Ajustes.</string>
   <string name="tv_downloads_later">La cola de descargas se abre por ahora en la web.</string>
-  <string name="tv_my_list_empty">Los títulos que marcas con una estrella aparecen aquí.</string>
   <string name="catalog_type_movie">película</string>
   <string name="catalog_type_series">serie</string>
-  <string name="catalog_my_list">mi lista</string>
-  <string name="library_shelf_favorites">Favoritos</string>
+  <string name="favorites_title">Favoritos</string>
+  <string name="favorites_filter_all">Todo</string>
+  <string name="favorites_filter_library">En la biblioteca</string>
+  <string name="favorites_filter_catalog">Del catálogo</string>
+  <string name="favorites_empty_all_text">Marca con una estrella un archivo de la biblioteca o un título del catálogo y aparecerá aquí.</string>
+  <string name="favorites_empty_library_text">Marca con una estrella un archivo o carpeta de la biblioteca y aparecerá aquí.</string>
+  <string name="favorites_empty_catalog_text">Marca con una estrella un título del catálogo y aparecerá aquí.</string>
   <string name="player_subtitles">Subtítulos</string>
   <string name="player_subtitles_off">Apagado</string>
   <string name="player_subtitle_delay">Tiempo de subtítulos</string>

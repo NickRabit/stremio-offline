@@ -196,11 +196,12 @@ class ApiClient(
       .decode<SourceDto>() ?: throw ApiError(ApiFailure.Generic)
   }
 
-  /** One page of the library's Favourites view. */
-  override suspend fun favorites(limit: Int, skip: Int): BrowseResult {
-    val page = request(Request.Builder().url(address.resolve("/api/library/favorites?limit=$limit&skip=$skip")).get().build())
-      .decode<BrowsePage>() ?: throw ApiError(ApiFailure.Generic)
-    return BrowseResult(page.path, browseItems(page), page.total, page.pending)
+  /** One page of the one merged Favourites list. */
+  override suspend fun favorites(filter: FavoriteFilter, limit: Int, skip: Int): FavoritesPage {
+    val query = "?filter=${filter.wire}&limit=$limit&skip=$skip"
+    val page = request(Request.Builder().url(address.resolve("/api/favorites$query")).get().build())
+      .decode<FavoritesPageDto>() ?: throw ApiError(ApiFailure.Generic)
+    return FavoritesPage(favoriteItems(page), page.total, page.pending)
   }
 
   /** Stars or unstars a library file or folder. */

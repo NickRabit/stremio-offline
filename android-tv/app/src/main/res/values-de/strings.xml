@@ -10,6 +10,7 @@
   <string name="nav_home">Startseite</string>
   <string name="nav_catalog">Katalog</string>
   <string name="nav_library">Bibliothek</string>
+  <string name="nav_favorites">Favoriten</string>
   <string name="nav_settings">Einstellungen</string>
   <string name="tv_nav_search">Suchen</string>
   <string name="tv_connect_title">Mit Ihrem Server verbinden</string>
@@ -114,11 +115,15 @@
   <string name="tv_diagnostics_failed">Diagnose konnte nicht gesendet werden.</string>
   <string name="tv_crash_hint">Ein Absturz aus dem letzten Lauf wurde erfasst. Senden Sie die Diagnose in den Einstellungen.</string>
   <string name="tv_downloads_later">Die Download-Warteschlange öffnet sich vorerst im Web.</string>
-  <string name="tv_my_list_empty">Titel, die Sie mit einem Stern markieren, erscheinen hier.</string>
   <string name="catalog_type_movie">Film</string>
   <string name="catalog_type_series">Serie</string>
-  <string name="catalog_my_list">Meine Liste</string>
-  <string name="library_shelf_favorites">Favoriten</string>
+  <string name="favorites_title">Favoriten</string>
+  <string name="favorites_filter_all">Alle</string>
+  <string name="favorites_filter_library">In der Bibliothek</string>
+  <string name="favorites_filter_catalog">Aus dem Katalog</string>
+  <string name="favorites_empty_all_text">Markiere eine Datei in der Bibliothek oder einen Titel im Katalog mit einem Stern, und er erscheint hier.</string>
+  <string name="favorites_empty_library_text">Markiere eine Datei oder einen Ordner in der Bibliothek mit einem Stern, und er erscheint hier.</string>
+  <string name="favorites_empty_catalog_text">Markiere einen Titel im Katalog mit einem Stern, und er erscheint hier.</string>
   <string name="player_subtitles">Untertitel</string>
   <string name="player_subtitles_off">Aus</string>
   <string name="player_subtitle_delay">Untertitel-Timing</string>

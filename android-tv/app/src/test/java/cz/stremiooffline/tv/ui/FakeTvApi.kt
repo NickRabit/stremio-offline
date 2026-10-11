@@ -11,7 +11,9 @@ import cz.stremiooffline.tv.data.CopyDto
 import cz.stremiooffline.tv.data.DownloadResult
 import cz.stremiooffline.tv.data.DownloadTargetDto
 import cz.stremiooffline.tv.data.DownloadsResponseDto
+import cz.stremiooffline.tv.data.FavoriteFilter
 import cz.stremiooffline.tv.data.FavoriteToggleDto
+import cz.stremiooffline.tv.data.FavoritesPage
 import cz.stremiooffline.tv.data.HomeResponseDto
 import cz.stremiooffline.tv.data.HomeLayoutDto
 import cz.stremiooffline.tv.data.HomeLayoutResponseDto
@@ -48,8 +50,8 @@ open class FakeTvApi : TvApi {
   var progressValues: MutableMap<String, ProgressDto> = mutableMapOf()
   var browseCalls: MutableList<Pair<String?, Int>> = mutableListOf()
   var failBrowse = false
-  var favoritesValue: BrowseResult = BrowseResult(":favorites", emptyList(), 0, false)
-  var favoritesCalls: MutableList<Int> = mutableListOf()
+  var favoritesValue: FavoritesPage = FavoritesPage(emptyList(), 0, false)
+  var favoritesRequests: MutableList<FavoriteFilter> = mutableListOf()
   var failFavorites = false
   var libraryFavoriteCalls: MutableList<Pair<String, Boolean>> = mutableListOf()
   var favoriteFailure: ApiFailure? = null
@@ -161,8 +163,8 @@ open class FakeTvApi : TvApi {
     return pages[path] ?: BrowseResult(path.orEmpty(), emptyList(), 0, false)
   }
 
-  override suspend fun favorites(limit: Int, skip: Int): BrowseResult {
-    favoritesCalls += skip
+  override suspend fun favorites(filter: FavoriteFilter, limit: Int, skip: Int): FavoritesPage {
+    favoritesRequests += filter
     if (failFavorites) throw ApiError(ApiFailure.Generic)
     return favoritesValue
   }

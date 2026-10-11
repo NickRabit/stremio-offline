@@ -74,6 +74,7 @@ import cz.stremiooffline.tv.ui.catalog.SearchScreen
 import cz.stremiooffline.tv.ui.detail.DetailData
 import cz.stremiooffline.tv.ui.detail.DetailScreen
 import cz.stremiooffline.tv.ui.detail.PlayTarget
+import cz.stremiooffline.tv.ui.favorites.FavoritesRoute
 import cz.stremiooffline.tv.ui.home.HomeAction
 import cz.stremiooffline.tv.ui.home.HomeScreen
 import cz.stremiooffline.tv.ui.library.LibraryRoute
@@ -89,6 +90,7 @@ enum class Section(val route: String) {
   Home("home"),
   Catalog("catalog"),
   Library("library"),
+  Favorites("favorites"),
   Account("account"),
 }
 
@@ -105,6 +107,7 @@ private val Section.labelRes: Int
     Section.Home -> R.string.nav_home
     Section.Catalog -> R.string.nav_catalog
     Section.Library -> R.string.nav_library
+    Section.Favorites -> R.string.nav_favorites
     Section.Account -> R.string.nav_settings
   }
 
@@ -161,6 +164,9 @@ fun Shell(
   // Bumped each time Library comes back into view, so re-entering refreshes without losing focus.
   var libraryRefreshToken by remember { mutableIntStateOf(0) }
   var librarySeen by remember { mutableStateOf(false) }
+  // Bumped each time Favourites comes back into view, so a star removed elsewhere disappears.
+  var favoritesRefreshToken by remember { mutableIntStateOf(0) }
+  var favoritesSeen by remember { mutableStateOf(false) }
   // Where Search looks: kept across a rail switch, and preset when a catalogue's Hledat opens it.
   var searchScope by remember { mutableStateOf(SearchScope()) }
   /** True while Search was opened from the catalogue, so Back returns there instead of the rail. */
@@ -173,6 +179,10 @@ fun Shell(
     if (current == Section.Home) {
       if (homeSeen) homeRefreshToken++
       homeSeen = true
+    }
+    if (current == Section.Favorites) {
+      if (favoritesSeen) favoritesRefreshToken++
+      favoritesSeen = true
     }
   }
 
@@ -201,6 +211,17 @@ fun Shell(
           refreshToken = libraryRefreshToken,
           pushPath = libraryPush,
           onPushConsumed = { libraryPush = null },
+        )
+        Section.Favorites -> FavoritesRoute(
+          api = api,
+          onOpenDetail = { detail = it },
+          onOpenCatalog = { catalogDetail = it },
+          onOpenLibrary = { path ->
+            libraryPush = path
+            shellState.pick(Section.Library)
+          },
+          restoreToken = returnToken,
+          refreshToken = favoritesRefreshToken,
         )
         Section.Catalog -> CatalogScreen(
           api = api,
@@ -417,6 +438,7 @@ private fun Rail(
       Section.Home to HomeIcon,
       Section.Catalog to CatalogIcon,
       Section.Library to LibraryIcon,
+      Section.Favorites to StarIcon,
     )
   }
 
@@ -623,4 +645,18 @@ private val LibraryIcon = icon("Library") {
   lineTo(18.5f, 12f)
   moveTo(7f, 16f)
   lineTo(7.01f, 16f)
+}
+
+private val StarIcon = icon("Star") {
+  moveTo(12f, 3.5f)
+  lineTo(14.6f, 9f)
+  lineTo(20.6f, 9.9f)
+  lineTo(16.3f, 14.1f)
+  lineTo(17.3f, 20f)
+  lineTo(12f, 17.2f)
+  lineTo(6.7f, 20f)
+  lineTo(7.7f, 14.1f)
+  lineTo(3.4f, 9.9f)
+  lineTo(9.4f, 9f)
+  close()
 }

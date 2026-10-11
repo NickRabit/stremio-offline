@@ -22,7 +22,6 @@ import cz.stremiooffline.tv.data.BrowseResult
 import cz.stremiooffline.tv.data.FavoriteToggleDto
 import cz.stremiooffline.tv.ui.FakeTvApi
 import cz.stremiooffline.tv.ui.detail.TagDetailFavourite
-import cz.stremiooffline.tv.ui.library.FavoritesPath
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Before
@@ -32,10 +31,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
-/**
- * A star toggled in a library detail has to show up again when the title is reopened, and the
- * root's Favourites card has to follow it without dropping the remote off the card it came from.
- */
+/** A star toggled in a library detail has to show up again when the title is reopened. */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], qualifiers = "w960dp-h540dp-xhdpi")
 class LibraryFavouriteReturnTest {
@@ -67,12 +63,6 @@ class LibraryFavouriteReturnTest {
       browseCalls += path to skip
       val items = if (path == null) root else folder[path].orEmpty()
       return BrowseResult(path.orEmpty(), items.map(::withFavorite), items.size, false)
-    }
-
-    override suspend fun favorites(limit: Int, skip: Int): BrowseResult {
-      favoritesCalls += skip
-      val items = root.filter { it.path in starred }.map(::withFavorite)
-      return BrowseResult(FavoritesPath, items, items.size, false)
     }
 
     override suspend fun setFavorite(path: String, favorite: Boolean): FavoriteToggleDto {
@@ -146,26 +136,4 @@ class LibraryFavouriteReturnTest {
     compose.onNodeWithTag(TagDetailFavourite).assertTextContains("★")
   }
 
-  @Test
-  fun `the Favourites card follows the star and keeps focus on the card it came from`() {
-    val api = library()
-    mount(api)
-
-    compose.onNodeWithTag(FavoritesPath).assertDoesNotExist()
-    openIt()
-    focusFavourite()
-    press(Key.DirectionCenter)
-    back()
-
-    compose.onNodeWithTag(FavoritesPath).assertExists()
-    compose.onNodeWithTag("It").assertIsFocused()
-
-    openIt()
-    focusFavourite()
-    press(Key.DirectionCenter)
-    back()
-
-    compose.onNodeWithTag(FavoritesPath).assertDoesNotExist()
-    compose.onNodeWithTag("It").assertIsFocused()
-  }
 }

@@ -10,6 +10,7 @@
   <string name="nav_home">Accueil</string>
   <string name="nav_catalog">Catalogue</string>
   <string name="nav_library">Bibliothèque</string>
+  <string name="nav_favorites">Favoris</string>
   <string name="nav_settings">Paramètres</string>
   <string name="tv_nav_search">Rechercher</string>
   <string name="tv_connect_title">Se connecter à votre serveur</string>
@@ -114,11 +115,15 @@
   <string name="tv_diagnostics_failed">Les diagnostics n\'ont pas pu être envoyés.</string>
   <string name="tv_crash_hint">Un plantage de l\'exécution précédente a été enregistré. Envoyez les diagnostics depuis les réglages.</string>
   <string name="tv_downloads_later">La file de téléchargements s\'ouvre pour l\'instant sur le web.</string>
-  <string name="tv_my_list_empty">Les titres que vous ajoutez avec une étoile apparaissent ici.</string>
   <string name="catalog_type_movie">film</string>
   <string name="catalog_type_series">série</string>
-  <string name="catalog_my_list">Ma liste</string>
-  <string name="library_shelf_favorites">Favoris</string>
+  <string name="favorites_title">Favoris</string>
+  <string name="favorites_filter_all">Tout</string>
+  <string name="favorites_filter_library">Dans la bibliothèque</string>
+  <string name="favorites_filter_catalog">Du catalogue</string>
+  <string name="favorites_empty_all_text">Ajoutez une étoile à un fichier de la bibliothèque ou à un titre du catalogue et il apparaîtra ici.</string>
+  <string name="favorites_empty_library_text">Ajoutez une étoile à un fichier ou un dossier de la bibliothèque et il apparaîtra ici.</string>
+  <string name="favorites_empty_catalog_text">Ajoutez une étoile à un titre du catalogue et il apparaîtra ici.</string>
   <string name="player_subtitles">Sous-titres</string>
   <string name="player_subtitles_off">Désactivé</string>
   <string name="player_subtitle_delay">Synchronisation des sous-titres</string>
