@@ -1638,4 +1638,10 @@ export const en = {
   "tv.passthrough": "Passthrough",
   "tv.versionRow": "App {app} · server {server}",
   "tv.versionMismatch": "The server runs {server}, this app is {app}. Update the one that is older.",
+  "tv.nowPlaying": "Playing",
+  "tv.forceConversion": "Convert on the server",
+  "tv.forceConversionNote": "Use when the picture or sound plays badly. The server re-encodes the video.",
+  "tv.preferConversion": "Prefer server conversion",
+  "tv.preferConversionNote": "Every playback starts like a browser, so the server converts what the TV cannot play. Slower to start and heavier on the server.",
+  "tv.backToSource": "Back to the previous source",
 };

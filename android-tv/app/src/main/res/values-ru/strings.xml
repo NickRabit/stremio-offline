@@ -152,4 +152,12 @@
   <string name="tv_passthrough">Проброс</string>
   <string name="tv_version_row">Приложение %1$s · сервер %2$s</string>
   <string name="tv_version_mismatch">Сервер работает под версией %1$s, приложение — %2$s. Обновите то, что старше.</string>
+  <string name="player_quality">Качество</string>
+  <string name="player_quality_original">Оригинал</string>
+  <string name="tv_now_playing">Воспроизводится</string>
+  <string name="tv_force_conversion">Конвертировать на сервере</string>
+  <string name="tv_force_conversion_note">Используйте, если изображение или звук воспроизводится плохо. Сервер перекодирует видео.</string>
+  <string name="tv_prefer_conversion">Предпочитать конвертацию на сервере</string>
+  <string name="tv_prefer_conversion_note">Каждое воспроизведение начинается как в браузере, поэтому сервер конвертирует то, что телевизор не может воспроизвести. Медленнее запуск и выше нагрузка на сервер.</string>
+  <string name="tv_back_to_source">Вернуться к предыдущему источнику</string>
 </resources>

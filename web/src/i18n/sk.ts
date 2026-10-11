@@ -1581,4 +1581,10 @@ export const sk: Catalog = {
   "tv.passthrough": "Priechod",
   "tv.versionRow": "Aplikácia {app} · server {server}",
   "tv.versionMismatch": "Server beží vo verzii {server}, aplikácia je {app}. Aktualizujte tú staršiu.",
+  "tv.nowPlaying": "Prehráva sa",
+  "tv.forceConversion": "Prevádzať na serveri",
+  "tv.forceConversionNote": "Použite, keď sa obraz alebo zvuk prehráva zle. Server video prekóduje.",
+  "tv.preferConversion": "Preferovať prevod na serveri",
+  "tv.preferConversionNote": "Každé prehrávanie sa spustí ako v prehliadači, takže server prevedie, čo televízor nezvládne. Pomalší štart a vyššia záťaž servera.",
+  "tv.backToSource": "Späť na predchádzajúci zdroj",
 };

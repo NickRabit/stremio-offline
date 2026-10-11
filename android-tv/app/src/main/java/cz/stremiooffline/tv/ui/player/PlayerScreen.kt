@@ -50,9 +50,12 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.MediaSession
 import androidx.media3.ui.PlayerView
 import cz.stremiooffline.tv.R
+import cz.stremiooffline.tv.catalog.Streams
 import cz.stremiooffline.tv.data.AddonSubtitleDto
 import cz.stremiooffline.tv.data.SettingsResponse
+import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.data.TvApi
+import cz.stremiooffline.tv.data.TvPreferences
 import cz.stremiooffline.tv.playback.NextEpisode
 import cz.stremiooffline.tv.playback.PlaybackController
 import cz.stremiooffline.tv.playback.PlaybackDiagnostics
@@ -60,20 +63,24 @@ import cz.stremiooffline.tv.playback.PlaybackMode
 import cz.stremiooffline.tv.playback.PlayerTrack
 import cz.stremiooffline.tv.playback.PlayerTrackGroup
 import cz.stremiooffline.tv.playback.Progress
+import cz.stremiooffline.tv.playback.QualityChoice
 import cz.stremiooffline.tv.playback.SidecarState
 import cz.stremiooffline.tv.playback.SubtitleChoice
 import cz.stremiooffline.tv.playback.SubtitleDelay
 import cz.stremiooffline.tv.playback.VttCue
 import cz.stremiooffline.tv.playback.absoluteCues
 import cz.stremiooffline.tv.playback.activeCue
+import cz.stremiooffline.tv.playback.browserCapabilities
 import cz.stremiooffline.tv.playback.detectCapabilities
 import cz.stremiooffline.tv.playback.diagPath
 import cz.stremiooffline.tv.playback.matchTrack
 import cz.stremiooffline.tv.playback.nextEpisodeOf
 import cz.stremiooffline.tv.playback.parseVtt
+import cz.stremiooffline.tv.playback.qualityChoice
 import cz.stremiooffline.tv.playback.sidecarAdvanced
 import cz.stremiooffline.tv.playback.sidecarPollDelay
 import cz.stremiooffline.tv.playback.sidecarRefresh
+import cz.stremiooffline.tv.ui.catalog.SourcesPanel
 import cz.stremiooffline.tv.ui.detail.PlayTarget
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -84,10 +91,23 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 @Composable
-fun PlayerScreen(api: TvApi, target: PlayTarget, onExit: () -> Unit) {
+fun PlayerScreen(
+  api: TvApi,
+  target: PlayTarget,
+  onExit: () -> Unit,
+  /** The other sources the caller offers for this title; a library file has none. */
+  sources: List<StreamDto> = emptyList(),
+  /** The caller is still waiting on addons, so the list above may still grow. */
+  sourcesLoading: Boolean = false,
+) {
   val context = LocalContext.current
   val lifecycle = LocalLifecycleOwner.current.lifecycle
-  val capabilities = remember { detectCapabilities(context) }
+  // The device preference turns every start into a browser's: the native capability lists go and
+  // the server converts what the TV cannot play.
+  val capabilities = remember {
+    val detected = detectCapabilities(context)
+    if (TvPreferences(context).preferConversion) browserCapabilities(detected) else detected
+  }
   // The teardown save and delete must outlive the composition, so the controller gets its own
   // scope rather than the one Compose cancels on dispose.
   val scope = remember { CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate) }
@@ -118,6 +138,11 @@ fun PlayerScreen(api: TvApi, target: PlayTarget, onExit: () -> Unit) {
 
   var tracksOpen by remember { mutableStateOf(false) }
   var diagnosticsOpen by remember { mutableStateOf(false) }
+  var sourcesOpen by remember { mutableStateOf(false) }
+  var qualityOpen by remember { mutableStateOf(false) }
+  // A source switch that has not landed yet: what to retry, and where to go back to.
+  var switchTarget by remember { mutableStateOf<String?>(null) }
+  var previousSourceId by remember { mutableStateOf<String?>(null) }
   // The button that opened a panel takes the remote back once the panel and its focus trap are
   // gone; the request waits for the frame that removed them.
   var restoreFocus by remember { mutableStateOf<FocusRequester?>(null) }
@@ -138,6 +163,10 @@ fun PlayerScreen(api: TvApi, target: PlayTarget, onExit: () -> Unit) {
 
   val tracksFocus = remember { FocusRequester() }
   val tracksEntry = remember { FocusRequester() }
+  val sourcesFocus = remember { FocusRequester() }
+  val sourcesEntry = remember { FocusRequester() }
+  val qualityFocus = remember { FocusRequester() }
+  val qualityEntry = remember { FocusRequester() }
   val diagnosticsFocus = remember { FocusRequester() }
   val playFocus = remember { FocusRequester() }
   val nextFocus = remember { FocusRequester() }
@@ -148,7 +177,8 @@ fun PlayerScreen(api: TvApi, target: PlayTarget, onExit: () -> Unit) {
     // the same frame lets the removal take the focus back to the OSD's first control on a device,
     // so the request waits a frame the way `SidePanel` does when it opens.
     awaitFrame()
-    runCatching { target.requestFocus() }
+    // A failed start brings the error panel up in the meantime; that panel owns the remote then.
+    if (state.error == null) runCatching { target.requestFocus() }
     restoreFocus = null
   }
 
@@ -221,6 +251,10 @@ fun PlayerScreen(api: TvApi, target: PlayTarget, onExit: () -> Unit) {
     nextCard = false
     tracksOpen = false
     diagnosticsOpen = false
+    sourcesOpen = false
+    qualityOpen = false
+    switchTarget = null
+    previousSourceId = null
     cues = emptyList()
   }
 
@@ -231,6 +265,41 @@ fun PlayerScreen(api: TvApi, target: PlayTarget, onExit: () -> Unit) {
     val type = target.subtitleType
     val id = target.subtitleTarget
     addonSubtitles = if (type != null && id != null) runCatching { api.subtitles(type, id) }.getOrDefault(emptyList()) else emptyList()
+  }
+
+  // The sources the caller offers in its own order; an addon's notice is not a source. A library
+  // file has none, so both the button and the panel stay away.
+  val offeredSources = sources.filterNot { Streams.isAddonNotice(it) }
+  val playingSource = offeredSources.firstOrNull { it.sourceId == state.sourceId }
+  val sourcesShown = offeredSources.size > 1 || sourcesLoading
+  val quality = qualityChoice(state.quality, state.mode, state.copyVideo)
+
+  /** Choosing a row: the one already playing only closes the panel, any other starts a new session. */
+  fun chooseSource(stream: StreamDto) {
+    sourcesOpen = false
+    restoreFocus = sourcesFocus
+    if (stream.sourceId == state.sourceId) return
+    previousSourceId = state.sourceId
+    switchTarget = stream.sourceId
+    scope.launch {
+      // The addon subtitle ids are minted per session, so the new one gets fresh ones.
+      readAccount()
+      controller.switchSource(stream.sourceId, addonSubtitles, settings.audioLanguage, settings.subtitleLanguage)
+    }
+  }
+
+  fun chooseQuality(quality: Int?) {
+    qualityOpen = false
+    restoreFocus = qualityFocus
+    controller.selectQuality(quality)
+  }
+
+  // Once a session has landed, the switch it came from is no longer something to go back from.
+  LaunchedEffect(state.started) {
+    if (state.started) {
+      switchTarget = null
+      previousSourceId = null
+    }
   }
 
   LaunchedEffect(attempt) {
@@ -420,6 +489,10 @@ fun PlayerScreen(api: TvApi, target: PlayTarget, onExit: () -> Unit) {
     else -> stringResource(R.string.tv_subtitle_embedded)
   }
   val subtitleText = activeCue(cues, position)?.takeIf { it.isNotBlank() }
+  // The Sources panel opens on the row that is playing; without it, on the first row.
+  val sourcesIndex = offeredSources.indexOfFirst { it.sourceId == state.sourceId }.let { if (it >= 0) it else 0 }
+  val sourcesTitle = stringResource(R.string.sources_heading)
+  val qualityText = qualityLabel(quality)
 
   PlayerOverlayShell(
     position = position,
@@ -430,7 +503,7 @@ fun PlayerScreen(api: TvApi, target: PlayTarget, onExit: () -> Unit) {
     eyebrow = if (state.started) stringResource(pathLabel(diagPath(state.mode, state.copyAudio))) else "",
     playFocus = playFocus,
     seekKept = state.seekKept,
-    modal = tracksOpen || diagnosticsOpen || nextCard || state.error != null,
+    modal = tracksOpen || diagnosticsOpen || sourcesOpen || qualityOpen || nextCard || state.error != null,
     onSeek = { controller.seekTo(it) },
     onTogglePause = { if (playing) exoPlayer.pause() else exoPlayer.play() },
     onExit = leave,
@@ -438,6 +511,14 @@ fun PlayerScreen(api: TvApi, target: PlayTarget, onExit: () -> Unit) {
     tracksText = tracksButtonText(state.audioTrack?.language),
     tracksLabel = stringResource(R.string.tv_tracks_title),
     tracksFocus = tracksFocus,
+    onSources = if (sourcesShown) ({ sourcesOpen = true }) else null,
+    sourcesText = sourcesTitle,
+    sourcesLabel = sourcesTitle,
+    sourcesFocus = sourcesFocus,
+    onQuality = { qualityOpen = true },
+    qualityText = qualityText,
+    qualityLabel = qualityText,
+    qualityFocus = qualityFocus,
     onNext = if (currentNext != null) ({ startNext() }) else null,
     nextLabel = stringResource(R.string.player_next_episode),
     onDiagnostics = { diagnosticsOpen = true },
@@ -496,6 +577,42 @@ fun PlayerScreen(api: TvApi, target: PlayTarget, onExit: () -> Unit) {
         )
       }
 
+      if (sourcesOpen) {
+        SourcesPanel(
+          streams = offeredSources,
+          focusIndex = sourcesIndex,
+          onChoose = { chooseSource(it) },
+          onClose = {
+            sourcesOpen = false
+            restoreFocus = sourcesFocus
+          },
+          default = Streams.pickDefaultStream(offeredSources),
+          playing = playingSource,
+          asking = sourcesLoading,
+          emptyText = stringResource(R.string.sources_none),
+          failureText = stringResource(R.string.tv_load_error),
+          initialFocus = sourcesEntry,
+        )
+      }
+
+      if (qualityOpen) {
+        PlayerQualityPanel(
+          choice = quality,
+          onOriginal = { chooseQuality(null) },
+          onHeight = { chooseQuality(it) },
+          onForce = {
+            qualityOpen = false
+            restoreFocus = qualityFocus
+            controller.escalate()
+          },
+          onClose = {
+            qualityOpen = false
+            restoreFocus = qualityFocus
+          },
+          initialFocus = qualityEntry,
+        )
+      }
+
       if (nextCard && currentNext != null) {
         Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.35f)), contentAlignment = Alignment.BottomEnd) {
           Box(Modifier.padding(48.dp)) {
@@ -513,20 +630,36 @@ fun PlayerScreen(api: TvApi, target: PlayTarget, onExit: () -> Unit) {
       }
 
       state.error?.let {
+        val failedSource = switchTarget
+        val previousSource = previousSourceId
         ErrorPanel(
           onRetry = {
             // Try again always re-reads the account: the addon subtitle ids are minted per sign-in
             // session and short-lived, so a started session cannot reuse the ones it began with.
             scope.launch {
-              playerRetry(
-                started = state.started,
-                readAccount = { readAccount() },
-                restart = { controller.retry(addonSubtitles, settings.audioLanguage, settings.subtitleLanguage) },
-                startOver = { attempt++ },
-              )
+              if (failedSource != null) {
+                // Try again is the new source, not the one the player started with.
+                readAccount()
+                controller.switchSource(failedSource, addonSubtitles, settings.audioLanguage, settings.subtitleLanguage)
+              } else {
+                playerRetry(
+                  started = state.started,
+                  readAccount = { readAccount() },
+                  restart = { controller.retry(addonSubtitles, settings.audioLanguage, settings.subtitleLanguage) },
+                  startOver = { attempt++ },
+                )
+              }
             }
           },
           onBack = leave,
+          onBackToSource = previousSource?.let { back ->
+            {
+              scope.launch {
+                readAccount()
+                controller.switchSource(back, addonSubtitles, settings.audioLanguage, settings.subtitleLanguage)
+              }
+            }
+          },
         )
       }
     },

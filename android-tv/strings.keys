@@ -141,3 +141,11 @@ tv.signOutConfirm
 tv.passthrough
 tv.versionRow
 tv.versionMismatch
+player.quality
+player.qualityOriginal
+tv.nowPlaying
+tv.forceConversion
+tv.forceConversionNote
+tv.preferConversion
+tv.preferConversionNote
+tv.backToSource

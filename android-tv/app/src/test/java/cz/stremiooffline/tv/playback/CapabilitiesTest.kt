@@ -68,5 +68,22 @@ class CapabilitiesTest {
 
     assertEquals(listOf("H.264", "HEVC", "AAC", "AC-3"), decodedLabels(capabilities))
     assertEquals(listOf("E-AC-3"), passthroughLabels(capabilities))
+
+  @Test
+  fun `the browser view keeps the codecs and drops every native list`() {
+    val capabilities = capabilitiesFrom(
+      listOf(CodecInfo("video/avc", false, emptyList()), CodecInfo("audio/ac3", false, emptyList())),
+      setOf("ac3"),
+    )
+
+    val browser = browserCapabilities(capabilities)
+
+    assertTrue(browser.h264)
+    assertTrue(browser.ac3)
+    assertTrue(browser.containers.isEmpty())
+    assertTrue(browser.audioDecode.isEmpty())
+    assertTrue(browser.audioPassthrough.isEmpty())
+    assertTrue(browser.subtitles.isEmpty())
+    assertTrue(browser.deepColor.isEmpty())
   }
 }

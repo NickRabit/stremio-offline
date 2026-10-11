@@ -102,6 +102,36 @@ class CatalogSourcesTest {
     compose.onNodeWithTag(TagCatalogSources).assertTextContains("Sources · 2")
   }
 
+  // The player's own Sources panel is fed by the detail while the addons are still answering.
+  @Test
+  fun `the detail hands the caller the merged list and the loading flag`() {
+    val api = FakeTvApi()
+    val beta = twoAddons(api)
+    val reported = mutableListOf<OfferedSources>()
+    compose.setContent {
+      CatalogDetailScreen(
+        api = api,
+        args = CatalogDetailArgs(MetaDto(id = "tt1", type = "movie", name = "It"), "Cinemeta", "movie"),
+        imageUrl = { null },
+        onPlay = {},
+        onBack = {},
+        onSources = { reported += it },
+      )
+    }
+    compose.waitUntil(5_000) { api.streamsCompleted.contains("movie:tt1|alpha") }
+    compose.waitForIdle()
+
+    assertEquals(setOf("srcA"), reported.last().streams.map { it.sourceId }.toSet())
+    assertTrue(reported.last().loading)
+
+    beta.complete(Unit)
+    compose.waitUntil(5_000) { api.streamsCompleted.contains("movie:tt1|beta") }
+    compose.waitForIdle()
+
+    assertEquals(setOf("srcA", "srcB"), reported.last().streams.map { it.sourceId }.toSet())
+    assertTrue(!reported.last().loading)
+  }
+
   @Test
   fun `a better source that lands while the rest are still coming becomes the default`() {
     val api = FakeTvApi()

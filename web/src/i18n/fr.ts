@@ -1581,4 +1581,10 @@ export const fr: Catalog = {
   "tv.passthrough": "Transmission directe",
   "tv.versionRow": "App {app} · serveur {server}",
   "tv.versionMismatch": "Le serveur exécute {server}, cette app est {app}. Mettez à jour la plus ancienne.",
+  "tv.nowPlaying": "En lecture",
+  "tv.forceConversion": "Convertir sur le serveur",
+  "tv.forceConversionNote": "À utiliser quand l’image ou le son passe mal. Le serveur ré-encode la vidéo.",
+  "tv.preferConversion": "Préférer la conversion sur le serveur",
+  "tv.preferConversionNote": "Chaque lecture démarre comme dans un navigateur : le serveur convertit ce que la télévision ne peut pas lire. Démarrage plus lent et charge serveur plus élevée.",
+  "tv.backToSource": "Revenir à la source précédente",
 };

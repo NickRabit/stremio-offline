@@ -6,6 +6,7 @@ import cz.stremiooffline.tv.data.BrowseItem
 import cz.stremiooffline.tv.data.BrowseResult
 import cz.stremiooffline.tv.data.CatalogDto
 import cz.stremiooffline.tv.data.ClientCapabilitiesDto
+import cz.stremiooffline.tv.data.CopyDto
 import cz.stremiooffline.tv.data.DownloadResult
 import cz.stremiooffline.tv.data.DownloadsResponseDto
 import cz.stremiooffline.tv.data.FavoriteToggleDto
@@ -255,15 +256,25 @@ open class FakeTvApi : TvApi {
     time: Double,
     subtitleIds: List<String>,
   ): PlaybackDescriptorDto {
+    startedSources += sourceId
+    startedTimes += time
+    startedCapabilities += capabilities
     startedSubtitleIds += subtitleIds
     return startAnswer
   }
 
   var startAnswer: PlaybackDescriptorDto = PlaybackDescriptorDto(id = "p1", url = "stream.mp4")
   val startedSubtitleIds: MutableList<List<String>> = mutableListOf()
+  /** Every start, in order: which source, at what time and with what the client claimed. */
+  val startedSources: MutableList<String> = mutableListOf()
+  val startedTimes: MutableList<Double> = mutableListOf()
+  val startedCapabilities: MutableList<ClientCapabilitiesDto> = mutableListOf()
+  val deletedIds: MutableList<String> = mutableListOf()
 
-  override suspend fun trackPlayback(id: String, change: TrackChange): PlaybackDescriptorDto =
-    trackAnswer ?: PlaybackDescriptorDto(id = id, url = "stream.mp4")
+  override suspend fun trackPlayback(id: String, change: TrackChange): PlaybackDescriptorDto {
+    trackChanges += change
+    return trackAnswer ?: PlaybackDescriptorDto(id = id, url = "stream.mp4")
+  }
 
   var trackAnswer: PlaybackDescriptorDto? = null
   val trackChanges: MutableList<TrackChange> = mutableListOf()
@@ -303,12 +314,26 @@ open class FakeTvApi : TvApi {
   override suspend fun seekPlayback(id: String, time: Double): PlaybackDescriptorDto =
     PlaybackDescriptorDto(id = id, url = "stream.m3u8", playlist = true, offset = time)
 
-  override suspend fun escalatePlayback(id: String, time: Double): PlaybackDescriptorDto =
-    PlaybackDescriptorDto(id = id, url = "escalated.m3u8", playlist = true, offset = time)
+  val escalatedTimes: MutableList<Double> = mutableListOf()
+
+  /** A forced conversion, as the server answers it: no copy left in the session. */
+  override suspend fun escalatePlayback(id: String, time: Double): PlaybackDescriptorDto {
+    escalatedTimes += time
+    return PlaybackDescriptorDto(
+      id = id,
+      mode = "transcode",
+      url = "escalated.m3u8",
+      playlist = true,
+      offset = time,
+      copy = CopyDto(video = false, audio = false),
+    )
+  }
 
   override suspend fun pingPlayback(id: String) {}
 
-  override suspend fun deletePlayback(id: String) {}
+  override suspend fun deletePlayback(id: String) {
+    deletedIds += id
+  }
 
   override suspend fun saveProgress(
     key: String,

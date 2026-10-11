@@ -34,6 +34,7 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
@@ -67,6 +68,8 @@ const val TAG_OSD_SEEK_FORWARD = "osd_seek_forward"
 const val TAG_OSD_PLAY = "osd_play"
 const val TAG_OSD_BUBBLE = "osd_bubble"
 const val TAG_OSD_TRACKS = "osd_tracks"
+const val TAG_OSD_SOURCES = "osd_sources"
+const val TAG_OSD_QUALITY = "osd_quality"
 const val TAG_OSD_NEXT = "osd_next"
 const val TAG_OSD_DIAG = "osd_diag"
 const val TAG_OSD_TIMELINE = "osd_timeline"
@@ -99,7 +102,7 @@ fun LoadingOverlay(title: String) {
 }
 
 @Composable
-fun ErrorPanel(onRetry: () -> Unit, onBack: () -> Unit) {
+fun ErrorPanel(onRetry: () -> Unit, onBack: () -> Unit, onBackToSource: (() -> Unit)? = null) {
   val retryFocus = remember { FocusRequester() }
   androidx.activity.compose.BackHandler { onBack() }
   androidx.compose.runtime.LaunchedEffect(Unit) { runCatching { retryFocus.requestFocus() } }
@@ -135,6 +138,9 @@ fun ErrorPanel(onRetry: () -> Unit, onBack: () -> Unit) {
           modifier = Modifier.focusRequester(retryFocus),
           kind = FocusButtonKind.Primary,
         )
+        if (onBackToSource != null) {
+          FocusButton(stringResource(R.string.tv_back_to_source), onClick = onBackToSource)
+        }
         FocusButton(stringResource(R.string.tv_back), onClick = onBack)
       }
     }
@@ -159,6 +165,16 @@ fun Osd(
   tracksText: String = "",
   tracksLabel: String = "",
   tracksFocus: FocusRequester? = null,
+  /** The Sources panel, offered only when the title has more than one source. */
+  onSources: (() -> Unit)? = null,
+  sourcesText: String = "",
+  sourcesLabel: String = "",
+  sourcesFocus: FocusRequester? = null,
+  /** The Quality / conversion panel; null hides the button. */
+  onQuality: (() -> Unit)? = null,
+  qualityText: String = "",
+  qualityLabel: String = "",
+  qualityFocus: FocusRequester? = null,
   onNext: (() -> Unit)? = null,
   nextLabel: String = "",
   onDiagnostics: () -> Unit = {},
@@ -226,6 +242,26 @@ fun Osd(
           onActivity = onActivity,
           focusRequester = tracksFocus,
         ) { }
+        if (onSources != null) {
+          RoundButton(
+            label = sourcesLabel,
+            text = sourcesText.ifBlank { null },
+            tag = TAG_OSD_SOURCES,
+            onClick = onSources,
+            onActivity = onActivity,
+            focusRequester = sourcesFocus,
+          ) { SourcesIcon() }
+        }
+        if (onQuality != null) {
+          RoundButton(
+            label = qualityLabel,
+            text = qualityText.ifBlank { null },
+            tag = TAG_OSD_QUALITY,
+            onClick = onQuality,
+            onActivity = onActivity,
+            focusRequester = qualityFocus,
+          ) { }
+        }
         if (onNext != null) {
           RoundButton(
             label = nextLabel,
@@ -402,6 +438,19 @@ private fun SeekIcon(forward: Boolean) {
       useCenter = false,
       style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round),
     )
+  }
+}
+
+/** The Sources mark: a list whose top row is the one playing. */
+@Composable
+private fun SourcesIcon() {
+  Canvas(Modifier.size(18.dp)) {
+    val bar = 3.dp.toPx()
+    val gap = 2.5.dp.toPx()
+    val radius = CornerRadius(bar / 2f, bar / 2f)
+    drawRoundRect(Color.White, topLeft = Offset(0f, 0f), size = Size(size.width * 0.62f, bar), cornerRadius = radius)
+    drawRoundRect(Color.White.copy(alpha = 0.55f), topLeft = Offset(0f, bar + gap), size = Size(size.width * 0.85f, bar), cornerRadius = radius)
+    drawRoundRect(Color.White.copy(alpha = 0.55f), topLeft = Offset(0f, (bar + gap) * 2f), size = Size(size.width, bar), cornerRadius = radius)
   }
 }
 

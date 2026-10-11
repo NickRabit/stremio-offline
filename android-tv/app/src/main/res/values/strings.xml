@@ -148,4 +148,12 @@
   <string name="tv_passthrough">Passthrough</string>
   <string name="tv_version_row">App %1$s · server %2$s</string>
   <string name="tv_version_mismatch">The server runs %1$s, this app is %2$s. Update the one that is older.</string>
+  <string name="player_quality">Quality</string>
+  <string name="player_quality_original">Original</string>
+  <string name="tv_now_playing">Playing</string>
+  <string name="tv_force_conversion">Convert on the server</string>
+  <string name="tv_force_conversion_note">Use when the picture or sound plays badly. The server re-encodes the video.</string>
+  <string name="tv_prefer_conversion">Prefer server conversion</string>
+  <string name="tv_prefer_conversion_note">Every playback starts like a browser, so the server converts what the TV cannot play. Slower to start and heavier on the server.</string>
+  <string name="tv_back_to_source">Back to the previous source</string>
 </resources>

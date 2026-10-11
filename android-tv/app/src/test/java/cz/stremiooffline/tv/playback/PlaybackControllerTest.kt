@@ -75,7 +75,14 @@ class PlaybackControllerTest {
 
     override suspend fun escalatePlayback(id: String, time: Double): PlaybackDescriptorDto {
       escalates += time
-      return descriptor.copy(mode = "transcode", url = "transcode.m3u8", offset = time, playlist = true)
+      // The server never copies this session again once it is escalated.
+      return descriptor.copy(
+        mode = "transcode",
+        url = "transcode.m3u8",
+        offset = time,
+        playlist = true,
+        copy = CopyDto(video = false, audio = false),
+      )
     }
 
     override suspend fun pingPlayback(id: String) {
@@ -590,4 +597,110 @@ class PlaybackControllerTest {
 
   private fun trackList(json: String): List<JsonObject> =
     Json.parseToJsonElement(json).jsonArray.map { it.jsonObject }
+
+  // --- Source switching and the Quality panel ------------------------------------------------
+
+  private fun playing(controller: PlaybackController, at: Double) {
+    controller.onPlayerReady()
+    controller.onPlayerPosition(at)
+    controller.onPlaying()
+  }
+
+  @Test
+  fun `a source switch saves, deletes and starts at the absolute position`() = runTest {
+    val api = FakeApi()
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+    controller.start("srcA", "movie:tt1", "It", null, resume = false)
+    runCurrent()
+    playing(controller, 300.0)
+    api.calls.clear()
+
+    controller.switchSource("srcB")
+    runCurrent()
+
+    assertEquals(listOf("save", "delete", "start"), api.calls)
+    assertEquals("srcB", api.started.last().first)
+    assertEquals(300.0, api.started.last().third, 0.001)
+    // The same progress key and title carry over to the new source.
+    assertEquals("movie:tt1", api.saved.last().first)
+  }
+
+  @Test
+  fun `a failed switch can go back to the source that was playing`() = runTest {
+    val api = FakeApi()
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+    controller.start("srcA", "movie:tt1", "It", null, resume = false)
+    runCurrent()
+    playing(controller, 300.0)
+
+    api.failStart = true
+    controller.switchSource("srcB")
+    runCurrent()
+    assertEquals(PlaybackError.Network, controller.state.value.error)
+    assertEquals("srcB", api.started.last().first)
+
+    api.failStart = false
+    controller.switchSource("srcA")
+    runCurrent()
+
+    assertEquals("srcA", api.started.last().first)
+    assertEquals(300.0, api.started.last().third, 0.001)
+    assertEquals(null, controller.state.value.error)
+  }
+
+  @Test
+  fun `a chosen height changes the track at the absolute position`() = runTest {
+    val api = FakeApi()
+    api.trackAnswer = api.descriptor.copy(
+      mode = "transcode",
+      url = "720.m3u8",
+      playlist = true,
+      copy = CopyDto(video = false, audio = true),
+      quality = 720,
+    )
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+    controller.start("src", "movie:tt1", "It", null, resume = false)
+    runCurrent()
+    playing(controller, 500.0)
+
+    controller.selectQuality(720)
+    runCurrent()
+
+    assertEquals(listOf(TrackChange.Quality(720, 500.0)), api.tracks)
+    assertEquals(720, controller.state.value.quality)
+    assertEquals(QualityChoice.P720, qualityChoice(controller.state.value.quality, controller.state.value.mode, controller.state.value.copyVideo))
+  }
+
+  @Test
+  fun `the descriptor derives the quality choice`() {
+    assertEquals(QualityChoice.Original, qualityChoice(null, PlaybackMode.Direct, copyVideo = true))
+    assertEquals(QualityChoice.Original, qualityChoice(null, PlaybackMode.Remux, copyVideo = true))
+    // Audio-only conversion still leaves the picture alone, so it is the server's own choice.
+    assertEquals(QualityChoice.Original, qualityChoice(null, PlaybackMode.Transcode, copyVideo = true))
+    assertEquals(QualityChoice.Force, qualityChoice(null, PlaybackMode.Transcode, copyVideo = false))
+    assertEquals(QualityChoice.P480, qualityChoice(480, PlaybackMode.Transcode, copyVideo = false))
+    assertEquals(QualityChoice.P1080, qualityChoice(1080, PlaybackMode.Transcode, copyVideo = false))
+  }
+
+  @Test
+  fun `Original after a forced conversion starts a new session at the same position`() = runTest {
+    val api = FakeApi()
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+    controller.start("src", "movie:tt1", "It", null, resume = false)
+    runCurrent()
+    playing(controller, 300.0)
+
+    controller.escalate()
+    runCurrent()
+    assertEquals(1, api.escalates.size)
+    assertEquals(QualityChoice.Force, qualityChoice(controller.state.value.quality, controller.state.value.mode, controller.state.value.copyVideo))
+
+    api.calls.clear()
+    controller.selectQuality(null)
+    runCurrent()
+
+    assertEquals(listOf("save", "delete", "start"), api.calls)
+    assertEquals(300.0, api.started.last().third, 0.001)
+    assertEquals(QualityChoice.Original, qualityChoice(controller.state.value.quality, controller.state.value.mode, controller.state.value.copyVideo))
+  }
 }

@@ -51,6 +51,9 @@ sealed interface TrackChange {
   data class Audio(val index: Int, override val time: Double, val subtitleOff: Boolean = false) : TrackChange
   /** A null index asks the server for Off. */
   data class Subtitle(val index: Int?, override val time: Double) : TrackChange
+  /** A chosen picture height; null is the server's own choice. A height always means a real
+   *  transcode at that height, which is what a slow network needs. */
+  data class Quality(val quality: Int?, override val time: Double) : TrackChange
 }
 
 /** One read of the progressively written sidecar: its WebVTT plus how far it reaches. */
@@ -81,6 +84,8 @@ data class PlaybackDescriptorDto(
   val video: String? = null,
   val audio: String? = null,
   val copy: CopyDto? = null,
+  /** The picture height that was chosen, or null for the server's own choice. */
+  val quality: Int? = null,
   /** `POST /api/playback` maps each offered addon subtitle id to the id this session must use. */
   val subtitleIds: Map<String, String> = emptyMap(),
 )

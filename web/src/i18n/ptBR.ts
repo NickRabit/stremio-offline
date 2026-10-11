@@ -1581,4 +1581,10 @@ export const ptBR: Catalog = {
   "tv.passthrough": "Repasse",
   "tv.versionRow": "App {app} · servidor {server}",
   "tv.versionMismatch": "O servidor executa {server}, este app é {app}. Atualize o que for mais antigo.",
+  "tv.nowPlaying": "Reproduzindo",
+  "tv.forceConversion": "Converter no servidor",
+  "tv.forceConversionNote": "Use quando a imagem ou o som reproduzir mal. O servidor recodifica o vídeo.",
+  "tv.preferConversion": "Preferir conversão no servidor",
+  "tv.preferConversionNote": "Cada reprodução começa como num navegador, então o servidor converte o que a TV não consegue reproduzir. Início mais lento e mais carga no servidor.",
+  "tv.backToSource": "Voltar à fonte anterior",
 };

@@ -77,6 +77,9 @@ data class PlaybackState(
   val duration: Double = 0.0,
   val mode: PlaybackMode = PlaybackMode.Direct,
   val copyAudio: Boolean = true,
+  val copyVideo: Boolean = true,
+  /** The picture height that was chosen, or null for the server's own choice. */
+  val quality: Int? = null,
   val audioTracks: List<DescriptorTrack> = emptyList(),
   val audioTrackIndex: Int = 0,
   val subtitleTracks: List<DescriptorTrack> = emptyList(),
@@ -123,6 +126,8 @@ class PlaybackController(
   private var duration = 0.0
   private var mode = PlaybackMode.Direct
   private var copyAudio = true
+  private var copyVideo = true
+  private var quality: Int? = null
   private var audioTracks: List<DescriptorTrack> = emptyList()
   private var subtitleTracks: List<DescriptorTrack> = emptyList()
   private var subtitle: SubtitleChoice = SubtitleChoice.Off
@@ -255,6 +260,8 @@ class PlaybackController(
     offset = 0.0
     duration = 0.0
     copyAudio = true
+    copyVideo = true
+    quality = null
     mode = PlaybackMode.Direct
     audioTracks = emptyList()
     subtitleTracks = emptyList()
@@ -369,6 +376,44 @@ class PlaybackController(
     }
   }
 
+  /**
+   * Another source of the same title. A source switch is a new session: the outgoing one is saved
+   * and deleted before the new one starts, at the absolute position the viewer is watching.
+   */
+  fun switchSource(
+    sourceId: String,
+    subtitles: List<AddonSubtitleDto> = plan?.subtitles ?: emptyList(),
+    audioPreference: String? = plan?.audioPreference,
+    subtitlePreference: String? = plan?.subtitlePreference,
+  ) {
+    val current = plan ?: return
+    begin(
+      current.copy(
+        sourceId = sourceId,
+        explicitTime = position,
+        resume = false,
+        subtitles = subtitles,
+        audioPreference = audioPreference,
+        subtitlePreference = subtitlePreference,
+        mint = null,
+      ),
+    )
+  }
+
+  /**
+   * A chosen picture height, or Original. Original after a forced conversion cannot be undone
+   * inside the session -- the server never copies that source again -- so it starts a new one.
+   */
+  fun selectQuality(quality: Int?) {
+    if (stopped || sessionId == null) return
+    if (quality == null && qualityChoice(this.quality, mode, copyVideo) == QualityChoice.Force) {
+      val current = plan ?: return
+      begin(current.copy(explicitTime = position, resume = false))
+      return
+    }
+    track(TrackChange.Quality(quality, position), addon = null)
+  }
+
   /** A chosen subtitle row. The four cases live in [subtitleRoute] and [subtitleNeedsServer]. */
   fun selectSubtitle(choice: SubtitleChoice) {
     if (stopped || sessionId == null) return
@@ -440,6 +485,24 @@ class PlaybackController(
       val descriptor = runCatching { api.escalatePlayback(id, position) }.getOrNull()
       if (stopped || mine != generation) return@launch
       if (descriptor != null) apply(descriptor, target = position)
+      else _state.update { it.copy(error = PlaybackError.Decoder) }
+    }
+  }
+
+  /**
+   * The viewer asked for a real conversion. The server stops copying this session for good, so the
+   * only way back to a copy is a new session; a failure here is a decoder error like any other.
+   */
+  fun escalate() {
+    if (stopped || sessionId == null) return
+    val id = sessionId ?: return
+    val at = position
+    val mine = generation
+    escalated = true
+    scope.launch {
+      val descriptor = runCatching { api.escalatePlayback(id, at) }.getOrNull()
+      if (stopped || mine != generation) return@launch
+      if (descriptor != null) apply(descriptor, target = at)
       else _state.update { it.copy(error = PlaybackError.Decoder) }
     }
   }
@@ -539,6 +602,8 @@ class PlaybackController(
     duration = descriptor.duration ?: duration
     mode = modeOf(descriptor.mode)
     copyAudio = descriptor.copy?.audio ?: true
+    copyVideo = descriptor.copy?.video ?: true
+    quality = descriptor.quality
     audioTracks = descriptorTracks(descriptor.audioTracks)
     subtitleTracks = descriptorTracks(descriptor.subtitleTracks)
     val chosen = when {
@@ -567,6 +632,8 @@ class PlaybackController(
         duration = duration,
         mode = mode,
         copyAudio = copyAudio,
+        copyVideo = copyVideo,
+        quality = quality,
         audioTracks = audioTracks,
         audioTrackIndex = audioChoice,
         subtitleTracks = subtitleTracks,
@@ -636,4 +703,21 @@ fun subtitleNeedsServer(currentServer: Boolean, next: SubtitleRoute): Boolean =
 private fun TrackChange.withTime(time: Double): TrackChange = when (this) {
   is TrackChange.Audio -> copy(time = time)
   is TrackChange.Subtitle -> copy(time = time)
+  is TrackChange.Quality -> copy(time = time)
+}
+
+/** The Quality panel's rows, re-derived from the answered descriptor. */
+enum class QualityChoice { Original, P1080, P720, P480, Force }
+
+/**
+ * Which row the Quality panel ticks. A chosen height wins; otherwise a full picture transcode is
+ * the forced conversion, and everything else -- direct, remux, audio-only -- is the server's own
+ * choice.
+ */
+fun qualityChoice(quality: Int?, mode: PlaybackMode, copyVideo: Boolean): QualityChoice = when {
+  quality == 1080 -> QualityChoice.P1080
+  quality == 720 -> QualityChoice.P720
+  quality == 480 -> QualityChoice.P480
+  mode == PlaybackMode.Transcode && !copyVideo -> QualityChoice.Force
+  else -> QualityChoice.Original
 }

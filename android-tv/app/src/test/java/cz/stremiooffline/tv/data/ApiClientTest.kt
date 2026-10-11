@@ -267,6 +267,42 @@ class ApiClientTest {
   }
 
   @Test
+  fun `a chosen quality posts the height and the position`() = runTest {
+    server.enqueue(MockResponse().setBody(DESCRIPTOR))
+    client(start()).trackPlayback("p1", TrackChange.Quality(720, 120.0))
+
+    val request = server.takeRequest()
+    assertEquals("/api/playback/p1/track", request.path)
+    assertEquals("""{"quality":720,"time":120.0}""", request.body.readUtf8())
+  }
+
+  @Test
+  fun `going back to the original posts the explicit null quality`() = runTest {
+    server.enqueue(MockResponse().setBody(DESCRIPTOR))
+    client(start()).trackPlayback("p1", TrackChange.Quality(null, 60.0))
+
+    assertEquals("""{"quality":null,"time":60.0}""", server.takeRequest().body.readUtf8())
+  }
+
+  @Test
+  fun `browser capabilities leave the native lists out of the start body`() = runTest {
+    val address = start()
+    val api = client(address)
+    val tv = ClientCapabilitiesDto(h264 = true, containers = listOf("mp4", "mkv"), audioDecode = listOf("ac3"))
+    server.enqueue(MockResponse().setBody(DESCRIPTOR))
+    api.startPlayback("src", tv, 0.0)
+    val asTv = server.takeRequest().body.readUtf8()
+    assertTrue(asTv, asTv.contains(""""containers":["mp4","mkv"]"""))
+
+    server.enqueue(MockResponse().setBody(DESCRIPTOR))
+    api.startPlayback("src", cz.stremiooffline.tv.playback.browserCapabilities(tv), 0.0)
+    val asBrowser = server.takeRequest().body.readUtf8()
+    assertTrue(asBrowser, asBrowser.contains(""""h264":true"""))
+    assertTrue(asBrowser, !asBrowser.contains("containers"))
+    assertTrue(asBrowser, !asBrowser.contains("audioDecode"))
+  }
+
+  @Test
   fun `starting a session registers every addon subtitle id`() = runTest {
     server.enqueue(MockResponse().setBody("""{"id":"p1","url":"/x","subtitleIds":{"a":"b"}}"""))
     val descriptor = client(start()).startPlayback("src", ClientCapabilitiesDto(), 0.0, listOf("one", "two"))

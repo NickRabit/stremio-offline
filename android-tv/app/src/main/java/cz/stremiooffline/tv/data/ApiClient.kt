@@ -200,6 +200,7 @@ class ApiClient(
         json.encodeToString(TrackAudioRequest.serializer(), TrackAudioRequest(change.index, change.time))
       }
       is TrackChange.Subtitle -> json.encodeToString(TrackSubtitleRequest.serializer(), TrackSubtitleRequest(change.index, change.time))
+      is TrackChange.Quality -> trackJson.encodeToString(TrackQualityRequest.serializer(), TrackQualityRequest(change.quality, change.time))
     }
     return request(Request.Builder().url(address.resolve("/api/playback/$id/track")).post(payload.toRequestBody(mediaType)).build(), playbackClient)
       .decode<PlaybackDescriptorDto>() ?: throw ApiError(ApiFailure.Generic)
@@ -446,6 +447,9 @@ private data class TrackAudioOffRequest(val audio: Int, val subtitle: Int?, val 
 
 @Serializable
 private data class TrackSubtitleRequest(val subtitle: Int?, val time: Double)
+
+@Serializable
+private data class TrackQualityRequest(val quality: Int?, val time: Double)
 
 @Serializable
 private data class ProgressRequest(

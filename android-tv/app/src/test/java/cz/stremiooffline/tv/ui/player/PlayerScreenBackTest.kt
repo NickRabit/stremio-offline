@@ -86,6 +86,7 @@ class PlayerScreenBackTest {
     press(Key.DirectionRight)
     press(Key.DirectionRight)
     press(Key.DirectionRight)
+    press(Key.DirectionRight)
     press(Key.DirectionCenter)
   }
 
