@@ -13,10 +13,13 @@ import cz.stremiooffline.tv.data.DownloadDto
 import cz.stremiooffline.tv.data.HomeCard
 import cz.stremiooffline.tv.data.HomeResponseDto
 import cz.stremiooffline.tv.data.HomeRowStatus
+import cz.stremiooffline.tv.data.MetaDto
 import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.data.decodeHomeRow
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -61,6 +64,10 @@ data class HomeState(
   val dataVersion: Int = 0,
 )
 
+/** The hero's lazily-loaded metadata for one catalogue card, keyed by `type:id`. [meta] is the
+ *  title's own answer, or null when the card is a library one, the answer was empty or it failed. */
+data class HeroMeta(val key: String, val meta: MetaDto?)
+
 /** True when a row has something to draw: an empty, complete row is the only one left out. */
 fun drawnContent(content: RowContent): Boolean = when (content) {
   is RowContent.Cards -> content.items.isNotEmpty() || content.partial
@@ -79,11 +86,56 @@ class HomeViewModel(private val api: TvApi) : ViewModel() {
   var state by mutableStateOf(HomeState())
     private set
 
+  /** The focused catalogue card's metadata, or nothing while it is unknown. */
+  var hero by mutableStateOf<HeroMeta?>(null)
+    private set
+
   private var started = false
   private val pendingReveal = mutableSetOf<String>()
   private var revealJob: Job? = null
   private var loadJob: Job? = null
   private var requestCounter = 0
+  /** Answers already received, keyed by `type:id`; a second visit asks nothing again. Only the
+   *  most recent [HERO_CACHE_SIZE] titles are kept, and a failed ask is never stored. */
+  private val heroCache = object : LinkedHashMap<String, MetaDto>(16, 0.75f, true) {
+    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, MetaDto>?) =
+      size > HERO_CACHE_SIZE
+  }
+  private var heroJob: Job? = null
+  /** The account's interface language, read once for the session; a failure leaves it null. */
+  private var uiLanguageJob: Deferred<String?>? = null
+
+  private fun uiLanguage(): Deferred<String?> {
+    uiLanguageJob?.let { return it }
+    val job = viewModelScope.async { runCatching { api.settings().uiLanguage }.getOrNull() }
+    uiLanguageJob = job
+    return job
+  }
+
+  /**
+   * The hero asks one catalogue title for its own metadata. A cached title answers without a
+   * request; a new one replaces whatever the previous focus had in flight, so only the last
+   * focused card is ever asked.
+   */
+  fun heroMeta(type: String, id: String) {
+    val key = "$type:$id"
+    val cached = heroCache[key]
+    if (hero?.key != key) hero = HeroMeta(key, cached)
+    if (cached != null) return
+    heroJob?.cancel()
+    heroJob = viewModelScope.launch {
+      val language = uiLanguage().await()
+      val meta = try {
+        api.meta(type, id, language)
+      } catch (cancelled: CancellationException) {
+        throw cancelled
+      } catch (_: ApiError) {
+        null
+      }
+      if (meta != null) heroCache[key] = meta
+      if (hero?.key == key) hero = HeroMeta(key, meta)
+    }
+  }
 
   fun start() {
     if (started) return
@@ -262,6 +314,7 @@ class HomeViewModel(private val api: TvApi) : ViewModel() {
   }
 
   companion object {
+    private const val HERO_CACHE_SIZE = 60
     fun factory(api: TvApi) = viewModelFactory { initializer { HomeViewModel(api) } }
   }
 }

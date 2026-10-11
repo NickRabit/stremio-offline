@@ -57,6 +57,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -70,6 +71,7 @@ import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.data.DownloadDto
 import cz.stremiooffline.tv.data.ApiFailure
 import cz.stremiooffline.tv.data.HomeCard
+import cz.stremiooffline.tv.data.MetaDto
 import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.data.displayTitle
 import cz.stremiooffline.tv.data.episodeCodeText
@@ -82,12 +84,18 @@ import cz.stremiooffline.tv.ui.components.PosterCard
 import cz.stremiooffline.tv.ui.components.ShimmerCard
 import cz.stremiooffline.tv.ui.components.ShimmerCards
 import cz.stremiooffline.tv.ui.components.WideCard
+import cz.stremiooffline.tv.ui.settings.feedTypeOf
+import cz.stremiooffline.tv.ui.settings.typeTag
 import cz.stremiooffline.tv.ui.theme.Tokens
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 
 const val TagDownloadsStrip = "home_downloads_strip"
 const val TagBackdropTitle = "home_backdrop_title"
+const val TagBackdropHero = "home_backdrop_hero"
+
+/** How long focus has to rest on a card before the hero asks the catalogue about it. */
+const val HERO_META_DEBOUNCE_MS = 300L
 
 fun homeCardTag(key: String): String = "card:$key"
 
@@ -99,6 +107,10 @@ private const val StripId = "downloads"
 private val BackdropHeight = 300.dp
 private val RowsTop = 270.dp
 private val RowGap = 14.dp
+private val HeroColumnFraction = 0.62f
+private val HeroMetaLineHeight = 18.dp
+private val HeroDescriptionHeight = 52.dp
+private const val HeroCopyFadeMs = 200
 private const val PlaceholderCards = 5
 
 /**
@@ -142,10 +154,12 @@ fun HomeScreen(
       state.loading && state.rows.isEmpty() -> HomeLoading()
       else -> HomeBody(
         state = state,
+        hero = viewModel.hero,
         imageUrl = imageUrl,
         onAction = onAction,
         onReveal = viewModel::reveal,
         onRetry = viewModel::retry,
+        onHeroMeta = viewModel::heroMeta,
         onDownloads = { onHint(downloadsLater) },
       )
     }
@@ -208,10 +222,12 @@ private fun ErrorRetry(onRetry: () -> Unit, requester: FocusRequester) {
 @Composable
 private fun HomeBody(
   state: HomeState,
+  hero: HeroMeta?,
   imageUrl: (String?) -> String?,
   onAction: (HomeAction) -> Unit,
   onReveal: (String) -> Unit,
   onRetry: (String) -> Unit,
+  onHeroMeta: (String, String) -> Unit,
   onDownloads: () -> Unit,
 ) {
   val slots = state.rows.filter { drawnContent(it.content) }
@@ -239,6 +255,16 @@ private fun HomeBody(
   val focusedSlot = slots.getOrNull(focusedIndex)
   val focusedItems = (focusedSlot?.content as? RowContent.Cards)?.items.orEmpty()
   val focusedCard = focusedItems.getOrNull(focusedCardIndex.coerceIn(0, maxOf(0, focusedItems.lastIndex)))
+
+  // The hero asks the catalogue about the card focus comes to rest on: the wait restarts on every
+  // change, so a card crossed on the way to another one is never asked for.
+  val heroRef = focusedCard?.heroMetaRef()
+  LaunchedEffect(heroRef, focusedCard?.key) {
+    val ref = focusedCard?.heroMetaRef() ?: return@LaunchedEffect
+    delay(HERO_META_DEBOUNCE_MS)
+    onHeroMeta(ref.first, ref.second)
+  }
+  val heroMeta = hero?.takeIf { it.key == heroRef?.let { (type, id) -> "$type:$id" } }?.meta
 
   fun focusCard(index: Int, cardIndex: Int): Boolean {
     val rowId = rowIds.getOrNull(index) ?: return false
@@ -284,7 +310,7 @@ private fun HomeBody(
 
   Box(Modifier.fillMaxSize()) {
     if (focusedCard != null) {
-      Backdrop(row = focusedSlot, card = focusedCard, imageUrl = imageUrl)
+      Backdrop(row = focusedSlot, card = focusedCard, meta = heroMeta, imageUrl = imageUrl)
     }
 
     Box(
@@ -355,7 +381,7 @@ private fun HomeBody(
 }
 
 @Composable
-private fun Backdrop(row: HomeRowSlot?, card: HomeCard, imageUrl: (String?) -> String?) {
+private fun Backdrop(row: HomeRowSlot?, card: HomeCard, meta: MetaDto?, imageUrl: (String?) -> String?) {
   Box(Modifier.fillMaxWidth().height(BackdropHeight).clipToBounds()) {
     Crossfade(
       targetState = imageUrl(card.wideImage),
@@ -371,7 +397,14 @@ private fun Backdrop(row: HomeRowSlot?, card: HomeCard, imageUrl: (String?) -> S
     Box(
       Modifier
         .fillMaxSize()
-        .background(Brush.horizontalGradient(listOf(Tokens.Bg, Tokens.Bg.copy(alpha = 0.75f), Color.Transparent))),
+        .background(
+          Brush.horizontalGradient(
+            0f to Tokens.Bg,
+            0.55f to Tokens.Bg.copy(alpha = 0.85f),
+            0.8f to Tokens.Bg.copy(alpha = 0.25f),
+            1f to Color.Transparent,
+          ),
+        ),
     )
     Box(
       Modifier
@@ -380,7 +413,10 @@ private fun Backdrop(row: HomeRowSlot?, card: HomeCard, imageUrl: (String?) -> S
     )
 
     Column(
-      modifier = Modifier.padding(start = 32.dp, top = 48.dp).width(560.dp),
+      modifier = Modifier
+        .fillMaxWidth(HeroColumnFraction)
+        .testTag(TagBackdropHero)
+        .padding(start = 32.dp, top = 48.dp),
       verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
       if (row != null) {
@@ -392,21 +428,19 @@ private fun Backdrop(row: HomeRowSlot?, card: HomeCard, imageUrl: (String?) -> S
           letterSpacing = 1.6.sp,
         )
       }
+      val titleSize = heroTitleSize(card.displayTitle)
       Text(
         card.displayTitle,
         color = Tokens.Text,
-        fontSize = 34.sp,
-        lineHeight = 36.sp,
+        fontSize = titleSize,
+        lineHeight = (titleSize.value + 2).sp,
         fontWeight = FontWeight.ExtraBold,
         letterSpacing = (-1).sp,
         maxLines = 2,
         overflow = TextOverflow.Ellipsis,
         modifier = Modifier.testTag(TagBackdropTitle),
       )
-      val meta = listOfNotNull(card.yearText, card.episodeCodeText).joinToString(" · ")
-      if (meta.isNotEmpty()) {
-        Text(meta, color = Tokens.Muted, fontSize = 11.5.sp, fontWeight = FontWeight.Medium)
-      }
+      HeroCopy(line = heroMetaLine(card, meta), description = heroDescription(card, meta))
       card.progressFraction?.let { fraction ->
         val percent = (fraction * 100).roundToInt()
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
@@ -420,10 +454,60 @@ private fun Backdrop(row: HomeRowSlot?, card: HomeCard, imageUrl: (String?) -> S
   }
 }
 
+/** The title's size steps: a longer name gets a smaller face rather than a third line. */
+private fun heroTitleSize(title: String): TextUnit = when {
+  title.length <= 28 -> 34.sp
+  title.length <= 44 -> 30.sp
+  else -> 26.sp
+}
+
+/** The hero's line and description, drawn inside a fixed frame so the arriving text never
+ *  moves what is under it, and faded in rather than popped. */
+@Composable
+private fun HeroCopy(line: String, description: String?) {
+  Crossfade(
+    targetState = line to description,
+    animationSpec = tween(HeroCopyFadeMs),
+    label = "homeHeroCopy",
+  ) { (targetLine, targetDescription) ->
+    Column {
+      Box(Modifier.height(HeroMetaLineHeight)) {
+        if (targetLine.isNotEmpty()) {
+          Text(
+            targetLine,
+            color = Tokens.Muted,
+            fontSize = 11.5.sp,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+          )
+        }
+      }
+      Box(Modifier.height(HeroDescriptionHeight)) {
+        if (targetDescription != null) {
+          Text(
+            targetDescription,
+            color = Tokens.Muted,
+            fontSize = 12.sp,
+            lineHeight = 16.sp,
+            maxLines = 3,
+            overflow = TextOverflow.Ellipsis,
+          )
+        }
+      }
+    }
+  }
+}
+
 @Composable
 private fun rowTitle(slot: HomeRowSlot): String {
   val builtin = builtinRowTitle(slot.id)
-  return if (builtin != null) stringResource(builtin) else slot.title.orEmpty()
+  if (builtin != null) return stringResource(builtin)
+  val title = slot.title.orEmpty()
+  // A feed's twin catalogues ("Cinemeta · Popular" as a film and as a series) share a name, so
+  // the row carries its catalogue type the way the picker does.
+  val type = feedTypeOf(slot.id) ?: return title
+  return "$title (${typeTag(type)})"
 }
 
 @Composable

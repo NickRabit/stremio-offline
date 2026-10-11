@@ -83,7 +83,7 @@ internal fun feedTypeOf(id: String): String? {
 }
 
 @Composable
-private fun typeTag(type: String): String = when (type) {
+internal fun typeTag(type: String): String = when (type) {
   "movie" -> stringResource(R.string.catalog_type_movie)
   "series" -> stringResource(R.string.catalog_type_series)
   else -> type
