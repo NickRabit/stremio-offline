@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { resetViews } from "../library-tools";
+import { pickAddonStream } from "../catalog-sources";
 
 test.beforeEach(async ({ request }) => { await resetViews(request); });
 
@@ -142,9 +143,9 @@ test("a long folder listing leaves the save dialog's library row whole", async (
   const options = await page.getByRole("combobox", { name: "Procházet katalog" }).locator("option").allTextContents();
   await page.getByRole("combobox", { name: "Procházet katalog" }).selectOption({ label: options.find((text) => /Filmy/.test(text))! });
   await page.getByRole("button", { name: /Zkušební film/ }).click();
-  const detail = page.locator(".detail-panel");
-  await detail.locator(".stream-list button").first().click();
-  await detail.getByRole("button", { name: "Uložit jinam…" }).click();
+  // The library journeys leave this film in the library, and its local copy leads the list.
+  await pickAddonStream(page);
+  await page.locator(".detail-panel").getByRole("button", { name: "Uložit jinam…" }).click();
 
   const dialog = page.getByRole("dialog");
   await dialog.getByText("Jinam", { exact: true }).click();
