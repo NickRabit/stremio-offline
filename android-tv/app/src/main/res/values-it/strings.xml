@@ -10,6 +10,7 @@
   <string name="nav_home">Home</string>
   <string name="nav_catalog">Catalogo</string>
   <string name="nav_library">Libreria</string>
+  <string name="nav_favorites">Preferiti</string>
   <string name="nav_settings">Impostazioni</string>
   <string name="tv_nav_search">Cerca</string>
   <string name="tv_connect_title">Connettiti al tuo server</string>
@@ -114,11 +115,15 @@
   <string name="tv_diagnostics_failed">Impossibile inviare la diagnostica.</string>
   <string name="tv_crash_hint">Un arresto anomalo dell\'esecuzione precedente è stato registrato. Invia la diagnostica dalle impostazioni.</string>
   <string name="tv_downloads_later">La coda dei download si apre per ora sul web.</string>
-  <string name="tv_my_list_empty">I titoli che contrassegni con una stella compaiono qui.</string>
   <string name="catalog_type_movie">film</string>
   <string name="catalog_type_series">serie</string>
-  <string name="catalog_my_list">La mia lista</string>
-  <string name="library_shelf_favorites">Preferiti</string>
+  <string name="favorites_title">Preferiti</string>
+  <string name="favorites_filter_all">Tutti</string>
+  <string name="favorites_filter_library">In libreria</string>
+  <string name="favorites_filter_catalog">Dal catalogo</string>
+  <string name="favorites_empty_all_text">Aggiungi una stella a un file della libreria o a un titolo del catalogo e comparirà qui.</string>
+  <string name="favorites_empty_library_text">Aggiungi una stella a un file o a una cartella della libreria e comparirà qui.</string>
+  <string name="favorites_empty_catalog_text">Aggiungi una stella a un titolo del catalogo e comparirà qui.</string>
   <string name="player_subtitles">Sottotitoli</string>
   <string name="player_subtitles_off">Spento</string>
   <string name="player_subtitle_delay">Tempistica dei sottotitoli</string>

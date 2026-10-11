@@ -9,6 +9,7 @@ auth.signedInAs
 nav.home
 nav.catalog
 nav.library
+nav.favorites
 nav.settings
 tv.navSearch
 tv.connectTitle
@@ -107,11 +108,15 @@ tv.diagnosticsSent
 tv.diagnosticsFailed
 tv.crashHint
 tv.downloadsLater
-tv.myListEmpty
 catalog.typeMovie
 catalog.typeSeries
-catalog.myList
-library.shelf.favorites
+favorites.title
+favorites.filterAll
+favorites.filterLibrary
+favorites.filterCatalog
+favorites.emptyAllText
+favorites.emptyLibraryText
+favorites.emptyCatalogText
 player.subtitles
 player.subtitlesOff
 player.subtitleDelay

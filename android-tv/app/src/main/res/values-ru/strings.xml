@@ -10,6 +10,7 @@
   <string name="nav_home">Главная</string>
   <string name="nav_catalog">Каталог</string>
   <string name="nav_library">Библиотека</string>
+  <string name="nav_favorites">Избранное</string>
   <string name="nav_settings">Настройки</string>
   <string name="tv_nav_search">Поиск</string>
   <string name="tv_connect_title">Подключитесь к своему серверу</string>
@@ -118,11 +119,15 @@
   <string name="tv_diagnostics_failed">Не удалось отправить диагностику.</string>
   <string name="tv_crash_hint">Сбой предыдущего запуска был записан. Отправьте диагностику в настройках.</string>
   <string name="tv_downloads_later">Очередь загрузок пока открывается в веб-интерфейсе.</string>
-  <string name="tv_my_list_empty">Отмеченные звёздочкой фильмы и сериалы появятся здесь.</string>
   <string name="catalog_type_movie">фильм</string>
   <string name="catalog_type_series">серия</string>
-  <string name="catalog_my_list">Мой список</string>
-  <string name="library_shelf_favorites">Избранное</string>
+  <string name="favorites_title">Избранное</string>
+  <string name="favorites_filter_all">Все</string>
+  <string name="favorites_filter_library">В библиотеке</string>
+  <string name="favorites_filter_catalog">Из каталога</string>
+  <string name="favorites_empty_all_text">Отметьте звёздочкой файл в библиотеке или название в каталоге, и оно появится здесь.</string>
+  <string name="favorites_empty_library_text">Отметьте звёздочкой файл или папку в библиотеке, и они появятся здесь.</string>
+  <string name="favorites_empty_catalog_text">Отметьте звёздочкой название в каталоге, и оно появится здесь.</string>
   <string name="player_subtitles">Субтитры</string>
   <string name="player_subtitles_off">Выкл.</string>
   <string name="player_subtitle_delay">Время субтитров</string>

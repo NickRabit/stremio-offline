@@ -10,6 +10,7 @@
   <string name="nav_home">Domov</string>
   <string name="nav_catalog">Katalóg</string>
   <string name="nav_library">Knižnica</string>
+  <string name="nav_favorites">Obľúbené</string>
   <string name="nav_settings">Nastavenia</string>
   <string name="tv_nav_search">Hľadať</string>
   <string name="tv_connect_title">Pripojte sa k svojmu serveru</string>
@@ -118,11 +119,15 @@
   <string name="tv_diagnostics_failed">Diagnostiku sa nepodarilo odoslať.</string>
   <string name="tv_crash_hint">Pád z predchádzajúceho spustenia bol zaznamenaný. Odošlite diagnostiku v nastaveniach.</string>
   <string name="tv_downloads_later">Fronta sťahovania sa zatiaľ otvára na webe.</string>
-  <string name="tv_my_list_empty">Tituly označené hviezdičkou nájdete tu.</string>
   <string name="catalog_type_movie">film</string>
   <string name="catalog_type_series">séria</string>
-  <string name="catalog_my_list">Môj zoznam</string>
-  <string name="library_shelf_favorites">Obľúbené</string>
+  <string name="favorites_title">Obľúbené</string>
+  <string name="favorites_filter_all">Všetko</string>
+  <string name="favorites_filter_library">V knižnici</string>
+  <string name="favorites_filter_catalog">Z katalógu</string>
+  <string name="favorites_empty_all_text">Pridajte hviezdičku súboru v knižnici alebo titulu v katalógu a objaví sa tu.</string>
+  <string name="favorites_empty_library_text">Pridajte hviezdičku súboru alebo priečinku v knižnici a objaví sa tu.</string>
+  <string name="favorites_empty_catalog_text">Pridajte hviezdičku titulu v katalógu a objaví sa tu.</string>
   <string name="player_subtitles">titulky</string>
   <string name="player_subtitles_off">Vypnuté</string>
   <string name="player_subtitle_delay">Časovanie titulkov</string>

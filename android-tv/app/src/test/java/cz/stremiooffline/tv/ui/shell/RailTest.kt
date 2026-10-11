@@ -68,6 +68,7 @@ class RailTest {
     compose.onNodeWithTag(railTag(Section.Home)).assertContentDescriptionEquals(context.getString(R.string.nav_home))
     compose.onNodeWithTag(railTag(Section.Catalog)).assertContentDescriptionEquals(context.getString(R.string.nav_catalog))
     compose.onNodeWithTag(railTag(Section.Library)).assertContentDescriptionEquals(context.getString(R.string.nav_library))
+    compose.onNodeWithTag(railTag(Section.Favorites)).assertContentDescriptionEquals(context.getString(R.string.nav_favorites))
     // The account item shows the avatar alone; the username is only its spoken name.
     compose.onNodeWithTag(railTag(Section.Account)).assertContentDescriptionEquals("demo")
   }

@@ -10,6 +10,7 @@
   <string name="nav_home">Start</string>
   <string name="nav_catalog">Katalog</string>
   <string name="nav_library">Biblioteka</string>
+  <string name="nav_favorites">Ulubione</string>
   <string name="nav_settings">Ustawienia</string>
   <string name="tv_nav_search">Szukaj</string>
   <string name="tv_connect_title">Połącz się ze swoim serwerem</string>
@@ -118,11 +119,15 @@
   <string name="tv_diagnostics_failed">Nie udało się wysłać diagnostyki.</string>
   <string name="tv_crash_hint">Zapisano awarię z poprzedniego uruchomienia. Wyślij diagnostykę w ustawieniach.</string>
   <string name="tv_downloads_later">Kolejka pobierania otwiera się na razie w przeglądarce.</string>
-  <string name="tv_my_list_empty">Tytuły oznaczone gwiazdką pojawią się tutaj.</string>
   <string name="catalog_type_movie">film</string>
   <string name="catalog_type_series">seria</string>
-  <string name="catalog_my_list">Moja lista</string>
-  <string name="library_shelf_favorites">Ulubione</string>
+  <string name="favorites_title">Ulubione</string>
+  <string name="favorites_filter_all">Wszystko</string>
+  <string name="favorites_filter_library">W bibliotece</string>
+  <string name="favorites_filter_catalog">Z katalogu</string>
+  <string name="favorites_empty_all_text">Dodaj gwiazdkę plikowi w bibliotece lub tytułowi w katalogu, a pojawi się tutaj.</string>
+  <string name="favorites_empty_library_text">Dodaj gwiazdkę plikowi lub folderowi w bibliotece, a pojawi się tutaj.</string>
+  <string name="favorites_empty_catalog_text">Dodaj gwiazdkę tytułowi w katalogu, a pojawi się tutaj.</string>
   <string name="player_subtitles">Napisy</string>
   <string name="player_subtitles_off">Wyłączone</string>
   <string name="player_subtitle_delay">Czas napisów</string>

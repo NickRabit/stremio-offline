@@ -6,9 +6,11 @@ import okhttp3.OkHttpClient
 /** The library browse and paging one screen needs. */
 interface LibraryApi {
   suspend fun browse(path: String?, limit: Int = 60, skip: Int = 0): BrowseResult
+}
 
-  /** The library's Favourites view (`GET /api/library/favorites`). */
-  suspend fun favorites(limit: Int = 60, skip: Int = 0): BrowseResult
+/** The one merged Favourites list: library stars and catalogue stars in one page. */
+interface FavoritesApi {
+  suspend fun favorites(filter: FavoriteFilter = FavoriteFilter.All, limit: Int = 60, skip: Int = 0): FavoritesPage
 }
 
 /** What the title detail needs: the stored position and the library star. */
@@ -61,7 +63,7 @@ interface DownloadsApi {
 }
 
 /** Everything a signed-in screen does: library, detail, catalogue, Home, images and playback. */
-interface TvApi : LibraryApi, DetailApi, PlaybackApi, CatalogApi, HomeApi, DownloadsApi {
+interface TvApi : LibraryApi, FavoritesApi, DetailApi, PlaybackApi, CatalogApi, HomeApi, DownloadsApi {
   val http: OkHttpClient
   /** The address as the user typed it, shown on the Settings screen. */
   val serverAddress: String

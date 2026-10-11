@@ -81,7 +81,7 @@ class ShellNavigationTest {
     }
     compose.waitForIdle()
 
-    for (section in listOf(Section.Catalog, Section.Home, Section.Library, Section.Search, Section.Account)) {
+    for (section in listOf(Section.Catalog, Section.Home, Section.Library, Section.Favorites, Section.Search, Section.Account)) {
       compose.onRoot().performKeyInput { pressKey(Key.DirectionLeft) }
       compose.waitForIdle()
       scenario.onActivity { }

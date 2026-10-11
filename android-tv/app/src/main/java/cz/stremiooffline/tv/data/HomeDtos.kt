@@ -128,6 +128,18 @@ sealed interface HomeCard {
   ) : HomeCard
 
   @Serializable
+  @SerialName("favorite-catalogue")
+  data class FavoriteCatalogue(
+    override val key: String,
+    val type: String = "movie",
+    val id: String = "",
+    val name: String = "",
+    override val poster: String? = null,
+    override val wide: String? = null,
+    val year: String? = null,
+  ) : HomeCard
+
+  @Serializable
   @SerialName("recent")
   data class Recent(
     override val key: String,
@@ -187,6 +199,7 @@ val HomeCard.isWideKind: Boolean
 val HomeCard.displayTitle: String
   get() = when (this) {
     is HomeCard.Favorite -> label
+    is HomeCard.FavoriteCatalogue -> name
     is HomeCard.Recent -> label
     is HomeCard.Tonight -> label
     is HomeCard.Episode -> name
@@ -216,6 +229,7 @@ val HomeCard.yearText: String?
   get() = when (this) {
     is HomeCard.Discovery -> year
     is HomeCard.Tonight -> year
+    is HomeCard.FavoriteCatalogue -> year
     else -> null
   }
 
