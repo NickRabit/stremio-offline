@@ -626,7 +626,7 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .identify-head h2{margin:0;font-size:18px}
 .dialog-split{padding:0;display:flex;flex-direction:column;overflow:hidden}
 .dialog-split>.identify-head{flex:0 0 auto;padding:22px 22px 12px}
-.dialog-body{flex:1 1 auto;min-height:0;overflow:auto;overscroll-behavior:contain;display:grid;align-content:start;gap:12px;padding:0 22px 16px}
+.dialog-body{flex:1 1 auto;min-height:0;overflow:auto;overscroll-behavior:contain;display:grid;grid-auto-rows:max-content;align-content:start;gap:12px;padding:0 22px 16px}
 .dialog-foot{flex:0 0 auto;display:grid;gap:10px;padding:14px 22px 22px;border-top:1px solid var(--line);background:#121721f5}
 .identify-hint{margin:0;font-size:12px;color:var(--muted);line-height:1.45}
 .identify-row{display:grid;grid-template-columns:90px minmax(0,1fr);gap:10px;align-items:end}
