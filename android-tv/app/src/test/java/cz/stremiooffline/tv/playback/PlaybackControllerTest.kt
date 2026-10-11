@@ -520,6 +520,81 @@ class PlaybackControllerTest {
     assertEquals("The app keeps drawing the addon it chose", SubtitleChoice.Addon("sid"), controller.state.value.subtitle)
   }
 
+  // The server's descriptor never names an app-drawn addon, so its seek answer must not turn the
+  // viewer's choice Off.
+  @Test
+  fun `an addon subtitle survives an hls seek`() = runTest {
+    val api = FakeApi()
+    api.descriptor = PlaybackDescriptorDto(
+      id = "p1", mode = "remux", url = "start.m3u8", offset = 0.0, duration = 1_000.0,
+      playlist = true, copy = CopyDto(video = true, audio = true),
+    )
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+    val addon = AddonSubtitleDto(subtitleId = "sid", lang = "cs", addonName = "OpenSubtitles")
+
+    controller.start("src", "movie:tt1", "It", null, resume = false, subtitles = listOf(addon))
+    runCurrent()
+    controller.selectSubtitle(SubtitleChoice.Addon("sid"))
+    runCurrent()
+    assertEquals(SubtitleChoice.Addon("sid"), controller.state.value.subtitle)
+
+    controller.onPlayerReady()
+    controller.onPlayerPosition(30.0)
+    controller.seekTo(120.0)
+    advanceTimeBy(601)
+    runCurrent()
+
+    assertEquals(listOf(120.0), api.seeks)
+    assertEquals(SubtitleChoice.Addon("sid"), controller.state.value.subtitle)
+  }
+
+  @Test
+  fun `an addon subtitle survives a quality change`() = runTest {
+    val api = FakeApi()
+    api.trackAnswer = api.descriptor.copy(
+      mode = "transcode",
+      url = "720.m3u8",
+      playlist = true,
+      copy = CopyDto(video = false, audio = true),
+      quality = 720,
+    )
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+    val addon = AddonSubtitleDto(subtitleId = "sid", lang = "cs", addonName = "OpenSubtitles")
+
+    controller.start("src", "movie:tt1", "It", null, resume = false, subtitles = listOf(addon))
+    runCurrent()
+    controller.selectSubtitle(SubtitleChoice.Addon("sid"))
+    runCurrent()
+    playing(controller, 100.0)
+
+    controller.selectQuality(720)
+    runCurrent()
+
+    assertEquals(listOf(TrackChange.Quality(720, 100.0)), api.tracks)
+    assertEquals(SubtitleChoice.Addon("sid"), controller.state.value.subtitle)
+  }
+
+  @Test
+  fun `an addon subtitle survives a dead-session restart`() = runTest {
+    val api = FakeApi()
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+    val addon = AddonSubtitleDto(subtitleId = "sid", lang = "cs", addonName = "OpenSubtitles")
+
+    controller.start("src", "movie:tt1", "It", null, resume = false, subtitles = listOf(addon))
+    runCurrent()
+    controller.selectSubtitle(SubtitleChoice.Addon("sid"))
+    runCurrent()
+    controller.onPlayerReady()
+    controller.onPlayerPosition(50.0)
+
+    api.pingFailure = ApiError(ApiFailure.NotFound)
+    advanceTimeBy(30_001)
+    runCurrent()
+
+    assertEquals(2, api.started.size)
+    assertEquals(SubtitleChoice.Addon("sid"), controller.state.value.subtitle)
+  }
+
   @Test
   fun `a track change during a pending seek carries the seek target`() = runTest {
     val api = FakeApi()

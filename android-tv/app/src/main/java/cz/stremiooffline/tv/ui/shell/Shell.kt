@@ -118,6 +118,8 @@ fun Shell(
   api: TvApi,
   username: String,
   onSignOut: () -> Unit,
+  /** The confirmed Back on the rail closes the app; the stored session stays signed in. */
+  onExitApp: () -> Unit = {},
   address: String = "http://",
   onLocale: (String) -> Unit = {},
 ) {
@@ -163,7 +165,7 @@ fun Shell(
       shellState.pick(section)
       true
     },
-    onBackToExit = onSignOut,
+    onBackToExit = onExitApp,
     railHidden = detail != null || catalogDetail != null,
   ) { focusRequester ->
     val section = current

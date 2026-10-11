@@ -1,5 +1,8 @@
 package cz.stremiooffline.tv.ui
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -181,6 +184,7 @@ fun AppRoot() {
       // frame, and every later pick goes through the session too.
       SessionLocale(session)
       val imageLoader = remember(state.api) { ImageLoader.Builder(context).okHttpClient(state.api.http).build() }
+      val hostActivity = context.hostActivity()
       CompositionLocalProvider(LocalImageLoader provides imageLoader) {
         SessionShell(
           api = state.api,
@@ -188,6 +192,7 @@ fun AppRoot() {
           username = state.username,
           address = state.api.serverAddress,
           onSignOut = session::signOut,
+          onExitApp = { hostActivity?.finish() },
           onLocale = session::setLanguage,
         )
       }
@@ -221,12 +226,20 @@ fun SessionShell(
   start: Section,
   username: String,
   onSignOut: () -> Unit,
+  onExitApp: () -> Unit = {},
   address: String = "http://",
   onLocale: (String) -> Unit = {},
 ) {
   SessionContent(api) {
-    Shell(start = start, api = api, username = username, onSignOut = onSignOut, address = address, onLocale = onLocale)
+    Shell(start = start, api = api, username = username, onSignOut = onSignOut, onExitApp = onExitApp, address = address, onLocale = onLocale)
   }
+}
+
+/** The activity the composition sits in, so the confirmed Back-to-exit can close it. */
+private tailrec fun Context.hostActivity(): Activity? = when (this) {
+  is Activity -> this
+  is ContextWrapper -> baseContext.hostActivity()
+  else -> null
 }
 
 /** The session-scoped store around [content]; the shell of one signed-in session. */

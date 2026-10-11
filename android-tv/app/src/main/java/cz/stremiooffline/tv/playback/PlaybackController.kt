@@ -159,6 +159,8 @@ class PlaybackController(
     val library: Boolean,
     /** A fresh source is minted after the outgoing session is closed, never before it. */
     val mint: (suspend () -> String?)? = null,
+    /** The client's own subtitle choice, carried across a restart of the same session. */
+    val carrySubtitle: SubtitleChoice? = null,
   )
 
   private var plan: StartPlan? = null
@@ -172,6 +174,8 @@ class PlaybackController(
   private var escalatedByViewer = false
   private var recovered = false
   private var stopped = true
+  /** The screen is gone for good; a late answer must not start a session, however long it took. */
+  private var released = false
 
   private var pingJob: Job? = null
   private var saveJob: Job? = null
@@ -206,7 +210,8 @@ class PlaybackController(
     audioPreference: String?,
     subtitlePreference: String?,
     mint: (suspend () -> String?)? = null,
-  ) = StartPlan(sourceId, key, title, path, explicitTime, resume, poster, addonKey, subtitles, audioPreference, subtitlePreference, library = path != null, mint = mint)
+    carrySubtitle: SubtitleChoice? = null,
+  ) = StartPlan(sourceId, key, title, path, explicitTime, resume, poster, addonKey, subtitles, audioPreference, subtitlePreference, library = path != null, mint = mint, carrySubtitle = carrySubtitle)
 
   fun start(
     sourceId: String,
@@ -219,7 +224,10 @@ class PlaybackController(
     subtitles: List<AddonSubtitleDto> = emptyList(),
     audioPreference: String? = null,
     subtitlePreference: String? = null,
-  ) = begin(startPlan(sourceId, key, title, path, null, resume, poster, addonKey, subtitles, audioPreference, subtitlePreference))
+  ) {
+    if (released) return
+    begin(startPlan(sourceId, key, title, path, null, resume, poster, addonKey, subtitles, audioPreference, subtitlePreference))
+  }
 
   /** Starts the next library file: the old session is saved and deleted before the new start. */
   fun playNext(
@@ -230,6 +238,7 @@ class PlaybackController(
     poster: String? = null,
     mint: suspend () -> String?,
   ) {
+    if (released) return
     val current = plan ?: return
     begin(startPlan(null, key, title, path, null, resume, poster, current.addonKey, current.subtitles, current.audioPreference, current.subtitlePreference, mint))
   }
@@ -243,8 +252,18 @@ class PlaybackController(
     audioPreference: String? = plan?.audioPreference,
     subtitlePreference: String? = plan?.subtitlePreference,
   ) {
+    if (released) return
     val current = plan ?: return
-    begin(current.copy(explicitTime = restartPosition, resume = false, subtitles = subtitles, audioPreference = audioPreference, subtitlePreference = subtitlePreference))
+    begin(
+      current.copy(
+        explicitTime = restartPosition,
+        resume = false,
+        subtitles = subtitles,
+        audioPreference = audioPreference,
+        subtitlePreference = subtitlePreference,
+        carrySubtitle = _state.value.subtitle,
+      ),
+    )
   }
 
   private fun begin(next: StartPlan) {
@@ -400,6 +419,7 @@ class PlaybackController(
     audioPreference: String? = plan?.audioPreference,
     subtitlePreference: String? = plan?.subtitlePreference,
   ) {
+    if (released) return
     val current = plan ?: return
     val at = restartPosition
     restartAt = at
@@ -436,7 +456,7 @@ class PlaybackController(
       val current = plan ?: return
       val at = restartPosition
       restartAt = at
-      begin(current.copy(explicitTime = at, resume = false))
+      begin(current.copy(explicitTime = at, resume = false, carrySubtitle = _state.value.subtitle))
       return
     }
     track(TrackChange.Quality(quality, position), addon = null)
@@ -488,7 +508,7 @@ class PlaybackController(
       // audio was chosen inside ExoPlayer, so the server's descriptor still names its own default
       // and must not re-tick the panel. Every restart answer re-derives the choice.
       val keepAudio = change is TrackChange.Subtitle && sameItem
-      apply(descriptor, target = before, bumpRevision = !sameItem, addon = addon, keepAudio = keepAudio)
+      apply(descriptor, target = before, bumpRevision = !sameItem, addon = addon, keepAudio = keepAudio, subtitleChange = change is TrackChange.Subtitle)
       lastPosition = before - offset
     }
   }
@@ -569,6 +589,12 @@ class PlaybackController(
     }
   }
 
+  /** The screen is gone: release the session and refuse any start or retry that answers late. */
+  fun release() {
+    released = true
+    stop()
+  }
+
   private fun saveNow() {
     if (stopped || !hasPosition || sessionId == null) return
     val payload = SavePayload(key, position, duration, title, path, poster, addonKey)
@@ -625,6 +651,8 @@ class PlaybackController(
     bumpRevision: Boolean = true,
     addon: AddonSubtitleDto? = null,
     keepAudio: Boolean = false,
+    /** True only for a `/track` answer to a subtitle the viewer picked. */
+    subtitleChange: Boolean = false,
   ) {
     sessionId = descriptor.id
     restartAt = null
@@ -637,16 +665,21 @@ class PlaybackController(
     quality = descriptor.quality
     audioTracks = descriptorTracks(descriptor.audioTracks)
     subtitleTracks = descriptorTracks(descriptor.subtitleTracks)
+    // The server's descriptor never names an app-drawn addon, so a seek, a quality or audio change,
+    // an escalate or a dead-session restart keeps the client's choice; only a subtitle answer or a
+    // fresh session re-derives it.
+    val carried = plan?.carrySubtitle
     val chosen = when {
       addon != null -> SubtitleChoice.Addon(addon.subtitleId)
-      descriptor.subtitleTrack != null -> SubtitleChoice.Embedded(descriptor.subtitleTrack)
-      else -> SubtitleChoice.Off
+      subtitleChange -> descriptor.subtitleTrack?.let { SubtitleChoice.Embedded(it) } ?: SubtitleChoice.Off
+      carried != null -> carried
+      plan != null -> descriptor.subtitleTrack?.let { SubtitleChoice.Embedded(it) } ?: SubtitleChoice.Off
+      else -> _state.value.subtitle
     }
-    subtitle = chosen
     recovered = false
     lastPosition = target - offset
     val addons = plan?.subtitles ?: _state.value.addonSubtitles
-    val defaultAddon = if (addon == null && descriptor.subtitleTrack == null && descriptor.sidecarUrl == null) {
+    val defaultAddon = if (!subtitleChange && addon == null && carried == null && descriptor.subtitleTrack == null && descriptor.sidecarUrl == null) {
       plan?.let { defaultAddon(it, descriptor, addons) }
     } else null
     val shown = defaultAddon?.let { SubtitleChoice.Addon(it.subtitleId) } ?: chosen
