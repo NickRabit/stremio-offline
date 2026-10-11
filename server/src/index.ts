@@ -11,6 +11,7 @@ import { autoRefreshEnabled, refreshDue, refreshManifests, type RefreshOutcome }
 import { rankStreams } from "./ranking.js";
 import { DownloadQueue, ownerMayDownload, type DownloadJob } from "./downloads.js";
 import { DeviceTransfers } from "./device-transfers.js";
+import { ClientLogStore } from "./client-logs.js";
 import { selectDownloadSource, selectTorrentSource } from "./download-selection.js";
 import { StatsLog, type TrafficEvent, type TrafficMeta } from "./stats.js";
 import { Throughput } from "./throughput.js";
@@ -97,6 +98,8 @@ const externalIds = new ExternalIdStore(DATA_DIR);
 const followStore = new FollowStore(DATA_DIR);
 /** When this app first met each library file, so "Recently added" is not the file's own date. */
 const seen = new LibrarySeenStore(DATA_DIR);
+/** The log bundles clients upload, one JSON file each under the data directory. */
+const clientLogs = new ClientLogStore(DATA_DIR);
 let markServerReady!: () => void;
 const serverReady = new Promise<void>((resolve) => { markServerReady = resolve; });
 await store.load();
@@ -490,6 +493,9 @@ app.use("/api", (req, res, next) => {
   res.on("finish", () => log("DEBUG", "API request", { req: id, method: req.method, path: req.path, status: res.statusCode, ms: Date.now() - startedAt }));
   next();
 });
+// A client log bundle may carry up to 512 KB, more than an ordinary request. Its own parser
+// runs first, so the smaller limit below never sees the body.
+app.use("/api/client-log/bundle", express.json({ limit: "512kb" }));
 app.use(express.json({ limit: "256kb" }));
 /** Measures how much the response actually sends and reports it to the statistics.
  * It counts at write time, so what the client asked for and then abandoned by closing
@@ -1199,7 +1205,7 @@ const artworkBesideMediaFor = (key: string) => {
  *  mode withholds it because the picker discloses host layout to somebody at the keyboard and
  *  a shared instance renders names and counts only; an ordinary account is withheld it for
  *  the same reason, and loses nothing by it -- every view it has names a library by id. */
-const libraryView = (library: LibraryRecord, health: LibraryHealth, stats: { titles: number; files: number; bytes: number }, admin: boolean) => ({
+const libraryView = (library: LibraryRecord, health: LibraryHealth, stats: { titles: number; files: number; bytes: number }, admin: boolean, canDownload: boolean) => ({
   id: library.id, name: library.name, type: library.type,
   ...(restrictedMode() || !admin ? {} : { root: toPosix(library.root) }),
   enabled: library.enabled, order: library.order, addedAt: library.addedAt,
@@ -1211,6 +1217,10 @@ const libraryView = (library: LibraryRecord, health: LibraryHealth, stats: { tit
   autoScanMetadata: automaticMetadataEnabled(library),
   visibleTo: library.visibleTo ?? [],
   unreachable: health.unreachable, readOnly: health.readOnly,
+  // Whether a download may be saved here by the account that is asking: switched on, reachable,
+  // not read-only, and the account may download to a library at all. `visible` is implied -- only
+  // the libraries the caller can see are listed.
+  writable: library.enabled && !health.unreachable && !health.readOnly && canDownload,
   defaultMovie: store.settings().defaultMovieLibrary === library.id,
   defaultSeries: store.settings().defaultSeriesLibrary === library.id,
   titles: stats.titles, files: stats.files, bytes: stats.bytes,
@@ -1690,7 +1700,7 @@ const followService = new FollowService({
 queue.setRemovalGuard((job, reason) => followService.jobRemoving(job, reason));
 queue.setClearCompletedGuard((jobs) => followService.jobsClearing(jobs));
 
-registerFollowRoutes(app, { ...routeContext, follows: followService, followStore, prefsOf, markersOf, dataOf, updateData, posterOf, cachedMeta });
+registerFollowRoutes(app, { ...routeContext, follows: followService, followStore, prefsOf, markersOf, dataOf, updateData, posterOf, cachedMeta, defaultDownloadLibrary: downloadDefaultLibrary });
 
 // The file operations on library items live in `library-actions.ts`; these bindings keep the
 // call sites and the route dependency objects unchanged.
@@ -2199,12 +2209,12 @@ const warmHomeCatalogs = () => { if (!homeCatalogs.idle) homeCatalogs.warm(homeC
 registerHomeRoutes(app, { ...routeContext, homeCatalogs, personal, completedJobs: () => queue.list(), newEpisodes: (ownerUserId, watched) => followService.newEpisodes(ownerUserId, watched), describeLibraryPath, locateFileArtwork, locateFolderArtworkPair, thumbUrl, scheduleFileArtwork, scheduleFolderArtwork, wirePath, dataOf, markersOf, progressOf, metaStore, seen, suggestionRows: curate.suggestionRows });
 
 registerDeviceRoutes(app, { ...routeContext, stats, countBytes, deviceDownloadTickets, deviceTransfers, DEVICE_TICKET_TTL, httpSourceOf, libraryTarget, mediaSource, ownerOf, pruneDeviceDownloadTickets, statMeta, trackMedia });
-registerDownloadRoutes(app, { ...routeContext, queue, deviceTransfers, jobView, sourceOf, mediaSource, posterOf, rememberTitle, titleKey, saveCatalogPoster, libraryKey, cachedMeta, prefsOf });
+registerDownloadRoutes(app, { ...routeContext, queue, deviceTransfers, jobView, sourceOf, mediaSource, posterOf, rememberTitle, titleKey, saveCatalogPoster, libraryKey, cachedMeta, prefsOf, defaultDownloadLibrary: downloadDefaultLibrary });
 const freeSpace = async (target: string) => {
   try { const info = await statfs(target); return { path: target, freeBytes: info.bavail * info.bsize, totalBytes: info.blocks * info.bsize }; }
   catch { return { path: target }; }
 };
-registerDiagnosticsRoutes(app, { ...routeContext, stats, playback, throughput, queue, libraryScan, playbackMeta, freeSpace, dataDir: DATA_DIR });
+registerDiagnosticsRoutes(app, { ...routeContext, stats, playback, throughput, queue, libraryScan, playbackMeta, freeSpace, clientLogs, dataDir: DATA_DIR });
 registerSettingsRoutes(app, { ...routeContext, STREAM_SORTS, accountIdOf, invalidateLibrary, metaCache, metaStore, mutateData, prefsOf, queue, streamCache });
 registerPlaybackRoutes(app, { ...routeContext, airplayAccess, airplayRequest, answerHeaders, countBytes, httpSourceOf, internalMediaRequest, libraryTarget, noteSourceQuiet, ownerOf, playback, playbackMeta, playbackOwners, playbackResponse, prefsOf, quietSources, rangeCache, safeInspection, sleep, sourceIsQuiet, stats, subtitleDelay, trackMedia, SOURCE_ATTEMPTS, SOURCE_RETRY_MS, SOURCE_RESUMES, SOURCE_HEADER_MS, SOURCE_QUIET_HEADER_MS });
 

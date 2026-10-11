@@ -21,6 +21,8 @@ export interface FollowDeps extends RouteContext {
   updateData(req: express.Request | undefined, mutate: (data: UserData) => void): Promise<void>;
   posterOf(value: unknown): string | undefined;
   cachedMeta(type: string, id: string, language?: string, viewer?: Viewer): Promise<MetaItem | null>;
+  /** The library a rule with no library of its own lands in, resolved as the queue resolves it. */
+  defaultDownloadLibrary(kind: "movie" | "series"): LibraryRecord | undefined;
 }
 
 interface FollowEpisodeView { season: number; episode: number; title?: string; released?: string; releasedSource?: "addon" | "tmdb"; dateUncertain?: boolean }
@@ -161,8 +163,8 @@ export function calendarFeedHandler(deps: CalendarFeedDeps): express.RequestHand
 }
 
 export function registerFollowRoutes(app: express.Application, deps: FollowDeps): void {
-  const { store, followStore, follows, currentUser, dataOf, updateData, markersOf, posterOf, cachedMeta, prefsOf } = deps;
-  const parseSelection = createSelectionParser({ store, currentUser, cachedMeta, prefsOf });
+  const { store, followStore, follows, currentUser, dataOf, updateData, markersOf, posterOf, cachedMeta, prefsOf, defaultDownloadLibrary } = deps;
+  const parseSelection = createSelectionParser({ store, currentUser, cachedMeta, prefsOf, defaultDownloadLibrary });
 
   /** The follow the caller owns, or nothing. A follow owned by somebody else answers
    *  exactly like one that does not exist, so the route never confirms it is there. */

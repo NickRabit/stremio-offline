@@ -7,7 +7,7 @@ beforeEach(() => setLocale("en"));
 
 const library = (id: string, name: string, type: LibraryType, extra: Partial<LibraryView> = {}): LibraryView => ({
   id, name, type, root: `/media/${name}`, enabled: true, order: 0, addedAt: "2026-01-01T00:00:00.000Z",
-  writeArtwork: true, autoScanMetadata: true, unreachable: false, readOnly: false, defaultMovie: false, defaultSeries: false,
+  writeArtwork: true, autoScanMetadata: true, unreachable: false, readOnly: false, writable: true, defaultMovie: false, defaultSeries: false,
   titles: 0, files: 0, bytes: 0, ...extra,
 });
 
@@ -28,6 +28,11 @@ it("offers only the libraries a title of this kind can be written to", () => {
 
   expect(offeredLibraries(libraries, "movie").map((item) => item.id)).toEqual(["lib_a", "lib_c"]);
   expect(offeredLibraries(libraries, "series").map((item) => item.id)).toEqual(["lib_b", "lib_c"]);
+});
+
+it("does not offer a library the account may not write to", () => {
+  const libraries = [library("lib_a", "Films", "movie"), library("lib_b", "Locked", "movie", { writable: false })];
+  expect(offeredLibraries(libraries, "movie").map((item) => item.id)).toEqual(["lib_a"]);
 });
 
 it("names the library a rule would use, falling back to the default-flagged one", () => {

@@ -91,6 +91,7 @@ const mount = async (): Promise<Harness> => {
     },
     posterOf: (value) => (value === undefined || value === null ? undefined : String(value)),
     cachedMeta: async () => null,
+    defaultDownloadLibrary: () => libraries[0],
   };
   const app = express();
   app.use(express.json());
@@ -211,9 +212,9 @@ test("switching a follow to automatic needs the right to queue", async () => {
 test("an automatic rule stores an explicit, concrete target", async () => {
   const h = await mount();
   try {
-    const follow = await (await api(h.base, "/api/follows", { method: "POST", as: "B", body: { type: "series", id: "tt1", name: "Show" } })).json() as { id: string };
+    const follow = await (await api(h.base, "/api/follows", { method: "POST", as: "A", body: { type: "series", id: "tt1", name: "Show" } })).json() as { id: string };
     const response = await api(h.base, `/api/follows/${follow.id}`, {
-      method: "PATCH", as: "B",
+      method: "PATCH", as: "A",
       body: { autoDownload: { startMode: "new", selection: { addonKeys: ["stream-addon"], audioLanguage: "en" } } },
     });
     assert.equal(response.status, 200);
@@ -222,6 +223,19 @@ test("an automatic rule stores an explicit, concrete target", async () => {
     assert.equal(view.autoDownload?.startMode, "new");
     assert.deepEqual(view.autoDownload?.selection.addonKeys, ["stream-addon"]);
     assert.deepEqual(view.autoDownload?.selection.targetSettings, { libraryId: "lib_shows", subfolder: "", layout: "structured", explicit: true });
+  } finally { await h.close(); }
+});
+
+test("an automatic rule whose default library the account cannot see is refused", async () => {
+  const h = await mount();
+  try {
+    const follow = await (await api(h.base, "/api/follows", { method: "POST", as: "B", body: { type: "series", id: "tt1", name: "Show" } })).json() as { id: string };
+    const refused = await api(h.base, `/api/follows/${follow.id}`, {
+      method: "PATCH", as: "B",
+      body: { autoDownload: { startMode: "new", selection: { addonKeys: ["stream-addon"], audioLanguage: "en" } } },
+    });
+    assert.equal(refused.status, 403, "the rule is refused at the door, not pinned to a library the account cannot see");
+    assert.equal(await keyOf(refused), "err.downloadLibraryNotAllowed");
   } finally { await h.close(); }
 });
 

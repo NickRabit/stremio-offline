@@ -7,9 +7,10 @@ export interface SaveTarget { libraryId: string; subfolder: string; layout: "str
 const usable = (library: LibraryView) => library.enabled && !library.readOnly && !library.unreachable;
 const takes = (library: LibraryView, kind: SaveKind) => library.type === kind || library.type === "mixed";
 
-/** Libraries a title of this kind may be saved into: enabled, writable, reachable, type fits. */
+/** Libraries a title of this kind may be saved into: enabled, writable, reachable, type fits,
+ *  and the account may queue a download there at all. */
 export function offeredLibraries(libraries: LibraryView[], kind: SaveKind): LibraryView[] {
-  return libraries.filter((library) => usable(library) && takes(library, kind));
+  return libraries.filter((library) => usable(library) && library.writable && takes(library, kind));
 }
 
 /** Where the addon rule puts it; libraryId falls back to the library flagged defaultMovie/defaultSeries. */

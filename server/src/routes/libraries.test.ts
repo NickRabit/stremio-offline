@@ -24,7 +24,7 @@ interface Harness {
    *  account does. `after` lets it answer the handler's own first read and nothing after. */
   loseSession: (after: number) => void;
   disable: (id: string) => void;
-  viewed: Array<{ id: string; health: LibraryHealth; stats: { titles: number; files: number; bytes: number }; admin: boolean }>;
+  viewed: Array<{ id: string; health: LibraryHealth; stats: { titles: number; files: number; bytes: number }; admin: boolean; canDownload: boolean }>;
   enqueued: unknown[];
   invalidated: string[];
   /** Every library id the first-seen index was asked to forget, in order. */
@@ -50,7 +50,7 @@ const library = (id: string, order: number): LibraryRecord => ({
 const ADA = "usr_00000001";
 const BOB = "usr_00000002";
 const admin = { id: ADA, username: "ada", role: "admin" } as unknown as UserRecord;
-const ordinary = { id: BOB, username: "bob", role: "user" } as unknown as UserRecord;
+const ordinary = { id: BOB, username: "bob", role: "user", permissions: { downloadToLibrary: true, downloadToDevice: true } } as unknown as UserRecord;
 
 const stats = new Map([["alpha", { titles: 3, files: 4, bytes: 5 }]]);
 
@@ -107,9 +107,10 @@ const mount = async (
     invalidateLibrary: () => undefined,
     libraryGrants: () => mergeGrants(env, state.grants),
     libraryStats: async () => stats,
-    libraryView: (record, health, totals, admin) => {
-      viewed.push({ id: record.id, health, stats: totals, admin });
-      return { id: record.id, name: record.name, unreachable: health.unreachable, readOnly: health.readOnly, ...totals };
+    libraryView: (record, health, totals, admin, canDownload) => {
+      viewed.push({ id: record.id, health, stats: totals, admin, canDownload });
+      return { id: record.id, name: record.name, unreachable: health.unreachable, readOnly: health.readOnly,
+        writable: record.enabled && !health.readOnly && canDownload, ...totals };
     },
     progressOf: () => ({}),
     refreshLibraryHealth: async () => new Map(),
@@ -203,6 +204,24 @@ test("GET /api/libraries tells the view whether the caller may be shown a root",
 
   assert.deepEqual(harness.viewed.map((item) => item.admin), [true, false],
     "only an administrator is offered the path the library lives at on the host");
+});
+
+test("GET /api/libraries says whether this account may save a download to each library", async (t) => {
+  // The harness probes by id: `beta` reads as read-only, so it is not writable.
+  const harness = await mount([
+    { ...library("beta", 0), visibleTo: [BOB] },
+    { ...library("alpha", 1), visibleTo: [BOB] },
+    { ...library("delta", 2), visibleTo: [BOB] },
+  ]);
+  t.after(harness.close);
+
+  const admin = await (await api(harness.base, "/api/libraries")).json() as Array<{ id: string; writable: boolean }>;
+  assert.deepEqual(admin.map((item) => [item.id, item.writable]),
+    [["beta", false], ["alpha", true], ["delta", true]], "a read-only library is not writable");
+
+  const user = await (await api(harness.base, "/api/libraries", { user: BOB })).json() as Array<{ id: string; writable: boolean }>;
+  assert.deepEqual(user.map((item) => [item.id, item.writable]), [["beta", false], ["alpha", true], ["delta", true]]);
+  assert.deepEqual(harness.viewed.filter((item) => item.id === "delta").map((item) => item.canDownload), [true, true]);
 });
 
 test("PATCH /api/libraries/:id sets visibleTo and collapses duplicates", async (t) => {

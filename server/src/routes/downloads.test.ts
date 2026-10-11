@@ -7,7 +7,7 @@ import path from "node:path";
 import { test } from "node:test";
 import express from "express";
 import { DeviceTransfers } from "../device-transfers.js";
-import type { DownloadQueue } from "../downloads.js";
+import { ownerMayDownload, type DownloadQueue } from "../downloads.js";
 import { AppError, messageKeyOf } from "../errors.js";
 import type { LibraryRecord } from "../libraries.js";
 import { defaultDownloadSettings, type MediaInfo } from "../naming.js";
@@ -67,7 +67,7 @@ const denied = account(BOB, "user", false);
  *  instance over fake collaborators that record what they were asked to do. */
 const mount = async (
   addons: unknown[] = [streamAddon("stream-addon")],
-  options: { viewer?: UserRecord; jobs?: Array<{ id: string; ownerUserId?: string }>; libraries?: unknown[] } = {},
+  options: { viewer?: UserRecord; jobs?: Array<{ id: string; ownerUserId?: string }>; libraries?: unknown[]; defaultLibrary?: LibraryRecord } = {},
 ): Promise<Harness> => {
   const jobs = options.jobs ?? [{ id: "job-1", ownerUserId: ADA }, { id: "job-2", ownerUserId: ADA }];
   const transfers = new DeviceTransfers();
@@ -124,6 +124,9 @@ const mount = async (
     libraryKey: (value) => value,
     cachedMeta: async () => null,
     prefsOf: () => ({ uiLanguage: "en" }) as UserPrefs,
+    // The queue resolves a rule with no library to the default for the kind; tests name it
+    // explicitly, and otherwise it is the single configured library.
+    defaultDownloadLibrary: () => options.defaultLibrary ?? (options.libraries as LibraryRecord[] | undefined)?.[0],
   };
   const app = express();
   app.use(express.json());
@@ -502,4 +505,39 @@ test("POST /api/downloads/bulk refuses an unusable explicit target and queues no
   assert.equal(response.status, 400);
   assert.equal(await keyOf(response), "err.libraryNotFound");
   assert.deepEqual(harness.pending, []);
+});
+
+test("POST /api/downloads refuses a default library the account cannot see, and creates no job", async (t) => {
+  const hidden = library("lib_private", "movie", { visibleTo: [] });
+  const harness = await mount([streamAddon("stream-addon")], { viewer: ordinary, libraries: [hidden], defaultLibrary: hidden });
+  t.after(harness.close);
+  const response = await api(harness.base, "/api/downloads", { method: "POST", body: { title: "Film" } });
+  assert.equal(response.status, 403, "the job is refused at the door, not queued and paused");
+  assert.equal(await keyOf(response), "err.downloadLibraryNotAllowed");
+  assert.deepEqual(harness.added, [], "nothing is queued");
+});
+
+test("POST /api/downloads accepts a visible writable default library and the queue's own check agrees", async (t) => {
+  const visible = library("lib_movies", "movie", { visibleTo: [BOB] });
+  const harness = await mount([streamAddon("stream-addon")], { viewer: ordinary, libraries: [visible], defaultLibrary: visible });
+  t.after(harness.close);
+  const response = await api(harness.base, "/api/downloads", { method: "POST", body: { title: "Film" } });
+  assert.equal(response.status, 201);
+  assert.deepEqual(harness.added[0]?.settings, { subfolder: "", layout: "structured" });
+  // The job the queue builds resolves the same library; its own owner-bound check lets it run.
+  assert.equal(ownerMayDownload({ owner: ordinary, addons: [], libraries: [visible] }, { stream: {}, libraryId: visible.id }), true,
+    "the queue's first check does not pause the job");
+});
+
+test("POST /api/downloads/bulk refuses a default library the account cannot see and queues nothing", async (t) => {
+  const hidden = library("lib_private", "series", { visibleTo: [] });
+  const harness = await mount([streamAddon("stream-addon", { allowedUsers: [BOB] })], { viewer: ordinary, libraries: [hidden], defaultLibrary: hidden });
+  t.after(harness.close);
+  const response = await api(harness.base, "/api/downloads/bulk", {
+    method: "POST",
+    body: { title: "Show", episodes: episodes(1), selection: { addonKeys: ["stream-addon"], audioLanguage: "en" } },
+  });
+  assert.equal(response.status, 403);
+  assert.equal(await keyOf(response), "err.downloadLibraryNotAllowed");
+  assert.deepEqual(harness.pending, [], "nothing is queued");
 });

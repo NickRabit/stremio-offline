@@ -6,7 +6,7 @@ import { ownerMayDownload, type AudioMode, type DownloadQueue, type DownloadSele
 import { AppError } from "../errors.js";
 import { normalizeLanguage } from "../language.js";
 import { log } from "../logger.js";
-import { libraryVisible, resolveLibraryPath, type Viewer } from "../libraries.js";
+import { libraryVisible, resolveLibraryPath, type LibraryRecord, type Viewer } from "../libraries.js";
 import { defaultDownloadSettings, exactSubfolder, targetLibrary, type MediaInfo } from "../naming.js";
 import { titleLanguage } from "../ranking.js";
 import type { UserPrefs } from "../store.js";
@@ -24,13 +24,16 @@ export interface DownloadsDeps extends RouteContext {
   titleKey(target: string, media: MediaInfo | undefined, flat: boolean): string;
   saveCatalogPoster(key: string, url?: string, fallback?: string, backdrop?: string): void;
   libraryKey(value: string): string;
+  /** Where a download whose rule names no library goes, resolved the way the queue resolves
+   *  it, so the guard at the door and the queue's own check agree on the same library. */
+  defaultDownloadLibrary(kind: "movie" | "series"): LibraryRecord | undefined;
   cachedMeta(type: string, id: string, language?: string, viewer?: Viewer): Promise<MetaItem | null>;
   prefsOf(req?: express.Request): UserPrefs;
 }
 
 /** The deps the body-validation of a lazy download selection needs, shared by the bulk route
  *  and the follow routes so both parse audio, subtitles and the pinned target the same way. */
-type SelectionDeps = Pick<DownloadsDeps, "store" | "currentUser" | "cachedMeta" | "prefsOf">;
+type SelectionDeps = Pick<DownloadsDeps, "store" | "currentUser" | "cachedMeta" | "prefsOf" | "defaultDownloadLibrary">;
 
 /** The owner-bound check where a failure reaches the caller instead of pausing a job. The
  *  rights are asked before the body is read; the source and the library the rule names are
@@ -75,7 +78,7 @@ const explicitTargetFor = (deps: SelectionDeps) => async (req: express.Request, 
  *  caller may use, the strategy, the audio and subtitle rules, the title language and a
  *  concrete target. Shared so the bulk route and a follow's automatic rule cannot drift. */
 export function createSelectionParser(deps: SelectionDeps): (req: express.Request, input: { selection: unknown; target: unknown; metaType: string; parentId?: string }) => Promise<DownloadSelection> {
-  const { store, currentUser, cachedMeta, prefsOf } = deps;
+  const { store, currentUser, cachedMeta, prefsOf, defaultDownloadLibrary } = deps;
   const assertMayQueue = mayQueueGuard(deps);
   const explicitTarget = explicitTargetFor(deps);
   return async (req, input) => {
@@ -114,13 +117,16 @@ export function createSelectionParser(deps: SelectionDeps): (req: express.Reques
       fallbackSubtitleLanguage: fallbackSubtitleLanguage === subtitleLanguage ? undefined : fallbackSubtitleLanguage,
       targetSettings: explicit ?? (firstAddon?.downloadSettings[kind] ?? defaultDownloadSettings()[kind]),
     };
-    assertMayQueue(req, { libraryId: selection.targetSettings.libraryId });
+    // The rule names a library or leaves the choice to the default for the kind. The queue
+    // resolves that same default, so the guard has to resolve it here too or an unavailable
+    // account would be let past the door and paused by the queue a moment later.
+    assertMayQueue(req, { libraryId: selection.targetSettings.libraryId ?? defaultDownloadLibrary(kind)?.id });
     return selection;
   };
 }
 
 export function registerDownloadRoutes(app: express.Application, deps: DownloadsDeps): void {
-  const { store, currentUser, queue, deviceTransfers, jobView, sourceOf, mediaSource, posterOf, rememberTitle, titleKey, saveCatalogPoster, libraryKey } = deps;
+  const { store, currentUser, queue, deviceTransfers, jobView, sourceOf, mediaSource, posterOf, rememberTitle, titleKey, saveCatalogPoster, libraryKey, defaultDownloadLibrary } = deps;
 
   const assertMayQueue = mayQueueGuard(deps);
   const explicitTarget = explicitTargetFor(deps);
@@ -153,7 +159,9 @@ export function registerDownloadRoutes(app: express.Application, deps: Downloads
     const kind = media?.kind === "episode" ? "series" : "movie";
     const chosen = await explicitTarget(req, req.body.target, kind);
     const targetSettings = chosen ?? (kind === "series" ? settings.series : settings.movie);
-    assertMayQueue(req, { stream, libraryId: targetSettings.libraryId });
+    // The queue turns a rule that names no library into the default for the kind; the guard
+    // has to name that same library or the job would be let in and paused at once.
+    assertMayQueue(req, { stream, libraryId: targetSettings.libraryId ?? defaultDownloadLibrary(kind)?.id });
     const job = await queue.add(String(req.body.title ?? "video"), stream, media, targetSettings, owner?.id);
     await rememberTitle(job.target, media, targetSettings.layout === "flat");
     // Only for a source the catalogue has no title for: `rememberTitle` already saved the

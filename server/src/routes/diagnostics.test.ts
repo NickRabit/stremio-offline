@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import express from "express";
+import { ClientLogStore } from "../client-logs.js";
 import type { DownloadQueue } from "../downloads.js";
 import { messageKeyOf } from "../errors.js";
 import type { LibraryScan } from "../library-scan.js";
@@ -14,23 +15,27 @@ import type { PlaybackManager } from "../playback.js";
 import type { StatsLog } from "../stats.js";
 import type { Store } from "../store.js";
 import type { Throughput } from "../throughput.js";
+import type { UserRecord } from "../users.js";
 import { registerDiagnosticsRoutes, type DiagnosticsDeps } from "./diagnostics.js";
 
 interface Harness {
   base: string;
   hours: number[];
+  /** The directory bundles are written under; a test can read it back. */
+  dataDir: string;
   close(): Promise<void>;
 }
 
 /** The routes take everything they need from the context, so the app here is a real express
  *  instance over fake collaborators that record what they were asked to do. */
-const mount = async (jobs: unknown[] = []): Promise<Harness> => {
+const mount = async (jobs: unknown[] = [], options: { user?: UserRecord } = {}): Promise<Harness> => {
   const hours: number[] = [];
+  const dataDir = await mkdtemp(path.join(tmpdir(), "routes-client-logs-"));
   const deps: DiagnosticsDeps = {
     store: { addons: () => [], libraries: () => [] } as unknown as Store,
     needsSetup: () => false,
     currentSession: () => undefined,
-    currentUser: () => undefined,
+    currentUser: () => options.user,
     isSecure: () => false,
     stopOwnedPlayback: async () => undefined,
     stopUserSessions: async () => undefined,
@@ -43,10 +48,12 @@ const mount = async (jobs: unknown[] = []): Promise<Harness> => {
     libraryScan: { snapshot: () => ({ running: false }) } as unknown as LibraryScan,
     playbackMeta: () => ({ source: "catalog", provider: "example", title: "title", kind: "other" }),
     freeSpace: async (target: string) => ({ path: target, freeBytes: 10, totalBytes: 20 }),
-    dataDir: "/data",
+    clientLogs: new ClientLogStore(dataDir),
+    dataDir,
   };
   const app = express();
-  app.use(express.json());
+  // A bundle may carry up to 512 KB, more than the ordinary body limit.
+  app.use(express.json({ limit: "512kb" }));
   registerDiagnosticsRoutes(app, deps);
   app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
     const status = typeof (error as { status?: unknown }).status === "number" ? (error as { status: number }).status : 400;
@@ -58,9 +65,11 @@ const mount = async (jobs: unknown[] = []): Promise<Harness> => {
   return {
     base: `http://127.0.0.1:${port}`,
     hours,
+    dataDir,
     close: async () => {
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
+      await rm(dataDir, { recursive: true, force: true });
     },
   };
 };
@@ -143,4 +152,85 @@ test("POST /api/client-log keeps a forged line out of the log", async (t) => {
   assert.equal(lines.length, 1, `the forged line did not split the log\n${written}`);
   assert.equal(lines[0]!.startsWith(forged), false, "the forged line does not stand as its own record");
   assert.equal(lines[0]!.includes(forged), true, "the text is kept, on the one line");
+});
+
+const signedIn = (username: string): UserRecord => ({ id: `usr_${username}`, username, role: "user" } as unknown as UserRecord);
+const bundleBody = (over: Record<string, unknown> = {}) => ({
+  client: "tv", app: "1.4.0", device: "Living room TV", note: "keeps stalling",
+  lines: [{ t: "2026-01-01T00:00:00.000Z", level: "ERROR", message: "Decoder failed", context: { codec: "hevc" } }],
+  ...over,
+});
+
+test("POST /api/client-log prefixes a television's line with [tv]", async (t) => {
+  const dir = await mkdtemp(path.join(tmpdir(), "routes-client-log-tv-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const previousStdout = process.env.LOG_STDOUT;
+  process.env.LOG_STDOUT = "0";
+  t.after(() => { if (previousStdout === undefined) delete process.env.LOG_STDOUT; else process.env.LOG_STDOUT = previousStdout; });
+  await initLogger(dir);
+  setLevel("DEBUG");
+  const harness = await mount();
+  t.after(harness.close);
+  const response = await api(harness.base, "/api/client-log", { method: "POST", body: { client: "tv", level: "WARN", message: "buffering" } });
+  assert.equal(response.status, 204);
+  await flushLog();
+  const written = await readLog({ level: "WARN" });
+  assert.match(written, / WARN \[tv\] buffering/);
+});
+
+test("a bundle round-trips: stored, listed, read back and deleted", async (t) => {
+  const harness = await mount([], { user: signedIn("bundle-user") });
+  t.after(harness.close);
+
+  const created = await api(harness.base, "/api/client-log/bundle", { method: "POST", body: bundleBody() });
+  assert.equal(created.status, 201);
+  const { id } = await created.json() as { id: string };
+  assert.equal(typeof id, "string");
+
+  const list = await (await api(harness.base, "/api/client-logs")).json() as Array<{ id: string; user: string; client: string; app: string; device: string; note?: string; lines: number }>;
+  assert.equal(list.length, 1);
+  assert.deepEqual(
+    { id: list[0]!.id, user: list[0]!.user, client: list[0]!.client, app: list[0]!.app, device: list[0]!.device, note: list[0]!.note, lines: list[0]!.lines },
+    { id, user: "bundle-user", client: "tv", app: "1.4.0", device: "Living room TV", note: "keeps stalling", lines: 1 },
+  );
+
+  const one = await (await api(harness.base, `/api/client-logs/${id}`)).json() as { lines: Array<{ message: string; context?: Record<string, unknown> }> };
+  assert.equal(one.lines.length, 1);
+  assert.equal(one.lines[0]!.message, "Decoder failed");
+  assert.deepEqual(one.lines[0]!.context, { codec: "hevc" });
+
+  assert.equal((await api(harness.base, `/api/client-logs/${id}`, { method: "DELETE" })).status, 204);
+  assert.equal((await api(harness.base, `/api/client-logs/${id}`)).status, 404);
+  assert.deepEqual(await (await api(harness.base, "/api/client-logs")).json(), []);
+});
+
+test("POST /api/client-log/bundle refuses more than a thousand lines", async (t) => {
+  const harness = await mount([], { user: signedIn("too-many-lines") });
+  t.after(harness.close);
+  const lines = Array.from({ length: 1001 }, (_, index) => ({ t: "2026-01-01T00:00:00.000Z", level: "INFO", message: `line ${index}` }));
+  const response = await api(harness.base, "/api/client-log/bundle", { method: "POST", body: bundleBody({ lines }) });
+  assert.equal(response.status, 400);
+  assert.equal((await response.json() as { messageKey?: string }).messageKey, "err.clientLogTooLarge");
+  assert.deepEqual(await (await api(harness.base, "/api/client-logs")).json(), [], "nothing is stored");
+});
+
+test("POST /api/client-log/bundle refuses a body larger than 512 KB", async (t) => {
+  const harness = await mount([], { user: signedIn("too-big") });
+  t.after(harness.close);
+  const lines = [{ t: "2026-01-01T00:00:00.000Z", level: "INFO", message: "x".repeat(600 * 1024) }];
+  const response = await api(harness.base, "/api/client-log/bundle", { method: "POST", body: bundleBody({ lines }) });
+  assert.equal(response.status, 413);
+  assert.deepEqual(await (await api(harness.base, "/api/client-logs")).json(), [], "nothing is stored");
+});
+
+test("POST /api/client-log/bundle allows six bundles an hour per account", async (t) => {
+  const harness = await mount([], { user: signedIn("rate-limited") });
+  t.after(harness.close);
+  for (let index = 0; index < 6; index += 1) {
+    assert.equal((await api(harness.base, "/api/client-log/bundle", { method: "POST", body: bundleBody() })).status, 201, `bundle ${index}`);
+  }
+  const refused = await api(harness.base, "/api/client-log/bundle", { method: "POST", body: bundleBody() });
+  assert.equal(refused.status, 429);
+  assert.equal((await refused.json() as { messageKey?: string }).messageKey, "err.clientLogTooMany");
+  assert.equal((await (await api(harness.base, "/api/client-logs")).json() as unknown[]).length, 6, "the seventh is not stored");
 });

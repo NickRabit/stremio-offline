@@ -31,7 +31,7 @@ afterEach(() => {
 const library = (over: Partial<LibraryView> = {}): LibraryView => ({
   id: "lib_ab12cd34", name: "Films", type: "movie", root: "/downloads/Films",
   enabled: true, order: 0, addedAt: "2026-09-01T00:00:00.000Z", writeArtwork: true, autoScanMetadata: true,
-  unreachable: false, readOnly: false, defaultMovie: true, defaultSeries: false,
+  unreachable: false, readOnly: false, writable: true, defaultMovie: true, defaultSeries: false,
   titles: 12, files: 27, bytes: 48_500_000_000, ...over,
 });
 
