@@ -6,6 +6,7 @@ import android.content.Context
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextEquals
@@ -16,9 +17,12 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.pressKey
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.test.core.app.ApplicationProvider
 import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.catalog.ResumeEpisode
+import cz.stremiooffline.tv.data.ApiError
+import cz.stremiooffline.tv.data.ApiFailure
 import cz.stremiooffline.tv.data.DownloadDto
 import cz.stremiooffline.tv.data.DownloadsResponseDto
 import cz.stremiooffline.tv.data.HomeCard
@@ -26,11 +30,17 @@ import cz.stremiooffline.tv.data.HomeCardsJson
 import cz.stremiooffline.tv.data.HomeOrderEntry
 import cz.stremiooffline.tv.data.HomeResponseDto
 import cz.stremiooffline.tv.data.HomeRowDto
+import cz.stremiooffline.tv.data.MetaDto
+import cz.stremiooffline.tv.data.SettingsResponse
+import cz.stremiooffline.tv.data.episodeCodeText
 import cz.stremiooffline.tv.ui.FakeTvApi
 import cz.stremiooffline.tv.ui.catalog.CatalogDetailArgs
 import cz.stremiooffline.tv.ui.detail.PlayTarget
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -692,5 +702,238 @@ class HomeScreenTest {
 
     compose.onNodeWithTag(homeCardTag("folder:f")).assertIsFocused()
     assertTrue("the folder poster was not resolved: $urls", "lib_1/Films/cover.jpg" in urls)
+  }
+
+  /** The text layout a tagged `Text` drew, so a test can see its lines and overflow. */
+  private fun layoutOf(tag: String): TextLayoutResult {
+    val results = mutableListOf<TextLayoutResult>()
+    compose.onNodeWithTag(tag).fetchSemanticsNode().config[SemanticsActions.GetTextLayoutResult].action!!.invoke(results)
+    return results.single()
+  }
+
+  /** Moves the virtual clock and lets the composition catch up. With auto-advance off a step
+   *  shorter than the debounce really is shorter than the debounce, which a test can rely on. */
+  private fun step(ms: Long) {
+    compose.mainClock.advanceTimeBy(ms)
+    repeat(3) { compose.mainClock.advanceTimeByFrame() }
+    compose.waitForIdle()
+  }
+
+  private fun catalogueMeta() = MetaDto(
+    id = "tt3",
+    type = "movie",
+    name = "Dis",
+    description = "A quiet film about a loud room.",
+    releaseInfo = "2019-05-01",
+    genres = listOf("Drama", "Crime", "Mystery", "Thriller"),
+    runtime = "1 h 42 min",
+    imdbRating = JsonPrimitive("8.1"),
+  )
+
+  @Test
+  fun `the hero asks the catalogue only after the debounce`() {
+    val api = FakeTvApi()
+    serve(api, order("tonight"), mapOf("tonight" to row(discovery("movie:tt3", "tt3"))))
+    api.metaValues["movie:tt3"] = catalogueMeta()
+    compose.mainClock.autoAdvance = false
+    mount(api)
+    step(100)
+
+    assertEquals(0, api.metaRequests.size)
+
+    step(HERO_META_DEBOUNCE_MS)
+
+    assertEquals(listOf(Triple("movie", "tt3", null)), api.metaRequests)
+  }
+
+  @Test
+  fun `moving across five cards quickly asks only the card focus lands on`() {
+    val api = FakeTvApi()
+    val cards = (1..5).map { discovery("movie:tt$it", "tt$it") }
+    serve(api, order("tonight"), mapOf("tonight" to row(*cards.toTypedArray())))
+    compose.mainClock.autoAdvance = false
+    mount(api)
+    step(100)
+
+    // One burst of presses, so no card on the way is ever the settled one.
+    compose.onNodeWithTag(homeCardTag("movie:tt1")).performKeyInput { repeat(4) { pressKey(Key.DirectionRight) } }
+    compose.mainClock.advanceTimeByFrame()
+    step(HERO_META_DEBOUNCE_MS)
+
+    compose.onNodeWithTag(homeCardTag("movie:tt5")).assertIsFocused()
+    assertEquals(listOf(Triple("movie", "tt5", null)), api.metaRequests)
+  }
+
+  @Test
+  fun `returning to a visited card asks the catalogue nothing`() {
+    val api = FakeTvApi()
+    val cards = listOf(discovery("movie:tt1", "tt1"), discovery("movie:tt2", "tt2"))
+    serve(api, order("tonight"), mapOf("tonight" to row(*cards.toTypedArray())))
+    api.metaValues["movie:tt1"] = catalogueMeta().copy(id = "tt1")
+    api.metaValues["movie:tt2"] = catalogueMeta().copy(id = "tt2")
+    compose.mainClock.autoAdvance = false
+    mount(api)
+    step(100)
+
+    step(HERO_META_DEBOUNCE_MS)
+    assertEquals(listOf(Triple("movie", "tt1", null)), api.metaRequests)
+
+    compose.onNodeWithTag(homeCardTag("movie:tt1")).performKeyInput { pressKey(Key.DirectionRight) }
+    step(HERO_META_DEBOUNCE_MS)
+    assertEquals(listOf(Triple("movie", "tt1", null), Triple("movie", "tt2", null)), api.metaRequests)
+
+    compose.onNodeWithTag(homeCardTag("movie:tt2")).performKeyInput { pressKey(Key.DirectionLeft) }
+    step(HERO_META_DEBOUNCE_MS)
+
+    assertEquals(2, api.metaRequests.size)
+  }
+
+  @Test
+  fun `the catalogue line and description appear once the title answers`() {
+    val api = FakeTvApi()
+    serve(api, order("tonight"), mapOf("tonight" to row(discovery("movie:tt3", "tt3"))))
+    api.metaValues["movie:tt3"] = catalogueMeta()
+    mount(api)
+    compose.waitForIdle()
+
+    compose.mainClock.advanceTimeBy(HERO_META_DEBOUNCE_MS + 200)
+    compose.waitForIdle()
+
+    compose.onNodeWithText("2019 · Drama · Crime · Mystery · 1 h 42 min · ★ 8.1").assertExists()
+    compose.onNodeWithText("A quiet film about a loud room.").assertExists()
+  }
+
+  @Test
+  fun `a failing catalogue answer leaves the card's own line`() {
+    val api = FakeTvApi()
+    val card = HomeCard.ResumeCatalogue(
+      key = "series:x:1:2",
+      title = "Show",
+      type = "series",
+      id = "tt1",
+      name = "Show",
+      season = 1,
+      episode = 2,
+    )
+    serve(api, order("resume"), mapOf("resume" to row(card)))
+    mount(api)
+    compose.waitForIdle()
+
+    compose.mainClock.advanceTimeBy(HERO_META_DEBOUNCE_MS + 200)
+    compose.waitForIdle()
+
+    assertEquals(1, api.metaRequests.size)
+    compose.onNodeWithText(card.episodeCodeText!!).assertExists()
+  }
+
+  @Test
+  fun `a forty character title keeps to two lines inside the wider column`() {
+    val api = FakeTvApi()
+    val title = "The Greatest Story Ever Told In One Line"
+    assertEquals(40, title.length)
+    serve(api, order("resume"), mapOf("resume" to row(resumeFile("a", title))))
+    mount(api)
+    compose.waitForIdle()
+
+    val layout = layoutOf(TagBackdropTitle)
+    assertTrue("the title took ${layout.lineCount} lines", layout.lineCount <= 2)
+    assertFalse("the title overflowed its height", layout.didOverflowHeight)
+
+    val root = compose.onRoot().fetchSemanticsNode().boundsInRoot
+    val hero = compose.onNodeWithTag(TagBackdropHero).fetchSemanticsNode().boundsInRoot
+    assertEquals("the hero column is not 62 % of the screen", root.width * 0.62f, hero.width, 2f)
+    val titleBounds = compose.onNodeWithTag(TagBackdropTitle).fetchSemanticsNode().boundsInRoot
+    assertTrue("the title $titleBounds escapes the hero $hero", titleBounds.left >= hero.left - 2f && titleBounds.right <= hero.right + 2f)
+  }
+
+  @Test
+  fun `the hero keeps its height as the title metadata arrives`() {
+    val api = FakeTvApi()
+    serve(api, order("tonight"), mapOf("tonight" to row(discovery("movie:tt3", "tt3"))))
+    api.metaValues["movie:tt3"] = catalogueMeta()
+    // Hold the answer so the "before" bounds are read with the hero still bare.
+    val gate = CompletableDeferred<Unit>()
+    api.metaGates["movie:tt3"] = gate
+    mount(api)
+    compose.waitForIdle()
+    val before = compose.onNodeWithTag(TagBackdropHero).fetchSemanticsNode().boundsInRoot
+
+    gate.complete(Unit)
+    compose.mainClock.advanceTimeBy(HERO_META_DEBOUNCE_MS + 200)
+    compose.waitForIdle()
+
+    compose.onNodeWithText("A quiet film about a loud room.").assertExists()
+    val after = compose.onNodeWithTag(TagBackdropHero).fetchSemanticsNode().boundsInRoot
+    assertEquals("the hero moved when the metadata arrived", before.height, after.height, 0.5f)
+  }
+
+  @Test
+  fun `a library card shows its own subtitle and asks the catalogue for nothing`() {
+    val api = FakeTvApi()
+    val card = HomeCard.ResumeFile(key = "a", title = "First", subtitle = "Films/First.mkv", path = "browse/a", progress = null)
+    serve(api, order("resume"), mapOf("resume" to row(card)))
+    mount(api)
+    compose.waitForIdle()
+    compose.mainClock.advanceTimeBy(HERO_META_DEBOUNCE_MS + 200)
+    compose.waitForIdle()
+
+    assertTrue(api.metaRequests.isEmpty())
+    compose.onNodeWithText("Films/First.mkv").assertExists()
+  }
+
+  @Test
+  fun `the hero asks the catalogue in the account's language, read once`() {
+    val api = FakeTvApi()
+    api.settingsValue = SettingsResponse(uiLanguage = "cs")
+    val cards = listOf(discovery("movie:tt1", "tt1"), discovery("movie:tt2", "tt2"))
+    serve(api, order("tonight"), mapOf("tonight" to row(*cards.toTypedArray())))
+    api.metaValues["movie:tt1"] = catalogueMeta().copy(id = "tt1")
+    api.metaValues["movie:tt2"] = catalogueMeta().copy(id = "tt2")
+    compose.mainClock.autoAdvance = false
+    mount(api)
+    step(100)
+
+    step(HERO_META_DEBOUNCE_MS)
+    compose.onNodeWithTag(homeCardTag("movie:tt1")).performKeyInput { pressKey(Key.DirectionRight) }
+    step(HERO_META_DEBOUNCE_MS)
+
+    assertEquals(listOf(Triple("movie", "tt1", "cs"), Triple("movie", "tt2", "cs")), api.metaRequests)
+    assertEquals(1, api.settingsCalls)
+  }
+
+  @Test
+  fun `a failing settings read leaves the hero's language unset`() {
+    val api = object : FakeTvApi() {
+      override suspend fun settings(): SettingsResponse = throw ApiError(ApiFailure.Generic)
+    }
+    serve(api, order("tonight"), mapOf("tonight" to row(discovery("movie:tt3", "tt3"))))
+    api.metaValues["movie:tt3"] = catalogueMeta()
+    compose.mainClock.autoAdvance = false
+    mount(api)
+    step(100)
+
+    step(HERO_META_DEBOUNCE_MS)
+
+    assertEquals(listOf(Triple("movie", "tt3", null)), api.metaRequests)
+  }
+
+  @Test
+  fun `catalogue rows name their type so twin names are told apart`() {
+    val api = FakeTvApi()
+    val movie = "catalog:cinemeta:movie:popular"
+    val series = "catalog:cinemeta:series:popular"
+    serve(
+      api,
+      listOf(HomeOrderEntry(movie, "Cinemeta · Popular"), HomeOrderEntry(series, "Cinemeta · Popular")),
+      mapOf(
+        movie to row(discovery("movie:tt1", "tt1")),
+        series to row(HomeCard.Discovery(key = "series:tt2", type = "series", id = "tt2", name = "Show", title = "Show")),
+      ),
+    )
+    mount(api)
+    compose.waitForIdle()
+
+    compose.onNodeWithText("Cinemeta · Popular (movie)").assertExists()
+    compose.onNodeWithText("Cinemeta · Popular (series)").assertExists()
   }
 }

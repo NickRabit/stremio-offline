@@ -54,6 +54,41 @@ fun captionOf(card: HomeCard, label: String?): String? = listOfNotNull(
   card.yearText?.takeIf { it.isNotBlank() },
 ).joinToString(" · ").ifEmpty { null }
 
+/** The catalogue title a card's hero describes itself with: the type and the id `meta` is asked
+ *  for. Nothing for the kinds the library backs, which carry no catalogue metadata and ask for none. */
+fun HomeCard.heroMetaRef(): Pair<String, String>? = when (this) {
+  is HomeCard.ResumeCatalogue -> type to id
+  is HomeCard.Episode -> type to metaId
+  is HomeCard.Discovery -> type to id
+  is HomeCard.FavoriteCatalogue -> type to id
+  else -> null
+}
+
+/** The hero's line under the title: the catalogue's own year, genres, runtime and rating once the
+ *  title has answered, the card's year and episode code while it has not (or when it has none).
+ *  An episode keeps its episode code the way it always has. */
+fun heroMetaLine(card: HomeCard, meta: MetaDto?): String {
+  if (meta != null && card !is HomeCard.Episode) {
+    val line = listOfNotNull(
+      meta.yearText ?: card.yearText,
+      *meta.genres.orEmpty().take(3).toTypedArray(),
+      meta.runtime?.takeIf { it.isNotBlank() },
+      meta.ratingText?.let { "★ $it" },
+    ).joinToString(" · ")
+    if (line.isNotEmpty()) return line
+  }
+  return listOfNotNull(card.yearText, card.episodeCodeText).joinToString(" · ")
+}
+
+/** The hero's description: the catalogue's own text, or the subtitle a library file carries.
+ *  Nothing when it has neither, so a library card asks for no metadata. */
+fun heroDescription(card: HomeCard, meta: MetaDto?): String? =
+  if (meta != null) {
+    meta.description?.takeIf { it.isNotBlank() }
+  } else {
+    (card as? HomeCard.ResumeFile)?.subtitle?.takeIf { it.isNotBlank() }
+  }
+
 /** Where OK on a card goes: the player, the library folder or a catalogue detail. */
 fun actionFor(card: HomeCard): HomeAction = when (card) {
   is HomeCard.ResumeFile -> play(card.path, card.title)
