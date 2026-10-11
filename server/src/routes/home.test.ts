@@ -48,6 +48,8 @@ interface Harness {
   records: Record<string, MetaRecord>;
   /** Keys `describeLibraryPath` must answer as gone. */
   missing: Set<string>;
+  /** Keys `describeLibraryPath` must answer as folders. */
+  folders: Set<string>;
   /** Keys `describeLibraryPath` must throw on, for the throwing-row case. */
   broken: Set<string>;
   /** The finished jobs `completedJobs()` hands out. */
@@ -98,17 +100,23 @@ const fileItem = (relative: string): BrowseItem => {
   };
 };
 
+const folderItem = (relative: string): BrowseItem => ({
+  kind: "folder", path: relative, name: relative.slice(relative.lastIndexOf("/") + 1),
+  fileCount: 0, size: 0, modified: "2024-01-01T00:00:00.000Z",
+});
+
 const mount = async (options: { libraries?: LibraryRecord[]; deadlineMs?: number; now?: number } = {}): Promise<Harness> => {
   const libraries = options.libraries ?? [];
   const addons: AddonRecord[] = [];
   const records: Record<string, MetaRecord> = {};
   const missing = new Set<string>();
+  const folders = new Set<string>();
   const broken = new Set<string>();
   const seenDir = await mkdtemp(path.join(tmpdir(), "home-seen-"));
   const seen = new LibrarySeenStore(seenDir);
   await seen.load();
   const state: Harness = {
-    base: "", addons, records, missing, broken, completed: [], completedThrows: false, seen,
+    base: "", addons, records, missing, folders, broken, completed: [], completedThrows: false, seen,
     episodes: [], episodesThrows: false, newEpisodesCalls: [], suggestions: [], suggestionsThrow: false, suggestionCalls: 0,
     now: options.now ?? Date.parse("2026-01-15T12:00:00.000Z"),
     metaDelayMs: 0, metaAnswer: null, lookups: [], catalogCalls: [], catalogDelayMs: 0,
@@ -147,7 +155,8 @@ const mount = async (options: { libraries?: LibraryRecord[]; deadlineMs?: number
     describeLibraryPath: async (key) => {
       if (broken.has(key)) throw new Error("the library read blew up");
       if (missing.has(key)) return undefined;
-      return fileItem(parseLibraryPath(key)?.relative ?? key);
+      const relative = parseLibraryPath(key)?.relative ?? key;
+      return folders.has(key) ? folderItem(relative) : fileItem(relative);
     },
     libraryKey: (value) => value,
     libraryOfKey: (key) => {
@@ -1224,4 +1233,122 @@ test("GET /api/home/layout lists every arrangeable row with its state and the cu
   assert.deepEqual(body.layout.hidden, ["completed"]);
   assert.equal(body.layout.order[0], "favorites", "the placed order leads");
   assert.ok(body.layout.order.indexOf("favorites") < body.layout.order.indexOf("resume"));
+});
+
+const favorites = async (harness: Harness, query: string, user = ALICE): Promise<{ items: Array<{ kind: string; path?: string; id?: string; name?: string; catalogId?: string; year?: string; itemKind?: string; label?: string; progress?: { position: number; duration: number }; poster?: string }>; total: number }> =>
+  (await api(harness.base, `/api/favorites${query}`, user)).json() as never;
+
+test("GET /api/favorites merges both sources, library stars first, each newest first", async (t) => {
+  const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
+  t.after(harness.close);
+  harness.data(ALICE).favorites = ["lib_00000001/Old.mkv", "lib_00000001/New.mkv"];
+  harness.data(ALICE).watchlist = {
+    "movie:tt1": { type: "movie", id: "tt1", name: "Older star", addedAt: "2024-01-01T00:00:00.000Z" },
+    "movie:tt2": { type: "movie", id: "tt2", name: "Newer star", poster: "https://img/p.jpg", addedAt: "2024-02-01T00:00:00.000Z" },
+  };
+
+  const body = await favorites(harness, "");
+  assert.deepEqual(body.items.map((item) => item.kind), ["library", "library", "catalog", "catalog"]);
+  assert.deepEqual(body.items.map((item) => item.path ?? item.id), ["New.mkv", "Old.mkv", "tt2", "tt1"]);
+  assert.equal(body.total, 4);
+});
+
+test("GET /api/favorites filters by source and treats an unknown filter as all", async (t) => {
+  const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
+  t.after(harness.close);
+  harness.folders.add("lib_00000001/Shows");
+  harness.data(ALICE).favorites = ["lib_00000001/Shows"];
+  harness.data(ALICE).watchlist = { "movie:tt1": { type: "movie", id: "tt1", name: "Star", addedAt: "2024-01-01T00:00:00.000Z" } };
+
+  const libraryOnly = await favorites(harness, "?filter=library");
+  assert.deepEqual(libraryOnly.items.map((item) => item.kind), ["library"]);
+  assert.equal(libraryOnly.items[0]!.itemKind, "folder");
+  assert.equal(libraryOnly.items[0]!.label, "Shows");
+  const catalog = await favorites(harness, "?filter=catalog");
+  assert.deepEqual(catalog.items.map((item) => item.kind), ["catalog"]);
+  const all = await favorites(harness, "?filter=bogus");
+  assert.deepEqual(all.items.map((item) => item.kind), ["library", "catalog"]);
+});
+
+test("a catalogue star folds into the library star it matches, one entry with the catalogue id", async (t) => {
+  const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
+  t.after(harness.close);
+  harness.records["lib_00000001/Films/Heat.mkv"] = { type: "movie", id: "tt1", name: "Heat", year: "1995" };
+  harness.data(ALICE).favorites = ["lib_00000001/Films/Heat.mkv"];
+  harness.data(ALICE).watchlist = { "movie:tt1": { type: "movie", id: "tt1", name: "Heat", addedAt: "2024-01-01T00:00:00.000Z" } };
+
+  const body = await favorites(harness, "");
+  assert.equal(body.items.length, 1);
+  assert.equal(body.items[0]!.kind, "library");
+  assert.equal(body.items[0]!.path, "Films/Heat.mkv");
+  assert.equal(body.items[0]!.catalogId, "tt1");
+  assert.equal(body.items[0]!.year, "1995");
+});
+
+test("a catalogue star for a downloaded title is served as the local copy", async (t) => {
+  const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
+  t.after(harness.close);
+  harness.records["lib_00000001/Films/Heat.mkv"] = { type: "movie", id: "tt1", name: "Heat" };
+  harness.data(ALICE).watchlist = { "movie:tt1": { type: "movie", id: "tt1", name: "Heat", addedAt: "2024-01-01T00:00:00.000Z" } };
+
+  const body = await favorites(harness, "");
+  assert.deepEqual(body.items.map((item) => item.kind), ["library"]);
+  assert.equal(body.items[0]!.path, "Films/Heat.mkv");
+  assert.equal(body.items[0]!.catalogId, "tt1");
+});
+
+test("GET /api/favorites keeps only what the account may see", async (t) => {
+  const harness = await mount({ libraries: [
+    library({ id: "lib_00000001", root: "/media/one", visibleTo: [BOB] }),
+    library({ id: "lib_00000002", root: "/media/two", visibleTo: [ALICE], showInFavorites: false }),
+  ] });
+  t.after(harness.close);
+  harness.data(ALICE).favorites = ["lib_00000001/Private.mkv", "lib_00000002/OptedOut.mkv"];
+  harness.data(ALICE).watchlist = { "movie:tt1": { type: "movie", id: "tt1", name: "Star", addedAt: "2024-01-01T00:00:00.000Z" } };
+
+  const body = await favorites(harness, "");
+  assert.deepEqual(body.items.map((item) => item.kind), ["catalog"]);
+});
+
+test("favourites paging is stable across both sources", async (t) => {
+  const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
+  t.after(harness.close);
+  harness.data(ALICE).favorites = ["lib_00000001/A.mkv", "lib_00000001/B.mkv", "lib_00000001/C.mkv"];
+  harness.data(ALICE).watchlist = {
+    "movie:tt1": { type: "movie", id: "tt1", name: "One", addedAt: "2024-01-01T00:00:00.000Z" },
+    "movie:tt2": { type: "movie", id: "tt2", name: "Two", addedAt: "2024-02-01T00:00:00.000Z" },
+    "movie:tt3": { type: "movie", id: "tt3", name: "Three", addedAt: "2024-03-01T00:00:00.000Z" },
+  };
+
+  const first = await favorites(harness, "?limit=2&skip=0");
+  const second = await favorites(harness, "?limit=2&skip=2");
+  const third = await favorites(harness, "?limit=2&skip=4");
+  assert.equal(first.total, 6);
+  const seen = [...first.items, ...second.items, ...third.items].map((item) => item.path ?? item.id);
+  assert.deepEqual(seen, ["C.mkv", "B.mkv", "A.mkv", "tt3", "tt2", "tt1"]);
+  assert.equal(new Set(seen).size, 6, "paging never repeats an entry");
+});
+
+test("a library star carries its stored position", async (t) => {
+  const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
+  t.after(harness.close);
+  harness.data(ALICE).favorites = ["lib_00000001/Films/Watched.mkv"];
+  harness.data(ALICE).progress = {
+    "file:lib_00000001/Films/Watched.mkv": { position: 60, duration: 600, title: "Watched", path: "lib_00000001/Films/Watched.mkv", updatedAt: "2024-01-01T00:00:00.000Z" },
+  };
+
+  const body = await favorites(harness, "");
+  assert.deepEqual(body.items[0]!.progress, { position: 60, duration: 600 });
+});
+
+test("Home Favourites shows a catalogue star and opens the catalogue", async (t) => {
+  const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
+  t.after(harness.close);
+  harness.data(ALICE).watchlist = { "movie:tt9": { type: "movie", id: "tt9", name: "Starred", addedAt: "2024-01-01T00:00:00.000Z" } };
+
+  const rows = await allRows(harness, ALICE);
+  assert.equal(rows.favorites!.items.length, 1);
+  const card = rows.favorites!.items[0]!;
+  assert.equal(card.kind, "favorite-catalogue");
+  assert.deepEqual([card.type, card.id, card.name], ["movie", "tt9", "Starred"]);
 });

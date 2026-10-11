@@ -131,6 +131,16 @@ describe("query building", () => {
     await api.search("dune");
     expect(url()).toBe("/api/search?query=dune");
   });
+
+  it("asks the merged favourites list with the chosen filter and page", async () => {
+    fetchMock.mockImplementation(() => Promise.resolve(json({ items: [], total: 0, pending: false })));
+    await api.favoritesList({ filter: "library", skip: 60, limit: 60 });
+    expect(url(0)).toBe("/api/favorites?filter=library&skip=60&limit=60");
+    await api.favoritesList();
+    expect(url(1)).toBe("/api/favorites?limit=60");
+    await api.favoritesList({ filter: "all", limit: 20 });
+    expect(url(2)).toBe("/api/favorites?limit=20");
+  });
 });
 
 describe("opaque media contracts", () => {

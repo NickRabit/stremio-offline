@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { LibraryShelf } from "./LibraryShelf";
 import { setLocale } from "./i18n";
-import type { BrowseResult, FollowView, NewEpisode } from "./types";
+import type { FollowView, NewEpisode } from "./types";
 
 const at = "2026-01-01T00:00:00.000Z";
 const episode = (): NewEpisode => ({ followId: "f", type: "series", metaId: "tt1", name: "Show", videoId: "v1", season: 1, episode: 2, released: "2026-10-03T00:00:00Z" });
@@ -11,10 +11,6 @@ const follow = (): FollowView => ({
   id: "f", ownerUserId: "usr_00000001", type: "series", metaId: "tt1", name: "Show",
   createdAt: at, updatedAt: at, enabled: true, revision: 1, nextCheckAt: at, failures: 0, episodeCount: 1,
   downloads: { queued: 0, waiting: 0, completed: 0, skipped: 0, attention: 0 },
-});
-const favorites = (): BrowseResult => ({
-  path: ":favorites", total: 1, pending: false,
-  items: [{ kind: "file", path: "lib_00000001/Film.mkv", label: "Film", season: null, episode: null, size: 0, modified: at }],
 });
 const resumeItem = () => ({ key: "file:lib_00000001/A.mkv", path: "lib_00000001/A.mkv", title: "A", position: 1, duration: 4 });
 
@@ -39,9 +35,9 @@ type Overrides = Partial<Parameters<typeof LibraryShelf>[0]>;
 
 const render = async (over: Overrides = {}) => {
   const props: Parameters<typeof LibraryShelf>[0] = {
-    segment: "resume", showResume: true, resume: [], resumeTotal: 0, episodes: [], follows: [], favorites: null,
-    onSegment: vi.fn(), onPlayResume: vi.fn(), onRevealResume: vi.fn(), onOpenEpisode: vi.fn(), onOpenFavorite: vi.fn(),
-    onShowResume: vi.fn(), onShowEpisodes: vi.fn(), onShowFavorites: vi.fn(), ...over,
+    segment: "resume", showResume: true, resume: [], resumeTotal: 0, episodes: [], follows: [],
+    onSegment: vi.fn(), onPlayResume: vi.fn(), onRevealResume: vi.fn(), onOpenEpisode: vi.fn(),
+    onShowResume: vi.fn(), onShowEpisodes: vi.fn(), ...over,
   };
   await act(async () => { root.render(<LibraryShelf {...props}/>); });
   return props;
@@ -52,16 +48,19 @@ const showAll = () => host.querySelector<HTMLButtonElement>(".resume-show-all")!
 const click = async (element: HTMLElement) => { await act(async () => { element.click(); await Promise.resolve(); }); };
 
 describe("LibraryShelf", () => {
-  it("shows all three segments when Continue is allowed", async () => {
+  it("shows Continue and New episodes when Continue is allowed, and no Favourites segment", async () => {
     await render({ segment: "resume", showResume: true, resume: [resumeItem()] });
-    expect(segments().map((button) => button.textContent)).toEqual(["Continue", "New episodes", "Favourites"]);
+    expect(segments().map((button) => button.textContent)).toEqual(["Continue", "New episodes"]);
     expect(segments()[0].getAttribute("aria-pressed")).toBe("true");
   });
 
-  it("reports a segment click to the caller", async () => {
-    const { onSegment } = await render({ segment: "resume", favorites: favorites() });
-    await click(segments()[2]);
-    expect(onSegment).toHaveBeenCalledWith("favorites");
+  it("reports a segment click to the caller and reads an old favourites choice harmlessly", async () => {
+    const { onSegment } = await render({ segment: "resume", follows: [follow()], episodes: [episode()] });
+    await click(segments()[1]);
+    expect(onSegment).toHaveBeenCalledWith("episodes");
+    await render({ segment: "favorites", showResume: false, follows: [follow()], episodes: [episode()] });
+    expect(segments().map((button) => button.textContent)).toEqual(["New episodes"]);
+    expect(segments()[0].getAttribute("aria-pressed")).toBe("true");
   });
 
   it("shows all calls the callback of the displayed segment", async () => {
@@ -73,10 +72,6 @@ describe("LibraryShelf", () => {
     expect(showAll().textContent).toContain("Followed series (1)");
     await click(showAll());
     expect(episodes.onShowEpisodes).toHaveBeenCalled();
-
-    const favourite = await render({ segment: "favorites", favorites: favorites() });
-    await click(showAll());
-    expect(favourite.onShowFavorites).toHaveBeenCalled();
   });
 
   it("opens the resume menu onto reveal and plays a card", async () => {
@@ -88,19 +83,13 @@ describe("LibraryShelf", () => {
     expect(onRevealResume).toHaveBeenCalledWith("lib_00000001/A.mkv");
   });
 
-  it("opens a favourite on click", async () => {
-    const { onOpenFavorite } = await render({ segment: "favorites", favorites: favorites() });
-    await click(host.querySelector<HTMLButtonElement>(".resume-strip .browse-item")!);
-    expect(onOpenFavorite).toHaveBeenCalledWith(expect.objectContaining({ path: "lib_00000001/Film.mkv" }));
-  });
-
-  it("hides Continue, displays Favourites and does not write a preference", async () => {
+  it("hides Continue, displays New episodes and does not write a preference", async () => {
     const onSegment = vi.fn();
-    await render({ segment: "resume", showResume: false, favorites: favorites(), onSegment });
-    expect(segments().map((button) => button.textContent)).toEqual(["New episodes", "Favourites"]);
-    expect(segments()[1].getAttribute("aria-pressed")).toBe("true");
+    await render({ segment: "resume", showResume: false, follows: [follow()], episodes: [episode()], onSegment });
+    expect(segments().map((button) => button.textContent)).toEqual(["New episodes"]);
+    expect(segments()[0].getAttribute("aria-pressed")).toBe("true");
     expect(onSegment).not.toHaveBeenCalled();
-    expect(host.querySelector(".resume-strip")!.textContent).toContain("Film");
+    expect(host.querySelector(".resume-strip")!.textContent).toContain("Show");
   });
 
   it("renders nothing when every source is empty and Continue is hidden", async () => {
@@ -111,7 +100,7 @@ describe("LibraryShelf", () => {
   it("names the empty displayed segment", async () => {
     await render({ segment: "episodes", follows: [follow()], episodes: [] });
     expect(host.querySelector(".library-shelf")!.textContent).toContain("No new episodes");
-    await render({ segment: "favorites", follows: [follow()], favorites: { path: ":favorites", total: 0, pending: false, items: [] } });
-    expect(host.querySelector(".library-shelf")!.textContent).toContain("No favourites yet");
+    await render({ segment: "favorites", showResume: true, resume: [], follows: [follow()] });
+    expect(host.querySelector(".library-shelf")!.textContent).toContain("Nothing to continue");
   });
 });

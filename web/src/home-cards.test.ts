@@ -100,9 +100,9 @@ describe("showAllTarget", () => {
     expect(showAllTarget("completed", [completed], true)).toBe("downloads");
   });
 
-  it("always offers the library's list for Favourites", () => {
-    expect(showAllTarget("favorites", [favorite], false)).toBe("library-favorites");
-    expect(showAllTarget("favorites", [], true)).toBe("library-favorites");
+  it("always offers the Favourites section for Favourites", () => {
+    expect(showAllTarget("favorites", [favorite], false)).toBe("favorites");
+    expect(showAllTarget("favorites", [], true)).toBe("favorites");
   });
 
   it("always points New episodes at Following and To confirm at the suggestions dialog", () => {

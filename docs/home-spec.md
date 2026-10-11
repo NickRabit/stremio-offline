@@ -59,7 +59,7 @@ re-ordered by a heuristic, which keeps scroll restoration honest.
 | # | Row | Contents | Status |
 | --- | --- | --- | --- |
 | 1 | Continue watching | Library files with a stored position, catalogue progress and next-episode rows. | Needs a server identity contract, see below |
-| 2 | Favourites | Library favourites, filtered by grant. | Ready |
+| 2 | Favourites | Library favourites and starred catalogue titles, merged into one list and filtered by grant. | Ready |
 | 3 | Tonight | Unstarted whole titles from the libraries Home shows, in a per-day order. | Ready |
 | 4 | Add-on catalogs | One seeded random selection per selected manifest catalog feed from enabled, granted add-ons shown on Home. | Ready; bounded request per feed |
 | 5 | New episodes | The existing `NewEpisodesRow` from Following, after a check of its grant semantics. | Ready, reuse |
@@ -172,7 +172,8 @@ opens the same resolved, owner-scoped list, not the library root.
 | Library file in Continue watching | `playLocal`, resuming at the stored position | The overflow button is a sibling of the play control. Menu: Show in library, Forget progress |
 | Catalogue entry or next episode | `openMeta` on the remembered episode | The episode list is the alternative picker. Numbering is never guessed: `nextEpisodeOf` needs a season and an episode. |
 | Ready to play | `playLocal` on the resolved file | |
-| Favourite | Opens the folder or plays the file | |
+| Favourite file or folder | Opens the folder or plays the file | |
+| Starred catalogue title | `openMeta` on the title, so a downloaded copy opens from the catalogue detail | |
 
 "Download next episode" on a Continue watching card reuses the series download
 dialog and bulk route. The owner-scoped duplicate check has landed
@@ -572,9 +573,10 @@ the personal `homeLayout` setting below.
 
 ## Open questions for the owner
 
-- Should Favourites later include starred catalogue titles? The watchlist
-  returns titles with no check of the addons the account may use and stores no
-  addon key, so that needs fixing first. Until then: library only.
+- Favourites holds both kinds now: a starred catalogue title appears beside the
+  library stars and folds into the library entry when the title is downloaded
+  and identified. The watchlist still stores no addon key, so a catalogue star
+  is not filtered by which addons the account may use.
 - Should Home ever be the landing view? Recommended: no, until slice 6 and then
   only as an opt-in.
 - Cancel on a queue card? Recommended: no, cancel stays in Downloads.

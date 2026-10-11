@@ -301,18 +301,18 @@ describe("Home", () => {
     expect(onForgotten).not.toHaveBeenCalled();
   });
 
-  it("shows Show all only for a row with more, and Favourites always offers Open library", async () => {
+  it("shows Show all only for a row with more, and Favourites always offers its own section", async () => {
     const { onShowAll } = await render({
       rows: allEmpty({ resume: rowState({ items: [resumeFile()], hasMore: true }), completed: rowState({ items: [completedCard()] }), favorites: rowState({ items: [favoriteCard("file")] }) }),
     });
     const showAll = (id: string) => row(id)!.querySelector<HTMLButtonElement>(".resume-show-all");
     expect(showAll("resume")!.textContent).toContain("Show all");
     expect(showAll("completed")).toBeNull();
-    expect(showAll("favorites")!.textContent).toContain("Open library");
+    expect(showAll("favorites")!.textContent).toContain("Show all");
     await click(showAll("resume")!);
     expect(onShowAll).toHaveBeenCalledWith("library-resume");
     await click(showAll("favorites")!);
-    expect(onShowAll).toHaveBeenCalledWith("library-favorites");
+    expect(onShowAll).toHaveBeenCalledWith("favorites");
   });
 
   it("flips the tile shape from the heading", async () => {

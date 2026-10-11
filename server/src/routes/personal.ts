@@ -2,6 +2,10 @@ import type express from "express";
 import { allowedAddons } from "../addons.js";
 import type { ArtShape } from "../artwork.js";
 import { AppError } from "../errors.js";
+import {
+  filterFavorites, mergeFavorites, parseFavoriteFilter, type FavoriteCatalogItem, type FavoriteEntry,
+  type FavoriteEntryCatalog, type FavoriteEntryLibrary, type FavoriteItem, type FavoriteLibraryItem,
+} from "../favorites.js";
 import { HOME_FORGET_LIMIT } from "../home.js";
 import { images } from "../images.js";
 import { knownTitleEntry } from "../library-match.js";
@@ -92,11 +96,21 @@ export type ResumePageItem = LibraryFile & BrowseMeta & {
 };
 export interface ResumePage { items: ResumePageItem[]; total: number; pending: boolean }
 
+export interface FavoritesOptions {
+  filter?: ReturnType<typeof parseFavoriteFilter>;
+  skip?: number;
+  limit?: number;
+  /** Home drops the library stars of a library switched off there. */
+  onHome?: boolean;
+}
+export interface FavoritesPage { items: FavoriteItem[]; total: number; pending: boolean }
+
 /** The pieces `registerHomeRoutes` reads from the personal routes instead of reaching into
  *  the store itself, so exactly one place applies the permission rules. */
 export interface PersonalApi {
   progressRows(req: express.Request, options?: ProgressRowOptions): Promise<ProgressPage>;
   libraryResumeItems(req: express.Request, options?: ResumeRowOptions): Promise<ResumePage>;
+  favoritesPage(req: express.Request, options?: FavoritesOptions): Promise<FavoritesPage>;
   pathVisible(key: string, viewer: Viewer, libraries: LibraryRecord[]): boolean;
 }
 
@@ -408,6 +422,118 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     res.json({ path: relative, favorite: wanted });
   }));
 
+  /** A library star drawn on Home belongs to a library that is switched on and reachable,
+   *  the same two switches Home reads everywhere else. */
+  const onHomePath = (key: string, libraries: LibraryRecord[]): boolean => {
+    const parsed = parseLibraryPath(key);
+    if (!parsed) return true;
+    const library = libraryFor(libraries, parsed.libraryId);
+    if (!library) return true;
+    return library.enabled && !library.unreachable;
+  };
+
+  /** The merged Favourites list, ordered and permission-filtered but not yet described:
+   *  the paging slice happens before any disk read, so a long list is not walked whole. */
+  const favoritesEntries = (req: express.Request, options: FavoritesOptions): FavoriteEntry[] => {
+    const data = dataOf(req);
+    const viewer = viewerOf(currentUser(req));
+    const libraries = store.libraries();
+    const records = metaStore.qualifiedMeta();
+    const onHome = (key: string) => !options.onHome || (showsOnHome(key, libraries) && onHomePath(key, libraries));
+
+    // The library star whose binding carries a catalogue id, so a title starred in both
+    // places appears once. Only what the account may see takes part in the fold.
+    const boundByImdb = new Map<string, string>();
+    for (const [key, record] of Object.entries(records)) {
+      if (!record.id || record.unmatched) continue;
+      if (!pathVisible(key, viewer, libraries) || !showsInFavorites(key, libraries) || !onHome(key)) continue;
+      boundByImdb.set(`${record.type}:${record.id}`, key);
+    }
+
+    // The stored array is oldest first, so reversing it is the library's newest first.
+    const starred = data.favorites
+      .filter((key) => pathVisible(key, viewer, libraries) && showsInFavorites(key, libraries) && onHome(key))
+      .slice().reverse();
+    const starredKeys = new Set(starred);
+
+    const claimed = new Map<string, string>();
+    const library: FavoriteEntryLibrary[] = starred.map((key) => {
+      const record = records[key];
+      if (record?.id) claimed.set(`${record.type}:${record.id}`, key);
+      return { kind: "library", key, ...(record?.id ? { catalogId: record.id } : {}) };
+    });
+
+    const catalog: FavoriteEntryCatalog[] = [];
+    const watchlist = Object.entries(watchlistOf(data))
+      .map(([key, value]) => ({ key, ...value }))
+      .filter((entry) => Boolean(entry.id))
+      .sort((a, b) => b.addedAt.localeCompare(a.addedAt) || a.key.localeCompare(b.key));
+    const seen = new Set<string>();
+    for (const entry of watchlist) {
+      if (seen.has(entry.key)) continue;
+      seen.add(entry.key);
+      const identity = `${entry.type}:${entry.id}`;
+      // Starred in the library too: the library entry already carries this catalogue id.
+      if (claimed.has(identity)) continue;
+      // Downloaded and identified: the account opens the local copy rather than the add-on.
+      const bound = boundByImdb.get(identity) ?? boundByImdb.get(`movie:${entry.id}`) ?? boundByImdb.get(`series:${entry.id}`);
+      if (bound && !starredKeys.has(bound)) { library.push({ kind: "library", key: bound, catalogId: entry.id }); continue; }
+      catalog.push({
+        kind: "catalog", type: entry.type, id: entry.id, name: entry.name,
+        ...(entry.poster ? { poster: entry.poster } : {}),
+      });
+    }
+
+    return filterFavorites(mergeFavorites(library, catalog), options.filter ?? "all");
+  };
+
+  const describeFavorite = async (req: express.Request, entry: FavoriteEntry): Promise<FavoriteItem | undefined> => {
+    if (entry.kind === "catalog") {
+      const poster = entry.poster ? images.proxied(entry.poster) : undefined;
+      return { kind: "catalog", type: entry.type, id: entry.id, name: entry.name, ...(poster ? { poster } : {}), ...(entry.addonKey ? { addonKey: entry.addonKey } : {}) } satisfies FavoriteCatalogItem;
+    }
+    const item = await describeLibraryPath(entry.key, { stale: true });
+    if (!item) return undefined;
+    const key = libraryKey(entry.key);
+    const { poster: art, wide } = item.kind === "folder"
+      ? await locateFolderArtworkPair(key)
+      : { poster: await locateFileArtwork(key), wide: await locateFileArtwork(key, "wide") };
+    if (!art) (item.kind === "folder" ? scheduleFolderArtwork : scheduleFileArtwork)(key);
+    if (!wide) (item.kind === "folder" ? scheduleFolderArtwork : scheduleFileArtwork)(key, "wide");
+    const wire = wirePath(key);
+    const poster = await thumbUrl(item.kind === "folder" ? "dir" : "path", wire, art);
+    const wideUrl = await thumbUrl(item.kind === "folder" ? "dir" : "path", wire, wide, "wide");
+    const record = metaStore.qualifiedMeta()[key];
+    const stored = progressOf(dataOf(req))[`file:${key}`];
+    const progress = stored && stored.duration > 0 ? { position: stored.position, duration: stored.duration } : undefined;
+    return {
+      kind: "library", path: wire,
+      label: item.kind === "folder" ? item.name : item.label,
+      ...(poster ? { poster } : {}),
+      ...(wideUrl ? { wide: wideUrl } : {}),
+      ...(record?.year ? { year: record.year } : {}),
+      itemKind: item.kind,
+      ...(progress ? { progress } : {}),
+      ...(entry.catalogId ? { catalogId: entry.catalogId } : {}),
+    } satisfies FavoriteLibraryItem;
+  };
+
+  const favoritesPage = async (req: express.Request, options: FavoritesOptions = {}): Promise<FavoritesPage> => {
+    const entries = favoritesEntries(req, options);
+    const skip = Math.max(0, options.skip ?? 0);
+    const limit = Math.max(1, Math.min(120, options.limit ?? 60));
+    const described = await Promise.all(entries.slice(skip, skip + limit).map((entry) => describeFavorite(req, entry)));
+    const items = described.filter((item): item is FavoriteItem => item !== undefined);
+    return { items, total: entries.length, pending: items.some((item) => item.kind === "library" && (!item.poster || !item.wide)) };
+  };
+  app.get("/api/favorites", asyncRoute(async (req, res) => {
+    res.json(await favoritesPage(req, {
+      filter: parseFavoriteFilter(req.query.filter),
+      skip: Math.max(0, Number(req.query.skip) || 0),
+      limit: Math.max(1, Math.min(120, Number(req.query.limit) || 60)),
+    }));
+  }));
+
   const libraryResumeItems = async (req: express.Request, options: ResumeRowOptions = {}): Promise<ResumePage> => {
     const data = dataOf(req);
     const favorites = new Set(data.favorites);
@@ -494,5 +620,5 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     res.json({ path: ":favorites", items: page.map(({ backfill: _backfill, ...item }) => item), total: ordered.length, pending: page.some((item) => !item.poster || !item.wide || item.backfill) });
   }));
 
-  return { progressRows, libraryResumeItems, pathVisible };
+  return { progressRows, libraryResumeItems, favoritesPage, pathVisible };
 }

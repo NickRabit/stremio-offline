@@ -1,6 +1,6 @@
 import { serverText, t } from "./i18n";
 import type { SaveTarget } from "./save-target";
-import type { StatsActivityPage, ActiveStream, ActivityItem, CalendarItem, UndatedCalendarItem, ClientLogBundle, ClientLogSummary, Diagnostics, BuildInfo, AuthStatus, StatsSummary, Addon, AddonDownloadSettings, Capabilities, Catalog, Download, DownloadSelection, DownloadSnapshot, FollowDefaults, FollowEpisodeRow, FollowPreview, FollowStartMode, FollowView, Inspection, BrowseResult, IdentityPreview, LibraryFolder, LibraryMatchResult, LibraryOp, LibraryOpsState, NewEpisode, ProgressEntry, UserViews, WatchlistEntry, GrantBrowse, LibraryEstimate, LibraryGrant, LibrarySummary, LibraryType, LibraryView, Meta, PlaybackSession, ScanState, SearchPreferences, SearchResult, SearchState, SearchableCatalog, SiteLink, SuggestionRow, Session, Settings, SettingsBackup, SettingsPatch, SettingsView, Stream, Subtitle, Trailer, UserAccount, UserPermissions, UserRole } from "./types";
+import type { StatsActivityPage, ActiveStream, ActivityItem, CalendarItem, UndatedCalendarItem, ClientLogBundle, ClientLogSummary, Diagnostics, BuildInfo, AuthStatus, StatsSummary, Addon, AddonDownloadSettings, Capabilities, Catalog, Download, DownloadSelection, DownloadSnapshot, FavoriteFilter, FavoriteItem, FollowDefaults, FollowEpisodeRow, FollowPreview, FollowStartMode, FollowView, Inspection, BrowseResult, IdentityPreview, LibraryFolder, LibraryMatchResult, LibraryOp, LibraryOpsState, NewEpisode, ProgressEntry, UserViews, WatchlistEntry, GrantBrowse, LibraryEstimate, LibraryGrant, LibrarySummary, LibraryType, LibraryView, Meta, PlaybackSession, ScanState, SearchPreferences, SearchResult, SearchState, SearchableCatalog, SiteLink, SuggestionRow, Session, Settings, SettingsBackup, SettingsPatch, SettingsView, Stream, Subtitle, Trailer, UserAccount, UserPermissions, UserRole } from "./types";
 import type { HomeLayoutResponse, HomeResponse, HomeRowId } from "../../server/src/home";
 
 /** The status code has to reach the top, or a sign-out is indistinguishable from an ordinary error. */
@@ -159,6 +159,13 @@ export const api = {
     request<ScanState>("/api/library/scan", { method: "POST", body: JSON.stringify(body) }),
   stopLibraryScan: () => request<void>("/api/library/scan/stop", { method: "POST" }),
   watchlist: () => request<WatchlistEntry[]>("/api/watchlist"),
+  /** The one Favourites list: library stars and catalogue stars merged. */
+  favoritesList: (options: { filter?: FavoriteFilter; skip?: number; limit?: number } = {}) =>
+    request<{ items: FavoriteItem[]; total: number; pending: boolean }>(`/api/favorites?${q({
+      filter: options.filter && options.filter !== "all" ? options.filter : undefined,
+      skip: options.skip || undefined,
+      limit: options.limit ?? 60,
+    })}`),
   setWatchlist: (payload: { type: string; id: string; name?: string; poster?: string; favorite: boolean }) =>
     request<{ key: string; favorite: boolean }>("/api/watchlist", { method: "POST", body: JSON.stringify(payload) }),
   follows: () => request<{ follows: FollowView[] }>("/api/follows").then((answer) => answer.follows),

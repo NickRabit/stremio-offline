@@ -97,7 +97,8 @@ Shipped in `main`; implementation details live in the linked guides.
 - **Phones and tablets**: responsive layouts and Home Screen setup.
   [Mobile guide](mobile.md).
 - **Home**: the queue, Continue watching, new episodes, Ready to play, Recently
-  added, Tonight, Favourites and the titles waiting for a match on one page;
+  added, Tonight, Favourites (library stars and starred catalogue titles in one
+  list) and the titles waiting for a match on one page;
   selected add-on catalog feeds have their own lazy-loaded carousels. The
   account can choose its start page, arrange which rows show and in what order,
   and add catalogue feeds from the addons it may use.
