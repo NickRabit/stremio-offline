@@ -98,7 +98,14 @@ fun ErrorPanel(onRetry: () -> Unit, onBack: () -> Unit) {
   androidx.activity.compose.BackHandler { onBack() }
   androidx.compose.runtime.LaunchedEffect(Unit) { runCatching { retryFocus.requestFocus() } }
   Box(
-    Modifier.fillMaxSize().testTag(TAG_ERROR_PANEL).background(Color.Black.copy(alpha = 0.75f)),
+    Modifier
+      .fillMaxSize()
+      .testTag(TAG_ERROR_PANEL)
+      .background(Color.Black.copy(alpha = 0.75f))
+      // The panel sits above the OSD, so it takes the remote's Back itself.
+      .onPreviewKeyEvent { event ->
+        if (event.type == KeyEventType.KeyDown && event.key == Key.Back) { onBack(); true } else false
+      },
     contentAlignment = Alignment.Center,
   ) {
     Column(

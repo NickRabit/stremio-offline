@@ -2,6 +2,7 @@
 
 package cz.stremiooffline.tv.ui.player
 
+import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
@@ -68,6 +69,24 @@ class PlayerScreenErrorTest {
     compose.onNodeWithTag(TAG_ERROR_PANEL).assertExists()
 
     compose.runOnUiThread { compose.activity.onBackPressedDispatcher.onBackPressed() }
+    compose.waitForIdle()
+
+    assertEquals(true, exited)
+  }
+
+  // The emulator hands Back to the window first; the panel above the OSD has to take it there too.
+  @Test
+  fun `a real back key over the error panel leaves the player`() {
+    val api = GatedApi()
+    mount(api)
+    api.gate.completeExceptionally(ApiError(ApiFailure.Unreachable))
+    compose.waitForIdle()
+    compose.onNodeWithTag(TAG_ERROR_PANEL).assertExists()
+
+    compose.runOnUiThread {
+      compose.activity.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_BACK))
+      compose.activity.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_BACK))
+    }
     compose.waitForIdle()
 
     assertEquals(true, exited)
