@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { addonManifest } from "../../playwright.config";
+import { pickAddonStream } from "./catalog-sources";
 
 const openFirstEpisode = async (page: Page) => {
   await page.goto("/");
@@ -11,6 +12,7 @@ const openFirstEpisode = async (page: Page) => {
   const detail = page.locator(".detail-panel");
   await detail.getByRole("combobox", { name: "Série" }).selectOption("1");
   await detail.getByRole("button", { name: /První díl/ }).click();
+  await pickAddonStream(page);
   await detail.getByRole("button", { name: "Přehrát", exact: true }).click();
 
   const overlay = page.locator(".player-overlay");

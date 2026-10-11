@@ -74,8 +74,13 @@ test("a movie already in the library leads its sources and plays the library fil
   await detail.getByRole("button", { name: "Přehrát", exact: true }).click();
   const overlay = page.locator(".player-overlay");
   const video = overlay.locator("video");
-  // The clip is two minutes long; past five seconds the player has a position worth saving.
-  await expect.poll(() => video.evaluate((element: HTMLVideoElement) => !element.paused && element.currentTime > 6), { timeout: 30_000 }).toBe(true);
+  // The clip is two minutes long, and the server keeps no position under thirty seconds
+  // (`POST /api/progress` calls that the very beginning), so the play is sped up until it
+  // has one worth saving.
+  await video.evaluate((element: HTMLVideoElement) => { element.playbackRate = 8; });
+  await expect.poll(() => video.evaluate((element: HTMLVideoElement) => !element.paused && element.currentTime > 31), { timeout: 30_000 }).toBe(true);
+  // The film is still running, so the overlay has hidden its controls, the close button with them.
+  await overlay.dispatchEvent("pointermove");
   await page.getByRole("button", { name: "Zavřít přehrávač", exact: true }).click();
   await expect(overlay).toHaveCount(0);
 

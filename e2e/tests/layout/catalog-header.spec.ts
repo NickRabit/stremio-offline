@@ -121,6 +121,9 @@ test("phone source scrolling hides metadata and restores it on an intentional pu
     const streams = await response.json();
     await route.fulfill({ json: Array.from({ length: 40 }, (_, i) => ({ ...streams[0], name: `Source ${i}` })) });
   });
+  // The library copies the journeys leave behind are not what this list is about, and the
+  // count below is the mocked addon answer alone.
+  await page.route("**/api/local-streams/**", (route) => route.fulfill({ json: [] }));
   await page.goto("/");
   const catalog = page.getByRole("combobox", { name: "Procházet katalog" });
   await expect(catalog).toBeVisible();

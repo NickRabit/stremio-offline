@@ -1,5 +1,6 @@
 import { expect, test, type APIRequestContext } from "@playwright/test";
 import { addonManifest } from "../../playwright.config";
+import { pickAddonStream } from "./catalog-sources";
 
 const control = (request: APIRequestContext, mode: string) => request.get(new URL(`/proxy-control?mode=${mode}`, addonManifest).href);
 async function start(request: APIRequestContext, airplay = false) {
@@ -176,6 +177,7 @@ test("browser playback renders from the server and never requests provider media
   const option = await catalog.locator("option").filter({ hasText: "Filmy" }).first().getAttribute("value");
   await catalog.selectOption(option!);
   await page.getByRole("button", { name: /Zkušební film/ }).click();
+  await pickAddonStream(page);
   await page.getByRole("button", { name: "Přehrát", exact: true }).click();
   const video = page.locator("video");
   await expect.poll(() => video.evaluate((element: HTMLVideoElement) => element.currentTime), { timeout: 15_000 }).toBeGreaterThan(0);

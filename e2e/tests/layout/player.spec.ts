@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { addonManifest } from "../../../playwright.config";
+import { pickAddonStream } from "../catalog-sources";
 import { forgetFilm } from "../film-progress";
 
 test.beforeEach(async ({ request }) => { await forgetFilm(request); });
@@ -16,6 +17,7 @@ test("player keeps its picture stable and its overlay controls reachable", async
   const option = await catalog.locator("option").filter({ hasText: "Filmy" }).first().getAttribute("value");
   await catalog.selectOption(option!);
   await page.getByRole("button", { name: /Zkušební film/ }).click();
+  await pickAddonStream(page);
   await page.getByRole("button", { name: "Přehrát", exact: true }).click();
   const overlay = page.locator(".player-overlay");
   const video = overlay.locator("video");
@@ -79,6 +81,7 @@ test("fill-screen toggle is presentation-only, reversible and resets when the pl
   const catalog = page.getByRole("combobox", { name: "Procházet katalog" });
   await catalog.selectOption((await catalog.locator("option").filter({ hasText: "Filmy" }).first().getAttribute("value"))!);
   await page.getByRole("button", { name: /Zkušební film/ }).click();
+  await pickAddonStream(page);
   const play = page.getByRole("button", { name: "Přehrát", exact: true });
   const playbackRequests: string[] = [];
   page.on("request", (request) => {
@@ -145,6 +148,7 @@ test("video clicks dismiss controls and settings; double-click toggles fullscree
   const catalog = page.getByRole("combobox", { name: "Procházet katalog" });
   await catalog.selectOption((await catalog.locator("option").filter({ hasText: "Filmy" }).first().getAttribute("value"))!);
   await page.getByRole("button", { name: /Zkušební film/ }).click();
+  await pickAddonStream(page);
   await page.getByRole("button", { name: "Přehrát", exact: true }).click();
   const overlay = page.locator(".player-overlay");
   const video = overlay.locator("video");

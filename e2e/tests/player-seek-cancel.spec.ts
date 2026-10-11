@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import { mkdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { pickAddonStream } from "./catalog-sources";
 import { withholdUnloadProgress } from "./film-progress";
 
 const folder = path.resolve("e2e/.tmp/seek-cancel");
@@ -46,6 +47,7 @@ test("closing during the fourth seek does not start a replacement film", async (
   const catalog = page.getByRole("combobox", { name: "Procházet katalog" });
   await catalog.selectOption((await catalog.locator("option").filter({ hasText: "Filmy" }).first().getAttribute("value"))!);
   await page.getByRole("button", { name: /Zkušební film/ }).click();
+  await pickAddonStream(page);
   await page.getByRole("button", { name: "Přehrát", exact: true }).click();
   const overlay = page.locator(".player-overlay");
   const timeline = page.getByRole("slider", { name: "Pozice", exact: true });
