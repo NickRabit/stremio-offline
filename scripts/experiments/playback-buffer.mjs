@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, execFile } from "node:child_process";
-import { mkdtemp, mkdir, readFile, readdir, rm, stat } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, rm, rmdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { setTimeout as delay } from "node:timers/promises";
@@ -67,6 +67,8 @@ try {
       };
       assert.equal(output.pausedReader.existsAfterProducerFinishes, false);
     } else {
+      assert.equal(result.listed.length, 3);
+      assert.equal(result.durations.length, 3);
       assert.ok(result.durations.every((duration) => duration === 10));
     }
   }
@@ -108,7 +110,7 @@ try {
 
   await rm(root, { recursive: true });
   let mountRootRemoval;
-  try { await rm("/lab", { recursive: true, force: true }); }
+  try { await rmdir("/lab"); }
   catch (error) { mountRootRemoval = error.code; }
   assert.equal(mountRootRemoval, "EBUSY");
   output.mountRootRemoval = mountRootRemoval;

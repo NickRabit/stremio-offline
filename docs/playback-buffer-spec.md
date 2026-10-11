@@ -116,9 +116,14 @@ says that `EVENT` forces an unlimited list and that segment cuts occur at
 keyframes. [RFC 8216, sections 6.2.1 and 6.2.2](https://datatracker.ietf.org/doc/html/rfc8216#section-6.2.1)
 restricts mutation of EVENT playlists and requires a retention interval after
 removing a segment URI from a live playlist. A server cannot safely unlink a
-file as soon as it publishes a shorter playlist. A stalled rolling playlist
-also needs client verification: live clients expect advancement and may try to
-catch up to the edge after a pause.
+file as soon as it publishes a shorter playlist. There is also a protocol
+conflict to resolve: section 6.2.1 requires a non-ended playlist to add media
+within 1.5 target durations. Parking a producer indefinitely violates that
+cadence; a player tolerating it is not proof of RFC compliance. The prototype
+must explicitly qualify this behavior as an application-controlled protocol
+for negotiated clients, or select another architecture such as virtual VOD
+segment serving. Do not claim generic native-HLS compatibility from hls.js
+success. Clients may report a stuck playlist or jump to the live edge.
 
 ## Reproducible experiment
 
@@ -146,7 +151,7 @@ Fixture: 40 s of 160x90 H.264 at 10 fps, copied into fMP4 HLS.
 | A hypothetical paused reader still requesting segment 0 | Segment 0 absent; published window now starts at 34 s | A reader left behind would get a missing file; this is a filesystem observation, not a browser playback test |
 | Same sliding settings, source with ten-second GOP | Three listed segments of 10 s each; four files, 747,312 bytes | Neither segment count nor nominal `hls_time=2` is a byte/time guarantee |
 | SIGSTOP/SIGCONT during local remux | Output unchanged during 500 ms observed pause; resumed to 20 segments and decoded through EOF | Linux process suspension can stop this local producer; remote timeout, GPU, and long-pause behavior remain unproved |
-| Delete the empty tmpfs mount root using Node `rm` | `EBUSY` | Mounting directly at today's `DATA_DIR/playback` would conflict with startup root removal |
+| Remove the empty tmpfs mount root using Node `rmdir` | `EBUSY` | The final directory-removal step of today's recursive startup cleanup cannot remove a mount root |
 
 The script asserts these properties. Timing-dependent segment counts during
 suspension are informational. This is not a benchmark, a measurement of NAS
@@ -162,7 +167,7 @@ disk wear, a browser compatibility result, or a test on QuickSync/DS920+.
 | Lower `readrate` | Can reduce bursts; cannot impose a memory limit or handle pauses |
 | Short successive FFmpeg jobs | Do not use for initial implementation: repeated provider connections, GOP landing, discontinuities, and subtitle timing increase risk |
 | Jellyfin-style virtual full-film playlist and regenerate missing segments | Valid alternative architecture, but larger change: random segment service, index/timestamp stability, locks, init segments, and codec continuity need redesign |
-| Server-owned rolling manifest, playhead-aware retention, producer control, byte budget | Preferred prototype, gated on player timing and long-pause behavior; reuse explicit generation restarts outside retained coverage |
+| Server-owned rolling manifest, playhead-aware retention, producer control, byte budget | First prototype candidate, not an approved generic HLS architecture: resolve the publication-cadence conflict, player timing and long pauses; reuse explicit generation restarts outside retained coverage |
 
 Deleting files on a disk reduces space usage; it does not undo the writes
 already performed. Reducing output writes requires RAM placement, avoiding
@@ -288,12 +293,30 @@ never edit a file FFmpeg is concurrently replacing. Publish served snapshots
 atomically, retaining valid init, discontinuity, target-duration and sequence
 information. Only advertise completed, non-empty output.
 
+The private FFmpeg playlist must also stay bounded: preserving today's growing
+EVENT playlist there would retain an unbounded entry list and rewrite it on
+every publication even if media files were evicted. Prototype a finite private
+list without FFmpeg-owned deletion. Consume its entries before they roll out,
+detect missed publications, and stop safely if the index cannot establish
+complete coverage. Filesystem notifications alone are not a lossless journal;
+the reconciliation scheme must recover actual durations and ordering, not
+guess them from filenames. Prune index rows after all retention/read leases end.
+
 Use a rolling manifest without the append-only EVENT claim. Preserve a stable
 film-time mapping as the window moves; a sequence number is not a timestamp,
 and `segment number * 2` is invalid for remux. Keep the init segment for every
 generation that remains addressable. Do not signal ENDLIST just to pause a
 writer. At actual EOF, retain the reader's playable tail and correct end/next
 episode behavior, including a paused viewer and backward seek.
+
+Keep media sequence numbers monotonic and stable for retained segments, and
+update discontinuity sequence when removing a discontinuity marker. Do not
+shrink a non-ended manifest below three target durations. Target duration must
+remain fixed for that manifest URL and cover actual segment durations; sparse
+GOPs may make a nominal two-second target invalid. Determine an admissible bound
+before publication or refuse that combination rather than quietly changing the
+target duration or emitting an undersized window. These requirements consume
+budget and cannot be relaxed merely because byte pressure is high.
 
 Remove a URI from new manifests before considering its file for deletion.
 Honor RFC retention for previously published snapshots and pin open HTTP/Range
@@ -382,7 +405,7 @@ claim of seamless eviction until the following acceptance evidence exists.
 | --- | --- |
 | Long film, local remux and actual transcode | Play through EOF under a budget far smaller than total output; continuous picture/audio, stable absolute time and correct completion |
 | Sparse keyframes, VBR spikes, oversized segment | Actual duration/bytes drive decisions; no ENOSPC/OOM cascade, runaway output, or silent truncation |
-| Pause for 30 minutes, resume near either window boundary | Storage reaches a stable bound; same paused frame/time resumes; no jump to live edge or new source connection unless the source actually requires recovery |
+| Pause for 30 minutes, resume near either window boundary | Storage reaches a stable bound; same paused frame/time resumes; no stuck-playlist failure or jump to live edge; publication-cadence deviation explicitly qualified for negotiated clients or architecture changed; no new source connection unless recovery requires it |
 | Seek retained/evicted/near-ahead/far-ahead, rapid alternating seeks | Correct target within existing keyframe accuracy; nearby wait wakes producer; no accidental clamping to window start |
 | Slow/refused seek, both attempts, twelve consecutive failures then success | Previous generation remains playable; no premature eviction, stale timers or generation reuse; bounded overlap |
 | Close/source switch during seek or suspension | No leaked writer, timer, response, reservation or segment; late responses cannot restart playback |
@@ -390,6 +413,7 @@ claim of seamless eviction until the following acceptance evidence exists.
 | EOF while paused; backward seek after EOF | Tail stays available and absolute duration/next episode are correct; no premature ENDLIST during throttling |
 | Audio/quality/subtitle changes, decode recovery | Correct track/timing, existing fallback semantics, no new connection churn from subtitle-only changes |
 | Delayed requests, old manifests, slow Range responses, stale heartbeat | No eviction-caused 404 for a still-promised segment; stale state cannot delete active coverage |
+| Missed private-playlist updates and long-running generation | Reconciles segment durations/order safely or stops before publishing incomplete coverage; writer playlist and index memory remain bounded |
 | Remote idle close, request refusal, interrupted response | Actual proxy recovery is bounded and preserves bytes; failures do not destroy a usable fallback |
 | Container restart and cleanup, suspended writer termination | Owned files/processes removed; mount root and unrelated data preserved; no EBUSY startup failure |
 | Client matrix | Chromium hls.js, macOS/iOS Safari in its actual selected HLS mode, desktop client against Linux, Android TV where enabled; native HLS separately; AirPlay remains disabled |
