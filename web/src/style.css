@@ -917,7 +917,9 @@ img.broken{visibility:hidden}
   .detail-panel.series-sources-layout .hero{height:auto;min-height:0;padding:10px 16px}
   .detail-panel.series-sources-layout .series-hero .detail-copy>:is(.title-chips,.catalog-description){display:none}
   .detail-panel.series-sources-layout .source-footer{margin-top:6px;padding-top:8px;padding-bottom:12px}
-  .detail-panel.series-sources-layout .source-footer .actions{grid-template-columns:1.2fr 1fr 1fr;gap:6px}
+  /* The trailing two cells keep their captions: a fractional column a pixel short cuts the
+     label, and the local row's "Show in library" needs a few more than "To library" does. */
+  .detail-panel.series-sources-layout .source-footer .actions{grid-template-columns:minmax(0,1.2fr) max-content max-content;gap:6px}
   .detail-panel.series-sources-layout .source-footer .actions .primary{grid-column:auto;order:0}
   .detail-panel.series-sources-layout .source-footer .actions>*{padding-inline:8px;font-size:11px}
   .detail-panel.series-sources-layout .stream-list{min-height:96px}

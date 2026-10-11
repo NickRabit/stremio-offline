@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { addonManifest } from "../../playwright.config";
+import { pickAddonStream } from "./catalog-sources";
 
 /** Closes the player and opens the fixture film again: the overlay, and with it the `<video>`,
  *  is unmounted in between, so a volume that survives this is one that was remembered. */
@@ -8,6 +9,7 @@ const openFilm = async (page: import("@playwright/test").Page) => {
   const catalog = page.getByRole("combobox", { name: "Procházet katalog" });
   await catalog.selectOption((await catalog.locator("option").filter({ hasText: "Filmy" }).first().getAttribute("value"))!);
   await page.getByRole("button", { name: /Zkušební film/ }).click();
+  await pickAddonStream(page);
   await page.getByRole("button", { name: "Přehrát", exact: true }).click();
 };
 

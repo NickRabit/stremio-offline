@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { addonManifest } from "../../playwright.config";
+import { pickAddonStream } from "./catalog-sources";
 
 test("embedded subtitle URLs load directly and a subtitle error never stops the video", async ({ page, request }) => {
   await request.get(new URL("/proxy-control?mode=browser", addonManifest).href);
@@ -31,6 +32,7 @@ test("embedded subtitle URLs load directly and a subtitle error never stops the 
   const catalog = page.getByRole("combobox", { name: "Procházet katalog" });
   await catalog.selectOption((await catalog.locator("option").filter({ hasText: "Filmy" }).first().getAttribute("value"))!);
   await page.getByRole("button", { name: /Zkušební film/ }).click();
+  await pickAddonStream(page);
   await page.getByRole("button", { name: "Přehrát", exact: true }).click();
   const video = page.locator("video");
   // The fixture clip is seconds long and the player steps aside when a film ends; keeping it
