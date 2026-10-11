@@ -1573,4 +1573,12 @@ export const de: Catalog = {
   "tv.diagSession": "Sitzung",
   "tv.diagDevice": "Gerät",
   "tv.diagPing": "vor {seconds} s",
+  "tv.settingsTitle": "Dieser Fernseher",
+  "tv.account": "Konto",
+  "tv.device": "Gerät",
+  "tv.version": "Version",
+  "tv.signOutConfirm": "Auf diesem Fernseher abmelden? Zum erneuten Anmelden brauchen Sie das Passwort.",
+  "tv.passthrough": "Durchleitung",
+  "tv.versionRow": "App {app} · Server {server}",
+  "tv.versionMismatch": "Der Server läuft auf {server}, diese App ist {app}. Aktualisieren Sie die ältere Version.",
 };

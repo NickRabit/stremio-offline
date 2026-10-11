@@ -14,6 +14,16 @@ val sharedVersion = Regex("\"version\"\\s*:\\s*\"([^\"]+)\"")
 val sharedVersionCode = sharedVersion.split(".").map(String::toInt)
   .let { (major, minor, patch) -> major * 1_000_000 + minor * 1_000 + patch }
 
+// The release key lives in CI secrets, never in the repository: the four variables below are
+// exported by the android job in release.yml. All four are required before the signing config
+// exists -- one of them alone would fail `packageRelease` instead of producing the unsigned APK a
+// local run expects.
+val releaseKeystore = System.getenv("ANDROID_KEYSTORE")
+val releaseStorePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+val releaseKeyAlias = System.getenv("ANDROID_KEY_ALIAS")
+val releaseKeyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+val hasReleaseKey = listOf(releaseKeystore, releaseStorePassword, releaseKeyAlias, releaseKeyPassword).all { !it.isNullOrBlank() }
+
 android {
   namespace = "cz.stremiooffline.tv"
   compileSdk = 35
@@ -25,6 +35,28 @@ android {
     targetSdk = 35
     versionCode = sharedVersionCode
     versionName = sharedVersion
+  }
+
+  signingConfigs {
+    if (hasReleaseKey) {
+      create("release") {
+        storeFile = file(releaseKeystore!!)
+        storePassword = releaseStorePassword
+        keyAlias = releaseKeyAlias
+        keyPassword = releaseKeyPassword
+      }
+    }
+  }
+
+  buildTypes {
+    release {
+      isMinifyEnabled = true
+      // Media3, OkHttp and kotlinx-serialization ship their own consumer rules, and Coil 2 needs
+      // none. This file holds only what a minified build proves necessary: `assembleRelease`
+      // proves the build minifies, not that a reflective path survives at runtime.
+      proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+      if (hasReleaseKey) signingConfig = signingConfigs.getByName("release")
+    }
   }
 
   buildFeatures {
@@ -59,6 +91,7 @@ kotlin {
 
 dependencies {
   implementation(platform(libs.androidx.compose.bom))
+  implementation(libs.androidx.appcompat)
   implementation(libs.androidx.compose.foundation)
   implementation(libs.androidx.compose.ui)
   implementation(libs.androidx.compose.ui.graphics)

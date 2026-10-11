@@ -1573,4 +1573,12 @@ export const ptBR: Catalog = {
   "tv.diagSession": "Sessão",
   "tv.diagDevice": "Dispositivo",
   "tv.diagPing": "há {seconds} s",
+  "tv.settingsTitle": "Esta TV",
+  "tv.account": "Conta",
+  "tv.device": "Dispositivo",
+  "tv.version": "Versão",
+  "tv.signOutConfirm": "Sair nesta TV? Você precisará da senha para entrar de novo.",
+  "tv.passthrough": "Repasse",
+  "tv.versionRow": "App {app} · servidor {server}",
+  "tv.versionMismatch": "O servidor executa {server}, este app é {app}. Atualize o que for mais antigo.",
 };

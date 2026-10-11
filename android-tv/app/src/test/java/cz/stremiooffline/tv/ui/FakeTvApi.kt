@@ -10,6 +10,7 @@ import cz.stremiooffline.tv.data.DownloadResult
 import cz.stremiooffline.tv.data.DownloadsResponseDto
 import cz.stremiooffline.tv.data.FavoriteToggleDto
 import cz.stremiooffline.tv.data.HomeResponseDto
+import cz.stremiooffline.tv.data.LanguageDto
 import cz.stremiooffline.tv.data.MediaDto
 import cz.stremiooffline.tv.data.MetaDto
 import cz.stremiooffline.tv.data.NextFileDto
@@ -71,6 +72,17 @@ open class FakeTvApi : TvApi {
   var addonsCalls = 0
   var settingsValue: SettingsResponse = SettingsResponse()
   var settingsCalls = 0
+  /** Each `updateSettings()` call in order, so a test can assert one personal field per body. */
+  var settingsPatches: MutableList<Pair<String, String>> = mutableListOf()
+  /** When set, every `updateSettings()` throws it instead of answering. */
+  var settingsFailure: ApiFailure? = null
+  var languagesValue: List<LanguageDto> = listOf(
+    LanguageDto("cs", "Čeština"),
+    LanguageDto("en", "Angličtina"),
+    LanguageDto("de", "Němčina"),
+  )
+  var serverVersionValue: String = "0.5.36"
+  override var serverAddress: String = "http://server:8090"
   var progressEntries: List<ProgressEntryDto> = emptyList()
   var progressListCalls = 0
   var progressListGate: CompletableDeferred<Unit>? = null
@@ -175,6 +187,23 @@ open class FakeTvApi : TvApi {
 
   override suspend fun settings(): SettingsResponse {
     settingsCalls += 1
+    return settingsValue
+  }
+
+  override suspend fun languages(): List<LanguageDto> = languagesValue
+
+  override suspend fun serverVersion(): String = serverVersionValue
+
+  override suspend fun updateSettings(field: String, value: String): SettingsResponse {
+    settingsPatches += field to value
+    settingsFailure?.let { throw ApiError(it) }
+    settingsValue = when (field) {
+      "uiLanguage" -> settingsValue.copy(uiLanguage = value)
+      "audioLanguage" -> settingsValue.copy(audioLanguage = value)
+      "subtitleLanguage" -> settingsValue.copy(subtitleLanguage = value)
+      "startView" -> settingsValue.copy(startView = value)
+      else -> settingsValue
+    }
     return settingsValue
   }
 

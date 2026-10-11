@@ -53,6 +53,85 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "${{ github.ref_name }}" --generate-notes --title "${{ github.ref_name }}"
 
+  # The Android TV APK, signed with the project's release key from the
+  # ANDROID_KEYSTORE_BASE64 secret. A missing secret is not a failure: the image
+  # and the desktop packages must ship anyway, and an unsigned or differently
+  # signed APK would fail as an update on every television. The job only uploads
+  # an asset -- it never edits the release notes -- so it can run beside the
+  # desktop jobs.
+  android:
+    needs: [version, release]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check for the signing key
+        id: key
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          if [ -z "${ANDROID_KEYSTORE_BASE64:-}" ]; then
+            echo "::notice title=No TV APK::ANDROID_KEYSTORE_BASE64 is not set, so this release has no TV APK and Obtainium will skip it."
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.key.outputs.signed == 'true'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+      - if: steps.key.outputs.signed == 'true'
+        uses: android-actions/setup-android@v3
+        with:
+          # The default list still names the retired `tools` package, which sdkmanager now refuses.
+          packages: platform-tools platforms;android-35 build-tools;35.0.0
+      - name: Build, verify and attach the signed APK
+        if: steps.key.outputs.signed == 'true'
+        env:
+          ANDROID_KEYSTORE: ${{ runner.temp }}/release.keystore
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          # Optional repository variable: the SHA-256 of the signing certificate as
+          # `apksigner --print-certs` prints it. Set it so a rotated or mis-set keystore cannot
+          # publish an APK every television refuses as an update.
+          ANDROID_CERT_SHA256: ${{ vars.ANDROID_CERT_SHA256 }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$ANDROID_KEYSTORE"
+          chmod 600 "$ANDROID_KEYSTORE"
+          ( cd android-tv && ./gradlew assembleRelease --no-daemon )
+          apk="android-tv/app/build/outputs/apk/release/app-release.apk"
+          # `apksigner` sits in build-tools, which setup-android does not put on PATH.
+          certs="$("$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs "$apk")"
+          printf '%s\n' "$certs"
+          if [ -n "${ANDROID_CERT_SHA256:-}" ]; then
+            if ! printf '%s\n' "$certs" | grep -qiF "SHA-256 digest: $ANDROID_CERT_SHA256"; then
+              echo "::error title=Wrong signing certificate::the APK is not signed with the certificate ANDROID_CERT_SHA256 pins; refusing to publish it."
+              exit 1
+            fi
+          else
+            echo "::warning title=Unpinned TV certificate::ANDROID_CERT_SHA256 is not set, so the APK's certificate was not compared against a pinned one. Pin it with: gh variable set ANDROID_CERT_SHA256"
+          fi
+          cp "$apk" "stremio-offline-tv-${VERSION}.apk"
+          # `gh release upload` fails on an asset name that is already there, so a
+          # rerun never replaces what was published.
+          present="$(gh release view "${GITHUB_REF_NAME}" --json assets --jq '.assets[].name')"
+          if printf '%s\n' "$present" | grep -qxF -e "stremio-offline-tv-${VERSION}.apk"; then
+            echo "::warning title=TV APK already attached::the release already carries stremio-offline-tv-${VERSION}.apk; the upload never replaces what is published, so a wrong or truncated asset has to be deleted by hand before a rerun."
+          else
+            gh release upload "${GITHUB_REF_NAME}" "stremio-offline-tv-${VERSION}.apk"
+          fi
+          rm -f "$ANDROID_KEYSTORE"
+
   # The macOS app goes onto the same release, unsigned: there is no Developer ID
   # yet, so the bundle is ad-hoc signed as in "Desktop package" and the asset
   # names say so. It runs after the release exists, and a failure here leaves

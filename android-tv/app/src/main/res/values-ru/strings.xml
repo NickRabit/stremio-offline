@@ -139,4 +139,17 @@
   <string name="tv_diag_session">Сеанс</string>
   <string name="tv_diag_device">Устройство</string>
   <string name="tv_diag_ping">%1$s с назад</string>
+  <string name="common_cancel">Отмена</string>
+  <string name="settings_ui_language">Язык интерфейса</string>
+  <string name="settings_audio_language">Язык аудио</string>
+  <string name="settings_subtitle_language">Язык субтитров</string>
+  <string name="settings_start_view">Начальная страница</string>
+  <string name="tv_settings_title">Этот телевизор</string>
+  <string name="tv_account">Аккаунт</string>
+  <string name="tv_device">Устройство</string>
+  <string name="tv_version">Версия</string>
+  <string name="tv_sign_out_confirm">Выйти из аккаунта на этом телевизоре? Для входа снова понадобится пароль.</string>
+  <string name="tv_passthrough">Проброс</string>
+  <string name="tv_version_row">Приложение %1$s · сервер %2$s</string>
+  <string name="tv_version_mismatch">Сервер работает под версией %1$s, приложение — %2$s. Обновите то, что старше.</string>
 </resources>

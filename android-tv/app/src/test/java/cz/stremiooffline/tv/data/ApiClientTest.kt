@@ -166,6 +166,43 @@ class ApiClientTest {
   }
 
   @Test
+  fun `every settings patch body carries exactly the one personal field`() = runTest {
+    val api = client(start())
+    val fields = listOf(
+      "uiLanguage" to "cs",
+      "audioLanguage" to "de",
+      "subtitleLanguage" to "fr",
+      "startView" to "library",
+    )
+    for ((field, value) in fields) {
+      server.enqueue(MockResponse().setBody("{}"))
+      api.updateSettings(field, value)
+      val request = server.takeRequest()
+      assertEquals("/api/settings", request.path)
+      assertEquals("PATCH", request.method)
+      assertEquals("""{"$field":"$value"}""", request.body.readUtf8())
+    }
+  }
+
+  @Test
+  fun `the settings patch takes the server's authoritative answer`() = runTest {
+    server.enqueue(MockResponse().setBody("""{"uiLanguage":"cs","audioLanguage":"en","subtitleLanguage":"en","startView":"home"}"""))
+    val answer = client(start()).updateSettings("uiLanguage", "cs")
+
+    assertEquals("cs", answer.uiLanguage)
+    assertEquals("home", answer.startView)
+  }
+
+  @Test
+  fun `languages reads the codes the server offers`() = runTest {
+    server.enqueue(MockResponse().setBody("""[{"code":"cs","name":"Čeština"},{"code":"en","name":"Angličtina"}]"""))
+    val languages = client(start()).languages()
+
+    assertEquals("/api/languages", server.takeRequest().path)
+    assertEquals(listOf("cs", "en"), languages.map { it.code })
+  }
+
+  @Test
   fun `progress carries the poster and addon only when the player knew them`() = runTest {
     val api = client(start())
     server.enqueue(MockResponse().setResponseCode(204))

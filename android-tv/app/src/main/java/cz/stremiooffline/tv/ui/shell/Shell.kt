@@ -27,6 +27,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -64,8 +65,6 @@ import androidx.tv.material3.Text
 import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.ui.components.BrandMark
-import cz.stremiooffline.tv.ui.components.FocusButton
-import cz.stremiooffline.tv.ui.components.FocusButtonKind
 import cz.stremiooffline.tv.ui.catalog.CatalogDetailArgs
 import cz.stremiooffline.tv.ui.catalog.CatalogDetailScreen
 import cz.stremiooffline.tv.ui.catalog.CatalogScreen
@@ -77,6 +76,7 @@ import cz.stremiooffline.tv.ui.home.HomeAction
 import cz.stremiooffline.tv.ui.home.HomeScreen
 import cz.stremiooffline.tv.ui.library.LibraryRoute
 import cz.stremiooffline.tv.ui.player.PlayerScreen
+import cz.stremiooffline.tv.ui.settings.SettingsRoute
 import cz.stremiooffline.tv.ui.theme.Tokens
 import cz.stremiooffline.tv.ui.theme.appBackground
 import kotlinx.coroutines.delay
@@ -112,8 +112,15 @@ private val CollapsedRail = 60.dp
 private val ExpandedRail = 200.dp
 
 @Composable
-fun Shell(start: Section, api: TvApi, username: String, onSignOut: () -> Unit) {
-  val shellState = remember(start) { ShellState(start) }
+fun Shell(
+  start: Section,
+  api: TvApi,
+  username: String,
+  onSignOut: () -> Unit,
+  address: String = "http://",
+  onLocale: (String) -> Unit = {},
+) {
+  val shellState = rememberSaveable(start, saver = ShellStateSaver) { ShellState(start) }
   val current = shellState.selected
   val sectionStates = rememberSaveableStateHolder()
 
@@ -199,12 +206,12 @@ fun Shell(start: Section, api: TvApi, username: String, onSignOut: () -> Unit) {
             }
           },
         )
-        Section.Account -> SectionContent(
-          section = section,
+        Section.Account -> SettingsRoute(
+          api = api,
           username = username,
-          onSignOut = onSignOut,
-          onAction = { shellState.pick(Section.Home) },
           focusRequester = focusRequester,
+          onSignOut = onSignOut,
+          onLocale = onLocale,
         )
       }
     }
@@ -465,52 +472,6 @@ private fun Avatar(username: String) {
       fontSize = 10.sp,
       fontWeight = FontWeight.ExtraBold,
     )
-  }
-}
-
-@Composable
-private fun SectionContent(
-  section: Section,
-  username: String,
-  onSignOut: () -> Unit,
-  onAction: () -> Unit,
-  focusRequester: FocusRequester,
-) {
-  LaunchedEffect(Unit) { runCatching { focusRequester.requestFocus() } }
-  Column(
-    modifier = Modifier.padding(start = Tokens.SafeX, top = Tokens.SafeY),
-    verticalArrangement = Arrangement.spacedBy(11.dp),
-  ) {
-    Text(
-      stringResource(section.labelRes).uppercase(),
-      color = Tokens.Accent,
-      fontSize = 8.sp,
-      fontWeight = FontWeight.Bold,
-      letterSpacing = 1.5.sp,
-    )
-    Text(
-      if (section == Section.Account) stringResource(R.string.auth_signed_in_as, username)
-      else stringResource(R.string.tv_placeholder_title),
-      color = Tokens.Text,
-      fontSize = 26.sp,
-      fontWeight = FontWeight.ExtraBold,
-      letterSpacing = (-0.8).sp,
-    )
-    if (section == Section.Account) {
-      FocusButton(
-        text = stringResource(R.string.auth_sign_out),
-        onClick = onSignOut,
-        modifier = Modifier.focusRequester(focusRequester),
-        kind = FocusButtonKind.Primary,
-      )
-    } else {
-      FocusButton(
-        text = stringResource(R.string.tv_placeholder_action),
-        onClick = onAction,
-        modifier = Modifier.focusRequester(focusRequester),
-        kind = FocusButtonKind.Primary,
-      )
-    }
   }
 }
 

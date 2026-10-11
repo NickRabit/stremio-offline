@@ -34,6 +34,11 @@ data class SettingsResponse(
   val realDebridConfigured: Boolean = false,
 )
 
+/** One content language `GET /api/languages` offers. The name is the server's Czech label
+ *  and is never shown: the TV picks for the code the way the web does. */
+@Serializable
+data class LanguageDto(val code: String = "", val name: String? = null)
+
 @Serializable
 data class ErrorVars(val seconds: Int? = null)
 

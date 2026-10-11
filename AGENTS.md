@@ -42,6 +42,8 @@ The single set of rules for any coding agent working in this repository.
   `package-lock.json` in sync -- `npm version <x.y.z> --no-git-tag-version
   --workspaces --include-workspace-root` changes all of them at once, and
   `node scripts/check-versions.mjs` (also run by CI) says whether they agree.
+  The Android TV app needs no bump of its own: Gradle reads `versionName` from
+  the root `package.json`.
   The release's desktop job checks the tag against `desktop/package.json`, so
   a forgotten desktop bump fails only after the image has already shipped.
   Bump minor or major only when the user asks. Skip the bump for docs, rules,

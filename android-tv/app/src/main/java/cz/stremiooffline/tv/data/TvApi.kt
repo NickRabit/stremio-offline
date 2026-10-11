@@ -28,6 +28,10 @@ interface CatalogApi {
   suspend fun streams(type: String, id: String, addon: String? = null): List<StreamDto>
   suspend fun addons(): List<AddonDto>
   suspend fun settings(): SettingsResponse
+  /** The content languages `GET /api/languages` offers, codes only. */
+  suspend fun languages(): List<LanguageDto>
+  /** Writes exactly one personal preference; the server refuses an instance key in the body. */
+  suspend fun updateSettings(field: String, value: String): SettingsResponse
   suspend fun progressList(): List<ProgressEntryDto>
   suspend fun watchlist(): List<WatchlistEntryDto>
   suspend fun setWatchlist(type: String, id: String, name: String, poster: String?, favorite: Boolean): WatchlistToggleDto
@@ -47,7 +51,11 @@ interface DownloadsApi {
 /** Everything a signed-in screen does: library, detail, catalogue, Home, images and playback. */
 interface TvApi : LibraryApi, DetailApi, PlaybackApi, CatalogApi, HomeApi, DownloadsApi {
   val http: OkHttpClient
+  /** The address as the user typed it, shown on the Settings screen. */
+  val serverAddress: String
   fun url(path: String): String
+  /** The server's own version from `/api/status`. */
+  suspend fun serverVersion(): String
   suspend fun librarySource(path: String): SourceDto
 
   /** The addon subtitles offered for one catalogue title or episode. */
