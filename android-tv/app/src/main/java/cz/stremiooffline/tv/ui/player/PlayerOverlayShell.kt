@@ -88,6 +88,8 @@ fun PlayerOverlayShell(
   onDiagnostics: () -> Unit = {},
   diagnosticsLabel: String = "",
   diagnosticsFocus: FocusRequester? = null,
+  /** The server-delivered cue over the picture, or null when nothing is on screen. */
+  subtitleText: String? = null,
   /** Panels and the next-episode card: drawn above the OSD, over the picture they cover. */
   topLayer: @Composable () -> Unit = {},
   content: @Composable () -> Unit,
@@ -136,8 +138,10 @@ fun PlayerOverlayShell(
   }
 
   // Android 13+ hands the remote's Back to the back dispatcher, not to key listeners, so the
-  // player claims it here; otherwise the detail underneath would take it and close instead.
-  BackHandler {
+  // player claims it here; otherwise the detail underneath would take it and close instead. A
+  // panel or the card owns the dispatcher while it is up, so the player steps aside and the
+  // innermost layer wins: panel, then the controls, then the player.
+  BackHandler(enabled = !modal) {
     activity++
     val intent = playerKeyIntent(PlayerKey.Back, controls) ?: return@BackHandler
     if (intent.exit) onExit()
@@ -240,6 +244,9 @@ fun PlayerOverlayShell(
         diagnosticsFocus = diagnosticsFocus,
       )
     }
+
+    // Above the picture and the OSD scrim, lifted clear of the controls, below the panels.
+    subtitleText?.let { SubtitleOverlay(it, lifted = controls) }
 
     val text = bubbleText
     if (text != null) {

@@ -64,6 +64,7 @@ import cz.stremiooffline.tv.playback.SidecarState
 import cz.stremiooffline.tv.playback.SubtitleChoice
 import cz.stremiooffline.tv.playback.SubtitleDelay
 import cz.stremiooffline.tv.playback.VttCue
+import cz.stremiooffline.tv.playback.activeCue
 import cz.stremiooffline.tv.playback.detectCapabilities
 import cz.stremiooffline.tv.playback.diagPath
 import cz.stremiooffline.tv.playback.matchTrack
@@ -403,6 +404,7 @@ fun PlayerScreen(api: TvApi, target: PlayTarget, onExit: () -> Unit) {
     state.subtitle == SubtitleChoice.Off -> stringResource(R.string.player_subtitles_off)
     else -> stringResource(R.string.tv_subtitle_embedded)
   }
+  val subtitleText = activeCue(cues, position)?.takeIf { it.isNotBlank() }
 
   PlayerOverlayShell(
     position = position,
@@ -426,6 +428,7 @@ fun PlayerScreen(api: TvApi, target: PlayTarget, onExit: () -> Unit) {
     onDiagnostics = { diagnosticsOpen = true },
     diagnosticsLabel = stringResource(R.string.diag_title),
     diagnosticsFocus = diagnosticsFocus,
+    subtitleText = subtitleText,
     modifier = Modifier.onPreviewKeyEvent { event ->
       if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
       mediaKey(event.key, exoPlayer, playing, onExit) ?: false
@@ -514,8 +517,6 @@ fun PlayerScreen(api: TvApi, target: PlayTarget, onExit: () -> Unit) {
       },
       modifier = Modifier.fillMaxSize(),
     )
-
-    if (cues.isNotEmpty()) SubtitleOverlay(cues = cues, position = position)
 
     if (state.error == null && !state.started) LoadingOverlay(title = target.title)
   }

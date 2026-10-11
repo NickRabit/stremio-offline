@@ -2,6 +2,7 @@
 
 package cz.stremiooffline.tv.ui.player
 
+import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -66,14 +67,34 @@ class PlayerScreenBackTest {
     compose.waitForIdle()
   }
 
+  /** A real remote Back: Android 14 delivers it to the window before any Compose key listener. */
+  private fun backKey() {
+    compose.runOnUiThread {
+      compose.activity.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_BACK))
+      compose.activity.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_BACK))
+    }
+    compose.waitForIdle()
+  }
+
+  private fun openTracks() {
+    press(Key.DirectionRight)
+    press(Key.DirectionRight)
+    press(Key.DirectionCenter)
+  }
+
+  private fun openDiagnostics() {
+    press(Key.DirectionRight)
+    press(Key.DirectionRight)
+    press(Key.DirectionRight)
+    press(Key.DirectionCenter)
+  }
+
   @Test
   fun `back through the panel, the osd and the player releases the session once`() {
     mount()
     assertEquals(1, api.startedSubtitleIds.size)
 
-    press(Key.DirectionRight)
-    press(Key.DirectionRight)
-    press(Key.DirectionCenter)
+    openTracks()
     compose.onNodeWithTag(TagTracksPanel).assertExists()
 
     back()
@@ -87,6 +108,47 @@ class PlayerScreenBackTest {
     assertEquals(true, exited)
     compose.waitUntil(timeoutMillis = 5_000) { api.deleted.isNotEmpty() }
     assertEquals(listOf("p1"), api.deleted)
+  }
+
+  // Bug on the emulator: the panel's focus exit made the focus system eat the remote's Back, so
+  // the key never reached the back dispatcher and the panel stayed open.
+  @Test
+  fun `a real back key closes the tracks panel and keeps the player`() {
+    mount()
+    openTracks()
+    compose.onNodeWithTag(TagTracksPanel).assertExists()
+
+    backKey()
+
+    compose.onNodeWithTag(TagTracksPanel).assertDoesNotExist()
+    compose.onNodeWithTag(TAG_OSD_PLAY).assertExists()
+    assertFalse(exited)
+  }
+
+  @Test
+  fun `a real back key closes the diagnostics panel`() {
+    mount()
+    openDiagnostics()
+    compose.onNodeWithTag(TagDiagPanel).assertExists()
+
+    backKey()
+
+    compose.onNodeWithTag(TagDiagPanel).assertDoesNotExist()
+    compose.onNodeWithTag(TAG_OSD_PLAY).assertExists()
+    assertFalse(exited)
+  }
+
+  @Test
+  fun `a real back key hides the controls and then leaves the player`() {
+    mount()
+    compose.onNodeWithTag(TAG_OSD_PLAY).assertExists()
+
+    backKey()
+    compose.onNodeWithTag(TAG_OSD_PLAY).assertDoesNotExist()
+    assertFalse(exited)
+
+    backKey()
+    assertEquals(true, exited)
   }
 
   private fun tracks(vararg items: String): List<JsonObject> =

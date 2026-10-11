@@ -2,6 +2,7 @@
 
 package cz.stremiooffline.tv.ui.player
 
+import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -83,6 +84,20 @@ class PlayerNextCardTest {
     mount()
 
     compose.runOnUiThread { compose.activity.onBackPressedDispatcher.onBackPressed() }
+    compose.waitForIdle()
+
+    assertEquals(1, dismissals)
+    assertEquals(0, plays)
+  }
+
+  @Test
+  fun `a real back key dismisses the offer`() {
+    mount()
+
+    compose.runOnUiThread {
+      compose.activity.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_BACK))
+      compose.activity.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_BACK))
+    }
     compose.waitForIdle()
 
     assertEquals(1, dismissals)

@@ -32,6 +32,11 @@ import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
@@ -72,7 +77,17 @@ fun SidePanel(
     awaitFrame()
     runCatching { target.requestFocus() }
   }
-  Box(modifier.fillMaxSize(), contentAlignment = Alignment.CenterEnd) {
+  Box(
+    modifier
+      .fillMaxSize()
+      // The rows declare an exit target, which makes the focus system swallow the remote's Back
+      // before the dispatcher sees it. The panel claims the key itself, so Back always closes it.
+      .onPreviewKeyEvent { event ->
+        if (event.type == KeyEventType.KeyDown && event.key == Key.Back) { onClose(); true }
+        else false
+      },
+    contentAlignment = Alignment.CenterEnd,
+  ) {
     Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.45f)))
     Column(
       modifier = Modifier
