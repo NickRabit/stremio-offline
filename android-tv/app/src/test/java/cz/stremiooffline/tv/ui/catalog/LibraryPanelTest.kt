@@ -154,4 +154,44 @@ class LibraryPanelTest {
     )
     assertEquals(emptyList<Any>(), api.queuedTargets.filterNotNull())
   }
+
+  /** The web's `ruleTarget`: with no addon rule the library the account flagged as its default
+   *  for this kind is the one the panel opens on. */
+  @Test
+  fun `without an addon rule the library flagged as the movie default is preselected`() {
+    val api = ready(
+      listOf(
+        LibraryDto(id = "movies", name = "Movies", type = "movie", writable = true),
+        LibraryDto(id = "shows", name = "Shows", type = "movie", writable = true, defaultMovie = true),
+      ),
+    )
+    mount(api)
+    compose.waitForIdle()
+
+    focusToLibrary()
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(TagCatalogLibraryPanel).assertExists()
+    compose.onNodeWithTag(libraryOptionTag("shows")).assertIsFocused()
+  }
+
+  /** With neither an addon rule nor a flagged library, the first writable one of the right type
+   *  is the offer, and it is the panel's selection. */
+  @Test
+  fun `without any default the first writable library of the right type is preselected`() {
+    val api = ready(
+      listOf(
+        LibraryDto(id = "series", name = "Shows", type = "series", writable = true, defaultSeries = true),
+        LibraryDto(id = "movies", name = "Movies", type = "movie", writable = true),
+        LibraryDto(id = "films", name = "Films", type = "movie", writable = true),
+      ),
+    )
+    mount(api)
+    compose.waitForIdle()
+
+    focusToLibrary()
+    press(Key.DirectionCenter)
+
+    compose.onNodeWithTag(libraryOptionTag("movies")).assertIsFocused()
+    compose.onNodeWithTag(libraryOptionTag("series")).assertDoesNotExist()
+  }
 }

@@ -63,10 +63,15 @@ object AppLog {
     }
   }
 
-  /** The lines a bundle carries, with the crash left by the previous run, when there is one. */
-  fun bundleLines(crash: String?, at: Long = System.currentTimeMillis()): List<ClientLogLineDto> = buildList {
-    if (!crash.isNullOrBlank()) add(ClientLogLineDto(stamp(at), "ERROR", crash))
-    snapshot().forEach { add(ClientLogLineDto(it.t, it.level, it.message, it.context)) }
+  /**
+   * The lines a bundle carries, with the crash left by the previous run, when there is one. The
+   * server refuses more than [CAPACITY] lines, and a full buffer is exactly what a crash leaves
+   * behind: the oldest buffer line makes room for the crash rather than the crash being dropped.
+   */
+  fun bundleLines(crash: String?, at: Long = System.currentTimeMillis()): List<ClientLogLineDto> {
+    val crashLines = if (crash.isNullOrBlank()) emptyList() else listOf(ClientLogLineDto(stamp(at), "ERROR", crash))
+    val room = (CAPACITY - crashLines.size).coerceAtLeast(0)
+    return crashLines + snapshot().takeLast(room).map { ClientLogLineDto(it.t, it.level, it.message, it.context) }
   }
 
   /** `SimpleDateFormat` is not thread safe, so every use is taken under the same lock. */

@@ -21,7 +21,6 @@ class PlayerKeysTest {
   fun `with the controls hidden OK shows them without pausing`() {
     val intent = playerKeyIntent(PlayerKey.Center, controlsShown = false)!!
     assertTrue(intent.showControls)
-    assertFalse(intent.pausePlayback)
     assertFalse(intent.exit)
   }
 

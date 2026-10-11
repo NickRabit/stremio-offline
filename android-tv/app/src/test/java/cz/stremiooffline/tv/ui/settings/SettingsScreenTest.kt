@@ -310,4 +310,37 @@ class SettingsScreenTest {
     assertEquals("tv", bundle.client)
     assertTrue(bundle.lines.any { it.message == "API GET /api/home" })
   }
+
+  /** The server may explain why it refused the bundle; that explanation is what the row says. */
+  @Test
+  fun `a failed Send diagnostics shows the server's own error`() {
+    val api = fake()
+    api.bundleFailure = ApiFailure.Forbidden
+    api.bundleFailureMessage = "Client logs are turned off on this server."
+    mount(api)
+    repeat(7) { press(Key.DirectionDown) }
+    focusRow(TagSettingsRowDiagnostics)
+
+    press(Key.DirectionCenter)
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagSettingsRowDiagnostics).assertTextContains("Client logs are turned off on this server.", substring = true)
+  }
+
+  /** Without an explanation the row still names the failure instead of a fixed line. */
+  @Test
+  fun `a failed Send diagnostics with no explanation names the failure`() {
+    val api = fake()
+    api.bundleFailure = ApiFailure.Unreachable
+    mount(api)
+    repeat(7) { press(Key.DirectionDown) }
+    focusRow(TagSettingsRowDiagnostics)
+
+    press(Key.DirectionCenter)
+    compose.waitForIdle()
+
+    val unreachable = ApplicationProvider.getApplicationContext<Context>()
+      .getString(cz.stremiooffline.tv.R.string.tv_err_unreachable)
+    compose.onNodeWithTag(TagSettingsRowDiagnostics).assertTextContains(unreachable, substring = true)
+  }
 }

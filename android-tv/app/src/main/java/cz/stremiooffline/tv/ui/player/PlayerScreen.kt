@@ -283,7 +283,7 @@ fun PlayerScreen(
 
   // The sources the caller offers in its own order; an addon's notice is not a source. A library
   // file has none, so both the button and the panel stay away.
-  val offeredSources = sources.filterNot { Streams.isAddonNotice(it) }
+  val offeredSources = Streams.offeredStreams(sources)
   val playingSource = offeredSources.firstOrNull { it.sourceId == state.sourceId }
   val quality = qualityChoice(state.quality, state.escalatedByViewer)
 

@@ -264,6 +264,20 @@ class PlayerOverlayTest {
     assertTrue(compose.onAllNodes(hasTestTag(TAG_OSD_SEEK_BACK)).fetchSemanticsNodes().isEmpty())
   }
 
+  // The auto-hide is playback's, not the clock's: a viewer who paused keeps the controls, so the
+  // Play button they would need to resume never disappears under them.
+  @Test
+  fun `paused playback keeps the controls past the hide delay`() {
+    mount(playing = false)
+    compose.onNodeWithTag(TAG_OSD_SEEK_BACK).assertExists()
+
+    compose.mainClock.advanceTimeBy(CONTROLS_HIDE_MS + 100)
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TAG_OSD_SEEK_BACK).assertExists()
+    compose.onNodeWithTag(TAG_OSD_PLAY).assertExists()
+  }
+
   @Test
   fun `with controls hidden back leaves the player`() {
     mount(initiallyShown = false)

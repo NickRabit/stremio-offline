@@ -241,6 +241,18 @@ class StreamsTest {
     assertEquals(listOf("s1"), Streams.offeredStreams(listOf(notice, playable)).map { it.sourceId })
   }
 
+  // The server hashes an identical stream to one id, so an addon that answers the same source
+  // twice hands the panel two rows with one id. Compose refuses duplicate lazy keys at measure
+  // time, which is the crash the panel keys were meant to prevent.
+  @Test
+  fun `offeredStreams drops a source the addon sent twice`() {
+    val twice = stream(sourceId = "s1", name = "FullHD", title = "Czech 1 GB", addonName = "alpha")
+    assertEquals(listOf("s1"), Streams.offeredStreams(listOf(twice, twice)).map { it.sourceId })
+    val lists = Streams.sourceLists(listOf(twice, twice), emptyList(), StreamSort.Recommended, "cs", true, null)
+    assertEquals(1, lists.offered.size)
+    assertEquals(1, lists.visible.size)
+  }
+
   @Test
   fun `noticeText reads the message from the field the addon used`() {
     val notice = stream(kind = "unsupported", playable = false, name = "⚠ Luna", title = "VIP expires in 4 days.")

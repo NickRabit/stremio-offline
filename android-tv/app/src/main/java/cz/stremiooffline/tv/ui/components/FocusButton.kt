@@ -51,6 +51,7 @@ fun FocusButton(
   kind: FocusButtonKind = FocusButtonKind.Normal,
   leading: (@Composable () -> Unit)? = null,
   contentDescription: String? = null,
+  enabled: Boolean = true,
 ) {
   val interaction = remember { MutableInteractionSource() }
   val focused by interaction.collectIsFocusedAsState()
@@ -61,6 +62,7 @@ fun FocusButton(
 
   Button(
     onClick = onClick,
+    enabled = enabled,
     modifier = modifier
       .then(if (kind == FocusButtonKind.Icon) Modifier.size(36.dp) else Modifier.height(36.dp))
       .then(if (contentDescription != null) Modifier.semantics { this.contentDescription = contentDescription } else Modifier)

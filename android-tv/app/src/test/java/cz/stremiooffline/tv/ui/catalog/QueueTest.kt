@@ -4,8 +4,11 @@ package cz.stremiooffline.tv.ui.catalog
 
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -21,6 +24,8 @@ import cz.stremiooffline.tv.data.MetaDto
 import cz.stremiooffline.tv.data.SettingsResponse
 import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.ui.FakeTvApi
+import kotlinx.coroutines.CompletableDeferred
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -96,6 +101,45 @@ class QueueTest {
     press(Key.DirectionCenter)
 
     compose.onNodeWithTag(TagCatalogMessage).assertTextContains("This account may not download to the library.")
+  }
+
+  /** A refusal the server explained is a failure even though its text matches no catalogue line:
+   *  the kind has to be tracked where the message is set, not read back off the drawn string. */
+  @Test
+  fun `a refusal the server explained is marked as a failure`() {
+    val api = ready()
+    api.downloadFailure = ApiFailure.Forbidden
+    api.downloadFailureMessage = "This account may not save to that library. Choose another one."
+    mount(api)
+    compose.waitForIdle()
+
+    focusFromLeft(TagCatalogToLibrary)
+    press(Key.DirectionCenter)
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagCatalogMessage).assertTextContains("Choose another one.", substring = true)
+    compose.onNodeWithTag(TagCatalogMessage).assert(SemanticsMatcher.expectValue(CatalogNoticeKind, CatalogNotice.Failure))
+  }
+
+  /** One press burst, one job: the button waits for the answer and a second OK cannot post again. */
+  @Test
+  fun `a second OK while the queue is in flight does not queue again`() {
+    val api = ready()
+    val gate = CompletableDeferred<Unit>()
+    api.downloadGate = gate
+    mount(api)
+    compose.waitForIdle()
+
+    focusFromLeft(TagCatalogToLibrary)
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(TagCatalogToLibrary).assertIsNotEnabled()
+    press(Key.DirectionCenter)
+
+    assertEquals(1, api.downloadCalls)
+
+    gate.complete(Unit)
+    compose.waitForIdle()
+    compose.onNodeWithTag(TagCatalogToLibrary).assertTextContains("Queued", substring = true)
   }
 
   // Found on the owner's server: the Queued mark outlived the source it was queued for.

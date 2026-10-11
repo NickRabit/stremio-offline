@@ -5,9 +5,14 @@ import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -40,6 +45,7 @@ import cz.stremiooffline.tv.playback.SubtitleDelay
 import cz.stremiooffline.tv.ui.catalog.PanelOption
 import cz.stremiooffline.tv.ui.catalog.SidePanel
 import cz.stremiooffline.tv.ui.theme.Tokens
+import kotlinx.coroutines.android.awaitFrame
 
 const val TagTracksPanel = "tracks_panel"
 const val TagDelayRow = "tracks_delay"
@@ -77,6 +83,23 @@ internal fun tracksEntry(
     if (index >= 0) TracksEntry.Addon(index) else TracksEntry.Off
   }
   else -> TracksEntry.Off
+}
+
+/**
+ * The row's place in the lazy list: the audio section (its rows, or the one dash row when there is
+ * no audio), the subtitle section (Off, then embedded, then addon), then the delay row.
+ */
+internal fun tracksRowIndex(entry: TracksEntry, audioCount: Int, embeddedCount: Int): Int {
+  val audioRows = if (audioCount == 0) 1 else audioCount
+  val offIndex = 2 + audioRows
+  val embeddedStart = offIndex + 1
+  val addonStart = embeddedStart + embeddedCount
+  return when (entry) {
+    is TracksEntry.Audio -> 1 + entry.index.coerceIn(0, audioRows - 1)
+    TracksEntry.Off -> offIndex
+    is TracksEntry.Embedded -> embeddedStart + entry.index
+    is TracksEntry.Addon -> addonStart + entry.index
+  }
 }
 
 /**
@@ -158,59 +181,82 @@ fun PlayerTracksPanel(
 ) {
   val entry = tracksEntry(audioTracks, audioTrackIndex, subtitleTracks, subtitle, addonSubtitles)
   val addonLabels = addonSubtitleLabels(addonSubtitles)
+  val listState = rememberLazyListState()
+  // An addon can answer with hundreds of subtitles, so the rows are a lazy list: only what is on
+  // screen is composed, and a focus move costs a row rather than hundreds. An off-screen row is
+  // not laid out at all, so the entry row is scrolled to before the focus request lands.
+  LaunchedEffect(audioTracks, subtitleTracks, addonSubtitles) {
+    val target = initialFocus ?: return@LaunchedEffect
+    runCatching { listState.scrollToItem(tracksRowIndex(entry, audioTracks.size, subtitleTracks.size)) }
+    awaitFrame()
+    runCatching { target.requestFocus() }
+  }
   SidePanel(
     title = stringResource(R.string.tv_tracks_title),
     onClose = onClose,
     modifier = Modifier.testTag(TagTracksPanel),
     initialFocus = initialFocus,
+    scroll = false,
   ) {
-    Text(stringResource(R.string.tv_audio_section), color = Tokens.Muted, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-    if (audioTracks.isEmpty()) {
-      Text(DIAGNOSTIC_UNKNOWN, color = Tokens.Muted, fontSize = 13.sp)
-    } else {
-      audioTracks.forEachIndexed { index, track ->
+    LazyColumn(
+      state = listState,
+      modifier = Modifier.fillMaxSize(),
+      verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+      item(key = "audio-header") {
+        Text(stringResource(R.string.tv_audio_section), color = Tokens.Muted, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+      }
+      if (audioTracks.isEmpty()) {
+        item(key = "audio-none") { Text(DIAGNOSTIC_UNKNOWN, color = Tokens.Muted, fontSize = 13.sp) }
+      } else {
+        itemsIndexed(audioTracks, key = { index, _ -> "audio-$index" }) { index, track ->
+          PanelOption(
+            text = audioRowLabel(track, capabilities),
+            selected = index == audioTrackIndex,
+            onClick = { onAudio(index) },
+            modifier = Modifier
+              .testTag(audioRowTag(index))
+              .then(if (initialFocus != null && entry == TracksEntry.Audio(index)) Modifier.focusRequester(initialFocus) else Modifier),
+          )
+        }
+      }
+
+      item(key = "subtitles-header") {
+        Text(stringResource(R.string.player_subtitles), color = Tokens.Muted, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+      }
+      item(key = "subtitle-off") {
         PanelOption(
-          text = audioRowLabel(track, capabilities),
-          selected = index == audioTrackIndex,
-          onClick = { onAudio(index) },
+          text = stringResource(R.string.player_subtitles_off),
+          selected = subtitle == SubtitleChoice.Off,
+          onClick = { onSubtitle(SubtitleChoice.Off) },
           modifier = Modifier
-            .testTag(audioRowTag(index))
-            .then(if (initialFocus != null && entry == TracksEntry.Audio(index)) Modifier.focusRequester(initialFocus) else Modifier),
+            .testTag(TagSubtitleOffRow)
+            .then(if (initialFocus != null && entry == TracksEntry.Off) Modifier.focusRequester(initialFocus) else Modifier),
         )
       }
-    }
+      itemsIndexed(subtitleTracks, key = { index, _ -> "subtitle-embedded-$index" }) { index, track ->
+        PanelOption(
+          text = embeddedRowLabel(track),
+          selected = subtitle == SubtitleChoice.Embedded(index),
+          onClick = { onSubtitle(SubtitleChoice.Embedded(index)) },
+          modifier = Modifier
+            .testTag(embeddedRowTag(index))
+            .then(if (initialFocus != null && entry == TracksEntry.Embedded(index)) Modifier.focusRequester(initialFocus) else Modifier),
+        )
+      }
+      itemsIndexed(addonSubtitles, key = { index, _ -> "subtitle-addon-$index" }) { index, item ->
+        PanelOption(
+          text = addonLabels[index],
+          selected = subtitle == SubtitleChoice.Addon(item.subtitleId),
+          onClick = { onSubtitle(SubtitleChoice.Addon(item.subtitleId)) },
+          modifier = Modifier
+            .testTag(addonRowTag(index))
+            .then(if (initialFocus != null && entry == TracksEntry.Addon(index)) Modifier.focusRequester(initialFocus) else Modifier),
+        )
+      }
 
-    Text(stringResource(R.string.player_subtitles), color = Tokens.Muted, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-    PanelOption(
-      text = stringResource(R.string.player_subtitles_off),
-      selected = subtitle == SubtitleChoice.Off,
-      onClick = { onSubtitle(SubtitleChoice.Off) },
-      modifier = Modifier
-        .testTag(TagSubtitleOffRow)
-        .then(if (initialFocus != null && entry == TracksEntry.Off) Modifier.focusRequester(initialFocus) else Modifier),
-    )
-    subtitleTracks.forEachIndexed { index, track ->
-      PanelOption(
-        text = embeddedRowLabel(track),
-        selected = subtitle == SubtitleChoice.Embedded(index),
-        onClick = { onSubtitle(SubtitleChoice.Embedded(index)) },
-        modifier = Modifier
-          .testTag(embeddedRowTag(index))
-          .then(if (initialFocus != null && entry == TracksEntry.Embedded(index)) Modifier.focusRequester(initialFocus) else Modifier),
-      )
+      item(key = "delay") { DelayRow(delay = delay, enabled = delayEnabled, onDelay = onDelay) }
     }
-    addonSubtitles.forEachIndexed { index, item ->
-      PanelOption(
-        text = addonLabels[index],
-        selected = subtitle == SubtitleChoice.Addon(item.subtitleId),
-        onClick = { onSubtitle(SubtitleChoice.Addon(item.subtitleId)) },
-        modifier = Modifier
-          .testTag(addonRowTag(index))
-          .then(if (initialFocus != null && entry == TracksEntry.Addon(index)) Modifier.focusRequester(initialFocus) else Modifier),
-      )
-    }
-
-    DelayRow(delay = delay, enabled = delayEnabled, onDelay = onDelay)
   }
 }
 

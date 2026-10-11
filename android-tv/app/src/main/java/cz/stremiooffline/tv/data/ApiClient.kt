@@ -127,13 +127,14 @@ class ApiClient(
   }
 
   suspend fun me(): MeResult {
+    val request = Request.Builder().url(address.resolve("/api/auth/me")).get().build()
     val started = System.currentTimeMillis()
-    call(Request.Builder().url(address.resolve("/api/auth/me")).get().build()).closing { response ->
-      val body = readBody(response)
-      if (response.code == 401) {
-        AppLog.apiFailure("GET", "/api/auth/me", 401, System.currentTimeMillis() - started)
-        throw ApiError(ApiFailure.SessionExpired)
+    call(request).closing { response ->
+      if (!response.isSuccessful) {
+        AppLog.apiFailure(request.method, request.url.encodedPath, response.code, System.currentTimeMillis() - started)
+        throw ApiError(if (response.code == 401) ApiFailure.SessionExpired else ApiFailure.Generic)
       }
+      val body = readBody(response)
       val parsed = body.decodeOrNull<MeResponse>() ?: throw ApiError(ApiFailure.Incompatible)
       if (parsed.setup) return MeResult.Setup
       return MeResult.SignedIn(parsed.username ?: throw ApiError(ApiFailure.SessionExpired), parsed.language)
@@ -141,8 +142,13 @@ class ApiClient(
   }
 
   override suspend fun settings(): SettingsResponse {
-    call(Request.Builder().url(address.resolve("/api/settings")).get().build()).closing { response ->
-      if (!response.isSuccessful) throw ApiError(ApiFailure.Generic)
+    val request = Request.Builder().url(address.resolve("/api/settings")).get().build()
+    val started = System.currentTimeMillis()
+    call(request).closing { response ->
+      if (!response.isSuccessful) {
+        AppLog.apiFailure(request.method, request.url.encodedPath, response.code, System.currentTimeMillis() - started)
+        throw ApiError(ApiFailure.Generic)
+      }
       return readBody(response).decodeOrNull<SettingsResponse>() ?: SettingsResponse()
     }
   }
@@ -247,7 +253,7 @@ class ApiClient(
       if (!response.isSuccessful) return@closing null
       val complete = response.header("x-sidecar-complete") == "1"
       val coverage = response.header("x-sidecar-coverage")?.toDoubleOrNull() ?: Double.POSITIVE_INFINITY
-      SidecarFetch(readBody(response), complete, coverage)
+      SidecarFetch(readBody(response, log = false), complete, coverage)
     }
   }
 
@@ -258,7 +264,7 @@ class ApiClient(
   override suspend fun subtitleText(id: String, offset: Double, delay: Double): String? {
     val path = SubtitleUrls.addon(id, offset, delay)
     return call(Request.Builder().url(address.resolve(path)).get().build()).closing { response ->
-      if (!response.isSuccessful) null else readBody(response)
+      if (!response.isSuccessful) null else readBody(response, log = false)
     }
   }
 
@@ -437,11 +443,19 @@ class ApiClient(
       withContext(NonCancellable + Dispatchers.IO) { close() }
     }
 
-  /** The body streams from the socket, so it is read off the main thread like the call itself. */
-  private suspend fun readBody(response: Response): String = withContext(Dispatchers.IO) {
+  /**
+   * The body streams from the socket, so it is read off the main thread like the call itself. A
+   * connection that dies mid-body is a failure the diagnostics buffer should hold, once; the
+   * polling routes turn [log] off so a loop cannot fill it.
+   */
+  private suspend fun readBody(response: Response, log: Boolean = true): String = withContext(Dispatchers.IO) {
+    val started = System.currentTimeMillis()
     try {
       response.body?.string().orEmpty()
     } catch (error: IOException) {
+      if (log) {
+        AppLog.apiFailure(response.request.method, response.request.url.encodedPath, null, System.currentTimeMillis() - started)
+      }
       throw ApiError(ApiFailure.Unreachable)
     }
   }

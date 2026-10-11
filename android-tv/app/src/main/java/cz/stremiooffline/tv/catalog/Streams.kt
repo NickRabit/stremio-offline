@@ -144,7 +144,17 @@ object Streams {
     listOf(stream.title, stream.description, stream.name).firstOrNull { !it.isNullOrBlank() }
       ?.trim()?.replace(Regex("\\s+"), " ") ?: ""
 
-  fun offeredStreams(streams: List<StreamDto>): List<StreamDto> = streams.filter { !isAddonNotice(it) }
+  /**
+   * The sources a viewer may play. The server hashes an identical stream to one id, so one addon
+   * answering the same release twice hands two rows with one id; the panel keys its rows by that
+   * id and refuses duplicates, so the second copy is dropped here.
+   */
+  fun offeredStreams(streams: List<StreamDto>): List<StreamDto> {
+    val seen = HashSet<String>()
+    return streams.filter { stream ->
+      !isAddonNotice(stream) && (stream.sourceId.isBlank() || seen.add(stream.sourceId))
+    }
+  }
 
   /** The sources of one title after the addons that answered have been merged, sorted and
    *  filtered: the list the panel draws, the one the player holds, and the addon notices. Built

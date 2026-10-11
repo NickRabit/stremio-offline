@@ -42,6 +42,8 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.SemanticsPropertyKey
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -94,6 +96,19 @@ const val TagCatalogChosenSource = "catalog_chosen_source"
 const val TagCatalogLibraryPanel = "catalog_library_panel"
 
 fun libraryOptionTag(libraryId: String): String = "catalog_library_$libraryId"
+
+/** What the message line under the actions tells the viewer; the kind picks its colour. */
+internal enum class CatalogNotice { Neutral, Success, Failure }
+
+internal fun catalogNoticeColour(kind: CatalogNotice): Color = when (kind) {
+  CatalogNotice.Success -> Tokens.Green
+  CatalogNotice.Failure -> Tokens.Red
+  CatalogNotice.Neutral -> Tokens.Muted
+}
+
+/** The colour is not readable from a test, so the kind behind it is exposed as a semantics
+ *  property, the way the player exposes focus through its own. */
+internal val CatalogNoticeKind = SemanticsPropertyKey<CatalogNotice>("CatalogNoticeKind")
 
 /** One slow addon must not hold a play back longer once something playable has arrived. */
 const val PLAY_WHEN_READY_TIMEOUT_MS = 8_000L
@@ -155,6 +170,10 @@ fun CatalogDetailScreen(
   var favouriteBusy by remember { mutableStateOf(false) }
   var queuedSourceId by remember { mutableStateOf<String?>(null) }
   var message by remember { mutableStateOf<String?>(null) }
+  var noticeKind by remember { mutableStateOf(CatalogNotice.Neutral) }
+  // One queue request per press burst: the second OK of a burst while the first is still in the
+  // air must not post the same job again.
+  var queueBusy by remember { mutableStateOf(false) }
   var libraries by remember { mutableStateOf<List<LibraryDto>>(emptyList()) }
   // False when the server could not answer /api/libraries at all: the TV then queues the way it
   // did before the field existed instead of inventing a refusal.
@@ -172,6 +191,13 @@ fun CatalogDetailScreen(
   val toLibraryText = stringResource(R.string.save_to_library)
   val findingSourcesText = stringResource(R.string.tv_finding_sources)
   val playWhenReadyText = stringResource(R.string.tv_play_when_ready)
+
+  /** The one place the message line is set, so its kind -- which is what picks the colour --
+   *  travels with the text instead of being read back off the drawn string. */
+  fun notice(text: String?, kind: CatalogNotice = CatalogNotice.Neutral) {
+    message = text
+    noticeKind = if (text == null) CatalogNotice.Neutral else kind
+  }
 
   val primaryFocus = remember { FocusRequester() }
   val rowFocus = remember { FocusRequester() }
@@ -196,7 +222,7 @@ fun CatalogDetailScreen(
   // metadata waits for the settings it takes its language from.
   LaunchedEffect(args.meta.id) {
     queuedSourceId = null
-    message = null
+    notice(null)
     libraryPanelOpen = false
     pendingLibraryStream = null
     coroutineScope {
@@ -243,7 +269,7 @@ fun CatalogDetailScreen(
     sourcesLoaded = false
     sourcesFailed = false
     queuedSourceId = null
-    message = null
+    notice(null)
     val id = streamVideoId
     if (id == null) {
       sourcesLoaded = true
@@ -323,6 +349,8 @@ fun CatalogDetailScreen(
   val queued = queuedSourceId != null && activeStream?.sourceId == queuedSourceId
   // Nothing visible to play: either no addon offers a source, or only a torrent it cannot open.
   val emptyText = if (offered.isEmpty()) noSourcesText else torrentText
+  // The empty state is a note; a list holding only torrents is a failure.
+  val emptyKind = if (offered.isEmpty()) CatalogNotice.Neutral else CatalogNotice.Failure
 
   // A later addon may outrank the one already picked, but only while the viewer has not chosen.
   LaunchedEffect(visible, sourcesAsking) {
@@ -398,7 +426,7 @@ fun CatalogDetailScreen(
     pickedStream = true
     selectedStream = stream
     closeSources()
-    message = null
+    notice(null)
     onPlay(
       PlayTarget(
         key = progressKey,
@@ -418,32 +446,36 @@ fun CatalogDetailScreen(
   fun queueTo(stream: StreamDto, libraryId: String?) {
     val media = mediaFor(meta, args, selectedVideo, settings)
     val title = playerTitle
+    queueBusy = true
     scope.launch {
       try {
         val job = api.download(title, stream.sourceId, media, libraryId?.let(::DownloadTargetDto))
         queuedSourceId = stream.sourceId
-        message = if (job.status == "waiting") waitingText else queuedText
+        notice(if (job.status == "waiting") waitingText else queuedText, CatalogNotice.Success)
       } catch (cancelled: CancellationException) {
         throw cancelled
       } catch (error: ApiError) {
         // A refusal carries the server's own explanation; the catalogue line is the fallback.
-        message = error.serverMessage ?: if (error.failure == ApiFailure.Forbidden) notAllowedText else null
+        notice(error.serverMessage ?: notAllowedText.takeIf { error.failure == ApiFailure.Forbidden }, CatalogNotice.Failure)
+      } finally {
+        queueBusy = false
       }
     }
   }
 
   fun queue(stream: StreamDto) {
+    if (queueBusy) return
     selectedStream = stream
     pickedStream = true
-    message = null
+    notice(null)
     if (!Streams.canQueue(stream, settings.realDebridConfigured)) {
-      message = torrentText
+      notice(torrentText, CatalogNotice.Failure)
       return
     }
     when {
       // The server that could not answer keeps the old behaviour: queue and let it pick.
       !librariesLoaded -> queueTo(stream, null)
-      libraryCandidates.isEmpty() -> message = noLibraryText
+      libraryCandidates.isEmpty() -> notice(noLibraryText, CatalogNotice.Failure)
       libraryCandidates.size == 1 -> queueTo(stream, libraryCandidates.first().id)
       // More than one usable library: let the viewer choose, the addon's own default preselected.
       else -> {
@@ -458,14 +490,14 @@ fun CatalogDetailScreen(
     selectedStream = stream
     pickedStream = true
     chosenInPanel = true
-    message = null
+    notice(null)
     closeToPlay = true
     closeSources()
   }
 
   /** OK while the sources are still coming; the wait ends when they all answer or the deadline passes. */
   fun armPendingPlay() {
-    message = null
+    notice(null)
     playTimeoutReached = false
     pendingPlay = true
   }
@@ -473,35 +505,39 @@ fun CatalogDetailScreen(
   fun resolvePendingPlay() {
     cancelPendingPlay()
     val stream = preferredStream
-    if (stream?.playable == true) play(stream) else message = if (offered.isEmpty()) noSourcesText else torrentText
+    if (stream?.playable == true) {
+      play(stream)
+    } else {
+      notice(if (offered.isEmpty()) noSourcesText else torrentText, CatalogNotice.Failure)
+    }
   }
 
   fun playPressed() {
     val stream = activeStream
     when {
       pendingPlay -> cancelPendingPlay()
-      sourcesFailed -> message = loadErrorText
+      sourcesFailed -> notice(loadErrorText, CatalogNotice.Failure)
       // Once a row is chosen, Play acts on that row alone: a playable pick plays, an unplayable
       // one says why, and the wait for another addon never overrides the pick.
       pickedStream -> when {
         stream?.playable == true -> play(stream)
-        stream != null -> message = torrentText
-        else -> message = emptyText
+        stream != null -> notice(torrentText, CatalogNotice.Failure)
+        else -> notice(emptyText, emptyKind)
       }
       stream?.playable == true -> play(stream)
       findingSources -> armPendingPlay()
       // A chosen stream that cannot be played is what the torrent message is for; queuing it is
       // the To library button's job.
-      stream != null -> message = torrentText
-      else -> message = emptyText
+      stream != null -> notice(torrentText, CatalogNotice.Failure)
+      else -> notice(emptyText, emptyKind)
     }
   }
 
   fun startOverPressed() {
-    message = null
+    notice(null)
     val stream = activeStream
     when {
-      sourcesFailed -> message = loadErrorText
+      sourcesFailed -> notice(loadErrorText, CatalogNotice.Failure)
       stream?.playable == true -> {
         pickedStream = true
         selectedStream = stream
@@ -518,9 +554,9 @@ fun CatalogDetailScreen(
           ),
         )
       }
-      pickedStream -> message = if (stream != null) torrentText else emptyText
+      pickedStream -> notice(if (stream != null) torrentText else emptyText, if (stream != null) CatalogNotice.Failure else emptyKind)
       sourcesAsking -> Unit
-      else -> message = emptyText
+      else -> notice(emptyText, emptyKind)
     }
   }
 
@@ -556,7 +592,7 @@ fun CatalogDetailScreen(
     sourcesLoaded = false
     sourcesFailed = false
     queuedSourceId = null
-    message = null
+    notice(null)
   }
 
   // The deadline starts when OK arms the wait, not when the first stream lands.
@@ -580,6 +616,14 @@ fun CatalogDetailScreen(
   val startOverWasFocused = startOverFocused
   LaunchedEffect(canQueueActive) {
     if (!canQueueActive && toLibraryWasFocused) {
+      toLibraryFocused = false
+      runCatching { primaryFocus.requestFocus() }
+    }
+  }
+  // A queue request in the air disables the button, so the remote it was holding goes back to Play
+  // instead of being left on nothing.
+  LaunchedEffect(queueBusy) {
+    if (queueBusy && toLibraryWasFocused) {
       toLibraryFocused = false
       runCatching { primaryFocus.requestFocus() }
     }
@@ -707,6 +751,7 @@ fun CatalogDetailScreen(
           FocusButton(
             text = if (queued) "✓ $queuedText" else toLibraryText,
             onClick = { activeStream?.let { queue(it) } },
+            enabled = !queueBusy,
             modifier = Modifier
               .testTag(TagCatalogToLibrary)
               .focusRequester(libraryOpenerFocus)
@@ -746,14 +791,11 @@ fun CatalogDetailScreen(
       if (shown != null) {
         Text(
           shown,
-          // Red for a failure, muted for a neutral notice, green only for a successful queue.
-          color = when (shown) {
-            queuedText, waitingText -> Tokens.Green
-            notAllowedText, noLibraryText, torrentText, loadErrorText -> Tokens.Red
-            else -> Tokens.Muted
-          },
+          color = catalogNoticeColour(noticeKind),
           fontSize = 11.sp,
-          modifier = Modifier.testTag(TagCatalogMessage),
+          modifier = Modifier
+            .testTag(TagCatalogMessage)
+            .semantics { this[CatalogNoticeKind] = noticeKind },
         )
       }
       val videos = meta.videos.orEmpty()
@@ -804,9 +846,13 @@ fun CatalogDetailScreen(
     }
 
     if (libraryPanelOpen) {
-      // The source addon's own default stands out when the server has one for this title.
-      val defaultLibraryId = addons.firstOrNull { it.key == pendingLibraryStream?.addonKey }?.defaultLibraryId(streamType)
-      val preferredLibraryId = defaultLibraryId?.takeIf { id -> libraryCandidates.any { it.id == id } }
+      // The preselection follows the web's `ruleTarget`: the addon's own rule first, then the
+      // library the account flagged as its default for this kind, then the first usable one.
+      val addonDefault = addons.firstOrNull { it.key == pendingLibraryStream?.addonKey }?.defaultLibraryId(streamType)
+      val flaggedDefault = libraryCandidates.firstOrNull { if (streamType == "series") it.defaultSeries else it.defaultMovie }?.id
+      val preferredLibraryId = addonDefault?.takeIf { id -> libraryCandidates.any { it.id == id } }
+        ?: flaggedDefault
+        ?: libraryCandidates.firstOrNull()?.id
       val focusIndex = libraryCandidates.indexOfFirst { it.id == preferredLibraryId }.let { if (it >= 0) it else 0 }
       SidePanel(
         title = stringResource(R.string.save_to_library),

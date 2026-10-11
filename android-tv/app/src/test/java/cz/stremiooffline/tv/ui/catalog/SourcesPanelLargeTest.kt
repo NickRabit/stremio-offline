@@ -84,4 +84,25 @@ class SourcesPanelLargeTest {
     // Generous: the point is that the walk does not lock up, not a device benchmark.
     assertTrue("DOWN to row 50 took ${elapsed}ms", elapsed < 30_000)
   }
+
+  /** The server answers an identical stream with one id, so an addon can hand the panel the same
+   *  source twice. Two rows with one lazy key are a crash, so the second one is dropped. */
+  @Test
+  fun `a source the addon sent twice opens the panel with one row`() {
+    val api = FakeTvApi()
+    api.settingsValue = SettingsResponse(uiLanguage = "en", audioLanguage = "en", realDebridConfigured = true)
+    val twice = StreamDto(sourceId = "s1", kind = "remote", playable = true, title = "Czech 8 GB", addonName = "alpha")
+    api.streamsValues["movie:tt1"] = listOf(twice, twice, StreamDto(sourceId = "s2", kind = "remote", playable = true, title = "Czech 4 GB", addonName = "alpha"))
+    mount(api)
+    compose.waitForIdle()
+
+    focusSources()
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(TagSourcesPanel).assertExists()
+    compose.onNodeWithTag(sourceRowTag(0)).assertIsFocused()
+
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(sourceRowTag(1)).assertIsFocused()
+    compose.onNodeWithTag(sourceRowTag(2)).assertDoesNotExist()
+  }
 }

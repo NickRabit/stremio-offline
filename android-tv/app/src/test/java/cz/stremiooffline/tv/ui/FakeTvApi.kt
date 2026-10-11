@@ -102,8 +102,13 @@ open class FakeTvApi : TvApi {
   var downloads: MutableList<Pair<String?, MediaDto>> = mutableListOf()
   /** The source id each `download()` was called with, so a test can name the queued source. */
   var queuedSourceIds: MutableList<String> = mutableListOf()
+  /** Every `download()` the screen asked for, counted as it arrives, in flight or not. */
+  var downloadCalls = 0
+  /** When set, `download()` waits for it before answering: a queue request that stays in flight. */
+  var downloadGate: CompletableDeferred<Unit>? = null
   var downloadResult: DownloadResult = DownloadResult(status = "queued")
   var downloadFailure: ApiFailure? = null
+  var downloadFailureMessage: String? = null
   var searchPages: MutableMap<String, SearchResultDto> = mutableMapOf()
   var searchRequests: MutableList<Pair<String, String?>> = mutableListOf()
   var failSearch = false
@@ -119,6 +124,7 @@ open class FakeTvApi : TvApi {
   var bundles: MutableList<ClientLogBundleDto> = mutableListOf()
   var bundleResultId: String = "b1"
   var bundleFailure: ApiFailure? = null
+  var bundleFailureMessage: String? = null
 
   override val http: OkHttpClient = OkHttpClient()
 
@@ -251,7 +257,9 @@ open class FakeTvApi : TvApi {
   }
 
   override suspend fun download(title: String, sourceId: String, media: MediaDto, target: DownloadTargetDto?): DownloadResult {
-    downloadFailure?.let { throw ApiError(it) }
+    downloadCalls += 1
+    downloadGate?.await()
+    downloadFailure?.let { throw ApiError(it, serverMessage = downloadFailureMessage) }
     downloads += title to media
     queuedSourceIds += sourceId
     queuedTargets += target
@@ -277,7 +285,7 @@ open class FakeTvApi : TvApi {
   }
 
   override suspend fun sendClientLogBundle(bundle: ClientLogBundleDto): String {
-    bundleFailure?.let { throw ApiError(it) }
+    bundleFailure?.let { throw ApiError(it, serverMessage = bundleFailureMessage) }
     bundles += bundle
     return bundleResultId
   }

@@ -58,4 +58,20 @@ class AppLogTest {
     assertTrue(AppLog.allowWarn("player:Network", now = 61_000))
     assertTrue(AppLog.allowWarn("player:Decoder", now = 30_000))
   }
+
+  /** The server caps a bundle at a thousand lines. A buffer that is full -- which is what a crash
+   *  leaves behind -- plus the crash line was a hundred and one over that, so the one bundle that
+   *  exists for a crash could never be filed. */
+  @Test
+  fun `a full buffer plus the crash line still fits the thousand line cap`() {
+    repeat(AppLog.CAPACITY) { AppLog.record("INFO", "line $it") }
+
+    val lines = AppLog.bundleLines("Uncaught exception on main")
+
+    assertEquals(AppLog.CAPACITY, lines.size)
+    assertEquals("Uncaught exception on main", lines.first().message)
+    // The oldest buffer line made room for the crash; the newest are all still there.
+    assertEquals("line 1", lines[1].message)
+    assertEquals("line 999", lines.last().message)
+  }
 }

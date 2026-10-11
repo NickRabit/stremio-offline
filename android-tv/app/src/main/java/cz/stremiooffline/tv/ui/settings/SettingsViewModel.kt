@@ -32,7 +32,8 @@ sealed interface DiagnosticsState {
   data object Idle : DiagnosticsState
   data object Sending : DiagnosticsState
   data class Sent(val id: String) : DiagnosticsState
-  data object Failed : DiagnosticsState
+  /** The failure the row explains: the server's own message when it sent one, the kind otherwise. */
+  data class Failed(val failure: ApiFailure, val serverMessage: String? = null) : DiagnosticsState
 }
 
 /**
@@ -132,8 +133,8 @@ class SettingsViewModel(
         DiagnosticsState.Sent(api.sendClientLogBundle(bundle))
       } catch (cancelled: CancellationException) {
         throw cancelled
-      } catch (_: ApiError) {
-        DiagnosticsState.Failed
+      } catch (error: ApiError) {
+        DiagnosticsState.Failed(error.failure, error.serverMessage)
       }
     }
   }

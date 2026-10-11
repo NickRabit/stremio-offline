@@ -56,6 +56,8 @@ data class LibraryDto(
   val readOnly: Boolean = false,
   val unreachable: Boolean = false,
   val writable: Boolean? = null,
+  val defaultMovie: Boolean = false,
+  val defaultSeries: Boolean = false,
 ) {
   /** True when this account may queue a download here. Without the field, the older-server rule
    *  is "visible, enabled and not read-only", which is what the spec allows the TV to assume. */

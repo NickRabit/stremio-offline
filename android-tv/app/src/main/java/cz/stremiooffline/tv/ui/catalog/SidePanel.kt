@@ -66,8 +66,8 @@ fun SidePanel(
   onClose: () -> Unit,
   modifier: Modifier = Modifier,
   initialFocus: FocusRequester? = null,
-  /** True for a short list the panel scrolls itself. A long list (the sources) passes false and
-   *  draws its own `LazyColumn` in the space the panel hands it. */
+  /** True for a short list the panel scrolls itself. A long list (the sources, the tracks) passes
+   *  false and draws its own `LazyColumn` in the space the panel hands it. */
   scroll: Boolean = true,
   content: @Composable ColumnScope.() -> Unit,
 ) {

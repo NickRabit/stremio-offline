@@ -18,7 +18,6 @@ fun playerKeyOf(key: Key): PlayerKey? = when (key) {
 
 /** What one key does. */
 data class PlayerKeyIntent(
-  val pausePlayback: Boolean = false,
   val showControls: Boolean = false,
   val hideControls: Boolean = false,
   /** -1 rewinds, +1 forwards; the distance comes from how long the key is held. */

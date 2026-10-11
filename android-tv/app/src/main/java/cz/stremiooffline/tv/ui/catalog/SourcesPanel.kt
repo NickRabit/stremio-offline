@@ -170,7 +170,9 @@ fun SourcesPanel(
 }
 
 /** A stable key per row: the stream's own identity, with a positional fallback for one that
- *  arrived without a source id. */
+ *  arrived without a source id. `Streams.offeredStreams` has already dropped a repeated id, so
+ *  two rows never share a key -- and a row that is still offered keeps its identity across a
+ *  re-sort. */
 private fun sourceRowKey(stream: StreamDto, index: Int): String = stream.sourceId.ifBlank { "row-$index" }
 
 /** One offered stream: badge, addon, the stream's title and a size/language meta line. */

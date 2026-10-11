@@ -135,7 +135,8 @@ fun SettingsRoute(
   val diagnosticsValue = when (val state = viewModel.diagnostics) {
     DiagnosticsState.Idle, DiagnosticsState.Sending -> null
     is DiagnosticsState.Sent -> stringResource(R.string.tv_diagnostics_sent, state.id)
-    DiagnosticsState.Failed -> stringResource(R.string.tv_diagnostics_failed)
+    // The server may say why it refused the bundle; without that, the row names the failure kind.
+    is DiagnosticsState.Failed -> state.serverMessage ?: stringResource(state.failure.messageRes())
   }
   SettingsScreen(
     state = viewModel.state,

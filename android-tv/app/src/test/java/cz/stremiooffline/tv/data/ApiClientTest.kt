@@ -1,5 +1,6 @@
 package cz.stremiooffline.tv.data
 
+import cz.stremiooffline.tv.diagnostics.AppLog
 import java.io.ByteArrayInputStream
 import java.security.KeyStore
 import java.util.Base64
@@ -13,6 +14,7 @@ import kotlinx.coroutines.test.runTest
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.SocketPolicy
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -373,6 +375,42 @@ class ApiClientTest {
   fun `a library source with no neighbour answers nothing`() = runTest {
     server.enqueue(MockResponse().setBody("null"))
     assertNull(client(start()).libraryNext("src1"))
+  }
+
+  /** The app's own diagnostics buffer is only useful if a failure lands in it once. These three
+   *  calls used to answer a non-2xx or die mid-body without a single line. */
+  @Test
+  fun `a failing settings read is logged once`() = runTest {
+    AppLog.clear()
+    server.enqueue(MockResponse().setResponseCode(500).setBody("""{"error":"boom"}"""))
+
+    runCatching { client(start()).settings() }
+
+    val lines = AppLog.snapshot().filter { it.message == "API GET /api/settings" }
+    assertEquals(1, lines.size)
+    assertEquals("500", lines.first().context?.get("status"))
+  }
+
+  @Test
+  fun `a failing me read is logged once`() = runTest {
+    AppLog.clear()
+    server.enqueue(MockResponse().setResponseCode(500).setBody("""{"error":"boom"}"""))
+
+    runCatching { client(start()).me() }
+
+    assertEquals(1, AppLog.snapshot().count { it.message == "API GET /api/auth/me" })
+  }
+
+  @Test
+  fun `a body that dies while it is read is logged once`() = runTest {
+    AppLog.clear()
+    server.enqueue(
+      MockResponse().setBody("x".repeat(4096)).setSocketPolicy(SocketPolicy.DISCONNECT_DURING_RESPONSE_BODY),
+    )
+
+    assertFailure(ApiFailure.Unreachable) { client(start()).catalogs() }
+
+    assertEquals(1, AppLog.snapshot().count { it.message == "API GET /api/catalogs" })
   }
 
   private fun start(): ServerAddress {
