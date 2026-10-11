@@ -270,6 +270,20 @@ The selected source and the player offer two destinations:
 
 Individual library files can also be downloaded from their context menu.
 
+A title whose copy is already in a library also lists it as a **Local**
+(`Lokální`) row above the addon sources, marked with a drive icon and the
+library's name. Playing it plays the library file itself, so the progress, the
+Continue watching row, the favourite star and the previous/next file are the
+ones that file already has. **To library** is disabled for it — the file is on
+the server's disk already — **To device** saves it, and **Show in library**
+opens it in the Library view.
+
+The catalogue detail keeps its own resume line: a local play writes the file's
+progress under `file:<path>`, not the catalogue's key, so the detail does not
+move after a local play while the Library view and Home do. A movie that
+already had catalogue progress from an earlier addon play therefore keeps two
+Continue watching cards until one of them is forgotten.
+
 External streams always pass through the server proxy: the browser talks only to
 Stremio Offline, and the provider URL is never placed in the download link.
 Filenames follow the same rules as library downloads.

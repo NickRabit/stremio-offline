@@ -23,7 +23,7 @@ import { report } from "./diagnostics";
 import { label, titleLanguage } from "./languages";
 import { locale, localeTag, setLocale, t, useI18n, type Key } from "./i18n";
 import { catalogTypeTag } from "./catalog-labels";
-import { addonNotices, canQueue, noticeText, offeredStreams, pickDefaultStream, pickNextEpisodeStream, repickStream, streamBadge, streamLanguages, streamSize, visibleCatalogStreams, type StreamSort } from "./streams";
+import { addonNotices, canQueue, catalogSourceList, isLocalStream, noticeText, offeredStreams, pickDefaultStream, pickNextEpisodeStream, repickStream, streamBadge, streamLanguages, streamSize, visibleCatalogStreams, type StreamSort } from "./streams";
 import { parseSearchScope } from "./search-scope";
 import { createLiveSearch, type LiveSearch, type LiveSearchState } from "./live-search";
 import { rankByTitle } from "./title-match";
@@ -200,7 +200,7 @@ export function App() {
   }
   type TreeItem = Extract<BrowseItem, { kind: "folder" | "file" }>;
   const [selectedCatalog, setSelectedCatalog] = useState(""); const [search, setSearch] = useState(""); const [items, setItems] = useState<Meta[]>([]); const [selected, setSelected] = useState<Meta | null>(null); const [selectedSummary, setSelectedSummary] = useState<Meta | null>(null); const [selectedDownloadTitle, setSelectedDownloadTitle] = useState("");
-  const [selectedVideo, setSelectedVideo] = useState<Video | null>(null); const [streams, setStreams] = useState<Stream[]>([]); const [selectedStream, setSelectedStream] = useState<Stream | null>(null); const [subtitles, setSubtitles] = useState<Subtitle[]>([]); const [localEpisode, setLocalEpisode] = useState(false); const [playbackPreferences, setPlaybackPreferences] = useState<{ audioLanguage?: string; subtitleLanguage?: string | null }>({});
+  const [selectedVideo, setSelectedVideo] = useState<Video | null>(null); const [streams, setStreams] = useState<Stream[]>([]); const [localStreams, setLocalStreams] = useState<Stream[]>([]); const [localLoading, setLocalLoading] = useState(false); const [selectedStream, setSelectedStream] = useState<Stream | null>(null); const [subtitles, setSubtitles] = useState<Subtitle[]>([]); const [localEpisode, setLocalEpisode] = useState(false); const [playbackPreferences, setPlaybackPreferences] = useState<{ audioLanguage?: string; subtitleLanguage?: string | null }>({});
   const nextEpisodePrefetchRef = useRef<{ id: string; promise: Promise<{ streams: Stream[]; subtitles: Subtitle[] }> } | null>(null);
   const [sourcesLoaded, setSourcesLoaded] = useState(false); const [metaLoading, setMetaLoading] = useState(false);
   const [titleLinks, setTitleLinks] = useState<SiteLink[]>([]);
@@ -1017,7 +1017,7 @@ export function App() {
     setView("catalog");
     setSearch(""); setSubmittedQuery(""); setSearchScopeValue(""); setTypeFilter(""); setGenre(""); setSort("default"); setSearchSort("default");
     setSelectedCatalog(firstCatalog ? `${firstCatalog.addonKey}:${firstCatalog.type}:${firstCatalog.id}` : "");
-    setSelected(null); setSelectedVideo(null); setStreams([]); setSelectedStream(null); setSubtitles([]); setSourcesLoaded(false);
+    setSelected(null); setSelectedVideo(null); setStreams([]); setLocalStreams([]); setLocalLoading(false); setSelectedStream(null); setSubtitles([]); setSourcesLoaded(false);
     setGalleryIndex(null);
     setStreamAddon(""); setStreamLanguage(""); setStreamSort(settings.streamSort as StreamSort);
     setEpisodesOpen(true); setSeason(null); setCatalogReset((value) => value + 1);
@@ -1471,8 +1471,8 @@ export function App() {
     try { return await playLocal(file.title, file.path, localPoster, localEpisode); }
     finally { nextBusyRef.current = false; setNextBusy(false); }
   };
-  const playLocal = async (title: string, path: string, poster?: string, episode = false) => {
-    const returning = capturePlaybackReturn({ kind: "library", key: path });
+  const playLocal = async (title: string, path: string, poster?: string, episode = false, anchor?: PlaybackAnchor) => {
+    const returning = capturePlaybackReturn(anchor ?? { kind: "library", key: path });
     try {
       const source = await api.librarySource(path);
       setLocalPoster(poster);
@@ -1532,7 +1532,7 @@ export function App() {
     if (reset) {
       searchAbortRef.current?.abort();
       searchAbortRef.current = null;
-      setBusy(true); setSelected(null); setStreams([]);
+      setBusy(true); setSelected(null); setStreams([]); setLocalStreams([]); setLocalLoading(false);
     } else setLoadingMore(true);
     try {
       if (submittedQuery) {
@@ -1686,15 +1686,20 @@ export function App() {
     if (streamLanguage && !counts.has(streamLanguage)) counts.set(streamLanguage, 0);
     return [...counts.entries()].sort((a, b) => b[1] - a[1]);
   }, [byAddon, streamLanguage, metaLanguage]);
+  // Local copies sit above the addon streams in the list that is rendered and picked from;
+  // everything else (filters, counts, notices) stays on the addon streams alone.
+  const sourceRows = useMemo(() => catalogSourceList(localStreams, visibleStreams), [localStreams, visibleStreams]);
   // When a filter removes the chosen source, the pick moves to the first one left -- unless
   // the film is already playing on it, when moving it would restart playback on another source.
   useEffect(() => {
+    const preferred = pickDefaultStream(sourceRows) ?? null;
     const next = repickStream({
-      playing: playerOpen, picked: pickedRef.current, pending: pendingSources,
-      visible: visibleStreams, selected: selectedStream, preferred: pickDefaultStream(visibleStreams) ?? null,
+      playing: playerOpen, picked: pickedRef.current, pending: pendingSources + (localLoading ? 1 : 0),
+      upgrade: Boolean(preferred && isLocalStream(preferred) && selectedStream && !isLocalStream(selectedStream)),
+      visible: sourceRows, selected: selectedStream, preferred,
     });
     if (next.move) setSelectedStream(next.to);
-  }, [visibleStreams, pendingSources, playerOpen]);
+  }, [sourceRows, localStreams, pendingSources, localLoading, playerOpen]);
 
   const catalogResume = useMemo(() => catalogResumeEntries(resume, addons), [resume, addons]);
   /** Each Continue watching row with the episode it remembers, in the server's order. */
@@ -1760,8 +1765,15 @@ export function App() {
     const request = ++sourcesRequestRef.current;
     const stale = () => request !== sourcesRequestRef.current;
     setSelectedVideo(video ?? null); setSourcesLoaded(false); setBusy(true);
-    setStreams([]); setSelectedStream(null); setSubtitles([]); setPendingSources(0);
+    setStreams([]); setLocalStreams([]); setLocalLoading(false); setSelectedStream(null); setSubtitles([]); setPendingSources(0);
     pickedRef.current = false;
+    // Local copies are asked for beside the addons and outside the try: an addon or subtitle
+    // failure must not drop them.
+    setLocalLoading(true);
+    void api.localStreams(type, id)
+      .then((found) => { if (!stale()) setLocalStreams(found.filter(isLocalStream)); })
+      .catch(() => undefined)
+      .finally(() => { if (!stale()) setLocalLoading(false); });
     try {
       const [sources, nextSubtitles] = await Promise.all([api.streamSources(type, id), api.subtitles(type, id)]);
       if (stale()) return;
@@ -1781,7 +1793,7 @@ export function App() {
     setMetaLoading(true);
     // The row the grid drew from, kept beside the merged detail: its pictures are the ones on
     // screen, and they are what a download has to carry into the library.
-    setSelected(item); setSelectedSummary(item); setSelectedDownloadTitle(item.name); setSelectedVideo(null); setEpisodesOpen(true); setSeason(null); setStreams([]); setSelectedStream(null); setSubtitles([]); setSourcesLoaded(false); setGalleryIndex(null); setDetailCompact(false); setTitleLinks([]); setTitleTrailer(null);
+    setSelected(item); setSelectedSummary(item); setSelectedDownloadTitle(item.name); setSelectedVideo(null); setEpisodesOpen(true); setSeason(null); setStreams([]); setLocalStreams([]); setLocalLoading(false); setSelectedStream(null); setSubtitles([]); setSourcesLoaded(false); setGalleryIndex(null); setDetailCompact(false); setTitleLinks([]); setTitleTrailer(null);
     requestAnimationFrame(() => detailRef.current?.scrollTo({ top: 0 }));
     const type = item.type || currentCatalog?.type || "movie";
     let detail = item;
@@ -1809,7 +1821,7 @@ export function App() {
     sourcesRequestRef.current += 1;
     linksRequestRef.current += 1;
     trailerRequestRef.current += 1;
-    setSelected(null); setSelectedSummary(null); setSelectedDownloadTitle(""); setSelectedVideo(null); setStreams([]); setSelectedStream(null); setSubtitles([]); setSourcesLoaded(false); setGalleryIndex(null); setDetailCompact(false); setTitleLinks([]); setTitleTrailer(null);
+    setSelected(null); setSelectedSummary(null); setSelectedDownloadTitle(""); setSelectedVideo(null); setStreams([]); setLocalStreams([]); setLocalLoading(false); setSelectedStream(null); setSubtitles([]); setSourcesLoaded(false); setGalleryIndex(null); setDetailCompact(false); setTitleLinks([]); setTitleTrailer(null);
   };
   const loadSources = async (video?: Video) => {
     if (!selected) return; await fetchSources(selected.type || currentCatalog?.type || "movie", video?.id || selected.id, video);
@@ -1844,10 +1856,17 @@ export function App() {
     const request = ++sourcesRequestRef.current;
     const stale = () => request !== sourcesRequestRef.current;
     setSelectedVideo(nextCatalogEpisode); setEpisodesOpen(false); setSourcesLoaded(false); setBusy(true);
-    setStreams([]); setSelectedStream(null); setSubtitles([]); setPendingSources(0); pickedRef.current = false;
+    setStreams([]); setLocalStreams([]); setLocalLoading(false); setSelectedStream(null); setSubtitles([]); setPendingSources(0); pickedRef.current = false;
+    const type = selected.type || currentCatalog?.type || "series";
+    const id = nextCatalogEpisode.id || selected.id;
+    // The new episode's local copies are looked up too; they must not change what is about to
+    // play, and the repick guard on `playerOpen` keeps the playing source in place.
+    setLocalLoading(true);
+    void api.localStreams(type, id)
+      .then((found) => { if (!stale()) setLocalStreams(found.filter(isLocalStream)); })
+      .catch(() => undefined)
+      .finally(() => { if (!stale()) setLocalLoading(false); });
     try {
-      const type = selected.type || currentCatalog?.type || "series";
-      const id = nextCatalogEpisode.id || selected.id;
       const prefetched = nextEpisodePrefetchRef.current;
       let { streams: nextStreams, subtitles: nextSubtitles } = prefetched?.id === id
         ? await prefetched.promise.catch(() => fetchEpisodeSources(type, id))
@@ -1893,6 +1912,16 @@ export function App() {
       : { kind: "movie", title: baseDownloadTitle, ...(movieYear ? { year: movieYear } : {}), id: selected?.id, metaType: selected?.type, ...art };
   };
   const canPlay = Boolean(selectedStream?.playable);
+  /** When the picked source is a library copy, its path drives Play, To device and Show in library. */
+  const selectedLocalPath = selectedStream && isLocalStream(selectedStream) ? selectedStream.localPath : undefined;
+  /** A local row plays the library file the way the Library view plays it; every other row
+   *  hands its source to the player exactly as before. */
+  const startCatalogPlayback = () => {
+    if (!selected) return;
+    const anchor = { kind: "catalog" as const, key: `${selected.type || "movie"}:${selected.id}` };
+    if (selectedStream && isLocalStream(selectedStream) && selectedStream.localPath) void playLocal(videoTitle, selectedStream.localPath, selected.poster, Boolean(selectedVideo), anchor);
+    else openPlayer(anchor);
+  };
   const enqueue = async (target?: SaveTarget) => {
     if (!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)) return false;
     // The server builds the path from this; without it an episode would end up a flat file.
@@ -2191,17 +2220,17 @@ export function App() {
                   <option value="size-asc">{t("sources.sortSmallest")}</option>
                   <option value="addon">{t("sources.sortAddon")}</option>
                 </select></label>
-              </div>}<div className="stream-list" onScroll={(event) => compactOnScroll(event, detailCompact, setDetailCompact, true)}>{visibleStreams.map((stream, index) => <button key={index} className={selectedStream === stream ? "selected" : ""} onClick={() => { pickedRef.current = true; setSelectedStream(stream); }}><i className={stream.kind === "torrent" ? "rd" : stream.playable ? undefined : "ext"}>{streamBadge(stream)}</i><span><strong>{streamLabel(stream)}</strong><small>{stream.addonName}</small></span><span className="stream-meta">{streamSize(stream) ? <b>{bytes(streamSize(stream))}</b> : null}<small>{streamLanguages(stream, metaLanguage).map((code) => <em className="lang-badge" key={code} title={t("sources.languageGuess")}>{label(code)}</em>)}</small></span>{selectedStream === stream && <Check/>}</button>)}</div>
-              {!offered.length && pendingSources === 0 && <div className="no-sources">{t("sources.none")}</div>}
-              {!offered.length && pendingSources > 0 && <div className="no-sources">{t("sources.asking")}</div>}
-              {Boolean(offered.length) && !visibleStreams.length && hiddenTorrents && !streamAddon && !streamLanguage && <div className="no-sources">{t("sources.onlyTorrentsBefore")} <button className="link-button" onClick={() => openView("settings")}>{t("nav.settings")}</button> {t("sources.onlyTorrentsAfter")}</div>}
-              {Boolean(offered.length) && !visibleStreams.length && !(hiddenTorrents && !streamAddon && !streamLanguage) && <div className="no-sources">{t("sources.noneMatchFilter", { count: offered.length })} <button className="link-button" onClick={() => { setStreamAddon(""); setStreamLanguage(""); }}>{t("sources.clearFilters")}</button></div>}
+              </div>}<div className="stream-list" onScroll={(event) => compactOnScroll(event, detailCompact, setDetailCompact, true)}>{sourceRows.map((stream, index) => { const local = isLocalStream(stream); return <button key={index} className={selectedStream === stream ? "selected" : ""} title={local ? t("sources.localHint") : undefined} onClick={() => { pickedRef.current = true; setSelectedStream(stream); }}><i className={local ? "local" : stream.kind === "torrent" ? "rd" : stream.playable ? undefined : "ext"}>{local ? <><HardDrive/>{t("sources.localBadge")}</> : streamBadge(stream)}</i><span><strong>{local ? stream.behaviorHints?.filename ?? streamLabel(stream) : streamLabel(stream)}</strong><small>{local ? stream.libraryName : stream.addonName}</small></span><span className="stream-meta">{streamSize(stream) ? <b>{bytes(streamSize(stream))}</b> : null}<small>{streamLanguages(stream, metaLanguage).map((code) => <em className="lang-badge" key={code} title={t("sources.languageGuess")}>{label(code)}</em>)}</small></span>{selectedStream === stream && <Check/>}</button>; })}</div>
+              {!offered.length && pendingSources === 0 && !localLoading && localStreams.length === 0 && <div className="no-sources">{t("sources.none")}</div>}
+              {!offered.length && pendingSources > 0 && localStreams.length === 0 && <div className="no-sources">{t("sources.asking")}</div>}
+              {Boolean(offered.length) && !visibleStreams.length && localStreams.length === 0 && hiddenTorrents && !streamAddon && !streamLanguage && <div className="no-sources">{t("sources.onlyTorrentsBefore")} <button className="link-button" onClick={() => openView("settings")}>{t("nav.settings")}</button> {t("sources.onlyTorrentsAfter")}</div>}
+              {Boolean(offered.length) && !visibleStreams.length && localStreams.length === 0 && !(hiddenTorrents && !streamAddon && !streamLanguage) && <div className="no-sources">{t("sources.noneMatchFilter", { count: offered.length })} <button className="link-button" onClick={() => { setStreamAddon(""); setStreamLanguage(""); }}>{t("sources.clearFilters")}</button></div>}
               {notices.map((notice) => <p className="notice" key={notice.sourceId}><b>{notice.addonName}</b> {noticeText(notice)}</p>)}
               {selectedStream?.kind === "torrent" && <p className="notice">{t("sources.torrentNotice")}</p>}
-              <div className="source-footer"><div className="source-info"><Subtitles/> {t("sources.subtitleCount", { count: subtitles.length + (selectedStream?.subtitles?.length || 0) })}
+              <div className="source-footer"><div className="source-info"><Subtitles/> {t("sources.subtitleCount", { count: selectedLocalPath ? 0 : subtitles.length + (selectedStream?.subtitles?.length || 0) })}
                 {inspection && <> · <b>{t("sources.audioInFile")}</b> {inspection.audioTracks.length ? inspection.audioTracks.map((track, index) => <em className="lang-badge" key={index}>{label(track.language)}</em>) : "—"}
                 · <b>{t("sources.subtitlesInFile")}</b> {inspection.subtitleTracks.length ? inspection.subtitleTracks.map((track, index) => <em className="lang-badge" key={index}>{label(track.language)}</em>) : "—"}</>}
-              {selectedStream?.playable && !inspection && <> · {t("sources.probing")}</>}</div><div className="action-slot"><div className="actions"><button className="primary" disabled={!canPlay} onClick={() => openPlayer({ kind: "catalog", key: `${selected.type || "movie"}:${selected.id}` })}><CirclePlay/> {t("player.play")}</button><div className="split-button"><button disabled={!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)} onClick={() => void enqueue()}><HardDrive/> {t("save.toLibrary")}</button><button className="split-button-toggle" disabled={!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)} aria-haspopup="dialog" aria-label={t("save.toLibraryElsewhere")} title={t("save.toLibraryElsewhere")} onClick={() => setSaveTargetOpen(true)}><ChevronDown/></button></div><button disabled={!canPlay} onClick={() => void downloadStreamToDevice()}><Download/> {t("save.toDevice")}</button></div></div></div>
+              {selectedStream?.playable && !inspection && <> · {t("sources.probing")}</>}</div><div className="action-slot"><div className="actions"><button className="primary" disabled={!canPlay} onClick={startCatalogPlayback}><CirclePlay/> {t("player.play")}</button><div className="split-button"><button disabled={!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)} title={selectedLocalPath ? t("sources.localQueueDisabled") : undefined} onClick={() => void enqueue()}><HardDrive/> {t("save.toLibrary")}</button><button className="split-button-toggle" disabled={!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)} aria-haspopup="dialog" aria-label={t("save.toLibraryElsewhere")} title={t("save.toLibraryElsewhere")} onClick={() => setSaveTargetOpen(true)}><ChevronDown/></button></div><button disabled={!canPlay} onClick={() => { if (selectedLocalPath) void downloadLibraryFile(selectedLocalPath); else void downloadStreamToDevice(); }}><Download/> {t("save.toDevice")}</button>{selectedLocalPath && <button onClick={() => revealInLibrary(selectedLocalPath)}><FolderOpen/> {t("library.showInLibrary")}</button>}</div></div></div>
             </div>}
             </div>
           </> : <Empty icon={<Film/>} title={t("catalog.pickTitle")} text={t("catalog.pickText")}/>}</section></div>

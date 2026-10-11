@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addonNotices, arrangeStreams, canQueue, noticeText, offeredStreams, pickDefaultStream, pickNextEpisodeStream, streamBadge, streamLanguages, streamSize, streamText, visibleCatalogStreams, repickStream, type StreamFilters } from "./streams";
+import { addonNotices, arrangeStreams, canQueue, catalogSourceList, isLocalStream, noticeText, offeredStreams, pickDefaultStream, pickNextEpisodeStream, streamBadge, streamLanguages, streamSize, streamText, visibleCatalogStreams, repickStream, type StreamFilters } from "./streams";
 import type { Stream } from "./types";
 
 const stream = (parts: Partial<Stream>): Stream => ({ sourceId: "source", kind: "remote", playable: true, ...parts });
@@ -199,6 +199,38 @@ describe("torrent listing", () => {
   });
 });
 
+describe("local copies", () => {
+  const local = stream({ kind: "library", playable: true, localPath: "lib_1/Heat.mkv", libraryName: "Filmy", behaviorHints: { filename: "Heat.mkv" } });
+  const addon = stream({ name: "FullHD", addonName: "Luna", title: "Czech 2 GB" });
+
+  it("recognises a library stream", () => {
+    expect(isLocalStream(local)).toBe(true);
+    expect(isLocalStream(addon)).toBe(false);
+  });
+
+  it("badges a local copy as LOCAL, ahead of playable", () => {
+    expect(streamBadge(local)).toBe("LOCAL");
+    expect(streamBadge(stream({ kind: "library", playable: false }))).toBe("LOCAL");
+  });
+
+  it("never queues a copy that is already on disk", () => {
+    expect(canQueue(local, true)).toBe(false);
+  });
+
+  it("puts local copies above the addon streams and picks the first one", () => {
+    const rows = catalogSourceList([local], [addon]);
+    expect(rows).toEqual([local, addon]);
+    expect(pickDefaultStream(rows)).toBe(local);
+  });
+
+  it("keeps a local copy out of the addon and language filters", () => {
+    // The addon rows are filtered on their own; the local entry is prepended afterwards.
+    const visible = visibleCatalogStreams([addon], filters({ addon: "Nope" }), "cs", new Map(), true);
+    expect(visible).toEqual([]);
+    expect(catalogSourceList([local], visible)).toEqual([local]);
+  });
+});
+
 describe("pickNextEpisodeStream", () => {
   it("keeps the current addon and ranks its variants by the spoken language", () => {
     const current = stream({ addonKey: "same", addonName: "Same" });
@@ -249,6 +281,22 @@ describe("repickStream", () => {
   it("clears the pick when nothing is left to play and nobody is watching", () => {
     expect(repickStream({ ...base, visible: [], selected: first, preferred: null })).toEqual({ move: true, to: null });
     expect(repickStream({ ...base, visible: [], selected: null, preferred: null })).toEqual({ move: false });
+  });
+
+  it("moves an automatic addon pick to a local copy that lands once every addon finished", () => {
+    expect(repickStream({ ...base, upgrade: true, preferred: second })).toEqual({ move: true, to: second });
+  });
+
+  it("never moves a source the viewer picked themselves for a local copy", () => {
+    expect(repickStream({ ...base, picked: true, upgrade: true, preferred: second })).toEqual({ move: false });
+  });
+
+  it("never interrupts playback for a local copy that lands", () => {
+    expect(repickStream({ ...base, playing: true, upgrade: true, preferred: second })).toEqual({ move: false });
+  });
+
+  it("leaves a non-upgrade arrival alone when nothing is pending", () => {
+    expect(repickStream({ ...base, upgrade: false, preferred: second })).toEqual({ move: false });
   });
 });
 
