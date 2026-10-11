@@ -77,7 +77,7 @@ const explicitTargetFor = (deps: SelectionDeps) => async (req: express.Request, 
 /** Parses the lazy download body of a series into a `DownloadSelection`: the addon keys the
  *  caller may use, the strategy, the audio and subtitle rules, the title language and a
  *  concrete target. Shared so the bulk route and a follow's automatic rule cannot drift. */
-export function createSelectionParser(deps: SelectionDeps): (req: express.Request, input: { selection: unknown; target: unknown; metaType: string; parentId?: string }) => Promise<DownloadSelection> {
+export function createSelectionParser(deps: SelectionDeps): (req: express.Request, input: { selection: unknown; target: unknown; metaType: string; parentId?: string; kind?: "movie" | "series" }) => Promise<DownloadSelection> {
   const { store, currentUser, cachedMeta, prefsOf, defaultDownloadLibrary } = deps;
   const assertMayQueue = mayQueueGuard(deps);
   const explicitTarget = explicitTargetFor(deps);
@@ -86,7 +86,9 @@ export function createSelectionParser(deps: SelectionDeps): (req: express.Reques
     // refused with 403 rather than a body-validation error it could never satisfy.
     assertMayQueue(req);
     // A followed film is saved by the film rules; everything else this parses is a series.
-    const kind = input.metaType === "movie" ? "movie" : "series";
+    // The caller may name the kind from the job it will actually add, because the queue reads
+    // the kind off that job's media and the two must not be answered by two different inputs.
+    const kind = input.kind ?? (input.metaType === "movie" ? "movie" : "series");
     const explicit = await explicitTarget(req, input.target, kind);
     const rawSelection = input.selection && typeof input.selection === "object" ? input.selection as Record<string, unknown> : {};
     // The caller's own addons, so a disallowed key cannot be smuggled in by naming it here.
@@ -187,7 +189,9 @@ export function registerDownloadRoutes(app: express.Application, deps: Downloads
     const episodes = Array.isArray(req.body.episodes) ? req.body.episodes as Array<Record<string, unknown>> : [];
     if (!episodes.length) throw new AppError("Missing episode list.", "err.missingEpisodes");
     if (episodes.length > 500) throw new AppError("At most 500 episodes at a time.", "err.tooManyEpisodes");
-    const selection = await parseSelection(req, { selection: req.body.selection, target: req.body.target, metaType, parentId });
+    // Every job this route adds carries `media.kind: "episode"`, so the queue reads it as a
+    // series whatever `metaType` the body claims for the title; the door has to agree.
+    const selection = await parseSelection(req, { selection: req.body.selection, target: req.body.target, metaType, parentId, kind: "series" });
     let added = 0, skipped = 0;
     for (const episode of episodes) {
       const videoId = String(episode.id ?? "").trim();

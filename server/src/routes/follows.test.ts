@@ -8,7 +8,8 @@ import { test } from "node:test";
 import express from "express";
 import { messageKeyOf } from "../errors.js";
 import { FollowService, FollowStore } from "../follows.js";
-import type { LibraryRecord } from "../libraries.js";
+import { defaultDownloadLibrary } from "../downloads.js";
+import type { DefaultLibrarySettings, LibraryRecord } from "../libraries.js";
 import { defaultDownloadSettings } from "../naming.js";
 import type { Store, UserPrefs } from "../store.js";
 import type { UserData, UserRecord } from "../users.js";
@@ -27,7 +28,12 @@ interface Harness { base: string; store: FollowStore; users: Record<string, User
 
 /** Real express over a real store: the routes take everything from the context, and the
  *  account each request speaks for is named by a header so one server can hold two. */
-const mount = async (): Promise<Harness> => {
+const mount = async (options: {
+  libraries?: LibraryRecord[];
+  settings?: DefaultLibrarySettings;
+  addons?: unknown[];
+  defaultDownloadLibrary?: (kind: "movie" | "series") => LibraryRecord | undefined;
+} = {}): Promise<Harness> => {
   const dir = mkdtempSync(path.join(tmpdir(), "routes-follows-"));
   const store = new FollowStore(dir);
   await store.load();
@@ -61,15 +67,16 @@ const mount = async (): Promise<Harness> => {
     queue,
     mayDownload: (ownerUserId) => Boolean(Object.values(users).find((entry) => entry.id === ownerUserId)?.permissions.downloadToLibrary),
   });
-  const libraries: LibraryRecord[] = [{ id: "lib_shows", name: "Shows", type: "series", root: dir, enabled: true, order: 0, addedAt: "2026-01-01T00:00:00.000Z", writeArtwork: false }];
-  const addons = [
+  const libraries: LibraryRecord[] = options.libraries ?? [{ id: "lib_shows", name: "Shows", type: "series", root: dir, enabled: true, order: 0, addedAt: "2026-01-01T00:00:00.000Z", writeArtwork: false }];
+  const settings = options.settings ?? {};
+  const addons = options.addons ?? [
     { key: "stream-addon", enabled: true, role: "source", allowedUsers: [BOB], manifest: { id: "stream-addon", name: "Stream" }, downloadSettings: defaultDownloadSettings() },
     { key: "admin-addon", enabled: true, role: "source", allowedUsers: [ADA], manifest: { id: "admin-addon", name: "Admin" }, downloadSettings: defaultDownloadSettings() },
   ];
   const userData: Record<string, UserData> = {};
   const keyOfReq = (req: express.Request | undefined) => users[String(req?.header("x-as") ?? "A")]?.id ?? ADA;
   const deps: FollowDeps = {
-    store: { addons: () => addons, libraries: () => libraries, settings: () => ({}) } as unknown as Store,
+    store: { addons: () => addons, libraries: () => libraries, settings: () => settings } as unknown as Store,
     needsSetup: () => false,
     currentSession: () => undefined,
     currentUser: (req) => users[String(req.header("x-as") ?? "A")],
@@ -91,7 +98,7 @@ const mount = async (): Promise<Harness> => {
     },
     posterOf: (value) => (value === undefined || value === null ? undefined : String(value)),
     cachedMeta: async () => null,
-    defaultDownloadLibrary: () => libraries[0],
+    defaultDownloadLibrary: options.defaultDownloadLibrary ?? ((kind) => defaultDownloadLibrary(libraries, settings, kind)),
   };
   const app = express();
   app.use(express.json());
@@ -236,6 +243,51 @@ test("an automatic rule whose default library the account cannot see is refused"
     });
     assert.equal(refused.status, 403, "the rule is refused at the door, not pinned to a library the account cannot see");
     assert.equal(await keyOf(refused), "err.downloadLibraryNotAllowed");
+  } finally { await h.close(); }
+});
+
+test("an automatic rule is pinned the way the door and the queue resolve the default", async () => {
+  const addedAt = "2026-01-01T00:00:00.000Z";
+  const readOnly = { id: "lib_ro", name: "Read only", type: "series", root: "", enabled: true, order: 0, addedAt, writeArtwork: false, readOnly: true, visibleTo: [BOB] } as LibraryRecord;
+  const writable = { id: "lib_rw", name: "Writable", type: "series", root: "", enabled: true, order: 1, addedAt, writeArtwork: false, visibleTo: [BOB] } as LibraryRecord;
+  // The instance default points at the read-only library; the door and the queue both skip it
+  // for the first writable one, so the rule must be pinned there too rather than to a library
+  // the queue would pause on its first check.
+  const h = await mount({ libraries: [readOnly, writable], settings: { defaultSeriesLibrary: readOnly.id } });
+  try {
+    const follow = await (await api(h.base, "/api/follows", { method: "POST", as: "B", body: { type: "series", id: "tt1", name: "Show" } })).json() as { id: string };
+    const response = await api(h.base, `/api/follows/${follow.id}`, {
+      method: "PATCH", as: "B",
+      body: { autoDownload: { startMode: "new", selection: { addonKeys: ["stream-addon"], audioLanguage: "en" } } },
+    });
+    assert.equal(response.status, 200);
+    const view = await response.json() as { autoDownload?: { selection: { targetSettings: { libraryId?: string } } } };
+    assert.equal(view.autoDownload?.selection.targetSettings.libraryId, writable.id, "the writable library, not the read-only default");
+  } finally { await h.close(); }
+});
+
+test("an automatic rule whose named library is gone falls back only to a library the owner may use", async () => {
+  const addedAt = "2026-01-01T00:00:00.000Z";
+  const invisible = { id: "lib_hidden", name: "Hidden", type: "series", root: "", enabled: true, order: 0, addedAt, writeArtwork: false, visibleTo: [] } as LibraryRecord;
+  const visible = { id: "lib_shows", name: "Shows", type: "series", root: "", enabled: true, order: 1, addedAt, writeArtwork: false, visibleTo: [BOB] } as LibraryRecord;
+  // The addon's rule still names a library that has been removed; the door lets that through
+  // (a rule whose library is gone is not itself a refusal), so the fallback the rule is pinned
+  // to is the thing that has to be checked -- and the default here is invisible to B.
+  const addons = [{
+    key: "stream-addon", enabled: true, role: "source", allowedUsers: [BOB], manifest: { id: "stream-addon", name: "Stream" },
+    downloadSettings: { movie: { subfolder: "", layout: "structured" }, series: { subfolder: "", layout: "structured", libraryId: "lib_gone" } },
+  }];
+  const h = await mount({ libraries: [invisible, visible], addons });
+  try {
+    const follow = await (await api(h.base, "/api/follows", { method: "POST", as: "B", body: { type: "series", id: "tt1", name: "Show" } })).json() as { id: string };
+    const refused = await api(h.base, `/api/follows/${follow.id}`, {
+      method: "PATCH", as: "B",
+      body: { autoDownload: { startMode: "new", selection: { addonKeys: ["stream-addon"], audioLanguage: "en" } } },
+    });
+    assert.equal(refused.status, 403, "the fallback library is invisible to the account");
+    assert.equal(await keyOf(refused), "err.downloadLibraryNotAllowed");
+    const listed = await (await api(h.base, "/api/follows", { as: "B" })).json() as { follows: Array<{ id: string; autoDownload?: unknown }> };
+    assert.equal(listed.follows.find((entry) => entry.id === follow.id)?.autoDownload, undefined, "no rule is stored");
   } finally { await h.close(); }
 });
 

@@ -1,11 +1,11 @@
 import type express from "express";
 import { randomBytes } from "node:crypto";
 import { allowedAddons } from "../addons.js";
-import type { DownloadSelection } from "../downloads.js";
+import { ownerMayDownload, type DownloadSelection } from "../downloads.js";
 import { AppError } from "../errors.js";
 import { images } from "../images.js";
 import { activityItems, calendarFeed, calendarItems, CALENDAR_MAX_SPAN_MS, downloadEligibility, parseFollowDefaults, undatedCalendarItems, type Follow, type FollowAutoDownload, type FollowEpisode, type FollowService, type FollowStore } from "../follows.js";
-import { defaultLibrary, libraryVisible, type DefaultLibrarySettings, type LibraryRecord, type Viewer } from "../libraries.js";
+import { libraryVisible, type LibraryRecord, type Viewer } from "../libraries.js";
 import type { UserPrefs, WatchedMarker } from "../store.js";
 import type { DownloadTargetSettings, MetaItem } from "../types.js";
 import { feedTokenMatches, type FollowDefaults, type UserData, type UserRecord } from "../users.js";
@@ -118,13 +118,19 @@ const movieView = (episode: FollowEpisode) => ({
 });
 
 /** The pinned destination a follow stores. An explicit choice is already concrete; a rule
- *  that names no library is resolved to the queue's own default series library, and a rule
- *  naming one that is gone falls back the same way. No library taking series is refused. */
-const pinnedTarget = (selection: DownloadSelection, libraries: LibraryRecord[], settings: DefaultLibrarySettings, kind: "movie" | "series"): DownloadTargetSettings => {
+ *  that names no library takes the same default for the kind the door and the queue resolve,
+ *  and so does a rule naming one that is gone. The caller then runs the owner check on the
+ *  result, so the rule can never be pinned to a library the door would refuse. */
+const pinnedTarget = (
+  selection: DownloadSelection,
+  libraries: LibraryRecord[],
+  defaultLibraryFor: (kind: "movie" | "series") => LibraryRecord | undefined,
+  kind: "movie" | "series",
+): DownloadTargetSettings => {
   const rule = selection.targetSettings;
   if (rule.explicit) return rule;
   const named = rule.libraryId ? libraries.find((library) => library.id === rule.libraryId) : undefined;
-  const library = named ?? defaultLibrary(libraries, settings, kind === "movie" ? "movie" : "episode");
+  const library = named ?? defaultLibraryFor(kind);
   if (!library) throw kind === "movie"
     ? new AppError("No library takes films.", "err.noLibraryForMovies")
     : new AppError("No library takes series.", "err.noLibraryForSeries");
@@ -301,7 +307,14 @@ export function registerFollowRoutes(app: express.Application, deps: FollowDeps)
           if (!Number.isInteger(graceDays) || graceDays < 0 || graceDays > 30) throw new AppError("The followed series is missing a type, an id or a name.", "err.followInvalid");
         }
         const selection = await parseSelection(req, { selection: item.selection, target: item.target, metaType: follow.type, parentId: follow.metaId });
-        const targetSettings = pinnedTarget(selection, store.libraries(), store.settings(), follow.type === "movie" ? "movie" : "series");
+        const libraries = store.libraries();
+        const targetSettings = pinnedTarget(selection, libraries, defaultDownloadLibrary, follow.type === "movie" ? "movie" : "series");
+        // The rule may name a library that is gone, in which case the pinned target is the
+        // default the door did not look at. Check it here too, so the rule is refused rather
+        // than stored and paused by the queue's first check.
+        if (!ownerMayDownload({ owner: currentUser(req), addons: store.addons(), libraries }, { libraryId: targetSettings.libraryId })) {
+          throw new AppError("This account may not download to the library.", "err.downloadLibraryNotAllowed", 403);
+        }
         const value: Omit<FollowAutoDownload, "enabledAt" | "blockedKey"> = {
           startMode,
           ...(startSeason != null ? { startSeason } : {}),

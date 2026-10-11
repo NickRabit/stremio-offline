@@ -32,6 +32,21 @@ export const CLIENT_LOG_KEEP = 50;
 
 const summaryOf = (bundle: ClientLogBundle): ClientLogSummary => ({ ...bundle, lines: bundle.lines.length });
 
+/** A parsed file counts as a bundle only when it carries every field a bundle is read back
+ *  with. The directory also holds whatever else lands in it, and one stray file must not turn
+ *  the administrator's list into a failure. */
+const isBundle = (value: unknown): value is ClientLogBundle => {
+  if (!value || typeof value !== "object") return false;
+  const bundle = value as Record<string, unknown>;
+  return typeof bundle.id === "string"
+    && typeof bundle.user === "string"
+    && (bundle.client === "web" || bundle.client === "tv")
+    && typeof bundle.app === "string"
+    && typeof bundle.device === "string"
+    && typeof bundle.time === "string"
+    && Array.isArray(bundle.lines);
+};
+
 /** One JSON file per bundle under `<data dir>/client-logs`, newest first by the time it was
  *  uploaded. A bundle that cannot be read back is skipped rather than failing the whole list. */
 export class ClientLogStore {
@@ -84,7 +99,10 @@ export class ClientLogStore {
     const bundles: ClientLogBundle[] = [];
     for (const name of names) {
       if (!name.endsWith(".json")) continue;
-      try { bundles.push(JSON.parse(await readFile(path.join(this.dir, name), "utf8")) as ClientLogBundle); }
+      try {
+        const parsed = JSON.parse(await readFile(path.join(this.dir, name), "utf8")) as unknown;
+        if (isBundle(parsed)) bundles.push(parsed);
+      }
       catch { /* a half-written or foreign file is skipped, not fatal */ }
     }
     return bundles;

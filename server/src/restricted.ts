@@ -67,6 +67,7 @@ export const ALLOWED_MUTATIONS: Rule[] = [
   { method: "DELETE", pattern: /^\/device-transfers$/ },
   { method: "DELETE", pattern: /^\/device-transfers\/[^/]+$/ },
   { method: "POST", pattern: /^\/client-log$/ },
+  { method: "POST", pattern: /^\/client-log\/bundle$/ },
   { method: "POST", pattern: /^\/inspect$/ },
   { method: "POST", pattern: /^\/playback$/ },
   { method: "POST", pattern: /^\/playback\/[^/]+\/(ping|seek|escalate|track)$/ },

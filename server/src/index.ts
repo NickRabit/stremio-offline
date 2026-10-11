@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { allowedAddons, loadAddon, metadata, searchAll, searchableCatalogs, streams, subtitles, type MetaProvider } from "./addons.js";
 import { autoRefreshEnabled, refreshDue, refreshManifests, type RefreshOutcome } from "./addon-refresh.js";
 import { rankStreams } from "./ranking.js";
-import { DownloadQueue, ownerMayDownload, type DownloadJob } from "./downloads.js";
+import { defaultDownloadLibrary, DownloadQueue, ownerMayDownload, type DownloadJob } from "./downloads.js";
 import { DeviceTransfers } from "./device-transfers.js";
 import { ClientLogStore } from "./client-logs.js";
 import { selectDownloadSource, selectTorrentSource } from "./download-selection.js";
@@ -57,7 +57,7 @@ import type { MediaInfo } from "./naming.js";
 import { defaultDownloadSettings } from "./naming.js";
 import { AppError, classifyError, explainedError, messageKeyOf } from "./errors.js";
 import { accessLost, contentOf, Revocations, type AccessClaim, type AccessNeed, type ActiveTransfer, type StopContentOptions } from "./revocation.js";
-import { automaticMetadataEnabled, carveOuts, queuedArtworkKey, defaultLibrary, isInside, libraryFor, libraryPath, libraryVisible, parseLibraryPath, playingUnder, posixBase, posixDir, posixJoin, realAncestor, relativeWithin, resolveLibraryPath, toFs, toPosix, visibleLibraries, type LibraryRecord, type LibraryType, type ResolvedPath, type RootGrant, type Viewer } from "./libraries.js";
+import { automaticMetadataEnabled, carveOuts, queuedArtworkKey, isInside, libraryFor, libraryPath, libraryVisible, parseLibraryPath, playingUnder, posixBase, posixDir, posixJoin, realAncestor, relativeWithin, resolveLibraryPath, toFs, toPosix, visibleLibraries, type LibraryRecord, type LibraryType, type ResolvedPath, type RootGrant, type Viewer } from "./libraries.js";
 import { envGrants, grantView, mergeGrants } from "./library-grants.js";
 import { migrateStateFile } from "./library-migrate.js";
 import { LibraryMetaStore } from "./library-meta-store.js";
@@ -142,10 +142,10 @@ await images.load();
 await artworks.load();
 const playbackOwners = new Map<string, { owner: ResourceOwner; resourceId: string }>();
 const airplayAccess = new AirPlayAccess(mediaResources);
-/** Where a download with no library of its own goes: the default for the kind. A read-only
- *  library is never a destination, so it is left out of the choice. */
+/** Where a download with no library of its own goes: the default for the kind, resolved the
+ *  one way the door, a follow's automatic rule and the queue all resolve it. */
 const downloadDefaultLibrary = (kind: "movie" | "series") =>
-  defaultLibrary(store.libraries().filter((library) => !library.readOnly), store.settings(), kind === "series" ? "episode" : "movie");
+  defaultDownloadLibrary(store.libraries(), store.settings(), kind);
 /** The account a job queued before ownership existed belongs to: the administrator the
  *  single-account state migrated into, which is the oldest one. A disabled account stops
  *  speaking for the queue, so a replacement administrator inherits those jobs rather than
@@ -494,8 +494,10 @@ app.use("/api", (req, res, next) => {
   next();
 });
 // A client log bundle may carry up to 512 KB, more than an ordinary request. Its own parser
-// runs first, so the smaller limit below never sees the body.
-app.use("/api/client-log/bundle", express.json({ limit: "512kb" }));
+// runs first, so the smaller limit below never sees the body. The parser sits a little above
+// the route's own ceiling, so a bundle that is over it is refused with the catalogue key
+// rather than Express's bare 413.
+app.use("/api/client-log/bundle", express.json({ limit: "1mb" }));
 app.use(express.json({ limit: "256kb" }));
 /** Measures how much the response actually sends and reports it to the statistics.
  * It counts at write time, so what the client asked for and then abandoned by closing

@@ -52,8 +52,9 @@ const mount = async (jobs: unknown[] = [], options: { user?: UserRecord } = {}):
     dataDir,
   };
   const app = express();
-  // A bundle may carry up to 512 KB, more than the ordinary body limit.
-  app.use(express.json({ limit: "512kb" }));
+  // A bundle may carry up to 512 KB, more than the ordinary body limit; the parser sits a
+  // little above it so the route's own ceiling is what refuses an oversized bundle.
+  app.use(express.json({ limit: "1mb" }));
   registerDiagnosticsRoutes(app, deps);
   app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
     const status = typeof (error as { status?: unknown }).status === "number" ? (error as { status: number }).status : 400;
@@ -187,14 +188,18 @@ test("a bundle round-trips: stored, listed, read back and deleted", async (t) =>
   const { id } = await created.json() as { id: string };
   assert.equal(typeof id, "string");
 
-  const list = await (await api(harness.base, "/api/client-logs")).json() as Array<{ id: string; user: string; client: string; app: string; device: string; note?: string; lines: number }>;
+  const listed = await api(harness.base, "/api/client-logs");
+  assert.equal(listed.headers.get("cache-control"), "private, no-store");
+  const list = await listed.json() as Array<{ id: string; user: string; client: string; app: string; device: string; note?: string; lines: number }>;
   assert.equal(list.length, 1);
   assert.deepEqual(
     { id: list[0]!.id, user: list[0]!.user, client: list[0]!.client, app: list[0]!.app, device: list[0]!.device, note: list[0]!.note, lines: list[0]!.lines },
     { id, user: "bundle-user", client: "tv", app: "1.4.0", device: "Living room TV", note: "keeps stalling", lines: 1 },
   );
 
-  const one = await (await api(harness.base, `/api/client-logs/${id}`)).json() as { lines: Array<{ message: string; context?: Record<string, unknown> }> };
+  const read = await api(harness.base, `/api/client-logs/${id}`);
+  assert.equal(read.headers.get("cache-control"), "private, no-store");
+  const one = await read.json() as { lines: Array<{ message: string; context?: Record<string, unknown> }> };
   assert.equal(one.lines.length, 1);
   assert.equal(one.lines[0]!.message, "Decoder failed");
   assert.deepEqual(one.lines[0]!.context, { codec: "hevc" });
@@ -220,6 +225,7 @@ test("POST /api/client-log/bundle refuses a body larger than 512 KB", async (t) 
   const lines = [{ t: "2026-01-01T00:00:00.000Z", level: "INFO", message: "x".repeat(600 * 1024) }];
   const response = await api(harness.base, "/api/client-log/bundle", { method: "POST", body: bundleBody({ lines }) });
   assert.equal(response.status, 413);
+  assert.equal((await response.json() as { messageKey?: string }).messageKey, "err.clientLogTooLarge");
   assert.deepEqual(await (await api(harness.base, "/api/client-logs")).json(), [], "nothing is stored");
 });
 

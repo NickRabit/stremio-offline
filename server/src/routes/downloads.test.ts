@@ -67,7 +67,13 @@ const denied = account(BOB, "user", false);
  *  instance over fake collaborators that record what they were asked to do. */
 const mount = async (
   addons: unknown[] = [streamAddon("stream-addon")],
-  options: { viewer?: UserRecord; jobs?: Array<{ id: string; ownerUserId?: string }>; libraries?: unknown[]; defaultLibrary?: LibraryRecord } = {},
+  options: {
+    viewer?: UserRecord;
+    jobs?: Array<{ id: string; ownerUserId?: string }>;
+    libraries?: unknown[];
+    /** The library a rule with no library lands in, either fixed or decided by the kind. */
+    defaultLibrary?: LibraryRecord | ((kind: "movie" | "series") => LibraryRecord | undefined);
+  } = {},
 ): Promise<Harness> => {
   const jobs = options.jobs ?? [{ id: "job-1", ownerUserId: ADA }, { id: "job-2", ownerUserId: ADA }];
   const transfers = new DeviceTransfers();
@@ -126,7 +132,9 @@ const mount = async (
     prefsOf: () => ({ uiLanguage: "en" }) as UserPrefs,
     // The queue resolves a rule with no library to the default for the kind; tests name it
     // explicitly, and otherwise it is the single configured library.
-    defaultDownloadLibrary: () => options.defaultLibrary ?? (options.libraries as LibraryRecord[] | undefined)?.[0],
+    defaultDownloadLibrary: (kind) => typeof options.defaultLibrary === "function"
+      ? options.defaultLibrary(kind)
+      : options.defaultLibrary ?? (options.libraries as LibraryRecord[] | undefined)?.[0],
   };
   const app = express();
   app.use(express.json());
@@ -538,6 +546,29 @@ test("POST /api/downloads/bulk refuses a default library the account cannot see 
     body: { title: "Show", episodes: episodes(1), selection: { addonKeys: ["stream-addon"], audioLanguage: "en" } },
   });
   assert.equal(response.status, 403);
+  assert.equal(await keyOf(response), "err.downloadLibraryNotAllowed");
+  assert.deepEqual(harness.pending, [], "nothing is queued");
+});
+
+test("POST /api/downloads/bulk reads the door's kind from the job it builds, not the body's metaType", async (t) => {
+  const movieLib = library("lib_movie", "movie", { visibleTo: [BOB] });
+  // The series default the queue resolves for every bulk job; the account may not see it.
+  const seriesLib = library("lib_series", "series", { visibleTo: [] });
+  const byKind = (kind: "movie" | "series") => (kind === "movie" ? movieLib : seriesLib);
+  const harness = await mount([streamAddon("stream-addon", { allowedUsers: [BOB] })], { viewer: ordinary, libraries: [movieLib, seriesLib], defaultLibrary: byKind });
+  t.after(harness.close);
+  const response = await api(harness.base, "/api/downloads/bulk", {
+    method: "POST",
+    body: {
+      title: "Show",
+      // The body claims a film, but every job this route adds is an episode: the queue reads
+      // it as a series, so the door has to check the series default.
+      media: { id: "tt1", metaType: "movie" },
+      episodes: episodes(1),
+      selection: { addonKeys: ["stream-addon"], audioLanguage: "en" },
+    },
+  });
+  assert.equal(response.status, 403, "the queue's series default decides, not the body's claim");
   assert.equal(await keyOf(response), "err.downloadLibraryNotAllowed");
   assert.deepEqual(harness.pending, [], "nothing is queued");
 });

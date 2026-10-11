@@ -167,10 +167,15 @@ export function registerDiagnosticsRoutes(app: express.Application, deps: Diagno
     res.status(201).json({ id: summary.id });
   }));
 
-  app.get("/api/client-logs", asyncRoute(async (_req, res) => res.json(await clientLogs.list())));
+  app.get("/api/client-logs", asyncRoute(async (_req, res) => {
+    // Bundles carry device names, notes and usernames; nothing between here and the screen may cache them.
+    res.setHeader("cache-control", "private, no-store");
+    res.json(await clientLogs.list());
+  }));
   app.get("/api/client-logs/:id", asyncRoute(async (req, res) => {
     const bundle = await clientLogs.get(String(req.params.id));
     if (!bundle) throw new AppError("The log bundle was not found.", "err.itemNotFound", 404);
+    res.setHeader("cache-control", "private, no-store");
     res.json(bundle);
   }));
   app.delete("/api/client-logs/:id", asyncRoute(async (req, res) => {
