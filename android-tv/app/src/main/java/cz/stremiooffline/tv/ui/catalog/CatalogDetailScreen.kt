@@ -49,13 +49,14 @@ import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Text
 import coil.compose.AsyncImage
 import cz.stremiooffline.tv.R
-import cz.stremiooffline.tv.catalog.Languages
 import cz.stremiooffline.tv.catalog.ProgressKey
 import cz.stremiooffline.tv.catalog.Resume
 import cz.stremiooffline.tv.catalog.Streams
 import cz.stremiooffline.tv.data.AddonDto
 import cz.stremiooffline.tv.data.ApiError
 import cz.stremiooffline.tv.data.ApiFailure
+import cz.stremiooffline.tv.data.DownloadTargetDto
+import cz.stremiooffline.tv.data.LibraryDto
 import cz.stremiooffline.tv.data.MediaDto
 import cz.stremiooffline.tv.data.MetaDto
 import cz.stremiooffline.tv.data.ProgressDto
@@ -90,6 +91,9 @@ const val TagCatalogSources = "catalog_sources"
 const val TagCatalogMessage = "catalog_message"
 const val TagCatalogEpisode = "catalog_episode"
 const val TagCatalogChosenSource = "catalog_chosen_source"
+const val TagCatalogLibraryPanel = "catalog_library_panel"
+
+fun libraryOptionTag(libraryId: String): String = "catalog_library_$libraryId"
 
 /** One slow addon must not hold a play back longer once something playable has arrived. */
 const val PLAY_WHEN_READY_TIMEOUT_MS = 8_000L
@@ -151,10 +155,17 @@ fun CatalogDetailScreen(
   var favouriteBusy by remember { mutableStateOf(false) }
   var queuedSourceId by remember { mutableStateOf<String?>(null) }
   var message by remember { mutableStateOf<String?>(null) }
+  var libraries by remember { mutableStateOf<List<LibraryDto>>(emptyList()) }
+  // False when the server could not answer /api/libraries at all: the TV then queues the way it
+  // did before the field existed instead of inventing a refusal.
+  var librariesLoaded by remember { mutableStateOf(false) }
+  var libraryPanelOpen by remember { mutableStateOf(false) }
+  var pendingLibraryStream by remember { mutableStateOf<StreamDto?>(null) }
 
   val queuedText = stringResource(R.string.save_queued)
   val waitingText = stringResource(R.string.downloads_waiting_debrid)
   val notAllowedText = stringResource(R.string.err_download_library_not_allowed)
+  val noLibraryText = stringResource(R.string.tv_no_library_to_save)
   val torrentText = stringResource(R.string.err_torrent_not_playable)
   val noSourcesText = stringResource(R.string.sources_none)
   val loadErrorText = stringResource(R.string.tv_load_error)
@@ -167,9 +178,16 @@ fun CatalogDetailScreen(
   val seasonFocus = remember { FocusRequester() }
   val sourcesOpenerFocus = remember { FocusRequester() }
   val sourcesPanelFocus = remember { FocusRequester() }
+  val libraryOpenerFocus = remember { FocusRequester() }
+  val libraryPanelFocus = remember { FocusRequester() }
 
   val streamType = meta.type ?: args.type
   val isSeries = streamType == "series"
+  // The libraries this account may save this kind of title to. A server too old to answer
+  // /api/libraries leaves the list empty and the TV keeps the addon's own destination.
+  val libraryCandidates = remember(libraries, streamType) {
+    libraries.filter { it.canWrite && (it.type == streamType || it.type == "mixed") }
+  }
   // Streams belong to a video; a series asks for nothing until an episode is chosen.
   val streamVideoId = if (isSeries) selectedVideo?.id else meta.id
   val streamsKey = streamVideoId?.let { "$streamType:$it" }
@@ -179,9 +197,12 @@ fun CatalogDetailScreen(
   LaunchedEffect(args.meta.id) {
     queuedSourceId = null
     message = null
+    libraryPanelOpen = false
+    pendingLibraryStream = null
     coroutineScope {
       val settingsJob = async { runCatching { api.settings() }.getOrDefault(SettingsResponse()) }
       val addonsJob = async { runCatching { api.addons() }.getOrDefault(emptyList()) }
+      val librariesJob = async { runCatching { api.libraries() }.getOrNull() }
       val entriesJob = async { runCatching { api.progressList() }.getOrDefault(emptyList()) }
       val watchlistJob = async { runCatching { api.watchlist() }.getOrDefault(emptyList()) }
       val progressJob = async {
@@ -193,6 +214,7 @@ fun CatalogDetailScreen(
       val detail = metaJob.await()
       if (detail != null) meta = mergeMeta(args.meta, detail)
       addons = addonsJob.await()
+      librariesJob.await()?.let { libraries = it; librariesLoaded = true }
       entries = entriesJob.await()
       favourite = watchlistJob.await().any { it.key == "${args.type}:${args.meta.id}" }
       movieProgress = progressJob.await()
@@ -272,18 +294,23 @@ fun CatalogDetailScreen(
     }
   }
 
-  val offered = Streams.offeredStreams(streams)
-  val priority = addons.mapIndexed { index, addon -> addon.manifest.name to index }.toMap()
-  val titleLanguage = Languages.titleLanguage(meta.language)
-  val visible = Streams.visibleCatalogStreams(
-    offered,
-    Streams.StreamFilters(sort = Streams.StreamSort.of(settings.streamSort)),
-    settings.audioLanguage ?: "en",
-    priority,
-    settings.realDebridConfigured,
-    titleLanguage,
-  )
-  val notices = Streams.addonNotices(streams)
+  // Merged, sorted and filtered once per change of the raw list, never on a focus-driven
+  // recomposition: parsing hundreds of sizes and languages on every move is what ground the
+  // real TV to a halt.
+  val lists = remember(streams, addons, settings, meta.language) {
+    Streams.sourceLists(
+      streams = streams,
+      addons = addons,
+      sort = Streams.StreamSort.of(settings.streamSort),
+      preferredLanguage = settings.audioLanguage ?: "en",
+      showTorrents = settings.realDebridConfigured,
+      metaLanguage = meta.language,
+    )
+  }
+  val offered = lists.offered
+  val visible = lists.visible
+  val notices = lists.notices
+  val titleLanguage = lists.titleLanguage
   val preferredStream = Streams.pickDefaultStream(visible)
   val chosenStream = selectedStream?.takeIf { pickedStream && visible.contains(it) }
   val activeStream = chosenStream ?: selectedStream?.takeIf { visible.contains(it) } ?: preferredStream
@@ -356,6 +383,17 @@ fun CatalogDetailScreen(
     }
   }
 
+  var libraryWasOpen by remember { mutableStateOf(false) }
+  // Back on the library panel hands the remote back to the To library button that opened it.
+  LaunchedEffect(libraryPanelOpen) {
+    if (libraryPanelOpen) {
+      libraryWasOpen = true
+    } else if (libraryWasOpen) {
+      libraryWasOpen = false
+      runCatching { libraryOpenerFocus.requestFocus() }
+    }
+  }
+
   fun play(stream: StreamDto) {
     pickedStream = true
     selectedStream = stream
@@ -375,6 +413,25 @@ fun CatalogDetailScreen(
     )
   }
 
+  /** Queues one source into [libraryId], or with no target when the server never told us which
+   *  libraries this account may use. */
+  fun queueTo(stream: StreamDto, libraryId: String?) {
+    val media = mediaFor(meta, args, selectedVideo, settings)
+    val title = playerTitle
+    scope.launch {
+      try {
+        val job = api.download(title, stream.sourceId, media, libraryId?.let(::DownloadTargetDto))
+        queuedSourceId = stream.sourceId
+        message = if (job.status == "waiting") waitingText else queuedText
+      } catch (cancelled: CancellationException) {
+        throw cancelled
+      } catch (error: ApiError) {
+        // A refusal carries the server's own explanation; the catalogue line is the fallback.
+        message = error.serverMessage ?: if (error.failure == ApiFailure.Forbidden) notAllowedText else null
+      }
+    }
+  }
+
   fun queue(stream: StreamDto) {
     selectedStream = stream
     pickedStream = true
@@ -383,17 +440,15 @@ fun CatalogDetailScreen(
       message = torrentText
       return
     }
-    val media = mediaFor(meta, args, selectedVideo, settings)
-    val title = playerTitle
-    scope.launch {
-      try {
-        val job = api.download(title, stream.sourceId, media)
-        queuedSourceId = stream.sourceId
-        message = if (job.status == "waiting") waitingText else queuedText
-      } catch (cancelled: CancellationException) {
-        throw cancelled
-      } catch (error: ApiError) {
-        message = if (error.failure == ApiFailure.Forbidden) notAllowedText else null
+    when {
+      // The server that could not answer keeps the old behaviour: queue and let it pick.
+      !librariesLoaded -> queueTo(stream, null)
+      libraryCandidates.isEmpty() -> message = noLibraryText
+      libraryCandidates.size == 1 -> queueTo(stream, libraryCandidates.first().id)
+      // More than one usable library: let the viewer choose, the addon's own default preselected.
+      else -> {
+        pendingLibraryStream = stream
+        libraryPanelOpen = true
       }
     }
   }
@@ -654,6 +709,7 @@ fun CatalogDetailScreen(
             onClick = { activeStream?.let { queue(it) } },
             modifier = Modifier
               .testTag(TagCatalogToLibrary)
+              .focusRequester(libraryOpenerFocus)
               .onFocusChanged { toLibraryFocused = it.isFocused },
           )
         }
@@ -693,7 +749,7 @@ fun CatalogDetailScreen(
           // Red for a failure, muted for a neutral notice, green only for a successful queue.
           color = when (shown) {
             queuedText, waitingText -> Tokens.Green
-            notAllowedText, torrentText, loadErrorText -> Tokens.Red
+            notAllowedText, noLibraryText, torrentText, loadErrorText -> Tokens.Red
             else -> Tokens.Muted
           },
           fontSize = 11.sp,
@@ -745,6 +801,34 @@ fun CatalogDetailScreen(
         retryTag = TagCatalogRetry,
         initialFocus = sourcesPanelFocus,
       )
+    }
+
+    if (libraryPanelOpen) {
+      // The source addon's own default stands out when the server has one for this title.
+      val defaultLibraryId = addons.firstOrNull { it.key == pendingLibraryStream?.addonKey }?.defaultLibraryId(streamType)
+      val preferredLibraryId = defaultLibraryId?.takeIf { id -> libraryCandidates.any { it.id == id } }
+      val focusIndex = libraryCandidates.indexOfFirst { it.id == preferredLibraryId }.let { if (it >= 0) it else 0 }
+      SidePanel(
+        title = stringResource(R.string.save_to_library),
+        onClose = { libraryPanelOpen = false },
+        modifier = Modifier.testTag(TagCatalogLibraryPanel),
+        initialFocus = libraryPanelFocus,
+      ) {
+        libraryCandidates.forEachIndexed { index, library ->
+          PanelOption(
+            text = library.name,
+            selected = library.id == preferredLibraryId,
+            onClick = {
+              val stream = pendingLibraryStream
+              libraryPanelOpen = false
+              stream?.let { queueTo(it, library.id) }
+            },
+            modifier = Modifier
+              .testTag(libraryOptionTag(library.id))
+              .then(if (index == focusIndex) Modifier.focusRequester(libraryPanelFocus) else Modifier),
+          )
+        }
+      }
     }
   }
 }

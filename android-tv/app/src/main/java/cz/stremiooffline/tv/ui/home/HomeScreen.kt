@@ -68,6 +68,7 @@ import androidx.tv.material3.Text
 import coil.compose.AsyncImage
 import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.data.DownloadDto
+import cz.stremiooffline.tv.data.ApiFailure
 import cz.stremiooffline.tv.data.HomeCard
 import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.data.displayTitle
@@ -134,7 +135,10 @@ fun HomeScreen(
 
   Box(modifier.fillMaxSize()) {
     when {
-      state.failed -> HomeErrorPanel(onRetry = viewModel::refresh)
+      state.failed -> HomeErrorPanel(
+        unavailable = state.failure == ApiFailure.Forbidden || state.failure == ApiFailure.NotFound,
+        onRetry = viewModel::refresh,
+      )
       state.loading && state.rows.isEmpty() -> HomeLoading()
       else -> HomeBody(
         state = state,
@@ -159,12 +163,16 @@ private fun HomeLoading() {
 }
 
 @Composable
-private fun HomeErrorPanel(onRetry: () -> Unit) {
+private fun HomeErrorPanel(unavailable: Boolean, onRetry: () -> Unit) {
   val requester = remember { FocusRequester() }
   LaunchedEffect(Unit) { runCatching { requester.requestFocus() } }
   Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
     Column(verticalArrangement = Arrangement.spacedBy(11.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-      Text(stringResource(R.string.tv_home_load_error), color = Tokens.Muted, fontSize = 12.sp)
+      Text(
+        stringResource(if (unavailable) R.string.tv_home_unavailable else R.string.tv_home_load_error),
+        color = Tokens.Muted,
+        fontSize = 12.sp,
+      )
       ErrorRetry(onRetry, requester)
     }
   }

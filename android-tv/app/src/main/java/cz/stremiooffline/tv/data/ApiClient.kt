@@ -1,6 +1,7 @@
 package cz.stremiooffline.tv.data
 
 import cz.stremiooffline.tv.playback.SubtitleUrls
+import cz.stremiooffline.tv.diagnostics.AppLog
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
@@ -26,7 +27,13 @@ enum class ApiFailure {
 /** A playback call waits for FFmpeg, not for a plain API answer. */
 internal const val PLAYBACK_READ_TIMEOUT_S = 60L
 
-class ApiError(val failure: ApiFailure, val seconds: Int? = null) : Exception(failure.name)
+class ApiError(
+  val failure: ApiFailure,
+  val seconds: Int? = null,
+  /** The server's own English message, when it sent one; the interface prefers it to a
+   *  catalogue line for a refusal it can explain precisely. */
+  val serverMessage: String? = null,
+) : Exception(serverMessage ?: failure.name)
 
 data class ServerStatus(val version: String)
 
@@ -81,9 +88,13 @@ class ApiClient(
     if (path.startsWith("http://") || path.startsWith("https://")) path else address.resolve(path).toString()
 
   suspend fun status(): ServerStatus {
+    val started = System.currentTimeMillis()
     call(Request.Builder().url(address.resolve("/api/status")).get().build()).closing { response ->
       val parsed = readBody(response).decodeOrNull<StatusResponse>()
-      if (parsed?.status != "ok") throw ApiError(ApiFailure.Incompatible)
+      if (parsed?.status != "ok") {
+        AppLog.apiFailure("GET", "/api/status", response.code, System.currentTimeMillis() - started)
+        throw ApiError(ApiFailure.Incompatible)
+      }
       return ServerStatus(parsed.version.orEmpty())
     }
   }
@@ -92,6 +103,7 @@ class ApiClient(
   override suspend fun serverVersion(): String = status().version
 
   suspend fun login(username: String, password: String): LoginResult {
+    val started = System.currentTimeMillis()
     val payload = json.encodeToString(LoginRequest.serializer(), LoginRequest(username, password, true))
     call(Request.Builder().url(address.resolve("/api/auth/login")).post(payload.toRequestBody(mediaType)).build())
       .closing { response ->
@@ -105,16 +117,23 @@ class ApiClient(
             if (body.decodeOrNull<ErrorBody>()?.messageKey == "err.badCredentials") ApiFailure.BadCredentials
             else ApiFailure.Generic
           )
-          response.code == 429 -> throw ApiError(ApiFailure.TooMany, body.decodeOrNull<ErrorBody>()?.vars?.seconds)
-          else -> throw ApiError(ApiFailure.Generic)
+          else -> {
+            AppLog.apiFailure("POST", "/api/auth/login", response.code, System.currentTimeMillis() - started)
+            if (response.code == 429) throw ApiError(ApiFailure.TooMany, body.decodeOrNull<ErrorBody>()?.vars?.seconds)
+            throw ApiError(ApiFailure.Generic)
+          }
         }
       }
   }
 
   suspend fun me(): MeResult {
+    val started = System.currentTimeMillis()
     call(Request.Builder().url(address.resolve("/api/auth/me")).get().build()).closing { response ->
       val body = readBody(response)
-      if (response.code == 401) throw ApiError(ApiFailure.SessionExpired)
+      if (response.code == 401) {
+        AppLog.apiFailure("GET", "/api/auth/me", 401, System.currentTimeMillis() - started)
+        throw ApiError(ApiFailure.SessionExpired)
+      }
       val parsed = body.decodeOrNull<MeResponse>() ?: throw ApiError(ApiFailure.Incompatible)
       if (parsed.setup) return MeResult.Setup
       return MeResult.SignedIn(parsed.username ?: throw ApiError(ApiFailure.SessionExpired), parsed.language)
@@ -263,6 +282,9 @@ class ApiClient(
   override suspend fun catalogs(): List<CatalogDto> =
     request(Request.Builder().url(address.resolve("/api/catalogs")).get().build()).decode() ?: emptyList()
 
+  override suspend fun libraries(): List<LibraryDto> =
+    request(Request.Builder().url(address.resolve("/api/libraries")).get().build()).decode() ?: emptyList()
+
   override suspend fun catalog(addonKey: String, type: String, id: String, skip: Int, genre: String?): List<MetaDto> {
     val query = buildString {
       append("?addon=").append(encode(addonKey))
@@ -325,8 +347,8 @@ class ApiClient(
       .decode() ?: WatchlistToggleDto("$type:$id", favorite)
   }
 
-  override suspend fun download(title: String, sourceId: String, media: MediaDto): DownloadResult {
-    val payload = downloadJson.encodeToString(DownloadRequest.serializer(), DownloadRequest(title, sourceId, media))
+  override suspend fun download(title: String, sourceId: String, media: MediaDto, target: DownloadTargetDto?): DownloadResult {
+    val payload = downloadJson.encodeToString(DownloadRequest.serializer(), DownloadRequest(title, sourceId, media, target))
     return request(Request.Builder().url(address.resolve("/api/downloads")).post(payload.toRequestBody(mediaType)).build())
       .decode() ?: DownloadResult()
   }
@@ -341,6 +363,18 @@ class ApiClient(
   override suspend fun downloads(): DownloadsResponseDto =
     request(Request.Builder().url(address.resolve("/api/downloads")).get().build())
       .decode<DownloadsResponseDto>() ?: throw ApiError(ApiFailure.Generic)
+
+  /** Best effort: a line that could not be filed must never break the screen that sent it. */
+  override suspend fun clientLog(level: String, message: String, context: Map<String, String>?) {
+    val payload = json.encodeToString(ClientLogRequestDto.serializer(), ClientLogRequestDto("tv", level, message, context))
+    runCatching { request(Request.Builder().url(address.resolve("/api/client-log")).post(payload.toRequestBody(mediaType)).build()) }
+  }
+
+  override suspend fun sendClientLogBundle(bundle: ClientLogBundleDto): String {
+    val payload = downloadJson.encodeToString(ClientLogBundleDto.serializer(), bundle)
+    val body = request(Request.Builder().url(address.resolve("/api/client-log/bundle")).post(payload.toRequestBody(mediaType)).build())
+    return body.decode<ClientLogBundleResultDto>()?.id ?: throw ApiError(ApiFailure.Generic)
+  }
 
   override suspend fun saveProgress(
     key: String,
@@ -359,13 +393,20 @@ class ApiClient(
     request(Request.Builder().url(address.resolve("/api/progress")).post(payload.toRequestBody(mediaType)).build())
   }
 
-  private suspend fun request(request: Request, http: OkHttpClient = client): String = call(request, http).closing { response ->
-    when {
-      response.isSuccessful -> readBody(response)
-      response.code == 401 -> throw ApiError(ApiFailure.SessionExpired)
-      response.code == 403 -> throw ApiError(ApiFailure.Forbidden)
-      response.code == 404 || response.code == 410 -> throw ApiError(ApiFailure.NotFound)
-      else -> throw ApiError(ApiFailure.Generic)
+  private suspend fun request(request: Request, http: OkHttpClient = client): String {
+    val started = System.currentTimeMillis()
+    return call(request, http).closing { response ->
+      if (response.isSuccessful) return@closing readBody(response)
+      AppLog.apiFailure(request.method, request.url.encodedPath, response.code, System.currentTimeMillis() - started)
+      // A refusal carries the server's own English message plus the catalogue key it renders as;
+      // the interface shows the message when it can explain a failure better than a generic line.
+      val error = readBody(response).decodeOrNull<ErrorBody>()
+      when (response.code) {
+        401 -> throw ApiError(ApiFailure.SessionExpired, serverMessage = error?.error)
+        403 -> throw ApiError(ApiFailure.Forbidden, serverMessage = error?.error)
+        404, 410 -> throw ApiError(ApiFailure.NotFound, serverMessage = error?.error)
+        else -> throw ApiError(ApiFailure.Generic, serverMessage = error?.error)
+      }
     }
   }
 
@@ -378,9 +419,11 @@ class ApiClient(
   private fun encode(value: String): String = java.net.URLEncoder.encode(value, "UTF-8").replace("+", "%20")
 
   private suspend fun call(request: Request, http: OkHttpClient = client): Response = withContext(Dispatchers.IO) {
+    val started = System.currentTimeMillis()
     try {
       http.newCall(request).execute()
     } catch (error: IOException) {
+      AppLog.apiFailure(request.method, request.url.encodedPath, null, System.currentTimeMillis() - started)
       throw ApiError(ApiFailure.Unreachable)
     }
   }
@@ -426,7 +469,12 @@ private data class WatchlistRequest(
 )
 
 @Serializable
-private data class DownloadRequest(val title: String, val sourceId: String, val media: MediaDto)
+private data class DownloadRequest(
+  val title: String,
+  val sourceId: String,
+  val media: MediaDto,
+  val target: DownloadTargetDto? = null,
+)
 
 @Serializable
 private data class TimeRequest(val time: Double)

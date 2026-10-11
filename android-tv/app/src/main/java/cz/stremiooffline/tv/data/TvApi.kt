@@ -21,6 +21,8 @@ interface DetailApi {
 /** The catalogue calls: browse, search, metadata, streams, the watchlist and To library. */
 interface CatalogApi {
   suspend fun catalogs(): List<CatalogDto>
+  /** The libraries this account may see, each carrying whether it may queue a download there. */
+  suspend fun libraries(): List<LibraryDto>
   suspend fun catalog(addonKey: String, type: String, id: String, skip: Int, genre: String?): List<MetaDto>
   suspend fun search(query: String, cursor: String?): SearchResultDto
   suspend fun meta(type: String, id: String, language: String?): MetaDto
@@ -35,7 +37,9 @@ interface CatalogApi {
   suspend fun progressList(): List<ProgressEntryDto>
   suspend fun watchlist(): List<WatchlistEntryDto>
   suspend fun setWatchlist(type: String, id: String, name: String, poster: String?, favorite: Boolean): WatchlistToggleDto
-  suspend fun download(title: String, sourceId: String, media: MediaDto): DownloadResult
+  /** Queues one source; [target] names the library the viewer picked, or is null to let the
+   *  server pick the addon's own default. */
+  suspend fun download(title: String, sourceId: String, media: MediaDto, target: DownloadTargetDto? = null): DownloadResult
 }
 
 /** The Home rows, asked by name so a retry touches only the row it names. */
@@ -69,4 +73,10 @@ interface TvApi : LibraryApi, DetailApi, PlaybackApi, CatalogApi, HomeApi, Downl
 
   /** One poll of the sidecar URL the descriptor named, at the current position and delay. */
   suspend fun sidecar(url: String, position: Double, delay: Double): SidecarFetch?
+
+  /** One rate-limited line for the server's log; best effort, so a failure is swallowed. */
+  suspend fun clientLog(level: String, message: String, context: Map<String, String>? = null)
+
+  /** Uploads the app's diagnostics bundle; answers the id the server filed it under. */
+  suspend fun sendClientLogBundle(bundle: ClientLogBundleDto): String
 }

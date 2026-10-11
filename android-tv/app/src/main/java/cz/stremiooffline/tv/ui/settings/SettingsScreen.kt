@@ -63,6 +63,7 @@ import cz.stremiooffline.tv.data.ClientCapabilitiesDto
 import cz.stremiooffline.tv.data.LanguageDto
 import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.data.TvPreferences
+import cz.stremiooffline.tv.diagnostics.AppLog
 import cz.stremiooffline.tv.playback.decodedLabels
 import cz.stremiooffline.tv.playback.passthroughLabels
 import cz.stremiooffline.tv.ui.catalog.PanelOption
@@ -90,6 +91,7 @@ const val TagSettingsRowStartView = "settings_row_start_view"
 const val TagSettingsRowPreferConversion = "settings_row_prefer_conversion"
 const val TagSettingsRowDevice = "settings_row_device"
 const val TagSettingsRowVersion = "settings_row_version"
+const val TagSettingsRowDiagnostics = "settings_row_diagnostics"
 const val TagSettingsPanel = "settings_panel"
 const val TagSettingsSignOutCancel = "settings_sign_out_cancel"
 const val TagSettingsSignOutConfirm = "settings_sign_out_confirm"
@@ -120,12 +122,27 @@ fun SettingsRoute(
   // in the account settings the screen patches.
   val preferences = remember(context) { TvPreferences(context) }
   var preferConversion by remember(preferences) { mutableStateOf(preferences.preferConversion) }
+  val appVersion = remember(context) { appVersionOf(context) }
+  val device = remember {
+    listOfNotNull(Build.MODEL.takeIf { !it.isNullOrBlank() }, "Android ${Build.VERSION.RELEASE}".takeIf { Build.VERSION.RELEASE?.isNotBlank() == true })
+      .joinToString(" · ")
+  }
+  val crashFile = remember(context) { AppLog.crashFile(context.filesDir) }
+  // A crash the previous run recorded travels with the bundle, and is dropped once it is away.
+  LaunchedEffect(viewModel.diagnostics) {
+    if (viewModel.diagnostics is DiagnosticsState.Sent) AppLog.clearCrash(crashFile)
+  }
+  val diagnosticsValue = when (val state = viewModel.diagnostics) {
+    DiagnosticsState.Idle, DiagnosticsState.Sending -> null
+    is DiagnosticsState.Sent -> stringResource(R.string.tv_diagnostics_sent, state.id)
+    DiagnosticsState.Failed -> stringResource(R.string.tv_diagnostics_failed)
+  }
   SettingsScreen(
     state = viewModel.state,
     languages = viewModel.languages,
     address = api.serverAddress,
     username = username,
-    appVersion = remember(context) { appVersionOf(context) },
+    appVersion = appVersion,
     deviceModel = Build.MODEL.orEmpty(),
     deviceRelease = Build.VERSION.RELEASE.orEmpty(),
     capabilities = capabilities,
@@ -138,6 +155,8 @@ fun SettingsRoute(
       preferConversion = !preferConversion
       preferences.preferConversion = preferConversion
     },
+    diagnosticsValue = diagnosticsValue,
+    onSendDiagnostics = { viewModel.sendDiagnostics(appVersion, device, AppLog.readCrash(crashFile)) },
     onSignOut = onSignOut,
     focusRequester = focusRequester,
   )
@@ -163,6 +182,8 @@ fun SettingsScreen(
   onStartView: (String) -> Unit,
   preferConversion: Boolean,
   onPreferConversion: () -> Unit,
+  diagnosticsValue: String? = null,
+  onSendDiagnostics: () -> Unit = {},
   onSignOut: () -> Unit,
   focusRequester: FocusRequester,
 ) {
@@ -294,6 +315,13 @@ fun SettingsScreen(
         },
         noteColor = Tokens.Gold,
         modifier = Modifier.testTag(TagSettingsRowVersion),
+      )
+      DiagnosticsRow(
+        label = stringResource(R.string.tv_send_diagnostics),
+        note = stringResource(R.string.tv_send_diagnostics_note),
+        value = diagnosticsValue,
+        onClick = onSendDiagnostics,
+        modifier = Modifier.testTag(TagSettingsRowDiagnostics),
       )
     }
     state.error?.let { failure ->
@@ -500,6 +528,49 @@ private fun ToggleRow(
       Text(note, color = Tokens.Muted, fontSize = 11.sp, lineHeight = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
     Text(value, modifier = Modifier.weight(1f, fill = false), color = Tokens.Muted, fontSize = 13.sp, textAlign = TextAlign.End, maxLines = 1)
+  }
+}
+
+/** An action with a note under its label: OK posts the app's diagnostics buffer to the server. */
+@Composable
+private fun DiagnosticsRow(
+  label: String,
+  note: String,
+  value: String?,
+  onClick: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  val shape = RoundedCornerShape(8.dp)
+  Surface(
+    onClick = onClick,
+    modifier = modifier.fillMaxWidth().height(56.dp),
+    shape = ClickableSurfaceDefaults.shape(shape = shape),
+    colors = ClickableSurfaceDefaults.colors(
+      containerColor = Color.Transparent,
+      contentColor = Tokens.Text,
+      focusedContainerColor = Tokens.Panel2,
+      focusedContentColor = Tokens.Text,
+      pressedContainerColor = Tokens.Panel2,
+      pressedContentColor = Tokens.Text,
+    ),
+    scale = ClickableSurfaceDefaults.scale(focusedScale = 1f, pressedScale = 1f),
+    border = ClickableSurfaceDefaults.border(
+      border = Border.None,
+      focusedBorder = Border(BorderStroke(1.5.dp, Tokens.Accent2), shape = shape),
+    ),
+  ) {
+    Row(
+      modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(label, color = Tokens.Text, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(note, color = Tokens.Muted, fontSize = 11.sp, lineHeight = 15.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+      }
+      if (value != null) {
+        Text(value, color = Tokens.Muted, fontSize = 13.sp, textAlign = TextAlign.End, maxLines = 1, overflow = TextOverflow.Ellipsis)
+      }
+    }
   }
 }
 

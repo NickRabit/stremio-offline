@@ -98,6 +98,13 @@
   <string name="home_empty_title">Rien ici pour l\'instant</string>
   <string name="home_empty_text">Téléchargez quelque chose ou commencez à regarder, et cela apparaîtra ici.</string>
   <string name="tv_home_load_error">La page d\'accueil n\'a pas pu être chargée.</string>
+  <string name="tv_home_unavailable">L\'accueil n\'est pas disponible pour ce compte sur ce serveur.</string>
+  <string name="tv_no_library_to_save">Aucune bibliothèque ne permet à ce compte d\'enregistrer.</string>
+  <string name="tv_send_diagnostics">Envoyer les diagnostics</string>
+  <string name="tv_send_diagnostics_note">Envoie les 1000 dernières lignes de journal au serveur.</string>
+  <string name="tv_diagnostics_sent">Envoyé · %1$s</string>
+  <string name="tv_diagnostics_failed">Les diagnostics n\'ont pas pu être envoyés.</string>
+  <string name="tv_crash_hint">Un plantage de l\'exécution précédente a été enregistré. Envoyez les diagnostics depuis les réglages.</string>
   <string name="tv_downloads_later">La file de téléchargements s\'ouvre pour l\'instant sur le web.</string>
   <string name="tv_my_list_empty">Les titres que vous ajoutez avec une étoile apparaissent ici.</string>
   <string name="catalog_type_movie">film</string>

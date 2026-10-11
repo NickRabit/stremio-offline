@@ -44,3 +44,20 @@ data class ErrorVars(val seconds: Int? = null)
 
 @Serializable
 data class ErrorBody(val error: String? = null, val messageKey: String? = null, val vars: ErrorVars? = null)
+
+/** One `GET /api/libraries` entry. `writable` arrives only from a server that can say whether
+ *  this account may queue a download there; an older one leaves it null. */
+@Serializable
+data class LibraryDto(
+  val id: String = "",
+  val name: String = "",
+  val type: String = "",
+  val enabled: Boolean = true,
+  val readOnly: Boolean = false,
+  val unreachable: Boolean = false,
+  val writable: Boolean? = null,
+) {
+  /** True when this account may queue a download here. Without the field, the older-server rule
+   *  is "visible, enabled and not read-only", which is what the spec allows the TV to assume. */
+  val canWrite: Boolean get() = writable ?: (enabled && !readOnly && !unreachable)
+}

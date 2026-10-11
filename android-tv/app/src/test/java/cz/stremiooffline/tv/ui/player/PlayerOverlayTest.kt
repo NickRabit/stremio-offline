@@ -169,14 +169,26 @@ class PlayerOverlayTest {
   }
 
   @Test
-  fun `with controls hidden OK pauses and shows them`() {
+  fun `with controls hidden OK shows them on Play without pausing`() {
     mount(initiallyShown = false)
     compose.onNodeWithTag(TAG_OSD_SEEK_BACK).assertDoesNotExist()
 
     compose.onNodeWithTag("video").performKeyInput { pressKey(Key.DirectionCenter) }
     compose.waitForIdle()
+
+    assertEquals(0, pauses)
+    compose.onNodeWithTag(TAG_OSD_PLAY).assertExists().assertIsFocused()
+  }
+
+  @Test
+  fun `with the controls up OK on Play pauses`() {
+    mountWithControlsUp()
+    compose.onNodeWithTag(TAG_OSD_PLAY).assertIsFocused()
+
+    compose.onRoot().performKeyInput { pressKey(Key.DirectionCenter) }
+    compose.waitForIdle()
+
     assertEquals(1, pauses)
-    compose.onNodeWithTag(TAG_OSD_PLAY).assertExists()
   }
 
   @Test
@@ -265,7 +277,7 @@ class PlayerOverlayTest {
   // Bug 1: the shell never took focus when the OSD hid, so a non-focusable video left nothing to
   // press and the remote went dead. The overlay root has to own focus in the hidden state.
   @Test
-  fun `after auto-hide OK pauses and shows the controls again`() {
+  fun `after auto-hide OK shows the controls again on Play without pausing`() {
     mountWithoutFocusableContent()
 
     compose.mainClock.advanceTimeBy(CONTROLS_HIDE_MS + 100)
@@ -273,8 +285,8 @@ class PlayerOverlayTest {
     compose.onRoot().performKeyInput { pressKey(Key.DirectionCenter) }
     compose.waitForIdle()
 
-    assertEquals(1, pauses)
-    compose.onNodeWithTag(TAG_OSD_PLAY).assertExists()
+    assertEquals(0, pauses)
+    compose.onNodeWithTag(TAG_OSD_PLAY).assertExists().assertIsFocused()
   }
 
   // Bug 1: with the OSD hidden nothing held focus, so Back was dropped instead of leaving.

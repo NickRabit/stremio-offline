@@ -57,6 +57,7 @@ import cz.stremiooffline.tv.data.SettingsResponse
 import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.data.TvPreferences
+import cz.stremiooffline.tv.diagnostics.AppLog
 import cz.stremiooffline.tv.playback.NextEpisode
 import cz.stremiooffline.tv.playback.PlaybackController
 import cz.stremiooffline.tv.playback.PlaybackDiagnostics
@@ -451,6 +452,7 @@ fun PlayerScreen(
     val observer = LifecycleEventObserver { _, event ->
       when (event) {
         Lifecycle.Event.ON_STOP -> {
+          AppLog.info("Lifecycle stop")
           resumed = false
           exoPlayer.pause()
           backgroundPosition = controller.position
@@ -460,6 +462,7 @@ fun PlayerScreen(
         }
         Lifecycle.Event.ON_START -> {
           if (backgroundPosition == null) return@LifecycleEventObserver
+          AppLog.info("Lifecycle start")
           backgroundPosition = null
           resumed = true
           startPaused = true
@@ -471,6 +474,14 @@ fun PlayerScreen(
     }
     lifecycle.addObserver(observer)
     onDispose { lifecycle.removeObserver(observer) }
+  }
+
+  // A fatal playback error goes to the server once, through the rate-limited single-line route;
+  // the full buffer travels with the next diagnostics bundle from Settings.
+  LaunchedEffect(state.error) {
+    val error = state.error ?: return@LaunchedEffect
+    val kind = error::class.simpleName.orEmpty()
+    if (AppLog.allowWarn("player:$kind")) api.clientLog("WARN", "Player error: $kind")
   }
 
   DisposableEffect(Unit) {

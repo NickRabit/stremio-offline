@@ -16,6 +16,7 @@ import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.pressKey
 import cz.stremiooffline.tv.data.ApiFailure
 import cz.stremiooffline.tv.data.DownloadResult
+import cz.stremiooffline.tv.data.LibraryDto
 import cz.stremiooffline.tv.data.MetaDto
 import cz.stremiooffline.tv.data.SettingsResponse
 import cz.stremiooffline.tv.data.StreamDto
@@ -48,6 +49,8 @@ class QueueTest {
     val api = FakeTvApi()
     api.settingsValue = SettingsResponse(uiLanguage = "en", audioLanguage = "en", realDebridConfigured = true)
     api.streamsValues["movie:tt1"] = listOf(StreamDto(sourceId = "s1", kind = "torrent", playable = false, title = "Czech 8 GB", addonName = "alpha"))
+    // One writable library: the To library button queues straight into it, no panel.
+    api.librariesValue = listOf(LibraryDto(id = "movies", name = "Movies", type = "movie", writable = true))
     return api
   }
 
@@ -100,6 +103,7 @@ class QueueTest {
   fun `Queued belongs to the source that was queued and drops when another is picked`() {
     val api = FakeTvApi()
     api.settingsValue = SettingsResponse(uiLanguage = "en", audioLanguage = "en", realDebridConfigured = true)
+    api.librariesValue = listOf(LibraryDto(id = "movies", name = "Movies", type = "movie", writable = true))
     api.streamsValues["movie:tt1"] = listOf(
       StreamDto(sourceId = "srcA", kind = "remote", playable = true, name = "small", title = "Czech 1 GB", addonName = "alpha"),
       StreamDto(sourceId = "srcB", kind = "remote", playable = true, name = "big", title = "Czech 8 GB", addonName = "beta"),

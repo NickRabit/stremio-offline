@@ -9,8 +9,11 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import cz.stremiooffline.tv.data.ApiError
 import cz.stremiooffline.tv.data.ApiFailure
+import cz.stremiooffline.tv.data.ClientLogBundleDto
 import cz.stremiooffline.tv.data.LanguageDto
 import cz.stremiooffline.tv.data.TvApi
+import cz.stremiooffline.tv.diagnostics.AppLog
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
 /** The personal settings the Settings screen shows and edits. */
@@ -23,6 +26,14 @@ data class SettingsState(
   /** The last write that failed; the screen shows it and the row already holds the old value. */
   val error: ApiFailure? = null,
 )
+
+/** What the Send diagnostics row shows after OK. */
+sealed interface DiagnosticsState {
+  data object Idle : DiagnosticsState
+  data object Sending : DiagnosticsState
+  data class Sent(val id: String) : DiagnosticsState
+  data object Failed : DiagnosticsState
+}
 
 /**
  * Reads the account's own preferences and writes one field at a time. The interface language is
@@ -38,6 +49,9 @@ class SettingsViewModel(
     private set
 
   var languages by mutableStateOf(emptyList<LanguageDto>())
+    private set
+
+  var diagnostics by mutableStateOf<DiagnosticsState>(DiagnosticsState.Idle)
     private set
 
   init {
@@ -104,6 +118,22 @@ class SettingsViewModel(
         answer.startView?.let { state = state.copy(startView = it) }
       } catch (error: ApiError) {
         state = state.copy(startView = before, error = error.failure)
+      }
+    }
+  }
+
+  /** Posts the buffer, with the crash the previous run left, as one bundle. */
+  fun sendDiagnostics(app: String, device: String, crash: String?) {
+    if (diagnostics == DiagnosticsState.Sending) return
+    diagnostics = DiagnosticsState.Sending
+    val bundle = ClientLogBundleDto(client = "tv", app = app, device = device, note = null, lines = AppLog.bundleLines(crash))
+    viewModelScope.launch {
+      diagnostics = try {
+        DiagnosticsState.Sent(api.sendClientLogBundle(bundle))
+      } catch (cancelled: CancellationException) {
+        throw cancelled
+      } catch (_: ApiError) {
+        DiagnosticsState.Failed
       }
     }
   }

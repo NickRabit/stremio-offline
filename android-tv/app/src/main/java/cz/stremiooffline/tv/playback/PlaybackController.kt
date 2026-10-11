@@ -8,6 +8,7 @@ import cz.stremiooffline.tv.data.ClientCapabilitiesDto
 import cz.stremiooffline.tv.data.PlaybackDescriptorDto
 import cz.stremiooffline.tv.data.ProgressDto
 import cz.stremiooffline.tv.data.TrackChange
+import cz.stremiooffline.tv.diagnostics.AppLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -268,6 +269,7 @@ class PlaybackController(
 
   private fun begin(next: StartPlan) {
     val mine = ++generation
+    AppLog.info("Session start", mapOf("source" to (next.sourceId ?: "mint")))
     // A start that is still in flight is left to finish: the session it may have already created
     // on the server is deleted when its answer arrives, rather than leaked to the reaper.
     cancelLoops()
@@ -423,6 +425,7 @@ class PlaybackController(
     val current = plan ?: return
     val at = restartPosition
     restartAt = at
+    AppLog.info("Source switch", mapOf("source" to sourceId))
     begin(
       current.copy(
         sourceId = sourceId,
@@ -490,6 +493,7 @@ class PlaybackController(
   /** One `/track` round trip; the answer is kept only when it is still the current generation. */
   private fun track(request: TrackChange, addon: AddonSubtitleDto?) {
     val id = sessionId ?: return
+    AppLog.info("Track switch", mapOf("change" to request.javaClass.simpleName))
     val mine = generation
     val stamp = ++sequence
     // A seek that has been asked for but not answered yet is the position the viewer wants; a track
@@ -524,9 +528,11 @@ class PlaybackController(
     val id = sessionId ?: return
     val position = position
     if (escalated) {
+      AppLog.error("Player decoder error", mapOf("fatal" to "true"))
       _state.update { it.copy(error = PlaybackError.Decoder) }
       return
     }
+    AppLog.warn("Player decoder error, escalating")
     escalated = true
     val mine = generation
     scope.launch {
@@ -546,6 +552,7 @@ class PlaybackController(
     val id = sessionId ?: return
     val at = position
     val mine = generation
+    AppLog.info("Escalated by viewer", mapOf("source" to (sourceId ?: "")))
     escalated = true
     escalatedByViewer = true
     scope.launch {
@@ -557,12 +564,14 @@ class PlaybackController(
   }
 
   fun onNetworkError() {
+    AppLog.error("Player network error", mapOf("source" to (sourceId ?: "")))
     _state.update { it.copy(error = PlaybackError.Network) }
   }
 
   /** A session the server has forgotten: restart once at the absolute position, else give up. */
   private fun onDeadSession() {
     if (recovered) {
+      AppLog.error("Playback session lost")
       _state.update { it.copy(error = PlaybackError.Session) }
       return
     }
@@ -574,6 +583,7 @@ class PlaybackController(
   fun stop() {
     if (stopped) return
     stopped = true
+    AppLog.info("Session stop", mapOf("source" to (sourceId ?: "")))
     restartAt = null
     // Superseding an in-flight start makes it delete its own session once it lands.
     generation++
@@ -660,6 +670,8 @@ class PlaybackController(
     offset = descriptor.offset
     duration = descriptor.duration ?: duration
     mode = modeOf(descriptor.mode)
+    val priorMode = _state.value.mode
+    if (!_state.value.started || mode != priorMode) AppLog.info("Playback path", mapOf("mode" to mode.name))
     copyAudio = descriptor.copy?.audio ?: true
     copyVideo = descriptor.copy?.video ?: true
     quality = descriptor.quality

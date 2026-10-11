@@ -139,12 +139,35 @@ data class WatchlistEntryDto(
 @Serializable
 data class WatchlistToggleDto(val key: String = "", val favorite: Boolean = false)
 
-/** One addon, for the priority `arrangeStreams` reads off the listing order. */
+/** One addon, for the priority `arrangeStreams` reads off the listing order and the default
+ *  download library the To library panel preselects. */
 @Serializable
-data class AddonDto(val key: String = "", val manifest: AddonManifestDto = AddonManifestDto())
+data class AddonDto(
+  val key: String = "",
+  val manifest: AddonManifestDto = AddonManifestDto(),
+  val downloadSettings: AddonDownloadSettingsDto? = null,
+) {
+  /** Where this addon saves a title of [kind] by default, or null when it names none. */
+  fun defaultLibraryId(kind: String): String? =
+    (if (kind == "series") downloadSettings?.series else downloadSettings?.movie)?.libraryId?.ifEmpty { null }
+}
 
 @Serializable
 data class AddonManifestDto(val id: String = "", val name: String = "")
+
+/** The per-kind save rules an addon carries in `GET /api/addons`. */
+@Serializable
+data class AddonDownloadSettingsDto(
+  val movie: DownloadTargetSettingsDto? = null,
+  val series: DownloadTargetSettingsDto? = null,
+)
+
+@Serializable
+data class DownloadTargetSettingsDto(
+  val libraryId: String? = null,
+  val layout: String? = null,
+  val subfolder: String? = null,
+)
 
 /** The `media` object `POST /api/downloads` carries, the fields `selectedMedia()` sends. */
 @Serializable

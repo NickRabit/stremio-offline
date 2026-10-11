@@ -1,8 +1,6 @@
 package cz.stremiooffline.tv.ui.shell
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -37,7 +35,6 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
@@ -54,6 +51,8 @@ import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -64,6 +63,7 @@ import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
 import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.data.TvApi
+import cz.stremiooffline.tv.diagnostics.AppLog
 import cz.stremiooffline.tv.ui.components.BrandMark
 import cz.stremiooffline.tv.ui.catalog.CatalogDetailArgs
 import cz.stremiooffline.tv.ui.catalog.CatalogDetailScreen
@@ -109,8 +109,8 @@ private val Section.labelRes: Int
 
 const val TAG_RAIL_PREFIX = "rail_"
 
+/** The rail is always icons only: it never widens on focus. */
 private val CollapsedRail = 60.dp
-private val ExpandedRail = 200.dp
 
 @Composable
 fun Shell(
@@ -142,6 +142,17 @@ fun Shell(
   var libraryPush by remember { mutableStateOf<String?>(null) }
   var hint by remember { mutableStateOf<String?>(null) }
   val hintScope = rememberCoroutineScope()
+  // A crash the previous run left is worth one line on the way in; sending it is a Settings row.
+  val crashContext = LocalContext.current
+  val crashHint = crashContext.getString(R.string.tv_crash_hint)
+  LaunchedEffect(Unit) {
+    if (AppLog.readCrash(AppLog.crashFile(crashContext.filesDir)) == null) return@LaunchedEffect
+    hint = crashHint
+    hintScope.launch {
+      delay(4_000)
+      if (hint == crashHint) hint = null
+    }
+  }
   // Bumped each time Library comes back into view, so re-entering refreshes without losing focus.
   var libraryRefreshToken by remember { mutableIntStateOf(0) }
   var librarySeen by remember { mutableStateOf(false) }
@@ -338,7 +349,6 @@ fun ShellScaffold(
       Rail(
         username = username,
         current = current,
-        expanded = focusedRail != null,
         requesters = railFocusRequesters,
         contentRequester = { contentFocusRequester },
         onFocusChanged = { section, focused ->
@@ -361,13 +371,11 @@ fun ShellScaffold(
 private fun Rail(
   username: String,
   current: Section,
-  expanded: Boolean,
   requesters: Map<Section, FocusRequester>,
   contentRequester: () -> FocusRequester,
   onFocusChanged: (Section, Boolean) -> Unit,
   onSelect: (Section) -> Unit,
 ) {
-  val width by animateDpAsState(if (expanded) ExpandedRail else CollapsedRail, label = "railWidth")
   val sections = remember {
     listOf(
       Section.Search to SearchIcon,
@@ -380,7 +388,7 @@ private fun Rail(
   Column(
     modifier = Modifier
       .fillMaxHeight()
-      .width(width)
+      .width(CollapsedRail)
       .background(Brush.horizontalGradient(listOf(Tokens.Bg, Tokens.Bg, Color.Transparent)))
       .padding(vertical = Tokens.SafeY, horizontal = 11.dp),
     verticalArrangement = Arrangement.spacedBy(11.dp),
@@ -391,7 +399,6 @@ private fun Rail(
       RailItem(
         label = stringResource(section.labelRes),
         selected = section == current,
-        expanded = expanded,
         modifier = Modifier
           .fillMaxWidth()
           .testTag(railTag(section))
@@ -408,7 +415,6 @@ private fun Rail(
     RailItem(
       label = username,
       selected = current == Section.Account,
-      expanded = expanded,
       modifier = Modifier
         .fillMaxWidth()
         .testTag(railTag(Section.Account))
@@ -435,7 +441,6 @@ private fun Modifier.rightToContent(contentRequester: () -> FocusRequester): Mod
 private fun RailItem(
   label: String,
   selected: Boolean,
-  expanded: Boolean,
   leading: @Composable () -> Unit,
   onFocusChanged: (Boolean) -> Unit,
   onClick: () -> Unit,
@@ -444,7 +449,12 @@ private fun RailItem(
   val shape = RoundedCornerShape(8.dp)
   Surface(
     onClick = onClick,
-    modifier = modifier.height(36.dp).clip(shape).onFocusChanged { onFocusChanged(it.isFocused) },
+    modifier = modifier
+      .height(36.dp)
+      .clip(shape)
+      // Icons only: the label lives on as the item's spoken name.
+      .semantics { contentDescription = label }
+      .onFocusChanged { onFocusChanged(it.isFocused) },
     shape = ClickableSurfaceDefaults.shape(shape = shape),
     colors = ClickableSurfaceDefaults.colors(
       containerColor = Color.Transparent,
@@ -461,18 +471,11 @@ private fun RailItem(
     ),
   ) {
     Row(
-      modifier = Modifier.fillMaxSize().padding(horizontal = 11.dp),
+      modifier = Modifier.fillMaxSize(),
+      horizontalArrangement = Arrangement.Center,
       verticalAlignment = Alignment.CenterVertically,
     ) {
       leading()
-      Spacer(Modifier.width(11.dp))
-      Text(
-        label,
-        modifier = Modifier.alpha(animateFloatAsState(if (expanded) 1f else 0f, label = "railLabel").value),
-        fontSize = 13.sp,
-        fontWeight = FontWeight.SemiBold,
-        maxLines = 1,
-      )
     }
 
     if (selected) {

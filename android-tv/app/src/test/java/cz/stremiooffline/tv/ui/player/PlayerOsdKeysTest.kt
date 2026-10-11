@@ -86,6 +86,23 @@ class PlayerOsdKeysTest {
     compose.onNodeWithTag(TagSourcesPanel).assertExists()
   }
 
+  // On a real TV the first OK with the controls hidden only revealed them, and it landed on Play
+  // rather than pausing: the viewer saw the buttons before anything stopped.
+  @Test
+  fun `with the controls hidden the first OK brings them up on Play`() {
+    mount()
+
+    realKey(KeyEvent.KEYCODE_BACK)
+    compose.onNodeWithTag(TAG_OSD_PLAY).assertDoesNotExist()
+
+    realKey(KeyEvent.KEYCODE_DPAD_CENTER)
+
+    assertFocused(TAG_OSD_PLAY)
+    // Nothing was seeked and the player stayed open.
+    compose.onNodeWithTag(TAG_OVERLAY_BUBBLE).assertDoesNotExist()
+    compose.onNodeWithTag(TAG_OSD_PLAY).assertExists()
+  }
+
   // Bug on the emulator: the controls appeared but the D-pad was dead. A full-screen focus target
   // has nothing beside it, so a remote that landed on the overlay root could not reach a control.
   @Test
