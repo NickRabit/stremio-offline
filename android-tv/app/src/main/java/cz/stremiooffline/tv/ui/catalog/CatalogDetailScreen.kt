@@ -424,6 +424,8 @@ fun CatalogDetailScreen(
   val resumeEpisode = if (isSeries) Resume.resumeVideo(meta.videos.orEmpty(), resumeEntry?.let { Resume.resumeTarget(it).episode }) else null
   val storedPosition = if (isSeries) resumeEntry?.position ?: 0.0 else movieProgress?.position ?: 0.0
   val storedDuration = if (isSeries) resumeEntry?.duration ?: 0.0 else movieProgress?.duration ?: 0.0
+  val progressPosition = if (localActive) localProgress?.position ?: 0.0 else storedPosition
+  val progressDuration = if (localActive) localProgress?.duration ?: 0.0 else storedDuration
   // The local file has its own progress key, so a catalogue row has no bearing on its resume.
   val resuming = if (localActive) {
     localProgress?.let { Progress.resumePosition(it.position, it.duration) != null } == true
@@ -792,8 +794,8 @@ fun CatalogDetailScreen(
           modifier = Modifier.width(700.dp),
         )
       }
-      if (resuming && storedDuration > 0) {
-        val fraction = (storedPosition / storedDuration).toFloat()
+      if (resuming && progressDuration > 0) {
+        val fraction = (progressPosition / progressDuration).toFloat()
         Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
           Box(Modifier.width(140.dp).height(5.dp).clip(RoundedCornerShape(999.dp)).background(Tokens.Line)) {
             Box(Modifier.fillMaxHeight().fillMaxWidth(fraction.coerceIn(0f, 1f)).background(Tokens.Accent))
