@@ -148,4 +148,12 @@
   <string name="tv_passthrough">Repasse</string>
   <string name="tv_version_row">App %1$s · servidor %2$s</string>
   <string name="tv_version_mismatch">O servidor executa %1$s, este app é %2$s. Atualize o que for mais antigo.</string>
+  <string name="player_quality">Qualidade</string>
+  <string name="player_quality_original">Originais</string>
+  <string name="tv_now_playing">Reproduzindo</string>
+  <string name="tv_force_conversion">Converter no servidor</string>
+  <string name="tv_force_conversion_note">Use quando a imagem ou o som reproduzir mal. O servidor recodifica o vídeo.</string>
+  <string name="tv_prefer_conversion">Preferir conversão no servidor</string>
+  <string name="tv_prefer_conversion_note">Cada reprodução começa como num navegador, então o servidor converte o que a TV não consegue reproduzir. Início mais lento e mais carga no servidor.</string>
+  <string name="tv_back_to_source">Voltar à fonte anterior</string>
 </resources>

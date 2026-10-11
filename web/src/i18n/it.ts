@@ -1581,4 +1581,10 @@ export const it: Catalog = {
   "tv.passthrough": "Passaggio diretto",
   "tv.versionRow": "App {app} · server {server}",
   "tv.versionMismatch": "Il server esegue {server}, questa app è {app}. Aggiorna quella più vecchia.",
+  "tv.nowPlaying": "In riproduzione",
+  "tv.forceConversion": "Converti sul server",
+  "tv.forceConversionNote": "Usalo quando immagine o audio si sentono male. Il server ricodifica il video.",
+  "tv.preferConversion": "Preferisci la conversione sul server",
+  "tv.preferConversionNote": "Ogni riproduzione parte come in un browser, quindi il server converte ciò che il televisore non riesce a leggere. Avvio più lento e carico maggiore sul server.",
+  "tv.backToSource": "Torna alla sorgente precedente",
 };

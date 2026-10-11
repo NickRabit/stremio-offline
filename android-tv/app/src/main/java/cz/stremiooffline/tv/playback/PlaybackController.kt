@@ -77,6 +77,11 @@ data class PlaybackState(
   val duration: Double = 0.0,
   val mode: PlaybackMode = PlaybackMode.Direct,
   val copyAudio: Boolean = true,
+  val copyVideo: Boolean = true,
+  /** The picture height that was chosen, or null for the server's own choice. */
+  val quality: Int? = null,
+  /** True once the viewer asked for a server conversion with the Quality panel this session. */
+  val escalatedByViewer: Boolean = false,
   val audioTracks: List<DescriptorTrack> = emptyList(),
   val audioTrackIndex: Int = 0,
   val subtitleTracks: List<DescriptorTrack> = emptyList(),
@@ -112,6 +117,9 @@ class PlaybackController(
   private val scope: CoroutineScope,
   private val clock: () -> Long,
   private val capabilities: ClientCapabilitiesDto,
+  /** What the start declares. "Prefer server conversion" empties the native lists here only;
+   *  [capabilities] keeps the device's real decoders for the routing and the labels. */
+  private val startCapabilities: ClientCapabilitiesDto = capabilities,
 ) {
   private val _state = MutableStateFlow(PlaybackState())
   val state: StateFlow<PlaybackState> = _state.asStateFlow()
@@ -123,6 +131,8 @@ class PlaybackController(
   private var duration = 0.0
   private var mode = PlaybackMode.Direct
   private var copyAudio = true
+  private var copyVideo = true
+  private var quality: Int? = null
   private var audioTracks: List<DescriptorTrack> = emptyList()
   private var subtitleTracks: List<DescriptorTrack> = emptyList()
   private var subtitle: SubtitleChoice = SubtitleChoice.Off
@@ -158,6 +168,8 @@ class PlaybackController(
   private var hasPosition = false
   private var lastPosition = 0.0
   private var escalated = false
+  /** The viewer's own escalate from the Quality panel; a decoder error never sets it. */
+  private var escalatedByViewer = false
   private var recovered = false
   private var stopped = true
 
@@ -169,9 +181,15 @@ class PlaybackController(
   private var sequence = 0
   /** Bumped by every start and stop, so a late answer from a superseded request is dropped. */
   private var generation = 0
+  /** The absolute position a restart began at, kept until a descriptor lands so a failed restart
+   *  is recovered there rather than at the new session's zero. */
+  private var restartAt: Double? = null
 
   /** The absolute position, converted through the HLS offset the way the spec defines it. */
   val position: Double get() = absolute(lastPosition)
+
+  /** Where a restart goes: the place it began at, or the position the player is at now. */
+  private val restartPosition: Double get() = restartAt ?: position
 
   private fun absolute(playerPosition: Double) = if (playlist) offset + playerPosition else playerPosition
 
@@ -226,7 +244,7 @@ class PlaybackController(
     subtitlePreference: String? = plan?.subtitlePreference,
   ) {
     val current = plan ?: return
-    begin(current.copy(explicitTime = position, resume = false, subtitles = subtitles, audioPreference = audioPreference, subtitlePreference = subtitlePreference))
+    begin(current.copy(explicitTime = restartPosition, resume = false, subtitles = subtitles, audioPreference = audioPreference, subtitlePreference = subtitlePreference))
   }
 
   private fun begin(next: StartPlan) {
@@ -249,12 +267,15 @@ class PlaybackController(
     hasPosition = false
     lastPosition = 0.0
     escalated = false
+    escalatedByViewer = false
     recovered = false
     stopped = false
     playlist = false
     offset = 0.0
     duration = 0.0
     copyAudio = true
+    copyVideo = true
+    quality = null
     mode = PlaybackMode.Direct
     audioTracks = emptyList()
     subtitleTracks = emptyList()
@@ -278,7 +299,7 @@ class PlaybackController(
       if (mine != generation) return@launch
       if (resumeTime > 0) lastPosition = resumeTime
       val offered = next.subtitles.map { it.subtitleId }.take(MAX_SUBTITLE_IDS)
-      val descriptor = runCatching { api.startPlayback(resolved, capabilities, resumeTime, offered) }.getOrElse { error ->
+      val descriptor = runCatching { api.startPlayback(resolved, startCapabilities, resumeTime, offered) }.getOrElse { error ->
         if (mine == generation) _state.update { it.copy(loading = false, error = errorOf(error)) }
         return@launch
       }
@@ -369,6 +390,58 @@ class PlaybackController(
     }
   }
 
+  /**
+   * Another source of the same title. A source switch is a new session: the outgoing one is saved
+   * and deleted before the new one starts, at the absolute position the viewer is watching.
+   */
+  fun switchSource(
+    sourceId: String,
+    subtitles: List<AddonSubtitleDto> = plan?.subtitles ?: emptyList(),
+    audioPreference: String? = plan?.audioPreference,
+    subtitlePreference: String? = plan?.subtitlePreference,
+  ) {
+    val current = plan ?: return
+    val at = restartPosition
+    restartAt = at
+    begin(
+      current.copy(
+        sourceId = sourceId,
+        explicitTime = at,
+        resume = false,
+        subtitles = subtitles,
+        audioPreference = audioPreference,
+        subtitlePreference = subtitlePreference,
+        mint = null,
+      ),
+    )
+  }
+
+  /**
+   * A chosen picture height, or Original. Original after a forced conversion cannot be undone
+   * inside the session -- the server never copies that source again -- so it starts a new one.
+   */
+  fun selectQuality(quality: Int?) {
+    if (stopped || sessionId == null) return
+    val row = when (quality) {
+      null -> QualityChoice.Original
+      1080 -> QualityChoice.P1080
+      720 -> QualityChoice.P720
+      480 -> QualityChoice.P480
+      else -> return
+    }
+    // The row that is already ticked only closes the panel; re-running the same conversion would
+    // restart the picture for nothing.
+    if (qualityChoice(this.quality, escalatedByViewer) == row) return
+    if (quality == null && escalated) {
+      val current = plan ?: return
+      val at = restartPosition
+      restartAt = at
+      begin(current.copy(explicitTime = at, resume = false))
+      return
+    }
+    track(TrackChange.Quality(quality, position), addon = null)
+  }
+
   /** A chosen subtitle row. The four cases live in [subtitleRoute] and [subtitleNeedsServer]. */
   fun selectSubtitle(choice: SubtitleChoice) {
     if (stopped || sessionId == null) return
@@ -444,6 +517,25 @@ class PlaybackController(
     }
   }
 
+  /**
+   * The viewer asked for a real conversion. The server stops copying this session for good, so the
+   * only way back to a copy is a new session; a failure here is a decoder error like any other.
+   */
+  fun escalate() {
+    if (stopped || sessionId == null) return
+    val id = sessionId ?: return
+    val at = position
+    val mine = generation
+    escalated = true
+    escalatedByViewer = true
+    scope.launch {
+      val descriptor = runCatching { api.escalatePlayback(id, at) }.getOrNull()
+      if (stopped || mine != generation) return@launch
+      if (descriptor != null) apply(descriptor, target = at)
+      else _state.update { it.copy(error = PlaybackError.Decoder) }
+    }
+  }
+
   fun onNetworkError() {
     _state.update { it.copy(error = PlaybackError.Network) }
   }
@@ -462,6 +554,7 @@ class PlaybackController(
   fun stop() {
     if (stopped) return
     stopped = true
+    restartAt = null
     // Superseding an in-flight start makes it delete its own session once it lands.
     generation++
     cancelLoops()
@@ -534,11 +627,14 @@ class PlaybackController(
     keepAudio: Boolean = false,
   ) {
     sessionId = descriptor.id
+    restartAt = null
     playlist = descriptor.playlist
     offset = descriptor.offset
     duration = descriptor.duration ?: duration
     mode = modeOf(descriptor.mode)
     copyAudio = descriptor.copy?.audio ?: true
+    copyVideo = descriptor.copy?.video ?: true
+    quality = descriptor.quality
     audioTracks = descriptorTracks(descriptor.audioTracks)
     subtitleTracks = descriptorTracks(descriptor.subtitleTracks)
     val chosen = when {
@@ -567,6 +663,9 @@ class PlaybackController(
         duration = duration,
         mode = mode,
         copyAudio = copyAudio,
+        copyVideo = copyVideo,
+        quality = quality,
+        escalatedByViewer = escalatedByViewer,
         audioTracks = audioTracks,
         audioTrackIndex = audioChoice,
         subtitleTracks = subtitleTracks,
@@ -636,4 +735,21 @@ fun subtitleNeedsServer(currentServer: Boolean, next: SubtitleRoute): Boolean =
 private fun TrackChange.withTime(time: Double): TrackChange = when (this) {
   is TrackChange.Audio -> copy(time = time)
   is TrackChange.Subtitle -> copy(time = time)
+  is TrackChange.Quality -> copy(time = time)
+}
+
+/** The Quality panel's rows, re-derived from the answered descriptor. */
+enum class QualityChoice { Original, P1080, P720, P480, Force }
+
+/**
+ * Which row the Quality panel ticks. A chosen height wins; otherwise only the viewer's own
+ * escalate is the forced conversion. A transcode the server chose for another reason -- a burned
+ * in subtitle, an audio track it cannot copy -- is still the server's own choice (Original).
+ */
+fun qualityChoice(quality: Int?, escalatedByViewer: Boolean): QualityChoice = when {
+  quality == 1080 -> QualityChoice.P1080
+  quality == 720 -> QualityChoice.P720
+  quality == 480 -> QualityChoice.P480
+  escalatedByViewer -> QualityChoice.Force
+  else -> QualityChoice.Original
 }

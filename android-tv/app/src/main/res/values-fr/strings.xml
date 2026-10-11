@@ -148,4 +148,12 @@
   <string name="tv_passthrough">Transmission directe</string>
   <string name="tv_version_row">App %1$s · serveur %2$s</string>
   <string name="tv_version_mismatch">Le serveur exécute %1$s, cette app est %2$s. Mettez à jour la plus ancienne.</string>
+  <string name="player_quality">Qualité</string>
+  <string name="player_quality_original">Originale</string>
+  <string name="tv_now_playing">En lecture</string>
+  <string name="tv_force_conversion">Convertir sur le serveur</string>
+  <string name="tv_force_conversion_note">À utiliser quand l’image ou le son passe mal. Le serveur ré-encode la vidéo.</string>
+  <string name="tv_prefer_conversion">Préférer la conversion sur le serveur</string>
+  <string name="tv_prefer_conversion_note">Chaque lecture démarre comme dans un navigateur : le serveur convertit ce que la télévision ne peut pas lire. Démarrage plus lent et charge serveur plus élevée.</string>
+  <string name="tv_back_to_source">Revenir à la source précédente</string>
 </resources>

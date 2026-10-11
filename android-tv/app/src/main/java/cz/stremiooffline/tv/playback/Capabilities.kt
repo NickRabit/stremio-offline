@@ -141,3 +141,16 @@ fun decodedLabels(capabilities: ClientCapabilitiesDto): List<String> {
 /** What the device passes through to a receiver, for the same line. */
 fun passthroughLabels(capabilities: ClientCapabilitiesDto): List<String> =
   codecLabels(capabilities.audioPassthrough)
+
+/**
+ * The same device seen as a browser: the boolean codecs stay, the native lists go. The server then
+ * converts whatever a browser cannot play, which is the point of the "Prefer server conversion"
+ * device setting.
+ */
+fun browserCapabilities(capabilities: ClientCapabilitiesDto): ClientCapabilitiesDto = capabilities.copy(
+  containers = emptyList(),
+  audioDecode = emptyList(),
+  audioPassthrough = emptyList(),
+  subtitles = emptyList(),
+  deepColor = emptyList(),
+)

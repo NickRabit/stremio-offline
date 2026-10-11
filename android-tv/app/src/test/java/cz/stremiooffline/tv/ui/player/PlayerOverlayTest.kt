@@ -14,6 +14,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -109,6 +110,55 @@ class PlayerOverlayTest {
         Box(Modifier.fillMaxSize().testTag("video").background(Color.Black))
       }
     }
+  }
+
+  /** The OSD up on a video that cannot hold focus, so the remote sits on the Play control. */
+  private fun mountWithControlsUp(position: Double = 100.0, duration: Double = 1_000.0) {
+    compose.setContent {
+      PlayerOverlayShell(
+        position = position,
+        duration = duration,
+        playing = true,
+        title = "It",
+        eyebrow = "Direct play",
+        playFocus = FocusRequester(),
+        initiallyShown = true,
+        onSeek = { seeks += it },
+        onTogglePause = { pauses++ },
+        onExit = { exits++ },
+      ) {
+        Box(Modifier.fillMaxSize().testTag("video").background(Color.Black))
+      }
+    }
+  }
+
+  // The media keys work no matter which control holds the remote, and they are still summed the
+  // way the pad is when a finger stays on the button.
+  @Test
+  fun `a media key seeks while the controls are up`() {
+    mountWithControlsUp()
+    compose.onNodeWithTag(TAG_OSD_PLAY).assertIsFocused()
+
+    compose.onRoot().performKeyInput { pressKey(Key.MediaFastForward) }
+    compose.mainClock.advanceTimeBy(PlaybackController.SEEK_DEBOUNCE_MS + 100)
+
+    assertEquals(listOf(110.0), seeks)
+    compose.onNodeWithTag(TAG_OVERLAY_BUBBLE).assertExists()
+  }
+
+  @Test
+  fun `a held media key sums one seek while the controls are up`() {
+    mountWithControlsUp()
+
+    compose.onRoot().performKeyInput { pressKey(Key.MediaFastForward) }
+    repeat(4) {
+      compose.onRoot().performKeyInput { advanceEventTime(300); pressKey(Key.MediaFastForward) }
+    }
+    assertTrue("nothing is sent while the key keeps coming", seeks.isEmpty())
+
+    compose.mainClock.advanceTimeBy(PlaybackController.SEEK_DEBOUNCE_MS + 100)
+
+    assertEquals(listOf(190.0), seeks)
   }
 
   @Test

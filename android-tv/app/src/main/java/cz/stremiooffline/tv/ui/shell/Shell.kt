@@ -68,6 +68,7 @@ import cz.stremiooffline.tv.ui.components.BrandMark
 import cz.stremiooffline.tv.ui.catalog.CatalogDetailArgs
 import cz.stremiooffline.tv.ui.catalog.CatalogDetailScreen
 import cz.stremiooffline.tv.ui.catalog.CatalogScreen
+import cz.stremiooffline.tv.ui.catalog.OfferedSources
 import cz.stremiooffline.tv.ui.catalog.SearchScreen
 import cz.stremiooffline.tv.ui.detail.DetailData
 import cz.stremiooffline.tv.ui.detail.DetailScreen
@@ -127,6 +128,10 @@ fun Shell(
   var detail by remember { mutableStateOf<DetailData?>(null) }
   var catalogDetail by remember { mutableStateOf<CatalogDetailArgs?>(null) }
   var player by remember { mutableStateOf<PlayTarget?>(null) }
+  /** The streams of the title the player is on: the catalogue reports them while addons answer. */
+  var playerSources by remember { mutableStateOf(OfferedSources()) }
+  /** The source the player ended on, so the title underneath keeps naming what was watched. */
+  var playedSourceId by remember { mutableStateOf<String?>(null) }
   var returnToken by remember { mutableIntStateOf(0) }
   // Bumped each time Home comes back into view, so re-entering refreshes the rows.
   var homeRefreshToken by remember { mutableIntStateOf(0) }
@@ -197,7 +202,11 @@ fun Shell(
           },
           onAction = { action ->
             when (action) {
-              is HomeAction.Play -> player = action.target
+              is HomeAction.Play -> {
+                playerSources = OfferedSources()
+                playedSourceId = null
+                player = action.target
+              }
               is HomeAction.OpenLibrary -> {
                 libraryPush = action.path
                 shellState.pick(Section.Library)
@@ -222,7 +231,11 @@ fun Shell(
     DetailScreen(
       detail = openDetail,
       imageUrl = { path -> path?.let(api::url) },
-      onPlay = { player = it },
+      onPlay = {
+        playerSources = OfferedSources()
+        playedSourceId = null
+        player = it
+      },
       onBack = {
         detail = null
         returnToken++
@@ -240,7 +253,12 @@ fun Shell(
       api = api,
       args = openCatalogDetail,
       imageUrl = { path -> path?.let(api::url) },
-      onPlay = { player = it },
+      onPlay = {
+        playedSourceId = null
+        player = it
+      },
+      onSources = { playerSources = it },
+      playedSourceId = playedSourceId,
       onBack = {
         catalogDetail = null
         returnToken++
@@ -251,10 +269,17 @@ fun Shell(
 
   val openPlayer = player
   if (openPlayer != null) {
-    PlayerScreen(api = api, target = openPlayer, onExit = {
-      player = null
-      returnToken++
-    })
+    PlayerScreen(
+      api = api,
+      target = openPlayer,
+      sources = playerSources.streams,
+      sourcesLoading = playerSources.loading,
+      onExit = { endedSourceId ->
+        playedSourceId = endedSourceId
+        player = null
+        returnToken++
+      },
+    )
   }
 }
 

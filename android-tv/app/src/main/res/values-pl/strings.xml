@@ -152,4 +152,12 @@
   <string name="tv_passthrough">Przekazywanie</string>
   <string name="tv_version_row">Aplikacja %1$s · serwer %2$s</string>
   <string name="tv_version_mismatch">Serwer działa w wersji %1$s, ta aplikacja to %2$s. Zaktualizuj tę starszą.</string>
+  <string name="player_quality">Jakość</string>
+  <string name="player_quality_original">Oryginał</string>
+  <string name="tv_now_playing">Odtwarzane</string>
+  <string name="tv_force_conversion">Konwertuj na serwerze</string>
+  <string name="tv_force_conversion_note">Użyj, gdy obraz lub dźwięk odtwarza się źle. Serwer ponownie koduje wideo.</string>
+  <string name="tv_prefer_conversion">Preferuj konwersję na serwerze</string>
+  <string name="tv_prefer_conversion_note">Każde odtwarzanie startuje jak w przeglądarce, więc serwer konwertuje to, czego telewizor nie odtworzy. Wolniejszy start i większe obciążenie serwera.</string>
+  <string name="tv_back_to_source">Wróć do poprzedniego źródła</string>
 </resources>

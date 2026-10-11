@@ -111,6 +111,7 @@ class PlayerPanelFocusTest {
     press(Key.DirectionRight)
     press(Key.DirectionRight)
     press(Key.DirectionRight)
+    press(Key.DirectionRight)
     compose.onNodeWithTag(TAG_OSD_DIAG).assertIsFocused()
     press(Key.DirectionCenter)
 

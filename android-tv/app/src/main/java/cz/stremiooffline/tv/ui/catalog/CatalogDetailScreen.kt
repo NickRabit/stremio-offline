@@ -1,9 +1,7 @@
 package cz.stremiooffline.tv.ui.catalog
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -48,9 +46,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.tv.material3.Border
-import androidx.tv.material3.ClickableSurfaceDefaults
-import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
 import coil.compose.AsyncImage
 import cz.stremiooffline.tv.R
@@ -95,15 +90,15 @@ const val TagCatalogSources = "catalog_sources"
 const val TagCatalogMessage = "catalog_message"
 const val TagCatalogEpisode = "catalog_episode"
 const val TagCatalogChosenSource = "catalog_chosen_source"
-const val TagSourcesPanel = "catalog_sources_panel"
-const val TagSourcesEmpty = "catalog_sources_empty"
 
 /** One slow addon must not hold a play back longer once something playable has arrived. */
 const val PLAY_WHEN_READY_TIMEOUT_MS = 8_000L
 
-fun sourceRowTag(index: Int): String = "source_row_$index"
 fun seasonChipTag(season: Int): String = "season_chip_$season"
 fun episodeCardTag(video: VideoDto): String = "episode_card_${video.id ?: video.label}"
+
+/** The Sources panel's rows as the catalogue gathered them, and whether the addons still owe one. */
+data class OfferedSources(val streams: List<StreamDto> = emptyList(), val loading: Boolean = false)
 
 /** The catalogue title detail: the library's layout for a movie or a series, with sources. */
 @Composable
@@ -114,6 +109,11 @@ fun CatalogDetailScreen(
   onPlay: (PlayTarget) -> Unit,
   onBack: () -> Unit,
   restoreToken: Int = 0,
+  /** The source the player was left on, if it was left on one; the caption and the next Play
+   *  then name it, the way they do a row the viewer picked here. */
+  playedSourceId: String? = null,
+  /** The merged list the player's own Sources panel shows, kept current while addons answer. */
+  onSources: (OfferedSources) -> Unit = {},
 ) {
   // An OK while the sources load waits for them; Back or a second OK drops the wait.
   var pendingPlay by remember { mutableStateOf(false) }
@@ -158,8 +158,6 @@ fun CatalogDetailScreen(
   val torrentText = stringResource(R.string.err_torrent_not_playable)
   val noSourcesText = stringResource(R.string.sources_none)
   val loadErrorText = stringResource(R.string.tv_load_error)
-  val tryAgainText = stringResource(R.string.tv_try_again)
-  val defaultText = stringResource(R.string.tv_default)
   val toLibraryText = stringResource(R.string.save_to_library)
   val findingSourcesText = stringResource(R.string.tv_finding_sources)
   val playWhenReadyText = stringResource(R.string.tv_play_when_ready)
@@ -312,11 +310,17 @@ fun CatalogDetailScreen(
     if (next.move) selectedStream = next.to
   }
 
-  // The default row may only appear after the panel is already up (sources still arriving).
-  LaunchedEffect(sourcesOpen, visible.isEmpty(), sourcesFailed) {
-    if (!sourcesOpen) return@LaunchedEffect
-    awaitFrame()
-    runCatching { sourcesPanelFocus.requestFocus() }
+  // The player's own Sources panel gets the same list, and it keeps growing while the addons answer.
+  LaunchedEffect(visible, sourcesAsking) { onSources(OfferedSources(visible, sourcesAsking)) }
+
+  // A switch made inside the player has to carry back: the detail keeps naming the source the
+  // viewer actually watched, and Play offers it again.
+  LaunchedEffect(playedSourceId, visible) {
+    val id = playedSourceId ?: return@LaunchedEffect
+    val stream = visible.firstOrNull { it.sourceId == id } ?: return@LaunchedEffect
+    selectedStream = stream
+    pickedStream = true
+    chosenInPanel = true
   }
 
   val resumeEntry = if (isSeries) seriesEntry(entries, meta.id) else null
@@ -723,46 +727,24 @@ fun CatalogDetailScreen(
     if (sourcesOpen) {
       // Reopening lands on what the viewer picked; without a pick, on the default.
       val focusIndex = visible.indexOfFirst { it === (chosenStream ?: preferredStream) }.let { if (it >= 0) it else 0 }
-      SidePanel(
-        title = stringResource(R.string.sources_heading),
+      SourcesPanel(
+        streams = visible,
+        focusIndex = focusIndex,
+        onChoose = { chooseSource(it) },
         onClose = { closeSources() },
-        modifier = Modifier.testTag(TagSourcesPanel),
+        default = preferredStream,
+        chosen = chosenStream,
+        anyChosen = chosenStream != null,
+        titleLanguage = titleLanguage,
+        asking = sourcesAsking,
+        failed = sourcesFailed,
+        notices = notices,
+        emptyText = emptyText,
+        failureText = loadErrorText,
+        onRetry = { sourcesRetry++ },
+        retryTag = TagCatalogRetry,
         initialFocus = sourcesPanelFocus,
-      ) {
-        when {
-          sourcesFailed -> {
-            Text(loadErrorText, color = Tokens.Red, fontSize = 12.sp, lineHeight = 17.sp)
-            FocusButton(
-              text = tryAgainText,
-              onClick = { sourcesRetry++ },
-              modifier = Modifier.focusRequester(sourcesPanelFocus).testTag(TagCatalogRetry),
-            )
-          }
-          visible.isEmpty() -> {
-            Text(if (sourcesAsking) findingSourcesText else emptyText, color = Tokens.Muted, fontSize = 12.sp, lineHeight = 17.sp)
-            // Something has to hold the remote while the panel is up, even with no rows yet.
-            Box(Modifier.focusRequester(sourcesPanelFocus).focusable().testTag(TagSourcesEmpty))
-          }
-          else -> visible.forEachIndexed { index, stream ->
-            SourceRow(
-              stream = stream,
-              default = preferredStream === stream,
-              chosen = chosenStream === stream,
-              anyChosen = chosenStream != null,
-              defaultText = defaultText,
-              titleLanguage = titleLanguage,
-              onClick = { chooseSource(stream) },
-              modifier = Modifier
-                .testTag(sourceRowTag(index))
-                .then(if (index == focusIndex) Modifier.focusRequester(sourcesPanelFocus) else Modifier),
-            )
-          }
-        }
-        if (notices.isNotEmpty()) {
-          Spacer(Modifier.height(4.dp))
-          notices.forEach { notice -> Text(Streams.noticeText(notice), color = Tokens.Muted, fontSize = 10.5.sp, lineHeight = 15.sp) }
-        }
-      }
+      )
     }
   }
 }
@@ -775,69 +757,6 @@ private fun eyebrow(addonName: String, series: Boolean): String =
   } else {
     stringResource(if (series) R.string.tv_detail_eyebrow_series else R.string.tv_detail_eyebrow_movie, addonName)
   }
-
-/** One offered stream: badge, addon, the stream's title and a size/language meta line. */
-@Composable
-private fun SourceRow(
-  stream: StreamDto,
-  default: Boolean,
-  chosen: Boolean,
-  anyChosen: Boolean,
-  defaultText: String,
-  titleLanguage: String?,
-  onClick: () -> Unit,
-  modifier: Modifier = Modifier,
-) {
-  val shape = RoundedCornerShape(8.dp)
-  val badge = Streams.streamBadge(stream)
-  val badgeColour = when (badge) {
-    "HTTP" -> Tokens.Green
-    "RD" -> Tokens.Accent
-    else -> Tokens.Muted
-  }
-  val meta = buildList {
-    formatSize(Streams.streamSize(stream))?.let(::add)
-    addAll(Streams.streamLanguages(stream, titleLanguage).map { Languages.label(it) })
-  }
-  Surface(
-    onClick = onClick,
-    modifier = modifier.fillMaxWidth(),
-    shape = ClickableSurfaceDefaults.shape(shape = shape),
-    colors = ClickableSurfaceDefaults.colors(
-      containerColor = if (default) Tokens.Panel2 else Color.Transparent,
-      contentColor = Tokens.Text,
-      focusedContainerColor = Tokens.Panel2,
-      focusedContentColor = Tokens.Text,
-      pressedContainerColor = Tokens.Panel2,
-      pressedContentColor = Tokens.Text,
-    ),
-    // Panel rows do not scale on focus: the list viewport would clip the first and last row.
-    scale = ClickableSurfaceDefaults.scale(focusedScale = 1f, pressedScale = 1f),
-    border = ClickableSurfaceDefaults.border(
-      border = Border.None,
-      focusedBorder = Border(BorderStroke(1.5.dp, Tokens.Accent2), shape = shape),
-    ),
-  ) {
-    Row(
-      modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-      Text(badge, color = badgeColour, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-      Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(stream.addonName.orEmpty(), color = Tokens.Muted, fontSize = 9.5.sp, maxLines = 1)
-        Text(streamLabel(stream), fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        if (meta.isNotEmpty()) Text(meta.joinToString(" · "), color = Tokens.Muted, fontSize = 10.sp, maxLines = 1)
-      }
-      // One tick only: on the picked row once the viewer chose one, otherwise on the default.
-      when {
-        chosen -> Text(if (default) "✓ $defaultText" else "✓", color = Tokens.Green, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
-        default && !anyChosen -> Text("✓ $defaultText", color = Tokens.Green, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
-        default -> Text(defaultText, color = Tokens.Muted, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
-      }
-    }
-  }
-}
 
 @Composable
 private fun SeriesRows(
@@ -912,9 +831,6 @@ private fun SeriesRows(
     }
   }
 }
-
-private fun streamLabel(stream: StreamDto): String =
-  stream.name ?: stream.title?.split("\n")?.firstOrNull() ?: stream.description?.split("\n")?.firstOrNull() ?: ""
 
 /** The selected episode under the title: the card's `S1 · E1` label and the episode's name. */
 internal fun episodeLine(video: VideoDto): String {

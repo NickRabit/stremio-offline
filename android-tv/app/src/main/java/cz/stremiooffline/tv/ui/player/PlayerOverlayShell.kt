@@ -39,6 +39,7 @@ import cz.stremiooffline.tv.playback.PlaybackController
 import cz.stremiooffline.tv.ui.theme.Tokens
 import java.util.Locale
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -83,6 +84,14 @@ fun PlayerOverlayShell(
   tracksText: String = "",
   tracksLabel: String = "",
   tracksFocus: FocusRequester? = null,
+  onSources: (() -> Unit)? = null,
+  sourcesText: String = "",
+  sourcesLabel: String = "",
+  sourcesFocus: FocusRequester? = null,
+  onQuality: (() -> Unit)? = null,
+  qualityText: String = "",
+  qualityLabel: String = "",
+  qualityFocus: FocusRequester? = null,
   onNext: (() -> Unit)? = null,
   nextLabel: String = "",
   onDiagnostics: () -> Unit = {},
@@ -177,6 +186,29 @@ fun PlayerOverlayShell(
     if (controls) runCatching { playFocus.requestFocus() } else runCatching { rootFocus.requestFocus() }
   }
 
+  // A conditionally drawn control can leave the row while it holds the remote -- the Sources
+  // button goes once the addons settle on a single row, and the session restart behind a switch
+  // takes both of them away. The root is deliberately not a target while the controls are up, so
+  // Play has to take the remote or the D-pad would have nothing to move from.
+  var sourcesFocused by remember { mutableStateOf(false) }
+  var qualityFocused by remember { mutableStateOf(false) }
+  // Read during composition, before Compose applies the removal and its focus event: a control
+  // that leaves the row is still seen as focused here even though it is about to lose the remote.
+  val sourcesHadFocus = sourcesFocused
+  val qualityHadFocus = qualityFocused
+  LaunchedEffect(onSources != null) {
+    if (onSources == null && sourcesHadFocus) {
+      awaitFrame()
+      runCatching { playFocus.requestFocus() }
+    }
+  }
+  LaunchedEffect(onQuality != null) {
+    if (onQuality == null && qualityHadFocus) {
+      awaitFrame()
+      runCatching { playFocus.requestFocus() }
+    }
+  }
+
   fun seekBy(offsetSeconds: Double) {
     val from = if (!preview.isNaN()) preview else position
     // A button press inside a held burst takes the burst over, so its pending commit never follows.
@@ -198,7 +230,9 @@ fun PlayerOverlayShell(
       .testTag(TAG_OVERLAY_ROOT)
       .background(Color.Black)
       .focusRequester(rootFocus)
-      .focusable()
+      // While the controls are up the full-screen root must not be a focus target: nothing sits
+      // beside a full-screen box, so a remote that landed on it would never reach a control.
+      .focusable(enabled = !controls)
       .onPreviewKeyEvent { event ->
         if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
         // A panel or the card has the remote: it traps focus itself, so the shell steps aside.
@@ -237,6 +271,16 @@ fun PlayerOverlayShell(
         tracksText = tracksText,
         tracksLabel = tracksLabel,
         tracksFocus = tracksFocus,
+        onSources = onSources,
+        sourcesText = sourcesText,
+        sourcesLabel = sourcesLabel,
+        sourcesFocus = sourcesFocus,
+        onSourcesFocus = { sourcesFocused = it },
+        onQuality = onQuality,
+        qualityText = qualityText,
+        qualityLabel = qualityLabel,
+        qualityFocus = qualityFocus,
+        onQualityFocus = { qualityFocused = it },
         onNext = onNext,
         nextLabel = nextLabel,
         onDiagnostics = onDiagnostics,

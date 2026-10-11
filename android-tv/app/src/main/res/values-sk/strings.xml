@@ -152,4 +152,12 @@
   <string name="tv_passthrough">Priechod</string>
   <string name="tv_version_row">Aplikácia %1$s · server %2$s</string>
   <string name="tv_version_mismatch">Server beží vo verzii %1$s, aplikácia je %2$s. Aktualizujte tú staršiu.</string>
+  <string name="player_quality">Kvalita</string>
+  <string name="player_quality_original">Originál</string>
+  <string name="tv_now_playing">Prehráva sa</string>
+  <string name="tv_force_conversion">Prevádzať na serveri</string>
+  <string name="tv_force_conversion_note">Použite, keď sa obraz alebo zvuk prehráva zle. Server video prekóduje.</string>
+  <string name="tv_prefer_conversion">Preferovať prevod na serveri</string>
+  <string name="tv_prefer_conversion_note">Každé prehrávanie sa spustí ako v prehliadači, takže server prevedie, čo televízor nezvládne. Pomalší štart a vyššia záťaž servera.</string>
+  <string name="tv_back_to_source">Späť na predchádzajúci zdroj</string>
 </resources>
