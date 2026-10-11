@@ -146,8 +146,8 @@ grep `: TvApi` again before starting.
   `play` and `startOverPressed` build the library `PlayTarget` for a local
   entry (`key = Progress.libraryKey(localPath)`, `path = localPath`,
   `sourceId = null`, no catalogue subtitle target). Ordinary Play sets
-  `resume = true`, Start over sets `resume = false`; **To library** on a local
-  entry shows `sources.localQueueDisabled` instead of queuing; a **Show in library** button
+  `resume = true`, Start over sets `resume = false`; **To library** is hidden
+  for a local entry, as for anything that cannot be queued; a **Show in library** button
   in the action row while a local entry is active; `onSources` reports addon
   streams only.
 - Track local loading independently; failure of `streamSources` must not

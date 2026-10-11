@@ -1,6 +1,7 @@
 # Local copies as a catalogue source
 
-Status: specification, not implemented. The execution order is in
+Status: implemented on the server, the web (and so the desktop apps) and Android
+TV. The execution order it was built in is
 [local-sources-agent-task.md](local-sources-agent-task.md).
 
 ## Problem
@@ -258,8 +259,9 @@ New keys in `web/src/i18n/en.ts` and translated in all ten catalogues
 
 `sources.localHint` is the row's `title` attribute on the web and the TV
 row's description for accessibility. `sources.localQueueDisabled` is the
-title of the disabled **To library** button on the web and the message TV shows
-when **To library** is pressed on a local entry. The TV keys go into
+title of the disabled **To library** button on the web. TV hides **To library**
+for a local entry (the action row already hides it for anything that cannot be
+queued) and shows **Show in library** in its place, so it does not need the key. The TV keys go into
 `android-tv/strings.keys` and the resources are regenerated with
 `node scripts/android-strings.mjs`. `library.showInLibrary` exists already; add
 it to `android-tv/strings.keys` if TV does not use it yet.
