@@ -67,6 +67,9 @@ class PlayerScreenCloseTest {
     compose.waitForIdle()
 
     assertEquals("no session may start after the player closed", listOf("srcA"), api.startedSources)
+    // A ping would come every 30 s; let one interval pass so the check can bite.
+    compose.mainClock.advanceTimeBy(30_001)
+    compose.waitForIdle()
     assertTrue("no ping may follow the player out", api.pings.isEmpty())
   }
 

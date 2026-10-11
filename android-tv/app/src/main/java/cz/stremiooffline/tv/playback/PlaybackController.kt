@@ -672,7 +672,9 @@ class PlaybackController(
     val chosen = when {
       addon != null -> SubtitleChoice.Addon(addon.subtitleId)
       subtitleChange -> descriptor.subtitleTrack?.let { SubtitleChoice.Embedded(it) } ?: SubtitleChoice.Off
-      carried != null -> carried
+      // Only the app-drawn addon is the client's to keep: an embedded track is the server's, and
+      // a restarted session's answer says which one the picture now carries.
+      carried is SubtitleChoice.Addon -> carried
       plan != null -> descriptor.subtitleTrack?.let { SubtitleChoice.Embedded(it) } ?: SubtitleChoice.Off
       else -> _state.value.subtitle
     }

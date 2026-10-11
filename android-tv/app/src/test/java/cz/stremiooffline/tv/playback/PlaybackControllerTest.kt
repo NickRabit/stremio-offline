@@ -596,6 +596,30 @@ class PlaybackControllerTest {
   }
 
   @Test
+  fun `a restarted session ticks the embedded track its answer names, not the old one`() = runTest {
+    val api = FakeApi()
+    api.descriptor = PlaybackDescriptorDto(
+      id = "p1", mode = "transcode", url = "start.m3u8", offset = 0.0, duration = 1_000.0, playlist = true,
+      subtitleTrack = 1, sidecarUrl = "/api/playback/p1/sidecar.vtt",
+    )
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+
+    controller.start("src", "movie:tt1", "It", null, resume = false)
+    runCurrent()
+    controller.onPlayerReady()
+    controller.onPlayerPosition(50.0)
+    assertEquals(SubtitleChoice.Embedded(1), controller.state.value.subtitle)
+
+    api.descriptor = api.descriptor.copy(id = "p2", subtitleTrack = 0, sidecarUrl = "/api/playback/p2/sidecar.vtt")
+    api.pingFailure = ApiError(ApiFailure.NotFound)
+    advanceTimeBy(30_001)
+    runCurrent()
+
+    assertEquals(2, api.started.size)
+    assertEquals(SubtitleChoice.Embedded(0), controller.state.value.subtitle)
+  }
+
+  @Test
   fun `a track change during a pending seek carries the seek target`() = runTest {
     val api = FakeApi()
     api.descriptor = PlaybackDescriptorDto(
