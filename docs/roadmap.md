@@ -209,6 +209,18 @@ It starts with a server-only PR that lets a native client declare containers,
 profiles and audio passthrough. Scope, contracts and PR order:
 [Android TV client](android-tv-spec.md).
 
+Next on the television, after the first real-TV tests:
+
+- **Smart series download**, as the web and desktop do it: a series detail
+  offers "Download season / series" opening the same choices as
+  `SeriesDownloadDialog` -- which episodes (a season, from an episode on,
+  all), audio and subtitle language, quality strategy, target library -- and
+  sends the lazy `POST /api/downloads/bulk` body, so the server picks a source
+  per episode. Following a series (automatic new episodes) from the TV uses the
+  same dialog. A side panel with D-pad rows replaces the web's form.
+- Per-title source sorting and filters (addon, language) in the sources panel,
+  which the web already offers next to its list.
+
 ### Desktop
 
 The clients and release packages exist for macOS arm64, Windows x64, and Linux
