@@ -170,11 +170,14 @@ fun Osd(
   sourcesText: String = "",
   sourcesLabel: String = "",
   sourcesFocus: FocusRequester? = null,
+  /** Watched by the shell, so a button that leaves the row can hand the remote back to Play. */
+  onSourcesFocus: ((Boolean) -> Unit)? = null,
   /** The Quality / conversion panel; null hides the button. */
   onQuality: (() -> Unit)? = null,
   qualityText: String = "",
   qualityLabel: String = "",
   qualityFocus: FocusRequester? = null,
+  onQualityFocus: ((Boolean) -> Unit)? = null,
   onNext: (() -> Unit)? = null,
   nextLabel: String = "",
   onDiagnostics: () -> Unit = {},
@@ -250,6 +253,7 @@ fun Osd(
             onClick = onSources,
             onActivity = onActivity,
             focusRequester = sourcesFocus,
+            onFocusChange = onSourcesFocus,
           ) { SourcesIcon() }
         }
         if (onQuality != null) {
@@ -260,6 +264,7 @@ fun Osd(
             onClick = onQuality,
             onActivity = onActivity,
             focusRequester = qualityFocus,
+            onFocusChange = onQualityFocus,
           ) { }
         }
         if (onNext != null) {
@@ -370,6 +375,7 @@ private fun RoundButton(
   onClick: () -> Unit,
   onActivity: () -> Unit,
   focusRequester: FocusRequester? = null,
+  onFocusChange: ((Boolean) -> Unit)? = null,
   content: @Composable () -> Unit,
 ) {
   var focused by remember { mutableStateOf(false) }
@@ -382,7 +388,7 @@ private fun RoundButton(
       .semantics { this.contentDescription = label }
       .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
       // Observes the button's own focus target, so it has to sit before `focusable()`.
-      .onFocusChanged { focused = it.isFocused }
+      .onFocusChanged { focused = it.isFocused; onFocusChange?.invoke(it.isFocused) }
       .focusable()
       .clickable { onActivity(); onClick() }
       .semantics { this[OsdFocused] = focused }

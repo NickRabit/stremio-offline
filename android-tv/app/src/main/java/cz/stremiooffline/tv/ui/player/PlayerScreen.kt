@@ -94,7 +94,8 @@ import kotlinx.coroutines.launch
 fun PlayerScreen(
   api: TvApi,
   target: PlayTarget,
-  onExit: () -> Unit,
+  /** Leaving reports the source the session ended on, so the caller can keep naming it. */
+  onExit: (String?) -> Unit,
   /** The other sources the caller offers for this title; a library file has none. */
   sources: List<StreamDto> = emptyList(),
   /** The caller is still waiting on addons, so the list above may still grow. */
@@ -102,16 +103,16 @@ fun PlayerScreen(
 ) {
   val context = LocalContext.current
   val lifecycle = LocalLifecycleOwner.current.lifecycle
-  // The device preference turns every start into a browser's: the native capability lists go and
-  // the server converts what the TV cannot play.
-  val capabilities = remember {
-    val detected = detectCapabilities(context)
-    if (TvPreferences(context).preferConversion) browserCapabilities(detected) else detected
+  // The device's own decoders decide the routing and the labels; "Prefer server conversion" only
+  // changes the lists the start sends, so the server treats the TV like a browser.
+  val capabilities = remember { detectCapabilities(context) }
+  val startCapabilities = remember(capabilities) {
+    if (TvPreferences(context).preferConversion) browserCapabilities(capabilities) else capabilities
   }
   // The teardown save and delete must outlive the composition, so the controller gets its own
   // scope rather than the one Compose cancels on dispose.
   val scope = remember { CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate) }
-  val controller = remember(api) { PlaybackController(api, scope, System::currentTimeMillis, capabilities) }
+  val controller = remember(api) { PlaybackController(api, scope, System::currentTimeMillis, capabilities, startCapabilities) }
   val state by controller.state.collectAsStateWithLifecycle()
 
   val exoPlayer = remember(api) {
@@ -158,7 +159,7 @@ fun PlayerScreen(
   /** Every way out of the player releases the session first, whether or not the caller unmounts us. */
   val leave = {
     controller.stop()
-    onExit()
+    onExit(state.sourceId)
   }
 
   val tracksFocus = remember { FocusRequester() }
@@ -178,7 +179,11 @@ fun PlayerScreen(
     // so the request waits a frame the way `SidePanel` does when it opens.
     awaitFrame()
     // A failed start brings the error panel up in the meantime; that panel owns the remote then.
-    if (state.error == null) runCatching { target.requestFocus() }
+    // A switch takes its opener away with the session, so Play catches the remote rather than
+    // leaving the D-pad with nothing to move from.
+    if (state.error == null) {
+      runCatching { target.requestFocus() }.onFailure { runCatching { playFocus.requestFocus() } }
+    }
     restoreFocus = null
   }
 
@@ -271,7 +276,6 @@ fun PlayerScreen(
   // file has none, so both the button and the panel stay away.
   val offeredSources = sources.filterNot { Streams.isAddonNotice(it) }
   val playingSource = offeredSources.firstOrNull { it.sourceId == state.sourceId }
-  val sourcesShown = offeredSources.size > 1 || sourcesLoading
   val quality = qualityChoice(state.quality, state.escalatedByViewer)
 
   /** Choosing a row: the one already playing only closes the panel, any other starts a new session. */
@@ -493,6 +497,10 @@ fun PlayerScreen(
   val sourcesIndex = offeredSources.indexOfFirst { it.sourceId == state.sourceId }.let { if (it >= 0) it else 0 }
   val sourcesTitle = stringResource(R.string.sources_heading)
   val qualityText = qualityLabel(quality)
+  // Both panels act on the running session, so their buttons wait for it: a choice made before
+  // the first descriptor lands would be dropped.
+  val sourcesShown = state.started && (offeredSources.size > 1 || sourcesLoading)
+  val qualityShown = state.started
 
   PlayerOverlayShell(
     position = position,
@@ -515,7 +523,7 @@ fun PlayerScreen(
     sourcesText = sourcesTitle,
     sourcesLabel = sourcesTitle,
     sourcesFocus = sourcesFocus,
-    onQuality = { qualityOpen = true },
+    onQuality = if (qualityShown) ({ qualityOpen = true }) else null,
     qualityText = qualityText,
     qualityLabel = qualityText,
     qualityFocus = qualityFocus,
@@ -685,7 +693,7 @@ fun PlayerScreen(
  * The media keys work whether or not the OSD is up; a null answer means the key is not ours. Back
  * is deliberately absent: the overlay's own rule owns it and hides the controls first.
  */
-internal fun mediaKey(key: Key, player: ExoPlayer, playing: Boolean, onExit: () -> Unit): Boolean? = when (key) {
+internal fun mediaKey(key: Key, player: ExoPlayer, playing: Boolean, onExit: (String?) -> Unit): Boolean? = when (key) {
   Key.MediaPlayPause -> { if (playing) player.pause() else player.play(); true }
   Key.MediaPlay -> { player.play(); true }
   Key.MediaPause -> { player.pause(); true }

@@ -736,4 +736,95 @@ class PlaybackControllerTest {
     assertEquals(300.0, api.started.last().third, 0.001)
     assertEquals(QualityChoice.Original, qualityChoice(controller.state.value.quality, controller.state.value.escalatedByViewer))
   }
+
+  // The outgoing session was HLS with an offset, so the absolute position is not the player's own
+  // place in the stream. Recovering a failed switch must not re-derive it once the offset is gone.
+  @Test
+  fun `a failed switch recovers at the absolute position`() = runTest {
+    val api = FakeApi()
+    api.descriptor = PlaybackDescriptorDto(
+      id = "p1", mode = "remux", url = "start.m3u8", offset = 100.0, duration = 1_000.0,
+      playlist = true, copy = CopyDto(video = true, audio = true),
+    )
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+    controller.start("srcA", "movie:tt1", "It", null, resume = false)
+    runCurrent()
+    playing(controller, 200.0)
+    assertEquals(300.0, controller.position, 0.001)
+
+    api.failStart = true
+    controller.switchSource("srcB")
+    runCurrent()
+    assertEquals(PlaybackError.Network, controller.state.value.error)
+
+    api.failStart = false
+    controller.switchSource("srcA")
+    runCurrent()
+
+    assertEquals("srcA", api.started.last().first)
+    assertEquals(300.0, api.started.last().third, 0.001)
+    assertEquals(null, controller.state.value.error)
+  }
+
+  // "Prefer server conversion" empties the lists the start declares; the device's real decoders
+  // still decide how a chosen audio track is applied, so the labels and the routing stay honest.
+  @Test
+  fun `prefer conversion only changes the start body`() = runTest {
+    val api = FakeApi()
+    api.descriptor = PlaybackDescriptorDto(
+      id = "p1", mode = "direct", url = "direct.mp4", offset = 0.0, duration = 600.0,
+      audioTracks = tracks("ac3"),
+    )
+    val real = ClientCapabilitiesDto(h264 = true, containers = listOf("mp4"), audioDecode = listOf("ac3"))
+    val controller = PlaybackController(api, backgroundScope, { 0L }, real, browserCapabilities(real))
+
+    controller.start("src", "file:a", "A", "a", resume = false)
+    runCurrent()
+    controller.onPlayerReady()
+    controller.onPlayerPosition(30.0)
+    controller.selectAudio(0)
+    runCurrent()
+
+    assertTrue("the start declares no native lists", api.started.single().second.containers.isEmpty())
+    assertTrue("the device's own decoder still selects the audio inside the player", api.tracks.isEmpty())
+  }
+
+  @Test
+  fun `choosing the ticked quality row only closes the panel`() = runTest {
+    val api = FakeApi()
+    api.trackAnswer = api.descriptor.copy(
+      mode = "transcode",
+      url = "720.m3u8",
+      playlist = true,
+      quality = 720,
+      copy = CopyDto(video = false, audio = true),
+    )
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+    controller.start("src", "movie:tt1", "It", null, resume = false)
+    runCurrent()
+    playing(controller, 100.0)
+
+    controller.selectQuality(720)
+    runCurrent()
+    assertEquals(1, api.tracks.size)
+
+    controller.selectQuality(720)
+    runCurrent()
+    assertEquals("the ticked row must not run the conversion again", 1, api.tracks.size)
+  }
+
+  // The server's own choice is already in use; pressing it must not spend a round trip on nothing.
+  @Test
+  fun `the original that is already in use only closes the panel`() = runTest {
+    val api = FakeApi()
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+    controller.start("src", "movie:tt1", "It", null, resume = false)
+    runCurrent()
+    playing(controller, 100.0)
+
+    controller.selectQuality(null)
+    runCurrent()
+
+    assertTrue("nothing is sent when the server's own choice is already in use", api.tracks.isEmpty())
+  }
 }

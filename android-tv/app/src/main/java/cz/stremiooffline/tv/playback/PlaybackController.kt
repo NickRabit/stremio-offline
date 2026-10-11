@@ -117,6 +117,9 @@ class PlaybackController(
   private val scope: CoroutineScope,
   private val clock: () -> Long,
   private val capabilities: ClientCapabilitiesDto,
+  /** What the start declares. "Prefer server conversion" empties the native lists here only;
+   *  [capabilities] keeps the device's real decoders for the routing and the labels. */
+  private val startCapabilities: ClientCapabilitiesDto = capabilities,
 ) {
   private val _state = MutableStateFlow(PlaybackState())
   val state: StateFlow<PlaybackState> = _state.asStateFlow()
@@ -178,9 +181,15 @@ class PlaybackController(
   private var sequence = 0
   /** Bumped by every start and stop, so a late answer from a superseded request is dropped. */
   private var generation = 0
+  /** The absolute position a restart began at, kept until a descriptor lands so a failed restart
+   *  is recovered there rather than at the new session's zero. */
+  private var restartAt: Double? = null
 
   /** The absolute position, converted through the HLS offset the way the spec defines it. */
   val position: Double get() = absolute(lastPosition)
+
+  /** Where a restart goes: the place it began at, or the position the player is at now. */
+  private val restartPosition: Double get() = restartAt ?: position
 
   private fun absolute(playerPosition: Double) = if (playlist) offset + playerPosition else playerPosition
 
@@ -235,7 +244,7 @@ class PlaybackController(
     subtitlePreference: String? = plan?.subtitlePreference,
   ) {
     val current = plan ?: return
-    begin(current.copy(explicitTime = position, resume = false, subtitles = subtitles, audioPreference = audioPreference, subtitlePreference = subtitlePreference))
+    begin(current.copy(explicitTime = restartPosition, resume = false, subtitles = subtitles, audioPreference = audioPreference, subtitlePreference = subtitlePreference))
   }
 
   private fun begin(next: StartPlan) {
@@ -290,7 +299,7 @@ class PlaybackController(
       if (mine != generation) return@launch
       if (resumeTime > 0) lastPosition = resumeTime
       val offered = next.subtitles.map { it.subtitleId }.take(MAX_SUBTITLE_IDS)
-      val descriptor = runCatching { api.startPlayback(resolved, capabilities, resumeTime, offered) }.getOrElse { error ->
+      val descriptor = runCatching { api.startPlayback(resolved, startCapabilities, resumeTime, offered) }.getOrElse { error ->
         if (mine == generation) _state.update { it.copy(loading = false, error = errorOf(error)) }
         return@launch
       }
@@ -392,10 +401,12 @@ class PlaybackController(
     subtitlePreference: String? = plan?.subtitlePreference,
   ) {
     val current = plan ?: return
+    val at = restartPosition
+    restartAt = at
     begin(
       current.copy(
         sourceId = sourceId,
-        explicitTime = position,
+        explicitTime = at,
         resume = false,
         subtitles = subtitles,
         audioPreference = audioPreference,
@@ -411,9 +422,21 @@ class PlaybackController(
    */
   fun selectQuality(quality: Int?) {
     if (stopped || sessionId == null) return
+    val row = when (quality) {
+      null -> QualityChoice.Original
+      1080 -> QualityChoice.P1080
+      720 -> QualityChoice.P720
+      480 -> QualityChoice.P480
+      else -> return
+    }
+    // The row that is already ticked only closes the panel; re-running the same conversion would
+    // restart the picture for nothing.
+    if (qualityChoice(this.quality, escalatedByViewer) == row) return
     if (quality == null && escalated) {
       val current = plan ?: return
-      begin(current.copy(explicitTime = position, resume = false))
+      val at = restartPosition
+      restartAt = at
+      begin(current.copy(explicitTime = at, resume = false))
       return
     }
     track(TrackChange.Quality(quality, position), addon = null)
@@ -531,6 +554,7 @@ class PlaybackController(
   fun stop() {
     if (stopped) return
     stopped = true
+    restartAt = null
     // Superseding an in-flight start makes it delete its own session once it lands.
     generation++
     cancelLoops()
@@ -603,6 +627,7 @@ class PlaybackController(
     keepAudio: Boolean = false,
   ) {
     sessionId = descriptor.id
+    restartAt = null
     playlist = descriptor.playlist
     offset = descriptor.offset
     duration = descriptor.duration ?: duration

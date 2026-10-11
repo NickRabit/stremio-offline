@@ -109,6 +109,9 @@ fun CatalogDetailScreen(
   onPlay: (PlayTarget) -> Unit,
   onBack: () -> Unit,
   restoreToken: Int = 0,
+  /** The source the player was left on, if it was left on one; the caption and the next Play
+   *  then name it, the way they do a row the viewer picked here. */
+  playedSourceId: String? = null,
   /** The merged list the player's own Sources panel shows, kept current while addons answer. */
   onSources: (OfferedSources) -> Unit = {},
 ) {
@@ -309,6 +312,16 @@ fun CatalogDetailScreen(
 
   // The player's own Sources panel gets the same list, and it keeps growing while the addons answer.
   LaunchedEffect(visible, sourcesAsking) { onSources(OfferedSources(visible, sourcesAsking)) }
+
+  // A switch made inside the player has to carry back: the detail keeps naming the source the
+  // viewer actually watched, and Play offers it again.
+  LaunchedEffect(playedSourceId, visible) {
+    val id = playedSourceId ?: return@LaunchedEffect
+    val stream = visible.firstOrNull { it.sourceId == id } ?: return@LaunchedEffect
+    selectedStream = stream
+    pickedStream = true
+    chosenInPanel = true
+  }
 
   val resumeEntry = if (isSeries) seriesEntry(entries, meta.id) else null
   val resumeEpisode = if (isSeries) Resume.resumeVideo(meta.videos.orEmpty(), resumeEntry?.let { Resume.resumeTarget(it).episode }) else null

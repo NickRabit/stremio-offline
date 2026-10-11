@@ -2,6 +2,7 @@
 
 package cz.stremiooffline.tv.ui.catalog
 
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assertIsFocused
@@ -12,6 +13,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.pressKey
+import androidx.compose.ui.test.requestFocus
 import cz.stremiooffline.tv.data.MetaDto
 import cz.stremiooffline.tv.data.SettingsResponse
 import cz.stremiooffline.tv.data.StreamDto
@@ -167,6 +169,39 @@ class CatalogSourcesTest {
     compose.waitForIdle()
     // Once every addon answered the default no longer moves.
     compose.onNodeWithTag(sourceRowTag(0)).assertTextContains("Czech 8 GB")
+  }
+
+  // A switch made inside the player has to carry back: the detail keeps naming the source the
+  // viewer actually watched, and Play offers it again.
+  @Test
+  fun `the detail names the source the player ended on`() {
+    val api = FakeTvApi()
+    api.settingsValue = settings()
+    api.streamSourcesValues["movie:tt1"] = listOf(source("alpha"), source("beta"))
+    api.addonStreams["movie:tt1|alpha"] = listOf(stream("srcA", "Czech 1 GB", "Alpha"))
+    api.addonStreams["movie:tt1|beta"] = listOf(stream("srcB", "Czech 8 GB", "Beta"))
+    val ended = mutableStateOf<String?>(null)
+    compose.setContent {
+      CatalogDetailScreen(
+        api = api,
+        args = CatalogDetailArgs(MetaDto(id = "tt1", type = "movie", name = "It"), "Cinemeta", "movie"),
+        imageUrl = { null },
+        onPlay = { played += it },
+        onBack = {},
+        playedSourceId = ended.value,
+      )
+    }
+    compose.waitUntil(5_000) { api.streamsCompleted.size >= 2 }
+    compose.waitForIdle()
+    compose.onNodeWithTag(TagCatalogChosenSource).assertDoesNotExist()
+
+    ended.value = "srcB"
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagCatalogChosenSource).assertTextContains("Beta", substring = true)
+    compose.onNodeWithTag(TagCatalogPrimary).requestFocus()
+    press(Key.DirectionCenter)
+    assertEquals("srcB", played.last().sourceId)
   }
 
   // Found on the owner's server: the detail waited for every addon before it showed anything.
