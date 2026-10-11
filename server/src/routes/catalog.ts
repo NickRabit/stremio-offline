@@ -5,7 +5,7 @@ import { AppError } from "../errors.js";
 import { ExternalIdStore, imdbOf, siteLinks } from "../external-ids.js";
 import { images } from "../images.js";
 import { normalizeLanguage } from "../language.js";
-import { libraryFor, libraryVisible, parseLibraryPath, type Viewer } from "../libraries.js";
+import { libraryFor, libraryVisible, parseLibraryPath, posixBase, type Viewer } from "../libraries.js";
 import { knownTitleEntry } from "../library-match.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import { mediaResources, ResourceError, safeSourceText, type ResourceOwner } from "../media-resources.js";
@@ -25,13 +25,15 @@ export interface CatalogDeps extends RouteContext {
   ownerOf(req: express.Request): ResourceOwner;
   trackMedia(owner: ResourceOwner, res: express.Response, resourceId?: string): void;
   libraryKey(value: string): string;
+  /** The caller's library copies of one catalogue title or episode, in answer order. */
+  localCopies(type: string, id: string, viewer: Viewer): Promise<Array<{ key: string; libraryId: string; libraryName: string; path: string; size: number }>>;
   metaStore: LibraryMetaStore;
   externalIds: ExternalIdStore;
   subtitleDelay(value: unknown): number;
 }
 
 export function registerCatalogRoutes(app: express.Application, deps: CatalogDeps): void {
-  const { store, currentUser, cachedMeta, prefsOf, libraryTarget, ownerOf, trackMedia, libraryKey, metaStore, externalIds, subtitleDelay, requireAccess } = deps;
+  const { store, currentUser, cachedMeta, prefsOf, libraryTarget, ownerOf, trackMedia, libraryKey, localCopies, metaStore, externalIds, subtitleDelay, requireAccess } = deps;
 
   /** The addons this caller may use, read once per request. A disabled addon is left out
    *  later by the helpers that honour `enabled`; visibility narrows an enabled addon only. */
@@ -147,6 +149,24 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
       requireAccess(req, { addonKey });
     }
     res.setHeader("cache-control", "private, no-store").json(mediaResources.listing(items, owner));
+  }));
+  app.get("/api/local-streams/:type/:id", asyncRoute(async (req, res) => {
+    const viewer = viewerOf(currentUser(req));
+    const owner = ownerOf(req);
+    const copies = await localCopies(String(req.params.type), String(req.params.id), viewer);
+    // A grant withdrawn while the walk was being read must not get a resource, the same way
+    // the addon listing re-checks. Nothing is awaited between the check and the listing.
+    for (const libraryId of new Set(copies.map((copy) => copy.libraryId))) requireAccess(req, { libraryId });
+    const listed = mediaResources.listing(copies.map((copy) => ({
+      url: `file://${copy.key}`,
+      behaviorHints: { filename: posixBase(copy.key), videoSize: copy.size },
+    })), owner);
+    // The listing redacts long path segments as if they were an addon's secrets; the name of the
+    // viewer's own file is not one, and it is what the row shows.
+    res.setHeader("cache-control", "private, no-store").json(listed.map((stream, index) => ({
+      ...stream, behaviorHints: { ...stream.behaviorHints, filename: posixBase(copies[index]!.key) },
+      localPath: copies[index]!.path, libraryName: copies[index]!.libraryName,
+    })));
   }));
   app.get("/api/subtitles/:type/:id", asyncRoute(async (req, res) => {
     const owner = ownerOf(req);
