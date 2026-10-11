@@ -62,6 +62,8 @@
   <string name="catalog_all_genres">Tutto</string>
   <string name="sources_heading">Fonti</string>
   <string name="sources_none">Nessun componente aggiuntivo di origine attivo ha uno streaming per questo titolo.</string>
+  <string name="sources_local_badge">Locale</string>
+  <string name="sources_local_hint">Già nella tua libreria — viene riprodotto dal disco del server</string>
   <string name="save_to_library">In libreria</string>
   <string name="save_queued">In coda</string>
   <string name="player_play">Gioca</string>
@@ -166,4 +168,5 @@
   <string name="tv_off">Disattivo</string>
   <string name="tv_back_to_source">Torna alla sorgente precedente</string>
   <string name="library_mosaic_alt">Mosaico di poster di %1$s film</string>
+  <string name="library_show_in_library">Mostra in biblioteca</string>
 </resources>

@@ -61,6 +61,8 @@ catalog.genre
 catalog.allGenres
 sources.heading
 sources.none
+sources.localBadge
+sources.localHint
 save.toLibrary
 save.queued
 player.play
@@ -159,3 +161,4 @@ tv.on
 tv.off
 tv.backToSource
 library.mosaicAlt
+library.showInLibrary

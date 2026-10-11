@@ -79,7 +79,9 @@ import java.util.Locale
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.sync.Mutex
@@ -94,6 +96,7 @@ const val TagCatalogMessage = "catalog_message"
 const val TagCatalogEpisode = "catalog_episode"
 const val TagCatalogChosenSource = "catalog_chosen_source"
 const val TagCatalogLibraryPanel = "catalog_library_panel"
+const val TagCatalogShowInLibrary = "catalog_show_in_library"
 
 fun libraryOptionTag(libraryId: String): String = "catalog_library_$libraryId"
 
@@ -133,6 +136,8 @@ fun CatalogDetailScreen(
   playedSourceId: String? = null,
   /** The merged list the player's own Sources panel shows, kept current while addons answer. */
   onSources: (OfferedSources) -> Unit = {},
+  /** Opens one local file's folder in the Library view. */
+  onShowInLibrary: (String) -> Unit = {},
 ) {
   // An OK while the sources load waits for them; Back or a second OK drops the wait.
   var pendingPlay by remember { mutableStateOf(false) }
@@ -150,6 +155,12 @@ fun CatalogDetailScreen(
   var addons by remember { mutableStateOf<List<AddonDto>>(emptyList()) }
   var movieProgress by remember { mutableStateOf<ProgressDto?>(null) }
   var streams by remember { mutableStateOf<List<StreamDto>>(emptyList()) }
+  var localStreams by remember { mutableStateOf<List<StreamDto>>(emptyList()) }
+  var localLoading by remember { mutableStateOf(false) }
+  // Bumped per source generation, so a late local answer that belongs to a dropped request is
+  // discarded even if its coroutine cancellation has not run yet.
+  var localRequest by remember { mutableIntStateOf(0) }
+  var localProgress by remember { mutableStateOf<ProgressDto?>(null) }
   var pendingSources by remember { mutableIntStateOf(0) }
   var sourcesLoaded by remember { mutableStateOf(false) }
   var sourcesFailed by remember { mutableStateOf(false) }
@@ -261,7 +272,10 @@ fun CatalogDetailScreen(
   // Each source addon is asked on its own so the first answer is usable without waiting for the
   // slowest, and a change of video clears the list at once so nothing plays a stale source.
   LaunchedEffect(streamsKey, sourcesRetry) {
+    val request = ++localRequest
     streams = emptyList()
+    localStreams = emptyList()
+    localLoading = false
     selectedStream = null
     pickedStream = false
     chosenInPanel = false
@@ -275,33 +289,53 @@ fun CatalogDetailScreen(
       sourcesLoaded = true
       return@LaunchedEffect
     }
-    val sources = try {
-      api.streamSources(streamType, id)
-    } catch (cancelled: CancellationException) {
-      throw cancelled
-    } catch (error: ApiError) {
-      sourcesFailed = true
-      sourcesLoaded = true
-      return@LaunchedEffect
-    }
-    sourcesLoaded = true
-    pendingSources = sources.size
-    // Addon answers can resume on different threads, so their updates take a lock: a lost
-    // decrement would leave the button spinning on "Finding sources…" forever.
-    val updates = Mutex()
     coroutineScope {
-      sources.forEach { source ->
-        launch {
-          val part = try {
-            api.streams(streamType, id, source.key.ifEmpty { null })
-          } catch (cancelled: CancellationException) {
-            throw cancelled
-          } catch (error: ApiError) {
-            emptyList()
-          }
-          updates.withLock {
-            if (part.isNotEmpty()) streams = streams + part
-            pendingSources -= 1
+      // The local lookup is its own child coroutine, started before the addons are asked, so a
+      // failed addon discovery neither cancels it nor skips it.
+      launch {
+        localLoading = true
+        val found = try {
+          api.localStreams(streamType, id)
+        } catch (cancelled: CancellationException) {
+          throw cancelled
+        } catch (error: ApiError) {
+          emptyList()
+        }
+        // A cancelled (stale) effect must not write state; the next run resets it anyway.
+        currentCoroutineContext().ensureActive()
+        if (request == localRequest) {
+          localStreams = found
+          localLoading = false
+        }
+      }
+      val sources = try {
+        api.streamSources(streamType, id)
+      } catch (cancelled: CancellationException) {
+        throw cancelled
+      } catch (error: ApiError) {
+        sourcesFailed = true
+        sourcesLoaded = true
+        return@coroutineScope
+      }
+      sourcesLoaded = true
+      pendingSources = sources.size
+      // Addon answers can resume on different threads, so their updates take a lock: a lost
+      // decrement would leave the button spinning on "Finding sources…" forever.
+      val updates = Mutex()
+      coroutineScope {
+        sources.forEach { source ->
+          launch {
+            val part = try {
+              api.streams(streamType, id, source.key.ifEmpty { null })
+            } catch (cancelled: CancellationException) {
+              throw cancelled
+            } catch (error: ApiError) {
+              emptyList()
+            }
+            updates.withLock {
+              if (part.isNotEmpty()) streams = streams + part
+              pendingSources -= 1
+            }
           }
         }
       }
@@ -337,42 +371,50 @@ fun CatalogDetailScreen(
   val visible = lists.visible
   val notices = lists.notices
   val titleLanguage = lists.titleLanguage
-  val preferredStream = Streams.pickDefaultStream(visible)
-  val chosenStream = selectedStream?.takeIf { pickedStream && visible.contains(it) }
-  val activeStream = chosenStream ?: selectedStream?.takeIf { visible.contains(it) } ?: preferredStream
+  // Local copies sit above the addon streams in the list that is drawn and picked from; the
+  // filters, counts and notices keep using the addon streams alone.
+  val rows = remember(localStreams, visible) { Streams.catalogSourceList(localStreams, visible) }
+  val preferredStream = Streams.pickDefaultStream(rows)
+  val chosenStream = selectedStream?.takeIf { pickedStream && rows.contains(it) }
+  val activeStream = chosenStream ?: selectedStream?.takeIf { rows.contains(it) } ?: preferredStream
   // Asking covers both "the addon list has not answered" and "some addon still owes a list".
   val sourcesAsking = !sourcesFailed && (!sourcesLoaded || pendingSources > 0)
+  val anyAsking = sourcesAsking || localLoading
   // While no playable stream has arrived the primary action is a spinner, not a promise to play.
-  val findingSources = activeStream?.playable != true && sourcesAsking
+  val findingSources = activeStream?.playable != true && anyAsking
   val canQueueActive = activeStream != null && Streams.canQueue(activeStream, settings.realDebridConfigured)
   // The tick belongs to the source that was actually queued, and only while it is still the pick.
   val queued = queuedSourceId != null && activeStream?.sourceId == queuedSourceId
+  // A local pick can always be played, and keeps the "no sources" note away: a local copy is a
+  // source even before the addons answered.
+  val localActive = activeStream != null && Streams.isLocalStream(activeStream)
   // Nothing visible to play: either no addon offers a source, or only a torrent it cannot open.
   val emptyText = if (offered.isEmpty()) noSourcesText else torrentText
   // The empty state is a note; a list holding only torrents is a failure.
   val emptyKind = if (offered.isEmpty()) CatalogNotice.Neutral else CatalogNotice.Failure
 
   // A later addon may outrank the one already picked, but only while the viewer has not chosen.
-  LaunchedEffect(visible, sourcesAsking) {
+  LaunchedEffect(rows, anyAsking) {
     val next = Streams.repickStream(
       playing = false,
       picked = pickedStream,
-      pending = if (sourcesAsking) maxOf(pendingSources, 1) else 0,
-      visible = visible,
+      pending = if (anyAsking) maxOf(pendingSources, 1) else 0,
+      visible = rows,
       selected = selectedStream,
       preferred = preferredStream,
+      upgrade = preferredStream?.let(Streams::isLocalStream) == true && selectedStream?.let(Streams::isLocalStream) != true,
     )
     if (next.move) selectedStream = next.to
   }
 
   // The player's own Sources panel gets the same list, and it keeps growing while the addons answer.
-  LaunchedEffect(visible, sourcesAsking) { onSources(OfferedSources(visible, sourcesAsking)) }
+  LaunchedEffect(rows, anyAsking) { onSources(OfferedSources(visible, anyAsking)) }
 
   // A switch made inside the player has to carry back: the detail keeps naming the source the
   // viewer actually watched, and Play offers it again.
-  LaunchedEffect(playedSourceId, visible) {
+  LaunchedEffect(playedSourceId, rows) {
     val id = playedSourceId ?: return@LaunchedEffect
-    val stream = visible.firstOrNull { it.sourceId == id } ?: return@LaunchedEffect
+    val stream = rows.firstOrNull { it.sourceId == id } ?: return@LaunchedEffect
     selectedStream = stream
     pickedStream = true
     chosenInPanel = true
@@ -382,8 +424,19 @@ fun CatalogDetailScreen(
   val resumeEpisode = if (isSeries) Resume.resumeVideo(meta.videos.orEmpty(), resumeEntry?.let { Resume.resumeTarget(it).episode }) else null
   val storedPosition = if (isSeries) resumeEntry?.position ?: 0.0 else movieProgress?.position ?: 0.0
   val storedDuration = if (isSeries) resumeEntry?.duration ?: 0.0 else movieProgress?.duration ?: 0.0
-  val resuming = Progress.resumePosition(storedPosition, storedDuration) != null &&
-    (selectedVideo == null || selectedVideo?.id == resumeEpisode?.id)
+  // The local file has its own progress key, so a catalogue row has no bearing on its resume.
+  val resuming = if (localActive) {
+    localProgress?.let { Progress.resumePosition(it.position, it.duration) != null } == true
+  } else {
+    Progress.resumePosition(storedPosition, storedDuration) != null &&
+      (selectedVideo == null || selectedVideo?.id == resumeEpisode?.id)
+  }
+
+  // A local pick resumes from the file's own progress, read when it becomes the active row.
+  LaunchedEffect(activeStream?.localPath, restoreToken) {
+    val path = activeStream?.takeIf(Streams::isLocalStream)?.localPath
+    localProgress = if (path == null) null else runCatching { api.progress(Progress.libraryKey(path)) }.getOrNull()
+  }
 
   val baseTitle = localizedTitle(args.meta, meta, settings.uiLanguage)
   val playerTitle = if (selectedVideo != null) "$baseTitle · ${selectedVideo!!.label}" else baseTitle
@@ -427,18 +480,34 @@ fun CatalogDetailScreen(
     selectedStream = stream
     closeSources()
     notice(null)
-    onPlay(
-      PlayTarget(
-        key = progressKey,
-        title = playerTitle,
-        resume = resuming,
-        sourceId = stream.sourceId,
-        poster = args.meta.poster ?: meta.poster,
-        addonKey = args.addonKey,
-        subtitleType = streamType,
-        subtitleTarget = streamVideoId,
-      ),
-    )
+    val path = stream.localPath
+    if (Streams.isLocalStream(stream) && path != null) {
+      // A local play is a library play: the file's own key, the library source minted from the
+      // path and no catalogue subtitles.
+      onPlay(
+        PlayTarget(
+          key = Progress.libraryKey(path),
+          title = playerTitle,
+          resume = true,
+          path = path,
+          sourceId = null,
+          poster = args.meta.poster ?: meta.poster,
+        ),
+      )
+    } else {
+      onPlay(
+        PlayTarget(
+          key = progressKey,
+          title = playerTitle,
+          resume = resuming,
+          sourceId = stream.sourceId,
+          poster = args.meta.poster ?: meta.poster,
+          addonKey = args.addonKey,
+          subtitleType = streamType,
+          subtitleTarget = streamVideoId,
+        ),
+      )
+    }
   }
 
   /** Queues one source into [libraryId], or with no target when the server never told us which
@@ -507,7 +576,7 @@ fun CatalogDetailScreen(
     val stream = preferredStream
     if (stream?.playable == true) {
       play(stream)
-    } else {
+    } else if (localStreams.isEmpty()) {
       notice(if (offered.isEmpty()) noSourcesText else torrentText, CatalogNotice.Failure)
     }
   }
@@ -516,6 +585,8 @@ fun CatalogDetailScreen(
     val stream = activeStream
     when {
       pendingPlay -> cancelPendingPlay()
+      // A local copy needs no addon and no discovery, so a failed addon lookup must not block it.
+      localActive && stream?.localPath != null -> play(stream)
       sourcesFailed -> notice(loadErrorText, CatalogNotice.Failure)
       // Once a row is chosen, Play acts on that row alone: a playable pick plays, an unplayable
       // one says why, and the wait for another addon never overrides the pick.
@@ -528,15 +599,30 @@ fun CatalogDetailScreen(
       findingSources -> armPendingPlay()
       // A chosen stream that cannot be played is what the torrent message is for; queuing it is
       // the To library button's job.
-      stream != null -> notice(torrentText, CatalogNotice.Failure)
-      else -> notice(emptyText, emptyKind)
+      stream != null -> if (localStreams.isEmpty()) notice(torrentText, CatalogNotice.Failure)
+      else -> if (localStreams.isEmpty()) notice(emptyText, emptyKind)
     }
   }
 
   fun startOverPressed() {
     notice(null)
     val stream = activeStream
+    val path = stream?.localPath
     when {
+      stream != null && Streams.isLocalStream(stream) && path != null -> {
+        pickedStream = true
+        selectedStream = stream
+        onPlay(
+          PlayTarget(
+            key = Progress.libraryKey(path),
+            title = playerTitle,
+            resume = false,
+            path = path,
+            sourceId = null,
+            poster = args.meta.poster ?: meta.poster,
+          ),
+        )
+      }
       sourcesFailed -> notice(loadErrorText, CatalogNotice.Failure)
       stream?.playable == true -> {
         pickedStream = true
@@ -555,8 +641,8 @@ fun CatalogDetailScreen(
         )
       }
       pickedStream -> notice(if (stream != null) torrentText else emptyText, if (stream != null) CatalogNotice.Failure else emptyKind)
-      sourcesAsking -> Unit
-      else -> notice(emptyText, emptyKind)
+      anyAsking -> Unit
+      else -> if (localStreams.isEmpty()) notice(emptyText, emptyKind)
     }
   }
 
@@ -588,6 +674,8 @@ fun CatalogDetailScreen(
     pickedStream = false
     chosenInPanel = false
     streams = emptyList()
+    localStreams = emptyList()
+    localLoading = false
     pendingSources = 0
     sourcesLoaded = false
     sourcesFailed = false
@@ -603,10 +691,10 @@ fun CatalogDetailScreen(
   }
 
   // Resolves the armed play once every addon answered, or at the deadline with something playable.
-  LaunchedEffect(pendingPlay, sourcesAsking, preferredStream, playTimeoutReached) {
+  LaunchedEffect(pendingPlay, anyAsking, preferredStream, playTimeoutReached) {
     if (!pendingPlay) return@LaunchedEffect
     val playable = preferredStream?.playable == true
-    if (sourcesAsking && !(playTimeoutReached && playable)) return@LaunchedEffect
+    if (anyAsking && !(playTimeoutReached && playable)) return@LaunchedEffect
     resolvePendingPlay()
   }
 
@@ -759,20 +847,34 @@ fun CatalogDetailScreen(
           )
         }
         FocusButton(
-          text = stringResource(R.string.tv_sources_count, visible.size.toString()),
+          text = stringResource(R.string.tv_sources_count, rows.size.toString()),
           onClick = {
             cancelPendingPlay()
             sourcesOpen = true
           },
-          leading = if (sourcesAsking) ({ TvSpinner() }) else null,
+          leading = if (anyAsking) ({ TvSpinner() }) else null,
           modifier = Modifier.focusRequester(sourcesOpenerFocus).testTag(TagCatalogSources),
         )
+        // To library is hidden for a local pick (it is already on disk); Show in library opens
+        // the file's folder instead.
+        if (localActive) {
+          FocusButton(
+            text = stringResource(R.string.library_show_in_library),
+            onClick = { activeStream?.localPath?.let { onShowInLibrary(it.substringBeforeLast('/', "")) } },
+            modifier = Modifier
+              .testTag(TagCatalogShowInLibrary)
+              .focusRequester(libraryOpenerFocus)
+              .onFocusChanged { toLibraryFocused = it.isFocused },
+          )
+        }
       }
       if (chosenInPanel) {
         activeStream?.let { stream ->
+          val local = Streams.isLocalStream(stream)
+          val label = if (local) stream.behaviorHints?.filename ?: streamLabel(stream) else streamLabel(stream)
           val caption = listOfNotNull(
-            stream.addonName?.takeIf { it.isNotBlank() },
-            streamLabel(stream).takeIf { it.isNotBlank() },
+            (if (local) stream.libraryName else stream.addonName)?.takeIf { it.isNotBlank() },
+            label.takeIf { it.isNotBlank() },
             formatSize(Streams.streamSize(stream)),
           ).joinToString(" · ")
           if (caption.isNotEmpty()) {
@@ -824,9 +926,9 @@ fun CatalogDetailScreen(
 
     if (sourcesOpen) {
       // Reopening lands on what the viewer picked; without a pick, on the default.
-      val focusIndex = visible.indexOfFirst { it === (chosenStream ?: preferredStream) }.let { if (it >= 0) it else 0 }
+      val focusIndex = rows.indexOfFirst { it === (chosenStream ?: preferredStream) }.let { if (it >= 0) it else 0 }
       SourcesPanel(
-        streams = visible,
+        streams = rows,
         focusIndex = focusIndex,
         onChoose = { chooseSource(it) },
         onClose = { closeSources() },
@@ -834,7 +936,7 @@ fun CatalogDetailScreen(
         chosen = chosenStream,
         anyChosen = chosenStream != null,
         titleLanguage = titleLanguage,
-        asking = sourcesAsking,
+        asking = anyAsking,
         failed = sourcesFailed,
         notices = notices,
         emptyText = emptyText,

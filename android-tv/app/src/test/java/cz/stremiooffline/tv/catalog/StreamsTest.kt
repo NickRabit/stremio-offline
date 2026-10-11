@@ -21,7 +21,9 @@ class StreamsTest {
     addonKey: String? = null,
     addonName: String? = null,
     behaviorHints: BehaviorHintsDto? = null,
-  ) = StreamDto(sourceId, kind, playable, name, title, description, addonKey, addonName, behaviorHints)
+    localPath: String? = null,
+    libraryName: String? = null,
+  ) = StreamDto(sourceId, kind, playable, name, title, description, addonKey, addonName, behaviorHints, localPath, libraryName)
 
   private fun names(list: List<StreamDto>): List<String> = list.map { it.name.orEmpty() }
 
@@ -355,6 +357,80 @@ class StreamsTest {
     assertEquals(
       Streams.Repick<String>(false),
       Streams.repickStream(playing = false, picked = false, pending = 0, visible = emptyList(), selected = null, preferred = null),
+    )
+  }
+
+  // The local copy cases from web/src/streams.test.ts.
+  private val localStream = stream(
+    sourceId = "lib1",
+    kind = "library",
+    playable = true,
+    name = "Heat.mkv",
+    libraryName = "Filmy",
+    behaviorHints = BehaviorHintsDto(filename = "Heat.mkv"),
+  )
+  private val addonRemote = stream(sourceId = "s1", name = "FullHD", addonName = "Luna", title = "Czech 2 GB")
+
+  @Test
+  fun `isLocalStream recognises a library stream`() {
+    assertEquals(true, Streams.isLocalStream(localStream))
+    assertEquals(false, Streams.isLocalStream(addonRemote))
+  }
+
+  @Test
+  fun `streamBadge badges a local copy as LOCAL ahead of playable`() {
+    assertEquals("LOCAL", Streams.streamBadge(localStream))
+    assertEquals("LOCAL", Streams.streamBadge(stream(kind = "library", playable = false)))
+  }
+
+  @Test
+  fun `canQueue never queues a copy that is already on disk`() {
+    assertEquals(false, Streams.canQueue(localStream, true))
+  }
+
+  @Test
+  fun `catalogSourceList puts local copies above the addon streams and picks the first`() {
+    val rows = Streams.catalogSourceList(listOf(localStream), listOf(addonRemote))
+    assertEquals(listOf(localStream, addonRemote), rows)
+    assertEquals(localStream, Streams.pickDefaultStream(rows))
+  }
+
+  @Test
+  fun `catalogSourceList keeps a local copy out of an addon filter that removed everything`() {
+    val visible = Streams.visibleCatalogStreams(listOf(addonRemote), filters(addon = "Nope"), "cs", emptyMap(), true)
+    assertEquals(emptyList<StreamDto>(), visible)
+    assertEquals(listOf(localStream), Streams.catalogSourceList(listOf(localStream), visible))
+  }
+
+  @Test
+  fun `repickStream moves an automatic addon pick to a local copy that lands once every addon finished`() {
+    assertEquals(
+      Streams.Repick(true, second),
+      Streams.repickStream(playing = false, picked = false, pending = 0, visible = listOf(first, second), selected = first, preferred = second, upgrade = true),
+    )
+  }
+
+  @Test
+  fun `repickStream never moves a source the viewer picked themselves for a local copy`() {
+    assertEquals(
+      Streams.Repick<String>(false),
+      Streams.repickStream(playing = false, picked = true, pending = 0, visible = listOf(first, second), selected = first, preferred = second, upgrade = true),
+    )
+  }
+
+  @Test
+  fun `repickStream never interrupts playback for a local copy that lands`() {
+    assertEquals(
+      Streams.Repick<String>(false),
+      Streams.repickStream(playing = true, picked = false, pending = 0, visible = listOf(first, second), selected = first, preferred = second, upgrade = true),
+    )
+  }
+
+  @Test
+  fun `repickStream leaves a non-upgrade arrival alone when nothing is pending`() {
+    assertEquals(
+      Streams.Repick<String>(false),
+      Streams.repickStream(playing = false, picked = false, pending = 0, visible = listOf(first, second), selected = first, preferred = second, upgrade = false),
     )
   }
 }

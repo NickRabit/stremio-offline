@@ -276,6 +276,11 @@ fun Shell(
       },
       onSources = { playerSources = it },
       playedSourceId = playedSourceId,
+      onShowInLibrary = { folder ->
+        catalogDetail = null
+        libraryPush = folder
+        shellState.pick(Section.Library)
+      },
       onBack = {
         catalogDetail = null
         returnToken++
@@ -286,11 +291,12 @@ fun Shell(
 
   val openPlayer = player
   if (openPlayer != null) {
+    val playerSourcesNow = playerSourcesFor(openPlayer, playerSources)
     PlayerScreen(
       api = api,
       target = openPlayer,
-      sources = playerSources.streams,
-      sourcesLoading = playerSources.loading,
+      sources = playerSourcesNow.streams,
+      sourcesLoading = playerSourcesNow.loading,
       onExit = { endedSourceId ->
         playedSourceId = endedSourceId
         player = null
@@ -299,6 +305,12 @@ fun Shell(
     )
   }
 }
+
+/** A library play switches sources through the Library view, not the catalogue, so the player
+ *  gets no catalogue sources while the target carries a [PlayTarget.path]. Kept here so the
+ *  expression can be tested without a whole shell. */
+internal fun playerSourcesFor(target: PlayTarget, reported: OfferedSources): OfferedSources =
+  if (target.path != null) OfferedSources() else reported
 
 
 /**

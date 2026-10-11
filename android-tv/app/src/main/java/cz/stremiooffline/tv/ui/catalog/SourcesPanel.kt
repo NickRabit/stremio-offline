@@ -26,6 +26,8 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -190,19 +192,23 @@ internal fun SourceRow(
   modifier: Modifier = Modifier,
 ) {
   val shape = RoundedCornerShape(8.dp)
-  val badge = Streams.streamBadge(stream)
-  val badgeColour = when (badge) {
-    "HTTP" -> Tokens.Green
-    "RD" -> Tokens.Accent
+  val local = Streams.isLocalStream(stream)
+  val badge = if (local) stringResource(R.string.sources_local_badge) else Streams.streamBadge(stream)
+  val badgeColour = when {
+    local -> Tokens.Accent2
+    badge == "HTTP" -> Tokens.Green
+    badge == "RD" -> Tokens.Accent
     else -> Tokens.Muted
   }
   val meta = buildList {
     formatSize(Streams.streamSize(stream))?.let(::add)
     addAll(Streams.streamLanguages(stream, titleLanguage).map { Languages.label(it) })
   }
+  val localHint = stringResource(R.string.sources_local_hint)
+  val rowModifier = if (local) modifier.semantics { contentDescription = localHint } else modifier
   Surface(
     onClick = onClick,
-    modifier = modifier.fillMaxWidth(),
+    modifier = rowModifier.fillMaxWidth(),
     shape = ClickableSurfaceDefaults.shape(shape = shape),
     colors = ClickableSurfaceDefaults.colors(
       containerColor = if (default || playing) Tokens.Panel2 else Color.Transparent,
@@ -229,8 +235,14 @@ internal fun SourceRow(
       ) {
         Text(badge, color = badgeColour, fontSize = 10.sp, fontWeight = FontWeight.Bold)
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-          Text(stream.addonName.orEmpty(), color = Tokens.Muted, fontSize = 9.5.sp, maxLines = 1)
-          Text(streamLabel(stream), fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+          Text(if (local) stream.libraryName.orEmpty() else stream.addonName.orEmpty(), color = Tokens.Muted, fontSize = 9.5.sp, maxLines = 1)
+          Text(
+            if (local) stream.behaviorHints?.filename ?: streamLabel(stream) else streamLabel(stream),
+            fontSize = 12.5.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+          )
           if (meta.isNotEmpty()) Text(meta.joinToString(" · "), color = Tokens.Muted, fontSize = 10.sp, maxLines = 1)
         }
         // One mark only: the playing row is the playing one, otherwise the picked row, otherwise

@@ -28,6 +28,8 @@ interface CatalogApi {
   suspend fun meta(type: String, id: String, language: String?): MetaDto
   suspend fun streamSources(type: String, id: String): List<StreamSourceDto>
   suspend fun streams(type: String, id: String, addon: String? = null): List<StreamDto>
+  /** The viewer's own library copies of one title or episode (`GET /api/local-streams`). */
+  suspend fun localStreams(type: String, id: String): List<StreamDto>
   suspend fun addons(): List<AddonDto>
   suspend fun settings(): SettingsResponse
   /** The content languages `GET /api/languages` offers, codes only. */

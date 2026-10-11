@@ -34,6 +34,8 @@ import cz.stremiooffline.tv.data.WatchlistToggleDto
 import cz.stremiooffline.tv.data.ApiError
 import cz.stremiooffline.tv.data.ApiFailure
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 
 /** A `TvApi` that answers from memory, so a screen can be tested without a server. */
@@ -75,6 +77,13 @@ open class FakeTvApi : TvApi {
   var streamsGates: MutableMap<String, CompletableDeferred<Unit>> = mutableMapOf()
   var streamFailures: MutableMap<String, ApiFailure> = mutableMapOf()
   var streamSourcesFailures: MutableMap<String, ApiFailure> = mutableMapOf()
+  var localStreamsResult: List<StreamDto> = emptyList()
+  /** Per-request answers keyed by `type:id`; takes precedence over [localStreamsResult]. */
+  var localStreamsValues: MutableMap<String, List<StreamDto>> = mutableMapOf()
+  /** Held open until the test releases it, so a local answer can arrive after all addons did. */
+  var localStreamsGate: CompletableDeferred<Unit>? = null
+  var localStreamsError: ApiError? = null
+  val localStreamsRequests: MutableList<String> = mutableListOf()
   var addonsValue: List<AddonDto> = emptyList()
   var addonsCalls = 0
   var settingsValue: SettingsResponse = SettingsResponse()
@@ -203,6 +212,15 @@ open class FakeTvApi : TvApi {
     (streamFailures[request] ?: streamFailures[key])?.let { throw ApiError(it) }
     streamsCompleted += request
     return addonStreams[request] ?: streamsValues[key] ?: emptyList()
+  }
+
+  override suspend fun localStreams(type: String, id: String): List<StreamDto> {
+    localStreamsRequests += "$type:$id"
+    // A real request suspends cancellably; holding the gate on the current context keeps a
+    // cancelled (stale) lookup from answering, which a plain `await` on UNDISPATCHED would not.
+    localStreamsGate?.let { withContext(currentCoroutineContext()) { it.await() } }
+    localStreamsError?.let { throw it }
+    return localStreamsValues["$type:$id"] ?: localStreamsResult
   }
 
   override suspend fun addons(): List<AddonDto> {

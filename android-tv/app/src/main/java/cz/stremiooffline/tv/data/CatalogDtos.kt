@@ -96,6 +96,9 @@ data class StreamDto(
   val addonKey: String? = null,
   val addonName: String? = null,
   val behaviorHints: BehaviorHintsDto? = null,
+  /** A copy already in one of the viewer's libraries: the wire path and the library it sits in. */
+  val localPath: String? = null,
+  val libraryName: String? = null,
 )
 
 /** One `GET /api/stream-sources/:type/:id` entry: a source addon the streams are asked from. */
