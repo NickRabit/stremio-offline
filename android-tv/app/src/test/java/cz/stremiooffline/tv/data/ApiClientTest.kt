@@ -3,6 +3,7 @@ package cz.stremiooffline.tv.data
 import java.io.ByteArrayInputStream
 import java.security.KeyStore
 import java.util.Base64
+import java.util.concurrent.TimeUnit
 import javax.net.ssl.KeyManagerFactory
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLSocketFactory
@@ -228,6 +229,20 @@ class ApiClientTest {
     val body = server.takeRequest().body.readUtf8()
     assertTrue(body, body.contains(""""subtitleIds":["one","two"]"""))
     assertEquals(mapOf("a" to "b"), descriptor.subtitleIds)
+  }
+
+  @Test
+  fun `a start waits past the default timeout for a slow conversion`() = runTest {
+    server.enqueue(MockResponse().setBody(DESCRIPTOR).setBodyDelay(12, TimeUnit.SECONDS))
+
+    assertEquals("p1", client(start()).startPlayback("src", ClientCapabilitiesDto(), 0.0).id)
+  }
+
+  @Test
+  fun `a track change waits past the default timeout for a slow conversion`() = runTest {
+    server.enqueue(MockResponse().setBody(DESCRIPTOR).setBodyDelay(12, TimeUnit.SECONDS))
+
+    assertEquals("p1", client(start()).trackPlayback("p1", TrackChange.Audio(1, 30.0)).id)
   }
 
   @Test

@@ -124,6 +124,12 @@ fun PlayerScreen(api: TvApi, target: PlayTarget, onExit: () -> Unit) {
   val currentState by rememberUpdatedState(state)
   val currentNext by rememberUpdatedState(nextEpisode)
 
+  /** Every way out of the player releases the session first, whether or not the caller unmounts us. */
+  val leave = {
+    controller.stop()
+    onExit()
+  }
+
   val tracksFocus = remember { FocusRequester() }
   val tracksEntry = remember { FocusRequester() }
   val diagnosticsFocus = remember { FocusRequester() }
@@ -403,13 +409,14 @@ fun PlayerScreen(api: TvApi, target: PlayTarget, onExit: () -> Unit) {
     duration = state.duration,
     playing = playing,
     title = target.title,
-    eyebrow = stringResource(pathLabel(diagPath(state.mode, state.copyAudio))),
+    // Before the server answers there is no path to name; a failed start must not claim direct play.
+    eyebrow = if (state.started) stringResource(pathLabel(diagPath(state.mode, state.copyAudio))) else "",
     playFocus = playFocus,
     seekKept = state.seekKept,
-    modal = tracksOpen || diagnosticsOpen || nextCard,
+    modal = tracksOpen || diagnosticsOpen || nextCard || state.error != null,
     onSeek = { controller.seekTo(it) },
     onTogglePause = { if (playing) exoPlayer.pause() else exoPlayer.play() },
-    onExit = onExit,
+    onExit = leave,
     onTracks = { tracksOpen = true },
     tracksText = tracksButtonText(state.audioTrack?.language),
     tracksLabel = stringResource(R.string.tv_tracks_title),
@@ -486,6 +493,13 @@ fun PlayerScreen(api: TvApi, target: PlayTarget, onExit: () -> Unit) {
           }
         }
       }
+
+      state.error?.let {
+        ErrorPanel(
+          onRetry = { if (state.started) controller.retry() else { addonFetched = false; attempt++ } },
+          onBack = leave,
+        )
+      }
     },
   ) {
     AndroidView(
@@ -503,13 +517,7 @@ fun PlayerScreen(api: TvApi, target: PlayTarget, onExit: () -> Unit) {
 
     if (cues.isNotEmpty()) SubtitleOverlay(cues = cues, position = position)
 
-    when {
-      state.error != null -> ErrorPanel(
-        onRetry = { if (state.started) controller.retry() else attempt++ },
-        onBack = onExit,
-      )
-      !state.started -> LoadingOverlay(title = target.title)
-    }
+    if (state.error == null && !state.started) LoadingOverlay(title = target.title)
   }
 }
 
