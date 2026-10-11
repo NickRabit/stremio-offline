@@ -576,6 +576,8 @@ export const cs: Catalog = {
   "sources.audioInFile": "zvuk v souboru",
   "sources.subtitlesInFile": "titulky v souboru",
   "sources.probing": "zjišťuji stopy…",
+  "sources.localBadge": "Lokální",
+  "sources.localHint": "Už je ve vaší knihovně — přehrává se z disku serveru",
 
   // První spuštění bez doplňků.
   "onboarding.title": "Přidejte první Stremio doplněk",

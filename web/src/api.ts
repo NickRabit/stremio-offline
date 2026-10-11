@@ -95,6 +95,7 @@ export const api = {
   libraryGallery: (path: string) => request<{ images: Array<{ url: string; kind: "poster" | "background" | "logo" | "still"; shape: "poster" | "wide" }> }>(`/api/library/gallery?${q({ path })}`),
   streamSources: (type: string, id: string) => request<Array<{ key: string; name: string }>>(`/api/stream-sources/${encodeURIComponent(type)}/${encodeURIComponent(id)}`),
   streams: (type: string, id: string, addon?: string) => request<Stream[]>(`/api/streams/${encodeURIComponent(type)}/${encodeURIComponent(id)}${addon ? `?addon=${encodeURIComponent(addon)}` : ""}`),
+  localStreams: (type: string, id: string) => request<Stream[]>(`/api/local-streams/${encodeURIComponent(type)}/${encodeURIComponent(id)}`),
   subtitles: (type: string, id: string) => request<Subtitle[]>(`/api/subtitles/${encodeURIComponent(type)}/${encodeURIComponent(id)}`),
   downloads: (timeoutMs?: number) => request<DownloadSnapshot>("/api/downloads", { timeoutMs }),
   download: (title: string, stream: Stream, media?: Record<string, unknown>, target?: SaveTarget) => request<Download>("/api/downloads", { method: "POST", body: JSON.stringify({ title, sourceId: stream.sourceId, media, ...(target ? { target } : {}) }) }),

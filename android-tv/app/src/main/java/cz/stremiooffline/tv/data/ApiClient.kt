@@ -329,6 +329,11 @@ class ApiClient(
       ?: emptyList()
   }
 
+  /** The library copies of one title or episode, asked beside the addons. */
+  override suspend fun localStreams(type: String, id: String): List<StreamDto> =
+    request(Request.Builder().url(address.resolve("/api/local-streams/" + encode(type) + "/" + encode(id))).get().build()).decode()
+      ?: emptyList()
+
   override suspend fun addons(): List<AddonDto> =
     request(Request.Builder().url(address.resolve("/api/addons")).get().build()).decode() ?: emptyList()
 

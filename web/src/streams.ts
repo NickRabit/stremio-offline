@@ -79,6 +79,13 @@ export function pickDefaultStream(streams: Stream[]): Stream | undefined {
   return streams.find((stream) => stream.playable) ?? streams[0];
 }
 
+/** A copy that already exists in one of the viewer's libraries. */
+export const isLocalStream = (stream: Stream): boolean => stream.kind === "library";
+
+/** The list a source panel shows: local copies above the addon streams, never sorted or
+ *  filtered with them. */
+export const catalogSourceList = (local: Stream[], addonStreams: Stream[]): Stream[] => [...local, ...addonStreams];
+
 /** A new episode should stay with the provider the viewer chose when it can, while still
  * choosing that provider's best language and size variant. */
 export function pickNextEpisodeStream(streams: Stream[], current: Stream | null, preferredLanguage: string, priority: Map<string, number>, titleLanguage?: string): Stream | undefined {
@@ -105,12 +112,14 @@ export function pickNextEpisodeStream(streams: Stream[], current: Stream | null,
 }
 
 export function streamBadge(stream: Stream): string {
+  if (isLocalStream(stream)) return "LOCAL";
   if (stream.playable) return "HTTP";
   if (stream.kind === "torrent") return "RD";
   return "EXT";
 }
 
 export function canQueue(stream: Stream, debridConfigured: boolean): boolean {
+  if (isLocalStream(stream)) return false;
   return stream.playable || (stream.kind === "torrent" && debridConfigured);
 }
 
@@ -119,12 +128,15 @@ export function canQueue(stream: Stream, debridConfigured: boolean): boolean {
  *  at the list and wrong once they are watching: the player would stop the session it is
  *  playing and start the film again on the new source. */
 export function repickStream<T>(state: {
-  playing: boolean; picked: boolean; pending: number;
+  playing: boolean; picked: boolean; pending: number; upgrade?: boolean;
   visible: readonly T[]; selected: T | null; preferred: T | null;
 }): { move: true; to: T | null } | { move: false } {
   if (!state.visible.length) return state.selected !== null && !state.playing ? { move: true, to: null } : { move: false };
   if (state.playing) return { move: false };
   if (!state.selected || !state.visible.includes(state.selected)) return { move: true, to: state.preferred };
+  // A local copy may land after every addon finished, when the pending counter is already
+  // zero: it replaces an automatic pick, but never the viewer's own or a playing source.
+  if (!state.picked && state.upgrade && state.preferred && state.selected !== state.preferred) return { move: true, to: state.preferred };
   // A better source may arrive while paging, but the viewer's own pick is never overridden.
   if (!state.picked && state.pending > 0 && state.preferred && state.selected !== state.preferred) return { move: true, to: state.preferred };
   return { move: false };

@@ -581,6 +581,8 @@ export const en = {
   "sources.audioInFile": "audio in the file",
   "sources.subtitlesInFile": "subtitles in the file",
   "sources.probing": "reading the tracks…",
+  "sources.localBadge": "Local",
+  "sources.localHint": "Already in your library — plays from the server's disk",
 
   // First run with no addons.
   "onboarding.title": "Add your first Stremio addon",

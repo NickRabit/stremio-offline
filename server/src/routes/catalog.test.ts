@@ -40,12 +40,13 @@ const addon = (key: string, catalogs: CatalogDefinition[], options: { role?: Add
  *  instance over fake collaborators that record what they were asked to do. */
 const mount = async (records: AddonRecord[] = [], meta: MetaItem | null = null, options: {
   libraries?: LibraryRecord[];
-  viewer?: UserRecord;
+  viewer?: UserRecord | null;
   addonOrder?: Record<string, string[]>;
   bound?: Record<string, LibraryMetaRecord>;
   access?: CatalogDeps["requireAccess"];
+  localCopies?: CatalogDeps["localCopies"];
 } = {}): Promise<Harness> => {
-  const viewer = options.viewer ?? admin;
+  const viewer = options.viewer === undefined ? admin : options.viewer;
   const lookups: Harness["lookups"] = [];
   const store = {
     addons: () => records,
@@ -58,7 +59,7 @@ const mount = async (records: AddonRecord[] = [], meta: MetaItem | null = null, 
     store,
     needsSetup: () => false,
     currentSession: () => undefined,
-    currentUser: () => viewer,
+    currentUser: () => viewer ?? undefined,
     isSecure: () => false,
     stopOwnedPlayback: async () => undefined,
     stopUserSessions: async () => undefined,
@@ -71,6 +72,7 @@ const mount = async (records: AddonRecord[] = [], meta: MetaItem | null = null, 
     ownerOf: () => ({ userId: "usr_00000001", sid: "session-1", expiresAt: Number.MAX_SAFE_INTEGER }),
     trackMedia: () => undefined,
     libraryKey: (value) => value,
+    localCopies: options.localCopies ?? (async () => []),
     metaStore: { qualifiedMeta: () => options.bound ?? ({}) } as unknown as LibraryMetaStore,
     externalIds: { ids: async () => ({}) } as unknown as ExternalIdStore,
     subtitleDelay: () => 0,
@@ -278,6 +280,93 @@ test("GET /api/streams/:type/:id returns no source from an addon the caller may 
     const all = await (await api(administrator.base, "/api/streams/movie/tt1")).json() as Array<{ addonKey: string }>;
     assert.deepEqual(all.map((item) => item.addonKey).sort(), ["open", "shut"], "an administrator still reaches both");
   });
+});
+
+const localCopy = (overrides: Partial<Awaited<ReturnType<CatalogDeps["localCopies"]>>[number]> = {}) => ({
+  key: "lib_00000001/Heat (1995)/Heat 1995 1080p.mkv",
+  libraryId: "lib_00000001",
+  libraryName: "Films",
+  path: "Heat (1995)/Heat 1995 1080p.mkv",
+  size: 1234,
+  ...overrides,
+});
+
+test("GET /api/local-streams keeps a long dotted file name instead of redacting it", async (t) => {
+  const harness = await mount([], null, {
+    localCopies: async () => [localCopy({ key: "lib_00000001/Heat.1995.1080p/Heat.1995.1080p.BluRay.mkv", path: "Heat.1995.1080p/Heat.1995.1080p.BluRay.mkv" })],
+  });
+  t.after(harness.close);
+  const body = await (await api(harness.base, "/api/local-streams/movie/tt0113277")).json() as Array<{ behaviorHints: { filename?: string } }>;
+  assert.equal(body[0]!.behaviorHints.filename, "Heat.1995.1080p.BluRay.mkv");
+});
+
+test("GET /api/local-streams mints one library entry per copy", async (t) => {
+  const asked: Array<{ type: string; id: string }> = [];
+  const harness = await mount([], null, {
+    localCopies: async (type, id) => { asked.push({ type, id }); return [localCopy()]; },
+  });
+  t.after(harness.close);
+
+  const response = await api(harness.base, "/api/local-streams/movie/tt0113277");
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get("cache-control") ?? "", /no-store/);
+  assert.deepEqual(asked, [{ type: "movie", id: "tt0113277" }]);
+  const body = await response.json() as Array<Record<string, unknown>>;
+  assert.equal(body.length, 1);
+  const entry = body[0]!;
+  assert.equal(entry.kind, "library");
+  assert.equal(entry.playable, true);
+  assert.equal(entry.localPath, "Heat (1995)/Heat 1995 1080p.mkv");
+  assert.equal(entry.libraryName, "Films");
+  assert.equal((entry.behaviorHints as { videoSize?: number; filename?: string }).videoSize, 1234);
+  assert.equal((entry.behaviorHints as { videoSize?: number; filename?: string }).filename, "Heat 1995 1080p.mkv");
+  assert.equal(typeof entry.sourceId, "string");
+  assert.ok(entry.sourceId);
+});
+
+test("the local listing re-checks every library it is about to name", async (t) => {
+  const asked: Array<string | undefined> = [];
+  const harness = await mount([], null, {
+    localCopies: async () => [
+      localCopy(),
+      localCopy({ key: "lib_00000002/Ronin (1998)/Ronin.mkv", libraryId: "lib_00000002", libraryName: "More" }),
+      localCopy({ key: "lib_00000001/Heat (1995)/Heat.1995.720p.mkv", size: 800 }),
+    ],
+    access: (_req, need) => { asked.push(need?.libraryId); },
+  });
+  t.after(harness.close);
+
+  const response = await api(harness.base, "/api/local-streams/movie/tt0113277");
+  assert.equal(response.status, 200);
+  assert.deepEqual(asked, ["lib_00000001", "lib_00000002"], "each library once, whatever the copies say");
+});
+
+test("a library the caller may no longer open refuses the listing", async (t) => {
+  const harness = await mount([], null, {
+    localCopies: async () => [localCopy(), localCopy({ libraryId: "lib_00000002", key: "lib_00000002/Heat (1995)/Heat.1995.1080p.mkv" })],
+    access: (_req, need) => {
+      if (need?.libraryId === "lib_00000002") throw Object.assign(new Error("gone"), { status: 404 });
+    },
+  });
+  t.after(harness.close);
+
+  const response = await api(harness.base, "/api/local-streams/movie/tt0113277");
+  assert.equal(response.status, 404, "the answer is refused, not handed over without the library");
+  assert.ok(!Array.isArray(await response.json()));
+});
+
+test("GET /api/local-streams answers an empty listing when nothing is bound", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const response = await api(harness.base, "/api/local-streams/movie/tt0113277");
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), []);
+});
+
+test("GET /api/local-streams needs a session", async (t) => {
+  const harness = await mount([], null, { viewer: null });
+  t.after(harness.close);
+  assert.equal((await api(harness.base, "/api/local-streams/movie/tt0113277")).status, 401);
 });
 
 test("a subtitle remembers which addon it came from", async (t) => {

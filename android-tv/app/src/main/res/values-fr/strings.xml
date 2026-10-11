@@ -62,6 +62,8 @@
   <string name="catalog_all_genres">Tout</string>
   <string name="sources_heading">Sources</string>
   <string name="sources_none">Aucun module complémentaire source actif n\'a de flux pour ce titre.</string>
+  <string name="sources_local_badge">Local</string>
+  <string name="sources_local_hint">Déjà dans votre bibliothèque — lu depuis le disque du serveur</string>
   <string name="save_to_library">Vers la bibliothèque</string>
   <string name="save_queued">En file d\'attente</string>
   <string name="player_play">Jouer</string>
@@ -166,4 +168,5 @@
   <string name="tv_off">Désactivé</string>
   <string name="tv_back_to_source">Revenir à la source précédente</string>
   <string name="library_mosaic_alt">Mosaïque d\'affiches de %1$s films</string>
+  <string name="library_show_in_library">Afficher dans la bibliothèque</string>
 </resources>

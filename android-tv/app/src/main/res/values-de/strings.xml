@@ -62,6 +62,8 @@
   <string name="catalog_all_genres">Alle</string>
   <string name="sources_heading">Quellen</string>
   <string name="sources_none">Kein aktives Quell-Add-on verfügt über einen Stream für diesen Titel.</string>
+  <string name="sources_local_badge">Lokal</string>
+  <string name="sources_local_hint">Bereits in deiner Bibliothek — wird von der Festplatte des Servers abgespielt</string>
   <string name="save_to_library">Zur Bibliothek</string>
   <string name="save_queued">In der Warteschlange</string>
   <string name="player_play">Spielen</string>
@@ -166,4 +168,5 @@
   <string name="tv_off">Aus</string>
   <string name="tv_back_to_source">Zurück zur vorherigen Quelle</string>
   <string name="library_mosaic_alt">Postermosaik aus %1$s Filmen</string>
+  <string name="library_show_in_library">In der Bibliothek anzeigen</string>
 </resources>

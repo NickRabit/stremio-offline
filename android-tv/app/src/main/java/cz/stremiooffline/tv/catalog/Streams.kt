@@ -106,6 +106,13 @@ object Streams {
   fun pickDefaultStream(streams: List<StreamDto>): StreamDto? =
     streams.firstOrNull { it.playable } ?: streams.firstOrNull()
 
+  /** A copy that already exists in one of the viewer's libraries. */
+  fun isLocalStream(stream: StreamDto): Boolean = stream.kind == "library"
+
+  /** The list a source panel shows: local copies above the addon streams, never sorted or
+   *  filtered with them. */
+  fun catalogSourceList(local: List<StreamDto>, addon: List<StreamDto>): List<StreamDto> = local + addon
+
   /** What a repick decided: [move] is false when the current pick stays. */
   data class Repick<T>(val move: Boolean, val to: T? = null)
 
@@ -119,23 +126,28 @@ object Streams {
     visible: List<T>,
     selected: T?,
     preferred: T?,
+    upgrade: Boolean = false,
   ): Repick<T> {
     if (visible.isEmpty()) return if (selected != null && !playing) Repick(true, null) else Repick(false)
     if (playing) return Repick(false)
     if (selected == null || !visible.contains(selected)) return Repick(true, preferred)
+    // A local copy may land after every addon finished, when the pending counter is already
+    // zero: it replaces an automatic pick, but never the viewer's own one or a playing source.
+    if (!picked && upgrade && preferred != null && selected != preferred) return Repick(true, preferred)
     // A better source may arrive while paging, but the viewer's own pick is never overridden.
     if (!picked && pending > 0 && preferred != null && selected != preferred) return Repick(true, preferred)
     return Repick(false)
   }
 
   fun streamBadge(stream: StreamDto): String = when {
+    isLocalStream(stream) -> "LOCAL"
     stream.playable -> "HTTP"
     stream.kind == "torrent" -> "RD"
     else -> "EXT"
   }
 
   fun canQueue(stream: StreamDto, debridConfigured: Boolean): Boolean =
-    stream.playable || (stream.kind == "torrent" && debridConfigured)
+    !isLocalStream(stream) && (stream.playable || (stream.kind == "torrent" && debridConfigured))
 
   /** An addon that cannot be played through the server is talking to the viewer, not offering. */
   fun isAddonNotice(stream: StreamDto): Boolean = stream.kind == "unsupported"

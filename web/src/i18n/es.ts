@@ -546,6 +546,8 @@ export const es: Catalog = {
   "sources.audioInFile": "audio en el archivo",
   "sources.subtitlesInFile": "subtítulos en el archivo",
   "sources.probing": "leyendo las pistas...",
+  "sources.localBadge": "Local",
+  "sources.localHint": "Ya está en tu biblioteca — se reproduce desde el disco del servidor",
   "onboarding.title": "Añade tu primer complemento Stremio",
   "onboarding.text": "La aplicación necesita al menos un manifiesto de catálogo. Los manifiestos de origen se pueden agregar por separado.",
   "onboarding.action": "Agregar un manifiesto",

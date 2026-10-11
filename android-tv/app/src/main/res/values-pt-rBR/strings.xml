@@ -62,6 +62,8 @@
   <string name="catalog_all_genres">Todos</string>
   <string name="sources_heading">Fontes</string>
   <string name="sources_none">Nenhum complemento de fonte ativo possui um stream para este título.</string>
+  <string name="sources_local_badge">Local</string>
+  <string name="sources_local_hint">Já está na sua biblioteca — é reproduzido do disco do servidor</string>
   <string name="save_to_library">Salvar na biblioteca</string>
   <string name="save_queued">Na fila</string>
   <string name="player_play">Jogar</string>
@@ -166,4 +168,5 @@
   <string name="tv_off">Desativado</string>
   <string name="tv_back_to_source">Voltar à fonte anterior</string>
   <string name="library_mosaic_alt">Mosaico de pôsteres de %1$s filmes</string>
+  <string name="library_show_in_library">Mostrar na biblioteca</string>
 </resources>

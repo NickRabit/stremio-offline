@@ -17,7 +17,13 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.pressKey
+import cz.stremiooffline.tv.data.StreamDto
+import cz.stremiooffline.tv.ui.catalog.OfferedSources
+import cz.stremiooffline.tv.ui.detail.PlayTarget
 import org.junit.Rule
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -48,6 +54,23 @@ class ShellTest {
         LaunchedEffect(Unit) { runCatching { requester.requestFocus() } }
       }
     }
+  }
+
+  // A library play switches sources the way the Library view does; the catalogue sources the
+  // detail keeps reporting underneath must not reach the player.
+  @Test
+  fun `a target with a path gets the player no sources while the catalogue still reports some`() {
+    val reported = OfferedSources(streams = listOf(StreamDto(sourceId = "s1", kind = "remote", playable = true)), loading = true)
+    val library = PlayTarget(key = "file:Heat.mkv", title = "Heat", resume = true, path = "Filmy/Heat.mkv")
+    val catalogue = PlayTarget(key = "movie:tt1", title = "Heat", resume = false, sourceId = "s1")
+
+    val forLibrary = playerSourcesFor(library, reported)
+    assertTrue(forLibrary.streams.isEmpty())
+    assertFalse(forLibrary.loading)
+
+    val forCatalogue = playerSourcesFor(catalogue, reported)
+    assertEquals(reported.streams, forCatalogue.streams)
+    assertTrue(forCatalogue.loading)
   }
 
   // Bug 3: LEFT right after the shell appears must land on the current section, not another one.

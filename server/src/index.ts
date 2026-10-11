@@ -62,6 +62,7 @@ import { envGrants, grantView, mergeGrants } from "./library-grants.js";
 import { migrateStateFile } from "./library-migrate.js";
 import { LibraryMetaStore } from "./library-meta-store.js";
 import { LibrarySeenStore } from "./library-seen.js";
+import { localCopies } from "./local-sources.js";
 import { artworks } from "./artwork-cache.js";
 import type { AddonRecord, MetaItem, StreamItem } from "./types.js";
 import { createLibraryActions } from "./library-actions.js";
@@ -962,7 +963,22 @@ const maintenance = createMaintenance({
     { name: "artwork-sweep", run: (signal) => { sweepDeps.signal = signal; return artworkSweep().then(() => undefined); } },
   ],
 });
-registerCatalogRoutes(app, { ...routeContext, tmdbProvider, cachedMeta, prefsOf, libraryTarget, ownerOf, trackMedia, libraryKey, metaStore, externalIds, subtitleDelay });
+registerCatalogRoutes(app, {
+  ...routeContext, tmdbProvider, cachedMeta, prefsOf, libraryTarget, ownerOf, trackMedia, libraryKey,
+  // The walk caches are declared below this call, so they are read inside the body rather
+  // than captured here: a direct reference would throw in the temporal dead zone at start-up.
+  localCopies: async (type, id, viewer) => {
+    const visible = visibleLibraries(store.libraries(), viewer);
+    const [files, units] = await Promise.all([libraryFiles({ stale: true }), libraryUnits({ stale: true })]);
+    const copies = localCopies({ type, id, files, units, records: metaStore.qualifiedMeta(), libraries: visible });
+    const names = new Map(visible.map((library) => [library.id, library.name]));
+    return copies.map((copy) => ({
+      key: copy.key, libraryId: copy.libraryId, libraryName: names.get(copy.libraryId) ?? "",
+      path: wirePath(copy.key), size: copy.size,
+    }));
+  },
+  metaStore, externalIds, subtitleDelay,
+});
 /** `stale` is for a caller that only renders what it gets: it may be answered with the last
  *  walk while the next one runs. Anything that acts on the tree asks for a current one. */
 const libraryFiles = (read?: WalkRead) => videoCache.get(read);

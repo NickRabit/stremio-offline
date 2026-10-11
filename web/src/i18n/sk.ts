@@ -546,6 +546,8 @@ export const sk: Catalog = {
   "sources.audioInFile": "zvuk v súbore",
   "sources.subtitlesInFile": "titulky v súbore",
   "sources.probing": "čítanie skladieb...",
+  "sources.localBadge": "Lokálne",
+  "sources.localHint": "Už je vo vašej knižnici — prehráva sa z disku servera",
   "onboarding.title": "Pridajte svoj prvý doplnok Stremio",
   "onboarding.text": "Aplikácia potrebuje aspoň jeden katalógový manifest. Zdrojové manifesty je možné pridať samostatne.",
   "onboarding.action": "Pridajte manifest",

@@ -546,6 +546,8 @@ export const ru: Catalog = {
   "sources.audioInFile": "звук в файле",
   "sources.subtitlesInFile": "субтитры в файле",
   "sources.probing": "читаю следы…",
+  "sources.localBadge": "Локальный",
+  "sources.localHint": "Уже в вашей библиотеке — воспроизводится с диска сервера",
   "onboarding.title": "Добавьте свой первый аддон Stremio",
   "onboarding.text": "Приложению необходим хотя бы один манифест каталога. Исходные манифесты можно добавить отдельно.",
   "onboarding.action": "Добавить манифест",

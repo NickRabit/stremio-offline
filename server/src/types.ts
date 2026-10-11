@@ -112,6 +112,10 @@ export interface PublicStream {
   playable: boolean;
   name?: string; title?: string; description?: string;
   addonKey?: string; addonName?: string;
+  /** Set on a library copy: the file's wire path, the way the Library view speaks it. */
+  localPath?: string;
+  /** The display name of the library the copy sits in. */
+  libraryName?: string;
   behaviorHints: { filename?: string; videoSize?: number; bingeGroup?: string };
   subtitles: PublicSubtitle[];
 }

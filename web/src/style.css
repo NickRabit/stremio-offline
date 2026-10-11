@@ -1301,6 +1301,7 @@ img.broken{visibility:hidden}
 .stream-list .stream-meta b{font-size:11px;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
 .stream-list .stream-meta small{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:3px;margin:0;overflow:visible}
 .stream-list .stream-meta .lang-badge{margin-left:0}
+.stream-list button>i.local{color:var(--accent2);display:flex;flex-direction:column;align-items:center;gap:2px}.stream-list button>i.local svg{width:14px;height:14px}
 
 /* Who is signed in. The name is written out rather than kept in a tooltip, which several
    accounts make useless and a touch screen does not show at all. A phone cannot hold the
