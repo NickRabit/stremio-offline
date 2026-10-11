@@ -69,7 +69,7 @@ class CatalogViewModel(private val api: CatalogApi) : ViewModel() {
     // Leaving My list for the catalogue it was showing must still reload it.
     if (index !in state.catalogs.indices || (index == state.catalogIndex && !state.onWatchlist)) return
     job?.cancel()
-    // A genre, season or episode belongs to one catalogue; a different one starts clean.
+    // A genre belongs to one catalogue; a different one starts on the web's "All".
     state = state.copy(
       catalogIndex = index,
       genre = "",

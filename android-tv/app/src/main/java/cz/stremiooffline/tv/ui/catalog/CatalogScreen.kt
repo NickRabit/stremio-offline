@@ -27,10 +27,12 @@ import androidx.tv.material3.Text
 import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.data.CatalogDto
 import cz.stremiooffline.tv.data.MetaDto
+import cz.stremiooffline.tv.data.SearchScope
 import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.ui.components.FocusButton
 import cz.stremiooffline.tv.ui.components.FocusButtonKind
 import cz.stremiooffline.tv.ui.components.ShimmerCards
+import cz.stremiooffline.tv.ui.components.leftToNeighbour
 import cz.stremiooffline.tv.ui.theme.Tokens
 
 const val TagCatalogSearchChip = "catalog_chip_search"
@@ -61,7 +63,8 @@ private enum class CatalogPanel { Catalogs, Genres }
 fun CatalogScreen(
   api: TvApi,
   onOpenDetail: (CatalogDetailArgs) -> Unit,
-  onOpenSearch: () -> Unit,
+  /** Opens Search with the catalogue the chip shows, or every addon for My list. */
+  onOpenSearch: (SearchScope) -> Unit,
   imageUrl: (String?) -> String?,
   modifier: Modifier = Modifier,
   restoreToken: Int = 0,
@@ -125,23 +128,33 @@ fun CatalogScreen(
         letterSpacing = (-0.8).sp,
       )
       Row(horizontalArrangement = Arrangement.spacedBy(9.dp), verticalAlignment = Alignment.CenterVertically) {
+        val current = state.current
+        val searchScope = if (state.onWatchlist || current == null) SearchScope()
+          else SearchScope(current.addonKey, current.type, current.id)
         FocusButton(
           text = stringResource(R.string.tv_nav_search),
-          onClick = onOpenSearch,
+          onClick = { onOpenSearch(searchScope) },
           modifier = Modifier.focusRequester(searchFocus).testTag(TagCatalogSearchChip),
         )
-        val catalog = state.current
         // The picker always leads with My list, so its chip is drawn even with no addon catalogues.
         FocusButton(
-          text = if (state.onWatchlist || catalog == null) "★ ${stringResource(R.string.catalog_my_list)}" else catalogText(catalog),
+          text = if (state.onWatchlist || current == null) "★ ${stringResource(R.string.catalog_my_list)}" else catalogText(current),
           onClick = { panelOpener = catalogFocus; panel = CatalogPanel.Catalogs },
-          modifier = Modifier.focusRequester(catalogFocus).testTag(TagCatalogChip),
+          // The shell's LEFT exit jumps straight to the rail, which would skip the search chip
+          // beside it; walk to the neighbour instead so the whole row stays reachable.
+          modifier = Modifier
+            .focusRequester(catalogFocus)
+            .testTag(TagCatalogChip)
+            .leftToNeighbour(searchFocus),
         )
         if (state.genres.isNotEmpty()) {
           FocusButton(
             text = state.genre.ifEmpty { stringResource(R.string.catalog_all_genres) },
             onClick = { panelOpener = genreFocus; panel = CatalogPanel.Genres },
-            modifier = Modifier.focusRequester(genreFocus).testTag(TagCatalogGenreChip),
+            modifier = Modifier
+              .focusRequester(genreFocus)
+              .testTag(TagCatalogGenreChip)
+              .leftToNeighbour(catalogFocus),
           )
         }
       }

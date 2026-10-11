@@ -26,6 +26,7 @@ import androidx.test.core.app.ApplicationProvider
 import cz.stremiooffline.tv.data.CatalogDto
 import cz.stremiooffline.tv.data.CatalogExtraDto
 import cz.stremiooffline.tv.data.MetaDto
+import cz.stremiooffline.tv.data.SearchScope
 import cz.stremiooffline.tv.data.WatchlistEntryDto
 import cz.stremiooffline.tv.ui.FakeTvApi
 import org.junit.After
@@ -68,16 +69,23 @@ class CatalogScreenTest {
   private fun genreExtra(genres: List<String>): List<CatalogExtraDto>? =
     if (genres.isEmpty()) null else listOf(CatalogExtraDto(name = "genre", options = genres))
 
+  private fun requiredGenreExtra(genres: List<String>): List<CatalogExtraDto> =
+    listOf(CatalogExtraDto(name = "genre", isRequired = true, options = genres))
+
   private fun meta(id: String, name: String = id, type: String = "movie") = MetaDto(id = id, type = type, name = name)
 
-  private fun mount(api: FakeTvApi, onOpenDetail: (CatalogDetailArgs) -> Unit = {}) {
+  private fun mount(
+    api: FakeTvApi,
+    onOpenDetail: (CatalogDetailArgs) -> Unit = {},
+    onOpenSearch: (SearchScope) -> Unit = {},
+  ) {
     scenario.onActivity { activity ->
       host = activity
       activity.setContent {
         CatalogScreen(
           api = api,
           onOpenDetail = onOpenDetail,
-          onOpenSearch = {},
+          onOpenSearch = onOpenSearch,
           imageUrl = { null },
         )
       }
@@ -395,5 +403,75 @@ class CatalogScreenTest {
 
     compose.onNodeWithText(context.getString(cz.stremiooffline.tv.R.string.tv_my_list_empty)).assertExists()
     compose.onNodeWithTag(TagCatalogChip).assertIsFocused()
+  }
+
+  @Test
+  fun `the Hledat chip hands the catalogue it shows to Search`() {
+    val api = FakeTvApi()
+    api.catalogsValue = listOf(
+      feature("Open Movies", addonKey = "a", id = "top"),
+      feature("Films", addonKey = "b", id = "films"),
+    )
+    api.catalogPages["a"] = listOf(listOf(meta("ttA", name = "Alpha")))
+    api.catalogPages["b"] = listOf(listOf(meta("ttB", name = "Beta")))
+    val scopes = mutableListOf<SearchScope>()
+    mount(api, onOpenSearch = { scopes += it })
+    compose.waitForIdle()
+
+    // Pick the second catalogue, so the handover is not just the default one.
+    press(Key.DirectionCenter)
+    press(Key.DirectionDown)
+    press(Key.DirectionCenter)
+    press(Key.DirectionLeft)
+    compose.onNodeWithTag(TagCatalogSearchChip).assertIsFocused()
+    press(Key.DirectionCenter)
+
+    assertEquals(listOf(SearchScope(addonKey = "b", catalogType = "movie", catalogId = "films")), scopes)
+  }
+
+  @Test
+  fun `My list hands over the whole catalogue set`() {
+    val api = FakeTvApi()
+    api.catalogsValue = listOf(feature("Open Movies", genres = listOf("Action")))
+    api.catalogPages["a"] = listOf(listOf(meta("ttA", name = "Alpha")))
+    api.watchlistValue = mutableListOf(watchlistEntry("tt9", "Nine"))
+    val scopes = mutableListOf<SearchScope>()
+    mount(api, onOpenSearch = { scopes += it })
+    compose.waitForIdle()
+
+    press(Key.DirectionCenter)
+    press(Key.DirectionUp)
+    press(Key.DirectionCenter)
+    press(Key.DirectionLeft)
+    press(Key.DirectionCenter)
+
+    assertEquals(listOf(SearchScope()), scopes)
+  }
+
+  @Test
+  fun `a required genre still opens on All, as the web does`() {
+    val api = FakeTvApi()
+    api.catalogsValue = listOf(
+      CatalogDto(
+        addonKey = "a",
+        addonName = "Open Movies",
+        type = "movie",
+        id = "top",
+        name = "Open Movies",
+        extra = requiredGenreExtra(listOf("Drama", "Comedy")),
+      ),
+    )
+    api.catalogPages["a"] = listOf(listOf(meta("ttA", name = "Alpha")))
+    mount(api)
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagCatalogGenreChip)
+      .assertTextContains(context.getString(cz.stremiooffline.tv.R.string.catalog_all_genres), substring = true)
+    assertEquals(null, api.catalogRequests.first().genre)
+
+    press(Key.DirectionRight)
+    compose.onNodeWithTag(TagCatalogGenreChip).assertIsFocused()
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(TagGenreAll).assertIsFocused()
   }
 }
