@@ -211,16 +211,18 @@ mixed into the list the filters, counts and notices are computed from.
     Start over builds the same target with `resume = false`. Omit catalogue
     `subtitleType` and `subtitleTarget` on local targets, so subtitles come
     from the library source just as they do for a Library play.
-- **To library** (and its target menu) is disabled: `canQueue` answers false
-  for `kind === "library"` on both clients. It already answers true for any
-  playable stream, which would queue a download of a file that is on disk.
+- **To library** (and its target menu) is not offered: `canQueue` answers false
+  for `kind === "library"` on both clients (it used to answer true for any
+  playable stream, which would queue a download of a file that is on disk), and
+  **Show in library** takes its place in the action row, so the row keeps its
+  three buttons.
 - **To device** on the web uses `downloadLibraryFile(localPath)`, as the player
   already does for a library file.
 - A **Show in library** action (`library.showInLibrary`, existing key) opens
   the file in the Library view: `revealInLibrary(localPath)` on the web; on TV,
   the existing library push the Home cards use (`libraryPush` in `Shell.kt`)
-  with the file's folder. On TV it is a button in the action row while a local
-  entry is the active one.
+  with the file's folder. On both clients it is the button that stands where
+  **To library** stands for an addon source.
 
 ### The player
 
@@ -255,13 +257,9 @@ New keys in `web/src/i18n/en.ts` and translated in all ten catalogues
 | --- | --- |
 | `sources.localBadge` | `Local` |
 | `sources.localHint` | `Already in your library — plays from the server's disk` |
-| `sources.localQueueDisabled` | `This file is already in the library.` |
 
 `sources.localHint` is the row's `title` attribute on the web and the TV
-row's description for accessibility. `sources.localQueueDisabled` is the
-title of the disabled **To library** button on the web. TV hides **To library**
-for a local entry (the action row already hides it for anything that cannot be
-queued) and shows **Show in library** in its place, so it does not need the key. The TV keys go into
+row's description for accessibility. The TV keys go into
 `android-tv/strings.keys` and the resources are regenerated with
 `node scripts/android-strings.mjs`. `library.showInLibrary` exists already; add
 it to `android-tv/strings.keys` if TV does not use it yet.

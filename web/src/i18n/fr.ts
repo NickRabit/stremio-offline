@@ -548,7 +548,6 @@ export const fr: Catalog = {
   "sources.probing": "lire les traces…",
   "sources.localBadge": "Local",
   "sources.localHint": "Déjà dans votre bibliothèque — lu depuis le disque du serveur",
-  "sources.localQueueDisabled": "Ce fichier est déjà dans la bibliothèque.",
   "onboarding.title": "Ajoutez votre premier module complémentaire Stremio",
   "onboarding.text": "L'application a besoin d'au moins un manifeste de catalogue. Les manifestes sources peuvent être ajoutés séparément.",
   "onboarding.action": "Ajouter un manifeste",

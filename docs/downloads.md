@@ -274,9 +274,9 @@ A title whose copy is already in a library also lists it as a **Local**
 (`Lokální`) row above the addon sources, marked with a drive icon and the
 library's name. Playing it plays the library file itself, so the progress, the
 Continue watching row, the favourite star and the previous/next file are the
-ones that file already has. **To library** is disabled for it — the file is on
-the server's disk already — **To device** saves it, and **Show in library**
-opens it in the Library view.
+ones that file already has. The file is on the server's disk already, so
+**Show in library** takes the place of **To library** and opens it in the
+Library view; **To device** saves it.
 
 The catalogue detail keeps its own resume line: a local play writes the file's
 progress under `file:<path>`, not the catalogue's key, so the detail does not

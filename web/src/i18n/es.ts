@@ -548,7 +548,6 @@ export const es: Catalog = {
   "sources.probing": "leyendo las pistas...",
   "sources.localBadge": "Local",
   "sources.localHint": "Ya está en tu biblioteca — se reproduce desde el disco del servidor",
-  "sources.localQueueDisabled": "Este archivo ya está en la biblioteca.",
   "onboarding.title": "Añade tu primer complemento Stremio",
   "onboarding.text": "La aplicación necesita al menos un manifiesto de catálogo. Los manifiestos de origen se pueden agregar por separado.",
   "onboarding.action": "Agregar un manifiesto",

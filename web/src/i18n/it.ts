@@ -548,7 +548,6 @@ export const it: Catalog = {
   "sources.probing": "leggendo le tracce...",
   "sources.localBadge": "Locale",
   "sources.localHint": "Già nella tua libreria — viene riprodotto dal disco del server",
-  "sources.localQueueDisabled": "Questo file è già nella libreria.",
   "onboarding.title": "Aggiungi il tuo primo componente aggiuntivo Stremio",
   "onboarding.text": "L'app necessita di almeno un manifesto del catalogo. I manifest di origine possono essere aggiunti separatamente.",
   "onboarding.action": "Aggiungi un manifesto",

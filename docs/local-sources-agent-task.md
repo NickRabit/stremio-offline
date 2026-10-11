@@ -96,10 +96,9 @@ local row, plus the progress limitation from the specification).
     name as the main line, `libraryName` as the secondary line,
     `title={t("sources.localHint")}`.
   - **Play** on a local row calls `playLocal`, which gains an optional anchor
-    parameter (see the specification); **To library** and its menu are
-    disabled with `title={t("sources.localQueueDisabled")}`; **To device**
-    calls `downloadLibraryFile(localPath)`; a **Show in library** button calls
-    `revealInLibrary(localPath)`.
+    parameter (see the specification); **Show in library** (`revealInLibrary(localPath)`)
+    takes the place of **To library** and its menu; **To device** calls
+    `downloadLibraryFile(localPath)`.
   - The footer's addon subtitle count shows 0 while a local row is selected.
 - Tests:
   - Vitest for `streams.ts` (badge, `canQueue`, ordering, default pick, a

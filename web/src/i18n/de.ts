@@ -548,7 +548,6 @@ export const de: Catalog = {
   "sources.probing": "die Spuren lesen…",
   "sources.localBadge": "Lokal",
   "sources.localHint": "Bereits in deiner Bibliothek — wird von der Festplatte des Servers abgespielt",
-  "sources.localQueueDisabled": "Diese Datei ist bereits in der Bibliothek.",
   "onboarding.title": "Fügen Sie Ihr erstes Stremio-Add-on hinzu",
   "onboarding.text": "Die App benötigt mindestens ein Katalogmanifest. Quellmanifeste können separat hinzugefügt werden.",
   "onboarding.action": "Fügen Sie ein Manifest hinzu",

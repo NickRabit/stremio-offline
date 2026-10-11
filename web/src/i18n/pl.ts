@@ -548,7 +548,6 @@ export const pl: Catalog = {
   "sources.probing": "czytając utwory…",
   "sources.localBadge": "Lokalny",
   "sources.localHint": "Już jest w twojej bibliotece — odtwarzany z dysku serwera",
-  "sources.localQueueDisabled": "Ten plik jest już w bibliotece.",
   "onboarding.title": "Dodaj swój pierwszy dodatek Stremio",
   "onboarding.text": "Aplikacja potrzebuje co najmniej jednego manifestu katalogu. Manifesty źródłowe można dodawać osobno.",
   "onboarding.action": "Dodaj manifest",

@@ -548,7 +548,6 @@ export const ptBR: Catalog = {
   "sources.probing": "lendo as faixas…",
   "sources.localBadge": "Local",
   "sources.localHint": "Já está na sua biblioteca — é reproduzido do disco do servidor",
-  "sources.localQueueDisabled": "Este arquivo já está na biblioteca.",
   "onboarding.title": "Adicione seu primeiro complemento Stremio",
   "onboarding.text": "O aplicativo precisa de pelo menos um manifesto de catálogo. Os manifestos de origem podem ser adicionados separadamente.",
   "onboarding.action": "Adicionar um manifesto",
