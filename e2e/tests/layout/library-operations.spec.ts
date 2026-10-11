@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { resetViews } from "../library-tools";
+import { pickAddonStream } from "../catalog-sources";
 
 test.beforeEach(async ({ request }) => { await resetViews(request); });
 
@@ -118,4 +119,43 @@ test("the filter for unconfirmed titles appears only while something is waiting"
   await expect(button).toHaveAttribute("aria-pressed", "true");
   await expect.poll(() => asked.some((url) => url.includes("unconfirmed=1"))).toBe(true);
   await expect(page.locator(".browse-item")).toHaveCount(1);
+});
+
+/** The dialog body is a grid of fixed height, and the library row scrolls on its own. A grid
+ *  lets such a row shrink below its content, so a long folder listing squeezed it to a sliver
+ *  or to nothing: the other libraries were cut in half or not there at all. */
+test("a long folder listing leaves the save dialog's library row whole", async ({ page }) => {
+  const libraries = ["Downloads", "Seriály", "Seriály - Eliška", "XXX", "Eliška - seriály (video)", "Seriály (video)",
+    "Archiv 2019-2024", "Záloha", "Pohádky", "Dokumenty"]
+    .map((name, index) => ({
+      id: `lib_${String(index).padStart(8, "0")}`, name, type: "mixed", enabled: true, order: index, addedAt: "2026-01-01T00:00:00.000Z",
+      writeArtwork: false, autoScanMetadata: false, unreachable: false, readOnly: false, writable: true,
+      defaultMovie: index === 0, defaultSeries: index === 0, titles: 1, files: 1, bytes: 1e9,
+    }));
+  const folders = Array.from({ length: 14 }, (_, index) => `Složka ${index + 1}`);
+  await page.route("**/api/libraries", (route) => route.fulfill({ json: libraries }));
+  await page.route("**/api/library/folders?*", (route) => {
+    const path = new URL(route.request().url()).searchParams.get("path") ?? "";
+    return route.fulfill({ json: { path, folders: folders.map((name) => ({ name, path: `${path}/${name}` })) } });
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Katalog", exact: true }).click();
+  const options = await page.getByRole("combobox", { name: "Procházet katalog" }).locator("option").allTextContents();
+  await page.getByRole("combobox", { name: "Procházet katalog" }).selectOption({ label: options.find((text) => /Filmy/.test(text))! });
+  await page.getByRole("button", { name: /Zkušební film/ }).click();
+  // The library journeys leave this film in the library, and its local copy leads the list.
+  await pickAddonStream(page);
+  await page.locator(".detail-panel").getByRole("button", { name: "Uložit jinam…" }).click();
+
+  const dialog = page.getByRole("dialog");
+  await dialog.getByText("Jinam", { exact: true }).click();
+  await expect(dialog.locator(".move-list button")).toHaveCount(folders.length);
+  const row = dialog.locator(".move-libraries");
+  await expect(row.locator("button")).toHaveCount(libraries.length);
+  // The row is capped and may scroll past the cap, but up to it it has to show what it holds.
+  const { shown, content, cap } = await row.evaluate((element) => ({
+    shown: element.clientHeight, content: element.scrollHeight, cap: parseFloat(getComputedStyle(element).maxHeight),
+  }));
+  expect(shown, "the library row was squeezed").toBeGreaterThanOrEqual(Math.min(content, cap) - 1);
+  expect(shown, "the library row outgrew its cap").toBeLessThanOrEqual(cap + 1);
 });
