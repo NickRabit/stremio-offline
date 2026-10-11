@@ -63,6 +63,7 @@ import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
 import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.data.TvApi
+import cz.stremiooffline.tv.data.SearchScope
 import cz.stremiooffline.tv.diagnostics.AppLog
 import cz.stremiooffline.tv.ui.components.BrandMark
 import cz.stremiooffline.tv.ui.catalog.CatalogDetailArgs
@@ -160,6 +161,10 @@ fun Shell(
   // Bumped each time Library comes back into view, so re-entering refreshes without losing focus.
   var libraryRefreshToken by remember { mutableIntStateOf(0) }
   var librarySeen by remember { mutableStateOf(false) }
+  // Where Search looks: kept across a rail switch, and preset when a catalogue's Hledat opens it.
+  var searchScope by remember { mutableStateOf(SearchScope()) }
+  /** True while Search was opened from the catalogue, so Back returns there instead of the rail. */
+  var searchFromCatalog by remember { mutableStateOf(false) }
   LaunchedEffect(current) {
     if (current == Section.Library) {
       if (librarySeen) libraryRefreshToken++
@@ -177,6 +182,8 @@ fun Shell(
     current = current,
     hint = hint,
     onSection = { section ->
+      // The rail's Search is not the catalogue's: Back there belongs to the rail again.
+      if (section == Section.Search) searchFromCatalog = false
       shellState.pick(section)
       true
     },
@@ -198,14 +205,26 @@ fun Shell(
         Section.Catalog -> CatalogScreen(
           api = api,
           onOpenDetail = { catalogDetail = it },
-          onOpenSearch = { shellState.pick(Section.Search) },
+          onOpenSearch = { scope ->
+            searchScope = scope
+            searchFromCatalog = true
+            shellState.pick(Section.Search)
+          },
           imageUrl = { path -> path?.let(api::url) },
           restoreToken = returnToken,
         )
         Section.Search -> SearchScreen(
           api = api,
+          scope = searchScope,
+          onScopeChange = { searchScope = it },
           onOpenDetail = { catalogDetail = it },
           imageUrl = { path -> path?.let(api::url) },
+          onBackToCatalog = if (searchFromCatalog) {
+            {
+              searchFromCatalog = false
+              shellState.pick(Section.Catalog)
+            }
+          } else null,
         )
         Section.Home -> HomeScreen(
           api = api,

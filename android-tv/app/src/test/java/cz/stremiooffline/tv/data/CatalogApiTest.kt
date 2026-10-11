@@ -38,9 +38,35 @@ class CatalogApiTest {
   @Test
   fun `search carries the query and the cursor`() = runTest {
     server.enqueue(MockResponse().setBody("""{"items":[],"cursor":"c2","hasMore":false,"sources":2}"""))
-    client(start()).search("matrix", "c1")
+    client(start()).search("matrix", "c1", SearchScope())
 
     assertEquals("/api/search?query=matrix&cursor=c1", server.takeRequest().path)
+  }
+
+  @Test
+  fun `search pointed at a catalogue carries the addon, the type and the id`() = runTest {
+    server.enqueue(MockResponse().setBody("""{"items":[],"cursor":"","hasMore":false,"sources":1}"""))
+    client(start()).search("matrix", null, SearchScope("key", "series", "top"))
+
+    assertEquals("/api/search?query=matrix&addon=key&catalogType=series&catalogId=top", server.takeRequest().path)
+  }
+
+  @Test
+  fun `search pointed at an addon carries only its key`() = runTest {
+    server.enqueue(MockResponse().setBody("""{"items":[],"cursor":"","hasMore":false,"sources":1}"""))
+    client(start()).search("matrix", null, SearchScope(addonKey = "key"))
+
+    assertEquals("/api/search?query=matrix&addon=key", server.takeRequest().path)
+  }
+
+  @Test
+  fun `searchable asks the listing of scopes`() = runTest {
+    server.enqueue(MockResponse().setBody("""[{"addonKey":"a","addonName":"A","globalSearch":false,"type":"series","id":"top","name":"Popular"}]"""))
+    val scopes = client(start()).searchable()
+
+    assertEquals("/api/searchable", server.takeRequest().path)
+    assertEquals("Popular", scopes.single().name)
+    assertEquals(false, scopes.single().globalSearch)
   }
 
   @Test

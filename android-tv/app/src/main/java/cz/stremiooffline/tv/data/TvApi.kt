@@ -24,7 +24,9 @@ interface CatalogApi {
   /** The libraries this account may see, each carrying whether it may queue a download there. */
   suspend fun libraries(): List<LibraryDto>
   suspend fun catalog(addonKey: String, type: String, id: String, skip: Int, genre: String?): List<MetaDto>
-  suspend fun search(query: String, cursor: String?): SearchResultDto
+  /** The catalogues search can be scoped to, as `GET /api/searchable` lists them. */
+  suspend fun searchable(): List<SearchableCatalogDto>
+  suspend fun search(query: String, cursor: String?, scope: SearchScope): SearchResultDto
   suspend fun meta(type: String, id: String, language: String?): MetaDto
   suspend fun streamSources(type: String, id: String): List<StreamSourceDto>
   suspend fun streams(type: String, id: String, addon: String? = null): List<StreamDto>

@@ -24,6 +24,8 @@ import cz.stremiooffline.tv.data.PlaybackDescriptorDto
 import cz.stremiooffline.tv.data.ProgressDto
 import cz.stremiooffline.tv.data.ProgressEntryDto
 import cz.stremiooffline.tv.data.SearchResultDto
+import cz.stremiooffline.tv.data.SearchScope
+import cz.stremiooffline.tv.data.SearchableCatalogDto
 import cz.stremiooffline.tv.data.SettingsResponse
 import cz.stremiooffline.tv.data.SidecarFetch
 import cz.stremiooffline.tv.data.SourceDto
@@ -121,8 +123,10 @@ open class FakeTvApi : TvApi {
   var downloadFailure: ApiFailure? = null
   var downloadFailureMessage: String? = null
   var searchPages: MutableMap<String, SearchResultDto> = mutableMapOf()
-  var searchRequests: MutableList<Pair<String, String?>> = mutableListOf()
+  var searchRequests: MutableList<SearchRequest> = mutableListOf()
   var failSearch = false
+  var searchableValue: List<SearchableCatalogDto> = emptyList()
+  var searchableCalls = 0
 
   var homeHandler: (List<String>) -> HomeResponseDto = { HomeResponseDto() }
   var homeRequests: MutableList<List<String>> = mutableListOf()
@@ -197,8 +201,13 @@ open class FakeTvApi : TvApi {
     return emptyList()
   }
 
-  override suspend fun search(query: String, cursor: String?): SearchResultDto {
-    searchRequests += query to cursor
+  override suspend fun searchable(): List<SearchableCatalogDto> {
+    searchableCalls += 1
+    return searchableValue
+  }
+
+  override suspend fun search(query: String, cursor: String?, scope: SearchScope): SearchResultDto {
+    searchRequests += SearchRequest(query, cursor, scope)
     if (failSearch) throw ApiError(ApiFailure.Generic)
     return searchPages[cursor ?: ""] ?: SearchResultDto()
   }
@@ -430,6 +439,8 @@ open class FakeTvApi : TvApi {
 }
 
 data class CatalogRequest(val addonKey: String, val type: String, val id: String, val skip: Int, val genre: String?)
+
+data class SearchRequest(val query: String, val cursor: String?, val scope: SearchScope)
 
 fun file(
   path: String,

@@ -3,8 +3,10 @@
 package cz.stremiooffline.tv.ui.catalog
 
 import androidx.compose.ui.input.key.Key
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -15,7 +17,9 @@ import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.pressKey
 import cz.stremiooffline.tv.data.MetaDto
+import cz.stremiooffline.tv.data.SearchScope
 import cz.stremiooffline.tv.data.SearchResultDto
+import cz.stremiooffline.tv.data.SearchableCatalogDto
 import cz.stremiooffline.tv.ui.FakeTvApi
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -33,13 +37,32 @@ class SearchScreenTest {
 
   private fun meta(id: String, name: String = id) = MetaDto(id = id, type = "movie", name = name)
 
-  private fun mount(api: FakeTvApi) {
+  private var scope = mutableStateOf(SearchScope())
+
+  private fun searchable(
+    addonKey: String,
+    addonName: String,
+    type: String = "movie",
+    id: String = "top",
+    name: String = id,
+    globalSearch: Boolean = true,
+  ) = SearchableCatalogDto(addonKey, addonName, globalSearch, type, id, name)
+
+  private fun mount(api: FakeTvApi, initial: SearchScope = SearchScope()) {
+    scope = mutableStateOf(initial)
     compose.setContent {
-      SearchScreen(api = api, onOpenDetail = {}, imageUrl = { null })
+      SearchScreen(
+        api = api,
+        scope = scope.value,
+        onScopeChange = { scope.value = it },
+        onOpenDetail = {},
+        imageUrl = { null },
+      )
     }
   }
 
   private fun type(query: String) {
+    focusBy(TagSearchField, Key.DirectionLeft)
     press(Key.DirectionCenter)
     compose.onNodeWithTag(TagSearchInput).performTextInput(query)
     compose.onNodeWithTag(TagSearchInput).performImeAction()
@@ -55,6 +78,13 @@ class SearchScreenTest {
     compose.onAllNodes(isFocused()).fetchSemanticsNodes()
       .any { it.config.getOrElse(SemanticsProperties.TestTag) { "" } == tag }
 
+  private fun focusBy(tag: String, key: Key, times: Int = 10) {
+    repeat(times) {
+      if (focused(tag)) return
+      press(key)
+    }
+    compose.onNodeWithTag(tag).assertIsFocused()
+  }
 
   @Test
   fun `the field takes focus without opening the IME`() {
@@ -74,7 +104,10 @@ class SearchScreenTest {
 
     type("matrix")
 
-    assertEquals(listOf("matrix" to null), api.searchRequests)
+    val request = api.searchRequests.single()
+    assertEquals("matrix", request.query)
+    assertEquals(null, request.cursor)
+    assertEquals(SearchScope(), request.scope)
   }
 
   @Test
@@ -104,6 +137,84 @@ class SearchScreenTest {
     press(Key.DirectionDown)
     compose.onNodeWithTag(posterTag(meta("tt7"))).assertIsFocused()
 
-    assertTrue(api.searchRequests.contains("it" to "c1"))
+    assertTrue(api.searchRequests.any { it.query == "it" && it.cursor == "c1" })
+  }
+
+  @Test
+  fun `the scope panel lists the addon groups from searchable`() {
+    val api = FakeTvApi()
+    api.searchableValue = listOf(
+      searchable("a", "Alpha", type = "movie", id = "popular", name = "Popular"),
+      searchable("a", "Alpha", type = "series", id = "shows", name = "Shows"),
+      searchable("b", "Beta", type = "movie", id = "films", name = "Films", globalSearch = false),
+    )
+    mount(api)
+    compose.waitForIdle()
+
+    press(Key.DirectionRight)
+    compose.onNodeWithTag(TagSearchScopeChip).assertIsFocused().assertTextContains("all addons", substring = true)
+    press(Key.DirectionCenter)
+
+    compose.onNodeWithTag(TagSearchScopePanel).assertExists()
+    compose.onNodeWithTag(TagSearchScopeAll).assertIsFocused()
+    compose.onNodeWithText("Alpha").assertExists()
+    compose.onNodeWithTag(scopeAddonTag("a")).assertTextContains("All catalogs", substring = true)
+    compose.onNodeWithTag(scopeCatalogTag("series", "shows")).assertTextContains("Shows (series)", substring = true)
+    compose.onNodeWithText("Beta ·").assertExists()
+    compose.onNodeWithText("Only searched when picked").assertExists()
+  }
+
+  @Test
+  fun `choosing a catalogue points the search scope at it`() {
+    val api = FakeTvApi()
+    api.searchableValue = listOf(
+      searchable("a", "Alpha", type = "movie", id = "popular", name = "Popular"),
+      searchable("a", "Alpha", type = "series", id = "shows", name = "Shows"),
+    )
+    api.searchPages[""] = SearchResultDto(items = listOf(meta("tt9", "Matrix")), cursor = "", hasMore = false)
+    mount(api)
+    compose.waitForIdle()
+
+    press(Key.DirectionRight)
+    press(Key.DirectionCenter)
+    focusBy(scopeCatalogTag("series", "shows"), Key.DirectionDown)
+    press(Key.DirectionCenter)
+
+    compose.onNodeWithTag(TagSearchScopeChip).assertIsFocused().assertTextContains("Alpha · Shows (series)", substring = true)
+    type("matrix")
+
+    val request = api.searchRequests.last()
+    assertEquals("matrix", request.query)
+    assertEquals(SearchScope("a", "series", "shows"), request.scope)
+  }
+
+  @Test
+  fun `changing the scope re-runs a submitted query`() {
+    val api = FakeTvApi()
+    api.searchableValue = listOf(searchable("a", "Alpha"))
+    api.searchPages[""] = SearchResultDto(items = listOf(meta("tt9", "Matrix")), cursor = "", hasMore = false)
+    mount(api)
+    compose.waitForIdle()
+
+    type("matrix")
+    assertEquals(SearchScope(), api.searchRequests.last().scope)
+
+    press(Key.DirectionRight)
+    press(Key.DirectionCenter)
+    focusBy(scopeAddonTag("a"), Key.DirectionDown)
+    press(Key.DirectionCenter)
+
+    assertEquals(SearchScope(addonKey = "a"), api.searchRequests.last().scope)
+    assertEquals("matrix", api.searchRequests.last().query)
+  }
+
+  @Test
+  fun `the chip shows the scope the shell preset`() {
+    val api = FakeTvApi()
+    api.searchableValue = listOf(searchable("a", "Alpha", type = "series", id = "shows", name = "Shows"))
+    mount(api, initial = SearchScope("a", "series", "shows"))
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagSearchScopeChip).assertTextContains("Alpha · Shows (series)", substring = true)
   }
 }

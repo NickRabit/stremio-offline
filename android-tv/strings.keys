@@ -59,6 +59,11 @@ tv.playWhenReady
 catalog.title
 catalog.genre
 catalog.allGenres
+catalog.allAddons
+catalog.allCatalogs
+catalog.onlyWhenPicked
+catalog.searchScope
+catalog.searchScopeIn
 sources.heading
 sources.none
 sources.localBadge

@@ -59,7 +59,7 @@ class CatalogViewModel(private val api: CatalogApi) : ViewModel() {
         state = state.copy(loading = false, error = true)
         return@launch
       }
-      state = state.copy(catalogs = catalogs, catalogIndex = 0, genre = "")
+      state = state.copy(catalogs = catalogs, catalogIndex = 0, genre = catalogs.firstOrNull()?.defaultGenre.orEmpty())
       refreshWatchlistCount()
       if (catalogs.isNotEmpty()) load(reset = true) else state = state.copy(loading = false, hasMore = false)
     }
@@ -72,7 +72,8 @@ class CatalogViewModel(private val api: CatalogApi) : ViewModel() {
     // A genre, season or episode belongs to one catalogue; a different one starts clean.
     state = state.copy(
       catalogIndex = index,
-      genre = "",
+      // A catalogue that requires a genre cannot be asked without one: its first option stands in.
+      genre = state.catalogs[index].defaultGenre,
       items = emptyList(),
       skip = 0,
       hasMore = true,

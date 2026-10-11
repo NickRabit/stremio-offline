@@ -295,6 +295,9 @@ class ApiClient(
   override suspend fun catalogs(): List<CatalogDto> =
     request(Request.Builder().url(address.resolve("/api/catalogs")).get().build()).decode() ?: emptyList()
 
+  override suspend fun searchable(): List<SearchableCatalogDto> =
+    request(Request.Builder().url(address.resolve("/api/searchable")).get().build()).decode() ?: emptyList()
+
   override suspend fun libraries(): List<LibraryDto> =
     request(Request.Builder().url(address.resolve("/api/libraries")).get().build()).decode() ?: emptyList()
 
@@ -309,10 +312,15 @@ class ApiClient(
     return request(Request.Builder().url(address.resolve("/api/catalog$query")).get().build()).decode() ?: emptyList()
   }
 
-  override suspend fun search(query: String, cursor: String?): SearchResultDto {
+  override suspend fun search(query: String, cursor: String?, scope: SearchScope): SearchResultDto {
     val suffix = buildString {
       append("?query=").append(encode(query))
       if (!cursor.isNullOrEmpty()) append("&cursor=").append(encode(cursor))
+      if (!scope.addonKey.isNullOrEmpty()) {
+        append("&addon=").append(encode(scope.addonKey))
+        if (!scope.catalogType.isNullOrEmpty()) append("&catalogType=").append(encode(scope.catalogType))
+        if (!scope.catalogId.isNullOrEmpty()) append("&catalogId=").append(encode(scope.catalogId))
+      }
     }
     return request(Request.Builder().url(address.resolve("/api/search$suffix")).get().build()).decode()
       ?: throw ApiError(ApiFailure.Generic)

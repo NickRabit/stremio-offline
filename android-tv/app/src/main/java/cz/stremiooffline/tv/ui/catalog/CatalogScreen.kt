@@ -17,6 +17,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -27,6 +32,7 @@ import androidx.tv.material3.Text
 import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.data.CatalogDto
 import cz.stremiooffline.tv.data.MetaDto
+import cz.stremiooffline.tv.data.SearchScope
 import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.ui.components.FocusButton
 import cz.stremiooffline.tv.ui.components.FocusButtonKind
@@ -61,7 +67,8 @@ private enum class CatalogPanel { Catalogs, Genres }
 fun CatalogScreen(
   api: TvApi,
   onOpenDetail: (CatalogDetailArgs) -> Unit,
-  onOpenSearch: () -> Unit,
+  /** Opens Search with the catalogue the chip shows, or every addon for My list. */
+  onOpenSearch: (SearchScope) -> Unit,
   imageUrl: (String?) -> String?,
   modifier: Modifier = Modifier,
   restoreToken: Int = 0,
@@ -125,17 +132,30 @@ fun CatalogScreen(
         letterSpacing = (-0.8).sp,
       )
       Row(horizontalArrangement = Arrangement.spacedBy(9.dp), verticalAlignment = Alignment.CenterVertically) {
+        val current = state.current
+        val searchScope = if (state.onWatchlist || current == null) SearchScope()
+          else SearchScope(current.addonKey, current.type, current.id)
         FocusButton(
           text = stringResource(R.string.tv_nav_search),
-          onClick = onOpenSearch,
+          onClick = { onOpenSearch(searchScope) },
           modifier = Modifier.focusRequester(searchFocus).testTag(TagCatalogSearchChip),
         )
-        val catalog = state.current
         // The picker always leads with My list, so its chip is drawn even with no addon catalogues.
         FocusButton(
-          text = if (state.onWatchlist || catalog == null) "★ ${stringResource(R.string.catalog_my_list)}" else catalogText(catalog),
+          text = if (state.onWatchlist || current == null) "★ ${stringResource(R.string.catalog_my_list)}" else catalogText(current),
           onClick = { panelOpener = catalogFocus; panel = CatalogPanel.Catalogs },
-          modifier = Modifier.focusRequester(catalogFocus).testTag(TagCatalogChip),
+          // The shell's LEFT exit jumps straight to the rail, which would skip the search chip
+          // beside it; walk to the neighbour instead so the whole row stays reachable.
+          modifier = Modifier
+            .focusRequester(catalogFocus)
+            .testTag(TagCatalogChip)
+            .onPreviewKeyEvent { event ->
+              if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionLeft) {
+                runCatching { searchFocus.requestFocus() }.isSuccess
+              } else {
+                false
+              }
+            },
         )
         if (state.genres.isNotEmpty()) {
           FocusButton(

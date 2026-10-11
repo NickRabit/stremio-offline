@@ -18,7 +18,12 @@ data class CatalogDto(
 ) {
   /** `addonName · (name ?: id)`, the chip label the web writes. */
   val label: String get() = "$addonName · ${name ?: id}"
-  val genreOptions: List<String> get() = extra?.firstOrNull { it.name == "genre" }?.options ?: emptyList()
+  val genreExtra: CatalogExtraDto? get() = extra?.firstOrNull { it.name == "genre" }
+  val genreOptions: List<String> get() = genreExtra?.options.orEmpty()
+  /** A catalogue that refuses to answer without a genre falls back to its own first option,
+   *  the way the web's Home shelves fill a required extra in. */
+  val defaultGenre: String
+    get() = if (genreExtra?.isRequired == true) genreOptions.firstOrNull().orEmpty() else ""
 }
 
 @Serializable
@@ -26,6 +31,18 @@ data class CatalogExtraDto(
   val name: String = "",
   val isRequired: Boolean = false,
   val options: List<String>? = null,
+)
+
+/** One row of `GET /api/searchable`: a catalogue the search can be pointed at, with whether
+ *  its addon is searched when nothing is picked. */
+@Serializable
+data class SearchableCatalogDto(
+  val addonKey: String = "",
+  val addonName: String = "",
+  val globalSearch: Boolean = true,
+  val type: String = "",
+  val id: String = "",
+  val name: String = "",
 )
 
 /** The catalogue item the grid draws and the detail opens. Fields the web reads loosely stay
