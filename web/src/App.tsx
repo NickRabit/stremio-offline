@@ -1256,7 +1256,21 @@ export function App() {
     } catch { /* Artwork refresh is optional. */ }
   };
   useEffect(() => { if (!ready) return; api.watchlist().then(setWatchlist).catch(() => undefined); void loadFollows(); }, [ready, view]);
-  useEffect(() => { if (!ready || view !== "favorites") return; void loadFavorites(favoritesFilter, 0); }, [ready, view, favoritesFilter]);
+  useEffect(() => {
+    if (!ready || view !== "favorites") return;
+    // The previous filter's cards and its own "load more" must not stay under the new one.
+    setFavorites([]); setFavoritesTotal(0);
+    void loadFavorites(favoritesFilter, 0);
+  }, [ready, view, favoritesFilter]);
+  // The player's star writes the library favourite, which the view does not read: closing the
+  // player re-reads the list, so a star removed there disappears from its card.
+  const playerWasOpen = useRef(false);
+  useEffect(() => {
+    if (playerOpen) { playerWasOpen.current = true; return; }
+    if (!playerWasOpen.current) return;
+    playerWasOpen.current = false;
+    if (view === "favorites") void loadFavorites(favoritesFilter, 0);
+  }, [playerOpen]);
   // The follow of the title on screen. A slow answer for a title that is already gone is
   // dropped; a failure leaves the chip in the not-followed state and never blocks the detail.
   const selectedIdRef = useRef<string | null>(null);
@@ -2046,16 +2060,18 @@ export function App() {
   // render a shell whose every request comes back refused with nothing to explain it.
   if (session?.mustChangePassword) return <PasswordChangeRequired session={session} onSession={setSession}/>;
 
-  // Following, Addons, Settings and Statistics are the destinations the compact chrome folds
-  // into More. `badge` on More is the Following indicator: new episodes plus attention.
+  // Favourites, Following, Addons, Settings and Statistics are the destinations the compact
+  // chrome folds into More, which is what keeps the bar at exactly five slots. `badge` on More
+  // is the Following indicator: new episodes plus attention.
   const followingBadge = (newEpisodes.length + follows.reduce((sum, follow) => sum + follow.downloads.attention, 0)) || undefined;
   const moreItems: MoreItem[] = [
+    { key: "favorites", icon: <Star/>, label: t("nav.favorites"), active: view === "favorites", onSelect: () => openView("favorites") },
     { key: "following", icon: <BellRing/>, label: t("nav.following"), badge: followingBadge, active: view === "following", onSelect: () => openView("following") },
     { key: "addons", icon: <PackagePlus/>, label: t("nav.addons"), badge: addons.length, active: view === "addons", onSelect: () => openView("addons") },
     { key: "settings", icon: <Settings/>, label: t("nav.settings"), active: view === "settings", onSelect: () => openView("settings") },
     ...(session!.role === "admin" ? [{ key: "stats", icon: <BarChart3/>, label: t("nav.stats"), active: view === "stats", onSelect: () => openView("stats") }] : []),
   ];
-  const moreActive = view === "following" || view === "addons" || view === "settings" || view === "stats";
+  const moreActive = view === "favorites" || view === "following" || view === "addons" || view === "settings" || view === "stats";
 
   return <div className={`app-shell catalog-tiles-${settings.catalogTileSize} library-tiles-${settings.libraryTileSize} catalog-shape-${settings.catalogTileShape} library-shape-${settings.libraryTileShape} home-shape-${settings.homeTileShape}${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
     <header className="topbar"><button className="brand brand-home" title={t("app.goToCleanCatalog")} aria-label={t("app.goToCleanCatalog")} onClick={() => resetCatalog()}><div className="brand-mark"><CirclePlay/></div><div><small>{t("auth.brandEyebrow")}</small><h1>Stremio <span>Offline</span></h1></div></button><div className="topbar-right">{restricted && <div className="restricted-chip">{t("restricted.chip")}</div>}<div className="online"><i/> {t("app.serverOnline")}</div>
@@ -2069,7 +2085,7 @@ export function App() {
       {!restricted && <Nav icon={<HomeIcon/>} label={t("nav.home")} active={view === "home"} onClick={() => openView("home")}/>}
       <Nav icon={<Library/>} label={t("nav.catalog")} active={view === "catalog"} onClick={() => openView("catalog")}/>
       <Nav icon={<HardDrive/>} label={t("nav.library")} active={view === "library"} onClick={() => openView("library")}/>
-      <Nav icon={<Star/>} label={t("nav.favorites")} active={view === "favorites"} onClick={() => openView("favorites")}/>
+      <Nav secondary icon={<Star/>} label={t("nav.favorites")} active={view === "favorites"} onClick={() => openView("favorites")}/>
       <Nav secondary icon={<BellRing/>} label={t("nav.following")} active={view === "following"} badge={followingBadge} onClick={() => openView("following")}/>
       <Nav icon={<Download/>} label={t("nav.downloads")} active={view === "downloads"} badge={downloads.filter((job) => job.status === "checking" || job.status === "downloading" || job.status === "queued" || job.status === "waiting").length} onClick={() => openView("downloads")}/>
       <Nav secondary icon={<PackagePlus/>} label={t("nav.addons")} active={view === "addons"} badge={addons.length} onClick={() => openView("addons")}/>

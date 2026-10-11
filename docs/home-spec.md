@@ -173,7 +173,8 @@ opens the same resolved, owner-scoped list, not the library root.
 | Catalogue entry or next episode | `openMeta` on the remembered episode | The episode list is the alternative picker. Numbering is never guessed: `nextEpisodeOf` needs a season and an episode. |
 | Ready to play | `playLocal` on the resolved file | |
 | Favourite file or folder | Opens the folder or plays the file | |
-| Starred catalogue title | `openMeta` on the title, so a downloaded copy opens from the catalogue detail | |
+| Starred catalogue title | `openMeta` on the title | The star with no identified local copy. |
+| Catalogue star with an identified local copy | Opens the local copy | The fold: the card is also the library entry, and it answers the library's filter too. |
 
 "Download next episode" on a Continue watching card reuses the series download
 dialog and bulk route. The owner-scoped duplicate check has landed
@@ -255,6 +256,28 @@ more than that is refused with 400 rather than persisted.
 The queue row needs `ownerUserId` and the `"permission"` pause reason on the
 client's `Download` type; the server already sends both.
 
+**Favourites (one list).** `GET /api/favorites?filter=all|library|catalog&skip&limit`
+answers one list for the signed-in account, and Home's `favorites` row is its first
+page. A library star and a catalogue star are stored in two maps and merged in one
+place ([`server/src/favorites.ts`](../server/src/favorites.ts)), so the web, Home
+and the TV read the same order:
+
+- the account's own library stars first, newest star first by the stored order;
+  a library star carries no time of its own and the storage stays as it is;
+- then the catalogue stars no local copy answers, newest `addedAt` first.
+
+A catalogue star whose type and IMDb id match an identified library item the
+account can see folds into that item: one card, which opens the local copy. The
+fold resolves the starred key through its title unit, so a starred episode folds
+with its show's folder and the card is that folder, the way the library groups an
+episode under its show. The folded card carries the catalogue id and answers
+`filter=catalog` as well as `filter=library`; a library star no catalogue star
+names is not a catalogue entry. Several identified copies of one title answer
+with the shortest path, then the first by name. `total` counts only entries that
+can be returned, so a key the disk no longer answers cannot make a page repeat or
+stall. Nothing here touches the stored maps: no migration, and the watchlist is
+still not filtered by which add-ons the account may use.
+
 ## Client
 
 - `type View` gains `"home"`. It scrolls on the document like Downloads and
@@ -293,16 +316,17 @@ client's `Download` type; the server already sends both.
 
 ### Navigation
 
-Destinations for an administrator are now Home, Catalogue, Library, Following,
-Downloads, Addons, Settings and Statistics: eight. Today seven already do not
+Destinations for an administrator are now Home, Catalogue, Library, Favourites,
+Following, Downloads, Addons, Settings and Statistics: nine. Today seven already do not
 fit the compact chrome: the phone bar gives each a 68 px minimum, and the
 landscape rail squeezes seven icons into about 229 px, roughly 32 px each.
 
 - **Wide** (the labelled sidebar on desktop and tablet landscape): every allowed
-  destination, with the Following and Downloads badges. In its collapsed state it
-  stays labelled by icon and tooltip as today.
+  destination, Favourites between Library and Downloads, with the Following and
+  Downloads badges. In its collapsed state it stays labelled by icon and tooltip as
+  today.
 - **Tablet held upright** (701-980 px portrait): the existing collapsed sidebar
-  rail, 76 px wide, with every destination and the label under the icon. Eight
+  rail, 76 px wide, with every destination and the label under the icon. Nine
   items at about 49 px fit the 1180 px height, so nothing needs a More menu.
 - **Compact** (up to 700 px, and a phone on its side, the short-landscape rule):
   exactly five slots, **Home, Catalogue, Library, Downloads, More**. Icon and
@@ -313,8 +337,9 @@ landscape rail squeezes seven icons into about 229 px, roughly 32 px each.
   ("Herunterladen", "Stahování") does not have to fit. The bar does not scroll
   sideways, and its outer height stays the existing `68px` plus the safe area.
   Catalogue and Library already subtract that constant from `100dvh`; labels
-  must not make the bar taller.
-- **More** holds Following, Addons, Settings and, for an administrator,
+  must not make the bar taller. Favourites is not one of the five: it folds into
+  More, where the phone can still reach it.
+- **More** holds Favourites, Following, Addons, Settings and, for an administrator,
   Statistics. It is marked active while one of them is open and says which. It
   carries the new-episodes and attention indicator that Following shows, built
   only from the account's visible data. On a phone it opens a sheet; on a rail it
@@ -573,10 +598,8 @@ the personal `homeLayout` setting below.
 
 ## Open questions for the owner
 
-- Favourites holds both kinds now: a starred catalogue title appears beside the
-  library stars and folds into the library entry when the title is downloaded
-  and identified. The watchlist still stores no addon key, so a catalogue star
-  is not filtered by which addons the account may use.
+- A catalogue star is not filtered by which addons the account may use: the
+  watchlist stores no addon key. Left as it is until the storage changes.
 - Should Home ever be the landing view? Recommended: no, until slice 6 and then
   only as an opt-in.
 - Cancel on a queue card? Recommended: no, cancel stays in Downloads.

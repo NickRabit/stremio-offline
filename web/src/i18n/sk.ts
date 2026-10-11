@@ -198,7 +198,7 @@ export const sk: Catalog = {
   "nav.stats": "Štatistiky",
   "nav.following": "Sledované",
 
-  // Jedna sekcia Obľúbené: hviezdičky z knižnice aj z katalógu.
+  // One Favourites section: library stars and catalogue stars together.
   "nav.favorites": "Obľúbené",
   "favorites.title": "Obľúbené",
   "favorites.filterAll": "Všetko",

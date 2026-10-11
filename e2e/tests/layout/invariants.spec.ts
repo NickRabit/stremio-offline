@@ -6,7 +6,7 @@ import { goToView, menuItem } from "../nav";
 // screen sideways, controls too small to hit, the wrong navigation for the size --
 // and unlike screenshots they never need refreshing.
 
-const VIEWS = ["Domů", "Katalog", "Knihovna", "Stahování", "Doplňky", "Nastavení", "Statistiky"] as const;
+const VIEWS = ["Domů", "Katalog", "Knihovna", "Oblíbené", "Stahování", "Doplňky", "Nastavení", "Statistiky"] as const;
 // What the compact navigation keeps on screen; the rest sits behind More.
 const COMPACT = ["Domů", "Katalog", "Knihovna", "Stahování", "Více"] as const;
 
@@ -111,7 +111,7 @@ test.describe("layout invariants", () => {
     await expect(page.locator("aside.sidebar nav button:visible")).toHaveCount(COMPACT.length);
     await more.click();
     await expect(more).toHaveAttribute("aria-expanded", "true");
-    for (const name of ["Sledované", "Doplňky", "Nastavení", "Statistiky", "Odhlásit"]) {
+    for (const name of ["Oblíbené", "Sledované", "Doplňky", "Nastavení", "Statistiky", "Odhlásit"]) {
       await expect(menuItem(page, name), `${name} is in More`).toBeVisible();
     }
     const menu = (await page.getByRole("menu").boundingBox())!;

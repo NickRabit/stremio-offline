@@ -211,7 +211,7 @@ export const cs: Catalog = {
   "nav.stats": "Statistiky",
   "nav.following": "Sledované",
 
-  // Jedna sekce Oblíbené: hvězdičky z knihovny i z katalogu.
+  // One Favourites section: library stars and catalogue stars together.
   "nav.favorites": "Oblíbené",
   "favorites.title": "Oblíbené",
   "favorites.filterAll": "Vše",

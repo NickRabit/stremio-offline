@@ -8,10 +8,10 @@ import {
 } from "../favorites.js";
 import { HOME_FORGET_LIMIT } from "../home.js";
 import { images } from "../images.js";
-import { knownTitleEntry } from "../library-match.js";
+import { knownEntryForUnit, knownTitleEntry, unitFor, type LibraryMetaRecord, type TitleUnit } from "../library-match.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
-import { sortFiles, type BrowseItem, type BrowseMeta, type LibraryFile } from "../library.js";
-import { libraryFor, libraryPath, libraryVisible, parseLibraryPath, showsInContinueWatching, showsInFavorites, showsOnHome, type LibraryRecord, type Viewer } from "../libraries.js";
+import { isVideo, sortFiles, type BrowseItem, type BrowseMeta, type LibraryFile } from "../library.js";
+import { libraryFor, libraryPath, libraryVisible, parseLibraryPath, posixBase, showsInContinueWatching, showsInFavorites, showsOnHome, type LibraryRecord, type Viewer } from "../libraries.js";
 import { log } from "../logger.js";
 import { markersOwingRow, nextEpisodeOf } from "../next-episode.js";
 import { groupSeriesProgress, seriesOf, type ProgressSeries } from "../progress-series.js";
@@ -32,6 +32,9 @@ export interface PersonalDeps extends RouteContext {
   describeLibraryPath(key: string, read?: { stale?: boolean }): Promise<BrowseItem | undefined>;
   libraryKey(value: string): string;
   libraryOfKey(key: string): { library: LibraryRecord; relative: string };
+  /** The title units the library walk found, the same grouping the library listing resolves
+   *  a file's identity through. */
+  libraryUnits(): Promise<TitleUnit[]>;
   locateFileArtwork(key: string, shape?: ArtShape): Promise<string | undefined>;
   locateFolderArtworkPair(key: string): Promise<{ poster: string | undefined; wide: string | undefined }>;
   markersOf(data: UserData): Record<string, WatchedMarker>;
@@ -126,7 +129,7 @@ async function withDeadline<T>(work: Promise<T>, ms?: number): Promise<T | typeo
 }
 
 export function registerPersonalRoutes(app: express.Application, deps: PersonalDeps): PersonalApi {
-  const { store, currentUser, attachBrowseMeta, cachedMeta, dataOf, describeLibraryPath, libraryKey, libraryOfKey, locateFileArtwork, locateFolderArtworkPair, markersOf, metaStore, posterOf, prefsOf, progressOf, scheduleFileArtwork, scheduleFolderArtwork, setLibraryFavorite, thumbUrl, updateData, watchlistOf, wirePath } = deps;
+  const { store, currentUser, attachBrowseMeta, cachedMeta, dataOf, describeLibraryPath, libraryKey, libraryOfKey, libraryUnits, locateFileArtwork, locateFolderArtworkPair, markersOf, metaStore, posterOf, prefsOf, progressOf, scheduleFileArtwork, scheduleFolderArtwork, setLibraryFavorite, thumbUrl, updateData, watchlistOf, wirePath } = deps;
 
   /** Whether the caller may see the library a stored path names. A path that names no
    *  library -- an unqualified row from before, or one whose library is gone -- is kept:
@@ -432,52 +435,82 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     return library.enabled && !library.unreachable;
   };
 
-  /** The merged Favourites list, ordered and permission-filtered but not yet described:
-   *  the paging slice happens before any disk read, so a long list is not walked whole. */
-  const favoritesEntries = (req: express.Request, options: FavoritesOptions): FavoriteEntry[] => {
+  /** The identified title a starred key belongs to, resolved the way the library listing
+   *  resolves it: through the key's unit, so a starred episode answers with its show's folder
+   *  and folds with the show's catalogue star. Falls back to the key itself when nothing
+   *  groups it. */
+  const favoriteIdentity = (
+    key: string,
+    records: Record<string, LibraryMetaRecord>,
+    units: TitleUnit[],
+  ): { key: string; record: LibraryMetaRecord } | undefined =>
+    knownEntryForUnit(unitFor(key, units) ?? key, records, isVideo(posixBase(key)) ? key : undefined);
+
+  /** The merged Favourites list, ordered and permission-filtered but not yet described.
+   *  Order: the account's own library stars first, newest star first by the stored order
+   *  (a library star carries no time of its own and the storage stays as it is), then the
+   *  catalogue stars with no local copy, newest `addedAt` first. */
+  const favoritesEntries = async (req: express.Request, options: FavoritesOptions): Promise<FavoriteEntry[]> => {
     const data = dataOf(req);
     const viewer = viewerOf(currentUser(req));
     const libraries = store.libraries();
     const records = metaStore.qualifiedMeta();
+    const units = await libraryUnits();
     const onHome = (key: string) => !options.onHome || (showsOnHome(key, libraries) && onHomePath(key, libraries));
+    const visible = (key: string) =>
+      pathVisible(key, viewer, libraries) && showsInFavorites(key, libraries) && onHome(key);
 
-    // The library star whose binding carries a catalogue id, so a title starred in both
-    // places appears once. Only what the account may see takes part in the fold.
+    // Every identified copy the account may see, so a catalogue star can fold onto the local
+    // one. Two copies of a title answer with the shortest path, then the first by name, so
+    // the same copy wins on every request.
     const boundByImdb = new Map<string, string>();
     for (const [key, record] of Object.entries(records)) {
-      if (!record.id || record.unmatched) continue;
-      if (!pathVisible(key, viewer, libraries) || !showsInFavorites(key, libraries) || !onHome(key)) continue;
-      boundByImdb.set(`${record.type}:${record.id}`, key);
+      if (!record.id || record.unmatched || !visible(key)) continue;
+      const identity = `${record.type}:${record.id}`;
+      const previous = boundByImdb.get(identity);
+      if (previous === undefined || key.length < previous.length || (key.length === previous.length && key < previous)) {
+        boundByImdb.set(identity, key);
+      }
     }
 
     // The stored array is oldest first, so reversing it is the library's newest first.
-    const starred = data.favorites
-      .filter((key) => pathVisible(key, viewer, libraries) && showsInFavorites(key, libraries) && onHome(key))
-      .slice().reverse();
-    const starredKeys = new Set(starred);
+    const starred = data.favorites.filter(visible).reverse();
 
-    const claimed = new Map<string, string>();
-    const library: FavoriteEntryLibrary[] = starred.map((key) => {
-      const record = records[key];
-      if (record?.id) claimed.set(`${record.type}:${record.id}`, key);
-      return { kind: "library", key, ...(record?.id ? { catalogId: record.id } : {}) };
-    });
+    const library: FavoriteEntryLibrary[] = [];
+    /** The card already drawn for a path, and the card that stands for one identity. */
+    const drawn = new Map<string, FavoriteEntryLibrary>();
+    const owner = new Map<string, FavoriteEntryLibrary>();
+    for (const key of starred) {
+      const known = favoriteIdentity(key, records, units);
+      const target = known?.key ?? key;
+      // A newer star of the same title already drew this card.
+      if (drawn.has(target)) continue;
+      const entry: FavoriteEntryLibrary = { kind: "library", key: target };
+      drawn.set(target, entry);
+      if (known?.record.id) owner.set(`${known.record.type}:${known.record.id}`, entry);
+      library.push(entry);
+    }
 
     const catalog: FavoriteEntryCatalog[] = [];
     const watchlist = Object.entries(watchlistOf(data))
       .map(([key, value]) => ({ key, ...value }))
       .filter((entry) => Boolean(entry.id))
       .sort((a, b) => b.addedAt.localeCompare(a.addedAt) || a.key.localeCompare(b.key));
-    const seen = new Set<string>();
     for (const entry of watchlist) {
-      if (seen.has(entry.key)) continue;
-      seen.add(entry.key);
       const identity = `${entry.type}:${entry.id}`;
-      // Starred in the library too: the library entry already carries this catalogue id.
-      if (claimed.has(identity)) continue;
+      // Starred in the library too: the library card becomes this catalogue star too.
+      const starredCopy = owner.get(identity);
+      if (starredCopy) { starredCopy.catalogId = entry.id; continue; }
       // Downloaded and identified: the account opens the local copy rather than the add-on.
-      const bound = boundByImdb.get(identity) ?? boundByImdb.get(`movie:${entry.id}`) ?? boundByImdb.get(`series:${entry.id}`);
-      if (bound && !starredKeys.has(bound)) { library.push({ kind: "library", key: bound, catalogId: entry.id }); continue; }
+      // The binding is looked up by the entry's own kind, never across kinds.
+      const bound = boundByImdb.get(identity);
+      if (bound !== undefined && !drawn.has(bound)) {
+        const card: FavoriteEntryLibrary = { kind: "library", key: bound, catalogId: entry.id };
+        drawn.set(bound, card);
+        owner.set(identity, card);
+        library.push(card);
+        continue;
+      }
       catalog.push({
         kind: "catalog", type: entry.type, id: entry.id, name: entry.name,
         ...(entry.poster ? { poster: entry.poster } : {}),
@@ -490,7 +523,7 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
   const describeFavorite = async (req: express.Request, entry: FavoriteEntry): Promise<FavoriteItem | undefined> => {
     if (entry.kind === "catalog") {
       const poster = entry.poster ? images.proxied(entry.poster) : undefined;
-      return { kind: "catalog", type: entry.type, id: entry.id, name: entry.name, ...(poster ? { poster } : {}), ...(entry.addonKey ? { addonKey: entry.addonKey } : {}) } satisfies FavoriteCatalogItem;
+      return { kind: "catalog", type: entry.type, id: entry.id, name: entry.name, ...(poster ? { poster } : {}) } satisfies FavoriteCatalogItem;
     }
     const item = await describeLibraryPath(entry.key, { stale: true });
     if (!item) return undefined;
@@ -519,13 +552,20 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
   };
 
   const favoritesPage = async (req: express.Request, options: FavoritesOptions = {}): Promise<FavoritesPage> => {
-    const entries = favoritesEntries(req, options);
+    const entries = await favoritesEntries(req, options);
     const skip = Math.max(0, options.skip ?? 0);
     const limit = Math.max(1, Math.min(120, options.limit ?? 60));
-    const described = await Promise.all(entries.slice(skip, skip + limit).map((entry) => describeFavorite(req, entry)));
-    const items = described.filter((item): item is FavoriteItem => item !== undefined);
-    return { items, total: entries.length, pending: items.some((item) => item.kind === "library" && (!item.poster || !item.wide)) };
+    // Every entry is described before the slice, so `total` counts only what can be returned:
+    // a key the disk no longer answers cannot make a page repeat or stall the "load more".
+    const described = (await Promise.all(entries.map((entry) => describeFavorite(req, entry))))
+      .filter((item): item is FavoriteItem => item !== undefined);
+    const items = described.slice(skip, skip + limit);
+    return { items, total: described.length, pending: items.some((item) => item.kind === "library" && (!item.poster || !item.wide)) };
   };
+  /** One Favourites list for every signed-in account: its own library stars first (newest
+   *  star first by the stored order, because a library star carries no time) and then the
+   *  catalogue stars with no local copy (newest `addedAt` first). A catalogue star whose
+   *  identified local copy exists folds into that copy, which then answers both filters. */
   app.get("/api/favorites", asyncRoute(async (req, res) => {
     res.json(await favoritesPage(req, {
       filter: parseFavoriteFilter(req.query.filter),

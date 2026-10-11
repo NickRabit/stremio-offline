@@ -17,6 +17,14 @@ test("filterFavorites keeps one source or both", () => {
   assert.deepEqual(filterFavorites(entries, "catalog").map((entry) => entry.kind), ["catalog"]);
 });
 
+test("filterFavorites keeps a folded catalogue star under both of its filters", () => {
+  const entries = mergeFavorites([library("lib_a/Heat", "tt1"), library("lib_a/Solo")], [catalog("tt2")]);
+  const names = (kept: typeof entries) => kept.map((entry) => entry.kind === "library" ? entry.key : entry.id);
+  assert.deepEqual(names(filterFavorites(entries, "library")), ["lib_a/Heat", "lib_a/Solo"]);
+  assert.deepEqual(names(filterFavorites(entries, "catalog")), ["lib_a/Heat", "tt2"],
+    "the fold is the catalogue's own star, the identified library star without one is not");
+});
+
 test("parseFavoriteFilter accepts the three names and falls back to all", () => {
   assert.equal(parseFavoriteFilter("library"), "library");
   assert.equal(parseFavoriteFilter("catalog"), "catalog");

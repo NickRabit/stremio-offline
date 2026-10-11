@@ -13,6 +13,18 @@ describe("one Favourites section in the shell", () => {
     expect(app).toContain('view === "favorites" && <FavoritesView');
   });
 
+  it("keeps the compact bar at five slots by folding Favourites into More", () => {
+    // The rule is docs/home-spec.md and e2e/tests/layout/invariants.spec.ts: the compact chrome
+    // shows exactly Home, Catalogue, Library, Downloads and More.
+    expect(app).toContain('secondary icon={<Star/>} label={t("nav.favorites")}');
+    expect(app).toContain('{ key: "favorites", icon: <Star/>');
+    expect(app).toMatch(/moreActive = [^;]*view === "favorites"/);
+  });
+
+  it("re-reads the Favourites list when the player closes", () => {
+    expect(app).toContain('if (view === "favorites") void loadFavorites(favoritesFilter, 0);');
+  });
+
   it("removed the catalogue's My list picker row", () => {
     expect(app).not.toContain("catalog.myList");
     expect(app).not.toContain("VIRTUAL.watchlist");

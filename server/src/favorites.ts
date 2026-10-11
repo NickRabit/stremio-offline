@@ -4,12 +4,10 @@
 
 export type FavoriteFilter = "all" | "library" | "catalog";
 
-export const FAVORITE_FILTERS: readonly FavoriteFilter[] = ["all", "library", "catalog"];
-
 export const parseFavoriteFilter = (value: unknown): FavoriteFilter =>
   value === "library" || value === "catalog" ? value : "all";
 
-/** One catalogue star that survived the fold, or the identity of a library star. */
+/** One library star, either its own or folded with the catalogue star it answers. */
 export interface FavoriteEntryLibrary { kind: "library"; key: string; catalogId?: string }
 export interface FavoriteEntryCatalog {
   kind: "catalog";
@@ -18,7 +16,6 @@ export interface FavoriteEntryCatalog {
   name: string;
   poster?: string;
   year?: string;
-  addonKey?: string;
 }
 export type FavoriteEntry = FavoriteEntryLibrary | FavoriteEntryCatalog;
 
@@ -35,7 +32,8 @@ export interface FavoriteLibraryItem {
   year?: string;
   itemKind: "file" | "folder";
   progress?: FavoriteProgress;
-  /** The IMDb id of the catalogue star this library item stands for. */
+  /** The IMDb id of the catalogue star this card folds in, and only then: the card answers
+   *  the catalogue's own filter and tells the interface which star chose the local copy. */
   catalogId?: string;
 }
 
@@ -47,7 +45,6 @@ export interface FavoriteCatalogItem {
   name: string;
   poster?: string;
   year?: string;
-  addonKey?: string;
 }
 
 export type FavoriteItem = FavoriteLibraryItem | FavoriteCatalogItem;
@@ -55,13 +52,16 @@ export type FavoriteItem = FavoriteLibraryItem | FavoriteCatalogItem;
 /** The merged order: library stars first, newest first, then the catalogue stars that
  *  no library copy answers, newest first. Library stars carry no timestamp of their own,
  *  so their stored order decides within the group; a catalogue star keeps its `addedAt`
- *  order. Paging a single ordered list stays stable either way. */
+ *  order. Storage stays as it is, so this order is the contract. Paging a single ordered
+ *  list stays stable either way. */
 export function mergeFavorites(library: FavoriteEntryLibrary[], catalog: FavoriteEntryCatalog[]): FavoriteEntry[] {
   return [...library, ...catalog];
 }
 
-/** How many entries a filter keeps. */
+/** How many entries a filter keeps. A library card that folded a catalogue star answers
+ *  both filters: it is a library star and it is that catalogue star. */
 export function filterFavorites(entries: FavoriteEntry[], filter: FavoriteFilter): FavoriteEntry[] {
   if (filter === "all") return entries;
-  return entries.filter((entry) => entry.kind === filter);
+  return entries.filter((entry) => entry.kind === filter
+    || (filter === "catalog" && entry.kind === "library" && entry.catalogId !== undefined));
 }

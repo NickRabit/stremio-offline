@@ -98,12 +98,12 @@ Shipped in `main`; implementation details live in the linked guides.
   [Mobile guide](mobile.md).
 - **Home**: the queue, Continue watching, new episodes, Ready to play, Recently
   added, Tonight, Favourites (library stars and starred catalogue titles in one
-  list) and the titles waiting for a match on one page;
+  list, one section in the navigation) and the titles waiting for a match on one page;
   selected add-on catalog feeds have their own lazy-loaded carousels. The
   account can choose its start page, arrange which rows show and in what order,
   and add catalogue feeds from the addons it may use.
   Compact navigation has five slots and a More menu on phones and short
-  landscape screens. [Home page](home-spec.md).
+  landscape screens; Favourites folds into More there. [Home page](home-spec.md).
 - **Statistics and diagnostics**: traffic by source, active streams, admin
   activity history, grouped errors and redacted logs.
   [Activity history](users.md#activity-history), [Diagnostics](troubleshooting.md).
