@@ -206,7 +206,9 @@ fun PlayerOverlayShell(
       .testTag(TAG_OVERLAY_ROOT)
       .background(Color.Black)
       .focusRequester(rootFocus)
-      .focusable()
+      // While the controls are up the full-screen root must not be a focus target: nothing sits
+      // beside a full-screen box, so a remote that landed on it would never reach a control.
+      .focusable(enabled = !controls)
       .onPreviewKeyEvent { event ->
         if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
         // A panel or the card has the remote: it traps focus itself, so the shell steps aside.

@@ -272,7 +272,7 @@ fun PlayerScreen(
   val offeredSources = sources.filterNot { Streams.isAddonNotice(it) }
   val playingSource = offeredSources.firstOrNull { it.sourceId == state.sourceId }
   val sourcesShown = offeredSources.size > 1 || sourcesLoading
-  val quality = qualityChoice(state.quality, state.mode, state.copyVideo)
+  val quality = qualityChoice(state.quality, state.escalatedByViewer)
 
   /** Choosing a row: the one already playing only closes the panel, any other starts a new session. */
   fun chooseSource(stream: StreamDto) {

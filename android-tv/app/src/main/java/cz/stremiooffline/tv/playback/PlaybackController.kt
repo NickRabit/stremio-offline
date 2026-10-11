@@ -80,6 +80,8 @@ data class PlaybackState(
   val copyVideo: Boolean = true,
   /** The picture height that was chosen, or null for the server's own choice. */
   val quality: Int? = null,
+  /** True once the viewer asked for a server conversion with the Quality panel this session. */
+  val escalatedByViewer: Boolean = false,
   val audioTracks: List<DescriptorTrack> = emptyList(),
   val audioTrackIndex: Int = 0,
   val subtitleTracks: List<DescriptorTrack> = emptyList(),
@@ -163,6 +165,8 @@ class PlaybackController(
   private var hasPosition = false
   private var lastPosition = 0.0
   private var escalated = false
+  /** The viewer's own escalate from the Quality panel; a decoder error never sets it. */
+  private var escalatedByViewer = false
   private var recovered = false
   private var stopped = true
 
@@ -254,6 +258,7 @@ class PlaybackController(
     hasPosition = false
     lastPosition = 0.0
     escalated = false
+    escalatedByViewer = false
     recovered = false
     stopped = false
     playlist = false
@@ -406,7 +411,7 @@ class PlaybackController(
    */
   fun selectQuality(quality: Int?) {
     if (stopped || sessionId == null) return
-    if (quality == null && qualityChoice(this.quality, mode, copyVideo) == QualityChoice.Force) {
+    if (quality == null && escalated) {
       val current = plan ?: return
       begin(current.copy(explicitTime = position, resume = false))
       return
@@ -499,6 +504,7 @@ class PlaybackController(
     val at = position
     val mine = generation
     escalated = true
+    escalatedByViewer = true
     scope.launch {
       val descriptor = runCatching { api.escalatePlayback(id, at) }.getOrNull()
       if (stopped || mine != generation) return@launch
@@ -634,6 +640,7 @@ class PlaybackController(
         copyAudio = copyAudio,
         copyVideo = copyVideo,
         quality = quality,
+        escalatedByViewer = escalatedByViewer,
         audioTracks = audioTracks,
         audioTrackIndex = audioChoice,
         subtitleTracks = subtitleTracks,
@@ -710,14 +717,14 @@ private fun TrackChange.withTime(time: Double): TrackChange = when (this) {
 enum class QualityChoice { Original, P1080, P720, P480, Force }
 
 /**
- * Which row the Quality panel ticks. A chosen height wins; otherwise a full picture transcode is
- * the forced conversion, and everything else -- direct, remux, audio-only -- is the server's own
- * choice.
+ * Which row the Quality panel ticks. A chosen height wins; otherwise only the viewer's own
+ * escalate is the forced conversion. A transcode the server chose for another reason -- a burned
+ * in subtitle, an audio track it cannot copy -- is still the server's own choice (Original).
  */
-fun qualityChoice(quality: Int?, mode: PlaybackMode, copyVideo: Boolean): QualityChoice = when {
+fun qualityChoice(quality: Int?, escalatedByViewer: Boolean): QualityChoice = when {
   quality == 1080 -> QualityChoice.P1080
   quality == 720 -> QualityChoice.P720
   quality == 480 -> QualityChoice.P480
-  mode == PlaybackMode.Transcode && !copyVideo -> QualityChoice.Force
+  escalatedByViewer -> QualityChoice.Force
   else -> QualityChoice.Original
 }

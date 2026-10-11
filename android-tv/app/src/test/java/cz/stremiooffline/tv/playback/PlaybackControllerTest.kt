@@ -668,18 +668,50 @@ class PlaybackControllerTest {
 
     assertEquals(listOf(TrackChange.Quality(720, 500.0)), api.tracks)
     assertEquals(720, controller.state.value.quality)
-    assertEquals(QualityChoice.P720, qualityChoice(controller.state.value.quality, controller.state.value.mode, controller.state.value.copyVideo))
+    assertEquals(QualityChoice.P720, qualityChoice(controller.state.value.quality, controller.state.value.escalatedByViewer))
   }
 
   @Test
-  fun `the descriptor derives the quality choice`() {
-    assertEquals(QualityChoice.Original, qualityChoice(null, PlaybackMode.Direct, copyVideo = true))
-    assertEquals(QualityChoice.Original, qualityChoice(null, PlaybackMode.Remux, copyVideo = true))
-    // Audio-only conversion still leaves the picture alone, so it is the server's own choice.
-    assertEquals(QualityChoice.Original, qualityChoice(null, PlaybackMode.Transcode, copyVideo = true))
-    assertEquals(QualityChoice.Force, qualityChoice(null, PlaybackMode.Transcode, copyVideo = false))
-    assertEquals(QualityChoice.P480, qualityChoice(480, PlaybackMode.Transcode, copyVideo = false))
-    assertEquals(QualityChoice.P1080, qualityChoice(1080, PlaybackMode.Transcode, copyVideo = false))
+  fun `the quality choice follows the viewer's own escalation only`() {
+    assertEquals(QualityChoice.Original, qualityChoice(null, escalatedByViewer = false))
+    // A height the viewer picked always wins.
+    assertEquals(QualityChoice.P480, qualityChoice(480, escalatedByViewer = false))
+    assertEquals(QualityChoice.P1080, qualityChoice(1080, escalatedByViewer = true))
+    assertEquals(QualityChoice.Force, qualityChoice(null, escalatedByViewer = true))
+  }
+
+  // Bug on the emulator: the server transcodes only because the account's subtitle is burned in,
+  // so the panel wrongly ticked the forced conversion. Only the viewer's own escalate ticks it.
+  @Test
+  fun `a server transcode for another reason is not the viewer's forced conversion`() = runTest {
+    val api = FakeApi()
+    api.descriptor = PlaybackDescriptorDto(
+      id = "p1", mode = "transcode", url = "subtitle.m3u8", offset = 0.0, duration = 1_000.0,
+      playlist = true, copy = CopyDto(video = false, audio = false), quality = null,
+    )
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+    controller.start("src", "movie:tt1", "It", null, resume = false)
+    runCurrent()
+
+    assertEquals(false, controller.state.value.escalatedByViewer)
+    assertEquals(QualityChoice.Original, qualityChoice(controller.state.value.quality, controller.state.value.escalatedByViewer))
+  }
+
+  // A decoder-error recovery also escalates the session, but the viewer never asked for it.
+  @Test
+  fun `a decoder recovery does not tick the forced conversion`() = runTest {
+    val api = FakeApi()
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+    controller.start("src", "movie:tt1", "It", null, resume = false)
+    runCurrent()
+    playing(controller, 30.0)
+
+    controller.onDecoderError()
+    runCurrent()
+
+    assertEquals(1, api.escalates.size)
+    assertEquals(false, controller.state.value.escalatedByViewer)
+    assertEquals(QualityChoice.Original, qualityChoice(controller.state.value.quality, controller.state.value.escalatedByViewer))
   }
 
   @Test
@@ -693,7 +725,8 @@ class PlaybackControllerTest {
     controller.escalate()
     runCurrent()
     assertEquals(1, api.escalates.size)
-    assertEquals(QualityChoice.Force, qualityChoice(controller.state.value.quality, controller.state.value.mode, controller.state.value.copyVideo))
+    assertEquals(true, controller.state.value.escalatedByViewer)
+    assertEquals(QualityChoice.Force, qualityChoice(controller.state.value.quality, controller.state.value.escalatedByViewer))
 
     api.calls.clear()
     controller.selectQuality(null)
@@ -701,6 +734,6 @@ class PlaybackControllerTest {
 
     assertEquals(listOf("save", "delete", "start"), api.calls)
     assertEquals(300.0, api.started.last().third, 0.001)
-    assertEquals(QualityChoice.Original, qualityChoice(controller.state.value.quality, controller.state.value.mode, controller.state.value.copyVideo))
+    assertEquals(QualityChoice.Original, qualityChoice(controller.state.value.quality, controller.state.value.escalatedByViewer))
   }
 }

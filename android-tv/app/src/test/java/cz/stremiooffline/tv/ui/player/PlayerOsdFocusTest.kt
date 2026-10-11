@@ -2,6 +2,9 @@
 
 package cz.stremiooffline.tv.ui.player
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.SemanticsMatcher
@@ -83,5 +86,58 @@ class PlayerOsdFocusTest {
 
     compose.onNodeWithTag(TAG_OSD_TIMELINE).assertIsFocused().assert(focused(true))
     compose.onNodeWithTag(TAG_OSD_PLAY).assert(focused(false))
+  }
+
+  private fun mountPlaying(playing: () -> Boolean) {
+    compose.mainClock.autoAdvance = false
+    compose.setContent {
+      PlayerOverlayShell(
+        position = 10.0,
+        duration = 100.0,
+        playing = playing(),
+        title = "It",
+        eyebrow = "Direct play",
+        playFocus = FocusRequester(),
+        initiallyShown = true,
+        onSeek = {},
+        onTogglePause = {},
+        onExit = {},
+        onTracks = {},
+        tracksText = "EN",
+        tracksLabel = "Audio and subtitles",
+        onDiagnostics = {},
+        diagnosticsLabel = "Diagnostics",
+      ) {}
+    }
+    compose.mainClock.advanceTimeBy(100)
+    compose.waitForIdle()
+  }
+
+  @Test
+  fun `the controls hide five seconds into playback`() {
+    mountPlaying { true }
+
+    compose.onNodeWithTag(TAG_OSD_PLAY).assertExists()
+    compose.mainClock.advanceTimeBy(CONTROLS_HIDE_MS + 1_000)
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TAG_OSD_PLAY).assertDoesNotExist()
+  }
+
+  // Bug on the emulator: the controls vanished while the video was still paused.
+  @Test
+  fun `the controls do not auto-hide while playback is paused`() {
+    var playing by mutableStateOf(true)
+    mountPlaying { playing }
+
+    compose.onNodeWithTag(TAG_OSD_PLAY).assertExists()
+    // The viewer pauses; one frame applies the new state before the idle timer can expire.
+    playing = false
+    compose.mainClock.advanceTimeByFrame()
+    compose.waitForIdle()
+    compose.mainClock.advanceTimeBy(CONTROLS_HIDE_MS + 1_000)
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TAG_OSD_PLAY).assertExists()
   }
 }

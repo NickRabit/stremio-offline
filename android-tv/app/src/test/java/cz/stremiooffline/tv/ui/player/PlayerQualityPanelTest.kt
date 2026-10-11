@@ -73,6 +73,29 @@ class PlayerQualityPanelTest {
     compose.onNodeWithText("Use when the picture or sound plays badly. The server re-encodes the video.").assertExists()
   }
 
+  // Bug on the emulator: the server transcodes only because the account's subtitle is burned in,
+  // and the button wrongly named the forced conversion the viewer never asked for.
+  @Test
+  fun `a subtitle driven transcode still names the server's own choice`() {
+    val api = FakeTvApi()
+    api.startAnswer = PlaybackDescriptorDto(
+      id = "p1",
+      mode = "transcode",
+      url = "/stream.m3u8",
+      playlist = true,
+      copy = CopyDto(video = false, audio = false),
+      quality = null,
+    )
+    mount(api)
+
+    compose.onNodeWithTag(TAG_OSD_QUALITY).assertTextContains("Original")
+
+    openQuality()
+
+    compose.onNodeWithTag(qualityRowTag("original")).assertIsFocused()
+    compose.onNodeWithTag(qualityRowTag("force")).assertExists()
+  }
+
   @Test
   fun `720p sends the track at the absolute position and ticks the new choice`() {
     val api = FakeTvApi()
