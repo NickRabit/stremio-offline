@@ -1579,5 +1579,6 @@ export const es: Catalog = {
   "tv.version": "Versión",
   "tv.signOutConfirm": "¿Cerrar sesión en este televisor? Necesitarás la contraseña para volver a entrar.",
   "tv.passthrough": "Paso directo",
+  "tv.versionRow": "App {app} · servidor {server}",
   "tv.versionMismatch": "El servidor ejecuta {server}, esta app es {app}. Actualiza la que sea más antigua.",
 };

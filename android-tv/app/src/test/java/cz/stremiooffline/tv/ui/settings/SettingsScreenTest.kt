@@ -12,14 +12,17 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.pressKey
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import cz.stremiooffline.tv.data.SettingsResponse
+import cz.stremiooffline.tv.data.ApiFailure
 import cz.stremiooffline.tv.ui.FakeTvApi
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -201,5 +204,42 @@ class SettingsScreenTest {
 
     assertEquals(listOf("startView" to "catalog"), api.settingsPatches)
     compose.onNodeWithTag(settingsOptionTag("start", "catalog")).assertDoesNotExist()
+  }
+
+  @Test
+  fun `the start page panel opens on the fallback when the setting is unknown`() {
+    val api = FakeTvApi().apply { settingsValue = SettingsResponse(startView = "following") }
+    mount(api)
+    repeat(5) { press(Key.DirectionDown) }
+    focusRow(TagSettingsRowStartView)
+    press(Key.DirectionCenter)
+
+    // The server would answer the catalog for an unknown value, so that is where the panel opens.
+    compose.onNodeWithTag(settingsOptionTag("start", "catalog")).assertIsFocused()
+    press(Key.DirectionCenter)
+    assertEquals(listOf("startView" to "catalog"), api.settingsPatches)
+  }
+
+  @Test
+  fun `the version row names the app and the server`() {
+    val api = fake()
+    mount(api)
+    // The bare join read "0.5.36 · 0.5.36"; the row now says which number is which.
+    compose.onNodeWithText("server ${api.serverVersionValue}", substring = true).assertExists()
+  }
+
+  @Test
+  fun `a write that fails puts the row back and shows the error line`() {
+    val api = fake()
+    api.settingsFailure = ApiFailure.Forbidden
+    mount(api)
+    repeat(3) { press(Key.DirectionDown) }
+    press(Key.DirectionCenter)
+    press(Key.DirectionDown)
+    press(Key.DirectionCenter)
+
+    compose.onNodeWithTag(TagSettingsError).assertExists()
+    // The row keeps the language the server still has instead of the one that did not stick.
+    compose.onNodeWithTag(TagSettingsRowAudio).assertTextContains("English")
   }
 }

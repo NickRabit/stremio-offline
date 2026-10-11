@@ -1579,5 +1579,6 @@ export const sk: Catalog = {
   "tv.version": "Verzia",
   "tv.signOutConfirm": "Odhlásiť sa na tejto televízii? Na prihlásenie budete znova potrebovať heslo.",
   "tv.passthrough": "Priechod",
+  "tv.versionRow": "Aplikácia {app} · server {server}",
   "tv.versionMismatch": "Server beží vo verzii {server}, aplikácia je {app}. Aktualizujte tú staršiu.",
 };

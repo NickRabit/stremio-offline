@@ -150,5 +150,6 @@
   <string name="tv_version">Wersja</string>
   <string name="tv_sign_out_confirm">Wylogować się na tym telewizorze? Do ponownego zalogowania będzie potrzebne hasło.</string>
   <string name="tv_passthrough">Przekazywanie</string>
+  <string name="tv_version_row">Aplikacja %1$s · serwer %2$s</string>
   <string name="tv_version_mismatch">Serwer działa w wersji %1$s, ta aplikacja to %2$s. Zaktualizuj tę starszą.</string>
 </resources>

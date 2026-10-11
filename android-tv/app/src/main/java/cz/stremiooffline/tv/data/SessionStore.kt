@@ -11,13 +11,19 @@ import androidx.security.crypto.MasterKey
  */
 open class SessionStore(context: Context) : SessionPersistence {
 
-  private val prefs: SharedPreferences = EncryptedSharedPreferences.create(
-    context.applicationContext,
-    FILE,
-    MasterKey.Builder(context.applicationContext).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build(),
-    EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-    EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
-  )
+  private val appContext = context.applicationContext
+
+  // Opened on first use, not in the constructor: a test substitutes an in-memory store by
+  // overriding these members, and the Android Keystore it would otherwise read is absent there.
+  private val prefs: SharedPreferences by lazy {
+    EncryptedSharedPreferences.create(
+      appContext,
+      FILE,
+      MasterKey.Builder(appContext).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build(),
+      EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+      EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
+    )
+  }
 
   open var serverUrl: String?
     get() = prefs.getString(KEY_SERVER, null)

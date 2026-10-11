@@ -27,6 +27,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -119,7 +120,7 @@ fun Shell(
   address: String = "http://",
   onLocale: (String) -> Unit = {},
 ) {
-  val shellState = remember(start) { ShellState(start) }
+  val shellState = rememberSaveable(start, saver = ShellStateSaver) { ShellState(start) }
   val current = shellState.selected
   val sectionStates = rememberSaveableStateHolder()
 

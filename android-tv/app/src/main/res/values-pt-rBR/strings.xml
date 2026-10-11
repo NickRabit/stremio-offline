@@ -146,5 +146,6 @@
   <string name="tv_version">Versão</string>
   <string name="tv_sign_out_confirm">Sair nesta TV? Você precisará da senha para entrar de novo.</string>
   <string name="tv_passthrough">Repasse</string>
+  <string name="tv_version_row">App %1$s · servidor %2$s</string>
   <string name="tv_version_mismatch">O servidor executa %1$s, este app é %2$s. Atualize o que for mais antigo.</string>
 </resources>

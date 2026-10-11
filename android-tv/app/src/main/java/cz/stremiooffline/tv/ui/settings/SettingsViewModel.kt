@@ -7,29 +7,22 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import cz.stremiooffline.tv.data.ApiError
+import cz.stremiooffline.tv.data.ApiFailure
 import cz.stremiooffline.tv.data.LanguageDto
 import cz.stremiooffline.tv.data.TvApi
 import kotlinx.coroutines.launch
 
 /** The personal settings the Settings screen shows and edits. */
 data class SettingsState(
-  val loaded: Boolean = false,
   val uiLanguage: String? = null,
   val audioLanguage: String? = null,
   val subtitleLanguage: String? = null,
   val startView: String? = null,
   val serverVersion: String? = null,
+  /** The last write that failed; the screen shows it and the row already holds the old value. */
+  val error: ApiFailure? = null,
 )
-
-/** The settings screen's state and the four writes it fires, so a screen test can drive it. */
-interface SettingsActions {
-  val state: SettingsState
-  val languages: List<LanguageDto>
-  fun setUiLanguage(code: String)
-  fun setAudioLanguage(code: String)
-  fun setSubtitleLanguage(code: String)
-  fun setStartView(view: String)
-}
 
 /**
  * Reads the account's own preferences and writes one field at a time. The interface language is
@@ -39,12 +32,12 @@ interface SettingsActions {
 class SettingsViewModel(
   private val api: TvApi,
   private val onLocale: (String) -> Unit,
-) : ViewModel(), SettingsActions {
+) : ViewModel() {
 
-  override var state by mutableStateOf(SettingsState())
+  var state by mutableStateOf(SettingsState())
     private set
 
-  override var languages by mutableStateOf(emptyList<LanguageDto>())
+  var languages by mutableStateOf(emptyList<LanguageDto>())
     private set
 
   init {
@@ -53,7 +46,6 @@ class SettingsViewModel(
       languages = runCatching { api.languages() }.getOrDefault(emptyList())
       val version = runCatching { api.serverVersion() }.getOrNull()
       state = SettingsState(
-        loaded = settings != null,
         uiLanguage = settings?.uiLanguage,
         audioLanguage = settings?.audioLanguage,
         subtitleLanguage = settings?.subtitleLanguage,
@@ -63,36 +55,56 @@ class SettingsViewModel(
     }
   }
 
-  override fun setUiLanguage(code: String) {
-    state = state.copy(uiLanguage = code)
+  fun setUiLanguage(code: String) {
+    val before = state.uiLanguage
+    state = state.copy(uiLanguage = code, error = null)
     onLocale(code)
     viewModelScope.launch {
-      val answer = runCatching { api.updateSettings("uiLanguage", code) }.getOrNull() ?: return@launch
-      answer.uiLanguage?.let { state = state.copy(uiLanguage = it) }
+      try {
+        val answer = api.updateSettings("uiLanguage", code)
+        answer.uiLanguage?.let { state = state.copy(uiLanguage = it) }
+      } catch (error: ApiError) {
+        state = state.copy(uiLanguage = before, error = error.failure)
+      }
     }
   }
 
-  override fun setAudioLanguage(code: String) {
-    state = state.copy(audioLanguage = code)
+  fun setAudioLanguage(code: String) {
+    val before = state.audioLanguage
+    state = state.copy(audioLanguage = code, error = null)
     viewModelScope.launch {
-      val answer = runCatching { api.updateSettings("audioLanguage", code) }.getOrNull() ?: return@launch
-      answer.audioLanguage?.let { state = state.copy(audioLanguage = it) }
+      try {
+        val answer = api.updateSettings("audioLanguage", code)
+        answer.audioLanguage?.let { state = state.copy(audioLanguage = it) }
+      } catch (error: ApiError) {
+        state = state.copy(audioLanguage = before, error = error.failure)
+      }
     }
   }
 
-  override fun setSubtitleLanguage(code: String) {
-    state = state.copy(subtitleLanguage = code)
+  fun setSubtitleLanguage(code: String) {
+    val before = state.subtitleLanguage
+    state = state.copy(subtitleLanguage = code, error = null)
     viewModelScope.launch {
-      val answer = runCatching { api.updateSettings("subtitleLanguage", code) }.getOrNull() ?: return@launch
-      answer.subtitleLanguage?.let { state = state.copy(subtitleLanguage = it) }
+      try {
+        val answer = api.updateSettings("subtitleLanguage", code)
+        answer.subtitleLanguage?.let { state = state.copy(subtitleLanguage = it) }
+      } catch (error: ApiError) {
+        state = state.copy(subtitleLanguage = before, error = error.failure)
+      }
     }
   }
 
-  override fun setStartView(view: String) {
-    state = state.copy(startView = view)
+  fun setStartView(view: String) {
+    val before = state.startView
+    state = state.copy(startView = view, error = null)
     viewModelScope.launch {
-      val answer = runCatching { api.updateSettings("startView", view) }.getOrNull() ?: return@launch
-      answer.startView?.let { state = state.copy(startView = it) }
+      try {
+        val answer = api.updateSettings("startView", view)
+        answer.startView?.let { state = state.copy(startView = it) }
+      } catch (error: ApiError) {
+        state = state.copy(startView = before, error = error.failure)
+      }
     }
   }
 

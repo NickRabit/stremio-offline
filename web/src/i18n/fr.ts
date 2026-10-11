@@ -1579,5 +1579,6 @@ export const fr: Catalog = {
   "tv.version": "Version",
   "tv.signOutConfirm": "Se déconnecter sur cette télévision ? Il vous faudra le mot de passe pour vous reconnecter.",
   "tv.passthrough": "Transmission directe",
+  "tv.versionRow": "App {app} · serveur {server}",
   "tv.versionMismatch": "Le serveur exécute {server}, cette app est {app}. Mettez à jour la plus ancienne.",
 };

@@ -146,5 +146,6 @@
   <string name="tv_version">Version</string>
   <string name="tv_sign_out_confirm">Sign out on this television? You will need the password to sign in again.</string>
   <string name="tv_passthrough">Passthrough</string>
+  <string name="tv_version_row">App %1$s · server %2$s</string>
   <string name="tv_version_mismatch">The server runs %1$s, this app is %2$s. Update the one that is older.</string>
 </resources>

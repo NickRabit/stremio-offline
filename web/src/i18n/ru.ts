@@ -1579,5 +1579,6 @@ export const ru: Catalog = {
   "tv.version": "Версия",
   "tv.signOutConfirm": "Выйти из аккаунта на этом телевизоре? Для входа снова понадобится пароль.",
   "tv.passthrough": "Проброс",
+  "tv.versionRow": "Приложение {app} · сервер {server}",
   "tv.versionMismatch": "Сервер работает под версией {server}, приложение — {app}. Обновите то, что старше.",
 };

@@ -99,6 +99,10 @@ jobs:
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          # Optional repository variable: the SHA-256 of the signing certificate as
+          # `apksigner --print-certs` prints it. Set it so a rotated or mis-set keystore cannot
+          # publish an APK every television refuses as an update.
+          ANDROID_CERT_SHA256: ${{ vars.ANDROID_CERT_SHA256 }}
           VERSION: ${{ needs.version.outputs.version }}
         run: |
           set -euo pipefail
@@ -107,13 +111,22 @@ jobs:
           ( cd android-tv && ./gradlew assembleRelease --no-daemon )
           apk="android-tv/app/build/outputs/apk/release/app-release.apk"
           # `apksigner` sits in build-tools, which setup-android does not put on PATH.
-          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs "$apk"
+          certs="$("$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs "$apk")"
+          printf '%s\n' "$certs"
+          if [ -n "${ANDROID_CERT_SHA256:-}" ]; then
+            if ! printf '%s\n' "$certs" | grep -qiF "SHA-256 digest: $ANDROID_CERT_SHA256"; then
+              echo "::error title=Wrong signing certificate::the APK is not signed with the certificate ANDROID_CERT_SHA256 pins; refusing to publish it."
+              exit 1
+            fi
+          else
+            echo "::warning title=Unpinned TV certificate::ANDROID_CERT_SHA256 is not set, so the APK's certificate was not compared against a pinned one. Pin it with: gh variable set ANDROID_CERT_SHA256"
+          fi
           cp "$apk" "stremio-offline-tv-${VERSION}.apk"
           # `gh release upload` fails on an asset name that is already there, so a
           # rerun never replaces what was published.
           present="$(gh release view "${GITHUB_REF_NAME}" --json assets --jq '.assets[].name')"
           if printf '%s\n' "$present" | grep -qxF -e "stremio-offline-tv-${VERSION}.apk"; then
-            echo "the release already carries the TV APK"
+            echo "::warning title=TV APK already attached::the release already carries stremio-offline-tv-${VERSION}.apk; the upload never replaces what is published, so a wrong or truncated asset has to be deleted by hand before a rerun."
           else
             gh release upload "${GITHUB_REF_NAME}" "stremio-offline-tv-${VERSION}.apk"
           fi

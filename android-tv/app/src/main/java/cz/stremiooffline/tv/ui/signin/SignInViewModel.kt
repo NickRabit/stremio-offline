@@ -147,9 +147,11 @@ class SignInViewModel(
 
   private suspend fun succeed(address: ServerAddress, username: String, language: String?, api: ApiClient) {
     store.serverUrl = address.display
-    val start = startSection(runCatching { api.settings().startView }.getOrNull())
-    // A fresh login answer carries no language; ask who the session is to apply the right one.
-    val uiLanguage = language ?: (runCatching { api.me() }.getOrNull() as? MeResult.SignedIn)?.language
+    // The settings call carries the account's own preferences, so its uiLanguage is the answer
+    // /api/auth/me would give too: one round trip for the start page and the language.
+    val settings = runCatching { api.settings() }.getOrNull()
+    val start = startSection(settings?.startView)
+    val uiLanguage = language ?: settings?.uiLanguage
     state = state.copy(busy = false)
     onSignedIn(username, uiLanguage, start, api)
   }

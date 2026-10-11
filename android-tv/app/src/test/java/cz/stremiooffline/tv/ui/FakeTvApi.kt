@@ -74,6 +74,8 @@ open class FakeTvApi : TvApi {
   var settingsCalls = 0
   /** Each `updateSettings()` call in order, so a test can assert one personal field per body. */
   var settingsPatches: MutableList<Pair<String, String>> = mutableListOf()
+  /** When set, every `updateSettings()` throws it instead of answering. */
+  var settingsFailure: ApiFailure? = null
   var languagesValue: List<LanguageDto> = listOf(
     LanguageDto("cs", "Čeština"),
     LanguageDto("en", "Angličtina"),
@@ -194,6 +196,7 @@ open class FakeTvApi : TvApi {
 
   override suspend fun updateSettings(field: String, value: String): SettingsResponse {
     settingsPatches += field to value
+    settingsFailure?.let { throw ApiError(it) }
     settingsValue = when (field) {
       "uiLanguage" -> settingsValue.copy(uiLanguage = value)
       "audioLanguage" -> settingsValue.copy(audioLanguage = value)

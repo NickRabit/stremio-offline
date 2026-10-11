@@ -146,5 +146,6 @@
   <string name="tv_version">Version</string>
   <string name="tv_sign_out_confirm">Se déconnecter sur cette télévision ? Il vous faudra le mot de passe pour vous reconnecter.</string>
   <string name="tv_passthrough">Transmission directe</string>
+  <string name="tv_version_row">App %1$s · serveur %2$s</string>
   <string name="tv_version_mismatch">Le serveur exécute %1$s, cette app est %2$s. Mettez à jour la plus ancienne.</string>
 </resources>

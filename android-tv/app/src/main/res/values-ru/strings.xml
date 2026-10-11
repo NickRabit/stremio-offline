@@ -150,5 +150,6 @@
   <string name="tv_version">Версия</string>
   <string name="tv_sign_out_confirm">Выйти из аккаунта на этом телевизоре? Для входа снова понадобится пароль.</string>
   <string name="tv_passthrough">Проброс</string>
+  <string name="tv_version_row">Приложение %1$s · сервер %2$s</string>
   <string name="tv_version_mismatch">Сервер работает под версией %1$s, приложение — %2$s. Обновите то, что старше.</string>
 </resources>

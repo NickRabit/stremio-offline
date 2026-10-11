@@ -139,4 +139,5 @@ tv.device
 tv.version
 tv.signOutConfirm
 tv.passthrough
+tv.versionRow
 tv.versionMismatch

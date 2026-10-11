@@ -1579,5 +1579,6 @@ export const de: Catalog = {
   "tv.version": "Version",
   "tv.signOutConfirm": "Auf diesem Fernseher abmelden? Zum erneuten Anmelden brauchen Sie das Passwort.",
   "tv.passthrough": "Durchleitung",
+  "tv.versionRow": "App {app} · Server {server}",
   "tv.versionMismatch": "Der Server läuft auf {server}, diese App ist {app}. Aktualisieren Sie die ältere Version.",
 };

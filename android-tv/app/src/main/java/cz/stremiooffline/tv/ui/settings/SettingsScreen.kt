@@ -58,6 +58,7 @@ import cz.stremiooffline.tv.ui.catalog.PanelOption
 import cz.stremiooffline.tv.ui.catalog.SidePanel
 import cz.stremiooffline.tv.ui.components.FocusButton
 import cz.stremiooffline.tv.ui.components.FocusButtonKind
+import cz.stremiooffline.tv.ui.signin.messageRes
 import cz.stremiooffline.tv.ui.theme.Tokens
 import java.util.Locale
 import kotlinx.coroutines.android.awaitFrame
@@ -80,8 +81,13 @@ const val TagSettingsRowVersion = "settings_row_version"
 const val TagSettingsPanel = "settings_panel"
 const val TagSettingsSignOutCancel = "settings_sign_out_cancel"
 const val TagSettingsSignOutConfirm = "settings_sign_out_confirm"
+const val TagSettingsError = "settings_error"
 
 fun settingsOptionTag(kind: String, code: String): String = "settings_${kind}_option_$code"
+
+/** The three Start page values the server accepts, with the catalog the fallback for anything
+ *  else -- the same value drives the row's label, the panel's tint and the panel's focus. */
+private val START_VIEWS = listOf("home", "catalog", "library")
 
 private enum class SettingsPanel { SignOut, UiLanguage, AudioLanguage, SubtitleLanguage, StartView }
 
@@ -171,11 +177,13 @@ fun SettingsScreen(
   val interfaceName = UI_LOCALE_NAMES.firstOrNull { it.first == uiLanguage }?.second ?: uiLanguage.orEmpty()
   val audioName = state.audioLanguage?.let { contentLanguageLabel(it, uiLanguage) }.orEmpty()
   val subtitleName = state.subtitleLanguage?.let { contentLanguageLabel(it, uiLanguage) }.orEmpty()
-  val startName = when (state.startView) {
+  val startView = state.startView?.takeIf { it in START_VIEWS } ?: "catalog"
+  val startName = when (startView) {
     "home" -> stringResource(R.string.nav_home)
     "library" -> stringResource(R.string.nav_library)
     else -> stringResource(R.string.nav_catalog)
   }
+  val serverVersion = state.serverVersion?.takeIf { it.isNotBlank() }
   val decodeLine = decodedLabels(capabilities).joinToString(" · ")
   val passthroughLine = passthroughLabels(capabilities).let {
     if (it.isEmpty()) "" else stringResource(R.string.tv_passthrough) + " " + it.joinToString(" · ")
@@ -248,14 +256,22 @@ fun SettingsScreen(
       )
       InfoRow(
         label = stringResource(R.string.tv_version),
-        value = listOf(appVersion, state.serverVersion.orEmpty()).filter { it.isNotBlank() }.joinToString(" · "),
-        note = if (Versions.differsInMinor(appVersion, state.serverVersion)) {
-          stringResource(R.string.tv_version_mismatch, state.serverVersion.orEmpty(), appVersion)
+        value = if (serverVersion == null) appVersion else stringResource(R.string.tv_version_row, appVersion, serverVersion),
+        note = if (Versions.differsInMinor(appVersion, serverVersion)) {
+          stringResource(R.string.tv_version_mismatch, serverVersion.orEmpty(), appVersion)
         } else {
           ""
         },
         noteColor = Tokens.Gold,
         modifier = Modifier.testTag(TagSettingsRowVersion),
+      )
+    }
+    state.error?.let { failure ->
+      Text(
+        stringResource(failure.messageRes()),
+        color = Tokens.Red,
+        fontSize = 11.sp,
+        modifier = Modifier.testTag(TagSettingsError),
       )
     }
   }
@@ -328,16 +344,15 @@ fun SettingsScreen(
       modifier = Modifier.testTag(TagSettingsPanel),
       initialFocus = panelFocus,
     ) {
-      val options = listOf(
-        "home" to stringResource(R.string.nav_home),
-        "catalog" to stringResource(R.string.nav_catalog),
-        "library" to stringResource(R.string.nav_library),
-      )
-      val selected = options.indexOfFirst { it.first == state.startView }.let { if (it >= 0) it else options.size - 1 }
-      options.forEachIndexed { index, (view, name) ->
+      val selected = START_VIEWS.indexOf(startView)
+      START_VIEWS.forEachIndexed { index, view ->
         PanelOption(
-          text = name,
-          selected = view == state.startView || (state.startView == null && view == "catalog"),
+          text = when (view) {
+            "home" -> stringResource(R.string.nav_home)
+            "library" -> stringResource(R.string.nav_library)
+            else -> stringResource(R.string.nav_catalog)
+          },
+          selected = view == startView,
           onClick = { closePanel(); onStartView(view) },
           modifier = Modifier
             .testTag(settingsOptionTag("start", view))

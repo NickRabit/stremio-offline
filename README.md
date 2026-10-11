@@ -143,9 +143,11 @@ and external-player limitations.
 
 ### On Android TV
 
-Every release also carries an Android TV app, `stremio-offline-tv-<version>.apk`,
-a remote-first client for the same server. It installs over an older version and
-updates itself through [Obtainium](https://github.com/ImranR98/Obtainium).
+Every release that has the signing key carries an Android TV app,
+`stremio-offline-tv-<version>.apk`, a remote-first client for the same server
+(a release without the key carries no APK at all, so no television is offered a
+build it cannot install over the old one). It installs over an older version
+and updates itself through [Obtainium](https://github.com/ImranR98/Obtainium).
 **[Installing the Android TV app](docs/install-android-tv.md)** covers Obtainium,
 the Downloader app and `adb install -r`.
 

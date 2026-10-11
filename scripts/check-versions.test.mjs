@@ -19,3 +19,27 @@ test("fails on a literal versionName", () => {
 test("fails when the Gradle file does not read the root version", () => {
   assert.throws(() => assertGradleVersion("android {\n}\n"), /does not read versionName/);
 });
+
+test("fails when the shared version is a literal in the Gradle file", () => {
+  const source = [
+    'val sharedVersion = "0.5.36"',
+    "android {",
+    "  defaultConfig {",
+    "    versionName = sharedVersion",
+    "  }",
+    "}",
+  ].join("\n");
+  assert.throws(() => assertGradleVersion(source), /does not read the root package\.json/);
+});
+
+test("fails when the Gradle file names a shared version without reading the root package.json", () => {
+  const source = [
+    'val sharedVersion = Regex("version").find(File("package.json").readText())!!.groupValues[1]',
+    "android {",
+    "  defaultConfig {",
+    "    versionName = sharedVersion",
+    "  }",
+    "}",
+  ].join("\n");
+  assert.throws(() => assertGradleVersion(source), /does not read the root package\.json/);
+});

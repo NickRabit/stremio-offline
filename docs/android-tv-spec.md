@@ -34,7 +34,7 @@ The app mirrors the web navigation, so a person who knows one knows the other.
 | **Home** | The rows the web Home shows, in the web's order: Continue watching, Favourites, Tonight, the addon catalog carousels, New episodes, Ready to play, Recently added, then the Downloads summary. | `GET /api/home` and its typed `HomeCard` kinds (`server/src/home.ts`); the summary from `GET /api/downloads` |
 | **Catalog** | Addon catalogs with the type and genre choice the web has, paged with `skip`; search across searchable catalogs; title detail. | `/api/catalogs`, `/api/catalog`, `/api/search`, `/api/searchable`, `/api/meta/:type/:id` |
 | **Library** | Granted libraries, their folders and titles, title detail with seasons and episodes, favourites. | `/api/libraries`, `/api/library/browse`, `/api/library/resume`, `/api/library/favorites`, `/api/library/favorite` |
-| Settings | Server address, account and sign-out, interface language, preferred audio and subtitle languages, start page, playback diagnostics. | `GET`/`PATCH /api/settings` (the personal part only), `/api/languages` |
+| Settings | Server address, account and sign-out, interface language, preferred audio and subtitle languages, start page. | `GET`/`PATCH /api/settings` (the personal part only), `/api/languages` |
 
 The start page follows the account's **Start page** setting (`startView`:
 `catalog`, `home` or `library`), as on the web.

@@ -128,6 +128,15 @@ class SessionViewModel(private val store: SessionStore) : ViewModel() {
     state = SessionState.SignedOut(store.serverUrl ?: DEFAULT_ADDRESS, null)
   }
 
+  /** The interface language of this session: /api/auth/me answers it at first, a Settings pick
+   *  replaces it. It is the one place the app's language lives, so a locale change cannot
+   *  re-apply an older one when the activity is recreated. */
+  fun setLanguage(code: String) {
+    val signedIn = state as? SessionState.SignedIn ?: return
+    if (signedIn.language == code) return
+    state = signedIn.copy(language = code)
+  }
+
   fun signOut() {
     val address = store.serverUrl?.let(ServerAddress::parse)
     viewModelScope.launch {
@@ -168,8 +177,9 @@ fun AppRoot() {
     }
 
     is SessionState.SignedIn -> {
-      // The account's interface language from /api/auth/me is the app's locale from the first frame.
-      LaunchedEffect(state.language) { applyAppLocale(state.language) }
+      // The account's interface language from /api/auth/me is the app's locale from the first
+      // frame, and every later pick goes through the session too.
+      SessionLocale(session)
       val imageLoader = remember(state.api) { ImageLoader.Builder(context).okHttpClient(state.api.http).build() }
       CompositionLocalProvider(LocalImageLoader provides imageLoader) {
         SessionShell(
@@ -178,7 +188,7 @@ fun AppRoot() {
           username = state.username,
           address = state.api.serverAddress,
           onSignOut = session::signOut,
-          onLocale = ::applyAppLocale,
+          onLocale = session::setLanguage,
         )
       }
     }
@@ -189,6 +199,16 @@ fun AppRoot() {
       onChangeServer = session::changeServer,
     )
   }
+}
+
+/**
+ * Applies the signed-in session's language whenever it changes; [apply] is the platform call, so a
+ * test can watch which language the session ends up on.
+ */
+@Composable
+fun SessionLocale(session: SessionViewModel, apply: (String?) -> Unit = ::applyAppLocale) {
+  val language = (session.state as? SessionState.SignedIn)?.language
+  LaunchedEffect(language) { apply(language) }
 }
 
 /**

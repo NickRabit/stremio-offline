@@ -150,5 +150,6 @@
   <string name="tv_version">Verze</string>
   <string name="tv_sign_out_confirm">Odhlásit se na této televizi? Pro přihlášení budete znovu potřebovat heslo.</string>
   <string name="tv_passthrough">Průchod</string>
+  <string name="tv_version_row">Aplikace %1$s · server %2$s</string>
   <string name="tv_version_mismatch">Server běží ve verzi %1$s, aplikace je %2$s. Aktualizujte tu starší.</string>
 </resources>

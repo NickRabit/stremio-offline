@@ -47,3 +47,7 @@ jobs:
       # assembleRelease also runs R8, so the minified build is proven on every change.
       - run: ./gradlew assembleDebug assembleRelease testDebugUnitTest lintDebug --no-daemon
         working-directory: android-tv
+      # One of the four signing variables on its own must not break the build: the signing config
+      # is created only when all four are set, so this still produces the unsigned APK.
+      - run: ANDROID_KEYSTORE="$RUNNER_TEMP/absent.keystore" ./gradlew :app:assembleRelease --no-daemon
+        working-directory: android-tv

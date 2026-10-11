@@ -107,6 +107,23 @@ nothing is written into the repository. With the same four variables set
 locally, `./gradlew assembleRelease` in `android-tv/` produces a signed APK;
 without them it still runs and produces an unsigned one.
 
+Then pin the certificate the release job checks the APK against, as the
+repository variable `ANDROID_CERT_SHA256`. Read it off once, either from a
+signed build, where `apksigner` prints it as `Signer #1 certificate SHA-256
+digest:`, or from the keystore, where `keytool` prints the same value with
+colons that are dropped and in lowercase:
+
+```bash
+apksigner verify --print-certs app/build/outputs/apk/release/app-release.apk | grep "SHA-256"
+# or: keytool -list -v -keystore stremio-offline-tv.jks -alias stremio-offline-tv | grep "SHA256:"
+gh variable set ANDROID_CERT_SHA256
+```
+
+With the variable set, a mismatch fails the release's `android` job before it
+uploads anything -- the APK would be refused by every installed television
+anyway. Without it the job still publishes the APK but writes a
+`::warning::` that the certificate is not pinned.
+
 The owner creates the keystore and sets the secrets; an agent never does.
 
 ## 5. Emulator and a server to talk to
