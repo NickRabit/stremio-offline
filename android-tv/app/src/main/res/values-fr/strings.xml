@@ -80,6 +80,7 @@
   <string name="home_new_episodes">Nouveaux épisodes</string>
   <string name="home_ready_to_play">Prêt à lire</string>
   <string name="home_recent">Ajouté récemment</string>
+  <string name="home_to_confirm">À confirmer</string>
   <string name="home_downloads">Téléchargements</string>
   <plurals name="home_downloads_summary">
     <item quantity="one">%1$s tâche</item>
@@ -169,4 +170,15 @@
   <string name="tv_back_to_source">Revenir à la source précédente</string>
   <string name="library_mosaic_alt">Mosaïque d\'affiches de %1$s films</string>
   <string name="library_show_in_library">Afficher dans la bibliothèque</string>
+  <string name="tv_home_layout">Accueil</string>
+  <string name="tv_home_layout_unavailable">La disposition de l\'accueil n\'est pas disponible sur ce serveur.</string>
+  <string name="tv_home_layout_note">Ajoutez des catalogues à l\'accueil depuis le web.</string>
+  <string name="tv_home_show">Afficher</string>
+  <string name="tv_home_hide">Masquer</string>
+  <string name="tv_home_move_up">Déplacer vers le haut</string>
+  <string name="tv_home_move_down">Déplacer vers le bas</string>
+  <string name="tv_home_move_top">Déplacer tout en haut</string>
+  <string name="tv_home_layout_reset">Réinitialiser</string>
+  <string name="tv_home_layout_shown">Visible</string>
+  <string name="tv_home_layout_hidden">Masqué</string>
 </resources>

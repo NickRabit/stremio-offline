@@ -20,7 +20,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -88,6 +90,7 @@ const val TagSettingsRowUiLanguage = "settings_row_ui_language"
 const val TagSettingsRowAudio = "settings_row_audio"
 const val TagSettingsRowSubtitle = "settings_row_subtitle"
 const val TagSettingsRowStartView = "settings_row_start_view"
+const val TagSettingsRowHomeLayout = "settings_row_home_layout"
 const val TagSettingsRowPreferConversion = "settings_row_prefer_conversion"
 const val TagSettingsRowDevice = "settings_row_device"
 const val TagSettingsRowVersion = "settings_row_version"
@@ -103,7 +106,7 @@ fun settingsOptionTag(kind: String, code: String): String = "settings_${kind}_op
  *  else -- the same value drives the row's label, the panel's tint and the panel's focus. */
 private val START_VIEWS = listOf("home", "catalog", "library")
 
-private enum class SettingsPanel { SignOut, UiLanguage, AudioLanguage, SubtitleLanguage, StartView }
+private enum class SettingsPanel { SignOut, UiLanguage, AudioLanguage, SubtitleLanguage, StartView, HomeLayout }
 
 /** The Device/Version line: the model, the Android release and what the device plays, all from
  *  the capability DTO the player already builds. */
@@ -151,6 +154,13 @@ fun SettingsRoute(
     onAudioLanguage = viewModel::setAudioLanguage,
     onSubtitleLanguage = viewModel::setSubtitleLanguage,
     onStartView = viewModel::setStartView,
+    homeLayout = viewModel.homeLayout,
+    onToggleHomeRow = viewModel::toggleHomeRow,
+    onMoveHomeRow = viewModel::moveHomeRow,
+    onMoveTopHomeRow = viewModel::moveHomeRowToTop,
+    onResetHomeLayout = viewModel::resetHomeLayout,
+    onFlushHomeLayout = viewModel::flushHomeLayout,
+    onOpenHomeLayout = viewModel::refreshHomeLayout,
     preferConversion = preferConversion,
     onPreferConversion = {
       preferConversion = !preferConversion
@@ -181,6 +191,14 @@ fun SettingsScreen(
   onAudioLanguage: (String) -> Unit,
   onSubtitleLanguage: (String) -> Unit,
   onStartView: (String) -> Unit,
+  homeLayout: HomeLayoutState,
+  onToggleHomeRow: (String) -> Unit,
+  onMoveHomeRow: (String, Int) -> Unit,
+  onMoveTopHomeRow: (String) -> Unit,
+  onResetHomeLayout: () -> Unit,
+  onFlushHomeLayout: () -> Unit,
+  /** Asked as the panel opens, so the arrangement is read again instead of shown stale. */
+  onOpenHomeLayout: () -> Unit = {},
   preferConversion: Boolean,
   onPreferConversion: () -> Unit,
   diagnosticsValue: String? = null,
@@ -196,6 +214,7 @@ fun SettingsScreen(
   val audioFocus = remember { FocusRequester() }
   val subtitleFocus = remember { FocusRequester() }
   val startFocus = remember { FocusRequester() }
+  val homeFocus = remember { FocusRequester() }
   val panelFocus = remember { FocusRequester() }
 
   LaunchedEffect(Unit) { runCatching { focusRequester.requestFocus() } }
@@ -228,6 +247,13 @@ fun SettingsScreen(
     "library" -> stringResource(R.string.nav_library)
     else -> stringResource(R.string.nav_catalog)
   }
+  // The row explains an old server, or a read that failed for another reason and can be retried.
+  val homeLayoutValue = when (homeLayout) {
+    is HomeLayoutState.Unavailable -> stringResource(R.string.tv_home_layout_unavailable)
+    is HomeLayoutState.Ready -> homeLayout.message
+      ?: homeLayout.failure?.let { stringResource(it.messageRes()) }.orEmpty()
+    else -> ""
+  }
   val serverVersion = state.serverVersion?.takeIf { it.isNotBlank() }
   val decodeLine = decodedLabels(capabilities).joinToString(" · ")
   val passthroughLine = passthroughLabels(capabilities).let {
@@ -235,7 +261,8 @@ fun SettingsScreen(
   }
 
   Column(
-    modifier = Modifier.fillMaxSize().padding(start = Tokens.SafeX, top = Tokens.SafeY),
+    // The list grew past one screen; it scrolls so the bottom rows still take focus.
+    modifier = Modifier.fillMaxSize().padding(start = Tokens.SafeX, top = Tokens.SafeY).verticalScroll(rememberScrollState()),
     verticalArrangement = Arrangement.spacedBy(6.dp),
   ) {
     Text(
@@ -292,6 +319,17 @@ fun SettingsScreen(
         value = startName,
         onClick = { openPanel(SettingsPanel.StartView, startFocus) },
         modifier = Modifier.testTag(TagSettingsRowStartView).focusRequester(startFocus),
+      )
+      SettingsRow(
+        label = stringResource(R.string.tv_home_layout),
+        value = homeLayoutValue,
+        onClick = {
+          if (homeLayout is HomeLayoutState.Ready) {
+            onOpenHomeLayout()
+            openPanel(SettingsPanel.HomeLayout, homeFocus)
+          }
+        },
+        modifier = Modifier.testTag(TagSettingsRowHomeLayout).focusRequester(homeFocus),
       )
       ToggleRow(
         label = stringResource(R.string.tv_prefer_conversion),
@@ -419,6 +457,16 @@ fun SettingsScreen(
         )
       }
     }
+    SettingsPanel.HomeLayout -> HomeLayoutPanel(
+      state = homeLayout,
+      onToggle = onToggleHomeRow,
+      onMove = onMoveHomeRow,
+      onMoveTop = onMoveTopHomeRow,
+      onReset = onResetHomeLayout,
+      onFlush = onFlushHomeLayout,
+      onClose = { closePanel() },
+      modifier = Modifier.testTag(TagSettingsPanel),
+    )
   }
 }
 

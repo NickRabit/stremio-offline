@@ -80,6 +80,7 @@
   <string name="home_new_episodes">Nové epizódy</string>
   <string name="home_ready_to_play">Pripravené na prehratie</string>
   <string name="home_recent">Nedávno pridané</string>
+  <string name="home_to_confirm">Na potvrdenie</string>
   <string name="home_downloads">Sťahovanie</string>
   <plurals name="home_downloads_summary">
     <item quantity="one">1 úloha</item>
@@ -173,4 +174,15 @@
   <string name="tv_back_to_source">Späť na predchádzajúci zdroj</string>
   <string name="library_mosaic_alt">Plagátová mozaika z %1$s filmov</string>
   <string name="library_show_in_library">Zobraziť v knižnici</string>
+  <string name="tv_home_layout">Domovská obrazovka</string>
+  <string name="tv_home_layout_unavailable">Rozloženie domovskej obrazovky na tomto serveri nie je dostupné.</string>
+  <string name="tv_home_layout_note">Katalógy na domovskú obrazovku pridáte vo webovom rozhraní.</string>
+  <string name="tv_home_show">Zobraziť</string>
+  <string name="tv_home_hide">Skryť</string>
+  <string name="tv_home_move_up">Posunúť nahor</string>
+  <string name="tv_home_move_down">Posunúť nadol</string>
+  <string name="tv_home_move_top">Posunúť na začiatok</string>
+  <string name="tv_home_layout_reset">Obnoviť predvolené</string>
+  <string name="tv_home_layout_shown">Zobrazené</string>
+  <string name="tv_home_layout_hidden">Skryté</string>
 </resources>

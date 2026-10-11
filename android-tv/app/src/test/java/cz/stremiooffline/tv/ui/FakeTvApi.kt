@@ -13,6 +13,8 @@ import cz.stremiooffline.tv.data.DownloadTargetDto
 import cz.stremiooffline.tv.data.DownloadsResponseDto
 import cz.stremiooffline.tv.data.FavoriteToggleDto
 import cz.stremiooffline.tv.data.HomeResponseDto
+import cz.stremiooffline.tv.data.HomeLayoutDto
+import cz.stremiooffline.tv.data.HomeLayoutResponseDto
 import cz.stremiooffline.tv.data.LanguageDto
 import cz.stremiooffline.tv.data.LibraryDto
 import cz.stremiooffline.tv.data.MediaDto
@@ -126,6 +128,16 @@ open class FakeTvApi : TvApi {
   var homeRequests: MutableList<List<String>> = mutableListOf()
   var failHome = false
   var homeFailure: ApiFailure? = null
+  var homeLayoutValue: HomeLayoutResponseDto = HomeLayoutResponseDto()
+  var homeLayoutFailure: ApiFailure? = null
+  var homeLayoutFailureMessage: String? = null
+  var homeLayoutRequests = 0
+  /** Each `updateHomeLayout()` call in order; `null` is the reset that clears the setting. */
+  var homeLayoutPatches: MutableList<HomeLayoutDto?> = mutableListOf()
+  /** When set, `updateHomeLayout()` holds the PATCH like a slow server would. */
+  var homeLayoutPatchGate: CompletableDeferred<Unit>? = null
+  var homeLayoutPatchFailure: ApiFailure? = null
+  var homeLayoutPatchMessage: String? = null
   var downloadsValue: DownloadsResponseDto = DownloadsResponseDto()
   var downloadsRequests = 0
 
@@ -291,6 +303,19 @@ open class FakeTvApi : TvApi {
     if (failHome) throw ApiError(ApiFailure.Generic)
     homeFailure?.let { throw ApiError(it) }
     return homeHandler(rows)
+  }
+
+  override suspend fun homeLayout(): HomeLayoutResponseDto {
+    homeLayoutRequests += 1
+    homeLayoutFailure?.let { throw ApiError(it, serverMessage = homeLayoutFailureMessage) }
+    return homeLayoutValue
+  }
+
+  override suspend fun updateHomeLayout(layout: HomeLayoutDto?): SettingsResponse {
+    homeLayoutPatches += layout
+    homeLayoutPatchGate?.await()
+    homeLayoutPatchFailure?.let { throw ApiError(it, serverMessage = homeLayoutPatchMessage) }
+    return settingsValue
   }
 
   override suspend fun downloads(): DownloadsResponseDto {

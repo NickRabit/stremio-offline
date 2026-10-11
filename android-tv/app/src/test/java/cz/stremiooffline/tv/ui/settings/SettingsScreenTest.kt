@@ -13,6 +13,7 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -22,6 +23,7 @@ import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.pressKey
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
+import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.data.SettingsResponse
 import cz.stremiooffline.tv.data.ApiFailure
 import cz.stremiooffline.tv.data.TvPreferences
@@ -113,13 +115,43 @@ class SettingsScreenTest {
 
     repeat(5) { press(Key.DirectionDown) }
     focusRow(TagSettingsRowStartView)
-    // The switch, then Send diagnostics: the device facts between and under them are not.
+    // The Home row, then the switch, then Send diagnostics: the device facts between and under
+    // them are not focusable.
+    press(Key.DirectionDown)
+    focusRow(TagSettingsRowHomeLayout)
     press(Key.DirectionDown)
     focusRow(TagSettingsRowPreferConversion)
     press(Key.DirectionDown)
     focusRow(TagSettingsRowDiagnostics)
     press(Key.DirectionDown)
     focusRow(TagSettingsRowDiagnostics)
+  }
+
+  @Test
+  fun `every row is reachable and the last one sits fully in the viewport`() {
+    mount(fake())
+    val root = compose.onRoot().fetchSemanticsNode()
+    val rows = listOf(
+      TagSettingsRowServer, TagSettingsRowAccount, TagSettingsRowUiLanguage, TagSettingsRowAudio,
+      TagSettingsRowSubtitle, TagSettingsRowStartView, TagSettingsRowHomeLayout,
+      TagSettingsRowPreferConversion, TagSettingsRowDiagnostics,
+    )
+    rows.forEachIndexed { index, tag ->
+      if (index > 0) press(Key.DirectionDown)
+      focusRow(tag)
+    }
+
+    compose.onNodeWithTag(TagSettingsRowDiagnostics).assertIsDisplayed()
+    val bounds = compose.onNodeWithTag(TagSettingsRowDiagnostics).fetchSemanticsNode().boundsInRoot
+    assertTrue(
+      "Send diagnostics is outside the viewport: $bounds of ${root.size.height}px",
+      bounds.top >= 0f && bounds.bottom <= root.size.height.toFloat(),
+    )
+    // The row's own note has to come with it; the row is focused whole, not just its label.
+    compose.onNodeWithText(
+      ApplicationProvider.getApplicationContext<Context>().getString(R.string.tv_send_diagnostics_note),
+      useUnmergedTree = true,
+    ).assertIsDisplayed()
   }
 
   @Test
@@ -128,11 +160,15 @@ class SettingsScreenTest {
     repeat(5) { press(Key.DirectionDown) }
     focusRow(TagSettingsRowStartView)
     press(Key.DirectionDown)
+    focusRow(TagSettingsRowHomeLayout)
+    press(Key.DirectionDown)
     focusRow(TagSettingsRowPreferConversion)
 
     val notFocusable = SemanticsMatcher.keyNotDefined(SemanticsProperties.Focused)
     compose.onNodeWithTag(TagSettingsRowDevice).assertExists().assert(notFocusable)
 
+    press(Key.DirectionUp)
+    focusRow(TagSettingsRowHomeLayout)
     press(Key.DirectionUp)
     focusRow(TagSettingsRowStartView)
   }
@@ -141,7 +177,7 @@ class SettingsScreenTest {
   fun `OK on the prefer conversion row flips it and stores it on the device`() {
     preferences().preferConversion = false
     mount(fake())
-    repeat(6) { press(Key.DirectionDown) }
+    repeat(7) { press(Key.DirectionDown) }
     focusRow(TagSettingsRowPreferConversion)
     compose.onNodeWithTag(TagSettingsRowPreferConversion).assertTextContains("Off", substring = true)
 
@@ -155,7 +191,7 @@ class SettingsScreenTest {
   fun `toggling the prefer conversion row writes nothing to the server`() {
     val api = fake()
     mount(api)
-    repeat(6) { press(Key.DirectionDown) }
+    repeat(7) { press(Key.DirectionDown) }
     focusRow(TagSettingsRowPreferConversion)
 
     press(Key.DirectionCenter)
@@ -299,7 +335,7 @@ class SettingsScreenTest {
     cz.stremiooffline.tv.diagnostics.AppLog.clear()
     cz.stremiooffline.tv.diagnostics.AppLog.record("WARN", "API GET /api/home", mapOf("status" to "403"))
     mount(api)
-    repeat(7) { press(Key.DirectionDown) }
+    repeat(8) { press(Key.DirectionDown) }
     focusRow(TagSettingsRowDiagnostics)
 
     press(Key.DirectionCenter)
@@ -318,7 +354,7 @@ class SettingsScreenTest {
     api.bundleFailure = ApiFailure.Forbidden
     api.bundleFailureMessage = "Client logs are turned off on this server."
     mount(api)
-    repeat(7) { press(Key.DirectionDown) }
+    repeat(8) { press(Key.DirectionDown) }
     focusRow(TagSettingsRowDiagnostics)
 
     press(Key.DirectionCenter)
@@ -333,7 +369,7 @@ class SettingsScreenTest {
     val api = fake()
     api.bundleFailure = ApiFailure.Unreachable
     mount(api)
-    repeat(7) { press(Key.DirectionDown) }
+    repeat(8) { press(Key.DirectionDown) }
     focusRow(TagSettingsRowDiagnostics)
 
     press(Key.DirectionCenter)
