@@ -65,7 +65,7 @@ re-ordered by a heuristic, which keeps scroll restoration honest.
 | 2 | Favourites | Library favourites and starred catalogue titles, merged into one list and filtered by grant. | Ready |
 | 3 | Tonight | Unstarted whole titles from the libraries Home shows, in a per-day order. | Ready |
 | 4 | Add-on catalogs | One seeded random selection per selected manifest catalog feed from enabled, granted add-ons shown on Home. | Ready; bounded request per feed |
-| 5 | New episodes | The existing `NewEpisodesRow` from Following, after a check of its grant semantics. | Ready, reuse |
+| 5 | New episodes | The account's own `NewEpisode`s, the same cards the planner's New episodes section draws. | Ready, reuse |
 | 6 | Ready to play | The account's own completed downloads that resolve to a file that can be opened now. | Small server change |
 | 7 | Recently added | Files first seen by a library scan. | Needs new persisted data |
 | 8 | Downloads | The account's own jobs. A one-line summary, unless one has failed or is blocked, in which case only those jobs are cards. | Ready: the client already holds and polls the queue |
@@ -77,8 +77,9 @@ filters each viewer's feed list and results by their current grant.
 
 Following is its own destination and is not rebuilt here, but its Overview tab now leads with
 a **New episodes** section: the account's `NewEpisode`s, the same cards the Library shelf used
-to draw, with the one action an episode has -- open its series. The section is hidden when
-nothing is new.
+to draw. A `NewEpisode` carries no library path (neither does the Home `episode` card), so the
+one action it can offer is to open its series; there is nothing to play from the library
+directly. The section is hidden when nothing is new.
 
 Tonight tops up from the account's unfinished favourites when fewer than 12 unstarted titles are eligible.
 
@@ -128,15 +129,16 @@ A local file in progress says **Resume** and shows its progress. A catalogue
 entry says **Open episode** (or **Open title** for a film), because opening the
 title does not guarantee that playback starts. A pending next episode says
 **Next episode** and has no invented 0% bar. Episode numbering is shown whenever
-it is known. `showResumeRow` and each library's and addon's
-`showInContinueWatching` are respected.
+it is known. Home's `resume` row is bounded by each library's and add-on's Show
+on Home switch; the Continue watching section drawn from the same cards honours
+only their `showInContinueWatching`.
 
 Today the two sources do not share an identity: `/api/progress` awaits
 `cachedMeta` for every owed marker before it slices to 40, `/api/library/resume`
-resolves stored paths before paging and drops the show key from its response,
-and `:resume` covers only library items. So a merged row needs a server
-contract with a stable card id, a source, the progress keys it represents, an
-optional canonical series identity, a target and a freshness time. Rules:
+resolves stored paths before paging and drops the show key from its response.
+So a merged row needs a server contract with a stable card id, a source, the
+progress keys it represents, an optional canonical series identity, a target
+and a freshness time. Rules:
 
 1. Apply permissions and visibility first, on the server, before selecting or
    counting. That includes stored catalogue progress, whose current filter checks
@@ -288,15 +290,17 @@ still not filtered by which add-ons the account may use.
 
 **Continue watching (one list).** `GET /api/resume?filter=all|library|catalog&skip&limit`
 answers the same merged, de-duplicated, newest-first list Home's `resume` row builds,
-pageable past the row's bound: Home's row is exactly its first page, and both read one
-builder so the two cannot disagree. Each item keeps the Home card shape
+pageable past the row's bound. Home's row is its first page, save that it also applies the
+Home switch; both read one builder, so they cannot disagree about the cards. Each item
+keeps the Home card shape
 (`resume-file` | `resume-catalogue`, with `forgetKeys` and the progress, numbering and
 artwork the card draws). `filter` selects by card kind, and a folded show that kept a local
-copy counts under both -- the kind that won the card does not decide it. Visibility and
-each library's and add-on's `showInContinueWatching` are applied exactly as Home applies
-them. Forgetting a card is the same owner-scoped `POST /api/progress/forget` Home uses.
-The library's own `:resume` list and the catalogue's virtual entry are no longer entry
-points; the library root draws no shelf.
+copy counts under both -- the kind that won the card does not decide it. The only
+difference from Home is the Home switch: Home's row drops a library or add-on switched
+off the Home page, while this section honours only `showInContinueWatching`, so such a
+library or add-on is still listed here. Forgetting a card is the same owner-scoped
+`POST /api/progress/forget` Home uses. The library's own `:resume` list and the
+catalogue's virtual entry are no longer entry points; the library root draws no shelf.
 
 ## Client
 
@@ -315,7 +319,7 @@ points; the library root draws no shelf.
   `App.tsx` as part of this.
 - Reuse `TileArt` and the tile-shape rules, the `.resume-bar` overlay,
   `.resume-strip` and `.row-strip`, `Empty`, `queueDestination`, the existing
-  download actions and `NewEpisodesRow`.
+  download actions.
 - Rows are horizontal shelves, never wrapping grids, so a row keeps a constant
   height. A shelf is a keyboard-reachable scroll region.
 - Preserve each shelf's horizontal offset when returning from playback and the
@@ -561,8 +565,8 @@ Do not hard-code the count in code or tests. New keys: `nav.home`, `nav.more`,
 `home.emptyText`, `home.emptyAdminHint`. The one Continue watching section
 adds `nav.resume`, `resume.title`, `resume.filterAll/Library/Catalog` and
 `resume.emptyAll/Library/CatalogTitle/Text`. Reuse equivalent existing keys first:
-`library.continueWatching`, `library.showAll`, `library.showInLibrary`,
-`downloads.retry` and the `downloads.status.*` labels.
+`library.showAll`, `library.showInLibrary`, `downloads.retry` and the
+`downloads.status.*` labels.
 
 ## Tests
 
@@ -613,7 +617,7 @@ the personal `homeLayout` setting below.
    catalogue groups and truthful action labels.
 3. **Ready to play.** `GET /api/home`, the resolved row, its full-list route and a
    refresh when a job completes.
-4. **Favourites**, and optionally `NewEpisodesRow` beneath it.
+4. **Favourites**, and optionally a New episodes row beneath it.
 5. **Recently added.** A write-once first-seen index written by the scan walk
    (`library/seen.json`), remapped on move and rename, with entries that predate
    it left out.

@@ -7,6 +7,9 @@ export const HOME_CANDIDATES = 30;
 export const HOME_MARKER_LIMIT = 20;
 export const HOME_LOOKUP_DEADLINE_MS = 1500;
 export const HOME_FORGET_LIMIT = 50;
+/** How many part-watched library files the merged Continue watching list reads before it
+ *  pages them. The public `/api/library/resume` keeps its own, smaller ceiling. */
+export const HOME_RESUME_FILE_LIMIT = 2000;
 /** How many row ids and extra feeds one personal layout may name. A body over either is refused. */
 export const HOME_LAYOUT_ROW_LIMIT = 200;
 export const HOME_LAYOUT_FEED_LIMIT = 50;

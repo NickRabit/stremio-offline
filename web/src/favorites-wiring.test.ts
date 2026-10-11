@@ -52,4 +52,13 @@ describe("one Continue watching section in the shell", () => {
     expect(app).not.toContain("chooseLibraryShelf");
     expect(app).not.toContain('t("library.onlyFavorites")');
   });
+
+  it("removed the library's own resume list and every entry point into it", () => {
+    expect(app).not.toContain('":resume"');
+    expect(app).not.toContain("resumeLibrary");
+    expect(app).not.toContain("NewEpisodesRow");
+    expect(source("./api.ts")).not.toContain("resumeLibrary");
+    expect(source("./views.ts")).not.toContain(":resume");
+    expect(source("./types.ts")).not.toMatch(/ExtraView =[^;]*:resume/);
+  });
 });

@@ -139,10 +139,6 @@ export function SettingsPage({ build, restricted = false, settings, search, onSe
       {admin && <section className="panel settings-section library-manager-section"><SettingsSectionHead icon={<Library/>} title={t("library.libraries")} text={t("library.librariesHint")}/><LibraryManager restricted={restricted || !admin} onChanged={onLibrariesChanged} onError={onError} onNotify={onNotify}/></section>}
       {admin && <section className="panel settings-section user-manager-section"><SettingsSectionHead icon={<Users/>} title={t("users.title")} text={t("users.hint")}/><UserManager session={session} restricted={restricted} onChanged={onLibrariesChanged} onNotify={onNotify} onError={onError}/></section>}
       <section className="panel settings-section"><SettingsSectionHead icon={<Library/>} title={t("nav.library")} /><SettingControl title={t("settings.sameTitles")} text={t("settings.sameTitlesHint")}><select aria-label={t("settings.sameTitles")} disabled={restricted} value={settings.mergeByName ? "1" : "0"} onChange={(event) => void onSave({ mergeByName: event.target.value === "1" })}><option value="1">{t("settings.merge")}</option><option value="0">{t("settings.showSeparately")}</option></select></SettingControl>
-        <SettingControl title={t("settings.resumeRow")} text={t("settings.resumeRowHint")}>
-          <select aria-label={t("settings.resumeRowLabel")} disabled={restricted} value={settings.showResumeRow ? "1" : "0"} onChange={(event) => void onSave({ showResumeRow: event.target.value === "1" })}>
-            <option value="1">{t("settings.show")}</option><option value="0">{t("settings.hide")}</option>
-          </select></SettingControl>
         {admin && <SettingControl title={t("settings.autoScan")} text={t("settings.autoScanHint")}>
           <select aria-label={t("settings.autoScanLabel")} disabled={restricted || !admin} value={settings.libraryAutoScan ? "1" : "0"} onChange={(event) => void onSave({ libraryAutoScan: event.target.value === "1" })}>
             <option value="1">{t("settings.autoScanOn")}</option><option value="0">{t("settings.autoScanOff")}</option>

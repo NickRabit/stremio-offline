@@ -79,6 +79,8 @@ interface Harness {
   metaAnswer: MetaItem | null;
   /** What `locateFileArtwork` answers; a thumbnail URL exists only when there is one. */
   artwork?: string;
+  /** Whether `attachBrowseMeta` reports that it found metadata beyond the scan. */
+  backfill?: boolean;
   /** Every series id the catalogue side was asked about, in order. */
   lookups: string[];
   /** Every manifest feed the Home route requested, including its required extras. */
@@ -144,7 +146,7 @@ const mount = async (options: { libraries?: LibraryRecord[]; deadlineMs?: number
     stopUserSessions: async () => undefined,
     requireAccess: () => undefined,
     stopContentAccess: async () => undefined,
-    attachBrowseMeta: async (item) => ({ item, backfill: false }),
+    attachBrowseMeta: async (item) => ({ item, backfill: state.backfill ?? false }),
     cachedMeta: async (_type, id) => {
       state.lookups.push(id);
       if (state.metaDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, state.metaDelayMs));
@@ -792,6 +794,63 @@ test("GET /api/resume is refused without a session, the way the personal routes 
   const response = await api(harness.base, "/api/resume");
   assert.equal(response.status, 401);
   assert.equal((await response.json() as { code?: string }).code, "AUTH_REQUIRED");
+});
+
+test("the Continue watching section keeps a library the Home row drops, and Home's row keeps its own switch", async (t) => {
+  const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE], showOnHome: false, showInContinueWatching: true })] });
+  t.after(harness.close);
+  harness.data(ALICE).progress = {
+    "file:lib_00000001/Shows/01.mkv": { position: 30, duration: 600, title: "Pilot", path: "lib_00000001/Shows/01.mkv", updatedAt: "2024-01-02T00:00:00.000Z" },
+  };
+
+  const rows = await allRows(harness, ALICE);
+  assert.deepEqual(rows.resume!.items, [], "Home's row still drops a library whose Home switch is off");
+  const page = await resumePageOf(harness);
+  assert.deepEqual(page.items.map((item) => item.key), ["file:Shows/01.mkv"], "the section applies only the library's own switch");
+});
+
+test("the Continue watching section keeps an addon the Home row drops, and Home's row keeps its own switch", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  harness.addons.push(
+    { key: "quiet", manifestUrl: "https://quiet/manifest.json", role: "both", enabled: true, globalSearch: true, showOnHome: false, showInContinueWatching: true, addedAt: "", allowedUsers: [ALICE], manifest: { id: "quiet", name: "Quiet", version: "1" } } as AddonRecord,
+  );
+  harness.data(ALICE).progress = {
+    "movie:tt1": { position: 10, duration: 100, title: "Kept", addonKey: "quiet", updatedAt: "2024-01-02T00:00:00.000Z" },
+  };
+
+  const rows = await allRows(harness, ALICE);
+  assert.deepEqual(rows.resume!.items, [], "Home's row still drops an addon whose Home switch is off");
+  const page = await resumePageOf(harness);
+  assert.deepEqual(page.items.map((item) => item.key), ["movie:tt1"], "the section applies only the addon's own switch");
+});
+
+test("GET /api/resume reaches past the old 120-file clamp and reports an honest total", async (t) => {
+  const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
+  t.after(harness.close);
+  const started = Date.parse("2024-01-01T00:00:00.000Z");
+  harness.data(ALICE).progress = Object.fromEntries(Array.from({ length: 130 }, (_, index) => {
+    const relative = `lib_00000001/Films/Film ${String(index).padStart(3, "0")}.mkv`;
+    return [`file:${relative}`, { position: 10, duration: 600, title: `Film ${index}`, path: relative, updatedAt: new Date(started + index * 60_000).toISOString() }];
+  }));
+
+  const all = await resumePageOf(harness, "?filter=library&limit=40");
+  assert.equal(all.total, 130, "every part-watched file counts, not the first 120");
+  const rest = await resumePageOf(harness, "?filter=library&skip=120&limit=40");
+  assert.equal(rest.items.length, 10, "the older files are reachable past the old ceiling");
+});
+
+test("GET /api/resume keeps the page-level pending of its sources, as the sibling list does", async (t) => {
+  const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
+  t.after(harness.close);
+  harness.artwork = "art.jpg";
+  harness.backfill = true;
+  harness.data(ALICE).progress = {
+    "file:lib_00000001/Films/Heat.mkv": { position: 30, duration: 600, title: "Heat", path: "lib_00000001/Films/Heat.mkv", updatedAt: "2024-01-01T00:00:00.000Z" },
+  };
+
+  const page = await resumePageOf(harness);
+  assert.equal(page.pending, true, "a library file whose metadata is still backfilling keeps the list pending");
 });
 
 test("Home Favourites keeps a star unless its library opted out, is off Home or is disabled", async (t) => {

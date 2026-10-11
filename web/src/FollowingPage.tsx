@@ -9,7 +9,7 @@ import type { ActivityItem, Addon, CalendarEpisodeState, CalendarItem, UndatedCa
 
 interface FollowingPageProps {
   follows: FollowView[];
-  /** Kept for the caller's shape; the page itself reads the two episodes off each follow. */
+  /** The new episodes the Overview tab leads with; the section draws them and opens the series. */
   newEpisodes: NewEpisode[];
   languages: Array<{ code: string; name: string }>;
   libraries: LibraryView[];
@@ -96,8 +96,9 @@ const sortFollows = (follows: FollowView[]): FollowView[] => [...follows].sort((
   return left.name.localeCompare(right.name);
 });
 
-/** The account's new episodes at the top of the planner: the same rows the Library shelf used
- *  to draw, with the one action an episode has -- open its series. Nothing new, nothing drawn. */
+/** The account's new episodes at the top of the planner: the rows the library shelf used to
+ *  draw. An episode carries no library path, so its one action is to open the series; there is
+ *  nothing to play from the library directly. Nothing new, nothing drawn. */
 function NewEpisodesSection({ episodes, onOpen }: { episodes: NewEpisode[]; onOpen: (episode: NewEpisode) => void }) {
   useI18n();
   if (!episodes.length) return null;

@@ -6,7 +6,7 @@ import { images } from "../images.js";
 import { allowedAddons } from "../addons.js";
 import { HomeCatalogCache, homeCatalogOfferings, homeCatalogTargets, type HomeCatalogTarget } from "../home-catalogs.js";
 import {
-  HOME_BUILTIN_LABELS, HOME_BUILTIN_ROWS, HOME_CANDIDATES, HOME_LOOKUP_DEADLINE_MS, HOME_MARKER_LIMIT, HOME_ROW_LIMIT,
+  HOME_BUILTIN_LABELS, HOME_BUILTIN_ROWS, HOME_CANDIDATES, HOME_LOOKUP_DEADLINE_MS, HOME_MARKER_LIMIT, HOME_RESUME_FILE_LIMIT, HOME_ROW_LIMIT,
   arrangeHomeRows, boundCards, homeCatalogRowId, homeFeedSelectionKey, homeRowOrder, mergeResume, parseHomeLayout,
   parseResumeFilter, resumePage,
   type HomeCard, type HomeLayout, type HomeLayoutEntry, type HomeLayoutResponse, type HomeResponse, type HomeRow, type HomeRowError, type HomeRowId,
@@ -164,11 +164,12 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
     return { poster: await thumbUrl("dir", relative, art), wide: await thumbUrl("dir", relative, wide, "wide") };
   };
 
-  /** The two Continue watching sources, permission-filtered the way Home applies them: the
-   *  catalogue's stored progress and next-episode markers, and the library files the account
-   *  left part-watched. Home's `resume` row and `GET /api/resume` read this one builder, so
-   *  the two can never disagree. */
-  const resumeSources = async (req: express.Request): Promise<{ sources: ResumeSources; partial: boolean }> => {
+  /** The two Continue watching sources, permission-filtered: the catalogue's stored progress
+   *  and next-episode markers, and the library files the account left part-watched. Home's
+   *  `resume` row and `GET /api/resume` read this one builder. On Home a library or add-on
+   *  switched off the Home page drops out; the Continue watching section applies only the
+   *  destination's own `showInContinueWatching` switch. */
+  const resumeSources = async (req: express.Request, home: boolean): Promise<{ sources: ResumeSources; partial: boolean; pending: boolean }> => {
     const [progress, resume] = await Promise.all([
       personal.progressRows(req, {
         markerLimit: HOME_MARKER_LIMIT, deadlineMs: homeLookupDeadlineMs, addonFilter: true,
@@ -177,17 +178,18 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
         limit: Number.POSITIVE_INFINITY,
       }),
       // Every file candidate, whatever page of the merged list the caller asked for: the
-      // stored positions are bounded already, and the merge is what pages.
-      personal.libraryResumeItems(req, { onHome: true, skip: 0, limit: 120 }),
+      // stored positions are bounded already, and the merge is what pages. Home only ever
+      // draws 20, so it keeps the smaller bound; the section may reach every file.
+      personal.libraryResumeItems(req, { onHome: home, skip: 0, limit: home ? 120 : HOME_RESUME_FILE_LIMIT }),
     ]);
     // The addon's own switches for the row, as the catalogue row reads them: a row whose addon
-    // is gone, or that never recorded one, stays.
+    // is gone, or that never recorded one, stays. Home also drops an add-on switched off there.
     const addons = store.addons();
     const catalogue: ResumeCatalogueItem[] = progress.items
       .filter((row) => !row.key.startsWith("file:"))
       .filter((row) => {
         const addon = addons.find((entry) => entry.key === row.addonKey);
-        return addon?.showInContinueWatching !== false && addon?.showOnHome !== false;
+        return addon?.showInContinueWatching !== false && (!home || addon?.showOnHome !== false);
       })
       .map((row) => {
         const series = row.series;
@@ -216,11 +218,11 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
       ...(typeof item.episode === "number" ? { episode: item.episode } : {}),
       ...(item.seriesId ? { seriesId: item.seriesId, seriesType: item.seriesType } : {}),
     }));
-    return { sources: { catalogue, files }, partial: progress.partial };
+    return { sources: { catalogue, files }, partial: progress.partial, pending: resume.pending };
   };
 
   const resumeRow = async (req: express.Request): Promise<HomeRow> => {
-    const { sources, partial } = await resumeSources(req);
+    const { sources, partial } = await resumeSources(req, true);
     const merged = mergeResume(sources);
     return { status: "ok", items: merged.items, hasMore: merged.hasMore, ...(partial ? { partial: true } : {}) };
   };
@@ -568,12 +570,13 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
     res.json(response);
   }));
 
-  /** The one Continue watching list for the signed-in account: Home's `resume` row is its
-   *  first page, and this route carries it past the row's bound, filtered by card kind. Every
-   *  card keeps the shape Home draws, so the interface renders both with one component. */
+  /** The one Continue watching list for the signed-in account: it carries Home's merged list
+   *  past the row's bound, filtered by card kind. The only difference from Home's row is that
+   *  this destination honours just `showInContinueWatching`, not the Home switches. Every card
+   *  keeps the shape Home draws, so the interface renders both with one component. */
   app.get("/api/resume", asyncRoute(async (req, res) => {
     res.set("Cache-Control", "private, no-store");
-    const { sources, partial } = await resumeSources(req);
+    const { sources, partial, pending } = await resumeSources(req, false);
     const page = resumePage(sources, {
       filter: parseResumeFilter(req.query.filter),
       skip: Math.max(0, Number(req.query.skip) || 0),
@@ -581,7 +584,9 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
     });
     res.json({
       items: page.items, total: page.total,
-      pending: page.items.some((item) => !item.poster),
+      // A page is pending when a card on it still lacks a poster, and the library source
+      // reports a file still waiting for artwork or metadata.
+      pending: pending || page.items.some((item) => !item.poster),
       ...(partial ? { partial: true } : {}),
     });
   }));

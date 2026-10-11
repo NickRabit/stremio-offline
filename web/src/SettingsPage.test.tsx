@@ -75,3 +75,14 @@ describe("SettingsPage Home layout", () => {
     expect(host.querySelector(".home-layout-section")).not.toBeNull();
   });
 });
+
+describe("SettingsPage library row", () => {
+  it("no longer offers a dead Continue watching row switch", async () => {
+    const { onSave } = await render();
+    expect([...host.querySelectorAll("select")].some((select) => select.getAttribute("aria-label") === "Part-watched row")).toBe(false);
+    await act(async () => {
+      for (const select of [...host.querySelectorAll<HTMLSelectElement>("select")]) select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(onSave).not.toHaveBeenCalledWith({ showResumeRow: false });
+  });
+});

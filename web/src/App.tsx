@@ -42,7 +42,6 @@ import type { ShowAllTarget } from "./home-cards";
 import type { HomeCard } from "../../server/src/home";
 import { parseHomeCatalogRowId } from "../../server/src/home";
 import { MoreMenu, type MoreItem } from "./MoreMenu";
-import { fmtEta } from "./download-format";
 import { MediaGallery, type GalleryImage, type GalleryKind } from "./MediaGallery";
 import { SettingsPage } from "./SettingsPage";
 import { resolveStartView } from "./start-view";
@@ -611,9 +610,7 @@ export function App() {
   const folderMeta = (item: Extract<BrowseItem, { kind: "folder" }>) =>
     [item.year, t("library.fileCount", { count: item.fileCount }), bytes(item.size)].filter(Boolean).join(" · ");
   const fileMeta = (item: Extract<BrowseItem, { kind: "file" }>) =>
-    browsePath === ":resume" && item.progress
-      ? t("library.remaining", { time: fmtEta(Math.max(0, item.progress.duration - item.progress.position)) })
-      : [item.year, bytes(item.size)].filter(Boolean).join(" · ");
+    [item.year, bytes(item.size)].filter(Boolean).join(" · ");
   const descriptionLine = (item: TreeItem) => item.description
     ? (item.catalogName ? `${item.catalogName} · ${item.description}` : item.description)
     : item.match === "suggested" && item.suggestion
@@ -1228,9 +1225,7 @@ export function App() {
     try {
       const options = { skip, limit: 60, sort: browseSort, order: browseDesc ? "desc" : "asc", seed: browseSeed.current };
       // Favorites include entries from the entire library tree.
-      const page = target === ":resume"
-        ? await api.resumeLibrary({ ...options, query: browseQuery })
-        : target === ":favorites"
+      const page = target === ":favorites"
         ? await api.favorites(options)
         : await api.browse({ ...options, path: target, query: browseQuery, unconfirmed: onlyUnconfirmed });
       if (request !== browseRequest.current || wanted !== browseLocation.current) return;
@@ -1244,9 +1239,7 @@ export function App() {
     const request = browseRequest.current;
     try {
       const options = { limit: Math.max(60, limit), sort: browseSort, order: browseDesc ? "desc" : "asc", seed: browseSeed.current };
-      const page = browsePath === ":resume"
-        ? await api.resumeLibrary({ ...options, query: browseQuery })
-        : browsePath === ":favorites"
+      const page = browsePath === ":favorites"
         ? await api.favorites(options)
         : await api.browse({ ...options, path: browsePath, query: browseQuery, unconfirmed: onlyUnconfirmed });
       if (location === browseLocation.current && request === browseRequest.current) setBrowse(page);
@@ -2239,7 +2232,6 @@ export function App() {
               <ChevronRight/>
               <button disabled={browsePath === ":favorites"} onClick={() => { setBrowseQuery(""); setBrowsePath(":favorites"); }}>{t("favorite.off")}</button>
             </span>}
-            {browsePath === ":resume" && <span><ChevronRight/><button disabled>{t("library.continueWatching")}</button></span>}
             {!browsePath.startsWith(":") && browsePath.split("/").filter(Boolean).map((part, index, all) => <span key={part + index}>
               <ChevronRight/>
               {/* Segment zero is a library id; the id is never shown. */}
@@ -2256,7 +2248,7 @@ export function App() {
               setBrowseDesc(next === "added" || next === "size");
               persistLibraryPrefs({ sort: next, order: next === "added" || next === "size" ? "desc" : "asc" });
             }}>
-              <option value="name">{t("library.sortName")}</option><option value="added">{t(browsePath === ":resume" ? "library.sortLastWatched" : "library.sortAdded")}</option>
+              <option value="name">{t("library.sortName")}</option><option value="added">{t("library.sortAdded")}</option>
               <option value="size">{t("library.sortSize")}</option><option value="random">{t("library.sortRandom")}</option>
             </select>}
             {!libraryList && <button title={t(browseDesc ? "common.descending" : "common.ascending")} onClick={() => { setBrowseDesc((value) => !value); persistLibraryPrefs({ order: browseDesc ? "asc" : "desc" }); }} disabled={browseSort === "random"}>
@@ -2265,7 +2257,7 @@ export function App() {
             {/* Only while the scan has something waiting: with nothing to confirm the filter
                 would list an empty folder and say nothing about why. */}
             {!libraryList && suggestionCount > 0 && <button className={onlyUnconfirmed ? "active-filter" : ""} title={t("library.onlyUnconfirmed")}
-              aria-pressed={onlyUnconfirmed} disabled={browsePath === ":favorites" || browsePath === ":resume"}
+              aria-pressed={onlyUnconfirmed} disabled={browsePath === ":favorites"}
               onClick={() => setOnlyUnconfirmed((value) => !value)}><Sparkles/></button>}
             {!libraryList && <button title={t(browseView === "grid" ? "library.viewRows" : "library.viewTiles")} onClick={() => { setBrowseView((value) => value === "grid" ? "list" : "grid"); persistLibraryPrefs({ view: browseView === "grid" ? "list" : "grid" }); }}>
               {browseView === "grid" ? <List/> : <LayoutGrid/>}
@@ -2356,7 +2348,7 @@ export function App() {
         </div>}
         {!browse || !browse.items.length
           ? (browseBusy ? <div className="loading">{t("common.loading")}</div>
-            : <Empty icon={<HardDrive/>} title={t(browseQuery ? "library.emptyFilterTitle" : onlyUnconfirmed ? "library.emptyUnconfirmedTitle" : browsePath === ":resume" ? "library.emptyResumeTitle" : browsePath === ":favorites" ? "library.emptyFavoritesTitle" : "library.emptyTitle")} text={t(browseQuery ? "library.emptyFilterText" : onlyUnconfirmed ? "library.emptyUnconfirmedText" : browsePath === ":resume" ? "library.emptyResumeText" : browsePath === ":favorites" ? "library.emptyFavoritesText" : "library.emptyText")}/>)
+            : <Empty icon={<HardDrive/>} title={t(browseQuery ? "library.emptyFilterTitle" : onlyUnconfirmed ? "library.emptyUnconfirmedTitle" : browsePath === ":favorites" ? "library.emptyFavoritesTitle" : "library.emptyTitle")} text={t(browseQuery ? "library.emptyFilterText" : onlyUnconfirmed ? "library.emptyUnconfirmedText" : browsePath === ":favorites" ? "library.emptyFavoritesText" : "library.emptyText")}/>)
           : <>
             <div className={browseView === "grid" ? "browse-grid" : "browse-rows"}>
               {browse.items.map((item) => item.kind === "library"

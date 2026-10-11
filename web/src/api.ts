@@ -230,8 +230,6 @@ export const api = {
   /** Everything this account can arrange on Home, and its current arrangement. */
   homeLayout: () => request<HomeLayoutResponse>("/api/home/layout"),
   setFavorite: (path: string, favorite: boolean) => request<{ path: string; favorite: boolean }>("/api/library/favorite", { method: "POST", body: JSON.stringify({ path, favorite }) }),
-  resumeLibrary: (options: { skip?: number; limit?: number; sort?: string; order?: string; seed?: string; query?: string; favorites?: boolean }) =>
-    request<BrowseResult>(`/api/library/resume?${q({ ...options, favorites: options.favorites ? 1 : undefined })}`),
   favorites: (options: { skip?: number; limit?: number; sort?: string; order?: string; seed?: string }) =>
     request<BrowseResult>(`/api/library/favorites?${q({ skip: options.skip || undefined, limit: options.limit ?? 60, sort: options.sort || undefined, order: options.order || undefined, seed: options.seed || undefined })}`),
   /** The configured libraries. `root` is withheld in restricted mode. */

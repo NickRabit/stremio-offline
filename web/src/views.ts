@@ -11,8 +11,6 @@ const LIBRARY_ID = /^lib_[0-9a-f]{8}$/;
 
 export const defaultLibraryView = (): LibraryViewPrefs =>
   ({ sort: "name", order: "asc", favoritesOnly: false, view: "grid" });
-export const defaultResumeView = (): LibraryViewPrefs =>
-  ({ sort: "added", order: "desc", favoritesOnly: false, view: "grid" });
 export const defaultDownloadsView = (): DownloadsViewPrefs =>
   ({ sort: "order", direction: "asc", status: "", dateField: "createdAt", pageSize: 20 });
 
@@ -22,7 +20,7 @@ export const emptyViews = (): UserViews =>
 /** A library list is not a bucket. A single-library install speaks relative
  *  paths (`Films`, not `lib_xxxxxxxx/Films`); those still belong to that library. */
 export function scopeOf(path: string, libraryIds: string[]): ViewScope {
-  if (path === ":favorites" || path === ":resume") return { kind: "extra", id: path };
+  if (path === ":favorites") return { kind: "extra", id: path };
   if (!path) return libraryIds.length === 1 ? { kind: "library", id: libraryIds[0]! } : { kind: "none" };
   const id = path.split("/")[0]!;
   if (LIBRARY_ID.test(id)) return { kind: "library", id };
@@ -32,7 +30,7 @@ export function scopeOf(path: string, libraryIds: string[]): ViewScope {
 export function prefsFor(views: UserViews, scope: ViewScope): LibraryViewPrefs {
   if (scope.kind === "none") return defaultLibraryView();
   if (scope.kind === "library") return views.libraries[scope.id] ?? defaultLibraryView();
-  return views.extras[scope.id] ?? (scope.id === ":resume" ? defaultResumeView() : defaultLibraryView());
+  return views.extras[scope.id] ?? defaultLibraryView();
 }
 
 export const withLibrary = (views: UserViews, id: string, prefs: LibraryViewPrefs): UserViews =>

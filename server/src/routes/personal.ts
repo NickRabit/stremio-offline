@@ -6,7 +6,7 @@ import {
   filterFavorites, mergeFavorites, parseFavoriteFilter, type FavoriteCatalogItem, type FavoriteEntry,
   type FavoriteEntryCatalog, type FavoriteEntryLibrary, type FavoriteItem, type FavoriteLibraryItem,
 } from "../favorites.js";
-import { HOME_FORGET_LIMIT } from "../home.js";
+import { HOME_FORGET_LIMIT, HOME_RESUME_FILE_LIMIT } from "../home.js";
 import { images } from "../images.js";
 import { knownEntryForUnit, knownTitleEntry, unitFor, type LibraryMetaRecord, type TitleUnit } from "../library-match.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
@@ -614,7 +614,11 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     const sort = sorts.has(String(req.query.sort)) ? String(req.query.sort) as "name" : "added";
     const ordered = sortFiles(items, sort, req.query.order !== "asc", String(req.query.seed ?? ""));
     const skip = Math.max(0, options.skip ?? (Number(req.query.skip) || 0));
-    const limit = Math.max(1, Math.min(120, options.limit ?? (Number(req.query.limit) || 60)));
+    // The public `/api/library/resume` ceiling is 120; an internal caller may hand the merge
+    // every file candidate it asked for, so the merged list can page past that bound.
+    const limit = options.limit !== undefined
+      ? Math.max(1, Math.min(HOME_RESUME_FILE_LIMIT, options.limit))
+      : Math.max(1, Math.min(120, Number(req.query.limit) || 60));
     const page = await Promise.all(ordered.slice(skip, skip + limit).map(async (item) => {
       const key = libraryKey(item.path);
       const art = await locateFileArtwork(key);
