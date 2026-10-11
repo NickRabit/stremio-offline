@@ -68,6 +68,7 @@ class CapabilitiesTest {
 
     assertEquals(listOf("H.264", "HEVC", "AAC", "AC-3"), decodedLabels(capabilities))
     assertEquals(listOf("E-AC-3"), passthroughLabels(capabilities))
+  }
 
   @Test
   fun `the browser view keeps the codecs and drops every native list`() {
