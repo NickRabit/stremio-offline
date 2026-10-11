@@ -108,10 +108,13 @@ fun PlayerScreen(api: TvApi, target: PlayTarget, onExit: () -> Unit) {
   // Coming back from the background starts a fresh session paused, at the position left behind.
   var backgroundPosition by remember { mutableStateOf<Double?>(null) }
   var startPaused by remember { mutableStateOf(false) }
-  var activeSourceId by remember { mutableStateOf<String?>(null) }
   var settings by remember { mutableStateOf(SettingsResponse()) }
   var addonSubtitles by remember { mutableStateOf<List<AddonSubtitleDto>>(emptyList()) }
   var addonFetched by remember { mutableStateOf(false) }
+  // The name the OSD and the loading overlay show; it follows the next episode too.
+  var title by remember(target.key) { mutableStateOf(target.title) }
+  // Subtitle polling runs only while the player is on screen: leaving the app releases the session.
+  var resumed by remember { mutableStateOf(true) }
 
   var tracksOpen by remember { mutableStateOf(false) }
   var diagnosticsOpen by remember { mutableStateOf(false) }
@@ -171,7 +174,7 @@ fun PlayerScreen(api: TvApi, target: PlayTarget, onExit: () -> Unit) {
     val groups = offeredTracks()
     val builder = exoPlayer.trackSelectionParameters.buildUpon()
 
-    val audioMatch = if (snapshot.mode == PlaybackMode.Direct) snapshot.audioTrack?.let { matchTrack(it, groups, C.TRACK_TYPE_AUDIO) } else null
+    val audioMatch = if (snapshot.mode == PlaybackMode.Direct) matchTrack(snapshot.audioTracks, snapshot.audioTrackIndex, groups, C.TRACK_TYPE_AUDIO) else null
     if (audioMatch != null) {
       val mediaGroup = exoPlayer.currentTracks.groups[audioMatch.groupIndex].mediaTrackGroup
       builder.setOverrideForType(TrackSelectionOverride(mediaGroup, audioMatch.trackIndex))
@@ -181,7 +184,7 @@ fun PlayerScreen(api: TvApi, target: PlayTarget, onExit: () -> Unit) {
 
     val embedded = snapshot.subtitle as? SubtitleChoice.Embedded
     val textDirect = snapshot.mode == PlaybackMode.Direct && embedded != null && snapshot.sidecarUrl == null
-    val textMatch = if (textDirect) snapshot.subtitleTracks.getOrNull(embedded!!.index)?.let { matchTrack(it, groups, C.TRACK_TYPE_TEXT) } else null
+    val textMatch = if (textDirect) matchTrack(snapshot.subtitleTracks, embedded!!.index, groups, C.TRACK_TYPE_TEXT) else null
     if (textMatch != null) {
       val mediaGroup = exoPlayer.currentTracks.groups[textMatch.groupIndex].mediaTrackGroup
       builder.setOverrideForType(TrackSelectionOverride(mediaGroup, textMatch.trackIndex))
@@ -200,17 +203,14 @@ fun PlayerScreen(api: TvApi, target: PlayTarget, onExit: () -> Unit) {
     nextCard = false
     delaySeconds = 0.0
     cues = emptyList()
-    scope.launch {
-      val source = runCatching { api.librarySource(next.path) }.getOrNull() ?: return@launch
-      activeSourceId = source.sourceId
-      controller.playNext(
-        sourceId = source.sourceId,
-        key = Progress.libraryKey(next.path),
-        title = next.title,
-        path = next.path,
-        resume = false,
-      )
-    }
+    title = next.title
+    // The source is minted inside the controller, after the outgoing session is saved and deleted.
+    controller.playNext(
+      key = Progress.libraryKey(next.path),
+      title = next.title,
+      path = next.path,
+      resume = false,
+    ) { runCatching { api.librarySource(next.path) }.getOrNull()?.sourceId }
   }
 
   // A new title left nothing behind: the cached list, the offer and the delay belong to one playback.
@@ -224,6 +224,15 @@ fun PlayerScreen(api: TvApi, target: PlayTarget, onExit: () -> Unit) {
     cues = emptyList()
   }
 
+  /** The account's languages and the addon subtitles, read fresh before every start. */
+  suspend fun readAccount() {
+    addonFetched = true
+    settings = runCatching { api.settings() }.getOrDefault(SettingsResponse())
+    val type = target.subtitleType
+    val id = target.subtitleTarget
+    addonSubtitles = if (type != null && id != null) runCatching { api.subtitles(type, id) }.getOrDefault(emptyList()) else emptyList()
+  }
+
   LaunchedEffect(attempt) {
     // A catalogue target already carries the server's source id; a library one is minted from its path.
     val sourceId = target.sourceId ?: target.path?.let { runCatching { api.librarySource(it) }.getOrNull()?.sourceId }
@@ -231,16 +240,9 @@ fun PlayerScreen(api: TvApi, target: PlayTarget, onExit: () -> Unit) {
       controller.onNetworkError()
       return@LaunchedEffect
     }
-    activeSourceId = sourceId
     // The account's languages and the addon subtitles are read just before the start: the ids are
     // minted per sign-in session and are short-lived, so they cannot be fetched any earlier.
-    if (!addonFetched) {
-      addonFetched = true
-      settings = runCatching { api.settings() }.getOrDefault(SettingsResponse())
-      val type = target.subtitleType
-      val id = target.subtitleTarget
-      if (type != null && id != null) addonSubtitles = runCatching { api.subtitles(type, id) }.getOrDefault(emptyList())
-    }
+    if (!addonFetched) readAccount()
     controller.start(
       sourceId = sourceId,
       key = target.key,
@@ -315,9 +317,9 @@ fun PlayerScreen(api: TvApi, target: PlayTarget, onExit: () -> Unit) {
   }
 
   // The next library file is resolved once the session is up, so the offer is ready at the end.
-  LaunchedEffect(state.started, state.startedAt, activeSourceId, target.path) {
+  LaunchedEffect(state.started, state.startedAt, state.sourceId, target.path) {
     if (!state.started || target.path == null) return@LaunchedEffect
-    val id = activeSourceId ?: return@LaunchedEffect
+    val id = state.sourceId ?: return@LaunchedEffect
     nextEpisode = runCatching { api.libraryNext(id) }.getOrNull()?.let(::nextEpisodeOf)
   }
 
@@ -327,12 +329,15 @@ fun PlayerScreen(api: TvApi, target: PlayTarget, onExit: () -> Unit) {
   val sidecarActive = sidecar != null && embeddedChoice != null
   val resolvedAddonId = addonChoice?.let { state.subtitleIds[it.subtitleId] ?: it.subtitleId }
 
-  // The sidecar is polled the way the web watches it; a 404 only means "come back".
-  LaunchedEffect(sidecarActive, sidecar, delaySeconds) {
-    if (sidecar == null || embeddedChoice == null) return@LaunchedEffect
+  // The sidecar is polled the way the web watches it; a 404 only means "come back". It stops while
+  // the app is in the background, where the session is gone, and resumes with the new one.
+  LaunchedEffect(resumed, sidecarActive, sidecar, delaySeconds) {
+    if (!resumed || sidecar == null || embeddedChoice == null) return@LaunchedEffect
     var watcher = SidecarState()
     cues = emptyList()
-    while (isActive) {
+    // The flag is read every pass too: while the app is stopped the composition is paused, so the
+    // key alone would not cancel a loop that is already suspended in its poll delay.
+    while (isActive && resumed) {
       val at = controller.position
       val fetch = runCatching { api.sidecar(sidecar, at, delaySeconds) }.getOrNull()
       if (fetch != null) {
@@ -348,9 +353,9 @@ fun PlayerScreen(api: TvApi, target: PlayTarget, onExit: () -> Unit) {
     }
   }
 
-  // An addon subtitle is read once, and again whenever the delay moves it.
-  LaunchedEffect(addonChoice, resolvedAddonId, delaySeconds, state.offset) {
-    if (addonChoice == null || resolvedAddonId == null) return@LaunchedEffect
+  // An addon subtitle is read once, and again whenever the delay moves it or a new session starts.
+  LaunchedEffect(resumed, addonChoice, resolvedAddonId, delaySeconds, state.offset) {
+    if (!resumed || addonChoice == null || resolvedAddonId == null) return@LaunchedEffect
     cues = emptyList()
     val text = runCatching { api.subtitleText(resolvedAddonId, state.offset, delaySeconds) }.getOrNull() ?: return@LaunchedEffect
     cues = absoluteCues(parseVtt(text), state.offset)
@@ -364,6 +369,7 @@ fun PlayerScreen(api: TvApi, target: PlayTarget, onExit: () -> Unit) {
     val observer = LifecycleEventObserver { _, event ->
       when (event) {
         Lifecycle.Event.ON_STOP -> {
+          resumed = false
           exoPlayer.pause()
           backgroundPosition = controller.position
           // The session is gone, so even an unchanged address must be prepared again.
@@ -373,6 +379,7 @@ fun PlayerScreen(api: TvApi, target: PlayTarget, onExit: () -> Unit) {
         Lifecycle.Event.ON_START -> {
           if (backgroundPosition == null) return@LifecycleEventObserver
           backgroundPosition = null
+          resumed = true
           startPaused = true
           nextCard = false
           controller.retry()
@@ -418,7 +425,7 @@ fun PlayerScreen(api: TvApi, target: PlayTarget, onExit: () -> Unit) {
     position = position,
     duration = state.duration,
     playing = playing,
-    title = target.title,
+    title = title,
     // Before the server answers there is no path to name; a failed start must not claim direct play.
     eyebrow = if (state.started) stringResource(pathLabel(diagPath(state.mode, state.copyAudio))) else "",
     playFocus = playFocus,
@@ -507,7 +514,18 @@ fun PlayerScreen(api: TvApi, target: PlayTarget, onExit: () -> Unit) {
 
       state.error?.let {
         ErrorPanel(
-          onRetry = { if (state.started) controller.retry() else { addonFetched = false; attempt++ } },
+          onRetry = {
+            // Try again always re-reads the account: the addon subtitle ids are minted per sign-in
+            // session and short-lived, so a started session cannot reuse the ones it began with.
+            scope.launch {
+              playerRetry(
+                started = state.started,
+                readAccount = { readAccount() },
+                restart = { controller.retry(addonSubtitles, settings.audioLanguage, settings.subtitleLanguage) },
+                startOver = { attempt++ },
+              )
+            }
+          },
           onBack = leave,
         )
       }
@@ -526,7 +544,7 @@ fun PlayerScreen(api: TvApi, target: PlayTarget, onExit: () -> Unit) {
       modifier = Modifier.fillMaxSize(),
     )
 
-    if (state.error == null && !state.started) LoadingOverlay(title = target.title)
+    if (state.error == null && !state.started) LoadingOverlay(title = title)
   }
 }
 
@@ -552,3 +570,19 @@ internal fun isDecoderError(error: PlaybackException): Boolean = error.errorCode
   PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES,
   PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED,
 )
+
+/**
+ * The error panel's Try again. The account is always read again first: the addon subtitle ids are
+ * minted per sign-in session and short-lived, so even a session that had started cannot reuse the
+ * ones it began with. A session that never answered is started from scratch; one that had started
+ * is restarted where the player left off.
+ */
+internal suspend fun playerRetry(
+  started: Boolean,
+  readAccount: suspend () -> Unit,
+  restart: suspend () -> Unit,
+  startOver: () -> Unit,
+) {
+  readAccount()
+  if (started) restart() else startOver()
+}

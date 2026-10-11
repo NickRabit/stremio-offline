@@ -87,6 +87,8 @@ data class PlaybackState(
   val subtitleIds: Map<String, String> = emptyMap(),
   val videoCodec: String? = null,
   val audioCodec: String? = null,
+  /** The source id the current session plays, so a caller can ask the server for its neighbour. */
+  val sourceId: String? = null,
   /** The absolute position the player should start or seek to after `revision` changes. */
   val target: Double = 0.0,
   val revision: Int = 0,
@@ -132,7 +134,8 @@ class PlaybackController(
   private var addonKey: String? = null
 
   private data class StartPlan(
-    val sourceId: String,
+    /** The source the start uses; null when [mint] has to produce one. */
+    val sourceId: String?,
     val key: String,
     val title: String,
     val path: String?,
@@ -144,6 +147,8 @@ class PlaybackController(
     val audioPreference: String?,
     val subtitlePreference: String?,
     val library: Boolean,
+    /** A fresh source is minted after the outgoing session is closed, never before it. */
+    val mint: (suspend () -> String?)? = null,
   )
 
   private var plan: StartPlan? = null
@@ -171,7 +176,7 @@ class PlaybackController(
   private fun absolute(playerPosition: Double) = if (playlist) offset + playerPosition else playerPosition
 
   private fun startPlan(
-    sourceId: String,
+    sourceId: String?,
     key: String,
     title: String,
     path: String?,
@@ -182,7 +187,8 @@ class PlaybackController(
     subtitles: List<AddonSubtitleDto>,
     audioPreference: String?,
     subtitlePreference: String?,
-  ) = StartPlan(sourceId, key, title, path, explicitTime, resume, poster, addonKey, subtitles, audioPreference, subtitlePreference, library = path != null)
+    mint: (suspend () -> String?)? = null,
+  ) = StartPlan(sourceId, key, title, path, explicitTime, resume, poster, addonKey, subtitles, audioPreference, subtitlePreference, library = path != null, mint = mint)
 
   fun start(
     sourceId: String,
@@ -198,15 +204,29 @@ class PlaybackController(
   ) = begin(startPlan(sourceId, key, title, path, null, resume, poster, addonKey, subtitles, audioPreference, subtitlePreference))
 
   /** Starts the next library file: the old session is saved and deleted before the new start. */
-  fun playNext(sourceId: String, key: String, title: String, path: String?, resume: Boolean, poster: String? = null) {
+  fun playNext(
+    key: String,
+    title: String,
+    path: String?,
+    resume: Boolean,
+    poster: String? = null,
+    mint: suspend () -> String?,
+  ) {
     val current = plan ?: return
-    begin(startPlan(sourceId, key, title, path, null, resume, poster, current.addonKey, current.subtitles, current.audioPreference, current.subtitlePreference))
+    begin(startPlan(null, key, title, path, null, resume, poster, current.addonKey, current.subtitles, current.audioPreference, current.subtitlePreference, mint))
   }
 
-  /** Retries a failed start at the position the player last reported. */
-  fun retry() {
+  /**
+   * Retries a failed start at the position the player last reported. The addon subtitles and the
+   * account languages are taken fresh: the ids are minted per sign-in session and short-lived.
+   */
+  fun retry(
+    subtitles: List<AddonSubtitleDto> = plan?.subtitles ?: emptyList(),
+    audioPreference: String? = plan?.audioPreference,
+    subtitlePreference: String? = plan?.subtitlePreference,
+  ) {
     val current = plan ?: return
-    begin(current.copy(explicitTime = position, resume = false))
+    begin(current.copy(explicitTime = position, resume = false, subtitles = subtitles, audioPreference = audioPreference, subtitlePreference = subtitlePreference))
   }
 
   private fun begin(next: StartPlan) {
@@ -246,11 +266,19 @@ class PlaybackController(
       if (previous != null) runCatching { save(previous) }
       if (previousId != null) runCatching { api.deletePlayback(previousId) }
       if (mine != generation) return@launch
+      // The outgoing session is closed before the new source is minted: a failure to close it must
+      // not leave a source behind that nobody ever starts.
+      val resolved = next.sourceId ?: next.mint?.invoke()?.takeIf { it.isNotBlank() }
+      if (resolved == null) {
+        if (mine == generation) _state.update { it.copy(loading = false, error = PlaybackError.Network) }
+        return@launch
+      }
+      sourceId = resolved
       val resumeTime = next.explicitTime ?: if (next.resume) storedResumeTime(next.key) else 0.0
       if (mine != generation) return@launch
       if (resumeTime > 0) lastPosition = resumeTime
       val offered = next.subtitles.map { it.subtitleId }.take(MAX_SUBTITLE_IDS)
-      val descriptor = runCatching { api.startPlayback(next.sourceId, capabilities, resumeTime, offered) }.getOrElse { error ->
+      val descriptor = runCatching { api.startPlayback(resolved, capabilities, resumeTime, offered) }.getOrElse { error ->
         if (mine == generation) _state.update { it.copy(loading = false, error = errorOf(error)) }
         return@launch
       }
@@ -313,7 +341,7 @@ class PlaybackController(
       val stamp = ++sequence
       val id = sessionId ?: return@launch
       val descriptor = runCatching { api.seekPlayback(id, target) }.getOrElse { error ->
-        if (isDead(error)) onDeadSession()
+        if (mine == generation && isDead(error)) onDeadSession()
         return@launch
       }
       if (stopped || mine != generation || stamp != sequence) return@launch
@@ -335,7 +363,9 @@ class PlaybackController(
     val track = audioTracks.getOrNull(index) ?: return
     when (audioRoute(mode, track, capabilities)) {
       AudioRoute.Direct -> setAudioLocal(index)
-      AudioRoute.Server -> track(TrackChange.Audio(index, position), addon = null)
+      // A conversion restart must not take an app-drawn addon subtitle with it: the server is told
+      // to drop its own subtitle, and the app keeps drawing the addon it already has.
+      AudioRoute.Server -> track(TrackChange.Audio(index, position, subtitleOff = _state.value.subtitle is SubtitleChoice.Addon), addon = currentAddon())
     }
   }
 
@@ -365,11 +395,14 @@ class PlaybackController(
   }
 
   /** One `/track` round trip; the answer is kept only when it is still the current generation. */
-  private fun track(change: TrackChange, addon: AddonSubtitleDto?) {
+  private fun track(request: TrackChange, addon: AddonSubtitleDto?) {
     val id = sessionId ?: return
     val mine = generation
     val stamp = ++sequence
-    val before = position
+    // A seek that has been asked for but not answered yet is the position the viewer wants; a track
+    // change in that window must carry it, or the server restarts at the stale position.
+    val change = request.withTime(pendingSeek ?: position)
+    val before = change.time
     trackJob?.cancel()
     trackJob = scope.launch {
       val descriptor = runCatching { api.trackPlayback(id, change) }.getOrElse { error ->
@@ -378,9 +411,19 @@ class PlaybackController(
       }
       if (stopped || mine != generation || stamp != sequence) return@launch
       val sameItem = descriptor.url == _state.value.url && modeOf(descriptor.mode) == mode
-      apply(descriptor, target = before, bumpRevision = !sameItem, addon = addon)
+      // A subtitle-only answer to the same item left the picture where it was: in direct play the
+      // audio was chosen inside ExoPlayer, so the server's descriptor still names its own default
+      // and must not re-tick the panel. Every restart answer re-derives the choice.
+      val keepAudio = change is TrackChange.Subtitle && sameItem
+      apply(descriptor, target = before, bumpRevision = !sameItem, addon = addon, keepAudio = keepAudio)
       lastPosition = before - offset
     }
+  }
+
+  /** The addon subtitle the viewer is watching, so a conversion restart can keep it. */
+  private fun currentAddon(): AddonSubtitleDto? {
+    val chosen = _state.value.subtitle as? SubtitleChoice.Addon ?: return null
+    return _state.value.addonSubtitles.firstOrNull { it.subtitleId == chosen.subtitleId }
   }
 
   fun onDecoderError() {
@@ -488,6 +531,7 @@ class PlaybackController(
     plan: StartPlan? = null,
     bumpRevision: Boolean = true,
     addon: AddonSubtitleDto? = null,
+    keepAudio: Boolean = false,
   ) {
     sessionId = descriptor.id
     playlist = descriptor.playlist
@@ -511,6 +555,8 @@ class PlaybackController(
     } else null
     val shown = defaultAddon?.let { SubtitleChoice.Addon(it.subtitleId) } ?: chosen
     subtitle = shown
+    val audioChoice = if (keepAudio) _state.value.audioTrackIndex else descriptor.audioTrack.coerceIn(0, maxOf(0, audioTracks.size - 1))
+    val currentSourceId = sourceId
     _state.update {
       it.copy(
         loading = false,
@@ -522,7 +568,7 @@ class PlaybackController(
         mode = mode,
         copyAudio = copyAudio,
         audioTracks = audioTracks,
-        audioTrackIndex = descriptor.audioTrack.coerceIn(0, maxOf(0, audioTracks.size - 1)),
+        audioTrackIndex = audioChoice,
         subtitleTracks = subtitleTracks,
         subtitle = shown,
         sidecarUrl = descriptor.sidecarUrl,
@@ -530,6 +576,7 @@ class PlaybackController(
         subtitleIds = descriptor.subtitleIds.ifEmpty { it.subtitleIds },
         videoCodec = descriptor.video,
         audioCodec = descriptor.audio,
+        sourceId = currentSourceId,
         target = target,
         revision = if (bumpRevision) it.revision + 1 else it.revision,
         trackRevision = it.trackRevision + 1,
@@ -584,3 +631,9 @@ class PlaybackController(
  *  server reads itself. A direct-to-direct switch never leaves the player. */
 fun subtitleNeedsServer(currentServer: Boolean, next: SubtitleRoute): Boolean =
   currentServer || next == SubtitleRoute.EmbeddedServer
+
+/** The same change, carrying the position the viewer actually asked for. */
+private fun TrackChange.withTime(time: Double): TrackChange = when (this) {
+  is TrackChange.Audio -> copy(time = time)
+  is TrackChange.Subtitle -> copy(time = time)
+}

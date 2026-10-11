@@ -43,6 +43,8 @@ class ApiClient(
 ) : TvApi {
 
   private val json = Json { ignoreUnknownKeys = true }
+  /** A track change that also turns the server's own subtitle off sends the explicit null. */
+  private val trackJson = Json { ignoreUnknownKeys = true; encodeDefaults = true }
   /** The download body drops null media fields instead of sending them as `null`. */
   private val downloadJson = Json { ignoreUnknownKeys = true; explicitNulls = false; encodeDefaults = false }
   /** Progress carries the artwork and addon only when the player knew them. */
@@ -174,7 +176,11 @@ class ApiClient(
 
   override suspend fun trackPlayback(id: String, change: TrackChange): PlaybackDescriptorDto {
     val payload = when (change) {
-      is TrackChange.Audio -> json.encodeToString(TrackAudioRequest.serializer(), TrackAudioRequest(change.index, change.time))
+      is TrackChange.Audio -> if (change.subtitleOff) {
+        trackJson.encodeToString(TrackAudioOffRequest.serializer(), TrackAudioOffRequest(change.index, null, change.time))
+      } else {
+        json.encodeToString(TrackAudioRequest.serializer(), TrackAudioRequest(change.index, change.time))
+      }
       is TrackChange.Subtitle -> json.encodeToString(TrackSubtitleRequest.serializer(), TrackSubtitleRequest(change.index, change.time))
     }
     return request(Request.Builder().url(address.resolve("/api/playback/$id/track")).post(payload.toRequestBody(mediaType)).build(), playbackClient)
@@ -416,6 +422,9 @@ private data class PlaybackStartRequest(
 
 @Serializable
 private data class TrackAudioRequest(val audio: Int, val time: Double)
+
+@Serializable
+private data class TrackAudioOffRequest(val audio: Int, val subtitle: Int?, val time: Double)
 
 @Serializable
 private data class TrackSubtitleRequest(val subtitle: Int?, val time: Double)

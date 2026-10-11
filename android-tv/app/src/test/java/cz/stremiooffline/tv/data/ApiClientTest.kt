@@ -214,6 +214,14 @@ class ApiClientTest {
   }
 
   @Test
+  fun `an audio change that also turns the subtitle off sends the explicit null`() = runTest {
+    server.enqueue(MockResponse().setBody(DESCRIPTOR))
+    client(start()).trackPlayback("p1", TrackChange.Audio(1, 5.0, subtitleOff = true))
+
+    assertEquals("""{"audio":1,"subtitle":null,"time":5.0}""", server.takeRequest().body.readUtf8())
+  }
+
+  @Test
   fun `a subtitle index reaches the server when the client does not render it`() = runTest {
     server.enqueue(MockResponse().setBody(DESCRIPTOR))
     client(start()).trackPlayback("p1", TrackChange.Subtitle(1, 60.0))

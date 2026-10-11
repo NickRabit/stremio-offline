@@ -46,7 +46,9 @@ data class NextFileDto(val path: String = "", val title: String = "")
 /** One `POST /api/playback/:id/track` change, with the absolute position it applies at. */
 sealed interface TrackChange {
   val time: Double
-  data class Audio(val index: Int, override val time: Double) : TrackChange
+  /** [subtitleOff] also clears the server's own subtitle, so a conversion restart cannot take an
+   *  app-drawn addon subtitle with it. */
+  data class Audio(val index: Int, override val time: Double, val subtitleOff: Boolean = false) : TrackChange
   /** A null index asks the server for Off. */
   data class Subtitle(val index: Int?, override val time: Double) : TrackChange
 }

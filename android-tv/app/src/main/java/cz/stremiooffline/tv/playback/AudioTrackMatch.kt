@@ -55,24 +55,35 @@ private fun trackOf(track: JsonObject, position: Int): DescriptorTrack = Descrip
 /**
  * The track the server meant, matched by language, then codec MIME, then channels. An attribute
  * the server did not state is not used. The file's ordinal is never trusted: the player drops a
- * track it cannot decode, which shifts every later one. Null means the target could not be
+ * track it cannot decode, which shifts every later one. Tracks the server lists as equal on all
+ * three attributes are told apart by their order among equals. Null means the target could not be
  * identified, so the caller leaves the player's own choice alone.
  */
-fun matchTrack(target: DescriptorTrack, groups: List<PlayerTrackGroup>, type: Int): TrackMatch? {
+fun matchTrack(tracks: List<DescriptorTrack>, index: Int, groups: List<PlayerTrackGroup>, type: Int): TrackMatch? {
+  val target = tracks.getOrNull(index) ?: return null
   val wantedLanguage = normalizeLanguage(target.language)
   val wantedChannels = target.channels
   if (wantedLanguage == null && mimeOf(target.codec) == null && wantedChannels <= 0) return null
+  val rank = tracks.take(index.coerceAtLeast(0)).count { it.sameAttributes(target) }
+  var seen = 0
   for ((groupIndex, group) in groups.withIndex()) {
     if (group.type != type) continue
     for ((trackIndex, track) in group.tracks.withIndex()) {
       if (wantedLanguage != null && normalizeLanguage(track.language) != wantedLanguage) continue
       if (!mimeMatches(target.codec, track.mimeType, type)) continue
       if (wantedChannels > 0 && track.channels != wantedChannels) continue
-      return TrackMatch(groupIndex, trackIndex)
+      if (seen == rank) return TrackMatch(groupIndex, trackIndex)
+      seen++
     }
   }
   return null
 }
+
+/** Whether two descriptor rows carry the same language, codec and channel count. */
+private fun DescriptorTrack.sameAttributes(other: DescriptorTrack): Boolean =
+  normalizeLanguage(language) == normalizeLanguage(other.language) &&
+    mimeOf(codec) == mimeOf(other.codec) &&
+    channels == other.channels
 
 /** ffprobe writes the ISO 639-2 code and the container tag may write it too; both are one code. */
 private val LANGUAGE_CODES = mapOf(
