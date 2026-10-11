@@ -220,6 +220,14 @@ Next on the television, after the first real-TV tests:
   same dialog. A side panel with D-pad rows replaces the web's form.
 - Per-title source sorting and filters (addon, language) in the sources panel,
   which the web already offers next to its list.
+- **Search history** on the TV, as the web keeps it: the last searches offered
+  under the field when it is empty (OK runs one again, a per-entry remove), stored
+  per account on the server so web and TV share it; Settings gets "Clear search
+  history".
+- **Voice search**: a microphone action next to the search field using Android's
+  speech recognizer (`RecognizerIntent`, and the remote's mic button where the TV
+  sends `KEYCODE_SEARCH`/`VOICE_ASSIST`), filling the field and running the search
+  in the current scope; hidden when the device has no recognizer.
 
 ### Desktop
 
