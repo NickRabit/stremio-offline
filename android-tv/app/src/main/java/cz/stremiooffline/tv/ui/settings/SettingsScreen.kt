@@ -5,7 +5,10 @@ package cz.stremiooffline.tv.ui.settings
 import android.content.Context
 import android.os.Build
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -28,15 +31,22 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.path
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -52,6 +62,7 @@ import cz.stremiooffline.tv.Versions
 import cz.stremiooffline.tv.data.ClientCapabilitiesDto
 import cz.stremiooffline.tv.data.LanguageDto
 import cz.stremiooffline.tv.data.TvApi
+import cz.stremiooffline.tv.data.TvPreferences
 import cz.stremiooffline.tv.playback.decodedLabels
 import cz.stremiooffline.tv.playback.passthroughLabels
 import cz.stremiooffline.tv.ui.catalog.PanelOption
@@ -76,6 +87,7 @@ const val TagSettingsRowUiLanguage = "settings_row_ui_language"
 const val TagSettingsRowAudio = "settings_row_audio"
 const val TagSettingsRowSubtitle = "settings_row_subtitle"
 const val TagSettingsRowStartView = "settings_row_start_view"
+const val TagSettingsRowPreferConversion = "settings_row_prefer_conversion"
 const val TagSettingsRowDevice = "settings_row_device"
 const val TagSettingsRowVersion = "settings_row_version"
 const val TagSettingsPanel = "settings_panel"
@@ -104,6 +116,10 @@ fun SettingsRoute(
   val viewModel = viewModel<SettingsViewModel>(factory = SettingsViewModel.factory(api, onLocale))
   val context = LocalContext.current
   val capabilities = remember(context) { runCatching { cz.stremiooffline.tv.playback.detectCapabilities(context) }.getOrElse { ClientCapabilitiesDto() } }
+  // The conversion preference belongs to this television, so it lives in the device store, not
+  // in the account settings the screen patches.
+  val preferences = remember(context) { TvPreferences(context) }
+  var preferConversion by remember(preferences) { mutableStateOf(preferences.preferConversion) }
   SettingsScreen(
     state = viewModel.state,
     languages = viewModel.languages,
@@ -117,6 +133,11 @@ fun SettingsRoute(
     onAudioLanguage = viewModel::setAudioLanguage,
     onSubtitleLanguage = viewModel::setSubtitleLanguage,
     onStartView = viewModel::setStartView,
+    preferConversion = preferConversion,
+    onPreferConversion = {
+      preferConversion = !preferConversion
+      preferences.preferConversion = preferConversion
+    },
     onSignOut = onSignOut,
     focusRequester = focusRequester,
   )
@@ -140,6 +161,8 @@ fun SettingsScreen(
   onAudioLanguage: (String) -> Unit,
   onSubtitleLanguage: (String) -> Unit,
   onStartView: (String) -> Unit,
+  preferConversion: Boolean,
+  onPreferConversion: () -> Unit,
   onSignOut: () -> Unit,
   focusRequester: FocusRequester,
 ) {
@@ -247,6 +270,13 @@ fun SettingsScreen(
         value = startName,
         onClick = { openPanel(SettingsPanel.StartView, startFocus) },
         modifier = Modifier.testTag(TagSettingsRowStartView).focusRequester(startFocus),
+      )
+      ToggleRow(
+        label = stringResource(R.string.tv_prefer_conversion),
+        note = stringResource(R.string.tv_prefer_conversion_note),
+        value = stringResource(if (preferConversion) R.string.tv_on else R.string.tv_off),
+        onToggle = onPreferConversion,
+        modifier = Modifier.testTag(TagSettingsRowPreferConversion),
       )
       InfoRow(
         label = stringResource(R.string.tv_device),
@@ -432,6 +462,44 @@ private fun SettingsRow(
       Spacer(Modifier.width(10.dp))
       Chevron()
     }
+  }
+}
+
+/** A device-local switch: OK flips it in place, with no panel and nothing sent to the server. */
+@Composable
+private fun ToggleRow(
+  label: String,
+  note: String,
+  value: String,
+  onToggle: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  var focused by remember { mutableStateOf(false) }
+  val shape = RoundedCornerShape(8.dp)
+  Row(
+    modifier = modifier
+      .fillMaxWidth()
+      .height(56.dp)
+      // Observes the row's own focus target, so it has to sit before `focusable()`.
+      .onFocusChanged { focused = it.isFocused }
+      .focusable()
+      .semantics(mergeDescendants = true) {}
+      .onPreviewKeyEvent { event ->
+        if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+        when (event.key) {
+          Key.Enter, Key.DirectionCenter, Key.Spacebar -> { onToggle(); true }
+          else -> false
+        }
+      }
+      .then(if (focused) Modifier.background(Tokens.Panel2, shape).border(1.5.dp, Tokens.Accent2, shape) else Modifier)
+      .padding(horizontal = 16.dp),
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+      Text(label, color = Tokens.Text, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+      Text(note, color = Tokens.Muted, fontSize = 11.sp, lineHeight = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+    Text(value, modifier = Modifier.weight(1f, fill = false), color = Tokens.Muted, fontSize = 13.sp, textAlign = TextAlign.End, maxLines = 1)
   }
 }
 

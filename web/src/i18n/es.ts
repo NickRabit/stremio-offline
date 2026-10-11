@@ -1586,5 +1586,7 @@ export const es: Catalog = {
   "tv.forceConversionNote": "Úsalo cuando la imagen o el sonido se reproduzcan mal. El servidor recodifica el vídeo.",
   "tv.preferConversion": "Preferir conversión en el servidor",
   "tv.preferConversionNote": "Cada reproducción empieza como en un navegador, así que el servidor convierte lo que la TV no puede reproducir. Inicio más lento y más carga en el servidor.",
+  "tv.on": "Activado",
+  "tv.off": "Desactivado",
   "tv.backToSource": "Volver a la fuente anterior",
 };

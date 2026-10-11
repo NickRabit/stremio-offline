@@ -1586,5 +1586,7 @@ export const ptBR: Catalog = {
   "tv.forceConversionNote": "Use quando a imagem ou o som reproduzir mal. O servidor recodifica o vídeo.",
   "tv.preferConversion": "Preferir conversão no servidor",
   "tv.preferConversionNote": "Cada reprodução começa como num navegador, então o servidor converte o que a TV não consegue reproduzir. Início mais lento e mais carga no servidor.",
+  "tv.on": "Ativado",
+  "tv.off": "Desativado",
   "tv.backToSource": "Voltar à fonte anterior",
 };

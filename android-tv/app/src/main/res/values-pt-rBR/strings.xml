@@ -155,5 +155,7 @@
   <string name="tv_force_conversion_note">Use quando a imagem ou o som reproduzir mal. O servidor recodifica o vídeo.</string>
   <string name="tv_prefer_conversion">Preferir conversão no servidor</string>
   <string name="tv_prefer_conversion_note">Cada reprodução começa como num navegador, então o servidor converte o que a TV não consegue reproduzir. Início mais lento e mais carga no servidor.</string>
+  <string name="tv_on">Ativado</string>
+  <string name="tv_off">Desativado</string>
   <string name="tv_back_to_source">Voltar à fonte anterior</string>
 </resources>

@@ -159,5 +159,7 @@
   <string name="tv_force_conversion_note">Используйте, если изображение или звук воспроизводится плохо. Сервер перекодирует видео.</string>
   <string name="tv_prefer_conversion">Предпочитать конвертацию на сервере</string>
   <string name="tv_prefer_conversion_note">Каждое воспроизведение начинается как в браузере, поэтому сервер конвертирует то, что телевизор не может воспроизвести. Медленнее запуск и выше нагрузка на сервер.</string>
+  <string name="tv_on">Включено</string>
+  <string name="tv_off">Выключено</string>
   <string name="tv_back_to_source">Вернуться к предыдущему источнику</string>
 </resources>

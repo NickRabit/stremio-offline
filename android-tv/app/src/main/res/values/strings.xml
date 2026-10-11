@@ -155,5 +155,7 @@
   <string name="tv_force_conversion_note">Use when the picture or sound plays badly. The server re-encodes the video.</string>
   <string name="tv_prefer_conversion">Prefer server conversion</string>
   <string name="tv_prefer_conversion_note">Every playback starts like a browser, so the server converts what the TV cannot play. Slower to start and heavier on the server.</string>
+  <string name="tv_on">On</string>
+  <string name="tv_off">Off</string>
   <string name="tv_back_to_source">Back to the previous source</string>
 </resources>

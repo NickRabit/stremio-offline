@@ -1643,5 +1643,7 @@ export const en = {
   "tv.forceConversionNote": "Use when the picture or sound plays badly. The server re-encodes the video.",
   "tv.preferConversion": "Prefer server conversion",
   "tv.preferConversionNote": "Every playback starts like a browser, so the server converts what the TV cannot play. Slower to start and heavier on the server.",
+  "tv.on": "On",
+  "tv.off": "Off",
   "tv.backToSource": "Back to the previous source",
 };
