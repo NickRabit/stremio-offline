@@ -95,8 +95,12 @@ class HomeViewModel(private val api: TvApi) : ViewModel() {
   private var revealJob: Job? = null
   private var loadJob: Job? = null
   private var requestCounter = 0
-  /** Answers already asked for, keyed by `type:id`; a second visit asks nothing again. */
-  private val heroCache = mutableMapOf<String, MetaDto?>()
+  /** Answers already received, keyed by `type:id`; a second visit asks nothing again. Only the
+   *  most recent [HERO_CACHE_SIZE] titles are kept, and a failed ask is never stored. */
+  private val heroCache = object : LinkedHashMap<String, MetaDto>(16, 0.75f, true) {
+    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, MetaDto>?) =
+      size > HERO_CACHE_SIZE
+  }
   private var heroJob: Job? = null
   /** The account's interface language, read once for the session; a failure leaves it null. */
   private var uiLanguageJob: Deferred<String?>? = null
@@ -115,8 +119,9 @@ class HomeViewModel(private val api: TvApi) : ViewModel() {
    */
   fun heroMeta(type: String, id: String) {
     val key = "$type:$id"
-    if (hero?.key != key) hero = HeroMeta(key, heroCache[key])
-    if (heroCache.containsKey(key)) return
+    val cached = heroCache[key]
+    if (hero?.key != key) hero = HeroMeta(key, cached)
+    if (cached != null) return
     heroJob?.cancel()
     heroJob = viewModelScope.launch {
       val language = uiLanguage().await()
@@ -127,7 +132,7 @@ class HomeViewModel(private val api: TvApi) : ViewModel() {
       } catch (_: ApiError) {
         null
       }
-      heroCache[key] = meta
+      if (meta != null) heroCache[key] = meta
       if (hero?.key == key) hero = HeroMeta(key, meta)
     }
   }
@@ -309,6 +314,7 @@ class HomeViewModel(private val api: TvApi) : ViewModel() {
   }
 
   companion object {
+    private const val HERO_CACHE_SIZE = 60
     fun factory(api: TvApi) = viewModelFactory { initializer { HomeViewModel(api) } }
   }
 }
