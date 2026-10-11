@@ -1,6 +1,7 @@
 package cz.stremiooffline.tv.ui.player
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -17,11 +18,10 @@ class PlayerKeysTest {
   }
 
   @Test
-  fun `with the controls hidden OK pauses and shows them`() {
+  fun `with the controls hidden OK shows them without pausing`() {
     val intent = playerKeyIntent(PlayerKey.Center, controlsShown = false)!!
-    assertTrue(intent.pausePlayback)
     assertTrue(intent.showControls)
-    assertTrue(!intent.exit)
+    assertFalse(intent.exit)
   }
 
   @Test

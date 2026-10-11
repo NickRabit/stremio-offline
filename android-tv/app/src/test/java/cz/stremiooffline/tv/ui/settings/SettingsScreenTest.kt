@@ -113,11 +113,13 @@ class SettingsScreenTest {
 
     repeat(5) { press(Key.DirectionDown) }
     focusRow(TagSettingsRowStartView)
-    // The switch is the last focusable row: the device facts under it are not.
+    // The switch, then Send diagnostics: the device facts between and under them are not.
     press(Key.DirectionDown)
     focusRow(TagSettingsRowPreferConversion)
     press(Key.DirectionDown)
-    focusRow(TagSettingsRowPreferConversion)
+    focusRow(TagSettingsRowDiagnostics)
+    press(Key.DirectionDown)
+    focusRow(TagSettingsRowDiagnostics)
   }
 
   @Test
@@ -289,5 +291,56 @@ class SettingsScreenTest {
     compose.onNodeWithTag(TagSettingsError).assertExists()
     // The row keeps the language the server still has instead of the one that did not stick.
     compose.onNodeWithTag(TagSettingsRowAudio).assertTextContains("English")
+  }
+
+  @Test
+  fun `OK on Send diagnostics posts the buffer and shows the returned id`() {
+    val api = fake()
+    cz.stremiooffline.tv.diagnostics.AppLog.clear()
+    cz.stremiooffline.tv.diagnostics.AppLog.record("WARN", "API GET /api/home", mapOf("status" to "403"))
+    mount(api)
+    repeat(7) { press(Key.DirectionDown) }
+    focusRow(TagSettingsRowDiagnostics)
+
+    press(Key.DirectionCenter)
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagSettingsRowDiagnostics).assertTextContains("Sent · b1", substring = true)
+    val bundle = api.bundles.single()
+    assertEquals("tv", bundle.client)
+    assertTrue(bundle.lines.any { it.message == "API GET /api/home" })
+  }
+
+  /** The server may explain why it refused the bundle; that explanation is what the row says. */
+  @Test
+  fun `a failed Send diagnostics shows the server's own error`() {
+    val api = fake()
+    api.bundleFailure = ApiFailure.Forbidden
+    api.bundleFailureMessage = "Client logs are turned off on this server."
+    mount(api)
+    repeat(7) { press(Key.DirectionDown) }
+    focusRow(TagSettingsRowDiagnostics)
+
+    press(Key.DirectionCenter)
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagSettingsRowDiagnostics).assertTextContains("Client logs are turned off on this server.", substring = true)
+  }
+
+  /** Without an explanation the row still names the failure instead of a fixed line. */
+  @Test
+  fun `a failed Send diagnostics with no explanation names the failure`() {
+    val api = fake()
+    api.bundleFailure = ApiFailure.Unreachable
+    mount(api)
+    repeat(7) { press(Key.DirectionDown) }
+    focusRow(TagSettingsRowDiagnostics)
+
+    press(Key.DirectionCenter)
+    compose.waitForIdle()
+
+    val unreachable = ApplicationProvider.getApplicationContext<Context>()
+      .getString(cz.stremiooffline.tv.R.string.tv_err_unreachable)
+    compose.onNodeWithTag(TagSettingsRowDiagnostics).assertTextContains(unreachable, substring = true)
   }
 }

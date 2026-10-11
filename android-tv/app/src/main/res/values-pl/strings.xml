@@ -102,6 +102,13 @@
   <string name="home_empty_title">Jeszcze nic tu nie ma</string>
   <string name="home_empty_text">Pobierz coś albo zacznij oglądać, a pojawi się to tutaj.</string>
   <string name="tv_home_load_error">Nie udało się wczytać strony głównej.</string>
+  <string name="tv_home_unavailable">Strona główna nie jest dostępna dla tego konta na tym serwerze.</string>
+  <string name="tv_no_library_to_save">Brak biblioteki, do której to konto może zapisywać.</string>
+  <string name="tv_send_diagnostics">Wyślij diagnostykę</string>
+  <string name="tv_send_diagnostics_note">Przesyła ostatnie 1000 wierszy dziennika na serwer.</string>
+  <string name="tv_diagnostics_sent">Wysłano · %1$s</string>
+  <string name="tv_diagnostics_failed">Nie udało się wysłać diagnostyki.</string>
+  <string name="tv_crash_hint">Zapisano awarię z poprzedniego uruchomienia. Wyślij diagnostykę w ustawieniach.</string>
   <string name="tv_downloads_later">Kolejka pobierania otwiera się na razie w przeglądarce.</string>
   <string name="tv_my_list_empty">Tytuły oznaczone gwiazdką pojawią się tutaj.</string>
   <string name="catalog_type_movie">film</string>

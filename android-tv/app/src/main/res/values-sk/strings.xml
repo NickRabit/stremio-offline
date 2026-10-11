@@ -102,6 +102,13 @@
   <string name="home_empty_title">Zatiaľ tu nič nie je</string>
   <string name="home_empty_text">Niečo si stiahnite alebo začnite sledovať a objaví sa to tu.</string>
   <string name="tv_home_load_error">Domovskú stránku sa nepodarilo načítať.</string>
+  <string name="tv_home_unavailable">Domovská obrazovka nie je pre tento účet na serveri dostupná.</string>
+  <string name="tv_no_library_to_save">Tento účet nemá knižnicu, do ktorej by mohol ukladať.</string>
+  <string name="tv_send_diagnostics">Odoslať diagnostiku</string>
+  <string name="tv_send_diagnostics_note">Odošle posledných 1000 riadkov záznamu na server.</string>
+  <string name="tv_diagnostics_sent">Odoslané · %1$s</string>
+  <string name="tv_diagnostics_failed">Diagnostiku sa nepodarilo odoslať.</string>
+  <string name="tv_crash_hint">Pád z predchádzajúceho spustenia bol zaznamenaný. Odošlite diagnostiku v nastaveniach.</string>
   <string name="tv_downloads_later">Fronta sťahovania sa zatiaľ otvára na webe.</string>
   <string name="tv_my_list_empty">Tituly označené hviezdičkou nájdete tu.</string>
   <string name="catalog_type_movie">film</string>

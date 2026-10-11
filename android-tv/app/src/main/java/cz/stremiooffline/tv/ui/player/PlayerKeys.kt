@@ -18,7 +18,6 @@ fun playerKeyOf(key: Key): PlayerKey? = when (key) {
 
 /** What one key does. */
 data class PlayerKeyIntent(
-  val pausePlayback: Boolean = false,
   val showControls: Boolean = false,
   val hideControls: Boolean = false,
   /** -1 rewinds, +1 forwards; the distance comes from how long the key is held. */
@@ -47,7 +46,10 @@ fun seekStep(heldMs: Long): Double = when {
  */
 fun playerKeyIntent(key: PlayerKey, controlsShown: Boolean): PlayerKeyIntent? = when (key) {
   PlayerKey.Back -> if (controlsShown) PlayerKeyIntent(hideControls = true) else PlayerKeyIntent(exit = true)
-  PlayerKey.Center -> if (controlsShown) null else PlayerKeyIntent(pausePlayback = true, showControls = true)
+  // The first OK with the controls hidden brings them up, on Play; a second OK lands on the
+  // focused control and pauses. Pausing on the same press that revealed the buttons read as
+  // "anything I press pauses", and the remote's play/pause keys already toggle directly.
+  PlayerKey.Center -> if (controlsShown) null else PlayerKeyIntent(showControls = true)
   PlayerKey.Left -> if (controlsShown) null else PlayerKeyIntent(seekDirection = -1)
   PlayerKey.Right -> if (controlsShown) null else PlayerKeyIntent(seekDirection = 1)
   PlayerKey.Up, PlayerKey.Down -> if (controlsShown) null else PlayerKeyIntent(showControls = true)

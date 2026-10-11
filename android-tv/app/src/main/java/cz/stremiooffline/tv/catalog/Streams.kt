@@ -1,6 +1,7 @@
 package cz.stremiooffline.tv.catalog
 
 import cz.stremiooffline.tv.data.StreamDto
+import cz.stremiooffline.tv.data.AddonDto
 import kotlin.math.roundToLong
 
 /** The web's `web/src/streams.ts`, ported without the browser-only helpers. */
@@ -143,7 +144,43 @@ object Streams {
     listOf(stream.title, stream.description, stream.name).firstOrNull { !it.isNullOrBlank() }
       ?.trim()?.replace(Regex("\\s+"), " ") ?: ""
 
-  fun offeredStreams(streams: List<StreamDto>): List<StreamDto> = streams.filter { !isAddonNotice(it) }
+  /**
+   * The sources a viewer may play. The server hashes an identical stream to one id, so one addon
+   * answering the same release twice hands two rows with one id; the panel keys its rows by that
+   * id and refuses duplicates, so the second copy is dropped here.
+   */
+  fun offeredStreams(streams: List<StreamDto>): List<StreamDto> {
+    val seen = HashSet<String>()
+    return streams.filter { stream ->
+      !isAddonNotice(stream) && (stream.sourceId.isBlank() || seen.add(stream.sourceId))
+    }
+  }
+
+  /** The sources of one title after the addons that answered have been merged, sorted and
+   *  filtered: the list the panel draws, the one the player holds, and the addon notices. Built
+   *  once per change of the raw [streams] and then remembered by the caller, so a focus move does
+   *  not re-parse hundreds of sizes and languages. */
+  data class SourceLists(
+    val offered: List<StreamDto>,
+    val visible: List<StreamDto>,
+    val notices: List<StreamDto>,
+    val titleLanguage: String?,
+  )
+
+  fun sourceLists(
+    streams: List<StreamDto>,
+    addons: List<AddonDto>,
+    sort: StreamSort,
+    preferredLanguage: String,
+    showTorrents: Boolean,
+    metaLanguage: String?,
+  ): SourceLists {
+    val offered = offeredStreams(streams)
+    val priority = addons.mapIndexed { index, addon -> addon.manifest.name to index }.toMap()
+    val titleLanguage = Languages.titleLanguage(metaLanguage)
+    val visible = visibleCatalogStreams(offered, StreamFilters(sort = sort), preferredLanguage, priority, showTorrents, titleLanguage)
+    return SourceLists(offered, visible, addonNotices(streams), titleLanguage)
+  }
 
   /** One line per message; addons repeat the same notice on every request. */
   fun addonNotices(streams: List<StreamDto>): List<StreamDto> {

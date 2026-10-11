@@ -98,6 +98,13 @@
   <string name="home_empty_title">Hier ist noch nichts</string>
   <string name="home_empty_text">Laden Sie etwas herunter oder beginnen Sie zu schauen – es erscheint dann hier.</string>
   <string name="tv_home_load_error">Die Startseite konnte nicht geladen werden.</string>
+  <string name="tv_home_unavailable">Home ist für dieses Konto auf diesem Server nicht verfügbar.</string>
+  <string name="tv_no_library_to_save">Es gibt keine Bibliothek, in der dieses Konto speichern darf.</string>
+  <string name="tv_send_diagnostics">Diagnose senden</string>
+  <string name="tv_send_diagnostics_note">Lädt die letzten 1000 Protokollzeilen auf den Server.</string>
+  <string name="tv_diagnostics_sent">Gesendet · %1$s</string>
+  <string name="tv_diagnostics_failed">Diagnose konnte nicht gesendet werden.</string>
+  <string name="tv_crash_hint">Ein Absturz aus dem letzten Lauf wurde erfasst. Senden Sie die Diagnose in den Einstellungen.</string>
   <string name="tv_downloads_later">Die Download-Warteschlange öffnet sich vorerst im Web.</string>
   <string name="tv_my_list_empty">Titel, die Sie mit einem Stern markieren, erscheinen hier.</string>
   <string name="catalog_type_movie">Film</string>

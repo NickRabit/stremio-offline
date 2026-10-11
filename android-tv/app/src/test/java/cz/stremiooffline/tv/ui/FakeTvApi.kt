@@ -5,13 +5,16 @@ import cz.stremiooffline.tv.data.AddonSubtitleDto
 import cz.stremiooffline.tv.data.BrowseItem
 import cz.stremiooffline.tv.data.BrowseResult
 import cz.stremiooffline.tv.data.CatalogDto
+import cz.stremiooffline.tv.data.ClientLogBundleDto
 import cz.stremiooffline.tv.data.ClientCapabilitiesDto
 import cz.stremiooffline.tv.data.CopyDto
 import cz.stremiooffline.tv.data.DownloadResult
+import cz.stremiooffline.tv.data.DownloadTargetDto
 import cz.stremiooffline.tv.data.DownloadsResponseDto
 import cz.stremiooffline.tv.data.FavoriteToggleDto
 import cz.stremiooffline.tv.data.HomeResponseDto
 import cz.stremiooffline.tv.data.LanguageDto
+import cz.stremiooffline.tv.data.LibraryDto
 import cz.stremiooffline.tv.data.MediaDto
 import cz.stremiooffline.tv.data.MetaDto
 import cz.stremiooffline.tv.data.NextFileDto
@@ -48,6 +51,9 @@ open class FakeTvApi : TvApi {
   var favoriteAnswer: ((Boolean) -> Boolean)? = null
 
   var catalogsValue: List<CatalogDto> = emptyList()
+  var librariesValue: List<LibraryDto> = emptyList()
+  var librariesFailure: ApiFailure? = null
+  var librariesCalls = 0
   var catalogPages: MutableMap<String, List<List<MetaDto>>> = mutableMapOf()
   var catalogRequests: MutableList<CatalogRequest> = mutableListOf()
   var failCatalogs = false
@@ -96,8 +102,13 @@ open class FakeTvApi : TvApi {
   var downloads: MutableList<Pair<String?, MediaDto>> = mutableListOf()
   /** The source id each `download()` was called with, so a test can name the queued source. */
   var queuedSourceIds: MutableList<String> = mutableListOf()
+  /** Every `download()` the screen asked for, counted as it arrives, in flight or not. */
+  var downloadCalls = 0
+  /** When set, `download()` waits for it before answering: a queue request that stays in flight. */
+  var downloadGate: CompletableDeferred<Unit>? = null
   var downloadResult: DownloadResult = DownloadResult(status = "queued")
   var downloadFailure: ApiFailure? = null
+  var downloadFailureMessage: String? = null
   var searchPages: MutableMap<String, SearchResultDto> = mutableMapOf()
   var searchRequests: MutableList<Pair<String, String?>> = mutableListOf()
   var failSearch = false
@@ -105,8 +116,15 @@ open class FakeTvApi : TvApi {
   var homeHandler: (List<String>) -> HomeResponseDto = { HomeResponseDto() }
   var homeRequests: MutableList<List<String>> = mutableListOf()
   var failHome = false
+  var homeFailure: ApiFailure? = null
   var downloadsValue: DownloadsResponseDto = DownloadsResponseDto()
   var downloadsRequests = 0
+
+  var clientLogLines: MutableList<Triple<String, String, Map<String, String>?>> = mutableListOf()
+  var bundles: MutableList<ClientLogBundleDto> = mutableListOf()
+  var bundleResultId: String = "b1"
+  var bundleFailure: ApiFailure? = null
+  var bundleFailureMessage: String? = null
 
   override val http: OkHttpClient = OkHttpClient()
 
@@ -138,6 +156,12 @@ open class FakeTvApi : TvApi {
   override suspend fun catalogs(): List<CatalogDto> {
     if (failCatalogs) throw ApiError(ApiFailure.Generic)
     return catalogsValue
+  }
+
+  override suspend fun libraries(): List<LibraryDto> {
+    librariesCalls += 1
+    librariesFailure?.let { throw ApiError(it) }
+    return librariesValue
   }
 
   override suspend fun catalog(addonKey: String, type: String, id: String, skip: Int, genre: String?): List<MetaDto> {
@@ -232,22 +256,38 @@ open class FakeTvApi : TvApi {
     return WatchlistToggleDto("$type:$id", watchlistAnswer?.invoke(favorite) ?: favorite)
   }
 
-  override suspend fun download(title: String, sourceId: String, media: MediaDto): DownloadResult {
-    downloadFailure?.let { throw ApiError(it) }
+  override suspend fun download(title: String, sourceId: String, media: MediaDto, target: DownloadTargetDto?): DownloadResult {
+    downloadCalls += 1
+    downloadGate?.await()
+    downloadFailure?.let { throw ApiError(it, serverMessage = downloadFailureMessage) }
     downloads += title to media
     queuedSourceIds += sourceId
+    queuedTargets += target
     return downloadResult
   }
+
+  val queuedTargets: MutableList<DownloadTargetDto?> = mutableListOf()
 
   override suspend fun home(rows: List<String>): HomeResponseDto {
     homeRequests += rows
     if (failHome) throw ApiError(ApiFailure.Generic)
+    homeFailure?.let { throw ApiError(it) }
     return homeHandler(rows)
   }
 
   override suspend fun downloads(): DownloadsResponseDto {
     downloadsRequests += 1
     return downloadsValue
+  }
+
+  override suspend fun clientLog(level: String, message: String, context: Map<String, String>?) {
+    clientLogLines += Triple(level, message, context)
+  }
+
+  override suspend fun sendClientLogBundle(bundle: ClientLogBundleDto): String {
+    bundleFailure?.let { throw ApiError(it, serverMessage = bundleFailureMessage) }
+    bundles += bundle
+    return bundleResultId
   }
 
   override suspend fun startPlayback(

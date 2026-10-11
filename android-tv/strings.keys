@@ -91,6 +91,13 @@ home.newEpisode
 home.emptyTitle
 home.emptyText
 tv.homeLoadError
+tv.homeUnavailable
+tv.noLibraryToSave
+tv.sendDiagnostics
+tv.sendDiagnosticsNote
+tv.diagnosticsSent
+tv.diagnosticsFailed
+tv.crashHint
 tv.downloadsLater
 tv.myListEmpty
 catalog.typeMovie

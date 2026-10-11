@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import cz.stremiooffline.tv.data.ApiError
+import cz.stremiooffline.tv.data.ApiFailure
 import cz.stremiooffline.tv.data.DownloadDto
 import cz.stremiooffline.tv.data.HomeCard
 import cz.stremiooffline.tv.data.HomeResponseDto
@@ -52,6 +53,9 @@ data class HomeState(
   val loading: Boolean = true,
   /** Either of the two built-in requests failed, so the page shows its own error panel. */
   val failed: Boolean = false,
+  /** Why the page failed, when it did: a refusal or a missing route means Home is simply not
+   *  there for this account, which the panel says instead of a generic load error. */
+  val failure: ApiFailure? = null,
   val downloads: List<DownloadDto> = emptyList(),
   /** Bumped whenever rows land, so the screen can restore the remembered card. */
   val dataVersion: Int = 0,
@@ -101,14 +105,15 @@ class HomeViewModel(private val api: TvApi) : ViewModel() {
     loadJob?.cancel()
     loadJob = viewModelScope.launch {
       val existing = state.rows.associateBy { it.id }
-      state = state.copy(loading = existing.isEmpty(), failed = false)
+      state = state.copy(loading = existing.isEmpty(), failed = false, failure = null)
       val probe = ask(emptyList())
-      if (probe == null) {
-        state = state.copy(loading = false, failed = true)
+      if (probe is RowAnswer.Failed) {
+        state = state.copy(loading = false, failed = true, failure = probe.failure)
         return@launch
       }
+      val probeResponse = (probe as RowAnswer.Ok).response
       // `confirm` is administrator curation and never drawn; every other ordered id gets a slot.
-      val slots = probe.order.filter { it.id != "confirm" }.map { entry ->
+      val slots = probeResponse.order.filter { it.id != "confirm" }.map { entry ->
         existing[entry.id]?.copy(title = entry.title, attempts = 0)
           ?: HomeRowSlot(entry.id, entry.title, entry.catalog, if (entry.catalog) RowContent.Placeholder else RowContent.Loading)
       }
@@ -118,18 +123,19 @@ class HomeViewModel(private val api: TvApi) : ViewModel() {
       if (builtin.isNotEmpty()) {
         val claims = begin(builtin)
         val answer = ask(builtin)
-        if (answer == null) {
-          state = state.copy(loading = false, failed = true)
+        if (answer is RowAnswer.Failed) {
+          state = state.copy(loading = false, failed = true, failure = answer.failure)
           return@launch
         }
-        apply(builtin, answer, catalog = false, claims = claims)
+        apply(builtin, (answer as RowAnswer.Ok).response, catalog = false, claims = claims)
       }
       state = state.copy(loading = false)
 
       val revealed = revealedCatalogRows(slots)
       if (revealed.isNotEmpty()) {
         val claims = begin(revealed)
-        ask(revealed)?.let { apply(revealed, it, catalog = true, claims = claims) }
+        val answer = ask(revealed)
+        if (answer is RowAnswer.Ok) apply(revealed, answer.response, catalog = true, claims = claims)
       }
       refreshDownloads()
     }
@@ -169,10 +175,10 @@ class HomeViewModel(private val api: TvApi) : ViewModel() {
         if (ids.isEmpty()) continue
         val claims = begin(ids)
         val answer = ask(ids)
-        if (answer == null) {
+        if (answer is RowAnswer.Failed) {
           ids.forEach { id -> update(id) { it.copy(content = RowContent.Error, answerSeq = it.answerSeq + 1) } }
         } else {
-          apply(ids, answer, catalog = true, claims = claims)
+          apply(ids, (answer as RowAnswer.Ok).response, catalog = true, claims = claims)
         }
       }
     }
@@ -184,8 +190,8 @@ class HomeViewModel(private val api: TvApi) : ViewModel() {
       val catalog = state.rows.firstOrNull { it.id == rowId }?.catalog == true
       val claims = begin(listOf(rowId))
       val answer = ask(listOf(rowId))
-      if (answer == null) update(rowId) { it.copy(content = RowContent.Error, answerSeq = it.answerSeq + 1) }
-      else apply(listOf(rowId), answer, catalog = catalog, claims = claims)
+      if (answer is RowAnswer.Failed) update(rowId) { it.copy(content = RowContent.Error, answerSeq = it.answerSeq + 1) }
+      else apply(listOf(rowId), (answer as RowAnswer.Ok).response, catalog = catalog, claims = claims)
     }
   }
 
@@ -197,13 +203,18 @@ class HomeViewModel(private val api: TvApi) : ViewModel() {
     retry(rowId)
   }
 
-  /** One Home call; a failed one is null, a cancelled one propagates. */
-  private suspend fun ask(ids: List<String>): HomeResponseDto? = try {
-    api.home(ids)
+  /** One Home call; a failure carries the reason, a cancellation propagates. */
+  private sealed interface RowAnswer {
+    data class Ok(val response: HomeResponseDto) : RowAnswer
+    data class Failed(val failure: ApiFailure) : RowAnswer
+  }
+
+  private suspend fun ask(ids: List<String>): RowAnswer = try {
+    RowAnswer.Ok(api.home(ids))
   } catch (cancelled: CancellationException) {
     throw cancelled
-  } catch (_: ApiError) {
-    null
+  } catch (error: ApiError) {
+    RowAnswer.Failed(error.failure)
   }
 
   /** Marks the rows a request is about to ask, so a superseded answer can be dropped. */

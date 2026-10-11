@@ -246,7 +246,6 @@ fun PlayerOverlayShell(
         val key = playerKeyOf(event.key) ?: return@onPreviewKeyEvent false
         val intent = playerKeyIntent(key, controls) ?: return@onPreviewKeyEvent false
         intent.seekDirection?.let { pressSeek(it, event.nativeKeyEvent.eventTime) }
-        if (intent.pausePlayback) onTogglePause()
         if (intent.exit) onExit()
         if (intent.showControls) controls = true
         if (intent.hideControls) controls = false

@@ -98,6 +98,13 @@
   <string name="home_empty_title">Qui non c\'è ancora niente</string>
   <string name="home_empty_text">Scarica qualcosa o inizia a guardare e comparirà qui.</string>
   <string name="tv_home_load_error">Impossibile caricare la Home.</string>
+  <string name="tv_home_unavailable">Home non è disponibile per questo account su questo server.</string>
+  <string name="tv_no_library_to_save">Non c\'è una libreria in cui questo account può salvare.</string>
+  <string name="tv_send_diagnostics">Invia diagnostica</string>
+  <string name="tv_send_diagnostics_note">Carica le ultime 1000 righe di log sul server.</string>
+  <string name="tv_diagnostics_sent">Inviato · %1$s</string>
+  <string name="tv_diagnostics_failed">Impossibile inviare la diagnostica.</string>
+  <string name="tv_crash_hint">Un arresto anomalo dell\'esecuzione precedente è stato registrato. Invia la diagnostica dalle impostazioni.</string>
   <string name="tv_downloads_later">La coda dei download si apre per ora sul web.</string>
   <string name="tv_my_list_empty">I titoli che contrassegni con una stella compaiono qui.</string>
   <string name="catalog_type_movie">film</string>

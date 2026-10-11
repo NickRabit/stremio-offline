@@ -23,6 +23,7 @@ import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.Modifier
 import androidx.compose.runtime.mutableIntStateOf
 import cz.stremiooffline.tv.data.MetaDto
+import cz.stremiooffline.tv.data.LibraryDto
 import cz.stremiooffline.tv.catalog.ResumeEpisode
 import cz.stremiooffline.tv.data.ProgressDto
 import cz.stremiooffline.tv.data.ProgressEntryDto
@@ -388,6 +389,7 @@ class CatalogDetailTest {
   fun `To library queues the chosen source`() {
     val api = FakeTvApi()
     api.settingsValue = settings()
+    api.librariesValue = listOf(LibraryDto(id = "movies", name = "Movies", type = "movie", writable = true))
     api.streamsValues["movie:tt1"] = listOf(
       stream("srcA", name = "small", title = "Czech 1 GB", addonName = "alpha"),
       stream("srcB", name = "big", title = "Czech 8 GB", addonName = "beta"),

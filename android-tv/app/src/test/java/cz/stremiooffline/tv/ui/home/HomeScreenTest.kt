@@ -296,6 +296,30 @@ class HomeScreenTest {
     compose.onNodeWithText(context.getString(R.string.home_empty_text)).assertExists()
   }
 
+  // A server whose Home refuses an ordinary account: the panel names the reason instead of a
+  // generic load error, and Try again keeps working.
+  @Test
+  fun `a refused home names the refusal`() {
+    val api = FakeTvApi()
+    api.homeFailure = cz.stremiooffline.tv.data.ApiFailure.Forbidden
+    mount(api)
+    compose.waitForIdle()
+
+    compose.onNodeWithText(context.getString(R.string.tv_home_unavailable)).assertExists()
+    compose.onNodeWithText(context.getString(R.string.tv_home_load_error)).assertDoesNotExist()
+  }
+
+  @Test
+  fun `a home that is simply broken keeps the load error`() {
+    val api = FakeTvApi()
+    api.failHome = true
+    mount(api)
+    compose.waitForIdle()
+
+    compose.onNodeWithText(context.getString(R.string.tv_home_load_error)).assertExists()
+    compose.onNodeWithText(context.getString(R.string.tv_home_unavailable)).assertDoesNotExist()
+  }
+
   @Test
   fun `the partial retry counter starts again when Home is entered again`() {
     val api = FakeTvApi()

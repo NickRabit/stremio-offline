@@ -98,6 +98,13 @@
   <string name="home_empty_title">Aquí todavía no hay nada</string>
   <string name="home_empty_text">Descarga algo o empieza a ver algo y aparecerá aquí.</string>
   <string name="tv_home_load_error">No se pudo cargar el inicio.</string>
+  <string name="tv_home_unavailable">Inicio no está disponible para esta cuenta en este servidor.</string>
+  <string name="tv_no_library_to_save">No hay ninguna biblioteca en la que esta cuenta pueda guardar.</string>
+  <string name="tv_send_diagnostics">Enviar diagnóstico</string>
+  <string name="tv_send_diagnostics_note">Sube las últimas 1000 líneas de registro al servidor.</string>
+  <string name="tv_diagnostics_sent">Enviado · %1$s</string>
+  <string name="tv_diagnostics_failed">No se pudo enviar el diagnóstico.</string>
+  <string name="tv_crash_hint">Se registró un fallo de la ejecución anterior. Envíe el diagnóstico desde Ajustes.</string>
   <string name="tv_downloads_later">La cola de descargas se abre por ahora en la web.</string>
   <string name="tv_my_list_empty">Los títulos que marcas con una estrella aparecen aquí.</string>
   <string name="catalog_type_movie">película</string>

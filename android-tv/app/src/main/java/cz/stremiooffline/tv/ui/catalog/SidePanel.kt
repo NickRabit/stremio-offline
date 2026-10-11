@@ -66,6 +66,9 @@ fun SidePanel(
   onClose: () -> Unit,
   modifier: Modifier = Modifier,
   initialFocus: FocusRequester? = null,
+  /** True for a short list the panel scrolls itself. A long list (the sources, the tracks) passes
+   *  false and draws its own `LazyColumn` in the space the panel hands it. */
+  scroll: Boolean = true,
   content: @Composable ColumnScope.() -> Unit,
 ) {
   BackHandler { onClose() }
@@ -104,8 +107,11 @@ fun SidePanel(
       Text(title, color = Tokens.Text, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold)
       Spacer(Modifier.height(2.dp))
       Column(
-        modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).testTag(TagSidePanelList),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier
+          .fillMaxWidth()
+          .then(if (scroll) Modifier.verticalScroll(rememberScrollState()) else Modifier.weight(1f))
+          .testTag(TagSidePanelList),
+        verticalArrangement = if (scroll) Arrangement.spacedBy(8.dp) else Arrangement.Top,
         content = content,
       )
     }

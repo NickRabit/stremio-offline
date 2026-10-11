@@ -16,3 +16,7 @@ data class DownloadDto(
 
 @Serializable
 data class DownloadsResponseDto(val jobs: List<DownloadDto> = emptyList())
+
+/** The `target` the To library choice sends: the one field the route reads off the body. */
+@Serializable
+data class DownloadTargetDto(val libraryId: String)
