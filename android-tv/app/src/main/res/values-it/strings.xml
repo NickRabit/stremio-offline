@@ -158,4 +158,5 @@
   <string name="tv_on">Attivo</string>
   <string name="tv_off">Disattivo</string>
   <string name="tv_back_to_source">Torna alla sorgente precedente</string>
+  <string name="library_mosaic_alt">Mosaico di poster di %1$s film</string>
 </resources>

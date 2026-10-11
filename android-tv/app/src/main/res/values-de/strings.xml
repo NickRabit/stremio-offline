@@ -158,4 +158,5 @@
   <string name="tv_on">Ein</string>
   <string name="tv_off">Aus</string>
   <string name="tv_back_to_source">Zurück zur vorherigen Quelle</string>
+  <string name="library_mosaic_alt">Postermosaik aus %1$s Filmen</string>
 </resources>

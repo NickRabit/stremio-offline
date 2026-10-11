@@ -144,4 +144,25 @@ class CardsTest {
     compose.onNodeWithTag(TagPosterMosaic, useUnmergedTree = true).assertDoesNotExist()
     compose.onAllNodesWithText("One").assertCountEquals(2)
   }
+
+  @Test
+  fun `the collage wins over a folder's own cover, as on the web`() {
+    val requested = mutableListOf<String>()
+    compose.setContent {
+      CompositionLocalProvider(LocalImageLoader provides loader(requested)) {
+        PosterCard(
+          name = "Show",
+          imageUrl = "http://server/own.jpg",
+          progress = null,
+          onClick = {},
+          mosaic = listOf("http://server/a.jpg", "http://server/b.jpg"),
+        )
+      }
+    }
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagPosterMosaic, useUnmergedTree = true).assertExists()
+    compose.waitUntil(5_000) { requested.size == 2 }
+    assertTrue("the folder's own cover is not drawn under the collage", "http://server/own.jpg" !in requested)
+  }
 }

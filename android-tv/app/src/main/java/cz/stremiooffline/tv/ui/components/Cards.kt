@@ -27,6 +27,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -42,6 +43,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -53,6 +57,7 @@ import androidx.tv.material3.Glow
 import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
 import coil.compose.AsyncImage
+import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.ui.theme.Tokens
 
 /** Room a focused card's scale and glow need inside a scrolling viewport, so the first one is
@@ -102,7 +107,7 @@ fun PosterCard(
           .clip(shape)
           .background(Brush.verticalGradient(listOf(Tokens.Panel2, Tokens.Bg))),
       ) {
-        if (art != null) {
+        if (art != null && mosaic.size < 2) {
           AsyncImage(
             model = art,
             contentDescription = null,
@@ -111,8 +116,9 @@ fun PosterCard(
             modifier = Modifier.fillMaxSize(),
           )
         }
-        val collage = art == null && mosaic.size >= 2
-        if (collage) PosterMosaic(mosaic)
+        // As on the web, two or more covers inside win over the folder's own picture.
+        val collage = mosaic.size >= 2
+        if (collage) PosterMosaic(mosaic, label = stringResource(R.string.library_mosaic_alt, mosaic.size.toString()))
         // The name over the artwork is the gradient fallback; with a real poster it would only
         // fight the picture.
         if (art == null && !collage) {
@@ -329,14 +335,24 @@ private val MosaicSlots = listOf(
 
 /** A library or folder without a cover of its own shows a collage of the covers inside it. */
 @Composable
-fun PosterMosaic(posters: List<String>, modifier: Modifier = Modifier) {
-  BoxWithConstraints(modifier.fillMaxSize().background(Tokens.Bg).testTag(TagPosterMosaic)) {
+fun PosterMosaic(posters: List<String>, label: String, modifier: Modifier = Modifier) {
+  BoxWithConstraints(
+    modifier
+      .fillMaxSize()
+      .background(Tokens.Bg)
+      .testTag(TagPosterMosaic)
+      .semantics { contentDescription = label },
+  ) {
     val slotShape = RoundedCornerShape(4.dp)
+    // A cover that fails to load leaves its slot empty instead of drawing a broken frame.
+    val broken = remember(posters) { mutableStateListOf<Int>() }
     posters.take(MosaicSlots.size).forEachIndexed { index, url ->
+      if (index in broken) return@forEachIndexed
       val slot = MosaicSlots[index]
       val first = index == 0
       AsyncImage(
         model = url,
+        onError = { broken.add(index) },
         contentDescription = null,
         contentScale = ContentScale.Crop,
         modifier = Modifier
