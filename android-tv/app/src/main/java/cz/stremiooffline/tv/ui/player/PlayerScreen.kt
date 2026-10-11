@@ -17,6 +17,7 @@ import androidx.compose.runtime.mutableDoubleStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -111,8 +112,11 @@ fun PlayerScreen(
   }
   // The teardown save and delete must outlive the composition, so the controller gets its own
   // scope rather than the one Compose cancels on dispose.
-  val scope = remember { CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate) }
-  val controller = remember(api) { PlaybackController(api, scope, System::currentTimeMillis, capabilities, startCapabilities) }
+  val sessionScope = remember { CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate) }
+  val controller = remember(api) { PlaybackController(api, sessionScope, System::currentTimeMillis, capabilities, startCapabilities) }
+  // Interactive calls (a source switch, Try again) must die with the screen, so a late account read
+  // can never start a session after the viewer left.
+  val scope = rememberCoroutineScope()
   val state by controller.state.collectAsStateWithLifecycle()
 
   val exoPlayer = remember(api) {
@@ -123,6 +127,9 @@ fun PlayerScreen(
   val mediaSession = remember(exoPlayer) { MediaSession.Builder(context, exoPlayer).build() }
 
   var attempt by remember { mutableIntStateOf(0) }
+  // The episode the start effect starts. A next episode replaces it, so Try again after a failed
+  // next start restarts that episode instead of the title the player was opened on.
+  var currentTarget by remember(target) { mutableStateOf(target) }
   var loadedUrl by remember { mutableStateOf<String?>(null) }
   var playing by remember { mutableStateOf(false) }
   var position by remember { mutableDoubleStateOf(0.0) }
@@ -158,7 +165,7 @@ fun PlayerScreen(
 
   /** Every way out of the player releases the session first, whether or not the caller unmounts us. */
   val leave = {
-    controller.stop()
+    controller.release()
     onExit(state.sourceId)
   }
 
@@ -239,6 +246,7 @@ fun PlayerScreen(
     delaySeconds = 0.0
     cues = emptyList()
     title = next.title
+    currentTarget = PlayTarget(key = Progress.libraryKey(next.path), title = next.title, resume = false, path = next.path)
     // The source is minted inside the controller, after the outgoing session is saved and deleted.
     controller.playNext(
       key = Progress.libraryKey(next.path),
@@ -267,8 +275,8 @@ fun PlayerScreen(
   suspend fun readAccount() {
     addonFetched = true
     settings = runCatching { api.settings() }.getOrDefault(SettingsResponse())
-    val type = target.subtitleType
-    val id = target.subtitleTarget
+    val type = currentTarget.subtitleType
+    val id = currentTarget.subtitleTarget
     addonSubtitles = if (type != null && id != null) runCatching { api.subtitles(type, id) }.getOrDefault(emptyList()) else emptyList()
   }
 
@@ -307,8 +315,9 @@ fun PlayerScreen(
   }
 
   LaunchedEffect(attempt) {
+    val episode = currentTarget
     // A catalogue target already carries the server's source id; a library one is minted from its path.
-    val sourceId = target.sourceId ?: target.path?.let { runCatching { api.librarySource(it) }.getOrNull()?.sourceId }
+    val sourceId = episode.sourceId ?: episode.path?.let { runCatching { api.librarySource(it) }.getOrNull()?.sourceId }
     if (sourceId == null) {
       controller.onNetworkError()
       return@LaunchedEffect
@@ -318,12 +327,12 @@ fun PlayerScreen(
     if (!addonFetched) readAccount()
     controller.start(
       sourceId = sourceId,
-      key = target.key,
-      title = target.title,
-      path = target.path,
-      resume = target.resume,
-      poster = target.poster,
-      addonKey = target.addonKey,
+      key = episode.key,
+      title = episode.title,
+      path = episode.path,
+      resume = episode.resume,
+      poster = episode.poster,
+      addonKey = episode.addonKey,
       subtitles = addonSubtitles,
       audioPreference = settings.audioLanguage,
       subtitlePreference = settings.subtitleLanguage,
@@ -466,7 +475,7 @@ fun PlayerScreen(
 
   DisposableEffect(Unit) {
     onDispose {
-      controller.stop()
+      controller.release()
       mediaSession.release()
       exoPlayer.release()
     }
