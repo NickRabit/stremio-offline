@@ -122,6 +122,21 @@ export function normalizeDownloadSettings(value: unknown, libraries?: LibraryRec
   return { movie: targetSettings(item.movie, "movie", libraries), series: targetSettings(item.series, "series", libraries) };
 }
 
+const sameFolder = (left: string, right: string) => left.normalize("NFC").toLowerCase() === right.normalize("NFC").toLowerCase();
+
+/** The title folders below a picked subfolder. When the folder picked already is the title's
+ *  own -- or its season -- the part of the chain it covers is not made a second time inside it. */
+const below = (prefix: string, chain: string[], alias?: string) => {
+  const segments = prefix.split("/").filter(Boolean);
+  for (let covered = Math.min(chain.length, segments.length); covered > 0; covered -= 1) {
+    const tail = segments.slice(segments.length - covered);
+    if (tail.every((segment, index) => sameFolder(segment, chain[index]) || (index === 0 && alias != null && sameFolder(segment, alias)))) {
+      return path.join(prefix, ...chain.slice(covered));
+    }
+  }
+  return path.join(prefix, ...chain);
+};
+
 /** A film goes into a folder of its own, an episode into the series and season folders. Media libraries expect that. */
 export function targetPath(media: MediaInfo | undefined, fallbackTitle: string, extension: string, settings: DownloadTargetSettings = defaultDownloadSettings().movie): { directory: string; base: string } {
   const prefix = settings.explicit ? exactSubfolder(settings.subfolder) : safeSubfolder(settings.subfolder);
@@ -137,7 +152,7 @@ export function targetPath(media: MediaInfo | undefined, fallbackTitle: string, 
     // The matcher reads a series by its show prefix and its SxxEyy code; the season folder keeps
     // the spelling existing libraries already use.
     const episodeCode = media.season == null ? `E${number || "00"}` : `S${pad(media.season)}E${number || "00"}`;
-    const directory = path.join(prefix, series, ...(media.season == null ? [] : [`${pad(media.season)} serie`]));
+    const directory = below(prefix, [series, ...(media.season == null ? [] : [`${pad(media.season)} serie`])]);
     const base = [series, episodeCode, name].filter(Boolean).join(" - ") || safeName(fallbackTitle);
     return { directory, base };
   }
@@ -146,7 +161,7 @@ export function targetPath(media: MediaInfo | undefined, fallbackTitle: string, 
   // A film's folder and file carry the year the catalogue named, so a remake of the same
   // name does not land in the folder of the original.
   const named = media?.year == null ? title : `${title} (${media.year})`;
-  return { directory: path.join(prefix, named), base: named };
+  return { directory: below(prefix, [named], title), base: named };
 }
 
 export const joinTarget = (directory: string, base: string, extension: string, copy = 1) =>

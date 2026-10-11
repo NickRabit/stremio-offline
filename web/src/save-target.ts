@@ -21,14 +21,23 @@ export function ruleTarget(settings: AddonDownloadSettings | undefined, kind: Sa
   return { ...(libraryId ? { libraryId } : {}), subfolder: rule?.subfolder ?? "", layout: rule?.layout ?? "structured" };
 }
 
+/** The name the server gives a title's folder, tidied the way it tidies it, for comparing. */
+const folderName = (value: string) => value.normalize("NFC").replace(/[\u0000-\u001f/:*?"<>|\\]/g, " ")
+  .split(/\s+/).filter(Boolean).join(" ").toLowerCase();
+
 /** Folder chain the title lands in, for display: library name, subfolder segments, then
- *  for structured layout the title folder (movie) or show folder + season folder (series). */
+ *  for structured layout the title folder (movie) or show folder + season folder (series).
+ *  A subfolder that already is the title's folder, or its season, is not repeated, as the
+ *  server does not repeat it either. */
 export function targetPreview(target: Partial<SaveTarget> & { subfolder: string; layout: "structured" | "flat" }, libraries: LibraryView[], title: string, kind: SaveKind, season?: number): string[] {
   const library = target.libraryId ? libraries.find((item) => item.id === target.libraryId) : undefined;
   const segments = [library?.name ?? t("saveTarget.defaultLibrary"), ...target.subfolder.split("/").filter(Boolean)];
   if (target.layout === "structured") {
-    segments.push(title);
-    if (kind === "series" && season != null) segments.push(`${String(season).padStart(2, "0")} serie`);
+    const chain = [title, ...(kind === "series" && season != null ? [`${String(season).padStart(2, "0")} serie`] : [])];
+    const picked = segments.slice(1);
+    let covered = Math.min(chain.length, picked.length);
+    while (covered > 0 && !picked.slice(picked.length - covered).every((segment, index) => folderName(segment) === folderName(chain[index]))) covered -= 1;
+    segments.push(...chain.slice(covered));
   }
   return segments;
 }

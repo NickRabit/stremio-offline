@@ -59,3 +59,15 @@ it("draws the folder chain a title lands in for each layout and kind", () => {
   expect(targetPreview({ libraryId: "lib_missing", subfolder: "", layout: "structured" }, libraries, "Dune", "movie")[0])
     .toBe("Default library");
 });
+
+it("does not repeat the title folder when the folder picked is that title already", () => {
+  const libraries = [library("lib_a", "Downloads", "mixed")];
+  expect(targetPreview({ libraryId: "lib_a", subfolder: "Ovečka Shaun", layout: "structured" }, libraries, "Ovečka Shaun", "series", 7))
+    .toEqual(["Downloads", "Ovečka Shaun", "07 serie"]);
+  expect(targetPreview({ libraryId: "lib_a", subfolder: "Ovečka Shaun/07 serie", layout: "structured" }, libraries, "Ovečka Shaun", "series", 7))
+    .toEqual(["Downloads", "Ovečka Shaun", "07 serie"]);
+  expect(targetPreview({ libraryId: "lib_a", subfolder: "Star Wars Episode IV", layout: "structured" }, libraries, "Star Wars: Episode IV", "movie"))
+    .toEqual(["Downloads", "Star Wars Episode IV"]);
+  expect(targetPreview({ libraryId: "lib_a", subfolder: "Ovečka Shaun/06 serie", layout: "structured" }, libraries, "Ovečka Shaun", "series", 7))
+    .toEqual(["Downloads", "Ovečka Shaun", "06 serie", "Ovečka Shaun", "07 serie"]);
+});

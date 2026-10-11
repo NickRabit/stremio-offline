@@ -37,6 +37,28 @@ test("with no season number the episode stays directly in the series folder", ()
   assert.equal(joinTarget(directory, base, ".mkv"), path.join("Seriál", "Seriál - E05 - Díl.mkv"));
 });
 
+test("a folder picked inside the series is not given the series folder a second time", () => {
+  const episode = { kind: "episode" as const, title: "Ovečka Shaun", season: 7, episode: 5, episodeTitle: "Doorbell" };
+  const inside = targetPath(episode, "x", ".mp4", { subfolder: "Ovečka Shaun", layout: "structured", explicit: true });
+  assert.equal(inside.directory, path.join("Ovečka Shaun", "07 serie"));
+  const season = targetPath(episode, "x", ".mp4", { subfolder: "Kreslené/Ovečka Shaun/07 serie", layout: "structured", explicit: true });
+  assert.equal(season.directory, path.join("Kreslené", "Ovečka Shaun", "07 serie"));
+  // The folder on disk may be spelt in another case; it is still the same title.
+  const cased = targetPath(episode, "x", ".mp4", { subfolder: "ovečka shaun", layout: "structured", explicit: true });
+  assert.equal(cased.directory, path.join("ovečka shaun", "07 serie"));
+  // Another season's folder is not this one, so the right one goes beside it, not inside.
+  const other = targetPath(episode, "x", ".mp4", { subfolder: "Ovečka Shaun/06 serie", layout: "structured", explicit: true });
+  assert.equal(other.directory, path.join("Ovečka Shaun", "06 serie", "Ovečka Shaun", "07 serie"));
+});
+
+test("a folder picked inside the film is not given the film folder a second time", () => {
+  const film = { kind: "movie" as const, title: "Heat", year: 1995 };
+  const named = targetPath(film, "x", ".mkv", { subfolder: "Filmy/Heat (1995)", layout: "structured", explicit: true });
+  assert.equal(joinTarget(named.directory, named.base, ".mkv"), path.join("Filmy", "Heat (1995)", "Heat (1995).mkv"));
+  const bare = targetPath(film, "x", ".mkv", { subfolder: "Filmy/Heat", layout: "structured", explicit: true });
+  assert.equal(joinTarget(bare.directory, bare.base, ".mkv"), path.join("Filmy", "Heat", "Heat (1995).mkv"));
+});
+
 test("with no show details the given name is used", () => {
   const { directory, base } = targetPath(undefined, "Nějaké video", ".avi");
   assert.equal(joinTarget(directory, base, ".avi"), path.join("Nějaké video", "Nějaké video.avi"));
