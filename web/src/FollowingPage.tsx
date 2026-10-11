@@ -52,7 +52,7 @@ const LEGEND: CalendarEpisodeState[] = ["upcoming", "released", "queued", "waiti
 
 const DAY_MS = 24 * 60 * 60_000;
 
-export function FollowingPage({ follows, canRetain = false, languages, libraries, addons, audioLanguage, subtitleLanguage, onChanged, onOpenSeries, onNotify }: FollowingPageProps) {
+export function FollowingPage({ follows, newEpisodes, canRetain = false, languages, libraries, addons, audioLanguage, subtitleLanguage, onChanged, onOpenSeries, onNotify }: FollowingPageProps) {
   useI18n();
   const [tab, setTab] = useState<Tab>("overview");
   const [openId, setOpenId] = useState<string | null>(null);
@@ -78,7 +78,7 @@ export function FollowingPage({ follows, canRetain = false, languages, libraries
         }}>{t(TAB_LABEL[name])}</button>)}
     </div>
     <div className="following-panel" role="tabpanel" id={`following-panel-${tab}`} aria-labelledby={`following-tab-${tab}`} tabIndex={0}>
-      {tab === "overview" && <Overview follows={follows} onOpen={setOpenId}/>}
+      {tab === "overview" && <Overview follows={follows} newEpisodes={newEpisodes} onOpen={setOpenId} onOpenSeries={onOpenSeries}/>}
       {tab === "calendar" && <CalendarTab onOpenSeries={onOpenSeries} onNotify={onNotify}/>}
       {tab === "activity" && <ActivityTab onNotify={onNotify}/>}
     </div>
@@ -96,10 +96,34 @@ const sortFollows = (follows: FollowView[]): FollowView[] => [...follows].sort((
   return left.name.localeCompare(right.name);
 });
 
-function Overview({ follows, onOpen }: { follows: FollowView[]; onOpen: (id: string) => void }) {
+/** The account's new episodes at the top of the planner: the same rows the Library shelf used
+ *  to draw, with the one action an episode has -- open its series. Nothing new, nothing drawn. */
+function NewEpisodesSection({ episodes, onOpen }: { episodes: NewEpisode[]; onOpen: (episode: NewEpisode) => void }) {
   useI18n();
-  if (!follows.length) return <div className="empty"><i><BellRing/></i><h3>{t("following.emptyTitle")}</h3><p>{t("following.emptyText")}</p></div>;
-  return <div className="following-grid">
+  if (!episodes.length) return null;
+  return <section className="following-new-episodes">
+    <h3>{t("home.newEpisodes")}</h3>
+    <div className="resume-strip">
+      {episodes.map((episode) => <button type="button" className="browse-item" key={`${episode.followId}:${episode.videoId}`} onClick={() => onOpen(episode)}>
+        <span className="browse-art">{episode.poster ? <img src={episode.poster} alt="" loading="lazy"/> : <Film/>}</span>
+        <strong>{episode.name}</strong>
+        <small>{codeOf(episode)}{episode.title ? ` · ${episode.title}` : ""}</small>
+        <small>{formatDay(episode.released)}</small>
+      </button>)}
+    </div>
+  </section>;
+}
+
+function Overview({ follows, newEpisodes, onOpen, onOpenSeries }: {
+  follows: FollowView[];
+  newEpisodes: NewEpisode[];
+  onOpen: (id: string) => void;
+  onOpenSeries: FollowingPageProps["onOpenSeries"];
+}) {
+  useI18n();
+  const section = <NewEpisodesSection episodes={newEpisodes} onOpen={(episode) => onOpenSeries({ type: episode.type, id: episode.metaId, name: episode.name, poster: episode.poster })}/>;
+  if (!follows.length) return <>{section}<div className="empty"><i><BellRing/></i><h3>{t("following.emptyTitle")}</h3><p>{t("following.emptyText")}</p></div></>;
+  return <>{section}<div className="following-grid">
     {sortFollows(follows).map((follow) => {
       const line = follow.type === "movie"
         ? follow.movie?.released ? t("follow.movieRelease", { date: formatDay(follow.movie.released) })
@@ -128,7 +152,7 @@ function Overview({ follows, onOpen }: { follows: FollowView[]; onOpen: (id: str
         </span>
       </button>;
     })}
-  </div>;
+  </div></>;
 }
 
 /** "neděle 4. října", never "Neděle 4. Října": only a sentence's first letter is raised. */

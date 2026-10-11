@@ -229,6 +229,19 @@ export const en = {
   "favorites.emptyCatalogTitle": "No catalogue favourites",
   "favorites.emptyCatalogText": "Star a title in the catalogue and it appears here.",
 
+  // One Continue watching section: the merged Home row, paged and filtered.
+  "nav.resume": "Continue watching",
+  "resume.title": "Continue watching",
+  "resume.filterAll": "All",
+  "resume.filterLibrary": "In library",
+  "resume.filterCatalog": "From catalog",
+  "resume.emptyAllTitle": "Nothing part-watched",
+  "resume.emptyAllText": "Films and episodes you leave half watched appear here.",
+  "resume.emptyLibraryTitle": "Nothing part-watched in the library",
+  "resume.emptyLibraryText": "Files you start from the library appear here.",
+  "resume.emptyCatalogTitle": "Nothing part-watched from the catalogue",
+  "resume.emptyCatalogText": "Titles you start from the catalogue appear here.",
+
   // Player overlay.
   "player.settings": "Playback settings",
   "player.closeSettings": "Close playback settings",

@@ -88,32 +88,30 @@ describe("relativeAge", () => {
 });
 
 describe("showAllTarget", () => {
-  it("offers Continue watching only when there is more, and picks the list by the cards held", () => {
-    expect(showAllTarget("resume", [file], false)).toBeUndefined();
-    expect(showAllTarget("resume", [file], true)).toBe("library-resume");
-    expect(showAllTarget("resume", [series], true)).toBe("catalog-resume");
-    expect(showAllTarget("resume", [series, file], true)).toBe("library-resume");
+  it("always points Continue watching at its one section", () => {
+    expect(showAllTarget("resume", false)).toBe("resume");
+    expect(showAllTarget("resume", true)).toBe("resume");
   });
 
   it("offers Ready to play only when there is more, and points at Downloads", () => {
-    expect(showAllTarget("completed", [completed], false)).toBeUndefined();
-    expect(showAllTarget("completed", [completed], true)).toBe("downloads");
+    expect(showAllTarget("completed", false)).toBeUndefined();
+    expect(showAllTarget("completed", true)).toBe("downloads");
   });
 
   it("always offers the Favourites section for Favourites", () => {
-    expect(showAllTarget("favorites", [favorite], false)).toBe("favorites");
-    expect(showAllTarget("favorites", [], true)).toBe("favorites");
+    expect(showAllTarget("favorites", false)).toBe("favorites");
+    expect(showAllTarget("favorites", true)).toBe("favorites");
   });
 
   it("always points New episodes at Following and To confirm at the suggestions dialog", () => {
-    expect(showAllTarget("episodes", [newEpisode], false)).toBe("following");
-    expect(showAllTarget("episodes", [newEpisode], true)).toBe("following");
-    expect(showAllTarget("confirm", [confirm], false)).toBe("confirm");
+    expect(showAllTarget("episodes", false)).toBe("following");
+    expect(showAllTarget("episodes", true)).toBe("following");
+    expect(showAllTarget("confirm", false)).toBe("confirm");
   });
 
   it("offers Recently added only when there is more, and offers Tonight nothing", () => {
-    expect(showAllTarget("recent", [recent], false)).toBeUndefined();
-    expect(showAllTarget("recent", [recent], true)).toBe("library");
-    expect(showAllTarget("tonight", [tonight], true)).toBeUndefined();
+    expect(showAllTarget("recent", false)).toBeUndefined();
+    expect(showAllTarget("recent", true)).toBe("library");
+    expect(showAllTarget("tonight", true)).toBeUndefined();
   });
 });

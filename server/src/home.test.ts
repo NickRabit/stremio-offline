@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { HOME_ROWS, HOME_ROW_LIMIT, boundCards, homeCatalogRowId, homeRowOrder, mergeResume, parseHomeCatalogRowId, type HomeCard, type ResumeCatalogueItem, type ResumeFileItem } from "./home.js";
+import { HOME_ROWS, HOME_ROW_LIMIT, boundCards, homeCatalogRowId, homeRowOrder, mergeResume, parseHomeCatalogRowId, parseResumeFilter, resumePage, type HomeCard, type ResumeCatalogueItem, type ResumeFileItem } from "./home.js";
 
 const at = (day: number) => `2024-01-${String(day).padStart(2, "0")}T00:00:00.000Z`;
 
@@ -108,6 +108,65 @@ test("the winner of a merged show does not depend on the input order", () => {
   const forward = mergeResume(sources);
   const reversed = mergeResume({ files: [...sources.files].reverse(), catalogue: [...sources.catalogue].reverse() });
   assert.deepEqual(forward, reversed);
+});
+
+test("parseResumeFilter keeps the two card kinds and folds anything else into all", () => {
+  assert.equal(parseResumeFilter("library"), "library");
+  assert.equal(parseResumeFilter("catalog"), "catalog");
+  assert.equal(parseResumeFilter("all"), "all");
+  assert.equal(parseResumeFilter(undefined), "all");
+  assert.equal(parseResumeFilter("nope"), "all");
+});
+
+test("the first page of resumePage is exactly Home's row", () => {
+  const sources = {
+    files: [file({ key: "file:a", seriesId: "tt1", updatedAt: at(1) })],
+    catalogue: [
+      catalogue({ key: "movie:tt2", type: "movie", id: "tt2", updatedAt: at(3) }),
+      catalogue({ key: "series:tt1:1:2", seriesId: "tt1", updatedAt: at(2) }),
+    ],
+  };
+  const row = mergeResume(sources);
+  const page = resumePage(sources, { limit: HOME_ROW_LIMIT });
+  assert.deepEqual(page.items.map((item) => item.key), row.items.map((item) => item.key));
+  assert.equal(page.hasMore, row.hasMore);
+});
+
+test("a folded show that kept a local copy answers both filters, whichever card won", () => {
+  const sources = {
+    files: [file({ key: "file:a", seriesId: "tt1", updatedAt: at(1) })],
+    // The newer marker wins the card, but the show still has a local copy behind it.
+    catalogue: [catalogue({ key: "series:tt1:1:2", seriesId: "tt1", updatedAt: at(3) })],
+  };
+  assert.equal(resumePage(sources, {}).items[0]!.kind, "resume-catalogue");
+  assert.deepEqual(resumePage(sources, { filter: "library" }).items.map((item) => item.key), ["series:tt1:1:2"]);
+  assert.deepEqual(resumePage(sources, { filter: "catalog" }).items.map((item) => item.key), ["series:tt1:1:2"]);
+});
+
+test("a card with only one source answers only its own filter", () => {
+  const local = { files: [file({ key: "file:a" })], catalogue: [] };
+  const remote = { files: [], catalogue: [catalogue({ key: "movie:tt1", type: "movie", id: "tt1" })] };
+  assert.deepEqual(resumePage(local, { filter: "library" }).items.map((item) => item.key), ["file:a"]);
+  assert.deepEqual(resumePage(local, { filter: "catalog" }).items, []);
+  assert.deepEqual(resumePage(remote, { filter: "library" }).items, []);
+  assert.deepEqual(resumePage(remote, { filter: "catalog" }).items.map((item) => item.key), ["movie:tt1"]);
+});
+
+test("paging walks one stable, de-duplicated order past the Home bound", () => {
+  const catalogue = Array.from({ length: HOME_ROW_LIMIT + 10 }, (_, index) =>
+    ({ key: `movie:tt${index}`, updatedAt: at(index + 1), title: `T${index}`, type: "movie", id: `tt${index}`, name: `T${index}` }));
+  const sources = { files: [], catalogue };
+  const first = resumePage(sources, { skip: 0, limit: HOME_ROW_LIMIT });
+  const second = resumePage(sources, { skip: HOME_ROW_LIMIT, limit: HOME_ROW_LIMIT });
+  const whole = resumePage(sources, { skip: 0, limit: 200 });
+  assert.equal(first.total, HOME_ROW_LIMIT + 10);
+  assert.equal(first.hasMore, true);
+  assert.equal(second.hasMore, false);
+  assert.equal(first.items.length, HOME_ROW_LIMIT);
+  assert.equal(second.items.length, 10);
+  const seen = new Set([...first.items, ...second.items].map((item) => item.key));
+  assert.equal(seen.size, HOME_ROW_LIMIT + 10, "no page repeats a card");
+  assert.deepEqual([...first.items, ...second.items].map((item) => item.key), whole.items.map((item) => item.key));
 });
 
 test("a catalogue row id names its addon, type and catalogue back, even with colons inside", () => {

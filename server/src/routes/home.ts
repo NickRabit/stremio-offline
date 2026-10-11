@@ -8,8 +8,9 @@ import { HomeCatalogCache, homeCatalogOfferings, homeCatalogTargets, type HomeCa
 import {
   HOME_BUILTIN_LABELS, HOME_BUILTIN_ROWS, HOME_CANDIDATES, HOME_LOOKUP_DEADLINE_MS, HOME_MARKER_LIMIT, HOME_ROW_LIMIT,
   arrangeHomeRows, boundCards, homeCatalogRowId, homeFeedSelectionKey, homeRowOrder, mergeResume, parseHomeLayout,
+  parseResumeFilter, resumePage,
   type HomeCard, type HomeLayout, type HomeLayoutEntry, type HomeLayoutResponse, type HomeResponse, type HomeRow, type HomeRowError, type HomeRowId,
-  type BuiltinHomeRowId, type ResumeCatalogueItem, type ResumeFileItem,
+  type BuiltinHomeRowId, type ResumeCatalogueItem, type ResumeFileItem, type ResumeSources,
 } from "../home.js";
 import { libraryFor, libraryPath, libraryVisible, parseLibraryPath, showsInFavorites, showsOnHome, type LibraryRecord, type Viewer } from "../libraries.js";
 import { isPathWithin, type BrowseItem } from "../library.js";
@@ -163,7 +164,11 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
     return { poster: await thumbUrl("dir", relative, art), wide: await thumbUrl("dir", relative, wide, "wide") };
   };
 
-  const resumeRow = async (req: express.Request): Promise<HomeRow> => {
+  /** The two Continue watching sources, permission-filtered the way Home applies them: the
+   *  catalogue's stored progress and next-episode markers, and the library files the account
+   *  left part-watched. Home's `resume` row and `GET /api/resume` read this one builder, so
+   *  the two can never disagree. */
+  const resumeSources = async (req: express.Request): Promise<{ sources: ResumeSources; partial: boolean }> => {
     const [progress, resume] = await Promise.all([
       personal.progressRows(req, {
         markerLimit: HOME_MARKER_LIMIT, deadlineMs: homeLookupDeadlineMs, addonFilter: true,
@@ -171,7 +176,9 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
         // would leave the other half behind; the merge does the real cut to 20.
         limit: Number.POSITIVE_INFINITY,
       }),
-      personal.libraryResumeItems(req, { onHome: true }),
+      // Every file candidate, whatever page of the merged list the caller asked for: the
+      // stored positions are bounded already, and the merge is what pages.
+      personal.libraryResumeItems(req, { onHome: true, skip: 0, limit: 120 }),
     ]);
     // The addon's own switches for the row, as the catalogue row reads them: a row whose addon
     // is gone, or that never recorded one, stays.
@@ -209,8 +216,13 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
       ...(typeof item.episode === "number" ? { episode: item.episode } : {}),
       ...(item.seriesId ? { seriesId: item.seriesId, seriesType: item.seriesType } : {}),
     }));
-    const merged = mergeResume({ catalogue, files });
-    return { status: "ok", items: merged.items, hasMore: merged.hasMore, ...(progress.partial ? { partial: true } : {}) };
+    return { sources: { catalogue, files }, partial: progress.partial };
+  };
+
+  const resumeRow = async (req: express.Request): Promise<HomeRow> => {
+    const { sources, partial } = await resumeSources(req);
+    const merged = mergeResume(sources);
+    return { status: "ok", items: merged.items, hasMore: merged.hasMore, ...(partial ? { partial: true } : {}) };
   };
 
   const completedRow = async (_req: express.Request, viewer: Viewer): Promise<HomeRow> => {
@@ -554,6 +566,24 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
     }));
     const response: HomeResponse = { generatedAt: new Date().toISOString(), order, rows };
     res.json(response);
+  }));
+
+  /** The one Continue watching list for the signed-in account: Home's `resume` row is its
+   *  first page, and this route carries it past the row's bound, filtered by card kind. Every
+   *  card keeps the shape Home draws, so the interface renders both with one component. */
+  app.get("/api/resume", asyncRoute(async (req, res) => {
+    res.set("Cache-Control", "private, no-store");
+    const { sources, partial } = await resumeSources(req);
+    const page = resumePage(sources, {
+      filter: parseResumeFilter(req.query.filter),
+      skip: Math.max(0, Number(req.query.skip) || 0),
+      limit: Math.max(1, Math.min(120, Number(req.query.limit) || HOME_ROW_LIMIT)),
+    });
+    res.json({
+      items: page.items, total: page.total,
+      pending: page.items.some((item) => !item.poster),
+      ...(partial ? { partial: true } : {}),
+    });
   }));
 
   app.get("/api/home/layout", asyncRoute(async (req, res) => {

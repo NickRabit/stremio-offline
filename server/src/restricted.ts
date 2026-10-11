@@ -45,6 +45,7 @@ export const ALLOWED_MUTATIONS: Rule[] = [
   { method: "POST", pattern: /^\/search\/history\/forget$/ },
   { method: "DELETE", pattern: /^\/search\/history$/ },
   { method: "POST", pattern: /^\/progress$/ },
+  { method: "POST", pattern: /^\/progress\/forget$/ },
   { method: "DELETE", pattern: /^\/progress\/[^/]+$/ },
   { method: "POST", pattern: /^\/library\/favorite$/ },
   { method: "POST", pattern: /^\/library\/folder$/ },

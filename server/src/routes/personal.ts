@@ -82,6 +82,10 @@ export interface ResumeRowOptions {
   /** Drop stored rows whose library was switched off for Home. Home asks for this; the route
    *  keeps showing a library whose Home switch is off, because that switch is not its own. */
   onHome?: boolean;
+  /** Home and the merged Continue watching route read candidates, not a page: they pass their
+   *  own cut so the query's `skip`/`limit` (the merged list's) never reaches this list. */
+  skip?: number;
+  limit?: number;
 }
 
 /** One row of `GET /api/library/resume` as the handler serialises it, plus the series
@@ -609,8 +613,8 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     const sorts = new Set(["name", "added", "size", "random"]);
     const sort = sorts.has(String(req.query.sort)) ? String(req.query.sort) as "name" : "added";
     const ordered = sortFiles(items, sort, req.query.order !== "asc", String(req.query.seed ?? ""));
-    const skip = Math.max(0, Number(req.query.skip) || 0);
-    const limit = Math.max(1, Math.min(120, Number(req.query.limit) || 60));
+    const skip = Math.max(0, options.skip ?? (Number(req.query.skip) || 0));
+    const limit = Math.max(1, Math.min(120, options.limit ?? (Number(req.query.limit) || 60)));
     const page = await Promise.all(ordered.slice(skip, skip + limit).map(async (item) => {
       const key = libraryKey(item.path);
       const art = await locateFileArtwork(key);

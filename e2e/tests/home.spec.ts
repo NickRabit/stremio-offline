@@ -29,7 +29,7 @@ test("Home shows the title that was left half watched and Forget progress remove
   expect(await (await request.get(`/api/progress/${encodeURIComponent("movie:tt-e2e-movie")}`)).json()).toBeNull();
 });
 
-test("a card opens the title where the catalogue's own Continue watching tile does", async ({ page, request }) => {
+test("a card opens the catalogue title it remembers", async ({ page, request }) => {
   expect((await seedFilm(request)).ok()).toBe(true);
   await page.goto("/");
   await goToView(page, "Domů");

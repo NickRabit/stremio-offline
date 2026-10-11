@@ -301,7 +301,7 @@ describe("Home", () => {
     expect(onForgotten).not.toHaveBeenCalled();
   });
 
-  it("shows Show all only for a row with more, and Favourites always offers its own section", async () => {
+  it("always offers the Continue watching and Favourites sections, and Show all only for a row with more", async () => {
     const { onShowAll } = await render({
       rows: allEmpty({ resume: rowState({ items: [resumeFile()], hasMore: true }), completed: rowState({ items: [completedCard()] }), favorites: rowState({ items: [favoriteCard("file")] }) }),
     });
@@ -310,7 +310,7 @@ describe("Home", () => {
     expect(showAll("completed")).toBeNull();
     expect(showAll("favorites")!.textContent).toContain("Show all");
     await click(showAll("resume")!);
-    expect(onShowAll).toHaveBeenCalledWith("library-resume");
+    expect(onShowAll).toHaveBeenCalledWith("resume");
     await click(showAll("favorites")!);
     expect(onShowAll).toHaveBeenCalledWith("favorites");
   });

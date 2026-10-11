@@ -9,6 +9,9 @@ heading, not a shelf, and Downloads is a one-line summary unless a job has
 failed or is blocked. Slice 6 shipped a personal Home layout: each account orders
 and hides its rows and adds catalogue feeds for itself, on top of the instance
 defaults, and an account that never arranged one sees the page exactly as before.
+Continue watching is also **one section in the navigation**, like Favourites:
+Home's `resume` row is its first page, and the library's own shelf and the
+catalogue's `▸ Continue watching` entry that drew the same list are gone.
 Written 2026-10-05 and revised the
 same day against `main` at 0.5.8, which already ships Following and owner-scoped
 duplicate checks. The [roadmap](roadmap.md) owns priority; this file owns the shape of the
@@ -58,7 +61,7 @@ re-ordered by a heuristic, which keeps scroll restoration honest.
 
 | # | Row | Contents | Status |
 | --- | --- | --- | --- |
-| 1 | Continue watching | Library files with a stored position, catalogue progress and next-episode rows. | Needs a server identity contract, see below |
+| 1 | Continue watching | Library files with a stored position, catalogue progress and next-episode rows. The first page of `GET /api/resume`, which the one Continue watching section pages and filters. | Ready |
 | 2 | Favourites | Library favourites and starred catalogue titles, merged into one list and filtered by grant. | Ready |
 | 3 | Tonight | Unstarted whole titles from the libraries Home shows, in a per-day order. | Ready |
 | 4 | Add-on catalogs | One seeded random selection per selected manifest catalog feed from enabled, granted add-ons shown on Home. | Ready; bounded request per feed |
@@ -72,7 +75,10 @@ individual feeds or none; the add-on's existing Show on Home switch remains the
 master switch. These settings are shared by accounts, while `allowedAddons`
 filters each viewer's feed list and results by their current grant.
 
-Following is its own destination and is not rebuilt here.
+Following is its own destination and is not rebuilt here, but its Overview tab now leads with
+a **New episodes** section: the account's `NewEpisode`s, the same cards the Library shelf used
+to draw, with the one action an episode has -- open its series. The section is hidden when
+nothing is new.
 
 Tonight tops up from the account's unfinished favourites when fewer than 12 unstarted titles are eligible.
 
@@ -147,8 +153,10 @@ optional canonical series identity, a target and a freshness time. Rules:
 If the identity contract is not in the first Continue watching slice, show
 **In library** and **In catalogue** as labelled groups and do not promise a
 merged count or de-duplication. "Show all" must open a list with the same items
-and order, paged; until that exists, offer the two existing destinations and no
-exact merged total.
+and order, paged. That list now exists as the one Continue watching section --
+the same merged cards, filtered by card kind -- and Home's "Show all" opens it;
+the library's `:resume` list and the catalogue's virtual entry are no longer the
+destination.
 
 **Forget progress.** `DELETE /api/progress/:key` forgets the saved position and
 can remove a next-episode marker, so the action is called Forget progress, says
@@ -278,10 +286,26 @@ can be returned, so a key the disk no longer answers cannot make a page repeat o
 stall. Nothing here touches the stored maps: no migration, and the watchlist is
 still not filtered by which add-ons the account may use.
 
+**Continue watching (one list).** `GET /api/resume?filter=all|library|catalog&skip&limit`
+answers the same merged, de-duplicated, newest-first list Home's `resume` row builds,
+pageable past the row's bound: Home's row is exactly its first page, and both read one
+builder so the two cannot disagree. Each item keeps the Home card shape
+(`resume-file` | `resume-catalogue`, with `forgetKeys` and the progress, numbering and
+artwork the card draws). `filter` selects by card kind, and a folded show that kept a local
+copy counts under both -- the kind that won the card does not decide it. Visibility and
+each library's and add-on's `showInContinueWatching` are applied exactly as Home applies
+them. Forgetting a card is the same owner-scoped `POST /api/progress/forget` Home uses.
+The library's own `:resume` list and the catalogue's virtual entry are no longer entry
+points; the library root draws no shelf.
+
 ## Client
 
 - `type View` gains `"home"`. It scrolls on the document like Downloads and
   Settings, so `scrollByView` and `openView` need no new branch.
+- `type View` gains `"resume"` for the one Continue watching section, a secondary
+  destination beside Favourites: filter pills (All / In library / From catalog),
+  a grid of the same `HomeCard`s, Load more and an empty state per filter. Home's
+  `resume` row "Show all" opens it.
 - Navigation is a single permission-aware destination model that every
   presentation renders, see Layout. A second activation of Home resets the page
   and each shelf's offset.
@@ -337,9 +361,9 @@ landscape rail squeezes seven icons into about 229 px, roughly 32 px each.
   ("Herunterladen", "Stahování") does not have to fit. The bar does not scroll
   sideways, and its outer height stays the existing `68px` plus the safe area.
   Catalogue and Library already subtract that constant from `100dvh`; labels
-  must not make the bar taller. Favourites is not one of the five: it folds into
-  More, where the phone can still reach it.
-- **More** holds Favourites, Following, Addons, Settings and, for an administrator,
+  must not make the bar taller. Favourites and Continue watching are not among the
+  five: they fold into More, where the phone can still reach them.
+- **More** holds Favourites, Continue watching, Following, Addons, Settings and, for an administrator,
   Statistics. It is marked active while one of them is open and says which. It
   carries the new-episodes and attention indicator that Following shows, built
   only from the account's visible data. On a phone it opens a sheet; on a rail it
@@ -534,7 +558,9 @@ Do not hard-code the count in code or tests. New keys: `nav.home`, `nav.more`,
 `home.openTitle`, `home.pickEpisode`, `home.downloadNext`, `home.forget`,
 `home.forgetConfirm`, `home.source.library`, `home.source.catalogue`,
 `home.partial`, `home.unavailableFile`, `home.rowFailed`, `home.emptyTitle`,
-`home.emptyText`, `home.emptyAdminHint`. Reuse equivalent existing keys first:
+`home.emptyText`, `home.emptyAdminHint`. The one Continue watching section
+adds `nav.resume`, `resume.title`, `resume.filterAll/Library/Catalog` and
+`resume.emptyAll/Library/CatalogTitle/Text`. Reuse equivalent existing keys first:
 `library.continueWatching`, `library.showAll`, `library.showInLibrary`,
 `downloads.retry` and the `downloads.status.*` labels.
 

@@ -224,6 +224,19 @@ export const cs: Catalog = {
   "favorites.emptyCatalogTitle": "Žádné oblíbené v katalogu",
   "favorites.emptyCatalogText": "Přidejte hvězdičku titulu v katalogu a objeví se tady.",
 
+  // One Continue watching section: the merged Home row, paged and filtered.
+  "nav.resume": "Pokračovat ve sledování",
+  "resume.title": "Pokračovat ve sledování",
+  "resume.filterAll": "Vše",
+  "resume.filterLibrary": "V knihovně",
+  "resume.filterCatalog": "Z katalogu",
+  "resume.emptyAllTitle": "Nic rozkoukaného",
+  "resume.emptyAllText": "Nedokoukané filmy a epizody se objeví tady.",
+  "resume.emptyLibraryTitle": "Nic rozkoukaného v knihovně",
+  "resume.emptyLibraryText": "Soubory, které spustíte z knihovny, se objeví tady.",
+  "resume.emptyCatalogTitle": "Nic rozkoukaného z katalogu",
+  "resume.emptyCatalogText": "Tituly, které spustíte z katalogu, se objeví tady.",
+
   // Přehrávač.
   "player.settings": "Nastavení přehrávání",
   "player.closeSettings": "Zavřít nastavení přehrávání",

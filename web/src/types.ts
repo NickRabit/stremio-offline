@@ -2,6 +2,7 @@ import type { Locale } from "./i18n";
 import type { DownloadSnapshot as ServerDownloadSnapshot, PublicDownload } from "../../server/src/api-types";
 import type { HomeLayout } from "../../server/src/home";
 export type { FavoriteCatalogItem, FavoriteFilter, FavoriteItem, FavoriteLibraryItem } from "../../server/src/favorites";
+export type { ResumeCard, ResumeFilter } from "../../server/src/home";
 export type DownloadLayout = "flat" | "structured";
 export interface DownloadTargetSettings {
   subfolder: string;

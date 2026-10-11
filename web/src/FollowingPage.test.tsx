@@ -30,10 +30,10 @@ const stubMatchMedia = (width: number) => vi.stubGlobal("matchMedia", (query: st
   addListener: () => undefined, removeListener: () => undefined, dispatchEvent: () => false,
 }));
 
-const render = async (follows: FollowView[]) => {
+const render = async (follows: FollowView[], over: Partial<Parameters<typeof FollowingPage>[0]> = {}) => {
   await act(async () => {
     root.render(<FollowingPage follows={follows} newEpisodes={[]} languages={[]} libraries={[]} addons={[]}
-      audioLanguage="en" subtitleLanguage="en" onChanged={() => undefined} onOpenSeries={() => undefined} onNotify={() => undefined}/>);
+      audioLanguage="en" subtitleLanguage="en" onChanged={() => undefined} onOpenSeries={() => undefined} onNotify={() => undefined} {...over}/>);
   });
 };
 
@@ -73,6 +73,24 @@ describe("FollowingPage", () => {
     ]);
     expect([...host.querySelectorAll(".following-card strong")].map((node) => node.textContent)).toEqual(["Alpha", "Beta"]);
     expect(host.querySelector(".following-chip.attention")!.textContent).toBe("2 to resolve");
+  });
+
+  it("lists the new episodes at the top of the overview and opens the series", async () => {
+    const onOpenSeries = vi.fn();
+    const episode = { followId: "f1", type: "series", metaId: "tt1", name: "Show", videoId: "v1", season: 2, episode: 4, title: "Finale", released: "2024-02-01T00:00:00.000Z" };
+    await render([follow({})], { newEpisodes: [episode], onOpenSeries });
+    const section = host.querySelector<HTMLElement>(".following-new-episodes")!;
+    expect(section).toBeTruthy();
+    expect(section.querySelector("h3")!.textContent).toBe("New episodes");
+    const card = section.querySelector<HTMLButtonElement>(".browse-item")!;
+    expect(card.textContent).toContain("S02E04 · Finale");
+    await act(async () => { card.click(); });
+    expect(onOpenSeries).toHaveBeenCalledWith({ type: "series", id: "tt1", name: "Show", poster: undefined });
+  });
+
+  it("hides the new-episodes section when nothing is new", async () => {
+    await render([follow({})]);
+    expect(host.querySelector(".following-new-episodes")).toBeNull();
   });
 
   it("places an episode on its day in the month grid and lists it for the chosen day", async () => {

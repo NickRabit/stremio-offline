@@ -4,6 +4,7 @@ import { copyFile, mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { appUrl } from "../../playwright.config";
+import { goToView } from "./nav";
 
 // A folder name of its own: the binding is what this journey is about, and a folder another
 // spec also uses would let its match stand in for this one's.
@@ -89,8 +90,8 @@ test("a movie already in the library leads its sources and plays the library fil
     const result = await (await request.get("/api/library/resume?limit=8")).json();
     return (result.items ?? []).some((item: { path?: string }) => (item.path ?? "").includes("Lokální film"));
   }).toBe(true);
-  await page.getByRole("button", { name: "Knihovna", exact: true }).click();
-  const card = page.locator('.library-shelf .browse-item[data-path*="Lokální film"]');
+  await goToView(page, "Pokračovat ve sledování");
+  const card = page.locator(".section-grid .browse-item", { hasText: "Lokální film" });
   await expect(card).toBeVisible();
   await expect(card.locator(".resume-bar")).toHaveCount(1);
 });
