@@ -391,7 +391,7 @@ test("an explicitly chosen library that never comes back fails the job instead o
     void send(res, size).then(() => res.end());
   });
   const queue = new DownloadQueue(() => 1, () => 1, path.join(directory, "data"), downloadDir, {
-    stallInitialMs: 5_000, stallTransferMs: 5_000, libraryRetryMs: 20, libraryWaitMs: 60,
+    stallInitialMs: 5_000, stallTransferMs: 5_000, libraryRetryMs: 20, libraryWaitMs: 500,
     libraries: () => [downloads],
     defaultLibrary: () => downloads,
     libraryState: async () => undefined,
