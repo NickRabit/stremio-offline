@@ -133,6 +133,8 @@ fun PlayerScreen(
   var currentTarget by remember(target) { mutableStateOf(target) }
   var loadedUrl by remember { mutableStateOf<String?>(null) }
   var playing by remember { mutableStateOf(false) }
+  // The intent to play: true from the start, so the OSD offers Pause while the video is still buffering.
+  var wantsPlay by remember { mutableStateOf(true) }
   var position by remember { mutableDoubleStateOf(0.0) }
   // Coming back from the background starts a fresh session paused, at the position left behind.
   var backgroundPosition by remember { mutableStateOf<Double?>(null) }
@@ -366,6 +368,10 @@ fun PlayerScreen(
 
   DisposableEffect(exoPlayer) {
     val listener = object : Player.Listener {
+      override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+        wantsPlay = playWhenReady
+      }
+
       override fun onIsPlayingChanged(isPlaying: Boolean) {
         playing = isPlaying
         if (isPlaying) controller.onPlaying() else controller.onPaused()
@@ -526,6 +532,7 @@ fun PlayerScreen(
     position = position,
     duration = state.duration,
     playing = playing,
+    pauseShown = wantsPlay,
     title = title,
     // Before the server answers there is no path to name; a failed start must not claim direct play.
     eyebrow = if (state.started) stringResource(pathLabel(diagPath(state.mode, state.copyAudio))) else "",
@@ -533,7 +540,7 @@ fun PlayerScreen(
     seekKept = state.seekKept,
     modal = tracksOpen || diagnosticsOpen || sourcesOpen || qualityOpen || nextCard || state.error != null,
     onSeek = { controller.seekTo(it) },
-    onTogglePause = { if (playing) exoPlayer.pause() else exoPlayer.play() },
+    onTogglePause = { if (exoPlayer.playWhenReady) exoPlayer.pause() else exoPlayer.play() },
     onExit = leave,
     onTracks = { tracksOpen = true },
     tracksText = tracksButtonText(state.audioTrack?.language),
@@ -714,7 +721,7 @@ fun PlayerScreen(
  * is deliberately absent: the overlay's own rule owns it and hides the controls first.
  */
 internal fun mediaKey(key: Key, player: ExoPlayer, playing: Boolean, onExit: (String?) -> Unit): Boolean? = when (key) {
-  Key.MediaPlayPause -> { if (playing) player.pause() else player.play(); true }
+  Key.MediaPlayPause -> { if (playing || player.playWhenReady) player.pause() else player.play(); true }
   Key.MediaPlay -> { player.play(); true }
   Key.MediaPause -> { player.pause(); true }
   else -> null

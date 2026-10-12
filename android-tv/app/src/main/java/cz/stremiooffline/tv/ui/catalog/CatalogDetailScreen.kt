@@ -202,8 +202,7 @@ fun CatalogDetailScreen(
   var librariesLoaded by remember { mutableStateOf(false) }
   var libraryPanelOpen by remember { mutableStateOf(false) }
   var pendingLibraryStream by remember { mutableStateOf<StreamDto?>(null) }
-  val forget = remember { ForgetState() }
-  val seriesDownload = remember { SeriesDownloadState() }
+  val ui = remember { DetailUiState() }
 
   val context = LocalContext.current
   val queuedText = stringResource(R.string.save_queued)
@@ -250,7 +249,7 @@ fun CatalogDetailScreen(
     queuedSourceId = null
     notice(null)
     libraryPanelOpen = false
-    seriesDownload.open = false
+    ui.series.open = false
     pendingLibraryStream = null
     sourceFilters.reset()
     coroutineScope {
@@ -454,7 +453,7 @@ fun CatalogDetailScreen(
   // Every stored key this title stands for: the card's own keys when it came from Continue
   // watching, the local file's own key for a local pick, a show's stored episode otherwise.
   val forgetKeys: List<String> = when {
-    args.forgetKeys.isNotEmpty() && !forget.done -> args.forgetKeys
+    args.forgetKeys.isNotEmpty() && !ui.forget.done -> args.forgetKeys
     localActive && localProgress?.let { it.position > 0 } == true ->
       activeStream?.localPath?.let { listOf(Progress.libraryKey(it)) }.orEmpty()
     isSeries -> entries.filter {
@@ -509,12 +508,12 @@ fun CatalogDetailScreen(
 
   // Closing the bulk panel, whether it queued or the viewer backed out, returns the remote to
   // the button that opened it.
-  LaunchedEffect(seriesDownload.open) {
-    if (seriesDownload.open) {
-      seriesDownload.wasOpen = true
-    } else if (seriesDownload.wasOpen) {
-      seriesDownload.wasOpen = false
-      runCatching { seriesDownload.focus.requestFocus() }
+  LaunchedEffect(ui.series.open) {
+    if (ui.series.open) {
+      ui.series.wasOpen = true
+    } else if (ui.series.wasOpen) {
+      ui.series.wasOpen = false
+      runCatching { ui.series.focus.requestFocus() }
     }
   }
 
@@ -710,13 +709,13 @@ fun CatalogDetailScreen(
 
   /** Forgets this title's stored positions, then re-reads them so the action turns back to Play. */
   fun forgetNow() {
-    if (forget.busy || forgetKeys.isEmpty()) return
-    forget.busy = true
-    forget.panelOpen = false
+    if (ui.forget.busy || forgetKeys.isEmpty()) return
+    ui.forget.busy = true
+    ui.forget.panelOpen = false
     scope.launch {
       try {
         api.forgetProgress(forgetKeys)
-        forget.done = true
+        ui.forget.done = true
         if (isSeries) {
           entries = runCatching { api.progressList() }.getOrDefault(entries)
         } else {
@@ -727,7 +726,7 @@ fun CatalogDetailScreen(
         throw cancelled
       } catch (_: ApiError) {
       } finally {
-        forget.busy = false
+        ui.forget.busy = false
       }
     }
   }
@@ -800,7 +799,7 @@ fun CatalogDetailScreen(
         // DOWN drops into the episode row from the action row only; inside an open panel it must
         // reach the next source instead.
         if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown &&
-          isSeries && !sourcesOpen && !seriesDownload.open && actionRowFocused
+          isSeries && !sourcesOpen && !ui.series.open && actionRowFocused
         ) {
           runCatching { rowFocus.requestFocus() }.isSuccess
         } else {
@@ -889,34 +888,41 @@ fun CatalogDetailScreen(
           modifier = Modifier.focusRequester(primaryFocus).testTag(TagCatalogPrimary),
         )
         if (resuming) {
-          FocusButton(
-            text = stringResource(R.string.tv_start_over),
+          ActionIconButton(
+            label = stringResource(R.string.tv_start_over),
+            icon = ReplayIcon,
             onClick = { startOverPressed() },
+            caption = ui.caption,
             modifier = Modifier
               .testTag(TagCatalogStartOver)
               .onFocusChanged { startOverFocused = it.isFocused },
           )
         }
         if (forgetKeys.isNotEmpty()) {
-          FocusButton(
-            text = stringResource(R.string.tv_forget_progress),
-            onClick = { forget.panelOpen = true },
-            enabled = !forget.busy,
+          ActionIconButton(
+            label = stringResource(R.string.tv_forget_progress),
+            icon = ForgetIcon,
+            onClick = { ui.forget.panelOpen = true },
+            enabled = !ui.forget.busy,
+            caption = ui.caption,
             modifier = Modifier.testTag(TagCatalogForget),
           )
         }
-        FocusButton(
-          text = if (favourite) "★" else "☆",
+        ActionIconButton(
+          label = stringResource(if (favourite) R.string.favorite_remove else R.string.favorite_add),
+          icon = null,
+          glyph = if (favourite) "★" else "☆",
           onClick = { toggleFavourite() },
-          kind = FocusButtonKind.Icon,
-          contentDescription = stringResource(if (favourite) R.string.favorite_remove else R.string.favorite_add),
+          caption = ui.caption,
           modifier = Modifier.testTag(TagCatalogFavourite),
         )
         if (canQueueActive) {
-          FocusButton(
-            text = if (queued) "✓ $queuedText" else toLibraryText,
+          ActionIconButton(
+            label = if (queued) queuedText else toLibraryText,
+            icon = if (queued) CheckIcon else DownloadIcon,
             onClick = { activeStream?.let { queue(it) } },
             enabled = !queueBusy,
+            caption = ui.caption,
             modifier = Modifier
               .testTag(TagCatalogToLibrary)
               .focusRequester(libraryOpenerFocus)
@@ -926,15 +932,17 @@ fun CatalogDetailScreen(
         // The web's bulk download, for the whole batch at once: it needs no source of its own,
         // so it sits beside To library for any series with an episode selected.
         if (isSeries && selectedVideo != null && !meta.videos.isNullOrEmpty()) {
-          FocusButton(
-            text = stringResource(R.string.bulk_title),
+          ActionIconButton(
+            label = stringResource(R.string.bulk_title),
+            icon = SeriesDownloadIcon,
             onClick = {
               cancelPendingPlay()
-              seriesDownload.open = true
+              ui.series.open = true
             },
+            caption = ui.caption,
             modifier = Modifier
               .testTag(TagCatalogSeriesDownload)
-              .focusRequester(seriesDownload.focus),
+              .focusRequester(ui.series.focus),
           )
         }
         FocusButton(
@@ -949,14 +957,19 @@ fun CatalogDetailScreen(
         // To library is hidden for a local pick (it is already on disk); Show in library opens
         // the file's folder instead.
         if (localActive) {
-          FocusButton(
-            text = stringResource(R.string.library_show_in_library),
+          ActionIconButton(
+            label = stringResource(R.string.library_show_in_library),
+            icon = FolderIcon,
             onClick = { activeStream?.localPath?.let { onShowInLibrary(it.substringBeforeLast('/', "")) } },
+            caption = ui.caption,
             modifier = Modifier
               .testTag(TagCatalogShowInLibrary)
               .focusRequester(libraryOpenerFocus)
               .onFocusChanged { toLibraryFocused = it.isFocused },
           )
+        }
+        if (ui.caption.text.isNotEmpty()) {
+          Text(ui.caption.text, color = Tokens.Muted, fontSize = 12.sp, maxLines = 1)
         }
       }
       if (chosenInPanel) {
@@ -1081,16 +1094,16 @@ fun CatalogDetailScreen(
       }
     }
 
-    if (forget.panelOpen) {
+    if (ui.forget.panelOpen) {
       SidePanel(
         title = stringResource(R.string.tv_forget_title),
-        onClose = { forget.panelOpen = false },
+        onClose = { ui.forget.panelOpen = false },
         modifier = Modifier.testTag(TagCatalogForgetPanel),
         initialFocus = forgetPanelFocus,
       ) {
         PanelOption(
           text = stringResource(R.string.common_cancel),
-          onClick = { forget.panelOpen = false },
+          onClick = { ui.forget.panelOpen = false },
           modifier = Modifier.testTag(TagCatalogForgetCancel).focusRequester(forgetPanelFocus),
         )
         PanelOption(
@@ -1101,7 +1114,7 @@ fun CatalogDetailScreen(
       }
     }
 
-    if (seriesDownload.open) {
+    if (ui.series.open) {
       // The batch carries the title and its artwork, and the addon's own destination unless the
       // viewer picks another library inside the panel.
       SeriesDownloadPanel(
@@ -1120,7 +1133,7 @@ fun CatalogDetailScreen(
         addons = addons,
         libraries = libraries,
         onQueued = { added, skipped ->
-          seriesDownload.open = false
+          ui.series.open = false
           val addedText = context.resources.getQuantityString(R.plurals.episodes_bulk_added, added, added)
           val skippedText = if (skipped > 0) {
             " " + context.resources.getQuantityString(R.plurals.episodes_bulk_skipped, skipped, skipped)
@@ -1129,7 +1142,7 @@ fun CatalogDetailScreen(
           }
           notice(addedText + skippedText, CatalogNotice.Success)
         },
-        onClose = { seriesDownload.open = false },
+        onClose = { ui.series.open = false },
       )
     }
   }
@@ -1355,4 +1368,12 @@ private class SeriesDownloadState {
   var open by mutableStateOf(false)
   var wasOpen by mutableStateOf(false)
   val focus = FocusRequester()
+}
+
+/** Everything the detail screen keeps besides its data, in one object so the screen holds a single
+ *  local for it: the Forget flow, the series-download panel and the focused action's caption. */
+private class DetailUiState {
+  val forget = ForgetState()
+  val series = SeriesDownloadState()
+  val caption = ActionCaption()
 }

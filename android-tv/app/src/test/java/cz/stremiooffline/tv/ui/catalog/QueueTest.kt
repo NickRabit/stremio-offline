@@ -10,6 +10,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextContains
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -86,7 +87,7 @@ class QueueTest {
     focusFromLeft(TagCatalogToLibrary)
     press(Key.DirectionCenter)
 
-    compose.onNodeWithTag(TagCatalogToLibrary).assertTextContains("Queued", substring = true)
+    compose.onNodeWithTag(TagCatalogToLibrary).assert(hasContentDescription("Queued", substring = true))
     compose.onNodeWithText("Waiting for Real-Debrid.").assertIsDisplayed()
   }
 
@@ -139,7 +140,7 @@ class QueueTest {
 
     gate.complete(Unit)
     compose.waitForIdle()
-    compose.onNodeWithTag(TagCatalogToLibrary).assertTextContains("Queued", substring = true)
+    compose.onNodeWithTag(TagCatalogToLibrary).assert(hasContentDescription("Queued", substring = true))
   }
 
   // Found on the owner's server: the Queued mark outlived the source it was queued for.
@@ -158,7 +159,7 @@ class QueueTest {
     // Recommended puts the largest first, so srcB is queued.
     focusFromLeft(TagCatalogToLibrary)
     press(Key.DirectionCenter)
-    compose.onNodeWithTag(TagCatalogToLibrary).assertTextContains("Queued", substring = true)
+    compose.onNodeWithTag(TagCatalogToLibrary).assert(hasContentDescription("Queued", substring = true))
 
     // Playing the other source drops the mark: the queued job is not for this one.
     focusFromLeft(TagCatalogSources)
@@ -167,6 +168,6 @@ class QueueTest {
     press(Key.DirectionDown)
     press(Key.DirectionCenter)
 
-    compose.onNodeWithTag(TagCatalogToLibrary).assertTextContains("To library")
+    compose.onNodeWithTag(TagCatalogToLibrary).assert(hasContentDescription("To library", substring = true))
   }
 }
