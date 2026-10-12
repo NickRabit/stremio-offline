@@ -452,10 +452,41 @@ class StreamsTest {
   }
 
   @Test
-  fun `catalogSourceList keeps a local copy out of an addon filter that removed everything`() {
+  fun `catalogSourceList shows a named addon's streams alone, without the local copy`() {
+    val visible = Streams.visibleCatalogStreams(listOf(addonRemote), filters(addon = "Luna"), "cs", emptyMap(), true)
+    assertEquals(listOf(addonRemote), Streams.catalogSourceList(listOf(localStream), visible, filters(addon = "Luna")))
+  }
+
+  @Test
+  fun `an addon filter that matches nothing leaves an empty list, not the local copy`() {
     val visible = Streams.visibleCatalogStreams(listOf(addonRemote), filters(addon = "Nope"), "cs", emptyMap(), true)
-    assertEquals(emptyList<StreamDto>(), visible)
-    assertEquals(listOf(localStream), Streams.catalogSourceList(listOf(localStream), visible))
+    assertEquals(emptyList<StreamDto>(), Streams.catalogSourceList(listOf(localStream), visible, filters(addon = "Nope")))
+  }
+
+  @Test
+  fun `the Local choice of the addon filter shows the library copies alone`() {
+    val lists = Streams.sourceLists(listOf(addonRemote), emptyList(), filters(addon = Streams.LOCAL_FILTER), "cs", true, null, local = listOf(localStream))
+    assertEquals(listOf(localStream), lists.rows)
+    // The choice is offered while there are copies, and never turns up as an addon of its own.
+    assertEquals(1, lists.options.localCount)
+    assertEquals(false, lists.options.addons.any { it.value == Streams.LOCAL_FILTER })
+  }
+
+  @Test
+  fun `the Local choice is not offered when the title has no library copy`() {
+    val lists = Streams.sourceLists(listOf(addonRemote), emptyList(), filters(), "cs", true, null, local = emptyList())
+    assertEquals(0, lists.options.localCount)
+  }
+
+  @Test
+  fun `the size sorts rank a local copy with the addon rows`() {
+    val small = stream(sourceId = "small", name = "SD", addonName = "Luna", title = "100 MB")
+    val big = stream(sourceId = "big", name = "HD", addonName = "Luna", title = "9 GB")
+    val rows = Streams.catalogSourceList(listOf(localStream), listOf(small), filters(sort = StreamSort.SizeDesc), "cs")
+    // Without a size of its own the local copy ranks after the sized addon row, as the web ranks it.
+    assertEquals(listOf(small.sourceId), rows.filter { !Streams.isLocalStream(it) }.map { it.sourceId })
+    assertEquals(true, rows.contains(localStream))
+    assertEquals(listOf(big.sourceId, small.sourceId), Streams.catalogSourceList(emptyList(), listOf(big, small), filters(sort = StreamSort.SizeDesc), "cs").map { it.sourceId })
   }
 
   @Test

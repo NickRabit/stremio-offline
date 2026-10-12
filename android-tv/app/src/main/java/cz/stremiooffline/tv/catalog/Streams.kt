@@ -109,9 +109,36 @@ object Streams {
   /** A copy that already exists in one of the viewer's libraries. */
   fun isLocalStream(stream: StreamDto): Boolean = stream.kind == "library"
 
-  /** The list a source panel shows: local copies above the addon streams, never sorted or
-   *  filtered with them. */
-  fun catalogSourceList(local: List<StreamDto>, addon: List<StreamDto>): List<StreamDto> = local + addon
+  /** The addon filter value that stands for the viewer's own library copies, the web's
+   *  `LOCAL_SOURCE`: a manifest name is a plain string, so a leading control character can
+   *  never collide with an addon of the same name. */
+  const val LOCAL_FILTER = "\u0000local"
+
+  /**
+   * The list a source panel shows, as the web builds it. [addon] is already filtered and sorted.
+   * The Local choice of the addon filter shows the library copies alone, a named addon shows its
+   * streams alone, and with no addon filter the copies lead the recommended and addon-priority
+   * orders but rank with the addon rows under the size sorts.
+   */
+  fun catalogSourceList(
+    local: List<StreamDto>,
+    addon: List<StreamDto>,
+    filters: StreamFilters = StreamFilters(),
+    preferredLanguage: String = "en",
+    priority: Map<String, Int> = emptyMap(),
+    titleLanguage: String? = null,
+  ): List<StreamDto> = when {
+    filters.addon == LOCAL_FILTER -> local
+    filters.addon.isNotEmpty() -> addon
+    filters.sort == StreamSort.Recommended || filters.sort == StreamSort.Addon -> local + addon
+    else -> arrangeStreams(
+      addon + local,
+      StreamFilters(sort = filters.sort),
+      preferredLanguage,
+      priority,
+      titleLanguage,
+    )
+  }
 
   /** What a repick decided: [move] is false when the current pick stays. */
   data class Repick<T>(val move: Boolean, val to: T? = null)
@@ -176,6 +203,8 @@ object Streams {
   data class SourceFilterOptions(
     val addons: List<StreamCount>,
     val languages: List<StreamCount>,
+    /** How many library copies the Local choice stands for; zero hides it unless it is chosen. */
+    val localCount: Int = 0,
   )
 
   fun filterOptions(
@@ -183,6 +212,7 @@ object Streams {
     filters: StreamFilters,
     priority: Map<String, Int> = emptyMap(),
     titleLanguage: String? = null,
+    localCount: Int = 0,
   ): SourceFilterOptions {
     val byLanguage = if (filters.language.isEmpty()) listed
     else listed.filter { streamLanguages(it, titleLanguage).contains(filters.language) }
@@ -195,7 +225,7 @@ object Streams {
       addonCounts[name] = (addonCounts[name] ?: 0) + 1
     }
     // The chosen addon stays in the menu even when the language filter left it nothing, or the chip would empty.
-    if (filters.addon.isNotEmpty() && !addonCounts.containsKey(filters.addon)) addonCounts[filters.addon] = 0
+    if (filters.addon.isNotEmpty() && filters.addon != LOCAL_FILTER && !addonCounts.containsKey(filters.addon)) addonCounts[filters.addon] = 0
     val addons = addonCounts.map { StreamCount(it.key, it.value) }
       .sortedWith(compareBy({ priority[it.value] ?: Int.MAX_VALUE }, { -it.count }))
 
@@ -206,7 +236,7 @@ object Streams {
     if (filters.language.isNotEmpty() && !languageCounts.containsKey(filters.language)) languageCounts[filters.language] = 0
     val languages = languageCounts.map { StreamCount(it.key, it.value) }.sortedByDescending { it.count }
 
-    return SourceFilterOptions(addons, languages)
+    return SourceFilterOptions(addons, languages, localCount)
   }
 
   /** The sources of one title after the addons that answered have been merged, sorted and
@@ -219,6 +249,9 @@ object Streams {
     val notices: List<StreamDto>,
     val titleLanguage: String?,
     val options: SourceFilterOptions,
+    /** What the panel draws and the player holds: the library copies and the addon streams,
+     *  arranged by the filters the way the web does. */
+    val rows: List<StreamDto> = visible,
   )
 
   fun sourceLists(
@@ -228,13 +261,21 @@ object Streams {
     preferredLanguage: String,
     showTorrents: Boolean,
     metaLanguage: String?,
+    local: List<StreamDto> = emptyList(),
   ): SourceLists {
     val offered = offeredStreams(streams)
     val priority = addons.mapIndexed { index, addon -> addon.manifest.name to index }.toMap()
     val titleLanguage = Languages.titleLanguage(metaLanguage)
     val listed = if (showTorrents) offered else offered.filter { it.kind != "torrent" }
     val visible = arrangeStreams(listed, filters, preferredLanguage, priority, titleLanguage)
-    return SourceLists(offered, visible, addonNotices(streams), titleLanguage, filterOptions(listed, filters, priority, titleLanguage))
+    return SourceLists(
+      offered = offered,
+      visible = visible,
+      notices = addonNotices(streams),
+      titleLanguage = titleLanguage,
+      options = filterOptions(listed, filters, priority, titleLanguage, local.size),
+      rows = catalogSourceList(local, visible, filters, preferredLanguage, priority, titleLanguage),
+    )
   }
 
   /** One line per message; addons repeat the same notice on every request. */

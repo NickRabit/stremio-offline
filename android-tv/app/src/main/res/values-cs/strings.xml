@@ -269,4 +269,5 @@
   <string name="settings_clear_search_history_hint">Historie sledování zůstane.</string>
   <string name="settings_search_history_confirm">Smazat historii hledání?</string>
   <string name="settings_search_history_cleared">Historie hledání smazána.</string>
+  <string name="sources_local_filter">Lokální soubory</string>
 </resources>

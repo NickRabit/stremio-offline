@@ -259,4 +259,5 @@
   <string name="settings_clear_search_history_hint">Seu histórico de reprodução continua.</string>
   <string name="settings_search_history_confirm">Apagar seu histórico de pesquisa?</string>
   <string name="settings_search_history_cleared">Histórico de pesquisa apagado.</string>
+  <string name="sources_local_filter">Arquivos locais</string>
 </resources>

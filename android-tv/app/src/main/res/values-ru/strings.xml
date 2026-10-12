@@ -269,4 +269,5 @@
   <string name="settings_clear_search_history_hint">История просмотра останется.</string>
   <string name="settings_search_history_confirm">Удалить историю поиска?</string>
   <string name="settings_search_history_cleared">История поиска удалена.</string>
+  <string name="sources_local_filter">Локальные файлы</string>
 </resources>

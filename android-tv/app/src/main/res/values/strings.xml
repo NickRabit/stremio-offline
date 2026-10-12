@@ -259,4 +259,5 @@
   <string name="settings_clear_search_history_hint">Your watch history stays.</string>
   <string name="settings_search_history_confirm">Delete your search history?</string>
   <string name="settings_search_history_cleared">Search history deleted.</string>
+  <string name="sources_local_filter">Local files</string>
 </resources>

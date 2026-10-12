@@ -521,6 +521,7 @@ internal fun sourceFilterChips(
   val addonTitle = stringResource(R.string.sources_addon)
   val languageTitle = stringResource(R.string.auth_language)
   val allAddonsLabel = stringResource(R.string.sources_all_addons)
+  val localLabel = stringResource(R.string.sources_local_filter)
   val anyLanguageLabel = stringResource(R.string.sources_any_language)
   val sortLabels = listOf(
     Streams.StreamSort.Recommended to stringResource(R.string.sources_sort_recommended),
@@ -543,9 +544,15 @@ internal fun sourceFilterChips(
       SourceFilterChip(
         key = "addon",
         title = addonTitle,
-        value = streamAddon.ifEmpty { allAddonsLabel },
+        value = if (streamAddon == Streams.LOCAL_FILTER) localLabel else streamAddon.ifEmpty { allAddonsLabel },
         selectedKey = streamAddon,
         options = listOf(SourceFilterOption("", allAddonsLabel)) +
+          // The viewer's own copies, as on the web: offered while there are any, and kept while chosen.
+          (if (options.localCount > 0 || streamAddon == Streams.LOCAL_FILTER) {
+            listOf(SourceFilterOption(Streams.LOCAL_FILTER, localLabel))
+          } else {
+            emptyList()
+          }) +
           options.addons.map { SourceFilterOption(it.value, it.value) },
       ),
     )
