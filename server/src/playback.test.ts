@@ -1,12 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { EventEmitter } from "node:events";
+import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { PlaybackManager, SOURCE_UNREACHABLE, SerialOperations, clientCapabilities, describeFailure, hlsCanStart, hlsPlaylistFiles, isPlaylistSource, sourceReachable, nvencBusy } from "./playback.js";
+import { promisify } from "node:util";
+import { DOLBY_VISION_UNITS_FILTER, PlaybackManager, SOURCE_UNREACHABLE, SerialOperations, clientCapabilities, describeFailure, hlsCanStart, hlsPlaylistFiles, isPlaylistSource, sourceReachable, nvencBusy } from "./playback.js";
 import { setFetchTransport } from "./security.js";
+
+const runFfmpeg = promisify(execFile);
+const hasX265 = await runFfmpeg("ffmpeg", ["-hide_banner", "-encoders"]).then(({ stdout }) => stdout.includes("libx265"), () => false);
+const START_CODE = Buffer.from([0, 0, 1]);
 
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -485,6 +491,81 @@ test("Dolby Vision is read as it comes but never announced to the browser", () =
   // "SourceBuffer error", so the output side must not ask for it.
   assert.ok(!args.slice(input).join(" ").includes("-strict unofficial"), "the output side must not");
   assert.ok(args.slice(input).join(" ").includes("-tag:v hvc1"));
+  // The RPU and enhancement layer units stay in the bitstream otherwise, and Safari stops on
+  // them with "Media failed to decode" a few seconds in.
+  assert.equal(args[args.indexOf("-bsf:v") + 1], "filter_units=remove_types=62|63");
+  assert.ok(args.indexOf("-bsf:v") > input, "the filter applies to the copied output");
+});
+
+test("an HEVC copy is handed over without the Dolby Vision units even when the probe saw none", () => {
+  const manager = new PlaybackManager(tmp("test-dolby-vision-rpu")) as any;
+  const session = {
+    capabilities: { hevc: true, hevc10: true, aac: true },
+    info: { container: "matroska", duration: 7200,
+      video: { codec: "hevc", profile: "Main 10", pixelFormat: "yuv420p10le" },
+      audio: { codec: "eac3" }, audioTracks: [{ index: 0, codec: "eac3" }], subtitleTracks: [] },
+    audioTrack: 0, quality: null, id: "s", stream: { url: "https://cdn.example/film.mkv" },
+    mode: "remux", generation: 1, offset: 2114, hardware: false, subtitleTrack: null,
+    startedAt: Date.now(), lastAccess: Date.now(), operations: new SerialOperations(), stopped: false, claimed: false,
+  };
+  const args: string[] = manager.args(session, 2114, tmp("gen"), false);
+  assert.equal(args[args.indexOf("-c:v") + 1], "copy");
+  assert.equal(args[args.indexOf("-bsf:v") + 1], DOLBY_VISION_UNITS_FILTER);
+});
+
+test("an H.264 copy and a transcode leave the video bitstream filters alone", () => {
+  const manager = new PlaybackManager(tmp("test-dolby-vision-h264")) as any;
+  const base = {
+    capabilities: { aac: true },
+    audioTrack: 0, quality: null, id: "s", stream: { url: "https://cdn.example/film.mkv" },
+    mode: "remux", generation: 1, offset: 0, hardware: false, subtitleTrack: null,
+    startedAt: Date.now(), lastAccess: Date.now(), operations: new SerialOperations(), stopped: false, claimed: false,
+  };
+  const h264 = { ...base, info: { container: "matroska", video: { codec: "h264", pixelFormat: "yuv420p" },
+    audio: { codec: "aac" }, audioTracks: [{ index: 0, codec: "aac" }], subtitleTracks: [] } };
+  assert.ok(!manager.args(h264, 0, tmp("gen"), false).includes("-bsf:v"));
+  const hevc = { ...base, mode: "transcode", info: { container: "matroska", video: { codec: "hevc", pixelFormat: "yuv420p10le" },
+    audio: { codec: "aac" }, audioTracks: [{ index: 0, codec: "aac" }], subtitleTracks: [] } };
+  const transcode: string[] = manager.args(hevc, 0, tmp("gen"), false);
+  assert.notEqual(transcode[transcode.indexOf("-c:v") + 1], "copy");
+  assert.ok(!transcode.includes("-bsf:v"));
+});
+
+test("the Dolby Vision filter strips NAL 62 and 63 from a real HEVC copy into fMP4 HLS", { skip: !hasX265 }, async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "dv-units-"));
+  try {
+    const plain = path.join(dir, "plain.hevc");
+    await runFfmpeg("ffmpeg", ["-v", "error", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=24", "-t", "4",
+      "-c:v", "libx265", "-x265-params", "log-level=0:keyint=24", "-f", "hevc", plain]);
+    // After every slice, an RPU and an enhancement layer unit, as a profile 7 Blu-ray rip carries them.
+    const data = await readFile(plain);
+    const starts: number[] = [];
+    for (let at = data.indexOf(START_CODE); at >= 0; at = data.indexOf(START_CODE, at + 3)) starts.push(at);
+    starts.push(data.length);
+    const units: Buffer[] = [];
+    for (let i = 0; i < starts.length - 1; i++) {
+      const nal = data.subarray(starts[i] + 3, starts[i + 1]);
+      units.push(Buffer.from([0, 0, 0, 1]), nal);
+      if (((nal[0] >> 1) & 0x3f) < 32) for (const type of [62, 63]) units.push(Buffer.from([0, 0, 0, 1, type << 1, 1]), Buffer.alloc(32, 0x55));
+    }
+    await writeFile(path.join(dir, "dv.hevc"), Buffer.concat(units));
+    const source = path.join(dir, "dv.mkv");
+    await runFfmpeg("ffmpeg", ["-v", "error", "-f", "hevc", "-framerate", "24", "-i", path.join(dir, "dv.hevc"), "-c", "copy", "-bsf:v", "setts=ts=N", path.join(dir, "dv.mp4")]);
+    await runFfmpeg("ffmpeg", ["-v", "error", "-i", path.join(dir, "dv.mp4"), "-c", "copy", source]);
+    const count = async (input: string) => {
+      const { stderr } = await runFfmpeg("ffmpeg", ["-v", "trace", "-i", input, "-c:v", "copy", "-bsf:v", "trace_headers", "-f", "null", "-"], { maxBuffer: 64 * 1024 * 1024 });
+      return stderr.split("\n").filter((line) => line.includes("trace_headers") && /UNSPEC6[23]/.test(line)).length;
+    };
+    assert.ok(await count(source) > 0, "the source carries the units");
+    const out = path.join(dir, "hls");
+    await mkdir(out);
+    await runFfmpeg("ffmpeg", ["-v", "error", "-strict", "unofficial", "-ss", "1", "-i", source, "-map", "0:v:0", "-avoid_negative_ts", "make_zero",
+      "-c:v", "copy", "-tag:v", "hvc1", "-bsf:v", DOLBY_VISION_UNITS_FILTER,
+      "-f", "hls", "-hls_time", "2", "-hls_segment_type", "fmp4", "-hls_fmp4_init_filename", "init.mp4", path.join(out, "index.m3u8")]);
+    assert.equal(await count(path.join(out, "index.m3u8")), 0, "no Dolby Vision unit reaches the player");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 test("ordinary HEVC Main 10 still copies when the client supports it", () => {
   const manager = new PlaybackManager(tmp("test-playback")) as any;
@@ -671,7 +752,7 @@ test("a conversion reconnects when a remote source drops the stream", () => {
   assert.equal(args[tag + 1], "hvc1");
   // The Dolby Vision configuration is deliberately left out of the segments: a browser handed
   // one answers every append with "SourceBuffer error" and shows nothing.
-  assert.deepEqual(args.slice(tag + 2, tag + 4), ["-c:a", "aac"]);
+  assert.deepEqual(args.slice(tag + 2, tag + 6), ["-bsf:v", DOLBY_VISION_UNITS_FILTER, "-c:a", "aac"]);
 });
 
 test("a trailing request for the previous generation still gets its directory for a while", () => {

@@ -308,6 +308,8 @@ export const describeFailure = (stderr: string, code: number | null) => {
   return lines.length ? lines.slice(-2).join(" ") : `FFmpeg exited with code ${code}.`;
 };
 
+export const DOLBY_VISION_UNITS_FILTER = "filter_units=remove_types=62|63";
+
 export class PlaybackManager {
   private previews = new PlayerPreviews();
   private sessions = new Map<string, Session>();
@@ -433,6 +435,9 @@ export class PlaybackManager {
       const info = await this.probeSource(stream);
       log(info ? "INFO" : "WARN", info ? "Source inspected" : "Source could not be inspected (ffprobe found nothing usable)", {
         video: info?.video?.codec, duration: info?.duration ? Math.round(info.duration) : undefined,
+        profile: info?.video?.profile, pixelFormat: info?.video?.pixelFormat,
+        size: info?.video?.width && info.video.height ? `${info.video.width}x${info.video.height}` : undefined,
+        dolbyVisionProfile: info?.video?.dolbyVisionProfile,
         dolbyVisionEnhancementLayer: info?.video?.dolbyVisionEnhancementLayer,
         audio: info?.audioTracks.map((track) => `${track.codec}/${track.language ?? "?"}${track.title ? `/${track.title}` : ""}`),
         subtitles: info?.subtitleTracks.map((track) => `${track.codec}/${track.language ?? "?"}${track.title ? `/${track.title}` : ""}`),
@@ -1367,7 +1372,10 @@ export class PlaybackManager {
         args.push("-tag:v", "hvc1");
         // Not the dvcC/dvvC box with it, whatever the source carries: a segment that announces
         // Dolby Vision comes back from the browser as "SourceBuffer error" and never plays.
-        // The picture underneath is ordinary HEVC, and that is what the player is given.
+        // The picture underneath is ordinary HEVC, and that is what the player is given --
+        // without the Dolby Vision RPU (NAL 62) and enhancement layer (NAL 63) units too, which
+        // Safari otherwise feeds to its decoder and stops on with "Media failed to decode".
+        args.push("-bsf:v", DOLBY_VISION_UNITS_FILTER);
       }
     }
     // A keyframe every 2 s keeps segments short: HLS may only cut on keyframes, so a longer GOP
