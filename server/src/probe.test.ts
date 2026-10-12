@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { hasDolbyVisionEnhancementLayer, looksUnreachable, pickVariant, playlistArgsFrom } from "./probe.js";
+import { dolbyVisionProfile, hasDolbyVisionEnhancementLayer, looksUnreachable, pickVariant, playlistArgsFrom } from "./probe.js";
 
 test("the picky segment options are passed only to a build that has them", () => {
   assert.deepEqual(
@@ -53,4 +53,11 @@ test("an HLS master is read as one rendition: the tallest, with its own audio", 
   assert.equal(picked?.audio?.index, 10, "the audio of that same rendition");
   assert.equal(pickVariant(rendition(0, 720, 1)), undefined, "a single rendition needs no choosing");
   assert.equal(pickVariant([{ index: 0, codec_type: "video", height: 1080 }, { index: 1, codec_type: "video", height: 720 }]), undefined, "a file, not a playlist");
+});
+
+test("the Dolby Vision profile is read from the configuration record for the log", () => {
+  assert.equal(dolbyVisionProfile({ side_data_list: [{ side_data_type: "DOVI configuration record", dv_profile: 7, el_present_flag: 1 }] }), 7);
+  assert.equal(dolbyVisionProfile({ side_data_list: [{ side_data_type: "DOVI configuration record", dv_profile: 8 }] }), 8);
+  assert.equal(dolbyVisionProfile({ side_data_list: [{ side_data_type: "Mastering display metadata" }] }), undefined);
+  assert.equal(dolbyVisionProfile({}), undefined);
 });
