@@ -32,7 +32,7 @@ const render = async (over: Overrides = {}) => {
   const actions: HomeCardActions = { play: vi.fn(), open: vi.fn(), reveal: vi.fn(), forget: vi.fn() };
   const props: Parameters<typeof ResumeView>[0] = {
     filter: "all", onFilter: vi.fn(), items: [], busy: false, shape: "wide", actions,
-    hasMore: false, loadingMore: false, onLoadMore: vi.fn(), ...over,
+    onToggleShape: vi.fn(), hasMore: false, loadingMore: false, onLoadMore: vi.fn(), ...over,
   };
   await act(async () => { root.render(<ResumeView {...props}/>); });
   return props;
@@ -49,6 +49,16 @@ describe("ResumeView", () => {
     expect(chips()[0]!.getAttribute("aria-pressed")).toBe("true");
     await click(chips()[1]!);
     expect(onFilter).toHaveBeenCalledWith("library");
+  });
+
+  it("draws the Favourites grid and reports the page shape setting", async () => {
+    const { onToggleShape } = await render({ items: [file()], shape: "poster" });
+    expect(host.querySelector(".browse-grid")!.classList.contains("section-grid")).toBe(true);
+    expect(host.querySelector(".browse-grid")!.classList.contains("tile-shape-poster")).toBe(true);
+    const toggle = host.querySelector<HTMLButtonElement>(".shape-toggle")!;
+    expect(toggle.getAttribute("aria-pressed")).toBe("false");
+    await click(toggle);
+    expect(onToggleShape).toHaveBeenCalledTimes(1);
   });
 
   it("plays a library card and opens the episode a catalogue card remembers", async () => {

@@ -54,13 +54,13 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
     const {
       uiLanguage, audioLanguage, subtitleLanguage, downloadTitleLanguage,
       mergeByName, streamSort, trackProgress, showResumeRow,
-      catalogTileSize, libraryTileSize, catalogTileShape, libraryTileShape, homeTileShape, startView, libraryShelf,
+      tileSize, catalogTileShape, libraryTileShape, favoritesTileShape, resumeTileShape, followingTileShape, homeTileShape, startView, libraryShelf,
       homeLayout,
       ...instance
     } = flat;
     return {
       instance,
-      prefs: { uiLanguage, audioLanguage, subtitleLanguage, downloadTitleLanguage, mergeByName, streamSort, trackProgress, showResumeRow, catalogTileSize, libraryTileSize, catalogTileShape, libraryTileShape, homeTileShape, startView, libraryShelf, ...(homeLayout ? { homeLayout } : {}) },
+      prefs: { uiLanguage, audioLanguage, subtitleLanguage, downloadTitleLanguage, mergeByName, streamSort, trackProgress, showResumeRow, tileSize, catalogTileShape, libraryTileShape, favoritesTileShape, resumeTileShape, followingTileShape, homeTileShape, startView, libraryShelf, ...(homeLayout ? { homeLayout } : {}) },
     };
   };
 
@@ -211,19 +211,18 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
         const value = String(req.body.streamSort);
         prefs.streamSort = STREAM_SORTS.has(value) ? value : "recommended";
       }
-      if (req.body.catalogTileSize !== undefined) {
-        const value = String(req.body.catalogTileSize);
-        prefs.catalogTileSize = value === "compact" || value === "small" || value === "large" ? value : "medium";
-      }
-      if (req.body.libraryTileSize !== undefined) {
-        const value = String(req.body.libraryTileSize);
-        prefs.libraryTileSize = value === "compact" || value === "small" || value === "large" ? value : "medium";
+      if (req.body.tileSize !== undefined) {
+        const value = String(req.body.tileSize);
+        prefs.tileSize = value === "compact" || value === "small" || value === "large" ? value : "medium";
       }
       if (req.body.catalogTileShape !== undefined) {
         prefs.catalogTileShape = String(req.body.catalogTileShape) === "wide" ? "wide" : "poster";
       }
       if (req.body.libraryTileShape !== undefined) {
         prefs.libraryTileShape = String(req.body.libraryTileShape) === "wide" ? "wide" : "poster";
+      }
+      for (const key of ["favoritesTileShape", "resumeTileShape", "followingTileShape"] as const) {
+        if (req.body[key] !== undefined) prefs[key] = String(req.body[key]) === "wide" ? "wide" : "poster";
       }
       if (req.body.homeTileShape !== undefined) {
         prefs.homeTileShape = String(req.body.homeTileShape) === "wide" ? "wide" : "poster";

@@ -179,7 +179,7 @@ test("GET /api/settings tells an ordinary account nothing about the instance it 
   assert.equal(carol.realDebridConfigured, true);
   assert.equal(carol.secureMode, harness.state.settings.secureMode);
   assert.equal(carol.uiLanguage, "en", "its own half arrives whole");
-  assert.equal(carol.libraryTileSize, "medium");
+  assert.equal(carol.tileSize, "medium");
   assert.equal(carol.homeTileShape, "wide", "the Home tile shape defaults to wide");
   assert.equal(carol.startView, "catalog", "the start page defaults to the catalogue");
 
@@ -193,13 +193,28 @@ test("PATCH /api/settings answers an ordinary account with the same narrowed vie
   const harness = await mount();
   t.after(harness.close);
 
-  const response = await api(harness.base, "/api/settings", { method: "PATCH", user: "carol", body: { libraryTileSize: "large" } });
+  const response = await api(harness.base, "/api/settings", { method: "PATCH", user: "carol", body: { tileSize: "large" } });
 
   assert.equal(response.status, 200);
   const body = await response.json() as Record<string, unknown>;
-  assert.equal(body.libraryTileSize, "large");
+  assert.equal(body.tileSize, "large");
   assert.equal("concurrentDownloads" in body, false);
   assert.equal("tmdbConfigured" in body, false);
+});
+
+test("PATCH /api/settings stores each library page shape separately", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const response = await api(harness.base, "/api/settings", {
+    method: "PATCH", user: "carol", body: { favoritesTileShape: "wide" },
+  });
+  assert.equal(response.status, 200);
+  const body = await response.json() as Record<string, unknown>;
+  assert.equal(body.favoritesTileShape, "wide");
+  assert.equal(body.resumeTileShape, "poster");
+  assert.equal(body.followingTileShape, "poster");
+  assert.equal(harness.state.userData?.[CAROL]?.prefs.favoritesTileShape, "wide");
+  assert.equal(harness.state.userData?.[CAROL]?.prefs.resumeTileShape, "poster");
 });
 
 test("PATCH /api/settings sends an instance key to the instance and a personal key to the caller", async (t) => {
@@ -209,19 +224,19 @@ test("PATCH /api/settings sends an instance key to the instance and a personal k
   const response = await api(harness.base, "/api/settings", {
     method: "PATCH",
     user: "bob",
-    body: { concurrentDownloads: 5, libraryTileSize: "large", homeTileShape: "poster", startView: "library" },
+    body: { concurrentDownloads: 5, tileSize: "large", homeTileShape: "poster", startView: "library" },
   });
 
   assert.equal(response.status, 200);
   assert.equal(harness.state.settings.concurrentDownloads, 5);
-  assert.equal("libraryTileSize" in harness.state.settings, false, "a personal key never reaches the instance half");
-  assert.equal(harness.state.userData?.[BOB]?.prefs.libraryTileSize, "large");
+  assert.equal("tileSize" in harness.state.settings, false, "a personal key never reaches the instance half");
+  assert.equal(harness.state.userData?.[BOB]?.prefs.tileSize, "large");
   assert.equal(harness.state.userData?.[BOB]?.prefs.homeTileShape, "poster");
   assert.equal(harness.state.userData?.[BOB]?.prefs.startView, "library");
-  assert.equal(harness.state.userData?.[ADA]?.prefs.libraryTileSize, "medium", "the other person keeps their value");
+  assert.equal(harness.state.userData?.[ADA]?.prefs.tileSize, "medium", "the other person keeps their value");
   const body = await response.json() as Record<string, unknown>;
   assert.equal(body.concurrentDownloads, 5);
-  assert.equal(body.libraryTileSize, "large");
+  assert.equal(body.tileSize, "large");
   assert.equal(body.homeTileShape, "poster");
   assert.equal(body.startView, "library");
 });
@@ -278,7 +293,7 @@ test("POST /api/settings/import puts each key of a flat backup back on the side 
       exportedAt: new Date().toISOString(),
       settings: {
         concurrentDownloads: 3, secureMode: false, realDebridToken: "restored-token", tmdbApiKey: "",
-        uiLanguage: "cs", audioLanguage: "cs", streamSort: "addon", libraryTileSize: "large",
+        uiLanguage: "cs", audioLanguage: "cs", streamSort: "addon", tileSize: "large",
       },
       addons: [],
       libraries: [],
@@ -295,7 +310,7 @@ test("POST /api/settings/import puts each key of a flat backup back on the side 
   assert.equal(prefs.uiLanguage, "cs");
   assert.equal(prefs.audioLanguage, "cs");
   assert.equal(prefs.streamSort, "addon");
-  assert.equal(prefs.libraryTileSize, "large");
+  assert.equal(prefs.tileSize, "large");
   const body = await response.json() as { remapped: number; settings: Record<string, unknown> };
   assert.equal(body.remapped, 0);
   assert.equal(body.settings.uiLanguage, "cs");
@@ -404,14 +419,14 @@ test("PATCH /api/settings lets an ordinary user change only their own preference
   const response = await api(harness.base, "/api/settings", {
     method: "PATCH",
     user: "carol",
-    body: { libraryTileSize: "large", uiLanguage: "cs" },
+    body: { tileSize: "large", uiLanguage: "cs" },
   });
 
   assert.equal(response.status, 200);
-  assert.equal(harness.state.userData?.[CAROL]?.prefs.libraryTileSize, "large");
+  assert.equal(harness.state.userData?.[CAROL]?.prefs.tileSize, "large");
   assert.equal(harness.state.userData?.[CAROL]?.prefs.uiLanguage, "cs");
-  assert.equal(harness.state.userData?.[ADA]?.prefs.libraryTileSize, "medium", "the other people keep theirs");
-  assert.equal("libraryTileSize" in harness.state.settings, false, "a personal key never reaches the instance half");
+  assert.equal(harness.state.userData?.[ADA]?.prefs.tileSize, "medium", "the other people keep theirs");
+  assert.equal("tileSize" in harness.state.settings, false, "a personal key never reaches the instance half");
 });
 
 test("PATCH /api/settings refuses an ordinary user an instance key and writes nothing", async (t) => {
@@ -442,14 +457,14 @@ test("PATCH /api/settings refuses a body that mixes the halves as a whole", asyn
   const response = await api(harness.base, "/api/settings", {
     method: "PATCH",
     user: "carol",
-    body: { libraryTileSize: "large", concurrentDownloads: 5 },
+    body: { tileSize: "large", concurrentDownloads: 5 },
   });
 
   assert.equal(response.status, 403);
   const body = await response.json() as { messageKey?: string };
   assert.equal(body.messageKey, "err.notAllowed");
   assert.deepEqual(harness.state.settings, settingsBefore, "the instance key is not written");
-  assert.equal(harness.state.userData?.[CAROL]?.prefs.libraryTileSize, prefsBefore.libraryTileSize, "the personal key is not applied either");
+  assert.equal(harness.state.userData?.[CAROL]?.prefs.tileSize, prefsBefore.tileSize, "the personal key is not applied either");
 });
 
 test("PATCH /api/settings refuses a malformed Home layout with 400 and writes nothing", async (t) => {

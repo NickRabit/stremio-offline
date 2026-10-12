@@ -140,8 +140,9 @@ export interface Settings {
   /** What the server writes down, as opposed to what the log view filters back out. */
   logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR";
   addonRefreshHours: number;
-  catalogTileSize: TileSize; libraryTileSize: TileSize;
-  catalogTileShape: TileShape; libraryTileShape: TileShape; homeTileShape: TileShape;
+  tileSize: TileSize;
+  catalogTileShape: TileShape; libraryTileShape: TileShape; favoritesTileShape: TileShape;
+  resumeTileShape: TileShape; followingTileShape: TileShape; homeTileShape: TileShape;
   startView: StartView;
   libraryShelf: LibraryShelf;
   /** This account's own Home arrangement. Absent means it has never arranged one. */

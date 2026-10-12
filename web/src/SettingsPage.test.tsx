@@ -13,8 +13,8 @@ const settings = (over: Partial<AppSettings> = {}): AppSettings => ({
   uiLanguage: "en", audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui",
   mergeByName: true, streamSort: "recommended", trackProgress: true, showResumeRow: true,
   libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, addonRefreshHours: 24,
-  catalogTileSize: "medium", libraryTileSize: "medium",
-  catalogTileShape: "poster", libraryTileShape: "poster", homeTileShape: "wide",
+  tileSize: "medium",
+  catalogTileShape: "poster", libraryTileShape: "poster", favoritesTileShape: "poster", resumeTileShape: "poster", followingTileShape: "poster", homeTileShape: "wide",
   startView: "catalog", libraryShelf: "resume", realDebridConfigured: false, tmdbConfigured: false, ...over,
 });
 

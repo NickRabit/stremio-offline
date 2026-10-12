@@ -87,7 +87,7 @@ test.describe("screenshots", () => {
       })) });
     });
     await openView(page, "Nastavení");
-    await expect(page.getByRole("combobox", { name: "Velikost položek katalogu" })).toBeVisible();
+    await expect(page.getByRole("combobox", { name: "Velikost dlaždic" })).toBeVisible();
     // The report count is different on every run, and at the narrow viewports its width
     // decides whether the header wraps. The section is masked anyway, so drop the chip and
     // let the baseline measure the header, not the noise.

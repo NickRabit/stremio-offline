@@ -59,8 +59,9 @@ export interface InstanceSettings {
 export interface UserPrefs {
   uiLanguage: UiLanguage; audioLanguage: string; subtitleLanguage: string; downloadTitleLanguage: "ui" | string;
   mergeByName: boolean; streamSort: string; trackProgress: boolean; showResumeRow: boolean;
-  catalogTileSize: TileSize; libraryTileSize: TileSize;
-  catalogTileShape: TileShape; libraryTileShape: TileShape; homeTileShape: TileShape;
+  tileSize: TileSize;
+  catalogTileShape: TileShape; libraryTileShape: TileShape; favoritesTileShape: TileShape;
+  resumeTileShape: TileShape; followingTileShape: TileShape; homeTileShape: TileShape;
   /** The view the app opens on; the catalogue unless the person chose otherwise. */
   startView: StartView;
   /** The segment the library root's one shelf shows; Continue unless the person chose otherwise. */
@@ -117,7 +118,7 @@ export interface State { schemaVersion?: number;
   /** When the addon manifests were last refreshed in the background. */
   addonsRefreshedAt?: string }
 const baseInstanceSettings: InstanceSettings = { concurrentDownloads: 1, parallelPerProvider: 1, downloadSegments: 2, libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, addonRefreshHours: 24, defaultMovieLibrary: "", defaultSeriesLibrary: "", realDebridToken: "", tmdbApiKey: "" };
-const basePrefs: UserPrefs = { uiLanguage: "en", audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui", mergeByName: true, streamSort: "recommended", trackProgress: true, showResumeRow: true, catalogTileSize: "medium", libraryTileSize: "medium", catalogTileShape: "poster", libraryTileShape: "poster", homeTileShape: "wide", startView: "catalog", libraryShelf: "resume" };
+const basePrefs: UserPrefs = { uiLanguage: "en", audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui", mergeByName: true, streamSort: "recommended", trackProgress: true, showResumeRow: true, tileSize: "medium", catalogTileShape: "poster", libraryTileShape: "poster", favoritesTileShape: "poster", resumeTileShape: "poster", followingTileShape: "poster", homeTileShape: "wide", startView: "catalog", libraryShelf: "resume" };
 
 /** A fresh install starts with the one library the download directory has always been,
  *  so it never runs the migration an upgrade needs. */
@@ -195,7 +196,21 @@ export class Store {
    *  background refresh or the scan -- has no user to speak for and answers the defaults. */
   prefs(userId: string | undefined): UserPrefs {
     if (!userId) return defaultPrefs();
-    return { ...defaultPrefs(), ...this.state.userData?.[userId]?.prefs as Partial<UserPrefs> | undefined };
+    const stored = this.state.userData?.[userId]?.prefs as Partial<UserPrefs> | undefined;
+    const prefs = { ...defaultPrefs(), ...stored };
+    if (stored?.tileSize === undefined) {
+      const previous = (stored as Record<string, unknown> | undefined)?.libraryTileSize ?? (stored as Record<string, unknown> | undefined)?.catalogTileSize;
+      if (previous === "compact" || previous === "small" || previous === "medium" || previous === "large") prefs.tileSize = previous;
+    }
+    delete (prefs as Record<string, unknown>).catalogTileSize;
+    delete (prefs as Record<string, unknown>).libraryTileSize;
+    delete (prefs as Record<string, unknown>).favoritesTileSize;
+    delete (prefs as Record<string, unknown>).resumeTileSize;
+    delete (prefs as Record<string, unknown>).followingTileSize;
+    if (stored?.favoritesTileShape === undefined) prefs.favoritesTileShape = stored?.libraryTileShape ?? prefs.favoritesTileShape;
+    if (stored?.resumeTileShape === undefined) prefs.resumeTileShape = stored?.libraryTileShape ?? prefs.resumeTileShape;
+    if (stored?.followingTileShape === undefined) prefs.followingTileShape = stored?.libraryTileShape ?? prefs.followingTileShape;
+    return prefs;
   }
   /** One person's data. A user nothing was written for yet answers the empty shape. */
   userData(userId: string): UserData { return this.state.userData?.[userId] ?? emptyUserData(); }

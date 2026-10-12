@@ -31,7 +31,7 @@ type Overrides = Partial<Parameters<typeof FavoritesView>[0]>;
 const render = async (over: Overrides = {}) => {
   const props: Parameters<typeof FavoritesView>[0] = {
     filter: "all", onFilter: vi.fn(), items: [], busy: false, shape: "poster",
-    onPlay: vi.fn(), onOpenFolder: vi.fn(), onOpenCatalog: vi.fn(),
+    onToggleShape: vi.fn(), onPlay: vi.fn(), onOpenFolder: vi.fn(), onOpenCatalog: vi.fn(),
     hasMore: false, loadingMore: false, onLoadMore: vi.fn(), ...over,
   };
   await act(async () => { root.render(<FavoritesView {...props}/>); });
@@ -49,6 +49,15 @@ describe("FavoritesView", () => {
     expect(chips()[0]!.getAttribute("aria-pressed")).toBe("true");
     await click(chips()[2]!);
     expect(onFilter).toHaveBeenCalledWith("catalog");
+  });
+
+  it("reports the shared shape setting from its toggle", async () => {
+    const { onToggleShape } = await render({ items: [film()], shape: "wide" });
+    expect(host.querySelector(".favorites-grid")!.classList.contains("tile-shape-wide")).toBe(true);
+    const toggle = host.querySelector<HTMLButtonElement>(".shape-toggle")!;
+    expect(toggle.getAttribute("aria-pressed")).toBe("true");
+    await click(toggle);
+    expect(onToggleShape).toHaveBeenCalledTimes(1);
   });
 
   it("opens a library folder, plays a library file and opens a catalogue detail", async () => {

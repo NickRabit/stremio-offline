@@ -33,7 +33,7 @@ const stubMatchMedia = (width: number) => vi.stubGlobal("matchMedia", (query: st
 const render = async (follows: FollowView[], over: Partial<Parameters<typeof FollowingPage>[0]> = {}) => {
   await act(async () => {
     root.render(<FollowingPage follows={follows} newEpisodes={[]} languages={[]} libraries={[]} addons={[]}
-      audioLanguage="en" subtitleLanguage="en" onChanged={() => undefined} onOpenSeries={() => undefined} onNotify={() => undefined} {...over}/>);
+      shape="poster" onToggleShape={() => undefined} audioLanguage="en" subtitleLanguage="en" onChanged={() => undefined} onOpenSeries={() => undefined} onNotify={() => undefined} {...over}/>);
   });
 };
 
@@ -54,6 +54,15 @@ beforeEach(() => {
 afterEach(() => { act(() => root.unmount()); host.remove(); vi.unstubAllGlobals(); });
 
 describe("FollowingPage", () => {
+  it("keeps the shared shape toggle available when the overview is empty", async () => {
+    const onToggleShape = vi.fn();
+    await render([], { onToggleShape });
+    const toggle = host.querySelector<HTMLButtonElement>(".shape-toggle")!;
+    expect(toggle.getAttribute("aria-pressed")).toBe("false");
+    await act(async () => { toggle.click(); });
+    expect(onToggleShape).toHaveBeenCalledTimes(1);
+  });
+
   it("renders the three tabs and switches them with the arrow keys", async () => {
     await render([]);
     const tabs = host.querySelectorAll<HTMLButtonElement>('[role="tab"]');
@@ -71,8 +80,32 @@ describe("FollowingPage", () => {
       follow({ id: "b", name: "Beta" }),
       follow({ id: "a", name: "Alpha", downloads: { ...downloads, attention: 2 } }),
     ]);
-    expect([...host.querySelectorAll(".following-card strong")].map((node) => node.textContent)).toEqual(["Alpha", "Beta"]);
+    expect([...host.querySelectorAll(".following-grid .browse-item strong")].map((node) => node.textContent)).toEqual(["Alpha", "Beta"]);
     expect(host.querySelector(".following-chip.attention")!.textContent).toBe("2 to resolve");
+  });
+
+  it("keeps the overview tiles and their actions in both shapes", async () => {
+    const onToggleShape = vi.fn();
+    for (const shape of ["poster", "wide"] as const) {
+      // A fresh tree per shape: the tile keeps its name, its chips and its open action.
+      fetchMock.mockImplementation(async () => json({ episodes: [], items: [] }));
+      act(() => root.unmount());
+      root = createRoot(host);
+      await render([follow({ id: "a", name: "Alpha", downloads: { ...downloads, attention: 2 } })], { shape, onToggleShape });
+      const grid = host.querySelector(".following-grid")!;
+      expect(grid.classList.contains("browse-grid")).toBe(true);
+      expect(grid.classList.contains(`tile-shape-${shape}`)).toBe(true);
+      expect(grid.querySelector(".browse-art")).not.toBeNull();
+      expect(grid.querySelector(".following-chip.attention")!.textContent).toBe("2 to resolve");
+      const toggle = host.querySelector<HTMLButtonElement>(".shape-toggle")!;
+      expect(toggle.getAttribute("aria-pressed")).toBe(shape === "wide" ? "true" : "false");
+      await act(async () => { toggle.click(); });
+      const tile = grid.querySelector<HTMLButtonElement>(".browse-item")!;
+      expect(tile.textContent).toContain("Alpha");
+      await act(async () => { tile.click(); await Promise.resolve(); });
+      expect(host.querySelector(".identify-overlay"), `the ${shape} tile opens the follow dialog`).not.toBeNull();
+    }
+    expect(onToggleShape).toHaveBeenCalledTimes(2);
   });
 
   it("lists the new episodes at the top of the overview and opens the series", async () => {

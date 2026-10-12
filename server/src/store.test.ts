@@ -27,8 +27,7 @@ test("an old addon state migrates to the default save rules", async () => {
       movie: { subfolder: "", layout: "structured" }, series: { subfolder: "", layout: "structured" },
     });
     // The personal keys have no account to live under yet, so the defaults answer.
-    assert.equal(store.prefs(undefined).catalogTileSize, "medium");
-    assert.equal(store.prefs(undefined).libraryTileSize, "medium");
+    assert.equal(store.prefs(undefined).tileSize, "medium");
     assert.equal(store.prefs(undefined).catalogTileShape, "poster");
     assert.equal(store.prefs(undefined).libraryTileShape, "poster");
     assert.equal(store.prefs(undefined).homeTileShape, "wide");
@@ -195,9 +194,9 @@ test("the personal settings are the keys PERSONAL_SETTINGS names, both ways roun
   const prefs = defaultPrefs();
   const keys = Object.keys(prefs).sort();
   const listed = [...PERSONAL_SETTINGS].sort();
-  // `homeLayout` is personal but has no default: an account that never arranged its Home
-  // keeps the instance's, so it is absent from `defaultPrefs()` until the person writes one.
-  const optional: string[] = ["homeLayout"];
+  // Legacy page-size keys stay personal so saved values can be migrated; none has a default.
+  // `homeLayout` is also absent until the person arranges their Home.
+  const optional: string[] = ["homeLayout", "catalogTileSize", "libraryTileSize", "favoritesTileSize", "resumeTileSize", "followingTileSize"];
   assert.deepEqual([...new Set([...keys, ...optional])].sort(), listed);
   const defaults = new Set(keys);
   for (const key of PERSONAL_SETTINGS) {
@@ -207,6 +206,26 @@ test("the personal settings are the keys PERSONAL_SETTINGS names, both ways roun
     }
     assert.equal(key in defaultInstanceSettings(), false, `${key} belongs to a person, not to the instance`);
   }
+});
+
+test("page tile shapes are independent and old shared library shape seeds their defaults", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "stremio-prefs-"));
+  try {
+  const store = new Store(dir);
+  await store.load();
+  const user = { id: "usr_00000001", username: "person", role: "admin" as const, passwordHash: "", secret: "secret", createdAt: "", permissions: { downloadToLibrary: true, downloadToDevice: true }, permissionsVersion: 0 };
+  await store.update((state) => {
+    state.users = [user];
+    state.userData = { [user.id]: { prefs: { libraryTileShape: "wide" }, favorites: [], watchlist: {}, progress: {}, watchedSeries: {} } };
+  });
+  const migrated = store.prefs(user.id);
+  assert.equal(migrated.favoritesTileShape, "wide");
+  assert.equal(migrated.resumeTileShape, "wide");
+  assert.equal(migrated.followingTileShape, "wide");
+  await store.update((state) => { state.userData![user.id]!.prefs.favoritesTileShape = "poster"; });
+  assert.equal(store.prefs(user.id).favoritesTileShape, "poster");
+  assert.equal(store.prefs(user.id).resumeTileShape, "wide");
+  } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
 /** A realistic file from the release before this one: one account, the four personal maps
@@ -263,8 +282,7 @@ test("a state from before the accounts shape migrates and the owner finds their 
     assert.equal(store.prefs(user.id).streamSort, "size-desc");
     assert.equal(store.prefs(user.id).trackProgress, false);
     assert.equal(store.prefs(user.id).showResumeRow, false);
-    assert.equal(store.prefs(user.id).catalogTileSize, "large");
-    assert.equal(store.prefs(user.id).libraryTileSize, "compact");
+    assert.equal(store.prefs(user.id).tileSize, "compact");
     assert.equal(store.prefs(user.id).catalogTileShape, "wide");
     assert.equal(store.prefs(user.id).libraryTileShape, "poster");
     assert.equal(store.prefs(user.id).homeTileShape, "wide", "a preference the state predates answers its default");
