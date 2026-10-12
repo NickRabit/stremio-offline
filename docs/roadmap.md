@@ -218,25 +218,16 @@ It starts with a server-only PR that lets a native client declare containers,
 profiles and audio passthrough. Scope, contracts and PR order:
 [Android TV client](android-tv-spec.md).
 
-Next on the television, after the first real-TV tests:
+Since the first real-TV tests the television also has: smart series download (the
+web dialog's choices as D-pad panels over `POST /api/downloads/bulk`), per-title
+source sorting and filters, a search history shared with the web and cleared from
+Settings, voice search (hidden without a recognizer), a Continue watching
+section with Forget progress, and the unified Favourites.
 
-- **Smart series download**, as the web and desktop do it: a series detail
-  offers "Download season / series" opening the same choices as
-  `SeriesDownloadDialog` -- which episodes (a season, from an episode on,
-  all), audio and subtitle language, quality strategy, target library -- and
-  sends the lazy `POST /api/downloads/bulk` body, so the server picks a source
-  per episode. Following a series (automatic new episodes) from the TV uses the
-  same dialog. A side panel with D-pad rows replaces the web's form.
-- Per-title source sorting and filters (addon, language) in the sources panel,
-  which the web already offers next to its list.
-- **Search history** on the TV, as the web keeps it: the last searches offered
-  under the field when it is empty (OK runs one again, a per-entry remove), stored
-  per account on the server so web and TV share it; Settings gets "Clear search
-  history".
-- **Voice search**: a microphone action next to the search field using Android's
-  speech recognizer (`RecognizerIntent`, and the remote's mic button where the TV
-  sends `KEYCODE_SEARCH`/`VOICE_ASSIST`), filling the field and running the search
-  in the current scope; hidden when the device has no recognizer.
+Still open on the television:
+
+- **Following a series** (automatic new episodes) from the TV, in the same panel
+  style as the series download.
 
 ### Desktop
 
