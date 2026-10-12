@@ -118,6 +118,18 @@ data class StreamDto(
 @Serializable
 data class StreamSourceDto(val key: String = "", val name: String = "")
 
+/** One `GET /api/library/title` answer: the catalogue title the library file at a path is bound
+ *  to. A file with no binding, a path this account may see nothing of and an invalid path all
+ *  answer `{}`, which is a blank [id]. [videoId] is the id the addon stream endpoint takes for an
+ *  episode, and is absent when the file's season and episode cannot be told. */
+@Serializable
+data class LibraryTitleDto(
+  val type: String = "",
+  val id: String = "",
+  val videoId: String? = null,
+  val name: String? = null,
+)
+
 @Serializable
 data class SearchResultDto(
   val items: List<MetaDto> = emptyList(),

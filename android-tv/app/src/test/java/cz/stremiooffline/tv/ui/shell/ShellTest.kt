@@ -56,26 +56,39 @@ class ShellTest {
     }
   }
 
-  // A play that started from the catalogue detail keeps the sources the detail keeps reporting,
-  // a library copy included; a play the catalogue never started gets none of them.
+  // Each play reads its own list: the one the catalogue detail keeps reporting, a library copy
+  // included, and the one the library loader gathered for the file a library play opened.
   @Test
-  fun `a catalogue play keeps the reported sources while a library play gets none`() {
-    val reported = OfferedSources(streams = listOf(StreamDto(sourceId = "s1", kind = "remote", playable = true)), loading = true)
+  fun `a catalogue play keeps the detail's list and a library play the loader's`() {
+    val fromDetail = OfferedSources(streams = listOf(StreamDto(sourceId = "s1", kind = "remote", playable = true)), loading = true)
+    val fromLoader = OfferedSources(streams = listOf(StreamDto(sourceId = "", kind = "library", playable = true, localPath = "Filmy/Heat.mkv")))
     val library = PlayTarget(key = "file:Heat.mkv", title = "Heat", resume = true, path = "Filmy/Heat.mkv")
     val catalogueLocal = PlayTarget(key = "file:Filmy/Heat.mkv", title = "Heat", resume = true, path = "Filmy/Heat.mkv", catalogue = true)
     val catalogueAddon = PlayTarget(key = "movie:tt1", title = "Heat", resume = false, sourceId = "s1", catalogue = true)
 
-    val forLibrary = playerSourcesFor(library, reported)
-    assertTrue(forLibrary.streams.isEmpty())
+    val forLibrary = playerSourcesFor(library, fromDetail, fromLoader)
+    assertEquals(fromLoader.streams, forLibrary.streams)
     assertFalse(forLibrary.loading)
 
-    val forCatalogueLocal = playerSourcesFor(catalogueLocal, reported)
-    assertEquals(reported.streams, forCatalogueLocal.streams)
+    val forCatalogueLocal = playerSourcesFor(catalogueLocal, fromDetail, fromLoader)
+    assertEquals(fromDetail.streams, forCatalogueLocal.streams)
     assertTrue(forCatalogueLocal.loading)
 
-    val forCatalogueAddon = playerSourcesFor(catalogueAddon, reported)
-    assertEquals(reported.streams, forCatalogueAddon.streams)
+    val forCatalogueAddon = playerSourcesFor(catalogueAddon, fromDetail, fromLoader)
+    assertEquals(fromDetail.streams, forCatalogueAddon.streams)
     assertTrue(forCatalogueAddon.loading)
+  }
+
+  // A library play whose file has no binding, or whose lookup failed, has nothing in its slot:
+  // no Sources button, exactly as before this list existed.
+  @Test
+  fun `a library play with nothing reported gets an empty list`() {
+    val library = PlayTarget(key = "file:Heat.mkv", title = "Heat", resume = true, path = "Filmy/Heat.mkv")
+    val fromDetail = OfferedSources(streams = listOf(StreamDto(sourceId = "s1", kind = "remote", playable = true)))
+
+    val forLibrary = playerSourcesFor(library, fromDetail, OfferedSources())
+    assertTrue(forLibrary.streams.isEmpty())
+    assertFalse(forLibrary.loading)
   }
 
   // Bug 3: LEFT right after the shell appears must land on the current section, not another one.

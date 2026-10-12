@@ -70,6 +70,7 @@ const ALLOWED: Array<[string, string]> = [
   ["GET", "/trailer/movie/tt1254207"],
   ["GET", "/library/links"],
   ["GET", "/library/trailer"],
+  ["GET", "/library/title"],
   ["GET", "/image/poster"],
   ["GET", "/stream-sources/movie/tt1254207"],
   ["GET", "/streams/movie/tt1254207"],

@@ -117,6 +117,30 @@ Order: by library display order (the visible libraries sorted by
 `LibraryRecord.order`, as `libraryRootBrowse` sorts them), then by size
 descending, then by path. Cap the answer at 20 entries.
 
+### The title a library file is bound to
+
+`GET /api/library/title?path=<wire path>`
+
+- For any signed-in account (`USER_ALLOWED`), next to `GET /api/library/links`.
+- Resolves the path for the viewer exactly as `/api/library/links` does
+  (`boundKey`): a path in a library the account may not see, an invalid path
+  and a file with no binding all answer `{}` -- never 403 or 404 -- so a client
+  reads any non-answer as "this file has no sources".
+- Answers `{ type, id, name, videoId? }`: `type`, `id` and `name` come from the
+  binding (`knownTitleEntry` on `metaStore.qualifiedMeta()`), and a file whose
+  binding is a series also gets `videoId = "<id>:<season>:<episode>"`, the id
+  `GET /api/streams/:type/:id` and `GET /api/local-streams/:type/:id` take for
+  an episode. It is derived with the helpers `GET /api/library/identity` uses:
+  `episodeNumberOf(key, ownRecord(key, records), { loose: unitFor(key, units)?.kind === "series" })`
+  over the last walk of the libraries. A file whose season and episode cannot
+  be told gets no `videoId`.
+- `Cache-Control: private, no-store`.
+
+It exists for a play that started from the library: the player knows the file,
+not the catalogue title behind it, and the addons have to be asked about the
+title. `POST /api/library/source` mints the file's own source as before; this
+route only names what to ask for.
+
 ### What each entry carries
 
 Each qualifying file becomes one `PublicStream` minted through
@@ -255,6 +279,21 @@ mixed into the list the filters, counts and notices are computed from.
 - The panel marks the playing row by what the session actually plays: an addon
   row by its `sourceId`, a local row by `localPath` equal to the target's
   `path`. A blank `sourceId` names no source, so it never marks a row.
+- On TV, a play that started from the **library** -- a file opened in the Library
+  view, or a Continue card of a library file -- gets the same list as long as its
+  file is bound to a catalogue title. The server hands the binding over
+  (`GET /api/library/title`, above), the player asks that title's addons and local
+  copies the way the catalogue detail does, and the list arrives under the running
+  session: **Play** never waits for it. The file that is playing is one of the
+  local rows, and is marked **Playing** by its `localPath`. A file with no binding,
+  or a lookup that failed, has nothing to ask the addons about and gets no Sources
+  button, exactly as before. The loader is `LibraryPlaySources`
+  (`android-tv/.../ui/player/LibraryPlaySources.kt`), started by `Shell.kt` while
+  the player is open and cancelled when it closes. The web still offers no sources
+  for a library play.
+- A **next episode** started inside the player replaces the file, and with it the
+  file's list: the addon rows would name the episode that just ended, so the
+  player drops them and offers no sources for the new file.
 
 ### Progress
 

@@ -977,6 +977,10 @@ registerCatalogRoutes(app, {
       path: wirePath(copy.key), size: copy.size,
     }));
   },
+  // The same two reads, and for the same reason: only the last walk of a library is needed to
+  // name the episode a bound file holds.
+  libraryUnits: () => libraryUnits({ stale: true }),
+  ownRecord: (relative, records) => ownRecord(relative, records),
   metaStore, externalIds, subtitleDelay,
 });
 /** `stale` is for a caller that only renders what it gets: it may be answered with the last

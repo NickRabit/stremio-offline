@@ -196,6 +196,18 @@ class ApiClient(
       .decode<SourceDto>() ?: throw ApiError(ApiFailure.Generic)
   }
 
+  /** The title a library file is bound to. Every non-answer -- an unbound file, a path this
+   *  account may not see, a route an older server does not have -- is null, which the player
+   *  reads as "no addon sources for this file". */
+  override suspend fun libraryTitle(path: String): LibraryTitleDto? {
+    val body = try {
+      request(Request.Builder().url(address.resolve("/api/library/title?path=" + encode(path))).get().build())
+    } catch (error: ApiError) {
+      return null
+    }
+    return body.decode<LibraryTitleDto>()?.takeIf { it.id.isNotBlank() }
+  }
+
   /** One page of the one merged Favourites list. */
   override suspend fun favorites(filter: FavoriteFilter, limit: Int, skip: Int): FavoritesPage {
     val query = "?filter=${filter.wire}&limit=$limit&skip=$skip"

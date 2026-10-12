@@ -75,6 +75,7 @@ import cz.stremiooffline.tv.ui.favorites.FavoritesRoute
 import cz.stremiooffline.tv.ui.home.HomeAction
 import cz.stremiooffline.tv.ui.home.HomeScreen
 import cz.stremiooffline.tv.ui.library.LibraryRoute
+import cz.stremiooffline.tv.ui.player.LibraryPlaySources
 import cz.stremiooffline.tv.ui.player.PlayerScreen
 import cz.stremiooffline.tv.ui.resume.ResumeRoute
 import cz.stremiooffline.tv.ui.settings.SettingsRoute
@@ -136,6 +137,9 @@ fun Shell(
   var player by remember { mutableStateOf<PlayTarget?>(null) }
   /** The streams of the title the player is on: the catalogue reports them while addons answer. */
   var playerSources by remember { mutableStateOf(OfferedSources()) }
+  /** The same for a play that started from the library: the title its file is bound to is looked
+   *  up under the player and reported here, and stays empty for a file with no binding. */
+  var librarySources by remember { mutableStateOf(OfferedSources()) }
   /** The source the player ended on, so the title underneath keeps naming what was watched. */
   var playedSourceId by remember { mutableStateOf<String?>(null) }
   // A section takes the remote back when a detail or a player over it closes; a detail takes it
@@ -347,7 +351,14 @@ fun Shell(
 
   val openPlayer = player
   if (openPlayer != null) {
-    val playerSourcesNow = playerSourcesFor(openPlayer, playerSources)
+    // A play from the library asks the addons about the title its file is bound to. The loading
+    // runs beside the session, never before it: Play starts at once and the list arrives under
+    // it. Leaving the player takes the effect out of the composition and cancels the loading.
+    LaunchedEffect(openPlayer) {
+      librarySources = OfferedSources()
+      LibraryPlaySources(api).load(openPlayer) { librarySources = it }
+    }
+    val playerSourcesNow = playerSourcesFor(openPlayer, playerSources, librarySources)
     PlayerScreen(
       api = api,
       target = openPlayer,
@@ -377,12 +388,13 @@ private fun OverlayFocusTrap(fenced: Boolean, content: @Composable () -> Unit) {
   ) { content() }
 }
 
-/** Only a play the catalogue detail started may switch between that title's sources, a library
- *  copy of it included. A library view or a Continue card knows no such list, whatever the
- *  catalogue underneath still reports. Kept here so the expression can be tested without a
- *  whole shell. */
-internal fun playerSourcesFor(target: PlayTarget, reported: OfferedSources): OfferedSources =
-  if (target.catalogue) reported else OfferedSources()
+/** The two lists a play can be offered, kept apart so neither can lend the other its title:
+ *  [catalogue] is the one the catalogue detail keeps reporting, which a play it started keeps,
+ *  and [library] is the one the library loader gathered for the file a library play opened.
+ *  A library play that could not be resolved simply has nothing there -- no Sources button, as
+ *  before. Kept here so the expression can be tested without a whole shell. */
+internal fun playerSourcesFor(target: PlayTarget, catalogue: OfferedSources, library: OfferedSources): OfferedSources =
+  if (target.catalogue) catalogue else library
 
 
 /**
