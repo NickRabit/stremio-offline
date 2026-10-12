@@ -56,21 +56,26 @@ class ShellTest {
     }
   }
 
-  // A library play switches sources the way the Library view does; the catalogue sources the
-  // detail keeps reporting underneath must not reach the player.
+  // A play that started from the catalogue detail keeps the sources the detail keeps reporting,
+  // a library copy included; a play the catalogue never started gets none of them.
   @Test
-  fun `a target with a path gets the player no sources while the catalogue still reports some`() {
+  fun `a catalogue play keeps the reported sources while a library play gets none`() {
     val reported = OfferedSources(streams = listOf(StreamDto(sourceId = "s1", kind = "remote", playable = true)), loading = true)
     val library = PlayTarget(key = "file:Heat.mkv", title = "Heat", resume = true, path = "Filmy/Heat.mkv")
-    val catalogue = PlayTarget(key = "movie:tt1", title = "Heat", resume = false, sourceId = "s1")
+    val catalogueLocal = PlayTarget(key = "file:Filmy/Heat.mkv", title = "Heat", resume = true, path = "Filmy/Heat.mkv", catalogue = true)
+    val catalogueAddon = PlayTarget(key = "movie:tt1", title = "Heat", resume = false, sourceId = "s1", catalogue = true)
 
     val forLibrary = playerSourcesFor(library, reported)
     assertTrue(forLibrary.streams.isEmpty())
     assertFalse(forLibrary.loading)
 
-    val forCatalogue = playerSourcesFor(catalogue, reported)
-    assertEquals(reported.streams, forCatalogue.streams)
-    assertTrue(forCatalogue.loading)
+    val forCatalogueLocal = playerSourcesFor(catalogueLocal, reported)
+    assertEquals(reported.streams, forCatalogueLocal.streams)
+    assertTrue(forCatalogueLocal.loading)
+
+    val forCatalogueAddon = playerSourcesFor(catalogueAddon, reported)
+    assertEquals(reported.streams, forCatalogueAddon.streams)
+    assertTrue(forCatalogueAddon.loading)
   }
 
   // Bug 3: LEFT right after the shell appears must land on the current section, not another one.

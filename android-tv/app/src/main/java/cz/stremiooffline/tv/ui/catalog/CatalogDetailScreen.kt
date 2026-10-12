@@ -424,8 +424,9 @@ fun CatalogDetailScreen(
     if (next.move) selectedStream = next.to
   }
 
-  // The player's own Sources panel gets the same list, and it keeps growing while the addons answer.
-  LaunchedEffect(rows, anyAsking) { onSources(OfferedSources(visible, anyAsking)) }
+  // The player's own Sources panel gets the same list, the local copies included, and it keeps
+  // growing while the addons answer.
+  LaunchedEffect(rows, anyAsking) { onSources(OfferedSources(rows, anyAsking)) }
 
   // A switch made inside the player has to carry back: the detail keeps naming the source the
   // viewer actually watched, and Play offers it again.
@@ -534,6 +535,7 @@ fun CatalogDetailScreen(
           path = path,
           sourceId = null,
           poster = args.meta.poster ?: meta.poster,
+          catalogue = true,
         ),
       )
     } else {
@@ -547,6 +549,7 @@ fun CatalogDetailScreen(
           addonKey = args.addonKey,
           subtitleType = streamType,
           subtitleTarget = streamVideoId,
+          catalogue = true,
         ),
       )
     }
@@ -662,6 +665,7 @@ fun CatalogDetailScreen(
             path = path,
             sourceId = null,
             poster = args.meta.poster ?: meta.poster,
+            catalogue = true,
           ),
         )
       }
@@ -679,6 +683,7 @@ fun CatalogDetailScreen(
             addonKey = args.addonKey,
             subtitleType = streamType,
             subtitleTarget = streamVideoId,
+            catalogue = true,
           ),
         )
       }

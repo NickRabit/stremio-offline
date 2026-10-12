@@ -94,6 +94,10 @@ data class PlayTarget(
    *  for a series episode, the meta's own id for a movie); a library play leaves both null. */
   val subtitleType: String? = null,
   val subtitleTarget: String? = null,
+  /** True when the catalogue detail started this play. The player then keeps the sources that
+   *  detail offers, the title's own library copy included; a library view or a Continue card
+   *  leaves it false and gets no catalogue sources at all. */
+  val catalogue: Boolean = false,
 )
 
 /** Everything the title detail draws: the artwork, the meta line and the files that sit under it. */

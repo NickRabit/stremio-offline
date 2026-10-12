@@ -747,6 +747,50 @@ class PlaybackControllerTest {
     assertEquals(null, controller.state.value.error)
   }
 
+  // Another source of the same title can be one of the viewer's own library files: minted from
+  // its path, started at the position the viewer is watching, and saving under the file's key.
+  @Test
+  fun `a switch to a library file starts at the position and keeps the file's key`() = runTest {
+    val api = FakeApi()
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+    controller.start("srcA", "movie:tt1", "It", null, resume = false)
+    runCurrent()
+    playing(controller, 300.0)
+    api.calls.clear()
+
+    controller.start(null, "file:Films/B.mkv", "B", "Films/B.mkv", resume = false, at = 300.0) { "src:Films/B.mkv" }
+    runCurrent()
+
+    assertEquals(listOf("save", "delete", "start"), api.calls)
+    assertEquals("src:Films/B.mkv", api.started.last().first)
+    assertEquals(300.0, api.started.last().third, 0.001)
+
+    playing(controller, 320.0)
+    controller.onPaused()
+    runCurrent()
+    assertEquals("file:Films/B.mkv", api.saved.last().first)
+  }
+
+  // The other direction: an addon source chosen while a library file plays keeps that file's key,
+  // so the same viewing does not split into a catalogue entry and a file entry.
+  @Test
+  fun `an addon switch from a library file keeps the file's key`() = runTest {
+    val api = FakeApi()
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+    controller.start("src:Films/B.mkv", "file:Films/B.mkv", "B", "Films/B.mkv", resume = false)
+    runCurrent()
+    playing(controller, 300.0)
+
+    controller.start("srcA", "file:Films/B.mkv", "B", "Films/B.mkv", resume = false, at = 300.0)
+    runCurrent()
+
+    assertEquals("srcA", api.started.last().first)
+    playing(controller, 320.0)
+    controller.onPaused()
+    runCurrent()
+    assertEquals("file:Films/B.mkv", api.saved.last().first)
+  }
+
   @Test
   fun `a chosen height changes the track at the absolute position`() = runTest {
     val api = FakeApi()
