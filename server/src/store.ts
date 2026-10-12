@@ -10,6 +10,7 @@ import type { HomeLayout } from "./home.js";
 import { newLibraryId, type DepartedLibrary, type LibraryRecord, type RootGrant } from "./libraries.js";
 import { log } from "./logger.js";
 import type { ProgressSeries } from "./progress-series.js";
+import type { MediaConnectionRecord, RemoteLibraryRecord } from "./media-server-types.js";
 import { claimLegacyData, emptyUserData, type EnvReset, envResetApplied, envResetPending, findUser, type MigratableState, migrateUsers, newUserId, type UserData, type UserRecord } from "./users.js";
 
 /** `state.json` shape version. 2 is the libraries shape, 3 the accounts one; a state
@@ -116,7 +117,12 @@ export interface State { schemaVersion?: number;
    *  away; the only one left behind is the default admin/admin, which boot throws out. */
   auth?: AuthState;
   /** When the addon manifests were last refreshed in the background. */
-  addonsRefreshedAt?: string }
+  addonsRefreshedAt?: string;
+  /** Remote media-server connections, stored apart from the filesystem libraries so every
+   *  `libraries()` consumer keeps its local-only contract. */
+  mediaConnections?: MediaConnectionRecord[];
+  /** Remote libraries attached to those connections. */
+  remoteLibraries?: RemoteLibraryRecord[] }
 const baseInstanceSettings: InstanceSettings = { concurrentDownloads: 1, parallelPerProvider: 1, downloadSegments: 2, libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, addonRefreshHours: 24, defaultMovieLibrary: "", defaultSeriesLibrary: "", realDebridToken: "", tmdbApiKey: "" };
 const basePrefs: UserPrefs = { uiLanguage: "en", audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui", mergeByName: true, streamSort: "recommended", trackProgress: true, showResumeRow: true, tileSize: "medium", catalogTileShape: "poster", libraryTileShape: "poster", favoritesTileShape: "poster", resumeTileShape: "poster", followingTileShape: "poster", homeTileShape: "wide", startView: "catalog", libraryShelf: "resume" };
 
@@ -266,6 +272,8 @@ export class Store {
   /** The pre-accounts account object, read once at boot to throw it out. */
   auth() { return this.state.auth; }
   libraries() { return this.state.libraries ?? []; }
+  mediaConnections(): MediaConnectionRecord[] { return structuredClone(this.state.mediaConnections ?? []); }
+  remoteLibraries(): RemoteLibraryRecord[] { return structuredClone(this.state.remoteLibraries ?? []); }
   grants() { return this.state.grants ?? []; }
   departed() { return this.state.departed ?? []; }
   private chain: Promise<void> = Promise.resolve();
