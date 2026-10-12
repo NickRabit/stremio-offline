@@ -24,6 +24,7 @@ jobs:
       # image is out. Here it fails the pull request instead.
       - run: node scripts/check-versions.mjs
       - run: node --test scripts/check-versions.test.mjs
+      - run: node --test scripts/media-server-spike.test.mjs
       - run: npm ci
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
