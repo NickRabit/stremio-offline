@@ -252,4 +252,11 @@
     <item quantity="one">1 saltado, ya en cola.</item>
     <item quantity="other">%1$s omitido, ya en cola.</item>
   </plurals>
+  <string name="catalog_suggest_recent">Búsqueda reciente</string>
+  <string name="common_remove">Quitar</string>
+  <string name="settings_search_history">Historial de búsqueda</string>
+  <string name="settings_clear_search_history">Borrar historial de búsqueda</string>
+  <string name="settings_clear_search_history_hint">Tu historial de reproducción se conserva.</string>
+  <string name="settings_search_history_confirm">¿Borrar tu historial de búsqueda?</string>
+  <string name="settings_search_history_cleared">Historial de búsqueda borrado.</string>
 </resources>

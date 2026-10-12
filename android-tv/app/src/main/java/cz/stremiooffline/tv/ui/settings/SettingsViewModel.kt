@@ -12,6 +12,7 @@ import cz.stremiooffline.tv.data.ApiFailure
 import cz.stremiooffline.tv.data.ClientLogBundleDto
 import cz.stremiooffline.tv.data.HomeLayoutDto
 import cz.stremiooffline.tv.data.LanguageDto
+import cz.stremiooffline.tv.data.SearchStateDto
 import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.diagnostics.AppLog
 import kotlinx.coroutines.CancellationException
@@ -87,6 +88,14 @@ class SettingsViewModel(
   var homeLayout by mutableStateOf<HomeLayoutState>(HomeLayoutState.Loading)
     private set
 
+  /** The account's search history, read for the Clear search history row; null until it is known. */
+  var searchState by mutableStateOf<SearchStateDto?>(null)
+    private set
+
+  /** Counts the clears that landed; the screen shows the shell's notice once per clear. */
+  var historyCleared by mutableStateOf(0)
+    private set
+
   /** The last arrangement the server accepted, so a rejected write can go back to it. */
   private var savedHomeRows: List<HomeLayoutRow> = emptyList()
   private var savedHomeLayout: HomeLayoutDto = HomeLayoutDto()
@@ -111,6 +120,30 @@ class SettingsViewModel(
       )
     }
     viewModelScope.launch { loadHomeLayout() }
+    viewModelScope.launch {
+      searchState = try {
+        api.searchState()
+      } catch (cancelled: CancellationException) {
+        throw cancelled
+      } catch (_: ApiError) {
+        null
+      }
+    }
+  }
+
+  /** Empties the account's search history, shared with the web. */
+  fun clearSearchHistory() {
+    viewModelScope.launch {
+      val next = try {
+        api.clearSearchHistory()
+      } catch (cancelled: CancellationException) {
+        throw cancelled
+      } catch (_: ApiError) {
+        return@launch
+      }
+      searchState = next
+      historyCleared += 1
+    }
   }
 
   /** Reads the arrangement again; the panel asks for this as it opens, so a layout changed on the

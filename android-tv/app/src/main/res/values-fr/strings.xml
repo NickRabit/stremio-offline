@@ -252,4 +252,11 @@
     <item quantity="one">%1$s ignoré, déjà en file d\'attente.</item>
     <item quantity="other">%1$s ignoré, déjà en file d\'attente.</item>
   </plurals>
+  <string name="catalog_suggest_recent">Recherche récente</string>
+  <string name="common_remove">Supprimer</string>
+  <string name="settings_search_history">Historique de recherche</string>
+  <string name="settings_clear_search_history">Effacer l\'historique de recherche</string>
+  <string name="settings_clear_search_history_hint">Votre historique de visionnage est conservé.</string>
+  <string name="settings_search_history_confirm">Effacer votre historique de recherche ?</string>
+  <string name="settings_search_history_cleared">Historique de recherche effacé.</string>
 </resources>

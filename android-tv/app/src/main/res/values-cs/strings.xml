@@ -262,4 +262,11 @@
     <item quantity="many">%1$s přeskočeny, už jsou ve frontě.</item>
     <item quantity="other">%1$s přeskočeno, už jsou ve frontě.</item>
   </plurals>
+  <string name="catalog_suggest_recent">Nedávné hledání</string>
+  <string name="common_remove">Odebrat</string>
+  <string name="settings_search_history">Historie hledání</string>
+  <string name="settings_clear_search_history">Smazat historii hledání</string>
+  <string name="settings_clear_search_history_hint">Historie sledování zůstane.</string>
+  <string name="settings_search_history_confirm">Smazat historii hledání?</string>
+  <string name="settings_search_history_cleared">Historie hledání smazána.</string>
 </resources>

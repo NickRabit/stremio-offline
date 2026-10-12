@@ -1,12 +1,17 @@
 package cz.stremiooffline.tv.ui.catalog
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -14,6 +19,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -24,17 +30,27 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.Icon
 import androidx.tv.material3.Text
 import cz.stremiooffline.tv.R
+import cz.stremiooffline.tv.data.RecentSearchDto
 import cz.stremiooffline.tv.data.SearchScope
 import cz.stremiooffline.tv.data.SearchableCatalogDto
 import cz.stremiooffline.tv.data.TvApi
@@ -53,6 +69,10 @@ const val TagSearchScopeChip = "search_scope_chip"
 const val TagSearchVoice = "search_voice"
 const val TagSearchScopePanel = "search_scope_panel"
 const val TagSearchScopeAll = "search_scope_all"
+const val TagSearchRecentList = "search_recent_list"
+
+fun recentSearchTag(query: String): String = "search_recent_$query"
+fun recentRemoveTag(query: String): String = "search_recent_remove_$query"
 
 fun scopeHeaderTag(addonKey: String): String = "search_scope_header_$addonKey"
 fun scopeAddonTag(addonKey: String): String = "search_scope_addon_$addonKey"
@@ -174,8 +194,19 @@ fun SearchScreen(
       Text(stringResource(R.string.tv_search_hint), color = Tokens.Muted, fontSize = 12.sp)
     }
 
+    // Only an empty field with nothing submitted suggests history; a typed or committed query does not.
+    val showRecent = !state.submitted && text.isBlank() && state.recent.isNotEmpty()
     Box(Modifier.weight(1f).fillMaxWidth()) {
       when {
+        showRecent -> RecentSearches(
+          items = state.recent,
+          fieldFocus = fieldFocus,
+          onPick = { picked ->
+            text = picked
+            viewModel.submit(picked)
+          },
+          onForget = { viewModel.forget(it) },
+        )
         state.submitted && state.loading -> ShimmerCards()
         state.submitted && state.error -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
           Column(verticalArrangement = Arrangement.spacedBy(11.dp), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -213,6 +244,124 @@ fun SearchScreen(
       },
       onClose = { scopePanel = false },
       initialFocus = panelEntry,
+    )
+  }
+}
+
+/** Where focus goes once a removal lands: the row after it, or the field when none is left. */
+private sealed interface RecentFocus {
+  data class Row(val query: String) : RecentFocus
+  data object Field : RecentFocus
+}
+
+/** The account's recent searches under the field: OK runs one, its button drops it. */
+@Composable
+private fun RecentSearches(
+  items: List<RecentSearchDto>,
+  fieldFocus: FocusRequester,
+  onPick: (String) -> Unit,
+  onForget: (String) -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  val rowFocuses = remember { mutableMapOf<String, FocusRequester>() }
+  val removeFocuses = remember { mutableMapOf<String, FocusRequester>() }
+  var pendingFocus by remember { mutableStateOf<RecentFocus?>(null) }
+  // A removal rebuilt the list: move focus off the row that left.
+  LaunchedEffect(items.map { it.query }) {
+    val target = pendingFocus ?: return@LaunchedEffect
+    pendingFocus = null
+    awaitFrame()
+    val requester = when (target) {
+      RecentFocus.Field -> fieldFocus
+      is RecentFocus.Row -> rowFocuses[target.query] ?: fieldFocus
+    }
+    runCatching { requester.requestFocus() }
+  }
+  // A narrow column keeps each row's remove button beside its text, not at the screen edge.
+  Column(modifier.fillMaxHeight().widthIn(max = 640.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    Text(
+      stringResource(R.string.catalog_suggest_recent),
+      color = Tokens.Muted,
+      fontSize = 11.sp,
+      fontWeight = FontWeight.Bold,
+    )
+    LazyColumn(
+      modifier = Modifier.weight(1f).fillMaxWidth().testTag(TagSearchRecentList),
+      verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+      itemsIndexed(items, key = { _, entry -> entry.query }) { index, entry ->
+        RecentSearchRow(
+          query = entry.query,
+          rowFocus = rowFocuses.getOrPut(entry.query) { FocusRequester() },
+          removeFocus = removeFocuses.getOrPut(entry.query) { FocusRequester() },
+          // The first row walks back to the field; the others step up to the row above.
+          upFocus = if (index == 0) fieldFocus else null,
+          onClick = { onPick(entry.query) },
+          onRemove = {
+            val at = items.indexOfFirst { it.query == entry.query }
+            pendingFocus = items.getOrNull(at + 1)?.query?.let { RecentFocus.Row(it) } ?: RecentFocus.Field
+            onForget(entry.query)
+          },
+        )
+      }
+    }
+  }
+}
+
+/** One recent search: OK runs it, its remove button at the right edge drops just this row. */
+@Composable
+private fun RecentSearchRow(
+  query: String,
+  rowFocus: FocusRequester,
+  removeFocus: FocusRequester,
+  upFocus: FocusRequester?,
+  onClick: () -> Unit,
+  onRemove: () -> Unit,
+) {
+  var focused by remember { mutableStateOf(false) }
+  val shape = RoundedCornerShape(8.dp)
+  val removeText = stringResource(R.string.common_remove)
+  Row(
+    modifier = Modifier.fillMaxWidth().height(38.dp).padding(start = 12.dp, end = 6.dp),
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    // The label is its own focus target so the button beside it never sees the row's OK.
+    Row(
+      modifier = Modifier
+        .weight(1f)
+        .fillMaxHeight()
+        .focusRequester(rowFocus)
+        // Observes the row's own focus target, so it has to sit before `focusable()`.
+        .onFocusChanged { focused = it.isFocused }
+        .focusProperties {
+          right = removeFocus
+          if (upFocus != null) up = upFocus
+        }
+        .focusable()
+        .semantics(mergeDescendants = true) {}
+        .onPreviewKeyEvent { event ->
+          if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+          when (event.key) {
+            Key.Enter, Key.DirectionCenter, Key.Spacebar -> { onClick(); true }
+            else -> false
+          }
+        }
+        .then(if (focused) Modifier.background(Tokens.Panel2, shape).border(1.5.dp, Tokens.Accent2, shape) else Modifier)
+        .testTag(recentSearchTag(query)),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Text(query, color = Tokens.Text, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+    FocusButton(
+      text = "✕",
+      onClick = onRemove,
+      kind = FocusButtonKind.Icon,
+      contentDescription = removeText,
+      // LEFT returns to the row instead of leaving the screen for the rail.
+      modifier = Modifier
+        .focusRequester(removeFocus)
+        .leftToNeighbour(rowFocus)
+        .testTag(recentRemoveTag(query)),
     )
   }
 }

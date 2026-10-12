@@ -22,6 +22,8 @@ import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.unit.dp
 import cz.stremiooffline.tv.data.MetaDto
+import cz.stremiooffline.tv.data.RecentSearchDto
+import cz.stremiooffline.tv.data.SearchStateDto
 import cz.stremiooffline.tv.data.SearchScope
 import cz.stremiooffline.tv.data.SearchResultDto
 import cz.stremiooffline.tv.data.SearchableCatalogDto
@@ -74,6 +76,8 @@ class SearchScreenTest {
     compose.waitForIdle()
   }
 
+  private fun recent(vararg queries: String): List<RecentSearchDto> = queries.map { RecentSearchDto(it, "now") }
+
   private fun press(key: Key) {
     compose.onRoot().performKeyInput { pressKey(key) }
     compose.waitForIdle()
@@ -98,6 +102,113 @@ class SearchScreenTest {
 
     compose.onNodeWithTag(TagSearchField).assertIsFocused()
     compose.onNodeWithText("Type a title, then press Done.").assertExists()
+  }
+
+  @Test
+  fun `the recent searches are under the field while it is empty`() {
+    val api = FakeTvApi()
+    api.searchStateValue = SearchStateDto(recent = recent("Heat", "Ronin"))
+    mount(api)
+    compose.waitForIdle()
+
+    compose.onNodeWithText("Recent search").assertExists()
+    compose.onNodeWithTag(recentSearchTag("Heat")).assertExists()
+    compose.onNodeWithTag(recentSearchTag("Ronin")).assertExists()
+  }
+
+  @Test
+  fun `down from the field enters the first recent search`() {
+    val api = FakeTvApi()
+    api.searchStateValue = SearchStateDto(recent = recent("Heat", "Ronin"))
+    mount(api)
+    compose.waitForIdle()
+
+    press(Key.DirectionDown)
+
+    compose.onNodeWithTag(recentSearchTag("Heat")).assertIsFocused()
+  }
+
+  @Test
+  fun `up from the first row returns to the field`() {
+    val api = FakeTvApi()
+    api.searchStateValue = SearchStateDto(recent = recent("Heat", "Ronin"))
+    mount(api)
+    compose.waitForIdle()
+
+    press(Key.DirectionDown)
+    press(Key.DirectionUp)
+
+    compose.onNodeWithTag(TagSearchField).assertIsFocused()
+  }
+
+  @Test
+  fun `OK on a recent search fills the field and runs it`() {
+    val api = FakeTvApi()
+    api.searchStateValue = SearchStateDto(recent = recent("Heat", "Ronin"))
+    api.searchPages[""] = SearchResultDto(items = listOf(meta("tt9", "Heat")), cursor = "", hasMore = false)
+    mount(api)
+    compose.waitForIdle()
+
+    press(Key.DirectionDown)
+    press(Key.DirectionCenter)
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagSearchInput).assertTextContains("Heat", substring = true)
+    assertEquals("Heat", api.searchRequests.last().query)
+    compose.onNodeWithTag(TagSearchRecentList).assertDoesNotExist()
+  }
+
+  @Test
+  fun `right reaches a row's remove button and OK lands focus on the next row`() {
+    val api = FakeTvApi()
+    api.searchStateValue = SearchStateDto(recent = recent("Heat", "Ronin", "Alien"))
+    mount(api)
+    compose.waitForIdle()
+
+    press(Key.DirectionDown)
+    press(Key.DirectionRight)
+    compose.onNodeWithTag(recentRemoveTag("Heat")).assertIsFocused()
+
+    // LEFT steps back to the row; OK then drops it.
+    press(Key.DirectionLeft)
+    compose.onNodeWithTag(recentSearchTag("Heat")).assertIsFocused()
+    press(Key.DirectionRight)
+    press(Key.DirectionCenter)
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(recentSearchTag("Heat")).assertDoesNotExist()
+    compose.onNodeWithTag(recentSearchTag("Ronin")).assertIsFocused()
+    assertEquals(listOf("Heat"), api.forgottenSearches)
+  }
+
+  @Test
+  fun `removing the last row returns focus to the field`() {
+    val api = FakeTvApi()
+    api.searchStateValue = SearchStateDto(recent = recent("Heat"))
+    mount(api)
+    compose.waitForIdle()
+
+    press(Key.DirectionDown)
+    press(Key.DirectionRight)
+    press(Key.DirectionCenter)
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagSearchRecentList).assertDoesNotExist()
+    compose.onNodeWithTag(TagSearchField).assertIsFocused()
+  }
+
+  @Test
+  fun `the recent searches are gone once a query is submitted`() {
+    val api = FakeTvApi()
+    api.searchStateValue = SearchStateDto(recent = recent("Heat"))
+    api.searchPages[""] = SearchResultDto(items = listOf(meta("tt9", "Matrix")), cursor = "", hasMore = false)
+    mount(api)
+    compose.waitForIdle()
+    compose.onNodeWithTag(TagSearchRecentList).assertExists()
+
+    type("matrix")
+
+    compose.onNodeWithTag(TagSearchRecentList).assertDoesNotExist()
   }
 
   @Test

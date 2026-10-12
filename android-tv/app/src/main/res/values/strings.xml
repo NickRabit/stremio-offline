@@ -252,4 +252,11 @@
     <item quantity="one">1 skipped, already queued.</item>
     <item quantity="other">%1$s skipped, already queued.</item>
   </plurals>
+  <string name="catalog_suggest_recent">Recent search</string>
+  <string name="common_remove">Remove</string>
+  <string name="settings_search_history">Search history</string>
+  <string name="settings_clear_search_history">Clear search history</string>
+  <string name="settings_clear_search_history_hint">Your watch history stays.</string>
+  <string name="settings_search_history_confirm">Delete your search history?</string>
+  <string name="settings_search_history_cleared">Search history deleted.</string>
 </resources>

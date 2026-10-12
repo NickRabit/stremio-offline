@@ -38,6 +38,14 @@ interface CatalogApi {
   /** The catalogues search can be scoped to, as `GET /api/searchable` lists them. */
   suspend fun searchable(): List<SearchableCatalogDto>
   suspend fun search(query: String, cursor: String?, scope: SearchScope): SearchResultDto
+  /** The account's recent searches and whether the server keeps them. */
+  suspend fun searchState(): SearchStateDto
+  /** Records one committed query; the server trims, dedupes and ignores it while saving is off. */
+  suspend fun recordSearch(query: String)
+  /** Drops one query from the history, answering the state that is left. */
+  suspend fun forgetSearch(query: String): SearchStateDto
+  /** Empties the history, answering the state that is left. */
+  suspend fun clearSearchHistory(): SearchStateDto
   suspend fun meta(type: String, id: String, language: String?): MetaDto
   suspend fun streamSources(type: String, id: String): List<StreamSourceDto>
   suspend fun streams(type: String, id: String, addon: String? = null): List<StreamDto>

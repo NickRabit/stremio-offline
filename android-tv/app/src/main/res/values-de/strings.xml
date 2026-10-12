@@ -252,4 +252,11 @@
     <item quantity="one">1 übersprungen, bereits in der Warteschlange.</item>
     <item quantity="other">%1$s übersprungen, bereits in der Warteschlange.</item>
   </plurals>
+  <string name="catalog_suggest_recent">Letzte Suche</string>
+  <string name="common_remove">Entfernen</string>
+  <string name="settings_search_history">Suchverlauf</string>
+  <string name="settings_clear_search_history">Suchverlauf löschen</string>
+  <string name="settings_clear_search_history_hint">Der Wiedergabeverlauf bleibt.</string>
+  <string name="settings_search_history_confirm">Suchverlauf löschen?</string>
+  <string name="settings_search_history_cleared">Suchverlauf gelöscht.</string>
 </resources>

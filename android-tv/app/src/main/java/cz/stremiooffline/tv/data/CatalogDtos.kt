@@ -126,6 +126,20 @@ data class SearchResultDto(
   val sources: Int = 0,
 )
 
+/** One entry of the account's recent searches, as `GET /api/search/state` lists them. */
+@Serializable
+data class RecentSearchDto(val query: String = "", val usedAt: String? = null)
+
+/** The account's search preferences and history, shared with the web. [recent] is newest first
+ *  and empty while [saveHistory] is off. */
+@Serializable
+data class SearchStateDto(
+  val saveHistory: Boolean = true,
+  val liveSearch: Boolean = true,
+  val defaultOrder: String = "source",
+  val recent: List<RecentSearchDto> = emptyList(),
+)
+
 /** One row of `GET /api/progress`, the list resume and next-episode come from. */
 @Serializable
 data class ProgressEntryDto(

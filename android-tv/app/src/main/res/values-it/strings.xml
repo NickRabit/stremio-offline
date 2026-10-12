@@ -252,4 +252,11 @@
     <item quantity="one">1 saltato, già in coda.</item>
     <item quantity="other">%1$s saltati, già in coda.</item>
   </plurals>
+  <string name="catalog_suggest_recent">Ricerca recente</string>
+  <string name="common_remove">Rimuovi</string>
+  <string name="settings_search_history">Cronologia delle ricerche</string>
+  <string name="settings_clear_search_history">Cancella cronologia delle ricerche</string>
+  <string name="settings_clear_search_history_hint">La cronologia di visione resta.</string>
+  <string name="settings_search_history_confirm">Cancellare la cronologia delle ricerche?</string>
+  <string name="settings_search_history_cleared">Cronologia delle ricerche cancellata.</string>
 </resources>
