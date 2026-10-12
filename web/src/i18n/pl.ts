@@ -1597,6 +1597,7 @@ export const pl: Catalog = {
   "tv.default": "Domyślne",
   "tv.chosenSource": "Źródło",
   "tv.searchHint": "Wpisz tytuł i naciśnij Gotowe.",
+  "tv.voiceSearch": "Wyszukiwanie głosowe",
   "tv.findingSources": "Szukam źródeł…",
   "tv.playWhenReady": "Uruchomię, gdy źródła będą gotowe…",
   "tv.myListEmpty": "Tytuły oznaczone gwiazdką pojawią się tutaj.",

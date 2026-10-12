@@ -59,6 +59,7 @@ tv.sourcesCount
 tv.default
 tv.chosenSource
 tv.searchHint
+tv.voiceSearch
 tv.findingSources
 tv.playWhenReady
 catalog.title

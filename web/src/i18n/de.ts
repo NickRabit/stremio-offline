@@ -1597,6 +1597,7 @@ export const de: Catalog = {
   "tv.default": "Standard",
   "tv.chosenSource": "Quelle",
   "tv.searchHint": "Geben Sie einen Titel ein und drücken Sie Fertig.",
+  "tv.voiceSearch": "Sprachsuche",
   "tv.findingSources": "Suche Quellen…",
   "tv.playWhenReady": "Startet, sobald Quellen bereit sind…",
   "tv.myListEmpty": "Titel, die Sie mit einem Stern markieren, erscheinen hier.",

@@ -1597,6 +1597,7 @@ export const ru: Catalog = {
   "tv.default": "По умолчанию",
   "tv.chosenSource": "Источник",
   "tv.searchHint": "Введите название и нажмите Готово.",
+  "tv.voiceSearch": "Голосовой поиск",
   "tv.findingSources": "Поиск источников…",
   "tv.playWhenReady": "Запущу, когда источники будут готовы…",
   "tv.myListEmpty": "Отмеченные звёздочкой фильмы и сериалы появятся здесь.",

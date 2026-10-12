@@ -1597,6 +1597,7 @@ export const ptBR: Catalog = {
   "tv.default": "Padrão",
   "tv.chosenSource": "Fonte",
   "tv.searchHint": "Digite um título e pressione Concluído.",
+  "tv.voiceSearch": "Pesquisa por voz",
   "tv.findingSources": "Procurando fontes…",
   "tv.playWhenReady": "Vou iniciar quando as fontes estiverem prontas…",
   "tv.myListEmpty": "Os títulos que você marca com uma estrela aparecem aqui.",

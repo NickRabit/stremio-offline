@@ -1597,6 +1597,7 @@ export const fr: Catalog = {
   "tv.default": "Par défaut",
   "tv.chosenSource": "Source",
   "tv.searchHint": "Saisissez un titre, puis appuyez sur Terminé.",
+  "tv.voiceSearch": "Recherche vocale",
   "tv.findingSources": "Recherche des sources…",
   "tv.playWhenReady": "Démarrage dès que les sources sont prêtes…",
   "tv.myListEmpty": "Les titres que vous ajoutez avec une étoile apparaissent ici.",
