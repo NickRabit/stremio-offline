@@ -22,7 +22,7 @@ every library file bound to that title (and, for an episode, to that season and
 episode) that the viewer may see is offered as a **local source**:
 
 - above every addon source, marked with a **Local** badge and a drive icon;
-- outside the addon and language filters and the addon-priority sort;
+- ahead of the addon rows in the recommended and addon-priority orders (the size sorts rank them with the addon rows), and reachable through a **Local files** choice of the addon filter;
 - picked by default, so **Play** plays the local copy unless the viewer picks
   another row;
 - played exactly the way the Library view plays that file, so the progress, the
@@ -170,9 +170,12 @@ mixed into the list the filters, counts and notices are computed from.
 
 - Local entries come first, in the server's order, followed by the visible
   addon streams exactly as today.
-- The addon and language filters, the sort, the "N of M" count and the
-  "no source matches the filter" message apply to addon streams only. A local
-  entry is never hidden by a filter.
+- The addon filter has a **Local files** choice (`sources.localFilter`) while the
+  title has a library copy: it shows the copies alone. Choosing a named addon shows that
+  addon's streams alone, without the copy; with no addon filter the copies lead the
+  recommended and addon-priority orders and rank with the addon rows under the size
+  sorts. The language filter, the "N of M" count and the "no source matches the filter"
+  message apply to addon streams only.
 - The empty and "only torrents" messages appear only when there are no local
   entries either.
 - Badge text **Local** (`sources.localBadge`), in its own colour (the web
@@ -310,7 +313,7 @@ it to `android-tv/strings.keys` if TV does not use it yet.
    **Play** starts the file; afterwards the Library view shows its progress and
    Home has one Continue watching row for it (on a title with no earlier
    catalogue progress), not two.
-2. With an addon filter that matches nothing, the local row is still there.
+2. Choosing a named addon hides the local row; choosing **Local files** shows it alone.
 3. An episode shows a local row only for the season and episode the file holds.
 4. A file unmatched inside a bound folder does not appear.
 5. A file in a library the account may not see does not appear, and the
