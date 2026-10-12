@@ -194,9 +194,9 @@ test("the personal settings are the keys PERSONAL_SETTINGS names, both ways roun
   const prefs = defaultPrefs();
   const keys = Object.keys(prefs).sort();
   const listed = [...PERSONAL_SETTINGS].sort();
-  // `homeLayout` is personal but has no default: an account that never arranged its Home
-  // keeps the instance's, so it is absent from `defaultPrefs()` until the person writes one.
-  const optional: string[] = ["homeLayout"];
+  // Legacy page-size keys stay personal so saved values can be migrated; none has a default.
+  // `homeLayout` is also absent until the person arranges their Home.
+  const optional: string[] = ["homeLayout", "catalogTileSize", "libraryTileSize", "favoritesTileSize", "resumeTileSize", "followingTileSize"];
   assert.deepEqual([...new Set([...keys, ...optional])].sort(), listed);
   const defaults = new Set(keys);
   for (const key of PERSONAL_SETTINGS) {
