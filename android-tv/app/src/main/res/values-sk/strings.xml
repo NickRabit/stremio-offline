@@ -11,6 +11,7 @@
   <string name="nav_catalog">Katalóg</string>
   <string name="nav_library">Knižnica</string>
   <string name="nav_favorites">Obľúbené</string>
+  <string name="nav_resume">Pokračujte v sledovaní</string>
   <string name="nav_settings">Nastavenia</string>
   <string name="tv_nav_search">Hľadať</string>
   <string name="tv_connect_title">Pripojte sa k svojmu serveru</string>
@@ -40,6 +41,9 @@
   <string name="tv_play">Prehrať</string>
   <string name="tv_resume">Pokračovať</string>
   <string name="tv_start_over">Od začiatku</string>
+  <string name="tv_forget_progress">Zabudnúť priebeh</string>
+  <string name="tv_forget_title">Odobrať z Pokračujte v sledovaní?</string>
+  <string name="tv_forget_remove">Odobrať</string>
   <string name="tv_back10">O 10 sekúnd späť</string>
   <string name="tv_forward10">O 10 sekúnd vpred</string>
   <string name="tv_pause">Pozastaviť</string>
@@ -138,6 +142,16 @@
   <string name="favorites_empty_all_text">Pridajte hviezdičku súboru v knižnici alebo titulu v katalógu a objaví sa tu.</string>
   <string name="favorites_empty_library_text">Pridajte hviezdičku súboru alebo priečinku v knižnici a objaví sa tu.</string>
   <string name="favorites_empty_catalog_text">Pridajte hviezdičku titulu v katalógu a objaví sa tu.</string>
+  <string name="resume_title">Pokračujte v sledovaní</string>
+  <string name="resume_filter_all">Všetko</string>
+  <string name="resume_filter_library">V knižnici</string>
+  <string name="resume_filter_catalog">Z katalógu</string>
+  <string name="resume_empty_all_title">Nič čiastočne sledované</string>
+  <string name="resume_empty_all_text">Nedopozerané filmy a epizódy sa zobrazia tu.</string>
+  <string name="resume_empty_library_title">Nič čiastočne sledované v knižnici</string>
+  <string name="resume_empty_library_text">Súbory, ktoré spustíte z knižnice, sa zobrazia tu.</string>
+  <string name="resume_empty_catalog_title">Nič čiastočne sledované z katalógu</string>
+  <string name="resume_empty_catalog_text">Tituly, ktoré spustíte z katalógu, sa zobrazia tu.</string>
   <string name="player_subtitles">titulky</string>
   <string name="player_subtitles_off">Vypnuté</string>
   <string name="player_subtitle_delay">Časovanie titulkov</string>

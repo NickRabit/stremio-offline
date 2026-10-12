@@ -204,6 +204,21 @@ class ApiClient(
     return FavoritesPage(favoriteItems(page), page.total, page.pending)
   }
 
+  /** One page of the one merged Continue watching list, filtered by card kind. */
+  override suspend fun resume(filter: ResumeFilter, limit: Int, skip: Int): ResumePage {
+    val query = "?filter=${filter.wire}&limit=$limit&skip=$skip"
+    val page = request(Request.Builder().url(address.resolve("/api/resume$query")).get().build())
+      .decode<ResumePageDto>() ?: throw ApiError(ApiFailure.Generic)
+    return ResumePage(resumeCards(page), page.total, page.pending)
+  }
+
+  /** Forgets every stored key behind one card in a single owner-scoped write. */
+  override suspend fun forgetProgress(keys: List<String>) {
+    if (keys.isEmpty()) return
+    val payload = json.encodeToString(ForgetRequest.serializer(), ForgetRequest(keys))
+    request(Request.Builder().url(address.resolve("/api/progress/forget")).post(payload.toRequestBody(mediaType)).build())
+  }
+
   /** Stars or unstars a library file or folder. */
   override suspend fun setFavorite(path: String, favorite: Boolean): FavoriteToggleDto {
     val payload = json.encodeToString(FavoriteRequest.serializer(), FavoriteRequest(path, favorite))
@@ -502,6 +517,9 @@ private data class HomeLayoutPatch(val homeLayout: HomeLayoutDto? = null)
 
 @Serializable
 private data class FavoriteRequest(val path: String, val favorite: Boolean)
+
+@Serializable
+private data class ForgetRequest(val keys: List<String>)
 
 @Serializable
 private data class WatchlistRequest(

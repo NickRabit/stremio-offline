@@ -3,6 +3,7 @@ package cz.stremiooffline.tv.ui.shell
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -29,6 +30,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.key.onPreviewKeyEvent
@@ -79,6 +81,7 @@ import cz.stremiooffline.tv.ui.home.HomeAction
 import cz.stremiooffline.tv.ui.home.HomeScreen
 import cz.stremiooffline.tv.ui.library.LibraryRoute
 import cz.stremiooffline.tv.ui.player.PlayerScreen
+import cz.stremiooffline.tv.ui.resume.ResumeRoute
 import cz.stremiooffline.tv.ui.settings.SettingsRoute
 import cz.stremiooffline.tv.ui.theme.Tokens
 import cz.stremiooffline.tv.ui.theme.appBackground
@@ -90,6 +93,7 @@ enum class Section(val route: String) {
   Home("home"),
   Catalog("catalog"),
   Library("library"),
+  Resume("resume"),
   Favorites("favorites"),
   Account("account"),
 }
@@ -107,6 +111,7 @@ private val Section.labelRes: Int
     Section.Home -> R.string.nav_home
     Section.Catalog -> R.string.nav_catalog
     Section.Library -> R.string.nav_library
+    Section.Resume -> R.string.nav_resume
     Section.Favorites -> R.string.nav_favorites
     Section.Account -> R.string.nav_settings
   }
@@ -167,6 +172,8 @@ fun Shell(
   // Bumped each time Favourites comes back into view, so a star removed elsewhere disappears.
   var favoritesRefreshToken by remember { mutableIntStateOf(0) }
   var favoritesSeen by remember { mutableStateOf(false) }
+  var resumeRefreshToken by remember { mutableIntStateOf(0) }
+  var resumeSeen by remember { mutableStateOf(false) }
   // Where Search looks: kept across a rail switch, and preset when a catalogue's Hledat opens it.
   var searchScope by remember { mutableStateOf(SearchScope()) }
   /** True while Search was opened from the catalogue, so Back returns there instead of the rail. */
@@ -183,6 +190,10 @@ fun Shell(
     if (current == Section.Favorites) {
       if (favoritesSeen) favoritesRefreshToken++
       favoritesSeen = true
+    }
+    if (current == Section.Resume) {
+      if (resumeSeen) resumeRefreshToken++
+      resumeSeen = true
     }
   }
 
@@ -211,6 +222,13 @@ fun Shell(
           refreshToken = libraryRefreshToken,
           pushPath = libraryPush,
           onPushConsumed = { libraryPush = null },
+        )
+        Section.Resume -> ResumeRoute(
+          api = api,
+          onOpenDetail = { detail = it },
+          onOpenCatalog = { catalogDetail = it },
+          restoreToken = returnToken,
+          refreshToken = resumeRefreshToken,
         )
         Section.Favorites -> FavoritesRoute(
           api = api,
@@ -284,7 +302,7 @@ fun Shell(
   }
 
   val openDetail = detail
-  if (openDetail != null) {
+  if (openDetail != null) OverlayFocusTrap {
     DetailScreen(
       detail = openDetail,
       imageUrl = { path -> path?.let(api::url) },
@@ -305,7 +323,7 @@ fun Shell(
   }
 
   val openCatalogDetail = catalogDetail
-  if (openCatalogDetail != null) {
+  if (openCatalogDetail != null) OverlayFocusTrap {
     CatalogDetailScreen(
       api = api,
       args = openCatalogDetail,
@@ -344,6 +362,19 @@ fun Shell(
       },
     )
   }
+}
+
+/** A detail covers the section it was opened from, which stays composed underneath. Without this
+ *  fence a sideways move past the last button jumps into the hidden section's cards. */
+@OptIn(ExperimentalComposeUiApi::class)
+@Composable
+private fun OverlayFocusTrap(content: @Composable () -> Unit) {
+  Box(
+    Modifier
+      .fillMaxSize()
+      .focusProperties { exit = { FocusRequester.Cancel } }
+      .focusGroup(),
+  ) { content() }
 }
 
 /** A library play switches sources through the Library view, not the catalogue, so the player
@@ -438,6 +469,7 @@ private fun Rail(
       Section.Home to HomeIcon,
       Section.Catalog to CatalogIcon,
       Section.Library to LibraryIcon,
+      Section.Resume to HistoryIcon,
       Section.Favorites to StarIcon,
     )
   }
@@ -645,6 +677,16 @@ private val LibraryIcon = icon("Library") {
   lineTo(18.5f, 12f)
   moveTo(7f, 16f)
   lineTo(7.01f, 16f)
+}
+
+private val HistoryIcon = icon("History") {
+  moveTo(12f, 3f)
+  arcTo(9f, 9f, 0f, isMoreThanHalf = true, isPositiveArc = true, x1 = 12f, y1 = 21f)
+  arcTo(9f, 9f, 0f, isMoreThanHalf = true, isPositiveArc = true, x1 = 12f, y1 = 3f)
+  close()
+  moveTo(12f, 7f)
+  lineTo(12f, 12f)
+  lineTo(15.5f, 14f)
 }
 
 private val StarIcon = icon("Star") {

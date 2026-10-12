@@ -11,6 +11,7 @@
   <string name="nav_catalog">Katalog</string>
   <string name="nav_library">Knihovna</string>
   <string name="nav_favorites">Oblíbené</string>
+  <string name="nav_resume">Pokračovat ve sledování</string>
   <string name="nav_settings">Nastavení</string>
   <string name="tv_nav_search">Hledat</string>
   <string name="tv_connect_title">Připojte se ke svému serveru</string>
@@ -40,6 +41,9 @@
   <string name="tv_play">Přehrát</string>
   <string name="tv_resume">Pokračovat</string>
   <string name="tv_start_over">Od začátku</string>
+  <string name="tv_forget_progress">Zapomenout průběh</string>
+  <string name="tv_forget_title">Odebrat z Pokračovat ve sledování?</string>
+  <string name="tv_forget_remove">Odebrat</string>
   <string name="tv_back10">O 10 sekund zpět</string>
   <string name="tv_forward10">O 10 sekund vpřed</string>
   <string name="tv_pause">Pozastavit</string>
@@ -138,6 +142,16 @@
   <string name="favorites_empty_all_text">Přidejte hvězdičku souboru v knihovně nebo titulu v katalogu a objeví se tady.</string>
   <string name="favorites_empty_library_text">Přidejte hvězdičku souboru nebo složce v knihovně a objeví se tady.</string>
   <string name="favorites_empty_catalog_text">Přidejte hvězdičku titulu v katalogu a objeví se tady.</string>
+  <string name="resume_title">Pokračovat ve sledování</string>
+  <string name="resume_filter_all">Vše</string>
+  <string name="resume_filter_library">V knihovně</string>
+  <string name="resume_filter_catalog">Z katalogu</string>
+  <string name="resume_empty_all_title">Nic rozkoukaného</string>
+  <string name="resume_empty_all_text">Nedokoukané filmy a epizody se objeví tady.</string>
+  <string name="resume_empty_library_title">Nic rozkoukaného v knihovně</string>
+  <string name="resume_empty_library_text">Soubory, které spustíte z knihovny, se objeví tady.</string>
+  <string name="resume_empty_catalog_title">Nic rozkoukaného z katalogu</string>
+  <string name="resume_empty_catalog_text">Tituly, které spustíte z katalogu, se objeví tady.</string>
   <string name="player_subtitles">Titulky</string>
   <string name="player_subtitles_off">Vypnuto</string>
   <string name="player_subtitle_delay">Načasování titulků</string>

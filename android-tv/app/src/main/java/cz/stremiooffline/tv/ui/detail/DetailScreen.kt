@@ -55,6 +55,8 @@ import cz.stremiooffline.tv.ui.components.CardRowInset
 import cz.stremiooffline.tv.ui.components.FocusButton
 import cz.stremiooffline.tv.ui.components.FocusButtonKind
 import cz.stremiooffline.tv.ui.components.WideCard
+import cz.stremiooffline.tv.ui.catalog.PanelOption
+import cz.stremiooffline.tv.ui.catalog.SidePanel
 import cz.stremiooffline.tv.ui.theme.Tokens
 import java.util.Locale
 import kotlinx.coroutines.CancellationException
@@ -64,6 +66,10 @@ const val TagDetailPrimary = "detail_primary"
 const val TagDetailStartOver = "detail_start_over"
 const val TagDetailFavourite = "detail_favourite"
 const val TagDetailWatched = "detail_watched"
+const val TagDetailForget = "detail_forget"
+const val TagDetailForgetPanel = "detail_forget_panel"
+const val TagDetailForgetCancel = "detail_forget_cancel"
+const val TagDetailForgetRemove = "detail_forget_remove"
 
 /**
  * What to play: the progress key and title, and either a library [path] to mint a source from or
@@ -99,6 +105,8 @@ data class DetailData(
   val files: List<BrowseItem.File>,
   /** Whether the starred title itself is a favourite; the browse item carries it. */
   val favorite: Boolean = false,
+  /** Every stored key this title stands for when it was opened from a Continue watching card. */
+  val forgetKeys: List<String> = emptyList(),
 ) {
   /** Re-reads the stored position of every file, so returning from the player shows the resume. */
   suspend fun refresh(progress: suspend (String) -> ProgressDto?): DetailData {
@@ -150,6 +158,8 @@ fun DetailScreen(
   onBack: () -> Unit,
   progress: suspend (String) -> ProgressDto?,
   setFavorite: suspend (String, Boolean) -> Boolean = { _, wanted -> wanted },
+  /** Forgets the stored positions behind every key, the same call Home's card makes. */
+  forgetProgress: suspend (List<String>) -> Unit = {},
   restoreToken: Int = 0,
   backEnabled: Boolean = true,
 ) {
@@ -162,6 +172,10 @@ fun DetailScreen(
   // The star is optimistic and serialised the way the catalogue detail toggles the watchlist.
   var favourite by remember(detail.gridPath) { mutableStateOf(detail.favorite) }
   var favouriteBusy by remember(detail.gridPath) { mutableStateOf(false) }
+  var forgetPanelOpen by remember { mutableStateOf(false) }
+  var forgetting by remember { mutableStateOf(false) }
+  // The card's own keys stop counting once they have been forgotten.
+  var forgotten by remember { mutableStateOf(false) }
   LaunchedEffect(detail.gridPath, restoreToken) {
     current = if (detail.files.isEmpty()) detail else detail.refresh(progress)
   }
@@ -169,9 +183,12 @@ fun DetailScreen(
   val playIndex = current.files.indexOfFirst { !isCompleted(it) }.let { if (it < 0) 0 else it }
   val playFile = current.files.getOrNull(playIndex)
   val resuming = playFile?.let { Progress.resumePosition(positionOf(it), durationOf(it)) != null } == true
+  val storedKeys = current.files.filter { positionOf(it) > 0 }.map { Progress.libraryKey(it.path) }
+  val forgetKeys = (if (forgotten) emptyList() else detail.forgetKeys).ifEmpty { storedKeys }
 
   val primaryFocus = remember { FocusRequester() }
   val rowFocus = remember { FocusRequester() }
+  val forgetPanelFocus = remember { FocusRequester() }
   // The primary action takes focus on the first entry and again when the player closes.
   LaunchedEffect(current.gridPath, restoreToken) {
     runCatching { primaryFocus.requestFocus() }
@@ -195,15 +212,37 @@ fun DetailScreen(
     }
   }
 
+  fun forgetNow() {
+    if (forgetting || forgetKeys.isEmpty()) return
+    forgetting = true
+    forgetPanelOpen = false
+    scope.launch {
+      try {
+        forgetProgress(forgetKeys)
+        forgotten = true
+        current = current.copy(
+          files = current.files.map { file ->
+            if (Progress.libraryKey(file.path) in forgetKeys) file.copy(progress = null) else file
+          },
+        )
+        runCatching { primaryFocus.requestFocus() }
+      } catch (cancelled: CancellationException) {
+        throw cancelled
+      } catch (_: ApiError) {
+      } finally {
+        forgetting = false
+      }
+    }
+  }
 
   Box(
     Modifier
       .fillMaxSize()
       .background(Tokens.Bg)
       // DOWN from the actions enters the episode row on the first episode that is not finished,
-      // not on whatever card happens to sit below the button.
+      // not on whatever card happens to sit below the button. An open panel keeps the remote.
       .onPreviewKeyEvent { event ->
-        if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown && current.files.size > 1) {
+        if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown && current.files.size > 1 && !forgetPanelOpen) {
           runCatching { rowFocus.requestFocus() }
           true
         } else {
@@ -296,6 +335,14 @@ fun DetailScreen(
             modifier = Modifier.testTag(TagDetailStartOver),
           )
         }
+        if (forgetKeys.isNotEmpty()) {
+          FocusButton(
+            text = stringResource(R.string.tv_forget_progress),
+            onClick = { forgetPanelOpen = true },
+            enabled = !forgetting,
+            modifier = Modifier.testTag(TagDetailForget),
+          )
+        }
         FocusButton(
           text = if (favourite) "★" else "☆",
           onClick = { toggleFavourite() },
@@ -312,6 +359,26 @@ fun DetailScreen(
           imageUrl = imageUrl,
           onPlay = onPlay,
           focusRequester = rowFocus,
+        )
+      }
+    }
+
+    if (forgetPanelOpen) {
+      SidePanel(
+        title = stringResource(R.string.tv_forget_title),
+        onClose = { forgetPanelOpen = false },
+        modifier = Modifier.testTag(TagDetailForgetPanel),
+        initialFocus = forgetPanelFocus,
+      ) {
+        PanelOption(
+          text = stringResource(R.string.common_cancel),
+          onClick = { forgetPanelOpen = false },
+          modifier = Modifier.testTag(TagDetailForgetCancel).focusRequester(forgetPanelFocus),
+        )
+        PanelOption(
+          text = stringResource(R.string.tv_forget_remove),
+          onClick = { forgetNow() },
+          modifier = Modifier.testTag(TagDetailForgetRemove),
         )
       }
     }

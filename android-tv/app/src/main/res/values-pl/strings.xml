@@ -11,6 +11,7 @@
   <string name="nav_catalog">Katalog</string>
   <string name="nav_library">Biblioteka</string>
   <string name="nav_favorites">Ulubione</string>
+  <string name="nav_resume">Kontynuuj oglądanie</string>
   <string name="nav_settings">Ustawienia</string>
   <string name="tv_nav_search">Szukaj</string>
   <string name="tv_connect_title">Połącz się ze swoim serwerem</string>
@@ -40,6 +41,9 @@
   <string name="tv_play">Odtwórz</string>
   <string name="tv_resume">Wznów</string>
   <string name="tv_start_over">Od początku</string>
+  <string name="tv_forget_progress">Zapomnij postęp</string>
+  <string name="tv_forget_title">Usunąć z Kontynuuj oglądanie?</string>
+  <string name="tv_forget_remove">Usuń</string>
   <string name="tv_back10">10 sekund wstecz</string>
   <string name="tv_forward10">10 sekund do przodu</string>
   <string name="tv_pause">Wstrzymaj</string>
@@ -138,6 +142,16 @@
   <string name="favorites_empty_all_text">Dodaj gwiazdkę plikowi w bibliotece lub tytułowi w katalogu, a pojawi się tutaj.</string>
   <string name="favorites_empty_library_text">Dodaj gwiazdkę plikowi lub folderowi w bibliotece, a pojawi się tutaj.</string>
   <string name="favorites_empty_catalog_text">Dodaj gwiazdkę tytułowi w katalogu, a pojawi się tutaj.</string>
+  <string name="resume_title">Kontynuuj oglądanie</string>
+  <string name="resume_filter_all">Wszystko</string>
+  <string name="resume_filter_library">W bibliotece</string>
+  <string name="resume_filter_catalog">Z katalogu</string>
+  <string name="resume_empty_all_title">Nic częściowo obejrzanego</string>
+  <string name="resume_empty_all_text">Filmy i odcinki zostawione w połowie pojawiają się tutaj.</string>
+  <string name="resume_empty_library_title">Nic częściowo obejrzanego w bibliotece</string>
+  <string name="resume_empty_library_text">Pliki uruchomione z biblioteki pojawiają się tutaj.</string>
+  <string name="resume_empty_catalog_title">Nic częściowo obejrzanego z katalogu</string>
+  <string name="resume_empty_catalog_text">Tytuły uruchomione z katalogu pojawiają się tutaj.</string>
   <string name="player_subtitles">Napisy</string>
   <string name="player_subtitles_off">Wyłączone</string>
   <string name="player_subtitle_delay">Czas napisów</string>

@@ -11,6 +11,7 @@
   <string name="nav_catalog">Catalogo</string>
   <string name="nav_library">Libreria</string>
   <string name="nav_favorites">Preferiti</string>
+  <string name="nav_resume">Continua a guardare</string>
   <string name="nav_settings">Impostazioni</string>
   <string name="tv_nav_search">Cerca</string>
   <string name="tv_connect_title">Connettiti al tuo server</string>
@@ -40,6 +41,9 @@
   <string name="tv_play">Riproduci</string>
   <string name="tv_resume">Riprendi</string>
   <string name="tv_start_over">Dall\'inizio</string>
+  <string name="tv_forget_progress">Dimentica avanzamento</string>
+  <string name="tv_forget_title">Rimuovere da Continua a guardare?</string>
+  <string name="tv_forget_remove">Rimuovi</string>
   <string name="tv_back10">10 secondi indietro</string>
   <string name="tv_forward10">10 secondi avanti</string>
   <string name="tv_pause">Pausa</string>
@@ -134,6 +138,16 @@
   <string name="favorites_empty_all_text">Aggiungi una stella a un file della libreria o a un titolo del catalogo e comparirà qui.</string>
   <string name="favorites_empty_library_text">Aggiungi una stella a un file o a una cartella della libreria e comparirà qui.</string>
   <string name="favorites_empty_catalog_text">Aggiungi una stella a un titolo del catalogo e comparirà qui.</string>
+  <string name="resume_title">Continua a guardare</string>
+  <string name="resume_filter_all">Tutti</string>
+  <string name="resume_filter_library">In libreria</string>
+  <string name="resume_filter_catalog">Dal catalogo</string>
+  <string name="resume_empty_all_title">Niente di parzialmente guardato</string>
+  <string name="resume_empty_all_text">Film ed episodi lasciati a metà compaiono qui.</string>
+  <string name="resume_empty_library_title">Niente di parzialmente guardato in libreria</string>
+  <string name="resume_empty_library_text">I file che avvii dalla libreria compaiono qui.</string>
+  <string name="resume_empty_catalog_title">Niente di parzialmente guardato dal catalogo</string>
+  <string name="resume_empty_catalog_text">I titoli che avvii dal catalogo compaiono qui.</string>
   <string name="player_subtitles">Sottotitoli</string>
   <string name="player_subtitles_off">Spento</string>
   <string name="player_subtitle_delay">Tempistica dei sottotitoli</string>

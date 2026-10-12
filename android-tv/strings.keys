@@ -10,6 +10,7 @@ nav.home
 nav.catalog
 nav.library
 nav.favorites
+nav.resume
 nav.settings
 tv.navSearch
 tv.connectTitle
@@ -39,6 +40,9 @@ tv.detailWatched
 tv.play
 tv.resume
 tv.startOver
+tv.forgetProgress
+tv.forgetTitle
+tv.forgetRemove
 tv.back10
 tv.forward10
 tv.pause
@@ -127,6 +131,16 @@ favorites.filterCatalog
 favorites.emptyAllText
 favorites.emptyLibraryText
 favorites.emptyCatalogText
+resume.title
+resume.filterAll
+resume.filterLibrary
+resume.filterCatalog
+resume.emptyAllTitle
+resume.emptyAllText
+resume.emptyLibraryTitle
+resume.emptyLibraryText
+resume.emptyCatalogTitle
+resume.emptyCatalogText
 player.subtitles
 player.subtitlesOff
 player.subtitleDelay

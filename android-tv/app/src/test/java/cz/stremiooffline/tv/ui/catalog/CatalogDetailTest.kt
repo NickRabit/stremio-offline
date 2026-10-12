@@ -923,4 +923,74 @@ class CatalogDetailTest {
 
     compose.onNodeWithText("MOVIE").assertExists()
   }
+
+  @Test
+  fun `a movie with stored progress can forget it and falls back to Play`() {
+    val api = FakeTvApi()
+    api.settingsValue = settings()
+    api.streamsValues["movie:tt1"] = listOf(stream("s1", name = "FullHD"))
+    api.progressValues["movie:tt1"] = ProgressDto(38.6, 120.0)
+    mount(api, movieArgs())
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagCatalogForget).assertExists()
+    focusFromLeft(TagCatalogForget)
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(TagCatalogForgetPanel).assertExists()
+    press(Key.DirectionDown)
+    press(Key.DirectionCenter)
+    compose.waitForIdle()
+
+    assertEquals(listOf(listOf("movie:tt1")), api.forgetCalls)
+    compose.onNodeWithText("Play").assertIsDisplayed()
+    compose.onNodeWithTag(TagCatalogStartOver).assertDoesNotExist()
+    compose.onNodeWithTag(TagCatalogForget).assertDoesNotExist()
+  }
+
+  @Test
+  fun `a Continue card's keys stop offering Forget once they are forgotten`() {
+    val api = FakeTvApi()
+    api.settingsValue = settings()
+    api.streamsValues["movie:tt1"] = listOf(stream("s1", name = "FullHD"))
+    api.progressValues["movie:tt1"] = ProgressDto(38.6, 120.0)
+    mount(api, movieArgs().copy(forgetKeys = listOf("movie:tt1")))
+    compose.waitForIdle()
+
+    focusFromLeft(TagCatalogForget)
+    press(Key.DirectionCenter)
+    press(Key.DirectionDown)
+    press(Key.DirectionCenter)
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagCatalogForget).assertDoesNotExist()
+  }
+
+  @Test
+  fun `a series with stored progress forgets the show's episode key`() {
+    val api = seriesApi()
+    api.metaValues["series:tt1"] = seriesMeta(v1(), v2())
+    api.streamsValues["series:tt1:1:1"] = listOf(stream("s1", name = "FullHD"))
+    api.progressEntries = listOf(
+      ProgressEntryDto(
+        key = "series:tt1:1:1",
+        position = 300.0,
+        duration = 600.0,
+        title = "Show · One",
+        series = ProgressEntryDto.Series("tt1", "Show", 1, 1),
+      ),
+    )
+    mount(api, seriesArgs())
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagCatalogForget).assertExists()
+    focusFromLeft(TagCatalogForget)
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(TagCatalogForgetPanel).assertExists()
+    press(Key.DirectionDown)
+    press(Key.DirectionCenter)
+    compose.waitForIdle()
+
+    assertEquals(listOf(listOf("series:tt1:1:1")), api.forgetCalls)
+    compose.onNodeWithText("Play").assertIsDisplayed()
+  }
 }

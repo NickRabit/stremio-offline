@@ -11,6 +11,7 @@
   <string name="nav_catalog">Каталог</string>
   <string name="nav_library">Библиотека</string>
   <string name="nav_favorites">Избранное</string>
+  <string name="nav_resume">Продолжить просмотр</string>
   <string name="nav_settings">Настройки</string>
   <string name="tv_nav_search">Поиск</string>
   <string name="tv_connect_title">Подключитесь к своему серверу</string>
@@ -40,6 +41,9 @@
   <string name="tv_play">Воспроизвести</string>
   <string name="tv_resume">Продолжить</string>
   <string name="tv_start_over">С начала</string>
+  <string name="tv_forget_progress">Забыть прогресс</string>
+  <string name="tv_forget_title">Убрать из «Продолжить просмотр»?</string>
+  <string name="tv_forget_remove">Убрать</string>
   <string name="tv_back10">10 секунд назад</string>
   <string name="tv_forward10">10 секунд вперёд</string>
   <string name="tv_pause">Пауза</string>
@@ -138,6 +142,16 @@
   <string name="favorites_empty_all_text">Отметьте звёздочкой файл в библиотеке или название в каталоге, и оно появится здесь.</string>
   <string name="favorites_empty_library_text">Отметьте звёздочкой файл или папку в библиотеке, и они появятся здесь.</string>
   <string name="favorites_empty_catalog_text">Отметьте звёздочкой название в каталоге, и оно появится здесь.</string>
+  <string name="resume_title">Продолжить просмотр</string>
+  <string name="resume_filter_all">Все</string>
+  <string name="resume_filter_library">В библиотеке</string>
+  <string name="resume_filter_catalog">Из каталога</string>
+  <string name="resume_empty_all_title">Ничего не досмотрено</string>
+  <string name="resume_empty_all_text">Фильмы и серии, которые вы не досмотрели, появятся здесь.</string>
+  <string name="resume_empty_library_title">Ничего не досмотрено в библиотеке</string>
+  <string name="resume_empty_library_text">Файлы, запущенные из библиотеки, появятся здесь.</string>
+  <string name="resume_empty_catalog_title">Ничего не досмотрено из каталога</string>
+  <string name="resume_empty_catalog_text">Названия, запущенные из каталога, появятся здесь.</string>
   <string name="player_subtitles">Субтитры</string>
   <string name="player_subtitles_off">Выкл.</string>
   <string name="player_subtitle_delay">Время субтитров</string>
