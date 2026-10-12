@@ -54,6 +54,8 @@ data class CatalogDetailArgs(
   val episode: cz.stremiooffline.tv.catalog.ResumeEpisode? = null,
   /** The catalogue the meta came from, so a catalogue resume card can be drawn on Home. */
   val addonKey: String? = null,
+  /** Every stored key this title stands for when it was opened from a Continue watching card. */
+  val forgetKeys: List<String> = emptyList(),
 )
 
 private enum class CatalogPanel { Catalogs, Genres }

@@ -13,6 +13,15 @@ interface FavoritesApi {
   suspend fun favorites(filter: FavoriteFilter = FavoriteFilter.All, limit: Int = 60, skip: Int = 0): FavoritesPage
 }
 
+/** The one merged Continue watching list: Home's resume row paged and filtered, plus the forget
+ *  that drops every stored key one card stands for. */
+interface ResumeApi {
+  suspend fun resume(filter: ResumeFilter = ResumeFilter.All, limit: Int = 60, skip: Int = 0): ResumePage
+
+  /** Forgets the stored positions behind every key, the way the web's Home card does. */
+  suspend fun forgetProgress(keys: List<String>)
+}
+
 /** What the title detail needs: the stored position and the library star. */
 interface DetailApi {
   suspend fun progress(key: String): ProgressDto?
@@ -63,7 +72,7 @@ interface DownloadsApi {
 }
 
 /** Everything a signed-in screen does: library, detail, catalogue, Home, images and playback. */
-interface TvApi : LibraryApi, FavoritesApi, DetailApi, PlaybackApi, CatalogApi, HomeApi, DownloadsApi {
+interface TvApi : LibraryApi, FavoritesApi, ResumeApi, DetailApi, PlaybackApi, CatalogApi, HomeApi, DownloadsApi {
   val http: OkHttpClient
   /** The address as the user typed it, shown on the Settings screen. */
   val serverAddress: String

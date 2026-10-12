@@ -60,7 +60,7 @@ class DetailScreenTest {
     files = files,
   )
 
-  private fun mount(data: DetailData) {
+  private fun mount(data: DetailData, forgetProgress: suspend (List<String>) -> Unit = {}) {
     compose.setContent {
       DetailScreen(
         detail = data,
@@ -74,6 +74,7 @@ class DetailScreenTest {
           favouriteFailure?.let { throw ApiError(it) }
           wanted
         },
+        forgetProgress = forgetProgress,
         restoreToken = 0,
       )
     }
@@ -93,6 +94,17 @@ class DetailScreenTest {
       press(Key.DirectionRight)
     }
     compose.onNodeWithTag(TagDetailFavourite).assertIsFocused()
+  }
+
+  /** RIGHT from the primary action reaches Forget, which sits between Start over and the star. */
+  private fun focusForget() {
+    repeat(4) {
+      val tags = compose.onAllNodes(isFocused()).fetchSemanticsNodes()
+        .map { it.config.getOrElse(SemanticsProperties.TestTag) { "" } }
+      if (TagDetailForget in tags) return
+      press(Key.DirectionRight)
+    }
+    compose.onNodeWithTag(TagDetailForget).assertIsFocused()
   }
 
   @Test
@@ -240,5 +252,82 @@ class DetailScreenTest {
     press(Key.DirectionCenter)
 
     compose.onNodeWithTag(TagDetailFavourite).assertTextContains("☆")
+  }
+
+  @Test
+  fun `no stored progress shows no Forget button`() {
+    mount(detail(listOf(file("Films/It/It.mkv"))))
+
+    compose.onNodeWithTag(TagDetailForget).assertDoesNotExist()
+  }
+
+  @Test
+  fun `forgetting clears the stored position and turns Resume into Play`() {
+    progress["file:Films/It/It.mkv"] = ProgressDto(38.6, 120.0)
+    val forgotten = mutableListOf<List<String>>()
+    mount(
+      detail(listOf(file("Films/It/It.mkv"))),
+      forgetProgress = { keys -> forgotten += keys; keys.forEach { progress.remove(it) } },
+    )
+
+    compose.onNodeWithTag(TagDetailForget).assertExists()
+    focusForget()
+
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(TagDetailForgetPanel).assertExists()
+    compose.onNodeWithTag(TagDetailForgetCancel).assertIsFocused()
+    press(Key.DirectionDown)
+    press(Key.DirectionCenter)
+    compose.waitForIdle()
+
+    assertEquals(listOf(listOf("file:Films/It/It.mkv")), forgotten)
+    compose.onNodeWithText("Play").assertIsDisplayed()
+    compose.onNodeWithTag(TagDetailStartOver).assertDoesNotExist()
+    compose.onNodeWithTag(TagDetailForget).assertDoesNotExist()
+  }
+
+  @Test
+  fun `a Continue card's keys stop offering Forget once they are forgotten`() {
+    progress["file:Films/It/It.mkv"] = ProgressDto(38.6, 120.0)
+    mount(
+      detail(listOf(file("Films/It/It.mkv"))).copy(forgetKeys = listOf("file:Films/It/It.mkv")),
+      forgetProgress = { keys -> keys.forEach { progress.remove(it) } },
+    )
+
+    focusForget()
+    press(Key.DirectionCenter)
+    press(Key.DirectionDown)
+    press(Key.DirectionCenter)
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagDetailForget).assertDoesNotExist()
+  }
+
+  @Test
+  fun `forget sends every stored episode key of the show`() {
+    progress["file:Films/Show/S1E1.mkv"] = ProgressDto(100.0, 600.0)
+    progress["file:Films/Show/S1E2.mkv"] = ProgressDto(200.0, 600.0)
+    val forgotten = mutableListOf<List<String>>()
+    mount(
+      detail(
+        listOf(
+          file("Films/Show/S1E1.mkv", "S1E1").copy(season = 1, episode = 1),
+          file("Films/Show/S1E2.mkv", "S1E2").copy(season = 1, episode = 2),
+        ),
+        title = "Show",
+      ),
+      forgetProgress = { keys -> forgotten += keys; keys.forEach { progress.remove(it) } },
+    )
+
+    focusForget()
+    press(Key.DirectionCenter)
+    press(Key.DirectionDown)
+    press(Key.DirectionCenter)
+    compose.waitForIdle()
+
+    assertEquals(
+      listOf(listOf("file:Films/Show/S1E1.mkv", "file:Films/Show/S1E2.mkv")),
+      forgotten,
+    )
   }
 }

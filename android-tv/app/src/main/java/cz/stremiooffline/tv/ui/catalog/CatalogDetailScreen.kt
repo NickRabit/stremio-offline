@@ -98,6 +98,10 @@ const val TagCatalogEpisode = "catalog_episode"
 const val TagCatalogChosenSource = "catalog_chosen_source"
 const val TagCatalogLibraryPanel = "catalog_library_panel"
 const val TagCatalogShowInLibrary = "catalog_show_in_library"
+const val TagCatalogForget = "catalog_forget"
+const val TagCatalogForgetPanel = "catalog_forget_panel"
+const val TagCatalogForgetCancel = "catalog_forget_cancel"
+const val TagCatalogForgetRemove = "catalog_forget_remove"
 
 fun libraryOptionTag(libraryId: String): String = "catalog_library_$libraryId"
 
@@ -195,6 +199,7 @@ fun CatalogDetailScreen(
   var librariesLoaded by remember { mutableStateOf(false) }
   var libraryPanelOpen by remember { mutableStateOf(false) }
   var pendingLibraryStream by remember { mutableStateOf<StreamDto?>(null) }
+  val forget = remember { ForgetState() }
 
   val queuedText = stringResource(R.string.save_queued)
   val waitingText = stringResource(R.string.downloads_waiting_debrid)
@@ -221,6 +226,7 @@ fun CatalogDetailScreen(
   val sourcesPanelFocus = remember { FocusRequester() }
   val libraryOpenerFocus = remember { FocusRequester() }
   val libraryPanelFocus = remember { FocusRequester() }
+  val forgetPanelFocus = remember { FocusRequester() }
 
   val streamType = meta.type ?: args.type
   val isSeries = streamType == "series"
@@ -438,6 +444,18 @@ fun CatalogDetailScreen(
   } else {
     Progress.resumePosition(storedPosition, storedDuration) != null &&
       (selectedVideo == null || selectedVideo?.id == resumeEpisode?.id)
+  }
+  // Every stored key this title stands for: the card's own keys when it came from Continue
+  // watching, the local file's own key for a local pick, a show's stored episode otherwise.
+  val forgetKeys: List<String> = when {
+    args.forgetKeys.isNotEmpty() && !forget.done -> args.forgetKeys
+    localActive && localProgress?.let { it.position > 0 } == true ->
+      activeStream?.localPath?.let { listOf(Progress.libraryKey(it)) }.orEmpty()
+    isSeries -> entries.filter {
+      it.series?.id == meta.id || (it.key.startsWith("series:") && Resume.resumeTarget(it).meta.id == meta.id)
+    }.map { it.key }
+    movieProgress?.let { it.position > 0 } == true -> listOf(ProgressKey.of(streamType, meta.id))
+    else -> emptyList()
   }
 
   // A local pick resumes from the file's own progress, read when it becomes the active row.
@@ -673,6 +691,30 @@ fun CatalogDetailScreen(
     }
   }
 
+  /** Forgets this title's stored positions, then re-reads them so the action turns back to Play. */
+  fun forgetNow() {
+    if (forget.busy || forgetKeys.isEmpty()) return
+    forget.busy = true
+    forget.panelOpen = false
+    scope.launch {
+      try {
+        api.forgetProgress(forgetKeys)
+        forget.done = true
+        if (isSeries) {
+          entries = runCatching { api.progressList() }.getOrDefault(entries)
+        } else {
+          movieProgress = runCatching { api.progress(ProgressKey.of(streamType, meta.id)) }.getOrNull()
+        }
+        runCatching { primaryFocus.requestFocus() }
+      } catch (cancelled: CancellationException) {
+        throw cancelled
+      } catch (_: ApiError) {
+      } finally {
+        forget.busy = false
+      }
+    }
+  }
+
   /** Selecting an episode drops the list, the queued state and any message at once. */
   fun selectVideo(video: VideoDto) {
     if (video.id == selectedVideo?.id) return
@@ -838,6 +880,14 @@ fun CatalogDetailScreen(
               .onFocusChanged { startOverFocused = it.isFocused },
           )
         }
+        if (forgetKeys.isNotEmpty()) {
+          FocusButton(
+            text = stringResource(R.string.tv_forget_progress),
+            onClick = { forget.panelOpen = true },
+            enabled = !forget.busy,
+            modifier = Modifier.testTag(TagCatalogForget),
+          )
+        }
         FocusButton(
           text = if (favourite) "★" else "☆",
           onClick = { toggleFavourite() },
@@ -997,6 +1047,26 @@ fun CatalogDetailScreen(
               .then(if (index == focusIndex) Modifier.focusRequester(libraryPanelFocus) else Modifier),
           )
         }
+      }
+    }
+
+    if (forget.panelOpen) {
+      SidePanel(
+        title = stringResource(R.string.tv_forget_title),
+        onClose = { forget.panelOpen = false },
+        modifier = Modifier.testTag(TagCatalogForgetPanel),
+        initialFocus = forgetPanelFocus,
+      ) {
+        PanelOption(
+          text = stringResource(R.string.common_cancel),
+          onClick = { forget.panelOpen = false },
+          modifier = Modifier.testTag(TagCatalogForgetCancel).focusRequester(forgetPanelFocus),
+        )
+        PanelOption(
+          text = stringResource(R.string.tv_forget_remove),
+          onClick = { forgetNow() },
+          modifier = Modifier.testTag(TagCatalogForgetRemove),
+        )
       }
     }
   }
@@ -1206,3 +1276,12 @@ internal fun firstReleased(videos: List<VideoDto>, today: String = utcToday()): 
 internal fun seriesEntry(entries: List<ProgressEntryDto>, metaId: String): ProgressEntryDto? =
   entries.firstOrNull { it.series?.id == metaId }
     ?: entries.firstOrNull { it.key.startsWith("series:") && Resume.resumeTarget(it).meta.id == metaId }
+
+/** The Forget flow's three flags, in one object: this screen is one composable close to the
+ *  limit ART can verify, so each extra local would risk a VerifyError on a real device. */
+private class ForgetState {
+  var panelOpen by mutableStateOf(false)
+  var busy by mutableStateOf(false)
+  /** The card's own keys stop counting once they have been forgotten. */
+  var done by mutableStateOf(false)
+}

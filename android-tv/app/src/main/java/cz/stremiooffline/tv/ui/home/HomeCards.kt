@@ -102,6 +102,7 @@ fun actionFor(card: HomeCard): HomeAction = when (card) {
       addonName = "",
       type = card.type,
       episode = card.episode?.let { episode -> card.season?.let { season -> ResumeEpisode(card.key, season, episode) } },
+      forgetKeys = card.forgetKeys,
     ),
   )
   is HomeCard.Episode -> HomeAction.OpenCatalog(

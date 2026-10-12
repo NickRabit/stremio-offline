@@ -11,6 +11,7 @@
   <string name="nav_catalog">Catalogue</string>
   <string name="nav_library">Bibliothèque</string>
   <string name="nav_favorites">Favoris</string>
+  <string name="nav_resume">Continuer à regarder</string>
   <string name="nav_settings">Paramètres</string>
   <string name="tv_nav_search">Rechercher</string>
   <string name="tv_connect_title">Se connecter à votre serveur</string>
@@ -40,6 +41,9 @@
   <string name="tv_play">Lire</string>
   <string name="tv_resume">Reprendre</string>
   <string name="tv_start_over">Depuis le début</string>
+  <string name="tv_forget_progress">Oublier la progression</string>
+  <string name="tv_forget_title">Retirer de Continuer à regarder ?</string>
+  <string name="tv_forget_remove">Retirer</string>
   <string name="tv_back10">10 secondes en arrière</string>
   <string name="tv_forward10">10 secondes en avant</string>
   <string name="tv_pause">Pause</string>
@@ -134,6 +138,16 @@
   <string name="favorites_empty_all_text">Ajoutez une étoile à un fichier de la bibliothèque ou à un titre du catalogue et il apparaîtra ici.</string>
   <string name="favorites_empty_library_text">Ajoutez une étoile à un fichier ou un dossier de la bibliothèque et il apparaîtra ici.</string>
   <string name="favorites_empty_catalog_text">Ajoutez une étoile à un titre du catalogue et il apparaîtra ici.</string>
+  <string name="resume_title">Continuer à regarder</string>
+  <string name="resume_filter_all">Tout</string>
+  <string name="resume_filter_library">Dans la bibliothèque</string>
+  <string name="resume_filter_catalog">Du catalogue</string>
+  <string name="resume_empty_all_title">Rien de partiellement regardé</string>
+  <string name="resume_empty_all_text">Les films et épisodes laissés à moitié apparaissent ici.</string>
+  <string name="resume_empty_library_title">Rien de partiellement regardé dans la bibliothèque</string>
+  <string name="resume_empty_library_text">Les fichiers que vous lancez depuis la bibliothèque apparaissent ici.</string>
+  <string name="resume_empty_catalog_title">Rien de partiellement regardé depuis le catalogue</string>
+  <string name="resume_empty_catalog_text">Les titres que vous lancez depuis le catalogue apparaissent ici.</string>
   <string name="player_subtitles">Sous-titres</string>
   <string name="player_subtitles_off">Désactivé</string>
   <string name="player_subtitle_delay">Synchronisation des sous-titres</string>

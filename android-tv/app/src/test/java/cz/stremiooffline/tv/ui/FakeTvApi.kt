@@ -25,6 +25,8 @@ import cz.stremiooffline.tv.data.NextFileDto
 import cz.stremiooffline.tv.data.PlaybackDescriptorDto
 import cz.stremiooffline.tv.data.ProgressDto
 import cz.stremiooffline.tv.data.ProgressEntryDto
+import cz.stremiooffline.tv.data.ResumeFilter
+import cz.stremiooffline.tv.data.ResumePage
 import cz.stremiooffline.tv.data.SearchResultDto
 import cz.stremiooffline.tv.data.SearchScope
 import cz.stremiooffline.tv.data.SearchableCatalogDto
@@ -53,6 +55,15 @@ open class FakeTvApi : TvApi {
   var favoritesValue: FavoritesPage = FavoritesPage(emptyList(), 0, false)
   var favoritesRequests: MutableList<FavoriteFilter> = mutableListOf()
   var failFavorites = false
+  var resumeValue: ResumePage = ResumePage(emptyList(), 0, false)
+  /** Per-skip answers; a skip not listed falls back to [resumeValue], so a test can page. */
+  var resumePages: MutableMap<Int, ResumePage> = mutableMapOf()
+  var resumeRequests: MutableList<ResumeFilter> = mutableListOf()
+  var resumeSkips: MutableList<Int> = mutableListOf()
+  var failResume = false
+  /** Every `forgetProgress()` call in order, so a test can name the keys it carried. */
+  var forgetCalls: MutableList<List<String>> = mutableListOf()
+  var forgetFailure: ApiFailure? = null
   var libraryFavoriteCalls: MutableList<Pair<String, Boolean>> = mutableListOf()
   var favoriteFailure: ApiFailure? = null
   var favoriteGate: CompletableDeferred<Unit>? = null
@@ -167,6 +178,20 @@ open class FakeTvApi : TvApi {
     favoritesRequests += filter
     if (failFavorites) throw ApiError(ApiFailure.Generic)
     return favoritesValue
+  }
+
+  override suspend fun resume(filter: ResumeFilter, limit: Int, skip: Int): ResumePage {
+    resumeRequests += filter
+    resumeSkips += skip
+    if (failResume) throw ApiError(ApiFailure.Generic)
+    return resumePages[skip] ?: resumeValue
+  }
+
+  override suspend fun forgetProgress(keys: List<String>) {
+    forgetCalls += keys
+    forgetFailure?.let { throw ApiError(it) }
+    keys.forEach { progressValues.remove(it) }
+    progressEntries = progressEntries.filterNot { it.key in keys }
   }
 
   override suspend fun setFavorite(path: String, favorite: Boolean): FavoriteToggleDto {

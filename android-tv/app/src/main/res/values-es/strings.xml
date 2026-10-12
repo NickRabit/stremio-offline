@@ -11,6 +11,7 @@
   <string name="nav_catalog">Catálogo</string>
   <string name="nav_library">Biblioteca</string>
   <string name="nav_favorites">Favoritos</string>
+  <string name="nav_resume">Seguir viendo</string>
   <string name="nav_settings">Configuración</string>
   <string name="tv_nav_search">Buscar</string>
   <string name="tv_connect_title">Conecta con tu servidor</string>
@@ -40,6 +41,9 @@
   <string name="tv_play">Reproducir</string>
   <string name="tv_resume">Continuar</string>
   <string name="tv_start_over">Desde el principio</string>
+  <string name="tv_forget_progress">Olvidar progreso</string>
+  <string name="tv_forget_title">¿Quitar de Seguir viendo?</string>
+  <string name="tv_forget_remove">Quitar</string>
   <string name="tv_back10">10 segundos atrás</string>
   <string name="tv_forward10">10 segundos adelante</string>
   <string name="tv_pause">Pausa</string>
@@ -134,6 +138,16 @@
   <string name="favorites_empty_all_text">Marca con una estrella un archivo de la biblioteca o un título del catálogo y aparecerá aquí.</string>
   <string name="favorites_empty_library_text">Marca con una estrella un archivo o carpeta de la biblioteca y aparecerá aquí.</string>
   <string name="favorites_empty_catalog_text">Marca con una estrella un título del catálogo y aparecerá aquí.</string>
+  <string name="resume_title">Seguir viendo</string>
+  <string name="resume_filter_all">Todo</string>
+  <string name="resume_filter_library">En la biblioteca</string>
+  <string name="resume_filter_catalog">Del catálogo</string>
+  <string name="resume_empty_all_title">Nada a medias</string>
+  <string name="resume_empty_all_text">Las películas y episodios que dejes a medias aparecen aquí.</string>
+  <string name="resume_empty_library_title">Nada a medias en la biblioteca</string>
+  <string name="resume_empty_library_text">Los archivos que empieces desde la biblioteca aparecen aquí.</string>
+  <string name="resume_empty_catalog_title">Nada a medias del catálogo</string>
+  <string name="resume_empty_catalog_text">Los títulos que empieces desde el catálogo aparecen aquí.</string>
   <string name="player_subtitles">Subtítulos</string>
   <string name="player_subtitles_off">Apagado</string>
   <string name="player_subtitle_delay">Tiempo de subtítulos</string>

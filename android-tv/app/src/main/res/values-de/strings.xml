@@ -11,6 +11,7 @@
   <string name="nav_catalog">Katalog</string>
   <string name="nav_library">Bibliothek</string>
   <string name="nav_favorites">Favoriten</string>
+  <string name="nav_resume">Weiterschauen</string>
   <string name="nav_settings">Einstellungen</string>
   <string name="tv_nav_search">Suchen</string>
   <string name="tv_connect_title">Mit Ihrem Server verbinden</string>
@@ -40,6 +41,9 @@
   <string name="tv_play">Abspielen</string>
   <string name="tv_resume">Fortsetzen</string>
   <string name="tv_start_over">Von vorn</string>
+  <string name="tv_forget_progress">Fortschritt vergessen</string>
+  <string name="tv_forget_title">Aus „Weiterschauen“ entfernen?</string>
+  <string name="tv_forget_remove">Entfernen</string>
   <string name="tv_back10">10 Sekunden zurück</string>
   <string name="tv_forward10">10 Sekunden vor</string>
   <string name="tv_pause">Pause</string>
@@ -134,6 +138,16 @@
   <string name="favorites_empty_all_text">Markiere eine Datei in der Bibliothek oder einen Titel im Katalog mit einem Stern, und er erscheint hier.</string>
   <string name="favorites_empty_library_text">Markiere eine Datei oder einen Ordner in der Bibliothek mit einem Stern, und er erscheint hier.</string>
   <string name="favorites_empty_catalog_text">Markiere einen Titel im Katalog mit einem Stern, und er erscheint hier.</string>
+  <string name="resume_title">Weiterschauen</string>
+  <string name="resume_filter_all">Alle</string>
+  <string name="resume_filter_library">In der Bibliothek</string>
+  <string name="resume_filter_catalog">Aus dem Katalog</string>
+  <string name="resume_empty_all_title">Nichts teilweise gesehen</string>
+  <string name="resume_empty_all_text">Nicht zu Ende gesehene Filme und Folgen erscheinen hier.</string>
+  <string name="resume_empty_library_title">Nichts teilweise gesehen in der Bibliothek</string>
+  <string name="resume_empty_library_text">Dateien, die Sie aus der Bibliothek starten, erscheinen hier.</string>
+  <string name="resume_empty_catalog_title">Nichts teilweise gesehen aus dem Katalog</string>
+  <string name="resume_empty_catalog_text">Titel, die Sie aus dem Katalog starten, erscheinen hier.</string>
   <string name="player_subtitles">Untertitel</string>
   <string name="player_subtitles_off">Aus</string>
   <string name="player_subtitle_delay">Untertitel-Timing</string>

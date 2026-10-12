@@ -86,6 +86,8 @@ sealed interface HomeCard {
     val progress: HomeProgress? = null,
     val season: Int? = null,
     val episode: Int? = null,
+    /** Every stored key this card stands for; the detail forgets them together. */
+    val forgetKeys: List<String> = emptyList(),
   ) : HomeCard
 
   @Serializable
@@ -102,6 +104,7 @@ sealed interface HomeCard {
     val episode: Int? = null,
     val progress: HomeProgress? = null,
     val pending: Boolean = false,
+    val forgetKeys: List<String> = emptyList(),
   ) : HomeCard
 
   @Serializable
