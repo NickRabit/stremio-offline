@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addonNotices, arrangeStreams, canQueue, catalogSourceRows, isLocalStream, LOCAL_SOURCE, noticeText, offeredStreams, pickDefaultStream, pickNextEpisodeStream, streamBadge, streamLanguages, streamSize, streamText, visibleCatalogStreams, repickStream, type StreamFilters } from "./streams";
+import { addonNotices, arrangeStreams, canQueue, catalogSourceRows, filmHasNoSource, isLocalStream, LOCAL_SOURCE, noticeText, offeredStreams, pickDefaultStream, pickNextEpisodeStream, streamBadge, streamLanguages, streamSize, streamText, visibleCatalogStreams, repickStream, type StreamFilters } from "./streams";
 import type { Stream } from "./types";
 
 const stream = (parts: Partial<Stream>): Stream => ({ sourceId: "source", kind: "remote", playable: true, ...parts });
@@ -351,5 +351,17 @@ describe("addon notices", () => {
 
   it("never picks a notice as the default source", () => {
     expect(pickDefaultStream(offeredStreams([notice]))).toBeUndefined();
+  });
+});
+
+describe("filmHasNoSource", () => {
+  it("stays quiet while sources are loading or an addon is still asking", () => {
+    expect(filmHasNoSource({ loaded: false, pending: 0, playable: false })).toBe(false);
+    expect(filmHasNoSource({ loaded: true, pending: 2, playable: false })).toBe(false);
+  });
+
+  it("is true only when every addon answered and nothing is playable", () => {
+    expect(filmHasNoSource({ loaded: true, pending: 0, playable: false })).toBe(true);
+    expect(filmHasNoSource({ loaded: true, pending: 0, playable: true })).toBe(false);
   });
 });

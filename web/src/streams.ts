@@ -79,6 +79,12 @@ export function pickDefaultStream(streams: Stream[]): Stream | undefined {
   return streams.find((stream) => stream.playable) ?? streams[0];
 }
 
+/** Whether a film is worth following for its release: only once every addon has answered and
+ *  none offered anything playable. While they are still asking, the Follow chip would flash up
+ *  and vanish the moment the first source arrived. */
+export const filmHasNoSource = (state: { loaded: boolean; pending: number; playable: boolean }): boolean =>
+  state.loaded && state.pending === 0 && !state.playable;
+
 /** A copy that already exists in one of the viewer's libraries. */
 export const isLocalStream = (stream: Stream): boolean => stream.kind === "library";
 
