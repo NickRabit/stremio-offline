@@ -395,6 +395,20 @@ class ApiClient(
       .decode() ?: DownloadResult()
   }
 
+  override suspend fun downloadBulk(
+    title: String,
+    type: String,
+    episodes: List<BulkEpisodeDto>,
+    selection: DownloadSelectionDto,
+    media: BulkMediaDto,
+    target: DownloadTargetDto?,
+  ): BulkDownloadResult {
+    val body = bulkDownloadBody(title, type, episodes, selection, media, target)
+    val payload = downloadJson.encodeToString(BulkDownloadRequest.serializer(), body)
+    return request(Request.Builder().url(address.resolve("/api/downloads/bulk")).post(payload.toRequestBody(mediaType)).build())
+      .decode() ?: throw ApiError(ApiFailure.Generic)
+  }
+
   /** One Home answer for the named rows; an empty list only asks for `order`. */
   override suspend fun home(rows: List<String>): HomeResponseDto {
     val query = "?rows=" + encode(rows.joinToString(","))

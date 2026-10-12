@@ -219,4 +219,46 @@
   <string name="tv_home_layout_reset">Obnovit výchozí</string>
   <string name="tv_home_layout_shown">Zobrazeno</string>
   <string name="tv_home_layout_hidden">Skryto</string>
+  <string name="tv_download_which_episodes">Které díly</string>
+  <string name="tv_download_settings">Nastavení stahování</string>
+  <string name="tv_download_this_episode">Tento díl</string>
+  <string name="tv_download_this_season">Tato série (%1$s)</string>
+  <string name="tv_download_from_episode">Od tohoto dílu dál</string>
+  <string name="tv_download_all_episodes">Všechny díly</string>
+  <string name="bulk_title">Stažení seriálu</string>
+  <string name="bulk_add">Přidat do fronty</string>
+  <plurals name="bulk_episode_count">
+    <item quantity="one">1 epizoda</item>
+    <item quantity="few">%1$s epizody</item>
+    <item quantity="many">%1$s epizody</item>
+    <item quantity="other">%1$s epizod</item>
+  </plurals>
+  <string name="bulk_audio">Jazyk zvuku</string>
+  <string name="bulk_audio_fallback">Záložní zvuk</string>
+  <string name="bulk_no_fallback">Bez záložního jazyka</string>
+  <string name="bulk_subtitles">Titulky</string>
+  <string name="bulk_subtitles_off">Nestahovat</string>
+  <string name="bulk_subtitles_optional">Volitelné</string>
+  <string name="bulk_subtitles_required">Povinné</string>
+  <string name="bulk_subtitle_language">Jazyk titulků</string>
+  <string name="bulk_subtitle_fallback">Záložní titulky</string>
+  <string name="bulk_source_strategy">Výběr zdroje</string>
+  <string name="bulk_strategy_largest">Největší vyhovující soubor</string>
+  <string name="bulk_strategy_priority">Nejdřív preferovaný doplněk</string>
+  <string name="bulk_sources">Zdroje</string>
+  <string name="save_adding">Přidávám…</string>
+  <string name="save_target_default_library">Výchozí knihovna</string>
+  <string name="save_target_no_library">Pro tento druh titulu nemáte knihovnu, do které lze zapisovat.</string>
+  <plurals name="episodes_bulk_added">
+    <item quantity="one">Do fronty přidána 1 epizoda.</item>
+    <item quantity="few">Do fronty přidány %1$s epizody.</item>
+    <item quantity="many">Do fronty přidány %1$s epizody.</item>
+    <item quantity="other">Do fronty přidáno %1$s epizod.</item>
+  </plurals>
+  <plurals name="episodes_bulk_skipped">
+    <item quantity="one">1 přeskočena, už je ve frontě.</item>
+    <item quantity="few">%1$s přeskočeny, už jsou ve frontě.</item>
+    <item quantity="many">%1$s přeskočeny, už jsou ve frontě.</item>
+    <item quantity="other">%1$s přeskočeno, už jsou ve frontě.</item>
+  </plurals>
 </resources>

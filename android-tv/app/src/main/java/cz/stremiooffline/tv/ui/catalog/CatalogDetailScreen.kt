@@ -40,6 +40,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.SemanticsPropertyKey
@@ -58,6 +59,7 @@ import cz.stremiooffline.tv.catalog.Streams
 import cz.stremiooffline.tv.data.AddonDto
 import cz.stremiooffline.tv.data.ApiError
 import cz.stremiooffline.tv.data.ApiFailure
+import cz.stremiooffline.tv.data.BulkMediaDto
 import cz.stremiooffline.tv.data.DownloadTargetDto
 import cz.stremiooffline.tv.data.LibraryDto
 import cz.stremiooffline.tv.data.MediaDto
@@ -102,6 +104,7 @@ const val TagCatalogForget = "catalog_forget"
 const val TagCatalogForgetPanel = "catalog_forget_panel"
 const val TagCatalogForgetCancel = "catalog_forget_cancel"
 const val TagCatalogForgetRemove = "catalog_forget_remove"
+const val TagCatalogSeriesDownload = "catalog_series_download"
 
 fun libraryOptionTag(libraryId: String): String = "catalog_library_$libraryId"
 
@@ -200,7 +203,9 @@ fun CatalogDetailScreen(
   var libraryPanelOpen by remember { mutableStateOf(false) }
   var pendingLibraryStream by remember { mutableStateOf<StreamDto?>(null) }
   val forget = remember { ForgetState() }
+  val seriesDownload = remember { SeriesDownloadState() }
 
+  val context = LocalContext.current
   val queuedText = stringResource(R.string.save_queued)
   val waitingText = stringResource(R.string.downloads_waiting_debrid)
   val notAllowedText = stringResource(R.string.err_download_library_not_allowed)
@@ -245,6 +250,7 @@ fun CatalogDetailScreen(
     queuedSourceId = null
     notice(null)
     libraryPanelOpen = false
+    seriesDownload.open = false
     pendingLibraryStream = null
     sourceFilters.reset()
     coroutineScope {
@@ -498,6 +504,17 @@ fun CatalogDetailScreen(
     } else if (libraryWasOpen) {
       libraryWasOpen = false
       runCatching { libraryOpenerFocus.requestFocus() }
+    }
+  }
+
+  // Closing the bulk panel, whether it queued or the viewer backed out, returns the remote to
+  // the button that opened it.
+  LaunchedEffect(seriesDownload.open) {
+    if (seriesDownload.open) {
+      seriesDownload.wasOpen = true
+    } else if (seriesDownload.wasOpen) {
+      seriesDownload.wasOpen = false
+      runCatching { seriesDownload.focus.requestFocus() }
     }
   }
 
@@ -783,7 +800,7 @@ fun CatalogDetailScreen(
         // DOWN drops into the episode row from the action row only; inside an open panel it must
         // reach the next source instead.
         if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown &&
-          isSeries && !sourcesOpen && actionRowFocused
+          isSeries && !sourcesOpen && !seriesDownload.open && actionRowFocused
         ) {
           runCatching { rowFocus.requestFocus() }.isSuccess
         } else {
@@ -904,6 +921,20 @@ fun CatalogDetailScreen(
               .testTag(TagCatalogToLibrary)
               .focusRequester(libraryOpenerFocus)
               .onFocusChanged { toLibraryFocused = it.isFocused },
+          )
+        }
+        // The web's bulk download, for the whole batch at once: it needs no source of its own,
+        // so it sits beside To library for any series with an episode selected.
+        if (isSeries && selectedVideo != null && !meta.videos.isNullOrEmpty()) {
+          FocusButton(
+            text = stringResource(R.string.bulk_title),
+            onClick = {
+              cancelPendingPlay()
+              seriesDownload.open = true
+            },
+            modifier = Modifier
+              .testTag(TagCatalogSeriesDownload)
+              .focusRequester(seriesDownload.focus),
           )
         }
         FocusButton(
@@ -1068,6 +1099,38 @@ fun CatalogDetailScreen(
           modifier = Modifier.testTag(TagCatalogForgetRemove),
         )
       }
+    }
+
+    if (seriesDownload.open) {
+      // The batch carries the title and its artwork, and the addon's own destination unless the
+      // viewer picks another library inside the panel.
+      SeriesDownloadPanel(
+        api = api,
+        type = streamType,
+        title = baseTitle,
+        videos = meta.videos.orEmpty(),
+        selected = selectedVideo,
+        media = BulkMediaDto(
+          id = meta.id,
+          metaType = streamType,
+          poster = args.meta.poster ?: meta.poster,
+          background = args.meta.background ?: args.meta.poster ?: meta.background,
+        ),
+        settings = settings,
+        addons = addons,
+        libraries = libraries,
+        onQueued = { added, skipped ->
+          seriesDownload.open = false
+          val addedText = context.resources.getQuantityString(R.plurals.episodes_bulk_added, added, added)
+          val skippedText = if (skipped > 0) {
+            " " + context.resources.getQuantityString(R.plurals.episodes_bulk_skipped, skipped, skipped)
+          } else {
+            ""
+          }
+          notice(addedText + skippedText, CatalogNotice.Success)
+        },
+        onClose = { seriesDownload.open = false },
+      )
     }
   }
 }
@@ -1253,7 +1316,7 @@ internal fun releasedDate(video: VideoDto): String? {
   return date.takeIf { Regex("^\\d{4}-\\d{2}-\\d{2}$").matches(it) }
 }
 
-private fun utcToday(): String {
+internal fun utcToday(): String {
   val format = java.text.SimpleDateFormat("yyyy-MM-dd", Locale.US)
   format.timeZone = java.util.TimeZone.getTimeZone("UTC")
   return format.format(java.util.Date())
@@ -1284,4 +1347,12 @@ private class ForgetState {
   var busy by mutableStateOf(false)
   /** The card's own keys stop counting once they have been forgotten. */
   var done by mutableStateOf(false)
+}
+
+/** The series-download panel's flags and its opener's focus, in one object: this screen is one
+ *  composable close to the limit ART can verify, so every extra local risks a VerifyError. */
+private class SeriesDownloadState {
+  var open by mutableStateOf(false)
+  var wasOpen by mutableStateOf(false)
+  val focus = FocusRequester()
 }

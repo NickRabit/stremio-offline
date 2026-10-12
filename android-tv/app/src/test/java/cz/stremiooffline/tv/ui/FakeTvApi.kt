@@ -2,6 +2,10 @@ package cz.stremiooffline.tv.ui
 
 import cz.stremiooffline.tv.data.AddonDto
 import cz.stremiooffline.tv.data.AddonSubtitleDto
+import cz.stremiooffline.tv.data.BulkDownloadRequest
+import cz.stremiooffline.tv.data.BulkDownloadResult
+import cz.stremiooffline.tv.data.BulkEpisodeDto
+import cz.stremiooffline.tv.data.BulkMediaDto
 import cz.stremiooffline.tv.data.BrowseItem
 import cz.stremiooffline.tv.data.BrowseResult
 import cz.stremiooffline.tv.data.CatalogDto
@@ -9,6 +13,7 @@ import cz.stremiooffline.tv.data.ClientLogBundleDto
 import cz.stremiooffline.tv.data.ClientCapabilitiesDto
 import cz.stremiooffline.tv.data.CopyDto
 import cz.stremiooffline.tv.data.DownloadResult
+import cz.stremiooffline.tv.data.DownloadSelectionDto
 import cz.stremiooffline.tv.data.DownloadTargetDto
 import cz.stremiooffline.tv.data.DownloadsResponseDto
 import cz.stremiooffline.tv.data.FavoriteFilter
@@ -37,6 +42,7 @@ import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.data.StreamSourceDto
 import cz.stremiooffline.tv.data.TrackChange
 import cz.stremiooffline.tv.data.TvApi
+import cz.stremiooffline.tv.data.bulkDownloadBody
 import cz.stremiooffline.tv.data.WatchlistEntryDto
 import cz.stremiooffline.tv.data.WatchlistToggleDto
 import cz.stremiooffline.tv.data.ApiError
@@ -333,6 +339,31 @@ open class FakeTvApi : TvApi {
   }
 
   val queuedTargets: MutableList<DownloadTargetDto?> = mutableListOf()
+
+  /** Every bulk body the panel posted, in order. */
+  val bulkDownloads: MutableList<BulkDownloadRequest> = mutableListOf()
+  /** Counted as it arrives, in flight or not, so a double press is visible to a test. */
+  var bulkDownloadCalls = 0
+  var bulkDownloadResult: BulkDownloadResult = BulkDownloadResult(added = 1)
+  /** When set, `downloadBulk()` waits for it before answering. */
+  var bulkDownloadGate: CompletableDeferred<Unit>? = null
+  var bulkDownloadFailure: ApiFailure? = null
+  var bulkDownloadFailureMessage: String? = null
+
+  override suspend fun downloadBulk(
+    title: String,
+    type: String,
+    episodes: List<BulkEpisodeDto>,
+    selection: DownloadSelectionDto,
+    media: BulkMediaDto,
+    target: DownloadTargetDto?,
+  ): BulkDownloadResult {
+    bulkDownloadCalls += 1
+    bulkDownloadGate?.await()
+    bulkDownloadFailure?.let { throw ApiError(it, serverMessage = bulkDownloadFailureMessage) }
+    bulkDownloads += bulkDownloadBody(title, type, episodes, selection, media, target)
+    return bulkDownloadResult
+  }
 
   override suspend fun home(rows: List<String>): HomeResponseDto {
     homeRequests += rows

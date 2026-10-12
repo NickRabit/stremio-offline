@@ -1704,4 +1704,10 @@ export const en = {
   "tv.homeLayoutReset": "Reset to default",
   "tv.homeLayoutShown": "Shown",
   "tv.homeLayoutHidden": "Hidden",
+  "tv.downloadWhichEpisodes": "Which episodes",
+  "tv.downloadSettings": "Download settings",
+  "tv.downloadThisEpisode": "This episode",
+  "tv.downloadThisSeason": "This season ({season})",
+  "tv.downloadFromEpisode": "From this episode on",
+  "tv.downloadAllEpisodes": "All episodes",
 };

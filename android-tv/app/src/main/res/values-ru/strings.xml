@@ -219,4 +219,46 @@
   <string name="tv_home_layout_reset">Сбросить</string>
   <string name="tv_home_layout_shown">Показано</string>
   <string name="tv_home_layout_hidden">Скрыто</string>
+  <string name="tv_download_which_episodes">Какие серии</string>
+  <string name="tv_download_settings">Настройки загрузки</string>
+  <string name="tv_download_this_episode">Эта серия</string>
+  <string name="tv_download_this_season">Этот сезон (%1$s)</string>
+  <string name="tv_download_from_episode">С этой серии</string>
+  <string name="tv_download_all_episodes">Все серии</string>
+  <string name="bulk_title">Скачать серию</string>
+  <string name="bulk_add">Добавить в очередь</string>
+  <plurals name="bulk_episode_count">
+    <item quantity="one">%1$s серия</item>
+    <item quantity="few">%1$s серии</item>
+    <item quantity="many">%1$s серий</item>
+    <item quantity="other">%1$s серий</item>
+  </plurals>
+  <string name="bulk_audio">Язык аудио</string>
+  <string name="bulk_audio_fallback">Резервный звук</string>
+  <string name="bulk_no_fallback">Нет резервного варианта</string>
+  <string name="bulk_subtitles">Субтитры</string>
+  <string name="bulk_subtitles_off">Не скачивать</string>
+  <string name="bulk_subtitles_optional">Необязательно</string>
+  <string name="bulk_subtitles_required">Требуется</string>
+  <string name="bulk_subtitle_language">Язык субтитров</string>
+  <string name="bulk_subtitle_fallback">Резервные субтитры</string>
+  <string name="bulk_source_strategy">Выбор источника</string>
+  <string name="bulk_strategy_largest">Самый большой соответствующий файл</string>
+  <string name="bulk_strategy_priority">Предпочтительный аддон в первую очередь</string>
+  <string name="bulk_sources">Источники</string>
+  <string name="save_adding">Добавление…</string>
+  <string name="save_target_default_library">Библиотека по умолчанию</string>
+  <string name="save_target_no_library">Ни одна библиотека, в которую вы можете писать, не имеет такого названия.</string>
+  <plurals name="episodes_bulk_added">
+    <item quantity="one">В очередь добавлена ​​%1$s серия.</item>
+    <item quantity="few">В очередь добавлено %1$s серии.</item>
+    <item quantity="many">В очередь добавлено %1$s серий.</item>
+    <item quantity="other">В очередь добавлено %1$s серий.</item>
+  </plurals>
+  <plurals name="episodes_bulk_skipped">
+    <item quantity="one">%1$s пропущено, уже в очереди.</item>
+    <item quantity="few">%1$s пропущено, уже в очереди.</item>
+    <item quantity="many">%1$s пропущено, уже в очереди.</item>
+    <item quantity="other">%1$s пропущено, уже в очереди.</item>
+  </plurals>
 </resources>

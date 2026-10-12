@@ -215,4 +215,40 @@
   <string name="tv_home_layout_reset">Reset to default</string>
   <string name="tv_home_layout_shown">Shown</string>
   <string name="tv_home_layout_hidden">Hidden</string>
+  <string name="tv_download_which_episodes">Which episodes</string>
+  <string name="tv_download_settings">Download settings</string>
+  <string name="tv_download_this_episode">This episode</string>
+  <string name="tv_download_this_season">This season (%1$s)</string>
+  <string name="tv_download_from_episode">From this episode on</string>
+  <string name="tv_download_all_episodes">All episodes</string>
+  <string name="bulk_title">Download series</string>
+  <string name="bulk_add">Add to queue</string>
+  <plurals name="bulk_episode_count">
+    <item quantity="one">1 episode</item>
+    <item quantity="other">%1$s episodes</item>
+  </plurals>
+  <string name="bulk_audio">Audio language</string>
+  <string name="bulk_audio_fallback">Fallback audio</string>
+  <string name="bulk_no_fallback">No fallback</string>
+  <string name="bulk_subtitles">Subtitles</string>
+  <string name="bulk_subtitles_off">Do not download</string>
+  <string name="bulk_subtitles_optional">Optional</string>
+  <string name="bulk_subtitles_required">Required</string>
+  <string name="bulk_subtitle_language">Subtitle language</string>
+  <string name="bulk_subtitle_fallback">Fallback subtitles</string>
+  <string name="bulk_source_strategy">Source selection</string>
+  <string name="bulk_strategy_largest">Largest matching file</string>
+  <string name="bulk_strategy_priority">Preferred addon first</string>
+  <string name="bulk_sources">Sources</string>
+  <string name="save_adding">Adding…</string>
+  <string name="save_target_default_library">Default library</string>
+  <string name="save_target_no_library">No library you can write to takes this kind of title.</string>
+  <plurals name="episodes_bulk_added">
+    <item quantity="one">1 episode added to the queue.</item>
+    <item quantity="other">%1$s episodes added to the queue.</item>
+  </plurals>
+  <plurals name="episodes_bulk_skipped">
+    <item quantity="one">1 skipped, already queued.</item>
+    <item quantity="other">%1$s skipped, already queued.</item>
+  </plurals>
 </resources>

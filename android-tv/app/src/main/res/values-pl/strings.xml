@@ -219,4 +219,46 @@
   <string name="tv_home_layout_reset">Przywróć domyślne</string>
   <string name="tv_home_layout_shown">Widoczne</string>
   <string name="tv_home_layout_hidden">Ukryte</string>
+  <string name="tv_download_which_episodes">Które odcinki</string>
+  <string name="tv_download_settings">Ustawienia pobierania</string>
+  <string name="tv_download_this_episode">Ten odcinek</string>
+  <string name="tv_download_this_season">Ten sezon (%1$s)</string>
+  <string name="tv_download_from_episode">Od tego odcinka</string>
+  <string name="tv_download_all_episodes">Wszystkie odcinki</string>
+  <string name="bulk_title">Pobierz serię</string>
+  <string name="bulk_add">Dodaj do kolejki</string>
+  <plurals name="bulk_episode_count">
+    <item quantity="one">1 odcinek</item>
+    <item quantity="few">%1$s odcinki</item>
+    <item quantity="many">%1$s odcinków</item>
+    <item quantity="other">Liczba odcinków: %1$s</item>
+  </plurals>
+  <string name="bulk_audio">Język dźwięku</string>
+  <string name="bulk_audio_fallback">Dźwięk zastępczy</string>
+  <string name="bulk_no_fallback">Żadnego powrotu</string>
+  <string name="bulk_subtitles">Napisy</string>
+  <string name="bulk_subtitles_off">Nie pobieraj</string>
+  <string name="bulk_subtitles_optional">Opcjonalne</string>
+  <string name="bulk_subtitles_required">Wymagane</string>
+  <string name="bulk_subtitle_language">Język napisów</string>
+  <string name="bulk_subtitle_fallback">Napisy zastępcze</string>
+  <string name="bulk_source_strategy">Wybór źródła</string>
+  <string name="bulk_strategy_largest">Największy pasujący plik</string>
+  <string name="bulk_strategy_priority">Najpierw preferowany dodatek</string>
+  <string name="bulk_sources">Źródła</string>
+  <string name="save_adding">Dodawanie…</string>
+  <string name="save_target_default_library">Domyślna biblioteka</string>
+  <string name="save_target_no_library">Żadna biblioteka, w której można pisać, nie ma takiego tytułu.</string>
+  <plurals name="episodes_bulk_added">
+    <item quantity="one">Do kolejki dodano 1 odcinek.</item>
+    <item quantity="few">Do kolejki dodane %1$s odcinki.</item>
+    <item quantity="many">Do kolejki dodano %1$s odcinków.</item>
+    <item quantity="other">Do kolejki dodano %1$s odcinków.</item>
+  </plurals>
+  <plurals name="episodes_bulk_skipped">
+    <item quantity="one">1 pominięty, już w kolejce.</item>
+    <item quantity="few">%1$s pominięte, już w kolejce.</item>
+    <item quantity="many">%1$s pominiętych, już w kolejce.</item>
+    <item quantity="other">%1$s pominięte, już w kolejce.</item>
+  </plurals>
 </resources>

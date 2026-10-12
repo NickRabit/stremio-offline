@@ -1647,4 +1647,10 @@ export const it: Catalog = {
   "tv.homeLayoutReset": "Ripristina",
   "tv.homeLayoutShown": "Visibile",
   "tv.homeLayoutHidden": "Nascosto",
+  "tv.downloadWhichEpisodes": "Quali episodi",
+  "tv.downloadSettings": "Impostazioni di download",
+  "tv.downloadThisEpisode": "Questo episodio",
+  "tv.downloadThisSeason": "Questa stagione ({season})",
+  "tv.downloadFromEpisode": "Da questo episodio",
+  "tv.downloadAllEpisodes": "Tutti gli episodi",
 };

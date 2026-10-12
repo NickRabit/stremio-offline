@@ -215,4 +215,40 @@
   <string name="tv_home_layout_reset">Restaurar padrão</string>
   <string name="tv_home_layout_shown">Visível</string>
   <string name="tv_home_layout_hidden">Oculto</string>
+  <string name="tv_download_which_episodes">Quais episódios</string>
+  <string name="tv_download_settings">Configurações de download</string>
+  <string name="tv_download_this_episode">Este episódio</string>
+  <string name="tv_download_this_season">Esta temporada (%1$s)</string>
+  <string name="tv_download_from_episode">A partir deste episódio</string>
+  <string name="tv_download_all_episodes">Todos os episódios</string>
+  <string name="bulk_title">Baixar série</string>
+  <string name="bulk_add">Adicionar à fila</string>
+  <plurals name="bulk_episode_count">
+    <item quantity="one">%1$s episódio</item>
+    <item quantity="other">%1$s episódios</item>
+  </plurals>
+  <string name="bulk_audio">Idioma de áudio</string>
+  <string name="bulk_audio_fallback">Áudio substituto</string>
+  <string name="bulk_no_fallback">Sem alternativa</string>
+  <string name="bulk_subtitles">Legendas</string>
+  <string name="bulk_subtitles_off">Não baixe</string>
+  <string name="bulk_subtitles_optional">Opcional</string>
+  <string name="bulk_subtitles_required">Obrigatório</string>
+  <string name="bulk_subtitle_language">Idioma da legenda</string>
+  <string name="bulk_subtitle_fallback">Legendas substitutas</string>
+  <string name="bulk_source_strategy">Seleção de fonte</string>
+  <string name="bulk_strategy_largest">Maior arquivo correspondente</string>
+  <string name="bulk_strategy_priority">Addon preferido primeiro</string>
+  <string name="bulk_sources">Fontes</string>
+  <string name="save_adding">Adicionando…</string>
+  <string name="save_target_default_library">Biblioteca padrão</string>
+  <string name="save_target_no_library">Nenhuma biblioteca na qual você possa escrever leva esse tipo de título.</string>
+  <plurals name="episodes_bulk_added">
+    <item quantity="one">%1$s episódio adicionado à fila.</item>
+    <item quantity="other">%1$s episódios adicionados à fila.</item>
+  </plurals>
+  <plurals name="episodes_bulk_skipped">
+    <item quantity="one">%1$s pulei, já estou na fila.</item>
+    <item quantity="other">%1$s ignorado, já na fila.</item>
+  </plurals>
 </resources>
